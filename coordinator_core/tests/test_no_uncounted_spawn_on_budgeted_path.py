@@ -5915,25 +5915,40 @@ def _measure_static_spawn_counts(op_names, entrypoints) -> dict[str, int]:
 #: `_measure_static_spawn_counts` read, not a guess. `ceremony.commit` is a NEWLY-appeared live
 #: op with no prior pin (`test_static_spawn_count_pins_cover_every_unlegitimized_residual_op`'s
 #: own missing leg), pinned at its measured 10.
+#: TIGHTENED 2026-08-26/27 (D10 dispatch, `test_static_spawn_count_pins_that_have_gone_loose`):
+#: a peer `archive_terminal_handoffs.py` consolidation landed after D7 measured, dropping the
+#: `fleet.archive_*` family further -- fleet.archive_completed_handoffs 10->4;
+#: fleet.archive_paper_trail/archive_queue_entry/archive_release_accumulator/
+#: archive_terminal_sizings/prune_closed_bugs 9->3; fleet.reap_integrated_findings/
+#: reap_unintegrated_findings 14->9; fleet.migrate_handoff_vocabulary 12->11;
+#: handoff.archive_transition/reconcile_close_terminal 13->12; handoff.transition 12->11 --
+#: each a fresh `_measure_static_spawn_counts` read against the live tree, not transcribed.
+#: `merge_assemble.apply` is a NEWLY-appeared live op with no prior pin
+#: (`test_static_spawn_count_pins_cover_every_unlegitimized_residual_op`'s own missing leg,
+#: introduced by D8's new edge): its `_measure_static_spawn_counts` reachable-site count is 0
+#: (has spawn evidence per `ops_with_spawn_evidence`, but 0 sites survive the
+#: `_reachable_functions`/`_on_path_spawn_sites` walk this file's predicates all share) --
+#: pinned at that measured 0, not silently enrolled or omitted.
 _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     "plugin_health.sentinel": 26,
-    "handoff.archive_transition": 13,
-    "handoff.reconcile_close_terminal": 13,
-    "fleet.migrate_handoff_vocabulary": 12,
-    "handoff.transition": 12,
-    "fleet.reap_integrated_findings": 14,
-    "fleet.reap_unintegrated_findings": 14,
-    "fleet.archive_completed_handoffs": 10,
+    "handoff.archive_transition": 12,
+    "handoff.reconcile_close_terminal": 12,
+    "fleet.migrate_handoff_vocabulary": 11,
+    "handoff.transition": 11,
+    "fleet.reap_integrated_findings": 9,
+    "fleet.reap_unintegrated_findings": 9,
+    "fleet.archive_completed_handoffs": 4,
     "ceremony.commit": 10,
-    "fleet.archive_paper_trail": 9,
-    "fleet.archive_queue_entry": 9,
-    "fleet.archive_release_accumulator": 9,
-    "fleet.archive_terminal_sizings": 9,
-    "fleet.prune_closed_bugs": 9,
+    "fleet.archive_paper_trail": 3,
+    "fleet.archive_queue_entry": 3,
+    "fleet.archive_release_accumulator": 3,
+    "fleet.archive_terminal_sizings": 3,
+    "fleet.prune_closed_bugs": 3,
     "deliverable.cascade_terminal": 10,
     "warm_guard.evaluate": 10,
     "distill.apply_disposal": 9,
     "memo.transition": 9,
+    "merge_assemble.apply": 0,
     "ceremony.post_commit_tail": 7,
     "cruft_sweep.run": 8,
     "memo.send": 8,
@@ -6085,23 +6100,21 @@ _STATIC_SPAWN_COUNT_OVER_BUDGET_THRESHOLD = 8
 #: cannot itself drift from the pins) and then pinned here as its own declared set, so a NEW op
 #: crossing the threshold is a named, visible failure rather than a silent addition to a list
 #: nothing asserts on.
+#: Re-emitted 2026-08-26/27 (D10) against the D10-tightened pins above: the fleet.archive_*
+#: family and fleet.prune_closed_bugs dropped below the threshold (fleet.archive_completed_handoffs
+#: 10->4; the remaining fleet.archive_* + prune_closed_bugs 9->3) and fall OUT of this list, while
+#: every op still above `_STATIC_SPAWN_COUNT_OVER_BUDGET_THRESHOLD` keeps its D10-measured number.
 _STATIC_SPAWN_COUNT_OVER_BUDGET: dict[str, int] = {
     "plugin_health.sentinel": 26,
-    "fleet.reap_integrated_findings": 14,
-    "fleet.reap_unintegrated_findings": 14,
-    "handoff.archive_transition": 13,
-    "handoff.reconcile_close_terminal": 13,
-    "fleet.migrate_handoff_vocabulary": 12,
-    "handoff.transition": 12,
-    "fleet.archive_completed_handoffs": 10,
+    "handoff.archive_transition": 12,
+    "handoff.reconcile_close_terminal": 12,
+    "fleet.migrate_handoff_vocabulary": 11,
+    "handoff.transition": 11,
+    "fleet.reap_integrated_findings": 9,
+    "fleet.reap_unintegrated_findings": 9,
     "ceremony.commit": 10,
     "deliverable.cascade_terminal": 10,
     "warm_guard.evaluate": 10,
-    "fleet.archive_paper_trail": 9,
-    "fleet.archive_queue_entry": 9,
-    "fleet.archive_release_accumulator": 9,
-    "fleet.archive_terminal_sizings": 9,
-    "fleet.prune_closed_bugs": 9,
     "distill.apply_disposal": 9,
     "memo.transition": 9,
 }

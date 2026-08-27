@@ -2553,49 +2553,21 @@ def _dst_is_claimable(dst_norm: str) -> bool:
     return first not in _UNCLAIMABLE_DST_PREFIXES
 
 
-def _porcelain_dirty_paths(status_output: str) -> Optional[Set[str]]:
-    """Parse one ``git status --porcelain`` invocation's stdout into the set
-    of paths it reports as dirty — the per-call cleanliness probe
-    :func:`release_committed_claims` needs (one subprocess, not N).
-
-    A well-formed line is ``XY PATH`` (two status chars, one separating
-    space, then the path) or, for a rename/copy, ``XY OLD -> NEW`` — both
-    ``OLD`` and ``NEW`` are recorded dirty; a renamed path never releases
-    cleanly through its from-name alone. Returns ``None`` (fail-safe
-    signal) on ANY line that does not fit one of those two shapes — the
-    caller's contract is to release NOTHING for the whole call rather than
-    guess which path a malformed line concerns (AC7's "fail-safe is
-    RETAIN").
-    """
-    dirty: Set[str] = set()
-    for raw_line in status_output.splitlines():
-        if not raw_line:
-            continue
-        if len(raw_line) < 4 or raw_line[2] != " ":
-            return None
-        path_field = raw_line[3:]
-        if not path_field:
-            return None
-        if " -> " in path_field:
-            old, _sep, new = path_field.partition(" -> ")
-            if not old or not new:
-                return None
-            dirty.add(old)
-            dirty.add(new)
-        else:
-            dirty.add(path_field)
-    return dirty
-
-
 def _release_from_touch_record(
     sink_path: "Path | str",
     sid: str,
-    clean: Set[str],
+    release_set: Set[str],
     when: datetime,
     normalize: Callable[[str], Optional[str]],
     agent_id: Optional[str] = None,
 ) -> None:
-    """C4 — the seam-through counterpart of
+    """Append an ``R`` event for every path in *release_set* that this
+    session's own record still carries a ``T`` for — the release set is no
+    longer intersected against worktree cleanliness (PM ruling 2026-08-26,
+    see :func:`release_committed_claims`'s own docstring for the overrule);
+    it is exactly the caller-named paths this record still claims.
+
+    C4 — the seam-through counterpart of
 the former ``_release_from_touched_file``, for BOTH release planes.
     That future chunk landed: the agent-dir side no longer writes
     ``.agents/<aid>/touched.txt`` — it calls this function with the agent's
@@ -2627,7 +2599,7 @@ the former ``_release_from_touched_file``, for BOTH release planes.
         norm = normalize(raw_path)
         if norm is None or norm.endswith("/"):
             continue
-        if norm in clean:
+        if norm in release_set:
             to_release.append(raw_path)
 
     if not to_release:
@@ -2650,11 +2622,11 @@ the former ``_release_from_touched_file``, for BOTH release planes.
 def release_committed_claims(
     sid: str, paths: List[str], cwd: Optional[str] = None
 ) -> None:
-    """Append an ``R`` (release) event for each of *paths* that is clean in
-    the worktree, to THIS session's OWN ``touched.txt`` and to every
-    ``.agents/<aid>/touched.txt`` back-pointed at *this* ``sid`` — the
-    claim-release counterpart to :func:`touch`, called post-commit once a
-    pathspec has actually landed.
+    """Append an ``R`` (release) event for each of *paths* the caller
+    reports as committed, to THIS session's OWN ``touched.txt`` and to
+    every ``.agents/<aid>/touched.txt`` back-pointed at *this* ``sid`` —
+    the claim-release counterpart to :func:`touch`, called post-commit once
+    a pathspec has actually landed.
 
     Structurally incapable of releasing a PEER's claim: this function
     never accepts a peer session id and never iterates the sessions
@@ -2684,22 +2656,30 @@ def release_committed_claims(
     having reaped anything automatically.
 
     The release set for EACH such file is exactly ``paths ∩
-    clean-in-worktree ∩ currently-T-claimed-in-that-file``. A path
-    outside the caller-supplied *paths* is never released regardless of
-    cleanliness — otherwise every gitignored scratch/marker path this
-    session ever touched (which ``git status --porcelain`` reports clean
-    forever by construction) would get silently released. Cleanliness is
-    computed with ONE ``git status --porcelain -- <paths>`` call, never N
-    per-path calls (see :func:`_porcelain_dirty_paths`); a rename line
-    (``XY OLD -> NEW``) parses cleanly and marks BOTH ``OLD`` and ``NEW``
-    dirty — a renamed path never releases cleanly through its from-name
-    alone — while any genuinely unparseable line (one that does not fit the
-    ``XY PATH``/``XY OLD -> NEW`` shape) fails the WHOLE call safe to DIRTY
-    (nothing releases this call) rather than guessing which path a
-    malformed line concerns. ``ops/ceremony/scoped_git_commit.py::_commit_paths_are_clean``
-    is the aggregate cousin — ONE bool over a whole pathspec — and is NOT
-    reused here: it cannot say WHICH of several paths is clean, only
-    whether ALL are.
+    currently-T-claimed-in-that-file`` — no worktree-cleanliness term. A
+    path outside the caller-supplied *paths* is never released regardless
+    of cleanliness — otherwise every gitignored scratch/marker path this
+    session ever touched (which a cleanliness check would report clean
+    forever by construction) would get silently released.
+
+    PM RULING 2026-08-26 — THE CLEANLINESS TERM IS DELETED, NOT WEAKENED.
+    This function used to spend a chunked ``git status --porcelain`` call
+    here (via a now-deleted ``_porcelain_dirty_paths`` helper) and release
+    only the subset that came back clean, retaining the claim on any path
+    that read dirty. That rule answered a SESSION-SCOPED question
+    ("should THIS session release its own lock?") with a REPO-GLOBAL,
+    session-blind signal: ``git status`` cannot say WHOSE dirt it found, so
+    "someone has uncommitted bytes at this path" was being read as "this
+    session should keep its lock" — and when the dirt was a peer's, the
+    retained claim was what blocked THEM. PM, verbatim: "Claim release
+    doesn't need to be in git." The release condition is now exactly the
+    two facts held in-process — the caller named the path (it committed
+    it; this function is called post-commit by contract, which is what its
+    name asserts), and this session's own record still carries a ``T`` for
+    it (:func:`_release_from_touch_record` intersects against the
+    claimant's own record and refuses to touch any other session's). A
+    future rebuild of this function must meet this ruling rather than
+    rediscover the old cleanliness rule and restore it.
 
     Session-side entries are normalized via :func:`normalize_touch_path`
     (repo-root-relative dialect); agent-side entries via
@@ -2734,8 +2714,8 @@ def release_committed_claims(
     silently undercounts by half. A count in this docstring was already
     wrong once for exactly that reason.
 
-    Fail-safe is RETAIN, not raise: any ``OSError``, git failure, or parse
-    ambiguity skips the affected file's release for this call — mirrors
+    Fail-safe is RETAIN, not raise: any ``OSError`` reading or writing a
+    touch record skips the affected file's release for this call — mirrors
     ``touch()``'s fail-open contract. Emits nothing when there is nothing
     to release for a given file (AC10): ``touched.txt``'s mtime is a
     recency/liveness signal several readers depend on
@@ -2751,74 +2731,48 @@ def release_committed_claims(
     if not requested:
         return
 
-    # `git status --porcelain -- <every requested path>` on one argv blows the
-    # Windows 32767-char command-line limit at exactly the scale this repo's
-    # own archival batches routinely commit (measured 38,044 chars at 2000
-    # paths) -- Windows is first-class here (CLAUDE.md), so an unchunked
-    # argv is break-class, not a nit. Chunked via the shared `_chunk_paths`
-    # packer/budget `ops/ceremony/git_native.py` already established for the
-    # identical shape (`_diverging_paths_chunked`) rather than forking a
-    # second, independently-drifting copy -- function-local import to dodge
-    # the same module-cycle concern the `safe_commit_offer` import below
-    # already routes around (this module is imported widely; `git_native`
-    # is not imported at `scope` module scope anywhere today).
+    # PM RULING 2026-08-26 -- THE CLEANLINESS TERM IS DELETED, NOT WEAKENED.
+    # This function used to spend a chunked `git status --porcelain` here and
+    # release only the subset that came back clean, retaining the claim on any
+    # path that read dirty. That rule answered a SESSION-SCOPED question with a
+    # REPO-GLOBAL, session-blind signal. `git status` cannot say WHOSE dirt it
+    # found, so "someone has uncommitted bytes at this path" was being read as
+    # "this session should keep its lock" -- and when the dirt was a peer's,
+    # our retained claim was the thing standing in their way rather than
+    # anything protecting them. PM, verbatim: "Claim release doesn't need to be
+    # in git."
     #
-    # Fail-safe RETAIN is preserved ACROSS chunks, not merely within one: a
-    # `git status` failure or an unparseable line on ANY chunk fails the
-    # WHOLE call safe (nothing releases this call), exactly like the old
-    # single-call code did for the whole pathspec -- a per-chunk-silent
-    # fail-safe would let chunk 3's failure release claims chunk 1 and 2
-    # would have retained had the old code seen the same partial failure,
-    # which is not a shape the old, unchunked code could ever produce.
-    from coordinator_core.ops.ceremony.git_native import _chunk_paths
-
-    dirty: Set[str] = set()
-    for chunk in _chunk_paths(sorted(requested)):
-        status_out = _git_output(
-            [
-                "-c",
-                "core.quotepath=false",
-                "status",
-                "--porcelain",
-                "--",
-                *chunk,
-            ],
-            cwd,
-        )
-        if status_out is None:
-            return  # git failed on this chunk — fail-safe RETAIN for the whole call
-
-        chunk_dirty = _porcelain_dirty_paths(status_out)
-        if chunk_dirty is None:
-            return  # unparseable line — fail-safe RETAIN for the whole call
-        dirty |= chunk_dirty
-
-    # C1 follow-up (docs/plans/2026-08-11-claim-release-and-the-gate-that-
-    # cannot-clear.md): both sides of this set-diff MUST be folded through
-    # the SAME path_dialect canonicalizer before comparison. `requested` is
-    # the caller-supplied pathspec verbatim — a backslashed relative
-    # pathspec routinely reaches here (Windows, this repo's first-class
-    # platform) — while `dirty` comes from `git status --porcelain`, which
-    # always emits forward-slash paths. Without this fold, `requested -
-    # dirty` string-compares a backslashed entry against a forward-slashed
-    # one, they never match, and `clean` silently keeps the backslashed
-    # entry as if it were still dirty — the release for that path never
-    # happens at all, not merely under the wrong key. Canonicalizing `dirty`
-    # is a practical no-op (porcelain output is already forward-slashed) but
-    # makes the comparison dialect-safe BY CONSTRUCTION rather than by luck,
-    # matching this chunk's canonicalize-both-sides thesis
-    # (`claim_index.lookup` does the identical thing for its own set-diff).
-    # `clean` is expressed in CANONICAL form (not the caller's original
-    # dialect): the release step below tests membership via
-    # `norm in clean`, where `norm` is always the canonical output of its
-    # own `normalize` callback — so `clean` must be canonical too, or that
-    # membership test reintroduces the identical dialect fork one level
-    # down.
-    clean = {canonicalize_relative_path(p) for p in requested} - {
-        canonicalize_relative_path(p) for p in dirty
-    }
-    if not clean:
-        return  # nothing clean to release this call
+    # THE PRIOR REASONING, recorded so this is legible as an OVERRULE rather
+    # than an oversight (and because this deliverable has twice lost a lesson
+    # by leaving it only in prose that got rewritten). This function's own
+    # docstring and `hooks/auto_push.py`'s `--no-claim-release` note both said
+    # the clean check "is what stops a release racing an unstaged edit", and
+    # both said not to relax it. The sharper form of that worry -- do not
+    # release while THIS session has an uncommitted edit at the path -- is
+    # coherent, but the only behaviour ever actually observed was the opposite
+    # failure: auto_push.py records a path git was still renormalizing line
+    # endings for reading dirty and WRONGLY RETAINING, self-corrected seconds
+    # later. The hazard was theoretical; the false retain was measured. And the
+    # window it guarded is sub-second, inside our own session, on a path the
+    # caller has just committed -- `release_committed_claims` is called
+    # post-commit by contract, which is what its name asserts.
+    #
+    # WHAT REPLACES IT: nothing external. The release condition is now exactly
+    # the two facts we already hold in-process -- the caller named the path
+    # (it committed it), and this session's own record still carries a `T` for
+    # it (`_release_from_touch_record` intersects against the claimant's own
+    # record, and refuses to touch any other session's). `claim_index.lookup()`
+    # is the session-scoped question answered session-scoped.
+    #
+    # SECOND-ORDER COST THIS ALSO RETIRES: the old code failed safe to RETAIN
+    # across the WHOLE call on any git failure or one unparseable porcelain
+    # line. On a box where `index.lock` contention is routine, that converted a
+    # transient git hiccup into permanently stale claims -- manufacturing
+    # exactly the garbage the reaper exists to collect, in service of a rule
+    # that was pointing the wrong way to begin with.
+    release_set = {canonicalize_relative_path(p) for p in requested}
+    if not release_set:
+        return  # nothing to release this call
 
     when = datetime.now(timezone.utc)
 
@@ -2831,7 +2785,7 @@ def release_committed_claims(
         _release_from_touch_record(
             own_sink,
             sid,
-            clean,
+            release_set,
             when,
             lambda raw_path: normalize_touch_path(raw_path, cwd, root=cwd),
         )
@@ -2904,7 +2858,7 @@ def release_committed_claims(
         _release_from_touch_record(
             str(agent_dir / _TOUCH_RECORD_FILENAME),
             em_sid,
-            clean,
+            release_set,
             when,
             _normalize_agent_touched_entry,
             agent_id=agent_dir.name,

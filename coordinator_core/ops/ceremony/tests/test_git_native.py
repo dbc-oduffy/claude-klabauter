@@ -1917,7 +1917,29 @@ def test_agree_branch_commits_at_zero_or_one_spawn_via_private_index_route(tmp_p
         a for a in argvs
         if len(a) > 1 and a[1] in ("add", "commit", "hash-object")
     ]
-    assert landing_spawns == [["git", "hash-object", "-w", "--stdin-paths"]], landing_spawns
+    # AT MOST one `hash-object`, which is what the comment above has always
+    # said and what the AC bounds -- not EXACTLY one.
+    #
+    # This assertion previously read `== [["git", "hash-object", ...]]` and so
+    # failed the moment C3c/C3d made the blob write in-process: the op got
+    # BETTER and the test went red on the improvement rather than on a
+    # regression. That is the fourth instance of this shape on this
+    # deliverable (the baton records three others asserting `len(calls) == 1`,
+    # each pinning a previous optimisation as a FLOOR). A spawn-count
+    # assertion must bound the ceiling; pinning the exact count converts every
+    # future cut into a test failure and quietly discourages the next one.
+    #
+    # What must stay exact is the PROHIBITION -- never a bare `add`, never a
+    # real `commit` -- because those name the landing mechanism this AC exists
+    # to bound. Zero `hash-object` spawns is the better answer, not a
+    # violation.
+    forbidden = [a for a in landing_spawns if a[1] in ("add", "commit")]
+    assert forbidden == [], (
+        "the private-index landing route must never shell out to `git add` or "
+        "`git commit`: %r" % (forbidden,)
+    )
+    hash_object_spawns = [a for a in landing_spawns if a[1] == "hash-object"]
+    assert len(hash_object_spawns) <= 1, hash_object_spawns
 
     committed = subprocess.run(
         ["git", "show", "HEAD:new.txt"], cwd=str(repo), capture_output=True, text=True, check=True,

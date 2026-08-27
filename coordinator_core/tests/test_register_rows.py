@@ -109,7 +109,7 @@ def test_symbol_row_absent_for_missing_member() -> None:
 def test_module_row_absent_for_untracked_module(index: TrackedFileIndex) -> None:
     row = Row(
         register=RegisterId("coordinator_core/tests/test_register_rows.py", "GONE"),
-        subject="coordinator_core.tests.totally_nonexistent_module_xyz.member",
+        subject="coordinator_core.tests.totally_nonexistent_module_xyz",
         declared_class=SubjectClass.MODULE,
     )
     resolution = resolve_row(row, index, REPO_ROOT)
@@ -358,6 +358,35 @@ def test_symbol_row_locates_a_relatively_named_module(tmp_path: Path) -> None:
     )
 
     assert resolve_row(row, index, tmp_path).resolved
+
+
+def test_symbol_row_ignores_a_nested_scope_shadow_of_a_deleted_module_level_name(
+    tmp_path: Path,
+) -> None:
+    """A SYMBOL row names a module-level definition, not any name in the file.
+
+    Regression: `_resolve_symbol` originally walked the whole tree
+    (`ast.walk`), so a deleted module-level `_is_stamped` read as RESOLVED
+    whenever some unrelated nested scope happened to bind a local of the
+    same name. That is the reads-as-CLOSURE failure in its silent
+    direction -- a genuinely dead row reported live.
+    """
+    module = tmp_path / "holder.py"
+    module.write_text(
+        "def other_function():\n"
+        "    def _is_stamped():\n"
+        "        pass\n"
+        "    return _is_stamped\n",
+        encoding="utf-8",
+    )
+    index = TrackedFileIndex(frozenset({"holder.py"}))
+    row = Row(
+        register=RegisterId("probe.py", "_SYMBOLS"),
+        subject="holder._is_stamped",
+        declared_class=SubjectClass.SYMBOL,
+    )
+
+    assert resolve_row(row, index, tmp_path).absent
 
 
 def test_an_ambiguous_dotted_module_is_unadjudicable_never_resolved() -> None:

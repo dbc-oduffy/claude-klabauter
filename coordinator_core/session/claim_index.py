@@ -8,24 +8,28 @@ existence — the excised sink-side ownership gate (``de27716``, ``b56f3f3``)
 re-derived path->claimant on every call by walking every claimant's log,
 which cost 13.91s on a 918-live-claim tree and blew the 30s dispatch budget
 on a ONE-FILE pathspec. This module inverts that: the claim substrate is
-small (measured on this tree: 1012 ``touched.txt`` files, 9040 T/R event
-lines, 1255 distinct claimed paths) and cheap to read in full (measured full
-rebuild: 37.9ms, no git subprocess spawns), so a derived reverse index turns
-a per-call O(claims) scan into an O(len(paths)) dict lookup.
+small (measured on this tree, pre-cutover dialect: 1012 ``touched.txt``
+files, 9040 T/R event lines, 1255 distinct claimed paths — a dated
+measurement of the old corpus, kept as-is rather than restated in the
+current dialect) and cheap to read in full (measured full rebuild: 37.9ms,
+no git subprocess spawns), so a derived reverse index turns a per-call
+O(claims) scan into an O(len(paths)) dict lookup.
 
 SOURCE OF TRUTH stays the existing per-claimant logs — this module is a
-derived cache, never a second authority. It never writes to a
-``touched.txt``, and it writes nothing to disk of its own: the reverse
-index is IN-MEMORY-ONLY, rebuilt fresh on every ``lookup()`` call.
+derived cache, never a second authority. It never writes to the touch
+record, and it writes nothing to disk of its own: the reverse index is
+IN-MEMORY-ONLY, rebuilt fresh on every ``lookup()`` call.
 
-SUBSTRATE FORMAT — ``touched.txt`` is a CURRENT-CLAIM record (DR-254),
-append-only, last-event-wins across TWO event verbs sharing one file:
-``T <iso8601> <repo-relative-path>`` (claim) and ``R <iso8601>
-<repo-relative-path>`` (release, written by
+SUBSTRATE FORMAT — the touch record (``touch-record.jsonl``, DR-254's
+successor dialect; see the NEGATIVE SPEC below for the retirement of the
+older ``touched.txt`` dialect this paragraph used to describe) is a
+CURRENT-CLAIM record, append-only, last-event-wins across TWO event verbs
+sharing one file: ``T <iso8601> <repo-relative-path>`` (claim) and ``R
+<iso8601> <repo-relative-path>`` (release, written by
 ``coordinator_core.session.scope.release_committed_claims`` and its sibling
 write-side release path). Both verbs land in the SAME file, at BOTH
-``<sessions-dir>/<sid>/touched.txt`` (one per session) AND
-``<sessions-dir>/.agents/<agent-id>/touched.txt`` (one per dispatched
+``<sessions-dir>/<sid>/touch-record.jsonl`` (one per session) AND
+``<sessions-dir>/.agents/<agent-id>/touch-record.jsonl`` (one per dispatched
 agent, back-pointed to its owning session via a same-directory
 ``em-session-id.txt`` whose first line is that session's id — an agent's
 claims are attributed to ITS OWNER session in this index, never to the
@@ -48,7 +52,7 @@ ship a permanently-stale index. With a full rebuild measured at 37.9ms,
 always-rebuild-on-staleness is simpler and cheap enough to just do.
 
 NO LOCK. Concurrent-reader-safe by construction rather than by mutual
-exclusion: each claimant's ``touched.txt`` is read as a single
+exclusion: each claimant's touch record is read as a single
 line-oriented blob, and a reader that catches a writer mid-write discards
 only the (possibly torn) trailing line rather than attempting to repair it
 — see ``_read_lines_discard_torn_tail``. Re-adding the ceremony lock to
@@ -74,7 +78,7 @@ STALENESS RULE — DELETED, NOT REPAIRED (measured this session, C1b). The
 original design stamped the index with the sessions-dir's own top-level
 mtime and had ``lookup()`` re-rebuild only on divergence. That probe is
 blind to the common case: an EXISTING session appending its 2nd-and-later
-claim to ``<sid>/touched.txt`` (what ``scope.py::touch`` does on every call
+claim to ``<sid>/touch-record.jsonl`` (what ``scope.py::touch`` does on every call
 after the first) changes THAT FILE's mtime, not its parent directory's —
 neither the top-level sessions-dir mtime nor ``<sid>/``'s own mtime moves.
 Only creating a brand-new session dir moved the stamp. So the probe reported
@@ -140,7 +144,7 @@ now carries ``(verb, timestamp)`` instead of a bare verb, ``rebuild()``
 threads it into ``_IndexState.edit_ts`` (path -> {claimant_sid:
 last_T_timestamp}), and ``lookup()`` re-keys it onto ``_LookupResult.
 edit_ts`` for its caller — the timestamp was already being parsed off every
-``touched.txt`` line and discarded one line before it reached a consumer;
+touch record line and discarded one line before it reached a consumer;
 carrying it adds zero I/O (same files, same walk, same parse), so the
 37.9ms rebuild budget is unaffected. The stamp is the FIRST edit of a
 claimant's current claim run, not its latest (``scope.touch()`` dedups by

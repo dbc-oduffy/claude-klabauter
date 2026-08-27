@@ -1193,7 +1193,32 @@ def _run_close_commit_tail(
     frame."""
     kwargs = _resolve_close_commit_kwargs(decisions, sid)
     if kwargs is None:
-        return None
+        # A SKIP IS REPORTED, NEVER SILENT (2026-08-27). This used to return
+        # `None`, and `apply()` then folded nothing into the report at all: a
+        # session that closed with no `decisions["subject"]` got exit 0, no
+        # commit, and no record anywhere that a commit had been declined or
+        # why. That is indistinguishable, to an operator and to any downstream
+        # reader of the report, from a commit step that ran and found nothing
+        # -- and it is one of the two mechanisms behind fleet reports of "the
+        # close commit isn't running".
+        #
+        # The SKIP ITSELF is correct and unchanged: commit-message authoring is
+        # `judgments.py`'s call and is never guessed here, so absent a
+        # caller-supplied subject there is genuinely nothing to commit. Only
+        # its invisibility was the defect. `attempted: False` distinguishes
+        # this from every attempted-commit shape, and carries no
+        # `commit_failed` key, so the exit-code arm in `apply()` reads it as
+        # falsy and leaves SUCCESS standing -- a declined commit is not a
+        # failed one.
+        missing = "subject" if not decisions.get("subject") else "session-id"
+        return {
+            "attempted": False,
+            "skipped": f"close-commit:no-{missing}",
+            "diagnostics": [
+                f"close commit not attempted: no {missing} resolved; "
+                "commit-message authoring is the caller's, never guessed here"
+            ],
+        }
     try:
         result = directives_commit_tail.run_close_commit_and_release_claims(worktree_root, **kwargs)
     except Exception as exc:  # noqa: BLE001 - closed call, fold rather than crash
@@ -1419,10 +1444,38 @@ def apply(*, decisions: Optional[dict[str, Any]] = None) -> tuple[int, dict[str,
             # nothing new to commit.
             push_report = _run_push_outstanding_tail(worktree_root)
             report["push"] = push_report
-            if push_report.get("push_status") == "push-failed" and exit_code == int(
-                WorkstreamApplyExitCode.SUCCESS
-            ):
-                exit_code = int(WorkstreamApplyExitCode.PARTIAL_MUTATION)
+
+            # A FAILED PUSH DOES NOT DOWNGRADE A SUCCEEDED COMMIT (2026-08-27).
+            # This block used to read `push_status == "push-failed" and
+            # exit_code == SUCCESS` -> `PARTIAL_MUTATION`, which made the
+            # ceremony report partial mutation for a session whose commit had
+            # landed cleanly. Fleet symptom: operators read exit 4 as "the
+            # close commit never ran" and blamed `ceremony.wsc_tail`, an op
+            # killed 2026-08-23 that cannot run at all.
+            #
+            # WHY THE DOWNGRADE IS WRONG, not merely noisy. `PARTIAL_MUTATION`
+            # means this pass mutated some of what it set out to mutate and not
+            # the rest -- a statement about THIS session's writes. A push
+            # publishes commits that are already durably landed, including
+            # earlier rounds' (see `_run_push_outstanding_tail`'s own
+            # "a prior round's already-committed, still-unpushed work"), so its
+            # failure leaves this pass's mutations exactly as complete as they
+            # were. It is a publication outcome, not a mutation outcome, and it
+            # is separately owned: `push.outstanding` carries its own retry
+            # ladder, branch gate and protected-branch policy, and can report
+            # `push-failed` on a timeout AFTER the push already succeeded.
+            #
+            # NOT SUPPRESSED, RE-HOMED: the outcome stays fully reported in
+            # `report["push"]` above, which is where a caller that cares about
+            # publication reads it. What changes is only that it no longer
+            # overwrites an exit code that describes the commit.
+            #
+            # Negative-spec: do not restore this by widening the condition to
+            # some other push status. A push outcome must never be the thing
+            # that decides `exit_code` here. If a future requirement genuinely
+            # needs "closed but unpublished" to be visible in the exit status,
+            # it takes its own code -- never `PARTIAL_MUTATION`, whose meaning
+            # this block was borrowing and corrupting.
 
         if exit_code == int(WorkstreamApplyExitCode.SUCCESS):
             outcome = "success"

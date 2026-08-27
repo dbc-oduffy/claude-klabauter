@@ -125,8 +125,11 @@ def _all_six_verdicts(monkeypatch, root: Path) -> tuple:
 
 #: Declaration for the register-aging sweep (C5,
 #: `docs/plans/2026-08-26-every-register-either-derives-or-fails-on-its-dead-rows.md`):
-#: every row of `_VERDICT_LABELS` names a symbol living inside a parent module (e.g.
-#: `warm.engine_root.is_engine_root`), not a whole module.
+#: every row of `_VERDICT_LABELS` names a symbol living inside a parent module, not a
+#: whole module -- most rows as a dotted path (e.g. `warm.engine_root.is_engine_root`),
+#: two (`claude-klabauter-doctor-probe.*`, `gen-launcher-shim.*`) as a hyphenated script filename
+#: loaded via a bespoke loader rather than `import`. Both shapes still resolve because
+#: resolution is suffix-path string matching, not import-legality validation.
 _VERDICT_LABELS__SUBJECT_CLASS = "symbol"
 
 _VERDICT_LABELS = (

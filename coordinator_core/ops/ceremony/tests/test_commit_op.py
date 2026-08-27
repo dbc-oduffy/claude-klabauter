@@ -743,3 +743,53 @@ def test_run_commit_pipeline_spawn_count_is_gated(
         f"run_commit_pipeline issued more than one `git status`-shaped "
         f"call: {status_calls!r}; full argv list: {argvs!r}"
     )
+
+
+def test_modify_only_commit_spawn_count_is_at_most_one(
+    monkeypatch: pytest.MonkeyPatch, _repo: Path
+) -> None:
+    """C3e (docs/dispatch-briefs/2026-08-26-the-commit-op-stops-asking-git-
+    eleven-times/C3e.md): the LAST cut between this op and AC1 was
+    `coordinator_core/git/divergence.py :: diverging_paths`'s own `git
+    status --porcelain=v2 -z --no-renames` spawn. Once it settles in
+    process, a MODIFY-ONLY commit (every staged path already tracked, no
+    new file, so `check-ignore` was already free per `test_modify_only_
+    commit_asks_git_nothing_about_ignores` above) should reach AC1's
+    survivor: `git add`, the mutation itself, and nothing else.
+
+    RUN THE INSTRUMENT, don't trust a report: this asserts the counter
+    directly, the same `_PopenSpawnRecorder` the sibling spawn-count test
+    above uses, over a fixture built specifically so no branch of this
+    pipeline has an untracked-path or new-file residual to fall back on."""
+    from coordinator_core.ops.ceremony.commit_pipeline import run_commit_pipeline
+
+    file_name = "modify_only_spawn_probe.txt"
+    (_repo / file_name).write_text("first\n", encoding="utf-8")
+    _git(["add", "--", file_name], _repo)
+    _git(["commit", "-q", "-m", "seed modify-only spawn probe"], _repo)
+
+    # Now MODIFY it -- every staged path is tracked, nothing is new.
+    (_repo / file_name).write_text("second\n", encoding="utf-8")
+
+    recorder = _PopenSpawnRecorder(subprocess.Popen)
+    monkeypatch.setattr(subprocess, "Popen", recorder)
+
+    result = run_commit_pipeline(
+        _repo,
+        session_id="modify-only-spawn-count-session",
+        subject="C3e modify-only spawn count probe",
+        stage_paths=[file_name],
+        push_mode="none",
+    )
+
+    assert not result.commit_failed and result.committed_sha, (
+        f"pipeline call under measurement must actually commit: {result!r}"
+    )
+
+    argvs = [list(map(str, argv)) for argv in recorder.calls]
+
+    assert len(argvs) <= 1, (
+        f"a modify-only commit must reach at most ONE spawn (`git add`, the "
+        f"mutation itself) once diverging_paths settles in process; got "
+        f"{len(argvs)}: {argvs!r}"
+    )

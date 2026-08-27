@@ -17,8 +17,6 @@ import os
 import pytest
 import yaml
 
-from datetime import datetime, timezone
-
 from coordinator_core.session import claim_index
 from coordinator_core.session import claim_neighbours
 from coordinator_core.session import scope
@@ -55,12 +53,11 @@ def _session_touched(base, sid, lines):
 
 
 def _epoch(ts):
-    if not ts:
-        return None
-    parsed = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
-    return parsed.timestamp()
+    # Review: code-reviewer P3 — every call site passes the `datetime` (or
+    # `None`) `parse_touch_event` already returned, never a string; the
+    # former str()->fromisoformat round-trip existed to handle an input
+    # shape this helper is never actually called with.
+    return ts.timestamp() if ts is not None else None
 
 
 def _touch_line(verb, path, when="2026-08-16T10:00:00.000000Z"):

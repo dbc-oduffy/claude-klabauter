@@ -1,21 +1,32 @@
 """
 coordinator_core.workstream_complete.directives_commit_tail — the
-dirty-tree, commit-tail, push-verification, claim-release, cadence and
-final-summary builders for the `workstream-complete-assemble` computed-skill
-engine.
+peer-attribution, commit-tail, push-outstanding, push-verification and
+publish-lag-advisory builders for the `workstream-complete-assemble`
+computed-skill engine.
 
-Purpose: computes what remains of Steps 3.0/3.6/4 (`SKILL.md` census rows
-`d-accumulate-session-paths`, `d-verify-push-landed`,
-`d-render-final-summary`) for `coordinator_core.workstream_complete`'s
-`brief()` assembly seam (C3) — the terminal leg of the ceremony, run only
-after every earlier directive/judgment has resolved. Mirrors
-`directives_session_hygiene.py`'s directives-vs-gates split: a mutating
-step (a real, on-disk, never-invoked-in-process CLI) becomes a
-`directives[]` entry; a step whose "work" is reading disk/git state or
-folding already-computed one-liners into a fixed template becomes a plain
-read-only function this module exposes directly, per the same "compute a
-fact, don't invent a directive" disposition that module's own docstring
-documents.
+Purpose: this module's live surface is the CLOSE/COMMIT tail itself, not a
+`directives[]`-builder family — the close/commit tail proper is
+`run_close_commit` / `run_close_commit_and_release_claims` (the two
+governing-plan and per-path claim releases wired into the latter) /
+`run_push_outstanding_tail`. Everything else here (`resolve_known_
+concurrent_paths` and its `_committed_paths_for_sids`/`chunked_show_
+numstat_blocks` support, `compute_push_landed_gate`, `compute_publish_lag_
+advisory`) is read-only fan-in these callers consume: peer-exclusion pathspec
+resolution, push-landed confirmation, and the DR-335 publish-lag advisory.
+Mirrors `directives_session_hygiene.py`'s directives-vs-gates split where it
+still applies: a step whose "work" is reading disk/git state or folding
+already-computed one-liners into a fixed template is a plain read-only
+function this module exposes directly, per that module's own "compute a
+fact, don't invent a directive" disposition.
+
+Callers MUST use `run_close_commit_and_release_claims`, never bare
+`run_close_commit` — the latter releases NEITHER claim mechanism (see its
+own docstring): `run_close_commit_and_release_claims` wraps it and
+releases both the per-path commit-claim (`session/scope.py ::
+release_committed_claims`, hard constraint 4) and the governing-plan
+artifact claim (`ops/ceremony/tail_ops.py :: cs_release_artifact`, AC5)
+unconditionally, on both the success and failure exit of the wrapped
+commit call.
 
 This module is one of seven siblings (directives_lessons_plan.py,
 directives_completion.py, directives_memo_lifecycle.py,
@@ -23,76 +34,50 @@ directives_review.py, directives_session_hygiene.py, judgments.py) built
 under the multi-module-assembler convention `docs/plans/2026-07-26-
 workstream-complete-computed-frontage.md` (D-4) sets for this tree:
 `__init__.py` is retained as the assembly + CLI seam ONLY, and every
-submodule exposes pure, `__init__`-independent builder functions.
+submodule exposes pure, `__init__`-independent functions.
 
 Spec backlink: docs/plans/2026-07-26-workstream-complete-computed-frontage.md,
 chunk C2e. Source census: state/plan-sidecars/2026-07-26-workstream-complete-
 computed-frontage.census-steps.md, Step 3.0/3/3.5/3.6/4 rows.
 
-Step 3/3.5, 2026-08-23 kill (`ceremony.wsc_tail`) and 2026-08-25 rebuild
-(DR-358, `docs/decisions/DR-358-the-close-ceremony-shape-after-the-kill.md`):
-`d-close-tail-args` (`build_close_tail_args_directive`, fronting
-`coordinator/bin/wsc-close.py tail-args`) and `d-run-wsc-tail`
-(`build_wsc_tail_directive`, fronting the now-deleted `coordinator/bin/
-wsc-tail.py` trampoline for the killed `ceremony.wsc_tail` op) were removed
-outright by the kill. DR-358 rules that the OPERATOR requirement they
-discharged — closing a session without hand-landing the commit — is
-rebuilt, not restored: `run_close_commit` below is the rebuilt shape, an
-in-process call directly against `commit_pipeline.run_commit_pipeline` at
-`push_mode=PUSH_MODE_NEVER` (hard constraints 5/6), with no new CLI or
-`directives[]` layer above it — `d-close-tail-args`'s former argument
-computation merges into this one call per DR-358's own ruling, rather than
-being rebuilt as a separate step. `d-release-plan-claim`
-(`build_release_plan_claim_directive`, fronting `session-claim-cli
-release-artifact`) remains gone as a standalone directive — DR-358 rules it
-discharged by an inline call to the existing native port
-`ops/ceremony/tail_ops.py :: cs_release_artifact`, wired into
-`run_close_commit`'s route by a later chunk (C5), not rebuilt as a directive
-either; see `state/kill-ledger.md` for the original removal record.
-`run_close_commit_and_release_claims` (this module, C5) is the wired route:
-it wraps `run_close_commit` and releases BOTH claim mechanisms hard
-constraint 4 and AC5 separately require — the per-path `session/scope.py ::
-release_committed_claims` (hard constraint 4) and the governing-plan
-artifact claim via `cs_release_artifact` (AC5) — unconditionally, on both
-the success and failure exit of the wrapped commit call, per DR-358's
-failure-path ruling. A caller of this rebuilt close route should call
-`run_close_commit_and_release_claims`, never `run_close_commit` directly —
-the latter releases neither claim (see its own docstring).
+Kill/rebuild provenance (load-bearing — preserve; do not restate as if
+current):
 
-Consumes (orchestrates, reimplements none):
-    coordinator/bin/emit-cadence.py -> build_emit_cadence_directive's
-        directives[].cli, via the shared
-        `coordinator_core.ceremony_common.tail.build_ceremony_close_tail`
-        factor (see § Design note below for why only its emit-cadence half
-        is taken).
-    `git log`/`git branch -r --contains` (read-only) ->
-        compute_push_landed_gate's own subprocess calls, mirroring
-        `resolve_repo_root`'s existing precedent of a plain read-only
-        subprocess rather than an in-process git read-model (out of scope
-        here per this package's own module docstring).
+`ceremony.wsc_tail` was killed 2026-08-23 (`state/kill-ledger.md` for the
+original removal record) and its OPERATOR requirement — closing a session
+without hand-landing the commit — was rebuilt, not restored, by DR-358
+(`docs/decisions/DR-358-the-close-ceremony-shape-after-the-kill.md`),
+2026-08-25:
 
-Design note — why `build_ceremony_close_tail` contributes only its
-emit-cadence half here. The "Third surface" decision
-(docs/plans/2026-07-26-workstream-complete-computed-frontage.md, D-1
-addendum) directs this module to consume `build_ceremony_close_tail`
-for the `d-emit-cadence` tail pair rather than re-deriving it — but
-`build_ceremony_close_tail` returns a PAIR (`coordinator-ceremony-hook`
-then `emit-cadence`), and workstream-complete, unlike workday-complete and
-workweek-complete, has no post-command-hook step anywhere in its own
-census or `SKILL.md` (verified: `grep -c ceremony-hook
-coordinator/skills/workstream-complete/SKILL.md` -> `0`; the command-
-payload-inventory audit's "run project post-ceremony command hook" row
-lists `workday-start`/`workday-complete`/`workweek-start`/`workweek-
-complete` but never `workstream-complete`). Emitting the hook half here
-would be a phantom directive with no source-of-truth step behind it —
-exactly the failure class AC2's phantom-verb guard exists to catch. This
-chunk resolves the tension by taking ONLY `build_ceremony_close_tail`'s
-second (emit-cadence) element — still sharing the family factor's shape
-(cli/args/depends_on/already_satisfied) rather than hand-deriving a third
-copy, while not inventing a step this ceremony does not have. Flagged
-explicitly as a decision this chunk made that the plan body left open,
-per this package's own precedent for such flags
-(`directives_session_hygiene.py`'s completeness-checklist-gate note).
+- `d-close-tail-args` (formerly `build_close_tail_args_directive`,
+  fronting `coordinator/bin/wsc-close.py tail-args`) and `d-run-wsc-tail`
+  (formerly `build_wsc_tail_directive`, fronting the now-deleted
+  `coordinator/bin/wsc-tail.py` trampoline for the killed op) were removed
+  outright by the kill and are NOT present in this file. DR-358 rules
+  `run_close_commit` the rebuilt shape for `d-run-wsc-tail`'s requirement:
+  an in-process call directly against `commit_pipeline.run_commit_pipeline`
+  at `push_mode=PUSH_MODE_NEVER` (hard constraints 5/6), with no new CLI or
+  `directives[]` layer above it — `d-close-tail-args`'s former argument
+  computation merges into this one call per DR-358's own ruling, rather
+  than being rebuilt as a separate step.
+- `d-release-plan-claim` (formerly `build_release_plan_claim_directive`,
+  fronting `session-claim-cli release-artifact`) remains gone as a
+  standalone directive — DR-358 rules it discharged by an inline call to
+  the existing native port `ops/ceremony/tail_ops.py :: cs_release_
+  artifact`, wired into `run_close_commit`'s route by `run_close_commit_
+  and_release_claims` (C5), not rebuilt as a directive either.
+- `d-write-trail`'s former review-shape/review-enum assemble-time
+  validators (`validate_review_shape` and the rest of that cluster) lived
+  in this module only because their sole callers — the now-removed
+  `build_wsc_tail_directive`/`build_close_tail_args_directive` — lived here
+  too. Deleted as dead code once those builders' removal left them with
+  zero callers; `d-write-trail` itself lives in `directives_review.py`
+  (`build_write_trail_directives`), not here, and was never this module's
+  own step.
+- `accumulate_session_paths` (formerly `d-accumulate-session-paths`) was
+  spliced only into the two removed builders' `--stage-paths` argument;
+  deleted as dead code once they were gone and no replacement caller
+  appeared.
 
 Negative-spec:
     - Does NOT decide commit subject/prose text, the pinboard note, which
@@ -101,61 +86,53 @@ Negative-spec:
       `commit-message-authoring`, `unattributable-file-disposition`,
       `concurrent-peer-attribution`, `session-work-summary`, and
       `flag-severity-classification` are C2f's (`judgments.py`) judgment
-      points. This module only turns ALREADY-DECIDED text into directive
-      args or a rendered summary string.
+      points. This module only turns already-decided values into a
+      `run_commit_pipeline` call or a rendered summary string.
     - Does NOT implement the dirty-tree classifier itself
       (`d-classify-dirty-tree`) — per the census, that step is already
-      engine-owned inside `ceremony.wsc_tail`'s own `commit_gates` and has
-      nothing separate for this assembler to compute or name.
+      engine-owned inside the commit-gate stack (`commit_gates`) and has
+      nothing separate for this module to compute or name.
     - Does NOT restate the "never `git add -A`" invariant anywhere in this
       module. That invariant is already enforced inside the op
       (`coordinator_core.bash_guards.block_blanket_git_add`) and DR-090's
       own worked example names restating an already-enforced invariant at
       the call site as the antipattern the conversion exists to remove —
-      this module's directives pass an explicit `--stage-paths`/pathspec
-      list and nothing broader, full stop.
-    - Does NOT invoke any of the named CLIs in-process. Every function
-      below only reads disk/git state or returns a `directives[]` entry
-      naming an existing CLI; mutation happens only when the apply half
-      later executes that entry.
-    - Does NOT retry a `wsc-tail` client-side timeout automatically.
-      `describe_wsc_tail_outcome`'s `"timeout"` entry names RECONCILE
-      (check actual repo state before deciding anything failed) as the
-      required next move, never a blind retry — see its own docstring.
+      this module passes an explicit `stage_paths` pathspec and nothing
+      broader, full stop.
     - `run_close_commit` does NOT compose `subject`/`prose` text itself
       (`commit-message-authoring` stays `judgments.py`'s C2f call), does NOT
-      decide `stage_paths` (that is `accumulate_session_paths`'/
-      `resolve_known_concurrent_paths`'s job above), and does NOT release the
-      governing-plan claim (`cs_release_artifact` wiring is C5's route, not
-      this function's body) — it only turns already-decided values into one
-      `run_commit_pipeline` call, at a push mode this module never lets the
-      caller override.
+      decide `stage_paths` (that is `resolve_known_concurrent_paths`'s job
+      above, folded by the caller), and does NOT release the governing-plan
+      claim (`cs_release_artifact` wiring is `run_close_commit_and_release_
+      claims`'s route, not this function's body) — it only turns
+      already-decided values into one `run_commit_pipeline` call, at a push
+      mode this module never lets the caller override.
     - DOES retry, narrowly: `_chunked_committed_paths`' per-chunk git spawn
-      (`_run_git_ok_retrying`, `_GIT_RETRY_ATTEMPTS`) is the ONE exception
-      to the no-retry posture above, and it is not a contradiction of it —
-      that entry is about not blind-retrying an ALREADY-REPORTED-SUCCESS
-      client-side timeout; this one is a bounded retry of a git SPAWN that
-      has not yet succeeded, absorbing routine lock contention this
-      machine's load norm makes common. Fail-closed is preserved either
-      way: exhausting the retry budget still raises
-      `PeerAttributionUnavailable`, never degrades to an empty/partial
-      result. Do not "simplify" this retry away, and do not widen it into a
-      general-purpose retry wrapper reused elsewhere in this module — it is
-      scoped to this one call site's known failure mode.
+      (`_run_git_ok_retrying`, `_GIT_RETRY_ATTEMPTS`) is bounded lock-
+      contention absorption for a git SPAWN that has not yet succeeded, not
+      a general-purpose retry wrapper — scoped to this one call site's known
+      failure mode. Fail-closed is preserved either way: exhausting the
+      retry budget still raises `PeerAttributionUnavailable`, never
+      degrades to an empty/partial result. Do not "simplify" this retry
+      away, and do not widen it into a general-purpose retry wrapper reused
+      elsewhere in this module.
+    - `run_push_outstanding_tail` never issues `git push` itself, and
+      neither does `compute_push_landed_gate` (read-only: `git log`/`git
+      branch -r --contains` only) — the SAME split `run_close_commit`'s own
+      docstring names ("A caller wanting a push does so as its own
+      separate, later step").
 """
 
 from __future__ import annotations
 
-import json
 import re
 import subprocess
 import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, NamedTuple, Optional, Sequence, Set, Union
+from typing import Any, Dict, List, NamedTuple, Optional, Sequence, Set, Union
 
-from coordinator_core.ceremony_common.tail import build_ceremony_close_tail
 from coordinator_core.session import core as _session_core
 from coordinator_core.session import liveness as _session_liveness
 from coordinator_core.session import scope as session_scope
@@ -165,74 +142,6 @@ from coordinator_core.win_portability import no_console_creationflags
 from coordinator_core.workstream_complete import directives_memo_lifecycle as _memo_lifecycle
 
 _NO_CONSOLE = no_console_creationflags()
-
-
-def _directive(
-    id_: str,
-    cli: str,
-    args: list[str],
-    depends_on: Any = None,
-    already_satisfied: bool = False,
-) -> dict[str, Any]:
-    return {"id": id_, "cli": cli, "args": args, "depends_on": depends_on, "already_satisfied": already_satisfied}
-
-
-# ---------------------------------------------------------------------------
-# Step 3.0 tail / Step 3 WSC_PATHS — d-accumulate-session-paths
-# ---------------------------------------------------------------------------
-
-
-def accumulate_session_paths(
-    session_authored_paths: Iterable[str],
-    deletion_paths: Iterable[str] = (),
-    sidecar_paths: Iterable[str] = (),
-) -> list[str]:
-    """Step 3's `WSC_PATHS` capture, done once: folds the session-authored
-    path set Step 2.67 already computed, its `git rm` deletion paths, and
-    any preserved Step 2.6b run-report sidecar deletions into one deduped,
-    order-preserving pathspec list — the same set drives both `git add`
-    and `git commit` per the SKILL's own "capture ONCE, reuse for both"
-    discipline (2026-06-24 shared-index absorption incident).
-
-    Pure aggregation, not a `directives[].cli` entry: per the census
-    (`d-accumulate-session-paths` row), this is "fully derivable by the
-    engine from the same session-authored-file tracking Step 2.67 already
-    computes" — there is no separate mutating CLI to name, only a set
-    union already known by the time this step runs. Previously spliced by
-    callers into `build_close_tail_args_directive`'s / `build_wsc_tail_
-    directive`'s `--stage-paths` argument (both removed, ceremony.wsc_tail
-    kill, 2026-08-23); this function is now unused pending a replacement
-    caller.
-
-    Reconciliation with C5's in-process auto-commit safety net
-    (docs/plans/2026-08-20-the-close-ceremony-commits-what-the-session-
-    wrote.md § C5, `coordinator_core.ops.ceremony.wsc_tail`'s post-commit
-    `session_auto_commit_safety_net` step): this function and that step
-    answer two genuinely different questions, not one question computed
-    twice, so keeping both is deliberate rather than duplicative.
-
-    This function (and `_peer_subagent_share_paths`/
-    `resolve_known_concurrent_paths` above it) run at ASSEMBLE time, before
-    any commit — they compute the explicit `--stage-paths` pathspec the WSC
-    commit is told to stage, from signals already known before the ceremony
-    starts (Step 2.67's session-authored-file tracking, the peer-exclusion
-    scan). C5's safety net runs AFTER that commit has already landed, via a
-    fresh `coordinator_core.ops.session.safe_commit_offer.compute_offer`
-    read taken at that later moment — it exists specifically to catch
-    session-claimed paths that became dirty (or were newly touched by a
-    dispatched sub-agent) DURING the ceremony's own pre-commit tail steps
-    (roadmap-callout render, review-trail write), after this module's
-    assemble-time pathspec was already fixed and handed to `wsc-tail`.
-    Folding the safety net's live re-scan into THIS function would require
-    re-deriving it at assemble time, which cannot see a file that does not
-    dirty until partway through the ceremony that follows — the two run at
-    different points in the pipeline and neither can subsume the other.
-    """
-    seen: dict[str, None] = {}
-    for path in (*session_authored_paths, *deletion_paths, *sidecar_paths):
-        if path:
-            seen.setdefault(str(path), None)
-    return list(seen.keys())
 
 
 # ---------------------------------------------------------------------------
@@ -1117,10 +1026,8 @@ def resolve_known_concurrent_paths(
 
 
 # ---------------------------------------------------------------------------
-# Step 3 mandatory-commit-shape — wsc-close tail-args + wsc-tail
+# Step 3 decisions-key surface
 # ---------------------------------------------------------------------------
-
-_REVIEW_REQUIRED_FIELDS = ("sha_range", "reviewer", "scope", "verdict", "diff_loc")
 
 #: The `decisions` keys this module's directive builders read — declared
 #: once so a caller (`__init__.py`'s `preflight.decisions_template`
@@ -1145,260 +1052,6 @@ FREE_VALUE_KEYS: tuple[str, ...] = (
     _KEY_STAGE_PATHS,
     _KEY_GOVERNING_PLAN_SLUG,
 )
-
-
-def _review_fields_present(review: Any) -> bool:
-    """Whether a SINGLE `review` dict carries all five required fields,
-    non-empty. Used two ways: (1) directly, on `decisions["review"]` when it
-    is the pre-existing single-`dict` shape; (2) per-ENTRY, when
-    `decisions["review"]` is the additive `list[dict]` shape (partitioned-
-    review fix, `workstream_complete.build_write_trail_directives`), which
-    calls this once per list entry to decide which entries qualify,
-    mirroring `build_write_trail_directives`'s own "an incomplete entry
-    contributes nothing, silently" convention. (`build_close_tail_args_
-    directive`/`wsc-tail.py`, formerly the other consumer of this shape,
-    were removed in the ceremony.wsc_tail kill, 2026-08-23.)
-
-    Returns `False` for any non-`dict` input (a bare falsy `review`, or a
-    list entry that is itself not a dict) — this function only ever judges
-    ONE candidate dict at a time; a caller holding a `list` must iterate
-    and call this per element, never pass the list itself."""
-    if not isinstance(review, dict):
-        return False
-    return all(review.get(k) not in (None, "") for k in _REVIEW_REQUIRED_FIELDS)
-
-
-def _review_any_qualifies(review: Any) -> bool:
-    """The qualification predicate for "does decisions['review'] back
-    anything real" — dict shape delegates straight to `_review_fields_
-    present`; list shape is true iff ANY entry qualifies. Anything else
-    (falsy, or a shape `validate_review_shape` would already have rejected)
-    is `False`.
-
-    Formerly extracted so `build_wsc_tail_directive`'s `--adjudication-
-    present` predicate and `build_close_tail_args_directive`'s `--review-*`/
-    `--review-slice` predicate decided the SAME fact from the SAME code —
-    before this helper existed they were two independent predicates (bare
-    truthiness vs. `_review_fields_present`) that could disagree on an
-    incomplete-but-recognized shape (a dict missing required fields, a list
-    where every entry is incomplete, `[{}]`, `{'workstream': 'x'}`): that
-    input composed `--adjudication-present` while composing NO `--review-*`/
-    `--review-slice` token at all, so the mismatch surfaced only after a
-    live ceremony had already committed, as a `failed_critical`-driven
-    exit_code 2 the operator is told not to re-run for. `_raise_on_review_
-    truthy_unqualified` (below) caught that class at assemble time, before
-    either builder's directive was even constructed. Both builders were
-    removed in the ceremony.wsc_tail kill, 2026-08-23."""
-    if isinstance(review, list):
-        return any(_review_fields_present(entry) for entry in review)
-    return _review_fields_present(review)
-
-
-def _raise_on_review_truthy_unqualified(review: Any) -> None:
-    """Raises `ValueError` when `review` is truthy but `_review_any_
-    qualifies` is `False` — the disagreement class `_review_any_qualifies`'s
-    own docstring names. Formerly called once, from `build_wsc_tail_
-    directive` (the `--adjudication-present` producer, removed in the
-    ceremony.wsc_tail kill, 2026-08-23), which `__init__.py` always called in
-    the same assemble pass as `build_close_tail_args_directive` (also
-    removed) — raising here aborted assembly before either directive reached
-    `directives[]`, same loud-at-ingestion posture `validate_review_shape`
-    already establishes for shape, one layer up for completeness. Leaves the
-    post-commit `failed_critical` branch (`tail_ops.write_review_trail`) as
-    the defence-in-depth backstop it was designed to be, rather than the
-    primary detector for this class."""
-    if review and not _review_any_qualifies(review):
-        if isinstance(review, list):
-            detail = f"every entry of the {len(review)}-item list is missing required field(s)"
-        else:
-            missing = sorted(k for k in _REVIEW_REQUIRED_FIELDS if review.get(k) in (None, ""))
-            detail = f"missing required field(s): {missing!r}"
-        raise ValueError(
-            f"decisions['review'] is truthy but qualifies for no --review-*/--review-slice "
-            f"token ({detail}) — a close asserting a review must supply complete review "
-            f"metadata, or omit decisions['review'] entirely."
-        )
-
-
-def _raise_on_review_enum_values(review: Any) -> None:
-    """Raises `ValueError` when any composed review entry carries an
-    out-of-vocabulary `reviewer`/`scope`/`verdict`/`scope_kind`.
-
-    Completes the assemble-time validator family (`validate_review_shape` for
-    shape, `_raise_on_review_truthy_unqualified` for completeness) with the
-    fourth axis — value legality. Without it, the four closed vocabularies were
-    reachable ONLY by being rejected by them: `wsc-close tail-args --help`
-    lists the `--review-*` flag names with no value constraints, and the review
-    block is a free-form map carrying no `dispositions[]` the way every other
-    `judgment_points[]` entry does. The discovery path was author-a-guess, run
-    apply, get rejected.
-
-    Firing here rather than at the writer is the whole point: `d-write-trail`
-    runs FIRST in apply order, so a wrong enum turned the pass into `EXIT: 4
-    PARTIAL_MUTATION` and forced a reconcile-before-retry. Assembly aborts
-    before any directive reaches `directives[]`, so the same mistake is now a
-    question asked before anything moved.
-
-    Messages come from `review_trail_write.review_enum_errors` — the writer's
-    own authority, not a copy — so the text is byte-identical to the
-    apply-time rejection and cannot drift from the vocabularies it names.
-    Imported lazily: this module is on the assemble hot path and
-    `review_trail_write` pulls the op-registry side effects with it.
-
-    Spec backlink: cross-repo/inbox/2026-08-18-doe-claude-em-review-trail-
-    write-enums-undiscoverable-until-apply.md § 1.
-    """
-    from coordinator_core.ops.review_trail_write import review_enum_errors
-
-    entries = review if isinstance(review, list) else [review]
-    errors: list[str] = []
-    for index, entry in enumerate(entries):
-        if not isinstance(entry, dict) or not _review_fields_present(entry):
-            # A shape-invalid or incomplete entry is not this validator's
-            # class — `validate_review_shape` and `_raise_on_review_truthy_
-            # unqualified` own those, and an incomplete entry composes no
-            # token at all, so its enum values never reach the writer.
-            continue
-        entry_errors = review_enum_errors(
-            reviewer=str(entry["reviewer"]),
-            scope=str(entry["scope"]),
-            verdict=str(entry["verdict"]),
-            # scope_kind is optional in the dict and defaults at the writer;
-            # validate the value that will actually be written, not "".
-            scope_kind=str(entry["scope_kind"]) if entry.get("scope_kind") else "diff",
-        )
-        if entry_errors and isinstance(review, list):
-            entry_errors = [f"slice[{index}]: {e}" for e in entry_errors]
-        errors += entry_errors
-    if errors:
-        raise ValueError(
-            " | ".join(errors)
-            + " — rejected at assemble time; correcting it here costs no partial mutation."
-        )
-
-
-#: Derived from `_REVIEW_REQUIRED_FIELDS` (never hand-duplicated) — the flat
-#: `review_<field>` spellings a caller might plausibly place directly on
-#: `decisions` instead of nesting them under `decisions["review"]`. A caller
-#: who does this looks plausible at the callsite (2026-07-30 cross-repo memo:
-#: `cross-repo/archive/2026-07-30-doe-claude-em-wsc-review-trail-passthrough-
-#: and-memo-attribution.md` — a real session supplied `review_sha_range`,
-#: `review_reviewer`, etc. as flat keys, `_review_fields_present({})` was
-#: `False`, `--review-*` was never composed, and the tail reported
-#: `review_trail.write:no-review-metadata` while still exiting 0) — nothing
-#: in this module read those keys, so they were silently dropped. See
-#: `_warn_unrecognized_review_keys` for the diagnostic this now emits.
-_REVIEW_FLAT_ALIAS_KEYS: tuple[str, ...] = tuple(
-    f"review_{field}" for field in (*_REVIEW_REQUIRED_FIELDS, "scope_kind")
-)
-
-
-def _warn_unrecognized_review_keys(decisions: dict[str, Any]) -> None:
-    """This module's own Negative-spec already states the flag-shape
-    principle one layer down: "a flag either parser rejects is worse than a
-    missing one" (formerly `build_close_tail_args_directive`'s own docstring,
-    removed in the ceremony.wsc_tail kill, 2026-08-23).
-    This applies that SAME principle one layer up, at the `decisions` dict
-    itself — a legitimately absent `review` dict must not fail loud (the
-    review slice is genuinely optional), but a flat `review_*` key sitting
-    unconsumed on `decisions` is not "absent", it is a caller's contract
-    mismatch that this module can detect and was previously swallowing in
-    silence. Diagnostic only, never raises — the ceremony still proceeds
-    (the review dict, if genuinely supplied, is unaffected), it just stops
-    doing so quietly. Printed to stderr, never stdout: this module's own
-    `brief`/`apply` CLI seams (`coordinator_core.workstream_complete.
-    __init__`) serialize their JSON result to stdout, and polluting it
-    would be worse than the silent drop this closes.
-    """
-    present = sorted(k for k in _REVIEW_FLAT_ALIAS_KEYS if k in decisions)
-    if not present:
-        return
-    print(
-        "workstream-complete: decisions key(s) "
-        f"{present!r} are not part of the contract and are being IGNORED — "
-        f"review metadata must be supplied as a nested decisions[{_KEY_REVIEW!r}] "
-        f"object with keys {list(_REVIEW_REQUIRED_FIELDS)!r} (optional "
-        "'scope_kind'), not flat top-level keys.",
-        file=sys.stderr,
-    )
-
-
-#: The optional keys a single `review` dict (scalar shape, or one entry of
-#: the list shape) may carry alongside `_REVIEW_REQUIRED_FIELDS` -- mirrors
-#: `wsc-tail.py`'s `_REVIEW_SLICE_ALLOWED_KEYS` plus `workstream` (that one
-#: forwarded via wsc-tail.py's own `--review-workstream`, not through the
-#: `--review-slice` JSON path). Membership only, not completeness: a dict
-#: whose keys are a subset of `_REVIEW_ALLOWED_KEYS` is a legal shape even
-#: when a required field is absent -- that stays `_review_fields_present`'s
-#: and `build_write_trail_directives`'s own "an incomplete entry contributes
-#: nothing, silently" convention (state/bug-backlog/2026-08-14-wsc-apply-
-#: accepts-an-unconsumed-decision-debea052f8c5.yaml DESIGN NOTE: fix at
-#: decisions-ingestion, leave the lower per-layer conventions alone).
-_REVIEW_OPTIONAL_KEYS: tuple[str, ...] = ("scope_kind", "reviewer_evidence", "workstream")
-_REVIEW_ALLOWED_KEYS: frozenset[str] = frozenset(_REVIEW_REQUIRED_FIELDS) | frozenset(_REVIEW_OPTIONAL_KEYS)
-
-_REVIEW_SHAPE_MESSAGE = (
-    "decisions['review'] must be one of: falsy; a dict whose keys are a "
-    f"subset of {sorted(_REVIEW_ALLOWED_KEYS)!r}; or a list of such dicts."
-)
-
-
-def _raise_on_unrecognized_review_dict(entry: dict[str, Any]) -> None:
-    """Raises when `entry` (the scalar `review` dict, or one `list` entry)
-    carries a key outside `_REVIEW_ALLOWED_KEYS`. Silent on a dict whose
-    keys are all recognized, even if incomplete -- see `_REVIEW_ALLOWED_KEYS`
-    docstring above for why completeness is not this function's concern."""
-    unrecognized = sorted(set(entry) - _REVIEW_ALLOWED_KEYS)
-    if not unrecognized:
-        return
-    missing = sorted(k for k in _REVIEW_REQUIRED_FIELDS if entry.get(k) in (None, ""))
-    detail = f" Unrecognized key(s): {unrecognized!r}."
-    if missing:
-        detail += f" Missing required field(s): {missing!r}."
-    raise ValueError(f"{_REVIEW_SHAPE_MESSAGE}{detail}")
-
-
-def validate_review_shape(review: Any) -> None:
-    """The shared POSITIVE shape validator for `decisions['review']` --
-    called from `workstream_complete.build_write_trail_directives` (formerly
-    also from `build_close_tail_args_directive`, removed in the
-    ceremony.wsc_tail kill, 2026-08-23) so they could not diverge. Two
-    independent silent-dropping sites for one key was the
-    structural defect under state/bug-backlog/2026-08-14-wsc-apply-accepts-
-    an-unconsumed-decision-debea052f8c5.yaml (corroborated cross-repo:
-    cross-repo/inbox/2026-08-14-example-cockpit-repo-em-review-decisions-dict-
-    drops-silently-and-mints-a-not-reviewed-waiver.md) -- a dict nested one
-    key deeper than the accepted shapes (e.g. `{'slices': [...], ...}`)
-    passed both sites without a single flag or record produced, and the
-    ceremony still exited 0.
-
-    RAISES `ValueError` on anything outside the three legal shapes: falsy;
-    a dict whose keys are a subset of `_REVIEW_ALLOWED_KEYS`; or a list of
-    such dicts. Validates KEY-SET membership only, never per-field
-    completeness -- an incomplete-but-recognized dict/entry is left to the
-    lower layers' own pre-existing "contributes nothing, silently"
-    convention (`_review_fields_present`, `build_write_trail_directives`),
-    untouched per that backlog entry's DESIGN NOTE. This is a POSITIVE
-    validator (accepts by shape), distinct from `_warn_unrecognized_review_
-    keys` above, which is a diagnostic-only NEGATIVE check on a different
-    object -- flat `review_*` keys sitting on `decisions` itself, not on
-    `decisions['review']`.
-    """
-    if not review:
-        return
-    if isinstance(review, dict):
-        _raise_on_unrecognized_review_dict(review)
-        return
-    if isinstance(review, list):
-        for entry in review:
-            if not isinstance(entry, dict):
-                raise ValueError(
-                    f"{_REVIEW_SHAPE_MESSAGE} Got a list entry of type "
-                    f"{type(entry).__name__}, not a dict."
-                )
-            _raise_on_unrecognized_review_dict(entry)
-        return
-    raise ValueError(f"{_REVIEW_SHAPE_MESSAGE} Got {type(review).__name__}.")
 
 
 # ---------------------------------------------------------------------------

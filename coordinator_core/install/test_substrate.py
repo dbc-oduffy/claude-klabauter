@@ -1632,6 +1632,67 @@ def test_write_ps1_policy_status_survives_unwritable_path(tmp_path, capsys):
     assert "WARNING" in capsys.readouterr().err
 
 
+def test_ps1_policy_status_unreadable_verdict_carries_probe_failed_diagnosis(tmp_path):
+    """An UNREADABLE verdict means the probe never ran to completion, so no
+    policy was read at all. `reason` alone cannot carry that: it quotes a
+    cmdlet error under a key named for a policy verdict, which reads as
+    'this host's policy forbids it' and sends the operator to
+    `Set-ExecutionPolicy` for a fault that is nothing of the kind. The
+    live instance of this cost two sessions and eight days -- see
+    DR-365."""
+    bin_dst = tmp_path / "bin"
+    bin_dst.mkdir()
+    verdict = PolicyGateVerdict(
+        green=False, host_verdicts=[], reason="probe exited 1: ...", unreadable=True
+    )
+
+    _write_ps1_policy_status(bin_dst, verdict)
+
+    payload = json.loads(_ps1_policy_status_path(bin_dst).read_text(encoding="utf-8"))
+    assert payload["unreadable"] is True
+    diagnosis = payload["diagnosis"]
+    assert "not a policy verdict" in diagnosis
+    assert "The host is healthy" in diagnosis
+    assert "DR-365" in diagnosis, "the diagnosis must point at the record carrying the root cause"
+
+
+def test_ps1_policy_status_restrictive_policy_carries_no_diagnosis(tmp_path):
+    """The discriminator, and the load-bearing half of the pair above: a
+    RED verdict that was READ (a genuinely restrictive policy) is a real
+    policy verdict and must NOT be annotated as a probe failure. Emitting
+    the diagnosis unconditionally would tell an operator whose policy
+    really does forbid execution that their host is healthy and the
+    environment is at fault -- inverting the true and the false case."""
+    bin_dst = tmp_path / "bin"
+    bin_dst.mkdir()
+
+    _write_ps1_policy_status(bin_dst, _fake_red_verdict(reason="effective policy 'Restricted'"))
+
+    payload = json.loads(_ps1_policy_status_path(bin_dst).read_text(encoding="utf-8"))
+    assert payload["unreadable"] is False
+    assert "diagnosis" not in payload
+
+
+def test_report_ps1_policy_gate_skip_headline_separates_probe_failure_from_policy(tmp_path, capsys):
+    """Same discrimination on the install-time stderr leg: a probe that
+    could not RUN and a policy that FORBIDS execution want different
+    fixes, so they must not share a headline."""
+    bin_dst = tmp_path / "bin"
+    bin_dst.mkdir()
+
+    _report_ps1_policy_gate_skip(
+        PolicyGateVerdict(green=False, host_verdicts=[], reason="probe exited 1", unreadable=True),
+        bin_dst,
+    )
+    unreadable_err = capsys.readouterr().err
+    assert "could not determine execution policy (probe failed to run)" in unreadable_err
+
+    _report_ps1_policy_gate_skip(_fake_red_verdict(reason="'Restricted'"), bin_dst)
+    restrictive_err = capsys.readouterr().err
+    assert "execution-policy gate reported RED" in restrictive_err
+    assert "probe failed to run" not in restrictive_err
+
+
 def test_prune_orphaned_static_bin_names_disabled_does_not_unlink(monkeypatch, tmp_path, capsys):
     monkeypatch.setenv("COORDINATOR_DISABLE_MACHINE_MUTATION", "1")
     bin_dst = tmp_path / "bin"

@@ -45,17 +45,44 @@ job-object process count under-reports (3.0 vs the census's 11) because it
 sees landing spawns, not the gate path — a separate, already-known
 limitation of that leg, not something this fix claims to close.
 
-No MEASURED block is recorded here post-fix: this chunk (C5) rebuilds the
-instrument only, and does not re-run it to mint new gated numbers -- that is
-C6's own task per the header above. AC5's dial leg alone (a zero-git `ping`
-through the identical door) measures 1 process / ~82ms, so the transport
+MEASURED 2026-08-26/27 (C6, this chunk, against the rebuilt post-C5
+instrument, isolated warm server, this live tree, two consecutive runs).
+AC4 FAILS: wallclock median=204.687ms p50=204.687ms p95=391.828ms
+min=159.567ms max=991.894ms (n=15) against the 150.0ms target -- a
+54.687ms miss, process_time=105.469ms procs_per_call=3.0 (k=8,
+driver-inclusive leg, see DRIVER SHAPE above). AC7 FAILS far more severely
+under 8-way distinct-worktree concurrent load, and on its own added
+criterion, not only its wallclock target: run 1 measured p50=2070.839ms
+p95=2083.605ms with 0/8 -32004 responses; a second run of the identical
+instrument measured p50=2347.585ms p95=2571.324ms with 1/8 calls returning
+-32004 WARM_DISPATCH_INDETERMINATE ("no response within 2.0s") -- both
+runs cluster in the ~2.0-2.6s band, both far over AC4's own 150.0ms target,
+and the second run additionally fails the criterion this chunk adds in its
+own right (0 -32004 responses). That band sits almost exactly on the 2.0s
+dispatch-deadline figure named elsewhere in this repo's doctrine, which is
+evidence (not proof -- this instrument does not itself attribute cause)
+that AC7's degradation is a deadline/retry artifact of concurrent dispatch
+rather than a linear scaling of AC4's own per-call cost, and that the
+-32004 criterion is not a rare edge case but reachable on ordinary runs of
+this exact load shape.
+
+NEITHER GATE CLOSES. Per this chunk's own brief ("If a number misses, the
+chunk says so and the plan does not close — the answer is a cheaper op,
+never a wider AC"), AC4_TARGET_MS stays 150.0 unmoved and neither assertion
+above is loosened to match the measured figures. AC5's dial leg alone (a
+zero-git `ping` through the identical door) measures ~82-105ms process time
+(procs_per_call=3.0 in this run's driver-inclusive leg), so the transport
 itself is not the residual cost: the excess named by the spike sits inside
 the commit op's own handler path (the four commit-leg gates, trailer
 assembly, and/or hooks still walking `subprocess.run` rather than the
 in-process object-write machinery C3 shipped for the commit itself) — a
 design/mechanism gap in files this chunk's `writes:` scope excludes
 (`commit_op.py`, `git_native.py`, `commit_pipeline.py`), not a measurement
-artifact of this instrument.
+artifact of this instrument. AC7's own 2.0-2.6s-band clustering, and its
+one observed -32004, additionally implicate a deadline/retry mechanism
+reachable through concurrent dispatch, itself outside this chunk's
+`writes:` scope to name precisely — recorded here as a MEASURED finding
+for the plan's own next chunk to read, not remediated by this one.
 
 THREE COLUMNS, NEVER COLLAPSED (plan task body, verbatim instruction).
 wallclock (median/p50/p95), process time, and job-object spawn count are
@@ -752,16 +779,32 @@ def test_commit_op_concurrent_load_wallclock_is_recorded(
             )
         )
 
-    samples_ms: List[float] = []
+    # Every proc is drained BEFORE any assertion fires -- a mid-loop assert
+    # on the first non-zero rc would leave later procs' pipes unread and
+    # would under-count indeterminate_count for a run where more than one
+    # of the N_CONCURRENT callers hit -32004 (brief: "assert 0 -32004
+    # responses as a criterion in its own right, not as an incidental").
+    results = []
     for start, proc in zip(starts, procs):
         stdout, stderr = proc.communicate(timeout=_SUBPROCESS_TIMEOUT_S)
         elapsed_ms = (time.perf_counter() - start) * 1000.0
-        assert proc.returncode == 0, (
-            f"concurrent driver failed rc={proc.returncode}: stdout={stdout!r} stderr={stderr!r}"
-        )
-        _parse_invoke_stdout(stdout)
-        samples_ms.append(elapsed_ms)
+        results.append((proc.returncode, stdout, stderr, elapsed_ms))
 
+    # WARM_DISPATCH_INDETERMINATE (-32004, `warm/client.py`) parsed
+    # defensively: a -32004 envelope is still valid JSON on stdout even
+    # though the process's own returncode is non-zero for it.
+    indeterminate_count = 0
+    for rc, stdout, _stderr, _elapsed_ms in results:
+        try:
+            parsed = json.loads(stdout)
+        except (json.JSONDecodeError, TypeError):
+            parsed = None
+        if isinstance(parsed, dict):
+            err = parsed.get("error")
+            if isinstance(err, dict) and err.get("code") == -32004:
+                indeterminate_count += 1
+
+    samples_ms = [r[3] for r in results]
     ordered = sorted(samples_ms)
     p50 = round(_percentile(ordered, 0.50), 3)
     p95 = round(_percentile(ordered, 0.95), 3)
@@ -769,9 +812,27 @@ def test_commit_op_concurrent_load_wallclock_is_recorded(
         f"AC7 warm-served concurrent-load baseline (n={len(ordered)} distinct "
         f"worktrees, warmth asserted by warm_engine_root's "
         f"_assert_warmth_or_fail, not merely requested): wallclock p50={p50}ms p95={p95}ms "
-        f"min={round(ordered[0], 3)}ms max={round(ordered[-1], 3)}ms samples={ordered}"
+        f"min={round(ordered[0], 3)}ms max={round(ordered[-1], 3)}ms samples={ordered} "
+        f"-32004 (WARM_DISPATCH_INDETERMINATE) responses={indeterminate_count}/{N_CONCURRENT}"
     )
     print(detail)
+
+    # AC7's own criterion, in its own right (brief): a run where the op's
+    # outcome is unknowable under ordinary concurrent load has not met a
+    # concurrency criterion, regardless of what the wallclock figure reads.
+    # Checked BEFORE the generic per-call rc==0 assertion below so a -32004
+    # failure is never misreported as an undifferentiated "driver failed".
+    assert indeterminate_count == 0, (
+        f"AC7 FAILS: {indeterminate_count}/{N_CONCURRENT} concurrent commits "
+        f"returned -32004 WARM_DISPATCH_INDETERMINATE -- the op's outcome was "
+        f"unknowable for at least one caller under {N_CONCURRENT}-way distinct-"
+        f"worktree load. {detail}"
+    )
+    for rc, stdout, stderr, _elapsed_ms in results:
+        assert rc == 0, (
+            f"concurrent driver failed rc={rc}: stdout={stdout!r} stderr={stderr!r}. {detail}"
+        )
+        _parse_invoke_stdout(stdout)
     assert len(ordered) == N_CONCURRENT, detail
     assert p95 >= p50, detail
     assert p50 > 0.0, f"a zero-ms concurrent sample means the instrument is not measuring anything. {detail}"

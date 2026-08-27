@@ -29,13 +29,32 @@ MANDATORY REUSE, BLOCKING:
       works on a plain clone (private == common there) and mis-resolves
       silently only in a linked worktree.
 
-THE WORKTREE HASH DOES NOT WORK -- measured, not suspected. This module
-never hashes on-disk bytes and compares the result to a git OID
-(`core.autocrlf`/`core.filemode`/smudge filters make that comparison wrong
-for a meaningful fraction of paths on this repo). No `worktree_blob()` is
-provided here, deliberately: a caller needing a worktree-vs-git answer
-keeps its spawn. The worktree axis fork is RESOLVED to "keep the spawn" --
-do not re-open it and do not add a stat-based worktree comparison here.
+THE WORKTREE HASH DOES NOT WORK, FOR RAW BYTES -- measured, not suspected.
+This module never hashes on-disk bytes AS-IS and compares the result to a
+git OID (`core.autocrlf`/`core.filemode`/smudge filters make that NAIVE
+comparison wrong for a meaningful fraction of paths on this repo -- 326 of
+400 clean tracked files MISMATCH here under `core.autocrlf=true`, the
+reverted `da156a723` incident). No `worktree_blob()` is provided in THIS
+module, deliberately: a caller here needing a worktree-vs-git answer keeps
+its spawn.
+
+SATISFIED, NOT LIFTED, ELSEWHERE (C3e, 2026-08-26, docs/dispatch-briefs/
+2026-08-26-the-commit-op-stops-asking-git-eleven-times/C3e.md): what is
+forbidden is hashing RAW worktree bytes. `coordinator_core.git.content_
+hash.content_matches_index_sha` hashes NORMALIZED bytes -- git's own
+`core.autocrlf=true`, default-attribute checkin-side transform, reproduced
+in process and verified byte-identical against real `git hash-object` over
+14 shapes -- which is a different operation with a different correctness
+argument, and it DECLINES (returns `None`, caller keeps its spawn) for
+every path outside the exact precondition set that verification covers
+(`autocrlf` not resolved to exactly `true`, any repo-local `text`/`-text`/
+`eol=` attribute pin, any `filter=` clean pipeline, or a read failure).
+`coordinator_core/git/divergence.py :: diverging_paths` is the one
+consumer, settling only its stat-mismatch "candidate" paths this way and
+falling back to the spawn for every DECLINE. Do not re-open the RAW-bytes
+question this section still forbids, and do not add a stat-based worktree
+comparison to THIS module -- the normalize-then-hash path lives in
+`content_hash.py`, not here, and stays scoped to the one caller above.
 
 Negative-spec:
     - NO process-lifetime cache, NO memoisation keyed on repo root. A caller

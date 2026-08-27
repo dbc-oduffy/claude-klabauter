@@ -294,7 +294,14 @@ def _resolve_symbol(subject: str, index: TrackedFileIndex, repo_root: Path) -> R
     except (OSError, SyntaxError, UnicodeDecodeError) as exc:
         return Resolution(ResolutionKind.UNADJUDICABLE, detail=f"parse failed: {exc}")
 
-    for node in ast.walk(tree):
+    # Module scope only (`tree.body`, not `ast.walk(tree)`): a SYMBOL row
+    # names a module-level definition. Walking the whole tree would match a
+    # same-named nested def, class, or local anywhere in the file, reading a
+    # deleted module-level symbol as RESOLVED whenever an unrelated nested
+    # scope happens to bind the same name -- the reads-as-CLOSURE failure
+    # this module exists to detect, in its silent direction. (Review:
+    # coordinator:code-reviewer Finding 1.)
+    for node in tree.body:
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
             if node.name == member_name:
                 return Resolution(ResolutionKind.RESOLVED, detail=relpath)

@@ -117,6 +117,11 @@ def _agent_claim(agent_dir, *paths, owner_sid=None):
     union came out (2026-08-26), so a fixture that writes one claims nothing.
     A ``'<verb> <ts> <path>'`` journal line is decoded into a real event, which
     is how these tests express release ordering.
+
+    The journal-vs-bare-path choice is a shape-sniff, not a flag: a path that
+    itself parses as ``<T|R> <ISO-ts> <path>`` would be reinterpreted as a
+    journal line. No fixture path has that shape; pass an explicit verb if one
+    ever does.
     """
     agent_dir = Path(agent_dir)
     if owner_sid is None:

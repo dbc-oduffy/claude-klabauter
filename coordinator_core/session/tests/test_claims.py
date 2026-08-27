@@ -1396,6 +1396,11 @@ def _write_agent_claims(agent_dir, agent_id, owner_sid, paths):
     being a claim surface when the compat union came out, so a fixture writing
     it now records nothing at all — silently, which is why this is a helper and
     not four inline writes.
+
+    The journal-vs-bare-path choice is a shape-sniff, not a flag: a path that
+    itself parses as ``<T|R> <ISO-ts> <path>`` would be reinterpreted as a
+    journal line. No fixture path has that shape; pass an explicit verb if one
+    ever does.
     """
     sink = Path(agent_dir) / scope._TOUCH_RECORD_FILENAME
     for entry in paths:

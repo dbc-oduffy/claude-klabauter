@@ -2329,7 +2329,18 @@ def test_apply_close_commit_tail_does_not_fire_without_subject_and_sid(
     exit_code, report = ws_apply.apply(decisions=decisions)
 
     assert calls == []
-    assert "close_commit" not in report
+    # CONTRACT CHANGED 2026-08-27: a declined close commit is REPORTED, not
+    # silent. This previously asserted `"close_commit" not in report` -- the
+    # skip left no trace, so a session that closed with no subject was
+    # indistinguishable from one whose commit ran and found nothing. That
+    # invisibility was one of the two mechanisms behind fleet reports of "the
+    # close commit isn't running". The skip itself is unchanged and still
+    # correct; only its silence was the defect.
+    assert report["close_commit"]["attempted"] is False
+    assert report["close_commit"]["skipped"].startswith("close-commit:no-")
+    # A DECLINED COMMIT IS NOT A FAILED ONE: no `commit_failed` key, so the
+    # exit-code arm reads it falsy and SUCCESS stands.
+    assert "commit_failed" not in report["close_commit"]
     assert exit_code == int(ws_apply.WorkstreamApplyExitCode.SUCCESS)
 
 

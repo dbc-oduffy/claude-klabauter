@@ -3371,6 +3371,23 @@ def _write_ps1_policy_status(bin_dst: Path, verdict: "PolicyGateVerdict") -> Non
             "docstring, AC10."
         ),
     }
+    if verdict.unreadable:
+        # A probe that could not RUN and a policy that FORBIDS execution are
+        # different faults wanting different fixes, and `reason` alone reads as
+        # the latter: it quotes a cmdlet error under a key named for a policy
+        # verdict. A reader taking it at face value concludes the HOST is broken
+        # and goes looking at `Set-ExecutionPolicy`. That read cost two sessions
+        # and eight days before anyone measured the probe environment instead.
+        payload["diagnosis"] = (
+            "No execution policy was read this pass -- the probe did not run to "
+            "completion. This is not a policy verdict, and not evidence that this "
+            "host's policy forbids anything. Known cause on this fleet: an "
+            "inherited PSModulePath carrying PowerShell 7's $PSHOME\\Modules, which "
+            "makes Windows PowerShell 5.1 resolve PS7's CoreCLR-only "
+            "Microsoft.PowerShell.Security and fail to load it. The host is "
+            "healthy; the probe environment is not. See "
+            "docs/decisions/DR-365-ruling-2-governs-every-managed-launcher-class.md."
+        )
     try:
         path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8", newline="\n")
     except OSError as exc:
@@ -3388,9 +3405,13 @@ def _report_ps1_policy_gate_skip(verdict: "PolicyGateVerdict", bin_dst: Path) ->
     install time.
     """
     status_path = _ps1_policy_status_path(bin_dst)
+    headline = (
+        "could not determine execution policy (probe failed to run)"
+        if verdict.unreadable
+        else "PowerShell execution-policy gate reported RED"
+    )
     print(
-        "[install-substrate] SKIPPED .ps1 launcher emission this pass -- "
-        "PowerShell execution-policy gate reported RED:",
+        f"[install-substrate] SKIPPED .ps1 launcher emission this pass -- {headline}:",
         file=sys.stderr,
     )
     print(f"[install-substrate]   {verdict.reason}", file=sys.stderr)

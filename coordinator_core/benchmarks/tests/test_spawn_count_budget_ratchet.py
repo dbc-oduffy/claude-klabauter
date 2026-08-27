@@ -23,11 +23,12 @@ Spec backlink: docs/wiki/cost-budgets-and-the-kill-disposition.md
 
 from __future__ import annotations
 
+import json
+import re
 from pathlib import Path
 
 from coordinator_core.benchmarks.budget import load_manifest
 
-_THIS_FILE = Path(__file__).resolve()
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 
 # Each op's high-water mark, one entry per named key inside its
@@ -152,41 +153,35 @@ _SPAWN_COUNT_HIGH_WATER = {
     # floors first measured 2026-08-19, and
     # `machine_local_cli_elimination_calls` legitimately keeps `_sort_unique`
     # stubbed to isolate `_merged_flat_registry`'s CLI elimination.
-    "ceremony.wsc_tail": {
-        "op_total_normal_pass": {
-            "ceiling": 34,
-            "reason": (
-                "34, reproduced across two independent runs 2026-08-21 against "
-                "test_wsc_tail_spawn_budget.py's own fixture -- this is the "
-                "figure the shipped assertion actually measures, and it is the "
-                "one pinned. C3 recorded 37 earlier the same day from a "
-                "STANDALONE REPRO SCRIPT (not shipped), and the plan's origin "
-                "figure was also '~37 per close'. ATTRIBUTION OF THE -3 IS "
-                "OPEN: it is a REDUCTION, so banking it can only make this "
-                "ratchet stricter, and it was banked rather than left "
-                "unbanked. The leading candidate is a1e5dd970 (15:36, "
-                "'wsc-tail: its review-trail records reach the commit that "
-                "reviewed them'), which touched wsc_tail.py after C3's "
-                "measurement; the other candidate is a harness difference "
-                "between C3's standalone script and this fixture. Neither is "
-                "established -- do NOT restate either as the cause without "
-                "measuring it. Recorded open so the next person to see this "
-                "move does not re-derive it from scratch. "
-                "Superseded provenance follows. "
-                "First measured 2026-08-21 (C3, dlv-every-op-knows-what-it-"
-                "spawns-f4bbf6): a fresh single-file commit on `main` "
-                "through the full `ceremony.wsc_tail` handler, deferred-"
-                "push mode with `_spawn_deferred_push_skip_loud` "
-                "monkeypatched off. Matches the plan's own '~37 spawns per "
-                "close' origin figure exactly -- the first time that number "
-                "is a real measurement rather than an inherited "
-                "approximation. Migrated 2026-08-21 (C4) from a test-local "
-                "constant (`_WSC_TAIL_OP_TOTAL_CEILING`, deleted in the "
-                "same change) into this manifest-backed table; the value "
-                "is unchanged by the migration."
-            ),
-        },
-    },
+    # GRAVESTONE -- `ceremony.wsc_tail`'s high-water entry, retired 2026-08-27.
+    # The op was killed 2026-08-23 (state/kill-ledger.md K-046); DR-358 rebuilt
+    # its requirements as in-process calls and explicitly NOT as an op, so no
+    # registered subject has carried this name since. Its pinned ceiling of 34
+    # `op_total_normal_pass` spawns governed something that cannot run, and its
+    # own reason text named the enforcer as
+    # `ops/ceremony/tests/test_wsc_tail_spawn_budget.py` -- a file deleted with
+    # the op.
+    #
+    # THIS IS A RETIREMENT, NEVER AN UNBANKED REDUCTION. The ratchet's rule is
+    # that a measured reduction must be banked so the ceiling only tightens;
+    # dropping a row would be ratchet evasion IF a live subject still spawned
+    # under it. Nothing does. The recorded open question this row carried --
+    # the unattributed -3 between C3's 37 and the fixture's 34 -- dies with the
+    # subject rather than being resolved, and must not be inherited by any
+    # successor row: it was measured against a handler that no longer exists.
+    #
+    # WHY IT SURVIVED THE KILL, which is the part worth keeping. The orphan
+    # check below, `test_spawn_count_budget_rows_name_a_subject_that_still_
+    # exists`, is a SUBSTRING SWEEP of the test tree, and `wsc_tail` still
+    # occurs as prose in guard-message fixtures -- so the sweep found the word,
+    # passed, and the row outlived its subject by four days. That is the SECOND
+    # time this exact false negative has fired: this module's own docstring
+    # already records `ceremony.scoped_git_commit` surviving K-045 the same way,
+    # "found by hand instead." Found by hand again. The durable fix is
+    # resolving a row's subject against the op registry rather than grepping
+    # for its name; surfaced as a design question, deliberately not patched
+    # here, because dropping this row treats the symptom and leaves the sweep
+    # blind to the third occurrence.
     "ops.discover_working_repos": {
         "per_call": {
             "ceiling": 1,
@@ -299,65 +294,78 @@ def _stale_high_water_ops(live: dict) -> list:
     return [op for op in _SPAWN_COUNT_HIGH_WATER if op not in live]
 
 
-def _op_leaf(op: str) -> str:
-    """The subject-bearing tail of a manifest op key.
+# The substring sweep that used to live here -- `_op_leaf`,
+# `_live_test_corpus_text`, `_ops_with_no_live_test_reference` -- was REMOVED
+# 2026-08-27, not kept alongside its replacement. It asked whether a row's leaf
+# name appears anywhere in the test corpus, which cannot separate a subject a
+# test exercises from a dead string a test uses as data, so keeping it as a
+# second opinion would only have re-supplied the false negative that let two
+# killed ops keep their budgets. Its design rationale and the two alternatives
+# it was chosen over are preserved in this module's own history and in
+# `_rows_whose_named_enforcer_is_gone`'s docstring below, which records what it
+# measured and why the signal was wrong rather than merely noisy.
 
-    `coverage.diagnose_open_review_loop_dag_mode` -> `diagnose_open_review_loop_dag_mode`;
-    `bin.workday_complete_step2_5_dirty_tree.classify_main_pass` -> `classify_main_pass`.
-    Deliberately the leaf, not the full dotted key -- several legitimately-live
-    rows are never spelled out as their full manifest key anywhere outside this
-    module. `changelog.cited_in_range_count`'s real function is
-    `_cited_in_range_count`; the string `"changelog.cited_in_range_count"`
-    appears nowhere but this file and the manifest, while `cited_in_range_count`
-    (the leaf) appears throughout `changelog_ops.py` and its spawn-bound test.
-    Substring containment (not exact match) is deliberate for the same reason:
-    it catches both the bare function name and any leading-underscore private
-    spelling of it.
+#: Any `test_*.py` filename mentioned in a row's own text. Rows name their
+#: enforcing test in `_rationale`/`reason` prose as an existing convention --
+#: all 8 live rows did so unprompted when this check was written -- so the
+#: pointer needs no new manifest field and no manifest-wide hand edit.
+_TEST_FILE_IN_PROSE = re.compile(r"test_[\w.]*\.py")
+
+
+def _named_enforcer_paths(row: dict) -> list:
+    """Every `test_*.py` filename this row's own text names, deduped."""
+    return sorted(set(_TEST_FILE_IN_PROSE.findall(json.dumps(row))))
+
+
+def _rows_whose_named_enforcer_is_gone(overrides: dict) -> tuple:
+    """Partition `spawn_count_budget` rows by whether the enforcing test they
+    NAME still exists on disk.
+
+    Returns `(orphaned, unpinnable)` -- `orphaned` rows name at least one test
+    and NONE of them resolve; `unpinnable` rows name no test at all.
+
+    WHY THIS REPLACED THE SUBSTRING SWEEP, removed outright as the gravestone
+    above records. That sweep asked "does this row's leaf name appear anywhere
+    in the test corpus", and that question cannot distinguish a subject a test
+    EXERCISES from a dead string a test happens to USE AS DATA. Measured on `ceremony.wsc_tail`
+    after its op was killed 2026-08-23: the leaf appears in 28 test files;
+    stripping comments and docstrings (so pure prose cannot vouch for a
+    subject) still leaves 8, and every one of those 8 is the dead name as
+    sample data -- `ipc._timeout_for("ceremony.wsc_tail")` in a timeout-table
+    test, `monkeypatch.setattr(cost_census, "HOT_PATH_OPS",
+    ("ceremony.wsc_tail",))` as an arbitrary fixture value, a local variable
+    named `wsc_tail`. No refinement of the search fixes that; the signal is
+    wrong, not merely noisy.
+
+    THIS IS THE THIRD ATTEMPT AND THE FIRST SOUND ONE. The sweep false
+    -negatived twice, and both times the row was found by hand instead:
+    `ceremony.scoped_git_commit` surviving K-045, then `ceremony.wsc_tail`
+    surviving K-046 by four days with a ceiling of 34 and a `_rationale`
+    naming `test_wsc_tail_spawn_budget.py`, a file deleted with the op. THIS
+    CHECK WOULD HAVE CAUGHT THAT ONE ON THE DAY: the named file does not
+    resolve, so the row is `orphaned` and the assertion is red.
+
+    A NAMED-AND-RESOLVING TEST IS NOT PROOF THE SUBJECT IS EXERCISED -- state
+    the residual plainly rather than overclaiming a third time. A row could
+    name a test that exists but no longer touches it. That is a strictly
+    smaller gap than the sweep's, and it is closable later by asserting the
+    named node id rather than the file; it is not closed here.
+
+    `unpinnable` rows are REPORTED, NEVER SILENTLY GREEN -- a row naming no
+    enforcer is exactly the shape both escapees had in effect, and letting it
+    pass unremarked rebuilds the blind spot one level up.
     """
-    return op.rsplit(".", 1)[-1]
-
-
-def _live_test_corpus_text() -> str:
-    """Concatenated source of every live (non-cache) `.py` file that is part
-    of the test surface -- lives under a `tests/` directory or is named
-    `test_*.py` -- excluding this module itself.
-
-    Excluding this file matters: `_SPAWN_COUNT_HIGH_WATER` and the manifest
-    op-key literals below name every op by construction, so leaving it in
-    would make every row look "referenced" regardless of whether anything
-    OUTSIDE this file still exercises it -- exactly the check this function
-    exists to make meaningful.
-    """
-    chunks = []
-    for path in _REPO_ROOT.rglob("*.py"):
-        parts = path.parts
-        if "__pycache__" in parts or ".git" in parts:
+    orphaned, unpinnable = [], []
+    for op, row in overrides.items():
+        named = _named_enforcer_paths(row)
+        if not named:
+            unpinnable.append(op)
             continue
-        if path.resolve() == _THIS_FILE:
-            continue
-        if "tests" not in parts and not path.name.startswith("test_"):
-            continue
-        try:
-            chunks.append(path.read_text(encoding="utf-8", errors="ignore"))
-        except OSError:
-            continue
-    return "\n".join(chunks)
-
-
-def _ops_with_no_live_test_reference(live: dict) -> list:
-    """Manifest `spawn_count_budget` rows whose leaf subject name (`_op_leaf`)
-    appears in NO live test file outside this module.
-
-    A sweep for a live *reader*, not an import/introspection check on the op
-    itself -- deliberately, per the FIX-B brief: a manifest key like
-    `bin.workday_complete_step2_5_dirty_tree.classify_main_pass` names a call
-    shape, not an importable symbol, so "does this dotted path import" cannot
-    be made to work uniformly across the table without faking it for that
-    shape of key. See this test module's own docstring for the design options
-    weighed and rejected in favor of this one.
-    """
-    corpus = _live_test_corpus_text()
-    return [op for op in live if _op_leaf(op) not in corpus]
+        if not any(
+            any(True for _ in _REPO_ROOT.rglob(name)) for name in named
+        ):
+            orphaned.append((op, named))
+    return orphaned, unpinnable
 
 
 def test_spawn_count_budget_never_ratchets_upward():
@@ -468,17 +476,82 @@ def test_spawn_count_budget_rows_name_a_subject_that_still_exists():
     ones -- this check can miss a still-dead row, but coming back green never
     means a live row is wrong, only that nothing currently proves it.
     """
-    live = _manifest_spawn_count_overrides()
-    orphaned = _ops_with_no_live_test_reference(live)
+    rows = {
+        op: entry
+        for op, entry in load_manifest().get("overrides", {}).items()
+        if isinstance(entry, dict) and entry.get("spawn_count_budget")
+    }
+    orphaned, unpinnable = _rows_whose_named_enforcer_is_gone(rows)
+
     assert not orphaned, (
-        f"spawn_count_budget row(s) with no live test referencing their "
-        f"subject anywhere outside this module: {sorted(orphaned)}. Each row "
-        f"budgets a subject that reads as governed coverage to any reviewer "
-        f"while governing nothing once its last caller/test is gone -- "
-        f"either restore a live caller+test or drop the row (manifest is "
-        f"EM-owned; report the exact row to the EM rather than editing it "
-        f"here)."
+        f"spawn_count_budget row(s) naming an enforcing test that no longer "
+        f"exists: {orphaned}. Each row budgets a subject that reads as "
+        f"governed coverage to any reviewer while governing nothing -- its "
+        f"own text names the test that was supposed to enforce it, and that "
+        f"file is gone. Either restore the enforcer or retire the row "
+        f"(manifest is EM-owned; report the exact row to the EM rather than "
+        f"editing it here). If the subject itself was killed, retire the row "
+        f"AND leave a gravestone in _SPAWN_COUNT_HIGH_WATER rather than "
+        f"deleting its mark silently -- a retirement is not an unbanked "
+        f"reduction, but only the gravestone says so."
     )
+
+    assert not unpinnable, (
+        f"spawn_count_budget row(s) naming no enforcing test at all: "
+        f"{sorted(unpinnable)}. Not a style nit: a row with no named enforcer "
+        f"is unfalsifiable by this check, which is the exact state both rows "
+        f"that escaped it were effectively in. Name the enforcing test in the "
+        f"row's own _rationale -- every row did so unprompted when this check "
+        f"was written, so this asks for the existing convention, not a new "
+        f"manifest field."
+    )
+
+
+def test_named_enforcer_check_catches_the_row_that_escaped_it_twice():
+    """MUTATION PROBE, and the only evidence that matters for this check.
+
+    A green orphan check has meant nothing here twice: the substring sweep it
+    replaced passed while `ceremony.scoped_git_commit` (K-045) and then
+    `ceremony.wsc_tail` (K-046) sat in the manifest budgeting dead subjects,
+    and both were found by hand. So this reconstructs the EXACT row that
+    escaped -- `ceremony.wsc_tail`'s real shape, ceiling 34, its `_rationale`
+    naming `test_wsc_tail_spawn_budget.py`, the file deleted along with the op
+    on 2026-08-23 -- and asserts the replacement classifies it `orphaned`.
+
+    Without this probe the new check is only ASSERTED to be sound. With it,
+    the third attempt is the first one with a demonstration attached.
+    """
+    escaped_row = {
+        "target_ms": 300,
+        "spawn_count_budget": {"op_total_normal_pass": 34},
+        "_rationale": (
+            "34, reproduced across two independent runs 2026-08-21 against "
+            "test_wsc_tail_spawn_budget.py's own fixture -- the figure the "
+            "shipped assertion actually measures."
+        ),
+    }
+    orphaned, unpinnable = _rows_whose_named_enforcer_is_gone(
+        {"ceremony.wsc_tail": escaped_row}
+    )
+    assert unpinnable == [], (
+        "the row names a test, so it must not be classified unpinnable -- "
+        f"got {unpinnable!r}"
+    )
+    assert [op for op, _ in orphaned] == ["ceremony.wsc_tail"], (
+        "the replacement check failed to flag the row that escaped its "
+        f"predecessor twice -- got {orphaned!r}. The named enforcer "
+        "test_wsc_tail_spawn_budget.py was deleted with the op on 2026-08-23."
+    )
+
+    # AND THE CONVERSE, so this cannot pass by flagging everything: a row
+    # naming an enforcer that DOES exist stays clean. Uses this module's own
+    # file, which is guaranteed present while the test is running.
+    live_row = {
+        "spawn_count_budget": {"per_call": 1},
+        "_rationale": "enforced by test_spawn_count_budget_ratchet.py",
+    }
+    orphaned, unpinnable = _rows_whose_named_enforcer_is_gone({"live.row": live_row})
+    assert orphaned == [] and unpinnable == []
 
 
 def test_spawn_count_high_water_table_flags_stale_orphan_via_mutation():

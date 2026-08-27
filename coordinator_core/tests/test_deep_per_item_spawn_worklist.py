@@ -133,9 +133,18 @@ from coordinator_core.tests.test_no_unbatched_per_item_git_spawn import (
     _gate_scope_paths,
     _import_resolves_to,
     _load_file_records,
+    _resolve_imported_defs,
     _REPO_ROOT,
     find_unbatched_per_item_spawns,
 )
+
+#: The published depth ceiling this module's own precision figures and the two standing
+#: multi-hop reproducers measure up to (module docstring's "PUBLISHED PRECISION, PER DEPTH"
+#: section: depths 2 through 4). Exported so a consumer needing the same ceiling (C3's
+#: `_KNOWN_SITES` classifier, `test_known_sites_rows_resolve_or_report_depth.py`) imports it
+#: rather than redeclaring the literal and drifting out of sync with this module's own figures.
+#: (Review: coordinator:code-reviewer -- F4.)
+_MAX_PUBLISHED_DEPTH = 4
 
 
 def _call_graph(
@@ -168,11 +177,7 @@ def _call_graph(
                 out_edges.add((relpath, callee))
                 continue
             if callee in index.imported_names_by_file.get(relpath, set()):
-                for candidate in index.funcs_by_name.get(callee, []):
-                    if candidate[0] != relpath and _import_resolves_to(
-                        index, relpath, callee, candidate[0], candidate[1]
-                    ):
-                        out_edges.add(candidate)
+                out_edges.update(_resolve_imported_defs(index, relpath, callee))
     return edges
 
 
@@ -274,8 +279,21 @@ def deep_find_with_site_depths(roots, max_depth: int):
         so the lookup strips to the top-level name. Missing that left exactly two sites
         mis-attributed to depth 1.
 
-    A site whose callee reaches no depth-bearing def is depth 1: a direct spawner the standing
-    one-hop gate already reports.
+    A site whose callee resolves (route a/b/c: a same-module def, or an imported name narrowed
+    through `_import_resolves_to`) to no depth-bearing def is depth 1: a direct spawner the
+    standing one-hop gate already reports.
+
+    HONEST CONTRACT, NOT "DEPTH 1 OR A NUMBER" (Review: coordinator:code-reviewer -- F1). The
+    depth-1 fallback above is sound only when it fires because `site.callee` genuinely resolved
+    to a def by name. A site reached through routes d/e/f/g (an injected or forwarded runner) can
+    carry a `callee` that names a locally-bound parameter, not a same-module or imported
+    definition -- `_call_graph`'s route a/b/c resolution was never going to find an edge for that
+    name at all, which is a different fact from "resolved to a direct spawner." `depth_of`
+    returns `None` for that case (unknown), never a fabricated 1: the caller must not read an
+    unresolved name as "already visible to the one-hop gate." No currently-resolvable site's
+    depth changes under this: the corpus-wide equivalence this docstring cites above was measured
+    with EXACT set equality at depths 2, 3 and 4, so this is a latent-gap guard, not a live
+    miscount fix.
 
     This does NOT promote the deep collector to gating and does not touch the gate module; it is
     the same advisory result, annotated.
@@ -292,13 +310,21 @@ def deep_find_with_site_depths(roots, max_depth: int):
 
     sites = find_unbatched_per_item_spawns(roots, index_transform=_transform)
 
-    def depth_of(site) -> int:
+    def depth_of(site) -> Optional[int]:
         top_level = site.enclosing.split(".")[0]
-        reached = [
+        callee_defs = [
             callee_def
             for callee_def in edges.get((site.path, top_level), ())
-            if callee_def[1] == site.callee and callee_def in depths
+            if callee_def[1] == site.callee
         ]
+        if not callee_defs:
+            # `site.callee` is not a same-module or import-resolvable definition `_call_graph`
+            # could ever add an edge for (route a/b/c) -- e.g. a locally-bound parameter reached
+            # through an injected/forwarded runner (route d/e/f/g). Distinguishable from a
+            # genuine one-hop spawner: unknown, never a fabricated depth 1 (Review:
+            # coordinator:code-reviewer -- F1).
+            return None
+        reached = [callee_def for callee_def in callee_defs if callee_def in depths]
         return min(depths[d] for d in reached) if reached else 1
 
     return sites, depth_of
@@ -1566,6 +1592,84 @@ def test_site_depth_is_one_for_a_direct_spawner_the_one_hop_gate_already_sees(tm
     assert _site_depths(tmp_path, 4)[("direct.py", "check", "_spawn")] == 1
 
 
+def test_site_depth_is_unknown_for_a_route_g_forwarded_runner_parameter(tmp_path):
+    """Finding 1 (Review: coordinator:code-reviewer). Route d/e/f/g sites can carry an
+    `AmpSite.callee` that names a locally-bound parameter of the enclosing function (here
+    `sweep`'s own `injected`), never a same-module or imported definition `_call_graph`'s route
+    a/b/c resolution was ever going to find an edge for. `depth_of` must report that honestly as
+    unknown (`None`), never fabricate a depth-1 default that is indistinguishable from a genuine
+    one-hop spawner. Fixture shape mirrors the gate module's own
+    `test_route_g_positive_direct_call_of_spawn_bearing_param`."""
+    _write_module(
+        tmp_path,
+        "route_g.py",
+        "import subprocess\n"
+        "\n"
+        "def _do_spawn(sha):\n"
+        "    subprocess.run(['git', 'show', sha], cwd='/repo')\n"
+        "\n"
+        "def sweep(shas, injected):\n"
+        "    for sha in shas:\n"
+        "        injected(sha)\n"
+        "\n"
+        "def driver(shas):\n"
+        "    sweep(shas, injected=_do_spawn)\n",
+    )
+
+    sites, depth_of = deep_find_with_site_depths((tmp_path,), max_depth=4)
+    route_g_sites = [s for s in sites if s.route == "g-forwarded-runner"]
+    assert route_g_sites, "expected the route-g site to still be reported by the widened collector"
+    for site in route_g_sites:
+        assert site.callee == "injected"
+        assert depth_of(site) is None, (
+            f"{site.key} attributed depth {depth_of(site)!r}; a parameter-named callee "
+            "_call_graph can never resolve must report unknown, not a fabricated depth 1"
+        )
+
+
+def test_site_depth_prefers_the_resolved_import_over_an_unimported_homonym(tmp_path):
+    """Finding 2 (Review: coordinator:code-reviewer). No prior fixture forced route-c import
+    narrowing to matter INSIDE `depth_of` itself -- `test_call_graph_all_candidates_for_homonym_
+    across_two_imported_modules` tests `_call_graph` in isolation, not `depth_of`'s downstream
+    min-over-`reached` filtering. An unrelated, UNIMPORTED same-named homonym at a SHALLOWER
+    depth must not win over the correctly-imported candidate at a DEEPER depth.
+
+    `shallow_mod.helper` (depth 2: one hop from `_spawn`) is never imported by `caller.py`.
+    `deep_mod.helper` (depth 3: `helper -> mid -> _spawn`) is the actual `from deep_mod import
+    helper` target. If import narrowing were bypassed inside `depth_of` (i.e. it took the
+    minimum over every same-named `helper` def instead of the one `_import_resolves_to`
+    confirms), this would wrongly report depth 2."""
+    _write_module(
+        tmp_path,
+        "shallow_mod.py",
+        _SPAWNER + "def helper(path):\n    _spawn(path)\n",
+    )
+    _write_module(
+        tmp_path,
+        "deep_mod.py",
+        _SPAWNER
+        + "def mid(path):\n    _spawn(path)\n"
+        + "\n"
+        + "def helper(path):\n    mid(path)\n",
+    )
+    _write_module(
+        tmp_path,
+        "caller.py",
+        "from deep_mod import helper\n"
+        "\n"
+        "def check(paths):\n"
+        "    for p in paths:\n"
+        "        helper(p)\n",
+    )
+
+    depths = _site_depths(tmp_path, 4)
+    assert depths[("caller.py", "check", "helper")] == 3, (
+        "depth_of must pick the resolved import's depth (deep_mod.helper, 3), not the shallower "
+        "unimported homonym's (shallow_mod.helper, 2) -- confirmed to fail if import narrowing "
+        "inside depth_of is bypassed"
+    )
+
+
 def test_site_depth_counts_hops_along_a_same_module_chain(tmp_path):
     """`check -> mid -> _spawn`: `mid` is one hop from the spawner, so the site is depth 2."""
     _write_module(
@@ -1611,8 +1715,8 @@ def test_site_depth_reads_a_nested_enclosing_function_via_its_top_level_owner(tm
         )
 
 
-def test_a_chain_beyond_max_depth_is_not_attributed_a_depth_within_it(tmp_path):
-    """Filtering by `depth_of(s) <= k` is only sound if a depth never understates the bound."""
+def _write_deep_chain(tmp_path):
+    """`check -> h3 -> h2 -> h1 -> _spawn`: `h3` is 4 hops from the spawner."""
     _write_module(
         tmp_path,
         "deep.py",
@@ -1626,9 +1730,25 @@ def test_a_chain_beyond_max_depth_is_not_attributed_a_depth_within_it(tmp_path):
         + "def check(paths):\n    for p in paths:\n        h3(p)\n",
     )
 
+
+def test_a_chain_beyond_max_depth_is_not_attributed_a_depth_within_it(tmp_path):
+    """Finding 3 (Review: coordinator:code-reviewer) split this from a second, unrelated
+    property (see `test_a_chain_at_its_true_depth_is_attributed_that_depth` below) so a future
+    failure names its own cause. Filtering by `depth_of(s) <= k` is only sound if a depth never
+    understates the bound."""
+    _write_deep_chain(tmp_path)
+
     assert ("deep.py", "check", "h3") not in _site_depths(tmp_path, 2), (
         "a chain four hops from its spawner must not appear in a max_depth=2 walk"
     )
+
+
+def test_a_chain_at_its_true_depth_is_attributed_that_depth(tmp_path):
+    """Finding 3 (Review: coordinator:code-reviewer) -- the sanity check on the chain
+    construction above, split out from the "beyond max_depth" property so it names its own
+    cause on failure: a walk AT the true depth must attribute exactly that depth."""
+    _write_deep_chain(tmp_path)
+
     assert _site_depths(tmp_path, 4)[("deep.py", "check", "h3")] == 4
 
 
@@ -1657,12 +1777,25 @@ def test_filtering_by_site_depth_matches_a_real_walk_at_that_depth(tmp_path):
     max_depth = 4
     sites, depth_of = deep_find_with_site_depths((tmp_path,), max_depth)
 
+    # `depth_of` reports `None` for a route d/e/f/g callee it cannot attribute (Review:
+    # coordinator:code-reviewer -- F1). This corpus is route a/b/c only, asserted rather than
+    # assumed: excluding unknowns from the attribution set would otherwise let the equivalence
+    # below hold vacuously for a site the real walk does report.
+    assert not [s for s in sites if depth_of(s) is None], (
+        "this corpus must attribute every site a depth; an unknown-depth site here would make "
+        "the equivalence below hold by exclusion rather than by agreement"
+    )
+
     for depth in range(1, max_depth + 1):
         from_walk = frozenset(
             site.key
             for site in _deep_find_unbatched_per_item_spawns((tmp_path,), max_depth=depth)
         )
-        from_attribution = frozenset(s.key for s in sites if depth_of(s) <= depth)
+        from_attribution = frozenset(
+            s.key
+            for s in sites
+            if (site_depth := depth_of(s)) is not None and site_depth <= depth
+        )
         assert from_attribution == from_walk, (
             f"at max_depth={depth}: only-in-attribution "
             f"{sorted(from_attribution - from_walk)}, only-in-walk "

@@ -2012,7 +2012,25 @@ class TestC0AgentDirJsonlOnlyUnion:
 
         If a directory-shaped claim is ever needed again, it needs a real
         representation in the record dialect first; do not restore it by
-        reviving a second reader for a dialect nothing writes."""
+        reviving a second reader for a dialect nothing writes.
+
+        Review: code-reviewer P1 — the rewrite pinned `orphans`/`skipped`
+        membership but never pinned `result.indeterminate`, which is the one
+        field that decides whether this orphan is safe to fold into an
+        adoption allow-list (`orphans - skipped`, see `ScopeResult.orphans`'s
+        own docstring in scope.py, the shape staff-eng review Finding F1
+        found live). `indeterminate` MUST stay `False` here: it means "the
+        scope computation could not see something", and this scenario saw
+        everything — the agent's record is fully readable, it claims the
+        literal path `coordinator/agent_dir_owned` (the trailing separator
+        canonicalized away at write time), and `inner.py` beneath it is
+        genuinely, accurately unclaimed by anyone. Firing `indeterminate`
+        on an accurate read would report a degrade that never happened, and
+        `indeterminate` is a blunt signal — it withholds the WHOLE
+        computation, not one path — so it would cost every other path in
+        the session for nothing. The safety margin for a future
+        `compute_scope` caller folding `orphans - skipped` into an adoption
+        allow-list is exactly this flag: check `indeterminate` first."""
         repo = _make_repo(tmp_path)
         core.init("em-owner", cwd=str(repo))
         core.init("bystander", cwd=str(repo))
@@ -2034,6 +2052,8 @@ class TestC0AgentDirJsonlOnlyUnion:
         assert "coordinator/agent_dir_owned/inner.py" in result.orphans
         skipped_paths = {path for path, _owner in result.skipped}
         assert "coordinator/agent_dir_owned/inner.py" not in skipped_paths
+        # This orphan is accurate, not unexamined -- see the docstring above.
+        assert result.indeterminate is False
 
     def test_missing_backptr_with_recent_agent_activity_fails_closed_not_swept(
         self, tmp_path
@@ -3927,38 +3947,6 @@ class TestComputeScopeEventProjectionAC13:
 # ---------------------------------------------------------------------------
 
 
-class TestPorcelainDirtyPaths:
-    """Review: code-reviewer Finding 3 (2026-08-03) -- `_porcelain_dirty_paths`
-    is string-parsing fail-safe code the brief itself named as a risk axis,
-    with zero direct test pressure before this class. Fail-safe is RETAIN
-    (release nothing), never merely "no crash" -- see `TestReleaseCommittedClaims`
-    below for the whole-call integration assertions of that contract."""
-
-    def test_well_formed_line_records_the_path(self):
-        assert scope._porcelain_dirty_paths(" M foo.py\n") == {"foo.py"}
-
-    def test_rename_line_records_both_old_and_new(self):
-        result = scope._porcelain_dirty_paths("R  old.py -> new.py\n")
-        assert result == {"old.py", "new.py"}
-
-    def test_copy_line_records_both_old_and_new(self):
-        result = scope._porcelain_dirty_paths("C  src.py -> copy.py\n")
-        assert result == {"src.py", "copy.py"}
-
-    def test_malformed_short_line_returns_none(self):
-        assert scope._porcelain_dirty_paths("MM\n") is None
-
-    def test_malformed_missing_separator_space_returns_none(self):
-        # Position 2 must be a space; a 4th non-space char here is malformed.
-        assert scope._porcelain_dirty_paths("MMXfoo.py\n") is None
-
-    def test_empty_lines_are_skipped_not_malformed(self):
-        assert scope._porcelain_dirty_paths(" M foo.py\n\n M bar.py\n") == {
-            "foo.py",
-            "bar.py",
-        }
-
-
 class TestReleaseCommittedClaims:
     """Existing assertions elsewhere in this file encode incident history
     (AC5) -- if any of THOSE fail because of this change, C1 is wrong; this
@@ -3983,31 +3971,41 @@ class TestReleaseCommittedClaims:
         projection = touch_record.project_live_claims(record, cwd=str(repo))
         assert "foo.py" not in projection.claims
 
-    def test_still_dirty_path_is_retained(self, tmp_path):
-        """AC2: a path never committed, still dirty, is not released."""
+    def test_dirty_uncommitted_path_still_releases(self, tmp_path):
+        """PM ruling 2026-08-26: the cleanliness term is deleted, not
+        weakened -- release no longer checks the worktree at all. A path
+        never committed, still dirty, still releases if the caller names
+        it: the caller-named-it-plus-still-T-claimed test is the whole
+        contract now (see `release_committed_claims`'s own docstring for
+        the overrule). This replaces the old AC2 "still dirty -> retained"
+        pin, which encoded the retired rule."""
         repo = _make_repo(tmp_path)
         core.init("s-rel2", cwd=str(repo))
         (repo / "bar.py").write_text("x")
         scope.touch("s-rel2", "bar.py", cwd=str(repo))
-        # Never committed -> git status still reports it dirty (untracked).
+        # Never committed -- irrelevant now, release does not consult git.
 
         scope.release_committed_claims("s-rel2", ["bar.py"], cwd=str(repo))
 
         record = _sdir(repo, "s-rel2") / "touch-record.jsonl"
         events = _decode_events(record)
-        assert len(events) == 1  # unchanged -- no R appended
+        assert len(events) == 2
+        assert (events[1].verb, events[1].path) == (touch_record.VERB_RELEASE, "bar.py")
         projection = touch_record.project_live_claims(record, cwd=str(repo))
-        assert "bar.py" in projection.claims
+        assert "bar.py" not in projection.claims
 
-    def test_ac4_committed_in_earlier_hunk_still_carries_uncommitted_edits(
+    def test_ac4_committed_in_earlier_hunk_with_further_uncommitted_edit_still_releases(
         self, tmp_path
     ):
-        """AC4's specific shape: a path already committed once (has git
-        history) but that STILL carries a further, currently-uncommitted
-        edit at call time must be retained. Asserted directly here rather
-        than left to follow by implication from the plain-dirty case
-        above -- this path has been through a commit already, unlike
-        `bar.py` in test_still_dirty_path_is_retained."""
+        """Former AC4 shape: a path already committed once (has git
+        history) that STILL carries a further, currently-uncommitted edit
+        at call time. Under the PM ruling this is no longer retained --
+        the caller named it, it is still T-claimed, so it releases; the
+        further uncommitted edit is a fact about the worktree this
+        function no longer consults. Rewritten from the retired
+        retain-on-dirty pin rather than dropped, since the fixture (a
+        committed path with a LATER uncommitted edit) is still a real
+        situation worth coverage under the new rule."""
         repo = _make_repo(tmp_path)
         core.init("s-rel4", cwd=str(repo))
         (repo / "hunked.py").write_text("v1")
@@ -4023,9 +4021,13 @@ class TestReleaseCommittedClaims:
 
         record = _sdir(repo, "s-rel4") / "touch-record.jsonl"
         events = _decode_events(record)
-        assert len(events) == 1  # unchanged -- no R appended
+        assert len(events) == 2
+        assert (events[1].verb, events[1].path) == (
+            touch_record.VERB_RELEASE,
+            "hunked.py",
+        )
         projection = touch_record.project_live_claims(record, cwd=str(repo))
-        assert "hunked.py" in projection.claims
+        assert "hunked.py" not in projection.claims
 
     def test_ac7_unreadable_touch_record_leaves_file_byte_identical(
         self, tmp_path, monkeypatch
@@ -4060,29 +4062,26 @@ class TestReleaseCommittedClaims:
 
         assert record.read_bytes() == before
 
-    def test_ac7_git_command_failure_leaves_file_byte_identical(
-        self, tmp_path, monkeypatch
-    ):
-        repo = _make_repo(tmp_path)
-        core.init("s-rel7b", cwd=str(repo))
-        (repo / "clean2.py").write_text("x")
-        scope.touch("s-rel7b", "clean2.py", cwd=str(repo))
-        subprocess.run(["git", "add", "clean2.py"], cwd=repo, check=True)
-        subprocess.run(
-            ["git", "commit", "-q", "-m", "commit clean2"], cwd=repo, check=True
-        )
+    # RETIRED (PM ruling 2026-08-26): `release_committed_claims` no longer
+    # calls git at all -- the cleanliness term this test pinned a git
+    # failure fail-safe for is deleted, not weakened. There is no longer
+    # a git call on this path to fail; `test_ac7_unreadable_touch_record_
+    # leaves_file_byte_identical` above already pins this function's ONLY
+    # remaining fail-safe surface (an unreadable touch-record sink).
 
-        record = _sdir(repo, "s-rel7b") / "touch-record.jsonl"
-        before = record.read_bytes()
-
-        monkeypatch.setattr(scope, "_git_output", lambda args, cwd=None: None)
-        scope.release_committed_claims("s-rel7b", ["clean2.py"], cwd=str(repo))
-
-        assert record.read_bytes() == before
-
-    def test_ac8_path_redirtied_between_commit_and_release_is_retained(
+    def test_ac8_path_redirtied_between_commit_and_release_still_releases(
         self, tmp_path
     ):
+        """Former AC8 shape: a path released once, re-dirtied, then
+        re-claimed with a fresh `T`, then a SECOND release call while the
+        worktree is still dirty. Under the retired rule the second call
+        was required to retain (worktree cleanliness gated it); under the
+        PM ruling there is no worktree check left to gate on -- the second
+        call sees a caller-named path that is still T-claimed in-process
+        and releases it, dirty worktree or not. Rewritten rather than
+        dropped: the redirty-then-reclaim-then-release-again fixture is
+        still the real sequence worth pinning, just with the opposite
+        outcome."""
         repo = _make_repo(tmp_path)
         core.init("s-rel8", cwd=str(repo))
         (repo / "cycle.py").write_text("v1")
@@ -4107,20 +4106,23 @@ class TestReleaseCommittedClaims:
         projection = touch_record.project_live_claims(record, cwd=str(repo))
         assert "cycle.py" in projection.claims
 
-        # Try to release again while still dirty -- must retain, not
-        # re-release.
+        # Release again while still dirty -- releases anyway; no
+        # worktree-cleanliness term left to retain on.
         scope.release_committed_claims("s-rel8", ["cycle.py"], cwd=str(repo))
 
         after_second = _decode_events(record)
-        assert after_second == after_touch  # unchanged -- still dirty, retained
+        assert len(after_second) == 4
+        assert after_second[3].verb == touch_record.VERB_RELEASE
         projection2 = touch_record.project_live_claims(record, cwd=str(repo))
-        assert "cycle.py" in projection2.claims
+        assert "cycle.py" not in projection2.claims
 
     def test_renamed_path_is_releasable(self, tmp_path):
         """Review: code-reviewer Finding 3 -- a real `git mv` + commit must
-        release cleanly through the RENAMED (new) path; `_porcelain_dirty_paths`
-        recording both old and new names on a rename line is what keeps this
-        from spuriously appearing dirty via its old name."""
+        release cleanly through the RENAMED (new) path. Retained post PM
+        ruling 2026-08-26 as a plain releasability pin: there is no more
+        worktree-cleanliness check to spuriously fail via the old name --
+        the rename shape is still worth coverage as ordinary caller-named-
+        path-plus-still-T-claimed behaviour."""
         repo = _make_repo(tmp_path)
         core.init("s-rename", cwd=str(repo))
         (repo / "old_name.py").write_text("x")
@@ -4146,39 +4148,11 @@ class TestReleaseCommittedClaims:
         projection = touch_record.project_live_claims(record, cwd=str(repo))
         assert "new_name.py" not in projection.claims
 
-    def test_unparseable_porcelain_line_retains_whole_call_byte_identical(
-        self, tmp_path, monkeypatch
-    ):
-        """Review: code-reviewer Finding 3 -- an unparseable porcelain line
-        must fail the WHOLE call safe to RETAIN (release nothing), mirroring
-        `test_ac7_git_command_failure_leaves_file_byte_identical`'s byte-
-        identical assertion for a git-command failure."""
-        repo = _make_repo(tmp_path)
-        core.init("s-malformed", cwd=str(repo))
-        (repo / "committed.py").write_text("x")
-        scope.touch("s-malformed", "committed.py", cwd=str(repo))
-        subprocess.run(["git", "add", "committed.py"], cwd=repo, check=True)
-        subprocess.run(
-            ["git", "commit", "-q", "-m", "commit committed"], cwd=repo, check=True
-        )
-
-        record = _sdir(repo, "s-malformed") / "touch-record.jsonl"
-        before = record.read_bytes()
-
-        orig_git_output = scope._git_output
-
-        def _malformed_status(args, cwd=None):
-            if args and args[-len(["--", "committed.py"]) :] == [
-                "--",
-                "committed.py",
-            ] and "status" in args:
-                return "MM\n"  # too short to fit either recognized shape
-            return orig_git_output(args, cwd)
-
-        monkeypatch.setattr(scope, "_git_output", _malformed_status)
-        scope.release_committed_claims("s-malformed", ["committed.py"], cwd=str(repo))
-
-        assert record.read_bytes() == before
+    # RETIRED (PM ruling 2026-08-26): `_porcelain_dirty_paths` is deleted --
+    # `release_committed_claims` no longer parses `git status --porcelain`
+    # output at all, so there is no unparseable-line fail-safe left to pin
+    # here. `test_ac7_unreadable_touch_record_leaves_file_byte_identical`
+    # above pins this function's one remaining fail-safe surface.
 
     def test_peer_agent_dir_not_back_pointed_at_sid_is_untouched(self, tmp_path):
         """The worst failure this helper could have: silently pruning a
@@ -4214,11 +4188,16 @@ class TestReleaseCommittedClaims:
         assert peer_touched.read_bytes() == before
 
     def test_ac10_no_op_release_performs_no_write(self, tmp_path):
+        """AC10 survives the PM ruling under a different fixture: the old
+        no-op trigger was "never committed, stays dirty" -- that no longer
+        applies since cleanliness is no longer consulted. The genuinely
+        no-op case now is a path this session never claimed (never a `T`
+        in its own record), so `_release_from_touch_record`'s `claimed ∩
+        release_set` intersection is empty and nothing is written."""
         repo = _make_repo(tmp_path)
         core.init("s-rel10", cwd=str(repo))
         (repo / "untouched.py").write_text("x")
-        scope.touch("s-rel10", "untouched.py", cwd=str(repo))
-        # Never committed -- stays dirty, so nothing is releasable this call.
+        scope.touch("s-rel10", "other.py", cwd=str(repo))
 
         record = _sdir(repo, "s-rel10") / "touch-record.jsonl"
         mtime_before = record.stat().st_mtime_ns
@@ -4359,57 +4338,22 @@ class TestBackslashedRelativePathspecCommitClearsClaimEndToEnd:
         }
 
 
-class TestReleaseCommittedClaimsArgvBounded:
-    """Windows argv-length pin: a large committed pathspec (the shape this
-    repo's own archival batches routinely commit) must never put the raw
-    path list on one `git status --porcelain` argv -- measured 38,044 chars
-    on one argv at 2000 paths before this fix, blowing past the Windows
-    32767-char command-line limit (CLAUDE.md: Windows is first-class here).
-    Asserts the SHAPE (argv length bound, chunked spawn count > 1) rather
-    than the literal Windows-only failure, so it runs on every platform."""
-
-    def test_status_argv_stays_bounded_at_scale(self, tmp_path, monkeypatch):
-        repo = _make_repo(tmp_path)
-        core.init("s-argv", cwd=str(repo))
-
-        paths = []
-        for i in range(2000):
-            rel = f"file_{i:05d}.py"
-            (repo / rel).write_text("x")
-            paths.append(rel)
-            scope.touch("s-argv", rel, cwd=str(repo))
-        subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
-        subprocess.run(
-            ["git", "commit", "-q", "-m", "commit bulk"], cwd=repo, check=True
-        )
-
-        real_run = subprocess.run
-        argvs: list[list[str]] = []
-
-        def _spy(args, *a, **kw):
-            argvs.append(list(args))
-            return real_run(args, *a, **kw)
-
-        monkeypatch.setattr(scope.subprocess, "run", _spy)
-
-        scope.release_committed_claims("s-argv", paths, cwd=str(repo))
-
-        status_argvs = [a for a in argvs if "status" in a]
-        assert len(status_argvs) > 1, (
-            "expected the status call to be chunked across multiple spawns"
-        )
-        for a in status_argvs:
-            total_len = sum(len(tok) for tok in a)
-            assert total_len < 20000, (
-                f"unchunked-looking status argv ({total_len} chars): {a[:6]}"
-            )
-
-        # A 2000-path touch-record sink rotates (unlike every OTHER fixture
-        # in this file), so the claim state is read via the family-aware
-        # projection rather than `_decode_events`'s deliberately
-        # rotation-naive raw read (see that helper's own docstring).
-        record = _sdir(repo, "s-argv") / "touch-record.jsonl"
-        projection = touch_record.project_live_claims(record, cwd=str(repo))
-        assert not (set(paths) & set(projection.claims)), (
-            "every requested path was clean at commit and should have released"
-        )
+# RETIRED (PM ruling 2026-08-26): `TestReleaseCommittedClaimsArgvBounded::
+# test_status_argv_stays_bounded_at_scale` pinned that the chunked `git
+# status --porcelain` argv this function used to build stayed under the
+# Windows 32767-char command-line limit at multi-thousand-path scale. With
+# the cleanliness term deleted, `release_committed_claims` issues no
+# `status` call and builds no such argv at all -- the protection this test
+# pinned is moot, not merely untested. Checked for any OTHER large argv
+# `release_committed_claims` might still build: the function's remaining
+# work per call is (1) one touch-record read/append per sink via
+# `_release_from_touch_record` (no subprocess), and (2) an `os.scandir` walk
+# of `.agents/*` reading one line of `em-session-id.txt` per dir (no
+# subprocess, no argv). Neither builds a path-list argv, so there is nothing
+# left in this function for an argv-bound test to cover; the class and test
+# are deleted rather than rewritten against a call shape that no longer
+# exists. `_tracked_at_head`/`_staged_in_index` (this module, further down)
+# still build chunked git argvs via `_chunk_paths` for `release_phantom_
+# claims`'s separate discriminator -- unaffected by this ruling and out of
+# this test's original scope (it named `release_committed_claims`
+# specifically).

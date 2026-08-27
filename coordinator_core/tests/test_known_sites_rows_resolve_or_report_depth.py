@@ -67,6 +67,7 @@ from coordinator_core.tests.test_no_unbatched_per_item_git_spawn import (
     find_unbatched_per_item_spawns,
 )
 from coordinator_core.tests.test_deep_per_item_spawn_worklist import (
+    _MAX_PUBLISHED_DEPTH,
     deep_find_with_site_depths,
 )
 
@@ -75,7 +76,9 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 # The deep collector's own plan (docs/plans/2026-08-25-a-collector-that-sees-past-one-hop.md, C6)
 # measures and publishes depths 2 through 4. There is no published depth-5+ figure to widen into,
 # so the oracle is bounded here at the same ceiling that instrument itself is measured at.
-_MAX_DEPTH = 4
+# Imported from the worklist module rather than redeclared, so this ceiling cannot drift out of
+# sync with the figures it is measured against (Review: coordinator:code-reviewer -- F4).
+_MAX_DEPTH = _MAX_PUBLISHED_DEPTH
 
 KnownSiteKey = tuple[str, str, str]
 
@@ -94,7 +97,13 @@ class KnownSiteClassification:
 @dataclass(frozen=True)
 class KnownSiteAssessment:
     """One `_KNOWN_SITES` row, measured rather than judged. `depth` is populated only for
-    `PAST_HORIZON`: the first (lowest) depth at which the deep oracle reports the site."""
+    `PAST_HORIZON`: the first (lowest) depth at which the deep oracle reports the site.
+    `None` also covers a `PAST_HORIZON` row whose depth the oracle cannot attribute at all --
+    a route d/e/f/g site whose callee names a locally-bound parameter, never a same-module or
+    imported definition (`deep_find_with_site_depths`'s `depth_of` contract, Review:
+    coordinator:code-reviewer -- F1). Reported honestly as unknown rather than recording an
+    understated depth, which is exactly the debt-laundering this module's own Anti-scope
+    forbids."""
 
     site: KnownSiteKey
     classification: str
@@ -131,6 +140,7 @@ def classify_known_site(
     one_hop_keys: frozenset[KnownSiteKey],
     deep_keys_by_depth: dict[int, frozenset[KnownSiteKey]],
     repo_root: Path,
+    deep_keys_unknown_depth: frozenset[KnownSiteKey] = frozenset(),
 ) -> KnownSiteAssessment:
     """Measure one row against the four-way split. Delegates the path/symbol half to
     `register_rows.resolve_row` and the reachability half to the two existing collectors
@@ -161,6 +171,23 @@ def classify_known_site(
                 depth=depth,
                 detail=f"dark to the one-hop gate, seen by the deep oracle at depth {depth}",
             )
+
+    if site in deep_keys_unknown_depth:
+        # The oracle's widened collector reports this site, but `depth_of` cannot attribute it
+        # a depth at all -- a route d/e/f/g callee naming a locally-bound parameter, never a
+        # same-module or imported definition. Reporting this as CLOSURE_CANDIDATE would be the
+        # exact debt-laundering this module's Anti-scope forbids (a live per-item spawn silently
+        # dropped as "fixed/gone"); PAST_HORIZON with depth=None reports it honestly instead
+        # (Review: coordinator:code-reviewer -- F1).
+        return KnownSiteAssessment(
+            site=site,
+            classification=KnownSiteClassification.PAST_HORIZON,
+            depth=None,
+            detail=(
+                "dark to the one-hop gate, seen by the deep oracle but its depth is "
+                "unresolvable (route d/e/f/g callee names a locally-bound parameter)"
+            ),
+        )
 
     return KnownSiteAssessment(
         site=site,
@@ -230,6 +257,27 @@ def test_classify_known_site_past_horizon_from_deep_oracle_records_lowest_depth(
     assert assessment.depth == 3
 
 
+def test_classify_known_site_past_horizon_unknown_depth_when_oracle_cannot_attribute_one(
+    tmp_path,
+):
+    """Finding 1 (Review: coordinator:code-reviewer). A site the oracle reports but cannot
+    attribute a depth to (a route d/e/f/g callee naming a locally-bound parameter) must land
+    PAST_HORIZON with `depth=None`, never CLOSURE_CANDIDATE -- the latter would silently launder
+    a live per-item spawn as fixed/gone."""
+    module = tmp_path / "pkg" / "mod.py"
+    module.parent.mkdir(parents=True)
+    module.write_text("def check():\n    pass\n", encoding="utf-8")
+    index = _index_for(tmp_path, "pkg/mod.py")
+    site = ("pkg/mod.py", "check", "spawner")
+
+    assessment = classify_known_site(
+        site, index, frozenset(), {}, tmp_path, deep_keys_unknown_depth=frozenset({site})
+    )
+
+    assert assessment.classification == KnownSiteClassification.PAST_HORIZON
+    assert assessment.depth is None
+
+
 def test_classify_known_site_closure_candidate_when_dark_to_both(tmp_path):
     module = tmp_path / "pkg" / "mod.py"
     module.parent.mkdir(parents=True)
@@ -283,13 +331,27 @@ def test_known_sites_rows_resolve_or_report_depth():
 
     deep_sites, deep_site_depth = deep_find_with_site_depths(_gate_scope_paths(), _MAX_DEPTH)
 
+    # `deep_site_depth` returns `None` (unknown, Review: coordinator:code-reviewer -- F1) for a
+    # route d/e/f/g site whose callee names a locally-bound parameter, never a same-module or
+    # imported definition -- guard the `<= depth` comparison and track those separately rather
+    # than letting `None` silently drop a live oracle-reported site to CLOSURE_CANDIDATE.
     deep_keys_by_depth: dict[int, frozenset[KnownSiteKey]] = {}
     for depth in range(2, _MAX_DEPTH + 1):
-        deep_violations = [site for site in deep_sites if deep_site_depth(site) <= depth]
+        deep_violations = [
+            site
+            for site in deep_sites
+            if (site_depth := deep_site_depth(site)) is not None and site_depth <= depth
+        ]
         deep_keys_by_depth[depth] = frozenset(site.key for site in deep_violations)
 
+    deep_keys_unknown_depth = frozenset(
+        site.key for site in deep_sites if deep_site_depth(site) is None
+    )
+
     assessments = {
-        site: classify_known_site(site, index, one_hop_keys, deep_keys_by_depth, _REPO_ROOT)
+        site: classify_known_site(
+            site, index, one_hop_keys, deep_keys_by_depth, _REPO_ROOT, deep_keys_unknown_depth
+        )
         for site in _KNOWN_SITES
     }
 

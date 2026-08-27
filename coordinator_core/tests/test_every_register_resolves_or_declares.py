@@ -84,8 +84,8 @@ AC7/AC9 baseline. The canary is therefore three members, not two:
   2. `EXCLUDED_PATHS` in `test_no_direct_retired_root_env_reads.py` (13 rows, `repo-path`) --
      large and stable; no chunk of this plan writes that module.
   3. `COLD_PATH_MODULES` in `coordinator/tests/test_cold_path_remediation_is_runnable.py` --
-     the WRONG-ROOT discriminator. The core 45 span two roots (38 under `coordinator_core/`, 3
-     under `coordinator/`), so a derivation that only walked `coordinator_core/` would return 38
+     the WRONG-ROOT discriminator. The core 45 span two roots (42 under `coordinator_core/`, 3
+     under `coordinator/`), so a derivation that only walked `coordinator_core/` would return 42
      healthy-looking registers and read green -- exactly the absence-reads-as-THE-OLD-VALUE
      failure this canary exists to catch, and only a canary member on the far side of the root
      boundary discriminates it. `CORE_TRACKED_FILES` (also under `coordinator/`) is excluded
@@ -113,6 +113,7 @@ from pathlib import Path
 import pytest
 
 from coordinator_core.tests.register_rows import (
+    DOTTED_CLASSES,
     RegisterId,
     Resolution,
     Row,
@@ -234,11 +235,14 @@ _DOTTED_LEAF_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*
 
 #: Register-shaped module-level assignment, byte-level (leg 1). Anchored at column 0 so it only
 #: matches a module-level (not indented/nested) constant. Covers every shape the corpus actually
-#: uses: plain assign, `AnnAssign`, `frozenset(...)`/`dict(...)` calls, a dict literal, and the
+#: uses: plain assign, `AnnAssign`, `frozenset(...)`/`dict(...)`/`set(...)` calls, a dict literal, and the
 #: opening line of a multi-line tuple (`_KNOWN_SITES`, `_EXEMPTION_CLASSES` are `Call` nodes, so
 #: their opening line is `NAME = frozenset(` / `NAME: T = frozenset(`, already matched below).
 _CANDIDATE_LINE_RE = re.compile(
-    r"^(_*[A-Z][A-Z0-9_]*)\s*(?::[^=\n]+)?=\s*(?:frozenset\(|dict\(|\(|\[|\{)"
+    # Review: coordinatorcode-reviewer.a0bfa3d004796aa42 (Finding 4) -- `set(` alongside
+    # `frozenset(`/`dict(`; a `NAME: set = set()`-shaped register was invisible to this regex
+    # AND to the AST oracle that validates its recall, so it could never be caught by either.
+    r"^(_*[A-Z][A-Z0-9_]*)\s*(?::[^=\n]+)?=\s*(?:frozenset\(|dict\(|set\(|\(|\[|\{)"
 )
 
 
@@ -324,6 +328,13 @@ def _find_first_assignment_value(tree: ast.Module, name: str) -> ast.expr | None
                     return stmt.value
         elif isinstance(stmt, ast.AnnAssign):
             if isinstance(stmt.target, ast.Name) and stmt.target.id == name:
+                if stmt.value is None:
+                    # Review: coordinatorcode-reviewer.a0bfa3d004796aa42 (Finding 2) -- a
+                    # bare-annotation `NAME: T` with no `=` declares a name, it does not bind
+                    # one; agree with the sibling AST census below (`if value is None:
+                    # continue`) rather than stopping dead here and missing a later real
+                    # `NAME = (...)` assignment.
+                    continue
                 return stmt.value
     return None
 
@@ -479,7 +490,12 @@ def _assert_opaque_rows_have_not_aged_out(
             continue
         candidate_classes = [SubjectClass.REPO_PATH, SubjectClass.BARE_FILENAME]
         if _DOTTED_LEAF_RE.fullmatch(row.subject):
-            candidate_classes.append(SubjectClass.MODULE)
+            # Review: coordinatorcode-reviewer.a0bfa3d004796aa42 (Finding 1) -- a dotted
+            # subject can age into EITHER MODULE or SYMBOL shape; iterate the shared
+            # DOTTED_CLASSES rather than hand-picking MODULE, or the one live opaque
+            # register's module.member-shaped subjects (brief.main, apply.main_apply,
+            # apply.main_drop) can never be caught aging into SYMBOL.
+            candidate_classes.extend(DOTTED_CLASSES)
         for forced_class in candidate_classes:
             forced_row = Row(register=row.register, subject=row.subject, declared_class=forced_class)
             resolution = resolve_row(forced_row, index, repo_root)
@@ -660,7 +676,11 @@ def test_leg1_regex_matches_the_ast_census_once_at_land() -> None:
                     is_collection_call = (
                         isinstance(value, ast.Call)
                         and isinstance(value.func, ast.Name)
-                        and value.func.id in {"frozenset", "dict"}
+                        # Review: coordinatorcode-reviewer.a0bfa3d004796aa42 (Finding 4) --
+                        # `set` alongside `frozenset`/`dict`, so this oracle can validate
+                        # leg 1's recall for `set(...)`-shaped registers instead of sharing
+                        # the same blind spot.
+                        and value.func.id in {"frozenset", "dict", "set"}
                     )
                     if not (is_collection_literal or is_collection_call):
                         continue
@@ -829,6 +849,26 @@ def test_opaque_ages_out_helper_actually_detects_a_resolving_subject(
         declared_class=SubjectClass.OPAQUE,
     )
     _assert_opaque_rows_have_not_aged_out([genuinely_opaque_row], _index, REPO_ROOT)
+
+
+def test_opaque_ages_out_helper_detects_a_symbol_shaped_resolution(
+    _index: TrackedFileIndex,
+) -> None:
+    """Review: coordinatorcode-reviewer.a0bfa3d004796aa42 (Finding 1) -- the helper must force-
+    classify a dotted opaque subject under BOTH `DOTTED_CLASSES` members, not only `MODULE`. This
+    subject, `register_rows.resolve_row`, does not resolve as `module` (no
+    `register_rows/resolve_row.py` file exists) but DOES resolve as `symbol` (a real module-level
+    `resolve_row` function lives in `register_rows.py`) -- exactly the `module.member` shape the
+    one live opaque core-45 register (`_EXPECTED_CALLEE_BY_SUBCOMMAND`) actually uses. If this
+    check is reverted to force-classifying dotted subjects as `MODULE` only, this test FAILS
+    (verified by hand against the pre-fix code)."""
+    symbol_shaped_row = Row(
+        register=RegisterId("synthetic.py", "_SYNTHETIC"),
+        subject="register_rows.resolve_row",
+        declared_class=SubjectClass.OPAQUE,
+    )
+    with pytest.raises(AssertionError, match="aged out"):
+        _assert_opaque_rows_have_not_aged_out([symbol_shaped_row], _index, REPO_ROOT)
 
 
 # ---------------------------------------------------------------------------

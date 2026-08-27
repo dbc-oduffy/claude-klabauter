@@ -3034,6 +3034,36 @@ def _resolved_predecessor_closed_reason(predecessor_path: Optional[str], root: O
     return _fm_field(fm, "closed_reason") or ""
 
 
+def _resolved_predecessor_sizing_object(
+    predecessor_path: "Optional[str]", root: "Optional[Path]"
+) -> str:
+    """The resolved predecessor's own `sizing_object`, or `""` when it has none.
+
+    Exists because `coordinator-doc-new --type=roadmap-baton` REFUSES without an
+    explicit sizing answer -- either `--sizing-object <path>` or
+    `--no-sizing-object`. DR-172's identity carry forwarded `--roadmap-id` and
+    `--stub-id` and stopped there, so every roadmap-baton succession through
+    `baton-assemble apply` died at d1 with "requires an explicit sizing answer"
+    and no way to supply one: `apply` exposes no sizing flag, and the directive
+    list is not hand-executable by contract. Observed 2026-08-27 on
+    `hnd-the-gate-path-s-spawns-are-the-865bc9`.
+
+    A continuation inherits its predecessor's sizing by construction -- it is
+    the same sized work, which is what makes it a continuation rather than a
+    fork. Fail-open to `""` in the same shape as the sibling
+    `_resolved_predecessor_*` readers; the caller turns `""` into the explicit
+    `--no-sizing-object`, so the answer is always stated and never guessed.
+    """
+    if not predecessor_path or root is None:
+        return ""
+    candidate = Path(predecessor_path)
+    if not candidate.is_absolute():
+        candidate = root / candidate
+    if not candidate.is_file():
+        return ""
+    return _fm_field(_read_frontmatter(candidate), "sizing_object") or ""
+
+
 def _resolved_predecessor_roadmap_identity(
     predecessor_path: Optional[str], root: Optional[Path]
 ) -> tuple[str, str]:
@@ -3394,6 +3424,16 @@ def _build_directives(
                 d1_args.append(f"--roadmap-id={_pred_roadmap_id}")
             if _pred_stub_id:
                 d1_args.append(f"--stub-id={_pred_stub_id}")
+            # `--type=roadmap-baton` refuses without an explicit sizing answer.
+            # A continuation inherits the predecessor's sizing -- same sized
+            # work is what makes it a continuation. No sizing on the
+            # predecessor is answered explicitly rather than left unstated.
+            _pred_sizing = _resolved_predecessor_sizing_object(
+                lineage.get("predecessor"), root
+            )
+            d1_args.append(
+                f"--sizing-object={_pred_sizing}" if _pred_sizing else "--no-sizing-object"
+            )
     # `--out` is `lineage["output_path"]` -- a FRESH path COMPUTED via
     # `_compute_fresh_output_path`, never `artifact_path` echoed verbatim.
     # `artifact_path` is the caller-supplied INPUT lineage source in both

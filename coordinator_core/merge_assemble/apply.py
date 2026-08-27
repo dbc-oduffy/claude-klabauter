@@ -54,7 +54,6 @@ Negative-spec:
 """
 from __future__ import annotations
 
-import json
 import subprocess
 import sys
 from pathlib import Path
@@ -64,10 +63,6 @@ from coordinator_core.ceremony_common.cli_dispatch import (
     invoke_cli_main,
     load_cli_module,
     resolve_cli_script_root,
-)
-from coordinator_core.ceremony_common.json_payload_flag import (
-    detect_conflicting_payload_channels,
-    resolve_json_payload_flag,
 )
 from coordinator_core.contract import apply_base
 from coordinator_core.merge_assemble import (
@@ -663,40 +658,24 @@ def _usage(prog: str) -> int:
 
 
 def main_apply(argv: list[str]) -> int:
-    session_id: Optional[str] = None
-    decisions: Optional[dict[str, Any]] = None
-    force = False
-    tag_prefix = "v"
-    conflict = detect_conflicting_payload_channels(argv)
-    if conflict is not None:
-        print(f"merge-assemble apply: {conflict}", file=sys.stderr)
-        return _usage("merge-assemble")
-    i = 0
-    while i < len(argv):
-        tok = argv[i]
-        if tok == "--session-id":
-            if i + 1 >= len(argv):
-                return _usage("merge-assemble")
-            session_id = argv[i + 1]
-            i += 2
-        elif tok == "--force":
-            force = True
-            i += 1
-        elif tok == "--tag-prefix":
-            if i + 1 >= len(argv):
-                return _usage("merge-assemble")
-            tag_prefix = argv[i + 1]
-            i += 2
-        elif (payload := resolve_json_payload_flag(argv, i)).consumed:
-            if payload.error is not None:
-                print(f"merge-assemble apply: {payload.error}", file=sys.stderr)
-                return _usage("merge-assemble")
-            decisions = payload.value
-            i += payload.consumed
-        else:
-            print(f"merge-assemble apply: unrecognized argument {tok!r}", file=sys.stderr)
-            return _usage("merge-assemble")
+    from coordinator_core.merge_assemble.cli import (
+        UsageError,
+        parse_apply_argv,
+        print_apply_result,
+    )
 
-    exit_code, report = apply(session_id=session_id, decisions=decisions, force=force, tag_prefix=tag_prefix)
-    print(json.dumps(report, indent=2, sort_keys=True))
+    try:
+        params = parse_apply_argv(argv)
+    except UsageError as exc:
+        if exc.message is not None:
+            print(exc.message, file=sys.stderr)
+        return _usage("merge-assemble")
+
+    exit_code, report = apply(
+        session_id=params["session_id"],
+        decisions=params["decisions"],
+        force=params["force"],
+        tag_prefix=params["tag_prefix"],
+    )
+    print_apply_result(report)
     return exit_code

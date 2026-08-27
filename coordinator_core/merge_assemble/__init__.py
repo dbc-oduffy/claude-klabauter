@@ -51,12 +51,21 @@ import subprocess
 from pathlib import Path
 from typing import Any, Optional
 
-from coordinator_core.contract.decision_object.envelope import build_envelope
-from coordinator_core.contract.decision_object.judgment import (
-    build_disposition,
-    build_judgment_point,
-)
-from coordinator_core.git.repo_root import show_toplevel
+# Negative-spec — these three are imported LAZILY, inside the functions that use
+# them, and must not be restored to module scope. Importing this package is an
+# unavoidable side effect of importing its `cli` leaf (Python executes a parent
+# package before its submodule), so anything at THIS module's scope is paid by
+# the warm entry point that AC1 exists to keep cheap. Measured: the heavy graph
+# was 14.3ms of the leaf's 16.7ms import, ~85% of the cost AC1 forbids. Every
+# call site is inside a function body already; nothing here needs them eagerly.
+#
+# Measured honestly: removing this graph moved the leaf's import from 16.7ms to
+# 15.8ms cumulative. The saving is ~1ms, NOT the ~85% an earlier reading of the
+# cumulative number claimed -- most of the 13.2ms the package still costs is
+# stdlib (`dataclasses`, `subprocess`, `pathlib`, `inspect`) plus the editable-
+# install path finder, shared with every other importer and not attributable
+# here. The reason to keep this lazy is that it makes AC1's stated property
+# actually TRUE, not that it bought back measurable time.
 
 # ---------------------------------------------------------------------------
 # Exit-code contract — locally scoped to this compute-only half, NOT shared
@@ -126,6 +135,8 @@ def resolve_repo_root(start: Optional[Path] = None) -> Optional[Path]:
     cwd-keyed memoized resolution seam. Returns `None` on any failure (not
     inside a worktree, git unavailable) rather than raising."""
     cwd = start or Path.cwd()
+    from coordinator_core.git.repo_root import show_toplevel  # noqa: PLC0415
+
     top = show_toplevel(str(cwd))
     return Path(top) if top else None
 
@@ -342,6 +353,11 @@ def build_judgment_points(
     the halted pass's own report — back in as `decisions["portability_sweep_
     result"]`; `brief()` passes it through here so the disposition is
     offered against that REAL result, not the point's own absence."""
+    from coordinator_core.contract.decision_object.judgment import (  # noqa: PLC0415
+        build_disposition,
+        build_judgment_point,
+    )
+
     return [
         build_judgment_point(
             None,
@@ -769,6 +785,8 @@ def brief(
             f"(proposal was {version_bump.get('proposed')!r})."
         )
 
+    from coordinator_core.contract.decision_object.envelope import build_envelope  # noqa: PLC0415
+
     envelope = build_envelope(
         artifact={
             "branch_state": branch_state,
@@ -795,8 +813,13 @@ def _usage(prog: str) -> int:
 
 
 def main(argv: list[str]) -> int:
-    import json
     import sys
+
+    from coordinator_core.merge_assemble.cli import (
+        UsageError,
+        parse_brief_argv,
+        print_brief_result,
+    )
 
     if not argv:
         return _usage("merge-assemble")
@@ -817,19 +840,13 @@ def main(argv: list[str]) -> int:
         print(f"merge-assemble: unknown subcommand {subcmd!r}", file=sys.stderr)
         return _usage("merge-assemble")
 
-    tag_prefix = "v"
-    i = 0
-    while i < len(rest):
-        tok = rest[i]
-        if tok == "--tag-prefix":
-            if i + 1 >= len(rest):
-                return _usage("merge-assemble")
-            tag_prefix = rest[i + 1]
-            i += 2
-        else:
-            print(f"merge-assemble: unrecognized argument {tok!r}", file=sys.stderr)
-            return _usage("merge-assemble")
+    try:
+        params = parse_brief_argv(rest)
+    except UsageError as exc:
+        if exc.message is not None:
+            print(exc.message, file=sys.stderr)
+        return _usage("merge-assemble")
 
-    result = brief(tag_prefix=tag_prefix)
-    print(json.dumps(result.decision_object, indent=2, sort_keys=True))
+    result = brief(tag_prefix=params["tag_prefix"])
+    print_brief_result(result.decision_object)
     return result.exit_code

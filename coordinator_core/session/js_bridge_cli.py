@@ -143,25 +143,29 @@ def _cmd_claim_path(args: List[str]) -> int:
     # can see, which is the inverted-safety shape ``claim_index`` was repaired
     # for.
     #
-    # ``session_id`` is REQUIRED and validated by ``encode_line``: an empty one
-    # is a malformed line the reader degrades on, so an agent dir takes its
-    # OWNER's id from the ``em-session-id.txt`` back-pointer beside it (the same
-    # identity ``claim_index`` attributes an agent's claims to) and its own dir
-    # name as ``agent_id``. No back-pointer means no attributable claimant --
-    # refused and named, never written under a guessed id.
-    claim_dir = os.path.dirname(touched_file)
+    # ``session_id`` is NOT validated by ``encode_line`` -- it writes an empty
+    # ``sid`` with no complaint; only ``decode_line`` rejects one, on READ.
+    # A write-side empty id therefore lands a claim every reader degrades on,
+    # indistinguishable from claiming nothing, so THIS call site is the only
+    # place the emptiness check can happen. ``os.path.normpath`` first so a
+    # trailing separator on ``touched_file`` doesn't leave the last real path
+    # segment sitting in ``os.path.dirname``'s result (dirname alone strips
+    # only one trailing slash, not a whole segment).
+    claim_dir = os.path.dirname(os.path.normpath(touched_file))
     dir_name = os.path.basename(claim_dir)
     is_agent_dir = os.path.basename(os.path.dirname(claim_dir)) == ".agents"
-    if is_agent_dir:
-        session_id = _agent_owner_sid(claim_dir)
-        if not session_id:
-            sys.stderr.write(
-                f"js_bridge_cli: agent dir {claim_dir!r} has no readable "
-                f"em-session-id.txt — not claiming {entry!r}\n"
-            )
-            return 0
-    else:
-        session_id = dir_name
+    session_id = _agent_owner_sid(claim_dir) if is_agent_dir else dir_name
+    # Guard covers BOTH branches: an agent dir with no readable back-pointer
+    # and a non-agent ``touched_file`` with no directory component (bare
+    # filename) both resolve to a falsy id here, and either one must be
+    # refused rather than written -- a guessed/empty claimant is the exact
+    # inverted-safety shape this seam exists to close.
+    if not session_id:
+        sys.stderr.write(
+            f"js_bridge_cli: no attributable claimant for {touched_file!r} "
+            f"(claim dir {claim_dir!r}) — not claiming {entry!r}\n"
+        )
+        return 0
     sink = os.path.join(claim_dir, scope._TOUCH_RECORD_FILENAME)
     try:
         touch_record.append_event(
