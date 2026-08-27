@@ -32,8 +32,15 @@ three tests it served. `touch()` no longer opens the sink through
 `scope.open` at all, so the harness could not fire; and there is no longer a
 two-step region for it to straddle, so there is nothing left to force. Do NOT
 resurrect it against `touch_record.open` -- that would make a deleted lock
-look guarded. `_TOUCH_LOCK_TIMEOUT_SECS` is likewise no longer exercised by
-`touch()` and is not bumped anywhere in this file any more.
+look guarded. `_TOUCH_LOCK_TIMEOUT_SECS` is likewise not exercised by
+`touch()` and is no longer bumped anywhere in this file.
+
+Also retired here, 2026-08-27: `scope.touch`'s `lock=` parameter, and the
+`test_touch_ignores_the_vestigial_lock_parameter` test whose only subject
+was that the parameter did nothing. The parameter is GONE rather than
+inert, so there is no longer an inertness to pin; a test asserting that an
+absent parameter has no effect is the same "looks guarded" shape this
+file's own docstring warns about, one level up.
 
 Marker: `cadence` + `spawns_process` (Rule 2/4,
 `coordinator_core/tests/test_no_new_spawning_tests.py`) — every test here
@@ -129,10 +136,7 @@ _PLAIN_WRITER_SCRIPT_TEMPLATE = textwrap.dedent(
     sys.path.insert(0, {repo_root!r})
     from coordinator_core.session import scope
 
-    repo, sid, path, sent_open, sent_done, lock_flag, bump_timeout, sent_ready = sys.argv[1:9]
-    lock = lock_flag == "1"
-    if bump_timeout == "1":
-        scope._TOUCH_LOCK_TIMEOUT_SECS = 5.0
+    repo, sid, path, sent_open, sent_done, sent_ready = sys.argv[1:7]
     if sent_ready:
         # Signal the instant this writer is about to attempt the real
         # cross-process acquire -- NOT at process spawn, and NOT after
@@ -150,7 +154,7 @@ _PLAIN_WRITER_SCRIPT_TEMPLATE = textwrap.dedent(
     deadline = time.time() + 10
     while not os.path.exists(sent_open) and time.time() < deadline:
         time.sleep(0.01)
-    scope.touch(sid, path, cwd=repo, root=repo, lock=lock)
+    scope.touch(sid, path, cwd=repo, root=repo)
     with open(sent_done, "w") as fh:
         fh.write("1")
     """
@@ -226,7 +230,7 @@ class TestPostAC17AtomicAppendNeedsNoLock:
                 subprocess.Popen(
                     [
                         sys.executable, str(script), str(repo), sid, name,
-                        str(gun), str(tmp_path / f"done-{name}.flag"), "0", "0", "",
+                        str(gun), str(tmp_path / f"done-{name}.flag"), "",
                     ],
                     env=_clean_env(),
                     **no_console_creationflags(),
@@ -254,29 +258,6 @@ class TestPostAC17AtomicAppendNeedsNoLock:
             "touch path that AC17 removed"
         )
 
-    def test_touch_ignores_the_vestigial_lock_parameter(self, tmp_path):
-        """``lock=False`` and ``lock=True`` are indistinguishable at the record.
-
-        The parameter survives only for call-site signature compatibility
-        (``ipc.py``, ``cli_entry.py``). This pins that it is genuinely inert,
-        so a future reader cannot mistake it for a live switch -- and it fails
-        if anyone re-wires it to mean something again without saying so.
-        """
-        repo = tmp_path / "repo"
-        repo.mkdir()
-        _make_repo(repo)
-
-        for sid, lock in (("sid-lock-true", True), ("sid-lock-false", False)):
-            core.init(sid, cwd=str(repo))
-            scope.touch(sid, "same.txt", cwd=str(repo), root=str(repo), lock=lock)
-
-        locked = _sink_as_legacy_text(core.session_dir("sid-lock-true", cwd=str(repo)))
-        unlocked = _sink_as_legacy_text(core.session_dir("sid-lock-false", cwd=str(repo)))
-
-        assert "same.txt" in locked and "same.txt" in unlocked
-        # Same verb, same path, one event each -- the flag changed nothing.
-        assert len(locked.splitlines()) == len(unlocked.splitlines()) == 1
-
 
 def test_ac3_peer_session_write_never_recorded_into_this_sessions_touched(tmp_path):
     """AC3: two concurrent sessions writing into the same tree at once --
@@ -301,14 +282,14 @@ def test_ac3_peer_session_write_never_recorded_into_this_sessions_touched(tmp_pa
         proc_mine = subprocess.Popen(
             [
                 sys.executable, str(script), str(repo), sid_mine, "mine.txt",
-                str(sent_open), str(tmp_path / "mine_done.flag"), "1", "0", "",
+                str(sent_open), str(tmp_path / "mine_done.flag"), "",
             ],
             **no_console_creationflags(),
         )
         proc_peer = subprocess.Popen(
             [
                 sys.executable, str(script), str(repo), sid_peer, "peer.txt",
-                str(sent_open), str(tmp_path / "peer_done.flag"), "1", "0", "",
+                str(sent_open), str(tmp_path / "peer_done.flag"), "",
             ],
             **no_console_creationflags(),
         )

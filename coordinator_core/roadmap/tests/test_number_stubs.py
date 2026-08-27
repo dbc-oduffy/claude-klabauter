@@ -41,12 +41,71 @@ def test_parse_edges_file_line_form_with_comments_and_isolated_node():
     assert parsed["isolatedNodes"] == ["LONER"]
 
 
-def test_parse_edges_file_malformed_line_skipped(capsys):
+def test_parse_edges_file_malformed_line_is_a_hard_error(capsys):
+    """Was ``test_parse_edges_file_malformed_line_skipped``. A line containing
+    ``<-`` with an empty side is an *attempted* edge; the old warn-and-skip
+    silently changed the DAG and the WARNING went unread in a
+    transcribe-by-hand authoring flow.
+    """
     content = "<- BASE\nWIDGET <- BASE\n"
-    parsed = parse_edges_file(content)
-    assert parsed["edges"] == [{"from": "WIDGET", "to": "BASE"}]
+    with pytest.raises(SystemExit) as excinfo:
+        parse_edges_file(content)
+    assert excinfo.value.code == 2
     err = capsys.readouterr().err
-    assert "WARNING: malformed edge line" in err
+    assert "ERROR: malformed edge line 1" in err
+    assert "A <- B" in err
+    assert "WARNING" not in err
+
+
+def test_parse_edges_file_malformed_right_side_is_a_hard_error(capsys):
+    with pytest.raises(SystemExit) as excinfo:
+        parse_edges_file("WIDGET <-\nGADGET <- BASE\n")
+    assert excinfo.value.code == 2
+    assert "ERROR: malformed edge line 1" in capsys.readouterr().err
+
+
+def test_parse_edges_file_multiline_zero_edge_file_is_refused(capsys):
+    """A whole file in the wrong notation used to parse as N isolated nodes and
+    zero edges, then print a confident, wrong numbering at exit 0.
+    """
+    content = "WIDGET blocked_by BASE\nGADGET blocked_by WIDGET\n"
+    with pytest.raises(SystemExit) as excinfo:
+        parse_edges_file(content)
+    assert excinfo.value.code == 2
+    err = capsys.readouterr().err
+    assert "zero edges" in err
+    assert 'first offending line 1: "WIDGET blocked_by BASE"' in err
+    assert "A <- B" in err
+    assert "edge-free roadmap needs no numbering op" in err
+
+
+def test_parse_edges_file_zero_edge_refusal_ignores_comments_and_blanks(capsys):
+    """The >1-line floor counts non-comment, non-blank lines only — a single
+    isolated node buried in comments stays legal.
+    """
+    parsed = parse_edges_file("# header\n\nLONER\n\n# trailer\n")
+    assert parsed["edges"] == []
+    assert parsed["isolatedNodes"] == ["LONER"]
+
+    with pytest.raises(SystemExit) as excinfo:
+        parse_edges_file("# header\nA -> B\nB -> C\n")
+    assert excinfo.value.code == 2
+    assert 'first offending line 2: "A -> B"' in capsys.readouterr().err
+
+
+def test_parse_edges_file_single_isolated_node_still_legal():
+    parsed = parse_edges_file("LONER\n")
+    assert parsed["edges"] == []
+    assert parsed["isolatedNodes"] == ["LONER"]
+
+
+def test_parse_edges_file_isolated_node_alongside_an_edge_still_legal():
+    """The refusal is scoped to *zero* edges — an isolated node in a file that
+    also carries real edges is a legitimate authoring case.
+    """
+    parsed = parse_edges_file("WIDGET <- BASE\nLONER\n")
+    assert parsed["edges"] == [{"from": "WIDGET", "to": "BASE"}]
+    assert parsed["isolatedNodes"] == ["LONER"]
 
 
 def test_parse_edges_file_json_form():
@@ -61,6 +120,33 @@ def test_parse_edges_file_json_malformed_entry_exits_1():
     with pytest.raises(SystemExit) as excinfo:
         parse_edges_file(content)
     assert excinfo.value.code == 1
+
+
+def test_parse_edges_file_json_form_behaviour_unchanged_by_line_form_refusals(capsys):
+    """The line-form refusals are scoped to the line form. The JSON branch
+    already failed loud (exit 1, "looks like JSON but failed to parse") and
+    keeps that exit code and message shape — a caller may be reading it.
+    """
+    with pytest.raises(SystemExit) as excinfo:
+        parse_edges_file('[{"from": "BETA", "to": ')
+    assert excinfo.value.code == 1
+    assert "ERROR: file looks like JSON but failed to parse" in capsys.readouterr().err
+
+    # An empty JSON array yields zero edges and does NOT trip the line-form
+    # zero-edge refusal — the JSON branch returns before that check.
+    assert parse_edges_file("[]") == {"edges": [], "isolatedNodes": [], "sprints": {}}
+
+
+def test_default_mode_refuses_wrong_notation_file(tmp_path, capsys):
+    edges_file = tmp_path / "edges.txt"
+    edges_file.write_text("WIDGET blocked_by BASE\nGADGET blocked_by WIDGET\n", encoding="utf-8")
+
+    with pytest.raises(SystemExit) as excinfo:
+        main([str(edges_file)])
+    assert excinfo.value.code == 2
+    captured = capsys.readouterr()
+    assert "zero edges" in captured.err
+    assert captured.out == ""
 
 
 def test_derive_nodes_preserves_first_seen_order_dependency_before_dependent():

@@ -209,6 +209,17 @@ _logger = logging.getLogger(__name__)
 
 SCHEMA_VERSION = 1
 
+#: AC7: the record's filename, owned HERE and nowhere else, plus the one
+#: constructor every caller uses to turn a claimant directory into its sink
+#: path. Before this existed, four sites outside this module each spelled the
+#: literal themselves -- ``bash_guards/check_test_suite_invocation``,
+#: ``bash_guards/dispatch_checks``, ``session/stable_pid_watch`` and
+#: ``claim_index``'s own private ``_TOUCHED_FILENAME`` -- which is how a
+#: filename change becomes a silent partial repoint: a missed site does not
+#: fail, it reads an absent file and reports "no claims", the fail-open shape
+#: this whole workstream exists to close.
+RECORD_FILENAME = "touch-record.jsonl"
+
 VERB_TOUCH = "T"
 VERB_RELEASE = "R"
 _VALID_VERBS = (VERB_TOUCH, VERB_RELEASE)
@@ -313,6 +324,18 @@ class TouchEvent:
     session_id: str
     agent_id: Optional[str]
     path: str
+
+
+def sink_path(claimant_dir: "Path | str") -> Path:
+    """The record sink inside *claimant_dir* — a session dir or an agent dir.
+
+    AC7's single record-path constructor. Takes the directory, returns the
+    live sink; ``discover_family`` takes it from there when a caller needs
+    the rotated generations too. Deliberately does NOT check existence: a
+    claimant with no sink yet is a normal state, and conflating "no file"
+    with "no path" is what a caller must stay able to distinguish.
+    """
+    return Path(claimant_dir) / RECORD_FILENAME
 
 
 def encode_line(

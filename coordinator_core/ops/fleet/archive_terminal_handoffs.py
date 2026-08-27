@@ -282,8 +282,41 @@ _PACK_IDX_MAGIC = b"\xfftOc"
 _SUPPORTED_PACK_IDX_VERSION = 2
 
 
-def _sha_in_pack_idx(idx_path: Path, target: bytes) -> bool:
+# A `shipped_in` may be ABBREVIATED. git's own minimum useful abbreviation is
+# 7 hex; anything shorter is refused rather than range-searched, because the
+# match set gets wide enough that "some object starts with this" stops being
+# evidence about the recorded commit at all.
+_MIN_ABBREV_SHA_HEX = 7
+
+
+def _oid_search_range(sha_hex: str) -> Optional[Tuple[bytes, bytes]]:
+    """The inclusive `(lo_key, hi_key)` 20-byte bounds an oid table is searched
+    between for `sha_hex`, or None when `sha_hex` is not a usable oid.
+
+    A full 40-hex sha yields `lo_key == hi_key` — the exact-match search the
+    callers have always done, bit for bit. A 7..39-hex abbreviation yields the
+    range that prefix spans (right-padded with `0`s and `f`s), so a sorted-oid
+    binary search answers "does any object carry this prefix" in the same
+    O(log N) reads as the exact case. `_object_exists_no_spawn` is an
+    EXISTENCE gate, so an abbreviation matching more than one object is still
+    a true "the recorded commit is present"; disambiguating it would need the
+    object bodies this reader deliberately never touches.
+    """
+    sha = sha_hex.strip().lower()
+    if not _MIN_ABBREV_SHA_HEX <= len(sha) <= 40 or not _HEX_DIGITS.issuperset(sha):
+        return None
+    try:
+        return bytes.fromhex(sha.ljust(40, "0")), bytes.fromhex(sha.ljust(40, "f"))
+    except ValueError:
+        return None
+
+
+def _sha_in_pack_idx(idx_path: Path, lo_key: bytes, hi_key: bytes) -> bool:
     """Existence-only binary search over one pack `.idx`'s sorted sha table.
+
+    Answers whether any oid falls in the inclusive `[lo_key, hi_key]` range
+    `_oid_search_range` computed — an exact sha when the two bounds are equal,
+    an abbreviation's prefix range otherwise.
 
     Reads ONLY the fanout table (1024 bytes) plus the O(log N) sha entries
     the binary search visits — never the whole file, never a pack's zlib
@@ -315,24 +348,117 @@ def _sha_in_pack_idx(idx_path: Path, target: bytes) -> bool:
             raise ValueError(f"{idx_path}: truncated fanout table")
         fanout = [int.from_bytes(fanout_bytes[i * 4:i * 4 + 4], "big") for i in range(256)]
 
-        first_byte = target[0]
+        first_byte = lo_key[0]
         lo = fanout[first_byte - 1] if first_byte > 0 else 0
         hi = fanout[first_byte]
         shas_start = fanout_offset + 1024
 
+        # Lower-bound search for lo_key, then one containment test: the table
+        # is sorted, so the first entry >= lo_key is the only candidate that
+        # can fall inside [lo_key, hi_key].
         while lo < hi:
             mid = (lo + hi) // 2
             f.seek(shas_start + mid * entry_stride + sha_field_offset)
             candidate = f.read(20)
             if len(candidate) != 20:
                 raise ValueError(f"{idx_path}: truncated sha entry at index {mid}")
-            if candidate == target:
-                return True
-            if candidate < target:
+            if candidate < lo_key:
                 lo = mid + 1
             else:
                 hi = mid
-        return False
+
+        if lo >= fanout[first_byte]:
+            return False
+        f.seek(shas_start + lo * entry_stride + sha_field_offset)
+        candidate = f.read(20)
+        if len(candidate) != 20:
+            raise ValueError(f"{idx_path}: truncated sha entry at index {lo}")
+        return lo_key <= candidate <= hi_key
+
+
+# Multi-pack-index magic and the two chunk IDs this reader needs: OIDF (the
+# 256-entry fanout) and OIDL (the sorted object-id table). Every other chunk
+# — PNAM, OOFF, LOFF, RIDX, BTMP — is object *location*, which existence does
+# not need.
+_MIDX_MAGIC = b"MIDX"
+_SUPPORTED_MIDX_VERSION = 1
+_MIDX_CHUNK_FANOUT = b"OIDF"
+_MIDX_CHUNK_LOOKUP = b"OIDL"
+
+
+def _sha_in_multi_pack_index(midx_path: Path, lo_key: bytes, hi_key: bytes) -> bool:
+    """Existence-only binary search over a `multi-pack-index`'s sorted oid table.
+
+    Same `[lo_key, hi_key]` range contract as `_sha_in_pack_idx` — an exact
+    sha when the bounds are equal, an abbreviation's prefix range otherwise.
+
+    Same shape and same guarantees as `_sha_in_pack_idx`: reads the 12-byte
+    header, the chunk lookup table, the 1024-byte fanout, and the O(log N)
+    oid entries the search visits — nothing else, and no spawn. Raises
+    ValueError/OSError on any unhandled shape (unsupported version, SHA-256
+    oids, a non-zero base-file count, a missing chunk, truncation); the
+    caller treats that as unresolvable, so this function never returns a
+    false "found".
+    """
+    with open(midx_path, "rb") as f:
+        header = f.read(12)
+        if len(header) < 12:
+            raise ValueError(f"{midx_path}: truncated header")
+        if header[:4] != _MIDX_MAGIC:
+            raise ValueError(f"{midx_path}: not a multi-pack-index")
+        if header[4] != _SUPPORTED_MIDX_VERSION:
+            raise ValueError(f"{midx_path}: unsupported midx version {header[4]}")
+        if header[5] != 1:
+            # oid version 2 is SHA-256; this reader is SHA-1 only.
+            raise ValueError(f"{midx_path}: unsupported oid version {header[5]}")
+        if header[7] != 0:
+            # A non-zero base-file count means an incremental MIDX chain,
+            # whose earlier layers this reader does not walk.
+            raise ValueError(f"{midx_path}: incremental midx chain unsupported")
+
+        num_chunks = header[6]
+        table = f.read((num_chunks + 1) * 12)
+        if len(table) != (num_chunks + 1) * 12:
+            raise ValueError(f"{midx_path}: truncated chunk lookup table")
+        chunks = {
+            table[i * 12:i * 12 + 4]: int.from_bytes(table[i * 12 + 4:i * 12 + 12], "big")
+            for i in range(num_chunks + 1)
+        }
+
+        fanout_offset = chunks.get(_MIDX_CHUNK_FANOUT)
+        lookup_offset = chunks.get(_MIDX_CHUNK_LOOKUP)
+        if fanout_offset is None or lookup_offset is None:
+            raise ValueError(f"{midx_path}: missing OIDF/OIDL chunk")
+
+        f.seek(fanout_offset)
+        fanout_bytes = f.read(1024)
+        if len(fanout_bytes) != 1024:
+            raise ValueError(f"{midx_path}: truncated fanout table")
+        fanout = [int.from_bytes(fanout_bytes[i * 4:i * 4 + 4], "big") for i in range(256)]
+
+        first_byte = lo_key[0]
+        lo = fanout[first_byte - 1] if first_byte > 0 else 0
+        hi = fanout[first_byte]
+
+        # Lower-bound search, then one containment test — see `_sha_in_pack_idx`.
+        while lo < hi:
+            mid = (lo + hi) // 2
+            f.seek(lookup_offset + mid * 20)
+            candidate = f.read(20)
+            if len(candidate) != 20:
+                raise ValueError(f"{midx_path}: truncated oid entry at index {mid}")
+            if candidate < lo_key:
+                lo = mid + 1
+            else:
+                hi = mid
+
+        if lo >= fanout[first_byte]:
+            return False
+        f.seek(lookup_offset + lo * 20)
+        candidate = f.read(20)
+        if len(candidate) != 20:
+            raise ValueError(f"{midx_path}: truncated oid entry at index {lo}")
+        return lo_key <= candidate <= hi_key
 
 
 def _object_exists_no_spawn(common_dir: Path, sha_hex: str) -> bool:
@@ -340,17 +466,40 @@ def _object_exists_no_spawn(common_dir: Path, sha_hex: str) -> bool:
     object that exists" — the Rail-2 bounded reader (C10, AC-11).
 
     Reads, in order: the loose object path `.git/objects/<2>/<38>` (a
-    `stat`), then each pack `.idx` via its fanout table and a binary search
+    `stat`), the `multi-pack-index` when one exists (its own OIDF fanout +
+    OIDL table), then each pack `.idx` via its fanout table and a binary search
     over the sorted sha list. No zlib, no object body, no `.git/index`
     parsing — existence only.
 
+    ABBREVIATED shas resolve. `shipped_in` is written abbreviated by several
+    stamping paths (8-9 hex is the common shape on this corpus), and requiring
+    a full 40 made this reader answer False for every one of them — the same
+    fail-closed retention the multi-pack-index bail-out caused, on the NEWEST
+    records rather than the packed ones, and growing with every ship. A 7..39
+    hex value is searched as the oid range its prefix spans
+    (`_oid_search_range`); below 7 it is refused, since "some object starts
+    with this" stops being evidence about the recorded commit. This is an
+    EXISTENCE gate, so an abbreviation matching more than one object is still
+    a true answer — disambiguating would need object bodies this never reads.
+
     FAIL-CLOSED DEGRADATION (the correctness argument, made explicit): any
-    condition this reader does not model — a malformed/non-hex sha, an
+    condition this reader does not model — a malformed/non-hex/too-short sha, an
     `objects/info/alternates` file (the object could live ONLY in an
-    alternate object store this reader never reads), a `multi-pack-index`
-    (objects may be indexed there without an equivalent per-pack `.idx`
-    entry this reader would find), an unexpected `.idx` version, or any read
-    error — returns False (unresolvable), NEVER True. A caller's existing
+    alternate object store this reader never reads), a `multi-pack-index.d`
+    incremental chain, a MIDX whose header/chunk layout
+    `_sha_in_multi_pack_index` refuses, an unexpected `.idx` version, or any
+    read error — returns False (unresolvable), NEVER True.
+
+    A MIDX is READ, not bailed on. Treating its mere presence as unmodeled
+    made this reader answer False for EVERY packed object in any repo that
+    has one — `git gc`/`git maintenance` write one by default — which
+    silently retained every shipped handoff whose ship commit was packed
+    (measured here 2026-08-27: 28 of 28 shipped records, sweep archiving
+    nothing but the one record whose ship commit was still loose). It is
+    consulted before the per-pack `.idx` scan (a `midx-expire` can leave a
+    covered pack without its own `.idx`), and a MIDX *miss* still falls
+    through to that scan, since a pack newer than the MIDX is not covered
+    by it. A caller's existing
     "unresolvable retains (fail-closed)" disposition (`_classify_branch`)
     means a false-unresolvable degrades to "retain, don't archive" — the
     only direction this reader is permitted to err in. Guessing "exists" on
@@ -358,30 +507,46 @@ def _object_exists_no_spawn(common_dir: Path, sha_hex: str) -> bool:
     which is the one thing this function must never do.
     """
     sha = sha_hex.strip().lower()
-    if len(sha) != 40 or not _HEX_DIGITS.issuperset(sha):
+    bounds = _oid_search_range(sha)
+    if bounds is None:
         return False
-    try:
-        target = bytes.fromhex(sha)
-    except ValueError:
-        return False
+    lo_key, hi_key = bounds
 
     objects_dir = common_dir / "objects"
     try:
         if (objects_dir / "info" / "alternates").exists():
             return False  # unmodeled path — see docstring
         pack_dir = objects_dir / "pack"
-        if (pack_dir / "multi-pack-index").exists():
+        if (pack_dir / "multi-pack-index.d").exists():
             return False  # unmodeled path — see docstring
 
-        loose = objects_dir / sha[:2] / sha[2:]
-        if loose.is_file():
-            return True
+        # Loose lookup is a `stat` for a full sha and one scandir of a single
+        # fanout directory (256th of the loose corpus) for an abbreviation.
+        loose_dir = objects_dir / sha[:2]
+        if len(sha) == 40:
+            if (loose_dir / sha[2:]).is_file():
+                return True
+        else:
+            rest = sha[2:]
+            try:
+                if any(e.name.startswith(rest) for e in os.scandir(loose_dir)):
+                    return True
+            except FileNotFoundError:
+                pass
 
         if not pack_dir.is_dir():
             return False
+
+        midx_path = pack_dir / "multi-pack-index"
+        if midx_path.is_file():
+            try:
+                if _sha_in_multi_pack_index(midx_path, lo_key, hi_key):
+                    return True
+            except (OSError, ValueError):
+                return False  # unmodeled midx layout — see docstring
         for idx_path in sorted(pack_dir.glob("*.idx")):
             try:
-                if _sha_in_pack_idx(idx_path, target):
+                if _sha_in_pack_idx(idx_path, lo_key, hi_key):
                     return True
             except (OSError, ValueError):
                 continue  # this idx unreadable/unsupported — try the rest

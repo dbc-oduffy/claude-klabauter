@@ -1217,7 +1217,8 @@ def _maximal_strip_peer_fallback(entry: str, worktree_root: Path) -> Optional[st
 def normalize_peer_claim_key(
     entry: str, worktree_root: Optional[Path]
 ) -> Optional[str]:
-    """Directional counterpart to :func:`normalize_historical_touch_entry`,
+    """Directional counterpart to the read-side candidate transform (the
+    ``normalize_historical_touch_entry`` wrapper, deleted 2026-08-27, AC5),
     for the peer/``other_owner`` key space ONLY (Step 3, Step 3b of
     :func:`compute_scope`) — never for Step 1 candidates.
 
@@ -1239,7 +1240,7 @@ def normalize_peer_claim_key(
     live peer's file into its own commit" failure C7 exists to prevent.
 
     The two sides must round in OPPOSITE directions to stay safe:
-      - Candidate side (Step 1, ``normalize_historical_touch_entry``):
+      - Candidate side (Step 1, ``classify_touch_entry(...).new_value``):
         dropping narrows ``my_scope`` — the safe direction. Unchanged.
       - Peer side (this function): a claim must never silently vanish just
         because the one-level strip didn't resolve it. Falls back to
@@ -1251,7 +1252,7 @@ def normalize_peer_claim_key(
         (silently dropping a live peer's real claim) is not.
 
     Returns ``entry`` unchanged (pass-through, matching
-    :func:`normalize_historical_touch_entry`'s degrade) if ``worktree_root``
+    the deleted wrapper's degrade) if ``worktree_root``
     is falsy — the containment check cannot run without a resolved root.
     """
     if not worktree_root:
@@ -1267,29 +1268,14 @@ def normalize_peer_claim_key(
     return _maximal_strip_peer_fallback(entry, worktree_root)
 
 
-def normalize_historical_touch_entry(
-    entry: str, worktree_root: Optional[Path]
-) -> Optional[str]:
-    """Thin read-side wrapper around :func:`classify_touch_entry` for
-    callers (:func:`compute_scope`'s Step 1/3/3b, AC8) that only need the
-    transformed value, not the full classification record
-    ``migrate_touched_prefix`` reports.
-
-    Returns ``entry`` UNCHANGED (a no-op pass-through, not a drop) if
-    ``worktree_root`` is falsy/``None`` — the containment check the
-    transform depends on cannot run without a resolved worktree root, and
-    the safest degrade with no root to check against is to leave the entry
-    exactly as :func:`compute_scope`'s pre-existing (pre-AC8) callers would
-    have seen it, not to silently drop every candidate/claim this call.
-
-    Otherwise returns ``classify_touch_entry(...).new_value`` — ``None``
-    signals "drop this entry" to the caller (multi-level or unrescuable-
-    absolute), the SAME narrowing-only disposition ``classify_touch_entry``
-    documents.
-    """
-    if not worktree_root:
-        return entry
-    return classify_touch_entry(entry, worktree_root).new_value
+#: DELETED 2026-08-27 (AC5) — ``normalize_historical_touch_entry`` was a
+#: thin read-side wrapper around ``classify_touch_entry`` for
+#: ``compute_scope``'s Step 1/3/3b. C4 removed its last caller and left the
+#: function standing, while a comment further down this module asserted it
+#: had been deleted. Measured before removing it: ZERO production callers,
+#: no test calling it. A reader who trusted that comment would conclude AC5
+#: was discharged without looking, which is what made this worth a named
+#: gravestone rather than a silent delete.
 
 
 def parse_touch_event(line: str) -> Tuple[str, Optional[datetime], str]:
@@ -1653,7 +1639,7 @@ def _read_touch_record_as_legacy_lines(sink_path: "Path | str") -> Tuple[List[st
     Path fields off the jsonl arm need NO further normalization:
     `touch_record.encode_line` canonicalizes at WRITE time (AC4), so
     `event.path` is already exactly the dialect `canonicalize_relative_path`
-    produces. This is why C4 deletes `normalize_historical_touch_entry` (a
+    produces. This is why C4 retired `normalize_historical_touch_entry` (a
     thin `classify_touch_entry(...).new_value` wrapper) at Step 1's one call
     site rather than re-threading it through this adapter's output —
     `classify_touch_entry` itself survives (see this chunk's report) for
@@ -1823,13 +1809,21 @@ def _peer_record_read_budget_exceeded(sink_path: "Path | str") -> bool:
     return False
 
 
-#: C4: no longer used by `touch()` itself (its dedup-scan-then-append lock
-#: region is gone -- see that function's own docstring). SURVIVES anyway --
-#: `coordinator_core.session.claims._ATOMIC_DEDUP_APPEND_LOCK_TIMEOUT_SECS`
-#: (outside this chunk's `writes:`) imports this exact attribute off this
-#: module; deleting it breaks that unrelated writer's own lock timeout at
-#: import time. Left at its original value/meaning (the shared acquire
-#: timeout class both writers agreed on) rather than renamed or repurposed.
+#: NOT DEAD, and audited as such 2026-08-27 (docs/problems/2026-08-27-the-
+#: touched-record-workstream-leaves-one-lever-and-nine-tails.md, Item 4)
+#: after being listed as a timeout that guards nothing. It guards a real
+#: acquire: `claims.py` re-exports this exact attribute as
+#: `_ATOMIC_DEDUP_APPEND_LOCK_TIMEOUT_SECS` and passes it as the `timeout=`
+#: of a live `held_lock` in `_append_touch_entry_atomically`, and
+#: `commit_ledger/store.py` and `session_baton/store.py` both cite it by
+#: name as the shared acquire-timeout class. Deleting it breaks that
+#: writer's lock at import time.
+#:
+#: Its NAME is the stale part: `touch()`'s own dedup-scan-then-append lock
+#: region is gone (C4 -- see that function's docstring), so nothing about
+#: this constant concerns `touch` any more. Renaming it means moving three
+#: citing modules together and is recorded on that problem doc, not done
+#: here. Left at its original value and meaning.
 _TOUCH_LOCK_TIMEOUT_SECS = 0.2
 
 
@@ -1838,7 +1832,6 @@ def touch(
     path: str,
     cwd: Optional[str] = None,
     root: Optional[str] = None,
-    lock: bool = True,
 ) -> None:
     """Port of ``cs_touch <session_id> <path>``: append a repo-relative file
     path to this session's ``touch-record.jsonl`` (C4 -- the writer flip;
@@ -1897,18 +1890,20 @@ def touch(
     Raises ``ValueError`` if ``sid`` or ``path`` is empty (bash
     ``${1:?}``/``${2:?}`` required-arg contract).
 
-    ``lock`` (C2, docs/plans/2026-08-14-cli-authored-writes-get-claimed.md;
-    VESTIGIAL as of C4 — see this function's body comment) — historically
-    wrapped the dedup-scan-then-append region in
-    :func:`coordinator_core.locked_write.held_lock` so concurrent
-    same-session declarations against the SAME ``touched.txt`` serialized
-    instead of racing the plain ``open(..., "a")`` lseek+write on Windows.
-    C4 (AC17) deletes the dedup read that region existed to serialize;
+    NEGATIVE SPEC — do NOT re-add a ``lock`` parameter. One existed (C2,
+    docs/plans/2026-08-14-cli-authored-writes-get-claimed.md) and wrapped
+    the dedup-scan-then-append region in
+    :func:`coordinator_core.locked_write.held_lock`, so concurrent
+    same-session declarations against the SAME sink serialized instead of
+    racing a plain ``open(..., "a")`` lseek+write on Windows. C4 (AC17)
+    deleted the dedup read that region existed to serialize, and
     ``touch_record.append_event``'s single atomic append needs no
     application-level lock (see ``touch_record.py``'s own negative-spec).
-    The parameter is accepted and silently ignored, purely for call-site
-    signature compatibility with existing callers — it no longer changes
-    this function's behavior in any way.
+    From then until its removal the parameter was accepted and immediately
+    discarded, which is how a reader concludes there is concurrency control
+    here when there is none. There is no lock at this site to re-enter, and
+    a caller that wants to bound a BATCH's worst-case latency takes its own
+    outer lock — see ``ipc.py``'s ``_record_self_reported_touches``.
     """
     if not sid:
         raise ValueError("session_id required")
@@ -1949,10 +1944,7 @@ def touch(
             file=sys.stderr,
         )
 
-    # C4/AC17: single atomic append, no dedup read, no app-level lock. The
-    # `lock` parameter is KEPT (accepted, not renamed/removed) for call-site
-    # signature compatibility with every existing caller (`ipc.py`,
-    # `cli_entry.py` — out of this chunk's `writes:`) but is now vestigial:
+    # C4/AC17: single atomic append, no dedup read, no app-level lock.
     # `touch_record.append_event` -> `atomic_append.append_line` opens the
     # sink fresh, by path, on every call and performs one O(1) write syscall
     # per event (see that module's own negative-spec: "`locked_rmw` must
@@ -1960,12 +1952,9 @@ def touch(
     # it bought was never cross-session ... buys nothing atomic append does
     # not already give at O(1)"). The OLD lock existed to serialize the
     # dedup-scan-then-append TWO-step race (read last event, then append) —
-    # with the dedup read removed there is no longer a multi-step region for
-    # a lock to protect, so `held_lock`/`LockTimeout`/`_TOUCH_LOCK_TIMEOUT_
-    # SECS` are no longer exercised by this function. `lock=False` callers
-    # (batched multi-path callers holding an OUTER lock of their own) are
-    # unaffected either way, since this function no longer takes one itself.
-    del lock
+    # with the dedup read removed there is no multi-step region left for a
+    # lock to protect, so `held_lock`/`LockTimeout` are not reachable from
+    # here at all. See this function's docstring for the negative spec.
     try:
         touch_record.append_event(
             sink,
@@ -3162,7 +3151,7 @@ def compute_scope(
     in-tree file whose colliding candidate happens to be clean). The two
     sides round in
     OPPOSITE, directional ways instead:
-      - Step 1 candidates (``normalize_historical_touch_entry``): an
+      - Step 1 candidates (``classify_touch_entry(...).new_value``): an
         unresolvable entry is DROPPED — narrows ``my_scope``, the safe
         direction for this side.
       - Step 3/3b ``other_owner`` keys (``normalize_peer_claim_key``): an
@@ -3470,7 +3459,7 @@ def compute_scope(
     # AC8 / Tier 2: worktree root resolved up-front (rather than only later,
     # for the mtime-fallback abs_path join) so the SAME root backs the
     # defensive '../'-strip-then-verify-containment normalization applied to
-    # Step 1 candidates below (`normalize_historical_touch_entry`) AND to
+    # Step 1 candidates below (`classify_touch_entry(...).new_value`) AND to
     # the Step 3/3b `other_owner` key space further down
     # (`normalize_peer_claim_key`) — belt-and-braces behind the C6
     # historical-corpus migration, not a substitute for it. The two sides
@@ -3545,7 +3534,8 @@ def compute_scope(
     # worktree, or an unrescuable absolute entry) is DROPPED from the
     # candidate set entirely here — narrowing only, per the fail-closed
     # invariant; it never becomes a fabricated in-repo path.
-    # C4: `normalize_historical_touch_entry` deleted — it was a thin
+    # C4 removed this call; the wrapper itself was deleted 2026-08-27
+    # (AC5). It was a thin
     # `classify_touch_entry(...).new_value` wrapper with one call site
     # (here), plus a no-root passthrough guard preserved inline below
     # (`classify_touch_entry` requires a real `worktree_root` — it is not

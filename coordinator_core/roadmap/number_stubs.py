@@ -75,7 +75,10 @@ Exit codes (faithful to the oracle CLI):
          (missing-sprint / number-order / same-or-inverted-slot / unresolved-edge
          / edge-source-divergence / cycle).
     2 -- CLI usage error (no args, missing edges file, unreadable/empty/malformed
-         edges file, missing --check/--state <run-id>, malformed run-id, unknown
+         edges file -- including the two line-form refusals documented on
+         ``parse_edges_file``: >1 non-comment line yielding zero edges, and a
+         ``<-`` line with an empty side -- missing --check/--state <run-id>,
+         malformed run-id, unknown
          flag) OR --check/--state mode's resolve_root() environment failure (not
          inside a git worktree / git unavailable) OR --check/--state mode could
          not establish roadmap state (both the live and archived roadmap-baton
@@ -314,6 +317,27 @@ def parse_edges_file(content: str) -> Dict[str, List[Any]]:
     ``toSprint`` tag is present anywhere in the file -- existing callers reading
     only ``edges``/``isolatedNodes`` are unaffected).
 
+    Line-form refusals (2026-08-27 EXTENSION -- deliberate divergence from the
+    oracle, which degraded silently on both). The oracle treated *any*
+    non-blank non-``#`` line without ``<-`` as an isolated node, with no floor:
+    an entire file in the wrong notation (``A blocked_by B``, ``A -> B``, YAML,
+    CSV) parsed as N isolated nodes and zero edges, and the op then printed a
+    confident, wrong numbering at exit 0. Two hard refusals close that:
+
+      1. More than one non-comment, non-blank line yielding **zero** parsed
+         edges is a format error -- exit 2, naming the ``A <- B`` form and
+         quoting the first offending line. A one-line file with no ``<-``
+         stays legal: that is the unambiguous isolated-node case. A genuinely
+         edge-free roadmap needs no numbering op at all.
+      2. A line that *contains* ``<-`` with an empty side is an *attempted*
+         edge; dropping it changes the DAG. Formerly a stderr WARNING that
+         went unread in a transcribe-by-hand authoring flow, now exit 2.
+
+    The JSON branch is untouched -- it already failed loud, so the line form
+    was the outlier. Sender: example-market-data-repo-em memo 2026-08-03, Ask 2;
+    DoE landed the operator-facing half of the same rule in
+    ``roadmap-planning/SKILL.md`` Step 2.1.5 (``cf98b7ede``).
+
     Returns:
         ``{"edges": [{"from": str, "to": str}], "isolatedNodes": [str],
         "sprints": {label: int}}``.
@@ -342,13 +366,18 @@ def parse_edges_file(content: str) -> Dict[str, List[Any]]:
     edges = []
     isolated_nodes = []
     sprints = {}
+    meaningful_lines = 0
+    first_arrowless: Optional[Tuple[int, str]] = None
     lines = content.split("\n")
     for i, raw in enumerate(lines):
         line = raw.strip()
         if not line or line.startswith("#"):
             continue
+        meaningful_lines += 1
         split = _split_edge_line(line)
         if split is None:
+            if first_arrowless is None:
+                first_arrowless = (i + 1, raw)
             label, sprint = _split_label_sprint(line)
             isolated_nodes.append(label)
             if sprint is not None:
@@ -357,9 +386,11 @@ def parse_edges_file(content: str) -> Dict[str, List[Any]]:
         lhs, rhs = split
         if not lhs or not rhs:
             sys.stderr.write(
-                f'WARNING: malformed edge line {i + 1}: "{raw}" — skipped\n'
+                f'ERROR: malformed edge line {i + 1}: "{raw}" — a line containing '
+                f'"<-" is an attempted edge; both sides must be non-empty '
+                f'(expected "A <- B", meaning "A blocked_by B")\n'
             )
-            continue
+            sys.exit(2)
         lhs_label, lhs_sprint = _split_label_sprint(lhs)
         rhs_label, rhs_sprint = _split_label_sprint(rhs)
         edges.append({"from": lhs_label, "to": rhs_label})
@@ -367,6 +398,25 @@ def parse_edges_file(content: str) -> Dict[str, List[Any]]:
             sprints[lhs_label] = lhs_sprint
         if rhs_sprint is not None:
             sprints[rhs_label] = rhs_sprint
+
+    if meaningful_lines > 1 and not edges:
+        line_no, raw = first_arrowless if first_arrowless else (0, "")
+        sys.stderr.write(
+            f"ERROR: edges file has {meaningful_lines} non-comment lines but yields "
+            f"zero edges — this is a format error, not a roadmap\n"
+        )
+        sys.stderr.write(
+            f'  first offending line {line_no}: "{raw}"\n'
+        )
+        sys.stderr.write(
+            '  expected one edge per line: "A <- B", meaning "A blocked_by B"\n'
+        )
+        sys.stderr.write(
+            "  a genuinely edge-free roadmap needs no numbering op — its stubs carry "
+            "no dependency order to linearize\n"
+        )
+        sys.exit(2)
+
     return {"edges": edges, "isolatedNodes": isolated_nodes, "sprints": sprints}
 
 

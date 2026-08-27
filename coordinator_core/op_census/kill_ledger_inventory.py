@@ -30,10 +30,26 @@ Population vocabulary, derived not asserted:
                    the named op (if any) is absent from the live registry.
 - ``CANDIDATE``  — nominated, never convicted. Status carries ``CANDIDATE`` and
                    the named op is still live.
-- ``NON_CUT``    — proposed-and-blocked, closed-superseded, or a relocation.
+- ``CONVICTED``  — convicted, cut not yet landed. The op is expected to still be
+                   live; that is the state the entry describes, not a
+                   disagreement with it.
+- ``NON_CUT``    — proposed-and-blocked, closed-superseded, acquitted, or a
+                   relocation.
+- ``CUT_ELSEWHERE`` — the cut landed in another plane (the ledger entry says so
+                   in as many words) while this repo's own registration survives
+                   by design. Liveness here is the stated outcome, so it is not
+                   contested; the note carries the cross-plane fact forward.
+- ``REBUILT``    — the cut landed, and the requirement was later answered by a
+                   from-scratch rebuild the entry records. The op is live again
+                   on purpose. The entry's cost figures belong to the dead
+                   predecessor and must not be quoted against the rebuild.
 - ``CONTESTED``  — the ledger's status and the live registry disagree. Never
                    silently resolved: a CONTESTED row is a defect report about
                    the ledger, surfaced by name.
+
+A status vocabulary the rules cannot place is itself a defect — but it is the
+*classifier's*, not the ledger's, and it drowns the real disagreements in noise.
+Every disposition the ledger actually writes is placed by a named rule above.
 """
 
 from __future__ import annotations
@@ -63,14 +79,24 @@ _LANDED_MARKERS = (
     "landed",
     "removed",
     "deleted",
+    "killed",
     "relocated",
 )
 _NON_CUT_MARKERS = (
     "not yet cut",
     "not executed",
     "closed",
+    "acquitted",
     "relocated",
 )
+#: A cut executed in a sibling plane, with this repo's registration surviving on
+#: purpose. Quoted from K-006, the only entry that states it — kept a literal
+#: phrase rather than a heuristic so a new cross-plane entry has to say so too.
+_CROSS_PLANE_MARKERS = ("not by this repo",)
+#: A cut that landed and was later answered by a from-scratch rebuild. Literal,
+#: for the same reason as `_CROSS_PLANE_MARKERS`: an entry earns this population
+#: by recording the rebuild, never by the classifier inferring one from liveness.
+_REBUILT_MARKERS = ("then rebuilt",)
 
 
 @dataclass
@@ -183,6 +209,11 @@ def classify(
 
         is_candidate = "candidate" in status and "not yet convicted" in status
         is_landed = any(marker in status[:40] for marker in _LANDED_MARKERS)
+        # Windowed like `is_landed`: every CANDIDATE status says "NOT YET
+        # CONVICTED" further along, and `is_candidate` claims those first.
+        is_convicted = "convicted" in status[:40] and not is_candidate
+        is_cross_plane = any(marker in status for marker in _CROSS_PLANE_MARKERS)
+        is_rebuilt = any(marker in status for marker in _REBUILT_MARKERS)
         # Windowed to the status line's opening, like `is_landed` above: a
         # LANDED entry's authority prose says things like "closed out by C1g",
         # and an unwindowed substring test reads that as a CLOSED status.
@@ -195,6 +226,18 @@ def classify(
                 entry.notes.append(
                     f"status says CANDIDATE but `{entry.op_name}` is absent from the live registry"
                 )
+        elif is_landed and is_rebuilt:
+            entry.population = "REBUILT"
+            if entry.op_live is False:
+                entry.population = "CONTESTED"
+                entry.notes.append(
+                    f"status records a rebuild but `{entry.op_name}` is absent from the live registry"
+                )
+        elif is_landed and is_cross_plane:
+            entry.population = "CUT_ELSEWHERE"
+            entry.notes.append(
+                "cut landed in another plane; this repo's registration survives by design"
+            )
         elif is_landed and not is_non_cut:
             entry.population = "LANDED"
             if entry.op_live is True and not entry.op_suspended:
@@ -202,6 +245,10 @@ def classify(
                 entry.notes.append(
                     f"status says landed/removed but `{entry.op_name}` is still registered"
                 )
+        elif is_convicted:
+            entry.population = "CONVICTED"
+            if entry.op_live is False:
+                entry.population = "LANDED"
         elif is_non_cut or "not yet cut" in entry.title.lower() or "candidate" in entry.title.lower():
             entry.population = "NON_CUT"
         elif is_landed:
@@ -249,7 +296,15 @@ def render(entries: Sequence[LedgerEntry], *, heading_count: int) -> str:
         lines.append("No CONTESTED rows: every entry's status agrees with the live registry.")
         lines.append("")
 
-    for population in ("LANDED", "CANDIDATE", "NON_CUT", "CONTESTED"):
+    for population in (
+        "LANDED",
+        "CANDIDATE",
+        "CONVICTED",
+        "REBUILT",
+        "NON_CUT",
+        "CUT_ELSEWHERE",
+        "CONTESTED",
+    ):
         rows = [e for e in entries if e.population == population]
         if not rows:
             continue

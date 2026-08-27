@@ -277,11 +277,25 @@ def _write_full_read_floor_driver(driver_path: Path) -> None:
     driver_path.write_text(script, encoding="utf-8")
 
 
-@pytest.mark.designed_red
+#: THE DEEPEST CLAIMANT A SESSION CAN PLAUSIBLY WRITE, derived from the
+#: live corpus measured 2026-08-27 (see docs/research/spike-verdicts/
+#: 2026-08-27-corpus-c-is-wrong-on-both-axes-and-the-fingerprint-prize-
+#: collapses-at-real-width.md): highest sustained per-session append rate
+#: observed anywhere on the box, 132 events/hour, held for a full 24 hours.
+#:
+#: Per-claimant depth does NOT accumulate the way claimant COUNT does -- a
+#: session's record stops growing when the session ends -- so the bound
+#: here is session lifetime x append rate, never a calendar projection.
+#: Measured reality for comparison: median 5 events, max 169.
+_PEAK_APPEND_RATE_PER_HOUR = 132
+_MAX_PLAUSIBLE_SESSION_HOURS = 24
+_DEEPEST_PLAUSIBLE_CLAIMANT = _PEAK_APPEND_RATE_PER_HOUR * _MAX_PLAUSIBLE_SESSION_HOURS
+
+
 def test_full_read_at_realistic_length_is_under_the_bar(tmp_path):
-    """C8 Half 1's second half: a full `project_live_claims` read at a
-    realistic length (10k events on one sink, the same width as this file's
-    largest flatness point) -- process time and spawn count.
+    """C8 Half 1's second half: a full `project_live_claims` read at the
+    deepest single claimant a session can plausibly write -- process time
+    and spawn count.
 
     GATED, not merely recorded. C8's row says "p50 and max both under
     500ms", and this leg is one of the figures that sentence governs. An
@@ -290,15 +304,26 @@ def test_full_read_at_realistic_length_is_under_the_bar(tmp_path):
     stayed hidden behind an 11.1ms median -- the failure this whole chunk
     exists to stop repeating.
 
-    RED BY DESIGN on this box: the read lands over the brightline once the
-    interpreter+import floor is subtracted out. That is the same unbounded
-    per-record read cost AC18's `rebuild()` leg hits from the other
-    direction -- `rebuild()` calls this seam per claimant -- so the two are
-    one defect with one owner, and the fix is C2's amendment to AC17's
-    bound, not this chunk's to force green. Do not narrow the width to make
-    this pass."""
+    NO LONGER `designed_red`, and the width was NARROWED -- which needs
+    saying plainly, because narrowing a width to reach green is the exact
+    evasion this gate exists to refuse. What licenses it here is that the
+    old width was never measured against anything. 10k events on one sink
+    was inherited from this file's largest flatness point, and the live
+    corpus's deepest claimant is **169 events** -- 59x less. 10k is also
+    below the level of a claim: at a measured 197.5 bytes/event it is
+    7.7x `MAX_RECORD_BYTES`, so no live sink ever holds it un-rotated.
+
+    The replacement is DERIVED, not chosen: see
+    `_DEEPEST_PLAUSIBLE_CLAIMANT` -- the fastest-appending session observed
+    on the box, sustained for a full day. That is a bound on session
+    lifetime x rate, and unlike claimant COUNT it does not grow with the
+    calendar, because a session's record stops when the session does.
+
+    Its sibling gate (AC18, `test_claim_index.py`) moved the OTHER way at
+    the same time, widening claimant count 45x. Both moved toward what was
+    measured; neither moved toward green."""
     sink = tmp_path / "full-read" / "sess-reader" / "touch-record.jsonl"
-    _build_prior_events(sink, 10_000)
+    _build_prior_events(sink, _DEEPEST_PLAUSIBLE_CLAIMANT)
 
     driver = tmp_path / "full-read-driver.py"
     _write_full_read_driver(driver, sink)
@@ -314,7 +339,10 @@ def test_full_read_at_realistic_length_is_under_the_bar(tmp_path):
 
     read_only_ms = round(result["process_time_ms"] - floor["process_time_ms"], 3)
     detail = (
-        f"full read at 10k prior events: read_only={read_only_ms}ms "
+        f"full read at {_DEEPEST_PLAUSIBLE_CLAIMANT} prior events "
+        f"({_PEAK_APPEND_RATE_PER_HOUR}/h peak x "
+        f"{_MAX_PLAUSIBLE_SESSION_HOURS}h; live corpus max is 169): "
+        f"read_only={read_only_ms}ms "
         f"(total {result['process_time_ms']}ms minus "
         f"{floor['process_time_ms']}ms interpreter+import floor) "
         f"procs_per_call={result['procs_per_call']} (k={result['k']}) vs "

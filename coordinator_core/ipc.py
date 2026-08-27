@@ -1635,12 +1635,11 @@ def _record_self_reported_touches(result: object, sid_cwd: Optional[str]) -> obj
                     raw_path, exc,
                 )
 
-        def _record_touches(use_lock: bool) -> None:
+        def _record_touches() -> None:
             for path_repo_root, abs_path in resolved_paths:
                 try:
                     _scope.touch(
                         sid, abs_path, path_repo_root, root=path_repo_root,
-                        lock=use_lock,
                     )
                 except Exception as exc:  # fail-open — one bad path must not abort the rest
                     _log().debug(
@@ -1656,14 +1655,13 @@ def _record_self_reported_touches(result: object, sid_cwd: Optional[str]) -> obj
         # acquire the batch lock ONCE for the whole declared-path batch,
         # here at the recorder, rather than once per path inside
         # `session.scope.touch()` — to bound worst-case latency (one
-        # acquire instead of up to `_MAX_DECLARED_TOUCH_PATHS`). `touch()`
-        # is called with `lock=False` inside this scope: AC11 traced
-        # `scope.touch`'s own `lock=` parameter as vestigial (C4/AC17
-        # deleted the dedup-scan region it once serialized;
-        # `touch_record.append_event`'s single atomic append needs no
-        # app-level lock), so there is no re-entrancy left to guard against
-        # — this lock now exists only to bound the batch's own worst-case
-        # latency, not to avoid a nested acquire. Every resolved path in
+        # acquire instead of up to `_MAX_DECLARED_TOUCH_PATHS`). This lock
+        # exists ONLY to bound that latency, never to avoid a nested
+        # acquire: `scope.touch` takes no lock of its own to re-enter (its
+        # vestigial `lock=` parameter was traced by AC11 and deleted
+        # 2026-08-27 — C4/AC17 had already removed the dedup-scan region it
+        # once serialized, and `touch_record.append_event`'s single atomic
+        # append needs no app-level lock). Every resolved path in
         # one call shares the same `caller_repo_root`
         # (`_resolve_declared_touch_root_and_path` enforces single-repo
         # containment against the caller's own repo — see its docstring),
@@ -1689,7 +1687,7 @@ def _record_self_reported_touches(result: object, sid_cwd: Optional[str]) -> obj
                     anchor_root=Path(os.path.realpath(anchor_repo_root)),
                     timeout=_TOUCH_BATCH_LOCK_TIMEOUT_SECS,
                 ):
-                    _record_touches(use_lock=False)
+                    _record_touches()
                     # Mark the batch done as soon as the body completes, not
                     # after the `with` statement exits — `held_lock`'s
                     # `finally` (`_plat_unlock`/`os.close`) can raise
@@ -1715,16 +1713,16 @@ def _record_self_reported_touches(result: object, sid_cwd: Optional[str]) -> obj
                 # tuple is the one asserting the intended degrade-not-abort
                 # contract explicitly, same as `scope.py::touch()`'s
                 # matching tuple. Review: code-reviewer P1/P2 (2026-08-14).
-                # All four fail open: degrade to
-                # per-path locking (touch()'s own `lock=True` default),
-                # which itself further degrades to an unlocked append on the
-                # same exception classes — never abort the whole batch.
+                # All four fail open: degrade to recording the batch
+                # WITHOUT the latency bound this lock buys — the appends
+                # themselves are atomic either way — never abort the whole
+                # batch.
                 _log().debug(
                     "coordinator_core.ipc: batch touch lock unavailable, "
                     "degrading to per-path locking: %s", exc,
                 )
         if not locked:
-            _record_touches(use_lock=True)
+            _record_touches()
     except Exception as exc:  # fail-open — recording must never fail the op
         _log().debug(
             "coordinator_core.ipc: self-reported touch recording failed: %s", exc

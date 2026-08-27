@@ -619,6 +619,119 @@ def test_c10_object_exists_no_spawn_refuses_under_alternates(repo: Path):
     )
 
 
+def test_c10_object_exists_no_spawn_resolves_under_multi_pack_index(repo: Path):
+    """A `multi-pack-index` must be READ, not bailed on.
+
+    Regression: treating its presence as unmodeled made this reader answer
+    False for every packed object in any repo that has one — `git gc` /
+    `git maintenance` write one by default — which silently retained every
+    shipped handoff whose ship commit was packed, archiving nothing.
+    """
+    common_dir = _common_dir(repo)
+    head_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    _git(repo, "gc", "-q")
+    _git(repo, "multi-pack-index", "write")
+    assert (common_dir / "objects" / "pack" / "multi-pack-index").is_file(), (
+        "precondition: this repo must actually carry a multi-pack-index"
+    )
+
+    with patch("subprocess.run", wraps=subprocess.run) as spy:
+        resolved = _object_exists_no_spawn(common_dir, head_sha)
+    assert resolved is True, (
+        "a packed commit must still resolve when a multi-pack-index is present"
+    )
+    assert spy.call_count == 0, "the bounded reader must spawn no git process"
+
+
+def test_c10_object_exists_no_spawn_unresolvable_sha_under_multi_pack_index(repo: Path):
+    common_dir = _common_dir(repo)
+    _git(repo, "gc", "-q")
+    _git(repo, "multi-pack-index", "write")
+
+    resolved = _object_exists_no_spawn(common_dir, "0" * 40)
+    assert resolved is False, (
+        "reading the midx must not turn a sha naming no object into a false 'exists'"
+    )
+
+
+def test_c10_object_exists_no_spawn_refuses_under_midx_chain(repo: Path):
+    common_dir = _common_dir(repo)
+    head_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+
+    (common_dir / "objects" / "pack" / "multi-pack-index.d").mkdir(parents=True, exist_ok=True)
+
+    resolved = _object_exists_no_spawn(common_dir, head_sha)
+    assert resolved is False, (
+        "an incremental multi-pack-index chain is unmodeled — degrade to "
+        "unresolvable (fail-closed), never guess 'exists'"
+    )
+
+
+@pytest.mark.parametrize("packed", [False, True])
+@pytest.mark.parametrize("abbrev_len", [7, 8, 9, 12, 40])
+def test_c10_object_exists_no_spawn_resolves_abbreviated_sha(
+    repo: Path, packed: bool, abbrev_len: int
+):
+    """`shipped_in` is written abbreviated by several stamping paths.
+
+    Regression: requiring a full 40 hex made this reader answer False for
+    every abbreviated value, which `_classify_branch` turned into permanent
+    fail-closed retention of the NEWEST shipped records — 17 of them on this
+    corpus, growing with every ship.
+    """
+    common_dir = _common_dir(repo)
+    head_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    if packed:
+        _git(repo, "gc", "-q")
+
+    resolved = _object_exists_no_spawn(common_dir, head_sha[:abbrev_len])
+    assert resolved is True, (
+        f"a {abbrev_len}-hex abbreviation of a real commit must resolve "
+        f"({'packed' if packed else 'loose'})"
+    )
+
+
+@pytest.mark.parametrize("packed", [False, True])
+def test_c10_object_exists_no_spawn_abbreviated_miss_is_unresolvable(repo: Path, packed: bool):
+    common_dir = _common_dir(repo)
+    if packed:
+        _git(repo, "gc", "-q")
+
+    assert _object_exists_no_spawn(common_dir, "0" * 8) is False, (
+        "a prefix naming no object must not be widened into a false 'exists'"
+    )
+
+
+def test_c10_object_exists_no_spawn_refuses_sha_below_abbrev_floor(repo: Path):
+    common_dir = _common_dir(repo)
+    head_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+
+    assert _object_exists_no_spawn(common_dir, head_sha[:6]) is False, (
+        "below git's 7-hex abbreviation floor the match set is too wide to be "
+        "evidence about the recorded commit — refuse rather than range-search"
+    )
+    assert _object_exists_no_spawn(common_dir, "") is False
+    assert _object_exists_no_spawn(common_dir, "zz" + head_sha[:8]) is False, (
+        "a non-hex value must stay unresolvable"
+    )
+
+
+def test_c10_object_exists_no_spawn_refuses_unreadable_midx(repo: Path):
+    common_dir = _common_dir(repo)
+    head_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    _git(repo, "gc", "-q")
+
+    pack_dir = common_dir / "objects" / "pack"
+    pack_dir.mkdir(parents=True, exist_ok=True)
+    (pack_dir / "multi-pack-index").write_bytes(b"NOTAMIDX" + b"\x00" * 64)
+
+    resolved = _object_exists_no_spawn(common_dir, head_sha)
+    assert resolved is False, (
+        "a midx whose layout the reader refuses must degrade to unresolvable, "
+        "not fall through to a per-pack scan that answers around it"
+    )
+
+
 # ---------------------------------------------------------------------------
 # AC-2 (re-opened): every scan rail names ITSELF, and no live record is
 # silently dropped

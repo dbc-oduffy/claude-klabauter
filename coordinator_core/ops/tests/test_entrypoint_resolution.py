@@ -59,11 +59,22 @@ _PROJECT_ROOT = Path(__file__).resolve().parents[3]
 # (a) committed allowlist seeded with only C0's proving CLI
 # ---------------------------------------------------------------------------
 
-def test_allowlist_seeded_with_only_the_proving_cli():
+def test_allowlist_retains_the_proving_cli_after_the_census_populates_it():
+    """C1 seeded the committed allowlist with ONLY C0's proving CLI. C5 then
+    populated it from C2's door-eligible census, so the exact-equality
+    assertion this replaced pinned a snapshot of one chunk's intermediate
+    state, not an invariant.
+
+    The invariant that outlives both chunks is the UNION: `forwarder_door_
+    census._write_allowlist` merges the census bucket with whatever is
+    already present and never drops an entry, so the proving CLI must still
+    be there. Asserting membership rather than a count also keeps this test
+    from re-breaking every time the corpus grows.
+    """
     data = json.loads(_ALLOWLIST_PATH.read_text(encoding="utf-8"))
-    assert set(data["entrypoints"]) == {"cross-repo-memo"}, (
-        "C1 must seed the committed allowlist with ONLY C0's proving CLI -- "
-        "everything else arrives via C2's door-eligible census, not this chunk"
+    assert "cross-repo-memo" in set(data["entrypoints"]), (
+        "the door-eligible census must never drop C0's proving CLI -- "
+        "_write_allowlist unions with the existing set rather than replacing it"
     )
 
 

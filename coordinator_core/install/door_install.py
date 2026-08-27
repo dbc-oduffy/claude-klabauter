@@ -116,10 +116,16 @@ checks, not install-time ones.
 `coordinator_core._settings_home.settings_home()`. This is what makes
 `install_door()` trivially testable against a scratch directory instead
 of the live, ~40-concurrent-session settings-home -- see this module's
-own tests. Wiring a call to this function into substrate.py's real
-install flow (passing the REAL `settings_home_path / "bin"`) is a
-separate, deliberately-deferred decision: this module only builds the
-capability.
+own tests.
+
+WIRED, NOT DEFERRED. This paragraph used to end "wiring a call to this
+function into substrate.py's real install flow is a separate,
+deliberately-deferred decision: this module only builds the capability."
+That stopped being true and read as authoritative long after it did.
+Both routes are live: `scripts/setup.py :: install_warm_door` calls
+`install_door()`, and `substrate.py :: _write_native_door_forwarder`
+calls `install_named_forwarder()` for every door-eligible name (C5,
+docs/plans/2026-08-26-every-forwarder-that-can-reach-the-door-does.md).
 """
 
 from __future__ import annotations
@@ -143,6 +149,7 @@ __all__ = [
     "named_forwarder_path",
     "install_named_forwarder",
     "remove_shadowing_ps1_sibling",
+    "remove_superseded_python_forwarders",
 ]
 
 #: Installed name is platform-resolved, not a single `.exe`-spelled
@@ -452,6 +459,60 @@ def remove_shadowing_ps1_sibling(bin_dst: Path, name: str) -> Optional[Path]:
             file=sys.stderr,
         )
     return None
+
+
+def remove_superseded_python_forwarders(bin_dst: Path, name: str) -> "list[Path]":
+    """Removes the Python forwarder pair a cut-over `name` no longer needs
+    (C5 kill, PM ruling 2026-08-27). Once a native door image exists for
+    `name`, its Python-trampoline forwarders are not merely outranked, they
+    are WRONG IF REACHED: the `.cmd` half execs the co-located
+    extensionless sibling through python, and on Windows that sibling is
+    the door's native binary post-cutover, not the trampoline the `.cmd`
+    was generated to invoke. Keeping them relied on PATHEXT ranking AND on
+    install ordering to hold a known-wrong body unreachable -- neither is
+    an invariant, and at 382 eligible names that is a large population of
+    wrong-bodied files kept harmless by an incidental property. This
+    removes the reliance rather than documenting it.
+
+    PLATFORM ASYMMETRY, AND WHY THE BARE NAME IS NOT UNIFORMLY REMOVABLE.
+    On Windows the native image is `name.exe`, so the bare extensionless
+    `name` and `name.cmd` are both genuinely superseded and both go. On
+    POSIX `named_forwarder_path` puts the native image AT the bare `name`
+    path itself -- the Python forwarder was already overwritten in place by
+    the native install, so the bare name there IS the live door image, and
+    removing it would uninstall the very forwarder this call follows. Only
+    a stray `.cmd` (never generated on POSIX, but cheap to sweep if an
+    earlier cross-platform install left one) is removable there.
+
+    Non-raising, idempotent, best-effort: returns the paths actually
+    removed. Mirrors `remove_shadowing_ps1_sibling`'s posture -- a failure
+    to clear a superseded forwarder must not un-succeed the native install
+    it follows, because the native image is already on disk and already
+    winning bare-name resolution by that point.
+
+    Negative-spec:
+      - Does NOT touch `name + ".ps1"` -- that is
+        `remove_shadowing_ps1_sibling`'s job, run for a shadowing rather
+        than a superseded reason.
+      - Does NOT run for a name whose native install did not succeed. The
+        caller gates on that: a doorless root keeps its Python pair, which
+        IS the doorless-fallback path and is not collateral of this kill.
+    """
+    removed = []
+    candidates = [Path(bin_dst) / f"{name}.cmd"]
+    if sys.platform == "win32":
+        candidates.append(Path(bin_dst) / name)
+    for candidate in candidates:
+        try:
+            if candidate.exists():
+                candidate.unlink()
+                removed.append(candidate)
+        except OSError as exc:
+            print(
+                f"[door-install] could not remove superseded forwarder {candidate}: {exc}",
+                file=sys.stderr,
+            )
+    return removed
 
 
 def main(argv: Optional[list] = None) -> int:

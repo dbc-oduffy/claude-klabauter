@@ -145,7 +145,7 @@ def _touch_record_family(sdir: Path) -> list[Path]:
     """
     from coordinator_core.session import touch_record
 
-    return list(touch_record.discover_family(sdir / "touch-record.jsonl"))
+    return list(touch_record.discover_family(touch_record.sink_path(sdir)))
 
 
 def _init_is_owed(sdir: Path, now: float) -> bool:

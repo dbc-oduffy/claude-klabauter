@@ -2745,6 +2745,64 @@ def test_hold_window_diverged_branch_defers_no_push_no_sleep(monkeypatch, tmp_pa
     assert record["branch"] == branch
 
 
+def test_hold_window_diverged_solo_branch_defers_instead_of_pushing_into_the_wall(monkeypatch, tmp_path):
+    """The divergence gate must be reachable on a SOLO branch.
+
+    Regression, 2026-08-27: the gate sat below `_shared_branch_live_count`'s
+    `<=1 -> return True` short-circuit, so a lone session on a diverged
+    branch never reached it and re-issued a guaranteed-non-fast-forward push
+    on every commit. Observed cross-repo as 22 identical NFF failures over an
+    hour on DoE-claude `work/machine-a/2026-08-22`. A push whose rejection is
+    already determined carries no crash insurance, so deferring it trades
+    nothing away.
+    """
+    branch = "work/c4-diverged-solo"
+    bare = tmp_path / "bare.git"
+    work = _init_divergence_repo(tmp_path, branch)
+    peer = tmp_path / "peer"
+    _real_git(["clone", "-q", str(bare), str(peer)], tmp_path)
+    _real_git(["config", "user.email", "peer@example.com"], peer)
+    _real_git(["config", "user.name", "peer"], peer)
+    _real_git(["config", "commit.gpgsign", "false"], peer)
+    _real_git(["checkout", "-q", branch], peer)
+    (peer / "f.txt").write_text("peer\n", encoding="utf-8")
+    _real_git(["commit", "-q", "-am", "peer commit"], peer)
+    _real_git(["push", "-q", "origin", branch], peer)
+    _real_git(["fetch", "-q", "origin"], work)
+    (work / "f.txt").write_text("mine\n", encoding="utf-8")
+    _real_git(["commit", "-q", "-am", "our own divergent commit"], work)
+
+    repo_root = str(work)
+    # Solo -- and unresolvable -- are the two shapes that short-circuited.
+    for live_count in (1, None):
+        auto_push._remove_pending_record(repo_root)
+        monkeypatch.setattr(auto_push, "_shared_branch_live_count", lambda root, b, _c=live_count: _c)
+        monkeypatch.setattr(auto_push.time, "sleep", lambda s: pytest.fail("diverged path must never sleep"))
+
+        assert auto_push._hold_window(repo_root, branch) is False, (
+            f"solo diverged branch (live_count={live_count!r}) must defer, not push"
+        )
+        record = auto_push._read_pending_record(repo_root)
+        assert record is not None and record["branch"] == branch
+
+
+def test_hold_window_solo_undiverged_branch_still_pushes_immediately(monkeypatch, tmp_path):
+    """The hoist must not hold back the ordinary solo case: ahead-only (never
+    diverged) still pushes with no record and no sleep."""
+    branch = "work/c4-solo-ahead"
+    work = _init_divergence_repo(tmp_path, branch)
+    _real_git(["fetch", "-q", "origin"], work)
+    (work / "f.txt").write_text("mine\n", encoding="utf-8")
+    _real_git(["commit", "-q", "-am", "ahead-only commit"], work)
+
+    repo_root = str(work)
+    monkeypatch.setattr(auto_push, "_shared_branch_live_count", lambda root, b: 1)
+    monkeypatch.setattr(auto_push.time, "sleep", lambda s: pytest.fail("solo predicate must never sleep"))
+
+    assert auto_push._hold_window(repo_root, branch) is True
+    assert auto_push._read_pending_record(repo_root) is None
+
+
 @pytest.mark.real_peer_predicate
 def test_hold_window_diverged_branch_n_commits_yield_one_deferred_record(monkeypatch, tmp_path):
     """N commits on a diverged branch yield one deferred publish (one

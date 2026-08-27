@@ -1,10 +1,18 @@
 """Tests for `coordinator_core.install.forwarder_door_census`.
 
-Covers: the four-bucket classification logic against synthetic fixture
-scripts (never the real 968-entry `coordinator/bin/`, which drifts), the
-`(a)`/`(b)` axis evidence recorded per row, JSON/table rendering, and the
-allowlist-population union behaviour (`_write_allowlist` never drops a
-pre-existing entry, e.g. C1's seeded `cross-repo-memo`).
+Covers: the classification logic against synthetic fixture scripts (never
+the real `coordinator/bin/`, which drifts), the `(a)`/`(b)` axis evidence
+recorded per row, JSON/table rendering, and the allowlist-population union
+behaviour (`_write_allowlist` never drops a pre-existing entry, e.g. C1's
+seeded `cross-repo-memo`).
+
+WHAT DECIDES A BUCKET, since the axes are no longer symmetric: eligibility
+is axis (b) alone, and only an UNCONTAINED exec-time hazard fails it. Axis
+(a) (op-equivalence) is scanned and recorded but does not gate — so
+`needs-op-extension` is now unreachable, and `engine-unreachable` is
+reached only by a scan error. Tests here assert that asymmetry directly,
+because the shape they replaced (both axes gating, four live buckets)
+condemned 315 of 384 CLIs on one shared bootstrap line.
 """
 
 from __future__ import annotations
@@ -75,24 +83,33 @@ class TestAxisB:
         assert v.warm_loadable is True
         assert v.warm_loadable_evidence == ()
 
-    def test_top_level_sys_path_insert_fails_b(self, tmp_path):
+    def test_top_level_sys_path_insert_is_contained_not_disqualifying(self, tmp_path):
+        """`sys.path.insert` at module scope is the engine bootstrap preamble
+        every `coordinator/bin` entrypoint opens with. `_run_entrypoint`
+        snapshots and restores `sys.path` around the module exec, so the shape
+        cannot reach the shared warm server and does NOT fail axis (b).
+
+        The evidence is still RECORDED: containment is a property of the
+        loader, and this row is what re-derives who was relying on it if that
+        containment is ever narrowed.
+        """
         _write(
             tmp_path,
             "pathmut.py",
             "import sys\nsys.path.insert(0, 'x')\n\ndef main(argv=None):\n    return 0\n",
         )
         v = fdc.classify_one("pathmut", "pathmut.py", bin_dir=tmp_path)
-        assert v.warm_loadable is False
+        assert v.warm_loadable is True
         assert any("sys.path.insert" in e for e in v.warm_loadable_evidence)
 
-    def test_top_level_hard_sys_exit_fails_b(self, tmp_path):
+    def test_top_level_hard_sys_exit_is_contained_not_disqualifying(self, tmp_path):
         _write(
             tmp_path,
             "hardexit.py",
             "import sys\n\nif True:\n    sys.exit(1)\n\ndef main(argv=None):\n    return 0\n",
         )
         v = fdc.classify_one("hardexit", "hardexit.py", bin_dir=tmp_path)
-        assert v.warm_loadable is False
+        assert v.warm_loadable is True
         assert any("sys.exit" in e for e in v.warm_loadable_evidence)
 
     def test_main_guard_body_never_flagged(self, tmp_path):
@@ -132,32 +149,50 @@ class TestBucketing:
         v = fdc.classify_one("clean", "clean.py", bin_dir=tmp_path)
         assert v.bucket == "door-eligible"
 
-    def test_a_fails_only_is_needs_op_extension(self, tmp_path):
+    def test_a_failing_alone_is_still_door_eligible(self, tmp_path):
+        """Axis (a) does not gate coverage. `invoke.from_argv` runs the CLI's
+        OWN `main(argv)` warm, so client-side work is done warm exactly as it
+        is done cold — it just stops paying an interpreter start. Gating on
+        (a) condemned 104 CLIs for doing legitimate local work.
+
+        (a) stays SCANNED and recorded: it answers the roadmap question of
+        which CLIs could one day become server-side ops.
+        """
         _write(
             tmp_path,
             "statter.py",
             "import os\n\ndef main(argv=None):\n    os.stat('x')\n    return 0\n",
         )
         v = fdc.classify_one("statter", "statter.py", bin_dir=tmp_path)
-        assert v.bucket == "needs-op-extension"
+        assert v.bucket == "door-eligible"
+        assert v.op_equivalent is False
+        assert any("os.stat" in e for e in v.op_equivalent_evidence)
 
-    def test_b_fails_only_is_needs_warm_safety(self, tmp_path):
+    def test_uncontained_b_failure_is_needs_warm_safety(self, tmp_path):
+        """Only an UNCONTAINED exec-time hazard disqualifies. `logging.
+        basicConfig` mutates interpreter-global state no `finally` puts back,
+        so unlike `sys.path.insert` it is not admitted."""
         _write(
             tmp_path,
-            "pathmut.py",
-            "import sys\nsys.path.insert(0, 'x')\n\ndef main(argv=None):\n    return 0\n",
+            "sideeffect.py",
+            "import logging\nlogging.basicConfig()\n\ndef main(argv=None):\n    return 0\n",
         )
-        v = fdc.classify_one("pathmut", "pathmut.py", bin_dir=tmp_path)
+        v = fdc.classify_one("sideeffect", "sideeffect.py", bin_dir=tmp_path)
         assert v.bucket == "needs-warm-safety"
 
-    def test_both_fail_is_engine_unreachable(self, tmp_path):
+    def test_both_axes_failing_is_still_only_needs_warm_safety(self, tmp_path):
+        """There is no both-fail bucket any more: (a) does not gate, so a row
+        failing both axes lands wherever (b) puts it. `engine-unreachable` is
+        now reached ONLY by a scan error (see the two tests below)."""
         _write(
             tmp_path,
             "bad.py",
-            "import sys, os\nsys.path.insert(0, 'x')\n\ndef main(argv=None):\n    os.stat('x')\n    return 0\n",
+            "import logging, os\nlogging.basicConfig()\n\ndef main(argv=None):\n    os.stat('x')\n    return 0\n",
         )
         v = fdc.classify_one("bad", "bad.py", bin_dir=tmp_path)
-        assert v.bucket == "engine-unreachable"
+        assert v.bucket == "needs-warm-safety"
+        assert v.op_equivalent is False
+        assert v.scan_error is None
 
     def test_syntax_error_is_engine_unreachable(self, tmp_path):
         _write(tmp_path, "broken.py", "def main(:\n    pass\n")
@@ -243,7 +278,7 @@ class TestAllowlistPopulation:
         _write(
             bin_dir,
             "ineligible-one.py",
-            "import os\n\ndef main(argv=None):\n    os.stat('x')\n    return 0\n",
+            "import logging\nlogging.basicConfig()\n\ndef main(argv=None):\n    return 0\n",
         )
         verdicts = fdc.run_census(bin_dir=bin_dir)
 
@@ -251,6 +286,8 @@ class TestAllowlistPopulation:
 
         assert "cross-repo-memo" in merged
         assert "eligible-one" in merged
+        # Excluded on an UNCONTAINED exec-time hazard, the only thing that
+        # disqualifies. A CLI doing client-side work in `main` is eligible.
         assert "ineligible-one" not in merged
 
         on_disk = json.loads(allowlist_path.read_text(encoding="utf-8"))

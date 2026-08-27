@@ -1160,9 +1160,43 @@ def _door_eligible_forwarder_names() -> "frozenset[str]":
     return frozenset(n for n in names if isinstance(n, str))
 
 
+def _cut_over_to_native_door(
+    name: str, bin_dst: Path, check_only: bool, *, engine_root: Optional[Path]
+) -> Optional[Path]:
+    """Attempts the C5 cutover for one door-eligible `name`, returning the
+    native image path on success or `None` when this name must stay on its
+    Python forwarder pair.
+
+    THE KILL (PM ruling 2026-08-27). C5 originally wrote the native image
+    ADDITIVELY, leaving the `.py`/`.cmd` pair in place as unreachable dead
+    weight. `door_install.remove_superseded_python_forwarders`'s own
+    docstring carries why that was wrong: the retained `.cmd` body is not
+    merely outranked but wrong-if-reached, and its harmlessness rested on
+    PATHEXT ranking plus install ordering rather than on any invariant.
+    The pair is now REMOVED on a successful cutover, and -- the half that
+    keeps this safe -- simply never written in the first place, so a
+    cut-over name costs one native install instead of three writes and a
+    delete.
+
+    `None` IS THE FALLBACK SIGNAL, NOT AN ERROR. A root that cannot supply
+    a door (no engine stamp) returns `None` here, and the caller then
+    writes the ordinary Python pair for that name. That is the doorless
+    fallback preserved intact -- the kill removes a superseded artifact,
+    never the only route to the engine."""
+    if engine_root is None:
+        return None
+    native_dst = _write_native_door_forwarder(name, bin_dst, check_only, engine_root=engine_root)
+    if native_dst is None or check_only:
+        return native_dst
+    from coordinator_core.install import door_install
+
+    door_install.remove_superseded_python_forwarders(bin_dst, name)
+    return native_dst
+
+
 def _write_native_door_forwarder(
     name: str, bin_dst: Path, check_only: bool, *, engine_root: Path
-) -> Path:
+) -> Optional[Path]:
     """Writes the native `.exe`-direct door forwarder for one door-eligible
     `name` (C5) via `door_install.install_named_forwarder` (hardlink-to-
     the-installed-door-or-copy; see that function's own docstring for the
@@ -1171,8 +1205,27 @@ def _write_native_door_forwarder(
     same-directory `.ps1` above `.exe`, the same shadow `door_install.
     claim_bare_name` already defuses for the door's own bare name.
     `check_only` performs no removal (no mutation permitted in check-only
-    mode, matching `install_named_forwarder`'s own contract)."""
+    mode, matching `install_named_forwarder`'s own contract).
+
+    RETURNS None ON AN UNSTAMPED ENGINE ROOT, never raises. The native image
+    is ADDITIVE to the `.py`/`.cmd` pair this function's callers have already
+    written, so a root that cannot supply a door leaves the name on its
+    existing Python path -- correct, merely uncut-over. Raising instead
+    (`install_named_forwarder`'s own refusal) would abort the whole install
+    over an addition that was never load-bearing. Unreachable while the
+    door-eligible bucket was 12 names; at 382 it is every install run from an
+    unstamped root, which is why the degrade is here rather than at the AC."""
     from coordinator_core.install import door_install
+    from coordinator_core.warm.engine_root import is_engine_root
+
+    if not is_engine_root(engine_root):
+        print(
+            f"[install-substrate] {name}: no native door forwarder -- "
+            f"{engine_root} carries no engine stamp. Left on its Python "
+            f"forwarder; stamp the root to cut it over.",
+            file=sys.stderr,
+        )
+        return None
 
     dest = door_install.install_named_forwarder(bin_dst, engine_root, name, check_only=check_only)
     if not check_only:
@@ -3752,9 +3805,13 @@ def _write_agent_helper_forwarders(
     supplied (the real installer's own call site, ``_install_bin_resolvers``
     below), every name that is BOTH a door-eligible name AND a key of
     ``agent_helper_target_map`` also gets a native ``.exe``-direct forwarder
-    via ``_write_native_door_forwarder`` -- additive to, never instead of,
-    the ``.py``/``.cmd`` pair this loop already writes for it (see that
-    function's own docstring for the PATHEXT/PowerShell mechanics). The
+    via ``_cut_over_to_native_door`` -- INSTEAD OF, not additive to, the
+    ``.py``/``.cmd`` pair (PM ruling 2026-08-27: the superseded pair is
+    wrong-if-reached and was kept reachable-only-by-accident; see
+    ``door_install.remove_superseded_python_forwarders``). A name whose
+    cutover returns ``None`` -- a root carrying no engine stamp -- falls
+    through to the ordinary Python pair, which is the doorless fallback
+    and is deliberately untouched by the kill. The
     complete set actually written this run is persisted to the native-
     forwarder manifest (``_write_native_forwarder_manifest``) so
     ``_sweep_orphaned_agent_helpers`` never mistakes a freshly-cut-over
@@ -3768,6 +3825,11 @@ def _write_agent_helper_forwarders(
     if check_only:
         agent_helper_resolved: "list[WriteSurfaceEntry]" = []
         for f, target in sorted(agent_helper_target_map.items()):
+            if f in door_eligible_names:
+                native_dst = _cut_over_to_native_door(f, bin_dst, check_only, engine_root=engine_root)
+                if native_dst is not None:
+                    agent_helper_resolved.append(WriteSurfaceEntry(kind="file-path", path=str(native_dst)))
+                    continue
             py_dst = bin_dst / f
             _write_agent_forwarder(f, py_dst, check_only, target=target)
             agent_helper_resolved.append(WriteSurfaceEntry(kind="file-path", path=str(py_dst)))
@@ -3780,14 +3842,17 @@ def _write_agent_helper_forwarders(
                     target=target,
                 )
                 agent_helper_resolved.append(WriteSurfaceEntry(kind="file-path", path=str(cmd_dst)))
-            if f in door_eligible_names and engine_root is not None:
-                native_dst = _write_native_door_forwarder(f, bin_dst, check_only, engine_root=engine_root)
-                agent_helper_resolved.append(WriteSurfaceEntry(kind="file-path", path=str(native_dst)))
         return agent_helper_resolved
 
     agent_helper_resolved = []
     with held_lock(bin_dst, holder_label="install-substrate-forwarders"):
         for f, target in sorted(agent_helper_target_map.items()):
+            if f in door_eligible_names:
+                native_dst = _cut_over_to_native_door(f, bin_dst, check_only, engine_root=engine_root)
+                if native_dst is not None:
+                    agent_helper_resolved.append(WriteSurfaceEntry(kind="file-path", path=str(native_dst)))
+                    native_written.add(f)
+                    continue
             py_dst = bin_dst / f
             _write_agent_forwarder(f, py_dst, check_only, target=target)
             agent_helper_resolved.append(WriteSurfaceEntry(kind="file-path", path=str(py_dst)))
@@ -3800,10 +3865,6 @@ def _write_agent_helper_forwarders(
                     target=target,
                 )
                 agent_helper_resolved.append(WriteSurfaceEntry(kind="file-path", path=str(cmd_dst)))
-            if f in door_eligible_names and engine_root is not None:
-                native_dst = _write_native_door_forwarder(f, bin_dst, check_only, engine_root=engine_root)
-                agent_helper_resolved.append(WriteSurfaceEntry(kind="file-path", path=str(native_dst)))
-                native_written.add(f)
 
     if engine_root is not None:
         _write_native_forwarder_manifest(bin_dst, native_written)

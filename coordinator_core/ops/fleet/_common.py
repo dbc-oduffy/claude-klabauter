@@ -107,7 +107,7 @@ _REASON_DEST_CONFLICT = "archive-dest-conflict"
 
 
 def _is_identical_duplicate(src: Path, dst: Path) -> bool:
-    """True when dst already exists AND is byte-identical to src.
+    """True when dst already exists AND is identical to src, modulo line endings.
 
     Duplicate deliveries happen: a sender can write the same memo filename into
     cross-repo/inbox/ a second time after the first copy was already archived, and
@@ -118,12 +118,25 @@ def _is_identical_duplicate(src: Path, dst: Path) -> bool:
     the apparent backlog. When the bytes match, archiving is lossless: the git mv -f
     overwrite is a no-op on content and a pure delete of the redundant source copy.
 
-    Returns False (skip, do not overwrite) whenever the contents differ or
-    either file cannot be read — a differing dst is real archived history and
-    must never be clobbered.
+    EOL-insensitive comparison (Windows-first-class): under `core.autocrlf=true`
+    a live copy checked out through git's smudge filter carries CRLF while the
+    same logical record, written directly by a Python op (e.g. the archive
+    write itself, or a prior sweep), carries LF — both flavours land on disk for
+    the SAME record as ambient drift, not as a genuine content difference. The
+    normalization (`\r\n` -> `\n`) is applied to BOTH sides for comparison only;
+    neither file's on-disk bytes are ever rewritten. No other normalization
+    (whitespace-trimming, BOM-stripping, unicode) is applied — EOL only.
+
+    Returns False (skip, do not overwrite) whenever the contents differ beyond
+    EOL or either file cannot be read — a differing dst is real archived
+    history and must never be clobbered.
     """
     try:
-        return dst.is_file() and src.read_bytes() == dst.read_bytes()
+        if not dst.is_file():
+            return False
+        src_bytes = src.read_bytes().replace(b"\r\n", b"\n")
+        dst_bytes = dst.read_bytes().replace(b"\r\n", b"\n")
+        return src_bytes == dst_bytes
     except OSError:
         _LOG.warning(
             "_is_identical_duplicate: comparing %s to %s failed: %s",
@@ -2211,11 +2224,15 @@ async def archive_and_commit(
         # a no-op archival commit. `_empty_private_index_breach` itself is
         # UNCHANGED and still guards `rm_and_commit`'s own private-index seam
         # below; this is a second, independent guard for this function only.
-        # `head_spine is not None` is implied by `spine_error is None` (the
-        # only way spine_error gets set first is an unreadable spine), but it
-        # is stated rather than inferred: the guard now takes the spine as a
-        # value, so its non-None-ness is this call site's stated precondition.
-        if spine_error is None and head_spine is not None and _assembled_commit_is_noop(
+        # Review: code-reviewer (2026-08-27) — traced the full spine_error
+        # if/elif chain above and PROVED `head_spine is not None` is
+        # unreachable-as-False here: `head_spine is None` sets spine_error on
+        # the very first branch, so `spine_error is None` already implies
+        # `head_spine is not None`. Dropped per PM ruling ("costing 0ms is no
+        # reason to have extraneous functions and unnecessary code") rather
+        # than kept-as-stated-precondition — a proven-redundant guard is dead
+        # weight, not documentation.
+        if spine_error is None and _assembled_commit_is_noop(
             head_spine, assembled
         ):
             spine_error = (

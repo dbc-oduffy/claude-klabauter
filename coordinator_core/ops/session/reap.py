@@ -1285,12 +1285,19 @@ async def _handler_audit_unreapable(
     (a cadence gate is for work that costs something; this is a directory
     listing plus one `stat` per entry). `_collect_unreapable` itself — the
     part this op's contract is about — is unconditionally spawn-free. The
-    handler wrapping it can still shell out: `check_repo_root` reaches
-    `git_common_dir` (a subprocess) whenever a caller supplies
-    `params["repo_root"]`, same D3 consistency check `session.reap`'s own
-    `_handler` runs and pays the identical cost for (see its docstring's
-    `repo_root` param note) — worth it because the check is what catches a
-    caller-supplied root that disagrees with the engine-resolved one.
+    handler wrapping it is spawn-free too: `check_repo_root` reaches
+    `git_common_dir` whenever a caller supplies `params["repo_root"]`, the
+    same D3 consistency check `session.reap`'s own `_handler` runs — worth it
+    because the check is what catches a caller-supplied root that disagrees
+    with the engine-resolved one. That reach is NOT a subprocess.
+    `coordinator_core.lifecycle.git_common_dir` resolves by a pure-Python
+    upward walk (its own docstring: "WALK ONLY, no subprocess spawn at all
+    ... Callers on a hot path may treat this as zero-spawn, always" — the
+    seam's spawn fallback was retired). Corrected 2026-08-27: this paragraph
+    previously called it "a subprocess", and that stale claim was reached for
+    as evidence when adjudicating whether `session.audit_unreapable` could be
+    enrolled as spawn-free in the composition spawn-budget gate. It can; the
+    docstring was the only thing saying otherwise.
 
     Population reported = exactly what `_reap_stale_sessions`'s gate rejects:
     directory children of the hub that are NOT dot-prefixed (those are

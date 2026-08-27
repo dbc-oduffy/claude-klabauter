@@ -121,11 +121,12 @@ def test_remove_shadowing_ps1_sibling_is_a_noop_when_absent(tmp_path):
 # --- Generator-level cutover (substrate layer) ---------------------------
 
 
-def test_write_agent_helper_forwarders_additionally_writes_native_image_for_eligible_names(tmp_path):
-    """A door-eligible name gets its native forwarder ADDITIVE to the
-    existing `.py` bare-name file this loop already writes for it -- never
-    a replacement on Windows (see `door_install.named_forwarder_path`'s own
-    docstring)."""
+def test_write_agent_helper_forwarders_replaces_the_python_pair_for_eligible_names(tmp_path):
+    """A door-eligible name gets its native forwarder INSTEAD OF the
+    Python pair, not alongside it (PM ruling 2026-08-27). The superseded
+    `.cmd` body is wrong-if-reached post-cutover, and was previously kept
+    harmless only by PATHEXT ranking plus install ordering -- neither an
+    invariant. See `door_install.remove_superseded_python_forwarders`."""
     _skip_if_no_prebuilt()
     engine_root = tmp_path / "engine"
     _stamp_engine_root(engine_root)
@@ -144,11 +145,13 @@ def test_write_agent_helper_forwarders_additionally_writes_native_image_for_elig
 
     py_dst = bin_dst / "cross-repo-memo"
     native_dst = door_install.named_forwarder_path(bin_dst, "cross-repo-memo")
+    cmd_dst = bin_dst / "cross-repo-memo.cmd"
+    assert not cmd_dst.exists()
     if sys.platform == "win32":
-        # Distinct filenames on Windows: the Python bare-name forwarder
-        # survives untouched, the native `.exe` is a new sibling.
-        assert py_dst.exists()
-        assert substrate._AGENT_FORWARDER_MARKER in py_dst.read_text(encoding="utf-8")
+        # Distinct filenames on Windows, so the superseded Python pair is
+        # genuinely removable -- and is removed, rather than left as
+        # unreachable dead weight behind PATHEXT.
+        assert not py_dst.exists()
         assert native_dst.exists()
         assert native_dst != py_dst
     else:
@@ -159,6 +162,63 @@ def test_write_agent_helper_forwarders_additionally_writes_native_image_for_elig
 
     door_dst = bin_dst / door_install.DOOR_INSTALLED_NAME
     assert native_dst.read_bytes() == door_dst.read_bytes()
+
+
+def test_doorless_root_keeps_the_python_pair_for_an_eligible_name(tmp_path):
+    """The kill removes a superseded artifact, never the only route to the
+    engine. An UNSTAMPED engine root cannot supply a door, so a door-
+    eligible name falls through to the ordinary Python pair -- correct,
+    merely uncut-over."""
+    engine_root = tmp_path / "engine"
+    engine_root.mkdir(parents=True, exist_ok=True)
+    bin_dst = tmp_path / "bin"
+    bin_dst.mkdir(parents=True, exist_ok=True)
+
+    substrate._write_agent_helper_forwarders(
+        {"cross-repo-memo": "cross-repo-memo"},
+        {"cross-repo-memo": "cross-repo-memo.cmd"},
+        bin_dst, False,
+        python3_cmd_resolved_bin="",
+        door_eligible_names=frozenset({"cross-repo-memo"}),
+        engine_root=engine_root,
+    )
+
+    py_dst = bin_dst / "cross-repo-memo"
+    assert py_dst.exists()
+    assert substrate._AGENT_FORWARDER_MARKER in py_dst.read_text(encoding="utf-8")
+    assert (bin_dst / "cross-repo-memo.cmd").exists()
+    assert not door_install.named_forwarder_path(bin_dst, "cross-repo-memo").exists() or (
+        door_install.named_forwarder_path(bin_dst, "cross-repo-memo") == py_dst
+    )
+
+
+def test_remove_superseded_python_forwarders_never_removes_the_posix_native_image(tmp_path):
+    """On POSIX the native image occupies the BARE NAME itself, so removing
+    the bare name would uninstall the forwarder the removal follows. Only a
+    stray `.cmd` is removable there; on Windows both go."""
+    bin_dst = tmp_path / "bin"
+    bin_dst.mkdir()
+    bare = bin_dst / "cross-repo-memo"
+    bare.write_text("native-image-stand-in", encoding="utf-8")
+    cmd = bin_dst / "cross-repo-memo.cmd"
+    cmd.write_text("@echo off" + chr(10), encoding="utf-8")
+
+    removed = door_install.remove_superseded_python_forwarders(bin_dst, "cross-repo-memo")
+
+    assert cmd in removed
+    assert not cmd.exists()
+    if sys.platform == "win32":
+        assert bare in removed
+        assert not bare.exists()
+    else:
+        assert bare not in removed
+        assert bare.exists()
+
+
+def test_remove_superseded_python_forwarders_is_a_noop_when_absent(tmp_path):
+    bin_dst = tmp_path / "bin"
+    bin_dst.mkdir()
+    assert door_install.remove_superseded_python_forwarders(bin_dst, "cross-repo-memo") == []
 
 
 def test_write_agent_helper_forwarders_persists_the_native_forwarder_manifest(tmp_path):

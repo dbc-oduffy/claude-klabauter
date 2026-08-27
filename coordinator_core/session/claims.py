@@ -1872,7 +1872,7 @@ def _release_path_claim_everywhere(
     HOW *sids* was decided, never in how the write is performed.
 
     For each ``(touched_path, claimant_sid)`` pair ``claim_index.
-    _enumerate_touched_files`` reaches whose claimant is in *sids*: re-scans
+    _enumerate_claim_sinks`` reaches whose claimant is in *sids*: re-scans
     that ONE file's own events for *path* (via ``scope.parse_touch_event``,
     normalized the same way ``claim_index._normalize_key`` normalizes, so a
     backslashed caller path matches a forward-slashed on-disk entry) and
@@ -1891,7 +1891,7 @@ def _release_path_claim_everywhere(
     if not sids:
         return
     normalized_target = claim_index._normalize_key(path)
-    pairs, _complete = claim_index._enumerate_touched_files(base)
+    pairs, _complete = claim_index._enumerate_claim_sinks(base)
     for touched_path, claimant_sid in pairs:
         if claimant_sid not in sids:
             continue

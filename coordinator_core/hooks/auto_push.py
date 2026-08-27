@@ -1840,9 +1840,6 @@ def _hold_window(repo_root: str, branch: str) -> bool:
     for free.
     """
     now = time.time()
-    live_count = _shared_branch_live_count(repo_root, branch)
-    if live_count is None or live_count <= 1:
-        return True
 
     existing = _read_pending_record(repo_root)
     if (
@@ -1852,16 +1849,25 @@ def _hold_window(repo_root: str, branch: str) -> bool:
     ):
         return False
 
-    # Divergence gate (C4) -- deliberately AFTER the live-record check's
-    # `return False` and BEFORE `_peer_commit_within_window` below, never
-    # above either gate (same regression `_peer_commit_within_window`'s own
-    # placement note describes: testing a bypass-shaped predicate first can
-    # push and unlink a still-sleeping incumbent's record). A branch already
-    # diverged from its upstream is a push `_hold_window` cannot make
-    # succeed -- publishing that here would let it retry into the wall on
-    # every subsequent commit, so it defers to a pending record instead,
-    # spawn-free (AC13) and without a fetch (see
-    # `_branch_diverged_no_spawn`'s docstring for why a stale read is safe).
+    # Divergence gate (C4). Sits ABOVE the live-count gate, not below it:
+    # a push whose rejection is already determined has no crash-insurance
+    # value to trade away, so the solo case has nothing to gain by falling
+    # through to it. It stayed below until 2026-08-27, which made this gate
+    # unreachable for exactly the branch it exists for -- a solo session on
+    # a diverged branch (or one whose live-count predicate is unresolvable)
+    # short-circuited to `return True` and pushed into the wall on every
+    # subsequent commit. Observed cross-repo: DoE-claude
+    # `work/machine-a/2026-08-22` logged 22 identical non-fast-forward
+    # failures over an hour, one per commit, where this gate would have
+    # produced a single deferred record. The gate must still run AFTER the
+    # live-record check above -- testing a bypass-shaped predicate ahead of
+    # an incumbent holder's record can push and unlink a still-sleeping
+    # holder's coalescing token (the regression `_peer_commit_within_window`'s
+    # own placement note describes).
+    #
+    # Spawn-free (AC13) and fetch-free -- see `_branch_diverged_no_spawn`'s
+    # docstring for why a stale remote-tracking read is safe here (it biases
+    # only toward False, i.e. toward today's immediate-push behaviour).
     if _branch_diverged_no_spawn(repo_root, branch):
         sha = _run_git(repo_root, ["rev-parse", branch])
         hold_until = now + _HOLD_WINDOW_SECONDS
@@ -1874,7 +1880,12 @@ def _hold_window(repo_root: str, branch: str) -> bool:
             return True
         return False
 
-    # Deliberately BELOW the live-record check: an incumbent holder's record is
+    live_count = _shared_branch_live_count(repo_root, branch)
+    if live_count is None or live_count <= 1:
+        return True
+
+    # Deliberately BELOW the live-record check (now hoisted to the head of
+    # this function, above the divergence gate that must follow it): an incumbent holder's record is
     # AC14's coalescing token, and `run_push_with_retry`'s success path clears
     # it. Testing this predicate first let a hold-skipping call push and unlink
     # a still-sleeping incumbent's record, leaving nothing for drain_pending_push

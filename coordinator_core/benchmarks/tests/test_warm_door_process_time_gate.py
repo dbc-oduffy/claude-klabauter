@@ -77,9 +77,14 @@ WHAT "ESTABLISH" MEANS, MECHANICALLY -- `_boot_isolated_server()` below:
      `COORDINATOR_WARM_GATE_ENGINE_ROOT`) via `warm.engine_root.is_engine_root`.
   2. Hardlink (`os.link`, same-volume, zero data copy -- ~1.4s for this
      package's ~2850 files) ONLY its `coordinator_core/` subtree into a
-     fresh temp directory created BESIDE the source root (same drive,
+     fresh temp directory created under `<source root>/scratch/benchmark-
+     clones/` by `benchmarks.isolated_clone.mkdtemp_for_clone` (same drive,
      required for `os.link`; never the default temp dir, which is commonly
-     a different drive on this box). This is the isolation: a genuinely
+     a different drive on this box). It lands INSIDE the source root, not
+     beside it as it originally did: `source_root.parent` is the bare drive
+     root for a repo checked out at a volume's top level, which is outside
+     every git repo and therefore invisible to write confinement -- see
+     that module's own docstring. This is the isolation: a genuinely
      distinct on-disk path, so `warm.election.pipe_name`'s path-hash keys
      a DIFFERENT pipe than the resident fleet server's -- this gate's own
      boot/measure/teardown can never race or evict a session's real warm
@@ -176,6 +181,11 @@ from coordinator_core.benchmarks.process_time import (
     IS_WINDOWS,
     batched_process_time_ms,
     batched_process_time_quantiles,
+)
+from coordinator_core.benchmarks.isolated_clone import (
+    mkdtemp_for_clone,
+    reap_processes_under,
+    rmtree_or_warn,
 )
 from coordinator_core.warm import breadcrumb
 from coordinator_core.warm.engine_root import is_engine_root
@@ -314,7 +324,7 @@ def warm_engine_root() -> Iterator[Path]:
             f"warm server from; point {_ENGINE_ROOT_OVERRIDE_ENV} at one to run this gate"
         )
 
-    tmp_parent = Path(tempfile.mkdtemp(prefix="warm-door-gate-", dir=str(source_root.parent)))
+    tmp_parent = mkdtemp_for_clone(source_root, prefix="warm-door-gate-")
     isolated_root = tmp_parent / "clone"
     proc: Optional[subprocess.Popen] = None
     try:
@@ -346,6 +356,14 @@ def warm_engine_root() -> Iterator[Path]:
                 proc.terminate()
             except OSError:
                 pass
+        # The breadcrumb pid is NOT the whole process set this fixture owns.
+        # `server.py`'s boot starts a daemon thread calling
+        # `supervisor.ensure_listener`, which spawns the http listener
+        # DETACHED -- so terminating the server above leaves that supervisor
+        # running out of this clone, holding it open, and the `rmtree` below
+        # then fails silently. Reap by ROOT, which is the only predicate a
+        # deliberately-reparented process still answers to.
+        reaped = reap_processes_under(tmp_parent)
         # The breadcrumb does NOT live inside `isolated_root` -- `svc_dir`
         # resolves it under the machine-global, per-clone-hash runtime base
         # (`%LOCALAPPDATA%/coordinator/warm/<clone_hash>/`, see
@@ -358,7 +376,7 @@ def warm_engine_root() -> Iterator[Path]:
         # by construction never collide with a real clone's, and this run
         # is the only possible writer of anything under it.
         shutil.rmtree(breadcrumb.svc_dir(engine_root=isolated_root), ignore_errors=True)
-        shutil.rmtree(tmp_parent, ignore_errors=True)
+        rmtree_or_warn(tmp_parent, label="warm_engine_root", reaped=reaped)
 
 
 # =========================================================================
@@ -534,7 +552,7 @@ def warm_engine_root_darwin() -> Iterator[Path]:
             f"warm server from; point {_ENGINE_ROOT_OVERRIDE_ENV} at one to run this gate"
         )
 
-    tmp_parent = Path(tempfile.mkdtemp(prefix="warm-door-gate-", dir=str(source_root.parent)))
+    tmp_parent = mkdtemp_for_clone(source_root, prefix="warm-door-gate-")
     isolated_root = tmp_parent / "clone"
     runtime_base = _short_runtime_base()
     server_pid: Optional[int] = None
@@ -557,6 +575,11 @@ def warm_engine_root_darwin() -> Iterator[Path]:
             _terminate(int(crumb["pid"]))
         elif server_pid is not None:
             _terminate(server_pid)
+        # Same detached-supervisor rationale as `warm_engine_root`'s teardown
+        # above -- and it applies with MORE force here, not less: this
+        # fixture's own server is already double-forked out of this process's
+        # table by construction, so parentage was never available to reap by.
+        reaped = reap_processes_under(tmp_parent)
         # Same rationale as `warm_engine_root`'s teardown above: `svc_dir`
         # resolves outside `isolated_root` (now under the short
         # `runtime_base`, not the operator's real runtime base -- see the
@@ -564,7 +587,7 @@ def warm_engine_root_darwin() -> Iterator[Path]:
         # to remove unconditionally for the same freshly-minted-path reason.
         shutil.rmtree(breadcrumb.svc_dir(engine_root=isolated_root), ignore_errors=True)
         shutil.rmtree(runtime_base, ignore_errors=True)
-        shutil.rmtree(tmp_parent, ignore_errors=True)
+        rmtree_or_warn(tmp_parent, label="warm_engine_root_darwin", reaped=reaped)
         if prior_runtime_base is None:
             os.environ.pop(breadcrumb.RUNTIME_BASE_ENV, None)
         else:

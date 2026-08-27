@@ -2815,7 +2815,7 @@ def _scope_roots() -> tuple[pathlib.Path, ...]:
     return tuple(_REPO_ROOT / root for root in _GATE_SCOPE_ROOTS)
 
 
-def _build_corpus_with_dispatch_tables():
+def _build_corpus_with_dispatch_tables(*, _with_tables: bool = True):
     """The full corpus build: everything `_build_corpus()` returns, PLUS the by-reference
     dispatch-table indexes this chunk adds (`module_callable_tables_by_file`,
     `table_aliases_by_file`). `_build_corpus()` is a stable slice of this same computation --
@@ -2850,14 +2850,22 @@ def _build_corpus_with_dispatch_tables():
             record, import_aliases_by_file[record.relpath], index.func_defs
         )
 
-    module_callable_tables_by_file = _module_callable_tables_by_file(
-        records, index, import_aliases_by_file, func_aliases_by_file, local_aliases_by_file
-    )
+    # OPT-IN, not unconditional. Indexing every module-level callable table costs ~1.06s of
+    # process time over this repo's ~1624 scope files, and `_build_corpus()`'s ~10 existing
+    # callers do not consume the tables. Paying it for them would put a shared helper ~1s over
+    # a path that DR-344 already holds to 500ms end-to-end and that this module's own docstring
+    # records as having had a cold-scan problem. `_with_tables=False` returns the two table
+    # indexes EMPTY rather than omitting them, so the 7-tuple shape is stable for every caller.
+    module_callable_tables_by_file: dict[str, dict[str, frozenset[tuple[str, str]]]] = {}
     table_aliases_by_file: dict[str, dict[str, tuple[str, str]]] = {}
-    for record in records:
-        table_aliases_by_file[record.relpath] = _import_table_aliases(
-            record, module_index, module_callable_tables_by_file
+    if _with_tables:
+        module_callable_tables_by_file = _module_callable_tables_by_file(
+            records, index, import_aliases_by_file, func_aliases_by_file, local_aliases_by_file
         )
+        for record in records:
+            table_aliases_by_file[record.relpath] = _import_table_aliases(
+                record, module_index, module_callable_tables_by_file
+            )
 
     spawn_sites_by_file = {record.relpath: record.spawn_sites for record in records}
     return (
@@ -2878,8 +2886,14 @@ def _build_corpus():
     local_aliases_by_file)` -- a stable slice of `_build_corpus_with_dispatch_tables()`, which
     also computes the by-reference dispatch-table indexes this chunk adds. Kept as its own name
     (rather than inlining a `[:5]` at every call site) so every EXISTING caller's signature and
-    cost stay byte-for-byte unchanged."""
-    return _build_corpus_with_dispatch_tables()[:5]
+    cost stay unchanged.
+
+    The cost half of that claim is what `_with_tables=False` buys. Sharing the scan was right;
+    the first version of this shared it by making every caller pay the ~1.06s table-indexing pass
+    whether or not it read the tables, which is the opposite of the promise this docstring makes.
+    The tables are now opt-in, so a caller that takes the 5-tuple slice pays exactly what it paid
+    before the dispatch-table edge existed."""
+    return _build_corpus_with_dispatch_tables(_with_tables=False)[:5]
 
 
 def _format_violation(op_key: str, site) -> str:
@@ -3803,18 +3817,23 @@ def _op_keyed_uncovered_pairs():
     entrypoints = spawn_bearing_ops.resolve_op_entrypoints(live)
     evidence = spawn_bearing_ops.ops_with_spawn_evidence(entrypoints, function_granular=True)
 
-    # SITE-keyed, never op-keyed -- AC19b: shared machinery is "legitimized once per site, with a
-    # counter valid for any caller". `_LEGITIMIZED_SITES` is keyed `(relpath, enclosing, argv0,
-    # ordinal)` and carries NO op, so a per-op grouping was never expressible from it. The prior
-    # shape grouped on `key[0]` (a RELPATH) and looked that group up by OP NAME below -- two
-    # disjoint namespaces, so the lookup always missed and `legit_keys` was always empty: a
-    # legitimization path that never legitimized anything. Masked rather than benign -- every op
-    # currently carries a D7 static pin and `if op in pinned: continue` returns before the
-    # subtraction is reached. Corrected 2026-08-27. Subtracting a real set can only SHRINK the
-    # reported pairs, so this cannot buy green for a site nobody legitimized.
-    legitimized_site_keys: set[tuple[str, str, int]] = {
-        (key[1], key[2], key[3]) for key in _LEGITIMIZED_SITES
-    }
+    # OP-KEYED, and the value tuple must match `site_keys` below element-for-element.
+    # `_LEGITIMIZED_SITES` is `dict[tuple[str, str, str, str, int], _Legitimation]` --
+    # (op_key, relpath, enclosing, argv0, ordinal), FIVE elements with the op FIRST. The prose in
+    # this module's EXEMPTION MODEL paragraph says "keyed on (relpath, enclosing, argv0, ordinal)"
+    # and omits the op; that prose is what misled two passes over this code on 2026-08-27.
+    #
+    # The shipped bug was the VALUE tuple, not the key: it built (key[1], key[2], key[3]) =
+    # (relpath, enclosing, argv0) and compared it against site_keys' (enclosing, argv0, ordinal),
+    # so the sets could never intersect and `legit_keys` was always empty. An intermediate fix the
+    # same day rekeyed this to a FLAT site-key set, which cured the symptom by breaking AC19c --
+    # a flat set closes a pair because SOME op legitimized that site, which is exactly the weaker
+    # predicate this plan retired. Both are corrected here: keep the op key, fix the value tuple.
+    # Masked either way, which is why the suite stayed green through both: every op currently
+    # carries a D7 static pin and `if op in pinned: continue` returns before the subtraction.
+    legitimized_ops: dict[str, set[tuple[str, str, int]]] = {}
+    for key in _LEGITIMIZED_SITES:
+        legitimized_ops.setdefault(key[0], set()).add((key[2], key[3], key[4]))
 
     (
         index,
@@ -3842,7 +3861,7 @@ def _op_keyed_uncovered_pairs():
         site_keys = {(site.enclosing, site.argv0, site.ordinal) for site in sites}
         if op in pinned:
             continue
-        legit_keys = legitimized_site_keys
+        legit_keys = legitimized_ops.get(op, set())
         for sk in sorted(site_keys - legit_keys):
             pairs.append((op, sk))
     return pairs
@@ -5880,18 +5899,23 @@ def _live_static_pin_targets() -> tuple[frozenset[str], dict]:
     entrypoints = spawn_bearing_ops.resolve_op_entrypoints(live)
     evidence = spawn_bearing_ops.ops_with_spawn_evidence(entrypoints, function_granular=True)
 
-    # SITE-keyed, never op-keyed -- AC19b: shared machinery is "legitimized once per site, with a
-    # counter valid for any caller". `_LEGITIMIZED_SITES` is keyed `(relpath, enclosing, argv0,
-    # ordinal)` and carries NO op, so a per-op grouping was never expressible from it. The prior
-    # shape grouped on `key[0]` (a RELPATH) and looked that group up by OP NAME below -- two
-    # disjoint namespaces, so the lookup always missed and `legit_keys` was always empty: a
-    # legitimization path that never legitimized anything. Masked rather than benign -- every op
-    # currently carries a D7 static pin and `if op in pinned: continue` returns before the
-    # subtraction is reached. Corrected 2026-08-27. Subtracting a real set can only SHRINK the
-    # reported pairs, so this cannot buy green for a site nobody legitimized.
-    legitimized_site_keys: set[tuple[str, str, int]] = {
-        (key[1], key[2], key[3]) for key in _LEGITIMIZED_SITES
-    }
+    # OP-KEYED, and the value tuple must match `site_keys` below element-for-element.
+    # `_LEGITIMIZED_SITES` is `dict[tuple[str, str, str, str, int], _Legitimation]` --
+    # (op_key, relpath, enclosing, argv0, ordinal), FIVE elements with the op FIRST. The prose in
+    # this module's EXEMPTION MODEL paragraph says "keyed on (relpath, enclosing, argv0, ordinal)"
+    # and omits the op; that prose is what misled two passes over this code on 2026-08-27.
+    #
+    # The shipped bug was the VALUE tuple, not the key: it built (key[1], key[2], key[3]) =
+    # (relpath, enclosing, argv0) and compared it against site_keys' (enclosing, argv0, ordinal),
+    # so the sets could never intersect and `legit_keys` was always empty. An intermediate fix the
+    # same day rekeyed this to a FLAT site-key set, which cured the symptom by breaking AC19c --
+    # a flat set closes a pair because SOME op legitimized that site, which is exactly the weaker
+    # predicate this plan retired. Both are corrected here: keep the op key, fix the value tuple.
+    # Masked either way, which is why the suite stayed green through both: every op currently
+    # carries a D7 static pin and `if op in pinned: continue` returns before the subtraction.
+    legitimized_ops: dict[str, set[tuple[str, str, int]]] = {}
+    for key in _LEGITIMIZED_SITES:
+        legitimized_ops.setdefault(key[0], set()).add((key[2], key[3], key[4]))
 
     (
         index,
@@ -5916,7 +5940,7 @@ def _live_static_pin_targets() -> tuple[frozenset[str], dict]:
         )
         sites = _on_path_spawn_sites(reached, spawn_sites_by_file, exempt=frozenset())
         site_keys = {(site.enclosing, site.argv0, site.ordinal) for site in sites}
-        legit_keys = legitimized_site_keys
+        legit_keys = legitimized_ops.get(op, set())
         if site_keys and site_keys <= legit_keys:
             continue
         targets.append(op)
@@ -6011,11 +6035,14 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     "handoff.transition": 11,
     "fleet.reap_integrated_findings": 9,
     "fleet.reap_unintegrated_findings": 9,
-    # 4 -> 5, 2026-08-27: raised on NAMED evidence, not to reach green. The op newly reaches
-    # `coordinator_core/git/run.py::run_git`, a site it did not reach when D10 measured hours
-    # earlier; the D3 cluster disposition records the same +1 independently, so two derivations
-    # agree on it. Peer drift on this op is well-attested -- 10 -> 4 before this plan's handoff,
-    # 4 -> 5 during its verification run.
+    # 4 -> 5, 2026-08-27: the value arrived via a concurrent peer commit (76c5cf07b,
+    # "pre-docs quick-save", a different session, 10:44:52) landed ~2.5 min before this
+    # session's own edit (9194ce8a5, 10:47:17) reached the file -- this session did NOT
+    # raise the pin. What this session did do: independently corroborate the +1 from two
+    # derivations that agree it's real -- the ceiling test's own pinned=4/live=5 report, and
+    # the D3 cluster disposition naming the newly-reached site
+    # (`coordinator_core/git/run.py::run_git`). Peer drift on this op is well-attested --
+    # 10 -> 4 before this plan's handoff, 4 -> 5 during its verification run.
     "fleet.archive_completed_handoffs": 5,
     "ceremony.commit": 10,
     "fleet.archive_paper_trail": 3,

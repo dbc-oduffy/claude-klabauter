@@ -75,3 +75,83 @@ def test_real_ledger_classifies_every_entry() -> None:
     entries, heading_count = kli.build()
     assert len(entries) == heading_count
     assert not [e for e in entries if e.population == "UNCLASSIFIED"]
+
+
+def test_killed_is_a_landing_word() -> None:
+    """`KILLED, PM ruling` is how the ledger records a PM-ordered cut. Absent a
+    marker for it, the entry fell through to CONTESTED and read as a defect."""
+    entries = kli.parse_ledger(_entry("KILLED, PM ruling 2026-08-26.", title="`fleet.gone_op`"))
+    kli.classify(entries, live_ops=frozenset(), suspended_ops=frozenset())
+    assert entries[0].population == "LANDED"
+
+
+def test_acquitted_is_not_a_cut() -> None:
+    entries = kli.parse_ledger(
+        _entry("ACQUITTED 2026-08-26 — returns-when met on its own stated terms.", title="`session.kept_op`")
+    )
+    kli.classify(entries, live_ops=frozenset({"session.kept_op"}), suspended_ops=frozenset())
+    assert entries[0].population == "NON_CUT"
+
+
+def test_convicted_but_unlanded_is_its_own_population_not_a_disagreement() -> None:
+    """A convicted op is *expected* to still be registered until the cut lands;
+    reading that as CONTESTED buries the entries where liveness is a real defect."""
+    entries = kli.parse_ledger(
+        _entry("CONVICTED ON PROCESS TIME — rebuild from first principles.", title="`handoff.doomed_op`")
+    )
+    kli.classify(entries, live_ops=frozenset({"handoff.doomed_op"}), suspended_ops=frozenset())
+    assert entries[0].population == "CONVICTED"
+
+
+def test_a_convicted_op_already_gone_reads_as_landed() -> None:
+    entries = kli.parse_ledger(
+        _entry("CONVICTED ON PROCESS TIME — rebuild from first principles.", title="`handoff.doomed_op`")
+    )
+    kli.classify(entries, live_ops=frozenset(), suspended_ops=frozenset())
+    assert entries[0].population == "LANDED"
+
+
+def test_convicted_does_not_steal_the_candidate_population() -> None:
+    """Every CANDIDATE status says NOT YET CONVICTED further along the line."""
+    entries = kli.parse_ledger(
+        _entry("CANDIDATE — MEASURED ON WALL CLOCK, NOT YET CONVICTED", title="`fleet.example_op`")
+    )
+    kli.classify(entries, live_ops=frozenset({"fleet.example_op"}), suspended_ops=frozenset())
+    assert entries[0].population == "CANDIDATE"
+
+
+def test_cross_plane_cut_must_say_so_in_the_status() -> None:
+    """The escape from CONTESTED is earned by the entry stating the cross-plane
+    fact — never by the classifier inferring one from liveness alone."""
+    stated = kli.parse_ledger(
+        _entry("removed — by DoE-claude, not by this repo, reconstructed here after the fact.",
+               title="`hooks.example_op`")
+    )
+    kli.classify(stated, live_ops=frozenset({"hooks.example_op"}), suspended_ops=frozenset())
+    assert stated[0].population == "CUT_ELSEWHERE"
+
+    unstated = kli.parse_ledger(_entry("removed", title="`hooks.example_op`"))
+    kli.classify(unstated, live_ops=frozenset({"hooks.example_op"}), suspended_ops=frozenset())
+    assert unstated[0].population == "CONTESTED"
+
+
+def test_rebuilt_must_say_so_and_must_actually_be_live() -> None:
+    text = _entry("**LANDED** (`abc1234`), then rebuilt and live again.", title="`memo.example_send`")
+    live = kli.parse_ledger(text)
+    kli.classify(live, live_ops=frozenset({"memo.example_send"}), suspended_ops=frozenset())
+    assert live[0].population == "REBUILT"
+
+    # A rebuild the registry cannot corroborate is a defect report, not a pass.
+    absent = kli.parse_ledger(text)
+    kli.classify(absent, live_ops=frozenset(), suspended_ops=frozenset())
+    assert absent[0].population == "CONTESTED"
+    assert "absent from the live registry" in " ".join(absent[0].notes)
+
+
+def test_the_real_ledger_has_no_contested_rows() -> None:
+    """AC-7 of the-meter-02: `--fail-on-contested` exits 0 against the real
+    ledger. A CONTESTED row here is a real ledger/registry disagreement to
+    reconcile in `state/kill-ledger.md`, never by widening a marker tuple."""
+    entries, _ = kli.build(kli.KILL_LEDGER)
+    contested = [f"{e.key}: {'; '.join(e.notes)}" for e in entries if e.population == "CONTESTED"]
+    assert not contested, contested

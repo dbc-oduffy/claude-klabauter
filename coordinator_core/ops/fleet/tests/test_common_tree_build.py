@@ -234,6 +234,81 @@ def test_assembled_commit_is_noop_true_when_assembled_matches_head(
     assert _assembled_commit_is_noop(spine, real_deletion) is False
 
 
+def test_assembled_commit_is_noop_extra_spine_keys_are_inert(
+    tmp_path: Path,
+) -> None:
+    """Superset coverage (code-reviewer nit, 2026-08-27): the spine handed to
+    `_assembled_commit_is_noop` is `archive_and_commit`'s real caller shape --
+    `read_tree_spine` over src UNION dst, a set that is a SUPERSET of
+    `assembled`'s own keys, never an exact match. This builds a spine
+    genuinely WIDER than `assembled`'s keys (a third, unrelated tracked path
+    neither in `assembled` nor asserted on) and proves the extra key changes
+    nothing: the guard still reads noop/non-noop purely off the keys
+    `assembled` actually names, exercising the superset property the
+    docstring claims rather than only asserting it in prose."""
+    root = tmp_path / "repo"
+    _init_repo(root)
+
+    tracked = root / "tracked.txt"
+    tracked.write_text("hello\n", encoding="utf-8")
+    unrelated = root / "unrelated.txt"
+    unrelated.write_text("other\n", encoding="utf-8")
+    _git(["add", "-A"], root)
+    _git(["commit", "-q", "-m", "seed"], root)
+
+    head_mode_sha = _git(["ls-tree", "HEAD", "tracked.txt"], root).stdout.split()
+    mode = int(head_mode_sha[0], 8)
+    sha = head_mode_sha[2]
+
+    # Wider than assembled's keys -- includes "unrelated.txt", which no
+    # assertion below ever looks up.
+    wide_spine = read_tree_spine(root, ["tracked.txt", "unrelated.txt"])
+    assert wide_spine is not None
+
+    noop_assembled = {"tracked.txt": (mode, sha)}
+    assert _assembled_commit_is_noop(wide_spine, noop_assembled) is True
+
+    real_change_assembled = {"tracked.txt": (mode, "0" * 40)}
+    assert _assembled_commit_is_noop(wide_spine, real_change_assembled) is False
+
+
+def test_assembled_commit_is_noop_key_missing_from_spine_reads_as_absent_from_head(
+    tmp_path: Path,
+) -> None:
+    """Documents CURRENT behaviour for a key in `assembled` that the spine
+    was never walked for (code-reviewer nit, 2026-08-27): the docstring says
+    a spine narrower than `assembled`'s keys "is a caller bug that reads as
+    'entry absent from HEAD'" -- a narrowed walk (a future edit dropping a
+    key source from the union that builds the spine) would silently look
+    like every such path is a brand-new add, never surfacing as its own
+    error. This pins that exact reading so a future change to it is visible
+    here rather than silently passing."""
+    root = tmp_path / "repo"
+    _init_repo(root)
+
+    tracked = root / "tracked.txt"
+    tracked.write_text("hello\n", encoding="utf-8")
+    _git(["add", "-A"], root)
+    _git(["commit", "-q", "-m", "seed"], root)
+
+    # Spine walked for a path that is NOT "never-added.txt" -- assembled
+    # below names a key the spine was never built for at all.
+    narrow_spine = read_tree_spine(root, ["tracked.txt"])
+    assert narrow_spine is not None
+
+    # A real (mode, sha) entry for a key absent from the spine reads as a
+    # genuine add -- NOT a no-op, and NOT an error of its own. This is the
+    # silent-misbehaviour shape a narrowed walk would produce for a real key.
+    assembled_with_missing_key = {"never-added.txt": (0o100644, "1" * 40)}
+    assert _assembled_commit_is_noop(narrow_spine, assembled_with_missing_key) is False
+
+    # A deletion (_ABSENT) of a key absent from the spine still reads as a
+    # no-op -- "nothing there to delete" is correct regardless of why the
+    # spine never covered that key.
+    assembled_absent_delete = {"never-added.txt": _ABSENT}
+    assert _assembled_commit_is_noop(narrow_spine, assembled_absent_delete) is True
+
+
 def _patch_counting_hash_object(monkeypatch):
     """Counts calls to `_hash_object_stdin_paths` -- the ONE git spawn left
     anywhere in `archive_and_commit`'s build, and only for a `restage_src=

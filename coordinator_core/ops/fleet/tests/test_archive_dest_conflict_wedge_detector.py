@@ -68,6 +68,41 @@ def test_is_identical_duplicate_true_when_bytes_match(tmp_path: Path) -> None:
     assert _is_identical_duplicate(src, dst) is True
 
 
+def test_is_identical_duplicate_true_when_only_eol_differs_crlf_src(tmp_path: Path) -> None:
+    """core.autocrlf=true: live copy checked out CRLF, archived copy written LF —
+    same logical record, must converge."""
+    src = tmp_path / "live.md"
+    dst = tmp_path / "archived.md"
+    src.write_bytes(b"line one\r\nline two\r\nline three\r\n")
+    dst.write_bytes(b"line one\nline two\nline three\n")
+
+    assert _is_identical_duplicate(src, dst) is True
+
+
+def test_is_identical_duplicate_true_when_only_eol_differs_crlf_dst(tmp_path: Path) -> None:
+    """Reverse flavour: src LF, dst CRLF — must also converge."""
+    src = tmp_path / "live.md"
+    dst = tmp_path / "archived.md"
+    src.write_bytes(b"line one\nline two\nline three\n")
+    dst.write_bytes(b"line one\r\nline two\r\nline three\r\n")
+
+    assert _is_identical_duplicate(src, dst) is True
+
+
+def test_is_identical_duplicate_false_when_content_differs_despite_eol_difference(
+    tmp_path: Path,
+) -> None:
+    """Regression guard: a real content difference must still wedge even when
+    the two files ALSO differ in EOL flavour — EOL-insensitivity must never
+    mask a genuine content divergence."""
+    src = tmp_path / "live.md"
+    dst = tmp_path / "archived.md"
+    src.write_bytes(b"line one\r\nline two CHANGED\r\nline three\r\n")
+    dst.write_bytes(b"line one\nline two\nline three\n")
+
+    assert _is_identical_duplicate(src, dst) is False
+
+
 # ---------------------------------------------------------------------------
 # Layer 2: the real three-way disposition inside a shipped handler, mover
 # monkeypatched.

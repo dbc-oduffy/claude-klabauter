@@ -2632,7 +2632,9 @@ def _agent_touched_test_files(raw_agent_id: str, session_id: str,
         base = git_common_dir(repo_root)
         if base is None:
             return []
-        sink = Path(base) / "coordinator-sessions" / ".agents" / canonical / "touch-record.jsonl"
+        sink = touch_record.sink_path(
+            Path(base) / "coordinator-sessions" / ".agents" / canonical
+        )
         projection = touch_record.project_live_claims(sink, cwd=repo_root)
     except Exception:
         return []

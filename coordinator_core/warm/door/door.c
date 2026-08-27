@@ -1123,8 +1123,6 @@ int main(void) {
             }
         }
     }
-    req_ok &= buf_append_cstr(&req, "\"},\"_engine_token\":\"");
-    req_ok &= buf_append_cstr(&req, engine_token);
     req_ok &= buf_append_cstr(&req, "\"");
 
     /* ADDITIVE, NOT ALWAYS PRESENT (C0). Omitted entirely when this image's
@@ -1133,7 +1131,21 @@ int main(void) {
      * door installed under its current single name produces a request the
      * current server handles identically (BACKWARD COMPATIBILITY IS AN AC).
      * Present, carrying the SAME `door_entrypoint_basename()` resolution
-     * `fall_through` reads for its own leg, for any other resolved name. */
+     * `fall_through` reads for its own leg, for any other resolved name.
+     *
+     * INSIDE `params`, AND THE ORDER HERE IS WHY. This block appended AFTER
+     * the `}` that closes `params` until 2026-08-27, putting `entrypoint` at
+     * the ENVELOPE top level, a sibling of `method` and `_engine_token`.
+     * `ops/invoke_from_argv.py :: _invoke_from_argv` reads
+     * `params["entrypoint"]`, so it saw nothing, dispatched
+     * `coordinator-invoke`'s own `main(argv)`, and returned exit 0 carrying
+     * that CLI's output -- a renamed image silently running a different
+     * CLI's argument grammar, the exact substitution AC18 forbids. The COLD
+     * leg was unaffected (it reads `door_entrypoint_basename()` directly,
+     * never the wire), which is why the two legs disagreed and why only an
+     * end-to-end warm invocation could catch it: every unit test on either
+     * leg alone passed throughout. Keep this append BEFORE the `}` below.
+     * Evidence: docs/research/2026-08-27-door-cutover-measurements.md. */
     if (req_ok) {
         const wchar_t *entrypoint_basename = door_entrypoint_basename();
         if (wcscmp(entrypoint_basename, DOOR_DEFAULT_ENTRYPOINT_W) != 0) {
@@ -1151,6 +1163,11 @@ int main(void) {
             req_ok &= buf_append_cstr(&req, "\"");
         }
     }
+
+    /* Closes `params`, then the envelope-level `_engine_token`. */
+    req_ok &= buf_append_cstr(&req, "},\"_engine_token\":\"");
+    req_ok &= buf_append_cstr(&req, engine_token);
+    req_ok &= buf_append_cstr(&req, "\"");
 
     req_ok &= buf_append_cstr(&req, "}\n");
 

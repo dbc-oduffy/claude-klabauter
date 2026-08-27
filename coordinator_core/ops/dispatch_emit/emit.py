@@ -267,6 +267,8 @@ Negative-spec:
 
 from __future__ import annotations
 
+import re
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
@@ -468,7 +470,141 @@ _TEST_PHASE_TITLE = "Scoped test run"
 _PREFLIGHT_PHASE_TITLE = "Preflight: commit claimability"
 
 
-def _row_prompt(row: WaveRow, plan_path: Optional[str] = None) -> str:
+@dataclass(frozen=True)
+class PlanContext:
+    """Plan-level context resolved ONCE per ``emit_script`` call and threaded
+    read-only through ``compose_script`` / ``_wave_agent_calls`` to
+    ``_row_prompt`` (AC12).
+
+    Never opened or re-derived per row: ``_row_prompt`` only ever splices
+    this dataclass's already-resolved fields, never the plan file itself.
+    ``goal`` is ``None`` on any plan carrying no ``## Goal`` section (AC13)
+    — the caller composing the preamble omits that line entirely rather
+    than emitting a placeholder.
+    """
+
+    title: str
+    goal: Optional[str]
+    problem_excerpt: Optional[str]
+
+
+# The section-heading vocabulary this module reads out of a plan BODY.
+# `## Goal` is C3a's own scaffolded heading (out of C4's write scope --
+# this chunk only reads whatever a plan already carries, live or absent).
+_GOAL_HEADING = "Goal"
+_PROBLEM_HEADING = "Problem"
+
+# A markdown ATX heading line at any level, used as the stop condition for
+# a section body -- the next heading of ANY level ends the current section,
+# not just a same-level sibling (a `### ` subsection under `## Problem`
+# is still part of the Problem section's body).
+_NEXT_HEADING_RE = re.compile(r"^#{1,6}\s", re.MULTILINE)
+
+# The hard character cap on the composed plan-context preamble (AC12's
+# "bounded... with an ENFORCED character cap"). The preamble is spliced via
+# `_js_string_literal` into EVERY row's `agent(...)` call, so an unbounded
+# Problem-section paragraph is paid for on every row of every wave -- see
+# module docstring's line-count-is-a-measured-axis discipline
+# (`CLAUDE.md` § The brightline). Chosen generously enough to carry a real
+# title + goal + one paragraph without truncating the common case, while
+# still refusing an unbounded prose blob.
+_PLAN_CONTEXT_PREAMBLE_CHAR_CAP = 900
+_TRUNCATION_SUFFIX = "…"
+
+
+def _plan_section_body(plan_text: str, heading: str) -> Optional[str]:
+    """The raw body text under a top-level ``## <heading>`` in ``plan_text``,
+    up to (not including) the next markdown heading of any level, or ``None``
+    if no such heading exists.
+
+    Matches the FIRST ``## <heading>`` occurrence only -- plan bodies never
+    repeat a top-level section heading, and this module does not validate
+    that they don't.
+    """
+    match = re.search(
+        rf"^##\s+{re.escape(heading)}\s*$", plan_text, re.MULTILINE
+    )
+    if match is None:
+        return None
+    rest = plan_text[match.end():]
+    next_heading = _NEXT_HEADING_RE.search(rest)
+    body = rest[: next_heading.start()] if next_heading else rest
+    return body.strip("\n")
+
+
+def _first_paragraph(section_body: str) -> Optional[str]:
+    """The first blank-line-delimited paragraph of ``section_body``, with
+    interior whitespace collapsed to single spaces -- a wrapped markdown
+    paragraph must not carry its source line breaks into a one-line prompt
+    preamble. ``None`` if the section is empty."""
+    stripped = section_body.strip()
+    if not stripped:
+        return None
+    paragraph = stripped.split("\n\n", 1)[0]
+    return " ".join(paragraph.split())
+
+
+def _plan_title(plan_text: str, fallback: str) -> str:
+    """The plan's H1 title (``# <title>``), or ``fallback`` (the plan's file
+    stem) when no H1 is present in the body."""
+    match = re.search(r"^#\s+(.+?)\s*$", plan_text, re.MULTILINE)
+    if match is None:
+        return fallback
+    return match.group(1)
+
+
+def derive_plan_context(plan_text: str, *, fallback_title: str) -> PlanContext:
+    """Resolve ``PlanContext`` from ``plan_text`` (the plan file's already-
+    read full text -- this function never opens a file itself).
+
+    ``goal`` is ``None`` whenever the plan carries no ``## Goal`` section or
+    that section's first paragraph is empty (AC13) -- never a placeholder.
+    ``problem_excerpt`` is the ``## Problem`` section's first paragraph, or
+    ``None`` when no such section exists (every plan today has one, but this
+    function stays total rather than assuming it).
+    """
+    goal_body = _plan_section_body(plan_text, _GOAL_HEADING)
+    goal = _first_paragraph(goal_body) if goal_body is not None else None
+
+    problem_body = _plan_section_body(plan_text, _PROBLEM_HEADING)
+    problem_excerpt = (
+        _first_paragraph(problem_body) if problem_body is not None else None
+    )
+
+    return PlanContext(
+        title=_plan_title(plan_text, fallback_title),
+        goal=goal,
+        problem_excerpt=problem_excerpt,
+    )
+
+
+def _plan_context_preamble(context: PlanContext) -> str:
+    """Compose the plan-context preamble spliced ahead of a row's own
+    dispatch prompt (AC12/AC13), bounded to
+    ``_PLAN_CONTEXT_PREAMBLE_CHAR_CAP`` characters (enforced below, never
+    left to instruction alone).
+
+    Line order: title, then ``Goal:`` ONLY when ``context.goal`` is present
+    (AC13 -- omitted entirely, never a placeholder line), then the Problem
+    excerpt when present.
+    """
+    lines = [f"Plan: {context.title}"]
+    if context.goal:
+        lines.append(f"Goal: {context.goal}")
+    if context.problem_excerpt:
+        lines.append(f"Problem: {context.problem_excerpt}")
+    preamble = "\n".join(lines)
+    if len(preamble) > _PLAN_CONTEXT_PREAMBLE_CHAR_CAP:
+        cut = _PLAN_CONTEXT_PREAMBLE_CHAR_CAP - len(_TRUNCATION_SUFFIX)
+        preamble = preamble[:cut] + _TRUNCATION_SUFFIX
+    return preamble
+
+
+def _row_prompt(
+    row: WaveRow,
+    plan_path: Optional[str] = None,
+    plan_context: Optional[PlanContext] = None,
+) -> str:
     """Compose one executor row's dispatch prompt.
 
     The prompt MUST name where the row's own spec lives. A title-only
@@ -487,11 +623,19 @@ def _row_prompt(row: WaveRow, plan_path: Optional[str] = None) -> str:
     ``title``. ``plan_path`` is optional solely so pre-existing callers
     that compose from already-derived waves keep working; every caller
     that knows its plan is expected to pass it.
+
+    ``plan_context`` (AC12) is an already-resolved ``PlanContext`` -- this
+    function never opens or parses the plan itself to obtain one. When
+    supplied, its preamble (``_plan_context_preamble``) is spliced ahead of
+    everything else so a dispatched executor learns which plan it is inside
+    and what that plan is for before it reads its own row's spec pointer.
+    Omitted (``None``) keeps the pre-existing shape unchanged, for any
+    caller not yet threading plan context.
     """
     head = f"Execute {row.id}: {row.title}"
     if not plan_path:
         return head
-    return (
+    body = (
         f"{head}\n\n"
         f"Your spec is the row with `id: {row.id}` in the `## Tasks` plan-spine "
         f"of {plan_path} — a fenced ```yaml plan-tasks block. Read that row's "
@@ -502,6 +646,9 @@ def _row_prompt(row: WaveRow, plan_path: Optional[str] = None) -> str:
         "you cannot read that row, stop and report BLOCKED rather than "
         "improvising."
     )
+    if plan_context is None:
+        return body
+    return f"{_plan_context_preamble(plan_context)}\n\n{body}"
 
 
 def _wave_agent_calls(
@@ -509,6 +656,7 @@ def _wave_agent_calls(
     phase_title: str,
     plan_path: Optional[str] = None,
     results_var: Optional[str] = None,
+    plan_context: Optional[PlanContext] = None,
 ) -> str:
     """Compose the ``phase()`` + agent-dispatch call(s) for one executor wave.
 
@@ -524,6 +672,9 @@ def _wave_agent_calls(
     as genuine pathspec provenance — see ``_commit_agent_call``. Omitting it
     keeps the pre-existing unbound ``await`` shape (back-compat for any
     caller not threading a commit phase after this wave).
+
+    ``plan_context`` (AC12) is forwarded, unopened and unparsed, straight to
+    ``_row_prompt`` for every row in the wave — see that function's docstring.
     """
     phase_call = f"  phase({_js_string_literal(phase_title)});"
     binder = f"const {results_var} = " if results_var else ""
@@ -532,7 +683,7 @@ def _wave_agent_calls(
         row = wave[0]
         call = (
             f"  {binder}await agent("
-            f"{_js_string_literal(_row_prompt(row, plan_path))}, "
+            f"{_js_string_literal(_row_prompt(row, plan_path, plan_context))}, "
             "{ "
             f"label: {_js_string_literal(f'work:{row.id}')}, "
             f"phase: {_js_string_literal(phase_title)}, "
@@ -544,7 +695,7 @@ def _wave_agent_calls(
 
     item_calls = ",\n".join(
         "    () => agent("
-        f"{_js_string_literal(_row_prompt(row, plan_path))}, "
+        f"{_js_string_literal(_row_prompt(row, plan_path, plan_context))}, "
         "{ "
         f"label: {_js_string_literal(f'work:{row.id}')}, "
         f"phase: {_js_string_literal(phase_title)}, "
@@ -836,7 +987,9 @@ def _no_test_scope_narration() -> str:
     return f"  log({_js_string_literal(message)});"
 
 
-def derive_review_tier(plan_path, *, repo_root: Optional[Path] = None) -> Optional[str]:
+def derive_review_tier(
+    plan_path, *, repo_root: Optional[Path] = None, plan_text: Optional[str] = None
+) -> Optional[str]:
     """Derive a review TIER (``lightweight``/``standard``/``full``) from
     ``plan_path``'s own sizing object (a) — never from ``routing.md`` prose
     and never a locally-minted sizing->reviewer table. See module docstring
@@ -848,6 +1001,13 @@ def derive_review_tier(plan_path, *, repo_root: Optional[Path] = None) -> Option
     only read discipline — never the body), then reads that citation's
     sizing-object YAML file's ``estimate.tshirt`` and maps it through
     ``_TSHIRT_TO_REVIEW_TIER``.
+
+    ``plan_text``, when supplied, is used AS-IS instead of this function
+    opening ``plan_path`` itself (AC16) — ``emit_script`` reads the plan
+    file exactly once and passes that text down here and to
+    ``derive_plan_context`` so the plan is never opened twice for one
+    ``emit_script`` call. Omitted, this function reads the file itself —
+    unchanged behaviour for every pre-existing caller.
 
     Returns ``None`` (never a fabricated tier) whenever the derivation
     cannot be completed cleanly: the plan file cannot be read, has no
@@ -867,10 +1027,13 @@ def derive_review_tier(plan_path, *, repo_root: Optional[Path] = None) -> Option
     plan_path = Path(plan_path)
     root = Path(repo_root) if repo_root is not None else _REPO_ROOT
 
-    try:
-        text = plan_path.read_text(encoding="utf-8")
-    except OSError:
-        return None
+    if plan_text is not None:
+        text = plan_text
+    else:
+        try:
+            text = plan_path.read_text(encoding="utf-8")
+        except OSError:
+            return None
 
     split = split_frontmatter(text)
     if split is None:
@@ -961,6 +1124,7 @@ def compose_script(
     review_tier: Optional[str] = None,
     review_roster_fragment: Optional[dict] = None,
     plan_path: Optional[str] = None,
+    plan_context: Optional[PlanContext] = None,
 ) -> str:
     """Compose one Workflow ``.mjs`` script text from already-derived ``waves``.
 
@@ -979,6 +1143,11 @@ def compose_script(
     size; this changes WHERE ``_commit_agent_call`` fires, never how many
     times overall a whole wave's work is committed for a wave at or under
     the threshold.
+
+    ``plan_context`` (AC12), when supplied, is forwarded unopened to every
+    ``_wave_agent_calls`` call so each row's prompt carries the plan-context
+    preamble — see ``PlanContext``/``_row_prompt``. This function never
+    resolves one itself; ``emit_script`` is the sole resolution site.
     """
     if not waves:
         raise NoWavesError(
@@ -1023,7 +1192,9 @@ def compose_script(
                 else f"wave{index + 1}Results"
             )
             body_blocks.append(
-                _wave_agent_calls(batch, wave_title, plan_path, results_var)
+                _wave_agent_calls(
+                    batch, wave_title, plan_path, results_var, plan_context
+                )
             )
 
             batch_pathspec = commit_pathspec(batch)
@@ -1123,12 +1294,28 @@ def emit_script(
     default to the plan file's stem and a fixed generic description when
     omitted.
 
-    Also reads ``plan_path``'s frontmatter ONLY (never the body — see
-    ``derive_review_tier``) to derive a review tier, which composes a review
-    phase (a) if, and only if, a caller also supplies ``review_roster_
-    fragment`` (DoE's data — no live fragment exists yet, see module
-    docstring § Review phases); omitting it composes no review phase, same
-    as before this chunk.
+    Reads ``plan_path``'s full text (frontmatter AND body) exactly ONCE
+    (AC16) — ``read_spine`` above already opens and reads the file to locate
+    its task-spine block, so this is the file's second and ONLY OTHER read,
+    consolidating what would otherwise be two separate re-reads (one for
+    ``derive_review_tier``'s frontmatter-only ``sizing_object:`` citation, a
+    second for ``derive_plan_context``'s ``## Goal``/``## Problem`` body
+    sections) into the ONE ``plan_path.read_text()`` call below, whose
+    result both derivations consume via their ``plan_text``/``plan_text``
+    parameters. Neither derivation, nor any per-row prompt composition
+    downstream, opens the plan file again — this corrects the module's
+    prior claim (frontmatter ONLY, never the body) now that AC12's
+    plan-context preamble reads the Problem section's first paragraph and,
+    when present, a ``## Goal`` section.
+
+    A review phase (a) composes if, and only if, a caller also supplies
+    ``review_roster_fragment`` (DoE's data — no live fragment exists yet,
+    see module docstring § Review phases); omitting it composes no review
+    phase, same as before this chunk.
+
+    ``plan_context`` (AC12) is resolved here, once, and passed to
+    ``compose_script`` -> ``_wave_agent_calls`` -> ``_row_prompt`` — no
+    downstream function opens or re-parses the plan to obtain it.
     """
     plan_path = Path(plan_path)
     rows = read_spine(plan_path)
@@ -1139,9 +1326,19 @@ def emit_script(
         f"Emitted executor/commit/test workflow for {plan_path.stem}"
     )
 
-    review_tier = derive_review_tier(plan_path, repo_root=repo_root)
+    try:
+        plan_text = plan_path.read_text(encoding="utf-8")
+    except OSError:
+        plan_text = None
+
+    review_tier = derive_review_tier(plan_path, repo_root=repo_root, plan_text=plan_text)
 
     spec_path = _spec_path_for_prompt(plan_path, repo_root)
+
+    plan_context = derive_plan_context(
+        plan_text if plan_text is not None else "",
+        fallback_title=plan_path.stem,
+    )
 
     return compose_script(
         waves,
@@ -1151,6 +1348,7 @@ def emit_script(
         review_tier=review_tier,
         review_roster_fragment=review_roster_fragment,
         plan_path=spec_path.as_posix(),
+        plan_context=plan_context,
     )
 
 

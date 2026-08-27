@@ -96,7 +96,8 @@ import os
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional, Sequence
+from collections.abc import Sequence
+from typing import Optional
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _BIN_DIR = _REPO_ROOT / "coordinator" / "bin"
@@ -111,6 +112,16 @@ _DOOR_STEM = "coordinator-invoke"
 #: it is not in PATHEXT and `shutil.which` will never report it. It is the
 #: sibling `install_warm_door :: claim_bare_name` exists to strip, so the
 #: resolver below must model it or it cannot see the original hazard.
+#:
+#: VERIFIED (2026-08-27) on this PowerShell host, not assumed: a directory
+#: containing ONLY `zzprobe.ps1` and `zzprobe.cmd`, prepended to PATH.
+#:   `$env:PATHEXT -split ';' -contains '.PS1'`  ->  False   (.ps1 is NOT in PATHEXT)
+#:   bare `zzprobe`                              ->  WINNER=ps1
+#:   `Get-Command zzprobe -All | % Source`        ->  ...\zzprobe.ps1
+#:                                                     ...\zzprobe.cmd
+#: A non-PATHEXT-listed `.ps1` beats a PATHEXT-listed `.cmd`, confirming the
+#: claim below empirically rather than by citation of `about_Command_Precedence`
+#: alone.
 _POWERSHELL_FIRST_EXT = ".ps1"
 
 #: A bare-name winner with any of these suffixes -- or one sitting under a
@@ -487,7 +498,10 @@ def resolve_bare_name(stem: str, path_dirs: Sequence[str], pathext: str) -> "lis
     `shutil.which` is deliberately not used: it answers for the CURRENT
     process's rules, and the callers that matter are a PowerShell host and a
     `CreateProcess` from the engine -- one of which prefers an extension
-    PATHEXT does not list at all."""
+    PATHEXT does not list at all.
+
+    The `.ps1`-first claim is verified, not assumed -- see `_POWERSHELL_FIRST_EXT`'s
+    comment for the captured `Get-Command`/PATHEXT trace."""
     exts = [_POWERSHELL_FIRST_EXT]
     exts += [e for e in pathext.split(os.pathsep) if e]
     exts.append("")
@@ -497,7 +511,7 @@ def resolve_bare_name(stem: str, path_dirs: Sequence[str], pathext: str) -> "lis
         if not raw_dir:
             continue
         for ext in exts:
-            candidate = Path(raw_dir) / f"{stem}{ext.lower()}"
+            candidate = Path(raw_dir) / f"{stem}{ext}"
             if candidate.is_file() and candidate not in hits:
                 hits.append(candidate)
     return hits
@@ -534,11 +548,23 @@ def bare_name_door_report() -> "list[str]":
     an installer that prepends flips it with no error and no runtime signal; the
     only symptom is ~94ms of interpreter start plus engine import per call
     against the door's ~2.34ms relay. `test_door_bare_name_ordering.py` pins the
-    installer's own `.ps1` sequencing; nothing pinned this."""
+    installer's own `.ps1` sequencing; nothing pinned this.
+
+    NAMED GAP -- this function is a REPORT, not a GATE (2026-08-27). Nothing
+    invokes it on a cadence that would catch a PATH-ordering flip before it
+    ships silently to a user; it fires only on a manual `forwarder_door_census.main()`
+    run. `coordinator_core`'s suite quarantines `Path.home()`, so a hermetic
+    pytest gate cannot see this property -- but that only rules out a pytest
+    gate, not every gate. An install-time check in `scripts/setup.py` (fail the
+    install when this function's BROKEN/BREAK-CLASS lines fire against the
+    just-installed environment) or a `doctor`-style probe run on a cadence
+    outside pytest's quarantine would close this; neither exists yet. Until one
+    does, this module documents the hazard on request -- it does not guard it."""
     door = _settings_home_root() / "bin" / f"{_DOOR_STEM}.exe"
+    path_dirs = os.environ.get("PATH", "").split(os.pathsep)
     hits = resolve_bare_name(
         _DOOR_STEM,
-        os.environ.get("PATH", "").split(os.pathsep),
+        path_dirs,
         os.environ.get("PATHEXT", ""),
     )
 
@@ -578,7 +604,10 @@ def bare_name_door_report() -> "list[str]":
         lines += [f"- `{h}`" for h in shadowed]
 
     sibling = door.with_suffix(_POWERSHELL_FIRST_EXT)
-    if sibling.is_file():
+    door_bin_on_path = any(
+        raw_dir and Path(raw_dir) == door.parent for raw_dir in path_dirs
+    )
+    if sibling.is_file() and door_bin_on_path and sibling not in hits:
         lines.append("")
         lines.append(
             f"**BROKEN**: `{sibling}` exists beside the door. PowerShell prefers a "

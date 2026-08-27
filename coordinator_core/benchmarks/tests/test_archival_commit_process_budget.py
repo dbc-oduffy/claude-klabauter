@@ -21,17 +21,25 @@ A direct `subprocess`/`Popen`/`create_subprocess_exec` spy over one real
 restage_src=False call (this chunk's own verification, driven from this
 file's own fixture code, not the AST generator) found `archive_and_commit`
 itself now issues ZERO git processes of its own -- but the call still
-observably spawns TWO real git processes from OTHER subsystems it invokes
+observably spawns ONE real git process from another subsystem it invokes
 in-process: `git restore --staged -- <paths>` (the shared-index resync,
 `_resync_main_index_for_moves`, this plan's own Anti-scope row 5 -- "Do not
-'fix' git restore --staged") and `git -c core.quotepath=false status
---porcelain -- <paths>` (`session_scope.release_committed_claims`, the
-predecessor's still-open C5). Both are out of scope for this plan and are
-why `archival_commit_measurement`'s own `spawn_count_per_call` reads 3.0-
-5.0, not 1.0, on a restage_src=False batch -- see
+'fix' git restore --staged"). It is out of scope for this plan and is why
+`archival_commit_measurement`'s own `spawn_count_per_call` reads 3.0, not
+1.0, on a restage_src=False batch (interpreter + git + its conhost) -- see
 `test_archival_commit_ac1_zero_then_one_own_spawn` for AC-1's own zero/one
-claim, pinned against these two disclosed contributors rather than against
-an unqualified reading of the full campaign.
+claim, pinned against that one disclosed contributor rather than against an
+unqualified reading of the full campaign.
+
+CORRECTED 2026-08-27. This paragraph named a SECOND contributor -- `git -c
+core.quotepath=false status --porcelain` from
+`session_scope.release_committed_claims` -- and gave the reading as "3.0-5.0".
+That spawn was retired at `e0d100640` and the 3.0-5.0 range described the
+two-spawn world. The stale text survived the correction pass that fixed every
+other site in this file, and was caught by review rather than by the pass
+itself: a file that states the same fact in five places rots at whichever one
+the editor's eye skipped. Prefer deriving the contributor list from the spy
+(`test_archival_commit_git_spawn_count_pinned`) over restating it here again.
 
 C6 (docs/plans/2026-08-26-the-archival-commit-helper-computes-its-own-tree.md):
 "Measured before/after via `benchmarks.process_time`, job object, p50 and p90
@@ -55,20 +63,28 @@ C5").
 DECOMPOSED (2026-08-27, docs/research/2026-08-27-the-archival-per-
 invocation-figure-decomposed.md): this file's per-invocation figure is
 NOT one cost. Measured on this file's own fixture, imported not re-
-implemented: interpreter start + `fleet._common` import 78.1ms (37%),
-`archive_and_commit`'s own in-process body 39-55ms (26%, isolated via
-`time.process_time()` bracketing the call -- parent CPU only, children
-excluded), and the ONE remaining git child plus its conhost 75-98ms (36%,
-derived as the residual). Total accounts to 100%, zero unexplained.
+implemented: interpreter start + `fleet._common` import 78.1ms (37%,
+single k=10-20 reading, tick-quantised +-15.6ms), `archive_and_commit`'s
+own in-process body 39-55ms (26%, isolated via `time.process_time()`
+bracketing the call -- parent CPU only, children excluded -- of which
+~20.3ms is `asyncio.run` loop-startup overhead the same doc measures
+separately, so netted of that the op's own logic is ~19-34ms), and the
+ONE remaining git child plus its conhost 75-98ms (36%, DERIVED AS THE
+RESIDUAL -- total minus the other two -- so it cannot fail to close the
+total; that closure is an arithmetic property, not a validation. The
+residual's magnitude is loosely consistent with the git child's
+independently-priced isolation cost, below). Rounded shares sum to ~99%,
+not 100% -- do not read "100%" as a checked result.
 Two figures a reader may have met elsewhere are RETIRED by it: "the op
-is 15.6ms" (it is 39-55ms on a 20-move batch against a 36k-entry index)
-and "~22ms for the remaining spawn". That spawn -- `git restore --staged
--- <40 paths>`, the resync -- measures 51.0ms in isolation on a clone at
-this repo's scale, and SPLITS 11.5ms process creation (the `git
---version` floor, re-priced the same session) / 39.6ms index load+write.
-The split is the disposition: an in-process index writeback retires only
-the 11.5ms process, and re-pays the 39.6ms in Python against git's C
-index writer. Do not read the 51ms as a removable 51ms.
+is 15.6ms" (it is 39-55ms bracketed, ~19-34ms net of asyncio.run startup,
+on a 20-move batch against a 36k-entry index) and "~22ms for the
+remaining spawn". That spawn -- `git restore --staged -- <40 paths>`,
+the resync -- measures 51.0ms in isolation on a clone at this repo's
+scale, and SPLITS 11.5ms process creation (the `git --version` floor,
+re-priced the same session) / 39.6ms index load+write. The split is the
+disposition: an in-process index writeback retires only the 11.5ms
+process, and re-pays the 39.6ms in Python against git's C index writer.
+Do not read the 51ms as a removable 51ms.
 
 UNIT: process time (job-object `TotalUserTime + TotalKernelTime`) and spawn
 count (`TotalProcesses`), both via `batched_process_time_ms`/

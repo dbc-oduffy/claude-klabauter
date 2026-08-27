@@ -18,9 +18,22 @@ Spec backlink:
 
 Negative-spec: ``_row_prompt`` must never emit a prompt naming only ``id`` and
 ``title`` when a plan path is available to it.
+
+Spec backlink (plan-context preamble, AC12/AC13/AC16):
+    docs/plans/2026-08-27-the-close-ceremony-refuses-a-goal-nothing-observed.md
+    § C4 — a dispatched executor is told which plan it is inside and what
+    that plan is for: plan title, the goal statement when the plan carries
+    one, and the Problem section's first paragraph. Negative-spec: a plan
+    with no ``## Goal`` section emits the preamble WITHOUT a ``Goal:`` line
+    — never a placeholder, never an empty heading (AC13).
 """
 
-from coordinator_core.ops.dispatch_emit.emit import _row_prompt
+from coordinator_core.ops.dispatch_emit.emit import (
+    PlanContext,
+    _plan_context_preamble,
+    _row_prompt,
+    derive_plan_context,
+)
 from coordinator_core.ops.dispatch_emit.wave_map import WaveRow
 
 _ROW = WaveRow(
@@ -138,3 +151,102 @@ def test_never_returns_a_drive_letter():
     for root in (None, Path('X:/claude-klabauter'), Path('Z:/other')):
         got = _spec_path_for_prompt(Path('X:/claude-klabauter/docs/plans/p.md'), root)
         assert ':' not in got.as_posix(), f'drive letter survived for root={root}: {got}'
+
+
+# ---------------------------------------------------------------------------
+# Plan-context preamble (AC12/AC13/AC16).
+# ---------------------------------------------------------------------------
+
+_PLAN_WITH_GOAL = """---
+title: "A plan with a goal"
+---
+
+# A plan with a goal
+
+## Problem
+
+The engine does a thing it should not. This paragraph is the excerpt.
+
+Second paragraph never appears in the excerpt.
+
+## Goal
+
+The engine stops doing the thing.
+
+This second Goal paragraph is not part of the excerpt either.
+
+## Tasks
+"""
+
+_PLAN_WITHOUT_GOAL = """---
+title: "No goal here"
+---
+
+# No goal here
+
+## Problem
+
+Nothing observes whether the change worked.
+
+## Tasks
+"""
+
+
+def test_derive_plan_context_reads_title_goal_and_problem():
+    ctx = derive_plan_context(_PLAN_WITH_GOAL, fallback_title="fallback")
+    assert ctx.title == "A plan with a goal"
+    assert ctx.goal == "The engine stops doing the thing."
+    assert ctx.problem_excerpt == (
+        "The engine does a thing it should not. This paragraph is the excerpt."
+    )
+
+
+def test_derive_plan_context_goal_is_none_when_no_goal_section():
+    """AC13: a plan with no goal statement carries `goal=None`, never a
+    placeholder string."""
+    ctx = derive_plan_context(_PLAN_WITHOUT_GOAL, fallback_title="fallback")
+    assert ctx.goal is None
+    assert ctx.problem_excerpt == "Nothing observes whether the change worked."
+
+
+def test_preamble_omits_goal_line_when_goal_is_none():
+    """AC13, restated as a negative-spec on the composed preamble string: no
+    `Goal:` line, no placeholder, no empty heading."""
+    ctx = PlanContext(title="T", goal=None, problem_excerpt="P")
+    preamble = _plan_context_preamble(ctx)
+    assert "Goal:" not in preamble
+    assert "TBD" not in preamble
+
+
+def test_preamble_carries_goal_line_when_present():
+    ctx = PlanContext(title="T", goal="Ship the thing", problem_excerpt="P")
+    preamble = _plan_context_preamble(ctx)
+    assert "Goal: Ship the thing" in preamble
+
+
+def test_preamble_is_bounded_by_a_hard_character_cap():
+    """The preamble is spliced into EVERY row's `agent(...)` call, so it must
+    be bounded structurally, not by instruction alone."""
+    from coordinator_core.ops.dispatch_emit.emit import (
+        _PLAN_CONTEXT_PREAMBLE_CHAR_CAP,
+    )
+
+    ctx = PlanContext(
+        title="T" * 200,
+        goal="G" * 2000,
+        problem_excerpt="P" * 2000,
+    )
+    preamble = _plan_context_preamble(ctx)
+    assert len(preamble) <= _PLAN_CONTEXT_PREAMBLE_CHAR_CAP
+
+
+def test_row_prompt_splices_the_preamble_ahead_of_the_spec_pointer():
+    ctx = PlanContext(title="A plan with a goal", goal="Ship it", problem_excerpt="P")
+    prompt = _row_prompt(_ROW, _PLAN, ctx)
+    assert prompt.index("Plan: A plan with a goal") < prompt.index("Your spec is the row")
+    assert "Goal: Ship it" in prompt
+
+
+def test_row_prompt_without_plan_context_is_unchanged():
+    """`plan_context=None` (the default) never alters the pre-existing shape."""
+    assert _row_prompt(_ROW, _PLAN, None) == _row_prompt(_ROW, _PLAN)

@@ -102,10 +102,10 @@ below MOOT rather than load-bearing — it is kept and documented (not
 deleted) because it is still the correct rule for anyone who reintroduces
 any form of caching here later.
 
-The 500ms hard wall-clock cap (``REBUILD_WALL_CLOCK_CAP_SECS``) is
+The 500ms hard process-time cap (``REBUILD_PROCESS_TIME_CAP_SECS``) is
 UNCHANGED and, together with an I/O error surfaced while READING a
 directory or file the walk actually reached (as opposed to that path
-genuinely not existing — see ``_enumerate_touched_files`` /
+genuinely not existing — see ``_enumerate_claim_sinks`` /
 ``_agent_owner_sid``), is the module's ONLY degradation path: if a
 rebuild exceeds the cap mid-walk, or hits an unreadable claim source, it
 marks the resulting ``_IndexState`` incomplete rather than silently
@@ -181,12 +181,16 @@ from coordinator_core.session.path_dialect import canonicalize_relative_path
 #: cost. ``time.process_time()`` only advances while this process is
 #: actually executing, so a scheduler-preempted rebuild on a loaded box no
 #: longer degrades to UNANSWERABLE purely because of contention it did not
-#: cause. The name is kept (not renamed) because it is a public module
-#: constant several tests reference by this name; the docstring and the two
-#: call sites below are what actually changed. See AC18's dispatch note for
-#: the measured C0 figure (541.48ms at 50 peers x 5000 lines/peer) this cap
-#: exists to catch.
-REBUILD_WALL_CLOCK_CAP_SECS = 0.5
+#: cause. Renamed 2026-08-27 (docs/problems/2026-08-27-the-touched-record-
+#: workstream-leaves-one-lever-and-nine-tails.md, Item 3) from
+#: ``REBUILD_WALL_CLOCK_CAP_SECS`` — that name asserted the opposite of what
+#: this constant is read against; the CODE was already correct (see AC18
+#: above), only the name lied. Do NOT reinstate C0's 541.48ms / 50-peers-x-
+#: 5000-lines figure as this cap's justification: that width was retired
+#: 2026-08-27 on measurement (the live corpus is 270 claimants at a median
+#: of 5 events, and the 541ms was a capped call timing this very cap). The
+#: cap exists for an unbounded corpus, not for that number.
+REBUILD_PROCESS_TIME_CAP_SECS = 0.5
 
 #: Sentinel returned by lookup() for a path an (aborted or unresolvable)
 #: rebuild could not answer for — distinct from "unclaimed" (an empty
@@ -237,7 +241,12 @@ _AGENTS_SUBDIR = ".agents"
 #: was live for hours on 2026-08-26 and produced a fully-populated
 #: ``complete: True`` answer while omitting the caller's own work. Do NOT
 #: read a missing entry as "unclaimed"; read it as "this index cannot say".
-_TOUCHED_FILENAME = "touch-record.jsonl"
+#:
+#: AC7, 2026-08-27: the filename is no longer spelled here. It is
+#: ``touch_record.RECORD_FILENAME``, and the sink is built by
+#: ``touch_record.sink_path``. The negative spec above is what this name
+#: still carries; the literal it used to hold belongs to the record module.
+_TOUCHED_FILENAME = touch_record.RECORD_FILENAME
 
 
 def _has_claim_surface(sink_path: str) -> bool:
@@ -373,7 +382,7 @@ def _read_stream_claims(sink_path: str) -> tuple:
 
     Returns ``(claims_by_path, read_ok)`` — ``read_ok`` mirrors this
     module's pre-existing ``(value, complete)`` convention (see
-    ``_agent_owner_sid``/``_enumerate_touched_files``): ``False`` iff
+    ``_agent_owner_sid``/``_enumerate_claim_sinks``): ``False`` iff
     ``touch_record``'s own degrade flag fired (an unreadable family member,
     or a complete line that failed to decode — AC6's typed signal), matching
     the bug-backlog concern the deleted ``_read_lines_discard_torn_tail``
@@ -408,8 +417,8 @@ def _agent_owner_sid(agent_dir_path: str) -> tuple:
     return first_line.strip(), True
 
 
-def _enumerate_touched_files(base: str) -> tuple:
-    """Enumerate every ``(touched.txt path, claimant session id)`` pair
+def _enumerate_claim_sinks(base: str) -> tuple:
+    """Enumerate every ``(touch-record.jsonl path, claimant session id)`` pair
     under ``base`` — session dirs directly, agent dirs via their
     ``em-session-id.txt`` back-pointer. Deterministically ordered (sorted
     by entry name) so a capped-out walk aborts at a reproducible point.
@@ -484,7 +493,7 @@ def _resolve_base(sessions_dir: Optional[str], cwd: Optional[str]) -> str:
 
 
 def rebuild(sessions_dir: Optional[str] = None, cwd: Optional[str] = None) -> _IndexState:
-    """Full walk over every claimant's ``touched.txt`` — the ONLY O(claims)
+    """Full walk over every claimant's ``touch-record.jsonl`` — the ONLY O(claims)
     operation in this module. Resolves last-event-wins per path per
     claimant file (see ``_last_verb_per_path``), aggregates across every
     session-dir and agent-dir claimant, and returns the resulting
@@ -492,7 +501,7 @@ def rebuild(sessions_dir: Optional[str] = None, cwd: Optional[str] = None) -> _I
     docstring, INDEX PERSISTENCE — REMOVED, NOT JUST UNUSED).
 
     Aborts (setting ``complete=False`` on the returned/persisted state) if
-    the walk exceeds ``REBUILD_WALL_CLOCK_CAP_SECS`` — the paths a caller
+    the walk exceeds ``REBUILD_PROCESS_TIME_CAP_SECS`` — the paths a caller
     asked about that this walk had not yet reached come back from
     ``lookup()`` as ``UNANSWERABLE``, never silently "unclaimed".
 
@@ -508,10 +517,10 @@ def rebuild(sessions_dir: Optional[str] = None, cwd: Optional[str] = None) -> _I
 
     # AC18 — process-time deadline, not wall-clock (see the constant's own
     # docstring for why).
-    process_deadline = time.process_time() + REBUILD_WALL_CLOCK_CAP_SECS
+    process_deadline = time.process_time() + REBUILD_PROCESS_TIME_CAP_SECS
     claims: Dict[str, set] = {}
     edit_ts: Dict[str, Dict[str, datetime]] = {}
-    touched_pairs, complete = _enumerate_touched_files(base)
+    touched_pairs, complete = _enumerate_claim_sinks(base)
     abort_cause: Optional[str] = None if complete else ABORT_CAUSE_IO_ERROR
 
     for touched_path, claimant_sid in touched_pairs:
@@ -570,7 +579,7 @@ def lookup(
     session appending a 2nd-and-later claim, the common case, so it served
     stale negatives). There is no cached-read path left in this function;
     every call is a fresh ``rebuild()``, budgeted at the measured 37.9ms
-    against ``REBUILD_WALL_CLOCK_CAP_SECS``.
+    against ``REBUILD_PROCESS_TIME_CAP_SECS``.
 
     A path with no live claimant resolves to ``[]``. A path this call could
     not resolve (unresolvable sessions dir, or an aborted rebuild that

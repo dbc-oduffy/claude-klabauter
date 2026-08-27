@@ -2,9 +2,9 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://coordinator.local/schemas/plan.schema.json",
   "x-schema-name": "plan",
-  "x-schema-version": "2.5.0",
+  "x-schema-version": "2.8.0",
   "x-bump-class": "nested-field-additive",
-  "x-bump-note": "2.4.0 -> 2.5.0 declares the three-field code-review attest stamp — `review_verified_by`, `review_verified_at`, `review_verified_findings`, all optional top-level scalars, written together in one locked_rmw mutate closure alongside a terminal `status: implemented`. Rides the `status_override_{by,reason,at}` precedent this schema declared at 2.2.0 verbatim in shape and in write discipline; the writer is claude-klabauter's `plan-status-transition`, never a ceremony's frontmatter edit. `review_verified_findings` carries the `state/review-trail/findings/...` path rather than a bare count, because a count is a lossy copy of a record that already exists on disk and drifts from it — and because the path IS the idempotence key: a re-run of the same wrap with an unchanged path is a no-op, while a genuine second review after fixes produces a new path and writes. NEGATIVE SPEC: this is deliberately NOT a new `status` enum value. The review fact is a quality signal, not a liveness signal, and an enum widen would force reconciliation across five deliberately-disagreeing plan-status partitions (`PLAN_ARCHIVABLE_STATUS`, `PLAN_ORPHAN_TERMINAL_STATUS`, `PLAN_TERMINAL_STATUS`, `_FROZEN_STATUSES`, `records_query.liveness()`) across four repos' plan corpora; the ordering the fact needs is served by a derived `plan_review_verified(plan)` predicate in the emit/cockpit layer, which touches no partition. Absence means \"no code review recorded\", never \"review failed\" — nothing gates a close-out on these fields. Classified nested-field-additive: three new optional top-level scalars, nothing removed, no domain narrowed, every document valid under 2.4.0 still validates — but a mirrored consumer enumerating plan frontmatter keys exhaustively could silently ignore them until updated. Canonical-side declaration answering claude-klabauter's ask (cross-repo/inbox/2026-08-20-claude-klabauter-em-review-verified-schema-fields-ask.md); they re-vendor via bin/claude-klabauter-revendor-schema.py. The pre-existing `review_signals` mirror drift is NOT closed by this bump and needs its own hand reconciliation (claude-klabauter:state/bug-backlog/2026-08-12-three-vendored-schemas-diverge-from-doe-ffd893950268.yaml). Spec backlink: pln-a-plan-s-status-advances-itsel-fb8bf2 § C1(c). Full prior-version history: coordinator/schemas/SCHEMA-BUMP-HISTORY.md § plan.schema.json.",
+  "x-bump-note": "2.7.0 -> 2.8.0 replaces the delta rule with a verdict rule: `prime_exit_criterion.falsifier` gains a required `expected_when_true` field stating what the observation yields when the criterion is TRUE, and `exit_criterion_met` gains an optional `falsifier_verdict` (pass|fail) recording whether the re-run matched it. `baseline_output` and the baseline-must-be-RED requirement are unchanged. A delta-only comparison (refuse only when `falsifier_output` equals `baseline_output`) cannot distinguish 'fixed' from 'differently wrong' — replayed against `pln-route-c-resolves-the-imported-fa0c5d`, a non-null delta (five wrong candidates pruned to none) passed the old rule while the stated criterion (resolve to the true target) remained unmet; see `state/plan-falsifiers/2026-08-27-plan-goal-as-a-first-class-exit-criterion.md`. The unchanged-output case needs no separate rule under the verdict test — an inert change also fails to match `expected_when_true`. Neither `prime_exit_criterion` nor `exit_criterion_met` enters top-level `required` (grandfathering holds); `falsifier_exemption` is unchanged. Spec backlink: pln-plan-goal-as-a-first-class-exit-criterion. 2.6.0 -> 2.7.0 adds a `pattern` to `prime_exit_criterion.derived_from`, narrowing it from an unconstrained string to the two shapes its description always named: a `state/sizings/<id>.yaml` path or a `<goal_id>#kr-<kr-id>` key-result reference into the existing per-repo goal plane (goal.schema.json), wiring the field onto that plane instead of leaving it a same-repo-only convention beside it. Every plan on disk before this bump used only the sizing-path form (grep-verified against docs/plans/*.md at bump time), so no live document is invalidated. This does NOT add an `evidence_source`-shaped field to `key_results[]`, does NOT retrofit a falsifier onto any existing KR, and does NOT gate `/goal-setting` — the link stays optional and KR-pointing is never mandatory, since most plans serve no named KR. Spec backlink: pln-plan-goal-as-a-first-class-exit-criterion § C16. 2.5.0 -> 2.6.0 declares `prime_exit_criterion` and `exit_criterion_met`, both optional top-level objects, neither in `required` — a plan on disk before this bump validates unchanged (grandfathered, never backfilled). `prime_exit_criterion` carries `statement`+`derived_from` always, plus a `falsifier` (how/baseline_output/baseline_ref) required only for plans whose `sizing_object`-linked `estimate.tshirt` is M/L/XL, enforced READ-SIDE since t-shirt size lives in the external sizing-object document and this schema cannot condition on a sibling document's content. `falsifier_exemption` is the narrow, NAMED escape hatch for a genuinely un-falsifiable-by-observation M+ criterion (doctrine/schema edits with no runtime behaviour to observe) — mutually exclusive with `falsifier`, distinct from and never merged with the size carve-out, and never `falsifier: optional`. `exit_criterion_met` carries `asserted` (required within the object; `false` is legitimate and then requires `reason`) plus `falsifier_output`/`prose`. Neither field is the retired acceptance oracle — PM ruling, 2026-08-27, five distinguishing axes (cardinality, typing, chooser, judge, target artifact); see `docs/wiki/coordinator-tripwires/tripwire-registry/acceptance-oracle-gate-retired.md`. Spec backlink: pln-plan-goal-as-a-first-class-exit-criterion § C1. 2.4.0 -> 2.5.0 declares the three-field code-review attest stamp — `review_verified_by`, `review_verified_at`, `review_verified_findings`, all optional top-level scalars, written together in one locked_rmw mutate closure alongside a terminal `status: implemented`. Rides the `status_override_{by,reason,at}` precedent this schema declared at 2.2.0 verbatim in shape and in write discipline; the writer is claude-klabauter's `plan-status-transition`, never a ceremony's frontmatter edit. `review_verified_findings` carries the `state/review-trail/findings/...` path rather than a bare count, because a count is a lossy copy of a record that already exists on disk and drifts from it — and because the path IS the idempotence key: a re-run of the same wrap with an unchanged path is a no-op, while a genuine second review after fixes produces a new path and writes. NEGATIVE SPEC: this is deliberately NOT a new `status` enum value. The review fact is a quality signal, not a liveness signal, and an enum widen would force reconciliation across five deliberately-disagreeing plan-status partitions (`PLAN_ARCHIVABLE_STATUS`, `PLAN_ORPHAN_TERMINAL_STATUS`, `PLAN_TERMINAL_STATUS`, `_FROZEN_STATUSES`, `records_query.liveness()`) across four repos' plan corpora; the ordering the fact needs is served by a derived `plan_review_verified(plan)` predicate in the emit/cockpit layer, which touches no partition. Absence means \"no code review recorded\", never \"review failed\" — nothing gates a close-out on these fields. Classified nested-field-additive: three new optional top-level scalars, nothing removed, no domain narrowed, every document valid under 2.4.0 still validates — but a mirrored consumer enumerating plan frontmatter keys exhaustively could silently ignore them until updated. Canonical-side declaration answering claude-klabauter's ask (cross-repo/inbox/2026-08-20-claude-klabauter-em-review-verified-schema-fields-ask.md); they re-vendor via bin/claude-klabauter-revendor-schema.py. The pre-existing `review_signals` mirror drift is NOT closed by this bump and needs its own hand reconciliation (claude-klabauter:state/bug-backlog/2026-08-12-three-vendored-schemas-diverge-from-doe-ffd893950268.yaml). Spec backlink: pln-a-plan-s-status-advances-itsel-fb8bf2 § C1(c). Full prior-version history: coordinator/schemas/SCHEMA-BUMP-HISTORY.md § plan.schema.json.",
   "applies_to": "docs/plans/*.md",
   "description": "Plan frontmatter schema. The active-execution value is 'executing', NOT the intuitive 'execution'. 'implemented' means work is done on the working branch — whether it merged to main is tracked in completion log + handoff deployment_state, NOT here.",
   "type": "object",
@@ -181,6 +181,111 @@
     "review_verified_findings": {
       "type": "string",
       "description": "Path to the review-trail record the pass produced, e.g. `state/review-trail/findings/<date>-<slug>.md`. OPTIONAL — one of the three-field review attest (by/at/findings). A path, never a count: a count is a lossy copy of a record that already exists on disk and drifts from it. This value is also the attest's IDEMPOTENCE KEY — a re-run of the same wrap with an unchanged path writes nothing, while a genuine second review after fixes produces a new path and writes a fresh attest."
+    },
+    "prime_exit_criterion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["statement", "derived_from"],
+      "description": "The plan-level falsifiable exit criterion — 'what is true of the tree when this plan has delivered', outcome-shaped per goal.schema.json's vocabulary. Deliberately NO `source`/provenance enum: a self-declared provenance flag is the unfalsifiable shape this plan (pln-plan-goal-as-a-first-class-exit-criterion) exists to remove. Provenance is instead `derived_from`, a LINK a reader can open and compare against, never an assertion. PROPORTIONALITY (enforced READ-SIDE, the same locus as `sizing_object`'s own cross-document requirement, never structurally in this file because `estimate.tshirt` lives in the external sizing-object document, not here): `falsifier` is REQUIRED only when the plan's `sizing_object` resolves to `estimate.tshirt` M/L/XL. At size S (spec-dispatch posture) a plan carries `statement`+`derived_from` only, no falsifier. XS never scaffolds a plan at all, so this object never appears. XXL routes to prime-exit-criterion-setting/roadmap, not a single plan; its obligation is discharged per-child-plan. The size carve-out keys ONLY on `estimate.tshirt` through `sizing_object` — never on an EM-set field, and never on plain field optionality: the shape below still marks `falsifier` absent from THIS object's own `required` array (JSON Schema cannot condition on a sibling document's content), but a plan sized M+ with no `falsifier` and no `falsifier_exemption` fails the read-side check even though it validates here. Do not read the schema-level optionality as the plan's own gate.",
+      "properties": {
+        "statement": {
+          "type": "string",
+          "description": "One falsifiable sentence naming what is true of the tree when this plan has delivered. Outcome-shaped (a measurable change in behaviour or state), never output-shaped (a deliverable produced, a task list wearing this field's clothes)."
+        },
+        "derived_from": {
+          "type": "string",
+          "pattern": "^(state/sizings/.+\\.yaml|[^#]+#kr-[^#]+)$",
+          "description": "Provenance BY LINK, not by self-declaration: a path to the sizing object that routed this plan (`state/sizings/<id>.yaml`, same shape as this schema's own top-level `sizing_object` field) or a key-result reference (`<goal_id>#kr-<kr-id>`, e.g. `goal-shipping-velocity#kr-throughput`) naming a KR in `state/goals/*.yaml` this plan serves — `<goal_id>` is the target goal's `id` field and `<kr-id>` is that goal's `key_results[].id` (goal.schema.json), never an array index, exactly like `kr-suggestion.schema.json`'s own `goal_id`/`kr_id` anchors. Openable and comparable against `statement` — the corpus-existing `intent`/`intent_source` fields already carry what this points at; no new sizing-object field was added for it. A plan links to a KR it serves without the KR itself gaining a falsifier or an AC-table binding — one KR spans several plans, so this is a pointer, never a merge of the two documents."
+        },
+        "falsifier": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["how", "baseline_output", "baseline_ref", "expected_when_true"],
+          "description": "The plan-time-authored observation distinguishing the prime exit criterion being true from false, with its baseline captured BEFORE any work — authored by someone with no stake yet in the answer. This is NOT a typed cell and is NOT bound to the AC table: it is one observation per plan, EM-chosen free form (a command, a query, a measurement, a named manual observation), judged by a human reading the re-run against a stated pass condition, never a script's exit code or a `grep:`/`pytest:`/`sh:` typed cell. It is NOT the retired acceptance oracle — PM ruling, 2026-08-27: 'it is categorically different' on five axes (cardinality, typing, chooser, judge, target artifact); see `docs/wiki/coordinator-tripwires/tripwire-registry/acceptance-oracle-gate-retired.md` for the retired mechanism this must not be reshaped back into, and do not 'improve' this field into a typed cell or delete it as a revival of that retirement. Mutually exclusive with `falsifier_exemption` — a prime exit criterion carries at most one of the two.",
+          "properties": {
+            "how": {
+              "type": "string",
+              "description": "The observation that distinguishes the prime exit criterion being true from false. Form is the EM's choice — a command, a query, a measurement, a named manual observation. Bounded at 4096 chars: this lands raw in the plan's YAML frontmatter, where an unbounded payload is a corpus hazard and the frontmatter validator is lenient about coercions. Output over the bound means the falsifier is too wide, never that the record should be truncated — narrow the observation (a count, a filtered line set).",
+              "maxLength": 4096
+            },
+            "baseline_output": {
+              "type": "string",
+              "description": "The raw output of `how`, run against HEAD before any work. Must show the prime exit criterion is currently FALSE — a baseline that already passes means the criterion is mis-stated, the work is already done, or the falsifier does not measure the criterion, all of which are worth catching at plan time. Bounded at 4096 chars: this lands raw in the plan's YAML frontmatter, where an unbounded payload is a corpus hazard and the frontmatter validator is lenient about coercions. Output over the bound means the falsifier is too wide, never that the record should be truncated — narrow the observation (a count, a filtered line set).",
+              "maxLength": 4096
+            },
+            "baseline_ref": {
+              "type": "string",
+              "description": "Where the baseline was taken (a commit sha). One falsifier per plan, one baseline_ref — never one per AC row, which would be per-item git-spawn amplification."
+            },
+            "expected_when_true": {
+              "type": "string",
+              "description": "What `how`'s observation yields WHEN the prime exit criterion is TRUE — the stated pass condition the close-out re-run is judged against. Makes the falsifier a discriminating observation, not a blob to diff: a re-run output is judged by whether it matches this shape/content, never by whether it merely differs from `baseline_output`. A non-null delta from baseline that still does not match `expected_when_true` is a criterion that is still false, differently. Bounded at 4096 chars for the same corpus-hazard reason as `how`/`baseline_output`.",
+              "maxLength": 4096
+            }
+          }
+        },
+        "falsifier_exemption": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["class", "admission"],
+          "description": "The NAMED escape hatch for an M+ prime exit criterion genuinely un-falsifiable-by-observation — pure doctrine/schema edits where 'run it and watch it fail' is contrived (this plan is itself in that class; see its own § This plan's own falsifier). Distinct from, and never a substitute for, the size carve-out: the size carve-out is a rule about which PLANS the instrument suits (keyed on `estimate.tshirt`), this is a rule about which M+ CRITERIA resist any instrument, and the two do not merge — a plan cannot claim exemption from `falsifier` by pointing at its size, nor claim the size carve-out by pointing at this exemption. NEVER `falsifier: optional`: this object exists precisely so optionality is never reopened as the way out. Mutually exclusive with `falsifier`.",
+          "properties": {
+            "class": {
+              "type": "string",
+              "const": "unfalsifiable-by-observation-doctrine-or-schema-edit",
+              "description": "The one admitted class, held to a single spelling so a later reader cannot widen it by inventing new class strings. Covers only work with no runtime behaviour to observe — doctrine prose, schema/contract shape edits with no executable surface a `how` could measure."
+            },
+            "admission": {
+              "type": "string",
+              "description": "The written admission test: a non-empty statement that (1) names why no baseline-red observation exists for this specific prime exit criterion, (2) confirms the change is doctrine/schema/contract-shaped with no runtime behaviour a falsifier could observe, and (3) is written by someone who first tried and failed to draft a `falsifier`, not someone who skipped the attempt. An admission that could be copy-pasted onto any plan without editing is not admissible — it must speak to THIS criterion."
+            }
+          }
+        }
+      },
+      "not": {
+        "required": ["falsifier", "falsifier_exemption"]
+      }
+    },
+    "exit_criterion_met": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["asserted"],
+      "description": "Written once, at close-out, by the EM — the assertion half of the prime-exit-criterion pair. `asserted: false` is a legitimate, first-class outcome (the plan is Phase-5-halted, not `implemented`); what is forbidden is the field's absence. Not bound to the AC table — see `prime_exit_criterion.falsifier`'s description for the acceptance-oracle distinction, which applies identically here.",
+      "properties": {
+        "asserted": {
+          "type": "boolean",
+          "description": "Whether HEAD now satisfies `prime_exit_criterion.statement`. `false` is legitimate and takes `reason`; it is never omitted in place of a `false` value."
+        },
+        "falsifier_output": {
+          "type": "string",
+          "description": "The SAME observation (`prime_exit_criterion.falsifier.how`) re-run against HEAD, raw. Judged against `prime_exit_criterion.falsifier.expected_when_true`, never against `baseline_output` alone — a changed output that still does not match `expected_when_true` is a criterion that is still false, differently, and unchanged output fails the same check without needing a separate rule. Bounded at 4096 chars: this lands raw in the plan's YAML frontmatter, where an unbounded payload is a corpus hazard and the frontmatter validator is lenient about coercions. Output over the bound means the falsifier is too wide, never that the record should be truncated — narrow the observation (a count, a filtered line set).",
+          "maxLength": 4096
+        },
+        "falsifier_verdict": {
+          "type": "string",
+          "enum": ["pass", "fail"],
+          "description": "The re-run's verdict: whether `falsifier_output` matches `prime_exit_criterion.falsifier.expected_when_true`. The gate refuses the stamp unless this is `pass`. Written beside `falsifier_output`, never inferred by a downstream reader from the raw output alone."
+        },
+        "prose": {
+          "type": "string",
+          "description": "The EM's own sentence tying the falsifier_output verdict to the prime exit criterion. The verdict is the evidence; this is the signature, not a substitute for it — an assertion with no falsifier output beside it is a checkbox."
+        },
+        "reason": {
+          "type": "string",
+          "description": "REQUIRED when `asserted: false`. What is not true of HEAD yet, and where the remainder is routed."
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "asserted": { "const": false } },
+            "required": ["asserted"]
+          },
+          "then": {
+            "required": ["reason"]
+          }
+        }
+      ]
     },
     "grouping_approvals": {
       "type": "object",

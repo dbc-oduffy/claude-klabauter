@@ -86,7 +86,14 @@ def test_an_earlier_scripts_shim_takes_the_bare_name(tmp_path: Path) -> None:
 
 def test_a_ps1_sibling_beats_the_exe_in_the_same_directory(tmp_path: Path) -> None:
     """PowerShell's own rule, which PATHEXT does not describe and `shutil.which`
-    cannot see. This is the original hazard `claim_bare_name` strips."""
+    cannot see. This is the original hazard `claim_bare_name` strips.
+
+    This pins the MODELLED order `resolve_bare_name` was built to produce -- a
+    unit test over a pure function cannot verify an OS behaviour, and asserting
+    against the function's own construction is not evidence the model is right.
+    The model's fidelity rests on the captured `Get-Command`/PATHEXT trace in
+    `_POWERSHELL_FIRST_EXT`'s comment (`forwarder_door_census.py`), not on this
+    test passing."""
     bin_dir = tmp_path / "settings" / "bin"
     _touch(bin_dir, f"{_STEM}.exe")
     ps1 = _touch(bin_dir, f"{_STEM}.ps1")

@@ -2503,14 +2503,115 @@ def _is_attribution_search(
 
 
 # --------------------------------------------------------------------------
+# Discriminator 17: single-shot terminal call. BUILT NEW 2026-08-27 (plan
+# `2026-08-27-the-discriminators-that-already-exist-reach-their-rows`, chunk C4, per C2's
+# finding that no existing predicate reaches this shape -- discriminators 9/10 need the LOOP's
+# own structure to prove a bound and this shape's bound instead comes from a `break`/`return` on
+# the call's own branch; discriminator 14 requires a terminating `If` AFTER the call testing
+# out-of-band state, and here the terminator is a `break`/`return` at the tail of the SAME branch
+# the call already sits inside, not a subsequent `If`).
+#
+# The call sits lexically inside a `for` body but on a path that `break`s or `return`s in the
+# same iteration, so it executes AT MOST ONCE per invocation of the enclosing function regardless
+# of collection size -- an early-exit search over a variable-length collection, not per-item
+# amplification. Frozen precedent, named in the register's own MISCLASSIFIED block:
+# `check_destructive_git_orphan`, "single-shot call on a returning branch".
+# --------------------------------------------------------------------------
+
+
+def _is_single_shot_terminal(call: ast.Call, loop: ast.AST | None) -> bool:
+    """DISCRIMINATOR 17 -- see the block comment above.
+
+    Mechanically decidable rule: walk the chain of statements whose subtree contains `call`,
+    innermost first, each paired with the statement LIST that directly holds it. At each level,
+    if that same list also holds -- somewhere AFTER the statement under test -- a `Return` or
+    `Break` that is itself a DIRECT element of the list (not nested inside a further `If`), the
+    call is single-shot: that terminator fires unconditionally once the block already reached to
+    get here is entered, which is exactly the entry condition already satisfied to reach the
+    call. Any level finding one is sufficient, and the innermost-first order means the tightest,
+    least-assuming proof wins.
+
+    Deliberately declines a `Return`/`Break` nested inside a SIBLING `If` -- that terminator is
+    conditional on a different test than whatever already gates the call, so it proves nothing
+    about the call's own path. Measured against all three real sites (`check_destructive_git_
+    orphan::_run_git`, `find_polluter::main::_existence_detail`, `percolate_preflight_scratch_
+    publish::check_allowlist_string::_run_child`): each is found at a DIFFERENT ancestor level
+    (the call's own containing statement for the first two, one level up -- the enclosing `try`
+    -- for the third, whose own body has nothing after the call), which is why the walk considers
+    every level rather than stopping at the first."""
+    if loop is None:
+        return False
+    loop_body = getattr(loop, "body", None)
+    if not isinstance(loop_body, list):
+        return False
+
+    #: stmt id -> (stmt, the list that directly holds it). Populated for every statement inside
+    #: the loop, including nested `if`/`try`/`except` bodies -- comprehensions have no statement
+    #: bodies to index, so `_index` never recurses into one.
+    indexed: dict[int, tuple[ast.stmt, list[ast.stmt]]] = {}
+
+    def _index(body: list[ast.stmt]) -> None:
+        for stmt in body:
+            indexed[id(stmt)] = (stmt, body)
+            for field in ("body", "orelse", "finalbody"):
+                sub = getattr(stmt, field, None)
+                if isinstance(sub, list):
+                    _index(sub)
+            for handler in getattr(stmt, "handlers", None) or []:
+                _index(handler.body)
+
+    _index(loop_body)
+
+    #: Every indexed statement whose subtree contains `call`, innermost (smallest subtree) first.
+    ancestors = [
+        stmt
+        for _stmt_id, (stmt, _body) in indexed.items()
+        if any(sub is call for sub in ast.walk(stmt))
+    ]
+    ancestors.sort(key=lambda stmt: sum(1 for _ in ast.walk(stmt)))
+
+    for stmt in ancestors:
+        _stmt, body = indexed[id(stmt)]
+        idx = body.index(stmt)
+        for later in body[idx + 1 :]:
+            if isinstance(later, (ast.Return, ast.Break)):
+                return True
+    return False
+
+
+# --------------------------------------------------------------------------
 # Discriminator 13: retained per-item fallback behind a batched primary. The batch IS the
 # primary call; the loop the collector counts fires only when that batch fails, recovering
 # per-item attribution instead of collapsing the whole set to one degraded verdict. Deleting the
 # fallback to clear the key would trade a degrade-on-failure posture for a metric.
 #
-# The relationship is entirely local -- no cross-module analysis -- but it wears THREE
+# The relationship is entirely local -- no cross-module analysis -- but it wears FIVE
 # control-flow shapes, and a predicate handling only the obvious one (loop nested in an `except`)
-# decides one of the three real sites.
+# decides one of the five real sites. WIDENED 2026-08-27 (plan
+# `2026-08-27-the-discriminators-that-already-exist-reach-their-rows`, chunk C3, from C1's
+# per-site audit at `state/audits/2026-08-27-the-discriminator-gap-per-row.c1.md`) to add:
+#   clause 1 (`_batched_primary_result_names`) -- a plural batched-primary callee name
+#     (`tip_authors`) bridges to its singular per-item callee (`tip_author`);
+#   clause 2 (`_carries_whole` / `_batched_primary_result_names`) -- a `Starred` argument that
+#     maps the group through a one-generator comprehension (`*[str(p) for p in tracked_paths]`)
+#     still carries it whole; and a primary whose bound result is later looked up by SUBSCRIPT
+#     or `.get(...)` keyed on the loop's own target name (`all_tip_authors[ref]`) carries the
+#     group by RESULT INDEXING rather than by argv;
+#   clause 3 -- shape 3d, the loop is the FALLBACK in the `orelse` of an `If` gated on the
+#     primary's result (symmetric to 3b, which only read `node.body`); shape 3e, the fallback is
+#     the else-arm of an `ast.IfExp` (a ternary, often nested in a dict literal) rather than a
+#     statement-level `if`/`else` block.
+# NOT widened: `orphan_branch_sweep.py::main -> _run`'s primary (`gh pr list`, unscoped, grouped
+# into a client-side dict keyed by a field read off each result item, two hops from the primary's
+# own bound name) needs a materially different, riskier mechanism than result-indexing-by-loop-
+# var and is deliberately deferred rather than folded into this same widening -- see this
+# chunk's run-report.
+#
+# `distill_apply_disposal.py::_delete_tracked_and_append_log -> _run_git`'s own fallback call
+# site (the `git rm` retry) IS reached by the clause-2/3d widening above, but the KEY still
+# reports: two sibling `_run_git` calls in the same function share the key and are genuinely
+# unrelated per-item mutations discriminator 13 does not and should not decide (`_KNOWN_SITES`
+# row stays, with the over-broad-key note in place).
 # --------------------------------------------------------------------------
 
 
@@ -2541,10 +2642,13 @@ def _derived_names(seed: set[str], fn: ast.AST) -> set[str]:
 
 
 def _carries_whole(expr: ast.expr, names: set[str]) -> bool:
-    """True when `expr` hands one of `names` over WHOLE -- `*N`, a bare `N`, or `N` on either
-    arm of an `Add` chain. This is clause 2: a "batched primary" that does not actually carry the
-    collection is not a primary at all, and without this the predicate would accept any earlier
-    spawn as cover for an unrelated fan-out."""
+    """True when `expr` hands one of `names` over WHOLE -- `*N`, a bare `N`, `N` on either arm of
+    an `Add` chain, or a single-generator comprehension mapping over `N` (`*[str(p) for p in N]`,
+    WIDENED 2026-08-27 for `distill_apply_disposal.py`'s `_run_git("rm", "--", *[str(p) for p in
+    tracked_paths], ...)` -- per-element transform of the whole collection is still the whole
+    collection, not a subset). This is clause 2: a "batched primary" that does not actually carry
+    the collection is not a primary at all, and without this the predicate would accept any
+    earlier spawn as cover for an unrelated fan-out."""
     if isinstance(expr, ast.Starred):
         return _carries_whole(expr.value, names)
     if isinstance(expr, ast.Name):
@@ -2556,6 +2660,39 @@ def _carries_whole(expr: ast.expr, names: set[str]) -> bool:
     if isinstance(expr, ast.Call) and isinstance(expr.func, ast.Name):
         if expr.func.id in ("list", "tuple", "sorted", "set") and len(expr.args) == 1:
             return _carries_whole(expr.args[0], names)
+    if isinstance(expr, ast.ListComp):
+        if len(expr.generators) == 1 and not expr.generators[0].ifs:
+            return _carries_whole(expr.generators[0].iter, names)
+    return False
+
+
+def _result_indexed_by_loop_var(fn: ast.AST, result_name: str, loop_target_names: set[str]) -> bool:
+    """True when `result_name` -- a batched primary's own bound name -- is later looked up,
+    anywhere in `fn`, by SUBSCRIPT or `.get(...)` keyed on one of the loop's own target names (or
+    a name derived from one). WIDENED 2026-08-27 for `consolidate_assemble/__init__.py::brief`'s
+    `all_tip_authors[ref]` / `all_tip_authors[branch_name]` -- `tip_authors(run_git, repo_root)`
+    carries the per-branch group not by argv (it is unscoped: `for-each-ref` over every ref) but
+    by being a MAPPING the loop later indexes per item. This is a second, narrower route to
+    "carries whole" alongside `_carries_whole`'s argv-shape route, not a replacement for it --
+    the primary must still be a recognized spawn or same-callee candidate before this is checked."""
+    for node in ast.walk(fn):
+        if (
+            isinstance(node, ast.Subscript)
+            and isinstance(node.value, ast.Name)
+            and node.value.id == result_name
+            and _names_in(node.slice) & loop_target_names
+        ):
+            return True
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "get"
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id == result_name
+            and node.args
+            and _names_in(node.args[0]) & loop_target_names
+        ):
+            return True
     return False
 
 
@@ -2564,13 +2701,21 @@ def _batched_primary_result_names(
     callee: str | None,
     group_names: set[str],
     spawn_linenos: set[int],
+    loop_target_names: set[str] = frozenset(),
 ) -> set[str]:
     """Names bound to the result of a BATCHED PRIMARY inside `fn`.
 
     A primary is either a recognized spawn call, or a call/reference naming the SAME callee the
     per-item loop calls -- the second clause is what reaches `cutover_gate`, whose primary is
     `pool.submit(_run_pytest_batch, root, root_refs)` and whose spawn lives one hop inside that
-    callee rather than in this function at all. Either way it must CARRY THE COLLECTION WHOLE."""
+    callee rather than in this function at all. A same-callee match also bridges a plural batched
+    name to its singular per-item callee (`tip_authors` <-> `tip_author`, WIDENED 2026-08-27 --
+    `_batched_primary_result_names` was never told the plural form is the same relationship, only
+    an identical string or a bare-Name reference).
+
+    Either way it must CARRY THE COLLECTION WHOLE -- by argv (`_carries_whole`) or, WIDENED
+    2026-08-27, by RESULT INDEXING (`_result_indexed_by_loop_var`): the primary's own bound name
+    is later subscripted/`.get()`-ed by the loop's own target name."""
     out: set[str] = set()
     for node in ast.walk(fn):
         if not isinstance(node, (ast.Assign, ast.AnnAssign)) or node.value is None:
@@ -2578,21 +2723,30 @@ def _batched_primary_result_names(
         for call in ast.walk(node.value):
             if not isinstance(call, ast.Call):
                 continue
-            is_spawn = call.lineno in spawn_linenos and _call_callee_name(call) in _SPAWN_API_NAMES
+            call_name = _call_callee_name(call)
+            is_spawn = call.lineno in spawn_linenos and call_name in _SPAWN_API_NAMES
             names_here = {
                 n.id for n in ast.walk(call) if isinstance(n, ast.Name)
             }
             is_same_callee = callee is not None and (
-                _call_callee_name(call) == callee or callee in names_here
+                call_name == callee or callee in names_here or call_name == f"{callee}s"
             )
             if not (is_spawn or is_same_callee):
                 continue
-            operands = list(call.args) + [kw.value for kw in call.keywords]
-            if not any(_carries_whole(a, group_names) for a in operands):
-                continue
             targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            bound_names: set[str] = set()
             for t in targets:
-                out |= _names_in(t)
+                bound_names |= _names_in(t)
+            operands = list(call.args) + [kw.value for kw in call.keywords]
+            carries = any(_carries_whole(a, group_names) for a in operands)
+            if not carries and loop_target_names:
+                carries = any(
+                    _result_indexed_by_loop_var(fn, name, loop_target_names)
+                    for name in bound_names
+                )
+            if not carries:
+                continue
+            out |= bound_names
     return out
 
 
@@ -2605,12 +2759,21 @@ def _loop_is_gated_on_failure(
     batch, ignores the result, fans out anyway". Relaxing it makes this discriminator silently
     over-broad, and it SUPPRESSES, so that is the dangerous direction.
 
-    Three shapes, all decided from straight-line statement structure:
+    Five shapes, all decided from straight-line statement/expression structure:
       3a  the loop sits in an `except` handler of a `Try` whose body holds the primary;
       3b  the loop sits inside an `If` whose test references the primary's result;
       3c  the loop FOLLOWS an `If` that returns on success -- dominance by early return rather
           than by nesting, which is `coordinator-safe-commit`'s shape and which a nesting-only
-          matcher misses entirely.
+          matcher misses entirely;
+      3d  the loop is the FALLBACK -- it sits in the `orelse` of an `If` whose test references
+          the primary's result, symmetric to 3b which only read `node.body`. WIDENED 2026-08-27
+          for `distill_apply_disposal.py`'s `if rc == 0: ... else: for path in tracked_paths:
+          ...` -- the success-flag test gates the recovery loop just as legitimately from its
+          else-branch as its then-branch.
+
+    Shape 3e (the fallback CALL is the else-arm of an `ast.IfExp`, not a loop nested in an
+    `If`/`Try` at all) is a different predicate, `_call_is_ifexp_fallback` below -- it needs the
+    call itself, which this function's `loop`-shaped checks cannot see.
     """
     gated = _derived_names(result_names, fn)
 
@@ -2620,10 +2783,15 @@ def _loop_is_gated_on_failure(
             for handler in node.handlers:
                 if any(sub is loop for sub in ast.walk(handler)):
                     return True
-        #: 3b -- an `if` on the primary's result (or a name derived from it).
+        #: 3b/3d -- an `if` on the primary's result (or a name derived from it), with the loop in
+        #: either the success arm (3b) or the fallback arm (3d).
         if isinstance(node, ast.If) and (_names_in(node.test) & gated):
             if any(sub is loop for sub in node.body) or any(
                 sub is loop for stmt in node.body for sub in ast.walk(stmt)
+            ):
+                return True
+            if any(sub is loop for sub in node.orelse) or any(
+                sub is loop for stmt in node.orelse for sub in ast.walk(stmt)
             ):
                 return True
 
@@ -2641,6 +2809,24 @@ def _loop_is_gated_on_failure(
                 continue
             if stmt.body and isinstance(stmt.body[-1], (ast.Return, ast.Raise)):
                 return True
+    return False
+
+
+def _call_is_ifexp_fallback(call: ast.Call, fn: ast.AST, result_names: set[str]) -> bool:
+    """Shape 3e: the fallback is the else-arm of an `ast.IfExp` (a ternary, often nested inside a
+    dict-literal argument), never a statement-level `if`/`else` block -- so `_loop_is_gated_on_
+    failure`'s `ast.If`-only 3a/3b/3c/3d checks, which all operate on the ENCLOSING LOOP, cannot
+    see it: the loop here runs unconditionally every iteration, and it is only this one CALL that
+    is conditionally skipped per iteration. WIDENED 2026-08-27 for `consolidate_assemble/
+    __init__.py::brief`'s `all_tip_authors[ref] if ref in all_tip_authors else tip_author(...)`."""
+    gated = _derived_names(result_names, fn)
+    for node in ast.walk(fn):
+        if not isinstance(node, ast.IfExp):
+            continue
+        if not (_names_in(node.test) & gated):
+            continue
+        if any(sub is call for sub in ast.walk(node.orelse)):
+            return True
     return False
 
 
@@ -2673,6 +2859,25 @@ def _loop_iterables(loop: ast.AST) -> list[ast.expr]:
     if isinstance(loop, _COMPREHENSIONS):
         return [gen.iter for gen in loop.generators]
     return []
+
+
+def _loop_construct_target_names(loop: ast.AST) -> set[str]:
+    """The name(s) one iteration of the loop CONSTRUCT `loop` binds -- `for x in ...:` binds `x`;
+    a comprehension binds each generator's own target. Not to be confused with the pre-existing
+    `_loop_target_names(target)` above (:986), which takes an already-resolved target expression
+    -- this one takes the loop/comprehension node itself and delegates to it per generator.
+    WIDENED 2026-08-27 alongside `_result_indexed_by_loop_var` -- feeds that check the loop's own
+    per-item name(s) so it can recognize `all_tip_authors[ref]` as indexed by the loop, not just a
+    bare direct target (`ref` is itself one hop from `entry`, the direct target; the caller runs
+    this through `_derived_names` to bridge that hop)."""
+    if isinstance(loop, (ast.For, ast.AsyncFor)):
+        return _loop_target_names(loop.target)
+    if isinstance(loop, _COMPREHENSIONS):
+        out: set[str] = set()
+        for gen in loop.generators:
+            out |= _loop_target_names(gen.target)
+        return out
+    return set()
 
 
 def _source_names(seed: set[str], fn: ast.AST) -> set[str]:
@@ -2749,10 +2954,15 @@ def _is_batched_primary_fallback(
     )
     if not group_names:
         return False
-    result_names = _batched_primary_result_names(fn, callee, group_names, spawn_linenos)
+    loop_target_names = _derived_names(_loop_construct_target_names(loop), fn)
+    result_names = _batched_primary_result_names(
+        fn, callee, group_names, spawn_linenos, loop_target_names
+    )
     if not result_names:
         return False
-    return _loop_is_gated_on_failure(fn, loop, result_names)
+    if _loop_is_gated_on_failure(fn, loop, result_names):
+        return True
+    return _call_is_ifexp_fallback(call, fn, result_names)
 
 
 # --------------------------------------------------------------------------
@@ -3935,6 +4145,11 @@ def find_unbatched_per_item_spawns(
                 node, _loop_node, loop_visitor.call_loop_taint.get(key, frozenset())
             ):
                 continue
+            # Discriminator 17: the call sits on a path that `break`s or `return`s in the same
+            # iteration, so it executes at most once per invocation regardless of collection
+            # size -- an early-exit search, not per-item amplification.
+            if _is_single_shot_terminal(node, _loop_node):
+                continue
             # Discriminator 13: the loop is the RETAINED PER-ITEM FALLBACK behind a batched
             # primary -- it runs only when the batch failed, recovering per-item attribution
             # instead of collapsing the set to one degraded verdict. Deleting it to clear a key
@@ -4555,11 +4770,22 @@ _KNOWN_SITES: frozenset[tuple[str, str, str]] = frozenset(
         # class by SATISFYING A RATIONALE rather than by being unbatchable, and the shared
         # comment block was never re-read against the code beneath it.
         #
-        #   REFUTED (13) -- a working batch primitive exists at this call site:
-        #   `__init__.py::brief` -> `tip_author`: git for-each-ref --format='%(refname:short)
-        #   %(authoremail)' returns every ref's tip author in one call; the callee's own
-        #   docstring asserts no such form exists
-        ('coordinator_core/consolidate_assemble/__init__.py', 'brief', 'tip_author'),
+        #   REFUTED (12) -- a working batch primitive exists at this call site. One of the
+        #   original 13 (`brief -> tip_author`) RETIRED 2026-08-27 (plan `2026-08-27-the-
+        #   discriminators-that-already-exist-reach-their-rows`, chunk C3): discriminator 13
+        #   (`_is_batched_primary_fallback`) now reaches it -- see its docstring for the widened
+        #   clauses. This block does not outlive the row; it is removed from the prose below, not
+        #   just the tuple. `_delete_tracked_and_append_log -> _run_git`'s own fallback call site
+        #   (line 928) is ALSO now declined by the same widening, but the KEY does not clear: two
+        #   sibling `_run_git` calls in the same function, at lines 969 (`add` staging a denorm
+        #   write) and 1015 (a revert `checkout` on log-append failure), share this
+        #   `(path, enclosing, callee)` key and are genuinely unrelated per-item mutations with no
+        #   batch primary of their own -- the OVER-BROAD KEY defect this register already names
+        #   elsewhere (`orphan_branch_sweep.py::main -> _git`, `register_discovered_repos.py::
+        #   main -> run`), missed by C1's per-row audit because it only walked the "rm" call site.
+        #   Measured, not asserted: before/after key-set diff for this chunk is exactly
+        #   `{tip_author}`, confirming this key is NOT retirable by a discriminator-13 widening
+        #   alone -- it needs call-site-scoped key splitting first. Row stays.
         #   `sidecar_sweep.py::sweep_sidecars` -> `active_reference_guard`: rg -f
         #   <patternfile> unions all needles in one call; needle->file attribution moves into
         #   the per-file read this guard already does
@@ -4579,7 +4805,8 @@ _KNOWN_SITES: frozenset[tuple[str, str, str]] = frozenset(
         #   with the batchable GET side
         #   `distill_apply_disposal.py::_delete_tracked_and_append_log` -> `_run_git`: git
         #   rm/add/checkout HEAD -- all accept N pathspecs; nothing here needs per-item
-        #   isolation, unlike the rm_and_commit sibling
+        #   isolation, unlike the rm_and_commit sibling. Row NOT retired this chunk -- see the
+        #   over-broad-key note above the `tip_author` row in this same class.
         (
             'coordinator_core/ops/distill_apply_disposal.py',
             '_delete_tracked_and_append_log',
@@ -4663,21 +4890,17 @@ _KNOWN_SITES: frozenset[tuple[str, str, str]] = frozenset(
         #   loop's tainted names never reach the spawn call's own arguments" -- identical argv
         #   every iteration, nothing for a batch to carry. Measured: exactly these three keys,
         #   zero collateral.
-        #   single-shot (4): the call sits lexically inside a `for` body but on a path that
-        #   `break`s or `return`s in the same iteration, so it executes AT MOST ONCE per call
-        #   regardless of collection size. Frozen precedent for the shape:
-        #   `check_destructive_git_orphan`, "single-shot call on a returning branch".
-        (
-            'coordinator_core/bash_guards/dispatch_checks.py',
-            'check_destructive_git_orphan',
-            '_run_git',
-        ),
-        ('coordinator_core/ops/find_polluter.py', 'main', '_existence_detail'),
-        (
-            'coordinator_core/ops/percolate_preflight_scratch_publish.py',
-            'check_allowlist_string',
-            '_run_child',
-        ),
+        #   single-shot (3): RETIRED 2026-08-27 (plan `2026-08-27-the-discriminators-that-
+        #   already-exist-reach-their-rows`, chunk C4) by DISCRIMINATOR 17 (`_is_single_shot_
+        #   terminal`), the one BUILT rather than widened this plan -- C2 found no existing
+        #   predicate reached this shape. The call sits lexically inside a `for` body but on a
+        #   path that `break`s or `return`s in the same iteration, so it executes AT MOST ONCE
+        #   per call regardless of collection size. Frozen precedent for the shape:
+        #   `check_destructive_git_orphan`, "single-shot call on a returning branch". Measured
+        #   against the live collector: before/after key-set diff is exactly these three keys
+        #   (`check_destructive_git_orphan::_run_git`, `find_polluter::main::_existence_detail`,
+        #   `percolate_preflight_scratch_publish::check_allowlist_string::_run_child`), zero
+        #   collateral -- `observed - _KNOWN_SITES` stayed empty across the change.
         #   discriminator-7 gap (1): RETIRED 2026-08-19 by giving discriminator 7 a ONE-HOP
         #   LOCAL BINDING resolution (`_loop_expr_bindings`). The note that stood here named the
         #   wrong mechanism: it blamed `_argv_splices_loop_target` for not walking a
@@ -5005,6 +5228,9 @@ _DISCRIMINATOR_PINS: dict[str, tuple[str, ...]] = {
         "test_discriminator_batched_primary_fallback_declines_an_ungated_loop",
         "test_discriminator_batched_primary_fallback_declines_without_a_primary",
     ),
+    "_is_single_shot_terminal": (
+        "test_discriminator_single_shot_terminal_declines_sibling_conditional_terminator",
+    ),
     "_root_scoped_direct": (
         "test_discriminator_root_scoped_declines_a_non_git_program",
         "test_discriminator_root_scoped_declines_when_a_pathspec_also_varies",
@@ -5195,17 +5421,27 @@ def test_burn_down_known_preexisting_amplification_sites():
     `composition_graph`, and `validate_frontmatter_schema_advisory` (per-endpoint `rev-parse`
     -> one `cat-file --batch-check`).
 
-    A BATCHED SITE THAT KEEPS A CORRECTNESS FALLBACK STILL FIRES HERE, and four rows below are
-    exactly that -- do not read them as unfixed. `orphan_branch_sweep::main` (both keys),
-    `migrate_branch_canonical_case`, `distill_apply_disposal`, and
-    `consolidate_assemble::brief -> tip_author` all took a real batch on the fast path and kept
-    a per-item call for the case the batch cannot answer: a ref the batch did not resolve, a
-    `git rm` whose atomic form would defeat the denorm module's per-child TOCTOU gate, a
-    case-folding filesystem where `for-each-ref` enumeration and `show-ref --verify` are not
-    equivalent. This collector is STATIC, so it sees the fallback and cannot see that it is
-    unreachable in the common case. That is a real discriminator gap, not a fix that failed --
-    and it is the honest reason the count stopped at 14 rather than 10. Measuring these needs a
-    runtime spawn count, which is what each site's new N-invariance test provides.
+    A BATCHED SITE THAT KEEPS A CORRECTNESS FALLBACK STILL FIRES HERE, and three rows below are
+    exactly that -- do not read them as unfixed. `orphan_branch_sweep::main` (both keys) and
+    `migrate_branch_canonical_case` took a real batch on the fast path and kept a per-item call
+    for the case the batch cannot answer: a ref the batch did not resolve, a case-folding
+    filesystem where `for-each-ref` enumeration and `show-ref --verify` are not equivalent. This
+    collector is STATIC, so it sees the fallback and cannot see that it is unreachable in the
+    common case. That is a real discriminator gap, not a fix that failed -- and it is the honest
+    reason the count did not reach zero. Measuring these needs a runtime spawn count, which is
+    what each site's new N-invariance test provides.
+
+    `distill_apply_disposal::_delete_tracked_and_append_log -> _run_git` is the SAME shape
+    (`git rm` fallback, correctness-motivated, unreachable in the common case) but stays for a
+    different reason: 2026-08-27 (plan `2026-08-27-the-discriminators-that-already-exist-reach-
+    their-rows`, chunk C3) widened discriminator 13 to reach its `git rm` fallback call
+    specifically, but two SIBLING `_run_git` calls in the same function (`add`-staging a denorm
+    write; a revert `checkout` on log-append failure) share this over-broad `(path, enclosing,
+    callee)` key and are genuinely unrelated per-item mutations no widening of this discriminator
+    should decide -- see `_KNOWN_SITES`'s own row comment. `consolidate_assemble::brief ->
+    tip_author` RETIRED the same chunk: discriminator 13 now reaches both its call sites (a
+    plural/singular callee-name bridge plus a primary carried by RESULT INDEXING rather than
+    argv), with no sibling call under that key to keep it open.
 
     One of the thirteen was never work at all:
     `close_out_and_stamp.py::_first_deliverable_commit_range_base` named a function that does not
@@ -5214,7 +5450,7 @@ def test_burn_down_known_preexisting_amplification_sites():
     entry retired the same day: A REGISTER THAT AGES SILENTLY DEFAULTS TO UNGUARDED, which is why
     `test_oracle_claims_still_name_live_sites` and this test's own subset assertion both exist.
 
-    14 keys remain and this assertion is NOT yet a standing `violations == []`. A reader six
+    10 keys remain and this assertion is NOT yet a standing `violations == []`. A reader six
     months out must not mistake this for a weakened test, and must not mistake the shrunk
     inventory for a finished one. What is left is the genuinely hard residue -- the easy and
     the merely-stale are gone, so the next reader should expect every remaining row to argue
@@ -5229,26 +5465,33 @@ def test_burn_down_known_preexisting_amplification_sites():
                     and pays the per-target call then. That is deliberate: this is the guard
                     between `rm` and a peer's uncommitted work, and a missed deny costs more
                     than a missed spawn. Pinned by `test_check_destructive_rm_status_batch.py`.
-      9  OVERTURNED -- the REFUTED rows whose named batch primitive survived contact are fixed
+      8  OVERTURNED -- the REFUTED rows whose named batch primitive survived contact are fixed
                     and gone. What is left is NOT PROVEN rows, fallback-bearing rows, and
                     REFUTED rows whose primitive did NOT survive tracing: `tail_ops::
                     spawn_detached` (the CLI it spawns takes exactly one id, and collapsing the
                     spawns would collapse the per-id attribution its own negative spec
-                    documents), `setup_chain_walker` (1-3 heterogeneous `||` sides, already
+                    documents), `distill_apply_disposal::_run_git` (over-broad key: two
+                    genuinely unrelated sibling calls share it), `migrate_branch_canonical_
+                    case::_migrate -> _git` (no fallback relationship exists; irreducibly
+                    per-ref), `setup_chain_walker` (1-3 heterogeneous `||` sides, already
                     short-circuiting, never a scaling collection), `central_run_due` (shells to
                     an out-of-tree DoE script whose argv surface cannot be verified from here),
                     `register_discovered_repos` (the remaining call is genuinely per-repo --
                     distinct destination key and value each), and `consolidate_assemble::
                     unique_commits` (per-branch attribution blocker unstated and untested in its
                     own evidence). Per-key evidence inline below.
-      5  MISCLASSIFIED -- collector false positives awaiting a DISCRIMINATOR, not a fix. See
-                    `_KNOWN_SITES` for the mechanically-decidable classes and what each would
-                    retire, and for the three (retry-loop, discriminator-7 gap, route-d name
-                    collision) that have already been retired exactly that way.
+      0  MISCLASSIFIED -- 2026-08-27, chunk C4 of `2026-08-27-the-discriminators-that-already-
+                    exist-reach-their-rows` retired the last three (the single-shot class) with
+                    DISCRIMINATOR 17, the one BUILT rather than widened this plan. See
+                    `_KNOWN_SITES` for the mechanically-decidable classes and what each retired,
+                    and for the four (retry-loop, single-shot, discriminator-7 gap, route-d name
+                    collision) that have now been retired exactly that way -- a collector false
+                    positive gets a discriminator, never a ledger note.
 
-    So 22 rows are amplification debt in the original sense. The other 5 are a
-    collector-precision backlog. Closing this test means disposing all 27;
-    `_KNOWN_SITES` shrinking to `frozenset()` is what flips the marker off.
+    So all 10 remaining rows are amplification debt in the original sense; the
+    collector-precision backlog this test used to also carry is closed. Closing this test means
+    disposing all 27 of the original inventory; `_KNOWN_SITES` shrinking to `frozenset()` is what
+    flips the marker off.
 
     Why `designed_red`, not gated: burning these down is a follow-up workstream, not this
     chunk's job -- gating on them here would turn a collector this plan wants VISIBLE into a
@@ -6924,6 +7167,303 @@ def test_discriminator_batched_primary_fallback_declines_without_a_primary(tmp_p
     )
     violations = find_unbatched_per_item_spawns((tmp_path,))
     assert [site.enclosing for site in violations] == ["check"]
+
+
+def test_discriminator_batched_primary_fallback_orelse_shape_not_flagged(tmp_path):
+    """Discriminator 13, shape 3d (WIDENED 2026-08-27, chunk C3 of `2026-08-27-the-
+    discriminators-that-already-exist-reach-their-rows`) -- the per-item loop is the FALLBACK,
+    sitting in the `orelse` of an `If` gated on the batch's own success flag, symmetric to shape
+    3b which only read the `If`'s `body`. `orphan_branch_sweep.py::main`'s real shape (`if
+    gh_batch_ok: ... else: for branch in ...: ...`). Pinned as a SITE-not-reported assertion, not
+    a unit test on the predicate's internals -- the exact shape the discriminator-7 gap left a
+    hole behind."""
+    fixture = tmp_path / "disc_fallback_orelse.py"
+    fixture.write_text(
+        "import subprocess\n"
+        "\n"
+        "def check(paths):\n"
+        "    batch = subprocess.run(['git', 'ls-files', '--', *paths])\n"
+        "    batch_ok = batch.returncode == 0\n"
+        "    if batch_ok:\n"
+        "        return None\n"
+        "    else:\n"
+        "        for p in paths:\n"
+        "            subprocess.run(['git', 'ls-files', '--', p])\n"
+        "    return None\n",
+        encoding="utf-8",
+    )
+    assert find_unbatched_per_item_spawns((tmp_path,)) == []
+
+
+def test_discriminator_batched_primary_fallback_orelse_declines_when_test_is_unrelated(tmp_path):
+    """AC7b negative for shape 3d -- the nearest shape that must STILL be reported: the loop sits
+    in an `orelse`, but the gating `If`'s test does not reference the primary's result at all, so
+    there is no real gate on the batch outcome. A widening that pattern-matched on "loop in an
+    orelse" alone, without still requiring the test to name the primary, would silently accept
+    this too."""
+    fixture = tmp_path / "disc_fallback_orelse_unrelated.py"
+    fixture.write_text(
+        "import subprocess\n"
+        "\n"
+        "def check(paths, flag):\n"
+        "    subprocess.run(['git', 'ls-files', '--', *paths])\n"
+        "    if flag:\n"
+        "        return None\n"
+        "    else:\n"
+        "        for p in paths:\n"
+        "            subprocess.run(['git', 'log', p])\n"
+        "    return None\n",
+        encoding="utf-8",
+    )
+    violations = find_unbatched_per_item_spawns((tmp_path,))
+    assert [site.enclosing for site in violations] == ["check"]
+
+
+def test_discriminator_batched_primary_fallback_ifexp_shape_not_flagged(tmp_path):
+    """Discriminator 13, shape 3e (WIDENED 2026-08-27, chunk C3) -- the fallback CALL is the
+    else-arm of an `ast.IfExp` (a ternary, often nested inside a dict literal), not a loop nested
+    in a statement-level `if`/`else`: the loop itself runs unconditionally every iteration, and
+    only this one call is conditionally skipped per iteration via a membership test on the
+    primary's own result. `consolidate_assemble/__init__.py::brief`'s real shape (`all_tip_authors
+    [ref] if ref in all_tip_authors else tip_author(...)`)."""
+    fixture = tmp_path / "disc_fallback_ifexp.py"
+    fixture.write_text(
+        "import subprocess\n"
+        "\n"
+        "def _tip_author(ref):\n"
+        "    return subprocess.run(['git', 'log', '-1', '--format=%ae', ref])\n"
+        "\n"
+        "def brief(refs):\n"
+        "    all_authors = subprocess.run(['git', 'for-each-ref'])\n"
+        "    out = {}\n"
+        "    for ref in refs:\n"
+        "        author = all_authors[ref] if ref in all_authors else _tip_author(ref)\n"
+        "        out[ref] = author\n"
+        "    return out\n",
+        encoding="utf-8",
+    )
+    assert find_unbatched_per_item_spawns((tmp_path,)) == []
+
+
+def test_discriminator_batched_primary_fallback_ifexp_declines_when_test_is_unrelated(tmp_path):
+    """AC7b negative for shape 3e -- the nearest shape that must STILL be reported: the fallback
+    call is the else-arm of an `IfExp`, but the ternary's test is unrelated to the primary's
+    result, so there is no real per-item gate on the batch outcome."""
+    fixture = tmp_path / "disc_fallback_ifexp_unrelated.py"
+    fixture.write_text(
+        "import subprocess\n"
+        "\n"
+        "def _tip_author(ref):\n"
+        "    return subprocess.run(['git', 'log', '-1', '--format=%ae', ref])\n"
+        "\n"
+        "def brief(refs, flag):\n"
+        "    subprocess.run(['git', 'for-each-ref'])\n"
+        "    out = {}\n"
+        "    for ref in refs:\n"
+        "        author = None if flag else _tip_author(ref)\n"
+        "        out[ref] = author\n"
+        "    return out\n",
+        encoding="utf-8",
+    )
+    violations = find_unbatched_per_item_spawns((tmp_path,))
+    assert [site.enclosing for site in violations] == ["brief"]
+
+
+def test_discriminator_batched_primary_fallback_starred_comprehension_not_flagged(tmp_path):
+    """Discriminator 13, clause 2 (WIDENED 2026-08-27, chunk C3) -- a `Starred` argument that maps
+    the group through a one-generator, unfiltered comprehension still carries it WHOLE.
+    `distill_apply_disposal.py`'s real primary argv (`*[str(p) for p in tracked_paths]`)."""
+    fixture = tmp_path / "disc_fallback_starred_comp.py"
+    fixture.write_text(
+        "import subprocess\n"
+        "\n"
+        "def check(paths):\n"
+        "    rc = subprocess.run(['git', 'rm', '--', *[str(p) for p in paths]]).returncode\n"
+        "    if rc == 0:\n"
+        "        return None\n"
+        "    for p in paths:\n"
+        "        subprocess.run(['git', 'rm', '--', str(p)])\n"
+        "    return None\n",
+        encoding="utf-8",
+    )
+    assert find_unbatched_per_item_spawns((tmp_path,)) == []
+
+
+def test_discriminator_batched_primary_fallback_filtered_comprehension_declines(tmp_path):
+    """AC7b negative for the comprehension leg of clause 2 -- the nearest shape that must STILL be
+    reported: the comprehension carries a FILTERED subset (`if p.exists()`), not the group whole,
+    so the primary does not actually cover every per-item call the loop later makes."""
+    fixture = tmp_path / "disc_fallback_filtered_comp.py"
+    fixture.write_text(
+        "import subprocess\n"
+        "\n"
+        "def check(paths):\n"
+        "    rc = subprocess.run(\n"
+        "        ['git', 'rm', '--', *[str(p) for p in paths if p]]\n"
+        "    ).returncode\n"
+        "    if rc == 0:\n"
+        "        return None\n"
+        "    for p in paths:\n"
+        "        subprocess.run(['git', 'rm', '--', str(p)])\n"
+        "    return None\n",
+        encoding="utf-8",
+    )
+    violations = find_unbatched_per_item_spawns((tmp_path,))
+    assert [site.enclosing for site in violations] == ["check"]
+
+
+def test_discriminator_batched_primary_fallback_plural_result_indexed_not_flagged(tmp_path):
+    """Discriminator 13, clauses 1 and 2 together (WIDENED 2026-08-27, chunk C3) -- a plural
+    batched-primary callee (`_tip_authors`) bridges to its singular per-item callee (`_tip_
+    author`, clause 1), and the primary's bound result carries the group not by argv but by being
+    a MAPPING the loop later indexes on its own target name (`all_authors[ref]`, clause 2).
+    `consolidate_assemble/__init__.py::brief`'s real relationship between `tip_authors` and
+    `tip_author`."""
+    fixture = tmp_path / "disc_fallback_plural_indexed.py"
+    fixture.write_text(
+        "import subprocess\n"
+        "\n"
+        "def _tip_author(ref):\n"
+        "    return subprocess.run(['git', 'log', '-1', '--format=%ae', ref])\n"
+        "\n"
+        "def _tip_authors():\n"
+        "    return subprocess.run(['git', 'for-each-ref'])\n"
+        "\n"
+        "def brief(refs):\n"
+        "    all_authors = _tip_authors()\n"
+        "    out = {}\n"
+        "    for ref in refs:\n"
+        "        author = all_authors[ref] if ref in all_authors else _tip_author(ref)\n"
+        "        out[ref] = author\n"
+        "    return out\n",
+        encoding="utf-8",
+    )
+    assert find_unbatched_per_item_spawns((tmp_path,)) == []
+
+
+def test_discriminator_batched_primary_fallback_plural_declines_without_indexing(tmp_path):
+    """AC7b negative for the clause-1/clause-2 pairing -- the nearest shape that must STILL be
+    reported: the plural batched primary exists and clause 1's name bridge matches it, but its
+    bound result is never subscripted or `.get()`-ed by the loop's own target name anywhere in
+    the function, so clause 2 still has nothing to show the group is carried. The name bridge
+    alone must never be sufficient."""
+    fixture = tmp_path / "disc_fallback_plural_unindexed.py"
+    fixture.write_text(
+        "import subprocess\n"
+        "\n"
+        "def _tip_author(ref):\n"
+        "    return subprocess.run(['git', 'log', '-1', '--format=%ae', ref])\n"
+        "\n"
+        "def _tip_authors():\n"
+        "    return subprocess.run(['git', 'for-each-ref'])\n"
+        "\n"
+        "def brief(refs):\n"
+        "    all_authors = _tip_authors()\n"
+        "    out = {}\n"
+        "    for ref in refs:\n"
+        "        out[ref] = _tip_author(ref)\n"
+        "    return out, all_authors\n",
+        encoding="utf-8",
+    )
+    violations = find_unbatched_per_item_spawns((tmp_path,))
+    assert [site.enclosing for site in violations] == ["brief"]
+
+
+def test_discriminator_single_shot_terminal_own_block_not_flagged(tmp_path):
+    """Discriminator 17 (BUILT 2026-08-27, chunk C4 of `2026-08-27-the-discriminators-that-
+    already-exist-reach-their-rows`) -- shape A: the call's own containing statement sits inside
+    a branch whose SAME block also holds an unconditional `return` after it. `find_polluter.py::
+    main::_existence_detail`'s real shape (`if os.path.exists(...): ...; print(_existence_detail
+    (...)); ...; return 1`, nested inside a `for` loop that is otherwise the amplification
+    candidate). Pinned as a SITE-not-reported assertion, not a unit test on the predicate's
+    internals."""
+    fixture = tmp_path / "disc_single_shot_own_block.py"
+    fixture.write_text(
+        "import subprocess\n"
+        "\n"
+        "def _existence_detail(path):\n"
+        "    return subprocess.run(['ls', '-la', path])\n"
+        "\n"
+        "def main(candidates):\n"
+        "    for candidate in candidates:\n"
+        "        subprocess.run(['npm', 'test', candidate])\n"
+        "        if candidate.exists():\n"
+        "            print('found')\n"
+        "            print(_existence_detail(candidate))\n"
+        "            print('done')\n"
+        "            return 1\n"
+        "    return 0\n",
+        encoding="utf-8",
+    )
+    violations = find_unbatched_per_item_spawns((tmp_path,))
+    assert "_existence_detail" not in {site.callee for site in violations}
+
+
+def test_discriminator_single_shot_terminal_outer_block_not_flagged(tmp_path):
+    """Discriminator 17, shape B: the call's own containing statement has nothing after it in
+    ITS block, but an outer ancestor's block (the `try` statement itself, a sibling of the
+    terminator) does. `percolate_preflight_scratch_publish.py::check_allowlist_string::
+    _run_child`'s real shape: the call is the only statement in a `try` body, and the
+    unconditional `break` sits several statements later as a sibling of the `try`, not inside
+    it. This is why the discriminator walks EVERY ancestor level rather than stopping at the
+    call's own immediate block."""
+    fixture = tmp_path / "disc_single_shot_outer_block.py"
+    fixture.write_text(
+        "import subprocess\n"
+        "\n"
+        "def _run_child(argv):\n"
+        "    return subprocess.run(argv)\n"
+        "\n"
+        "def check_allowlist_string(lines, target_name):\n"
+        "    found = False\n"
+        "    for raw in lines:\n"
+        "        if not raw.startswith(target_name):\n"
+        "            continue\n"
+        "        found = True\n"
+        "        try:\n"
+        "            proc = _run_child(['git', 'log', raw])\n"
+        "        except OSError:\n"
+        "            return 2\n"
+        "        if proc.returncode != 0:\n"
+        "            return 2\n"
+        "        print(proc.stdout)\n"
+        "        break\n"
+        "    return 0 if found else 1\n",
+        encoding="utf-8",
+    )
+    violations = find_unbatched_per_item_spawns((tmp_path,))
+    assert "_run_child" not in {site.callee for site in violations}
+
+
+def test_discriminator_single_shot_terminal_declines_sibling_conditional_terminator(tmp_path):
+    """AC7b negative -- the nearest shape that must STILL be reported: an early-exit `return`
+    follows the call, gated on the call's OWN result (`result.returncode != 0`, so
+    discriminator 14's out-of-band exclusion also declines this shape -- ordinary per-item
+    fail-fast, not attribution search), but nested inside a SIBLING `if` one level narrower than
+    the call's own branch, with a plain statement (`print(item)`) after it at the branch's own
+    level. The terminator is conditional on the call's own outcome, not unconditionally reached
+    once the call's branch is entered, so it proves nothing about how many times the call fires
+    -- this is the ordinary "spawn per item, then separately maybe bail on this item's result"
+    shape and must stay reported."""
+    fixture = tmp_path / "disc_single_shot_sibling_conditional.py"
+    fixture.write_text(
+        "import subprocess\n"
+        "\n"
+        "def _run_child(argv):\n"
+        "    return subprocess.run(argv)\n"
+        "\n"
+        "def scan(items):\n"
+        "    for item in items:\n"
+        "        if item.active:\n"
+        "            result = _run_child(['git', 'log', item.ref])\n"
+        "            if result.returncode != 0:\n"
+        "                return None\n"
+        "        print(item)\n"
+        "    return None\n",
+        encoding="utf-8",
+    )
+    violations = find_unbatched_per_item_spawns((tmp_path,))
+    assert [site.enclosing for site in violations] == ["scan"]
 
 
 def test_discriminator_annotated_module_literal_not_flagged(tmp_path):

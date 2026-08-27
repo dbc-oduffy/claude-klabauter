@@ -191,6 +191,11 @@ from coordinator_core.benchmarks.process_time import (
     IS_WINDOWS,
     batched_process_time_ms,
 )
+from coordinator_core.benchmarks.isolated_clone import (
+    mkdtemp_for_clone,
+    reap_processes_under,
+    rmtree_or_warn,
+)
 from coordinator_core.warm import breadcrumb
 from coordinator_core.session.core import stable_pid_alive
 
@@ -417,7 +422,7 @@ def warm_engine_root() -> Iterator[Path]:
             f"point {_ENGINE_ROOT_OVERRIDE_ENV} at a real checkout to run this file"
         )
 
-    tmp_parent = Path(tempfile.mkdtemp(prefix="commit-op-wallclock-", dir=str(source_root.parent)))
+    tmp_parent = mkdtemp_for_clone(source_root, prefix="commit-op-wallclock-")
     isolated_root = tmp_parent / "clone"
     proc: Optional[subprocess.Popen] = None
     try:
@@ -451,8 +456,14 @@ def warm_engine_root() -> Iterator[Path]:
                 proc.terminate()
             except OSError:
                 pass
+        # The breadcrumb pid is NOT the whole process set this fixture owns:
+        # `server.py`'s boot spawns the http listener DETACHED via
+        # `supervisor.ensure_listener`, so it survives the terminate above and
+        # holds this clone open against the removal below. Reap by ROOT, the
+        # one predicate a deliberately-reparented process still answers to.
+        reaped = reap_processes_under(tmp_parent)
         shutil.rmtree(breadcrumb.svc_dir(engine_root=isolated_root), ignore_errors=True)
-        shutil.rmtree(tmp_parent, ignore_errors=True)
+        rmtree_or_warn(tmp_parent, label="commit_op_engine_root", reaped=reaped)
 
 
 # ---------------------------------------------------------------------------

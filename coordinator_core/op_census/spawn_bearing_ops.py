@@ -62,7 +62,7 @@ bias, and it remains the safer answer when a sharper one cannot be computed.
 
 `function_granular=True` reuses (never re-derives) the gate module's own
 transitive-BFS reachability predicate — `_reachable_functions`,
-`_build_corpus`, and `_on_path_spawn_sites` in
+`_build_corpus_with_dispatch_tables`, and `_on_path_spawn_sites` in
 `coordinator_core/tests/test_no_uncounted_spawn_on_budgeted_path.py` — over the
 same `(relpath, top-level function name)` domain that predicate already ships
 for its own nine live entrypoints, widened here to every op whose entrypoint
@@ -489,7 +489,8 @@ def _ops_with_spawn_evidence_function_granular(
     entrypoints: Dict[str, OpEntrypoint],
 ) -> Dict[str, Tuple[SpawnSite, ...]]:
     """`function_granular=True` leg of `ops_with_spawn_evidence`. Builds the
-    reused gate module's corpus (`_build_corpus`) ONCE for the whole call,
+    reused gate module's corpus (`_build_corpus_with_dispatch_tables`) ONCE
+    for the whole call,
     then for every op whose `(relpath, function_name)` resolves to a
     TOP-LEVEL function definition in that corpus's own `func_defs`, computes
     the transitive-BFS reachable-function set from that one entrypoint
