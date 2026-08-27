@@ -1299,8 +1299,57 @@ class TestHandler:
         monkeypatch.delenv("CLAUDE_SESSION_ID", raising=False)
         monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
         out = safe_commit_offer._handler({"cwd": str(repo)})
-        assert out["error"] == "session_id could not be resolved"
+        assert "caller identity could not be established" in out["error"]
         assert out["session_id"] == ""
+
+    def test_ambient_environment_identity_is_refused_not_used(self, tmp_path, monkeypatch):
+        """The live 2026-08-27 defect, reported by doe-claude-em: dialled through
+        coordinator-invoke.exe from three different cwd values, the op returned
+        the ENGINE OWNER's session id every time, because the exe does not send
+        `_session_id` and `resolve_session_id(cwd)` therefore fell through to
+        tiers 1-3 — this process's environment. A non-dry run would have
+        committed the engine owner's paths under the calling ceremony's claim.
+
+        `cwd` was never the fix: `resolve_session_id`'s own docstring says
+        "cwd is retained for API compatibility with existing callers even
+        though tiers 0-3 do not use it" (tier 4 removed, KS-4).
+
+        So: an ambient env identity, with nothing carried by the caller, must
+        REFUSE. This asserts the refusal directly rather than asserting the
+        returned id, because the bug's signature was a plausible-looking id that
+        simply belonged to the wrong session.
+        """
+        repo = _make_repo(tmp_path)
+        monkeypatch.setenv("CLAUDE_SESSION_ID", "11111111-2222-3333-4444-555555555555")
+        core.init("11111111-2222-3333-4444-555555555555", cwd=str(repo))
+        (repo / "a.py").write_text("a")
+        scope.touch("11111111-2222-3333-4444-555555555555", "a.py", cwd=str(repo))
+
+        out = safe_commit_offer._handler({"cwd": str(repo)})
+
+        assert "caller identity could not be established" in out["error"], (
+            "the ambient environment answered for a session that never called"
+        )
+        assert out["session_id"] == ""
+
+    def test_carried_identity_is_accepted(self, tmp_path):
+        """The other half: identity the caller DID carry (tier 0, bound by
+        `warm.entry_seam.per_request_state` from the wire's `_session_id`) is
+        the one ambient-free source, and must still work — a refusal that also
+        rejected the correct path would just move the breakage.
+        """
+        repo = _make_repo(tmp_path)
+        sid = "1420e948-69f0-4e01-a44e-1853891f1795"
+        core.init(sid, cwd=str(repo))
+        (repo / "a.py").write_text("a")
+        scope.touch(sid, "a.py", cwd=str(repo))
+
+        with core.session_identity_override(sid):
+            out = safe_commit_offer._handler({"cwd": str(repo), "dry_run": True})
+
+        assert "error" not in out
+        assert out["session_id"] == sid
+        assert out["safe_paths"] == ["a.py"]
 
     def test_benign_noop_reports_no_failure(self, tmp_path):
         # Regression guard: the ordinary already-committed no-op must NEVER

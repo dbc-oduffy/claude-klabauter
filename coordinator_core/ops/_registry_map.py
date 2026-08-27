@@ -330,7 +330,6 @@ OP_MODULE_MAP: Dict[str, str] = {
     "fleet.backfill_reference_edges":         "coordinator_core.ops.backfill_reference_edges",
     "session_baton.mint":                     "coordinator_core.ops.session_baton_mint",
     "session_baton.promote":                  "coordinator_core.ops.session_baton_promote",
-    "eol.repair":                              "coordinator_core.ops.eol.repair",
     "warm_guard.evaluate":                     "coordinator_core.ops.warm_guard_evaluate",
     "merge_assemble.apply":                    "coordinator_core.merge_assemble.ops",
 }

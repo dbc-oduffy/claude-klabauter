@@ -1038,6 +1038,39 @@ def session_identity_override(sid: Optional[str]) -> Iterator[None]:
         _SESSION_ID_OVERRIDE.reset(token)
 
 
+def carried_session_id() -> str:
+    """The CALLER's session id when the request explicitly carried one, and
+    the empty string otherwise. Tier 0 alone — never the ambient environment.
+
+    `resolve_session_id` blends two materially different things behind one
+    return value: an identity the caller CARRIED across the wire (tier 0), and
+    an identity read out of THIS process's environment (tiers 1-3). Inside the
+    warm server those are not interchangeable — `os.environ` there belongs to
+    whoever spawned the server, not to the session being served — and tiers 1-3
+    cannot be distinguished from tier 0 by reading the return value. This
+    accessor is how a caller that must NOT accept the ambient answer asks the
+    narrower question.
+
+    Use it for any MUTATING op whose effect is attributed to a session, and
+    commit+push above all: `warm.client` omits `_session_id` entirely when it
+    cannot identify its own process, and `coordinator-invoke.exe` does not send
+    the field at all, so identity is absent for a whole dial path rather than
+    rarely. `resolve_session_id`'s degrade-to-env on absence is the documented
+    fail-safe for a READ ("degrade to the server's pre-existing behaviour, not
+    a broken one" — `warm/client.py`'s caller-identity seam), and it is exactly
+    wrong for a write: committing under whichever session happened to start the
+    engine is not a degrade, it is a silent misattribution of somebody's work.
+    Measured live 2026-08-27: three different `cwd` values dialled from a peer
+    session all returned the ENGINE owner's session id, and a non-dry run would
+    have committed that owner's paths under the peer's ceremony.
+
+    Callers gate on empty and REFUSE — never fall back to `resolve_session_id`
+    on an empty return, which reinstates precisely the blend this exists to
+    avoid.
+    """
+    return _SESSION_ID_OVERRIDE.get() or ""
+
+
 def resolve_session_id(cwd: Optional[str] = None) -> str:
     """Port of ``_cs_resolve_session_id`` / public alias ``cs_resolve_session_id``.
 

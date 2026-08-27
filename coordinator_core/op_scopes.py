@@ -1487,8 +1487,6 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # docs/plans/ spine (F0-contained) — never a shared common_dir path.
     # Spec: docs/plans/2026-08-21-a-discharged-gate-tells-the-row-waiting.md § C2
     "gate_liveness.reconcile":                  "show_top",
-    # eol.census / eol.audit_producers / eol.repair — "none": DECISION, not the
-    "eol.repair":                               "none",
     # "show_top", not "none": _op_census_report reads repo_root and forwards it
     # to census(repo_root=...), which resolves the corpus it walks from that
     # root. The census is per-worktree by construction — its own emitted

@@ -1745,7 +1745,7 @@ def _log_excluded_diagnostic(
         remaining = len(excluded) - len(preview)
         if remaining > 0:
             lines.append(
-                "  ... and %d more (see coordinator-invoke session.safe_commit_offer dry_run=true "
+                "  ... and %d more (see the session.safe_commit_offer op with dry_run "
                 "for the full list)" % remaining
             )
         with (log_dir / "sessionend-auto-commit-diagnostics.log").open(
@@ -1982,7 +1982,7 @@ def _render_report(report: CommitOfferReport, worktree_root: Optional[str] = Non
         lines.append(
             "Dropped %d caller-supplied group(s) — named path(s) outside "
             "this session's computed scope, left uncommitted on purpose "
-            "(run `coordinator-invoke session.safe_commit_offer dry_run=true` for the full list):"
+            "(run the session.safe_commit_offer op with dry_run for the full list):"
             % len(dropped_groups)
         )
         shown = dropped_groups[:_DROPPED_GROUPS_PREVIEW_COUNT]
@@ -2001,7 +2001,7 @@ def _render_report(report: CommitOfferReport, worktree_root: Optional[str] = Non
             "Residue: %d file(s) still dirty after this commit, not this "
             "session's peer-owned/committed work, across %d class(es) "
             "(report-only -- nothing staged or blocked; see "
-            "`coordinator-invoke session.safe_commit_offer dry_run=true` or `git status` for the "
+            "the session.safe_commit_offer op with dry_run, or git status, for the "
             "full list):" % (total_residue, len(residue))
         )
         residue_items = list(residue.items())
@@ -2120,6 +2120,25 @@ def _handler(params: dict, repo_root=None) -> dict:
     <50ms to reach it", and this op's sizing-object
     (`dlv-the-safe-commit-offer-answers-on-the-exe-0899da`).
 
+    HOW TO CALL IT — one positional JSON string, and nothing else:
+
+        coordinator-invoke.exe session.safe_commit_offer "{\"cwd\": \"<repo>\",
+            \"session_id\": \"<uuid>\", \"message\": \"<subject>\"}"
+
+    NOT `k=v` tokens. `coordinator-invoke` takes a single positional it parses
+    as JSON: the first `k=v` token is swallowed as that positional and fails
+    with `Invalid params_json: Expecting value: line 1 column 1`, and a second
+    token is rejected outright as `unrecognized arguments`. This module's own
+    docstring prescribed the `k=v` form until 2026-08-27 and doe-claude-em's
+    executor copied it verbatim into a repoint that was dead on arrival; it
+    fails loud, so nothing shipped, but a caller-facing example is a contract
+    and this one was wrong.
+
+    NOT `--repo` either. That flag is refused for this op (`-32603`) because
+    its scope is "none" (DR-279) — it resolves its own target from wire params.
+    A house style that reflexively appends `--repo` (as `push.outstanding`'s
+    does) breaks every call.
+
     Sync (not async): `commit_session_offer` drives the whole call under a
     single `asyncio.run()`; ipc.py offloads sync handlers via
     `asyncio.to_thread` (the `commit.exec_bit_change` pattern).
@@ -2195,9 +2214,15 @@ def _handler(params: dict, repo_root=None) -> dict:
     if groups is not None and not isinstance(groups, list):
         return _error_envelope("params.groups must be a list of {paths, message} objects")
 
-    session_id = params.get("session_id") or core.resolve_session_id(cwd)
+    session_id = params.get("session_id") or core.carried_session_id()
     if not session_id:
-        return _error_envelope("session_id could not be resolved")
+        return _error_envelope(
+            "caller identity could not be established — pass params.session_id. "
+            "This op refuses rather than falling back to the engine process's "
+            "own environment: on the warm path that environment belongs to "
+            "whoever spawned the server, so the fallback commits one session's "
+            "paths under another's claim."
+        )
 
     if params.get("dry_run"):
         offer = compute_offer(session_id, cwd)

@@ -140,8 +140,6 @@ def stubbed(mod, monkeypatch):
         ("_run_probe_warm_generation", "_WARM_GENERATION_PROBE"),
         ("_run_probe_warm_route_share", "_WARM_ROUTE_SHARE_PROBE"),
         ("_run_probe_warm_roundtrip", "_WARM_ROUNDTRIP_PROBE"),
-        ("_run_probe_eol_audit_producers", "_EOL_DRIFT_PROBE"),
-        ("_run_probe_eol_census", "_EOL_CENSUS_PROBE"),
     ]
 
     covered = {fn_name for fn_name, _const_name in table} | {"_run_probe_claude_klabauter_root"}

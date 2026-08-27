@@ -450,10 +450,6 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
         "coordinator_core/ops/assert_doctrine_cross_reference_counts.py",
         ("_handler",),
     ),
-    "eol.audit_producers": (
-        "coordinator_core/ops/eol/audit_producers.py",
-        ("_eol_audit_producers",),
-    ),
     "fanout.poll_scratch_dir": (
         "coordinator_core/ops/poll_scratch_dir.py",
         ("_poll_scratch_dir",),
@@ -722,10 +718,6 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
         "coordinator_core/plugin_health/scan.py",
         ("_plugin_health_scan",),
     ),
-    "queue.age_ping": (
-        "coordinator_core/ops/queue_age_ping.py",
-        ("_handler",),
-    ),
     "queue.cluster": (
         "coordinator_core/ops/queue_cluster.py",
         ("_handler",),
@@ -748,10 +740,6 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
     ),
     "roadmap.link_stubs": (
         "coordinator_core/ops/roadmap_link_stubs.py",
-        ("_handler",),
-    ),
-    "roadmap.serve": (
-        "coordinator_core/ops/roadmap_serve.py",
         ("_handler",),
     ),
     "schema.describe": (
@@ -1567,12 +1555,6 @@ _CLUSTER_D3_OPEN_DISPOSITION: dict[str, tuple[tuple[str, str, str, int], ...]] =
     "engine.drift": (
         ("coordinator_core/git/run.py", "run_git", "git", 0),
     ),
-    "eol.census": (
-        ("coordinator_core/git/run.py", "run_git", "git", 0),
-    ),
-    "eol.repair": (
-        ("coordinator_core/git/run.py", "run_git", "git", 0),
-    ),
     "fleet.archive_completed_handoffs": (
         ("coordinator_core/dag.py", "_git_path_ever_tracked", "git", 0),
         ("coordinator_core/git/run.py", "run_git", "git", 0),
@@ -1717,8 +1699,6 @@ _CLUSTER_D3_OPEN_ENTRYPOINTS: dict[str, tuple[str, str]] = {
     "deliverable.cascade_terminal": ("coordinator_core/ops/deliverable_cascade.py", "_handler"),
     "distill.apply_disposal": ("coordinator_core/ops/distill_apply_disposal.py", "_handler"),
     "engine.drift": ("coordinator_core/ops/engine_drift.py", "_engine_drift"),
-    "eol.census": ("coordinator_core/ops/eol/census.py", "_eol_census"),
-    "eol.repair": ("coordinator_core/ops/eol/repair.py", "_eol_repair"),
     "fleet.archive_completed_handoffs": ("coordinator_core/ops/fleet/archive_terminal_handoffs.py", "_handler"),
     "fleet.archive_paper_trail": ("coordinator_core/ops/fleet/archive_paper_trail.py", "_handler"),
     "fleet.archive_queue_entry": ("coordinator_core/ops/fleet/archive_queue_entry.py", "_handler"),
@@ -3716,9 +3696,6 @@ _FROZEN_UNENROLLED_SPAWN_SITES: frozenset = frozenset(
         ("coordinator_core/ops/draft_plan_aging.py", "_git_commit_epoch", "git", 0),
         ("coordinator_core/ops/draft_plan_aging.py", "_has_recent_real_work_commit", "git", 0),
         ("coordinator_core/ops/ensure_python3_exe_shim.py", "_classify_python3", "python3", 0),
-        ("coordinator_core/ops/eol/census.py", "_check_attr_eol_text", "git", 0),
-        ("coordinator_core/ops/eol/census.py", "_dirty_paths", "git", 0),
-        ("coordinator_core/ops/eol/repair.py", "_index_blobs", "git", 0),
         ("coordinator_core/ops/hibernate_machine.py", "_run_binary", "<dynamic>", 0),
         ("coordinator_core/ops/hibernate_machine.py", "hibernate", "pmset", 0),
         ("coordinator_core/ops/hibernate_machine.py", "hibernate", "shutdown", 1),
@@ -5607,28 +5584,6 @@ _NAMED_ARGV0_DISPOSITIONS_C: dict[tuple[str, str, str, int], str] = {
         "decision, never per-item."
     ),
     (
-        "coordinator_core/ops/eol/census.py",
-        "_check_attr_eol_text",
-        "git",
-        0,
-    ): (
-        "2026-08-23 exempt -- one batched `git check-attr eol text -z "
-        "--stdin` call over the whole candidate path list, fetching both "
-        "attributes in the same spawn (this function's own docstring, "
-        "\"pinned three-spawn budget\"); `eol.census` is not a "
-        "`_BUDGETED_ENTRYPOINTS` row."
-    ),
-    (
-        "coordinator_core/ops/eol/census.py",
-        "_dirty_paths",
-        "git",
-        0,
-    ): (
-        "2026-08-23 exempt -- one batched `git status --porcelain -z` "
-        "call (this function's own docstring); same non-budgeted scope as "
-        "this file's other site."
-    ),
-    (
         "coordinator_core/ops/record_history.py",
         "_is_git_worktree",
         "git",
@@ -5729,17 +5684,6 @@ _NAMED_ARGV0_DISPOSITIONS_C: dict[tuple[str, str, str, int], str] = {
         "`_BUDGETED_ENTRYPOINTS` row."
     ),
     (
-        "coordinator_core/ops/eol/repair.py",
-        "_index_blobs",
-        "git",
-        0,
-    ): (
-        "2026-08-23 exempt -- one batched `git cat-file --batch` call "
-        "resolving each candidate path's index blob in a single spawn "
-        "(this function's own docstring); `eol.repair` is not a "
-        "`_BUDGETED_ENTRYPOINTS` row."
-    ),
-    (
         "coordinator_core/ops/merge_branch_into_workstream.py",
         "_git",
         "git",
@@ -5811,13 +5755,11 @@ _TRANCHE_C_FILES: frozenset = frozenset({
     "coordinator_core/ops/plan_suggest_completion_steps.py",
     "coordinator_core/ops/changelog_ops.py",
     "coordinator_core/ops/create_github_remote.py",
-    "coordinator_core/ops/eol/census.py",
     "coordinator_core/ops/record_history.py",
     "coordinator_core/ops/review_trail_write.py",
     "coordinator_core/ops/tracker/push_suggestion.py",
     "coordinator_core/ops/cascade_retract.py",
     "coordinator_core/ops/detect_changed_dependency_manifests.py",
-    "coordinator_core/ops/eol/repair.py",
     "coordinator_core/ops/merge_branch_into_workstream.py",
     "coordinator_core/ops/resolve_swept_baton.py",
     "coordinator_core/ops/verify_fix_files_changed.py",
@@ -6111,13 +6053,11 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     "cruft_sweep.run": 8,
     "memo.send": 8,
     "workflow.fire": 6,
-    "eol.repair": 1,
     "machine.hibernate": 4,
     "orientation.regenerate_cache": 4,
     "workday.drain_pending_push": 4,
     "branch.merge_into_workstream": 3,
     "distill.assemble_disposal_manifest": 3,
-    "eol.census": 1,
     "push.outstanding": 3,
     "plan.suggest_completion_steps": 3,
     "release.cut_tag_and_publish": 3,
