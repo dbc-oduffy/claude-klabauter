@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://coordinator.local/schemas/initiative.schema.json",
+  "x-schema-name": "initiative",
+  "x-schema-version": "1.1.0",
+  "x-bump-class": "nested-field-additive",
+  "x-bump-note": "1.0.0 -> 1.1.0 added the optional nullable top-level `deliverable_id` scalar (durable deliverable-spine join key; C9c). DR-097 push-side notification duty is discharged — memo delivered to claude-klabauter-em 2026-08-10 at their `8796e9bd4`. Vendoring order actually used: DoE lands first, claude-klabauter vendors on our ping, because this bump originates here.",
+  "applies_to": "state/initiatives/*.yaml",
+  "description": "Lightweight initiative entity — the parent container for a fleet deliverable spine. A cross-repo bet, feature area, or goal that groups related work artifacts. Artifacts carry initiative: <id> as a nullable FK. Roadmaps attach to an initiative as one kind of initiative; a cross-repo bet with no formal roadmap is still a first-class initiative. Stored per-initiative in state/initiatives/<id>.yaml. Spec backlink: claude-klabauter:pln-fleet-deliverable-spine-identity-and-facets-2b331c § D2",
+  "type": "object",
+  "required": ["id", "label", "status"],
+  "properties": {
+    "id": {
+      "type": "string",
+      "description": "Stable initiative identifier (e.g. 'example-fleet-pro-launch'). Used as the FK value in artifact frontmatter initiative: fields. Kebab-case; unique across the repo."
+    },
+    "label": {
+      "type": "string",
+      "description": "Business-legible display name (e.g. 'Example-Fleet Pro Launch'). Shown on the CEO board as the parent grouping label."
+    },
+    "owner": {
+      "anyOf": [{"type": "string"}, {"type": "null"}],
+      "description": "EM or workstream identifier owning this initiative. Nullable — may be unassigned at inception."
+    },
+    "status": {
+      "enum": ["active", "paused", "shipped", "abandoned"],
+      "description": "Initiative lifecycle status. active=in flight; paused=temporarily blocked; shipped=done; abandoned=cancelled."
+    },
+    "target_date": {
+      "anyOf": [{"type": "string"}, {"type": "null"}],
+      "description": "ISO date (YYYY-MM-DD) of the intended completion, or null. null means ongoing / burn-down shape (no fixed end — work continues until the initiative is abandoned or shipped organically). A dated value means completion shape — the initiative has a concrete deadline and progress is tracked toward it. Spec backlink: pln-initiative-govern-sweep-priori-6cf808 § C1 (AC2)"
+    },
+    "goals": {
+      "type": "array",
+      "items": {"type": "string"},
+      "default": [],
+      "description": "Optional many-to-many list of goal-ids this initiative contributes to. A goal-id pointing nowhere is a soft tag — no referential enforcement. Absent or empty means no goal linkage declared."
+    },
+    "deliverable_id": {
+      "anyOf": [{"type": "string", "pattern": "^dlv-(?!placeholder-replace-with)[0-9a-zA-Z][0-9a-zA-Z.-]*$"}, {"type": "null"}],
+      "description": "The durable deliverable join key, minted once at the earliest artifact and carried verbatim by every downstream artifact. Null or absent when this record predates the spine. Spec backlink: pln-sizing-objects-join-the-delive-0fcd0a § C9c"
+    }
+  }
+}

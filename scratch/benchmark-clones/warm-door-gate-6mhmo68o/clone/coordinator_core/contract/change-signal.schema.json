@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://claude-klabauter/coordinator_core/contract/change-signal.schema.json",
+  "title": "R5 content-hash change-signal",
+  "description": "Cache-invalidation signal emitted by claude-klabauter on each work-state record so example-retrieval-repo can invalidate its CQRS projection cache on change. Content-hash (sha256 of the raw source file body), NOT mtime, NOT git-rev. mtime alone is REJECTED for product-facing reads (R5). Convention mirrors coordinator_core/cache.py compute_stamp (Design Decision D2). Spec: coordinator_core/contract/example-retrieval-repo-producer-contract.md § 3.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["algo", "hex", "source_path"],
+  "properties": {
+    "algo": {
+      "type": "string",
+      "const": "sha256",
+      "description": "Hash algorithm. Fixed literal 'sha256' (reserved for future algorithm agility)."
+    },
+    "hex": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "sha256(<raw source file body bytes>).hexdigest() — lowercase 64-char hex. Identical convention to coordinator_core/cache.py compute_stamp."
+    },
+    "source_path": {
+      "type": "string",
+      "description": "Repo-relative path of the source artifact the hash was taken over. Matches the record's provenance.path. rag keys its projection cache on (source_path, hex)."
+    }
+  }
+}

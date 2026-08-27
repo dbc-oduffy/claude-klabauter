@@ -1,0 +1,42 @@
+{
+  "format_version": "docgen-template/v1",
+  "doc_type": "plan-coverage-check",
+  "frontmatter": {
+    "style": "fenced",
+    "fields": [
+      {"kind": "value", "key": "plan", "field": "plan_path", "quote": true},
+      {"kind": "value", "key": "created", "field": "created", "quote": false},
+      {"kind": "literal", "line": "author: PLACEHOLDER"},
+      {"kind": "literal", "line": "verdict: PLACEHOLDER"}
+    ]
+  },
+  "body": [
+    {"kind": "raw", "lines": [
+      "",
+      "## Plan Coverage Verification",
+      "",
+      "**Plan:** PLACEHOLDER",
+      "**Verdict:** COMPLETE | INCOMPLETE | BLOCKED-SURFACE-TO-PM | SCOPE-MISMATCH | DEGRADED",
+      "**Oracle items:** 0",
+      "**Slate items:** 0",
+      "**Missed:** 0 | **Ambiguous:** 0 | **OOS-weak:** 0 | **Hedges:** 0 | **Substrate-drift:** 0",
+      "",
+      "### Missed audit items (no slate entry, no architectural OOS)",
+      "",
+      "<!-- For each MISSED: oracle item verbatim, suggested resolution (add to slate | architectural-OOS | oracle-was-wrong). -->",
+      "",
+      "### Ambiguous audit items (signal-partial — informational only)",
+      "",
+      "<!-- For each AMBIGUOUS: oracle item verbatim, reason for classification, EM action suggestion. -->",
+      "",
+      "### Weak OOS / hedges (appetite-based deferrals)",
+      "",
+      "<!-- For each WEAK-OOS/HEDGE: plan quote with context, doctrine citation, suggested action. -->",
+      "",
+      "### Substrate drift (in-repo paths/symbols cited that don't match disk)",
+      "",
+      "<!-- For each DRIFT: plan citation, current disk state, suggested action. -->",
+      ""
+    ]}
+  ]
+}

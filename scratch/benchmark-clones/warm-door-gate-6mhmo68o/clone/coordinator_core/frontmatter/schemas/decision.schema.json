@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://coordinator.local/schemas/decision.schema.json",
+  "x-schema-name": "decision",
+  "x-schema-version": "1.0.0",
+  "applies_to": "docs/decisions/*.md",
+  "description": "Decision record (DR) — records an architectural or process decision. Spec backlink: pln-example-initiative-tc-1-records-consolidation-9668e7 § D3, § D4",
+  "type": "object",
+  "required": ["title", "created", "status", "deciders"],
+  "properties": {
+    "title": {
+      "type": "string",
+      "description": "Human-readable title for the decision."
+    },
+    "created": {
+      "type": "string",
+      "format": "date",
+      "description": "Canonical temporal key (YYYY-MM-DD). Use 'created', not 'date'."
+    },
+    "status": {
+      "enum": ["proposed", "accepted", "deprecated", "superseded"],
+      "description": "Lifecycle status of the decision."
+    },
+    "deciders": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "List of people or agents who made this decision."
+    },
+    "superseded_by": {
+      "type": "string",
+      "description": "Path or identifier of the decision that supersedes this one."
+    },
+    "context": {
+      "type": "string",
+      "description": "Context or background for the decision."
+    },
+    "driver": {
+      "type": "string",
+      "description": "Primary driver or motivation for the decision."
+    },
+    "id": {
+      "type": "string",
+      "description": "Canonical DR number string, e.g. 'DR-042'. Dominant spelling; do not use decision_id in new records."
+    }
+  }
+}

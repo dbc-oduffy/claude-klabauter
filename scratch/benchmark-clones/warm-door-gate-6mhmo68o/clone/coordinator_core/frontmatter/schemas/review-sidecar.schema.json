@@ -1,0 +1,81 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://coordinator.local/schemas/review-sidecar.schema.json",
+  "x-schema-name": "review-sidecar",
+  "x-schema-version": "1.1.0",
+  "applies_to": "state/plan-sidecars/*.review.md",
+  "kinds": [
+    "staff-eng-review",
+    "eng-director-review",
+    "staff-ux-review",
+    "staff-game-dev-review",
+    "staff-data-sci-review",
+    "senior-front-end-review",
+    "vp-product-review",
+    "code-review",
+    "plan-review",
+    "review",
+    "review-sidecar",
+    "patrik-review",
+    "substrate-adjudication",
+    "plan-rereview"
+  ],
+  "description": "Review-sidecar — reviewer verdict artifact, historically colocated with plans at docs/plans/*.review.md, relocated to state/plan-sidecars/*.review.md by the docs/plans/2026-07-24-g2-plan-pipeline-sidecar-contract.md C11 non-plan-sidecar sweep (rename-on-existing preserved, git-log-followable). New named-reviewer dispatches persist to the DR-091 session-keyed state/subagent-share/<session>/<provision_key>.md home instead (reviewer-pipeline.md), covered by the universal run-report superset schema, not this applies_to glob — this schema now enumerates the archived legacy corpus. kinds list: role-based canonical values first, then legacy disk-census values retained as resolvers.",
+  "type": "object",
+  "required": ["plan"],
+  "properties": {
+    "plan": {
+      "type": "string",
+      "description": "Repo-relative path to the plan this sidecar reviewed."
+    },
+    "reviewer": {
+      "type": "string",
+      "description": "Role slug for the reviewer, matching the agent-registry slug (e.g. staff-eng, code-reviewer). Not a persona name — persona names are human-facing display aliases only."
+    },
+    "verdict": {
+      "type": "string",
+      "description": "Overall verdict (e.g. approved, approved-with-concerns, rejected)."
+    },
+    "created": {
+      "type": "string",
+      "format": "date",
+      "description": "Date the review sidecar was authored (YYYY-MM-DD)."
+    },
+    "author": {
+      "type": "string",
+      "description": "Author identifier (agent session or human)."
+    },
+    "title": {
+      "type": "string",
+      "description": "Human-readable label for the review sidecar."
+    },
+    "status": {
+      "type": "string",
+      "description": "Lifecycle state of this sidecar."
+    },
+    "findings_count": {
+      "type": "number",
+      "description": "Total number of findings in this review."
+    },
+    "diff_sha": {
+      "type": "string",
+      "description": "Git SHA the review diff was taken at."
+    },
+    "mode": {
+      "type": "string",
+      "description": "Review mode (e.g. full, focused, rereview)."
+    },
+    "predecessor_review": {
+      "type": "string",
+      "description": "Path to the predecessor review sidecar (for rereview iteration)."
+    },
+    "prior_art_check": {
+      "type": "string",
+      "description": "Path to the prior-art-check sidecar consumed alongside this review."
+    },
+    "scope": {
+      "type": "string",
+      "description": "Free-form scope annotation (e.g. full-plan, diff-only)."
+    }
+  }
+}

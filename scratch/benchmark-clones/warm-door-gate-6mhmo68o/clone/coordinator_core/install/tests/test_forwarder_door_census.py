@@ -1,0 +1,317 @@
+"""Tests for `coordinator_core.install.forwarder_door_census`.
+
+Covers: the classification logic against synthetic fixture scripts (never
+the real `coordinator/bin/`, which drifts), the `(a)`/`(b)` axis evidence
+recorded per row, JSON/table rendering, and the allowlist-population union
+behaviour (`_write_allowlist` never drops a pre-existing entry, e.g. C1's
+seeded `cross-repo-memo`).
+
+WHAT DECIDES A BUCKET, since the axes are no longer symmetric: eligibility
+is axis (b) alone, and only an UNCONTAINED exec-time hazard fails it. Axis
+(a) (op-equivalence) is scanned and recorded but does not gate — so
+`needs-op-extension` is now unreachable, and `engine-unreachable` is
+reached only by a scan error. Tests here assert that asymmetry directly,
+because the shape they replaced (both axes gating, four live buckets)
+condemned 315 of 384 CLIs on one shared bootstrap line.
+"""
+
+from __future__ import annotations
+
+import json
+
+import pytest
+
+from coordinator_core.install import forwarder_door_census as fdc
+
+
+def _write(tmp_path, name: str, body: str):
+    p = tmp_path / name
+    p.write_text(body, encoding="utf-8")
+    return p
+
+
+class TestAxisA:
+    def test_no_client_side_work_passes(self, tmp_path):
+        _write(
+            tmp_path,
+            "clean.py",
+            'def main(argv=None):\n    return 0\n\nif __name__ == "__main__":\n    import sys\n    sys.exit(main())\n',
+        )
+        v = fdc.classify_one("clean", "clean.py", bin_dir=tmp_path)
+        assert v.op_equivalent is True
+        assert v.op_equivalent_evidence == ()
+
+    def test_stat_call_fails_a(self, tmp_path):
+        _write(
+            tmp_path,
+            "statter.py",
+            "import os\n\ndef main(argv=None):\n    st = os.stat('x')\n    return 0\n",
+        )
+        v = fdc.classify_one("statter", "statter.py", bin_dir=tmp_path)
+        assert v.op_equivalent is False
+        assert any("os.stat" in e for e in v.op_equivalent_evidence)
+
+    def test_subprocess_call_fails_a(self, tmp_path):
+        _write(
+            tmp_path,
+            "shelling.py",
+            "import subprocess\n\ndef main(argv=None):\n    subprocess.run(['git', 'status'])\n    return 0\n",
+        )
+        v = fdc.classify_one("shelling", "shelling.py", bin_dir=tmp_path)
+        assert v.op_equivalent is False
+        assert any("subprocess.run" in e for e in v.op_equivalent_evidence)
+
+    def test_glob_and_rglob_fail_a(self, tmp_path):
+        _write(
+            tmp_path,
+            "globber.py",
+            "from pathlib import Path\n\ndef main(argv=None):\n    list(Path('.').rglob('*.py'))\n    return 0\n",
+        )
+        v = fdc.classify_one("globber", "globber.py", bin_dir=tmp_path)
+        assert v.op_equivalent is False
+        assert any(".rglob" in e for e in v.op_equivalent_evidence)
+
+
+class TestAxisB:
+    def test_clean_module_passes_b(self, tmp_path):
+        _write(
+            tmp_path,
+            "clean.py",
+            'def main(argv=None):\n    return 0\n\nif __name__ == "__main__":\n    import sys\n    sys.exit(main())\n',
+        )
+        v = fdc.classify_one("clean", "clean.py", bin_dir=tmp_path)
+        assert v.warm_loadable is True
+        assert v.warm_loadable_evidence == ()
+
+    def test_top_level_sys_path_insert_is_contained_not_disqualifying(self, tmp_path):
+        """`sys.path.insert` at module scope is the engine bootstrap preamble
+        every `coordinator/bin` entrypoint opens with. `_run_entrypoint`
+        snapshots and restores `sys.path` around the module exec, so the shape
+        cannot reach the shared warm server and does NOT fail axis (b).
+
+        The evidence is still RECORDED: containment is a property of the
+        loader, and this row is what re-derives who was relying on it if that
+        containment is ever narrowed.
+        """
+        _write(
+            tmp_path,
+            "pathmut.py",
+            "import sys\nsys.path.insert(0, 'x')\n\ndef main(argv=None):\n    return 0\n",
+        )
+        v = fdc.classify_one("pathmut", "pathmut.py", bin_dir=tmp_path)
+        assert v.warm_loadable is True
+        assert any("sys.path.insert" in e for e in v.warm_loadable_evidence)
+
+    def test_top_level_hard_sys_exit_is_contained_not_disqualifying(self, tmp_path):
+        _write(
+            tmp_path,
+            "hardexit.py",
+            "import sys\n\nif True:\n    sys.exit(1)\n\ndef main(argv=None):\n    return 0\n",
+        )
+        v = fdc.classify_one("hardexit", "hardexit.py", bin_dir=tmp_path)
+        assert v.warm_loadable is True
+        assert any("sys.exit" in e for e in v.warm_loadable_evidence)
+
+    def test_main_guard_body_never_flagged(self, tmp_path):
+        """`sys.exit(main())` inside the `if __name__ == "__main__":` guard
+        never executes under `exec_module` -- must not be flagged."""
+        _write(
+            tmp_path,
+            "guarded.py",
+            'import sys\n\ndef main(argv=None):\n    return 0\n\nif __name__ == "__main__":\n    sys.exit(main())\n',
+        )
+        v = fdc.classify_one("guarded", "guarded.py", bin_dir=tmp_path)
+        assert v.warm_loadable is True
+
+    def test_module_level_call_expr_fails_b(self, tmp_path):
+        _write(
+            tmp_path,
+            "sideeffect.py",
+            "import logging\nlogging.basicConfig()\n\ndef main(argv=None):\n    return 0\n",
+        )
+        v = fdc.classify_one("sideeffect", "sideeffect.py", bin_dir=tmp_path)
+        assert v.warm_loadable is False
+
+    def test_global_at_top_level_fails_b(self, tmp_path):
+        _write(
+            tmp_path,
+            "globaluse.py",
+            "global _X\n_X = 1\n\ndef main(argv=None):\n    return 0\n",
+        )
+        v = fdc.classify_one("globaluse", "globaluse.py", bin_dir=tmp_path)
+        assert v.warm_loadable is False
+        assert any("interpreter-global mutation" in e for e in v.warm_loadable_evidence)
+
+
+class TestBucketing:
+    def test_both_pass_is_door_eligible(self, tmp_path):
+        _write(tmp_path, "clean.py", "def main(argv=None):\n    return 0\n")
+        v = fdc.classify_one("clean", "clean.py", bin_dir=tmp_path)
+        assert v.bucket == "door-eligible"
+
+    def test_a_failing_alone_is_still_door_eligible(self, tmp_path):
+        """Axis (a) does not gate coverage. `invoke.from_argv` runs the CLI's
+        OWN `main(argv)` warm, so client-side work is done warm exactly as it
+        is done cold — it just stops paying an interpreter start. Gating on
+        (a) condemned 104 CLIs for doing legitimate local work.
+
+        (a) stays SCANNED and recorded: it answers the roadmap question of
+        which CLIs could one day become server-side ops.
+        """
+        _write(
+            tmp_path,
+            "statter.py",
+            "import os\n\ndef main(argv=None):\n    os.stat('x')\n    return 0\n",
+        )
+        v = fdc.classify_one("statter", "statter.py", bin_dir=tmp_path)
+        assert v.bucket == "door-eligible"
+        assert v.op_equivalent is False
+        assert any("os.stat" in e for e in v.op_equivalent_evidence)
+
+    def test_uncontained_b_failure_is_needs_warm_safety(self, tmp_path):
+        """Only an UNCONTAINED exec-time hazard disqualifies. `logging.
+        basicConfig` mutates interpreter-global state no `finally` puts back,
+        so unlike `sys.path.insert` it is not admitted."""
+        _write(
+            tmp_path,
+            "sideeffect.py",
+            "import logging\nlogging.basicConfig()\n\ndef main(argv=None):\n    return 0\n",
+        )
+        v = fdc.classify_one("sideeffect", "sideeffect.py", bin_dir=tmp_path)
+        assert v.bucket == "needs-warm-safety"
+
+    def test_both_axes_failing_is_still_only_needs_warm_safety(self, tmp_path):
+        """There is no both-fail bucket any more: (a) does not gate, so a row
+        failing both axes lands wherever (b) puts it. `engine-unreachable` is
+        now reached ONLY by a scan error (see the two tests below)."""
+        _write(
+            tmp_path,
+            "bad.py",
+            "import logging, os\nlogging.basicConfig()\n\ndef main(argv=None):\n    os.stat('x')\n    return 0\n",
+        )
+        v = fdc.classify_one("bad", "bad.py", bin_dir=tmp_path)
+        assert v.bucket == "needs-warm-safety"
+        assert v.op_equivalent is False
+        assert v.scan_error is None
+
+    def test_syntax_error_is_engine_unreachable(self, tmp_path):
+        _write(tmp_path, "broken.py", "def main(:\n    pass\n")
+        v = fdc.classify_one("broken", "broken.py", bin_dir=tmp_path)
+        assert v.bucket == "engine-unreachable"
+        assert v.scan_error is not None
+
+    def test_missing_script_is_engine_unreachable(self, tmp_path):
+        v = fdc.classify_one("ghost", "ghost.py", bin_dir=tmp_path)
+        assert v.bucket == "engine-unreachable"
+        assert v.scan_error is not None
+
+
+class TestCrossRepoMemoCanonicalExample:
+    """DR-365's canonical (a)-failure: `cross-repo-memo list`'s own mtime
+    pass over candidates the op returns unsorted (see that module's own
+    docstring: "Op returns candidates sorted by FILENAME with no mtime/age/
+    stale -- the CLI reproduces the historical mtime-based UX with a
+    minimal stat pass"). Exercised against the REAL file since it is the
+    concrete example the dispatch brief cites -- if this file is ever
+    rewritten to no longer do that stat pass, this test should be revisited
+    alongside it, not silently left green on stale reasoning."""
+
+    def test_real_cross_repo_memo_fails_axis_a(self):
+        from pathlib import Path
+
+        bin_dir = fdc._BIN_DIR
+        script = bin_dir / "cross-repo-memo.py"
+        if not script.is_file():
+            pytest.skip("coordinator/bin/cross-repo-memo.py not present in this checkout")
+        v = fdc.classify_one("cross-repo-memo", "cross-repo-memo.py", bin_dir=bin_dir)
+        assert v.op_equivalent is False
+        assert any("os.stat" in e for e in v.op_equivalent_evidence)
+
+
+class TestRunCensus:
+    def test_run_census_classifies_every_derived_name(self, tmp_path):
+        _write(tmp_path, "one.py", "def main(argv=None):\n    return 0\n")
+        _write(tmp_path, "two.py", "import os\n\ndef main(argv=None):\n    os.stat('x')\n    return 0\n")
+        verdicts = fdc.run_census(bin_dir=tmp_path)
+        names = {v.name for v in verdicts}
+        assert names == {"one", "two"}
+
+    def test_bucket_counts_sum_to_total(self, tmp_path):
+        _write(tmp_path, "one.py", "def main(argv=None):\n    return 0\n")
+        _write(tmp_path, "two.py", "import os\n\ndef main(argv=None):\n    os.stat('x')\n    return 0\n")
+        verdicts = fdc.run_census(bin_dir=tmp_path)
+        counts = fdc.bucket_counts(verdicts)
+        assert sum(counts.values()) == len(verdicts) == 2
+
+    def test_door_eligible_names_sorted(self, tmp_path):
+        _write(tmp_path, "b.py", "def main(argv=None):\n    return 0\n")
+        _write(tmp_path, "a.py", "def main(argv=None):\n    return 0\n")
+        verdicts = fdc.run_census(bin_dir=tmp_path)
+        assert fdc.door_eligible_names(verdicts) == ("a", "b")
+
+
+class TestRendering:
+    def test_to_json_round_trips_and_carries_counts(self, tmp_path):
+        _write(tmp_path, "one.py", "def main(argv=None):\n    return 0\n")
+        verdicts = fdc.run_census(bin_dir=tmp_path)
+        payload = json.loads(fdc.to_json(verdicts))
+        assert payload["counts"]["door-eligible"] == 1
+        assert payload["rows"][0]["name"] == "one"
+
+    def test_render_table_states_performance_axis_disclaimer(self, tmp_path):
+        _write(tmp_path, "one.py", "def main(argv=None):\n    return 0\n")
+        verdicts = fdc.run_census(bin_dir=tmp_path)
+        table = fdc.render_table(verdicts)
+        assert "PERFORMANCE AXIS, NOT A COVERAGE AXIS" in table
+        assert "one" in table
+
+
+class TestAllowlistPopulation:
+    def test_write_allowlist_unions_with_existing_seed(self, tmp_path):
+        allowlist_path = tmp_path / "warm_entrypoint_allowlist.json"
+        allowlist_path.write_text(
+            json.dumps({"entrypoints": ["cross-repo-memo"]}), encoding="utf-8"
+        )
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir()
+        _write(bin_dir, "eligible-one.py", "def main(argv=None):\n    return 0\n")
+        _write(
+            bin_dir,
+            "ineligible-one.py",
+            "import logging\nlogging.basicConfig()\n\ndef main(argv=None):\n    return 0\n",
+        )
+        verdicts = fdc.run_census(bin_dir=bin_dir)
+
+        merged = fdc._write_allowlist(verdicts, allowlist_path=allowlist_path)
+
+        assert "cross-repo-memo" in merged
+        assert "eligible-one" in merged
+        # Excluded on an UNCONTAINED exec-time hazard, the only thing that
+        # disqualifies. A CLI doing client-side work in `main` is eligible.
+        assert "ineligible-one" not in merged
+
+        on_disk = json.loads(allowlist_path.read_text(encoding="utf-8"))
+        assert set(on_disk["entrypoints"]) == set(merged)
+
+    def test_write_allowlist_creates_when_absent(self, tmp_path):
+        allowlist_path = tmp_path / "fresh_allowlist.json"
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir()
+        _write(bin_dir, "eligible-one.py", "def main(argv=None):\n    return 0\n")
+        verdicts = fdc.run_census(bin_dir=bin_dir)
+
+        merged = fdc._write_allowlist(verdicts, allowlist_path=allowlist_path)
+
+        assert merged == ("eligible-one",)
+        assert allowlist_path.is_file()
+
+
+class TestNegativeSpecNeverCountsInstalledFiles:
+    def test_run_census_never_touches_settings_home(self, tmp_path, monkeypatch):
+        """Classification must derive from `bin_dir` (generator state) only
+        -- pointing HOME at a directory with no settings-home bin/ must not
+        raise or otherwise attempt to read an installed-files listing."""
+        monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "nonexistent-settings-home"))
+        _write(tmp_path, "one.py", "def main(argv=None):\n    return 0\n")
+        verdicts = fdc.run_census(bin_dir=tmp_path)
+        assert len(verdicts) == 1

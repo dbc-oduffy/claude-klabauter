@@ -2725,6 +2725,7 @@ def _scaffold_roadmap_baton(
     handoff_id: str | None = None,
     gate_dependency: str | None = None,
     sizing_object: str | None = None,
+    blocks: list[str] | None = None,
 ) -> str:
     """Generate validator-clean roadmap-baton frontmatter + canonical section skeleton.
 
@@ -2734,7 +2735,29 @@ def _scaffold_roadmap_baton(
     gate_dependency (deprecated), blocked_by, or blocking_notes; category/summary
     required post-2026-05-29).
 
-    Graph field placeholders (sprint, wave, cost, blocks, blocked_by, scope) are
+    `blocks` (--blocks, repeatable) is the ONE graph field that is carried rather
+    than stubbed, because it is the one a continuation SILENTLY LOSES. A roadmap
+    baton picked up mid-flight mints a successor under the same `stub_id`; the
+    successor got `blocks: []` from the placeholder list below while the whole
+    down-graph still pointed at that `stub_id`, so every dependent's
+    `blocks`/`blocked_by` symmetry check read the edge as severed and
+    `reconcile.gate_eval._has_asymmetry` reported a symmetric graph as a data
+    defect. Losing an edge on continuation is not a placeholder to fill in later —
+    nothing tells the author it went missing. Carried through VERBATIM, never
+    resolved, deduped, or validated here: the caller (baton_assemble's
+    `_resolved_predecessor_roadmap_identity`) reads the predecessor's own authored
+    list and this scaffolder emits exactly what it is handed, on the same
+    carry-through terms as `--deliverable-ids`/`--additional-predecessor`. Omitted
+    → `blocks: []`, byte-identical to every caller that does not pass it.
+
+    Still NOT carried, named rather than silently dropped: `blocked_by`, `sprint`,
+    `wave`. `blocked_by` is deliberately excluded — it is DERIVED readiness state
+    (`--gated-open` owns it, and `_derive_readiness` reads it), so inheriting a
+    predecessor's gates would re-park a successor on blockers that may have since
+    cleared. `sprint`/`wave` are topo-sort outputs owned by
+    `bin/roadmap-number-stubs`, not lineage.
+
+    Graph field placeholders (sprint, wave, cost, blocked_by, scope) are
     best-effort stubs — the author fills them via Edit after the topo sort via
     bin/roadmap-number-stubs (skills/roadmap-planning/SKILL.md § Step 2.1.5).
     gate_dependency is the deprecated single-string gate field (C2); when not
@@ -2799,7 +2822,14 @@ def _scaffold_roadmap_baton(
         "wave: 1    # fill from roadmap-number-stubs topo output (Step 2.1.5)",
         "cost: T1   # T0 trivial | T1 small (<1h) | T2 medium (1-4h) | T3 multi-day",
         "deployment_state: awaiting_gate",
-        "blocks: []",
+    ]
+    _blocks = [b.strip() for b in (blocks or []) if isinstance(b, str) and b.strip()]
+    if _blocks:
+        lines.append("blocks:")
+        lines.extend(f"  - {_yaml_quote(_entry)}" for _entry in _blocks)
+    else:
+        lines.append("blocks: []")
+    lines += [
         "blocked_by: []",
         "scope:",
         "  - PLACEHOLDER  # replace with in-scope pathspecs (git pathspec syntax)",
@@ -3249,8 +3279,17 @@ def _scaffold_plan(
 
     Produces a conformant plan against schemas/plan.yaml: required title/created/
     author/status:draft + commented skeleton of promoted optional keys + the
-    canonical four-section body (## Problem / ## Acceptance Criteria /
-    ## Anti-scope / ## Out of scope as DISTINCT sections per D2).
+    canonical three-section body (## Problem / ## Anti-scope / ## Out of scope
+    as DISTINCT sections per D2).
+
+    Negative-spec: no `## Acceptance Criteria` heading is emitted. The AC table
+    is a retired row family (forward-only, PM ruling 2026-08-27, DoE-claude
+    pln-collapse-the-ac-checkbox-table-c53bbc): a criterion that must be
+    discharged is a `## Tasks` spine row, where `close_out_and_stamp`'s
+    `spine_fully_resolved` gate and `d-harvest-deferrals` actually reach it;
+    everything else rides `prime_exit_criterion`'s falsifier delta. Existing
+    plans keep their tables as paper trail -- do NOT reintroduce the heading
+    here to match them.
 
     plan_id is minted fresh (pln-<slug>-<6hex>) — always present, never null (D3).
     deliverable_id is auto-inherited from DELIVERABLE_ID env var or minted fresh
@@ -3337,10 +3376,6 @@ def _scaffold_plan(
         "## Problem",
         "",
         "<!-- State the problem this plan solves. -->",
-        "",
-        "## Acceptance Criteria",
-        "",
-        "<!-- Checklist or table the EM gates completion against. -->",
         "",
         "## Anti-scope",
         "",
@@ -5418,6 +5453,24 @@ Spec backlink (workflow): pln-workflow-skeleton-stamper-maki-adab0d
             "Defaults to placeholder-stub-1 when omitted."
         ),
     )
+    parser.add_argument(
+        "--blocks",
+        dest="blocks",
+        action="append",
+        default=None,
+        metavar="STUB_ID",
+        help=(
+            "(roadmap-baton) Repeatable, one blocked stub_id per occurrence — NOT "
+            "comma-joined (same rationale as --deliverable-ids: a comma-split "
+            "re-introduces the quoting seam the .cmd launcher mangles). Carried as-is "
+            "verbatim: never resolved, deduped, or validated here. Exists so a "
+            "CONTINUATION does not silently drop the down-edges its predecessor "
+            "authored — a successor minted under the same stub_id with blocks: [] "
+            "reads to every gate check as a severed graph, which is what the "
+            "blocks/blocked_by asymmetry surface then reports as a data defect. "
+            "Omitted -> blocks: [], byte-identical to callers that do not pass it."
+        ),
+    )
 
     # Goal-seed / roadmap-seed fields.
     parser.add_argument(
@@ -6247,6 +6300,7 @@ def main() -> None:
             handoff_id=_resolved_handoff_id,
             gate_dependency=args.gate_dependency,
             sizing_object=("null" if args.no_sizing_object else args.sizing_object),
+            blocks=args.blocks,
         )
     elif doc_type == "goal-seed":
         _goals_list = [g.strip() for g in args.goals.split(",") if g.strip()] if args.goals else None

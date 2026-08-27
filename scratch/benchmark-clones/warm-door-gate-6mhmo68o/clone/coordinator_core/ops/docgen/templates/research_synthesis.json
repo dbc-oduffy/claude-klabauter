@@ -1,0 +1,42 @@
+{
+  "format_version": "docgen-template/v1",
+  "doc_type": "research-synthesis",
+  "frontmatter": {
+    "style": "fenced",
+    "fields": [
+      {"kind": "value", "key": "title", "field": "title", "quote": true},
+      {"kind": "literal", "line": "question: \"PLACEHOLDER — replace with the research question this synthesis addresses\""},
+      {"kind": "value", "key": "created", "field": "created", "quote": false},
+      {"kind": "literal", "line": "pipeline: web  # one of: web | repo | structured | notebooklm"},
+      {"kind": "literal", "line": "# source_count: 0  # fill with number of sources consulted"},
+      {"kind": "literal", "line": "topic_facets: []  # fill with list of topic facets/sub-themes covered"},
+      {"kind": "literal", "line": "# coverage_score: 0  # fill with 1-5 coverage score from gap-report"},
+      {"kind": "literal", "line": "# confidence_summary: \"\"  # optional; prefer research-claim confidence= queries"}
+    ]
+  },
+  "body": [
+    {"kind": "raw", "lines": [
+      "",
+      "## Executive Summary",
+      "",
+      "<!-- author fills -->",
+      "",
+      "## Findings",
+      "",
+      "<!-- author fills -->",
+      "",
+      "## Conclusion",
+      "",
+      "<!-- author fills -->",
+      "",
+      "## Open Questions",
+      "",
+      "<!-- author fills -->",
+      "",
+      "## Source Bibliography",
+      "",
+      "<!-- author fills -->",
+      ""
+    ]}
+  ]
+}

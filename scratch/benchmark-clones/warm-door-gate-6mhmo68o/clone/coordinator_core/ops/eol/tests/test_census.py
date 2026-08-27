@@ -1,0 +1,299 @@
+"""coordinator_core.ops.eol.tests.test_census -- op tests for "eol.census".
+
+House convention (a)-(e), per this plan's C6 body:
+  (a) registration -- the op lands in the live _REGISTRY on import.
+  (b) negative paths -- missing target_root -> ValueError; a propagating
+      PathEscapeError is not swallowed by the handler.
+  (c) end-to-end round trip through the registered handler, against a
+      fixture repo carrying one violation of EACH direction plus one dirty
+      file that must be reported (flagged dirty, never dropped -- census
+      reports dirty violations, repair is what skips them, C3).
+  (d) a real dispatch_message() command-type smoke -- the _OP_KEY_SCOPE
+      keying path in-process handler tests do not exercise. A missing/wrong
+      op_scopes.py entry (e.g. "show_top"/"common_dir" instead of "none")
+      would raise ValueError here demanding `_origin_worktree`, since this
+      call deliberately omits that envelope field -- exactly the shape a
+      sibling repo's caller sends.
+  (e) classification assertion -- eol.census is OpClass.COMPUTE_ONLY, the
+      DR-208 affirmation granted at review per C5 (a read: three batched
+      read-only git spawns plus Path.read_bytes(), no write on any path).
+
+Spawns real `git` against a fixture repo -- tiered off the per-commit path
+per this repo's spawn ratchet (coordinator_core/tests/test_no_new_spawning_tests.py).
+
+Spec backlink: docs/plans/2026-08-20-every-repo-detects-its-own-eol-drift.md § C2, C6
+"""
+
+from __future__ import annotations
+
+import asyncio
+import subprocess
+
+import pytest
+
+# ---------------------------------------------------------------------------
+# Import guard -- MUST precede any test so @register_op fires first.
+# ---------------------------------------------------------------------------
+import coordinator_core.ops.eol.census  # noqa: F401 -- fires @register_op
+
+from coordinator_core.authz.classification import OP_CLASSIFICATION, OpClass
+from coordinator_core.cartography._guard import PathEscapeError
+from coordinator_core.ipc import _REGISTRY, dispatch_message
+from coordinator_core.ops.eol.census import _eol_census, census
+from coordinator_core.win_portability import no_console_creationflags
+
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
+_OP_NAME = "eol.census"
+
+
+def _git(cwd, *args):
+    return subprocess.run(
+        ["git", "-C", str(cwd), *args],
+        capture_output=True,
+        text=True,
+        check=False,
+        **no_console_creationflags(),
+    )
+
+
+def _new_fixture_repo(tmp_path):
+    """A committed tree carrying one clean violation of EACH direction
+    (a.txt declared lf holding CRLF, b.txt declared crlf holding LF-only)
+    plus one file (c.txt) left dirty after its own committed violation --
+    the "must be skipped" file this plan's repair op (C3) excludes, that
+    census must still REPORT with dirty=True (AC1: every tracked path).
+    """
+    d = tmp_path / "repo"
+    d.mkdir()
+    _git(d, "init", "-q")
+    _git(d, "config", "user.email", "t@t")
+    _git(d, "config", "user.name", "t")
+    _git(d, "config", "core.autocrlf", "false")
+    (d / ".gitattributes").write_text(
+        "a.txt eol=lf\nb.txt eol=crlf\nc.txt eol=lf\n", newline="\n"
+    )
+    _git(d, "add", ".gitattributes")
+    _git(d, "commit", "-qm", "attrs")
+
+    with open(d / "a.txt", "wb") as fh:
+        fh.write(b"alpha\r\nbeta\r\n")
+    with open(d / "b.txt", "wb") as fh:
+        fh.write(b"gamma\ndelta\n")
+    with open(d / "c.txt", "wb") as fh:
+        fh.write(b"epsilon\r\nzeta\r\n")
+    _git(d, "add", "a.txt", "b.txt", "c.txt")
+    _git(d, "commit", "-qm", "violations")
+
+    # Leave c.txt dirty -- a further uncommitted edit, still violating.
+    with open(d / "c.txt", "wb") as fh:
+        fh.write(b"epsilon\r\nzeta\r\nETA\r\n")
+
+    return d
+
+
+# ---------------------------------------------------------------------------
+# (a) registration
+# ---------------------------------------------------------------------------
+
+
+def test_registration():
+    assert _OP_NAME in _REGISTRY, (
+        f"import guard failed: {_OP_NAME!r} not in _REGISTRY -- "
+        "coordinator_core.ops.eol.census @register_op did not fire"
+    )
+
+
+# ---------------------------------------------------------------------------
+# (b) negative paths
+# ---------------------------------------------------------------------------
+
+
+def test_missing_target_root_raises_value_error():
+    with pytest.raises(ValueError, match="target_root"):
+        _eol_census({})
+
+
+def test_path_escape_error_propagates_uncaught(monkeypatch):
+    import coordinator_core.ops.eol.census as mod
+
+    def boom(target_root, path):
+        raise PathEscapeError("forced escape")
+
+    monkeypatch.setattr(mod, "path_guard", boom)
+
+    with pytest.raises(PathEscapeError):
+        _eol_census({"target_root": "whatever"})
+
+
+# ---------------------------------------------------------------------------
+# (c) end-to-end round trip
+# ---------------------------------------------------------------------------
+
+
+def test_end_to_end_bidirectional_violations_and_dirty_flag(tmp_path):
+    d = _new_fixture_repo(tmp_path)
+
+    result = _eol_census({"target_root": str(d)})
+
+    by_path = {v["path"]: v for v in result["violations"]}
+    assert by_path["a.txt"] == {
+        "path": "a.txt",
+        "declared": "lf",
+        "found": "crlf-present",
+        "dirty": False,
+    }
+    assert by_path["b.txt"] == {
+        "path": "b.txt",
+        "declared": "crlf",
+        "found": "lf-only",
+        "dirty": False,
+    }
+    assert by_path["c.txt"]["dirty"] is True
+    assert by_path["c.txt"]["declared"] == "lf"
+
+    assert result["violation_count"] == 3
+    assert result["dirty_violation_count"] == 1
+    assert result["tracked_count"] == 4  # .gitattributes, a.txt, b.txt, c.txt
+    assert result["declaration_coverage"] == {
+        "unspecified_count": 1,  # .gitattributes carries no eol declaration
+        "declared_count": 3,
+    }
+
+
+# ---------------------------------------------------------------------------
+# (d) dispatch_message wire smoke -- the _OP_KEY_SCOPE keying path
+# ---------------------------------------------------------------------------
+
+
+def test_dispatch_message_wire_smoke_without_origin_worktree(tmp_path):
+    """No `_origin_worktree` envelope field -- the sibling-repo caller
+    shape. Proves op_scopes.py keys eol.census "none": a wrong scope entry
+    (e.g. "show_top") would raise here demanding _origin_worktree, a defect
+    the in-process handler tests above cannot see."""
+    d = _new_fixture_repo(tmp_path)
+    msg = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": _OP_NAME,
+        "params": {"target_root": str(d)},
+    }
+    response = asyncio.run(dispatch_message(msg))
+
+    assert "error" not in response, response.get("error")
+    result = response["result"]
+    assert result["violation_count"] == 3
+
+
+# ---------------------------------------------------------------------------
+# (e) classification
+# ---------------------------------------------------------------------------
+
+
+def test_classified_compute_only():
+    assert OP_CLASSIFICATION[_OP_NAME] is OpClass.COMPUTE_ONLY
+
+
+# ---------------------------------------------------------------------------
+# F1 -- binary-content guard, both halves
+# ---------------------------------------------------------------------------
+
+
+def test_wildcard_eol_crlf_over_binary_content_is_not_a_violation(tmp_path):
+    """Regression for the critical finding: a wildcard `* text=auto
+    eol=crlf` declaration makes `check-attr eol` answer `crlf` for a binary
+    path too, and `text=auto` reports the literal "auto" macro value from
+    `check-attr text` rather than a per-file binary verdict -- so the
+    `text`-attribute guard alone cannot exclude this path. The NUL-byte
+    belt-and-braces guard must."""
+    d = tmp_path / "repo"
+    d.mkdir()
+    _git(d, "init", "-q")
+    _git(d, "config", "user.email", "t@t")
+    _git(d, "config", "user.name", "t")
+    _git(d, "config", "core.autocrlf", "false")
+    (d / ".gitattributes").write_bytes(b"* text=auto eol=crlf\n")
+    _git(d, "add", ".gitattributes")
+    _git(d, "commit", "-qm", "attrs")
+
+    # b"\n" present, no b"\r\n" at all, and a NUL byte -- the shape that
+    # would otherwise be flagged "crlf declared, lf-only found" (a real
+    # eol.repair candidate) if the belt-and-braces guard did not exclude it.
+    binary_content = b"\x00\x01\x02fake\nbinary\x00content\n"
+    (d / "image.bin").write_bytes(binary_content)
+    _git(d, "add", "image.bin")
+    _git(d, "commit", "-qm", "binary")
+
+    result = census(d)
+
+    assert "image.bin" not in {v["path"] for v in result["violations"]}
+
+
+def test_explicit_binary_attribute_is_not_a_violation(tmp_path):
+    """The other half of F1: a path with an explicit `binary` macro (which
+    implies `-text`) reports `text: unset` from `check-attr`, distinct from
+    the `text=auto` case above -- the `text`-attribute guard must exclude
+    it directly, without needing the NUL-byte fallback."""
+    d = tmp_path / "repo"
+    d.mkdir()
+    _git(d, "init", "-q")
+    _git(d, "config", "user.email", "t@t")
+    _git(d, "config", "user.name", "t")
+    _git(d, "config", "core.autocrlf", "false")
+    (d / ".gitattributes").write_bytes(
+        b"* text=auto eol=crlf\nblob.bin binary\n"
+    )
+    _git(d, "add", ".gitattributes")
+    _git(d, "commit", "-qm", "attrs")
+
+    # No NUL byte here -- if the text-attribute guard were absent, only the
+    # belt-and-braces NUL check would be left, and this content would slip
+    # past it, proving the two guards are independently necessary.
+    binary_like_content = b"fake\nbinary-ish\ncontent\n"
+    (d / "blob.bin").write_bytes(binary_like_content)
+    _git(d, "add", "blob.bin")
+    _git(d, "commit", "-qm", "binary")
+
+    result = census(d)
+
+    assert "blob.bin" not in {v["path"] for v in result["violations"]}
+
+
+# ---------------------------------------------------------------------------
+# F3 -- subdirectory target_root is refused
+# ---------------------------------------------------------------------------
+
+
+def test_subdirectory_target_root_is_refused(tmp_path):
+    d = _new_fixture_repo(tmp_path)
+    sub = d / "sub"
+    sub.mkdir()
+    (sub / "keep.txt").write_bytes(b"hi\n")
+    _git(d, "add", "sub/keep.txt")
+    _git(d, "commit", "-qm", "sub")
+
+    with pytest.raises(PathEscapeError):
+        _eol_census({"target_root": str(sub)})
+
+
+# ---------------------------------------------------------------------------
+# F4 -- census reads tracked files uncached
+# ---------------------------------------------------------------------------
+
+
+def test_census_reads_tracked_files_uncached(tmp_path, monkeypatch):
+    d = _new_fixture_repo(tmp_path)
+    seen_kwargs = {}
+    import coordinator_core.ops.eol.census as mod
+
+    real = mod.tracked_files_bytes
+
+    def spy(root, pathspec=".", use_cache=True):
+        seen_kwargs["use_cache"] = use_cache
+        return real(root, pathspec, use_cache=use_cache)
+
+    monkeypatch.setattr(mod, "tracked_files_bytes", spy)
+
+    census(d)
+
+    assert seen_kwargs.get("use_cache") is False

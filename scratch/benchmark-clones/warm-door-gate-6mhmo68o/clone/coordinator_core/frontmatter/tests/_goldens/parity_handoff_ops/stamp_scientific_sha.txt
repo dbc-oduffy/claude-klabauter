@@ -1,0 +1,14 @@
+---
+title: Parity Stamp Test
+created: 2026-01-01
+branch: work/test/2026-01-01
+status: consumed
+consumed_at: '2026-01-02T10:00:00Z'
+shipped_in: '1958e194'
+consumed_by: session-stamp-test
+predecessor: none
+---
+
+# Parity Stamp Test
+
+Body text.

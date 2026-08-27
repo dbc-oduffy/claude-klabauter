@@ -1,0 +1,14 @@
+---
+title: Parity Test Handoff
+created: 2026-01-01
+branch: work/test/2026-01-01
+status: consumed
+deployment_state: in_flight
+consumed_at: '2026-01-02T10:00:00Z'
+consumed_by: session-parity-test-abc
+predecessor: none
+---
+
+# Parity Test Handoff
+
+Body text for parity testing.

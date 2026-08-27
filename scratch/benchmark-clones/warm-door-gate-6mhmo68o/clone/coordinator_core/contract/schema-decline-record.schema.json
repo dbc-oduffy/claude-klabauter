@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://claude-klabauter/coordinator_core/contract/schema-decline-record.schema.json",
+  "title": "Vendored-schema decline record",
+  "description": "A deliberate, session-surviving refusal to re-vendor an upstream DoE schema shape, recorded by `bin/claude-klabauter-revendor-schema.py --decline` at `state/schema-decline-records/<schema>.json` and read back by `_decline_gate_reasons` to block a re-vendor that reproduces the declined shape. Self-expires the moment EITHER the incoming `x-schema-version` or the incoming shape hash moves off what was declined (see `declared_schema_version`'s description) — an operator never has to hand-clear a decline upstream already resolved.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "declined_shape_hash",
+    "declined_schema_version",
+    "reason",
+    "backout_sha",
+    "declared_ref",
+    "declared_doe_sha",
+    "declared",
+    "status"
+  ],
+  "properties": {
+    "schema": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]*[a-z0-9]$",
+      "description": "Basename of the vendored schema this decline applies to, without the `.schema.json` suffix (e.g. 'handoff'). Matches a file under coordinator_core/frontmatter/schemas/ — `_write_decline` refuses to record a decline for a name that is not currently vendored."
+    },
+    "declined_shape_hash": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "description": "semantic_shape_hash() of the DECLINED upstream schema's parsed JSON at the moment of decline — the VALIDATION shape, not the raw bytes. The gate re-hashes the incoming schema the same way and only blocks when this matches, so a cosmetic upstream edit (whitespace, comment, key order) that leaves validation behavior unchanged still blocks, while any shape-affecting edit self-expires the decline."
+    },
+    "declined_schema_version": {
+      "type": "string",
+      "description": "The upstream schema's `x-schema-version` at the moment of decline. This is the field whose movement self-expires the record: `_decline_gate_reasons` compares this against the INCOMING schema's `x-schema-version` on every re-vendor attempt, and the moment they differ the decline no longer applies — no matter how similar the shapes still look. This is the intended real-world resolution path (upstream bumping the version past the declined shape), not a bug to guard against; a decline is a refusal of ONE version's shape, not a standing ban on the schema."
+    },
+    "reason": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Free-text rationale for why this exact shape at this exact version was declined. Surfaced verbatim in the gate's blocking message so a future operator sees WHY, not just THAT, a re-vendor is blocked."
+    },
+    "backout_sha": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{7,40}$",
+      "description": "Commit SHA (7-40 hex chars) of the backout that reverted the bad re-vendor this decline records against. Same shape as plan-tasks.schema.json's `disposition_ref` for a 'coded' disposition (DR-096 singular-referent constraint) — one commit, not a range or list. `_write_decline` requires and validates this before writing."
+    },
+    "declared_ref": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The git ref (branch, tag, or SHA) the operator resolved against DoE when recording this decline, e.g. 'main' or 'HEAD'. Kept alongside `declared_doe_sha` (its resolved form) so the record shows both what was asked for and what was actually read."
+    },
+    "declared_doe_sha": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{7,40}$",
+      "description": "The DoE commit SHA that `declared_ref` resolved to at decline time — the exact commit the declined schema bytes were read from."
+    },
+    "declared": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+      "description": "UTC date (YYYY-MM-DD) the decline was recorded, per `time.strftime(\"%Y-%m-%d\", time.gmtime())` in `_write_decline`. Provenance only — the gate never reasons about age, only about version/shape match."
+    },
+    "status": {
+      "type": "string",
+      "const": "active",
+      "description": "Always 'active' for a live record — `_load_decline_record` treats any other value (or absence of the key) as inactive and returns None, so the gate never fires. No writer in this repo currently produces a non-'active' record; the field exists so a future manual edit can retire a decline in place without deleting the file."
+    }
+  }
+}

@@ -1,0 +1,368 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://coordinator.local/schemas/plan.schema.json",
+  "x-schema-name": "plan",
+  "x-schema-version": "2.8.0",
+  "x-bump-class": "nested-field-additive",
+  "x-bump-note": "2.7.0 -> 2.8.0 replaces the delta rule with a verdict rule: `prime_exit_criterion.falsifier` gains a required `expected_when_true` field stating what the observation yields when the criterion is TRUE, and `exit_criterion_met` gains an optional `falsifier_verdict` (pass|fail) recording whether the re-run matched it. `baseline_output` and the baseline-must-be-RED requirement are unchanged. A delta-only comparison (refuse only when `falsifier_output` equals `baseline_output`) cannot distinguish 'fixed' from 'differently wrong' — replayed against `pln-route-c-resolves-the-imported-fa0c5d`, a non-null delta (five wrong candidates pruned to none) passed the old rule while the stated criterion (resolve to the true target) remained unmet; see `state/plan-falsifiers/2026-08-27-plan-goal-as-a-first-class-exit-criterion.md`. The unchanged-output case needs no separate rule under the verdict test — an inert change also fails to match `expected_when_true`. Neither `prime_exit_criterion` nor `exit_criterion_met` enters top-level `required` (grandfathering holds); `falsifier_exemption` is unchanged. Spec backlink: pln-plan-goal-as-a-first-class-exit-criterion. 2.6.0 -> 2.7.0 adds a `pattern` to `prime_exit_criterion.derived_from`, narrowing it from an unconstrained string to the two shapes its description always named: a `state/sizings/<id>.yaml` path or a `<goal_id>#kr-<kr-id>` key-result reference into the existing per-repo goal plane (goal.schema.json), wiring the field onto that plane instead of leaving it a same-repo-only convention beside it. Every plan on disk before this bump used only the sizing-path form (grep-verified against docs/plans/*.md at bump time), so no live document is invalidated. This does NOT add an `evidence_source`-shaped field to `key_results[]`, does NOT retrofit a falsifier onto any existing KR, and does NOT gate `/goal-setting` — the link stays optional and KR-pointing is never mandatory, since most plans serve no named KR. Spec backlink: pln-plan-goal-as-a-first-class-exit-criterion § C16. 2.5.0 -> 2.6.0 declares `prime_exit_criterion` and `exit_criterion_met`, both optional top-level objects, neither in `required` — a plan on disk before this bump validates unchanged (grandfathered, never backfilled). `prime_exit_criterion` carries `statement`+`derived_from` always, plus a `falsifier` (how/baseline_output/baseline_ref) required only for plans whose `sizing_object`-linked `estimate.tshirt` is M/L/XL, enforced READ-SIDE since t-shirt size lives in the external sizing-object document and this schema cannot condition on a sibling document's content. `falsifier_exemption` is the narrow, NAMED escape hatch for a genuinely un-falsifiable-by-observation M+ criterion (doctrine/schema edits with no runtime behaviour to observe) — mutually exclusive with `falsifier`, distinct from and never merged with the size carve-out, and never `falsifier: optional`. `exit_criterion_met` carries `asserted` (required within the object; `false` is legitimate and then requires `reason`) plus `falsifier_output`/`prose`. Neither field is the retired acceptance oracle — PM ruling, 2026-08-27, five distinguishing axes (cardinality, typing, chooser, judge, target artifact); see `docs/wiki/coordinator-tripwires/tripwire-registry/acceptance-oracle-gate-retired.md`. Spec backlink: pln-plan-goal-as-a-first-class-exit-criterion § C1. 2.4.0 -> 2.5.0 declares the three-field code-review attest stamp — `review_verified_by`, `review_verified_at`, `review_verified_findings`, all optional top-level scalars, written together in one locked_rmw mutate closure alongside a terminal `status: implemented`. Rides the `status_override_{by,reason,at}` precedent this schema declared at 2.2.0 verbatim in shape and in write discipline; the writer is claude-klabauter's `plan-status-transition`, never a ceremony's frontmatter edit. `review_verified_findings` carries the `state/review-trail/findings/...` path rather than a bare count, because a count is a lossy copy of a record that already exists on disk and drifts from it — and because the path IS the idempotence key: a re-run of the same wrap with an unchanged path is a no-op, while a genuine second review after fixes produces a new path and writes. NEGATIVE SPEC: this is deliberately NOT a new `status` enum value. The review fact is a quality signal, not a liveness signal, and an enum widen would force reconciliation across five deliberately-disagreeing plan-status partitions (`PLAN_ARCHIVABLE_STATUS`, `PLAN_ORPHAN_TERMINAL_STATUS`, `PLAN_TERMINAL_STATUS`, `_FROZEN_STATUSES`, `records_query.liveness()`) across four repos' plan corpora; the ordering the fact needs is served by a derived `plan_review_verified(plan)` predicate in the emit/cockpit layer, which touches no partition. Absence means \"no code review recorded\", never \"review failed\" — nothing gates a close-out on these fields. Classified nested-field-additive: three new optional top-level scalars, nothing removed, no domain narrowed, every document valid under 2.4.0 still validates — but a mirrored consumer enumerating plan frontmatter keys exhaustively could silently ignore them until updated. Canonical-side declaration answering claude-klabauter's ask (cross-repo/inbox/2026-08-20-claude-klabauter-em-review-verified-schema-fields-ask.md); they re-vendor via bin/claude-klabauter-revendor-schema.py. The pre-existing `review_signals` mirror drift is NOT closed by this bump and needs its own hand reconciliation (claude-klabauter:state/bug-backlog/2026-08-12-three-vendored-schemas-diverge-from-doe-ffd893950268.yaml). Spec backlink: pln-a-plan-s-status-advances-itsel-fb8bf2 § C1(c). Full prior-version history: coordinator/schemas/SCHEMA-BUMP-HISTORY.md § plan.schema.json.",
+  "applies_to": "docs/plans/*.md",
+  "description": "Plan frontmatter schema. The active-execution value is 'executing', NOT the intuitive 'execution'. 'implemented' means work is done on the working branch — whether it merged to main is tracked in completion log + handoff deployment_state, NOT here.",
+  "type": "object",
+  "required": ["title", "created", "author", "status"],
+  "properties": {
+    "title": {
+      "type": "string",
+      "description": "Human-readable title for the plan."
+    },
+    "created": {
+      "type": "string",
+      "format": "date",
+      "description": "Date the plan was authored (YYYY-MM-DD)."
+    },
+    "author": {
+      "type": "string",
+      "description": "Agent or person who authored this plan."
+    },
+    "status": {
+      "type": "string",
+      "enum": ["draft", "reviewed", "approved", "executing", "landed", "implemented", "deferred", "abandoned", "superseded"],
+      "description": "Lifecycle state. Common slip: active-execution value is 'executing', NOT 'execution'. 'landed' sits between 'executing' and 'implemented': every chunk's code is on the branch, but not every spine row has reached a disposition yet. It is NOT terminal — a plan in 'landed' still has outstanding row-level work to close out before it can move to 'implemented'."
+    },
+    "branch": {
+      "type": "string",
+      "description": "Working branch this plan is being executed on."
+    },
+    "reviewer": {
+      "type": "string",
+      "description": "Reviewer(s) who approved this plan."
+    },
+    "source": {
+      "type": "string",
+      "description": "Origin reference (e.g. a handoff slug, memo path, or external prompt)."
+    },
+    "superseded_by": {
+      "type": "string",
+      "description": "Path or slug of the plan that supersedes this one."
+    },
+    "scope_mode": {
+      "type": "string",
+      "description": "Planning posture (e.g. 'architecture', 'implementation', 'spike', 'spec-dispatch' — the S-lane posture routed from coordinator:sizing: a light plan artifact scaffolded then dispatched, skipping the Opus plan review)."
+    },
+    "problem_set": {
+      "type": "string",
+      "description": "Ratified problem-set slug or inline statement (from /shape)."
+    },
+    "predecessor_handoff": {
+      "anyOf": [
+        { "type": "string" },
+        { "type": "null" }
+      ],
+      "description": "The handoff that spawned this plan (distinct from parent_plan). Nullable, for the same reason sizing_object is: an explicit null is the sanctioned 'this plan has no resolvable predecessor handoff' answer — a forced declaration rather than an omission, which is what makes the absence checkable. Written with an inline reason naming why (target never authored, or archived-then-pruned). 42 rows were set this way on 2026-08-14; the disposition ledger is state/audits/2026-08-13-predecessor-handoff-fk-disposition.md. A non-null value is expected to resolve on disk, literally or archive-relative — the FK is archive-agnostic by design and readers resolve archive-relative (docs/decisions/DR-159-predecessor-handoff-fk-is-archive-agnostic-by-design.md), so a value resolving only under archive/ is correct, not broken. Referential integrity is enforced by coordinator/tests/test_archive_handoff_referrer_guard.py."
+    },
+    "prerequisite_of": {
+      "type": "string",
+      "description": "Downstream plan(s) that depend on this plan completing first."
+    },
+    "source_memo": {
+      "anyOf": [
+        { "type": "string" },
+        { "type": "array", "items": { "type": "string" } }
+      ],
+      "description": "Cross-repo memo(s) that initiated this plan. May be a single path or a list."
+    },
+    "scope": {
+      "anyOf": [
+        { "type": "string" },
+        { "type": "array", "items": { "type": "string" } }
+      ],
+      "description": "In-scope items for this plan (list-of-string preferred; legacy string values accepted)."
+    },
+    "agent_sessions": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Sessions that executed this plan. Runtime-appended by append-plan-session.sh after a successful plan claim (execute-plan Phase 1.5 Step 0); NOT scaffolded onto new plans. Each entry is the encoded string \"<session_id>|<status>|<created_at>\": session_id is UUID-shaped (contains no '|'); status is an OPEN string ('working' at the Phase-0 fire point, not a closed enum); created_at is ISO-8601 UTC. All three fields are non-empty at write time — consumers must NOT use `IFS='|' read -ra` if a future field could be empty (read -ra silently drops trailing empty fields). Append-only: never rewrite or reorder peer entries."
+    },
+    "deliverable_id": {
+      "anyOf": [{"type": "string", "pattern": "^dlv-(?!placeholder-replace-with)[0-9a-zA-Z][0-9a-zA-Z.-]*$"}, {"type": "null"}],
+      "description": "Durable deliverable join key. Minted once at the earliest artifact and carried verbatim by every downstream artifact. dlv-<stub_id> for roadmap-stub origins; dlv-<slug>-<6hex> for standalone plan origins. Cross-field rule enforces 'dlv-' prefix when non-null. Null for pre-backfill plans. Spec backlink: claude-klabauter:pln-fleet-deliverable-spine-identity-and-facets-2b331c § D1"
+    },
+    "sizing_object": {
+      "anyOf": [
+        {
+          "pattern": "^state/sizings/.+\\.yaml$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "FK to the sizing-object (state/sizings/<id>.yaml) that routed this plan through coordinator:sizing. Optional and nullable in this schema; the requirement is enforced READ-SIDE in claude-klabauter (coordinator_core/ops/assert_plan_sizing_citation.py), never here. A plan created on/after 2026-08-06 must carry EITHER a resolving state/sizings/<id>.yaml path OR an explicit null — explicit null is the sanctioned 'no sizing object' answer, a forced declaration rather than a bypass, which is what makes the absence checkable at all. Plans created before that cutoff are permanently exempt and must NOT be backfilled: the large majority of the on-disk corpus predates the convention, and requiring it of them would invalidate the corpus. When present, the referenced file is expected to resolve on disk. Frontmatter-only: this field is never read from plan BODY prose, and no check compares its value against the plan's problem restatement — a body-scanning or intent-matching variant is out of scope by design (it fires on a plan that legitimately documents an absent or reworded citation). Bilaterally mirrored with claude-klabauter's vendored copy; originating request: state/memo-outbox/sent/plan-sizing-citation-unenforced-at-write-time.md."
+    },
+    "plan_id": {
+      "anyOf": [{"type": "string"}, {"type": "null"}],
+      "description": "Stable non-path plan identity (pln-<slug>-<6hex>). Minted by coordinator-doc-new at plan creation time. Allows the board to join on a stable key independent of file path/rename. Distinct from deliverable_id (which spans the full deliverable chain). Spec backlink: claude-klabauter:pln-fleet-deliverable-spine-identity-and-facets-2b331c § D3"
+    },
+    "initiative": {
+      "anyOf": [{"type": "string"}, {"type": "null"}],
+      "description": "FK to the initiative entity (state/initiatives/<id>.yaml). Nullable — not all work belongs to a named initiative. Cross-field rule enforces non-empty string when non-null. Spec backlink: claude-klabauter:pln-fleet-deliverable-spine-identity-and-facets-2b331c § D2"
+    },
+    "caption": {
+      "anyOf": [{"type": "string"}, {"type": "null"}],
+      "description": "One-sentence business-legible outcome line. NOT an engineering title or filename — authored for CEO-board legibility. Optional; authored at creation time."
+    },
+    "status_reason": {
+      "anyOf": [{"type": "string"}, {"type": "null"}],
+      "description": "Free-text one-liner explaining the current plan status (e.g. 'deferred — blocked on cockpit reader-first gate'). Optional authored field; carried into the cockpit emission as a product-legibility facet."
+    },
+    "owner": {
+      "anyOf": [{"type": "string"}, {"type": "null"}],
+      "description": "Authoring workstream or EM identifier. Nullable; carried forward from the earliest artifact for the deliverable."
+    },
+    "suggested_priority": {
+      "enum": ["urgent", "high", "medium", "low"],
+      "description": "Advisory execution-priority signal an EM may attach to this plan at authoring time. Optional (not nullable — absence already covers 'no suggestion'; a redundant null representation was reviewed out, see Finding 4 / review-integrator). Enum is the priority-ledger domain (priority-ledger.schema.json's urgent|high|medium|low|none) MINUS 'none' — an EM has no reason to author an explicit clear; absence of the field already covers that case. Advisory only: the PM-owned priority ledger (state/priority-ledger/) is the authoritative tier and lives on a deliberately separate surface — this field never overrides it, and that separation (not memory) is what keeps 'advisory never overrides authoritative' structural. Do NOT add a pm_priority field to this frontmatter to compensate; the tier split is the point. NEGATIVE-SPEC: no inherited_from / priority_predecessor field is permitted on this frontmatter either — priority does not chain plan-to-plan. No backfill of pre-existing plans, consistent with the handoff schema's origin_* no-backfill policy."
+    },
+    "provisional_until": {
+      "anyOf": [{ "type": "string", "format": "date" }, { "type": "null" }],
+      "description": "Expiry date (YYYY-MM-DD) for a decision this plan stages but does not yet execute — e.g. a ratification, a second stage of a two-stage rollout, or a hold pending a future condition. `revisit_by` is an accepted synonym key (same semantics, same format); a plan carries one or the other, never both. Read by the outstanding-provisional-decisions ceremony check (`coordinator/docs/wiki/provisional-decision-expiry.md`) against every non-terminal-status plan (`status` not in implemented/deferred/abandoned/superseded) — a date on or before today with the plan still non-terminal is surfaced as expired. Motivating case: the 2026-07-13 adopt spec's stage-2 ratification sat unexecuted for 13 days with nothing tracking that it was owed (archive/specs/2026-07/2026-07-13-doe-auto-reconcile-adopt.md). Optional; null/absent for plans that stage no provisional decision. Spec backlink: pln-push-side-write-discipline-for-05c30d § D1b."
+    },
+    "revisit_by": {
+      "anyOf": [{ "type": "string", "format": "date" }, { "type": "null" }],
+      "description": "Synonym key for `provisional_until` — same semantics, same format, same consumer. Use whichever name reads more naturally at the call site (`revisit_by` for a park_note-style hold; `provisional_until` for a staged-decision expiry); a plan sets at most one of the two. See `provisional_until` for the full description."
+    },
+    "tasks": {
+      "type": "array",
+      "items": { "$ref": "https://coordinator.local/schemas/plan-tasks.schema.json" },
+      "description": "NOT a frontmatter key — the ## Tasks task-spine lives BODY-RESIDENT in a single fenced ```yaml plan-tasks``` code block directly under the ## Tasks heading (parser-locate rule: exactly one such block; zero or >1 is a defined error). This 'tasks' property exists to WIRE the per-row shape (schemas/plan-tasks.schema.json) into the plan schema family for validators that parse the fenced block's YAML list and want the item schema, per the canonical body-resident-machine-block pattern (docs/wiki/canonical-artifact-shapes.md § Addressable-Section Convention, rule 4 — cf. the ## Session Ledger precedent in handoffs). Full authoring contract: docs/wiki/writing-plans.md § Machine-Parseable Task Spine. Spec backlink: pln-full-coverage-planning-posture-bca96f § C1."
+    },
+    "execution_authorized_by": {
+      "type": "string",
+      "description": "The PM/session that authorized execution. OPTIONAL — one of the four-field execution-authorization stamp (by/at/sha/note), mirrored from handoff.schema.json's identically-named field for the plan→execute-plan Stop-hook seam. Spec backlink: pln-first-class-execution-handoff--40a6e5 § C1"
+    },
+    "execution_authorized_at": {
+      "type": "string",
+      "description": "ISO 8601 date-time of authorization. OPTIONAL — one of the four-field execution-authorization stamp (by/at/sha/note), mirrored from handoff.schema.json's identically-named field for the plan→execute-plan Stop-hook seam. Spec backlink: pln-first-class-execution-handoff--40a6e5 § C1"
+    },
+    "execution_authorized_sha": {
+      "type": "string",
+      "pattern": "^[0-9a-fA-F]{7,64}$",
+      "description": "git-hash-object of the plan body at authorization (the content-binding witness /pickup recomputes; schema shape-only). OPTIONAL — one of the four-field execution-authorization stamp (by/at/sha/note), mirrored from handoff.schema.json's identically-named field for the plan→execute-plan Stop-hook seam. Spec backlink: pln-first-class-execution-handoff--40a6e5 § C1"
+    },
+    "execution_authorized_note": {
+      "type": "string",
+      "description": "The verbatim PM utterance that named execution. The FOURTH field of the stamp: plan-execute-session-split.md § Pinned conventions pins the stamp as a byte-identical FOUR-field contract (by/at/sha/note); note is the self-attesting field — a stamp without a note that names execution signals the write-bar may not have been met. Do NOT drop it. OPTIONAL, mirrored from handoff.schema.json's identically-named field for the plan→execute-plan Stop-hook seam. Spec backlink: pln-first-class-execution-handoff--40a6e5 § C1"
+    },
+    "status_override_by": {
+      "type": "string",
+      "description": "The session that overrode the completeness verdict when stamping `status: implemented`. OPTIONAL — one of the three-field override stamp (by/reason/at), written ONLY by `plan-status-transition stamp-implemented --override-reason`. Negative-spec: this stamp records an override of the SPINE/AC completeness verdict only; it never relaxes the live-foreign-holder refusal, which still runs unchanged. Supersedes the unschema'd hand-edit route (`status_stamped_by: EM-manual`, `status_stamped_by_hand`) that improvised two different field spellings across two repos because the engine offered no sanctioned path when it declined. Spec backlink: claude-klabauter:cross-repo/archive/2026-08-10-example-retrieval-repo-em-close-out-stamps-implemented-without-reading-the-ac-table.md"
+    },
+    "status_override_reason": {
+      "type": "string",
+      "description": "The verbatim operator reason for overriding the completeness verdict. REQUIRED by the op whenever an override is taken — `--override-reason` refuses empty text, so a bare force with no stated cause cannot reach disk. OPTIONAL here in shape terms (absent on every non-override plan). One of the three-field override stamp (by/reason/at)."
+    },
+    "status_override_at": {
+      "type": "string",
+      "description": "ISO 8601 date-time of the completeness-verdict override. OPTIONAL — one of the three-field override stamp (by/reason/at), written in the same locked_rmw mutate closure as the status flip it accompanies, so the stamp and the flip cannot diverge."
+    },
+    "review_signals": {
+      "type": "array",
+      "items": { "type": "string" },
+      "uniqueItems": true,
+      "description": "Selects which reviewers this plan needs, forward — distinct from `reviewer`, which records who already approved it, backward. Values are not enumerated here by design — the vocabulary is `coordinator/contract/review-signals.json`, and membership is enforced by the contract's parity test plus the frontmatter write guard where a coordinator engine is installed."
+    },
+    "review_verified_by": {
+      "type": "string",
+      "description": "The session that recorded a code-review pass over the work this plan delivered. OPTIONAL — one of the three-field review attest (by/at/findings), written ONLY by `plan-status-transition` alongside a terminal `status: implemented`, in the same locked_rmw mutate closure as the flip it accompanies, so the attest and the status cannot diverge. Negative-spec: this is an attest, not a status — absence means no code review was recorded, never that a review failed, and nothing gates a close-out on it. Spec backlink: pln-a-plan-s-status-advances-itsel-fb8bf2 § C1(c)."
+    },
+    "review_verified_at": {
+      "type": "string",
+      "description": "ISO 8601 date-time of the code-review pass. OPTIONAL — one of the three-field review attest (by/at/findings)."
+    },
+    "review_verified_findings": {
+      "type": "string",
+      "description": "Path to the review-trail record the pass produced, e.g. `state/review-trail/findings/<date>-<slug>.md`. OPTIONAL — one of the three-field review attest (by/at/findings). A path, never a count: a count is a lossy copy of a record that already exists on disk and drifts from it. This value is also the attest's IDEMPOTENCE KEY — a re-run of the same wrap with an unchanged path writes nothing, while a genuine second review after fixes produces a new path and writes a fresh attest."
+    },
+    "prime_exit_criterion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["statement", "derived_from"],
+      "description": "The plan-level falsifiable exit criterion — 'what is true of the tree when this plan has delivered', outcome-shaped per goal.schema.json's vocabulary. Deliberately NO `source`/provenance enum: a self-declared provenance flag is the unfalsifiable shape this plan (pln-plan-goal-as-a-first-class-exit-criterion) exists to remove. Provenance is instead `derived_from`, a LINK a reader can open and compare against, never an assertion. PROPORTIONALITY (enforced READ-SIDE, the same locus as `sizing_object`'s own cross-document requirement, never structurally in this file because `estimate.tshirt` lives in the external sizing-object document, not here): `falsifier` is REQUIRED only when the plan's `sizing_object` resolves to `estimate.tshirt` M/L/XL. At size S (spec-dispatch posture) a plan carries `statement`+`derived_from` only, no falsifier. XS never scaffolds a plan at all, so this object never appears. XXL routes to prime-exit-criterion-setting/roadmap, not a single plan; its obligation is discharged per-child-plan. The size carve-out keys ONLY on `estimate.tshirt` through `sizing_object` — never on an EM-set field, and never on plain field optionality: the shape below still marks `falsifier` absent from THIS object's own `required` array (JSON Schema cannot condition on a sibling document's content), but a plan sized M+ with no `falsifier` and no `falsifier_exemption` fails the read-side check even though it validates here. Do not read the schema-level optionality as the plan's own gate.",
+      "properties": {
+        "statement": {
+          "type": "string",
+          "description": "One falsifiable sentence naming what is true of the tree when this plan has delivered. Outcome-shaped (a measurable change in behaviour or state), never output-shaped (a deliverable produced, a task list wearing this field's clothes)."
+        },
+        "derived_from": {
+          "type": "string",
+          "pattern": "^(state/sizings/.+\\.yaml|[^#]+#kr-[^#]+)$",
+          "description": "Provenance BY LINK, not by self-declaration: a path to the sizing object that routed this plan (`state/sizings/<id>.yaml`, same shape as this schema's own top-level `sizing_object` field) or a key-result reference (`<goal_id>#kr-<kr-id>`, e.g. `goal-shipping-velocity#kr-throughput`) naming a KR in `state/goals/*.yaml` this plan serves — `<goal_id>` is the target goal's `id` field and `<kr-id>` is that goal's `key_results[].id` (goal.schema.json), never an array index, exactly like `kr-suggestion.schema.json`'s own `goal_id`/`kr_id` anchors. Openable and comparable against `statement` — the corpus-existing `intent`/`intent_source` fields already carry what this points at; no new sizing-object field was added for it. A plan links to a KR it serves without the KR itself gaining a falsifier or an AC-table binding — one KR spans several plans, so this is a pointer, never a merge of the two documents."
+        },
+        "falsifier": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["how", "baseline_output", "baseline_ref", "expected_when_true"],
+          "description": "The plan-time-authored observation distinguishing the prime exit criterion being true from false, with its baseline captured BEFORE any work — authored by someone with no stake yet in the answer. This is NOT a typed cell and is NOT bound to the AC table: it is one observation per plan, EM-chosen free form (a command, a query, a measurement, a named manual observation), judged by a human reading the re-run against a stated pass condition, never a script's exit code or a `grep:`/`pytest:`/`sh:` typed cell. It is NOT the retired acceptance oracle — PM ruling, 2026-08-27: 'it is categorically different' on five axes (cardinality, typing, chooser, judge, target artifact); see `docs/wiki/coordinator-tripwires/tripwire-registry/acceptance-oracle-gate-retired.md` for the retired mechanism this must not be reshaped back into, and do not 'improve' this field into a typed cell or delete it as a revival of that retirement. Mutually exclusive with `falsifier_exemption` — a prime exit criterion carries at most one of the two.",
+          "properties": {
+            "how": {
+              "type": "string",
+              "description": "The observation that distinguishes the prime exit criterion being true from false. Form is the EM's choice — a command, a query, a measurement, a named manual observation. Bounded at 4096 chars: this lands raw in the plan's YAML frontmatter, where an unbounded payload is a corpus hazard and the frontmatter validator is lenient about coercions. Output over the bound means the falsifier is too wide, never that the record should be truncated — narrow the observation (a count, a filtered line set).",
+              "maxLength": 4096
+            },
+            "baseline_output": {
+              "type": "string",
+              "description": "The raw output of `how`, run against HEAD before any work. Must show the prime exit criterion is currently FALSE — a baseline that already passes means the criterion is mis-stated, the work is already done, or the falsifier does not measure the criterion, all of which are worth catching at plan time. Bounded at 4096 chars: this lands raw in the plan's YAML frontmatter, where an unbounded payload is a corpus hazard and the frontmatter validator is lenient about coercions. Output over the bound means the falsifier is too wide, never that the record should be truncated — narrow the observation (a count, a filtered line set).",
+              "maxLength": 4096
+            },
+            "baseline_ref": {
+              "type": "string",
+              "description": "Where the baseline was taken (a commit sha). One falsifier per plan, one baseline_ref — never one per AC row, which would be per-item git-spawn amplification."
+            },
+            "expected_when_true": {
+              "type": "string",
+              "description": "What `how`'s observation yields WHEN the prime exit criterion is TRUE — the stated pass condition the close-out re-run is judged against. Makes the falsifier a discriminating observation, not a blob to diff: a re-run output is judged by whether it matches this shape/content, never by whether it merely differs from `baseline_output`. A non-null delta from baseline that still does not match `expected_when_true` is a criterion that is still false, differently. Bounded at 4096 chars for the same corpus-hazard reason as `how`/`baseline_output`.",
+              "maxLength": 4096
+            }
+          }
+        },
+        "falsifier_exemption": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["class", "admission"],
+          "description": "The NAMED escape hatch for an M+ prime exit criterion genuinely un-falsifiable-by-observation — pure doctrine/schema edits where 'run it and watch it fail' is contrived (this plan is itself in that class; see its own § This plan's own falsifier). Distinct from, and never a substitute for, the size carve-out: the size carve-out is a rule about which PLANS the instrument suits (keyed on `estimate.tshirt`), this is a rule about which M+ CRITERIA resist any instrument, and the two do not merge — a plan cannot claim exemption from `falsifier` by pointing at its size, nor claim the size carve-out by pointing at this exemption. NEVER `falsifier: optional`: this object exists precisely so optionality is never reopened as the way out. Mutually exclusive with `falsifier`.",
+          "properties": {
+            "class": {
+              "type": "string",
+              "const": "unfalsifiable-by-observation-doctrine-or-schema-edit",
+              "description": "The one admitted class, held to a single spelling so a later reader cannot widen it by inventing new class strings. Covers only work with no runtime behaviour to observe — doctrine prose, schema/contract shape edits with no executable surface a `how` could measure."
+            },
+            "admission": {
+              "type": "string",
+              "description": "The written admission test: a non-empty statement that (1) names why no baseline-red observation exists for this specific prime exit criterion, (2) confirms the change is doctrine/schema/contract-shaped with no runtime behaviour a falsifier could observe, and (3) is written by someone who first tried and failed to draft a `falsifier`, not someone who skipped the attempt. An admission that could be copy-pasted onto any plan without editing is not admissible — it must speak to THIS criterion."
+            }
+          }
+        }
+      },
+      "not": {
+        "required": ["falsifier", "falsifier_exemption"]
+      }
+    },
+    "exit_criterion_met": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["asserted"],
+      "description": "Written once, at close-out, by the EM — the assertion half of the prime-exit-criterion pair. `asserted: false` is a legitimate, first-class outcome (the plan is Phase-5-halted, not `implemented`); what is forbidden is the field's absence. Not bound to the AC table — see `prime_exit_criterion.falsifier`'s description for the acceptance-oracle distinction, which applies identically here.",
+      "properties": {
+        "asserted": {
+          "type": "boolean",
+          "description": "Whether HEAD now satisfies `prime_exit_criterion.statement`. `false` is legitimate and takes `reason`; it is never omitted in place of a `false` value."
+        },
+        "falsifier_output": {
+          "type": "string",
+          "description": "The SAME observation (`prime_exit_criterion.falsifier.how`) re-run against HEAD, raw. Judged against `prime_exit_criterion.falsifier.expected_when_true`, never against `baseline_output` alone — a changed output that still does not match `expected_when_true` is a criterion that is still false, differently, and unchanged output fails the same check without needing a separate rule. Bounded at 4096 chars: this lands raw in the plan's YAML frontmatter, where an unbounded payload is a corpus hazard and the frontmatter validator is lenient about coercions. Output over the bound means the falsifier is too wide, never that the record should be truncated — narrow the observation (a count, a filtered line set).",
+          "maxLength": 4096
+        },
+        "falsifier_verdict": {
+          "type": "string",
+          "enum": ["pass", "fail"],
+          "description": "The re-run's verdict: whether `falsifier_output` matches `prime_exit_criterion.falsifier.expected_when_true`. The gate refuses the stamp unless this is `pass`. Written beside `falsifier_output`, never inferred by a downstream reader from the raw output alone."
+        },
+        "prose": {
+          "type": "string",
+          "description": "The EM's own sentence tying the falsifier_output verdict to the prime exit criterion. The verdict is the evidence; this is the signature, not a substitute for it — an assertion with no falsifier output beside it is a checkbox."
+        },
+        "reason": {
+          "type": "string",
+          "description": "REQUIRED when `asserted: false`. What is not true of HEAD yet, and where the remainder is routed."
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "asserted": { "const": false } },
+            "required": ["asserted"]
+          },
+          "then": {
+            "required": ["reason"]
+          }
+        }
+      ]
+    },
+    "grouping_approvals": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "$comment: BLOCK PRESENCE IS THE WHOLE GOVERNED/LEGACY DISCRIMINATOR. A plan's frontmatter carrying this key at all makes the plan GOVERNED; a plan with no such key is LEGACY and keeps the existing per-row `pm_approved` gate unchanged. There is deliberately NO schema_version conjunct anywhere in this discriminator — do not add one. Presence-only is not taken bare, though: a GOVERNED plan whose `grouping_approvals` block is malformed, or that lacks the grouping a closed row needs, FAILS LOUD (schema violation here, plus the hard authorization check in schema_validate.py's check_plan_tasks_grouping_approval) — it does NOT silently degrade to legacy treatment. `additionalProperties: false` and `required: [\"status\"]` on each block (below) are what make a malformed block a structural violation rather than something that reads as merely absent. Groupings are DERIVED from each task-spine row's `disposition` and never stored separately: do <- open/coded; spun_off <- spun_off; defer <- backlogged; ruled_out <- wont_do. `spun_off` was split out of `defer` and relaxed by DoE's five-exits ruling (state/memo-outbox/sent/plan-tasks-five-exits-ruling.md, landed in claude-klabauter at f55daf8b9): moving a row to another plan drops no work, so it needs no PM ratification, while `backlogged` and `wont_do` do drop work and stay PM-gated. Plan-level approval is the SUM of the block statuses, COMPUTED at read time — never stored as a fourth rollup field (a stored rollup would be a second home for a derivable truth, and the two would drift). Mirrors claude-klabauter's vendored shape in coordinator_core/frontmatter/schemas/plan-tasks.schema.json (`$defs.grouping_approval_block`) — do not diverge from that spelling. Spec backlink: pln-pm-approved-gets-falsifiable-p-00737d § C1.",
+      "properties": {
+        "do": { "$ref": "#/$defs/grouping_approval_block" },
+        "defer": { "$ref": "#/$defs/grouping_approval_block" },
+        "ruled_out": { "$ref": "#/$defs/grouping_approval_block" }
+      }
+    }
+  },
+  "$defs": {
+    "grouping_approval_block": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status"],
+      "description": "One grouping_approvals grouping's approval state (do | defer | ruled_out). `pending` is the default, unapproved state. `approved` requires a non-empty `pm_utterance` (the PM's verbatim reasoning — testimonial, never backfilled/inferred) and a `digest` matching `sha256:<hex>` (a fresh recomputation over the CURRENT spine membership for this grouping — see schema_validate.py's compute_grouping_digest for the exact recipe). The `sha256:` prefix is load-bearing, never bare 40-hex hash: a membership digest names nothing in any git object store, so a bare-hex value would look like (and invite confusion with) a git object id, when the only valid operation on it is recompute-and-compare. `additionalProperties: false` plus `required: [\"status\"]` mean an unrecognized key or a missing `status` is a schema violation, not something that silently reads as an absent/legacy block.",
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": ["pending", "approved"],
+          "default": "pending"
+        },
+        "approver": {
+          "type": ["string", "null"],
+          "description": "Who approved this grouping (PM identity/handle). Null while pending."
+        },
+        "approved_at": {
+          "type": ["string", "null"],
+          "format": "date",
+          "description": "Date this grouping was approved (YYYY-MM-DD). Null while pending."
+        },
+        "pm_utterance": {
+          "type": ["string", "null"],
+          "description": "The PM's verbatim reasoning for approving this grouping. REQUIRED non-empty when status: approved (see allOf below). Never synthesized or backfilled — a grouping's assent is testimonial, not mechanically derivable from disk state."
+        },
+        "digest": {
+          "type": ["string", "null"],
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "description": "sha256:<hex> membership digest over the sorted set of (row id, disposition) pairs for the rows currently in this grouping, and nothing else. REQUIRED when status: approved (see allOf below). Row order, row body prose, section rendering, other frontmatter fields, and whitespace/YAML-style differences are all NOT covered."
+        }
+      },
+      "allOf": [
+        {
+          "$comment": "Cross-field rule: status: approved requires non-empty pm_utterance and a well-formed digest. Presence-only / non-hard-failing at THIS schema layer — the hard truthiness/freshness check (does the digest match a FRESH recomputation? is pm_utterance non-empty, not just present?) is schema_validate.py's job (check_plan_tasks_grouping_approval), not this file's.",
+          "if": {
+            "properties": { "status": { "const": "approved" } },
+            "required": ["status"]
+          },
+          "then": {
+            "required": ["pm_utterance", "digest"]
+          }
+        }
+      ]
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "required": ["provisional_until"],
+        "properties": {
+          "provisional_until": { "not": { "type": "null" } }
+        }
+      },
+      "then": {
+        "not": {
+          "allOf": [
+            { "required": ["revisit_by"] },
+            {
+              "properties": {
+                "revisit_by": { "not": { "type": "null" } }
+              }
+            }
+          ]
+        }
+      }
+    }
+  ]
+}
