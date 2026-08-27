@@ -1985,30 +1985,14 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # Negative-spec: NOT reachable over any network transport (DR-215 retired the UDS/HTTP
     # surface; the sole caller path is `python -m coordinator_core.invoke`).
     "ceremony.post_commit_tail": OpClass.MUTATING,
-    # ceremony.session_instructions — COMPUTE_ONLY: EM-facing instruction-set render op.
-    # Renders branch_resolution's already-computed node classification into a pruned,
     # push.outstanding — MUTATING: it pushes refs to a remote. The decision half
     # is a zero-spawn read, but the act half is an outward-facing publish.
     "push.outstanding": OpClass.MUTATING,
-    # ordered, EM-facing instruction set. Read-mostly: no mutation, no tail, no commit,
-    # no durable write of its own — it renders off an already-resolved context. Handler:
-    # ops/ceremony/session_instructions.py.
-    # DR-208 five-question affirmation (citing ceremony.session_instructions handler):
-    #   1. Writes, deletes, or reorders any state file, queue, or git object?  No.
-    #      _handler reads session shape (_read_session_shape) and calls the SAME
-    #      _resolve_branches + _session_commit_log read-only primitives branch_resolution.py
-    #      carries (formerly wsc_resolve.py, retired 2026-07-29, kill-list op removal);
-    #      _render_node only builds in-memory dicts. No write/open-for-write anywhere.
-    #   2. Writes into rag's relational store?                                 No.
-    #   3. Opens any file for write (including sentinel creation)?             No.
-    #   4. Mutates shared mutable state outside its own module?                No.
-    #   5. Persistent state changes observable across process boundaries?     No.
-    #      The only output is the returned instruction-set payload.
-    # COMPUTE_ONLY justification: all five questions answered No — the op is a pure
-    #   read-and-render. Same affirmation pattern as records.query above.
-    # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
-    # Spec backlink: docs/plans/2026-07-08-session-specific-instruction-set-emitter.op-spec.md [DEAD-CITATION: plan file never committed to this repo]
-    "ceremony.session_instructions": OpClass.COMPUTE_ONLY,
+    # ceremony.session_instructions was KILLED 2026-08-27 under DR-344's kill bar,
+    # measured at 31470ms against 500ms. Do not re-add a classification entry for it;
+    # a name in a string-keyed table outlives the op it names, which is the failure
+    # `ops/tests/test_registration_annotations_resolve.py` exists to catch.
+    # → state/audits/2026-08-27-session-instructions-has-never-served-a-real-request.md
     # ceremony.render_handoff_tracker was retired 2026-08-14 along with the
     # handoff-tracker render path -- see docs/plans/2026-08-14-retire-the-
     # handoff-tracker-and-project-tracker-renders.md § C2. Its OP_CLASSIFICATION

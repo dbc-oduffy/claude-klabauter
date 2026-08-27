@@ -24,6 +24,7 @@ import pytest
 
 import coordinator_core.ipc as ipc
 from coordinator_core.telemetry.op_latency import (
+    _ERROR_KIND_MAX_CHARS,
     new_correlation_id,
     pairing_summary,
     record_composition_span,
@@ -658,3 +659,65 @@ def test_flush_composition_record_explicit_sid_still_wins(tmp_path, monkeypatch)
     budget = make_fleet_budget("some_ceremony")
     flush_composition_record(budget, "success", repo_root=tmp_path, sid="sess-explicit")
     assert _composition_rows(tmp_path)[0]["sid"] == "sess-explicit"
+
+
+# ---------------------------------------------------------------------------
+# error_kind -- the failure's identity, not merely that it failed
+# ---------------------------------------------------------------------------
+
+
+def _only_row(tmp_path, monkeypatch, **kwargs):
+    """Record one latency row against an isolated sink and return it parsed."""
+    fake_common_dir = _fake_common_dir(tmp_path)
+    monkeypatch.setattr(
+        "coordinator_core.lifecycle.git_common_dir", lambda repo_root: fake_common_dir
+    )
+    record_op_latency(op="probe.op", t_start=1.0, elapsed_ms=2.0, repo_root=tmp_path, **kwargs)
+    lines = _sink_for(fake_common_dir).read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 1
+    return json.loads(lines[0])
+
+
+class TestErrorKind:
+    """`error_code` alone is unreadable: `-32603 Internal error` is the modal
+    value and it names nothing. Measured 2026-08-27 over the op-latency sink,
+    `review_trail.write` had failed 1974 of 3764 calls and `queue.append` 150
+    of 918 -- neither population could be told apart on disk, and both had to
+    be reproduced by hand against a live engine to learn what they were.
+    """
+
+    def test_error_kind_is_recorded(self, tmp_path, monkeypatch):
+        row = _only_row(
+            tmp_path, monkeypatch, outcome="error",
+            error_kind="ValueError: reviewer 'x' is invalid",
+        )
+        assert row["error_kind"] == "ValueError: reviewer 'x' is invalid"
+
+    def test_error_kind_is_bounded(self, tmp_path, monkeypatch):
+        row = _only_row(
+            tmp_path, monkeypatch, outcome="error",
+            error_kind="ValueError: " + ("x" * 500),
+        )
+        assert row["error_kind"].startswith("ValueError: ")
+        assert len(row["error_kind"]) <= _ERROR_KIND_MAX_CHARS, (
+            "an unbounded message can carry a path, a range, or a caller's "
+            "parameter values into a sink every peer on the box reads"
+        )
+        assert row["error_kind"].endswith("…")
+
+    def test_newlines_are_flattened(self, tmp_path, monkeypatch):
+        """The sink is JSONL; a multi-line message turns a readable column into
+        a wall."""
+        row = _only_row(
+            tmp_path, monkeypatch, outcome="error",
+            error_kind="ValueError: first\n  second\n\tthird",
+        )
+        assert row["error_kind"] == "ValueError: first second third"
+
+    def test_absent_error_kind_is_null_not_missing(self, tmp_path, monkeypatch):
+        """An ok row still carries the key, so a reader never has to tell "this
+        op did not fail" from "this row predates the field" -- the exact
+        ambiguity that left 1969 of 1976 failures unreadable."""
+        row = _only_row(tmp_path, monkeypatch, outcome="ok")
+        assert "error_kind" in row
+        assert row["error_kind"] is None

@@ -171,6 +171,52 @@ def _read_span_assert() -> ReaderResult:
     )
 
 
+def _auto_reconcile_probe_failed(error: dict[str, Any]) -> ReaderResult:
+    """Surface a JSON-RPC error envelope from the auto-reconcile probe as its
+    own judgment point.
+
+    Why this exists: a `handoff.reconcile_open` dispatch that ERRORS carries no
+    `result`, so `result.get("surfaced")` is `[]` — byte-identical, downstream,
+    to a successful probe that found nothing to reconcile. Without this branch
+    the reader returns an empty `ReaderResult()` and the Morning Briefing omits
+    `### Auto-Reconcile` entirely, rendering a refused or crashed probe as
+    "nothing open". Measured 2026-08-27: the op had produced zero op-latency
+    rows in ~10h against 3,301 rows from its peers, and nothing in the briefing
+    said so.
+
+    Negative-spec:
+      - Does NOT re-dispatch, retry, or fall back to a second probe path — one
+        failed observation is reported as one failed observation.
+      - Does NOT emit a directive: an unreachable probe is a fact for the
+        reader to act on, never an action this module applies on its own.
+    """
+    code = error.get("code")
+    message = truncate_external_text(str(error.get("message") or "(no message)"))
+    return ReaderResult(
+        judgment_points=[
+            build_judgment_point(
+                None,
+                id="j-auto-reconcile-probe-failed",
+                question=(
+                    "The auto-reconcile probe did not run — open handoffs were "
+                    "NOT checked. Investigate before treating the corpus as clean?"
+                ),
+                dispositions=[
+                    build_disposition("investigate_now"),
+                    build_disposition("leave_for_now"),
+                ],
+                evidence=(
+                    f"handoff.reconcile_open returned a JSON-RPC error "
+                    f"(code {code}): {message} | reason: an error envelope "
+                    "carries no surfaced[], which is indistinguishable "
+                    "downstream from a clean corpus"
+                ),
+                reason="recommendation-forbidden",
+            )
+        ]
+    )
+
+
 def _read_auto_reconcile() -> ReaderResult:
     """Open-handoff auto-reconcile observation — `check_auto_reconcile.get_response()`
     dispatches `handoff.reconcile_open` in-process under its own conservative
@@ -220,6 +266,9 @@ def _read_auto_reconcile() -> ReaderResult:
     response = get_response()
     if not response:
         return ReaderResult()
+    error = response.get("error")
+    if isinstance(error, dict):
+        return _auto_reconcile_probe_failed(error)
     result = response.get("result") or {}
     surfaced = result.get("surfaced") or []
     reconciled = result.get("reconciled") or []

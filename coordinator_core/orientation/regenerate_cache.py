@@ -211,7 +211,12 @@ from coordinator_core.ipc import register_op
 from coordinator_core.orientation.hook_cancellation_signal import emit_hook_cancellation_rate
 from coordinator_core.orientation.warm_health_signal import emit_warm_engine_health
 from coordinator_core.orientation.budget_breach_signal import emit_budget_breaches
-from coordinator_core.ops.ceremony.detached_spawn import clear_failures_log, read_failures_log
+from coordinator_core.ops.ceremony.detached_spawn import (
+    advance_failures_cursor,
+    clear_failures_log,  # noqa: F401 — reset primitive, re-exported for callers
+    read_failures_log,
+    trim_failures_log,
+)
 from coordinator_core.win_portability import same_path
 from coordinator_core.telemetry import op_latency
 from coordinator_core.ops.ceremony.housekeeping_liveness import (
@@ -1041,6 +1046,23 @@ def _parse_failure_line(line: str) -> Optional[dict]:
     }
 
 
+def _failures_cursor_key() -> str:
+    """This session's delivery cursor key for the shared housekeeping-failures log.
+
+    The orientation cache is per-session, so delivery has to be per-session too.
+    Falls back to the pid when no session id resolves: a cursor that is merely
+    coarse re-delivers a record, which is the safe direction — the failure this
+    replaces was records that reached nobody at all.
+    """
+    try:
+        from coordinator_core.session.core import resolve_session_id
+
+        sid = resolve_session_id()
+    except Exception:
+        sid = None
+    return str(sid) if sid else f"pid-{os.getpid()}"
+
+
 def _dedup_failure_lines(failure_lines: List[str]) -> Dict[tuple, dict]:
     """Collapse *failure_lines* into groups keyed by (script, error_class) --
     identical-modulo-timestamp/UUID records collapse to one group with a count and a
@@ -1107,7 +1129,7 @@ def _emit_housekeeping(repo_root: Path) -> List[str]:
     """
     lines: List[str] = []
 
-    failures_content = read_failures_log(str(repo_root))
+    failures_content = read_failures_log(str(repo_root), cursor_key=_failures_cursor_key())
     failure_lines = [ln for ln in failures_content.splitlines() if ln.strip()]
     if failure_lines:
         groups = _dedup_failure_lines(failure_lines)
@@ -1945,7 +1967,11 @@ def patch_pinboard_only(
         if not check:
             _atomic_replace(cache_file, new_content)
     if not check and housekeeping_lines:
-        clear_failures_log(str(resolved_repo_root))
+        # Advance THIS reader's cursor, never drain the shared log: ~50 sessions
+        # read it and a drain delivered each record to whichever one regenerated
+        # first. See `read_failures_log`'s cursor_key note.
+        advance_failures_cursor(str(resolved_repo_root), _failures_cursor_key())
+        trim_failures_log(str(resolved_repo_root))
     return new_content
 
 
@@ -1992,7 +2018,8 @@ async def _orientation_regenerate_cache(params: dict, repo_root: Optional[Path] 
         return result
     if not params.get("check", False):
         write_cache(result["cache_file"], result["output"])
-        clear_failures_log(str(repo_root))
+        advance_failures_cursor(str(repo_root), _failures_cursor_key())
+        trim_failures_log(str(repo_root))
     return {
         "skipped": False,
         "tier": result["tier"],

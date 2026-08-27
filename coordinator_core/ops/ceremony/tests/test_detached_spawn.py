@@ -395,3 +395,88 @@ def test_clear_never_raises_when_archive_path_is_a_directory(repo_root: str) -> 
     detached_spawn.clear_failures_log(repo_root)  # must not raise
 
     assert detached_spawn.read_failures_log(repo_root) == ""
+
+
+# ---------------------------------------------------------------------------
+# Per-reader delivery: the shared log is not a lottery
+# ---------------------------------------------------------------------------
+
+
+class TestPerReaderDelivery:
+    """~50 sessions read one shared failures log. Clearing it on delivery meant
+    the first session to regenerate its orientation cache consumed every record
+    and the other ~49 never saw them -- surfacing was a lottery, and a record was
+    almost always cleared by a session other than the one that would display it.
+    """
+
+    def _log(self, root, text):
+        path = detached_spawn.housekeeping_failures_log_path(str(root))
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "a", encoding="utf-8", newline="\n") as fh:
+            fh.write(text)
+
+    def test_every_reader_sees_every_record(self, tmp_path):
+        self._log(tmp_path, "[t] SPAWN FAILED one\n")
+        for reader in ("sid-a", "sid-b", "sid-c"):
+            seen = detached_spawn.read_failures_log(str(tmp_path), cursor_key=reader)
+            assert "one" in seen, (
+                f"{reader} never saw a record another reader had already consumed"
+            )
+            detached_spawn.advance_failures_cursor(str(tmp_path), reader)
+
+    def test_delivery_is_once_per_reader(self, tmp_path):
+        self._log(tmp_path, "[t] SPAWN FAILED one\n")
+        assert "one" in detached_spawn.read_failures_log(str(tmp_path), cursor_key="sid-a")
+        detached_spawn.advance_failures_cursor(str(tmp_path), "sid-a")
+        assert detached_spawn.read_failures_log(str(tmp_path), cursor_key="sid-a") == ""
+
+        self._log(tmp_path, "[t] SPAWN FAILED two\n")
+        fresh = detached_spawn.read_failures_log(str(tmp_path), cursor_key="sid-a")
+        assert "two" in fresh
+        assert "one" not in fresh
+
+    def test_reading_never_mutates_the_shared_log(self, tmp_path):
+        self._log(tmp_path, "[t] SPAWN FAILED one\n")
+        log = detached_spawn.housekeeping_failures_log_path(str(tmp_path))
+        before = log.read_text(encoding="utf-8")
+        detached_spawn.read_failures_log(str(tmp_path), cursor_key="sid-a")
+        detached_spawn.advance_failures_cursor(str(tmp_path), "sid-a")
+        assert log.read_text(encoding="utf-8") == before
+
+    def test_a_trimmed_log_restarts_rather_than_delivering_nothing(self, tmp_path):
+        """Over-delivering a record is arguable to a reader; a vanished one is
+        arguable to no one."""
+        self._log(tmp_path, "[t] SPAWN FAILED one\n" * 40)
+        detached_spawn.read_failures_log(str(tmp_path), cursor_key="sid-a")
+        detached_spawn.advance_failures_cursor(str(tmp_path), "sid-a")
+
+        detached_spawn.clear_failures_log(str(tmp_path))
+        self._log(tmp_path, "[t] SPAWN FAILED post-trim\n")
+        assert "post-trim" in detached_spawn.read_failures_log(
+            str(tmp_path), cursor_key="sid-a"
+        )
+
+    def test_uncursored_read_still_returns_everything(self, tmp_path):
+        """The --check dry-run path passes no cursor and must stay unchanged."""
+        self._log(tmp_path, "[t] SPAWN FAILED one\n")
+        assert "one" in detached_spawn.read_failures_log(str(tmp_path))
+        assert "one" in detached_spawn.read_failures_log(str(tmp_path))
+
+    def test_trim_is_a_noop_under_the_cap(self, tmp_path):
+        self._log(tmp_path, "[t] SPAWN FAILED one\n")
+        detached_spawn.trim_failures_log(str(tmp_path))
+        log = detached_spawn.housekeeping_failures_log_path(str(tmp_path))
+        assert "one" in log.read_text(encoding="utf-8")
+
+    def test_trim_empties_the_log_past_the_cap(self, tmp_path):
+        bulk = "[t] SPAWN FAILED bulk\n" * (detached_spawn._FAILURES_LOG_MAX_BYTES // 20 + 100)
+        self._log(tmp_path, bulk)
+        detached_spawn.trim_failures_log(str(tmp_path))
+
+        log = detached_spawn.housekeeping_failures_log_path(str(tmp_path))
+        assert log.read_text(encoding="utf-8") == ""
+        archive = detached_spawn.housekeeping_failures_archive_path(str(tmp_path))
+        assert "bulk" in archive.read_text(encoding="utf-8", errors="replace"), (
+            "retention must survive the trim -- a drain without history answers "
+            "no failure-rate question"
+        )

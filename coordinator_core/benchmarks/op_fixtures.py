@@ -211,11 +211,6 @@ COMPUTE_ONLY_FIXTURES: Dict[str, dict] = {
         "scope": "bare",
     },
     # --- 14 worktree-scoped ops ------------------------------------------------
-    "ceremony.session_instructions": {
-        "params_json": f'{{"sid": "{_SESSION_ID}"}}',
-        "scope": "worktree",
-        "repo_key": "common_dir",
-    },
     "commit.anchors": {
         "params_json": f'{{"session_id": "{_SESSION_ID}", "nature": "chore"}}',
         "scope": "worktree",

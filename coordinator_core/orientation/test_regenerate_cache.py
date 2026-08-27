@@ -480,9 +480,13 @@ def test_pinboard_only_rederives_housekeeping_section(tmp_path):
     assert "y.py" in after
     # Housekeeping still precedes Pinboard (patch_pinboard_only's own invariant).
     assert after.index("## Housekeeping") < after.index("## Pinboard")
-    # Deliver-exactly-once (Defect 1 fix): a real, non-check write that embedded
-    # non-empty housekeeping content clears the failures log afterward.
-    assert detached_spawn.read_failures_log(str(repo)) == ""
+    # Deliver-exactly-once, per READER (2026-08-27): a real, non-check write that
+    # embedded non-empty housekeeping content advances its OWN cursor and leaves
+    # the shared log intact for the other ~49 sessions reading it.
+    assert "x.py" in detached_spawn.read_failures_log(str(repo))
+    assert detached_spawn.read_failures_log(
+        str(repo), cursor_key=mod._failures_cursor_key()
+    ) == ""
 
 
 def test_pinboard_only_housekeeping_absent_to_present(tmp_path):
@@ -534,9 +538,16 @@ def test_pinboard_only_housekeeping_present_to_absent(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_pinboard_only_clears_failures_log_after_real_write(tmp_path):
-    """A real (non-check) patch_pinboard_only write that embeds non-empty housekeeping
-    content clears the failures log afterward, same as the other two write paths."""
+def test_pinboard_only_advances_its_own_cursor_without_draining_the_log(tmp_path):
+    """A real (non-check) write delivers to THIS reader and leaves the shared log
+    intact for the other ~49 sessions, same as the other two write paths.
+
+    Supersedes `test_pinboard_only_clears_failures_log_after_real_write`
+    (2026-08-27). The clear it pinned was written for one reader and deployed
+    against fifty: whichever session regenerated first consumed every record and
+    the rest never saw them. Deliver-once is now per-reader — see
+    `detached_spawn.read_failures_log`'s cursor_key note.
+    """
     from coordinator_core.ops.ceremony import detached_spawn
 
     repo = _make_repo(tmp_path)
@@ -546,7 +557,12 @@ def test_pinboard_only_clears_failures_log_after_real_write(tmp_path):
 
     mod.patch_pinboard_only(cache_file, "new note")
 
-    assert detached_spawn.read_failures_log(str(repo)) == ""
+    # The shared log still holds the record: a peer session has not lost it.
+    assert "x.py" in detached_spawn.read_failures_log(str(repo))
+    # This reader has been delivered to, so it does not re-report the same record.
+    assert detached_spawn.read_failures_log(
+        str(repo), cursor_key=mod._failures_cursor_key()
+    ) == ""
 
 
 def test_pinboard_only_check_mode_does_not_clear_failures_log(tmp_path):

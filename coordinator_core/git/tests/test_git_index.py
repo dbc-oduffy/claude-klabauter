@@ -23,6 +23,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from coordinator_core.git.git_index import (  # noqa: E402
+    parse_index_identity,
     IndexParseError,
     IndexV4Unsupported,
     parse_index_stat,
@@ -265,6 +266,59 @@ def test_zero_stored_nsec_falls_back_to_the_second_compare(tmp_path):
     _write_index(repo / ".git", raw)
 
     assert scoped_status(repo, ["nonsec.txt"]) == {"nonsec.txt": "clean"}
+
+
+def test_scoped_walk_returns_only_wanted_and_matches_the_full_walk(tmp_path):
+    """`wanted` narrows the RESULT without changing any entry's value, and
+    a wanted path absent from the index is absent from the result -- the
+    caller reads that as untracked exactly as it would from a full walk.
+    """
+    repo = _plain_repo(tmp_path)
+    raw = _build_index([
+        {"name": f"f{i}.txt", "mode": 0o100644, "size": i, "mtime": 100 + i}
+        for i in range(6)
+    ])
+    _write_index(repo / ".git", raw)
+
+    full = parse_index_identity(repo)
+    scoped = parse_index_identity(repo, wanted=["f1.txt", "f4.txt", "absent.txt"])
+
+    assert set(scoped) == {"f1.txt", "f4.txt"}
+    assert all(scoped[k] == full[k] for k in scoped), "a scoped value must equal its full-walk value"
+
+
+def test_scoped_walk_stops_once_every_wanted_path_is_found(tmp_path):
+    """Early exit is the whole point: a truncation AFTER the last wanted
+    entry is never reached, so it cannot raise. This pins the documented
+    trade (`wanted=None` validates the file end to end; a scoped walk does
+    not) rather than leaving it to be rediscovered as a bug.
+    """
+    repo = _plain_repo(tmp_path)
+    raw = _build_index([
+        {"name": f"f{i}.txt", "mode": 0o100644, "size": i, "mtime": 100 + i}
+        for i in range(6)
+    ])
+    # Claim more entries than the bytes actually carry: a full walk must
+    # raise on the missing tail, a walk satisfied by f0 must not.
+    corrupt = _SIGNATURE + struct.pack(">II", 2, 99) + raw[12:]
+    _write_index(repo / ".git", corrupt)
+
+    with pytest.raises(IndexParseError):
+        parse_index_identity(repo)
+
+    assert set(parse_index_identity(repo, wanted=["f0.txt"])) == {"f0.txt"}
+
+
+def test_scoped_walk_sha_is_the_entry_sha(tmp_path):
+    """The sha is the reason this parser exists -- `parse_index_stat` never
+    carried one, so a caller needing it paid a second full walk through
+    `git_state.read_index`.
+    """
+    repo = _plain_repo(tmp_path)
+    raw = _build_index([{"name": "a.txt", "mode": 0o100644, "size": 3, "mtime": 100}])
+    _write_index(repo / ".git", raw)
+
+    assert parse_index_identity(repo)["a.txt"].sha == _ZERO_SHA.hex()
 
 
 def test_absent_index_file_returns_empty(tmp_path):

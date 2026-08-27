@@ -610,6 +610,7 @@ def record_op_latency(
     corr_id: Optional[str] = None,
     caller: Optional[str] = None,
     error_code: Optional[int] = None,
+    error_kind: Optional[str] = None,
 ) -> None:
     """Append one JSON line recording a single op invocation's wall-clock cost.
 
@@ -618,7 +619,7 @@ def record_op_latency(
          "outcome": "ok"|"error"|"timeout", "pid": int, "sid": str|null,
          "repo_key": str|null, "repo_key_source": "envelope"|"cwd",
          "kind": "complete", "corr_id": str|null, "caller": str|null,
-         "error_code": int|null}
+         "error_code": int|null, "error_kind": str|null}
 
     ``error_code`` is the JSON-RPC ``error.code`` when the response carried
     one, and it is what makes the ``outcome == "error"`` population READABLE.
@@ -631,6 +632,22 @@ def record_op_latency(
     because the number on disk could not answer it. Two thirds of that
     population turned out to be callers dialling names that do not exist.
     → docs/research/2026-08-26-the-ceremony-budget-is-spent-on-one-git-status.md
+
+    ``error_kind`` is the failure's IDENTITY -- an exception class name, or a
+    bounded leading slice of the JSON-RPC error message -- and it is what makes
+    ``error_code`` actionable rather than merely non-null. ``-32603 Internal
+    error`` is the modal code and it names nothing: on 2026-08-27 the whole
+    ``review_trail.write`` failure population (1974 of 3764 calls, 52.4%) and
+    the whole ``queue.append`` one (150 of 918) had to be reproduced by hand
+    against a live engine to learn what they were, because neither the code nor
+    a message survived anywhere on disk. An op that fails thousands of times
+    and records only THAT it failed is an instrument nobody can read, which is
+    the same defect one layer down from an instrument nobody calls
+    (``warm_health_signal``'s own docstring records the first).
+
+    Bounded to ``_ERROR_KIND_MAX_CHARS`` and never the full message: a message
+    can carry a path, a range, or a caller's parameter values, and this sink is
+    a shared append-only file read by every peer on the box.
 
     Additive and defaulting to ``None`` for the same reason ``corr_id`` and
     ``caller`` are: a caller that predates it is unaffected, and an older row
@@ -670,8 +687,31 @@ def record_op_latency(
         "corr_id": corr_id,
         "caller": caller,
         "error_code": error_code,
+        "error_kind": _bounded_error_kind(error_kind),
     }
     _write_entry(entry, repo_root)
+
+
+#: Long enough for an exception class name plus the leading clause that
+#: distinguishes one failure from another, short enough that a path, a sha
+#: range, or a caller's parameter values cannot ride along into a file every
+#: peer on the box can read.
+_ERROR_KIND_MAX_CHARS = 120
+
+
+def _bounded_error_kind(error_kind: Optional[str]) -> Optional[str]:
+    """*error_kind* collapsed to one line and truncated, or None.
+
+    One line because the sink is JSONL and a multi-line message is the kind of
+    value that turns a readable column into a wall; truncated because a message
+    is caller-supplied text, not a vocabulary.
+    """
+    if not error_kind:
+        return None
+    flat = " ".join(str(error_kind).split())
+    if len(flat) <= _ERROR_KIND_MAX_CHARS:
+        return flat
+    return flat[:_ERROR_KIND_MAX_CHARS - 1] + "…"
 
 
 def record_op_started(

@@ -363,24 +363,117 @@ def record_child_failure(
         pass
 
 
-def read_failures_log(repo_root: str) -> str:
-    """Non-destructive peek of the shared housekeeping-failures log's current content.
+#: Per-reader delivery cursor, one file per session, beside the log it tracks.
+#: `.log`-suffixed so the existing `*.log` gitignore rule (.gitignore:78) covers
+#: it without a second rule to keep in sync.
+_CURSOR_RELPATH_TEMPLATE = ("state", "housekeeping-cursor-{key}.log")
+
+
+def housekeeping_cursor_path(repo_root: str, cursor_key: str) -> Path:
+    """Delivery cursor for one reader of the shared failures log."""
+    safe = "".join(c for c in cursor_key if c.isalnum() or c in "-_")[:64] or "unkeyed"
+    return Path(repo_root, _CURSOR_RELPATH_TEMPLATE[0],
+                _CURSOR_RELPATH_TEMPLATE[1].format(key=safe))
+
+
+def read_failures_log(repo_root: str, cursor_key: "str | None" = None) -> str:
+    """Non-destructive peek of the shared housekeeping-failures log's content.
 
     Returns "" if the log is absent or unreadable. Never raises. Used by the
     orientation-cache regen (C17b's surfacing occasion) to decide whether a
     ``## Housekeeping`` section is warranted, WITHOUT clearing anything itself — a
-    ``--check`` dry run must stay a true dry run. See `clear_failures_log` for the
-    delivery-completes-here half.
+    ``--check`` dry run must stay a true dry run.
+
+    ``cursor_key``, when supplied, makes delivery PER-READER: only the bytes
+    appended since that key last called `advance_failures_cursor` are returned.
+
+    Why this exists rather than the drain it replaces: the log is one shared file
+    and ~50 sessions read it, but the old contract cleared it on delivery, so the
+    first session to regenerate its orientation cache consumed every record and
+    the other ~49 never saw them. "Deliver each record exactly once" was written
+    for one reader and deployed against fifty, which made surfacing a lottery —
+    a record was almost always cleared by a session other than the one that would
+    have displayed it. Per-reader cursors deliver each record exactly once TO EACH
+    READER, which is what the contract meant, and the shared file stops being
+    destructively read at all.
     """
     log_path = housekeeping_failures_log_path(repo_root)
     try:
-        return log_path.read_text(encoding="utf-8")
+        raw = log_path.read_bytes()
     except OSError:
         return ""
+    if cursor_key is None:
+        return raw.decode("utf-8", errors="replace")
+
+    offset = _read_cursor(repo_root, cursor_key)
+    # A shorter log than the cursor means it was trimmed (or replaced) underneath
+    # us; restart from the beginning rather than silently delivering nothing --
+    # over-delivering a record is arguable to a reader, a vanished one is not.
+    if offset > len(raw):
+        offset = 0
+    return raw[offset:].decode("utf-8", errors="replace")
+
+
+def _read_cursor(repo_root: str, cursor_key: str) -> int:
+    try:
+        return max(0, int(housekeeping_cursor_path(repo_root, cursor_key).read_text(encoding="utf-8").strip()))
+    except (OSError, ValueError):
+        return 0
+
+
+def advance_failures_cursor(repo_root: str, cursor_key: str) -> None:
+    """Mark the log delivered up to its current end for `cursor_key`.
+
+    The delivery-completes-here half, and the exact counterpart of the drain this
+    replaces: called only after a successful, non-``--check`` write that has
+    already embedded the content into that reader's own cache. Best-effort — a
+    cursor that fails to advance re-delivers, which is the safe direction.
+    """
+    log_path = housekeeping_failures_log_path(repo_root)
+    try:
+        size = log_path.stat().st_size
+    except OSError:
+        return
+    cursor = housekeeping_cursor_path(repo_root, cursor_key)
+    try:
+        cursor.parent.mkdir(parents=True, exist_ok=True)
+        cursor.write_text(f"{size}\n", encoding="utf-8", newline="\n")
+    except OSError:
+        pass
+
+
+#: Live-log cap. Past it the log is archived and emptied. Retention is now a SIZE
+#: question rather than a delivery one: a record has to outlive every reader's next
+#: orientation regen, and a cap does that where clear-on-delivery did not.
+_FAILURES_LOG_MAX_BYTES = 256 * 1024
+
+
+def trim_failures_log(repo_root: str) -> None:
+    """Archive and empty the live log once it exceeds `_FAILURES_LOG_MAX_BYTES`.
+
+    Replaces the delivery-triggered drain as the live log's only bound. Under the
+    cap this is a stat call and nothing else, so it is safe to invoke from the
+    orientation write path on the same 200ms budget.
+
+    Never raises. A trim that does not happen costs disk, not correctness.
+    """
+    log_path = housekeeping_failures_log_path(repo_root)
+    try:
+        if log_path.stat().st_size <= _FAILURES_LOG_MAX_BYTES:
+            return
+    except OSError:
+        return
+    clear_failures_log(repo_root)
 
 
 def clear_failures_log(repo_root: str) -> None:
     """Best-effort drain the shared housekeeping-failures log to empty, retaining history.
+
+    NO LONGER A DELIVERY MECHANISM. It is the reset/trim primitive
+    (`trim_failures_log` is its only routine caller); delivery is per-reader via
+    `read_failures_log`'s `cursor_key` and `advance_failures_cursor`. Calling this
+    to "deliver" records again would restore the lottery those two exist to end —
+    see `read_failures_log`.
 
     Called by an orientation-cache write path ONLY after a successful, non-``--check``
     write that has already embedded the log's content into the cache (C17b) — delivers

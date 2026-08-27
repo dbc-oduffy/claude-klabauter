@@ -615,14 +615,6 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # git_common_dir because the handler derives its worktree via
     # main_worktree_root(common_dir), same as ceremony.post_commit_tail above.
     "push.outstanding":                      "common_dir",
-    # ceremony.session_instructions — read-mostly render op; keyed on git_common_dir.
-    # It reuses the SAME _resolve_branches call (branch_resolution.py, the surviving
-    # engine of the retired ceremony.wsc_resolve op) over session-shape.json under
-    # <common_dir>/coordinator-sessions/<sid>/ and renders the pruned instruction set.
-    # No durable write of its own (renders off an already-resolved context; does not
-    # emit a receipt). Handler derives worktree via main_worktree_root(common_dir).
-    # Spec: docs/plans/2026-07-08-session-specific-instruction-set-emitter.op-spec.md
-    "ceremony.session_instructions":         "common_dir",
     # strang-10 A+B residual writer strangle — changelog / completion / review-trail write ops.
     # Keyed on git_common_dir: changelog.* + review_trail.write write main-worktree-rooted state/
     # (handler derives worktree via main_worktree_root(common_dir), never repo_root/'state' directly);

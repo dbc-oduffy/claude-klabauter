@@ -225,7 +225,6 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
         "extraction of wsc_tail's steps 5c/5d into one standalone op, still invoked "
         "in-process by wsc_tail.py)",
     ),
-    ("coordinator_core.ops.ceremony.session_instructions", 'registers "ceremony.session_instructions"'),
     ("coordinator_core.session_ledger.aggregate_chain_loe", 'registers "session_ledger.aggregate_chain_loe"'),
     ("coordinator_core.ops.records_query", 'registers "records.query"'),
     ("coordinator_core.ops.record_history", 'registers "records.history"'),

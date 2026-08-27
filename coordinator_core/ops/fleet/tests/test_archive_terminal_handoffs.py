@@ -69,6 +69,7 @@ from coordinator_core.ops.fleet.archive_terminal_handoffs import (
     _SCAN_REASON_NOT_TERMINAL,
     _SCAN_REASON_WORKTREE_DIRTY,
     _dirty_handoff_relpaths,
+    _dirty_relpaths_in_process,
     _handle_act,
     _handler,
     _object_exists_no_spawn,
@@ -848,7 +849,13 @@ def test_c3_dirty_check_pathspec_scoped_to_survivors_only(repo: Path):
     _seed(repo, non_terminal_name, "status: open\ndeployment_state: ready_to_fire")
     common_dir = _common_dir(repo)
 
-    with patch("subprocess.run", wraps=subprocess.run) as spy:
+    # Force the SPAWNING arm: this test is about the porcelain pathspec, and
+    # the in-process arm answers the same question without one (its own
+    # no-spawn guarantee is asserted separately, below).
+    with patch(
+        "coordinator_core.ops.fleet.archive_terminal_handoffs._dirty_relpaths_in_process",
+        return_value=None,
+    ), patch("subprocess.run", wraps=subprocess.run) as spy:
         _run(plan_sweep(repo, common_dir, cap=50))
 
     dirty_calls = [c for c in spy.call_args_list if "status" in c.args[0]]
@@ -893,16 +900,104 @@ def test_c3_fail_closed_on_git_status_failure_treats_survivors_as_dirty():
     """
     survivors = ["state/handoffs/2026-05-20-a.md", "state/handoffs/2026-05-21-b.md"]
 
+    # The in-process arm must be forced to DECLINE, not merely left alone.
+    # Without this the call never reaches the patched failure at all (these
+    # paths do not exist, so the in-process arm returns them as untracked ->
+    # dirty) and the assertion below passes VACUOUSLY, green over a rail it
+    # never exercised.
     with patch(
+        "coordinator_core.ops.fleet.archive_terminal_handoffs._dirty_relpaths_in_process",
+        return_value=None,
+    ), patch(
         "coordinator_core.ops.fleet.archive_terminal_handoffs.status_porcelain",
         return_value=GitResult(returncode=1, stdout="", stderr="fatal: boom"),
-    ):
+    ) as spy:
         dirty = _dirty_handoff_relpaths(Path("."), survivors)
 
+    spy.assert_called_once()
     assert dirty == set(survivors), (
         f"a failed git status call must fail-closed to 'every survivor is "
         f"dirty', never an empty set; got {dirty!r}"
     )
+
+
+def test_in_process_arm_declining_is_a_fallback_never_a_fail_closed_refusal():
+    """A DECLINE is "ask git instead", not "every survivor is dirty".
+    Conflating the two would refuse every survivor on any box where
+    `content_matches_index_sha` cannot certify its preconditions -- i.e.
+    every stock non-`autocrlf=true` checkout.
+    """
+    survivors = ["state/handoffs/2026-05-20-a.md"]
+
+    with patch(
+        "coordinator_core.ops.fleet.archive_terminal_handoffs._dirty_relpaths_in_process",
+        return_value=None,
+    ), patch(
+        "coordinator_core.ops.fleet.archive_terminal_handoffs.status_porcelain",
+        return_value=GitResult(returncode=0, stdout="", stderr=""),
+    ) as spy:
+        dirty = _dirty_handoff_relpaths(Path("."), survivors)
+
+    spy.assert_called_once()
+    assert dirty == set(), (
+        f"a decline must fall through to git's own (here: clean) answer, "
+        f"never to a fail-closed refusal; got {dirty!r}"
+    )
+
+
+def test_in_process_arm_matches_porcelain_over_a_corpus_that_can_go_red(repo: Path):
+    """Equivalence against the rail it replaces, over clean / unstaged /
+    STAGED-but-uncommitted / deleted / untracked -- and zero spawns doing it.
+
+    The staged case is the one a worktree-only check gets wrong: git reports
+    it dirty, and a survivor whose bytes are staged but not committed is
+    exactly as unsafe to move as one with unstaged edits.
+    """
+    names = ["clean", "unstaged", "staged", "deleted"]
+    for n in names:
+        _seed(repo, f"{n}.md", "status: claimed")
+
+    (repo / "state" / "handoffs" / "unstaged.md").write_text("EDITED\n", encoding="utf-8")
+    (repo / "state" / "handoffs" / "staged.md").write_text("EDITED\n", encoding="utf-8")
+    _git(repo, "add", "state/handoffs/staged.md")
+    (repo / "state" / "handoffs" / "deleted.md").unlink()
+    _write(repo / "state" / "handoffs" / "untracked.md", "untracked\n")
+
+    survivors = sorted(_cid(f"{n}.md") for n in names + ["untracked"])
+
+    calls: list = []
+    real_init = subprocess.Popen.__init__
+
+    def _spy(self, args, *a, **kw):
+        calls.append(args)
+        return real_init(self, args, *a, **kw)
+
+    subprocess.Popen.__init__ = _spy
+    try:
+        in_process = _dirty_relpaths_in_process(repo, survivors)
+    finally:
+        subprocess.Popen.__init__ = real_init
+
+    if in_process is None:
+        pytest.skip("content_matches_index_sha declined here (preconditions unmet)")
+
+    assert calls == [], f"the in-process arm must spawn nothing; got {calls!r}"
+
+    with patch(
+        "coordinator_core.ops.fleet.archive_terminal_handoffs._dirty_relpaths_in_process",
+        return_value=None,
+    ):
+        porcelain = {
+            p for p in _dirty_handoff_relpaths(repo, survivors) if p in set(survivors)
+        }
+
+    assert in_process == porcelain, (
+        f"in-process and porcelain must agree; only in-process: "
+        f"{sorted(in_process - porcelain)!r}, only porcelain: "
+        f"{sorted(porcelain - in_process)!r}"
+    )
+    assert _cid("clean.md") not in in_process
+    assert _cid("staged.md") in in_process, "the index-vs-HEAD axis must be covered"
 
 
 # ---------------------------------------------------------------------------

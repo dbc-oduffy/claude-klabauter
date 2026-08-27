@@ -109,6 +109,15 @@ from coordinator_core.coverage import _get_handoff_consumed_by
 from coordinator_core.dag import _read_meta, build_reverse_edge_index
 from coordinator_core.ipc import register_op
 from coordinator_core.liveness import cs_claim_holder_live, resolve_live_session_ids
+from coordinator_core.git.content_hash import content_matches_index_sha
+from coordinator_core.git.git_index import (
+    IndexParseError as _IndexParseError,
+    parse_index_identity,
+)
+from coordinator_core.git.git_state import (
+    IndexParseError as _StateIndexParseError,
+    head_blobs,
+)
 from coordinator_core.ops.ceremony.git_native import (
     _DIVERGENCE_CHECK_ARGV_BUDGET_CHARS,
     status_porcelain,
@@ -401,6 +410,87 @@ def _batch_resolve_shipped_in(common_dir: Path, shas: Sequence[str]) -> Dict[str
     return {sha: _object_exists_no_spawn(common_dir, sha) for sha in distinct}
 
 
+def _dirty_relpaths_in_process(worktree: Path, ordered: Sequence[str]) -> Optional[set]:
+    """The spawn-free arm of `_dirty_handoff_relpaths`: the same dirty set,
+    or `None` to DECLINE, in which case the caller keeps its
+    `git status --porcelain` spawn.
+
+    ONE WALK OF THE INDEX, and a scoped one. The first cut of this was
+    reverted for spending 134ms of process time to answer about three
+    paths, against roughly 60ms of child CPU for the spawn it replaced: it
+    composed three ready-made helpers, each of which parsed a 37k-entry
+    index in full, to look at three of them. `parse_index_identity` exists
+    so this reads `(mode, sha, size, mtime, mtime_nsec)` for exactly the
+    wanted paths in a single early-exiting walk -- 18.8ms here.
+
+    BOTH AXES, because that is what porcelain answers. `git status` reports
+    a path dirty for index-vs-HEAD (staged, uncommitted) OR
+    worktree-vs-index (unstaged) alike, and this rail needs both -- a
+    survivor whose bytes are staged but not committed is exactly as unsafe
+    to move as one with unstaged edits. Answering only the worktree axis
+    would silently narrow the rail rather than speed it up.
+      - index vs HEAD  -> `(mode, sha)` from this walk against
+        `git_state.head_blobs`, which is spawn-free only because C2b taught
+        it to read objects in-process instead of spawning `git ls-tree`.
+      - worktree vs index -> `os.stat` against the entry's stat identity,
+        with a mismatch settled by `content_hash.content_matches_index_sha`.
+
+    DECLINE IS LOAD-BEARING, NOT AN ERROR PATH. `content_matches_index_sha`
+    returns `None` for anything outside its verified precondition set
+    (`core.autocrlf` not exactly `true`, any `text`/`-text`/`eol=` pin, any
+    `filter=` clean pipeline, an unreadable path, and `autocrlf=input`,
+    still unverified). One such path declines the WHOLE call rather than
+    being guessed at: that keeps this an optimisation of a question the op
+    could already answer, never a narrowing of which repos it can answer it
+    for. An unparseable/v4 index declines the same way.
+
+    FAIL-CLOSED IS THE CALLER'S JOB, NOT THIS FUNCTION'S. A decline returns
+    `None` (fall back and ask git), never `set(ordered)` -- the
+    all-survivors-dirty degradation belongs to an actual git FAILURE, and
+    conflating "we chose not to answer" with "git could not answer" would
+    refuse every survivor on any stock non-`autocrlf=true` box.
+    """
+    try:
+        index = parse_index_identity(worktree, wanted=ordered)
+        head = head_blobs(worktree, list(ordered))
+    except (_IndexParseError, _StateIndexParseError):
+        return None
+
+    dirty: set = set()
+    for rel in ordered:
+        entry = index.get(rel)
+        if entry is None:
+            # Untracked: porcelain's `??`, and a reason to retain.
+            dirty.add(rel)
+            continue
+
+        if head.get(rel) != (entry.mode, entry.sha):
+            # Staged against HEAD (added, or modified-and-staged).
+            dirty.add(rel)
+            continue
+
+        try:
+            st = (worktree / rel).stat()
+        except OSError:
+            dirty.add(rel)
+            continue
+
+        stat_matches = entry.size == (st.st_size & 0xFFFFFFFF) and entry.mtime == int(
+            st.st_mtime
+        )
+        if stat_matches and entry.mtime_nsec:
+            stat_matches = entry.mtime_nsec == st.st_mtime_ns % 1_000_000_000
+        if stat_matches:
+            continue
+
+        matches = content_matches_index_sha(worktree, rel, entry.sha)
+        if matches is None:
+            return None
+        if not matches:
+            dirty.add(rel)
+    return dirty
+
+
 def _dirty_handoff_relpaths(worktree: Path, survivor_relpaths: Sequence[str]) -> set:
     """ONE scoped `git status --porcelain` call over `survivor_relpaths` —
     the classify-first reorder (C3): this is only invoked once classification
@@ -443,6 +533,9 @@ def _dirty_handoff_relpaths(worktree: Path, survivor_relpaths: Sequence[str]) ->
     total_chars = sum(len(p) + 1 for p in ordered)
     if total_chars <= _DIVERGENCE_CHECK_ARGV_BUDGET_CHARS:
         scoped_paths: List[str] = ordered
+        in_process = _dirty_relpaths_in_process(worktree, ordered)
+        if in_process is not None:
+            return in_process
     else:
         scoped_paths = ["state/handoffs"]
 

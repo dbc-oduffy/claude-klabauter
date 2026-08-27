@@ -4113,6 +4113,17 @@ def main(argv: list[str]) -> int:
     probe_hard_failure = run_health_probe(claude_klabauter_root_resolved, engine_py, args.agent_mode)
 
     if not args.register_only:
+        # ORDER IS LOAD-BEARING AND SILENTLY SO -- forwarders FIRST, door SECOND.
+        # `install_bin_forwarders` emits a `coordinator-invoke.ps1` on every run
+        # (`substrate._emit_and_verify_ps1_forwarders`), and PowerShell ranks a
+        # same-directory `.ps1` ABOVE the door's `.exe`. `install_warm_door` ends
+        # by calling `door_install.claim_bare_name`, which strips that shadowing
+        # sibling -- so the door only wins the bare name because the removal runs
+        # AFTER the thing that writes it. Swap these two lines, or add any later
+        # step that re-emits forwarders, and every PowerShell caller drops from
+        # the ~2.34ms native door to a cold interpreter start with NO error and
+        # no signal -- just a slower path nobody is looking at. Pinned by
+        # coordinator_core/install/tests/test_door_bare_name_ordering.py.
         install_bin_forwarders(repo_root, engine_py, claude_klabauter_root_resolved, args)
         install_warm_door(repo_root, claude_klabauter_root_resolved, args)
         migrate_whoami_pin_off_venv(repo_root, args)

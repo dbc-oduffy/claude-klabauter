@@ -169,7 +169,6 @@ OP_MODULE_MAP: Dict[str, str] = {
     "ceremony.commit":                        "coordinator_core.ops.ceremony.commit_op",
     "ceremony.post_commit_tail":              "coordinator_core.ops.ceremony.post_commit_tail",
     "push.outstanding":                       "coordinator_core.ops.push_outstanding",
-    "ceremony.session_instructions":          "coordinator_core.ops.ceremony.session_instructions",
     "records.query":                          "coordinator_core.ops.records_query",
     "records.history":                        "coordinator_core.ops.record_history",
     "handoff.columns":                        "coordinator_core.ops.handoff_columns_query",

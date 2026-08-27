@@ -2448,6 +2448,11 @@ async def dispatch_message(msg: dict, *, caller: Optional[str] = None) -> dict:
     # population on disk is READABLE without probing a live registry. See
     # `record_op_latency`'s own `error_code` note for the incident.
     error_code = None
+    # The failure's identity. `error_code` alone is not readable: `-32603
+    # Internal error` is the modal value and names nothing, so a population
+    # thousands of rows deep still has to be reproduced by hand against a live
+    # engine to learn what it is. See `record_op_latency`'s `error_kind` note.
+    error_kind = None
     try:
         from coordinator_core.telemetry.op_latency import (
             new_correlation_id,
@@ -2478,10 +2483,16 @@ async def dispatch_message(msg: dict, *, caller: Optional[str] = None) -> dict:
             message = error.get("message", "") if isinstance(error, dict) else ""
             code = error.get("code") if isinstance(error, dict) else None
             error_code = code if isinstance(code, int) else None
+            error_kind = message if isinstance(message, str) else None
             outcome = "timeout" if isinstance(message, str) and message.startswith("op timed out after") else "error"
         return response
-    except BaseException:
+    except BaseException as exc:
+        # An exception that escapes dispatch is not converted to a JSON-RPC
+        # error response, so `error_code` stays None and the row on disk used
+        # to carry no identity at all -- the single largest un-diagnosable
+        # failure population on the box entered it through here.
         outcome = "error"
+        error_kind = f"{type(exc).__name__}: {exc}"
         raise
     finally:
         elapsed_ms = (_time.perf_counter() - perf_start) * 1000.0
@@ -2498,6 +2509,7 @@ async def dispatch_message(msg: dict, *, caller: Optional[str] = None) -> dict:
                 corr_id=corr_id,
                 caller=caller,
                 error_code=error_code,
+                error_kind=error_kind,
             )
         except Exception:
             _log().debug(
