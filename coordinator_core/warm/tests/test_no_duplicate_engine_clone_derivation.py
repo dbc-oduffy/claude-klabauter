@@ -6,7 +6,8 @@ Spec backlink: docs/plans/2026-08-19-an-engine-root-is-a-stamped-build.md § C3.
 WHAT THIS PROTECTS. Seven modules each kept a local
 `Path(__file__).resolve().parents[N]` copy of "the clone this process is
 running from" (`coordinator_core/warm/{skew,election,supervisor,breadcrumb,
-client,server}.py` and `coordinator_core/ops/session/warm_start.py`) --
+client,server}.py`; a seventh, `coordinator_core/ops/session/warm_start.py`,
+was cut with the op at `c89f8c32b` and is no longer scanned) --
 this codebase's convention of not reaching into a peer module's private
 name produced seven independent copies of one rule rather than one shared
 definition. C3 collapses all seven onto
@@ -35,10 +36,12 @@ import ast
 from pathlib import Path
 
 _WARM_DIR = Path(__file__).resolve().parent.parent
-_REPO_ROOT = _WARM_DIR.parent.parent
 
-# Every former duplicate site, per the plan's substrate table, plus
-# `ops/session/warm_start.py` (also enumerated there).
+# Every former duplicate site, per the plan's substrate table. The table's
+# seventh entry, `ops/session/warm_start.py`, is absent by deletion, not by
+# exemption: `c89f8c32b` cut the op. A killed op's path left in a
+# string-keyed list fails the scan on a missing file, which reads as a
+# regression in a rule the deleted module can no longer break.
 _SCANNED_MODULES = [
     _WARM_DIR / "skew.py",
     _WARM_DIR / "election.py",
@@ -46,7 +49,6 @@ _SCANNED_MODULES = [
     _WARM_DIR / "breadcrumb.py",
     _WARM_DIR / "client.py",
     _WARM_DIR / "server.py",
-    _REPO_ROOT / "coordinator_core" / "ops" / "session" / "warm_start.py",
 ]
 
 
@@ -103,7 +105,3 @@ def test_current_engine_clone_agrees_with_every_former_local_copy():
     assert breadcrumb._default_engine_clone() == expected
     assert client._engine_clone_root() == expected
     assert server._engine_clone_root() == expected
-
-    from coordinator_core.ops.session import warm_start
-
-    assert warm_start._engine_clone_root() == expected

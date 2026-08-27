@@ -21,9 +21,15 @@ had become. That trigger registration has since been retired — verified this
 session against the DoE-claude repo's `coordinator/hooks/hooks.json`, whose
 `SessionEnd` array registers only `sessionend-archive-session.py`, not this
 module. Every surviving caller today is an EM-initiated ceremony
-(`/handoff`, `/quick-wrap`, `/workstream-complete`) — a session, not a stop
-event, choosing to commit while still running and still able to answer for
-it. The module genuinely offers again, `safe_commit_offer` describes it
+(`/handoff`'s dirty-tree residue and `/quick-wrap` step 1) — a session, not a
+stop event, choosing to commit while still running and still able to answer
+for it. `/workstream-complete` was named here as a third caller until
+2026-08-27 and never was one: doe-claude-em read the skill on their side and
+found one `SKILL.md`, no residue directory, and no hit for this mechanism
+under any name — its dirty-tree handling is its own case-a/b/c classification
+and its commit tail routes through `snippets/scoped-commit-route.md`. A
+caller list is the first thing a reader trusts and the last thing anyone
+re-derives, so a name that was never in it costs a search every time. The module genuinely offers again, `safe_commit_offer` describes it
 correctly, and the name stays; a future reader must read this paragraph as
 the reversal's record, not as license to reinstate a SessionEnd registration
 this module no longer expects.

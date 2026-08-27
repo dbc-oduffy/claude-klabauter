@@ -799,6 +799,137 @@ def _merge_across_streams(per_stream_claims: list[dict[str, TouchEvent]]) -> dic
     return merged
 
 
+# ---------------------------------------------------------------------------
+# C2: commit-time reconciliation for a write that never passed through the
+# Write/Edit hook (a Bash heredoc, `sed -i`, `python3 -c`, etc.) and so was
+# never recorded as a TOUCH by this module's own `append_event`.
+#
+# Design constraint (plan docstring, carried in verbatim): this must not cost
+# a spawn or a filesystem walk PER BASH INVOCATION -- Bash fires constantly,
+# so intercepting at write time was rejected. Instead this reconciles at
+# COMMIT time, over the small residue Check 5 (``dispatch_checks.
+# check_validate_commit``) already computes as "staged but not in this
+# session's claim projection" -- that residue is already the product of a
+# `git diff --cached` Check 5 runs anyway, so this module adds no git spawn
+# and no directory walk of its own: one `os.stat` per already-narrowed
+# candidate path, nothing more.
+#
+# Attribution rule: a staged, unclaimed path is attributed to THIS session
+# if its mtime falls at or after this session's own `started_at` -- the
+# session-lifetime lower bound `session.core.init` stamps once, on first
+# start, into `<session_dir>/started_at`. A path last modified before this
+# session existed cannot be this session's write under any mechanism, so the
+# window is a sound (never a probabilistic) filter, not a heuristic score.
+# It is deliberately NOT an upper bound beyond "now": a peer could still
+# write the same path after reconciliation runs, but that later write earns
+# its OWN touch record at ITS OWN commit-time reconciliation (or its own
+# Write/Edit hook), and `_merge_across_streams`' later-``ts``-wins rule
+# already resolves that case the same way it resolves any other two-writer
+# race on this record.
+#
+# Negative-spec: this does NOT attempt hunk-level attribution (two sessions
+# both touching the same file) -- that is the C5 spike's unbuilt, unproven
+# territory (docs/plans/2026-08-27-a-pathspec-is-not-a-scope.md § C5), and a
+# path already carrying a live TOUCH claim from ANY session (including a
+# peer) is never a candidate a caller should pass here in the first place --
+# this function trusts its caller's `candidate_paths` are already the
+# staged-but-unclaimed residue, and does not re-derive that residue itself
+# (no second read of `project_live_claims` inside this function -- the
+# caller already has that answer, and re-deriving it here would be exactly
+# the second dialect of the same read this module's own docstring already
+# forbids for the append path).
+# ---------------------------------------------------------------------------
+
+
+def session_started_at_epoch(session_dir: "Path | str") -> Optional[float]:
+    """Read ``<session_dir>/started_at`` (the file ``session.core.init``
+    stamps once, on first start, with ``now_iso()``) and return it as epoch
+    seconds -- the lower bound of "this session's own mtime window".
+
+    Returns ``None`` if the file is absent or unreadable, or if its content
+    fails to parse as an ISO timestamp (``core.iso_to_epoch`` itself returns
+    ``0`` for a parse failure, which is indistinguishable from "midnight
+    1970" and therefore NOT a safe window bound here -- ``0`` is folded to
+    ``None`` rather than returned, so a caller cannot mistake "unparseable"
+    for "the epoch"). A caller MUST treat ``None`` as "no window available",
+    never as "any mtime qualifies" -- see ``reconcile_untouched_bash_writes``,
+    which returns an empty attribution list rather than guessing.
+
+    Lazy, per-call import of ``session.core`` (mirrors
+    ``check_validate_commit``'s own lazy import of ``session.scope`` for the
+    same reason: this is a commit-time-only read, never the hot Write/Edit
+    or Bash-guard path this module's append side serves).
+    """
+    from coordinator_core.session.core import iso_to_epoch
+
+    started_path = Path(session_dir) / "started_at"
+    try:
+        text = started_path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    if not text:
+        return None
+    epoch = iso_to_epoch(text)
+    return float(epoch) if epoch else None
+
+
+def reconcile_untouched_bash_writes(
+    sink: "Path | str",
+    *,
+    session_id: str,
+    agent_id: Optional[str],
+    session_dir: "Path | str",
+    candidate_paths: "list[str]",
+    cwd: Optional[str] = None,
+    timestamp: Optional[float] = None,
+) -> list[str]:
+    """Backfill a TOUCH record for every path in ``candidate_paths`` whose
+    current on-disk mtime falls at or after this session's own
+    ``started_at`` window (see ``session_started_at_epoch``) -- the
+    commit-time closure for a write that reached disk through Bash rather
+    than the Write/Edit hook.
+
+    ``candidate_paths`` are repo-relative paths the CALLER has already
+    narrowed to "staged, and not already a live claim for any session" (the
+    residue Check 5 computes) -- this function does no git spawn and no
+    directory listing of its own; it costs exactly one ``os.stat`` per
+    candidate, resolved against ``cwd`` when given (matching the caller's
+    own git invocation cwd) or the process cwd otherwise.
+
+    Returns the list of paths actually attributed (a TOUCH event appended
+    for each, via ``append_event`` -- the ONE append mechanism, per this
+    module's own negative-spec). Fails toward attributing NOTHING, never
+    toward guessing: an unreadable ``candidate_paths`` entry (stat raises)
+    is skipped, not attributed, and an absent/unparseable session window
+    (``session_started_at_epoch`` returns ``None``) short-circuits the whole
+    call to an empty list before any stat runs.
+    """
+    started_at = session_started_at_epoch(session_dir)
+    if started_at is None:
+        return []
+
+    base = Path(cwd) if cwd else None
+    attributed: list[str] = []
+    for candidate in candidate_paths:
+        target = (base / candidate) if base else Path(candidate)
+        try:
+            mtime = target.stat().st_mtime
+        except OSError:
+            continue
+        if mtime < started_at:
+            continue
+        append_event(
+            sink,
+            session_id=session_id,
+            agent_id=agent_id,
+            verb=VERB_TOUCH,
+            path=candidate,
+            timestamp=timestamp,
+        )
+        attributed.append(candidate)
+    return attributed
+
+
 @dataclass(frozen=True)
 class TouchProjection:
     """Result of ``project_live_claims`` -- the read seam's one return

@@ -128,15 +128,6 @@ def _resolve_test_claude_klabauter_root() -> str | None:
     publish-twin checkout, per project CLAUDE.md, that predates this plan's
     C2 rebuild of the op — a topology gap outside this file's scope, not a
     reason to fail the send-forwarder tests below).
-
-    Second currency probe, same rationale: the forwarder now stamps the
-    caller's `session_id` on the wire, because the op runs on a resident warm
-    engine whose own environ names the session that booted it rather than the
-    sender. `memo.send`'s param set is closed and refuses an unknown key
-    loud, so a mirror predating that param fails the send outright — a
-    publish-skew symptom, not a forwarder defect. Client and engine ship from
-    this one repo and therefore publish together, so the skew exists only
-    against a stale local mirror.
     """
     lib_dir = os.path.join(_bin_dir(), "lib")
     if lib_dir not in sys.path:
@@ -152,16 +143,6 @@ def _resolve_test_claude_klabauter_root() -> str | None:
     try:
         with open(root_registry_map, encoding="utf-8") as f:
             if '"memo.send"' not in f.read():
-                return None
-    except OSError:
-        return None
-
-    root_memo_send = os.path.join(
-        root, "coordinator_core", "ops", "fleet", "memo_send.py"
-    )
-    try:
-        with open(root_memo_send, encoding="utf-8") as f:
-            if '"session_id"' not in f.read():
                 return None
     except OSError:
         return None

@@ -159,7 +159,6 @@ OP_MODULE_MAP: Dict[str, str] = {
     "deliverable.cascade_retract":             "coordinator_core.ops.cascade_retract",
     "deliverable.cascade_backstop_sweep":      "coordinator_core.ops.cascade_backstop_sweep",
     "deliverable.fork_detect":                 "coordinator_core.ops.deliverable_fork_detect",
-    "ceremony.post_commit_tail":              "coordinator_core.ops.ceremony.post_commit_tail",
     "push.outstanding":                       "coordinator_core.ops.push_outstanding",
     "records.query":                          "coordinator_core.ops.records_query",
     "records.history":                        "coordinator_core.ops.record_history",
@@ -331,10 +330,6 @@ OP_MODULE_MAP: Dict[str, str] = {
     "fleet.backfill_reference_edges":         "coordinator_core.ops.backfill_reference_edges",
     "session_baton.mint":                     "coordinator_core.ops.session_baton_mint",
     "session_baton.promote":                  "coordinator_core.ops.session_baton_promote",
-    # eol.* — declared-vs-actual line-ending drift census/audit/repair, each op
-    # its own owning module (census.py, audit_producers.py, repair.py) under
-    # the coordinator_core.ops.eol package.
-    # Spec: docs/plans/2026-08-20-every-repo-detects-its-own-eol-drift.md § C5
     "eol.repair":                              "coordinator_core.ops.eol.repair",
     "warm_guard.evaluate":                     "coordinator_core.ops.warm_guard_evaluate",
     "merge_assemble.apply":                    "coordinator_core.merge_assemble.ops",

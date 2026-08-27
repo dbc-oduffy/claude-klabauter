@@ -538,17 +538,6 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
         "census-teardown-ops.md § C3)",
     ),
     (
-        "coordinator_core.ops.eol.census",
-        "imported for its census() function, which eol.repair calls directly; "
-        "registers no dispatchable op since the eol trio collapsed to one "
-        "(K-062, 2026-08-27)",
-    ),
-    (
-        "coordinator_core.ops.eol.repair",
-        'registers "eol.repair" (docs/plans/2026-08-20-every-repo-detects-'
-        "its-own-eol-drift.md § C3)",
-    ),
-    (
         "coordinator_core.ops.op_budget_breaches",
         'registers "op_census.breaches" (the budget-breach surface — DR-344-the-'
         "brightline-process-budget-for-claude-klabauter.md)",
@@ -560,8 +549,12 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ),
     (
         "coordinator_core.merge_assemble.ops",
-        'registers "merge_assemble.brief" and "merge_assemble.apply" (chunk C6, '
-        "docs/plans/2026-08-26-merges-directives-stop-starting-interpreters.md)",
+        'registers "merge_assemble.apply" (chunk C6, '
+        "docs/plans/2026-08-26-merges-directives-stop-starting-interpreters.md). "
+        'merge_assemble.brief was DELETED 2026-08-27 (kill ledger K-114) and is '
+        "struck from this annotation: the module stays eager for apply, and an "
+        "advertised-but-absent op reads to the annotation guard as a name "
+        "committed ahead of its op.",
     ),
 ]
 

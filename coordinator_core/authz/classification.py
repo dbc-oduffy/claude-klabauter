@@ -1249,6 +1249,8 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #      `read_text` only. No sentinel, no lock file, no temp file.
     #   4. Mutates shared mutable state outside its own module?                No.
     #   5. Persistent state changes observable across process boundaries?      No.
+    # eol.repair — writes normalized bytes to disk when `mutate: true` is
+    "eol.repair": OpClass.MUTATING,
     #      Its entire output is the returned envelope.
     # COMPUTE_ONLY over MUTATING is load-bearing, not a formality: the whole
     # point of moving enforcement earlier is that consulting the lint costs an
@@ -1854,34 +1856,6 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
     # Spec: docs/plans/2026-08-11-pull-surface-four-columns-and-the-archive.md § C3
     "handoff.columns": OpClass.COMPUTE_ONLY,
-    # ceremony.post_commit_tail — MUTATING: the C3a (docs/plans/2026-07-23-wsc-tail-
-    # slim-down.md § C3a) extraction of wsc_tail's steps 5c/5d (post-commit
-    # consumed-handoff stamp+ship, origin-stub close) into one standalone op. Writes
-    # consumed-handoff frontmatter (shipped_in/deployment_state stamps) and git
-    # commit objects (the C5 AC17 follow-up stamp commit, and — when a stub closes —
-    # its own origin-stub-close follow-up commit). Pure refactor of already-MUTATING
-    # code paths that were previously inline in `ceremony.wsc_tail`'s own handler;
-    # this classification mirrors that op's.
-    # DR-208 five-question affirmation (citing ceremony.post_commit_tail handler):
-    #   1. Writes, deletes, or reorders any state file, queue, or git object?  YES.
-    #      Creates git commit objects (stamp follow-up + origin-stub-close follow-up)
-    #      and stamps consumed-handoff frontmatter files.
-    #   2. Writes into rag's relational store?                                 No.
-    #      Writes only repo-tracked markdown/frontmatter files and git objects. Dual-
-    #      write ban satisfied.
-    #   3. Opens any file for write (including sentinel creation)?             YES.
-    #      Writes stamped shipped_in/deployment_state frontmatter and (when
-    #      applicable) the closed origin-stub file.
-    #   4. Mutates shared mutable state outside its own module?                YES.
-    #      Consumed-handoff frontmatter and origin-stub frontmatter are coordinator
-    #      substrate shared across sessions.
-    #   5. Persistent state changes observable across process boundaries?     YES.
-    #      The landed follow-up commits and any stamped shipped_in/deployment_state
-    #      are read by subsequent EM sessions and fleet sweeps.
-    # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
-    # Negative-spec: NOT reachable over any network transport (DR-215 retired the UDS/HTTP
-    # surface; the sole caller path is `python -m coordinator_core.invoke`).
-    "ceremony.post_commit_tail": OpClass.MUTATING,
     # ceremony.commit_v2 — MUTATING: a thin envelope over `commit.commit_paths`
     # (coordinator_core/git/commit.py), whose entire purpose is writing git
     # objects and moving the branch ref (ops/ceremony/commit_v2.py docstring).
@@ -3776,48 +3750,6 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # paper-trail dir; module docstring confirms this is a native replacement
     # for a shell `mv`-based fence. MUTATING.
     "research.restructure_for_repeat_topic": OpClass.MUTATING,
-    # eol.census — reads only (three batched read-only git spawns plus
-    # Path.read_bytes()). COMPUTE_ONLY affirmed at review by claude-klabauter-em
-    # on 2026-08-20, which is where C5 routes this call ("make that call in
-    # review, not here"). Checked first, per C5's own precondition: no
-    # `eol.`-prefixed family guard exists — `classify()` is a plain lookup with
-    # no prefix override, unlike the tracker.* shape that forces MUTATING
-    # regardless of the answers. Grantability precedent for a read: e32b1ff2d
-    # registered records.history COMPUTE_ONLY on 2026-08-20.
-    # Affirmed against the running op, not only the source: invoked over the
-    # wire against claude-klabauter (28,216 tracked paths) and observed to spawn exactly
-    # three read-only git subcommands and write nothing.
-    # DR-208 five-question affirmation:
-    #   1. Writes, deletes, or reorders any state file, queue, or git object?  No.
-    #      check-attr and status --porcelain are read-only git subcommands; no ref
-    #      moves, no object is created, no working-tree file is touched.
-    #   2. Writes into rag's relational store?                                 No.
-    #   3. Opens any file for write (including sentinel creation)?             No.
-    #      Path.read_bytes() only, never opened for write.
-    #   4. Mutates shared mutable state outside its own module?                No.
-    #   5. Persistent state changes observable across process boundaries?      No.
-    #      Returns the census dict verbatim; no disk write.
-    # Spec: docs/plans/2026-08-20-every-repo-detects-its-own-eol-drift.md § C2, C5
-    # eol.audit_producers — reads only (pathlib.Path.rglob / Path.read_text,
-    # ast.parse; no subprocess, no open-for-write). COMPUTE_ONLY affirmed at
-    # review on the same basis and by the same reviewer as eol.census above;
-    # invoked over the wire against claude-klabauter (1,669 sources scanned) and observed
-    # to write nothing.
-    # DR-208 five-question affirmation:
-    #   1. Writes, deletes, or reorders any state file, queue, or git object?  No.
-    #   2. Writes into rag's relational store?                                 No.
-    #   3. Opens any file for write (including sentinel creation)?             No.
-    #      Path.read_text() only, never opened for write; no subprocess of any kind.
-    #   4. Mutates shared mutable state outside its own module?                No.
-    #   5. Persistent state changes observable across process boundaries?      No.
-    #      Returns the audit report dict verbatim; no disk write.
-    # Spec: docs/plans/2026-08-20-every-repo-detects-its-own-eol-drift.md § C4, C5
-    # eol.repair — writes normalized bytes to disk when `mutate: true` is
-    # passed (defaults to dry-run reporting, but the op CAN write). MUTATING,
-    # unambiguously — no affirmation question applies since question 1 is
-    # answered Yes for the mutate=true path.
-    # Spec: docs/plans/2026-08-20-every-repo-detects-its-own-eol-drift.md § C3, C5
-    "eol.repair": OpClass.MUTATING,
     # C17 (docs/plans/2026-08-20-a-refusal-cannot-exit-zero.md) — the 14
     # registered-but-unclassified ops closing the OP_CLASSIFICATION gap
     # against ipc._REGISTRY (measure after `import coordinator_core.ops`,

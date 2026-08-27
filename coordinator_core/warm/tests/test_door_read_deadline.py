@@ -56,6 +56,7 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
 import subprocess
 import threading
 import time
@@ -88,6 +89,16 @@ def _door_deadline_ms(macro: str) -> int:
     match = re.search(rf"^#define\s+{macro}\s+(\d+)\s*$", source, re.MULTILINE)
     assert match, f"{macro} not found in {_DOOR_C} -- the deadline was renamed or removed"
     return int(match.group(1))
+
+
+def _door_default_entrypoint() -> str:
+    """The door's default entrypoint name, read out of `door.c` for the same
+    reason the deadlines are: the shipped binary compares its own basename
+    against this constant, and a literal here can drift away from it."""
+    source = _DOOR_C.read_text(encoding="utf-8")
+    match = re.search(r'^#define\s+DOOR_DEFAULT_ENTRYPOINT_W\s+L"([^"]+)"\s*$', source, re.MULTILINE)
+    assert match, f"DOOR_DEFAULT_ENTRYPOINT_W not found in {_DOOR_C} -- renamed or removed"
+    return match.group(1)
 
 
 def _make_stub_engine_root(tmp_path: Path) -> Path:
@@ -202,6 +213,25 @@ class _ReplyingServer:
             pass
 
 
+def _door_under_default_name(engine_root: Path) -> Path:
+    """A copy of the built door at `coordinator-invoke.exe`, the name these
+    tests' fixture is written against.
+
+    `door.c` C0 made the door name-aware: `resolve_own_basename` reads the
+    running image's own basename, `fall_through` targets
+    `<basename>.py` in `coordinator/bin/`, and any basename other than
+    the door's default entrypoint name also puts `entrypoint` on the wire. The build
+    artifact is named `door.exe`, so invoking it directly exercises neither
+    the cold script the stub root provides nor the default-name wire frame --
+    it looks for a `coordinator/bin/door.py` that no tree has. Production
+    installs the image under its entrypoint's name; so does this.
+    """
+    installed = engine_root / (_door_default_entrypoint() + ".exe")
+    if not installed.exists():
+        shutil.copy2(_DOOR_EXE, installed)
+    return installed
+
+
 def _run_door(engine_root: Path, timeout: float) -> subprocess.CompletedProcess:
     """Runs `door.exe ping` pointed at `engine_root` via the documented
     `COORDINATOR_DOOR_ENGINE_ROOT` override. The override is used rather than
@@ -212,7 +242,7 @@ def _run_door(engine_root: Path, timeout: float) -> subprocess.CompletedProcess:
     env = dict(os.environ)
     env["COORDINATOR_DOOR_ENGINE_ROOT"] = str(engine_root)
     return subprocess.run(
-        [str(_DOOR_EXE), "ping"],
+        [str(_door_under_default_name(engine_root)), "ping"],
         capture_output=True,
         text=True,
         env=env,

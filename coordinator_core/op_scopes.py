@@ -574,13 +574,6 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # handler fails loud when neither is available rather than guessing a cwd.
     # Spec: cross-repo/inbox/2026-07-28-example-retrieval-repo-em-inbox-blitz-proven-pattern.md
     "memo.blitz_buckets":                     "common_dir",
-    # ceremony.post_commit_tail — keyed on git_common_dir, same as wsc_tail (the
-    # only in-process caller): the C3a (2026-07-23 wsc-tail-slim-down) extraction
-    # of wsc_tail's steps 5c (C5 post-commit consumed-handoff stamp+ship) and 5d
-    # (origin-stub close) into one standalone op. Handler derives worktree via
-    # main_worktree_root(common_dir), same as wsc_tail.
-    # Spec: docs/plans/2026-07-23-wsc-tail-slim-down.md § C3a
-    "ceremony.post_commit_tail":             "common_dir",
     # push.outstanding — common_dir: the cadence-push primitive (DR-329). Decides
     # whether the current branch is ahead of its upstream and, if so, pushes via
     # the same push_with_retry machinery every other publisher uses. Keyed on
@@ -1495,13 +1488,6 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # Spec: docs/plans/2026-08-21-a-discharged-gate-tells-the-row-waiting.md § C2
     "gate_liveness.reconcile":                  "show_top",
     # eol.census / eol.audit_producers / eol.repair — "none": DECISION, not the
-    # closest-fitting default. All three take an explicit `target_root` wire
-    # param naming the tree to scan/repair; the injected repo_root/caller's own
-    # tree is ignored entirely (this plan's anti-scope: "Do not resolve the
-    # target root from the environment"). An op key missing from this table
-    # silently degrades to repo_root=None — see this module's own scope-table
-    # caveat above for why that would be a silent behavior change, not a no-op.
-    # Spec: docs/plans/2026-08-20-every-repo-detects-its-own-eol-drift.md § C5
     "eol.repair":                               "none",
     # "show_top", not "none": _op_census_report reads repo_root and forwards it
     # to census(repo_root=...), which resolves the corpus it walks from that

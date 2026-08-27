@@ -645,6 +645,14 @@ def _plan_context_preamble(context: PlanContext) -> str:
     never learns its plan's criterion is the one that builds a thing that is
     wrong in a new way -- see
     cross-repo/archive/2026-08-27-doe-claude-em-prime-exit-criterion-settled-shape.md.
+
+    Named external seam: DoE-claude's ``coordinator/bin/emit-dispatch-workflow.py``
+    monkeypatches ``_row_prompt`` wholesale and calls THIS function to compose the
+    same preamble ahead of its own row body. That is the sanctioned shape -- it is
+    the only way an outside composer inherits
+    ``_PLAN_CONTEXT_PREAMBLE_CHAR_CAP`` rather than re-deriving a cap that then
+    drifts. Negative spec: do not narrow or rename this signature without
+    notifying that shim; a widening here is what broke it once already.
     """
     lines = [f"Plan: {context.title}"]
     if context.goal:
