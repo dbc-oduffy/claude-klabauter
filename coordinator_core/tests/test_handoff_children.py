@@ -422,33 +422,6 @@ class TestInitiativesServeFailClosed:
         )
 
 
-class TestRoadmapServeFailClosed:
-    """roadmap_serve returns empty well-formed payload when repo_root=None."""
-
-    def test_empty_payload_when_no_repo_root(self) -> None:
-        """roadmap.serve returns empty well-formed payload when repo_root=None
-        (fail-safe: unknown worktree is not a 500; returns zero-node guard shape).
-        """
-        from coordinator_core.ops.roadmap_serve import _handler as _roadmap_handler
-
-        result = _run(_roadmap_handler(params={"roadmap_id": "test-rid"}, repo_root=None))
-
-        # Exact shape from roadmap_serve.py repo_root=None branch (lines 110-115)
-        assert result.get("nodes") == [], (
-            f"expected empty nodes list when repo_root=None; got {result}"
-        )
-        assert result.get("edges") == [], (
-            f"expected empty edges list when repo_root=None; got {result}"
-        )
-        assert result.get("critical_path") == [], (
-            f"expected empty critical_path when repo_root=None; got {result}"
-        )
-        roll_up = result.get("roll_up", {})
-        assert roll_up.get("total") == 0, (
-            f"expected roll_up.total=0 when repo_root=None; got roll_up={roll_up}"
-        )
-
-
 # ---------------------------------------------------------------------------
 # Test: unscannable subtree — silent-success guard (state/audits/2026-07-22
 #     silent-success audit). An unreadable state/handoffs/ or archive/handoffs/

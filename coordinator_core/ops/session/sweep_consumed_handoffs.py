@@ -130,7 +130,12 @@ def _setup_error(reason: str) -> dict:
     return {"exit_code": 1, "error": reason, "acted": [], "skipped": [], "failed": []}
 
 
-@register_op(_SWEEP_KEY)
+# `session.sweep_consumed_handoffs` was DELETED 2026-08-27 under the 200ms
+# process-time bar (kill ledger K-110). The decorator is stripped rather than
+# left with the eager-import entry removed: a @register_op that no
+# _EAGER_OP_MODULES row reaches ships present-but-dead, which
+# test_eager_op_modules_covers_every_register_op exists to refuse. Flagged by
+# claude-klabauter-59. The body stays as a library for any in-process caller.
 def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     """session.sweep_consumed_handoffs — sweep consumed handoffs a ceremony's
     stamp/ship follow-up commit just made terminal, into `archive/handoffs/`,

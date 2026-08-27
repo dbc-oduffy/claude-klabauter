@@ -58,19 +58,6 @@ def _independently_count_declaring_modules() -> int:
     return count
 
 
-def test_registered_via_register_op_and_reachable_through_dispatch():
-    # Registration is the whole point of this chunk — assert the handler is actually
-    # findable in the registry, not merely defined as a bare function nobody wired up.
-    assert get_op_handler("write_surface.emit_manifest") is not None
-
-    resp = _dispatch()
-    assert "error" not in resp, resp
-    result = resp["result"]
-    assert result["schema_version"] == 1
-    assert isinstance(result["entries"], list)
-    assert result["entries"], "expected at least one manifest entry"
-
-
 def test_manifest_writer_count_matches_modules_on_disk_declaring_write_surface():
     """The regression this dispatch exists to prevent: a hand-maintained writer roster
     going stale while modules keep declaring on disk. Collection must DISCOVER declaring

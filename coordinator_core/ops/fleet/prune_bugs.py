@@ -159,3 +159,147 @@ def _candidate_dict(path: Path, worktree_root: Path) -> dict:
 # Handler
 # ---------------------------------------------------------------------------
 
+
+# `fleet.prune_closed_bugs` was DELETED as an op 2026-08-27 under the 200ms
+# process-time bar (kill ledger K-105). The dispatchable surface is gone; this
+# body survives UNDECORATED as the vehicle two surviving suites drive real
+# shared code through -- the archive-destination wedge detector and the git-free
+# seam (ops/fleet/tests/test_archive_dest_conflict_wedge_detector.py,
+# test_archive_git_free_seam_smoke.py). Those tests assert behaviour that is
+# still live; they use this entrypoint because it is the real production
+# disposition path rather than a mock, per their own docstrings.
+#
+# Flagged by claude-klabauter-59, not caught by this sweep's own remediation pass.
+# Deleting the tests instead would have discarded coverage of code that is not
+# dead. Re-adding `@register_op` puts a deleted op back over the bar.
+async def _handler(params: dict, repo_root=None) -> dict:
+    """fleet.prune_closed_bugs — archive closed bug-backlog YAML entries.
+
+    Wire contract: coordinator_core/contract/cockpit-invoke-producer-contract.md
+    Terminality: frontmatter status: closed on state/bug-backlog/*.yaml.
+    Archive dest: archive/bug-backlog/YYYY-MM/ (YYYY-MM from filename prefix or created:).
+
+    dry_run:true  → candidates[] of closed bugs; mutates nothing.
+    dry_run:false → D1 re-verify each candidate_id at T3; git-mv + commit acted set;
+                    return acted/skipped/failed with exit_code 0 or 2.
+
+    repo_root arg: the git common dir delivered by _OP_KEY_SCOPE="common_dir".
+                   Handlers MUST NOT use ctx.repo_root (None in the global service).
+                   Worktree root is derived via main_worktree_root(repo_root).
+                   params.repo_root is the D3 consistency check only — NOT the
+                   worktree-root resolution source (plan Key Decision 5).
+    """
+    # ---- param validation (mode fail-closed, candidate_ids required on act) ----
+    result = validate_params(params)
+    if isinstance(result, dict):
+        return result  # exit_code:1 setup-error envelope
+    mode, dry_run, candidate_ids = result
+
+    # ---- D3 repo_root consistency check (contract §3.3) ----
+    if repo_root is not None:
+        common_dir = Path(repo_root)
+        mismatch = check_repo_root(params.get("repo_root"), common_dir)
+        if mismatch:
+            return build_setup_error_result(mode, dry_run, mismatch)
+        worktree = main_worktree_root(common_dir)
+    else:
+        # repo_root is None only in unit tests that bypass the keying table.
+        # Fail loudly in production; test fixtures supply an explicit value.
+        _LOG.error(
+            "fleet.prune_closed_bugs: repo_root is None — "
+            "_OP_KEY_SCOPE='common_dir' should always supply it in production"
+        )
+        return build_setup_error_result(
+            mode, dry_run,
+            "repo_root is None; cannot derive worktree root (keying-table misconfiguration)",
+        )
+
+    # ---- dry_run:true — preview (read-only; mutates nothing) ----
+    if dry_run:
+        bug_paths = _enumerate_bugs(worktree)
+        candidates = []
+        for path in bug_paths:
+            meta = _read_plain_yaml(path)
+            status = meta.get("status")
+            if _is_terminal(status):
+                candidates.append(_candidate_dict(path, worktree))
+        return build_dry_run_result(mode, candidates)
+
+    # ---- dry_run:false — act ----
+    # candidate_ids guaranteed non-empty by validate_params.
+    acted: List[dict] = []
+    skipped: List[dict] = []
+    failed: List[dict] = []
+    moves: List[Move] = []
+
+    # Resolve the allowed root once outside the loop (CRITICAL 2 path-traversal fix).
+    bug_dir_safe = (worktree / "state" / "bug-backlog").resolve()
+
+    for cid in candidate_ids:
+        src = worktree / cid
+
+        # Path-traversal containment guard (CRITICAL 2): reject candidate_id that
+        # resolves outside state/bug-backlog/ — covers absolute-path override and ../ traversal.
+        # Must run BEFORE any file read or git op on src.
+        resolved_src = src.resolve()
+        if not resolved_src.is_relative_to(bug_dir_safe):
+            _LOG.warning(
+                "prune_bugs: rejecting path-traversal candidate_id %r "
+                "(resolved %s escapes state/bug-backlog/)", cid, resolved_src,
+            )
+            failed.append({"id": cid, "reason": "path-traversal: candidate_id escapes state/bug-backlog/"})
+            continue
+        src = resolved_src
+
+        # Already-archived (source gone): idempotent replay per DR-211 D2(i).
+        if not src.exists():
+            skipped.append({"id": cid, "reason": "already-archived"})
+            continue
+
+        # D1 act-time re-verify: re-read status at T3 (contract §3.1 :231-267).
+        meta = _read_plain_yaml(src)
+        status_at_t3 = meta.get("status")
+        if not _is_terminal(status_at_t3):
+            _LOG.info(
+                "fleet.prune_closed_bugs: D1 drift — %s status=%r at T3, skipping",
+                cid, status_at_t3,
+            )
+            skipped.append({"id": cid, "reason": f"drifted-open: status={status_at_t3!r}"})
+            continue
+
+        # Derive archive destination path.
+        ym = _archive_month(src)
+        dst = worktree / "archive" / "bug-backlog" / ym / src.name
+
+        force = False
+        if dst.exists():
+            if not _is_identical_duplicate(src, dst):
+                _LOG.warning(
+                    "prune_bugs: %s NOT archived — a DIFFERENT file already "
+                    "occupies the archive destination %s. Reconcile the two copies "
+                    "before the next sweep.",
+                    cid,
+                    rel_id(dst, worktree),
+                )
+                skipped.append({"id": cid, "reason": _REASON_DEST_CONFLICT})
+                continue
+            # Byte-identical duplicate: converge by archiving over it.
+            force = True
+
+        moves.append(Move(src=src, dst=dst, candidate_id=cid, force=force))
+
+    if moves:
+        # TOCTOU note: a narrow window exists between the per-candidate D1 terminality
+        # re-verify above and the git-mv inside archive_and_commit below.  This is the
+        # accepted DR-211 D1-at-act residual; the T3 re-verify already narrows the window
+        # to the call-site gap (same shape as archive_plans).
+        # Review: code-reviewer (F8) — aligned prefix+count format with sibling handlers.
+        commit_subject = (
+            f"fleet: prune {len(moves)} closed bug "
+            f"{'entry' if len(moves) == 1 else 'entries'} [fleet.prune_closed_bugs]"
+        )
+        new_acted, new_failed = await archive_and_commit(worktree, moves, commit_subject)
+        acted.extend(new_acted)
+        failed.extend(new_failed)
+
+    return build_act_result(mode, acted, skipped, failed)

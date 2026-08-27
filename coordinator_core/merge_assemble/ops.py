@@ -1,5 +1,10 @@
-"""coordinator_core.merge_assemble.ops — registers `merge_assemble.brief` and
-`merge_assemble.apply` as warm-servable ops.
+"""coordinator_core.merge_assemble.ops — registers `merge_assemble.apply` as a
+warm-servable op.
+
+`merge_assemble.brief` was DELETED 2026-08-27 under the 200ms process-time bar
+(kill ledger K-114) and is deliberately no longer named here: the registration
+annotation guard reads this docstring and treats an advertised-but-absent op as
+an annotation committed ahead of its op.
 
 Purpose: this module's own import is the registration side-effect (chunk C6,
 docs/plans/2026-08-26-merges-directives-stop-starting-interpreters.md).
