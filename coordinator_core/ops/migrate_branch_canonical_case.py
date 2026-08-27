@@ -247,6 +247,34 @@ def _migrate(push_cleanup: bool) -> int:
 
     # --- Step 1: Mixed-case ref-file rename -------------------------------
     local_refs = _enumerate_work_refs(git_root)
+    mixed_case_refs = [ref for ref in local_refs if ref != ref.lower()]
+
+    # Batch primitive (test_no_unbatched_per_item_git_spawn.py _KNOWN_SITES
+    # evidence): the per-ref `show-ref --verify` sibling-existence check is
+    # collapsed into ONE `show-ref --verify` call over every candidate's
+    # lowercase refname, rather than one call per mixed-case ref.
+    #
+    # NOT a plain membership check against `local_refs`: on a case-insensitive
+    # filesystem (default macOS/Windows), a mixed-case ref's lowercase
+    # sibling resolves via `show-ref --verify`'s FS-level lookup even when
+    # `for-each-ref`'s listing enumerates only the ONE on-disk (mixed-case)
+    # entry — `show-ref`'s own ref-name pattern matching does NOT reproduce
+    # that FS-level case-fold. `show-ref --verify <ref1> <ref2> ...` accepts
+    # N refnames in one call, exits non-zero if ANY is unresolvable, but
+    # still prints one stdout line per refname that DOES resolve and keeps
+    # checking the rest — empirically verified (git 2.55, this port's own
+    # sandbox) against the exact multi-ref-with-one-missing shape used here.
+    # So parsing stdout, not the exit code, recovers the same per-candidate
+    # "does this canonical sibling already exist" answer the old per-ref
+    # `--verify --quiet` loop gave, in one spawn instead of N.
+    existing_siblings: set = set()
+    if mixed_case_refs:
+        verify_argv = [f"refs/heads/{ref.lower()}" for ref in mixed_case_refs]
+        verify_result = _git(git_root, "show-ref", "--verify", *verify_argv)
+        for line in verify_result.stdout.splitlines():
+            parts = line.split(None, 1)
+            if len(parts) == 2 and parts[1].startswith("refs/heads/"):
+                existing_siblings.add(parts[1][len("refs/heads/"):])
 
     renamed = 0
     skipped = 0
@@ -257,7 +285,7 @@ def _migrate(push_cleanup: bool) -> int:
         if ref == lc:
             continue  # already canonical
 
-        if _git(git_root, "show-ref", "--verify", "--quiet", f"refs/heads/{lc}").returncode == 0:
+        if lc in existing_siblings:
             print(
                 f"SKIP: '{ref}' — canonical sibling '{lc}' already exists; "
                 "remove the mixed-case form manually:",

@@ -616,6 +616,16 @@ def main(argv: List[str]) -> int:
     # directory rather than the class, so the gate HALTed /update-docs on 19
     # period-correct references (claude-klabauter, 2026-08-06).
     #
+    # inbox/, sent/ and dispatch-briefs/ are the same class again, found the same
+    # way (the gate HALTed /update-docs on 11 of them, claude-klabauter 2026-08-27).
+    # A DELIVERED memo -- inbound under cross-repo/inbox/ or outbound under
+    # state/memo-outbox/sent/ -- is a transmission record: its text is what the
+    # peer repo actually wrote, frequently naming that repo's own artifacts or
+    # quoting a defect report about a name that never resolved here. Editing one
+    # to satisfy this gate falsifies the record. A dispatch brief carries a
+    # dispatched agent's frozen instructions, which is subagent-share/'s rationale
+    # on the brief side of the same handoff.
+    #
     # Deliberately NOT excluded: the rest of state/ (handoffs, roadmap stubs,
     # improvement-queue) and docs/. Those are live surfaces someone will ACT on --
     # a handoff citing a retired agent is a real orphan, and that is the whole
@@ -629,7 +639,18 @@ def main(argv: List[str]) -> int:
         # path-scoped check, not via this basename exclude set -- a basename
         # exclude on ".claude" would also drop tracked .claude fixture dirs
         # under install/sandbox-test surfaces.
-        {"dist", "review-trail", "archive", "vendor", "audits", "subagent-share", "tasks"},
+        {
+            "dist",
+            "review-trail",
+            "archive",
+            "vendor",
+            "audits",
+            "subagent-share",
+            "tasks",
+            "inbox",
+            "sent",
+            "dispatch-briefs",
+        },
         errors=walk_dir_errors,
     ):
         try:

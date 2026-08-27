@@ -902,17 +902,39 @@ async def _delete_tracked_and_append_log(
         reaped: list[Path] = []
         failed: list[dict[str, str]] = []
 
-        for path in tracked_paths:
+        # Optimistic batch — one `git rm --` over the whole tracked_paths set
+        # instead of one spawn per path (amplification hitlist, 2026-08-19:
+        # `git rm` natively accepts N pathspecs). `git rm` (no `-f`) validates
+        # every pathspec before removing any of them, so an all-succeed batch
+        # (the common case) costs exactly ONE spawn regardless of N. A batch
+        # failure means NONE of the paths in this call were removed, but this
+        # module's own per-child TOCTOU denorm gate (see the docstring above)
+        # depends on knowing EXACTLY which sibling(s) failed vs. succeeded
+        # when one path in a set carries e.g. an uncommitted local edit —
+        # collapsing the whole batch to "all failed" would misreport a
+        # sibling that git would have happily removed on its own. On failure
+        # only, re-issue one `git rm --` PER remaining path to recover that
+        # exact per-item attribution — the fallback trades spawn count for
+        # correctness, but only on the failure path, which the "process count
+        # does not grow with N" pin (below) does not exercise.
+        if tracked_paths:
             rc, _out, err = await _run_git(
-                "rm", "--", str(path), cwd=worktree_root, env=base_env
+                "rm", "--", *[str(p) for p in tracked_paths], cwd=worktree_root, env=base_env
             )
-            if rc != 0:
-                failed.append({
-                    "path": rel_id(path, worktree_root),
-                    "reason": err.decode(errors="replace").strip() or "git-rm-failed",
-                })
+            if rc == 0:
+                reaped.extend(tracked_paths)
             else:
-                reaped.append(path)
+                for path in tracked_paths:
+                    rc, _out, err = await _run_git(
+                        "rm", "--", str(path), cwd=worktree_root, env=base_env
+                    )
+                    if rc != 0:
+                        failed.append({
+                            "path": rel_id(path, worktree_root),
+                            "reason": err.decode(errors="replace").strip() or "git-rm-failed",
+                        })
+                    else:
+                        reaped.append(path)
 
         # Gate the denorm write set on ACTUAL per-child delete outcomes, not
         # the pre-delete plan (module docstring § Lineage denormalization —

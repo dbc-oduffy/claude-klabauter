@@ -102,6 +102,33 @@ def _git_mv(repo_root: str, src: str, dst: str) -> bool:
     return result.returncode == 0
 
 
+def _git_mv_batch(repo_root: str, srcs: List[str], dst_dir: str) -> bool:
+    """Batch primitive (test_no_unbatched_per_item_git_spawn.py _KNOWN_SITES
+    evidence): `git mv` takes N sources into one destination DIRECTORY, and
+    every call in the per-file loop this replaces targets the same
+    legacy_dir — so one `git mv src1 src2 ... dst_dir` spawn does the same
+    work as N per-file `git mv src dst_dir/basename(src)` spawns.
+
+    Returns True iff the batched `git mv` succeeded (all srcs moved). On
+    failure nothing is guaranteed to have moved (git's own atomicity for a
+    single `git mv` invocation with multiple sources) — the caller degrades
+    to reporting every src in the batch as failed, matching the aggregate
+    "one or more git mv operations failed" contract this module's exit code
+    2 already promised (never a bespoke partial-failure shape mid-batch).
+    """
+    if not srcs:
+        return True
+    result = subprocess.run(
+        ["git", "-C", repo_root, "mv", *srcs, dst_dir],
+        capture_output=True,
+        text=True,
+        **no_console_creationflags(),
+    )
+    if result.returncode != 0 and result.stderr.strip():
+        print(f"  git mv stderr: {result.stderr.strip()}", file=sys.stderr)
+    return result.returncode == 0
+
+
 def main(argv: List[str]) -> int:
     """CLI entry: arg parse, root resolution, scan, migrate, print, return rc."""
     explicit_root: Optional[str] = None
@@ -174,23 +201,40 @@ def main(argv: List[str]) -> int:
     failed = 0
     failed_files: List[str] = []
 
+    # Skip-if-at-destination stays a per-file, spawn-free (`os.path.exists`)
+    # decision made BEFORE any git call — unchanged from the per-file loop.
+    # Only the actual `git mv` for the surviving set is batched: every one of
+    # them targets the SAME legacy_dir, so `git mv src1 src2 ... legacy_dir`
+    # does the work of N per-file `git mv` spawns in one call (see
+    # `_git_mv_batch`'s docstring for the batch-primitive evidence).
+    to_move: List[str] = []
     for src in monoliths:
         filename = os.path.basename(src)
         dst = os.path.join(legacy_dir, filename)
-
         if os.path.exists(dst):
             print(f"SKIP (already at destination): {filename}")
             continue
-
         print(f"MOVE: archive/completed/{filename}  →  archive/completed/legacy/{filename}")
-        if _git_mv(repo_root, src, dst):
+        to_move.append(src)
+
+    if _git_mv_batch(repo_root, to_move, legacy_dir):
+        for src in to_move:
+            filename = os.path.basename(src)
+            dst = os.path.join(legacy_dir, filename)
             # DR-276: declared AFTER the move lands, never before — the
             # contract is a report of what was ACTUALLY written, not of an
             # intended surface. `dst` is the final destination `git mv`
             # rewrote src into, never the pre-move src path.
             declare_write(dst)
             moved += 1
-        else:
+    else:
+        # `git mv` with multiple sources is a single atomic invocation:
+        # a non-zero exit here means it failed for the batch as a whole, so
+        # every candidate in it is reported failed — mirrors the aggregate
+        # "one or more git mv operations failed" exit-code-2 contract this
+        # module already promised, never a bespoke partial-failure shape.
+        for src in to_move:
+            filename = os.path.basename(src)
             print(f"  FAIL: git mv returned non-zero for {filename}", file=sys.stderr)
             failed += 1
             failed_files.append(filename)

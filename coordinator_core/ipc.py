@@ -1653,26 +1653,30 @@ def _record_self_reported_touches(result: object, sid_cwd: Optional[str]) -> obj
             return result
 
         # C2 (docs/plans/2026-08-14-cli-authored-writes-get-claimed.md):
-        # acquire the touched.txt append lock ONCE for the whole declared-
-        # path batch, here at the recorder, rather than once per path inside
-        # `session.scope.touch()` — both to bound worst-case latency (one
-        # acquire instead of up to `_MAX_DECLARED_TOUCH_PATHS`) and because a
-        # per-path acquire nested inside this outer acquire would be
-        # re-entrant on the same target (`held_lock` deadlocks for the full
-        # timeout on re-entry; see `locked_write.py`'s negative-spec). Every
-        # resolved path in one call shares the same `caller_repo_root`
+        # acquire the batch lock ONCE for the whole declared-path batch,
+        # here at the recorder, rather than once per path inside
+        # `session.scope.touch()` — to bound worst-case latency (one
+        # acquire instead of up to `_MAX_DECLARED_TOUCH_PATHS`). `touch()`
+        # is called with `lock=False` inside this scope: AC11 traced
+        # `scope.touch`'s own `lock=` parameter as vestigial (C4/AC17
+        # deleted the dedup-scan region it once serialized;
+        # `touch_record.append_event`'s single atomic append needs no
+        # app-level lock), so there is no re-entrancy left to guard against
+        # — this lock now exists only to bound the batch's own worst-case
+        # latency, not to avoid a nested acquire. Every resolved path in
+        # one call shares the same `caller_repo_root`
         # (`_resolve_declared_touch_root_and_path` enforces single-repo
-        # containment against the caller's own repo — see its docstring), so
-        # they also share one `touched.txt` target and one lock. `touch()`
-        # is called with `lock=False` inside this scope so it does NOT
-        # attempt its own (re-entrant) acquire.
+        # containment against the caller's own repo — see its docstring),
+        # so they also share one record-sink target and one lock, keyed on
+        # the SAME `touch-record.jsonl` seam `scope.touch`/`touch_record`
+        # use, not the retired `touched.txt` dialect.
         locked = False
         touched_path: Optional[Path] = None
         anchor_repo_root = resolved_paths[0][0]
         try:
             sdir = _session_core.session_dir(sid, anchor_repo_root)
             if sdir:
-                touched_path = Path(sdir) / "touched.txt"
+                touched_path = Path(sdir) / _scope._TOUCH_RECORD_FILENAME
         except Exception as exc:
             _log().debug(
                 "coordinator_core.ipc: could not resolve session dir for "

@@ -124,40 +124,70 @@ def _posix_login_shell() -> str:
     return os.environ.get("SHELL") or "/bin/sh"
 
 
+#: Delimiter marking the start of each entrypoint's output block inside the single
+#: combined -lc payload `_check_posix` builds -- lets one login-shell spawn report
+#: on every entrypoint instead of one spawn per entrypoint. Chosen to be effectively
+#: impossible for a resolved path or exec-proof output to collide with.
+_POSIX_ENTRY_MARKER = "===coordinator-path-probe-entry==="
+
+
 def _check_posix(names: "tuple[str, ...]") -> PathResolutionReport:
     shell = _posix_login_shell()
     checks: "list[EntrypointCheck]" = []
+
+    # PATH is built once at login-shell startup (profile files re-sourced by `-lc`),
+    # not per name looked up inside it -- so every entrypoint's `command -v` +
+    # exec-proof block can share ONE login-shell spawn instead of one per name. Each
+    # block is prefixed with a marker + the entrypoint name so the single combined
+    # stdout can be split back apart per entrypoint below.
+    blocks: "list[str]" = []
     for name in names:
         args = " ".join(_EXEC_PROOF_ARGS[name])
-        # Single combined -lc payload per entrypoint: `command -v` (PATH
-        # resolution) then, only if that succeeded, the exec-proof
-        # invocation -- one login-shell spawn per entrypoint rather than two,
-        # since each spawn re-sources every profile file on disk.
-        script = f'p="$(command -v {name} 2>/dev/null)"; ' f'if [ -n "$p" ]; then echo "$p"; {name} {args} >/dev/null 2>&1; echo "RC=$?"; else echo "RC=NOTFOUND"; fi'
-        try:
-            proc = subprocess.run(
-                [shell, "-lc", script],
-                capture_output=True, text=True, timeout=_PROBE_TIMEOUT_SECS,
-                stdin=subprocess.DEVNULL,
-                # This caller consumes the output itself (`capture_output=True`),
-                # so the creationflags-only helper is the correct one — and it
-                # returns `{}` off Windows, leaving this POSIX-only login-shell
-                # probe bit-for-bit unchanged.
-                **no_console_creationflags(),
-            )
-        except (OSError, subprocess.TimeoutExpired) as exc:
+        blocks.append(
+            f'echo "{_POSIX_ENTRY_MARKER}{name}"; '
+            f'p="$(command -v {name} 2>/dev/null)"; '
+            f'if [ -n "$p" ]; then echo "$p"; {name} {args} >/dev/null 2>&1; echo "RC=$?"; else echo "RC=NOTFOUND"; fi'
+        )
+    script = "; ".join(blocks)
+
+    try:
+        proc = subprocess.run(
+            [shell, "-lc", script],
+            capture_output=True, text=True, timeout=_PROBE_TIMEOUT_SECS,
+            stdin=subprocess.DEVNULL,
+            # This caller consumes the output itself (`capture_output=True`),
+            # so the creationflags-only helper is the correct one — and it
+            # returns `{}` off Windows, leaving this POSIX-only login-shell
+            # probe bit-for-bit unchanged.
+            **no_console_creationflags(),
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        for name in names:
             checks.append(EntrypointCheck(
                 name=name, resolved_path=None, executed_ok=False,
                 detail=f"login-shell probe failed to run ({shell} -lc): {exc}",
             ))
-            continue
+        return PathResolutionReport(
+            platform=platform.system(),
+            method=f"login shell ({shell} -lc), one combined subprocess for all entrypoints",
+            checks=checks,
+        )
 
-        lines = (proc.stdout or "").strip().splitlines()
-        if not lines or lines[0] == "" or lines[-1].strip() == "RC=NOTFOUND":
+    stderr_tail = (proc.stderr or "").strip()[:300]
+    raw = (proc.stdout or "")
+    per_entry: "dict[str, str]" = {}
+    for chunk in raw.split(_POSIX_ENTRY_MARKER)[1:]:
+        entry_name, _, rest = chunk.partition("\n")
+        per_entry[entry_name.strip()] = rest
+
+    for name in names:
+        block = per_entry.get(name)
+        lines = (block or "").strip().splitlines()
+        if block is None or not lines or lines[0] == "" or lines[-1].strip() == "RC=NOTFOUND":
             checks.append(EntrypointCheck(
                 name=name, resolved_path=None, executed_ok=False,
                 detail=f"`command -v {name}` returned nothing in a fresh {shell} -lc shell "
-                       f"(stderr: {(proc.stderr or '').strip()[:300]})",
+                       f"(stderr: {stderr_tail})",
             ))
             continue
 
@@ -173,7 +203,8 @@ def _check_posix(names: "tuple[str, ...]") -> PathResolutionReport:
         ))
 
     return PathResolutionReport(
-        platform=platform.system(), method=f"login shell ({shell} -lc), fresh subprocess per entrypoint",
+        platform=platform.system(),
+        method=f"login shell ({shell} -lc), one combined subprocess for all entrypoints",
         checks=checks,
     )
 

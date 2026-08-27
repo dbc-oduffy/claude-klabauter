@@ -110,7 +110,7 @@ import os
 import stat as stat_module
 import subprocess
 import sys
-from typing import Dict, List, Optional, Set
+from typing import Dict, List, Optional, Set, Tuple
 
 from coordinator_core.git.repo_root import show_toplevel as _show_toplevel
 from coordinator_core.frontmatter.consumed_marker import (
@@ -373,6 +373,57 @@ def get_tracked_files(abs_dir: str, root: str) -> Optional[Set[str]]:
         return None
 
 
+def get_tracked_files_batch(dirs: List[str], root: str) -> Dict[str, Optional[Set[str]]]:
+    """Batch counterpart to get_tracked_files: ONE `git ls-files` call across
+    every directory pathspec, partitioned client-side by directory prefix --
+    loop-invariant fix for the per-glob spawn `main()` used to issue (one
+    `git ls-files <dir>` per TYPE_TO_GLOB directory, 5 by default). `git
+    ls-files` natively accepts multiple pathspecs in one invocation, so this
+    collapses N per-directory spawns to 1.
+
+    Returns a dict keyed by the exact `dirs` entries. A directory's value is
+    None only when the single git call failed entirely (mirrors
+    get_tracked_files' None == "git unavailable, process all files"
+    contract) -- there is no per-directory partial failure since all
+    directories share the one subprocess call.
+    """
+    if not dirs:
+        return {}
+    rel_dirs: List[str] = []
+    rel_to_abs: Dict[str, str] = {}
+    for d in dirs:
+        rel = os.path.relpath(d, root).replace("\\", "/")
+        rel_dirs.append(rel)
+        rel_to_abs[rel] = d
+    try:
+        result = subprocess.run(
+            ["git", "ls-files", *rel_dirs],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            stdin=subprocess.DEVNULL,
+            cwd=root,
+            check=True,
+            **_CREATIONFLAGS,
+        )
+    except Exception:
+        print(
+            f"skip: get_tracked_files_batch: git ls-files across {len(rel_dirs)} "
+            f"dir(s) failed: {sys.exc_info()[1]}",
+            file=sys.stderr,
+        )
+        return {d: None for d in dirs}
+
+    per_dir: Dict[str, Set[str]] = {d: set() for d in dirs}
+    out = result.stdout.strip()
+    if out:
+        for f in out.split("\n"):
+            for rel in rel_dirs:
+                if f == rel or f.startswith(rel + "/"):
+                    per_dir[rel_to_abs[rel]].add(os.path.abspath(os.path.join(root, f)))
+    return per_dir  # type: ignore[return-value]
+
+
 def main(argv: List[str]) -> int:
     """CLI entry: scan configured record-type directories and flip drifted
     frontmatter. Mirrors the node oracle's main() shape and its
@@ -382,38 +433,46 @@ def main(argv: List[str]) -> int:
     results: List[Dict[str, object]] = []
     exit_code = 0
 
+    # Collect every (type, dir) pair up front so the tracked-files lookup
+    # below can batch across all of them in one `git ls-files` call instead
+    # of one call per TYPE_TO_GLOB directory.
+    type_dirs: List[Tuple[str, str]] = []
     for type_ in opts.types:
         raw_glob = TYPE_TO_GLOB.get(type_)  # type: ignore[arg-type]
         globs = raw_glob if isinstance(raw_glob, list) else [raw_glob]
         for glob in globs:
-            dir_ = os.path.join(root, glob)  # type: ignore[arg-type]
-            tracked = get_tracked_files(dir_, root)
-            for file in walk_dir(dir_):
-                # the Staff Engineer F5: skip untracked files silently (tracked is None
-                # means git is unavailable, so we process all files as a
-                # fallback).
-                if tracked is not None and os.path.abspath(file) not in tracked:
-                    continue
-                try:
-                    out = normalize_one(file)
-                except Exception as err:
-                    # the Staff Engineer F1: block-scalar field detected; fail loud with
-                    # filename, but keep scanning remaining files.
-                    rel = os.path.relpath(file, root).replace("\\", "/")
-                    sys.stderr.write(f"ERROR {rel}: {err}\n")
-                    exit_code = 1
-                    continue
-                if out is None:
-                    continue
+            type_dirs.append((type_, os.path.join(root, glob)))  # type: ignore[arg-type]
+
+    tracked_by_dir = get_tracked_files_batch([d for _, d in type_dirs], root)
+
+    for _type_, dir_ in type_dirs:
+        tracked = tracked_by_dir.get(dir_)
+        for file in walk_dir(dir_):
+            # the Staff Engineer F5: skip untracked files silently (tracked is None
+            # means git is unavailable, so we process all files as a
+            # fallback).
+            if tracked is not None and os.path.abspath(file) not in tracked:
+                continue
+            try:
+                out = normalize_one(file)
+            except Exception as err:
+                # the Staff Engineer F1: block-scalar field detected; fail loud with
+                # filename, but keep scanning remaining files.
                 rel = os.path.relpath(file, root).replace("\\", "/")
-                results.append({"file": rel, "changes": out["changes"]})
-                if not opts.dry_run:
-                    with open(file, "w", encoding="utf-8", newline="") as f:
-                        f.write(out["rebuilt"])  # type: ignore[arg-type]
-                    # DR-276: declared AFTER the write lands, never before —
-                    # the contract is a report of what was ACTUALLY written,
-                    # not of an intended surface.
-                    declare_write(file)
+                sys.stderr.write(f"ERROR {rel}: {err}\n")
+                exit_code = 1
+                continue
+            if out is None:
+                continue
+            rel = os.path.relpath(file, root).replace("\\", "/")
+            results.append({"file": rel, "changes": out["changes"]})
+            if not opts.dry_run:
+                with open(file, "w", encoding="utf-8", newline="") as f:
+                    f.write(out["rebuilt"])  # type: ignore[arg-type]
+                # DR-276: declared AFTER the write lands, never before —
+                # the contract is a report of what was ACTUALLY written,
+                # not of an intended surface.
+                declare_write(file)
 
     if not results:
         sys.stderr.write("No drift between body markers and frontmatter.\n")

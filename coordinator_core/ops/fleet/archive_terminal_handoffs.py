@@ -1070,10 +1070,16 @@ def plan_sweep(
     function of caller-supplied candidate_ids.
 
     `known_dirty_relpaths` (C10, AC-11) — passed straight through to
-    `_scan_terminal`; see that function's own docstring. None (default) on
-    the standalone/op path spawns Rail 1's `git status --porcelain` (1 git
-    spawn total, Rail 2 already spawns none); a provided set on the
-    in-plane path spawns nothing (0 git spawns total).
+    `_scan_terminal`; see that function's own docstring. A provided set
+    answers Rail 1 outright and spawns nothing. None (default) leaves Rail 1
+    to `_dirty_handoff_relpaths`, which is ALSO normally spawn-free: its
+    `_dirty_relpaths_in_process` arm answers from one scoped index walk, and
+    the `git status --porcelain` spawn is a FALLBACK, taken only when that arm
+    declines or the survivor pathspec exceeds
+    `_DIVERGENCE_CHECK_ARGV_BUDGET_CHARS`. So the honest bound is AT MOST one
+    spawn, not exactly one — and zero whenever classification leaves no
+    survivor, since the rail is never invoked at all. Rail 2 spawns none
+    either way.
 
     `scan_skipped` (opt-in out-param) — `_scan_terminal`'s own rail
     refusals, `{id, reason}` per refused record. Separate from the returned

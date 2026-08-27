@@ -28,6 +28,7 @@ Spec backlink: pln-distill-ceremony-mechanical-su-1bcb38 § C2
 from __future__ import annotations
 
 import shutil
+import subprocess
 
 import pytest
 
@@ -161,6 +162,42 @@ def test_deletion_manifest_never_contains_actively_referenced_path(tmp_path):
 
     for row in result.deletion_manifest:
         assert active_reference_guard(row["path"], repo_root) is False
+
+
+@_requires_rg
+def test_process_count_does_not_grow_with_the_set(tmp_path, monkeypatch):
+    """The amplification property: sweeping N sidecar candidates must cost the same
+    `rg` process count as sweeping one — `sweep_sidecars` batches the active-reference
+    guard lookup into a single `rg -f <patternfile>` call regardless of N."""
+    repo_root = tmp_path
+    (repo_root / "docs").mkdir()
+    (repo_root / "docs" / "unrelated.md").write_text("nothing relevant here\n")
+
+    scan_root = repo_root / "tasks"
+    scan_root.mkdir()
+
+    spawns: list[list[str]] = []
+    real_run = subprocess.run
+
+    def counting_run(argv, *args, **kwargs):  # type: ignore[no-untyped-def]
+        spawns.append(list(argv))
+        return real_run(argv, *args, **kwargs)
+
+    monkeypatch.setattr(subprocess, "run", counting_run)
+
+    (scan_root / "2026-07-12-one.review.md").write_text("a\n")
+    sweep_sidecars(scan_root, repo_root)
+    after_one = len(spawns)
+
+    for n in range(2, 6):
+        (scan_root / f"2026-07-12-item-{n}.review.md").write_text("a\n")
+    sweep_sidecars(scan_root, repo_root)
+    after_many = len(spawns)
+
+    assert after_many - after_one == after_one, (
+        f"5 candidates cost {after_many - after_one} rg spawns against {after_one} for 1: "
+        f"{spawns[after_one:]}"
+    )
 
 
 @_requires_rg

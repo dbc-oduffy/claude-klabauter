@@ -132,11 +132,13 @@ def test_non_session_subdir_without_meta_json_is_not_counted(tmp_path):
 
 
 def test_touched_txt_without_meta_json_counts_as_miss(tmp_path):
-    # AC8/C4 (2026-08-22): a session dir that ran but left NO meta.json at
-    # all — the population a sibling chunk (C1, edit-hook session-bootstrap
-    # removal) grows — must still be COUNTED, not fall out of the
-    # denominator and read falsely CLEAN. touched.txt is this repo's own
-    # signal that a session genuinely ran here.
+    # AC8/C4 (2026-08-22) originally pinned this via a bare `touched.txt`
+    # sibling. AC11 (2026-08-27) retires `_touch_record_family`'s legacy
+    # arm: `touch_record.discover_family` only recognizes the
+    # `touch-record.jsonl` dialect now, so a dir carrying ONLY the legacy
+    # file is no longer evidence a session "genuinely ran here" and falls
+    # back out of the denominator — the same "no file at all" shape the
+    # sibling test below already covers. Flipped to STATUS_EMPTY/checked 0.
     root = tmp_path / "coordinator-sessions"
     sdir = root / "s1"
     sdir.mkdir(parents=True)
@@ -144,9 +146,8 @@ def test_touched_txt_without_meta_json_counts_as_miss(tmp_path):
 
     result = scan_stable_pid_misses(sessions_dir=root)
 
-    assert result["status"] == STATUS_MISS
-    assert result["checked"] == 1
-    assert result["misses"] == [{"session": "s1", "reason": "no_meta_json"}]
+    assert result["status"] == STATUS_EMPTY
+    assert result["checked"] == 0
 
 
 def test_dir_with_neither_meta_json_nor_any_file_is_not_counted(tmp_path):
@@ -260,10 +261,15 @@ def test_stale_touched_txt_without_meta_json_is_not_counted(tmp_path):
 
 
 def test_recency_scope_does_not_mask_a_current_no_meta_session(tmp_path):
-    # The other half of the same pin: the scope must not become a way for a
-    # live bootstrap-without-init to read CLEAN. A fossil and a session
-    # whose touched.txt is inside the window sit side by side; only the
-    # current one is counted, and the denominator is 1, not 2.
+    # Originally the other half of a pin that fed both dirs a bare
+    # `touched.txt` sibling and expected the fresh one alone to count.
+    # AC11 (2026-08-27) retires that legacy dialect from
+    # `_touch_record_family` entirely, so NEITHER dir (fossil or current)
+    # carries evidence `discover_family` recognizes any more -- both fall
+    # out of the denominator, same as the "no file at all" shape. Flipped
+    # to STATUS_EMPTY/checked 0; the recency-scope behavior this test named
+    # is now exercised only by a `touch-record.jsonl`-bearing fixture
+    # elsewhere in this module.
     root = tmp_path / "coordinator-sessions"
     for name, age in (("fossil", _NO_META_RECENCY_SECONDS + 3600), ("current", 60)):
         sdir = root / name
@@ -275,9 +281,8 @@ def test_recency_scope_does_not_mask_a_current_no_meta_session(tmp_path):
 
     result = scan_stable_pid_misses(sessions_dir=root)
 
-    assert result["status"] == STATUS_MISS
-    assert result["checked"] == 1
-    assert result["misses"] == [{"session": "current", "reason": "no_meta_json"}]
+    assert result["status"] == STATUS_EMPTY
+    assert result["checked"] == 0
 
 
 def test_recency_scope_never_narrows_the_meta_json_bearing_population(tmp_path):
@@ -336,12 +341,16 @@ def test_old_dir_with_a_freshly_appended_guard_log_is_not_counted(tmp_path, monk
 
 
 def test_a_session_that_touched_files_without_init_is_still_counted(tmp_path):
-    """The shape this branch exists to surface, and the one real instance the
-    live box produced: `471733e0-…` edited files for thirteen minutes and was
-    archived at SessionEnd without ever holding a `meta.json`. Its directory
-    carried a touch record, so `core.init` was owed and did not happen — a
-    genuine K-006 miss, and the narrowing must not lose it. Over the nine
-    sessions archived on 2026-08-26 this predicate selects exactly that one.
+    """Originally the shape this branch exists to surface, pinned via a
+    bare `touched.txt` sibling: `471733e0-…` edited files for thirteen
+    minutes and was archived at SessionEnd without ever holding a
+    `meta.json`. AC11 (2026-08-27) retires the legacy dialect from
+    `_touch_record_family` -- `touch_record.discover_family` no longer
+    recognizes a lone `touched.txt` as touch-record evidence, so this
+    fixture (no `touch-record.jsonl`) now reads the same as "no touch
+    record at all" and falls out of the denominator, matching the
+    lazy-`meta.json` shape covered below. The real-world K-006 case this
+    test named is retired along with the writer that produced it.
     """
     root = tmp_path / "coordinator-sessions"
     sdir = root / "471733e0-5785-4c97-b9c6-e4db17040fe9"
@@ -353,11 +362,8 @@ def test_a_session_that_touched_files_without_init_is_still_counted(tmp_path):
 
     result = scan_stable_pid_misses(sessions_dir=root)
 
-    assert result["status"] == STATUS_MISS
-    assert result["checked"] == 1
-    assert result["misses"] == [
-        {"session": "471733e0-5785-4c97-b9c6-e4db17040fe9", "reason": "no_meta_json"}
-    ]
+    assert result["status"] == STATUS_EMPTY
+    assert result["checked"] == 0
 
 
 def test_a_freshly_started_session_before_its_first_touch_is_not_counted(tmp_path):
@@ -395,10 +401,14 @@ def test_a_freshly_started_session_before_its_first_touch_is_not_counted(tmp_pat
 
 
 def test_a_long_running_session_is_not_excluded_by_its_own_age(tmp_path, monkeypatch):
-    """Retraction pin. The first cut at the fixture-dir problem checked the
-    DIRECTORY's creation age, which would drop this case silently: a session
-    older than the window that touches a file now and gets no record is a
-    real miss. The touch-record scope counts it; a dir-age scope would not.
+    """Originally a retraction pin against a dir-age-scope regression, built
+    on a bare `touched.txt` fixture. AC11 (2026-08-27) retires the legacy
+    dialect from `_touch_record_family`: this fixture carries no
+    `touch-record.jsonl`, so `discover_family` now finds nothing, the dir
+    reads as having no touch record at all, and it falls out of the
+    denominator — the dir-age-vs-touch-record distinction this test named
+    needs a `touch-record.jsonl`-bearing fixture to still exercise it, which
+    this one no longer is.
     """
     import coordinator_core.session.stable_pid_watch as watch
 
@@ -417,6 +427,5 @@ def test_a_long_running_session_is_not_excluded_by_its_own_age(tmp_path, monkeyp
 
     result = scan_stable_pid_misses(sessions_dir=root)
 
-    assert result["status"] == STATUS_MISS
-    assert result["checked"] == 1
-    assert result["misses"] == [{"session": "long-runner", "reason": "no_meta_json"}]
+    assert result["status"] == STATUS_EMPTY
+    assert result["checked"] == 0

@@ -465,13 +465,45 @@ def _commit_list_reverse(wt_path: str, active_branch: str) -> List[str]:
     return [line for line in proc.stdout.splitlines() if line]
 
 
-def _cherry_pick_with_env(repo_root: Path, sha: str, wt_path: str) -> bool:
-    """Cherry-pick one commit onto repo_root's active branch.
+def _cherry_pick_head_sha(repo_root: Path) -> str:
+    """Resolve CHERRY_PICK_HEAD after a failed range cherry-pick.
+
+    With `-x`, CHERRY_PICK_HEAD names the ORIGINAL commit that was being
+    applied when the sequencer stopped — i.e. the source-worktree sha, not a
+    rewritten one — which is exactly what the emitted `stopped_at=` detail
+    needs. Best-effort: an unresolvable ref just yields an empty string, and
+    the caller already treats that as "unknown".
+    """
+    try:
+        proc = _run(["git", "-C", str(repo_root), "rev-parse", "CHERRY_PICK_HEAD"])
+    except (OSError, subprocess.TimeoutExpired):
+        print(f"skip: _cherry_pick_head_sha: git rev-parse CHERRY_PICK_HEAD failed: {sys.exc_info()[1]}", file=sys.stderr)
+        return ""
+    if proc.returncode != 0:
+        return ""
+    return proc.stdout.strip()
+
+
+def _cherry_pick_range(repo_root: Path, active_branch: str, tip_sha: str, wt_path: str) -> Tuple[bool, str]:
+    """Cherry-pick the whole `active_branch..tip_sha` range in ONE spawn.
+
+    Batch primitive named at this call site by the 2026-08-19 adversarial
+    re-verification (REFUTED disposition, `_KNOWN_SITES` row
+    `_sweep_one -> _cherry_pick_with_env`): the per-commit loop this replaces
+    called `git cherry-pick` once per commit in `_commit_list_reverse`'s
+    output; `git cherry-pick -x active_branch..tip_sha` applies the identical
+    set, in the identical order, and stops at the identical first conflict —
+    range cherry-pick and a manual sha-by-sha loop share the same stop-on-
+    first-failure semantics, so behaviour is unchanged for O(1) spawns
+    instead of O(N).
 
     COORDINATOR_OVERRIDE_BRANCH mirrors the bash oracle's env-var pair —
     the destination branch may be a protected/override-gated branch under
     daily-branch-discipline, and this salvage cherry-pick is an authorized
     exception (agent-worktree-sweep is itself a trusted maintenance tool).
+
+    Returns (ok, failed_sha) — failed_sha is "" on success or when the
+    stopping commit could not be resolved.
     """
     proc_env = {
         **_os_environ_copy(),
@@ -480,7 +512,10 @@ def _cherry_pick_with_env(repo_root: Path, sha: str, wt_path: str) -> bool:
     }
     try:
         proc = subprocess.run(
-            ["git", "-C", str(repo_root), "cherry-pick", "--allow-empty", "-x", sha],
+            [
+                "git", "-C", str(repo_root), "cherry-pick", "--allow-empty", "-x",
+                f"{active_branch}..{tip_sha}",
+            ],
             capture_output=True,
             text=True,
             timeout=_CHERRY_PICK_TIMEOUT_SECS,
@@ -489,9 +524,11 @@ def _cherry_pick_with_env(repo_root: Path, sha: str, wt_path: str) -> bool:
             env=proc_env,
         )
     except (OSError, subprocess.TimeoutExpired):
-        print(f"skip: _cherry_pick_with_env: proc = subprocess.run( failed: {sys.exc_info()[1]}", file=sys.stderr)
-        return False
-    return proc.returncode == 0
+        print(f"skip: _cherry_pick_range: proc = subprocess.run( failed: {sys.exc_info()[1]}", file=sys.stderr)
+        return False, ""
+    if proc.returncode == 0:
+        return True, ""
+    return False, _cherry_pick_head_sha(repo_root)
 
 
 def _os_environ_copy() -> dict:
@@ -608,16 +645,22 @@ def _sweep_one(
         # main() under detached HEAD (where active_branch is empty), so this
         # branch only ever executes when active_branch is non-empty. Invariant
         # depends on that guard ordering in main() — do not reorder it.
+        #
+        # ONE ranged cherry-pick (`active_branch..tip_sha`) replaces the old
+        # per-commit loop — see `_cherry_pick_range`'s docstring for the
+        # REFUTED `_KNOWN_SITES` disposition this batches. `commits` is still
+        # fetched (one spawn) purely to report `picked=X/Y` and to locate the
+        # conflicting sha's position on failure; it is never looped for a
+        # per-item spawn.
         commits = _commit_list_reverse(wt.path, active_branch)
-        picked = 0
         pick_failed = ""
-        for sha in commits:
-            if _cherry_pick_with_env(repo_root, sha, wt.path):
-                picked += 1
-            else:
-                pick_failed = sha
+        picked = len(commits)
+        if commits:
+            ok, failed_sha = _cherry_pick_range(repo_root, active_branch, commits[-1], wt.path)
+            if not ok:
                 _cherry_pick_abort(repo_root)
-                break
+                pick_failed = failed_sha or "unknown"
+                picked = commits.index(failed_sha) if failed_sha in commits else 0
         if pick_failed:
             detail = f"picked={picked}/{len(commits)} stopped_at={pick_failed} — worktree retained for PM"
             return _emit(fmt, wt.path, wt.branch, state, "salvage-conflict", detail, wt.lock_reason), 3

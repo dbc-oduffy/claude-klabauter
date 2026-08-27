@@ -58,14 +58,17 @@ NOT one cost. Measured on this file's own fixture, imported not re-
 implemented: interpreter start + `fleet._common` import 78.1ms (37%),
 `archive_and_commit`'s own in-process body 39-55ms (26%, isolated via
 `time.process_time()` bracketing the call -- parent CPU only, children
-excluded), and the two disclosed out-of-scope git children 75-98ms (36%,
+excluded), and the ONE remaining git child plus its conhost 75-98ms (36%,
 derived as the residual). Total accounts to 100%, zero unexplained.
 Two figures a reader may have met elsewhere are RETIRED by it: "the op
 is 15.6ms" (it is 39-55ms on a 20-move batch against a 36k-entry index)
-and "~22ms per remaining spawn" (each is ~38-49ms -- a spawn's cost on
-this repo is its INDEX LOAD, not its process creation; `git status
---porcelain -- <40 paths>` measures 34.4ms against a 16.4ms `git
---version` floor re-priced the same session).
+and "~22ms for the remaining spawn". That spawn -- `git restore --staged
+-- <40 paths>`, the resync -- measures 51.0ms in isolation on a clone at
+this repo's scale, and SPLITS 11.5ms process creation (the `git
+--version` floor, re-priced the same session) / 39.6ms index load+write.
+The split is the disposition: an in-process index writeback retires only
+the 11.5ms process, and re-pays the 39.6ms in Python against git's C
+index writer. Do not read the 51ms as a removable 51ms.
 
 UNIT: process time (job-object `TotalUserTime + TotalKernelTime`) and spawn
 count (`TotalProcesses`), both via `batched_process_time_ms`/
@@ -717,26 +720,27 @@ def test_archival_commit_ac1_zero_then_one_own_spawn(
 
     `archive_and_commit`'s own real-batch reading is NOT compared directly
     to the bare floor: a direct `subprocess.run`/`Popen`/
-    `create_subprocess_exec` spy over one real call (this chunk's own
-    verification, not the AST generator) found TWO real git spawns on
-    EVERY call, `restage_src=True` or not, neither of them
-    `archive_and_commit`'s own and both already named out of scope
-    elsewhere in this plan:
+    `create_subprocess_exec` spy over one real call (re-run 2026-08-27,
+    argv printed not counted) found ONE real git spawn on every
+    `restage_src=False` call, not `archive_and_commit`'s own:
       1. `git restore --staged -- <src+dst paths>` -- the shared-index
-         resync (`_resync_main_index_for_moves`), row 5 of the plan's own
-         spawn inventory table, Anti-scope: "Do not 'fix' git restore
-         --staged ... a named follow-on requiring its own spike."
-      2. `git -c core.quotepath=false status --porcelain -- <paths>` --
-         `session_scope.release_committed_claims`, out of scope for this
-         plan (the predecessor's C5, still open, per this file's module
-         docstring "What this file does NOT include").
-    Both are disclosed here as known, out-of-scope +1-unit contributors
-    each, not folded into or hidden from the assertion: the FALSE arm is
-    pinned against `bare + 2 units` (resync + claim-release, neither
-    `archive_and_commit`'s own), and the TRUE arm against `bare + 3 units`
-    (those same two PLUS the one `hash-object` spawn `restage_src=True`
-    adds) -- so the delta this AC actually turns on, TRUE minus FALSE, is
-    exactly one unit either way the absolute baseline is read.
+         resync (`_resync_main_index_for_moves`).
+    It is disclosed here as a known +1-unit contributor, not folded into or
+    hidden from the assertion: the FALSE arm is pinned against `bare + 1
+    unit` (the resync, not `archive_and_commit`'s own), and the TRUE arm
+    against `bare + 2 units` (that same one PLUS the one `hash-object`
+    spawn `restage_src=True` adds) -- so the delta this AC actually turns
+    on, TRUE minus FALSE, is exactly one unit either way the absolute
+    baseline is read.
+
+    A SECOND contributor was named here until 2026-08-27 -- `git -c
+    core.quotepath=false status --porcelain -- <paths>` from
+    `session_scope.release_committed_claims` -- and both arms were pinned
+    one unit higher accordingly. That spawn was retired at `e0d100640`.
+    This file is `cadence`-marked and did not re-run against the cut, so
+    both arms sat red and `GIT_SPAWN_COUNT_TOTAL_RATCHET` sat vacuous until
+    a decomposition pass caught it. Measured controls at the correction:
+    bare=1.0, unit=2.0, FALSE arm=3.0, TRUE arm=5.0.
     """
     bare = ac1_convention_controls["bare_interpreter_procs_per_call"]
     one_child = ac1_convention_controls["one_child_git_procs_per_call"]
@@ -763,15 +767,17 @@ def test_archival_commit_ac1_zero_then_one_own_spawn(
     false_procs = archival_commit_measurement["spawn_count_per_call"]
     true_procs = ac1_restage_true_measurement["spawn_count_per_call"]
 
-    assert false_procs == pytest.approx(bare + 2 * unit), (
+    assert false_procs == pytest.approx(bare + 1 * unit), (
         f"restage_src=False real arm did not read as bare-floor-plus-exactly-"
-        f"two-units (the shared-index resync's disclosed, out-of-scope "
-        f"git restore --staged spawn, PLUS session_scope."
-        f"release_committed_claims's disclosed, out-of-scope git status "
-        f"--porcelain spawn -- verified by a direct subprocess spy, this "
-        f"chunk's own authorship). A HIGHER reading than bare+2 units means "
-        f"archive_and_commit issued a git process of its own on an all-"
-        f"restage_src=False batch -- AC-1's zero claim. {detail}"
+        f"ONE-unit (the shared-index resync's disclosed git restore --staged "
+        f"spawn, the only child left on this arm -- verified by a direct "
+        f"argv-printing spy over a real 20-move batch, 2026-08-27). A HIGHER "
+        f"reading than bare+1 unit means archive_and_commit issued a git "
+        f"process of its own on an all-restage_src=False batch -- AC-1's zero "
+        f"claim. WAS bare+2 units until 2026-08-27: the second contributor "
+        f"(session_scope.release_committed_claims's git status --porcelain) "
+        f"was retired at e0d100640 and this cadence-marked file did not re-run "
+        f"against that cut. {detail}"
     )
     assert true_procs - false_procs == pytest.approx(unit), (
         f"restage_src=True real arm did not read exactly one unit above the "
@@ -828,16 +834,27 @@ invariant below, never a number to fit by raising this ceiling."""
 #: figure above, this quantity does NOT depend on conhost pairing: pairing
 #: changes procs/call, never the derived spawn-count-in-units of the
 #: control-arm gap. On a restage_src=False batch, `archive_and_commit`
-#: issues ZERO git spawns of its own; the path still observably spawns
-#: exactly TWO real git processes from OTHER subsystems it calls in-process
-#: -- both disclosed, out of scope for this plan, and named in the
-#: assertion message below rather than folded silently into the count:
-#: `git restore --staged -- <paths>` (the shared-index resync,
-#: `_resync_main_index_for_moves`, Anti-scope: "Do not 'fix' git restore
-#: --staged") and `git -c core.quotepath=false status --porcelain --
-#: <paths>` (`session_scope.release_committed_claims`, the predecessor's
-#: still-open C5).
-GIT_SPAWN_COUNT_TOTAL_RATCHET = 2.0
+#: issues ZERO git spawns of its own; the path observably spawns exactly
+#: ONE real git process from another subsystem it calls in-process --
+#: disclosed, and named in the assertion message below rather than folded
+#: silently into the count: `git restore --staged -- <paths>` (the
+#: shared-index resync, `_resync_main_index_for_moves`).
+#:
+#: LOWERED 2.0 -> 1.0 (2026-08-27). The second contributor this ratchet was
+#: sized against -- `git -c core.quotepath=false status --porcelain --
+#: <paths>` from `session_scope.release_committed_claims` -- was RETIRED at
+#: `e0d100640` (release condition is now `paths` intersected with this
+#: session's own T-claims, computed in-process). These tests are `cadence`-
+#: marked, so nothing re-ran them against that cut and the ratchet sat one
+#: full spawn loose: `own_git_spawns` is derived as `total - THIS
+#: CONSTANT`, so at 2.0 against a real total of 1.0 it read -1.0 and the
+#: own-spawn assertion below passed VACUOUSLY -- it would not have caught
+#: `archive_and_commit` reintroducing a git spawn of its own. Re-derived
+#: from a direct argv-printing spy over a real 20-move batch (one child,
+#: `git restore --staged`) and confirmed by this file's own controls
+#: (bare=1.0, unit=2.0, FALSE arm=3.0=bare+1*unit, TRUE arm=5.0=bare+2*
+#: units). Do not raise it back without a spy naming the new contributor.
+GIT_SPAWN_COUNT_TOTAL_RATCHET = 1.0
 GIT_SPAWN_COUNT_OWN_RATCHET = 0.0
 
 
@@ -955,16 +972,16 @@ def test_archival_commit_git_spawn_count_pinned(
 
     On a restage_src=False batch, `archive_and_commit` issues ZERO git
     spawns of its own (`GIT_SPAWN_COUNT_OWN_RATCHET`); the full measured
-    window still observably spawns exactly TWO real git processes from
-    OTHER subsystems it invokes in-process (`GIT_SPAWN_COUNT_TOTAL_RATCHET`)
-    -- both named here, not folded silently into the count:
+    window observably spawns exactly ONE real git process from another
+    subsystem it invokes in-process (`GIT_SPAWN_COUNT_TOTAL_RATCHET`),
+    named here rather than folded silently into the count:
       1. `git restore --staged -- <paths>` -- the shared-index resync
-         (`_resync_main_index_for_moves`), Anti-scope: "Do not 'fix' git
-         restore --staged ... a named follow-on requiring its own spike."
-      2. `git -c core.quotepath=false status --porcelain -- <paths>` --
-         `session_scope.release_committed_claims`, the predecessor's
-         still-open C5.
-    A regression here means a THIRD git spawn (or `archive_and_commit`'s own
+         (`_resync_main_index_for_moves`).
+    The second contributor this test formerly named
+    (`session_scope.release_committed_claims`'s `git status --porcelain`)
+    was RETIRED at `e0d100640`; see `GIT_SPAWN_COUNT_TOTAL_RATCHET` for why
+    that left this gate vacuous for a day.
+    A regression here means a SECOND git spawn (or `archive_and_commit`'s own
     first) entered the path -- fix forward, and if a genuinely new,
     justified git spawn enters, name it explicitly here rather than raising
     these ratchets to make the failure disappear.
@@ -993,10 +1010,9 @@ def test_archival_commit_git_spawn_count_pinned(
     _EPSILON = 1e-6
     assert total_git_spawns <= GIT_SPAWN_COUNT_TOTAL_RATCHET + _EPSILON, (
         f"archival commit path's total git-spawn count regressed past "
-        f"{GIT_SPAWN_COUNT_TOTAL_RATCHET} (the two disclosed, out-of-scope "
-        f"spawns: `git restore --staged` from the shared-index resync, and "
-        f"`git status --porcelain` from session_scope.release_committed_claims) "
-        f"-- a THIRD git spawn entered the path. {detail}"
+        f"{GIT_SPAWN_COUNT_TOTAL_RATCHET} (the one disclosed spawn: "
+        f"`git restore --staged` from the shared-index resync) "
+        f"-- a SECOND git spawn entered the path. {detail}"
     )
     assert own_git_spawns <= GIT_SPAWN_COUNT_OWN_RATCHET + _EPSILON, (
         f"archive_and_commit issued a git process of its own on an "

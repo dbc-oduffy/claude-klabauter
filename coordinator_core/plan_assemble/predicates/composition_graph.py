@@ -243,28 +243,48 @@ def path_rename_or_move(ctx: PredicateContext) -> dict[str, Any]:
     if not cited_paths:
         return {"fires": False, "paths": []}
 
-    # One `git log --follow` subprocess per cited path, run sequentially,
-    # with no early exit once `.fires` is already known True: `.paths`
-    # names EXACTLY the cited paths with a rename record (see docstring),
-    # so stopping early would silently truncate that list rather than
-    # merely computing `.fires` faster — a behavior change this row does
-    # not make on its own. A plan citing many paths does pay the full
-    # linear `git log` cost; that cost is real (each call is a real
-    # subprocess with its own `_GIT_TIMEOUT_SEC` budget) but narrowing
-    # `.paths` to fix it is a scope decision for the row's contract, not
-    # a style fix.
-    fired: list[str] = []
-    for path in sorted(cited_paths):
-        try:
-            proc = _run_git(
-                ["log", "--follow", "--diff-filter=R", "--name-status", "--", path],
-                cwd=ctx.repo_root,
-            )
-        except (subprocess.TimeoutExpired, OSError) as exc:
-            return undetermined(f"git log --follow failed for {path!r}: {exc}")
-        if proc.returncode == 0 and proc.stdout.strip():
-            fired.append(path)
+    # Batched — one `git log --diff-filter=R --name-status` over the WHOLE
+    # repo history instead of one `git log --follow` spawn per cited path
+    # (amplification hitlist, 2026-08-19). A pathspec-restricted `git log`
+    # (no `--follow`) applies history simplification BEFORE rename detection
+    # for a pathspec naming only a rename's post-image — it reports that
+    # commit as a plain add (`A\t<new>`), never as `R\t<old>\t<new>`, so
+    # limiting this batched call to `-- <cited paths>` would silently miss
+    # every rename whose pre-image name is not itself among the cited paths
+    # (confirmed empirically: the per-path `--follow` loop this replaces
+    # sidesteps the issue by tracking a single path across renames
+    # regardless of pathspec restriction; an unrestricted `--diff-filter=R`
+    # pass does not need pathspec restriction to find every rename record in
+    # history at all). `.paths` is derived by checking, for each cited path,
+    # whether it appears as either side of some `R<score>\t<old>\t<new>`
+    # line — the same "has a rename record in its history" membership test
+    # the per-path loop computed, at one spawn total.
+    sorted_paths = sorted(cited_paths)
+    try:
+        proc = _run_git(
+            ["log", "-M", "--diff-filter=R", "--name-status"],
+            cwd=ctx.repo_root,
+        )
+    except (subprocess.TimeoutExpired, OSError) as exc:
+        return undetermined(f"git log --diff-filter=R failed for cited paths: {exc}")
+    if proc.returncode != 0:
+        return undetermined(
+            f"git log --diff-filter=R exited {proc.returncode} for cited paths: "
+            f"{proc.stderr.strip()}"
+        )
 
+    renamed_names: set[str] = set()
+    for line in proc.stdout.splitlines():
+        if not line.startswith("R"):
+            continue
+        parts = line.split("\t")
+        if len(parts) < 3:
+            continue
+        _score, old_path, new_path = parts[0], parts[1], parts[2]
+        renamed_names.add(old_path)
+        renamed_names.add(new_path)
+
+    fired = [path for path in sorted_paths if path in renamed_names]
     return {"fires": bool(fired), "paths": fired}
 
 

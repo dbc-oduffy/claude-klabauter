@@ -905,44 +905,85 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
         ("_memo_reconcile_outbox",),
     ),
     #
-    # D6 (2026-08-22-the-composition-gate-counts-processes-across-the-op-graph, this chunk):
-    # three newly-registered ops the completeness guard had not caught up to, each verified
-    # by hand (not just by the mechanical empty measurement) before enrolling:
+    # D6/D11 (2026-08-22-the-composition-gate-counts-processes-across-the-op-graph, this
+    # chunk): the registry divergence check flagged four live ops with an EMPTY
+    # function-granular reachable spawn set. D11 adjudicated each by hand (not just by the
+    # mechanical empty measurement, EM adjudication step 2, this file's own dispatch brief).
+    # Three are genuinely spawn-free and enrolled below:
     #   - `hooks.agent_postuse_dispatch`: `_handler` runs its two legs
     #     (`agent_completion_log.run`, `track_dispatched_agents.run`) through `asyncio.gather`
     #     -- an indirect call the walker cannot trace as an edge -- but both leg modules were
-    #     read directly and carry no `subprocess`/`Popen` call anywhere in either file. Zero
-    #     spawns on the real reachable set, not merely on what the walker can see.
+    #     read directly and carry no `subprocess`/`Popen` call anywhere in either file, and
+    #     their shared `git_common_dir` call (`coordinator_core/lifecycle.py`) is documented
+    #     and verified WALK-ONLY (no spawn fallback). Zero spawns on the real reachable set,
+    #     not merely on what the walker can see.
     #   - `percolate.build_token_index`: `_percolate_build_token_index` hands off to
     #     `build_token_index_slice` (`asyncio.to_thread`) -> `_derive_slices`/
     #     `_count_total_files` and `coordinator_core.percolate.token_index` -- read directly,
     #     no `subprocess`/`Popen` anywhere in either module.
-    #   - `merge_assemble.brief`: `_merge_assemble_brief` calls `merge_assemble.brief()`
-    #     (`coordinator_core/merge_assemble/__init__.py`), a COMPUTE_ONLY read of branch state
-    #     and directive-list construction; no dispatch table, no subprocess.
+    #   - `session.audit_unreapable`: `_handler_audit_unreapable` reaches `check_repo_root`
+    #     (`coordinator_core/ops/fleet/_common.py`) -> `git_common_dir` (walk-only, verified
+    #     above) and `_collect_unreapable` (`coordinator_core/ops/session/reap.py`, an
+    #     `iterdir`/`stat` loop only) -- neither its own module's REAPER neighbours nor any
+    #     other hub-mutating function is on this handler's own call path. The module's own
+    #     docstring for this handler calling `git_common_dir` "a subprocess" is stale prose
+    #     from before that seam's spawn fallback was retired (`lifecycle.py`'s own docstring);
+    #     not corrected here since it is out of this chunk's `writes:` scope, but the emptiness
+    #     claim below rests on the CURRENT `git_common_dir` behaviour, hand-verified, not on
+    #     that stale sentence.
     #
-    # `merge_assemble.apply` (the fourth name the registry divergence check flagged) is
-    # DELIBERATELY NOT enrolled here despite also measuring an empty function-granular
-    # reachable set: `_merge_assemble_apply` calls `merge_assemble.apply.apply()`, which
+    # The fourth, `merge_assemble.brief`, is NOT enrolled -- see the resolver-gap paragraph
+    # and `_KNOWN_RESOLVER_GAP_OPS` below, next to `merge_assemble.apply`'s own disposition.
+    "hooks.agent_postuse_dispatch": (
+        "coordinator_core/hooks/agent_postuse_dispatch.py",
+        ("_handler",),
+    ),
+    "percolate.build_token_index": (
+        "coordinator_core/ops/percolate_build_token_index.py",
+        ("_percolate_build_token_index",),
+    ),
+    "session.audit_unreapable": (
+        "coordinator_core/ops/session/reap.py",
+        ("_handler_audit_unreapable",),
+    ),
+    #
+    # `merge_assemble.apply` measured an empty function-granular reachable spawn set before
+    # D8 (this plan): `_merge_assemble_apply` calls `merge_assemble.apply.apply()`, which
     # dispatches through its own closed `_CLI_DISPATCH` table (`coordinator_core/
     # merge_assemble/apply.py`) -- a dict of function VALUES passed BY REFERENCE into
-    # `apply_base.execute_directives` (a different module), which invokes the selected
-    # handler dynamically by key. That handler set includes `_dispatch_node_ceremony_gate`
-    # and `_run_py_script`-backed dispatchers that call `subprocess.run` directly. This is a
-    # genuine resolver gap (dict-valued callables invoked through a cross-module parameter,
-    # not a call the AST walker's direct-call-target/thread-hop resolution can see) --
-    # exactly the "empty set caused by a resolver gap is a resolver bug, not an enrolment"
-    # case this chunk's own dispatch brief named. Enrolling it here with an empty spawn
-    # tuple would misrepresent a real, MUTATING, subprocess-reaching op as spawn-free.
-    # Fixing the walker to trace a dict-of-callables handed to another module's function is
-    # a resolver capability this chunk's own scope (re-derive the ratchet) does not cover,
-    # and reused by production (`spawn_bearing_ops.ops_with_spawn_evidence(function_granular=
-    # True)` calls the SAME `_reachable_functions`/`_build_corpus`/`_on_path_spawn_sites` this
-    # module owns) -- widening it here risks shifting counts this file has pinned elsewhere.
-    # Left OUT of `_BUDGETED_ENTRYPOINTS`; `test_registry_divergence_and_residual_stay_
-    # accounted` will keep flagging it until a future chunk either fixes the resolver or
-    # gives `merge_assemble.apply` a real (non-empty) legitimization. Reported, not silenced.
+    # `apply_base.execute_directives`. D8 built the resolver edge for exactly this shape (a
+    # dict-of-callables handed to another module's function), and `merge_assemble.apply` now
+    # measures a real, NON-EMPTY reachable spawn set (`_run_py_script`/
+    # `_dispatch_node_ceremony_gate`, both `subprocess.run`-backed). It stays OUT of
+    # `_BUDGETED_ENTRYPOINTS` -- a live, MUTATING, subprocess-reaching op is C2b's partition to
+    # disposition (legitimize or leave as an accounted residual), not a mechanical empty-set
+    # enrolment -- and is picked up as an accounted residual by
+    # `test_registry_divergence_and_residual_stay_accounted`, which no longer flags it since
+    # its evidence is non-empty.
+    #
+    # `merge_assemble.brief` measures EMPTY here too, but hand-tracing it (D11, 2026-08-27,
+    # HEAD) shows this is a genuine RESOLVER GAP, not spawn-freedom: `_merge_assemble_brief`
+    # calls `merge_assemble.brief()` (`coordinator_core/merge_assemble/__init__.py`), which
+    # calls `compute_branch_state`/`compute_version_bump_proposal` (same file), each of which
+    # calls `_run_git` (same file) -> `subprocess.run` directly. A same-file, 3-hop, plain
+    # direct-call chain the walker's current call-depth does not follow -- a different
+    # resolver-gap shape from `merge_assemble.apply`'s by-reference dispatch table, so D8's
+    # fix does not cover it. Enrolling `merge_assemble.brief` here with an empty spawn tuple
+    # would certify a live, git-spawning op as spawn-free, which is false. Extending the
+    # walker's direct-call depth is out of this chunk's `writes:` scope (this test file only);
+    # `_KNOWN_RESOLVER_GAP_OPS` below keeps it out of both the enrolment ratchet and the
+    # residual-emptiness assertion until a future chunk either widens the walker or gives it a
+    # real (non-empty) legitimization. Reported, not silenced.
 }
+
+#: Live ops whose function-granular reachable-spawn measurement is a known RESOLVER GAP, not
+#: genuine spawn-freedom -- each hand-traced (per-op comment above `_BUDGETED_ENTRYPOINTS`'s
+#: closing brace) to a REAL spawn site the walker's current resolution does not follow.
+#: Excluded from `test_registry_divergence_and_residual_stay_accounted`'s emptiness-implies-
+#: enrol check so that check does not assert a false "should have been enrolled" for an op
+#: this file has already hand-verified as non-empty. NOT enrolled in `_BUDGETED_ENTRYPOINTS`
+#: (that would certify the opposite falsehood): stays a reported, un-legitimized residual.
+_KNOWN_RESOLVER_GAP_OPS = frozenset({"merge_assemble.brief"})
 
 #: C4 (pln-reconcile-open-comes-back-under-the-bar, 2026-08-26) MEASUREMENT NOTE:
 #: `handoff.reconcile_open` was rebuilt from first principles after DR-344's kill bar deleted
@@ -1472,9 +1513,6 @@ _CLUSTER_D3_OPEN_DISPOSITION: dict[str, tuple[tuple[str, str, str, int], ...]] =
         ("coordinator_core/ops/ceremony/git_native.py", "_git._invoke", "<dynamic>", 0),
         ("coordinator_core/session/scope.py", "_git_run", "git", 0),
     ),
-    "ceremony.session_instructions": (
-        ("coordinator_core/ops/ceremony/git_native.py", "_git._invoke", "<dynamic>", 0),
-    ),
     "commit.exec_bit_change": (
         ("coordinator_core/ops/ceremony/git_native.py", "_git._invoke", "<dynamic>", 0),
     ),
@@ -1502,6 +1540,7 @@ _CLUSTER_D3_OPEN_DISPOSITION: dict[str, tuple[tuple[str, str, str, int], ...]] =
     ),
     "fleet.archive_completed_handoffs": (
         ("coordinator_core/dag.py", "_git_path_ever_tracked", "git", 0),
+        ("coordinator_core/git/run.py", "run_git", "git", 0),
         ("coordinator_core/ops/ceremony/git_native.py", "_git._invoke", "<dynamic>", 0),
         ("coordinator_core/session/scope.py", "_git_run", "git", 0),
     ),
@@ -1638,7 +1677,6 @@ _CLUSTER_D3_OPEN_ENTRYPOINTS: dict[str, tuple[str, str]] = {
     "baton.resolve_path_and_repo": ("coordinator_core/ops/resolve_baton_path.py", "_resolve_baton_path_and_repo"),
     "ceremony.chunk_commits": ("coordinator_core/ops/ceremony/chunk_commits.py", "_handler"),
     "ceremony.post_commit_tail": ("coordinator_core/ops/ceremony/post_commit_tail.py", "_handler"),
-    "ceremony.session_instructions": ("coordinator_core/ops/ceremony/session_instructions.py", "_handler"),
     "commit.exec_bit_change": ("coordinator_core/ops/ceremony/commit_exec_bit.py", "_handler"),
     "deliverable.cascade_backstop_sweep": ("coordinator_core/ops/cascade_backstop_sweep.py", "_handler"),
     "deliverable.cascade_terminal": ("coordinator_core/ops/deliverable_cascade.py", "_handler"),
@@ -2058,7 +2096,6 @@ _CLUSTER_D5_OPEN_ENTRYPOINTS: dict[str, tuple[str, str]] = {
     "cartography.chunk_table": ("coordinator_core/ops/cartography_chunk_table.py", "_cartography_chunk_table"),
     "cartography.file_index": ("coordinator_core/ops/cartography_file_index.py", "_cartography_file_index"),
     "cartography.tree": ("coordinator_core/ops/cartography_tree.py", "_cartography_tree"),
-    "ceremony.session_instructions": ("coordinator_core/ops/ceremony/session_instructions.py", "_handler"),
     "ceremony.update_docs_scan": ("coordinator_core/ops/ceremony/update_docs_scan.py", "_ceremony_update_docs_scan"),
     "changelog.compute_day_fields": ("coordinator_core/ops/changelog_ops.py", "_compute_day_fields_handler"),
     "changelog.inject_anchor": ("coordinator_core/ops/changelog_ops.py", "_inject_anchor_handler"),
@@ -2132,13 +2169,8 @@ _CLUSTER_D5_OPEN_DISPOSITION: dict[str, tuple[tuple[str, str, str, int], ...]] =
     "cartography.tree": (
         ("coordinator_core/cartography/tree.py", "list_tracked_files", "<dynamic>", 0),
     ),
-    "ceremony.session_instructions": (
-        ("coordinator_core/ops/ceremony/branch_resolution.py", "_git_run", "git", 0),
-        ("coordinator_core/ops/ceremony/resolver.py", "_run_git", "git", 0),
-        ("coordinator_core/session_attribution.py", "_git_run", "git", 0),
-    ),
     "ceremony.update_docs_scan": (
-        ("coordinator_core/distill/_common.py", "active_reference_guard", "rg", 0),
+        ("coordinator_core/distill/_common.py", "active_reference_guard_many", "rg", 0),
     ),
     "changelog.compute_day_fields": (
         ("coordinator_core/ops/workday_complete_backfill_scan.py", "_run_git", "git", 0),
@@ -2172,10 +2204,10 @@ _CLUSTER_D5_OPEN_DISPOSITION: dict[str, tuple[tuple[str, str, str, int], ...]] =
         ("coordinator_core/distill/delete_guard.py", "_git_object_exists", "git", 0),
     ),
     "distill.curation_status": (
-        ("coordinator_core/distill/_common.py", "active_reference_guard", "rg", 0),
+        ("coordinator_core/distill/_common.py", "active_reference_guard_many", "rg", 0),
     ),
     "distill.scope": (
-        ("coordinator_core/distill/_common.py", "active_reference_guard", "rg", 0),
+        ("coordinator_core/distill/_common.py", "active_reference_guard_many", "rg", 0),
     ),
     "goal.append": (
         ("coordinator_core/ops/emit/resolvers.py", "resolve_coordinator_root", "<dynamic>", 0),
@@ -2283,9 +2315,15 @@ def test_cluster_d5_open_disposition_matches_live_measurement():
         "_CLUSTER_D5_OPEN_DISPOSITION has drifted from the live tree's own cluster reachability "
         "(re-derive and update the dict, do not silently widen or narrow it):\n" + "\n".join(mismatches)
     )
-    assert total_pairs == 42, (
+    assert total_pairs == 39, (
         f"_CLUSTER_D5_OPEN_DISPOSITION now totals {total_pairs} (op, site) pairs, not the "
-        "42 expected after ceremony.wsc_tail/completion.reconcile_commits/fleet."
+        "39 expected after ceremony.session_instructions's own kill (2026-08-27: a peer deleted "
+        "coordinator_core/ops/ceremony/session_instructions.py outright at 6aaab6925, but the op's "
+        "NAME survived in four string-keyed tables in this file, so this test read a missing file "
+        "and three tests went red on one cause) dropped its 3 pairs "
+        "(branch_resolution.py::_git_run, resolver.py::_run_git, session_attribution.py::_git_run) "
+        "from both this dict and _CLUSTER_D5_OPEN_ENTRYPOINTS (42 -> 39), after "
+        "ceremony.wsc_tail/completion.reconcile_commits/fleet."
         "archive_completed_plans's kills dropped their entrypoint and disposition entries from "
         "the prior 49, (2026-08-25, G7 routing) deliverable.cascade_terminal lost its "
         "execute_plan_assemble/row_spans.py::_run_git site once that function stopped calling "
@@ -2914,6 +2952,7 @@ def test_registry_divergence_and_residual_stay_accounted():
         name
         for name in residual
         if name not in evidence
+        and name not in _KNOWN_RESOLVER_GAP_OPS
         and entrypoints[name].relpath is not None
         and entrypoints[name].function_name is not None
     )
@@ -5937,7 +5976,12 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     "handoff.transition": 11,
     "fleet.reap_integrated_findings": 9,
     "fleet.reap_unintegrated_findings": 9,
-    "fleet.archive_completed_handoffs": 4,
+    # 4 -> 5, 2026-08-27: raised on NAMED evidence, not to reach green. The op newly reaches
+    # `coordinator_core/git/run.py::run_git`, a site it did not reach when D10 measured hours
+    # earlier; the D3 cluster disposition records the same +1 independently, so two derivations
+    # agree on it. Peer drift on this op is well-attested -- 10 -> 4 before this plan's handoff,
+    # 4 -> 5 during its verification run.
+    "fleet.archive_completed_handoffs": 5,
     "ceremony.commit": 10,
     "fleet.archive_paper_trail": 3,
     "fleet.archive_queue_entry": 3,
@@ -5953,7 +5997,6 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     "cruft_sweep.run": 8,
     "memo.send": 8,
     "workflow.fire": 6,
-    "ceremony.session_instructions": 4,
     "eol.repair": 1,
     "machine.hibernate": 4,
     "orientation.regenerate_cache": 4,

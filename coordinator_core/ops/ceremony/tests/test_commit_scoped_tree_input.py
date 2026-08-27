@@ -59,6 +59,41 @@ def test_staged_deletion_lands_in_absent_set_not_tree_input():
     assert absent == {"gone.txt"}
 
 
+def test_worktree_deleted_path_is_absent_even_with_a_live_index_entry():
+    # The sibling above infers the deletion from a MISSING index entry, which
+    # is right when the index is the authority. It is wrong for a path deleted
+    # on disk whose index entry still stands: that entry gets written back and
+    # the caller's requested removal silently does not happen. `worktree_deleted`
+    # is the caller stating the deletion rather than leaving it to be inferred.
+    resolution = {"gone.txt": _SOURCE_STAGED}
+    index_snapshot = {"gone.txt": IndexEntry(mode=0o100644, sha=_SHA_A, stage=0)}
+    head_spine = {"": {"gone.txt": (0o100644, _SHA_A)}}
+
+    tree_input, absent = _assemble_commit_tree_input(
+        resolution,
+        index_snapshot=index_snapshot,
+        head_spine=head_spine,
+        worktree_deleted={"gone.txt"},
+    )
+
+    assert tree_input == {}
+    assert absent == {"gone.txt"}
+
+
+def test_worktree_deleted_default_leaves_the_index_entry_authoritative():
+    # Same inputs, no `worktree_deleted` -- prior behaviour exactly, so the
+    # parameter is additive and no existing caller changes shape.
+    resolution = {"gone.txt": _SOURCE_STAGED}
+    index_snapshot = {"gone.txt": IndexEntry(mode=0o100644, sha=_SHA_A, stage=0)}
+
+    tree_input, absent = _assemble_commit_tree_input(
+        resolution, index_snapshot=index_snapshot, head_spine=None
+    )
+
+    assert tree_input == {"gone.txt": ("100644", _SHA_A)}
+    assert absent == set()
+
+
 def test_worktree_path_mode_prefers_index_over_head_spine():
     resolution = {"foo.txt": _SOURCE_WORKTREE}
     index_snapshot = {"foo.txt": IndexEntry(mode=0o100755, sha=_SHA_A, stage=0)}

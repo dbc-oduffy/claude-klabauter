@@ -1,0 +1,96 @@
+{
+  "_schema_note": "coordinator_core/warm/transport_registry.py is the sole reader/writer contract for this file. One row per transport that can reach the warm engine's op-dispatch surface. AC15 (docs/decisions -- see transport_registry.py module docstring): every row with degrades=true MUST carry degrade_observable, and when degrade_observable=false MUST carry a non-empty cannot_observe_reason -- enforced by test_transport_registry_covers_every_seam.py::test_every_degrading_row_is_observable_or_excused.",
+  "transports": [
+    {
+      "name": "native-door",
+      "entry_site": "coordinator_core/warm/door/door.c :: main",
+      "seam_keys": ["pipe_name_derivation", "invoke_from_argv_request"],
+      "seam_files": [
+        "coordinator_core/warm/door/door.c",
+        "coordinator_core/warm/door/door_core.c",
+        "coordinator_core/warm/door/door_posix.c"
+      ],
+      "seam_description": "The native C client. Independently re-derives the same endpoint name coordinator_core.warm.election.pipe_name/socket_path computes in Python (sha1(clone_path)[:16] + user SID + engine token, mirrored by hand -- see door.c's own module comment) and dials it directly, then relays raw argv over the wire as an invoke.from_argv-shaped request. No Python interpreter, no coordinator_core import, on the primary (served) path.",
+      "batched_process_time_ms": 7.8,
+      "procs": 1.0,
+      "measurement_note": "5.2-7.8 ms / 1.0 procs measured range, state/lessons/2026-08-26-naming-an-artifact-is-not-evaluating-it.yaml. 7.8 ms (worst-observed) recorded here as the conservative figure.",
+      "op_surface": "Every op the warm server can dispatch, via a relayed invoke.from_argv request (params.entrypoint optional -- see coordinator_core/ops/invoke_from_argv.py); this is the door's own primary path, not scoped to a subset.",
+      "degrades": true,
+      "degrade_observable": true,
+      "degrade_signal": "coordinator_core/warm/door/door.c :: fall_through (fwprintf to stderr on every cold fall-through, unconditionally, per PM ruling recorded in that function's own comment -- \"a degrade to cold must not go unnoticed\")",
+      "cannot_observe_reason": ""
+    },
+    {
+      "name": "warm-client-in-process",
+      "entry_site": "coordinator_core/warm/client.py :: try_warm_dispatch",
+      "seam_keys": ["client_dispatch_entry", "pipe_name_derivation"],
+      "seam_files": [
+        "coordinator_core/warm/client.py",
+        "coordinator_core/warm/election.py",
+        "coordinator_core/warm/server.py",
+        "coordinator_core/warm/supervisor.py"
+      ],
+      "seam_description": "The in-process Python API. Called by coordinator_core/invoke/__main__.py (the CLI's own warm preamble), coordinator/bin/lib/cc_invoke.py, and scripts/setup.py. Resolves the endpoint via _endpoint_name -> election.pipe_name/election.socket_path (the seam this row also claims -- see pipe_name_derivation below), dials it, and returns the served JSON-RPC response or None (go cold). election.py is the canonical derivation every other pipe_name_derivation user (this row, the door, the fastpath, and the front-door supervisor's own liveness pipe) either calls or independently mirrors; server.py is where the server SIDE elects the same name to listen on; supervisor.py reuses the identical derivation (with an \"http.\"-prefixed token) for the HTTP front door's own liveness/control pipe, a second consumer of the same shared function, not a fifth independent transport.",
+      "batched_process_time_ms": 80.7,
+      "procs": 1.0,
+      "measurement_note": "python -> cross-repo-memo list (shipped, warm hit) = 80.7 ms / 1.0 procs, docs/research/spike-verdicts/2026-08-26-op-cli-over-loopback-http.md; the client-side cost is dominated by this process's own Python interpreter start plus coordinator_core import graph, not by the pipe round trip (measured separately at ~1.5 ms in-request).",
+      "op_surface": "All ops coordinator_core.invoke.__main__._dispatch_argv can dispatch -- i.e. every registered op reachable via the python -m coordinator_core.invoke CLI grammar, and (scripts/setup.py, cc_invoke.py) install/dispatch call sites built on the same preamble.",
+      "degrades": true,
+      "degrade_observable": true,
+      "degrade_signal": "coordinator_core/warm/client.py :: try_warm_dispatch (stderr print on an unanticipated preamble failure, plus coordinator_core/warm/client.py :: _record_cold_fallback -> coordinator_core.warm.telemetry.record_client_cold_fallback for every None outcome, attributed by op and pid)",
+      "cannot_observe_reason": ""
+    },
+    {
+      "name": "warm-client-cli-fastpath",
+      "entry_site": "coordinator_core/warm/client.py :: _cli_main",
+      "seam_keys": ["pipe_name_derivation", "client_dispatch_entry"],
+      "seam_files": [
+        "coordinator_core/warm/client.py"
+      ],
+      "seam_description": "The stdlib-only, `-S -E`-runnable fast path added for AC3 of docs/plans/2026-08-19-the-fired-path-reaches-the-engine.md. Deliberately duplicates election.pipe_name's derivation inline (_cli_pipe_name/_cli_engine_token/_cli_user_sid) rather than importing election.py, so `python -S -E client.py '<json>'` never touches coordinator_core's own __init__ chain. Sibling to try_warm_dispatch above, not a layer over it -- neither calls into the other.",
+      "batched_process_time_ms": 36.5,
+      "procs": 1.0,
+      "measurement_note": "Not independently benchmarked -- this path has no production caller yet (AC3 artifact; see coordinator_core/warm/client.py's own AC3 section header). Reuses the bare-interpreter-floor figure (python -c pass = 36.5 ms / 1.0 procs, docs/research/spike-verdicts/2026-08-26-op-cli-over-loopback-http.md) as the closest available proxy, since this path is -S -E and imports nothing beyond stdlib. Re-measure directly before this row is cited as evidence for a real caller.",
+      "op_surface": "Any JSON-RPC request the caller constructs by hand and passes as argv[0]/stdin -- no op-surface restriction of its own; whatever the served warm engine accepts.",
+      "degrades": true,
+      "degrade_observable": false,
+      "degrade_signal": "",
+      "cannot_observe_reason": "_cli_main prints the literal string \"null\" to stdout for every non-served outcome -- warmth disabled, no pipe, malformed response, or any unanticipated exception -- with no way for the caller to distinguish them (see its own docstring: \"exists to be cheap, not to replace try_warm_dispatch's full anti-storm and fail-open discipline\"). No production caller is wired to this path today (see measurement_note), so no consumer currently needs to disambiguate a served null from a degraded one; adding a caller without adding a distinguishable signal here would need this field revisited."
+    },
+    {
+      "name": "http-hook-loopback",
+      "entry_site": "coordinator_core/warm/http_listener.py :: _Handler.do_POST",
+      "seam_keys": ["http_endpoint"],
+      "seam_files": [
+        "coordinator_core/warm/http_listener.py"
+      ],
+      "seam_description": "Loopback HTTP transport for Claude Code's native `type: \"http\"` hook, so a hook fire pays no interpreter start. Binds 127.0.0.1 literal only (never `localhost` -- see module docstring). Adapts a POST body into the same _serve_line frame the named-pipe/door transports use (coordinator_core/warm/hook_http.py decides what the bytes mean; this file only moves them) -- op dispatch, version-skew eviction, in-flight accounting, and the _engine_token refusal all live inside _serve_line, unduplicated here.",
+      "batched_process_time_ms": 10.4,
+      "procs": 1.0,
+      "measurement_note": "curl -> /hook = 10.4 ms / 1.0 procs, k=6, docs/research/spike-verdicts/2026-08-26-op-cli-over-loopback-http.md. The harness's own client is not curl; that document's PowerShell figure (320.3 ms) is the harness-adjacent upper bound, not cited here because it measures pwsh's own process cost, not this transport.",
+      "op_surface": "Claude Code hook events only -- coordinator_core/warm/hook_http.py's SERVED_EVENTS (currently == BLOCKING_EVENTS = {\"PreToolUse\"}), not the general op registry the pipe/door/in-process transports reach.",
+      "degrades": true,
+      "degrade_observable": false,
+      "degrade_signal": "",
+      "cannot_observe_reason": "Claude Code's own HTTP hook client fails open with no signal when the listener is unreachable (measured live against a dead port, per coordinator_core/warm/hook_http.py's module docstring, obligation 3). This transport's own code runs only once a request has actually been delivered, so it cannot detect or report the down-listener case at all -- coordinator_core/warm/hook_http.py :: unreachable_response documents a request that WAS delivered but could not be served, which is a different, already-observable case; the harness-level fail-open silence is outside this module's reach by construction, not an oversight left unfixed."
+    },
+    {
+      "name": "http-front-door",
+      "entry_site": "coordinator_core/warm/front_door.py :: _Handler.do_POST",
+      "seam_keys": ["http_endpoint"],
+      "seam_files": [
+        "coordinator_core/warm/front_door.py",
+        "coordinator_core/warm/supervisor.py"
+      ],
+      "seam_description": "The shared, fixed-port (47623, DR-http-hook-forwarder-fixed-port.md) machine-global HTTP front door a single static `type: \"http\"` hook registration dials -- distinct from http-hook-loopback above, which is a per-clone listener on an election-derived endpoint. front_door.py owns the port bind/exclusivity/foreign-holder election (socket.bind() on FIXED_PORT is itself the election -- see module docstring); supervisor.py hosts the actual `_Handler.do_POST` that serves a request once the election is won (dispatches via `hook_http.op_for_path`), a THIRD independent http_endpoint construction site alongside http_listener.py's and front_door.py's own inline handler -- found by this row's own seam scan, not previously catalogued anywhere. Found by grep during C9 (docs/dispatch-briefs/2026-08-26-every-forwarder-that-can-reach-the-door-does/C9.md); no prior manifest or handoff enumerated any of these as distinct transports before this row.",
+      "batched_process_time_ms": 45.1,
+      "procs": 0.0,
+      "measurement_note": "45.1 ms/fire (down from 271.4 ms/fire pre-fix), archive/handoffs/2026-08/2026-08-26_214823_the-bash-guard-stops-paying-for-a-process.md -- a wall-clock ms/fire figure from that chunk's own harness-side measurement, NOT the batched_process_time_ms instrument the other rows in this manifest cite. Recorded here rather than left blank because the row would otherwise carry no figure at all; re-measure with batched_process_time_ms before citing this row as a brightline comparison against another row. procs recorded as 0.0 because the whole point of this transport is that no process is spawned to serve a fire -- consistent with 0 spawns rather than an estimate.",
+      "op_surface": "Claude Code hook events only, the same SERVED_EVENTS shape as http-hook-loopback (coordinator_core/warm/hook_http.py) -- front_door.py is the fixed-port bind/routing layer; hook_http.py still decides what the bytes mean for both HTTP-shaped transports.",
+      "degrades": true,
+      "degrade_observable": false,
+      "degrade_signal": "",
+      "cannot_observe_reason": "Same harness-level fail-open gap as http-hook-loopback's cannot_observe_reason: Claude Code's HTTP hook client is silent when nothing answers, and this module's own code (including its loud, typed ElectionLost/ForeignHolderError exceptions) only ever runs once a connection was already accepted -- it cannot see or report the caller-side silent-failure case. A losing election is itself loud (raises, never swallowed) but that is a startup-time fact about which process serves the port, not a per-fire degrade signal."
+    }
+  ]
+}

@@ -168,3 +168,46 @@ def test_env_var_root_used_when_no_explicit_flag(tmp_path, capsys, monkeypatch):
     assert rc == 0
     out = capsys.readouterr().out
     assert "Moved:  1" in out
+
+
+# ---------------------------------------------------------------------------
+# Per-item git spawn amplification (coordinator_core/tests/
+# test_no_unbatched_per_item_git_spawn.py _KNOWN_SITES:
+# migrate_completion_log_legacy.py::main -> _git_mv)
+# ---------------------------------------------------------------------------
+
+
+def test_process_count_does_not_grow_with_the_set(tmp_path, capsys, monkeypatch):
+    """Model: test_schema_drift_watch.py::TestSchemaAdvisoryBatch::
+    test_process_count_does_not_grow_with_the_set. All monoliths in a run
+    share the same destination directory, so the `git mv` call count must
+    stay flat as the monolith count grows, not scale with it."""
+    import coordinator_core.ops.migrate_completion_log_legacy as mcl
+
+    spawns: list[list[str]] = []
+    real_run = subprocess.run
+
+    def counting_run(argv, *args, **kwargs):  # type: ignore[no-untyped-def]
+        spawns.append(list(argv))
+        return real_run(argv, *args, **kwargs)
+
+    monkeypatch.setattr(mcl.subprocess, "run", counting_run)
+
+    (tmp_path / "one").mkdir()
+    repo_one = _make_fixture_repo(tmp_path / "one", n=1)
+    spawns.clear()
+    rc_one = main(["--root", str(repo_one)])
+    assert rc_one == 0
+    spawns_for_one = len(spawns)
+
+    (tmp_path / "many").mkdir()
+    repo_many = _make_fixture_repo(tmp_path / "many", n=5)
+    spawns.clear()
+    rc_many = main(["--root", str(repo_many)])
+    assert rc_many == 0
+    spawns_for_many = len(spawns)
+
+    assert spawns_for_many <= spawns_for_one, (
+        f"spawn count grew with the monolith set: 1 file -> {spawns_for_one} spawns, "
+        f"5 files -> {spawns_for_many} spawns"
+    )

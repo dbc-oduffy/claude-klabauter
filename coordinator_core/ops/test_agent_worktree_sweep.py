@@ -261,6 +261,51 @@ def test_reap_cherry_picks_commits_clean(tmp_path, capsys, monkeypatch):
     assert "agent commit" in log
 
 
+def test_reap_cherry_pick_spawn_count_does_not_grow_with_commit_count(tmp_path, capsys, monkeypatch):
+    """Amplification-gate regression for `_KNOWN_SITES`'s
+    `_sweep_one -> _cherry_pick_with_env` row (REFUTED, 2026-08-19 adversarial
+    re-verification: `git cherry-pick -x active_branch..tip_sha` batches the
+    whole range in one spawn). Model:
+    `test_schema_drift_watch.py::TestSchemaAdvisoryBatch::
+    test_process_count_does_not_grow_with_the_set`. Before this fix the sweep
+    issued one `git cherry-pick` subprocess per commit (N spawns for N
+    commits); after, it issues exactly one regardless of N."""
+    import coordinator_core.ops.agent_worktree_sweep as aws
+
+    _init_repo(tmp_path)
+    wt = _add_agent_worktree(tmp_path, "reap-many-commits")
+    n_commits = 5
+    for i in range(n_commits):
+        (wt / f"file{i}.txt").write_text(f"payload {i}\n")
+        _git("add", f"file{i}.txt", cwd=wt)
+        _git("commit", "-q", "-m", f"agent commit {i}", cwd=wt)
+    monkeypatch.chdir(tmp_path)
+
+    real_subprocess_run = aws.subprocess.run
+    cherry_pick_calls: list = []
+
+    def _wrapped_subprocess_run(args, *a, **kw):
+        if len(args) >= 4 and args[0] == "git" and "cherry-pick" in args:
+            cherry_pick_calls.append(list(args))
+        return real_subprocess_run(args, *a, **kw)
+
+    monkeypatch.setattr(aws.subprocess, "run", _wrapped_subprocess_run)
+
+    rc = main(["--reap"])
+    assert rc == 0
+    states = _states(_lines(capsys))
+    row = states[wt.as_posix()]
+    assert row["action"] == "salvaged-removed"
+    assert f"cherry-picked={n_commits}" in row["detail"]
+    assert not wt.exists()
+
+    # ONE `git cherry-pick` spawn for the whole range, regardless of N.
+    assert len(cherry_pick_calls) == 1
+    argv = cherry_pick_calls[0]
+    assert argv[-1].startswith("main..")
+    assert "-x" in argv
+
+
 def test_reap_leaves_dirty_worktree(tmp_path, capsys, monkeypatch):
     _init_repo(tmp_path)
     wt = _add_agent_worktree(tmp_path, "reap-dirty")

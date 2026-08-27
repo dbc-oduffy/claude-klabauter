@@ -40,12 +40,60 @@ BEFORE the request has been written to the pipe — it falls straight
 through to the existing Python entrypoint
 (`{engine_root}\coordinator\bin\coordinator-invoke.py`) with the
 **original argv, unchanged**, and propagates its exit code. Falling
-through is normal operation, not an error: the ordinary fallback path
-prints nothing. This binary emits a diagnostic on its own in exactly two
-cases: no Python interpreter is reachable at all, or (see "PM ruling:
-published engine or nothing" below) no published engine can be resolved
-by any means, in which case it refuses outright rather than spawning
-anything.
+through is normal operation, not an error, but it is no longer silent:
+**every ordinary degrade to cold prints one line to stderr** before
+spawning the fallback (see "The fall-through is loud" below). This binary
+also emits a diagnostic on its own in the two genuinely fatal cases that
+predate that warn: no Python interpreter is reachable at all, or (see "PM
+ruling: published engine or nothing" below) no published engine can be
+resolved by any means, in which case it refuses outright rather than
+spawning anything.
+
+### The fall-through is loud
+
+The original baton for this workstream named the door's prior silence as
+the root cause of the whole gap it was built to close: *"The door's
+fall-through prints nothing by contract. That is defensible for a fast
+path and indefensible as the only signal."* The 13x slow-path gap went
+unnoticed for as long as it did because the slow path announced nothing.
+So every ordinary fall-through now prints one line to **stderr**,
+immediately before spawning the cold entrypoint. The exit code is
+untouched — cold succeeds; a warn is not a failure.
+
+**Why stderr, and not the two obvious alternatives.** The door relays the
+dispatched CLI's stdout, stderr, and exit code as its own. Stdout is off
+the table: a warn there would corrupt a programmatic consumer parsing the
+relayed CLI's own stdout as data. Telemetry (`op_latency`) was considered
+and rejected, not merely as weaker than stderr but as affirmatively wrong
+today: `door_route_signal.py`'s own docstring records that
+`op_latency._write_entry` resolves its sink under
+`git_common_dir(repo_root)`, derived from `_origin_worktree`/
+`_caller_cwd` — and the door protocol carries neither, so a degrade
+recorded there lands wherever the EXECUTING process's own cwd happens to
+resolve the sink to, not somewhere an operator watching stderr can find
+it. Telemetry could only discharge "should not go unnoticed" once the
+door carries caller context, which is not in this plan. That leaves
+stderr as the only venue that requires no new channel.
+
+**Blast radius, surveyed by class rather than by one grep for forwarder
+consumers:**
+
+- `door_route_signal.read_door_route` invokes the door and parses its
+  output during install verification. It captures stderr via
+  `subprocess.run(..., capture_output=True)` but never asserts it is
+  empty and never folds it into stdout — unaffected.
+- `coordinator_core/install/tests/test_install_surface_live.py` does not
+  invoke the door at all — unaffected.
+- Every door-invoking test under `coordinator_core/warm/tests/` and
+  `coordinator_core/install/tests/` was checked for a stderr-emptiness or
+  stderr-folded-into-stdout assertion; none exists — unaffected.
+
+**Negative spec.** This is not a rate limiter, a suppression flag, or a
+"once per session" cleverness. Every degrade prints, unconditionally. If
+volume proves to be a real problem in practice, that is a measured
+follow-up with its own row, not a hedge built in on day one.
+
+Coverage: `coordinator_core/warm/tests/test_fall_through_warns.py`.
 
 ### Correctness: which engine the fallback executes
 
@@ -387,6 +435,45 @@ is the same check, re-exported for callers already in that module.
 Neither runs automatically on every install (that would reintroduce a
 compiler dependency the runtime-sidecar design exists to avoid) — both
 are CI/audit-time checks.
+
+### In-repo staleness — resolved, not gravestoned (2026-08-27)
+
+A workstream baton once flagged this directory's committed `door.exe` as
+stale against `door.c` (19:56 vs 16:32 on 2026-08-21/22) and separately
+claimed `door.engine-root.txt` was missing. Checked directly against this
+repo: `door.engine-root.txt` **is** present and correctly `.gitignore`d
+(`.gitignore:204`) — it is a per-box sidecar (`write_sidecar()`'s output),
+never meant to be committed, so its absence from `git status` is not a
+gap. `door.exe` and `door.exe.provenance.json`, by contrast, are NOT
+gitignored — they are tracked, committed build artifacts, and a sibling
+chunk (C0c) has since rebuilt both from the post-C0, post-C4b source, so
+the staleness this row was dispatched to resolve no longer exists as of
+this check. Verified by `build.py --verify`, which reports MATCH — the
+committed image reproduces byte-for-byte from the committed source. That
+check, not a timestamp comparison, is the one worth repeating: the build
+is deterministic (two rebuilds hash identically), so a MISMATCH is always
+real staleness rather than toolchain noise.
+
+The three files did NOT land in one commit, and the log will mislead a
+reader who assumes they did. `door.c` landed in `e4a324ff9` (wave 1);
+`door.exe` and `door.exe.provenance.json` landed in `f03a0459c` — a peer
+session's unscoped "docs maintenance" commit that swept this session's
+uncommitted working tree. See
+`state/lessons/2026-08-27-an-unscoped-peer-commit-swallows-uncommitted-working-tree-work.yaml`.
+
+That leaves the narrower question this row actually owns: does the
+in-repo committed copy serve any purpose the installed door does not?
+**Yes — it is not a dev convenience, it is the install chain's only
+source.** `coordinator_core/install/door_install.py :: install_door()`
+`shutil.copy2`s `_PREBUILT_DOOR_EXE` (this directory's `door.exe`) to the
+target box, precisely because "Reproducibility and provenance" above
+already establishes no install box can be assumed to have a C compiler.
+Deleting the in-repo binary would break every install that isn't also a
+build. **Determination: no gravestone — keep the committed binary,
+verified current as of this check.** If a future check finds it stale
+again, that rebuild is its own row (`door.exe` +
+`door.exe.provenance.json` in `writes:`), never folded into a
+decision-only pass.
 
 The engine *token* (`coordinator_core/_engine_stamp`'s content hash) is
 **not** cached anywhere, baked or sidecar — it rotates every publish

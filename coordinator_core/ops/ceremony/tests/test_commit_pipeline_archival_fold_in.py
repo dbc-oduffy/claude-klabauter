@@ -48,6 +48,7 @@ docs/plans/2026-08-26-the-sweep-stops-paying-for-a-room-it-nev.md § C2 (AC-4, A
 
 from __future__ import annotations
 
+import builtins
 import subprocess
 import uuid
 from pathlib import Path
@@ -56,6 +57,7 @@ import pytest
 
 import coordinator_core.ops.ceremony.commit_pipeline as commit_pipeline_mod
 from coordinator_core.ops.ceremony import tail_ops as tail_ops_mod
+from coordinator_core.ops.fleet import archive_terminal_handoffs as fleet_sweep_mod
 from coordinator_core.ops.ceremony.commit_pipeline import run_commit_pipeline
 from coordinator_core.ops.fleet._common import Move
 
@@ -154,7 +156,7 @@ def test_archival_contribution_adds_zero_git_processes(tmp_path, monkeypatch):
 
     common_dir = repo / ".git"
     monkeypatch.setattr(
-        commit_pipeline_mod.archive_terminal_handoffs, "plan_sweep", _fake_plan_sweep_one_move
+        fleet_sweep_mod, "plan_sweep", _fake_plan_sweep_one_move
     )
     calls = _spy_git(monkeypatch)
 
@@ -179,7 +181,7 @@ def test_archival_move_lands_in_one_commit_with_both_halves(tmp_path, monkeypatc
     _git(["commit", "-q", "-m", "seed"], repo)
 
     monkeypatch.setattr(
-        commit_pipeline_mod.archive_terminal_handoffs, "plan_sweep", _fake_plan_sweep_one_move
+        fleet_sweep_mod, "plan_sweep", _fake_plan_sweep_one_move
     )
 
     _seed_file(repo, "tasks/feature/todo.md", "content")
@@ -219,7 +221,7 @@ def test_failed_sweep_leaves_commit_paths_untouched(tmp_path, monkeypatch):
     _git(["commit", "-q", "-m", "seed"], repo)
 
     monkeypatch.setattr(
-        commit_pipeline_mod.archive_terminal_handoffs, "plan_sweep", _fake_plan_sweep_raises
+        fleet_sweep_mod, "plan_sweep", _fake_plan_sweep_raises
     )
 
     _seed_file(repo, "tasks/feature/todo.md", "content")
@@ -247,14 +249,14 @@ def test_apply_sweep_failure_also_leaves_commit_paths_untouched(tmp_path, monkey
     _git(["commit", "-q", "-m", "seed"], repo)
 
     monkeypatch.setattr(
-        commit_pipeline_mod.archive_terminal_handoffs, "plan_sweep", _fake_plan_sweep_one_move
+        fleet_sweep_mod, "plan_sweep", _fake_plan_sweep_one_move
     )
 
     def _raising_apply_sweep(moves):
         raise RuntimeError("boom -- replace failed")
 
     monkeypatch.setattr(
-        commit_pipeline_mod.archive_terminal_handoffs, "apply_sweep", _raising_apply_sweep
+        fleet_sweep_mod, "apply_sweep", _raising_apply_sweep
     )
 
     _seed_file(repo, "tasks/feature/todo.md", "content")
@@ -312,7 +314,7 @@ def test_cadence_gate_skips_the_corpus_pass_inside_the_interval(tmp_path, monkey
     common_dir = repo / ".git"
     calls = {"n": 0}
     monkeypatch.setattr(
-        commit_pipeline_mod.archive_terminal_handoffs, "plan_sweep", _counting_plan_sweep(calls)
+        fleet_sweep_mod, "plan_sweep", _counting_plan_sweep(calls)
     )
     monkeypatch.setattr(commit_pipeline_mod, "_ARCHIVE_SWEEP_INTERVAL_S", 900.0)
     commit_pipeline_mod._stamp_archive_sweep(common_dir)
@@ -331,7 +333,7 @@ def test_cadence_gate_opens_once_the_interval_has_passed(tmp_path, monkeypatch):
     common_dir = repo / ".git"
     calls = {"n": 0}
     monkeypatch.setattr(
-        commit_pipeline_mod.archive_terminal_handoffs, "plan_sweep", _counting_plan_sweep(calls)
+        fleet_sweep_mod, "plan_sweep", _counting_plan_sweep(calls)
     )
     monkeypatch.setattr(commit_pipeline_mod, "_ARCHIVE_SWEEP_INTERVAL_S", 0.0)
     commit_pipeline_mod._stamp_archive_sweep(common_dir)
@@ -346,7 +348,7 @@ def test_cadence_gate_open_on_a_never_stamped_repo(tmp_path, monkeypatch):
     common_dir = repo / ".git"
     calls = {"n": 0}
     monkeypatch.setattr(
-        commit_pipeline_mod.archive_terminal_handoffs, "plan_sweep", _counting_plan_sweep(calls)
+        fleet_sweep_mod, "plan_sweep", _counting_plan_sweep(calls)
     )
     monkeypatch.setattr(commit_pipeline_mod, "_ARCHIVE_SWEEP_INTERVAL_S", 900.0)
 
@@ -363,7 +365,7 @@ def test_cadence_gate_stamps_even_when_the_sweep_finds_nothing(tmp_path, monkeyp
     common_dir = repo / ".git"
     calls = {"n": 0}
     monkeypatch.setattr(
-        commit_pipeline_mod.archive_terminal_handoffs, "plan_sweep", _counting_plan_sweep(calls)
+        fleet_sweep_mod, "plan_sweep", _counting_plan_sweep(calls)
     )
     monkeypatch.setattr(commit_pipeline_mod, "_ARCHIVE_SWEEP_INTERVAL_S", 900.0)
 
@@ -382,7 +384,7 @@ def test_cadence_gate_does_not_stamp_when_the_sweep_fails(tmp_path, monkeypatch)
     repo = _init_repo(tmp_path)
     common_dir = repo / ".git"
     monkeypatch.setattr(
-        commit_pipeline_mod.archive_terminal_handoffs, "plan_sweep", _fake_plan_sweep_raises
+        fleet_sweep_mod, "plan_sweep", _fake_plan_sweep_raises
     )
     monkeypatch.setattr(commit_pipeline_mod, "_ARCHIVE_SWEEP_INTERVAL_S", 900.0)
 
@@ -390,8 +392,80 @@ def test_cadence_gate_does_not_stamp_when_the_sweep_fails(tmp_path, monkeypatch)
 
     calls = {"n": 0}
     monkeypatch.setattr(
-        commit_pipeline_mod.archive_terminal_handoffs, "plan_sweep", _counting_plan_sweep(calls)
+        fleet_sweep_mod, "plan_sweep", _counting_plan_sweep(calls)
     )
+    commit_pipeline_mod._run_in_plane_archive_sweep(repo, common_dir)
+
+    assert calls["n"] == 1
+
+
+def test_a_failed_deferred_import_degrades_instead_of_flipping_the_exit_code(
+    tmp_path, monkeypatch
+):
+    """The deferred `from ... import archive_terminal_handoffs` is a runtime
+    operation on a commit hot path, so it fails like one -- and every OTHER
+    archival failure below it is already non-fatal by construction.
+
+    Observed live 2026-08-27 mid-publish-round: the import raised
+    `ImportError: cannot import name 'parse_index_identity' from
+    'coordinator_core.git.git_index'` and took the round down at its commit
+    step, after all 9 rows had synced clean. Nothing about an optional,
+    cadence-gated archive sweep should be able to do that."""
+    repo = _init_repo(tmp_path)
+    common_dir = repo / ".git"
+    monkeypatch.setattr(commit_pipeline_mod, "_ARCHIVE_SWEEP_INTERVAL_S", 0.0)
+
+    real_import = builtins.__import__
+
+    def _raising_import(name, globals=None, locals=None, fromlist=(), level=0):
+        if "archive_terminal_handoffs" in (fromlist or ()):
+            raise ImportError(
+                "cannot import name 'parse_index_identity' from "
+                "'coordinator_core.git.git_index'"
+            )
+        return real_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.setattr(builtins, "__import__", _raising_import)
+
+    assert commit_pipeline_mod._run_in_plane_archive_sweep(repo, common_dir) == ([], [])
+
+
+def test_a_raising_sweep_lock_degrades_instead_of_flipping_the_exit_code(
+    tmp_path, monkeypatch
+):
+    """`_acquire_sweep_lock` returning None is the CONTENDED answer, already a
+    first-class skip -- but it reaches the filesystem to say it, so it can raise
+    instead of answering, and that raise is an archival failure like any other."""
+    repo = _init_repo(tmp_path)
+    common_dir = repo / ".git"
+    monkeypatch.setattr(commit_pipeline_mod, "_ARCHIVE_SWEEP_INTERVAL_S", 0.0)
+
+    def _raising_acquire(_common_dir):
+        raise OSError("lock dir unwritable")
+
+    monkeypatch.setattr(fleet_sweep_mod, "_acquire_sweep_lock", _raising_acquire)
+
+    assert commit_pipeline_mod._run_in_plane_archive_sweep(repo, common_dir) == ([], [])
+
+
+def test_neither_reach_failure_closes_the_cadence_gate(tmp_path, monkeypatch):
+    """Same reasoning as `test_cadence_gate_does_not_stamp_when_the_sweep_fails`,
+    one and two call-sites earlier: a sweep that never reached `plan_sweep` has
+    not run the job, so the next occasion must still try."""
+    repo = _init_repo(tmp_path)
+    common_dir = repo / ".git"
+    monkeypatch.setattr(commit_pipeline_mod, "_ARCHIVE_SWEEP_INTERVAL_S", 900.0)
+
+    def _raising_acquire(_common_dir):
+        raise OSError("lock dir unwritable")
+
+    monkeypatch.setattr(fleet_sweep_mod, "_acquire_sweep_lock", _raising_acquire)
+    assert commit_pipeline_mod._run_in_plane_archive_sweep(repo, common_dir) == ([], [])
+
+    monkeypatch.undo()
+    monkeypatch.setattr(commit_pipeline_mod, "_ARCHIVE_SWEEP_INTERVAL_S", 900.0)
+    calls = {"n": 0}
+    monkeypatch.setattr(fleet_sweep_mod, "plan_sweep", _counting_plan_sweep(calls))
     commit_pipeline_mod._run_in_plane_archive_sweep(repo, common_dir)
 
     assert calls["n"] == 1
@@ -413,7 +487,26 @@ def test_cadence_gate_does_not_stamp_when_the_sweep_fails(tmp_path, monkeypatch)
 # ---------------------------------------------------------------------------
 
 
-def test_in_plane_sweep_spawns_exactly_one_git_process(tmp_path, monkeypatch):
+#: A record `_scan_terminal` CLASSIFIES AS TERMINAL, so it survives to Rail 1
+#: and the worktree-dirty check actually runs. The spawn-count tests below need
+#: a survivor by construction: `_dirty_handoff_relpaths` returns `set()` without
+#: spawning anything when the survivor set is empty (its own first two lines),
+#: which is the designed "scales with the survivor count, not the corpus"
+#: behaviour -- so a fixture of purely non-terminal records measures zero
+#: spawns and proves nothing about the rail it means to pin.
+_TERMINAL_HANDOFF = (
+    '---\ntitle: "archivable"\ncreated: 2026-01-01\nstatus: claimed\n'
+    'deployment_state: continued\ncontinued_into: hnd-child-1\n---\n\nBody.\n'
+)
+
+
+def test_in_plane_sweep_spawns_no_git_process_when_nothing_is_terminal(
+    tmp_path, monkeypatch
+):
+    """Rail 1's pathspec -- and the single spawn it costs -- scales with the
+    SURVIVOR count, not the corpus (`_scan_terminal`'s own docstring: "a scan
+    with zero survivors never pays either cost"). A corpus of live records is
+    the common case on every ceremony commit, and it must cost nothing."""
     import subprocess as _subprocess
 
     repo = _init_repo(tmp_path)
@@ -434,10 +527,90 @@ def test_in_plane_sweep_spawns_exactly_one_git_process(tmp_path, monkeypatch):
 
     commit_pipeline_mod._run_in_plane_archive_sweep(repo, repo / ".git")
 
+    assert len(spawned) == 0, (
+        f"classification refused every record, so Rail 1 has an empty pathspec "
+        f"and must not spawn at all. Got {len(spawned)}: {spawned}"
+    )
+
+
+def _decline_in_process_dirty_rail(monkeypatch) -> None:
+    """Force Rail 1 onto its `git status --porcelain` fallback.
+
+    `_dirty_handoff_relpaths` asks `_dirty_relpaths_in_process` first and only
+    spawns when that arm DECLINES (returns None) or the pathspec exceeds
+    `_DIVERGENCE_CHECK_ARGV_BUDGET_CHARS`. A test that wants to count the
+    fallback's spawn has to put the rail on the fallback deliberately --
+    otherwise it measures zero and reads as a spawn-count win it did not make."""
+    monkeypatch.setattr(
+        fleet_sweep_mod, "_dirty_relpaths_in_process", lambda _worktree, _ordered: None
+    )
+
+
+def test_in_plane_sweep_spawns_no_git_process_on_the_in_process_dirty_rail(
+    tmp_path, monkeypatch
+):
+    """A survivor DOES reach Rail 1 here (unlike the sibling above), and the
+    rail still costs nothing: `_dirty_relpaths_in_process` answers from one
+    scoped index walk. Zero is the ordinary in-plane cost, not one."""
+    import subprocess as _subprocess
+
+    repo = _init_repo(tmp_path)
+    _seed_file(repo, "state/handoffs/2026-01-01-archivable.md", _TERMINAL_HANDOFF)
+    _git(["add", "-A"], repo)
+    _git(["commit", "-q", "-m", "seed"], repo)
+
+    monkeypatch.setattr(commit_pipeline_mod, "_ARCHIVE_SWEEP_INTERVAL_S", 0.0)
+
+    spawned = []
+    real_run = _subprocess.run
+
+    def _counting_run(cmd, *a, **kw):
+        spawned.append(cmd if isinstance(cmd, str) else " ".join(str(c) for c in cmd))
+        return real_run(cmd, *a, **kw)
+
+    monkeypatch.setattr(_subprocess, "run", _counting_run)
+
+    srcs, _dsts = commit_pipeline_mod._run_in_plane_archive_sweep(repo, repo / ".git")
+
+    assert srcs == ["state/handoffs/2026-01-01-archivable.md"], (
+        "fixture must actually survive classification -- otherwise the spawn "
+        f"count below is measuring an empty rail. Got srcs={srcs!r}"
+    )
+    assert len(spawned) == 0, (
+        f"Rail 1's in-process arm answers without spawning; Rail 2 is "
+        f"spawn-free since C10. Got {len(spawned)}: {spawned}"
+    )
+
+
+def test_in_plane_sweep_spawns_exactly_one_git_process_on_the_status_fallback(
+    tmp_path, monkeypatch
+):
+    """When the in-process arm declines, the rail falls back to ONE scoped
+    `git status --porcelain` -- never a chunked several (`_dirty_handoff_
+    relpaths`'s own "PATHSPEC-BOUNDED, NEVER CHUNKED" contract)."""
+    import subprocess as _subprocess
+
+    repo = _init_repo(tmp_path)
+    _seed_file(repo, "state/handoffs/2026-01-01-archivable.md", _TERMINAL_HANDOFF)
+    _git(["add", "-A"], repo)
+    _git(["commit", "-q", "-m", "seed"], repo)
+
+    monkeypatch.setattr(commit_pipeline_mod, "_ARCHIVE_SWEEP_INTERVAL_S", 0.0)
+    _decline_in_process_dirty_rail(monkeypatch)
+
+    spawned = []
+    real_run = _subprocess.run
+
+    def _counting_run(cmd, *a, **kw):
+        spawned.append(cmd if isinstance(cmd, str) else " ".join(str(c) for c in cmd))
+        return real_run(cmd, *a, **kw)
+
+    monkeypatch.setattr(_subprocess, "run", _counting_run)
+
+    commit_pipeline_mod._run_in_plane_archive_sweep(repo, repo / ".git")
+
     assert len(spawned) == 1, (
-        f"in-plane sweep must spawn exactly one git process (Rail 1's "
-        f"worktree-dirty status; Rail 2 is spawn-free since C10). Got "
-        f"{len(spawned)}: {spawned}"
+        f"the fallback is ONE scoped status call. Got {len(spawned)}: {spawned}"
     )
     assert "status" in spawned[0] and "--porcelain" in spawned[0], spawned[0]
 
@@ -446,11 +619,16 @@ def test_cadence_gate_makes_that_spawn_per_interval_not_per_commit(tmp_path, mon
     import subprocess as _subprocess
 
     repo = _init_repo(tmp_path)
-    _seed_file(repo, "state/handoffs/open-baton.md", "---\nstatus: open\n---\n")
+    _seed_file(repo, "state/handoffs/2026-01-01-archivable.md", _TERMINAL_HANDOFF)
     _git(["add", "-A"], repo)
     _git(["commit", "-q", "-m", "seed"], repo)
 
     monkeypatch.setattr(commit_pipeline_mod, "_ARCHIVE_SWEEP_INTERVAL_S", 900.0)
+    # On the status fallback deliberately: the ordinary in-process rail costs
+    # zero spawns, and "5 x 0 == 1 x 0" would pass whether or not the cadence
+    # gate did anything. The gate is what this test is for, so it needs a rail
+    # whose cost is countable.
+    _decline_in_process_dirty_rail(monkeypatch)
 
     spawned = []
     real_run = _subprocess.run

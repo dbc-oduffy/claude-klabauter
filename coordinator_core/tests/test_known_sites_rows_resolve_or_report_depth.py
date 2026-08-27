@@ -140,7 +140,7 @@ def classify_known_site(
     one_hop_keys: frozenset[KnownSiteKey],
     deep_keys_by_depth: dict[int, frozenset[KnownSiteKey]],
     repo_root: Path,
-    deep_keys_unknown_depth: frozenset[KnownSiteKey] = frozenset(),
+    deep_keys_unknown_depth: frozenset[KnownSiteKey],
 ) -> KnownSiteAssessment:
     """Measure one row against the four-way split. Delegates the path/symbol half to
     `register_rows.resolve_row` and the reachability half to the two existing collectors
@@ -215,7 +215,7 @@ def test_classify_known_site_stale_when_enclosing_symbol_missing(tmp_path):
     index = _index_for(tmp_path, "pkg/mod.py")
     site = ("pkg/mod.py", "missing_fn", "some_callee")
 
-    assessment = classify_known_site(site, index, frozenset(), {}, tmp_path)
+    assessment = classify_known_site(site, index, frozenset(), {}, tmp_path, frozenset())
 
     assert assessment.classification == KnownSiteClassification.STALE
     assert assessment.depth is None
@@ -225,7 +225,7 @@ def test_classify_known_site_stale_when_path_missing(tmp_path):
     index = _index_for(tmp_path)
     site = ("pkg/gone.py", "some_fn", "some_callee")
 
-    assessment = classify_known_site(site, index, frozenset(), {}, tmp_path)
+    assessment = classify_known_site(site, index, frozenset(), {}, tmp_path, frozenset())
 
     assert assessment.classification == KnownSiteClassification.STALE
 
@@ -237,7 +237,7 @@ def test_classify_known_site_live_debt_when_one_hop_gate_reports(tmp_path):
     index = _index_for(tmp_path, "pkg/mod.py")
     site = ("pkg/mod.py", "check", "spawner")
 
-    assessment = classify_known_site(site, index, frozenset({site}), {}, tmp_path)
+    assessment = classify_known_site(site, index, frozenset({site}), {}, tmp_path, frozenset())
 
     assert assessment.classification == KnownSiteClassification.LIVE_DEBT
     assert assessment.depth is None
@@ -251,7 +251,9 @@ def test_classify_known_site_past_horizon_from_deep_oracle_records_lowest_depth(
     site = ("pkg/mod.py", "check", "spawner")
     deep_keys_by_depth = {2: frozenset(), 3: frozenset({site}), 4: frozenset({site})}
 
-    assessment = classify_known_site(site, index, frozenset(), deep_keys_by_depth, tmp_path)
+    assessment = classify_known_site(
+        site, index, frozenset(), deep_keys_by_depth, tmp_path, frozenset()
+    )
 
     assert assessment.classification == KnownSiteClassification.PAST_HORIZON
     assert assessment.depth == 3
@@ -286,7 +288,9 @@ def test_classify_known_site_closure_candidate_when_dark_to_both(tmp_path):
     site = ("pkg/mod.py", "check", "spawner")
     deep_keys_by_depth = {2: frozenset(), 3: frozenset(), 4: frozenset()}
 
-    assessment = classify_known_site(site, index, frozenset(), deep_keys_by_depth, tmp_path)
+    assessment = classify_known_site(
+        site, index, frozenset(), deep_keys_by_depth, tmp_path, frozenset()
+    )
 
     assert assessment.classification == KnownSiteClassification.CLOSURE_CANDIDATE
     assert assessment.depth is None

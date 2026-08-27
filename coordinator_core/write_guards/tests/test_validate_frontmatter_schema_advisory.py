@@ -842,19 +842,28 @@ class TestReviewedRangeOffer:
         )
 
     def test_ac1_symbolic_endpoint_offers_resolved_40_hex_range(self, tmp_path, monkeypatch):
+        # `left_token` is deliberately NOT a hex-looking string (unlike an
+        # abbreviated SHA) — `_hex_fast_path` intercepts any hex-prefixed
+        # token, real or short, before `_resolve_refs_to_sha_batch` is ever
+        # called (see that function's own contract), so a hex-shaped
+        # fixture here would never reach the mock below at all.
         left_sha = "a" * 40
         right_sha = "b" * 40
 
-        def fake_resolve(token, cwd):
-            if token == "a65e39850^":
-                return left_sha
-            if token == "HEAD":
-                return right_sha
-            raise ValueError(f"unexpected token {token!r}")
+        def fake_resolve_batch(tokens, cwd):
+            out = {}
+            for token in tokens:
+                if token == "some-branch^":
+                    out[token] = left_sha
+                elif token == "HEAD":
+                    out[token] = right_sha
+                else:
+                    raise ValueError(f"unexpected token {token!r}")
+            return out
 
-        monkeypatch.setattr(guard, "_resolve_ref_to_sha", fake_resolve)
+        monkeypatch.setattr(guard, "_resolve_refs_to_sha_batch", fake_resolve_batch)
 
-        result = self._write_and_check(tmp_path, "a65e39850^..HEAD")
+        result = self._write_and_check(tmp_path, "some-branch^..HEAD")
         assert result is not None
         text = _advisory_text(result)
         assert f"{left_sha}..{right_sha}" in text
@@ -879,7 +888,9 @@ class TestReviewedRangeOffer:
 
     def test_ac4_every_branch_is_an_advisory_never_a_deny_or_mutation(self, tmp_path, monkeypatch):
         monkeypatch.setattr(
-            guard, "_resolve_ref_to_sha", lambda token, cwd: "d" * 40
+            guard,
+            "_resolve_refs_to_sha_batch",
+            lambda tokens, cwd: {t: "d" * 40 for t in tokens},
         )
         for value in ("a65e39850^..HEAD", "e" * 40, "working-tree:some/path"):
             fp = self._sidecar_path(tmp_path)
@@ -902,10 +913,10 @@ class TestReviewedRangeOffer:
     def test_ac6_resolver_failure_degrades_to_pre_existing_advisory_text(
         self, tmp_path, monkeypatch
     ):
-        def broken_resolve(token, cwd):
+        def broken_resolve_batch(tokens, cwd):
             raise RuntimeError("git binary not found")
 
-        monkeypatch.setattr(guard, "_resolve_ref_to_sha", broken_resolve)
+        monkeypatch.setattr(guard, "_resolve_refs_to_sha_batch", broken_resolve_batch)
 
         result = self._write_and_check(tmp_path, "a65e39850^..HEAD")
         assert result is not None
@@ -913,6 +924,66 @@ class TestReviewedRangeOffer:
         assert "[frontmatter-schema warning]" in text
         assert "required shape: Value must match pattern:" in text
         assert "The write will proceed." in text
+
+    @pytest.mark.spawns_process
+    @pytest.mark.cadence
+    def test_reviewed_range_offer_process_count_does_not_grow_with_the_set(
+        self, tmp_path, monkeypatch
+    ):
+        """PROCESS COUNT DOES NOT GROW WITH N (amplification hitlist,
+        2026-08-19): `_reviewed_range_offer` must issue ONE `git cat-file
+        --batch-check` spawn for the whole `reviewed_range` list's
+        separator-form endpoints, not one `git rev-parse --verify` spawn per
+        endpoint — regardless of how many separator-form entries the list
+        carries."""
+        import subprocess as _sp
+
+        from coordinator_core.win_portability import no_console_creationflags
+
+        _no_console = no_console_creationflags()
+
+        def _git(*args):
+            _sp.run(["git", *args], cwd=tmp_path, check=True, capture_output=True, **_no_console)
+
+        _git("init", "-q")
+        _git("config", "user.email", "t@example.com")
+        _git("config", "user.name", "tester")
+        (tmp_path / "f.txt").write_text("x\n", encoding="utf-8")
+        _git("add", "f.txt")
+        _git("commit", "-q", "-m", "seed")
+
+        import coordinator_core.git.run as _git_run_mod
+
+        real_run_git = _git_run_mod.run_git
+        cat_file_calls: list[list[str]] = []
+
+        def _counting_run_git(args, **kwargs):
+            if args and args[0] == "cat-file":
+                cat_file_calls.append(list(args))
+            return real_run_git(args, **kwargs)
+
+        monkeypatch.setattr(_git_run_mod, "run_git", _counting_run_git)
+
+        errors_one = [{"field": "reviewed_range[0]", "error": "bad", "hint": "x"}]
+        fm_one = {"reviewed_range": ["main^..main"]}
+        guard._reviewed_range_offer(errors_one, fm_one, str(tmp_path))
+        calls_for_one = len(cat_file_calls)
+        assert calls_for_one == 1
+
+        cat_file_calls.clear()
+        errors_three = [
+            {"field": "reviewed_range[0]", "error": "bad", "hint": "x"},
+            {"field": "reviewed_range[1]", "error": "bad", "hint": "x"},
+            {"field": "reviewed_range[2]", "error": "bad", "hint": "x"},
+        ]
+        fm_three = {
+            "reviewed_range": ["main^..main", "main~1..HEAD", "some-branch..main"]
+        }
+        guard._reviewed_range_offer(errors_three, fm_three, str(tmp_path))
+        assert len(cat_file_calls) == calls_for_one, (
+            f"3 separator-form entries cost {len(cat_file_calls)} `git "
+            f"cat-file` spawns against {calls_for_one} for 1: {cat_file_calls}"
+        )
 
     def test_ac7_review_trail_write_not_imported_at_module_scope(self):
         # Parses the module with `ast` rather than matching text prefixes —

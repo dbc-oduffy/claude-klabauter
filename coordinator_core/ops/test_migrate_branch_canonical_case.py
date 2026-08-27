@@ -361,3 +361,49 @@ def test_bad_arg_short_circuits_before_git_root_lookup():
     # before any git-root lookup, so this doesn't need a real repo/cwd chdir.
     rc = mbcc.main(["--nope"])
     assert rc == 1
+
+
+# ---------------------------------------------------------------------------
+# Per-item git spawn amplification (coordinator_core/tests/
+# test_no_unbatched_per_item_git_spawn.py _KNOWN_SITES:
+# migrate_branch_canonical_case.py::_migrate -> _git)
+# ---------------------------------------------------------------------------
+
+
+def test_process_count_does_not_grow_with_the_set(tmp_path, monkeypatch, capsys):
+    """Model: test_schema_drift_watch.py::TestSchemaAdvisoryBatch::
+    test_process_count_does_not_grow_with_the_set. The redundant per-ref
+    `show-ref --verify` was removed in favor of a membership check against
+    the ref listing `_enumerate_work_refs` already fetched in one call, so
+    the number of `_git` spawns during Step 1's rename loop must not grow
+    with the number of mixed-case refs discovered."""
+    spawns: list[list[str]] = []
+    real_run = mbcc.subprocess.run
+
+    def counting_run(argv, *args, **kwargs):  # type: ignore[no-untyped-def]
+        spawns.append(list(argv))
+        return real_run(argv, *args, **kwargs)
+
+    monkeypatch.setattr(mbcc.subprocess, "run", counting_run)
+
+    repo_one = tmp_path / "repo_one"
+    _mkrepo(repo_one)
+    assert _git(repo_one, "branch", "work/one-mixed").returncode == 0
+    spawns.clear()
+    rc_one, _, _ = _run(repo_one, [], monkeypatch, capsys)
+    assert rc_one == 0
+    spawns_for_one = len(spawns)
+
+    repo_many = tmp_path / "repo_many"
+    _mkrepo(repo_many)
+    for name in ("work/one-mixed", "work/two-mixed", "work/three-mixed", "work/four-mixed"):
+        assert _git(repo_many, "branch", name).returncode == 0
+    spawns.clear()
+    rc_many, _, _ = _run(repo_many, [], monkeypatch, capsys)
+    assert rc_many == 0
+    spawns_for_many = len(spawns)
+
+    assert spawns_for_many <= spawns_for_one, (
+        f"spawn count grew with the ref set: 1 ref -> {spawns_for_one} spawns, "
+        f"4 refs -> {spawns_for_many} spawns"
+    )

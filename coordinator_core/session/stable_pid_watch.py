@@ -135,21 +135,17 @@ def _touch_record_family(sdir: Path) -> list[Path]:
     """Every on-disk file backing this session's touch record, or `[]`.
 
     Routed through ``touch_record.discover_family`` — the same family-aware
-    seam ``scope.py::_read_touch_record_as_legacy_lines`` reads — plus the
-    legacy ``touched.txt`` sibling it unions in, so this stays a WIDENING of
-    the C5 policy and not a swap back onto a single literal: a future record
-    rename is picked up under its new name, and a rotated generation
-    (``touch-record.jsonl.rotated-<ts>-<pid>.jsonl``) counts as evidence
-    exactly like the live file. Existence only — nothing here decodes a line,
-    so the branch stays a directory walk and a stat.
+    seam ``scope.py::_read_touch_record_as_legacy_lines`` reads. AC11
+    retires the legacy ``touched.txt`` sibling this once unioned in on its
+    own stated terms ("retires when C8's writer does"): `ab177e43f`
+    repointed `claims.atomic_dedup_append` off the old dialect and
+    `227b513e7` deleted the corresponding read-side union, so there is no
+    second dialect left to widen for. Existence only — nothing here decodes
+    a line, so the branch stays a directory walk and a stat.
     """
     from coordinator_core.session import touch_record
 
-    family = list(touch_record.discover_family(sdir / "touch-record.jsonl"))
-    legacy = sdir / "touched.txt"
-    if legacy.is_file():
-        family.append(legacy)
-    return family
+    return list(touch_record.discover_family(sdir / "touch-record.jsonl"))
 
 
 def _init_is_owed(sdir: Path, now: float) -> bool:

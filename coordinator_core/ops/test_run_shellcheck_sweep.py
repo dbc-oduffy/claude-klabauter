@@ -88,23 +88,37 @@ def _track_file(repo: Path, rel_path: str, content: str) -> Path:
     return path
 
 
-def _mock_shellcheck_run(findings_by_content):
+def _mock_shellcheck_run(findings_by_content, call_counter=None):
     """Build a `subprocess.run` stand-in that intercepts only shellcheck
-    invocations (argv[0] == "shellcheck"), reads the temp file it was
-    handed, and returns a canned JSON findings list keyed by that content
-    (so a test can assert on exactly what content shellcheck was shown,
-    e.g. proving CRLF was stripped first). Any other argv (git) is passed
-    through to the real subprocess.run.
+    invocations (argv[0] == "shellcheck"). Batched call shape: one shellcheck
+    invocation names every temp file in a single argv tail
+    (`shellcheck ... f1 f2 ... fN`) — this stand-in reads EACH trailing temp
+    file, calls `findings_by_content` per file's content, stamps each
+    resulting finding's `file` field with that file's own temp path (mirrors
+    real shellcheck's `-f json` per-finding `file` field), and returns the
+    UNION as one JSON stdout blob — so a test asserting on exactly what
+    content shellcheck was shown (e.g. proving CRLF was stripped first)
+    keeps working unchanged whether one file or many are batched together.
+    Any other argv (git) is passed through to the real subprocess.run.
+    `call_counter`, if given, is incremented once per shellcheck invocation
+    (never once per file) — the process-count-does-not-grow-with-N pin.
     """
     real_run = subprocess.run
 
     def _fake_run(argv, *args, **kwargs):
         if argv[0] == "shellcheck":
-            tmp_file = Path(argv[-1])
-            content = tmp_file.read_text(encoding="utf-8")
-            findings = findings_by_content(content)
+            if call_counter is not None:
+                call_counter["shellcheck"] = call_counter.get("shellcheck", 0) + 1
+            tmp_files = [Path(a) for a in argv if a.endswith(".sh")]
+            all_findings = []
+            for tmp_file in tmp_files:
+                content = tmp_file.read_text(encoding="utf-8")
+                for finding in findings_by_content(content):
+                    finding = dict(finding)
+                    finding["file"] = str(tmp_file)
+                    all_findings.append(finding)
             return subprocess.CompletedProcess(
-                argv, returncode=0, stdout=json.dumps(findings), stderr=""
+                argv, returncode=0, stdout=json.dumps(all_findings), stderr=""
             )
         return real_run(argv, *args, **kwargs)
 
@@ -204,6 +218,25 @@ def test_injected_repo_root_used_when_params_empty(tmp_path, monkeypatch):
 
     result = _run_shellcheck_sweep({}, repo_root=repo)
     assert result["files_checked"] == 1
+
+
+def test_process_count_does_not_grow_with_the_set(tmp_path, monkeypatch):
+    """Pin: N tracked .sh files -> exactly ONE `shellcheck` spawn, not N.
+    Model: test_schema_drift_watch.py::TestSchemaAdvisoryBatch::
+    test_process_count_does_not_grow_with_the_set.
+    """
+    repo = _init_repo(tmp_path)
+    for i in range(5):
+        _track_file(repo, f"scripts/s{i}.sh", f"#!/bin/bash\necho {i}\n")
+
+    call_counter: dict = {}
+    monkeypatch.setattr(
+        subprocess, "run", _mock_shellcheck_run(lambda c: [], call_counter=call_counter)
+    )
+
+    result = run_shellcheck_sweep(repo)
+    assert result["files_checked"] == 5
+    assert call_counter.get("shellcheck", 0) == 1
 
 
 def test_double_invocation_is_idempotent(tmp_path, monkeypatch):

@@ -479,3 +479,45 @@ class TestWriteSurfaceDeclaration:
         main(["--check-only"], self_dir=Path("."))
         assert rdr.WRITE_SURFACE is before
         assert rdr.WRITE_SURFACE.clauses[0].entry_template.key == "repos.<derived-key>"
+
+
+def test_dump_call_count_does_not_grow_with_candidate_count(env, tmp_path, monkeypatch):
+    """G6 process-count pin: the already-registered snapshot is ONE `dump`
+    call regardless of how many repos discovery surfaces -- 1 vs 4
+    candidates must cost the same single dump spawn. `set` still costs one
+    spawn per genuinely-new repo (a different destination key/value per
+    call, not batchable through `machine-local set`) -- that per-item cost
+    is real, not amplification, and is asserted separately below rather than
+    folded into the growth assertion.
+    """
+    lib_dir, bin_dir = env
+    import coordinator_core.ops.register_discovered_repos as rdr_mod
+
+    real_run = rdr_mod.subprocess.run
+
+    def _run_with_counting(repo_paths):
+        dump_calls = []
+
+        def _counting_run(argv, *args, **kwargs):
+            if "dump" in argv:
+                dump_calls.append(list(argv))
+            return real_run(argv, *args, **kwargs)
+
+        monkeypatch.setattr(rdr_mod.subprocess, "run", _counting_run)
+        _stub_discover(monkeypatch, repo_paths)
+        rc = main(["--non-interactive"], self_dir=lib_dir)
+        monkeypatch.setattr(rdr_mod.subprocess, "run", real_run)
+        return rc, dump_calls
+
+    rc_one, dump_one = _run_with_counting([str(tmp_path / "dev" / "repo-solo")])
+    assert rc_one == 0
+    assert len(dump_one) == 1
+
+    rc_four, dump_four = _run_with_counting(
+        [str(tmp_path / "dev" / f"repo-{i}") for i in range(4)]
+    )
+    assert rc_four == 0
+    assert len(dump_four) == 1, (
+        f"dump call count grew with candidate count: {len(dump_four)} for 4 vs "
+        f"{len(dump_one)} for 1"
+    )

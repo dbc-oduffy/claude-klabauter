@@ -104,17 +104,20 @@ _SPAWN_COUNT_HIGH_WATER = {
     },
     "fleet.archive_and_commit": {
         "op_total_20_move_batch_sync_push_git_spawns": {
-            "ceiling": 2,
+            "ceiling": 1,
             "reason": (
-                "Both remaining git spawns on the archival path are disclosed "
-                "and neither belongs to archive_and_commit: `git restore "
-                "--staged` (the shared-index resync, the unfinished half of "
-                "our own hand-rolled commit -- see "
-                "`_resync_main_index_for_moves`' docstring) and `git status "
-                "--porcelain` (session/scope.py's claim release). Spy-counted "
-                "argv, never a job-object process count: that count includes "
-                "non-deterministic conhost.exe pairing and reads 3.0/5.0/7.0 "
-                "for identical code on one box."
+                "The one remaining git spawn on the archival path is "
+                "disclosed and does not belong to archive_and_commit: `git "
+                "restore --staged` (the shared-index resync, the unfinished "
+                "half of our own hand-rolled commit -- see "
+                "`_resync_main_index_for_moves`' docstring). Lowered 2 -> 1 "
+                "on 2026-08-27: the second spawn this ceiling was sized "
+                "against, `git status --porcelain` from session/scope.py's "
+                "claim release, was retired at `e0d100640`, and the "
+                "cadence-marked gates did not re-run against that cut. "
+                "Spy-counted argv, never a job-object process count: that "
+                "count includes non-deterministic conhost.exe pairing and "
+                "reads 3.0/5.0/7.0 for identical code on one box."
             ),
         },
         "op_total_20_move_batch_sync_push_own_git_spawns": {

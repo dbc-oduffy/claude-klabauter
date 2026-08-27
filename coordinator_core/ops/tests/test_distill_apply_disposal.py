@@ -1309,3 +1309,64 @@ def test_main_index_resync_persistent_failure_log_is_honest_about_scope(
     assert "positionally" in message
     # git's own stderr is surfaced, not swallowed.
     assert "index.lock" in message
+
+
+@_requires_rg
+def test_tracked_rm_process_count_does_not_grow_with_the_set(
+    tmp_path: Path, monkeypatch
+):
+    """`_delete_tracked_and_append_log`'s tracked-delete loop must issue ONE
+    `git rm` spawn for the whole tracked_paths batch, not one per path
+    (amplification hitlist, 2026-08-19 — `git rm` natively accepts N
+    pathspecs). Pins PROCESS COUNT DOES NOT GROW WITH N: a 3-candidate batch
+    must cost the SAME number of `git rm` spawns as a 1-candidate batch."""
+    real_exec = asyncio.create_subprocess_exec
+    rm_spawns: list[list[str]] = []
+
+    async def _counting_exec(*args, **kwargs):
+        if len(args) >= 2 and args[0] == "git" and args[1] == "rm":
+            rm_spawns.append(list(args))
+        return await real_exec(*args, **kwargs)
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", _counting_exec)
+
+    shas = _init_repo_with_commits(tmp_path)
+    manifest = _manifest([_eligible_row("archive/handoffs/eligible.md")])
+    stamped = _stamped(manifest)
+    first = _run(
+        apply_disposal_manifest(tmp_path, stamped, harvest_committed_sha=shas["harvest"])
+    )
+    assert first.deleted_tracked == ["archive/handoffs/eligible.md"]
+    rm_spawns_for_one = len(rm_spawns)
+    assert rm_spawns_for_one == 1
+
+    rm_spawns.clear()
+    _git("reset", "--hard", shas["head"], cwd=tmp_path)
+    for i in range(3):
+        candidate = tmp_path / "archive" / "handoffs" / f"eligible-{i}.md"
+        candidate.write_text(
+            "---\nshipped_in: 68b27420\nstatus: consumed\n"
+            "deployment_state: shipped\nrealized_by: inline\n---\nbody\n",
+            encoding="utf-8",
+        )
+        _git("add", "--", f"archive/handoffs/eligible-{i}.md", cwd=tmp_path)
+    _git("commit", "-q", "-m", "add three more candidates", cwd=tmp_path)
+    head_sha = _git("rev-parse", "HEAD", cwd=tmp_path)
+
+    manifest_three = _manifest(
+        [_eligible_row(f"archive/handoffs/eligible-{i}.md") for i in range(3)],
+        run_id="2026-07-23-02h00",
+    )
+    stamped_three = _stamped(manifest_three)
+    second = _run(
+        apply_disposal_manifest(tmp_path, stamped_three, harvest_committed_sha=shas["harvest"])
+    )
+    assert sorted(second.deleted_tracked) == [
+        "archive/handoffs/eligible-0.md",
+        "archive/handoffs/eligible-1.md",
+        "archive/handoffs/eligible-2.md",
+    ]
+    assert len(rm_spawns) == rm_spawns_for_one, (
+        f"3-candidate batch cost {len(rm_spawns)} `git rm` spawns against "
+        f"{rm_spawns_for_one} for 1: {rm_spawns}"
+    )

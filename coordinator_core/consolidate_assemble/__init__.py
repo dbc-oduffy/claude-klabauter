@@ -149,13 +149,33 @@ def list_branches(run_git: RunGit, repo_root: Path) -> list[dict[str, Any]]:
 
 
 def tip_author(run_git: RunGit, repo_root: Path, ref: str) -> str:
-    """One call per ref by design: `git log -1 --format=%ae <ref>` resolves
-    against a single tip commit, and there is no batch form that returns a
-    per-ref author map in one invocation. `--no-walk=unsorted --format=%ae`
-    across multiple refs would still need per-ref demultiplexing of the
-    output, not a genuine collapse."""
+    """`git log -1 --format=%ae <ref>` resolves a single tip commit's
+    author. Retained as the per-ref fallback `tip_authors` falls back to for
+    a ref outside `refs/heads`/`refs/remotes` (e.g. a worktree path) that
+    `git for-each-ref` cannot resolve."""
     proc = run_git(["log", "-1", "--format=%ae", ref], repo_root)
     return proc.stdout.strip()
+
+
+def tip_authors(run_git: RunGit, repo_root: Path) -> dict[str, str]:
+    """Batches `tip_author` across every local and remote-tracking ref into
+    ONE `git for-each-ref` call: `%(refname:short)` yields `<name>` for a
+    local branch and `origin/<name>` for a remote-only one — the same `ref`
+    shape `list_branches` already produces — and `%(authoremail:trim)`
+    strips the `<...>` `git log --format=%ae` never adds, so the returned
+    map is keyed and valued identically to N per-ref `tip_author` calls."""
+    proc = run_git(
+        ["for-each-ref", "--format=%(refname:short) %(authoremail:trim)", "refs/heads", "refs/remotes"],
+        repo_root,
+    )
+    authors: dict[str, str] = {}
+    for raw_line in proc.stdout.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        name, _, email = line.partition(" ")
+        authors[name] = email
+    return authors
 
 
 def categorize_branch(name: str, current: str, main_branch: Optional[str], tip_email: str, my_email: str) -> str:
@@ -230,6 +250,25 @@ def worktree_is_dirty(run_git: RunGit, worktree_path: str) -> dict[str, Any]:
 def branch_reachable(run_git: RunGit, repo_root: Path, ref: str, target: str) -> bool:
     proc = run_git(["merge-base", "--is-ancestor", ref, target], repo_root)
     return proc.returncode == 0
+
+
+def branches_merged_into(run_git: RunGit, repo_root: Path, target: str) -> set[str]:
+    """Batches `branch_reachable` across every local branch against ONE
+    `target` into a single `git branch --merged <target>` call — the
+    full-listing form `merge-base --is-ancestor` has no equivalent of,
+    listing every local branch whose tip is reachable from `target`
+    (ancestor-or-equal), the same relation `branch_reachable` tests
+    per-ref. `target` is loop-invariant across the worktree loop's
+    per-worktree `branch_reachable` calls (always `main_branch or
+    current`), so one call here replaces one per worktree."""
+    proc = run_git(["branch", "--merged", target], repo_root)
+    names: set[str] = set()
+    for raw_line in proc.stdout.splitlines():
+        line = raw_line.strip().lstrip("* ").strip()
+        if not line or "->" in line:
+            continue
+        names.add(line)
+    return names
 
 
 def unique_commits(run_git: RunGit, repo_root: Path, current: str, stale_ref: str) -> list[str]:
@@ -336,13 +375,18 @@ def brief(
     stale_branches: list[dict[str, Any]] = []
     all_shas: list[str] = []
 
+    # Hoisted out of the branch loop: one `for-each-ref` call resolves
+    # every branch's tip author at once (see `tip_authors`'s docstring for
+    # the key/value equivalence to the per-ref call it replaces).
+    all_tip_authors = tip_authors(run_git, repo_root)
+
     for entry in branch_entries:
         name, ref = entry["name"], entry["ref"]
         if name == current or (main_branch is not None and name == main_branch):
             branches_report.append({**entry, "category": "current" if name == current else "main"})
             continue
 
-        author = tip_author(run_git, repo_root, ref)
+        author = all_tip_authors[ref] if ref in all_tip_authors else tip_author(run_git, repo_root, ref)
         category = categorize_branch(name, current, main_branch, author, my_email)
         if category != "mine-stale":
             branches_report.append({**entry, "tip_author": author, "category": "others"})
@@ -423,6 +467,11 @@ def brief(
     worktree_entries = list_worktrees(run_git, repo_root)
     worktrees_report: list[dict[str, Any]] = []
     branch_names_set = {b["name"] for b in branch_entries}
+    # Hoisted out of the worktree loop: `target` is loop-invariant (always
+    # `main_branch or current`), so one `git branch --merged` call replaces
+    # one `branch_reachable` spawn per worktree (see
+    # `branches_merged_into`'s docstring).
+    merged_into_target = branches_merged_into(run_git, repo_root, main_branch or current)
     for wt in worktree_entries:
         branch_name = wt.get("branch")
         wt_path = wt["path"]
@@ -433,24 +482,20 @@ def brief(
             worktrees_report.append({**wt, "category": "current"})
             continue
 
-        author = tip_author(run_git, repo_root, branch_name if branch_name in branch_names_set else wt_path)
+        author = (
+            all_tip_authors[branch_name]
+            if branch_name in branch_names_set and branch_name in all_tip_authors
+            else tip_author(run_git, repo_root, branch_name if branch_name in branch_names_set else wt_path)
+        )
         if author != my_email:
             worktrees_report.append({**wt, "tip_author": author, "category": "others"})
             continue
 
-        # `branch_reachable` and `worktree_is_dirty` stay per-item here.
-        # `branch_reachable`'s only batch-capable primitive is `git branch
-        # --merged <target>` (a full-listing form, distinct from the
-        # `merge-base --is-ancestor` single-ref call made below); it needs a
-        # parse path this module does not have yet, and
-        # `test_consolidate_assemble.py`'s fixture `run_git` now rejects that
-        # argv shape outright rather than modeling it — both are fixture
-        # debt outside this chunk's scope, not a fixture-modeled wall.
         # `worktree_is_dirty` has no batch form at all: `git status
         # --porcelain` reads one working directory's state, and each
         # worktree is its own separate tree — no single git invocation
         # reports every worktree's dirty state at once.
-        reachable = branch_reachable(run_git, repo_root, branch_name, main_branch or current)
+        reachable = branch_name in merged_into_target
         dirty_probe = worktree_is_dirty(run_git, wt_path)
         # DR-319 posture, applied at the call site: a degraded probe is
         # never read as clean. This guard authorizes destructive worktree

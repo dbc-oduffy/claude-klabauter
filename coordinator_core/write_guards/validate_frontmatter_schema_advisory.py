@@ -972,6 +972,68 @@ def _resolve_ref_to_sha(token: str, cwd: Path) -> str:
         )
     return out
 
+
+def _hex_fast_path(token: str) -> Optional[str]:
+    """The same hex-token fast path `_resolve_ref_to_sha` special-cases —
+    factored out so the batched resolver below can skip a git call entirely
+    for a token that already IS a (possibly `^`/`~N`-suffixed) hex SHA,
+    exactly like the per-item helper does. Returns the token unchanged on a
+    fast-path hit, `None` otherwise (caller must resolve via git)."""
+    if _HEX_TOKEN_RE.match(token) or (
+        token and _HEX_TOKEN_RE.match(re.split(r"[\^~]", token, maxsplit=1)[0])
+    ):
+        return token
+    return None
+
+
+def _resolve_refs_to_sha_batch(tokens: list[str], cwd: Path) -> dict[str, str]:
+    """Resolve many non-hex-fast-path git ref tokens to concrete SHAs in ONE
+    `git cat-file --batch-check` call (amplification hitlist, 2026-08-19)
+    instead of one `git rev-parse --verify` spawn per token — a DIFFERENT
+    primitive from `_resolve_ref_to_sha`'s per-item `rev-parse --verify`
+    form (the register this batch replaces the loop's calls with, not the
+    hex fast path, which callers should route around this function for —
+    see `_hex_fast_path`). `git cat-file --batch-check` reads N tokens on
+    stdin, one per line, and emits exactly one line per input IN ORDER:
+    `<sha> <type> <size>` on a hit, `<token> missing` on a miss.
+
+    Returns a dict mapping every RESOLVED token to its sha; an unresolved or
+    missing token is simply absent from the returned dict — the caller
+    distinguishes "resolved" from "unresolvable" by membership, the
+    batch-level analogue of `_resolve_ref_to_sha`'s per-item ValueError. A
+    timeout, a non-zero exit (including "not a git repository"), or any
+    other ordinary git-level failure is treated the SAME as "none of these
+    tokens resolved" — returns `{}` rather than raising — because the
+    per-item helper this replaces only ever raised `ValueError` for exactly
+    that class of failure, and every one of ITS `ValueError`s was caught
+    per-pair by the loop in `_reviewed_range_offer`, never propagated to
+    that function's own outer fail-open `except Exception`. Preserving that
+    scoping means this batched form must not turn "some/all refs did not
+    resolve" into a whole-function failure either — only a genuinely
+    unexpected exception (a non-`ValueError` from a future git-seam change,
+    mirroring `_resolve_ref_to_sha`'s own contract) is allowed to propagate
+    here and degrade the whole call, exactly as it did per-item before."""
+    if not tokens:
+        return {}
+    from coordinator_core.git.run import run_git
+
+    stdin_payload = ("\n".join(tokens) + "\n").encode("utf-8")
+    proc = run_git(
+        ["cat-file", "--batch-check=%(objectname) %(objecttype)"],
+        cwd=str(cwd),
+        input=stdin_payload,
+    )
+    if proc.timed_out or proc.returncode != 0:
+        return {}
+
+    resolved: dict[str, str] = {}
+    lines = proc.stdout.splitlines()
+    for token, line in zip(tokens, lines):
+        parts = line.split(" ", 2)
+        if len(parts) >= 2 and parts[1] != "missing" and parts[0]:
+            resolved[token] = parts[0]
+    return resolved
+
 # reviewed_targets closed prefix set (review-findings 3.2.0 / run-report
 # 2.2.0, vendored at coordinator_core/frontmatter/schemas/) — see plan-tasks
 # row C3, docs/plans/2026-08-14-the-write-time-offer-for-reviewed-range.md.
@@ -1071,7 +1133,15 @@ def _reviewed_range_offer(
         if not any(_REVIEWED_RANGE_FIELD_RE.match(e.get("field") or "") for e in errors):
             return
 
-        rewrites: list[tuple[dict, Optional[str], Optional[str]]] = []
+        # Pass 1 — no git spawn here. Collect every separator-form error's
+        # (left, right) endpoint pair, and every non-hex-fast-path endpoint
+        # token across the whole loop, deferring the actual resolution to
+        # ONE batched `git cat-file --batch-check` call below instead of one
+        # `git rev-parse --verify` spawn per endpoint (amplification
+        # hitlist, 2026-08-19).
+        sep_entries: list[tuple[dict, str, str, str]] = []  # (err, value, left, right)
+        other_entries: list[tuple[dict, str]] = []  # (err, value)
+        to_resolve: set[str] = set()
         for err in errors:
             match = _REVIEWED_RANGE_FIELD_RE.match(err.get("field") or "")
             if not match:
@@ -1084,15 +1154,34 @@ def _reviewed_range_offer(
             sep_match = _RANGE_SEPARATOR_RE.match(value)
             if sep_match:
                 left, _sep, right = sep_match.groups()
-                try:
-                    resolved_left = _resolve_ref_to_sha(left, Path(git_root))
-                    resolved_right = _resolve_ref_to_sha(right, Path(git_root))
-                except ValueError:
-                    rewrites.append((err, f'value "{value}" names no commit range', None))
-                    continue
-                rewrites.append((err, None, f"{resolved_left}..{resolved_right}"))
+                sep_entries.append((err, value, left, right))
+                for endpoint in (left, right):
+                    if _hex_fast_path(endpoint) is None:
+                        to_resolve.add(endpoint)
                 continue
 
+            other_entries.append((err, value))
+
+        resolved_map = _resolve_refs_to_sha_batch(sorted(to_resolve), Path(git_root))
+
+        def _resolve(token: str) -> Optional[str]:
+            fast = _hex_fast_path(token)
+            if fast is not None:
+                return fast
+            return resolved_map.get(token)
+
+        # Pass 2 — same branch table as before, over the precomputed
+        # resolutions instead of a per-endpoint git call.
+        rewrites: list[tuple[dict, Optional[str], Optional[str]]] = []
+        for err, value, left, right in sep_entries:
+            resolved_left = _resolve(left)
+            resolved_right = _resolve(right)
+            if resolved_left is None or resolved_right is None:
+                rewrites.append((err, f'value "{value}" names no commit range', None))
+                continue
+            rewrites.append((err, None, f"{resolved_left}..{resolved_right}"))
+
+        for err, value in other_entries:
             if _BARE_HEX_RE.match(value):
                 rewrites.append((err, None, f"{value}~1..{value}"))
                 continue

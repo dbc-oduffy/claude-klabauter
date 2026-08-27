@@ -1779,11 +1779,15 @@ def test_filtering_by_site_depth_matches_a_real_walk_at_that_depth(tmp_path):
 
     # `depth_of` reports `None` for a route d/e/f/g callee it cannot attribute (Review:
     # coordinator:code-reviewer -- F1). This corpus is route a/b/c only, asserted rather than
-    # assumed: excluding unknowns from the attribution set would otherwise let the equivalence
-    # below hold vacuously for a site the real walk does report.
+    # assumed. Note (Review: coordinator:code-reviewer -- F1, integrator-verified): this does
+    # not close a vacuous-pass hole -- `from_walk` below is produced by an independent
+    # `_deep_find_unbatched_per_item_spawns` call that never consults `depth_of`, so an
+    # unknown-depth site here would still surface as a real `from_attribution != from_walk`
+    # mismatch, not a silent vacuous pass. This assertion's actual value is a fail-fast with a
+    # legible message ahead of that harder-to-read set-diff.
     assert not [s for s in sites if depth_of(s) is None], (
-        "this corpus must attribute every site a depth; an unknown-depth site here would make "
-        "the equivalence below hold by exclusion rather than by agreement"
+        "this corpus must attribute every site a depth; an unknown-depth site here would fail "
+        "the equivalence below by direct mismatch rather than by a clear message here"
     )
 
     for depth in range(1, max_depth + 1):

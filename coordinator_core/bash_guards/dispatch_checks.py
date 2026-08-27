@@ -2694,6 +2694,56 @@ def _is_same_dir(a: str, b: str) -> bool:
         return False
 
 
+def _is_within(path: str, root: str) -> bool:
+    """True when `path` is `root` or lies underneath it. Pure string/normcase work --
+    no filesystem probe and no spawn, so it is safe to run over every target."""
+    p = os.path.normcase(os.path.normpath(path))
+    r = os.path.normcase(os.path.normpath(root))
+    return p == r or p.startswith(r.rstrip(os.sep) + os.sep)
+
+
+def _attribute_porcelain(
+    out: str, root: str, targets: List[str]
+) -> Optional[Dict[str, str]]:
+    """Split one batched `git status --porcelain` over many pathspecs back into
+    per-target status text, or return None if that cannot be done with certainty.
+
+    NEGATIVE SPEC -- THIS FUNCTION MAY NOT GUESS. Its caller uses the result to
+    decide whether `rm` is about to destroy a peer's uncommitted work, so an
+    unattributable line is not a clean target, it is an unanswered question. Every
+    shape below that this cannot parse exactly returns None, and the caller then
+    pays the un-batched per-target spawn it was trying to avoid. Batching is an
+    optimisation; the deny is not.
+
+    Declines on: a quoted path (`core.quotepath` escapes non-ASCII, and unescaping
+    it here would be a second, divergent implementation of git's own quoting), a
+    rename/copy arrow (`XY orig -> new`, where BOTH sides matter and the entry is
+    not one path), and any line too short to carry the two-column status plus a
+    path. Accepts only the plain `XY <path>` form."""
+    table: Dict[str, str] = {os.path.normcase(os.path.normpath(t)): "" for t in targets}
+    for line in out.splitlines():
+        if not line.strip():
+            continue
+        if len(line) < 4:
+            return None
+        rel = line[3:]
+        if rel.startswith('"') or " -> " in rel:
+            return None
+        abs_path = os.path.normpath(os.path.join(root, rel))
+        owner = None
+        for t in targets:
+            if _is_within(abs_path, t):
+                # Longest match wins: a nested target must not be absorbed by its
+                # own ancestor when both were named on the same command line.
+                if owner is None or len(t) > len(owner):
+                    owner = t
+        if owner is None:
+            return None
+        key = os.path.normcase(os.path.normpath(owner))
+        table[key] = (table[key] + "\n" + line) if table[key] else line
+    return table
+
+
 def check_destructive_rm(
     cmd: str,
     session_id: str = "",
@@ -2755,6 +2805,42 @@ def check_destructive_rm(
     # `_new_git_memo` docstring for why this is sound and why it is
     # deliberately NOT module-level.
     _memo_run_git = _new_git_memo()
+
+    # Per-call, per-ROOT batched `git status --porcelain`. One spawn per distinct
+    # repo root instead of one per TARGET (`rm a.py b.py c.py` was three).
+    #
+    # WHY LAZY, AND WHY NOT A PRE-PASS. Resolving every target's root up front to
+    # group them would spawn for targets the loop below `continue`s past long
+    # before it ever needs a status -- a scratch-allowlisted path, a nonexistent
+    # path, a claims-dir path. That trades an N-spawn tail for an N-spawn head.
+    # This fills on FIRST need for a root and only then, so every early exit above
+    # still costs nothing.
+    #
+    # WHY IT FALLS BACK RATHER THAN GUESSING. This guard's deny leg is the thing
+    # standing between a peer's uncommitted work and `rm -rf`. Porcelain paths are
+    # root-relative, may be renames (`XY orig -> new`), and are quoted when
+    # `core.quotepath` fires on non-ASCII. If a line cannot be attributed to a
+    # target with certainty, this does NOT assume clean -- it returns None and the
+    # caller re-issues that target's own un-batched status call. A missed spawn is
+    # a cost; a missed deny is a peer's lost work.
+    _status_by_root: Dict[str, Optional[Dict[str, str]]] = {}
+
+    def _batched_status_for(root: str, tgt_abs: str, all_targets: List[str]) -> Optional[str]:
+        if root not in _status_by_root:
+            under = [t for t in all_targets if _is_within(t, root)]
+            if not under:
+                _status_by_root[root] = None
+            else:
+                rc_b, out_b = _run_git(
+                    ["-C", root, "--no-optional-locks", "status", "--porcelain", "--"] + under
+                )
+                _status_by_root[root] = (
+                    _attribute_porcelain(out_b, root, under) if rc_b == 0 else None
+                )
+        table = _status_by_root[root]
+        if table is None:
+            return None
+        return table.get(os.path.normcase(tgt_abs), "")
 
     cur_repo = None
     rc, out = _run_git(["rev-parse", "--show-toplevel"])
@@ -3145,14 +3231,30 @@ def check_destructive_rm(
                     root = out_r.strip() if rc_r == 0 else ""
                 if not root:
                     continue
-                # NOT memoized: the pathspec argument is `tgt_abs`, which by
-                # definition differs across targets (two rm targets naming
-                # the same path is a degenerate case, not the shape this
-                # audit is scoped to) -- genuinely loop-VARIANT, unlike the
-                # calls above.
-                rc_st, out_st = _run_git(
-                    ["-C", root, "--no-optional-locks", "status", "--porcelain", "--", tgt_abs]
-                )
+                # BATCHED per repo root, not memoized per target. The pathspec is
+                # loop-VARIANT -- `tgt_abs` differs by construction -- which is why
+                # the (cwd, args) memo above cannot absorb it, and why this was one
+                # spawn per target: `rm a.py b.py c.py` paid three. `git status`
+                # takes MANY pathspecs, so one call answers every target sharing a
+                # root, and `_batched_status_for` fills that table on first need
+                # (never in a pre-pass -- see its docstring: a pre-pass would spawn
+                # for targets the early `continue`s above never reach).
+                #
+                # `None` means the batch could not be attributed with certainty, so
+                # this falls back to the original per-target call rather than
+                # treating an unparsed line as a clean tree. See
+                # `_attribute_porcelain`'s negative spec: a missed spawn is a cost,
+                # a missed deny is a peer's lost work.
+                _all_tgt_abs = [
+                    _abs_path(os.path.expanduser(t) if t.startswith("~") else te)
+                    for t, te in targets
+                    if t and os.path.exists(os.path.expanduser(t) if t.startswith("~") else te)
+                ]
+                out_st = _batched_status_for(root, tgt_abs, _all_tgt_abs)
+                if out_st is None:
+                    _rc_st, out_st = _run_git(
+                        ["-C", root, "--no-optional-locks", "status", "--porcelain", "--", tgt_abs]
+                    )
                 status = "\n".join(out_st.splitlines()[:9])
                 if status:
                     peer_sid = _rm_peer_claim_of(tgt_abs, root)
@@ -3341,20 +3443,31 @@ def _rm_peer_claim_of(tgt_abs: str, root: str) -> str:
             if mtime is not _UNKNOWN_MTIME and now - mtime > 1800:
                 continue
 
-        # AC21 -- TRANSITIONAL, and RESTORED here after C7b deleted it a wave
-        # early on the stated premise that "`touch()` no longer writes the
-        # old dialect once its writer migrates (C7c)". C7c never landed --
-        # `coordinator_core.session.claims :: self_claim` still appends this
-        # session's `touched.txt` via `atomic_dedup_append` at two sites --
-        # so that premise is false here too (mirrors the restoration applied
-        # to `scope.py :: compute_scope` Step 1 at 58420b380). A peer whose
-        # claims arrived only through `self_claim` projects to zero claims
-        # via the jsonl seam alone, which silently allowed a destructive
-        # command against that peer's claimed path.
+        # The AC21 legacy union that stood here was deleted 2026-08-27 on the
+        # condition this comment itself named: "until a chunk migrates that
+        # writer off the old dialect (verified at HEAD, not assumed from a
+        # stale premise) and deletes this union." Both halves are now true.
+        # `claims.atomic_dedup_append`'s last reachable production caller --
+        # the CLI `claim-path` seam -- was repointed onto
+        # `touch_record.append_event` (`ab177e43f`), and the claim-reader
+        # union came out of `scope.py`/`claim_index.py` in one change
+        # (`227b513e7`). The on-disk corpus was drained BEFORE the read was
+        # removed, not assumed empty: `legacy_touch_corpus_migrate` applied
+        # across 135 dirs, and both checks then read zero -- the existence-
+        # keyed `legacy_touch_corpus_drain_check` and the CONTENT-level
+        # `legacy_touch_corpus_straggler_check`, the latter walking
+        # `.agents/<aid>/`. Neither alone is sufficient, since the
+        # existence-keyed checks can never reopen a drained dir.
         #
-        # This stays until a chunk migrates that writer off the old dialect
-        # (verified at HEAD, not assumed from a stale premise) and deletes
-        # this union.
+        # NEGATIVE SPEC -- do NOT restore this union on the shape of the
+        # 2026-08-03 fail-open. That restoration (58420b380) was correct at
+        # the time because a live writer still emitted the old dialect; a
+        # peer whose claims arrived only through `self_claim` then projected
+        # to zero claims and a destructive command against its claimed path
+        # was silently allowed. No writer can emit that dialect now, so a
+        # restored union would read a corpus that cannot grow, and would
+        # re-admit the legacy PARSER this seam exists to retire. If a legacy
+        # writer ever reappears, the defect is the writer.
         new_claimed_paths: set = set()
         new_seam_degraded = False
         try:
@@ -3366,21 +3479,6 @@ def _rm_peer_claim_of(tgt_abs: str, root: str) -> str:
             new_seam_degraded = projection.degraded
         except Exception:
             new_seam_degraded = True
-
-        # Legacy union: any exception reading/projecting the legacy file
-        # fails CLOSED (never narrows below what the jsonl seam already
-        # found) -- this is a destructive guard, so a legacy read failure
-        # must never shrink `new_claimed_paths`.
-        legacy_touched = os.path.join(sid_dir, "touched.txt")
-        if os.path.isfile(legacy_touched):
-            try:
-                from coordinator_core.session.scope import project_self_scope
-
-                with open(legacy_touched, "r", encoding="utf-8", errors="replace") as fh:
-                    legacy_lines = [ln for ln in fh.read().splitlines() if ln]
-                new_claimed_paths |= project_self_scope(legacy_lines)
-            except Exception:
-                new_seam_degraded = True
 
         if new_seam_degraded:
             return sid

@@ -1760,25 +1760,23 @@ def _read_agent_touch_record_as_legacy_lines(sink_path: "Path | str") -> Tuple[L
 
 
 def _agent_touch_activity(agent_dir: Path) -> Tuple[bool, float]:
-    """C0 — stat-only ``(has_activity, age_sec)`` signal for the not-yet-
-    back-pointed agent-dir race-window gate (Step 3b's ``touched_probe``
-    branch), computed across BOTH dialects of one agent dir's touch record —
-    its ``touch-record.jsonl`` family (``touch_record.discover_family``) AND
-    its sibling ``touched.txt`` — rather than the ``touched.txt``-only stat
-    the branch used before this chunk. ``has_activity`` is true iff the
-    combined on-disk size of every member is non-zero; ``age_sec`` is the
-    age (seconds) of the NEWEST member's mtime, or ``float('inf')`` if no
-    member exists or every ``stat()`` failed (treated as maximally stale —
-    never a plausibly-live race). A per-member ``stat()`` failure is
-    skipped, not fatal, mirroring this gate's own accepted-residual posture
-    (see the call site's docstring note on ``touched_probe`` becoming
-    unreadable mid-scan)."""
+    """AC11 — stat-only ``(has_activity, age_sec)`` signal for the not-yet-
+    back-pointed agent-dir race-window gate (Step 3b's agent-dir activity
+    branch), computed over the ``touch-record.jsonl`` family
+    (``touch_record.discover_family``) only — the legacy ``touched.txt``
+    sibling this once also stat'd is retired: the corpus straggler check
+    reads zero across every live dir, so there is no second dialect left to
+    combine. ``has_activity`` is true iff the combined on-disk size of every
+    member is non-zero; ``age_sec`` is the age (seconds) of the NEWEST
+    member's mtime, or ``float('inf')`` if no member exists or every
+    ``stat()`` failed (treated as maximally stale — never a plausibly-live
+    race). A per-member ``stat()`` failure is skipped, not fatal, mirroring
+    this gate's own accepted-residual posture (see the call site's
+    docstring note on a record-family member becoming unreadable
+    mid-scan)."""
     members: List[Path] = list(
         touch_record.discover_family(agent_dir / _TOUCH_RECORD_FILENAME)
     )
-    legacy = agent_dir / "touched.txt"
-    if legacy.is_file():
-        members.append(legacy)
 
     total_size = 0
     newest_mtime = 0.0
@@ -4162,7 +4160,7 @@ def compute_scope(
                 # windows here degrade toward NOT withholding rather than
                 # the fail-closed posture used everywhere else in this
                 # function for an indeterminate other-session claim — (a)
-                # if touched_probe is deleted/replaced between the
+                # if a record-family member is deleted/replaced between the
                 # `.stat()` size check above and `core.mtime_epoch()` below,
                 # `mtime_epoch` returns 0 (not an error signal), making
                 # `age_sec` enormous, so the recency guard treats a raced
@@ -4171,26 +4169,26 @@ def compute_scope(
                 # `has_activity` was already confirmed True, this dir
                 # contests nothing for this call, silently (see the stderr
                 # note in that except-arm). Both windows require a
-                # concurrent delete/replace of touched.txt mid-scope-
+                # concurrent delete/replace of a record-family member mid-scope-
                 # computation — accepted as a residual rather than widened
                 # into another global withhold, per the 261-of-2011-dirs
                 # disk sweep that already forced a revert of exactly that
                 # global-withhold shape (see the em-session-id.txt-missing
                 # branch above).
-                # C0: routed through the real union — `_agent_touch_
-                # activity` stats BOTH dialects (jsonl family + sibling
-                # `touched.txt`), and `_read_touch_record_as_legacy_lines`
-                # below reads content the same way, rather than this
-                # branch growing its own `touched.txt`-only legacy arm.
-                touched_probe = agent_dir / "touched.txt"
+                # AC11: routed through `touch_record.discover_family` only
+                # — the legacy `touched.txt` sibling this comment used to
+                # name is retired, so this branch no longer grows a second
+                # dialect-specific arm; `_agent_touch_activity` and
+                # `_read_agent_touch_record_as_legacy_lines` below both stat
+                # and read the single jsonl-family seam.
                 has_activity, age_sec = _agent_touch_activity(agent_dir)
                 if has_activity:
                     if age_sec < liveness._THIRTY_MIN:
                         raw_lines, _race_degraded = _read_agent_touch_record_as_legacy_lines(
                             agent_dir / _TOUCH_RECORD_FILENAME
                         )
-                        # See the residual note above `touched_probe`'s
-                        # assignment: an unreadable member (a race between
+                        # See the residual note above the
+                        # `_agent_touch_activity` call: an unreadable member (a race between
                         # the stat above and this read) silently no-ops the
                         # withhold for this agent_dir this call unless the
                         # union's own degrade logging already said so —
@@ -4251,7 +4249,7 @@ def compute_scope(
                                 f"candidate path(s) will be withheld from "
                                 f"my_scope this call, uncontested "
                                 f"candidates elsewhere are unaffected): "
-                                f"{touched_probe}",
+                                f"{agent_dir}",
                                 file=sys.stderr,
                             )
                     # else: older than the recency window — dead residue,

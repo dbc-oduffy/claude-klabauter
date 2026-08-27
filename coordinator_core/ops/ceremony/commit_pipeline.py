@@ -4096,11 +4096,15 @@ def _run_in_plane_archive_sweep(
     Non-fatal contract (module docstring "HARD CONSTRAINT" precedent,
     inherited from `archive_and_commit`): NEVER raises. `common_dir is None`
     (the pass's own git-common-dir resolution failed -- see
-    `_resolve_pass_common_dir`) and any exception from `plan_sweep`/
-    `apply_sweep` themselves both degrade to `([], [])` -- an archival
+    `_resolve_pass_common_dir`), a failed import of the fleet module, a
+    raising `_acquire_sweep_lock`, and any exception from `plan_sweep`/
+    `apply_sweep` themselves all degrade to `([], [])` -- an archival
     failure must never flip the ceremony's exit code, and a failed sweep
     contributes no paths, leaving `commit_paths` exactly what it would have
-    been without this call.
+    been without this call. The import and the lock are inside that contract,
+    not before it: reaching the sweep is as much a part of the sweep as
+    running it, and every caller of this function is mid-commit with nothing
+    to gain from either failure being terminal.
 
     Negative-spec:
       - Does NOT spawn git -- `plan_sweep`'s own rails spawn `git status
@@ -4161,9 +4165,37 @@ def _run_in_plane_archive_sweep(
     # archiving forever with only a logged warning as its trace (staff-eng
     # Finding 0). Calling `plan_sweep` directly is the fix, not a
     # side-effect of the sync migration.
-    from coordinator_core.ops.fleet import archive_terminal_handoffs
+    #
+    # Guarded, because a deferred import is a runtime operation on a hot path
+    # and fails like one. Observed 2026-08-27 mid-publish-round: this line
+    # raised `ImportError: cannot import name 'parse_index_identity' from
+    # 'coordinator_core.git.git_index'` -- a transient inconsistency in a tree
+    # ~50 peer sessions share -- and took the whole round down at its commit
+    # step, AFTER all 9 rows had synced clean. Every other archival failure
+    # below is already non-fatal by construction; an unguarded import was the
+    # one way for the optional sweep to flip a ceremony's exit code.
+    try:
+        from coordinator_core.ops.fleet import archive_terminal_handoffs
+    except Exception:
+        _LOG.warning(
+            "run_commit_pipeline: in-plane archive-sweep module import failed "
+            "-- contributing no paths (non-fatal)", exc_info=True,
+        )
+        return [], []
 
-    lock_path = archive_terminal_handoffs._acquire_sweep_lock(common_dir)
+    # Same reasoning one call further in: `_acquire_sweep_lock` returning None
+    # is the CONTENDED answer, already handled below as a first-class skip --
+    # but it reaches the filesystem to say it, so it can raise instead of
+    # answering, and that raise is an archival failure like any other.
+    try:
+        lock_path = archive_terminal_handoffs._acquire_sweep_lock(common_dir)
+    except Exception:
+        _LOG.warning(
+            "run_commit_pipeline: in-plane archive-sweep lock acquisition failed "
+            "-- contributing no paths (non-fatal)", exc_info=True,
+        )
+        return [], []
+
     if lock_path is None:
         # Contended -- another instance (the standalone op's act path, or a
         # concurrent ceremony) holds the sweep right now. First-class

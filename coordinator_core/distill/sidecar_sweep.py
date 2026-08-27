@@ -31,7 +31,7 @@ from pathlib import Path
 from coordinator_core.wire_paths import rel_id
 
 from coordinator_core.distill._common import (
-    active_reference_guard,
+    active_reference_guard_many,
     is_sidecar_filename,
 )
 
@@ -87,23 +87,32 @@ def sweep_sidecars(scan_root: Path, repo_root: Path) -> SidecarSweepResult:
     deletion_manifest: list[dict] = []
     retained: list[dict] = []
 
-    for candidate in find_sidecar_candidates(scan_root):
-        # SECURITY-ADJACENT — rel_str MUST be forward-slash. It is fed to
-        # `active_reference_guard`, which passes it to `rg --fixed-strings`, and
-        # every in-repo document spells its references with '/'. A native-separator
-        # needle (`docs\plans\x.md` on Windows) therefore matches NOTHING, the guard
-        # returns "no active references found", and a still-referenced sidecar is
-        # reported DELETE-ELIGIBLE. That is the guard failing OPEN on Windows, not a
-        # cosmetic id nit. Mirrors the same fix in distill/delete_guard.py.
-        # rel_str is also emitted as the wire `path` field below, so POSIX is
-        # correct for both uses.
+    # SECURITY-ADJACENT — every rel_str MUST be forward-slash. Each is fed to
+    # `active_reference_guard_many`, which passes the whole set to `rg --fixed-strings`,
+    # and every in-repo document spells its references with '/'. A native-separator
+    # needle (`docs\plans\x.md` on Windows) therefore matches NOTHING, the guard
+    # returns "no active references found", and a still-referenced sidecar is
+    # reported DELETE-ELIGIBLE. That is the guard failing OPEN on Windows, not a
+    # cosmetic id nit. Mirrors the same fix in distill/delete_guard.py.
+    # rel_str is also emitted as the wire `path` field below, so POSIX is
+    # correct for both uses.
+    candidates = find_sidecar_candidates(scan_root)
+    rel_strs: list[str] = []
+    for candidate in candidates:
         try:
             rel_str = rel_id(candidate, repo_root)
         except ValueError:
             rel_str = candidate.as_posix()
+        rel_strs.append(rel_str)
 
-        is_referenced = active_reference_guard(rel_str, repo_root)
-        if is_referenced:
+    # Batched: one `rg -f <patternfile>` call for the whole candidate set instead of
+    # one `active_reference_guard` (and one `rg` process) per candidate — the
+    # ordering invariant (guard clears BEFORE emission) is preserved because the
+    # batched lookup still fully resolves before any row is appended below.
+    referenced = active_reference_guard_many(rel_strs, repo_root)
+
+    for rel_str in rel_strs:
+        if referenced[rel_str]:
             retained.append({"path": rel_str, "reason": "active-reference"})
         else:
             deletion_manifest.append({"path": rel_str})

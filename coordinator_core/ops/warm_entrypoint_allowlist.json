@@ -1,0 +1,19 @@
+{
+  "$comment": "Committed warm-load allowlist for invoke.from_argv's params.entrypoint (coordinator_core/ops/invoke_from_argv.py). A name absent from this list refuses (fail closed) rather than warm-loading an unvetted CLI's module body into the shared server process ~50 concurrent sessions share. Populated (chunk C2) from forwarder_door_census.py's 'door-eligible' bucket, unioned with C1's seeded proving CLI -- see docs/research/spike-verdicts/2026-08-27-multi-name-native-invocation-surface.md, chunks C0-C2.",
+  "entrypoints": [
+    "claude-ue-bootstrap",
+    "coordinator-publish",
+    "cross-repo-memo",
+    "doctor-probe-select",
+    "gate-validate-invocable",
+    "klabauter-promote",
+    "measure-amplification-discriminator",
+    "merge-assemble",
+    "percolate-sweep-scope-probe",
+    "provision-sidecar",
+    "publish_refusal_record",
+    "seed-skill-overrides",
+    "stub-file-gate",
+    "untested-platform-advisory"
+  ]
+}

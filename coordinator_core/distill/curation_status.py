@@ -38,7 +38,8 @@ under that item.
 
 `last_touched`: the artifact file's own mtime (UTC ISO-8601) — a plain filesystem
 read, not a git-log spawn; keeps this module subprocess-free apart from the
-pre-existing `active_reference_guard` ripgrep call it reuses unmodified.
+batched `active_reference_guard_many` ripgrep call (one process for the whole
+archive/specs cohort, not one per candidate).
 
 Negative-spec: this module performs no writes of any kind (no manifest, no stamp, no
 disposal decision) — those are the C12/C13/C14 disposal-tier ops. This module also
@@ -59,7 +60,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from coordinator_core.distill._common import (
-    active_reference_guard,
+    active_reference_guard_many,
     is_sidecar_filename,
     parse_distillation_log,
 )
@@ -220,6 +221,17 @@ def compute_curation_status(
             for p in specs_dir.rglob("*")
             if p.is_file()
         }
+        needles: list[str] = []
+        for rel in sorted(all_specs_relpaths):
+            abs_path = specs_dir / rel
+            full_path = f"archive/specs/{rel}"
+            sidecar = is_sidecar_filename(abs_path.name)
+            harvested = (not sidecar) and (rel not in debt_set)
+            blocked = blocked_index.get(full_path, [])
+            if (not sidecar) and harvested and not blocked:
+                needles.append(abs_path.stem)
+        reference_results = active_reference_guard_many(needles, repo_root)
+
         for rel in sorted(all_specs_relpaths):
             abs_path = specs_dir / rel
             full_path = f"archive/specs/{rel}"
@@ -230,7 +242,7 @@ def compute_curation_status(
                 prunable = True
                 reasons = ["sidecar"]
             elif harvested and not blocked:
-                referenced = active_reference_guard(abs_path.stem, repo_root)
+                referenced = reference_results.get(abs_path.stem, False)
                 if referenced:
                     prunable = False
                     reasons: list[str] = []

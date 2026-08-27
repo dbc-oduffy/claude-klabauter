@@ -2633,6 +2633,7 @@ def _assemble_commit_tree_input(
     worktree_blobs: Optional[Dict[str, str]] = None,
     supplied_blobs: Optional[Dict[str, str]] = None,
     index_file_absent: bool = False,
+    worktree_deleted: Optional[Set[str]] = None,
 ) -> Tuple[Dict[str, _TreeEntry], Set[str]]:
     """Pure function from `_resolve_content_sources`'s output to
     `{path: (mode, sha)}` plus an explicit ABSENT set -- the tree-input
@@ -2688,6 +2689,32 @@ def _assemble_commit_tree_input(
     entry in the index or HEAD has no committable content anywhere and
     raises rather than resolving to a deletion by default. `False` (the
     default) reproduces prior behaviour exactly.
+
+    `worktree_deleted` -- paths the CALLER has already established are gone
+    from the working tree, which resolve to the ABSENT set unconditionally,
+    ahead of every index/spine lookup above. The staged-deletion inference
+    two paragraphs up reads a MISSING index entry as the deletion signal;
+    that is exactly right when the index is the authority, and exactly wrong
+    for a path deleted on disk whose index entry still stands. Such a path
+    resolves `_SOURCE_STAGED`, finds its stale entry, and is written back
+    into the new tree verbatim -- the caller named it in the pathspec to
+    commit its removal and gets it resurrected instead, with no spawn count,
+    no rc, and no `git fsck` symptom to catch it.
+
+    Live instance (2026-08-27): `commit_pipeline._run_in_plane_archive_sweep`
+    moves terminal handoffs with `os.replace` and touches no index, so the
+    archival move committed its destination and kept its source -- the record
+    landed at BOTH paths. The alternative fix, staging the removal first,
+    costs a `git add` spawn that AC-3 ("the archival contribution adds ZERO
+    git processes") forbids; this parameter is what makes the same outcome
+    reachable without one.
+
+    ONLY `commit_scoped`'s agree branch supplies it, and only for the paths
+    its own `exists()` split already put in the deleted half. The diverged
+    branch must NEVER pass it: there, a path's staged content IS the caller's
+    intent (`_resolve_content_sources`'s AC14 "commit the deliberately-staged
+    blob as-is"), and a worktree that happens to lack the file is not a
+    deletion request. `None` (the default) reproduces prior behaviour exactly.
 
     `mode_only_paths` (AC15's "must not appear in the exclusion report")
     is deliberately NOT a parameter here -- every `mode_only_paths` member
@@ -2759,8 +2786,16 @@ def _assemble_commit_tree_input(
     tree_input: Dict[str, _TreeEntry] = {}
     absent: Set[str] = set()
 
+    worktree_deleted = worktree_deleted or set()
+
     for path, source in resolution.items():
         if source == _SOURCE_STAGED:
+            if path in worktree_deleted:
+                # Checked BEFORE the index lookup, not after: the whole point
+                # is that a surviving index entry must not speak for a path
+                # the caller already knows is gone from disk.
+                absent.add(path)
+                continue
             index_entry = _index_entry(path)
             if index_entry is None:
                 if index_file_absent:
@@ -2970,6 +3005,7 @@ def _commit_scoped_private_index(
     supplied_blobs: Optional[Dict[str, str]] = None,
     attributed_session_id: Optional[str] = None,
     mode_only_paths: Optional[Set[str]] = None,
+    worktree_deleted: Optional[Set[str]] = None,
 ) -> GitResult:
     """The PRIVATE-INDEX branch of `commit_scoped()` -- see that function's
     docstring for when this runs and why. Builds a commit tree under a
@@ -3000,6 +3036,13 @@ def _commit_scoped_private_index(
     `session_id_override`. `None` (the default) reproduces the prior blind
     env-var resolution exactly. See `commit_scoped`'s own docstring for the
     caller-identity split this closes.
+
+    `worktree_deleted` -- OPTIONAL, forwarded verbatim to
+    `_assemble_commit_tree_input` (see its own parameter docstring for the
+    resurrection trap it closes) and additionally carved out of the
+    `worktree_excluded` report below, since a path with no worktree version
+    cannot have had a worktree edit dropped. Supplied only by
+    `commit_scoped`'s agree branch, never by its diverged branch.
 
     `mode_only_paths` (mode-preservation fix, this module's own `_mode_
     delta_paths_chunked()`) -- OPTIONAL, the subset of `diverged` that
@@ -3104,6 +3147,7 @@ def _commit_scoped_private_index(
             worktree_blobs=worktree_blobs,
             supplied_blobs=supplied_blobs,
             index_file_absent=index_snapshot.stat_identity is None,
+            worktree_deleted=worktree_deleted,
         )
     except ValueError as exc:
         return GitResult(
@@ -3379,7 +3423,17 @@ def _commit_scoped_private_index(
     # differs from HEAD), so reporting it as "worktree edits ... were NOT
     # included" would be a false exclusion warning on every ordinary
     # re-mode commit. See `mode_only_paths`' own docstring parameter above.
-    excluded_paths = [p for p in staged_paths if p not in (mode_only_paths or set())]
+    #
+    # `worktree_deleted` is carved out for the same reason, one step further:
+    # such a path has no worktree version at all, so "your worktree edits were
+    # dropped in favour of the staged version" is not merely noisy but false
+    # in both halves -- nothing was substituted, the path was REMOVED, which
+    # is what the caller asked for. Reporting it would make every archival
+    # move warn about the deletion it just performed successfully.
+    excluded_paths = [
+        p for p in staged_paths
+        if p not in (mode_only_paths or set()) and p not in (worktree_deleted or set())
+    ]
     # Which version replaced the excluded worktree edit is not always the
     # staged one: with the index FILE absent there was no staged version to
     # commit, and `_assemble_commit_tree_input`'s `index_file_absent` arm
@@ -3942,10 +3996,19 @@ def commit_scoped(
         # already uses, not via any flag threaded into the landing call.
         existing = [p for p in path_list if (root / p).exists()]
         deleted = [p for p in path_list if p not in existing]
+        # `worktree_deleted` is what makes `deleted` MEAN deleted. Without it
+        # these paths take the staged-source arm and resolve to ABSENT only
+        # when the index has forgotten them too -- so a path deleted on disk
+        # whose index entry still stands is written back into the new tree,
+        # and the caller's requested removal silently does not happen (see
+        # `_assemble_commit_tree_input`'s own `worktree_deleted` paragraph for
+        # the live archival-sweep instance). Passed HERE and never on the
+        # diverged branch below, where staged content is the caller's intent.
         result = _commit_scoped_private_index(
             deleted, existing, msg_file, root, deliverable_id,
             supplied_blobs=supplied_blobs,
             attributed_session_id=attributed_session_id,
+            worktree_deleted=set(deleted),
         )
         if result.ok and not suppress_post_commit_auto_push:
             _replay_post_commit_auto_push(root, path_list, attributed_session_id)

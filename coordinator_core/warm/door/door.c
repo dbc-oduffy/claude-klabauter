@@ -68,8 +68,11 @@
  * `Path.resolve()`'s Windows semantics.
  *
  * WHAT THE FALLBACK RUNS, AND WHY IT IS NEVER A BARE `-m`: `fall_through()`
- * spawns `{python} {engine_root}\coordinator\bin\coordinator-invoke.py
- * <argv>` -- a SCRIPT PATH, one whose own trampoline calls
+ * spawns `{python} {engine_root}\coordinator\bin\<this image's own resolved
+ * basename>.py <argv>` (C0: name-aware, see `door_entrypoint_basename()` --
+ * `coordinator-invoke.py` for a door installed under the default name,
+ * FAILING CLOSED for any other name whose script does not exist) -- a
+ * SCRIPT PATH, one whose own trampoline calls
  * `cc_invoke.require_dispatch_engine_on_path()` to resolve the engine
  * it runs against. An earlier revision of this file spawned a bare
  * `python -m coordinator_core.invoke <argv>` instead, specifically so the
@@ -210,6 +213,36 @@
  * rebuild or a second sidecar file. */
 #define ENGINE_ROOT_ENV_OVERRIDE L"COORDINATOR_DOOR_ENGINE_ROOT"
 
+/* THE MULTI-NAME NATIVE-INVOCATION SURFACE (C0, docs/research/spike-verdicts/
+ * 2026-08-27-multi-name-native-invocation-surface.md). This binary's image is
+ * name-agnostic today -- a hardlink installed as e.g. `cross-repo-memo.exe`
+ * dispatches correctly on the WARM hit, but on a MISS its cold fallback
+ * (`fall_through`, below) used to hardcode `coordinator-invoke.py`
+ * unconditionally, mis-dispatching under the wrong CLI's argument grammar
+ * (a renamed door's miss is the COMMON path -- median server lifetime 5.7
+ * minutes -- not a corner case). The fix: resolve THIS image's own basename
+ * (via `GetModuleFileNameW`, never `argv[0]` -- see `get_own_directory`'s own
+ * comment on why) and use it for BOTH legs -- the cold fallback's script
+ * name AND the warm request's `entrypoint` field -- from the SAME single
+ * resolution (`resolve_own_basename`, called once from `main`), so the two
+ * legs cannot silently diverge on what "this image's name" means.
+ *
+ * `DOOR_DEFAULT_ENTRYPOINT_W` is the one name this file ever compares the
+ * resolved basename against -- a self-identity check ("is this image
+ * installed under the name the server has always assumed"), never a
+ * translation table: no argv is mapped to an op, no name is mapped to a
+ * different name. When the resolved basename equals this constant, the wire
+ * request omits `entrypoint` entirely (BACKWARD COMPATIBILITY IS AN AC: a
+ * door installed under its current single name must produce a request the
+ * current server handles identically to before this field existed) and the
+ * cold fallback's script path is `coordinator-invoke.py`, byte-identical to
+ * the pre-C0 hardcoded literal. Any OTHER resolved basename includes
+ * `entrypoint` on the wire and targets `<that-basename>.py` cold -- FAILING
+ * CLOSED (a diagnostic naming the image and the missing script, no process
+ * spawned) if no such script exists, rather than ever substituting
+ * `coordinator-invoke.py` for it. */
+#define DOOR_DEFAULT_ENTRYPOINT_W L"coordinator-invoke"
+
 /* SHA-1 (`sha1_hex16`) and the growable byte buffer (`buf_t`,
  * `buf_append*`) now live in `door_core.c`, shared verbatim with the
  * POSIX door. `sha1_hex16` is still byte-identical to Python's
@@ -308,6 +341,56 @@ static int get_own_directory(wchar_t *out, DWORD out_chars) {
     memcpy(out, full_path, dir_len * sizeof(wchar_t));
     out[dir_len] = L'\0';
     return 1;
+}
+
+/* THE ONE RESOLUTION both legs read this image's own name from -- see
+ * `DOOR_DEFAULT_ENTRYPOINT_W`'s own comment. A file-static rather than a
+ * value threaded through every `fall_through`/`fall_through_and_free` call
+ * site: this door is single-threaded and single-shot (one process, one
+ * request, then exit), so a process-wide "what is my own name" fact costs
+ * nothing to hold globally and avoids widening every existing fallback call
+ * site's signature for a value that never varies within one run.
+ *
+ * `g_own_basename_ok` is 0 until `resolve_own_basename()` (called once, near
+ * the top of `main`) succeeds; every reader must check it before trusting
+ * `g_own_basename_w`. On the rare failure of `GetModuleFileNameW` itself
+ * (this file's other callers of it already treat that as fall-through-worthy
+ * doubt), `fall_through` falls back to `DOOR_DEFAULT_ENTRYPOINT_W` -- the
+ * exact literal this file always spawned before C0, so an unresolvable
+ * image name degrades to the pre-C0 behaviour rather than refusing outright
+ * for a failure this file has never otherwise treated as fatal. */
+static wchar_t g_own_basename_w[MAX_PATH];
+static int g_own_basename_ok = 0;
+
+/* Fills `g_own_basename_w` with this running image's own basename, WITHOUT
+ * its extension (`cross-repo-memo.exe` -> `cross-repo-memo`), from
+ * `GetModuleFileNameW` -- never `argv[0]` (see `get_own_directory`'s own
+ * comment for why that distinction is a security requirement, not a style
+ * preference, here inherited verbatim). Idempotent; safe to call more than
+ * once, though `main` calls it exactly once. */
+static void resolve_own_basename(void) {
+    wchar_t full_path[MAX_PATH * 2];
+    DWORD len = GetModuleFileNameW(NULL, full_path, MAX_PATH * 2);
+    if (len == 0 || len >= MAX_PATH * 2) return;
+
+    wchar_t *last_sep = wcsrchr(full_path, L'\\');
+    wchar_t *name_start = last_sep ? last_sep + 1 : full_path;
+
+    wchar_t *dot = wcsrchr(name_start, L'.');
+    size_t name_len = dot ? (size_t)(dot - name_start) : wcslen(name_start);
+    if (name_len == 0 || name_len >= MAX_PATH) return;
+
+    memcpy(g_own_basename_w, name_start, name_len * sizeof(wchar_t));
+    g_own_basename_w[name_len] = L'\0';
+    g_own_basename_ok = 1;
+}
+
+/* The basename `fall_through`'s cold script path and the warm request's
+ * `entrypoint` field both resolve against -- `g_own_basename_w` when
+ * `resolve_own_basename()` succeeded, else the pre-C0 default (see
+ * `g_own_basename_ok`'s own comment). Never NULL. */
+static const wchar_t *door_entrypoint_basename(void) {
+    return g_own_basename_ok ? g_own_basename_w : DOOR_DEFAULT_ENTRYPOINT_W;
 }
 
 /* Reads the sidecar file's single line and trims a trailing `\r`/`\n`
@@ -476,11 +559,15 @@ static int quote_arg_w(buf_t *out_u8, const wchar_t *arg) {
 /* =========================================================================
  * Fallback -- the one path that must never fail to at least try. Spawns
  * the original Python entrypoint with the original argv, unchanged, and
- * propagates its exit code. Prints nothing on the ordinary fallback route
- * (a fallback IS normal operation); the one message this function ever
- * prints is for the one genuinely fatal case -- no Python interpreter
- * reachable at all, mirroring coordinator-invoke.cmd's own last-resort
- * message.
+ * propagates its exit code. A fallback IS normal operation and the exit
+ * code stays the dispatched CLI's own -- but every ordinary degrade to
+ * cold now prints ONE line to stderr before spawning (see the "PM ruling:
+ * a degrade must not go unnoticed" comment just above the spawn below for
+ * why, and why stdout/telemetry were both rejected as the venue). This
+ * function's other two stderr messages predate that ruling and cover the
+ * two genuinely fatal cases -- no published engine resolvable, no Python
+ * interpreter reachable at all -- where the warn below never gets a
+ * chance to print because the function has already returned.
  *
  * Spawns `{PYTHON_BIN_W} {engine_root}\coordinator\bin\coordinator-invoke.py
  * <argv>` -- a SCRIPT PATH, deliberately never a bare `-m
@@ -524,17 +611,43 @@ static int fall_through(int argc, wchar_t **wargv, const wchar_t *engine_root_w)
         return 1;
     }
 
+    /* THE NAME-AWARE COLD LEG (C0). Resolves against THIS image's own
+     * basename (`door_entrypoint_basename()`, the SAME single resolution the
+     * warm request's `entrypoint` field reads -- see that function's own
+     * comment), never the hardcoded `coordinator-invoke.py` literal this
+     * file used before. For a door installed under the default name this is
+     * byte-identical to the pre-C0 path (BACKWARD COMPATIBILITY IS AN AC).
+     * For any other name, FAIL CLOSED: refuse outright, no process spawned
+     * at all, rather than ever substituting `coordinator-invoke.py`'s
+     * grammar for a name it was never built to parse -- that substitution
+     * is the exact mis-dispatch this leg exists to kill (module docstring's
+     * "THE COLD LEG IS PART OF THIS CHUNK" note). */
+    const wchar_t *entrypoint_basename = door_entrypoint_basename();
+
+    wchar_t script_path_w[MAX_PATH * 2];
+    if (swprintf(script_path_w, MAX_PATH * 2,
+                 L"%s\\coordinator\\bin\\%s.py", root, entrypoint_basename) < 0) {
+        return 1;
+    }
+
+    WIN32_FILE_ATTRIBUTE_DATA script_attrs;
+    if (!GetFileAttributesExW(script_path_w, GetFileExInfoStandard, &script_attrs)) {
+        fwprintf(stderr,
+            L"door: this image is named %s, and no matching coordinator/bin "
+            L"CLI exists at %s -- refusing to fall through to a different "
+            L"CLI's argument grammar rather than mis-dispatching silently. "
+            L"Remediation: install a coordinator/bin/%s.py for this name, or "
+            L"reinstall the door under a name that already has one.\n",
+            entrypoint_basename, script_path_w, entrypoint_basename);
+        return 1;
+    }
+
     buf_t cmdline;
     if (!buf_init(&cmdline, 4096)) return 1;
 
     if (!quote_arg_w(&cmdline, PYTHON_BIN_W)) return 1;
     if (!buf_append(&cmdline, " ", 1)) return 1;
 
-    wchar_t script_path_w[MAX_PATH * 2];
-    if (swprintf(script_path_w, MAX_PATH * 2,
-                 L"%s\\coordinator\\bin\\coordinator-invoke.py", root) < 0) {
-        return 1;
-    }
     if (!quote_arg_w(&cmdline, script_path_w)) return 1;
 
     for (int i = 1; i < argc; i++) {
@@ -549,6 +662,34 @@ static int fall_through(int argc, wchar_t **wargv, const wchar_t *engine_root_w)
     wchar_t *cmdline_w = utf8_to_wide(cmdline_nul);
     free(cmdline_nul);
     if (!cmdline_w) return 1;
+
+    /* PM ruling: a degrade to cold must not go unnoticed. The door relays
+     * the dispatched CLI's stdout, stderr, and exit code as its own --
+     * stdout is off the table outright (it would corrupt a programmatic
+     * consumer parsing the relayed CLI's own stdout as data), and the exit
+     * code is off the table by explicit AC (cold succeeds; a warn is not a
+     * failure). That leaves stderr as the only venue that does not require
+     * inventing a new channel. Telemetry (`op_latency`) was considered and
+     * rejected, not merely weaker: `door_route_signal.py`'s own docstring
+     * records that `op_latency._write_entry` resolves its sink under
+     * `git_common_dir(repo_root)` derived from `_origin_worktree`/
+     * `_caller_cwd`, and the door protocol carries neither, so a
+     * door-routed degrade recorded there lands wherever the EXECUTING
+     * process's cwd happens to resolve the sink to -- not somewhere the
+     * operator watching stderr can find. It could only discharge this
+     * requirement once the door carries caller context, which is not in
+     * this plan. Surveyed callers most likely to see new stderr bytes on
+     * this common path: `door_route_signal.read_door_route` (captures
+     * stderr via `subprocess.run` but never asserts it empty --
+     * unaffected), `coordinator_core/install/tests/test_install_surface_
+     * live.py` (does not invoke the door at all -- unaffected), and every
+     * door-invoking test in `coordinator_core/warm/tests/` (none assert
+     * stderr is empty or fold it into stdout -- unaffected). This is not a
+     * rate limiter or a once-per-session suppression: every degrade prints,
+     * on purpose. */
+    fwprintf(stderr,
+        L"door: falling through to the cold entrypoint (%s)\n",
+        script_path_w);
 
     STARTUPINFOW si;
     PROCESS_INFORMATION pi;
@@ -825,6 +966,14 @@ int main(void) {
     wchar_t **wargv = CommandLineToArgvW(GetCommandLineW(), &argc);
     if (!wargv) return fall_through(1, NULL, NULL);
 
+    /* THE ONE RESOLUTION both legs read this image's own name from (C0) --
+     * see `resolve_own_basename`'s own comment. Called unconditionally,
+     * before engine-root resolution: it is independent of which engine this
+     * invocation targets, and both the cold leg (`fall_through`, via
+     * `door_entrypoint_basename()`) and the warm request built in step 6
+     * below need it available regardless of how far this function gets. */
+    resolve_own_basename();
+
     /* ---- 0. engine root -- resolved at runtime, never baked. See
      * `resolve_engine_root`'s own docstring for the sidecar/env-var
      * contract. On failure here `engine_root_w` stays NULL, which
@@ -976,7 +1125,34 @@ int main(void) {
     }
     req_ok &= buf_append_cstr(&req, "\"},\"_engine_token\":\"");
     req_ok &= buf_append_cstr(&req, engine_token);
-    req_ok &= buf_append_cstr(&req, "\"}\n");
+    req_ok &= buf_append_cstr(&req, "\"");
+
+    /* ADDITIVE, NOT ALWAYS PRESENT (C0). Omitted entirely when this image's
+     * own resolved name is the default `coordinator-invoke` -- the server
+     * treats absence as today's `_dispatch_argv` behaviour unchanged, so a
+     * door installed under its current single name produces a request the
+     * current server handles identically (BACKWARD COMPATIBILITY IS AN AC).
+     * Present, carrying the SAME `door_entrypoint_basename()` resolution
+     * `fall_through` reads for its own leg, for any other resolved name. */
+    if (req_ok) {
+        const wchar_t *entrypoint_basename = door_entrypoint_basename();
+        if (wcscmp(entrypoint_basename, DOOR_DEFAULT_ENTRYPOINT_W) != 0) {
+            req_ok &= buf_append_cstr(&req, ",\"entrypoint\":\"");
+            if (req_ok) {
+                int entrypoint_u8_len;
+                char *entrypoint_u8 = wide_to_utf8(entrypoint_basename, &entrypoint_u8_len);
+                if (!entrypoint_u8) {
+                    req_ok = 0;
+                } else {
+                    req_ok &= buf_append_json_escaped(&req, entrypoint_u8, (size_t)entrypoint_u8_len);
+                    free(entrypoint_u8);
+                }
+            }
+            req_ok &= buf_append_cstr(&req, "\"");
+        }
+    }
+
+    req_ok &= buf_append_cstr(&req, "}\n");
 
     LocalFree(wargv);
 

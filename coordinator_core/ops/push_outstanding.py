@@ -418,6 +418,30 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     by policy) from `skipped` without reading the exit code alone -- and can see
     the AC7b LFS range verdict, which rides in `skipped` as
     `push:lfs-range-clean` or `push:lfs-range-touched`.
+
+    Every `PushOutcome` field is carried, not just the zero-exit three. Until
+    2026-08-27 this flattened `exit_code`/`acted`/`skipped` only, which made a
+    FAILED push indistinguishable from a benign skip: the envelope read
+    `{"exit_code": 1, "acted": [], "skipped": ["push:lfs-range-clean"]}`, whose
+    sole legible content is an LFS verdict that has nothing to do with the
+    failure, while the condensed git diagnostic sat in the discarded `failed`.
+    On a box at the 50-70-concurrent-session load norm a reject from a peer's
+    concurrent push is the ORDINARY case, so the unreportable path was also the
+    common one -- twice in one session it was read as an ordinary no-op.
+
+    `unconfirmed` matters most of the three added lists and is the reason this
+    is not cosmetic: it is the "the transport leg may have outlived the killed
+    parent, the commit may ALREADY be on the remote" signal
+    (`state/bug-backlog/2026-08-19-push-retry-reports-push-failed-on-a-subp-
+    4400dc2697d0.yaml`). Dropping it left every op-registry caller -- which is
+    all six cadence surfaces, four of them in DoE-claude -- unable to tell a
+    definite reject from an indeterminate one, the exact distinction that
+    decides whether re-pushing is safe.
+
+    Negative-spec: does NOT collapse `failed`/`unconfirmed` into one key or
+    synthesize a summary string from them -- they are mutually exclusive by
+    `PushOutcome`'s own contract and a caller must be able to branch on which
+    one is populated.
     """
     if repo_root is None:
         return {
@@ -442,4 +466,9 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         "exit_code": outcome.exit_code,
         "acted": list(outcome.acted),
         "skipped": list(outcome.skipped),
+        "failed": list(outcome.failed),
+        "unconfirmed": list(outcome.unconfirmed),
+        "message": outcome.message,
+        "pushed_range": outcome.pushed_range,
+        "pushed_count": outcome.pushed_count,
     }

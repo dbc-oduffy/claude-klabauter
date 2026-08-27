@@ -175,6 +175,62 @@ def test_path_rename_or_move_detects_a_real_rename(tmp_path):
     assert result["paths"] == ["new_name.py"]
 
 
+def test_path_rename_or_move_process_count_does_not_grow_with_the_set(tmp_path, monkeypatch):
+    """PROCESS COUNT DOES NOT GROW WITH N (amplification hitlist, 2026-08-19):
+    `path_rename_or_move` must issue ONE `_run_git` call for the whole
+    cited-paths set, not one per path — `git log --diff-filter=R
+    --name-status` natively accepts N pathspecs."""
+    repo = tmp_path
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True, **_NO_CONSOLE)
+    subprocess.run(
+        ["git", "config", "user.email", "t@example.com"], cwd=repo, check=True, **_NO_CONSOLE
+    )
+    subprocess.run(["git", "config", "user.name", "tester"], cwd=repo, check=True, **_NO_CONSOLE)
+
+    for name in ("old_a.py", "old_b.py", "old_c.py"):
+        (repo / name).write_text("x = 1\n", encoding="utf-8")
+    subprocess.run(["git", "add", "old_a.py", "old_b.py", "old_c.py"], cwd=repo, check=True, **_NO_CONSOLE)
+    subprocess.run(["git", "commit", "-q", "-m", "add three files"], cwd=repo, check=True, **_NO_CONSOLE)
+
+    for old, new in (("old_a.py", "new_a.py"), ("old_b.py", "new_b.py"), ("old_c.py", "new_c.py")):
+        subprocess.run(["git", "mv", old, new], cwd=repo, check=True, **_NO_CONSOLE)
+    subprocess.run(["git", "commit", "-q", "-m", "rename all three"], cwd=repo, check=True, **_NO_CONSOLE)
+
+    spine = """\
+- id: C1
+  title: cites three renamed files
+  surface: some/surface
+  writes:
+    - new_a.py
+    - new_b.py
+    - new_c.py
+"""
+    plan_path = repo / "plan.md"
+    _write_spine_plan(plan_path, spine)
+
+    real_run_git = (
+        __import__(
+            "coordinator_core.plan_assemble.predicates.composition_graph", fromlist=["_run_git"]
+        )._run_git
+    )
+    calls: list[list[str]] = []
+
+    def _counting_run_git(argv, cwd):
+        calls.append(list(argv))
+        return real_run_git(argv, cwd=cwd)
+
+    monkeypatch.setattr(
+        "coordinator_core.plan_assemble.predicates.composition_graph._run_git",
+        _counting_run_git,
+    )
+
+    result = path_rename_or_move(_ctx(repo, plan_path=plan_path))
+
+    assert result["fires"] is True
+    assert result["paths"] == ["new_a.py", "new_b.py", "new_c.py"]
+    assert len(calls) == 1, f"3 cited paths cost {len(calls)} `_run_git` calls: {calls}"
+
+
 def test_path_rename_or_move_git_timeout_is_undetermined(tmp_path, monkeypatch):
     spine = """\
 - id: C1
@@ -195,7 +251,7 @@ def test_path_rename_or_move_git_timeout_is_undetermined(tmp_path, monkeypatch):
     )
     result = path_rename_or_move(_ctx(tmp_path, plan_path=plan_path))
     assert result["undetermined"] is True
-    assert "git log --follow failed" in result["reason"]
+    assert "git log --diff-filter=R failed" in result["reason"]
 
 
 def test_path_rename_or_move_git_oserror_is_undetermined(tmp_path, monkeypatch):
@@ -218,7 +274,7 @@ def test_path_rename_or_move_git_oserror_is_undetermined(tmp_path, monkeypatch):
     )
     result = path_rename_or_move(_ctx(tmp_path, plan_path=plan_path))
     assert result["undetermined"] is True
-    assert "git log --follow failed" in result["reason"]
+    assert "git log --diff-filter=R failed" in result["reason"]
 
 
 # ---------------------------------------------------------------------------

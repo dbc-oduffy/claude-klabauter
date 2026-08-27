@@ -66,7 +66,7 @@ import os
 import shutil
 import subprocess
 import sys
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 from coordinator_core.ops._git_root_util import git_root
 from coordinator_core.session.core import resolve_session_id
@@ -162,6 +162,111 @@ def _move_one(repo_root: str, src: str, dst: str, session_id: str = "") -> bool:
     return result.returncode == 0
 
 
+def _is_tracked_batch(repo_root: str, rel_paths: List[str]) -> set:
+    """Batched form of `_is_tracked` — one `git ls-files --error-unmatch`
+    spawn covering every pathspec in `rel_paths`, rather than one spawn per
+    path. Mirrors `coordinator_core.ops.fleet._findings_reap._is_tracked_batch`
+    (same primitive, ported sync/non-Path here rather than imported, since
+    that module's own version is async and Path-keyed for its fleet callers).
+
+    `git ls-files --error-unmatch` evaluates every named pathspec even when
+    some are unmatched — an unmatched entry only ever adds an extra stderr
+    line, never a short-circuit — so a single call's stdout is exactly the
+    tracked subset of `rel_paths`. Returns that subset as a set of the
+    matched relpath strings; an empty/None input returns an empty set
+    without spawning.
+    """
+    if not rel_paths:
+        return set()
+    result = _run_git(["git", "-C", repo_root, "ls-files", "--error-unmatch", *rel_paths])
+    return {line for line in result.stdout.splitlines() if line}
+
+
+def _move_batch(
+    repo_root: str,
+    items: List[Tuple[str, str, str]],
+    dst_dir: str,
+    session_id: str = "",
+) -> Tuple[bool, List[str]]:
+    """Batch primitive (test_no_unbatched_per_item_git_spawn.py _KNOWN_SITES
+    evidence): both legs `_move_one` used per-item — the `ls-files`
+    trackedness probe and the `git mv`/`git add` landing call — accept
+    multiple pathspecs, and the per-phase destination directory is constant
+    across every item in `items`. This collapses the per-item spawn loop
+    into: one batched trackedness check, one `git mv` for every tracked
+    source (into the shared `dst_dir`), and one `git add` for every
+    untracked destination (after each is moved in-process via
+    `shutil.move`/`relocate_touched_path`, neither of which spawns).
+
+    items: list of (src, dst, rel_src) triples — absolute src/dst paths plus
+    src's repo-relative form (callers already compute this for logging).
+
+    Returns (True, []) on full success, or (False, failed_rel_srcs) naming
+    every item in the batch that shares the failed leg — `git mv`/`git add`
+    with multiple pathspecs is one atomic invocation, so a non-zero exit
+    means the WHOLE leg failed and every item routed through it is reported
+    failed together, mirroring this module's existing all-or-nothing
+    per-phase failure contract (a single failed item already aborted the
+    whole run before this change; batching a leg does not loosen that).
+    """
+    if not items:
+        return True, []
+
+    rel_srcs = [rel_src for _src, _dst, rel_src in items]
+    tracked_set = _is_tracked_batch(repo_root, rel_srcs)
+
+    tracked_items = [item for item in items if item[2] in tracked_set]
+    untracked_items = [item for item in items if item[2] not in tracked_set]
+
+    if tracked_items:
+        tracked_rel_srcs = [rel_src for _src, _dst, rel_src in tracked_items]
+        result = _run_git(["git", "-C", repo_root, "mv", *tracked_rel_srcs, dst_dir])
+        if result.returncode != 0:
+            return False, [rel_src for rel_src in tracked_rel_srcs]
+        for src, dst, _rel_src in tracked_items:
+            # DR-276: declared AFTER the git-mv lands — dst is the final
+            # write site for the tracked branch.
+            declare_write(dst)
+
+    if untracked_items:
+        moved_dsts: List[Tuple[str, str]] = []  # (dst, rel_dst)
+        for src, dst, rel_src in untracked_items:
+            rel_dst = os.path.relpath(dst, repo_root)
+            moved = False
+            if session_id:
+                try:
+                    relocate_touched_path(session_id, rel_src, rel_dst, cwd=repo_root)
+                    moved = True
+                except OSError:
+                    print(
+                        f"skip: _move_batch: shutil.move(src, dst) failed: {sys.exc_info()[1]}",
+                        file=sys.stderr,
+                    )
+                    return False, [rel_src for _s, _d, rel_src in untracked_items]
+                except Exception:
+                    moved = False
+            if not moved:
+                try:
+                    shutil.move(src, dst)
+                except OSError:
+                    print(
+                        f"skip: _move_batch: shutil.move(src, dst) failed: {sys.exc_info()[1]}",
+                        file=sys.stderr,
+                    )
+                    return False, [rel_src for _s, _d, rel_src in untracked_items]
+            moved_dsts.append((dst, rel_dst))
+
+        rel_dsts = [rel_dst for _dst, rel_dst in moved_dsts]
+        result = _run_git(["git", "-C", repo_root, "add", *rel_dsts])
+        if result.returncode != 0:
+            return False, [rel_src for _s, _d, rel_src in untracked_items]
+        for dst, _rel_dst in moved_dsts:
+            # DR-276: declared AFTER the move lands at its destination.
+            declare_write(dst)
+
+    return True, []
+
+
 def _usage_text() -> str:
     return (
         "migrate-cross-repo-layout — One-time idempotent migration primitive.\n"
@@ -245,6 +350,14 @@ def main(argv: List[str]) -> int:
     archive_moves = 0
 
     # Phase 1: flat cross-repo/*.md (non-README) -> cross-repo/inbox/
+    #
+    # Batch primitive (test_no_unbatched_per_item_git_spawn.py _KNOWN_SITES
+    # evidence): the collision check stays per-item and spawn-free
+    # (`os.path.exists`, unchanged) -- ONLY the git-spawning leg (`_move_one`
+    # per src) is collapsed. Every item in a phase shares the same
+    # destination DIRECTORY, so `_move_batch` runs it as one batched
+    # trackedness probe plus one `git mv`/`git add` for the whole phase.
+    inbox_items: List[Tuple[str, str, str]] = []
     for src in sorted(glob.glob(os.path.join(cross_repo_dir, "*.md"))):
         if not os.path.isfile(src):
             continue
@@ -259,15 +372,21 @@ def main(argv: List[str]) -> int:
             print("  Resolve the conflict manually, then re-run.", file=sys.stderr)
             return 1
 
-        if not _move_one(repo_root, src, target, session_id):
-            print(f"ERROR: move failed for: {src} -> {target}", file=sys.stderr)
-            return 2
+        inbox_items.append((src, target, os.path.relpath(src, repo_root)))
 
-        print(f"  inbox: {filename}")
+    ok, failed_rel_srcs = _move_batch(
+        repo_root, inbox_items, os.path.relpath(inbox_dir, repo_root), session_id
+    )
+    if not ok:
+        print(f"ERROR: move failed for: {', '.join(failed_rel_srcs)} -> {inbox_dir}", file=sys.stderr)
+        return 2
+    for src, target, _rel_src in inbox_items:
+        print(f"  inbox: {os.path.basename(src)}")
         inbox_moves += 1
 
     # Phase 2: archive/cross-repo/* -> cross-repo/archive/
     if os.path.isdir(legacy_archive_dir):
+        archive_items: List[Tuple[str, str, str]] = []
         for filename in sorted(os.listdir(legacy_archive_dir)):
             src = os.path.join(legacy_archive_dir, filename)
             target = os.path.join(archive_dir, filename)
@@ -278,11 +397,19 @@ def main(argv: List[str]) -> int:
                 print("  Resolve the conflict manually, then re-run.", file=sys.stderr)
                 return 1
 
-            if not _move_one(repo_root, src, target, session_id):
-                print(f"ERROR: move failed for: {src} -> {target}", file=sys.stderr)
-                return 2
+            archive_items.append((src, target, os.path.relpath(src, repo_root)))
 
-            print(f"  archive: {filename}")
+        ok, failed_rel_srcs = _move_batch(
+            repo_root, archive_items, os.path.relpath(archive_dir, repo_root), session_id
+        )
+        if not ok:
+            print(
+                f"ERROR: move failed for: {', '.join(failed_rel_srcs)} -> {archive_dir}",
+                file=sys.stderr,
+            )
+            return 2
+        for src, target, _rel_src in archive_items:
+            print(f"  archive: {os.path.basename(src)}")
             archive_moves += 1
 
     # Phase 3: remove the now-empty top-level archive/cross-repo/ directory.

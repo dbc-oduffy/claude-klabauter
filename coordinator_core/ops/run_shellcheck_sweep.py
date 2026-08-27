@@ -148,41 +148,59 @@ def tracked_shell_files(repo_root: Path) -> List[str]:
 
 
 def _lint_one_file(repo_root: Path, rel_path: str, deadline: float) -> List[dict]:
-    """Lint a single tracked `.sh` file: read its content, CRLF-normalize a
-    throwaway copy, run `shellcheck -f json` against the copy, and rewrite
-    each finding's `file` field back to `rel_path` (repo-relative).
+    """Lint a single tracked `.sh` file — thin single-file wrapper over
+    `_lint_files` (kept for call-site/back-compat callers and direct unit
+    tests), delegating to the batched multi-file spawn.
+    """
+    return _lint_files(repo_root, [rel_path], deadline)
+
+
+def _lint_files(repo_root: Path, rel_paths: List[str], deadline: float) -> List[dict]:
+    """Lint every tracked `.sh` file in `rel_paths` in ONE `shellcheck -f
+    json` spawn: read each file, CRLF-normalize a throwaway copy of each into
+    its own temp file, invoke shellcheck once over the whole batch (`shellcheck
+    -f json f1 f2 ... fN` is standard multi-file usage), and rewrite each
+    finding's `file` field from the temp-copy path it names back to the
+    tracked repo-relative path — shellcheck's own `-f json` output already
+    carries a per-finding `file` field, so per-file attribution survives the
+    batch without re-deriving it.
 
     `deadline` is the sweep-wide monotonic deadline stamped once by
-    `run_shellcheck_sweep`, never a per-file allowance. This spawn's bound is
-    the smaller of the site's own bound and what is left of it, so N files
-    cannot buy N times the budget — the self-raising shape DR-349 names as
-    break-class, which this fan-out previously had in full (one 30s bound per
-    file, no ceiling on the sweep).
+    `run_shellcheck_sweep`. This spawn's bound is the smaller of the site's
+    own bound and what is left of it, so a wider `.sh` corpus cannot buy N
+    times the budget — the self-raising shape DR-349 names as break-class.
 
-    Returns an empty list when the file cannot be read, or when shellcheck
-    finds nothing / emits no parseable JSON. Raises RuntimeError when the
-    `shellcheck` binary itself is not on PATH (a systemic setup problem,
-    not a per-file finding).
+    Returns an empty list when no file in `rel_paths` is readable, or when
+    shellcheck finds nothing / emits no parseable JSON. Raises RuntimeError
+    when the `shellcheck` binary itself is not on PATH (a systemic setup
+    problem, not a per-file finding).
     """
-    abs_path = repo_root / rel_path
+    tmp_to_rel: dict[str, str] = {}
+    tmp_paths: List[Path] = []
     try:
-        raw = abs_path.read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        return []
+        for rel_path in rel_paths:
+            abs_path = repo_root / rel_path
+            try:
+                raw = abs_path.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
 
-    normalized = raw.replace("\r", "")
+            normalized = raw.replace("\r", "")
+            with tempfile.NamedTemporaryFile(
+                mode="w", suffix=".sh", delete=False, encoding="utf-8"
+            ) as tmp:
+                tmp.write(normalized)
+                tmp_path = Path(tmp.name)
+            tmp_paths.append(tmp_path)
+            tmp_to_rel[str(tmp_path)] = rel_path
 
-    tmp_path: Optional[Path] = None
-    try:
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".sh", delete=False, encoding="utf-8"
-        ) as tmp:
-            tmp.write(normalized)
-            tmp_path = Path(tmp.name)
+        if not tmp_paths:
+            return []
 
         try:
             proc = subprocess.run(
-                ["shellcheck", "-s", _SHELLCHECK_DIALECT, "-f", "json", str(tmp_path)],
+                ["shellcheck", "-s", _SHELLCHECK_DIALECT, "-f", "json"]
+                + [str(p) for p in tmp_paths],
                 capture_output=True,
                 text=True,
                 timeout=spawn_bound(_SHELLCHECK_SITE, deadline),
@@ -193,7 +211,7 @@ def _lint_one_file(repo_root: Path, rel_path: str, deadline: float) -> List[dict
         except subprocess.TimeoutExpired:
             return []
     finally:
-        if tmp_path is not None:
+        for tmp_path in tmp_paths:
             tmp_path.unlink(missing_ok=True)
 
     stdout = (proc.stdout or "").strip()
@@ -210,6 +228,8 @@ def _lint_one_file(repo_root: Path, rel_path: str, deadline: float) -> List[dict
     for item in raw_findings:
         if not isinstance(item, dict):
             continue
+        item_file = str(item.get("file", ""))
+        rel_path = tmp_to_rel.get(item_file, item_file)
         findings.append(
             {
                 "file": rel_path,
@@ -227,20 +247,20 @@ def run_shellcheck_sweep(repo_root: Path) -> dict:
     """Lint every git-tracked `.sh` file under `repo_root`. See module
     docstring for the full contract.
 
-    The deadline is stamped once here, before the first spawn, and every
-    per-file spawn derives its bound from the remainder. Exhausting it raises
-    RuntimeError rather than returning a short `findings` list: a sweep that
-    silently stopped early reads identical to a clean one, and the response
-    contract (`{findings, files_checked}`) is frozen, so there is no field a
-    partial result could honestly declare itself in.
+    The deadline is stamped once here, before the batched spawn. Exhausting
+    the sweep budget before even attempting the batch raises RuntimeError
+    rather than returning a short `findings` list: a sweep that silently
+    stopped early reads identical to a clean one, and the response contract
+    (`{findings, files_checked}`) is frozen, so there is no field a partial
+    result could honestly declare itself in. The whole tracked `.sh` corpus
+    is linted in a single `shellcheck` spawn (see `_lint_files`), so spawn
+    count no longer grows with the number of tracked files.
     """
     files = tracked_shell_files(repo_root)
     deadline = sweep_deadline()
-    findings: List[dict] = []
-    for rel_path in files:
-        if spawn_bound(_SHELLCHECK_SITE, deadline) <= 0.0:
-            raise RuntimeError(_SWEEP_EXHAUSTED_MESSAGE)
-        findings.extend(_lint_one_file(repo_root, rel_path, deadline))
+    if files and spawn_bound(_SHELLCHECK_SITE, deadline) <= 0.0:
+        raise RuntimeError(_SWEEP_EXHAUSTED_MESSAGE)
+    findings = _lint_files(repo_root, files, deadline) if files else []
     return {"findings": findings, "files_checked": len(files)}
 
 

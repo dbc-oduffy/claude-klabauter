@@ -145,13 +145,14 @@ _PRODUCTION_EXEMPT_SITES: frozenset[str] = frozenset({
     # `_read_touch_record_as_legacy_lines`, its agent-dir counterpart, and
     # `release_committed_claims` no longer carry the literal at all — the
     # compat union came out once every writer was retired and both corpus
-    # checks read zero. The four entries still listed below are the AC11
-    # residue, each with its own retirement condition; see this module's
-    # STANDING CORRECTION section.
-    "coordinator_core/session/scope.py::_agent_touch_activity",
-    "coordinator_core/session/scope.py::compute_scope",
-    "coordinator_core/ipc.py::_record_self_reported_touches",
-    "coordinator_core/bash_guards/dispatch_checks.py::_rm_peer_claim_of",
+    # checks read zero. AC11 (2026-08-27) deletes the five remaining
+    # production-reader entries this comment used to list —
+    # `scope.py::_agent_touch_activity`, `scope.py::compute_scope`,
+    # `ipc.py::_record_self_reported_touches`,
+    # `dispatch_checks.py::_rm_peer_claim_of`, and
+    # `stable_pid_watch.py::_touch_record_family` — each on its own stated
+    # retirement condition, now met. Only the migration/measurement tooling
+    # below remains, BY DESIGN.
     "coordinator_core/ops/session/migrate_touched_prefix.py::_iter_touched_files",
     "coordinator_core/ops/session/legacy_touch_corpus_migrate.py::<module>",
     "coordinator_core/ops/session/legacy_touch_corpus_drain_check.py::<module>",
@@ -161,7 +162,6 @@ _PRODUCTION_EXEMPT_SITES: frozenset[str] = frozenset({
     # corpus empty before the union was deleted. Unexempted until now only
     # because it was authored after the last allowlist re-measurement.
     "coordinator_core/ops/session/legacy_touch_corpus_straggler_check.py::<module>",
-    "coordinator_core/session/stable_pid_watch.py::_touch_record_family",
     # This gate itself is a test module and is already excluded by the
     # `_is_test_file` check below; no self-entry is needed the way the
     # WSC-disposition gate needed one, because none of this file's own

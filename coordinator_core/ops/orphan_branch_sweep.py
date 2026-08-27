@@ -373,6 +373,87 @@ def main(argv: list[str]) -> int:
                 sha, author_email, committer_ts = parts
                 tip_meta[sha] = (author_email, committer_ts)
 
+    # Batch ahead-count for every branch against main_ref in one `git
+    # for-each-ref --format=%(ahead-behind:<main_ref>)` call (amplification
+    # gate key ('main', '_git'), replacing the unconditional per-branch
+    # `git rev-list --count main_ref..tip_sha` this loop used to run every
+    # time main_ref is resolvable). One base ref (main_ref) shared by every
+    # branch, unlike the frozen anti-forgery-gate case where per-branch
+    # ranges could not be unioned — here each row of the batch reply is an
+    # independent ahead/behind pair for that ref alone, so there is no
+    # cross-branch exclusion to collide. On a whole-command failure, or an
+    # unparseable/missing row, this falls back to today's exact per-branch
+    # `_rev_list_count` call for that branch (never a blanket zero).
+    branch_ahead: dict[str, int] = {}
+    ahead_batch_ok = False
+    if main_ref is not None and seen_branches:
+        ref_patterns = []
+        for b in sorted(seen_branches):
+            ref_patterns.append(f"refs/heads/{b}")
+        for b in sorted(seen_branches):
+            ref_patterns.append(f"refs/remotes/origin/{b}")
+        fer_res = _git(
+            ["for-each-ref", f"--format=%(refname)%09%(ahead-behind:{main_ref})", *ref_patterns]
+        )
+        if fer_res.returncode == 0:
+            ahead_by_ref: dict[str, int] = {}
+            parse_ok = True
+            for line in fer_res.stdout.splitlines():
+                if not line.strip():
+                    continue
+                parts = line.split("\t")
+                if len(parts) != 2:
+                    parse_ok = False
+                    continue
+                refname, ab = parts
+                ab_parts = ab.split()
+                if len(ab_parts) != 2:
+                    parse_ok = False
+                    continue
+                try:
+                    ahead_by_ref[refname] = int(ab_parts[0])
+                except ValueError:
+                    parse_ok = False
+            if parse_ok:
+                ahead_batch_ok = True
+                for b in seen_branches:
+                    if f"refs/heads/{b}" in ahead_by_ref:
+                        branch_ahead[b] = ahead_by_ref[f"refs/heads/{b}"]
+                    elif f"refs/remotes/origin/{b}" in ahead_by_ref:
+                        branch_ahead[b] = ahead_by_ref[f"refs/remotes/origin/{b}"]
+
+    # Batch every branch's PR lookup into one unscoped `gh pr list` call
+    # (amplification gate key ('main', '_run')) — 2026-08-19 adversarial
+    # re-verification's named primitive for this site
+    # (`state/ledgers/wave4-dispositions/second-reader.md` row C7): an
+    # unscoped `gh pr list --json ...,headRefName` plus client-side
+    # filter-by-branch, replacing the per-branch `gh pr list --head
+    # <branch>`. Grouped by headRefName, each branch keeps the identical
+    # `prs[:5][-1]` selection its old per-branch `--limit 5` call used. On
+    # a whole-command failure or unparseable JSON, this falls back to
+    # today's exact per-branch `gh pr list --head <branch>` call.
+    prs_by_branch: dict[str, list[dict]] = {}
+    gh_batch_ok = False
+    if gh_available and seen_branches:
+        batch_res = _run(
+            [
+                "gh", "pr", "list", "--state", "all", "--limit", "1000",
+                "--json", "number,state,mergedAt,mergeCommit,headRefName",
+            ],
+            timeout=_GH_TIMEOUT,
+        )
+        if batch_res.returncode == 0:
+            batch_raw = batch_res.stdout.strip()
+            try:
+                all_prs = json.loads(batch_raw) if batch_raw else []
+            except json.JSONDecodeError:
+                all_prs = None
+            if all_prs is not None:
+                gh_batch_ok = True
+                for p in all_prs:
+                    head = p.get("headRefName") or ""
+                    prs_by_branch.setdefault(head, []).append(p)
+
     for branch in sorted(seen_branches):
         tip_sha = branch_tip_sha.get(branch)
         if tip_sha is None:
@@ -409,7 +490,10 @@ def main(argv: list[str]) -> int:
 
         ahead = 0
         if main_ref is not None:
-            ahead = _rev_list_count(f"{main_ref}..{tip_sha}")
+            if ahead_batch_ok and branch in branch_ahead:
+                ahead = branch_ahead[branch]
+            else:
+                ahead = _rev_list_count(f"{main_ref}..{tip_sha}")
 
         pr_json: dict[str, Any] | None = None
         pr_state = ""
@@ -417,38 +501,43 @@ def main(argv: list[str]) -> int:
         orphan_after_merge = 0
 
         if gh_available:
-            pr_res = _run(
-                [
-                    "gh", "pr", "list", "--head", branch, "--state", "all",
-                    "--limit", "5", "--json", "number,state,mergedAt,mergeCommit",
-                ],
-                timeout=_GH_TIMEOUT,
-            )
-            pr_raw = pr_res.stdout.strip() if pr_res.returncode == 0 else ""
-            if pr_raw and pr_raw != "[]":
-                try:
-                    prs = json.loads(pr_raw)
-                except json.JSONDecodeError:
+            if gh_batch_ok:
+                prs = prs_by_branch.get(branch, [])[:5]
+            else:
+                pr_res = _run(
+                    [
+                        "gh", "pr", "list", "--head", branch, "--state", "all",
+                        "--limit", "5", "--json", "number,state,mergedAt,mergeCommit",
+                    ],
+                    timeout=_GH_TIMEOUT,
+                )
+                pr_raw = pr_res.stdout.strip() if pr_res.returncode == 0 else ""
+                if pr_raw and pr_raw != "[]":
+                    try:
+                        prs = json.loads(pr_raw)
+                    except json.JSONDecodeError:
+                        prs = []
+                else:
                     prs = []
-                if prs:
-                    p = prs[-1]
-                    pr_number = p.get("number", "")
-                    pr_state = p.get("state", "") or ""
-                    pr_merged_at = p.get("mergedAt") or ""
-                    pr_json = {
-                        "number": pr_number if pr_number != "" else 0,
-                        "state": pr_state,
-                        "merged_at": pr_merged_at,
-                    }
+            if prs:
+                p = prs[-1]
+                pr_number = p.get("number", "")
+                pr_state = p.get("state", "") or ""
+                pr_merged_at = p.get("mergedAt") or ""
+                pr_json = {
+                    "number": pr_number if pr_number != "" else 0,
+                    "state": pr_state,
+                    "merged_at": pr_merged_at,
+                }
 
-                    if pr_state == "MERGED" and pr_merged_at:
-                        log_res = _git(
-                            ["log", tip_sha, f"--after={pr_merged_at}", "--format=%H"]
+                if pr_state == "MERGED" and pr_merged_at:
+                    log_res = _git(
+                        ["log", tip_sha, f"--after={pr_merged_at}", "--format=%H"]
+                    )
+                    if log_res.returncode == 0:
+                        orphan_after_merge = len(
+                            [ln for ln in log_res.stdout.splitlines() if ln.strip()]
                         )
-                        if log_res.returncode == 0:
-                            orphan_after_merge = len(
-                                [ln for ln in log_res.stdout.splitlines() if ln.strip()]
-                            )
 
         # ---------------------------------------------------------------
         # Classify severity

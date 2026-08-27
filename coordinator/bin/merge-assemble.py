@@ -35,5 +35,25 @@ if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 from entry_point_shim import run_target  # noqa: E402
 
+def main(argv: list[str] | None = None) -> int:
+    """Warm-loadable entry point for the native door (DR-347 Ruling 2).
+
+    The door hardlinks itself under this CLI's basename, resolves that name via
+    `door.c :: get_own_directory`, and hands it to `invoke.from_argv` as
+    `params.entrypoint`; the server then calls THIS function in-process inside
+    the already-warm server rather than paying a fresh cmd.exe shim plus a fresh
+    Python interpreter per call. Measured on this box before enrolment: the
+    forwarder cost 70.3ms of interpreter-and-imports BEFORE any dispatch
+    decision, against DR-347's ~60ms warm-reach bar, while the door served the
+    same op in 10.4ms process time.
+
+    Returns an int rather than calling `sys.exit`, because a hard exit inside
+    the shared server process would take down a server ~50 concurrent sessions
+    are using -- one of the properties `warm_entrypoint_allowlist.json` is the
+    fail-closed gate on. All argument interpretation stays in `run_target`;
+    this adds no second grammar (DR-347 Ruling 2's negative-spec)."""
+    return run_target("merge-assemble", list(sys.argv[1:] if argv is None else argv))
+
+
 if __name__ == "__main__":
-    sys.exit(run_target("merge-assemble", sys.argv[1:]))
+    sys.exit(main(sys.argv[1:]))

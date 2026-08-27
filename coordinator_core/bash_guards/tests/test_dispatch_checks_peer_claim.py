@@ -492,14 +492,22 @@ class TestEventLinePeerClaim:
 
 
 class TestLegacyTouchedTxtOnlyUnion:
-    """C7c never landed -- `session/claims.py :: self_claim` still appends
-    the old `touched.txt` dialect via `atomic_dedup_append`. A peer whose
-    ONLY claim record is that legacy file (no `touch-record.jsonl` entry at
-    all) must still be contested. Regression: pre-fix this returns "" --
-    the jsonl seam alone projects zero claims for a sid with no jsonl file.
+    """AC11 (2026-08-27) retired `_rm_peer_claim_of`'s legacy-dialect union:
+    `ab177e43f` repointed `claims.atomic_dedup_append` off `touched.txt`
+    (the writer this class's original pin depended on), and `227b513e7`
+    deleted the corresponding read-side union in `scope.py`. This class's
+    tests are re-cut as deliberate negatives: a sid whose ONLY claim record
+    is a legacy `touched.txt` file is now invisible to this guard -- there
+    is no reachable writer left that produces that shape, so the union is
+    gone rather than blind to it by accident.
     """
 
     def test_legacy_only_claim_is_contested(self, tmp_path, monkeypatch):
+        """Flipped by AC11: with the legacy-dialect union deleted, a sid
+        whose only claim record is `touched.txt` (no jsonl entry) now
+        projects to zero claims via the jsonl-only seam -- it is no longer
+        contested. This is the intended AC11 shape, not a regression: the
+        writer that used to produce a legacy-only claim is retired."""
         root = str(tmp_path)
         sdir = Path(root) / ".git" / "coordinator-sessions" / "peer-sess"
         sdir.mkdir(parents=True, exist_ok=True)
@@ -514,7 +522,7 @@ class TestLegacyTouchedTxtOnlyUnion:
             session_liveness, "live_session_ids", lambda cwd=None: frozenset({"peer-sess"})
         )
         target = str(tmp_path / "docs" / "plans" / "live-work.md")
-        assert dispatch_checks._rm_peer_claim_of(target, root) == "peer-sess"
+        assert dispatch_checks._rm_peer_claim_of(target, root) == ""
 
     def test_jsonl_only_claim_still_works_no_regression(self, tmp_path, monkeypatch):
         root = str(tmp_path)
@@ -535,6 +543,10 @@ class TestLegacyTouchedTxtOnlyUnion:
         assert dispatch_checks._rm_peer_claim_of(target, root) == "peer-sess"
 
     def test_union_of_disjoint_and_overlapping_paths(self, tmp_path, monkeypatch):
+        """Flipped by AC11: the legacy-only path no longer contests (no
+        union left to find it), while the jsonl-seam path still does --
+        proving the retirement removed exactly the legacy arm and nothing
+        else."""
         root = str(tmp_path)
         sdir = _write_session(
             root,
@@ -543,9 +555,9 @@ class TestLegacyTouchedTxtOnlyUnion:
             touched_lines=["docs/plans/jsonl-only.md"],
             touched_mtime=time.time(),
         )
-        # Overwrite touched.txt with a disjoint legacy-only path plus one
-        # overlapping with the jsonl seam, to assert the union (not either
-        # side alone) governs.
+        # touched.txt now carries a disjoint legacy-only path plus one
+        # overlapping with the jsonl seam -- asserting the legacy content
+        # is invisible while the jsonl-seam content still governs.
         (sdir / "touched.txt").write_text(
             "docs/plans/legacy-only.md\ndocs/plans/jsonl-only.md\n", encoding="utf-8"
         )
@@ -554,10 +566,15 @@ class TestLegacyTouchedTxtOnlyUnion:
         )
         legacy_target = str(tmp_path / "docs" / "plans" / "legacy-only.md")
         jsonl_target = str(tmp_path / "docs" / "plans" / "jsonl-only.md")
-        assert dispatch_checks._rm_peer_claim_of(legacy_target, root) == "peer-sess"
+        assert dispatch_checks._rm_peer_claim_of(legacy_target, root) == ""
         assert dispatch_checks._rm_peer_claim_of(jsonl_target, root) == "peer-sess"
 
     def test_unreadable_legacy_file_fails_closed(self, tmp_path, monkeypatch):
+        """Flipped by AC11: `_rm_peer_claim_of` no longer reads
+        `touched.txt` at all, so a `project_self_scope` failure it used to
+        fail-closed against is now unreachable dead weight for this call --
+        monkeypatching it has no effect, and the jsonl-seam claim alone
+        still governs (unaffected by an unrelated target)."""
         root = str(tmp_path)
         sdir = _write_session(
             root,
@@ -575,11 +592,11 @@ class TestLegacyTouchedTxtOnlyUnion:
         monkeypatch.setattr(
             session_liveness, "live_session_ids", lambda cwd=None: frozenset({"peer-sess"})
         )
-        # An unrelated target: a legacy-read failure must fail CLOSED
-        # (return sid), never widen to "unclaimed" for ANY target on this
-        # sid -- never "narrow" the claimed set.
+        # An unrelated target: no legacy read happens at all any more, so
+        # this sid is simply not contested for a path it never claimed via
+        # the jsonl seam -- there is no fail-closed arm left to exercise.
         target = str(tmp_path / "docs" / "plans" / "wholly-unrelated.md")
-        assert dispatch_checks._rm_peer_claim_of(target, root) == "peer-sess"
+        assert dispatch_checks._rm_peer_claim_of(target, root) == ""
         assert legacy.exists()
 
 

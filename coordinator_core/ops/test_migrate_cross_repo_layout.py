@@ -258,3 +258,46 @@ def test_no_op_when_nothing_to_migrate(tmp_path, capsys):
     assert rc == 0
     out = capsys.readouterr().out
     assert "no-op" in out
+
+
+# ---------------------------------------------------------------------------
+# Per-item git spawn amplification (coordinator_core/tests/
+# test_no_unbatched_per_item_git_spawn.py _KNOWN_SITES:
+# migrate_cross_repo_layout.py::main -> _move_one)
+# ---------------------------------------------------------------------------
+
+
+def test_process_count_does_not_grow_with_the_set(tmp_path, capsys, monkeypatch):
+    """Model: test_schema_drift_watch.py::TestSchemaAdvisoryBatch::
+    test_process_count_does_not_grow_with_the_set. Each phase's items share
+    one constant destination directory, so the git spawn count for a phase
+    must stay flat as its item count grows, not scale with it."""
+    import coordinator_core.ops.migrate_cross_repo_layout as mcrl
+
+    spawns: list[list[str]] = []
+    real_run = subprocess.run
+
+    def counting_run(argv, *args, **kwargs):  # type: ignore[no-untyped-def]
+        spawns.append(list(argv))
+        return real_run(argv, *args, **kwargs)
+
+    monkeypatch.setattr(mcrl.subprocess, "run", counting_run)
+
+    (tmp_path / "small").mkdir()
+    repo_small = _make_fixture_repo(tmp_path / "small", n_flat=1, m_archive=1)
+    spawns.clear()
+    rc_small = main(["--root", str(repo_small)])
+    assert rc_small == 0
+    spawns_for_small = len(spawns)
+
+    (tmp_path / "large").mkdir()
+    repo_large = _make_fixture_repo(tmp_path / "large", n_flat=4, m_archive=6)
+    spawns.clear()
+    rc_large = main(["--root", str(repo_large)])
+    assert rc_large == 0
+    spawns_for_large = len(spawns)
+
+    assert spawns_for_large <= spawns_for_small, (
+        f"spawn count grew with the item set: 2 items -> {spawns_for_small} spawns, "
+        f"10 items -> {spawns_for_large} spawns"
+    )

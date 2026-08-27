@@ -22,6 +22,7 @@ import pytest
 import yaml
 
 from coordinator_core.ops.normalize_claimed_frontmatter import main, normalize_one
+import coordinator_core.ops.normalize_claimed_frontmatter as _normalize_claimed_frontmatter_mod
 
 # main()'s CLI-level walkDir/git-tracked-file gating (cases 6+) reads real
 # `git ls-files` output to decide which paths qualify for rewrite — the
@@ -321,3 +322,35 @@ def test_main_block_scalar_field_errors_but_continues_scan(tmp_path, capsys):
     err = capsys.readouterr().err
     assert "ERROR state/handoffs/block-scalar.md" in err
     assert "shipped_in: abc1234f" in good.read_text(encoding="utf-8")
+
+
+def test_get_tracked_files_call_count_does_not_grow_with_dir_count(tmp_path, capsys):
+    """Pin for the per-item git-spawn fix: main() used to call
+    get_tracked_files once per TYPE_TO_GLOB directory (5 by default). It now
+    collects every (type, dir) pair up front and resolves them all through
+    ONE get_tracked_files_batch() call, which issues exactly one `git
+    ls-files` spawn regardless of how many directories are scanned.
+    """
+    _init_git_repo(tmp_path)
+    for sub in ("state/handoffs", "docs/plans", "docs/decisions", "state/reviews"):
+        (tmp_path / sub).mkdir(parents=True)
+    p = _write_fixture(tmp_path / "state" / "handoffs", "sha.md", "abc1234f")
+    subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
+
+    real_batch = _normalize_claimed_frontmatter_mod.get_tracked_files_batch
+    calls = []
+
+    def counting_batch(dirs, root):
+        calls.append(list(dirs))
+        return real_batch(dirs, root)
+
+    _normalize_claimed_frontmatter_mod.get_tracked_files_batch = counting_batch
+    try:
+        rc = main(["--root", str(tmp_path)])
+    finally:
+        _normalize_claimed_frontmatter_mod.get_tracked_files_batch = real_batch
+
+    assert rc == 0
+    assert len(calls) == 1, f"expected exactly 1 batch resolution call, got {len(calls)}"
+    assert len(calls[0]) == 5, "one dir per TYPE_TO_GLOB entry (handoff has two)"
+    assert "shipped_in: + abc1234f" in capsys.readouterr().out

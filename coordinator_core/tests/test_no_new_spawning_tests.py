@@ -83,7 +83,23 @@ FOUR RULES
         way); and (ii) every spawning function is itself a collectible
         `test_*`. A `pytest.mark` on a `_helper` or on a `@pytest.fixture`
         is INERT -- pytest applies marks only to what it collects -- so one
-        non-test spawner sends the whole file to the module-level form. The
+        non-test spawner sends the whole file to the module-level form.
+
+        WHICH IS WHY THE REMEDY MESSAGE LEADS WITH THE SPLIT, not with that
+        form (reordered 2026-08-27). "The whole file" is the literal cost:
+        every non-spawning test in it leaves the fast tier to declare the
+        spawning ones. Across the six files flagged that day it would have
+        moved 359 fast-tier tests to cover ~14 spawners. Moving the spawn
+        sites to a sibling `<name>_spawns.py` satisfies this rule exactly as
+        well and costs only the tests that actually spawn. The module-level
+        form stays correct -- and stays offered -- for a file that is mostly
+        spawners; it is last because it is the only option here that can
+        cost more coverage than the spawn it declares. The
+
+        Rule 4 REQUIREMENT is unchanged by that reordering: this collector
+        still refuses a per-function mark whenever any spawn site is a
+        non-test function, and still resolves calls only. What changed is
+        which discharge the message sends the reader to first. The
         live case WAS `session/tests/test_ensure_meta.py` (deleted 2026-08-26
         with the `ensure_meta` it covered), whose spawners were
         `_init_repo` and the `repo` fixture, with no test function reaching
@@ -1333,17 +1349,55 @@ _ALTERNATIVE_MSG_RULE1 = (
     "escape; see state/audits/2026-08-07-spawn-heavy-test-excision-ledger.md."
 )
 
+def _rule4_untiered_message(untiered: list[str]) -> str:
+    """Rule 4's failure text.
+
+    A function rather than an inline f-string so
+    `test_remedy_messages_offer_the_split_before_the_whole_file_form` grades
+    the SAME bytes the rule emits -- a second copy in the pin would drift
+    from the real message and pass while the real one regressed."""
+    return (
+        f"SPAWN-RATCHET Rule 4: {len(untiered)} file(s) spawn a real process but are "
+        "not tiered onto the cadence suite:\n"
+        + "\n".join(f"  {u}" for u in sorted(untiered))
+        + "\n\nFix, cheapest coverage cost first: MOVE the spawning tests to a "
+        "sibling `<name>_spawns.py` carrying `pytestmark = "
+        "[pytest.mark.spawns_process, pytest.mark.cadence]`, leaving the rest on "
+        "the fast tier; or rewrite against a faked process so the file stops "
+        "spawning; or add `@pytest.mark.cadence` to each spawning test function "
+        "(only when every spawn site is itself a collectible `test_*`); or add "
+        "`pytest.mark.cadence` to the module-level `pytestmark` list, which tiers "
+        "the WHOLE file -- correct only when most of it spawns, since it hides "
+        "every non-spawning test in the file too. A "
+        "conftest.py cannot be tiered by a marker at all -- move any spawning helper "
+        "out of it into a sibling module."
+    )
+
+
+#: ORDERED CHEAPEST-COVERAGE-COST FIRST (2026-08-27), not by convenience.
+#: The module-level form used to be named first, and it is the one remedy
+#: that can cost more coverage than the spawn it declares: it tiers EVERY
+#: test in the file, including ones that never spawn. Measured the day this
+#: was reordered, across the six files then flagged -- 359 fast-tier tests
+#: would have gone behind `cadence` to declare ~14 spawning ones, 25:1.
+#: That is not hypothetical drift: `test_destructive_core_powershell_oracle
+#: .py` hid sixteen rows behind one fixture's `git init`, and three of them
+#: sat green for a day asserting behaviour the code had already retired.
 _ALTERNATIVE_MSG_RULE2 = (
-    "Fix: either (a) decorate every spawning test in this file with "
-    "@pytest.mark.spawns_process (or set module-level "
-    "`pytestmark = [pytest.mark.spawns_process]` to cover the whole file), "
-    "declaring the real-process spawn explicitly, or (b) rewrite the test "
-    "against a mocked/faked git rather than a real spawned process. There is "
+    "Fix, cheapest coverage cost first: (a) if the spawn sites are a "
+    "minority of the file, MOVE them to a sibling `<name>_spawns.py` that "
+    "carries `pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]`"
+    ", leaving the non-spawning tests on the fast tier; or (b) rewrite "
+    "against a faked process so the file stops spawning; or (c) decorate "
+    "every spawning test with @pytest.mark.spawns_process, available only "
+    "when every spawn site is itself a collectible `test_*`; or (d) "
+    "module-level `pytestmark = [pytest.mark.spawns_process]`, which tiers "
+    "the WHOLE file -- correct only when most of it spawns, since it hides "
+    "every non-spawning test in the file too. There is "
     "no allowlist to add the file to -- the grandfather list was discharged "
     "on 2026-08-14. A declared spawn must also be tiered onto "
-    "`pytest.mark.cadence` (Rule 4) -- Rule 4 accepts the identical two "
-    "forms this rule does, so whichever form clears Rule 2 also clears "
-    "Rule 4."
+    "`pytest.mark.cadence` (Rule 4) -- Rule 4 accepts the identical forms "
+    "this rule does, so whichever form clears Rule 2 also clears Rule 4."
 )
 
 
@@ -1463,18 +1517,52 @@ def test_rule4_every_spawning_file_is_cadence_tiered() -> None:
         reason = _rule4_missing_cadence(path, relpath, report)
         if reason is not None:
             untiered.append(f"{relpath} ({reason})")
-    assert not untiered, (
-        f"SPAWN-RATCHET Rule 4: {len(untiered)} file(s) spawn a real process but are "
-        "not tiered onto the cadence suite:\n"
-        + "\n".join(f"  {u}" for u in sorted(untiered))
-        + "\n\nFix: add `pytest.mark.cadence` to the module-level `pytestmark` list "
-        "(alongside `pytest.mark.spawns_process`, tiers the whole file), or add "
-        "`@pytest.mark.cadence` directly to each spawning test function (tiers only "
-        "those functions -- only available when the file has no module-level spawn "
-        "site), or rewrite the test against a faked process so it stops spawning. A "
-        "conftest.py cannot be tiered by a marker at all -- move any spawning helper "
-        "out of it into a sibling module."
-    )
+    assert not untiered, _rule4_untiered_message(untiered)
+
+
+def test_remedy_messages_offer_the_split_before_the_whole_file_form() -> None:
+    """Both remedy messages name the sibling-file split BEFORE the
+    module-level form, and both warn what that form costs.
+
+    Pins an ordering, which is unusual for a test and is the point: the
+    module-level form is the only discharge here that can cost more coverage
+    than the spawn it declares, and it was named first for four days. A
+    reader following the message in good faith would have tiered 359
+    fast-tier tests off to declare ~14 spawners, across the six files
+    flagged on 2026-08-27. That is not a hypothesis about what readers do --
+    `test_destructive_core_powershell_oracle.py` had already taken that
+    trade for one fixture's `git init`, and three of its sixteen hidden rows
+    spent a day green while asserting behaviour the code had retired.
+
+    Deliberately asserts ORDER and the presence of the cost warning, not the
+    exact prose: rewording stays free, re-promoting the whole-file form does
+    not.
+    """
+    for label, message in (
+        ("Rule 2", _ALTERNATIVE_MSG_RULE2),
+        ("Rule 4", _rule4_untiered_message(["<probe> (reason)"])),
+    ):
+        split_at = message.find("_spawns.py")
+        whole_file_at = message.find("module-level `pytestmark`")
+        if whole_file_at < 0:
+            whole_file_at = message.find("module-level")
+        assert split_at >= 0, (
+            f"{label}'s remedy no longer offers the sibling-file split -- it is "
+            "the only discharge that leaves non-spawning tests on the fast tier."
+        )
+        assert whole_file_at >= 0, (
+            f"{label}'s remedy no longer offers the module-level form, which is "
+            "still correct for a file that is mostly spawn sites."
+        )
+        assert split_at < whole_file_at, (
+            f"{label}'s remedy names the module-level form before the split. "
+            "That form tiers the WHOLE file; leading with it is what sends a "
+            "reader to hide non-spawning tests to declare spawning ones."
+        )
+        assert "WHOLE file" in message, (
+            f"{label}'s remedy no longer states that the module-level form "
+            "tiers the whole file -- the cost that makes it the last resort."
+        )
 
 
 def test_no_grandfather_clause_is_reintroduced() -> None:

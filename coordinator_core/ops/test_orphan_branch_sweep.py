@@ -183,6 +183,10 @@ def test_unmerged_count_uses_separate_revs(tmp_path, monkeypatch):
 
 
 def _write_gh_stub(bin_dir: Path, pr_map: dict) -> None:
+    """Stub `gh pr list`, handling BOTH shapes production code now issues:
+    the per-branch fallback (`--head <branch>`, one PR object, unchanged)
+    and the batched call (no `--head`, every mapped PR with `headRefName`
+    set — the shape `main`'s batch primitive expects)."""
     bin_dir.mkdir(parents=True, exist_ok=True)
     map_file = bin_dir / "pr-map.json"
     map_file.write_text(json.dumps(pr_map))
@@ -196,8 +200,20 @@ def _write_gh_stub(bin_dir: Path, pr_map: dict) -> None:
         "    *) shift ;;\n"
         "  esac\n"
         "done\n"
-        f"python3 -c 'import json,sys; m=json.load(open(sys.argv[2])); "
-        "pr=m.get(sys.argv[1]); print(json.dumps([pr]) if pr else \"[]\")' "
+        "python3 -c 'import json,sys\n"
+        "m=json.load(open(sys.argv[2]))\n"
+        "branch=sys.argv[1]\n"
+        "if branch:\n"
+        "    pr=m.get(branch)\n"
+        "    print(json.dumps([pr]) if pr else \"[]\")\n"
+        "else:\n"
+        "    out=[]\n"
+        "    for b, pr in m.items():\n"
+        "        entry=dict(pr)\n"
+        "        entry[\"headRefName\"]=b\n"
+        "        out.append(entry)\n"
+        "    print(json.dumps(out))\n"
+        "' "
         f"\"$BRANCH\" \"{map_file}\"\n"
     )
     stub.chmod(0o755)
@@ -267,6 +283,72 @@ def test_end_to_end_critical_warning_ok(tmp_path, monkeypatch, capsys):
     assert by_branch["work/test/orphaned-after-merge"]["severity"] == "CRITICAL"
     assert by_branch[stale_branch]["severity"] == "WARNING"
     assert by_branch.get("work/test/cleanmerged", {}).get("severity", "OK") == "OK"
+
+
+# ---------------------------------------------------------------------------
+# Amplification-gate deliverable: `main`'s per-branch ahead-count
+# (`git rev-list --count main..tip`) and per-branch PR lookup (`gh pr list
+# --head <branch>`) are now each folded into ONE batched call outside the
+# per-branch loop (`git for-each-ref --format=%(ahead-behind:<main>)` and one
+# unscoped `gh pr list --json ...,headRefName`) — see the amplification gate
+# keys ('main', '_git') / ('main', '_run') in
+# coordinator_core/tests/test_no_unbatched_per_item_git_spawn.py::_KNOWN_SITES.
+# This pins PROCESS COUNT DOES NOT GROW WITH N: each batch primitive must
+# fire exactly once for the whole sweep, whatever the branch count, mirroring
+# test_schema_drift_watch.py::TestSchemaAdvisoryBatch::
+# test_process_count_does_not_grow_with_the_set.
+# ---------------------------------------------------------------------------
+
+
+def test_process_count_does_not_grow_with_the_set(tmp_path, monkeypatch):
+    """Counts spawns via a `_run`-level interceptor rather than a PATH-shadowed
+    `gh` stub script: on this host a real `gh.EXE` is installed, and Windows'
+    extension-less-executable PATH search does not shadow it with a bare
+    (no-extension) stub file the way POSIX exec does — a pre-existing
+    environment gap this test sidesteps rather than depends on (verified:
+    the existing `_write_gh_stub`-based tests fail identically against the
+    workstream merge-base, unrelated to this chunk's edits). `gh` calls are
+    answered in-process here; only the real `git for-each-ref` batch call is
+    allowed to actually spawn, so this test still exercises the genuine
+    batched git primitive end to end.
+    """
+    repo = _init_repo(tmp_path)
+    monkeypatch.chdir(repo)
+
+    branch_count = 6
+    for i in range(branch_count):
+        branch = f"work/test/branch{i}"
+        _git(repo, "checkout", "-q", "-b", branch)
+        _commit(repo, f"file{i}.txt", f"c{i}")
+        _git(repo, "checkout", "-q", "main")
+
+    monkeypatch.setattr(obs.shutil, "which", lambda name: "/usr/bin/gh" if name == "gh" else None)
+
+    calls = {"for_each_ref": 0, "gh_pr_list": 0}
+    real_run = obs._run
+
+    def counting_run(cmd, timeout=obs._GIT_TIMEOUT, cwd=None):
+        if cmd[:2] == ["git", "for-each-ref"]:
+            calls["for_each_ref"] += 1
+            return real_run(cmd, timeout=timeout, cwd=cwd)
+        if cmd[:1] == ["gh"] and "pr" in cmd and "list" in cmd:
+            calls["gh_pr_list"] += 1
+            return subprocess.CompletedProcess(cmd, 0, stdout="[]", stderr="")
+        return real_run(cmd, timeout=timeout, cwd=cwd)
+
+    monkeypatch.setattr(obs, "_run", counting_run)
+
+    rc = main(["--format", "json", "--severity-min", "ok", "--max-age-days", "365"])
+    assert rc == 0
+
+    assert calls["for_each_ref"] == 1, (
+        f"batched ahead-count must fire exactly once for {branch_count} branches, "
+        f"not once per branch: {calls}"
+    )
+    assert calls["gh_pr_list"] == 1, (
+        f"batched gh pr list must fire exactly once for {branch_count} branches, "
+        f"not once per branch: {calls}"
+    )
 
 
 # ---------------------------------------------------------------------------

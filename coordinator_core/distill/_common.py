@@ -16,6 +16,9 @@ Purpose: the 3 independent scripts (ripe-filter, sidecar-sweep, delete-guard) an
      ASCII two-character sequence "->", never a unicode arrow glyph.
   2. The active-reference ripgrep guard, scoped to docs/ tasks/ archive/ (sidecar-sweep and
      delete-guard both gate deletions on this before emitting a deletion-manifest row).
+     `active_reference_guard_many` is the batched form — one `rg -f <patternfile>` call for
+     a whole candidate set instead of one `rg` call per candidate; sidecar-sweep uses it to
+     stay off the per-item git-spawn amplification list.
   3. SIDECAR_SUFFIXES — the single named, full-suffix-anchored constant enumerating the
      process-scaffolding sidecar suffixes sidecar-sweep matches against. C8 (DoE's contract)
      is the eventual single owner of this enumeration; this constant is claude-klabauter's half of that
@@ -38,6 +41,7 @@ import os
 import re
 import shutil
 import subprocess
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -50,6 +54,7 @@ __all__ = [
     "DistillLogRow",
     "parse_distillation_log",
     "active_reference_guard",
+    "active_reference_guard_many",
     "read_fm_field",
     "split_frontmatter",
 ]
@@ -323,6 +328,16 @@ def active_reference_guard(
                         continue
                     if needle in text:
                         matched_paths.append(str(candidate))
+    return _needle_referenced_in(needle, matched_paths)
+
+
+def _needle_referenced_in(needle: str, matched_paths: list[str]) -> bool:
+    """Shared post-processing for `active_reference_guard` / `active_reference_guard_many`:
+    given the set of files a fixed-string search already flagged as containing `needle`
+    somewhere, read each one to decide whether the citation is a live reference (True) or
+    lives only inside a recognized provenance-marker tombstone block (excluded, does not
+    count). Same ambiguity-blocks posture as `active_reference_guard`'s docstring: a file
+    this cannot read is treated as a reference, never silently skipped."""
     for matched_path in matched_paths:
         if not matched_path:
             continue
@@ -334,6 +349,91 @@ def active_reference_guard(
         if needle in _text_excluding_provenance_blocks(file_text):
             return True
     return False
+
+
+def active_reference_guard_many(
+    needles: list[str],
+    repo_root: Path,
+    *,
+    scope: tuple[str, ...] = ACTIVE_REFERENCE_SCOPE,
+) -> dict[str, bool]:
+    """Batched form of `active_reference_guard`: return `{needle: is_referenced}` for every
+    needle in `needles`, using ONE `rg` invocation for the whole set (`rg -f <patternfile>`,
+    unioning every needle's pattern into a single fixed-strings search) instead of one `rg`
+    call per needle. Needle -> file attribution moves into the per-file read this guard
+    already performs per matched file (`_needle_referenced_in`) — the union of files any
+    needle matched is read once each, then checked against every needle, exactly the same
+    ambiguity-blocks-if-unreadable and provenance-block-exclusion semantics as
+    `active_reference_guard`.
+
+    A duplicate needle collapses naturally (dict keyed by needle); order of `needles` is not
+    preserved in the pattern file since fixed-strings union search is order-independent, but
+    the returned dict has one entry per DISTINCT input needle.
+
+    Negative-spec: performs no writes; behavior (per-needle result) is identical to calling
+    `active_reference_guard` once per needle — this is a process-count optimization only."""
+    distinct_needles = list(dict.fromkeys(needles))
+    if not distinct_needles:
+        return {}
+
+    existing_scope = [
+        str(repo_root / d) for d in scope if (repo_root / d).is_dir()
+    ]
+    if not existing_scope:
+        return {needle: False for needle in distinct_needles}
+
+    if shutil.which("rg") is not None:
+        from coordinator_core.win_portability import leaf_spawn_creationflags
+
+        pattern_fd, pattern_path = tempfile.mkstemp(suffix=".txt", text=True)
+        try:
+            with os.fdopen(pattern_fd, "w", encoding="utf-8") as pattern_file:
+                pattern_file.write("\n".join(distinct_needles) + "\n")
+            result = subprocess.run(
+                [
+                    "rg",
+                    "--fixed-strings",
+                    "--files-with-matches",
+                    "-f",
+                    pattern_path,
+                    *existing_scope,
+                ],
+                cwd=repo_root,
+                capture_output=True,
+                text=True,
+                **leaf_spawn_creationflags(),
+            )
+        finally:
+            os.unlink(pattern_path)
+        # rg exit codes: 0 = match(es) found, 1 = no match, 2 = error.
+        if result.returncode == 2:
+            raise RuntimeError(
+                f"active_reference_guard_many: ripgrep failed (exit 2): {result.stderr.strip()}"
+            )
+        matched_paths = [] if result.returncode == 1 else result.stdout.splitlines()
+    else:
+        # No process to batch — same in-process fallback walk as
+        # `active_reference_guard`, run once and checked against every needle.
+        matched_paths = []
+        for scope_dir in existing_scope:
+            for dirpath, dirnames, filenames in os.walk(scope_dir):
+                dirnames[:] = [d for d in dirnames if d not in _FALLBACK_IGNORE_DIRS]
+                for filename in filenames:
+                    candidate = Path(dirpath) / filename
+                    try:
+                        text = candidate.read_text(encoding="utf-8")
+                    except UnicodeDecodeError:
+                        continue
+                    except OSError:
+                        matched_paths.append(str(candidate))
+                        continue
+                    if any(needle in text for needle in distinct_needles):
+                        matched_paths.append(str(candidate))
+
+    return {
+        needle: _needle_referenced_in(needle, matched_paths)
+        for needle in distinct_needles
+    }
 
 
 # ---------------------------------------------------------------------------

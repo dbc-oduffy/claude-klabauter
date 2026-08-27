@@ -25,6 +25,7 @@ Spec backlink: pln-claude-klabauter-driven-ceremony-redesig-c7fe9a § C11
 
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -190,3 +191,48 @@ def test_absent_log_still_fails_loud_via_harvest_debt(tmp_path):
     (repo_root / "state" / "distillation-log.md").unlink()
     with pytest.raises(DistillationLogMissingError):
         compute_curation_status(repo_root)
+
+
+def _seed_repo_with_n_harvested_candidates(tmp_path: Path, n: int) -> Path:
+    """`_seed_repo`, plus `n` additional harvested, unreferenced, unblocked
+    archive/specs artifacts — each one an `active_reference_guard` candidate — so a
+    caller can vary N (the reference-guard candidate count) independent of the rest
+    of the fixture."""
+    repo_root = _seed_repo(tmp_path)
+    specs_dir = repo_root / "archive" / "specs" / "2026-07"
+    log_path = repo_root / "state" / "distillation-log.md"
+    log_lines = [log_path.read_text()]
+    for i in range(n):
+        name = f"extra-harvested-{i}.md"
+        (specs_dir / name).write_text("dummy content\n")
+        log_lines.append(
+            f"- archive/specs/2026-07/{name} -> DISTILLED, folded into wiki "
+            "(run: r-2026-07-23a)\n"
+        )
+    log_path.write_text("".join(log_lines))
+    return repo_root
+
+
+def test_process_count_does_not_grow_with_the_set(monkeypatch, tmp_path):
+    """`compute_curation_status` batches every archive/specs reference-guard
+    candidate into ONE `rg` invocation regardless of how many candidates there
+    are — process count must not scale with N."""
+    spawns: list[list[str]] = []
+    real_run = subprocess.run
+
+    def counting_run(argv, *args, **kwargs):
+        spawns.append(list(argv))
+        return real_run(argv, *args, **kwargs)
+
+    monkeypatch.setattr(subprocess, "run", counting_run)
+
+    small_repo = _seed_repo_with_n_harvested_candidates(tmp_path / "small", 1)
+    compute_curation_status(small_repo)
+    rg_spawns_small = sum(1 for argv in spawns if argv and argv[0] == "rg")
+
+    spawns.clear()
+    large_repo = _seed_repo_with_n_harvested_candidates(tmp_path / "large", 25)
+    compute_curation_status(large_repo)
+    rg_spawns_large = sum(1 for argv in spawns if argv and argv[0] == "rg")
+
+    assert rg_spawns_small == rg_spawns_large == 1

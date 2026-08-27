@@ -1859,6 +1859,44 @@ def _resolve_imports_by_file(
     return resolved
 
 
+def _resolve_imported_defs(
+    index: _FuncIndex, relpath: str, local_name: str
+) -> list[tuple[str, str]]:
+    """Route c's RESOLUTION (AC3), and the reason this is a resolver rather than a predicate.
+
+    Answers: which definitions does `local_name`, as imported into `relpath`, actually name?
+    The candidate pool is built FROM the resolved ORIGINAL name -- `funcs_by_name[orig_name]`
+    -- and then constrained to the resolved source module. It is NOT `funcs_by_name[local_name]`
+    filtered afterwards.
+
+    THAT DISTINCTION IS THE WHOLE DEFECT, and it is invisible until you write an aliased
+    fixture. `funcs_by_name` is keyed by DEFINITION names; a local alias is not one. So a
+    candidate pool keyed on the local binding contains only homonyms OF THE ALIAS, and no
+    predicate applied to that pool -- however correct -- can ever yield the definition actually
+    imported. Filtering it prunes the false positives to nothing and reports the true callee as
+    unreachable, which is a false NEGATIVE wearing a green test: the shape
+    `pln-route-c-resolves-the-imported-name-not-the-local-alias` rejected in its own Considered
+    alternatives, then shipped anyway on 2026-08-26 because AC3 was phrased as "resolves a
+    candidate ONLY WHEN ..." -- a necessary condition, satisfiable by inert code -- and every
+    test pinned the predicate in isolation. Goal probe:
+    `test_route_c_resolves_the_imported_name_not_the_local_alias`.
+
+    A star-reexport hop (`_UNCONSTRAINED_MODULE`) declines to constrain the MODULE, never the
+    name: all definitions of the original name match. Definitions in `relpath` itself are
+    excluded -- a same-file definition is route b's job, resolved before this is consulted."""
+    pairs = index.resolved_imports_by_file.get(relpath, {}).get(local_name)
+    if not pairs:
+        return []
+    out: list[tuple[str, str]] = []
+    for orig_name, module in pairs:
+        for cand in index.funcs_by_name.get(orig_name, []):
+            if cand[0] == relpath or cand in out:
+                continue
+            if module == _UNCONSTRAINED_MODULE or _relpath_to_module(cand[0]) == module:
+                out.append(cand)
+    return out
+
+
 def _import_resolves_to(
     index: _FuncIndex, relpath: str, local_name: str, def_relpath: str, def_name: str
 ) -> bool:
@@ -3102,11 +3140,7 @@ def _resolve_callee_def(
     if (relpath, callee) in index.func_defs:
         return [(relpath, callee)]
     if callee in index.imported_names_by_file.get(relpath, set()):
-        return [
-            k
-            for k in index.funcs_by_name.get(callee, [])
-            if k[0] != relpath and _import_resolves_to(index, relpath, callee, k[0], k[1])
-        ]
+        return _resolve_imported_defs(index, relpath, callee)
     return []
 
 
@@ -3153,8 +3187,8 @@ def _is_direct_spawner_name(index: _FuncIndex, relpath: str, ident: str) -> bool
     if ident not in index.imported_names_by_file.get(relpath, set()):
         return False
     return any(
-        _import_resolves_to(index, relpath, ident, def_relpath, ident)
-        for def_relpath, _ in index.direct_spawn_funcs.get(ident, [])
+        any(spawner_relpath == def_relpath for spawner_relpath, _ in index.direct_spawn_funcs.get(def_name, []))
+        for def_relpath, def_name in _resolve_imported_defs(index, relpath, ident)
     )
 
 
@@ -3992,21 +4026,26 @@ def find_unbatched_per_item_spawns(
                     if not (gated is not None and verb is not None and verb not in gated):
                         route = "b-local-helper"
 
-                # route c-cross-module: the IMPORTED NAME resolves -- via `_import_resolves_to`,
-                # the original imported name AND its resolved source module, not merely the
-                # local binding `imported_here` gates on -- to a function elsewhere that
-                # directly spawns. See module docstring's route-c section.
-                if (
-                    route is None
-                    and callee in imported_here
-                    and callee in index.direct_spawn_funcs
-                    and not any(r == relpath for r, _ in index.direct_spawn_funcs[callee])
-                    and any(
-                        _import_resolves_to(index, relpath, callee, def_relpath, callee)
-                        for def_relpath, _ in index.direct_spawn_funcs[callee]
-                        if def_relpath != relpath
+                # route c-cross-module: the local binding RESOLVES -- via
+                # `_resolve_imported_defs`, by the ORIGINAL imported name constrained to its
+                # resolved source module -- to a function elsewhere that directly spawns. The
+                # candidate pool comes from the original name, never from `callee` itself:
+                # `direct_spawn_funcs` is keyed by DEFINITION names, so gating on
+                # `callee in index.direct_spawn_funcs` would ask whether a spawner is named
+                # after the ALIAS and miss every aliased import. See module docstring's route-c
+                # section and `_resolve_imported_defs`.
+                if route is None and callee in imported_here:
+                    _resolved_defs = _resolve_imported_defs(index, relpath, callee)
+                    _reaches_spawner = any(
+                        any(
+                            spawner_relpath == def_relpath
+                            for spawner_relpath, _ in index.direct_spawn_funcs.get(def_name, [])
+                        )
+                        for def_relpath, def_name in _resolved_defs
                     )
-                ):
+                else:
+                    _reaches_spawner = False
+                if _reaches_spawner:
                     route = "c-cross-module"
 
                 # route e-generic-runner: callee is runner-shaped (a single-parameter
@@ -4495,7 +4534,6 @@ _KNOWN_SITES: frozenset[tuple[str, str, str]] = frozenset(
         # sibling cockpit batch on this module already used. Two spawns for the whole vendored
         # set, whatever N is. Pinned by `test_schema_drift_watch.py::TestSchemaAdvisoryBatch::
         # test_process_count_does_not_grow_with_the_set`.
-        ('coordinator_core/consolidate_assemble/__init__.py', 'brief', 'branch_reachable'),
         ('coordinator_core/bash_guards/dispatch_checks.py', 'check_destructive_rm', '_run_git'),
         ('coordinator_core/ops/orphan_branch_sweep.py', 'main', '_run'),
         # OVERTURNED (22) -- returned here from `_EXEMPT_SITES` by the 2026-08-19 ADVERSARIAL
@@ -4525,11 +4563,9 @@ _KNOWN_SITES: frozenset[tuple[str, str, str]] = frozenset(
         #   `sidecar_sweep.py::sweep_sidecars` -> `active_reference_guard`: rg -f
         #   <patternfile> unions all needles in one call; needle->file attribution moves into
         #   the per-file read this guard already does
-        ('coordinator_core/distill/sidecar_sweep.py', 'sweep_sidecars', 'active_reference_guard'),
         #   `agent_worktree_sweep.py::_sweep_one` -> `_cherry_pick_with_env`: commits IS
         #   rev-list --reverse active_branch..HEAD; cherry-pick -x active_branch..HEAD applies
         #   the same commits in order in one call and still stops on first conflict
-        ('coordinator_core/ops/agent_worktree_sweep.py', '_sweep_one', '_cherry_pick_with_env'),
         #   `tail_ops.py::fire_tracker_and_roadmap_detached` -> `spawn_detached`: the spawned
         #   script delegates to refresh_queries.main, which natively takes a comma-list of
         #   files; single-item-callee was asserted from the class
@@ -4555,44 +4591,25 @@ _KNOWN_SITES: frozenset[tuple[str, str, str]] = frozenset(
         ('coordinator_core/ops/migrate_branch_canonical_case.py', '_migrate', '_git'),
         #   `migrate_completion_log_legacy.py::main` -> `_git_mv`: git mv takes N sources into
         #   one destination DIRECTORY; every call in this loop targets the same legacy_dir
-        ('coordinator_core/ops/migrate_completion_log_legacy.py', 'main', '_git_mv'),
         #   `migrate_cross_repo_layout.py::main` -> `_move_one`: both legs (ls-files
         #   trackedness, git mv/add) accept multiple pathspecs and the per-phase destination
         #   is constant
-        ('coordinator_core/ops/migrate_cross_repo_layout.py', 'main', '_move_one'),
         #   `normalize_claimed_frontmatter.py::main` -> `get_tracked_files`: git ls-files
         #   accepts multiple directory pathspecs; the per-directory calls collapse to one,
         #   partitioned client-side by prefix
-        ('coordinator_core/ops/normalize_claimed_frontmatter.py', 'main', 'get_tracked_files'),
         #   `run_shellcheck_sweep.py::run_shellcheck_sweep` -> `_lint_one_file`: shellcheck -f
         #   json f1 f2 ... is standard multi-file usage and its JSON already carries the
         #   per-finding `file` field this code rewrites
-        (
-            'coordinator_core/ops/run_shellcheck_sweep.py',
-            'run_shellcheck_sweep',
-            '_lint_one_file',
-        ),
         #   `validate_frontmatter_schema_advisory.py::_reviewed_range_offer` ->
         #   `_resolve_ref_to_sha`: git cat-file --batch-check takes N ref tokens on stdin and
         #   emits per-token sha/missing -- a DIFFERENT primitive from the rev-parse --verify
         #   form the register tested and rejected
-        (
-            'coordinator_core/write_guards/validate_frontmatter_schema_advisory.py',
-            '_reviewed_range_offer',
-            '_resolve_ref_to_sha',
-        ),
         #   `composition_graph.py::path_rename_or_move` -> `_run_git`: not a range union at
         #   all; --follow forbids >1 pathspec but is not required by the predicate's stated
         #   contract, so one git log --diff-filter=R --name-status -- <all paths> serves it
-        (
-            'coordinator_core/plan_assemble/predicates/composition_graph.py',
-            'path_rename_or_move',
-            '_run_git',
-        ),
         #   `path_resolution_report.py::_check_posix` -> `run`: PATH is built once at
         #   login-shell startup, not per name looked up inside it, so one -lc script looping
         #   the entrypoints keeps the fresh-shell property and drops N spawns to 1
-        ('coordinator_core/install/path_resolution_report.py', '_check_posix', 'run'),
         #
         #   NOT PROVEN (8) -- the block's stated reason is not evidenced at this call site. Two
         #   are the OVER-BROAD KEY defect, which no prose review could have caught: an
@@ -4602,11 +4619,6 @@ _KNOWN_SITES: frozenset[tuple[str, str, str]] = frozenset(
         #   `curation_status.py::compute_curation_status` -> `active_reference_guard`: ripgrep
         #   has a native multi-pattern mode, unlike the git/npm CLIs the block cites as
         #   precedent; the block never measured this call site
-        (
-            'coordinator_core/distill/curation_status.py',
-            'compute_curation_status',
-            'active_reference_guard',
-        ),
         #   `central_run_due.py::main` -> `_count_universals`: shells to a DoE-resident
         #   extract-lessons.py whose argv surface is out of tree and could not be verified;
         #   shape matches none of the block's three named classes
@@ -4660,7 +4672,6 @@ _KNOWN_SITES: frozenset[tuple[str, str, str]] = frozenset(
             'check_destructive_git_orphan',
             '_run_git',
         ),
-        ('coordinator_core/ops/agent_worktree_sweep.py', '_sweep_one', '_cherry_pick_abort'),
         ('coordinator_core/ops/find_polluter.py', 'main', '_existence_detail'),
         (
             'coordinator_core/ops/percolate_preflight_scratch_publish.py',
@@ -4689,11 +4700,6 @@ _KNOWN_SITES: frozenset[tuple[str, str, str]] = frozenset(
         #   `run_git = run_git or default_run_git` has no literal leaf and still resolves.
         #   range-base re-key (1): flagged at a site whose own loop was already resolved
         #   upstream; recorded MISCLASSIFIED by C3 against the source, not the ledger.
-        (
-            'coordinator_core/execute_plan_assemble/close_out_and_stamp.py',
-            '_first_deliverable_commit_range_base',
-            '_run_git',
-        ),
     }
 )
 
@@ -5174,18 +5180,67 @@ def test_burn_down_known_preexisting_amplification_sites():
     (2026-08-19) took the inventory 94 -> 14, then the same day's adversarial re-verification
     returned 22 keys it had exempted on claims that did not survive being read at the call site;
     2026-08-21 retired one more to a discriminator and GRADUATED one by fixing it (the schema
-    advisory, hitlist G6 -- see `_KNOWN_SITES`). 27 keys remain and this assertion is NOT yet
-    a standing `violations == []`. A reader six months out must not mistake this for a weakened
-    test, and must not mistake the shrunk inventory for a finished one. They break down as:
+    advisory, hitlist G6 -- see `_KNOWN_SITES`).
 
-      3  OPEN     -- a real batch primitive exists and was declined on cost, not on principle.
-                    C-review overturned all four from EXEMPT (`branch_reachable`,
-                    `check_schema_drift_advisory`, `check_destructive_rm`, `orphan_branch_
-                    sweep::main -> _run`); the schema advisory has since been batched and
-                    graduated off the inventory. Each remaining one is genuinely fixable work.
-     19  OVERTURNED -- 13 REFUTED (a working batch primitive was named at the call site) plus
-                    6 NOT PROVEN (the governing rationale is not evidenced there). Debt in the
-                    same sense as OPEN; per-key evidence is cited inline in `_KNOWN_SITES`.
+    WAVE 5, 2026-08-27 -- 27 -> 14, and this is the first wave that FIXED rather than
+    re-classified. Thirteen keys graduated the only way a key is allowed to: the site stopped
+    firing because the spawn stopped happening. Each has a process-count-does-not-grow-with-N
+    test landed beside it. `agent_worktree_sweep::_sweep_one` (per-commit cherry-pick -> one
+    ranged call, O(N) -> O(1)), `consolidate_assemble::brief -> branch_reachable` (per-branch
+    `merge-base` -> one `branch --merged`), `curation_status` and `sidecar_sweep`
+    (per-candidate `rg` -> one `rg -f`, through ONE shared `active_reference_guard_many`, not
+    two copies), `run_shellcheck_sweep` (shellcheck takes many files),
+    `migrate_completion_log_legacy` and `migrate_cross_repo_layout`,
+    `normalize_claimed_frontmatter` (5 `ls-files` -> 1), `path_resolution_report`,
+    `composition_graph`, and `validate_frontmatter_schema_advisory` (per-endpoint `rev-parse`
+    -> one `cat-file --batch-check`).
+
+    A BATCHED SITE THAT KEEPS A CORRECTNESS FALLBACK STILL FIRES HERE, and four rows below are
+    exactly that -- do not read them as unfixed. `orphan_branch_sweep::main` (both keys),
+    `migrate_branch_canonical_case`, `distill_apply_disposal`, and
+    `consolidate_assemble::brief -> tip_author` all took a real batch on the fast path and kept
+    a per-item call for the case the batch cannot answer: a ref the batch did not resolve, a
+    `git rm` whose atomic form would defeat the denorm module's per-child TOCTOU gate, a
+    case-folding filesystem where `for-each-ref` enumeration and `show-ref --verify` are not
+    equivalent. This collector is STATIC, so it sees the fallback and cannot see that it is
+    unreachable in the common case. That is a real discriminator gap, not a fix that failed --
+    and it is the honest reason the count stopped at 14 rather than 10. Measuring these needs a
+    runtime spawn count, which is what each site's new N-invariance test provides.
+
+    One of the thirteen was never work at all:
+    `close_out_and_stamp.py::_first_deliverable_commit_range_base` named a function that does not
+    exist in that file -- it lives in `cascade_baton_rows.py`. It had been sitting in the frozen
+    inventory pre-approving whatever next took that key. Same failure as the dead `_ORACLE_CLAIMS`
+    entry retired the same day: A REGISTER THAT AGES SILENTLY DEFAULTS TO UNGUARDED, which is why
+    `test_oracle_claims_still_name_live_sites` and this test's own subset assertion both exist.
+
+    14 keys remain and this assertion is NOT yet a standing `violations == []`. A reader six
+    months out must not mistake this for a weakened test, and must not mistake the shrunk
+    inventory for a finished one. What is left is the genuinely hard residue -- the easy and
+    the merely-stale are gone, so the next reader should expect every remaining row to argue
+    back. They break down as:
+
+      2  OPEN     -- `check_destructive_rm` and `orphan_branch_sweep::main -> _run`, both now
+                    BATCHED with a fallback (see the block above), both still visible to this
+                    static collector because the fallback call survives in the source.
+                    `check_destructive_rm`'s per-target `git status` is one call per repo root
+                    on the fast path; it declines rather than guesses on a porcelain shape it
+                    cannot attribute exactly (a rename arrow, a `core.quotepath`-quoted path)
+                    and pays the per-target call then. That is deliberate: this is the guard
+                    between `rm` and a peer's uncommitted work, and a missed deny costs more
+                    than a missed spawn. Pinned by `test_check_destructive_rm_status_batch.py`.
+      9  OVERTURNED -- the REFUTED rows whose named batch primitive survived contact are fixed
+                    and gone. What is left is NOT PROVEN rows, fallback-bearing rows, and
+                    REFUTED rows whose primitive did NOT survive tracing: `tail_ops::
+                    spawn_detached` (the CLI it spawns takes exactly one id, and collapsing the
+                    spawns would collapse the per-id attribution its own negative spec
+                    documents), `setup_chain_walker` (1-3 heterogeneous `||` sides, already
+                    short-circuiting, never a scaling collection), `central_run_due` (shells to
+                    an out-of-tree DoE script whose argv surface cannot be verified from here),
+                    `register_discovered_repos` (the remaining call is genuinely per-repo --
+                    distinct destination key and value each), and `consolidate_assemble::
+                    unique_commits` (per-branch attribution blocker unstated and untested in its
+                    own evidence). Per-key evidence inline below.
       5  MISCLASSIFIED -- collector false positives awaiting a DISCRIMINATOR, not a fix. See
                     `_KNOWN_SITES` for the mechanically-decidable classes and what each would
                     retire, and for the three (retry-loop, discriminator-7 gap, route-d name
@@ -5454,6 +5509,77 @@ def test_import_resolves_to_prunes_a_homonym_of_the_alias():
     index.resolved_imports_by_file["caller.py"] = {"g": {("f", "real_mod")}}
     assert _import_resolves_to(index, "caller.py", "g", "unrelated_mod.py", "g") is False
     assert _import_resolves_to(index, "caller.py", "g", "real_mod.py", "f") is True
+
+
+def test_route_c_resolves_the_imported_name_not_the_local_alias(tmp_path):
+    """THE GOAL PROBE for `pln-route-c-resolves-the-imported-name-not-the-local-alias`, and the
+    test whose absence let that plan ship green while delivering the shape it had REJECTED.
+
+    `caller.py` imports a spawning function under an alias, and an unrelated non-spawning
+    homonym OF THE ALIAS exists elsewhere in the corpus. Both halves of the plan's title are
+    asserted here, end-to-end through the real collector rather than through the match predicate
+    in isolation:
+
+      - the site IS reported -- route c reaches `pkg/impl.py :: spawn_it` by the ORIGINAL
+        imported name, so an aliased import no longer hides a real per-item spawn (the leg the
+        first delivery missed: it pruned the decoy and resolved to NOTHING, converting a false
+        positive into a false negative);
+      - and it is reported for the right reason -- `decoy.py :: _spawn_it`, a homonym of the
+        ALIAS in a module `caller.py` never imports, does not spawn, so a resolution that still
+        searched by the local binding could only have matched the decoy and would report
+        nothing here.
+
+    NEGATIVE SPEC. This test must exercise `find_unbatched_per_item_spawns` over a real corpus.
+    Rewriting it to call `_import_resolves_to` (or any other predicate) directly re-creates the
+    exact hole it exists to close: `test_import_resolves_to_prunes_a_homonym_of_the_alias` hands
+    the predicate a `(def_relpath, def_name)` pair the real lookup never produces, so it stayed
+    green through the whole defect."""
+    pkg = tmp_path / "pkg"
+    pkg.mkdir()
+    (pkg / "impl.py").write_text(
+        "import subprocess\n"
+        "\n"
+        "def spawn_it(path):\n"
+        "    subprocess.run(['git', 'status', path], cwd='/repo')\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "decoy.py").write_text(
+        "def _spawn_it(path):\n    return path\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "caller.py").write_text(
+        "from pkg.impl import spawn_it as _spawn_it\n"
+        "\n"
+        "def check(paths):\n"
+        "    for p in paths:\n"
+        "        _spawn_it(p)\n",
+        encoding="utf-8",
+    )
+    violations = find_unbatched_per_item_spawns((tmp_path,))
+    matches = [v for v in violations if v.route == "c-cross-module"]
+    assert len(matches) == 1, (
+        "route c did not reach the aliased import's true target -- the local binding "
+        "`_spawn_it` was searched against definition names again, so `pkg.impl.spawn_it` is "
+        f"unreachable and a real per-item spawn goes unreported. Got: {violations}"
+    )
+    assert matches[0].callee == "_spawn_it"
+
+
+def test_resolve_callee_def_resolves_an_alias_to_its_original_name():
+    """Unit-level companion to the goal probe above: the resolver must ANSWER with the true
+    target, not merely decline the decoy. Pins the distinction the first delivery collapsed --
+    filtering an alias-keyed candidate pool can only ever return a subset of homonyms OF THE
+    ALIAS, so for an aliased import it returns nothing however correct the filter is."""
+    fn_node = ast.parse("def spawn_it():\n    pass\n").body[0]
+    index = _FuncIndex()
+    index.func_defs[("pkg/impl.py", "spawn_it")] = fn_node
+    index.func_defs[("decoy.py", "_spawn_it")] = fn_node
+    index.funcs_by_name["spawn_it"] = [("pkg/impl.py", "spawn_it")]
+    index.funcs_by_name["_spawn_it"] = [("decoy.py", "_spawn_it")]
+    index.imported_names_by_file["caller.py"] = {"_spawn_it"}
+    index.resolved_imports_by_file["caller.py"] = {"_spawn_it": {("spawn_it", "pkg.impl")}}
+
+    assert _resolve_callee_def(index, "caller.py", "_spawn_it") == [("pkg/impl.py", "spawn_it")]
 
 
 def test_resolve_callee_def_wide_keeps_the_homonym_narrow_prunes():

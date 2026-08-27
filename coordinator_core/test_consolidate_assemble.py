@@ -132,6 +132,17 @@ class TestBrief:
                 return SimpleNamespace(returncode=0 if ok else 1, stdout="", stderr="")
             if args == ["branch", "-a"]:
                 return SimpleNamespace(returncode=0, stdout=branch_lines, stderr="")
+            if args[0] == "for-each-ref":
+                names = []
+                for raw_line in branch_lines.splitlines():
+                    line = raw_line.strip().lstrip("* ").strip()
+                    if not line or "->" in line:
+                        continue
+                    names.append(line[len("remotes/"):] if line.startswith("remotes/") else line)
+                out = "\n".join(f"{name} {tip_author}" for name in names)
+                return SimpleNamespace(returncode=0, stdout=out + ("\n" if out else ""), stderr="")
+            if args[0] == "branch" and args[1] == "--merged":
+                return SimpleNamespace(returncode=0, stdout="", stderr="")
             if args[0] == "log" and args[1] == "-1":
                 return SimpleNamespace(returncode=0, stdout=f"{tip_author}\n", stderr="")
             if args[0] == "log" and args[1] == "--oneline":
@@ -255,6 +266,11 @@ class TestBrief:
                     stdout="* current\n  main\n  stale-a\n  remotes/origin/stale-b\n",
                     stderr="",
                 )
+            if args[0] == "for-each-ref":
+                out = "current me@x\nmain me@x\nstale-a me@x\norigin/stale-b me@x\n"
+                return SimpleNamespace(returncode=0, stdout=out, stderr="")
+            if args[0] == "branch" and args[1] == "--merged":
+                return SimpleNamespace(returncode=0, stdout="", stderr="")
             if args[0] == "log" and args[1] == "-1":
                 return SimpleNamespace(returncode=0, stdout="me@x\n", stderr="")
             if args[0] == "log" and args[1] == "--oneline":
@@ -313,6 +329,74 @@ class TestBrief:
         assert absorb_a["args"] == ["stale-a", "stale-a"]
         assert absorb_b["args"] == ["stale-b", "origin/stale-b", "origin"]
 
+    def test_tip_author_and_branch_reachable_spawns_do_not_grow_with_branch_or_worktree_count(
+        self, monkeypatch, tmp_path
+    ):
+        """PINS: `tip_author`'s branch-loop spawns collapse to ONE
+        `for-each-ref` call and `branch_reachable`'s worktree-loop spawns
+        collapse to ONE `git branch --merged` call, both independent of N
+        (here: 3 stale/others branches, 2 non-current/main worktrees) --
+        not one `git log -1`/`git merge-base --is-ancestor` per item. Model:
+        `test_schema_drift_watch.py::TestSchemaAdvisoryBatch::
+        test_process_count_does_not_grow_with_the_set`."""
+        calls: list[list[str]] = []
+
+        def run_git(args, cwd):
+            calls.append(list(args))
+            if args[:2] == ["config", "user.email"]:
+                return SimpleNamespace(returncode=0, stdout="me@x\n", stderr="")
+            if args[:2] == ["rev-parse", "--abbrev-ref"]:
+                return SimpleNamespace(returncode=0, stdout="current\n", stderr="")
+            if args[:2] == ["rev-parse", "--verify"]:
+                ok = args[2] == "main"
+                return SimpleNamespace(returncode=0 if ok else 1, stdout="", stderr="")
+            if args == ["branch", "-a"]:
+                return SimpleNamespace(
+                    returncode=0,
+                    stdout="* current\n  main\n  other-a\n  other-b\n  other-c\n",
+                    stderr="",
+                )
+            if args[0] == "for-each-ref":
+                out = (
+                    "current me@x\nmain me@x\nother-a me@x\nother-b me@x\nother-c me@x\n"
+                )
+                return SimpleNamespace(returncode=0, stdout=out, stderr="")
+            if args[0] == "branch" and args[1] == "--merged":
+                return SimpleNamespace(returncode=0, stdout="  other-a\n  other-b\n", stderr="")
+            if args[0] == "log" and args[1] == "--oneline":
+                return SimpleNamespace(returncode=0, stdout="", stderr="")
+            if args[0] == "worktree" and args[1] == "list":
+                return SimpleNamespace(
+                    returncode=0,
+                    stdout=(
+                        f"worktree {tmp_path}\nHEAD abc\nbranch refs/heads/current\n"
+                        "\n"
+                        "worktree /wt-a\nHEAD aaa\nbranch refs/heads/other-a\n"
+                        "\n"
+                        "worktree /wt-b\nHEAD bbb\nbranch refs/heads/other-b\n"
+                    ),
+                    stderr="",
+                )
+            if "status" in args:
+                return SimpleNamespace(returncode=0, stdout="", stderr="")
+            raise AssertionError(f"unexpected git call: {args}")
+
+        do = consolidate_assemble.brief(repo_root=tmp_path, run_git=run_git)
+
+        for_each_ref_calls = [c for c in calls if c[0] == "for-each-ref"]
+        merged_calls = [c for c in calls if c[0] == "branch" and c[1] == "--merged"]
+        log_dash1_calls = [c for c in calls if c[0] == "log" and c[1] == "-1"]
+        merge_base_calls = [c for c in calls if c[0] == "merge-base"]
+
+        assert len(for_each_ref_calls) == 1
+        assert len(merged_calls) == 1
+        assert log_dash1_calls == []
+        assert merge_base_calls == []
+
+        wt_categories = {w["branch"]: w["category"] for w in do["gates"]["worktrees"]}
+        assert wt_categories["other-a"] == "stale-absorbed"
+        assert wt_categories["other-b"] == "stale-absorbed"
+
     def test_inspect_commits_on_empty_sha_list_spawns_nothing(self, tmp_path):
         def run_git(args, cwd):
             raise AssertionError(f"unexpected git call: {args}")
@@ -358,6 +442,10 @@ class TestApplyDispatchTable:
                 ("rev-parse", "--abbrev-ref"): SimpleNamespace(returncode=0, stdout="current\n", stderr=""),
                 ("rev-parse", "--verify"): SimpleNamespace(returncode=0, stdout="", stderr=""),
                 ("branch", "-a"): SimpleNamespace(returncode=0, stdout="* current\n  main\n  stale\n", stderr=""),
+                ("for-each-ref",): SimpleNamespace(
+                    returncode=0, stdout="current me@x\nmain me@x\nstale me@x\n", stderr=""
+                ),
+                ("branch", "--merged"): SimpleNamespace(returncode=0, stdout="", stderr=""),
                 ("log", "-1"): SimpleNamespace(returncode=0, stdout="me@x\n", stderr=""),
                 ("log", "--oneline"): SimpleNamespace(returncode=0, stdout="abc123 a commit\n", stderr=""),
                 ("show",): SimpleNamespace(returncode=0, stdout="1 file changed\n", stderr=""),
@@ -391,6 +479,8 @@ class TestApplyDispatchTable:
                 ("rev-parse", "--abbrev-ref"): SimpleNamespace(returncode=0, stdout="current\n", stderr=""),
                 ("rev-parse", "--verify"): SimpleNamespace(returncode=1, stdout="", stderr=""),
                 ("branch", "-a"): SimpleNamespace(returncode=0, stdout="* current\n  stale\n", stderr=""),
+                ("for-each-ref",): SimpleNamespace(returncode=0, stdout="current me@x\nstale me@x\n", stderr=""),
+                ("branch", "--merged"): SimpleNamespace(returncode=0, stdout="", stderr=""),
                 ("log", "-1"): SimpleNamespace(returncode=0, stdout="me@x\n", stderr=""),
                 ("log", "--oneline"): SimpleNamespace(returncode=0, stdout="", stderr=""),
                 ("worktree", "list"): SimpleNamespace(

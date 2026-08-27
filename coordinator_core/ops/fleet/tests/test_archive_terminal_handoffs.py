@@ -1060,6 +1060,70 @@ def test_c4_closed_fall_through_enumeration_never_refuses(tmp_path: Path, block:
     assert _prefilter_scan_disqualifies(p) is None
 
 
+def test_ac11_unconditional_legs_are_not_paid_when_nothing_survives(repo: Path):
+    """AC-11: `build_reverse_edge_index` and `resolve_live_session_ids` are
+    DEFERRED until a candidate survives classification -- 29.9ms of the
+    measured 243.8ms that an all-refused pass must not pay.
+
+    The implementation shipped with C3's `if not survivors: return` and no
+    assertion, so the laziness was real and unguarded: any future reorder
+    that hoists either leg back above the short-circuit reintroduces the
+    cost silently, with every existing test still green. Mutation-tested
+    against itself below -- a fixture that DOES produce a survivor must
+    reach both legs, or this test would pass over a scan that never ran.
+    """
+    non_terminal = "2026-06-01-not-terminal.md"
+    _seed(repo, non_terminal, "status: open\ndeployment_state: ready_to_fire")
+    common_dir = _common_dir(repo)
+
+    # Record and DELEGATE, never stub: a stubbed return value of the wrong
+    # shape makes the positive arm below fail for a reason that has nothing
+    # to do with whether the leg was reached.
+    import coordinator_core.ops.fleet.archive_terminal_handoffs as _mod
+
+    real_index = _mod.build_reverse_edge_index
+    real_sids = _mod.resolve_live_session_ids
+    reached: list = []
+
+    def _spy_index(*a, **k):
+        reached.append("index")
+        return real_index(*a, **k)
+
+    def _spy_sids(*a, **k):
+        reached.append("sids")
+        return real_sids(*a, **k)
+
+    with patch.object(_mod, "build_reverse_edge_index", _spy_index), patch.object(
+        _mod, "resolve_live_session_ids", _spy_sids
+    ):
+        _run(plan_sweep(repo, common_dir, cap=50))
+
+    assert reached == [], (
+        f"an all-refused pass must pay neither unconditional leg; reached {reached!r}"
+    )
+
+    # The negative arm is only meaningful if the positive one fires: seed a
+    # genuinely archivable record and confirm both legs ARE reached.
+    # Same shape test_ac2_continued_predecessor_with_no_live_child_archives
+    # already proves reaches the act path -- a bare `shipped` does NOT (its
+    # shipped_in resolvability gate refuses it), which this arm caught.
+    _seed(
+        repo,
+        "2026-06-02-terminal.md",
+        "status: claimed\ndeployment_state: continued\ncontinued_into: hnd-child-1",
+    )
+    reached.clear()
+    with patch.object(_mod, "build_reverse_edge_index", _spy_index), patch.object(
+        _mod, "resolve_live_session_ids", _spy_sids
+    ):
+        _run(plan_sweep(repo, common_dir, cap=50))
+
+    assert "index" in reached and "sids" in reached, (
+        f"a surviving candidate must reach both legs, else the negative arm "
+        f"above is vacuous; reached {reached!r}"
+    )
+
+
 def test_ac12_prefilter_never_disqualifies_a_full_parse_admit():
     """AC-12's mechanical assertion, over the full live corpus: for every
     on-disk handoff frontmatter, either the pre-filter admits it (defers to
