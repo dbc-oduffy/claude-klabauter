@@ -434,6 +434,56 @@ SUSPENDED_OPS: Dict[str, Dict[str, object]] = {
         ),
         "spinoff": None,
     },
+    # eol.census — K-062 gravestoned this op id on 2026-08-27 but left it with
+    # no roster row, so dispatch answered METHOD_NOT_FOUND: true, and useless. A
+    # caller learns nothing from it about why the id is gone.
+    #
+    # eol.audit_producers, cut in the same K-entry, deliberately gets NO row: it
+    # was cut on redundancy, never on cost, and this roster is a record of cost
+    # convictions. A row here with a 0ms "breach" is a dial in disguise — the
+    # ratchet's own evidence guard says so, and it is right.
+    "eol.census": {
+        "measured": {"max_ms": 30007.0, "p50_ms": 30007.0, "n": 0, "unit": "wall_ms"},
+        "note": (
+            "p95 30,007ms -- CEILING-DOMINATED, i.e. hitting the invocation "
+            "timeout rather than completing "
+            "(docs/problems/2026-08-21-the-over-budget-timeout-hitlist.md)."
+        ),
+        "disposition": (
+            "gravestone (K-062). Never a separate id again: `repair(mutate=false)` "
+            "WAS this op, reached by a second registration over one mechanism. "
+            "The surviving op was itself killed the same day (see eol.repair "
+            "below), so the whole family is gone and the JOB is owed a v2 that "
+            "works at the write, not over the corpus."
+        ),
+        "spinoff": None,
+    },
+    "eol.repair": {
+        "measured": {"max_ms": 656.2, "p50_ms": 632.7, "n": 3, "unit": "process_ms"},
+        "note": (
+            "609-656ms cold end-to-end through the invoke entrypoint, 219-313ms "
+            "of the calling process's own CPU warm, both on the normal-tier box "
+            "with nothing contending -- over the 500ms brightline on the sunniest "
+            "reading. Corroborated far above that in production: p95 30,007ms in "
+            "docs/problems/2026-08-21-the-over-budget-timeout-hitlist.md, i.e. "
+            "ceiling-dominated -- timing out rather than working."
+        ),
+        "disposition": (
+            "gravestone -- the JOB survives, this shape does not. Job was 'a "
+            "declared eol= must match the bytes on disk for anything "
+            "executable', and it is real: the dry run found a .cmd launcher "
+            "declared crlf sitting LF-only, a class git cannot show you because "
+            "it normalizes the blob. But the op answered it by reading the whole "
+            "corpus, and it is OpClass.MUTATING, so the warm engine held its "
+            "single process-global write lock -- every commit and ceremony write "
+            "fleet-wide -- for an UNCAPPED O(corpus) census. 42 violations found, "
+            "41 of them scratch. The question is answerable at the write, on the "
+            "handful of paths a commit touches. PM 2026-08-27: 'better to kill "
+            "that, 580ms, and try to have a v2 that isn't a resource suck.' "
+            "v2 is a fresh plan from first principles, never a refactor of this."
+        ),
+        "spinoff": None,
+    },
     "roadmap.serve": {
         "measured": {"max_ms": 578.1, "p50_ms": 406.2, "n": 585, "unit": "process_ms"},
         "note": "n=585, the best-evidenced row in this batch.",

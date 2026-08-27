@@ -2,8 +2,14 @@
 coordinator_core.review_trail.tests.test_reviewed_set_equivalence
 
 Purpose: C2's equivalence proof, discharging AC6 (AC6a-e) and AC9 — the
-gate that makes deleting `coverage.py::build_reviewed_set`'s per-call
+gate that made deleting `coverage.py::build_reviewed_set`'s per-call
 recomputation safe.
+
+The whole-corpus differential leg was one-shot by construction: it ran while
+both implementations existed, recorded divergence 0/0 over the real corpus,
+and is asserted here against that frozen artifact because C5 has since
+deleted the implementation it compared against. The oracle cases below are
+the live gate and do not depend on any retired symbol.
 
 Ground truth is the independent `git rev-list` ORACLE, never mere
 new-vs-retiring agreement (Finding 5 of the 2026-07-15 slice-coverage test
@@ -399,44 +405,39 @@ class TestAC9DerivedNeverAuthoritative:
 
 
 class TestWholeCorpusDifferentialRatchet:
-    def test_new_store_matches_retiring_build_reviewed_set_over_real_corpus(self):
-        trail_paths = coverage._collect_trail_paths(str(_REPO_ROOT))
-        if not trail_paths:
-            pytest.skip("no real review-trail corpus present in this checkout")
+    """The differential was a ONE-SHOT gate, and it has fired.
 
-        old = coverage.build_reviewed_set(
-            trail_paths, on_record_error="skip", repo_root=str(_REPO_ROOT),
-        )
+    It ran live against both implementations while both existed, over this
+    repo's real 4805-file corpus, and recorded divergence 0/0 at
+    `_RATCHET_PATH`. C5 then deleted `coverage.build_reviewed_set`, so the
+    comparison cannot be re-run: there is no longer a second implementation
+    to differ against, and a test asserting agreement with a deleted symbol
+    is not a weaker gate but an unrunnable one.
 
-        # Additive/idempotent — folds only records not already folded; a
-        # concurrent peer session's own fold-ins are untouched (no delete,
-        # no truncate). See module negative-spec.
-        backfill.run_backfill(str(_REPO_ROOT))
-        new = set(rs.read_reviewed_set(str(_REPO_ROOT)))
+    What survives is the ratchet artifact, asserted here as a frozen record.
+    The live equivalence guarantee going forward is carried by the targeted
+    oracle cases above (AC6a-e), which ground-truth the store against an
+    independent `git rev-list` rather than against any implementation.
+    """
 
-        divergence_old_only = sorted(old - new)
-        divergence_new_only = sorted(new - old)
-
-        _RATCHET_PATH.parent.mkdir(parents=True, exist_ok=True)
-        _RATCHET_PATH.write_text(
-            json.dumps(
-                {
-                    "trail_record_files": len(trail_paths),
-                    "old_reviewed_set_size": len(old),
-                    "new_reviewed_set_size": len(new),
-                    "divergence_old_only_count": len(divergence_old_only),
-                    "divergence_new_only_count": len(divergence_new_only),
-                    "divergence_old_only_sample": divergence_old_only[:25],
-                    "divergence_new_only_sample": divergence_new_only[:25],
-                },
-                indent=2,
-                sort_keys=True,
+    def test_recorded_whole_corpus_differential_was_empty(self):
+        if not _RATCHET_PATH.exists():
+            pytest.skip(
+                "no ratchet artifact in this checkout — the one-shot "
+                "differential is recorded, not re-runnable"
             )
-            + "\n",
-            encoding="utf-8",
-        )
+        recorded = json.loads(_RATCHET_PATH.read_text(encoding="utf-8"))
 
-        assert not divergence_old_only and not divergence_new_only, (
-            "new store diverges from the retiring build_reviewed_set() over the "
-            f"real corpus — see {_RATCHET_PATH} for the recorded divergence set"
+        assert recorded["divergence_old_only_count"] == 0, (
+            "recorded whole-corpus differential is non-empty: the retiring "
+            "implementation credited SHAs the store does not — see "
+            f"{_RATCHET_PATH}"
+        )
+        assert recorded["divergence_new_only_count"] == 0, (
+            "recorded whole-corpus differential is non-empty: the store "
+            f"credits SHAs the retiring implementation did not — see {_RATCHET_PATH}"
+        )
+        assert recorded["old_reviewed_set_size"] == recorded["new_reviewed_set_size"]
+        assert recorded["old_reviewed_set_size"] > 0, (
+            "a differential over an empty set proves nothing"
         )

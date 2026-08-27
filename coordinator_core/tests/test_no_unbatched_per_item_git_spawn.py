@@ -4759,6 +4759,19 @@ _ORACLE_CLAIMS: dict[tuple[str, str, str], tuple[str, str]] = {
         "compute_readjudication_report",
         "_full_range_shas",
     ): ("test_git_argument_surface::test_git_rev_list_exclusions_are_global", "cadence"),
+    #: SIXTH site, bound 2026-08-27. The family's own comment said "one measured fact, six call
+    #: sites" while listing five -- `reviewed_set.py` is the sixth and was never bound, so it
+    #: surfaced as a NEW site the moment a discriminator narrowed. It earned its entry the hard
+    #: way: the first fix attempted here batched the ranges exactly as the gate's generic advice
+    #: says, went GREEN, and was caught only by a live-corpus check (2 ranges: 3 SHAs batched vs
+    #: 5 per-range, rc=0 both ways) -- which is the same batched-then-reverted history the oracle's
+    #: own docstring already records. A green gate over a silently narrowed reviewed set is the
+    #: worst outcome available here, so this site is bound to the measured fact rather than left
+    #: to the next reader's judgement.
+    ("coordinator_core/review_trail/reviewed_set.py", "fold_in", "_run"): (
+        "test_git_argument_surface::test_git_rev_list_exclusions_are_global",
+        "cadence",
+    ),
     # --- the spawn FLOOR claim is RETIRED 2026-08-26: the site it named no longer fires ---
     #: `_common.py::archive_and_commit::create_subprocess_exec` claimed a measured spawn floor
     #: ("M + C") for a loop issuing one `git mv` per move. A peer's spawn-free rework of the
@@ -5280,6 +5293,16 @@ _DISCRIMINATOR_PINS: dict[str, tuple[str, ...]] = {
     ),
     "_is_single_shot_terminal": (
         "test_discriminator_single_shot_terminal_declines_sibling_conditional_terminator",
+        "test_discriminator_single_shot_terminal_nested_loop_break_still_flagged",
+    ),
+    #: `_has_enclosing_loop` is the `has_outer_loop` half of discriminator 17: it is what stops a
+    #: `break`-only single-shot proof from being trusted when the loop it exits is itself nested.
+    #: Its declining test is the nested-loop fixture -- an inner `break` that leaves the OUTER
+    #: loop iterating must STILL be flagged. If this predicate were widened to return False for a
+    #: genuinely nested loop, that fixture goes green while the amplification is real, which is
+    #: exactly the widen-until-silent failure these pins exist to catch.
+    "_has_enclosing_loop": (
+        "test_discriminator_single_shot_terminal_nested_loop_break_still_flagged",
     ),
     "_root_scoped_direct": (
         "test_discriminator_root_scoped_declines_a_non_git_program",

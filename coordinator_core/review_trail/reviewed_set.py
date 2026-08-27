@@ -323,34 +323,70 @@ def _build_reach_set(repo_root: str) -> Optional[FrozenSet[str]]:
     return frozenset(shas)
 
 
-def _resolve_endpoints_batch(tokens: List[str], repo_root: str) -> Dict[str, Optional[str]]:
-    """Resolve each token in `tokens` to its full 40-hex SHA, one `git
-    rev-parse --verify --quiet` spawn per DISTINCT token (handles
-    abbreviated SHAs, `^N`/`~N` ancestry suffixes, and symbolic refs
-    uniformly). Deliberately per-token rather than one multi-arg spawn:
-    `git rev-parse` does NOT reliably emit one stdout line per argument on
-    a mixed batch — an unresolvable arg (e.g. `^N` beyond a root commit's
-    parent count) truncates the whole batch's stdout after the failing
-    arg, which silently misaligns any positional zip against the
-    remaining tokens (measured directly against this repo's git). Per-
-    token resolution trades a constant-factor spawn increase for a
-    verdict that can never misattribute one token's resolution to
-    another's.
+def _batch_check(exprs: List[str], repo_root: str) -> List[str]:
+    """One `git cat-file --batch-check` spawn over `exprs`, fed via stdin, returning
+    its stdout lines. Deliberately NOT built on `_run`: `--batch-check` is the one
+    git subcommand here that must WRITE to stdin, which `_run`'s
+    `stdin=subprocess.DEVNULL` (the pinned Windows hang fix) cannot support. Mirrors
+    `_run`'s portability flag without inheriting its stdin behaviour.
 
-    A token that fails to resolve maps to None — unresolved, never
-    guessed. This is the fix for the abbreviated-SHA and malformed-`^N`
-    incident classes named in this module's docstring. Token count per
-    record is fixed at 2 regardless of the range's commit span, so this
-    still holds the flat-cost property the write-time measurement
-    depends on."""
-    result: Dict[str, Optional[str]] = {}
-    for tok in tokens:
-        rc, out, _err = _run(
-            ["git", "rev-parse", "--verify", "--quiet", tok + "^{commit}"],
+    Not imported from `coordinator_core.coverage._batch_check_hex_tokens`, which is
+    the same mechanism: that module is heavy and this one sits on the review-trail
+    path that `test_hot_path_hook_import_budget` polices, so the ~10 lines are paid
+    here rather than its import weight. The output-shape guarantee below is that
+    function's, empirically verified there (code-reviewer item 3 + EM follow-up,
+    2026-07-28) and unchanged since."""
+    try:
+        result = subprocess.run(
+            ["git", "cat-file", "--batch-check=%(objectname) %(objecttype)"],
+            input="\n".join(exprs) + "\n",
             cwd=repo_root,
+            capture_output=True,
+            text=True,
+            **_NO_CONSOLE,
         )
-        line = out.strip()
-        result[tok] = line if rc == 0 and _SHA_RE.match(line) else None
+        return result.stdout.splitlines() if result.returncode == 0 else []
+    except Exception:
+        return []
+
+
+def _resolve_endpoints_batch(tokens: List[str], repo_root: str) -> Dict[str, Optional[str]]:
+    """Resolve each token in `tokens` to its full 40-hex SHA in ONE `git cat-file
+    --batch-check` spawn (handles abbreviated SHAs, `^N`/`~N` ancestry suffixes, and
+    symbolic refs uniformly, since `--batch-check` accepts any rev expression).
+
+    WAS one `git rev-parse --verify --quiet` spawn per distinct token, on a measured
+    and correct objection that no longer applies to the primitive now used: `git
+    rev-parse` does NOT reliably emit one stdout line per argument on a mixed batch
+    — an unresolvable arg (e.g. `^N` beyond a root commit's parent count) truncates
+    the whole batch's stdout after the failing arg, silently misaligning any
+    positional zip against the remaining tokens (measured directly against this
+    repo's git). That is a `rev-parse` property, not a batching property.
+    `--batch-check` emits EXACTLY ONE stdout line per stdin expression, in input
+    order, with failures reported in-band ("<expr> missing", "<expr> ambiguous") and
+    diagnostics confined to stderr — so the alignment the old docstring rightly
+    refused to trust is guaranteed here rather than assumed. `zip` still truncates
+    to the shorter side, so a short read degrades to unresolved, never to a
+    misattributed SHA.
+
+    A token that fails to resolve maps to None — unresolved, never guessed. This
+    preserves the fix for the abbreviated-SHA and malformed-`^N` incident classes
+    named in this module's docstring: resolution is gated on the reported object
+    type being `commit` AND the objectname being a full 40-hex SHA, so an ambiguous
+    prefix comes back None rather than as a resolved SHA.
+
+    Token count per record is fixed at 2 regardless of the range's commit span, and
+    the spawn count is now fixed at 1 regardless of token count — strictly stronger
+    than the flat-cost property the write-time measurement depends on."""
+    if not tokens:
+        return {}
+    exprs = [tok + "^{commit}" for tok in tokens]
+    lines = _batch_check(exprs, repo_root)
+    result: Dict[str, Optional[str]] = {tok: None for tok in tokens}
+    for tok, line in zip(tokens, lines):
+        parts = line.split()
+        if len(parts) >= 2 and parts[1] == "commit" and _SHA_RE.match(parts[0]):
+            result[tok] = parts[0]
     return result
 
 
@@ -426,6 +462,9 @@ def fold_in(repo_root: str, records: List[Tuple[str, str]]) -> FoldResult:
 
     folded: List[str] = []
     collected_shas: Set[str] = set()
+    # Ranges whose endpoints both resolved AND are both reachable — the only ones a
+    # rev-list is worth spawning for. Everything else is already in `unresolved`.
+    eligible: List[Tuple[str, str]] = []
     for record_id, sha_range in records:
         split = parsed.get(record_id)
         if split is None:
@@ -439,12 +478,30 @@ def fold_in(repo_root: str, records: List[Tuple[str, str]]) -> FoldResult:
         if left_sha not in reach_set or right_sha not in reach_set:
             unresolved.append(record_id)
             continue
+        eligible.append((record_id, sha_range))
+
+    # ONE `git rev-list` SPAWN PER RANGE, DELIBERATELY — do not "batch it into a single
+    # call", which is what the amplification gate's generic advice says here and what a
+    # first attempt at this actually did (2026-08-27) before a live-corpus check caught
+    # it. `git rev-list A..B C..D` does NOT emit the union of two ranges: ranges desugar
+    # to `B D ^A ^C`, and every exclusion applies GLOBALLY, so `^A` also strips A's
+    # ancestors out of C..D. Measured on this repo: two ranges yielded 3 SHAs batched
+    # against 5 per-range, rc=0 both ways. Batching here silently DROPS reviewed SHAs —
+    # a wrong verdict in the review-attribution path, produced with no error to notice.
+    #
+    # The flat-cost property this module depends on is per-RECORD, not per-repo: token
+    # count per record is fixed at 2 regardless of a range's commit span, and endpoint
+    # resolution for every record is already collapsed to ONE `git cat-file
+    # --batch-check` spawn in `_resolve_endpoints_batch` above. What remains is one
+    # spawn per record that actually has a resolvable, reachable range — a correctness
+    # floor for this primitive, in the same class as `explicit_stage`'s retained
+    # `git check-ignore`.
+    for record_id, sha_range in eligible:
         rc, out, _err = _run(["git", "rev-list", sha_range], cwd=repo_root)
         if rc != 0:
             unresolved.append(record_id)
             continue
-        range_shas = {s.strip() for s in out.splitlines() if s.strip()}
-        collected_shas.update(range_shas)
+        collected_shas.update(s.strip() for s in out.splitlines() if s.strip())
         folded.append(record_id)
 
     existing = read_reviewed_set(repo_root)

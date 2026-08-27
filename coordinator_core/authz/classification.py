@@ -1249,8 +1249,6 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #      `read_text` only. No sentinel, no lock file, no temp file.
     #   4. Mutates shared mutable state outside its own module?                No.
     #   5. Persistent state changes observable across process boundaries?      No.
-    # eol.repair — writes normalized bytes to disk when `mutate: true` is
-    "eol.repair": OpClass.MUTATING,
     #      Its entire output is the returned envelope.
     # COMPUTE_ONLY over MUTATING is load-bearing, not a formality: the whole
     # point of moving enforcement earlier is that consulting the lint costs an

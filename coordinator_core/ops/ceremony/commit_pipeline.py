@@ -3249,6 +3249,121 @@ def _is_push_reject(reason: str) -> bool:
     return classify_error(reason) in _PUSH_RETRY_CLASSES
 
 
+#: Sub-classifies a `gh-push-protection` rejection (C2, docs/plans/2026-08-27-
+#: the-merge-gate-gets-a-remote-authority-layer.md § C2). `auto_push.
+#: classify_error()` deliberately folds a GH013 RULE-VIOLATION refusal (the
+#: coverage-gate ruleset this plan adds) and a GH013 SECRET-SCANNING refusal
+#: into the SAME "gh-push-protection" class -- correct for that module's own
+#: purpose (both are equally non-rebase-recoverable), but wrong for THIS
+#: pipeline's recovery: a secret-scanning refusal must never be re-pushed
+#: (the secret is still in the commit), while a rule-violation refusal is
+#: exactly the case C1's status-poster exists to recover -- posting a fresh
+#: coverage-gate status and re-pushing the SAME, already-uploaded objects.
+#: Matched on the same phrasing GitHub's own secret-scanning refusal uses
+#: ("push cannot contain secrets", "Secret detected", "Push Protection");
+#: anything classified `gh-push-protection` that does NOT match this is
+#: treated as the rule-violation sub-class, since those are the only two
+#: refusals `_PAT_GH_PUSH_PROTECTION` (auto_push.py) matches in the first
+#: place.
+_PAT_SECRET_SCANNING_REJECT = re.compile(
+    r"(push cannot contain secrets|Secret detected|Push Protection)"
+)
+
+
+def _is_secret_scanning_reject(reason: str) -> bool:
+    """True iff a `gh-push-protection` rejection is GitHub secret scanning,
+    never rebase- or recovery-eligible (see `_PAT_SECRET_SCANNING_REJECT`)."""
+    return classify_error(reason) == "gh-push-protection" and bool(
+        _PAT_SECRET_SCANNING_REJECT.search(reason)
+    )
+
+
+def _is_rule_violation_reject(reason: str) -> bool:
+    """True iff a `gh-push-protection` rejection is the coverage-gate RULE
+    VIOLATION sub-class (GH013 from the ruleset this plan adds), eligible for
+    the post-and-re-push recovery below -- never the secret-scanning
+    sub-class (see `_is_secret_scanning_reject`)."""
+    return classify_error(reason) == "gh-push-protection" and not _is_secret_scanning_reject(
+        reason
+    )
+
+
+#: Parses `owner/repo` out of a `git remote get-url origin` value -- both the
+#: HTTPS (`https://github.com/<owner>/<repo>.git`) and SSH
+#: (`git@github.com:<owner>/<repo>.git`) forms, `.git` suffix optional.
+_PAT_GITHUB_REMOTE = re.compile(
+    r"github\.com[:/]([^/]+)/([^/]+?)(?:\.git)?/?$"
+)
+
+
+def _resolve_github_owner_repo(root: Path) -> Optional[Tuple[str, str]]:
+    """Resolve `(owner, repo)` from this worktree's `origin` remote URL.
+
+    Zero ambient config, no env var -- reads the one remote this pipeline
+    already pushes to. Returns `None` (never guesses) when the remote is
+    missing, unreadable, or not a github.com remote -- the C2 recovery path
+    below must fail closed on that, exactly like C1's own token resolution.
+    """
+    result = git_native._git(["remote", "get-url", "origin"], cwd=root)
+    if not result.ok:
+        return None
+    url = result.stdout.strip()
+    match = _PAT_GITHUB_REMOTE.search(url)
+    if not match:
+        return None
+    return match.group(1), match.group(2)
+
+
+def _recover_rule_violation_reject(
+    root: Path, pre_push_upstream_sha: Optional[str]
+) -> Optional[str]:
+    """Post a fresh coverage-gate status and clear the way for a re-push
+    (C2, the rule-violation sub-class only -- see `_is_rule_violation_reject`).
+
+    The two-phase sequence the plan's spike found: a GH013 rule-violation
+    refusal still uploads the objects server-side, so the fix is not a
+    rebase -- it is (re-)posting the `coverage-gate` status for the CURRENT
+    tip, immediately before the next re-push, so the status is always a
+    function of the sha about to be pushed.
+
+    Returns `None` on a posted, PASS-mapped ("success") status -- the
+    caller may proceed to re-push. Returns a non-`None` failure reason
+    string for every other outcome (posting failed/unpostable, no owner/repo
+    resolvable, no upstream tip to range from, or a posted `failure` state)
+    -- NEVER a silent skip, and the caller must route that reason to
+    `PushOutcome.failed`, never `unconfirmed` (this outcome was observed,
+    not indeterminate -- see `push_with_retry`'s own docstring on that
+    distinction).
+    """
+    from coordinator_core.ops import post_coverage_status as _post_coverage_status_mod
+
+    head_result = git_native.rev_parse_head(root)
+    if not head_result.ok or not head_result.stdout.strip():
+        return "rule-violation recovery: could not resolve HEAD sha to post a status for"
+    head_sha = head_result.stdout.strip()
+
+    if not pre_push_upstream_sha:
+        return "rule-violation recovery: no upstream tip resolvable to compute a coverage range from"
+
+    owner_repo = _resolve_github_owner_repo(root)
+    if owner_repo is None:
+        return "rule-violation recovery: could not resolve owner/repo from the origin remote"
+    owner, repo = owner_repo
+
+    commit_range = f"{pre_push_upstream_sha}..{head_sha}"
+    result = _post_coverage_status_mod.post_coverage_status(
+        owner, repo, head_sha, commit_range, repo_root=str(root)
+    )
+    if not result.posted:
+        return f"rule-violation recovery: coverage status unpostable ({result.reason})"
+    if result.state != "success":
+        return (
+            f"rule-violation recovery: coverage-gate verdict is red for {commit_range} "
+            f"({result.reason})"
+        )
+    return None
+
+
 def _rebase_onto_fetched_ref(worktree_root: Path, upstream_ref: str) -> Tuple[int, str]:
     """Rebase THIS session's own commit range onto the freshly-fetched `upstream_ref`.
 
@@ -3764,6 +3879,33 @@ def push_with_retry(
         # breaks immediately below -- the flag never survives into the
         # fetch/rebase branches.
         last_indeterminate = _is_indeterminate_push_result(push_result)
+
+        # C2 (docs/plans/2026-08-27-the-merge-gate-gets-a-remote-authority-
+        # layer.md § C2): a rule-violation (GH013) refusal is NOT rebase-
+        # recoverable -- rebasing changes nothing about coverage -- so it
+        # never enters the fetch/rebase ladder below. It has its own,
+        # narrower recovery instead: (re-)post the coverage-gate status for
+        # the current tip, then re-push the SAME, already-uploaded objects.
+        # A secret-scanning refusal (`_is_rule_violation_reject` is False
+        # for it) falls straight through to the ordinary `_is_push_reject`
+        # check below, which is already False for the whole `gh-push-
+        # protection` class -- so it breaks here exactly as it did before
+        # this chunk, `failed`, never re-pushed.
+        if _is_rule_violation_reject(reason):
+            if attempt == _PUSH_MAX_RETRIES - 1:
+                break
+            recovery_timeout = _remaining_or_none(deadline)
+            if recovery_timeout is not None and recovery_timeout <= 0:
+                last_reason = _budget_exhausted_reason(attempt + 1, budget_secs, last_reason)
+                break
+            recovery_failure = _recover_rule_violation_reject(root, pre_push_upstream_sha)
+            if recovery_failure is not None:
+                # Observed, not indeterminate -- the status posted (or a
+                # confirmed unpostable reason) already tells us the outcome,
+                # so this is `failed`, never `unconfirmed`.
+                last_reason = recovery_failure
+                break
+            continue
 
         if not _is_push_reject(reason) or attempt == _PUSH_MAX_RETRIES - 1:
             break

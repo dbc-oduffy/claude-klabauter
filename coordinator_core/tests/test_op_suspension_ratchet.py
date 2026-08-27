@@ -136,6 +136,8 @@ _RATIFIED_SUSPENSIONS = frozenset({
     "deliverable.cascade_terminal",
     "fleet.prune_closed_bugs",
     "ceremony.commit",
+    "eol.census",
+    "eol.repair",
     "roadmap.serve",
     "handoff.reconcile_open",
     "handoff.archive_transition",
