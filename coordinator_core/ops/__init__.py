@@ -143,6 +143,7 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ("coordinator_core.ops.fleet.archive_actioned_memos", 'registers "fleet.archive_actioned_memos"'),
     ("coordinator_core.ops.commit_anchors", 'registers "commit.anchors"'),
     ("coordinator_core.ops.ceremony.commit_exec_bit", 'registers "commit.exec_bit_change"'),
+    ("coordinator_core.ops.ceremony.commit_v2", 'registers "ceremony.commit_v2"'),
     ("coordinator_core.ops.memo_transition", 'registers "memo.transition"'),
     ("coordinator_core.ops.handoff_transition", 'registers "handoff.transition"'),
     ("coordinator_core.ops.handoff_stamp", 'registers "handoff.stamp"'),
@@ -169,7 +170,6 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ("coordinator_core.ops.peer_notice_check", 'registers "peer_notice.check"'),
     ("coordinator_core.ops.queue_promote", 'registers "queue.promote"'),
     ("coordinator_core.ops.queue_cluster", 'registers "queue.cluster"'),
-    ("coordinator_core.ops.queue_age_ping", 'registers "queue.age_ping"'),
     ("coordinator_core.ops.queue_scaffold_baton", 'registers "handoff.scaffold_from_queue"'),
     ("coordinator_core.ops.updatedocs_gates", 'registers "updatedocs.gates"'),
     ("coordinator_core.ops.fleet.memo_list", 'registers "memo.list"'),
@@ -282,7 +282,7 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ("coordinator_core.ops.session.guard_settings_integrity", 'registers "session.guard_settings_integrity"'),
     ("coordinator_core.ops.session.record_pickup", 'registers "session.record_pickup"'),
     ("coordinator_core.ops.session.scope_report", 'registers "session.scope_report"'),
-    ("coordinator_core.ops.session.warm_start", 'registers "session.warm_start"'),
+    ("coordinator_core.ops.session.safe_commit_offer", 'registers "session.safe_commit_offer"'),
     ("coordinator_core.ops.session_resolve_address", 'registers "session.resolve_address"'),
     ("coordinator_core.ops.session_peer_roster", 'registers "session.peer_roster"'),
     ("coordinator_core.ops.session_work_state", 'registers "session.work_state"'),
@@ -539,13 +539,9 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ),
     (
         "coordinator_core.ops.eol.census",
-        'registers "eol.census" (docs/plans/2026-08-20-every-repo-detects-'
-        "its-own-eol-drift.md § C2)",
-    ),
-    (
-        "coordinator_core.ops.eol.audit_producers",
-        'registers "eol.audit_producers" (docs/plans/2026-08-20-every-repo-'
-        "detects-its-own-eol-drift.md § C4)",
+        "imported for its census() function, which eol.repair calls directly; "
+        "registers no dispatchable op since the eol trio collapsed to one "
+        "(K-062, 2026-08-27)",
     ),
     (
         "coordinator_core.ops.eol.repair",

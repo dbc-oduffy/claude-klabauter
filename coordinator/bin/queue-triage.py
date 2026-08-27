@@ -54,10 +54,8 @@ from pathlib import Path, PureWindowsPath
 from typing import Any
 
 _BIN_DIR = Path(__file__).resolve().parent
-_LIB_DIR = str(_BIN_DIR / "lib")
-if _LIB_DIR not in sys.path:
-    sys.path.insert(0, _LIB_DIR)
 
+import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
 from cc_invoke import (  # noqa: E402
     RouteMutationError,
     require_engine_on_path,

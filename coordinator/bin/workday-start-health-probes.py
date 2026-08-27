@@ -202,12 +202,9 @@ _REPO_ROOT = os.path.dirname(os.path.dirname(_SCRIPT_DIR))
 if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
-_LIB_DIR = os.path.join(_SCRIPT_DIR, "lib")
-if _LIB_DIR not in sys.path:
-    sys.path.insert(0, _LIB_DIR)
-
 from coordinator_core.machine_resolver import registry_get  # noqa: E402
 from coordinator_core.win_portability import is_executable, no_console_creationflags  # noqa: E402
+import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
 from cli_shared import machine_local_impl, resolve_python  # noqa: E402
 
 _RESOLVE_CLAUDE_KLABAUTER_DIR = os.path.join(_REPO_ROOT, "coordinator", "lib", "resolve-claude-klabauter")

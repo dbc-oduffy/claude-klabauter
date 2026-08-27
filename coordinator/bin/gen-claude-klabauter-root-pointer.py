@@ -180,7 +180,6 @@ def _resolve_claude_klabauter_root() -> str:
 
 
 def main(argv: "list[str] | None" = None) -> int:
-    del argv  # this CLI takes no arguments; argv accepted for the warm-call contract
     parser = argparse.ArgumentParser(
         description="Project the claude-klabauter repo root into a cold-readable pointer file."
     )
@@ -189,7 +188,7 @@ def main(argv: "list[str] | None" = None) -> int:
         action="store_true",
         help="Validate without mutating the live pointer (dry-run-safe).",
     )
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     claude_klabauter_root = _resolve_claude_klabauter_root().rstrip("/\\")
 

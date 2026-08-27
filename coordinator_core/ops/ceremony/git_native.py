@@ -38,6 +38,14 @@ Negative-spec (hard-won):
     typed failure result rather than raising past the caller (callers are op handlers
     that must degrade gracefully, never crash the daemon on a git-availability blip).
   - Does NOT inherit the parent's stdin — see `stdin=DEVNULL` above.
+
+REMOVED 2026-08-27 (PM ruling, abd587695): the in-plane archival sweep
+`commit_pipeline._run_in_plane_archive_sweep` and its three legs are GONE from the
+commit path. Text below describing it is retained only as history of why this code
+looks the way it does -- it asserts nothing about the commit path today. Handoffs are
+archived at the occasions that create the work (pickup, workstream-complete,
+workday-complete, and the per-artifact lifecycle paths), never by sweeping a corpus on
+commit. See state/kill-ledger.md.
 """
 
 from __future__ import annotations
@@ -4597,6 +4605,14 @@ def _commit_via_head_spine(
     # against `root_tree_sha`, the SAME HEAD-tree read this function's own
     # precondition already took above (never a second read that could race
     # a concurrent mutation between the two).
+    # THE EMPTY `stderr` IS THE CONTRACT, NOT AN OMISSION. `returncode=1` with
+    # no message is the sentinel a benign no-op is rendered QUIETLY by --
+    # `test_pipeline_empty_commit_set_noop_rolls_back_quietly` and
+    # `test_commit_failure_bare_exit_code_preserved_for_downstream_quiet_
+    # rendering` both pin it. Naming a reason here (tried 2026-08-27, reverted)
+    # turns "a peer landed byte-identical content first" into a loud refusal
+    # and reds both. Not to be confused with `test_stage_failure_report_never_
+    # a_bare_exit_code`, which governs the STAGE report -- a different path.
     if refuse_noop and new_tree_sha == root_tree_sha:
         return GitResult(returncode=1, stdout="", stderr="")
 

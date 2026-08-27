@@ -79,9 +79,7 @@ from pathlib import Path
 from typing import List, Optional
 
 _BIN_DIR = Path(__file__).resolve().parent
-_LIB_DIR = _BIN_DIR / "lib"
-if str(_LIB_DIR) not in sys.path:
-    sys.path.insert(0, str(_LIB_DIR))
+import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
 from cc_invoke import require_colocated_engine_on_path  # noqa: E402
 
 try:

@@ -227,11 +227,11 @@ class CliTypeScopingTest(unittest.TestCase):
         with unittest.mock.patch("sys.argv", argv):
             with contextlib.redirect_stderr(stderr_buf):
                 try:
-                    _cli.main()
+                    raw = _cli.main()
                 except SystemExit as exc:
-                    code = exc.code if isinstance(exc.code, int) else (1 if exc.code else 0)
-                    return code, stderr_buf.getvalue()
-        return 0, stderr_buf.getvalue()
+                    raw = exc.code
+                code = raw if isinstance(raw, int) else (1 if raw else 0)
+                return code, stderr_buf.getvalue()
 
     def test_summary_rejected_for_non_handoff_type(self):
         code, stderr = self._run("--type", "goal", "--title", "t", "--summary", "x")

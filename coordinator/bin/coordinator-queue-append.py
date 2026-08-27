@@ -140,9 +140,7 @@ import yaml
 # at import time. Local copies of _repo_key_to_em_id, _same_path, and _em_id_for_root
 # are deleted; the canonical implementations live in coordinator_registry.
 # ---------------------------------------------------------------------------
-_LIB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib")
-if _LIB_DIR not in sys.path:
-    sys.path.insert(0, _LIB_DIR)
+import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
 from coordinator_registry import (  # noqa: E402
     REPO_ALIASES as _REPO_KEY_ALIASES,
     repo_key_to_em_id as _repo_key_to_em_id,

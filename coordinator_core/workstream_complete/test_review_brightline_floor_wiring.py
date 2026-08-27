@@ -79,11 +79,43 @@ def _init_repo(root: Path) -> None:
     _commit(root, "init", when=_PRE_SESSION_COMMIT_DATE)
 
 
-def _write_trail_record(root: Path, name: str, session_id: str, sha_range: str) -> Path:
+def _write_trail_record(
+    root: Path,
+    name: str,
+    session_id: str,
+    sha_range: str,
+    name_sid: str | None = None,
+) -> Path:
     """Real on-disk record shape (verified against `state/review-trail/`
-    live records) — `sha_range`, never `sha_range_head`/`head`."""
+    live records) — `sha_range`, never `sha_range_head`/`head`.
+
+    Real record FILENAMES also carry their own `session_id[:8]`:
+    `review_trail_write` names every record `{TIMESTAMP}-{SESSION_ID[:8]}.json`,
+    and `_list_review_trail_paths_for_root` pre-filters on that at the
+    `os.scandir` name level BEFORE opening anything. Audited over the live
+    corpus: 4710 of 4711 records with a `session_id` carry it in the filename
+    (the one exception, `2026-08-01T175000Z-mise-close-origin-stub.json`, was
+    hand-written).
+
+    This helper therefore INSERTS `-{session_id[:8]}` before `.json` when the
+    supplied `name` lacks it. Without that, every fixture here was invisible to
+    the name filter, `_resolve_review_brightline_floor_kwargs` bailed to `None`,
+    and six tests in this file compared a floored range against an unfloored
+    one. Deriving the suffix here rather than spelling it into each call site is
+    deliberate: a hand-written name is what drifted from the producer's
+    convention in the first place.
+
+    `name_sid` overrides the suffix independently of `session_id` — for the
+    peer-record case, which needs a filename that PASSES the name filter while
+    its `session_id` field still fails the exact-match check. That is the only
+    way to exercise the field check at all; a peer record whose name also fails
+    the filter is excluded one stage too early and proves nothing about it.
+    """
     trail_dir = root / "state" / "review-trail"
     trail_dir.mkdir(parents=True, exist_ok=True)
+    suffix = (name_sid if name_sid is not None else session_id)[:8]
+    if suffix and f"-{suffix}" not in name:
+        name = f"{name[: -len('.json')] if name.endswith('.json') else name}-{suffix}.json"
     path = trail_dir / name
     path.write_text(
         json.dumps(
@@ -152,10 +184,33 @@ def test_no_prior_trail_record_emits_byte_identical_argv(monkeypatch, tmp_path):
 def test_peer_session_record_never_floors_this_session(monkeypatch, tmp_path):
     """A trail record belonging to a DIFFERENT session_id must never
     contribute a floor — the plan's Anti-scope forbids widening/shifting
-    this session's range over a peer's reviewed span."""
+    this session's range over a peer's reviewed span.
+
+    The peer's FILENAME deliberately carries THIS session's `sid[:8]`
+    (`name_sid=_SID`) while its `session_id` FIELD is a peer's. That is the
+    8-char-collision case, and it is the only shape that actually tests the
+    exact-match field check in `_resolve_review_brightline_floor_kwargs`:
+    a peer record named after its own session is thrown out one stage earlier,
+    by the `os.scandir` name filter, so it would pass this test even if the
+    field check were deleted. Before this was fixed the test was doing exactly
+    that — passing for the wrong reason.
+    """
     _init_repo(tmp_path)
     first_sha = _commit(tmp_path, "close 1", filename="a1.py", content="a=1\n")
-    _write_trail_record(tmp_path, "2026-08-08-peer.json", "some-other-session-id", f"{first_sha}^..{first_sha}")
+    _write_trail_record(
+        tmp_path,
+        "2026-08-08-000001-peer.json",
+        "some-other-session-id",
+        f"{first_sha}^..{first_sha}",
+        name_sid=_SID,
+    )
+    # Prove the record reaches the field check rather than being dropped by the
+    # name filter -- otherwise this test's pass says nothing about the check it
+    # exists to cover.
+    assert any(
+        "peer" in p for p in wsc._list_review_trail_paths_for_root(tmp_path, sid_short=_SID[:8])
+    ), "peer record must survive the name filter so the session_id field check is what excludes it"
+
     session_start_time = datetime.now(timezone.utc) - timedelta(minutes=5)
     directives = wsc.build_directives(_gate(), {}, tmp_path, session_start_time=session_start_time)
     assert _brightline_directive(directives)["args"] == ["--session-id", _SID]

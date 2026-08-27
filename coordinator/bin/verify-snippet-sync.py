@@ -48,8 +48,6 @@ from pathlib import Path
 
 _BIN_DIR = os.path.dirname(os.path.abspath(__file__))
 _LIB_DIR = os.path.join(_BIN_DIR, "lib")
-if _LIB_DIR not in sys.path:
-    sys.path.insert(0, _LIB_DIR)
 # machine_local_resolve.py imports from the coordinator_core package
 # (win_portability) at module level -- that package is resolvable only from
 # the repo root, not from _LIB_DIR, so it must be on sys.path too or the
@@ -59,6 +57,7 @@ _REPO_ROOT = os.path.dirname(os.path.dirname(_BIN_DIR))
 if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
+import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
 from cc_invoke import require_dispatch_engine_on_path  # noqa: E402
 
 require_dispatch_engine_on_path()

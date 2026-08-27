@@ -33,10 +33,7 @@ import sys
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 _QUEUE_APPEND = os.path.join(_THIS_DIR, "coordinator-queue-append.py")
 
-_LIB_DIR = os.path.join(_THIS_DIR, "lib")
-if _LIB_DIR not in sys.path:
-    sys.path.insert(0, _LIB_DIR)
-
+import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
 from machine_local_impl_resolve import (  # noqa: E402
     claude_home as _mlir_claude_home,
     machine_local_impl_path as _mlir_machine_local_impl_path,
@@ -268,7 +265,6 @@ def _dedup_check(new_title):
 
 
 def main(argv: "list[str] | None" = None) -> int:
-    del argv  # this CLI takes no arguments; argv accepted for the warm-call contract
     parser = argparse.ArgumentParser(
         prog="coordinator-lesson-add",
         description=(
@@ -335,7 +331,7 @@ def main(argv: "list[str] | None" = None) -> int:
         help="Skip the dedup pre-check and write unconditionally.",
     )
 
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     from coordinator_core.argv_fidelity import ArgvFidelityError, refuse_newline_argv, resolve_body
 

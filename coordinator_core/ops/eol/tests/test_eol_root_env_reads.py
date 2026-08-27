@@ -12,9 +12,13 @@ settings-home probe therefore passes. The defect is reachable only through a
 live warm server, so a source-shape ratchet is the artifact that survives it --
 and it costs no subprocess, staying on the fast tier.
 
-TWO LEGS, BOTH NEEDED. `eol.census` and `eol.audit_producers` resolve
-`target_root` exclusively from the wire param, by design (this plan's AC7,
-"Do not resolve the target root from the environment"). The second leg is the
+TWO LEGS, BOTH NEEDED -- the scanner's two legs, not two ops. (Written when the
+family was three ops; `eol.repair` is now the only registered id and `census.py`
+is its library, K-062. The AC and both legs are unchanged by that collapse --
+`census()` still takes the root as an argument, so the shape this ratchet
+refuses is still reachable.) The family resolves `target_root` exclusively from
+the wire param, by design (this plan's AC7, "Do not resolve the target root from
+the environment"). The second leg is the
 one that bites: the laundering shape seen elsewhere in this repo is a module
 constant (e.g. `_CLAUDE_KLABAUTER_ROOT_ENV = "CLAUDE_KLABAUTER_ROOT"`) plus a bare read elsewhere --
 scanning for `os.environ` calls alone misses a constant-name read entirely,

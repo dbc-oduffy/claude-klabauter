@@ -92,7 +92,6 @@ def _atomic_write(settings_path: pathlib.Path, data: dict) -> None:
 
 
 def main(argv: "list[str] | None" = None) -> int:
-    del argv  # this CLI takes no arguments; argv accepted for the warm-call contract
     parser = argparse.ArgumentParser(
         description="Idempotently seed bundled-skill skillOverrides into settings.json."
     )
@@ -107,7 +106,7 @@ def main(argv: "list[str] | None" = None) -> int:
         action="store_true",
         help="Print the would-seed delta to stdout and exit 0; write nothing.",
     )
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     settings_path = _resolve_settings_path()
     s = _load_settings(settings_path)

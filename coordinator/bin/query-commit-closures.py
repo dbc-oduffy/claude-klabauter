@@ -91,9 +91,7 @@ import sys
 from pathlib import Path
 
 _BIN_DIR = os.path.dirname(os.path.abspath(__file__))
-_LIB_DIR = os.path.join(_BIN_DIR, "lib")
-if _LIB_DIR not in sys.path:
-    sys.path.insert(0, _LIB_DIR)
+import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
 from op_trampoline import (  # noqa: E402
     resolve_claude_klabauter_root_or_exit,
     resolve_repo_root_or_exit,

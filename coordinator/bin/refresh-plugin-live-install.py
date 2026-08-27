@@ -117,6 +117,7 @@ def _no_console_kwargs() -> dict:
     never turn a quiet spawn into a visible console window.
     """
     try:
+        import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
         from cc_invoke import _resolve_claude_klabauter_root, require_dispatch_engine_on_path
 
         claude_klabauter_root = require_dispatch_engine_on_path()
@@ -170,9 +171,6 @@ def eprint(*args, **kwargs) -> None:
 # resolution cost.
 # ---------------------------------------------------------------------------
 
-_LIB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib")
-if _LIB_DIR not in sys.path:
-    sys.path.insert(0, _LIB_DIR)
 
 from win_argv import win_safe_shlex_split  # noqa: E402
 

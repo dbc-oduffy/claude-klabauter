@@ -185,6 +185,7 @@ from typing import Any, Awaitable, Callable, Optional
 
 from coordinator_core.dag import _read_meta
 from coordinator_core.ipc import get_op_handler, register_op
+from coordinator_core.op_budget_suspension import OpSuspendedError
 from coordinator_core.ops.ceremony import consumed_handoff_stamp
 from coordinator_core.ops.handoff_children import blocked_by_dependents
 from coordinator_core.ops.ceremony.commit_pipeline import (
@@ -1007,16 +1008,20 @@ async def run(
     `None` (every `wsc_tail`-invoked call site, which has no proof of its
     own) preserves today's guard-only behaviour exactly. `cascade_handler`
     is OPTIONAL --
-    when omitted, it is resolved here via `get_op_handler(OP_DELIVERABLE_CASCADE)`
-    (never re-implemented), so existing callers (`wsc_tail.py`) that predate
-    C6b need no call-site change. `timing`, when supplied, records the SAME
-    two named spans as before C6b ("stamp_and_ship", "origin_stub_close") --
-    see module docstring "Timing-span preservation"; the deliverable-cascade
-    and gate-cascade-clear steps deliberately run untimed so as not to widen
+    when omitted, it is bound directly to `deliverable_cascade._handler`
+    (REPOINTED 2026-08-27: `deliverable.cascade_terminal` is killed, so this
+    no longer resolves via `get_op_handler` -- see the call site's own
+    comment), so existing callers (`wsc_tail.py`) that predate C6b need no
+    call-site change. `timing`, when supplied, records the SAME two named
+    spans as before C6b ("stamp_and_ship", "origin_stub_close") -- see
+    module docstring "Timing-span preservation"; the deliverable-cascade and
+    gate-cascade-clear steps deliberately run untimed so as not to widen
     `wsc_tail.py`'s pinned step-name contract. `gate_cascade_clear_handler`
     (C3) mirrors `cascade_handler`'s own OPTIONAL shape -- when omitted, it
-    is resolved here via `get_op_handler(OP_HANDOFF_TRANSITION)`, so existing
-    callers that predate C3 need no call-site change either.
+    is resolved here via `get_op_handler(OP_HANDOFF_TRANSITION)`, folding a
+    future `OpSuspendedError` into the same not-registered skip (see the
+    call site's own comment), so existing callers that predate C3 need no
+    call-site change either.
 
     All four steps run unconditionally in sequence -- a stamp+ship exception
     propagates BEFORE origin-stub close, the deliverable cascade, or the
@@ -1052,7 +1057,21 @@ async def run(
 
     resolved_cascade_handler = cascade_handler
     if resolved_cascade_handler is None:
-        resolved_cascade_handler = get_op_handler(OP_DELIVERABLE_CASCADE)
+        # REPOINTED 2026-08-27: `deliverable.cascade_terminal` is killed (K-104)
+        # and `get_op_handler` now raises OpSuspendedError for it, which would
+        # crash this tail rather than skip a step. The op is dead; its compute is
+        # retained undecorated in `ops/deliverable_cascade.py` precisely for
+        # in-process callers like this one. Bind it directly.
+        #
+        # The `is None` fallback below is kept rather than collapsed: an injected
+        # `cascade_handler` still wins (every test injects one), and a failure to
+        # import degrades to the existing not-registered skip instead of raising.
+        try:
+            from coordinator_core.ops.deliverable_cascade import (
+                _handler as resolved_cascade_handler,
+            )
+        except Exception:
+            resolved_cascade_handler = None
 
     # NOT wrapped in `_measure()` (unlike the two C3a-composed steps above):
     # `wsc_tail.py`'s own `_TailTiming` step-name set is a PINNED contract
@@ -1069,7 +1088,18 @@ async def run(
 
     resolved_gate_cascade_clear_handler = gate_cascade_clear_handler
     if resolved_gate_cascade_clear_handler is None:
-        resolved_gate_cascade_clear_handler = get_op_handler(OP_HANDOFF_TRANSITION)
+        # `handoff.transition` is not on the suspension roster today, but
+        # `get_op_handler` raises `OpSuspendedError` rather than returning
+        # None for any op that IS suspended (ipc.py's own docstring) -- fold
+        # that raise into the existing not-registered branch below so a
+        # future kill of this op degrades to `_run_gate_cascade_clear`'s
+        # clean "not-registered" skip instead of crashing this tail AFTER
+        # the ceremony commit has already landed (see module docstring's
+        # deliverable-cascade precedent immediately above for the same fold).
+        try:
+            resolved_gate_cascade_clear_handler = get_op_handler(OP_HANDOFF_TRANSITION)
+        except OpSuspendedError:
+            resolved_gate_cascade_clear_handler = None
 
     # NOT wrapped in `_measure()` -- same rationale as the deliverable-cascade
     # step immediately above (module docstring "Timing-span preservation").
@@ -1096,95 +1126,13 @@ async def run(
 # ---------------------------------------------------------------------------
 
 
-@register_op(OP_NAME)
-async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
-    """JSON-RPC `ceremony.post_commit_tail` handler -- standalone dispatch
-    entry point for this op. `wsc_tail.py` does NOT call this handler; it
-    calls `run()` directly (see module docstring). This handler exists so the
-    op is independently reachable via the registry, same convention as
-    `handoff.close_origin_stub` remaining independently reachable after its
-    own fold into `wsc_tail.py`'s step 5d.
 
-    Parameters (params dict):
-        sid                  (str, required)  -- WSC session id, forwarded to
-                                `consumed_handoff_stamp.post_commit_stamp_and_ship`.
-        committed_sha        (str, required)  -- the real post-commit SHA
-                                (Position A -- never re-derived here).
-        chain_terminal       (bool, optional, default False).
-        governing_plan_slug  (str, optional)  -- origin-stub-close join key.
-        initial_consumed     (list[[str, dict]], optional) -- consumed-handoff
-                                pairs from the caller's own step-1 resolve;
-                                first entry is the origin-stub-close join
-                                fallback.
-        push_mode            (str, optional, default PUSH_MODE_SYNC).
-
-    Returns `{exit_code, stamped, empty_consumed_set, follow_up_committed_sha,
-    follow_up_committed_shas, follow_up_pushed, origin_stub_close,
-    deliverable_cascade, gate_cascade_clear}` on success
-    (`follow_up_committed_shas` carries every follow-up commit the stamp leg
-    landed -- one per `deliverable_id` in the stamped set, so a multi-baton
-    close reports all of them rather than only the tip named by
-    `follow_up_committed_sha`);
-    `{exit_code: 1, error}` on a setup error (missing required param,
-    unregistered `handoff.close_origin_stub`, no `repo_root`).
-    `deliverable.cascade_terminal` (C6b) and `handoff.transition` (C3) are
-    both resolved on a best-effort basis -- if either is not registered, its
-    result field comes back a clean `{"acted": [], "skipped": [...],
-    "failed": []}`, not a setup error.
-    """
-    sid = str(params.get("sid") or "")
-    if not sid:
-        return {"exit_code": 1, "error": f"{OP_NAME}: 'sid' param is required"}
-
-    committed_sha = str(params.get("committed_sha") or "")
-    if not committed_sha:
-        return {"exit_code": 1, "error": f"{OP_NAME}: 'committed_sha' param is required"}
-
-    if repo_root is None:
-        return {
-            "exit_code": 1,
-            "error": f"{OP_NAME}: repo_root arg is None -- common_dir not supplied by engine",
-        }
-
-    common_dir = Path(repo_root)
-    worktree_root = main_worktree_root(common_dir)
-    chain_terminal = bool(params.get("chain_terminal", False))
-    governing_plan_slug = str(params.get("governing_plan_slug") or "")
-    initial_consumed_raw = params.get("initial_consumed") or []
-    initial_consumed = [(str(p), dict(fm)) for p, fm in initial_consumed_raw]
-    push_mode = str(params.get("push_mode") or PUSH_MODE_SYNC)
-
-    handler = get_op_handler(OP_CLOSE_ORIGIN_STUB)
-    if handler is None:
-        return {"exit_code": 1, "error": f"{OP_NAME}: {OP_CLOSE_ORIGIN_STUB} not registered"}
-
-    outcome = await run(
-        worktree_root,
-        common_dir,
-        sid,
-        committed_sha,
-        chain_terminal=chain_terminal,
-        governing_plan_slug=governing_plan_slug,
-        initial_consumed=initial_consumed,
-        close_origin_stub_handler=handler,
-        push_mode=push_mode,
-    )
-
-    has_failure = (
-        bool(outcome.stamp_outcome.errors)
-        or bool(outcome.origin_stub_result.get("failed"))
-        or bool(outcome.deliverable_cascade_result.get("failed"))
-        or bool(outcome.gate_cascade_clear_result.get("failed"))
-    )
-
-    return {
-        "exit_code": 2 if has_failure else 0,
-        "stamped": outcome.stamp_outcome.stamped,
-        "empty_consumed_set": outcome.stamp_outcome.empty_consumed_set,
-        "follow_up_committed_sha": outcome.stamp_outcome.follow_up_committed_sha,
-        "follow_up_committed_shas": outcome.stamp_outcome.follow_up_committed_shas,
-        "follow_up_pushed": outcome.stamp_outcome.follow_up_pushed,
-        "origin_stub_close": outcome.origin_stub_result,
-        "deliverable_cascade": outcome.deliverable_cascade_result,
-        "gate_cascade_clear": outcome.gate_cascade_clear_result,
-    }
+# `ceremony.post_commit_tail` was DELETED as an op 2026-08-27 under the 200ms
+# process-time bar (kill ledger K-116). Only the standalone dispatch surface is
+# gone: `wsc_tail.py` calls `run()` directly and never went through the handler
+# (see this module's own docstring), so the in-process path is unchanged.
+#
+# The op could only ever fail now anyway -- it resolved deliverable.cascade_terminal
+# and session.sweep_consumed_handoffs, both killed in the same sweep, so every
+# dispatch raised OpSuspendedError. Killing it is the honest disposition; leaving
+# a registered op that cannot succeed is not.

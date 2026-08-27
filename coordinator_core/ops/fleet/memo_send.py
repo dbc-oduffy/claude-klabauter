@@ -114,10 +114,10 @@ _MODE = "send"
 _SENT_BY_UNRESOLVED = "unresolved"
 
 
-def _resolve_sent_by(fm: dict) -> str:
+def _resolve_sent_by(fm: dict, session_id: Optional[str]) -> str:
     """The sender session id for this send: the draft's own value if it has
-    one, otherwise resolved fresh from session identity, otherwise the
-    sentinel.
+    one, otherwise the caller-supplied `session_id` param, otherwise a
+    process-env resolution, otherwise the sentinel.
 
     Send time is the ONLY place this field is resolved. `memo.draft` and
     `memo.compose` never author it and `memo.compose` actively strips one
@@ -127,12 +127,40 @@ def _resolve_sent_by(fm: dict) -> str:
     only reachable outcome, which is what silently made ~49 delivered memos
     unrepliable between 2026-08-25 and 2026-08-27.
 
+    Moving resolution to send time did NOT close that hole on its own, and
+    this param is the part that does. memo.send is served by the resident
+    warm engine — ONE process shared by every session on the box — so its
+    `os.environ` names whichever session happened to boot the server, not the
+    session making this call. The env-only chain therefore stamps either a
+    stranger's id or, with those vars absent from the server env, the
+    sentinel; the latter was observed on 2026-08-27 against nine live
+    doe-claude-* sessions, with the commit-trailer carrier failing in the
+    same breath. Identity rides the per-call payload for exactly the reason
+    `ops/warm_guard_evaluate.py` refuses to read `os.environ` for an override
+    decision, and in the shape `queue_append`'s caller-authoritative
+    `session_id` param already established. The env tier survives only as the
+    cold/direct-invoke fallback, unreachable whenever a caller names itself.
+
     Negative-spec: never RAISES on an unresolvable session — an un-nameable
     sender degrades the memo's repliability, it does not fail the delivery.
+
+    THE HISTORICAL CORPUS IS NOT BACKFILLED, and that is a decision, not an
+    oversight. Measured 2026-08-27: 710 of 711 files in this repo's
+    `state/memo-outbox/sent/` carry no `sent_by` at all, and DoE reports 639
+    of 640 on their side — the gap is symmetric and structural, not one
+    repo's defect. `sent-ledger.jsonl` is the better-attributed carrier of
+    the two (2319 rows: 450 named, 67 sentinel, 1802 absent), so a reader
+    chasing a historical sender should start there and expect a miss. Not
+    rewritten because the sending sessions are long gone: a backfill could
+    only re-derive identity by inference, and a confidently-wrong `sent_by`
+    is worse than an absent one — the sentinel's whole reason for existing.
+    This function fixes attribution from here forward only.
     """
     carried = fm.get("sent_by")
     if isinstance(carried, str) and carried.strip():
         return carried
+    if session_id:
+        return session_id
     return resolve_current_session_id() or _SENT_BY_UNRESOLVED
 
 
@@ -176,7 +204,7 @@ def _delivery_commit_message(topic: str, from_id: str, sent_by: str) -> str:
 
 # Param keys this handler declares; anything else fails loud rather than
 # being silently dropped (mirrors the pre-kill C9/A11 fix's discipline).
-_KNOWN_PARAM_KEYS = frozenset({"dry_run", "topic"})
+_KNOWN_PARAM_KEYS = frozenset({"dry_run", "topic", "session_id"})
 
 _OUTBOX_DIRNAME = ("state", "memo-outbox")
 _SENT_SUBDIRNAME = ("state", "memo-outbox", "sent")
@@ -197,11 +225,15 @@ MUTATES = ["state/memo-outbox/sent-ledger.jsonl", "cross-repo/inbox/*.md"]
 # ---------------------------------------------------------------------------
 
 def _validate_send_params(params: dict):
-    """Validate memo.send params; return (dry_run, topic) or a setup-error dict.
+    """Validate memo.send params; return (dry_run, topic, session_id) or a
+    setup-error dict.
 
-    Only `dry_run` (bool, required) and `topic` (slug, required) are
-    declared — every other field this send needs comes off the caller's own
-    already-staged `state/memo-outbox/<topic>.md` draft, never off the wire.
+    Only `dry_run` (bool, required), `topic` (slug, required) and
+    `session_id` (str, optional) are declared — every other field this send
+    needs comes off the caller's own already-staged
+    `state/memo-outbox/<topic>.md` draft, never off the wire. `session_id` is
+    the deliberate exception: the CALLER's own identity is the one thing
+    neither the draft nor this process can know (see `_resolve_sent_by`).
     """
     dry_run = params.get("dry_run")
     if not isinstance(dry_run, bool):
@@ -232,7 +264,19 @@ def _validate_send_params(params: dict):
             f"Path chars (/, .., absolute paths) are not permitted.",
         )
 
-    return dry_run, topic
+    session_id = params.get("session_id")
+    if session_id is not None:
+        if not isinstance(session_id, str) or not session_id.strip():
+            return build_setup_error_result(
+                _MODE, dry_run,
+                "memo.send: session_id, when supplied, must be a non-empty "
+                "string — omit the param rather than sending a blank one, so "
+                "a caller that cannot name itself stays distinguishable from "
+                "one that did not try.",
+            )
+        session_id = session_id.strip()
+
+    return dry_run, topic, session_id
 
 
 # ---------------------------------------------------------------------------
@@ -306,7 +350,7 @@ def _read_draft(draft_path: Path) -> tuple[Optional[dict], Optional[str], Option
 
 
 def _compose_delivered_content(
-    *, fm: dict, body: str, today: str,
+    *, fm: dict, body: str, today: str, sent_by: str,
 ) -> tuple[Optional[str], Optional[str]]:
     """Compose the delivered (status: open) memo content from a draft's
     parsed frontmatter + body. Returns (content, error) — exactly one non-None.
@@ -343,7 +387,7 @@ def _compose_delivered_content(
             scoped_to=fm.get("scoped_to"),
             in_reply_to=fm.get("in_reply_to"),
             space=fm.get("space"),
-            sent_by=_resolve_sent_by(fm),
+            sent_by=sent_by,
         )
     except ValueError as exc:
         return None, f"memo.send: {exc}"
@@ -424,6 +468,13 @@ def _memo_send(params: dict, repo_root=None) -> dict:
         dry_run (bool, required): preview (true) vs. act (false).
         topic   (str, required):  the staged draft's topic slug — identifies
                                    `state/memo-outbox/<topic>.md`.
+        session_id (str, optional): the CALLING session's id, stamped as the
+                                   delivered memo's `sent_by:` and its
+                                   delivery commit's `Session-Id:` trailer.
+                                   Supplied by a cold client process that
+                                   still holds the caller's own env; a warm
+                                   resident server cannot read it (see
+                                   `_resolve_sent_by`).
 
     repo_root: git common dir (`_OP_KEY_SCOPE = "common_dir"`) — the SENDER's
     own worktree is derived via `main_worktree_root(repo_root)`. The
@@ -432,7 +483,7 @@ def _memo_send(params: dict, repo_root=None) -> dict:
     validated = _validate_send_params(params)
     if isinstance(validated, dict):
         return validated  # exit_code:1 setup-error envelope
-    dry_run, topic = validated
+    dry_run, topic, session_id = validated
 
     if repo_root is None:
         return build_setup_error_result(
@@ -455,7 +506,14 @@ def _memo_send(params: dict, repo_root=None) -> dict:
         )
 
     today = datetime.date.today().isoformat()
-    content, compose_error = _compose_delivered_content(fm=fm, body=body, today=today)
+    # Resolved ONCE and threaded to all three carriers — the frontmatter
+    # field, the delivery commit's trailer and the sent-ledger row must name
+    # the same sender, or a reader joining them has three answers to one
+    # question.
+    sent_by = _resolve_sent_by(fm, session_id)
+    content, compose_error = _compose_delivered_content(
+        fm=fm, body=body, today=today, sent_by=sent_by,
+    )
     if compose_error is not None:
         return build_setup_error_result(_MODE, dry_run, compose_error)
 
@@ -548,7 +606,7 @@ def _memo_send(params: dict, repo_root=None) -> dict:
 
     rel_path = "cross-repo/inbox/" + filename
     msg_file = _write_msg_file(
-        _delivery_commit_message(topic, from_id, _resolve_sent_by(fm))
+        _delivery_commit_message(topic, from_id, sent_by)
     )
     try:
         commit_result = git_native.commit_authored_new_file(
@@ -620,7 +678,7 @@ def _memo_send(params: dict, repo_root=None) -> dict:
         topic=topic, to=to, kind=fm.get("kind"), summary=delivered_fm.get("summary"),
         delivered_to=delivered_to, in_reply_to=fm.get("in_reply_to"),
         delivery_commit_sha=delivery_commit_sha,
-        sent_by=_resolve_sent_by(fm),
+        sent_by=sent_by,
     )
     appended_line = json.dumps(row, ensure_ascii=False) + "\n"
 

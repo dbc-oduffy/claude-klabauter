@@ -57,7 +57,8 @@ from unittest import mock
 
 import pytest
 
-from coordinator_core.ops.invoke_from_argv import _invoke_from_argv
+from coordinator_core.ops import invoke_from_argv
+from coordinator_core.ops.invoke_from_argv import _invoke_from_argv, _run_entrypoint
 
 # Several tests spawn a real `sys.executable -m coordinator_core.invoke`
 # subprocess for the byte-identical CLI comparison (the dispatch brief's
@@ -367,3 +368,93 @@ def test_repeated_served_dispatch_thread_count_stays_bounded():
         f"thread count must settle back near its starting level, not grow "
         f"proportionally with 50 calls; before={before} after={after}"
     )
+
+
+# ---------------------------------------------------------------------------
+# (f) `params.entrypoint` set: the process-global chdir does not race across
+#     two concurrent calls with different `cwd`s (C7 — the entrypoint path
+#     stops chdir-ing a process 50 sessions share).
+# ---------------------------------------------------------------------------
+
+
+def test_concurrent_entrypoint_calls_do_not_race_the_shared_process_cwd(tmp_path):
+    """Two `_run_entrypoint` calls with DIFFERENT `cwd`s, started concurrently
+    on separate threads, must not interleave their `os.chdir` spans. Each
+    call's fake CLI records the cwd it observed on entry and on exit — if
+    `_ENTRYPOINT_CWD_LOCK` did not serialize the chdir/call/restore span, the
+    second thread's `os.chdir` could fire while the first thread's `main` is
+    still mid-run, so the first call's exit-time `os.getcwd()` would no
+    longer match its own entry-time `os.getcwd()`. This is the exact hazard
+    named in state/audits/2026-08-27-torn-read-hazard-sweep.md.
+    """
+    import builtins
+    import time
+
+    bin_dir = tmp_path / "coordinator" / "bin"
+    bin_dir.mkdir(parents=True)
+    script = bin_dir / "fake-entrypoint-cwd-race.py"
+    script.write_text(
+        "import builtins\n"
+        "import os\n"
+        "import time\n"
+        "\n"
+        "\n"
+        "def main(argv):\n"
+        "    rec = builtins._ENTRYPOINT_CWD_RACE_RECORD\n"
+        "    entry_cwd = os.getcwd()\n"
+        "    rec.append((\"start\", entry_cwd))\n"
+        "    time.sleep(0.2)\n"
+        "    rec.append((\"end\", entry_cwd, os.getcwd()))\n"
+        "    return 0\n",
+        encoding="utf-8",
+    )
+
+    cwd_a = tmp_path / "cwd_a"
+    cwd_b = tmp_path / "cwd_b"
+    cwd_a.mkdir()
+    cwd_b.mkdir()
+
+    builtins._ENTRYPOINT_CWD_RACE_RECORD = []
+    try:
+        with mock.patch.object(invoke_from_argv, "_ENGINE_ROOT", tmp_path), mock.patch.object(
+            invoke_from_argv,
+            "_WARM_ENTRYPOINT_ALLOWLIST",
+            frozenset({"fake-entrypoint-cwd-race"}),
+        ):
+            results: dict = {}
+
+            def _call(key: str, cwd: Path) -> None:
+                results[key] = _run_entrypoint("fake-entrypoint-cwd-race", [], str(cwd))
+
+            t1 = threading.Thread(target=_call, args=("a", cwd_a))
+            t2 = threading.Thread(target=_call, args=("b", cwd_b))
+            t1.start()
+            time.sleep(0.02)
+            t2.start()
+            t1.join(timeout=5)
+            t2.join(timeout=5)
+
+        assert not t1.is_alive() and not t2.is_alive()
+        for key, result in results.items():
+            assert result["exit_code"] == 0, f"{key}: {result}"
+
+        record = builtins._ENTRYPOINT_CWD_RACE_RECORD
+        assert len(record) == 4, record
+
+        # Each call's own exit-time cwd matches its own entry-time cwd —
+        # nothing chdir'd out from under it mid-run.
+        for entry in record:
+            if entry[0] == "end":
+                _, entry_cwd, exit_cwd = entry
+                assert entry_cwd == exit_cwd, (
+                    f"cwd changed mid-call — the lock did not hold: {entry}"
+                )
+
+        # The two calls never interleaved: a ("start", "end") pair is
+        # contiguous, never split by the other call's "start".
+        kinds = [entry[0] for entry in record]
+        assert kinds == ["start", "end", "start", "end"], (
+            f"entrypoint calls interleaved instead of serializing: {kinds}"
+        )
+    finally:
+        del builtins._ENTRYPOINT_CWD_RACE_RECORD

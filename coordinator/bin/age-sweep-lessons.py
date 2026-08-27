@@ -59,9 +59,7 @@ from pathlib import Path
 
 import yaml  # PyYAML — available in coordinator venv
 
-_LIB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib")
-if _LIB_DIR not in sys.path:
-    sys.path.insert(0, _LIB_DIR)
+import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
 import cc_invoke  # noqa: E402
 
 cc_invoke.ensure_engine_on_path(__file__)

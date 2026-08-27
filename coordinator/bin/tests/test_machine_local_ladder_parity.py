@@ -170,7 +170,21 @@ def _derive_settings_home(reader_path: str) -> str:
     ``_SCENARIOS``'s (also POSIX) expected literals. ``_same_home`` canonicalizes
     the separator on the compare side for the same reason.
     """
-    return posixpath.dirname(posixpath.dirname(reader_path.replace("\\", "/")))
+    normalized = reader_path.replace("\\", "/")
+    # Review: code-reviewer (Finding 2, this slice) -- a captured reader_path
+    # with fewer than two path components after normalization (e.g. a shim
+    # quoting bug that only captured a bare filename) used to fall through to
+    # a silent `posixpath.dirname` x2 -> "" -- the exact failure shape the
+    # docstring above says the OLD (pre-fix) code fell into for .ps1 output.
+    # Fail loudly here instead of letting a future capture regression
+    # masquerade as another empty-string parity mismatch.
+    assert normalized.rstrip("/").count("/") >= 2, (
+        f"reader_path has too few components to derive a settings-home from: "
+        f"{reader_path!r} (normalized: {normalized!r}) -- expected "
+        f"'<settings-home>/bin/_machine_local.py' or similar; this looks like "
+        f"a capture bug in the fake python3 shim, not a real ladder answer."
+    )
+    return posixpath.dirname(posixpath.dirname(normalized))
 
 
 
@@ -190,6 +204,19 @@ def _same_home(resolved: str, expected: str) -> bool:
         return value.rstrip("/").lower()
 
     return _canon(resolved) == _canon(expected)
+
+
+def test_derive_settings_home_normalizes_unc_reader_path():
+    # Review: code-reviewer (Finding 3, this slice) -- a direct unit test of
+    # _derive_settings_home against a UNC-rooted reader path
+    # (`\\server\share\...`), not exercised by either subprocess round-trip
+    # above. The blanket `\` -> `/` replace turns the UNC path into
+    # `//server/share/...`, which is exactly the cross-dialect shape
+    # `_same_home`'s own docstring calls out as the bug class this file
+    # exists to catch.
+    reader_path = r"\\server\share\home\.coordinator-claude-settings\bin\_machine_local.py"
+    resolved = _derive_settings_home(reader_path)
+    assert resolved == "//server/share/home/.coordinator-claude-settings"
 
 
 @pytest.mark.parametrize("env_overrides,expected_settings_home", _SCENARIOS)

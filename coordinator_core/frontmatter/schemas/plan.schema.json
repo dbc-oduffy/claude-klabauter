@@ -256,6 +256,14 @@
           "type": "boolean",
           "description": "Whether HEAD now satisfies `prime_exit_criterion.statement`. `false` is legitimate and takes `reason`; it is never omitted in place of a `false` value."
         },
+        "asserted_by": {
+          "type": "string",
+          "description": "The session id of the EM that made the assertion. Names WHO looked, so an assertion is attributable rather than anonymous — route-c's stamp was made in good faith by an EM who had genuinely looked, and attribution is what lets a later reader ask them what they saw."
+        },
+        "asserted_at": {
+          "type": "string",
+          "description": "ISO-8601 date the assertion was made. Dates the observation, so a re-run against a much later HEAD is visibly not the same evidence."
+        },
         "falsifier_output": {
           "type": "string",
           "description": "The SAME observation (`prime_exit_criterion.falsifier.how`) re-run against HEAD, raw. Judged against `prime_exit_criterion.falsifier.expected_when_true`, never against `baseline_output` alone — a changed output that still does not match `expected_when_true` is a criterion that is still false, differently, and unchanged output fails the same check without needing a separate rule. Bounded at 4096 chars: this lands raw in the plan's YAML frontmatter, where an unbounded payload is a corpus hazard and the frontmatter validator is lenient about coercions. Output over the bound means the falsifier is too wide, never that the record should be truncated — narrow the observation (a count, a filtered line set).",

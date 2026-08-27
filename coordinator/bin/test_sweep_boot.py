@@ -36,9 +36,6 @@ import re
 import sys
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-_LIB_DIR = os.path.join(SCRIPT_DIR, "lib")
-if _LIB_DIR not in sys.path:
-    sys.path.insert(0, _LIB_DIR)
 
 _SWEEP_BOOT_PATH = os.path.join(SCRIPT_DIR, "sweep-boot.py")
 

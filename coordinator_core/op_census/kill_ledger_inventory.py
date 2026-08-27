@@ -69,6 +69,15 @@ KILL_LEDGER = REPO_ROOT / "state" / "kill-ledger.md"
 
 _ENTRY_SPLIT = re.compile(r"^## (?=K-\d)", re.M)
 _HEADING = re.compile(r"^K-(\d+)\s*[—-]\s*(.*)$")
+#: A range heading covers several K-ids that share one disposition, e.g.
+#: `K-103..K-115 — the 200ms sweep`. Kept a distinct pattern rather than folding
+#: into `_HEADING` so the single-id path stays byte-identical.
+_RANGE_HEADING = re.compile(r"^K-(\d+)\.\.K-(\d+)\s*[—-]\s*(.*)$")
+#: Attributes an op to its own K-id inside a range heading's per-op table —
+#: `| K-103 | \`write_surface.emit_manifest\` | ...`. Best-effort: a row that
+#: doesn't match this shape leaves that id's `op_name` as None rather than
+#: guessing.
+_RANGE_ROW_OP = re.compile(r"^\|\s*K-(\d+)\s*\|\s*`([a-z][a-z0-9_.]*)`\s*\|", re.M)
 
 #: An op name in a heading or a `**What:**` line is written as `` `dotted.name` ``.
 #: Anchored to the ledger's own convention: lowercase, dot-separated, no spaces.
@@ -91,6 +100,11 @@ _LANDED_MARKERS = (
     # is this module's own stated defect ("a status vocabulary the rules cannot
     # place is the classifier's, not the ledger's") reported against the ledger.
     "gravestone",
+    # `CUT.` records a landing the same way `killed`/`removed` do (K-103..K-115,
+    # the 200ms sweep) — same defect shape as the `gravestone` addition above:
+    # absent this marker the entry falls through to CONTESTED, which is this
+    # module's own stated classifier gap, not a real ledger disagreement.
+    "cut",
 )
 _NON_CUT_MARKERS = (
     "not yet cut",
@@ -165,7 +179,12 @@ def parse_ledger(text: str) -> List[LedgerEntry]:
     entries: List[LedgerEntry] = []
     for section in _ENTRY_SPLIT.split(text)[1:]:
         heading, _, body = section.partition("\n")
-        matched = _HEADING.match(heading.strip())
+        stripped_heading = heading.strip()
+        range_matched = _RANGE_HEADING.match(stripped_heading)
+        if range_matched:
+            entries.extend(_expand_range_entry(range_matched, body))
+            continue
+        matched = _HEADING.match(stripped_heading)
         if not matched:  # pragma: no cover - the split guarantees the shape
             raise ValueError(f"unparseable kill-ledger heading: {heading!r}")
         number = int(matched.group(1))
@@ -189,6 +208,39 @@ def parse_ledger(text: str) -> List[LedgerEntry]:
             )
         )
     return entries
+
+
+def _expand_range_entry(matched: "re.Match[str]", body: str) -> List[LedgerEntry]:
+    """One `K-<n>..K-<m>` heading becomes `m - n + 1` `LedgerEntry` rows — every
+    id shares the range's title/status/cost/breaks/returns text and body_chars,
+    so the entries-parsed vs `## K-` heading-count reconciliation in `build()`
+    still counts the population this section actually covers, not the one
+    section it happens to be written as. Op attribution is per-id, best-effort,
+    from the range's own per-op table (`_RANGE_ROW_OP`); an id absent from that
+    table gets `op_name=None` rather than a guess."""
+    start, end, title = int(matched.group(1)), int(matched.group(2)), matched.group(3).strip()
+    status_text = _field(body, "Status", limit=260)
+    cost_text = _field(body, "Cost", "Measured cost", limit=260)
+    breaks_text = _field(body, "What breaks", "Breaks", limit=260)
+    returns_when_text = _field(
+        body, "Returns when", "Comes back when", "What would have to be true", limit=260
+    )
+    body_chars = len(body)
+    op_by_number = {int(n): op for n, op in _RANGE_ROW_OP.findall(body)}
+    return [
+        LedgerEntry(
+            number=number,
+            key=f"K-{number}",
+            title=title,
+            status_text=status_text,
+            op_name=op_by_number.get(number),
+            cost_text=cost_text,
+            breaks_text=breaks_text,
+            returns_when_text=returns_when_text,
+            body_chars=body_chars,
+        )
+        for number in range(start, end + 1)
+    ]
 
 
 def _live_op_names() -> frozenset:
@@ -363,9 +415,23 @@ def _cell(text: str, limit: int = 120) -> str:
     return collapsed or "—"
 
 
+def _heading_count(text: str) -> int:
+    """Count of K-ids named by `## K-` headings, range headings expanded —
+    the same population `parse_ledger` produces, so `build()`'s reconciliation
+    compares like with like instead of sections against ids."""
+    count = 0
+    for heading in re.findall(r"^## (K-.+)$", text, re.M):
+        range_matched = _RANGE_HEADING.match(heading.strip())
+        if range_matched:
+            count += int(range_matched.group(2)) - int(range_matched.group(1)) + 1
+        else:
+            count += 1
+    return count
+
+
 def build(ledger_path: Path = KILL_LEDGER) -> Tuple[List[LedgerEntry], int]:
     text = ledger_path.read_text(encoding="utf-8")
-    heading_count = len(re.findall(r"^## K-\d", text, re.M))
+    heading_count = _heading_count(text)
     entries = parse_ledger(text)
     if len(entries) != heading_count:
         raise AssertionError(

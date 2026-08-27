@@ -1129,8 +1129,8 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #            docs/decisions/DR-208-invoke-op-authz-model.md § 5
     "queue.promote": OpClass.MUTATING,
     # ---------------------------------------------------------------------------
-    # queue.cluster / queue.age_ping — READ-class queue-triage primitives, both
-    # classified COMPUTE_ONLY (DR-208 § 5 affirmation below)
+    # queue.cluster — READ-class queue-triage primitive, classified COMPUTE_ONLY
+    # (DR-208 § 5 affirmation below)
     # ---------------------------------------------------------------------------
     # queue.cluster — COMPUTE_ONLY: clusters a caller-scoped queue family's records
     # (loaded via queue_family.load_family_records → records_query.query_records,
@@ -1148,23 +1148,6 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
     # Spec: docs/plans/2026-07-23-queue-triage-terminus-ops.md § C3
     "queue.cluster": OpClass.COMPUTE_ONLY,
-    # queue.age_ping — COMPUTE_ONLY: scans the caller's queue families (loaded via
-    # queue_family.load_family_records, read-only) for aged "deferred" entries;
-    # age is computed at call time from the "created" scalar, never stored. Ack/
-    # exclude-set state lives entirely on the CALLER side — this op reads and
-    # returns, it never writes.
-    # DR-208 five-question affirmation (citing ops/queue_age_ping.py):
-    #   1. Writes, deletes, or reorders any state file, queue, or git object?  No.
-    #      Handler only reads via queue_family.load_family_records; no write path.
-    #   2. Writes into rag's relational store?                                 No.
-    #   3. Opens any file for write (including sentinel creation)?             No.
-    #      Returns a computed {"status": "ok", "entries": [...]} dict; nothing
-    #      staged or written.
-    #   4. Mutates shared mutable state outside its own module?                No.
-    #   5. Persistent state changes observable across process boundaries?     No.
-    # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
-    # Spec: docs/plans/2026-07-23-queue-triage-terminus-ops.md § C4
-    "queue.age_ping": OpClass.COMPUTE_ONLY,
     # ---------------------------------------------------------------------------
     # handoff.scaffold_from_queue — MUTATING: turns a queue-triage selection into a
     # new state/handoffs/*.md baton (DR-208 § 5 affirmation below)
@@ -1899,6 +1882,23 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # Negative-spec: NOT reachable over any network transport (DR-215 retired the UDS/HTTP
     # surface; the sole caller path is `python -m coordinator_core.invoke`).
     "ceremony.post_commit_tail": OpClass.MUTATING,
+    # ceremony.commit_v2 — MUTATING: a thin envelope over `commit.commit_paths`
+    # (coordinator_core/git/commit.py), whose entire purpose is writing git
+    # objects and moving the branch ref (ops/ceremony/commit_v2.py docstring).
+    # DR-208 five-question affirmation (citing ceremony.commit_v2 handler):
+    #   1. Writes, deletes, or reorders any state file, queue, or git object?  YES.
+    #      `commit_paths` writes tree/commit objects and moves the branch ref.
+    #   2. Writes into rag's relational store?                                 No.
+    #   3. Opens any file for write (including sentinel creation)?             YES.
+    #      Splices the git index (`index_write.splice_index`) before committing.
+    #   4. Mutates shared mutable state outside its own module?                YES.
+    #      The landed commit and moved ref are read by every subsequent
+    #      dispatch against this repo.
+    #   5. Persistent state changes observable across process boundaries?     YES.
+    #      The commit sha and ref move persist across the whole box.
+    # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
+    # Spec: docs/plans/2026-08-27-something-must-commit-ceremony-commit-v2.md § C3
+    "ceremony.commit_v2": OpClass.MUTATING,
     # push.outstanding — MUTATING: it pushes refs to a remote. The decision half
     # is a zero-spawn read, but the act half is an outward-facing publish.
     "push.outstanding": OpClass.MUTATING,
@@ -2142,6 +2142,14 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # a "read-only session-scope reporter" — reports THIS session's own scope, no
     # writes. Spec: coordinator_core/ops/session/scope_report.py module docstring.
     "session.scope_report": OpClass.COMPUTE_ONLY,
+    # session.safe_commit_offer — MUTATING, and the plainest case in this table:
+    # the op commits and pushes this session's claimed dirty paths, so it writes
+    # git objects and refs outright. It also appends to the diagnostics log its
+    # own `_log_*_diagnostic` sinks own. Registered 2026-08-27, replacing the
+    # module's `main()` CLI door; scope "none", same target-resolution
+    # convention as session.scope_report just above, which composes this
+    # module's own `compute_offer`.
+    "session.safe_commit_offer": OpClass.MUTATING,
     # workday.drain_pending_push — MUTATING: delegates to
     # `coordinator_core.hooks.auto_push.drain_pending_push`, which pushes and removes
     # the pending-push record on success — a real write/mutation, not a read. Kept a
@@ -3790,7 +3798,6 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #   5. Persistent state changes observable across process boundaries?      No.
     #      Returns the census dict verbatim; no disk write.
     # Spec: docs/plans/2026-08-20-every-repo-detects-its-own-eol-drift.md § C2, C5
-    "eol.census": OpClass.COMPUTE_ONLY,
     # eol.audit_producers — reads only (pathlib.Path.rglob / Path.read_text,
     # ast.parse; no subprocess, no open-for-write). COMPUTE_ONLY affirmed at
     # review on the same basis and by the same reviewer as eol.census above;
@@ -3805,7 +3812,6 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #   5. Persistent state changes observable across process boundaries?      No.
     #      Returns the audit report dict verbatim; no disk write.
     # Spec: docs/plans/2026-08-20-every-repo-detects-its-own-eol-drift.md § C4, C5
-    "eol.audit_producers": OpClass.COMPUTE_ONLY,
     # eol.repair — writes normalized bytes to disk when `mutate: true` is
     # passed (defaults to dry-run reporting, but the op CAN write). MUTATING,
     # unambiguously — no affirmation question applies since question 1 is
@@ -3870,7 +3876,6 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     "install.write_shell_rc_guard_block": OpClass.MUTATING,
     "percolate.run_ci_smoke_check": OpClass.COMPUTE_ONLY,
     "session.commits": OpClass.COMPUTE_ONLY,
-    "session.warm_start": OpClass.MUTATING,
     "session_baton.mint": OpClass.MUTATING,
     "session_baton.promote": OpClass.MUTATING,
     # op_census.breaches — COMPUTE_ONLY: the budget-breach view over the

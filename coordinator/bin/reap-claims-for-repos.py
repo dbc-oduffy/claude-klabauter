@@ -58,9 +58,6 @@ from __future__ import annotations
 import os
 import sys
 
-_LIB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib")
-if _LIB_DIR not in sys.path:
-    sys.path.insert(0, _LIB_DIR)
 
 # Guarded, unlike reap-sessions.py's identical bare import, and for the same
 # reason `main` below catches Exception rather than RuntimeError: this module is
@@ -73,6 +70,7 @@ if _LIB_DIR not in sys.path:
 # line. reap-sessions.py is safe bare only because it runs as its own
 # subprocess under a fail-open hook.
 try:
+    import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
     import cc_invoke  # noqa: E402
     from cc_invoke import _resolve_claude_klabauter_root  # noqa: E402
 

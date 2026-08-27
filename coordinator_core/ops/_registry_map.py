@@ -132,7 +132,6 @@ OP_MODULE_MAP: Dict[str, str] = {
     # enforcement-gap.md): the first op that AUTHORS a blocked_by/blocks
     # roadmap-dependency edge (reciprocal, two-file compound transaction).
     "roadmap.link_stubs":                     "coordinator_core.ops.roadmap_link_stubs",
-    "queue.age_ping":                         "coordinator_core.ops.queue_age_ping",
     "queue.append":                           "coordinator_core.ops.queue_append",
     "queue.cluster":                          "coordinator_core.ops.queue_cluster",
     "queue.promote":                          "coordinator_core.ops.queue_promote",
@@ -183,6 +182,7 @@ OP_MODULE_MAP: Dict[str, str] = {
     "session.guard_hooks_kill_switch_detail": "coordinator_core.ops.session.guard_settings_integrity",
     "session.record_pickup":                  "coordinator_core.ops.session.record_pickup",
     "session.scope_report":                   "coordinator_core.ops.session.scope_report",
+    "session.safe_commit_offer":              "coordinator_core.ops.session.safe_commit_offer",
     "session.resolve_address":                "coordinator_core.ops.session_resolve_address",
     "session.peer_roster":                    "coordinator_core.ops.session_peer_roster",
     "session.work_state":                     "coordinator_core.ops.session_work_state",
@@ -286,6 +286,7 @@ OP_MODULE_MAP: Dict[str, str] = {
     "bug_sweep.verify_fix_files_changed":     "coordinator_core.ops.verify_fix_files_changed",
     "machine.hibernate":                      "coordinator_core.ops.hibernate_machine",
     "commit.exec_bit_change":                 "coordinator_core.ops.ceremony.commit_exec_bit",
+    "ceremony.commit_v2":                     "coordinator_core.ops.ceremony.commit_v2",
     "percolate.run_pre_ci_hooks":             "coordinator_core.ops.run_pre_ci_hooks",
     "percolate.scan_content_leakage_tiers":   "coordinator_core.ops.scan_content_leakage",
     "session.resolve_chain_terminal_disposition": "coordinator_core.ops.session.resolve_chain_terminal_disposition",
@@ -328,15 +329,12 @@ OP_MODULE_MAP: Dict[str, str] = {
     "app_session.census":                     "coordinator_core.ops.app_session",
     "app_session.teardown":                   "coordinator_core.ops.app_session",
     "fleet.backfill_reference_edges":         "coordinator_core.ops.backfill_reference_edges",
-    "session.warm_start":                     "coordinator_core.ops.session.warm_start",
     "session_baton.mint":                     "coordinator_core.ops.session_baton_mint",
     "session_baton.promote":                  "coordinator_core.ops.session_baton_promote",
     # eol.* — declared-vs-actual line-ending drift census/audit/repair, each op
     # its own owning module (census.py, audit_producers.py, repair.py) under
     # the coordinator_core.ops.eol package.
     # Spec: docs/plans/2026-08-20-every-repo-detects-its-own-eol-drift.md § C5
-    "eol.census":                              "coordinator_core.ops.eol.census",
-    "eol.audit_producers":                     "coordinator_core.ops.eol.audit_producers",
     "eol.repair":                              "coordinator_core.ops.eol.repair",
     "warm_guard.evaluate":                     "coordinator_core.ops.warm_guard_evaluate",
     "merge_assemble.apply":                    "coordinator_core.merge_assemble.ops",

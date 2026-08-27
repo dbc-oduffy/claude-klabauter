@@ -124,10 +124,12 @@ def test_both_sidecar_types_still_refuse_without_out(doc_type, doc_new, monkeypa
         ],
     )
 
-    with pytest.raises(SystemExit) as exc:
-        doc_new.main()
+    try:
+        code = doc_new.main()
+    except SystemExit as exc:
+        code = exc.code
 
-    assert exc.value.code == 1
+    assert code == 1
     stderr = capsys.readouterr().err
     assert "--out <path> is required" in stderr
     assert "coordinator_core.dispatch.provision" in stderr

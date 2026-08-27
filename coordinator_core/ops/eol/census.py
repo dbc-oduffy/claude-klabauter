@@ -119,7 +119,6 @@ from coordinator_core.cartography._guard import PathEscapeError, path_guard
 from coordinator_core.git.ls_files_bytes import tracked_files_bytes
 from coordinator_core.git.repo_root import show_toplevel
 from coordinator_core.git.run import run_git
-from coordinator_core.ipc import register_op
 
 #: `check-attr` values that carry no LF/CRLF direction -- "unspecified" (no
 #: declaration at all) feeds declaration coverage; "set"/"unset" (the
@@ -301,7 +300,10 @@ def census(root: Path) -> dict:
     }
 
 
-@register_op("eol.census")
+# Op registration removed 2026-08-27 (K-062): the eol trio collapsed to ONE
+# dispatchable op, `eol.repair`, whose `mutate: false` mode IS this census —
+# it calls `census()` below directly. The handler is kept, unregistered, as
+# the documented wire shape a re-registration would restore verbatim.
 def _eol_census(params: dict, repo_root: Optional[Path] = None) -> dict:
     """"eol.census" handler -- bidirectional declared-vs-actual EOL drift
     census over any caller-supplied `target_root`. See module docstring for

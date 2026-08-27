@@ -49,8 +49,6 @@ def _load_round_module():
     """`percolate-round.py`'s helpers, loaded by path. Reused rather than
     re-derived so this entry point can never drift from the round's own
     lock/pre-flight/pathspec semantics."""
-    if str(_LIB_DIR) not in sys.path:
-        sys.path.insert(0, str(_LIB_DIR))
     if str(_BIN_DIR) not in sys.path:
         sys.path.insert(0, str(_BIN_DIR))
     spec = importlib.util.spec_from_file_location(
@@ -82,6 +80,7 @@ def _load_round_module():
 _CC_INVOKE_DIR = str(_BIN_DIR / "lib")
 if _CC_INVOKE_DIR not in sys.path:
     sys.path.insert(0, _CC_INVOKE_DIR)
+import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
 from cc_invoke import require_dispatch_engine_on_path  # noqa: E402
 
 require_dispatch_engine_on_path()

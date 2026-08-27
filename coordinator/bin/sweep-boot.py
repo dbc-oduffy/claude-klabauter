@@ -68,10 +68,8 @@ import os
 import sys
 
 _BIN_DIR = os.path.dirname(os.path.abspath(__file__))
-_LIB_DIR = os.path.join(_BIN_DIR, "lib")
-if _LIB_DIR not in sys.path:
-    sys.path.insert(0, _LIB_DIR)
 
+import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
 from cc_invoke import require_dispatch_engine_on_path  # noqa: E402
 from sweep_argv import parse_repo_root_argv  # noqa: E402
 

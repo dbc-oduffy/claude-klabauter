@@ -127,9 +127,7 @@ GENERATES = []  # writes ONE dirty memo into the RECEIVER's (sibling) repo tree 
 # outright, no stub) — only the leaf helpers draft/compose still use survive
 # below.
 # ---------------------------------------------------------------------------
-_MC_LIB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib")
-if _MC_LIB_DIR not in sys.path:
-    sys.path.insert(0, _MC_LIB_DIR)
+import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
 from memo_compose import (  # noqa: E402 (late import after sys.path manipulation)
     _yaml_quote,
     _SUMMARY_MAX_CHARS,
@@ -1459,6 +1457,37 @@ def _print_fallback_ambiguous_warning(receiver_em_id: str, candidate_names: list
 # verb #5 `draft`) — its only two call sites lived inside `_classify_receiver`
 # (deleted above), so it went dead alongside it. Confirmed via
 # `grep -n "_classify_receiver_registry_error("` before deletion.
+
+
+def _caller_session_id() -> str:
+    """This CLI process's own session id, for `memo.send`'s `session_id` param.
+
+    Resolution has to happen HERE, in the cold client, because this process
+    is the last place in the chain that still runs under the sending
+    session's environment. `memo.send` executes on the resident warm engine —
+    one process shared by every session on the box — so the op's own
+    `os.environ` names whichever session booted the server, not the sender.
+    Leaving it to resolve there stamped delivered memos with a stranger's id
+    or with the `unresolved` sentinel, and left the delivery commit without
+    its `Session-Id:` trailer: both carriers of sender identity failing from
+    one ambient read (observed 2026-08-27). The engine keeps an env fallback
+    for cold/direct invocation; supplying this param is what makes that
+    fallback unreachable on the warm path.
+
+    Delegates to `coordinator_core.session.core.resolve_session_id` — the
+    canonical `SESSION_ENV_PRECEDENCE` ladder — rather than re-reading the
+    env vars here; that constant's own docstring records the break-class
+    defect two disagreeing copies of the ladder caused. Returns "" when
+    unresolved or when the engine is unimportable, which the op renders as
+    its explicit `unresolved` sentinel rather than a silent omission.
+    """
+    try:
+        cc_invoke.ensure_engine_on_path(__file__)
+        from coordinator_core.session.core import resolve_session_id
+
+        return resolve_session_id() or ""
+    except Exception:  # noqa: BLE001 — fail-soft; an un-nameable sender still sends
+        return ""
 
 
 def _sender_em_id() -> str:
@@ -2881,11 +2910,14 @@ def _cmd_discard(args: argparse.Namespace) -> int:
 def _cmd_send(args: argparse.Namespace) -> int:
     """Handle: cross-repo-memo send <topic>
 
-    Bare forwarder onto claude-klabauter's `memo.send` op (rebuilt 2026-08-25) —
+    Near-bare forwarder onto claude-klabauter's `memo.send` op (rebuilt 2026-08-25) —
     everything the delivery needs (`to`, `title`, `body`, `kind`, etc.) is
     read by the op itself off the already-staged
     `state/memo-outbox/<topic>.md` draft; this handler validates the topic
-    slug, resolves the sender repo root, and renders the op's result. There
+    slug, resolves the sender repo root, and renders the op's result. The one
+    thing it does supply on the wire is `session_id`: the sender's identity
+    is the only field the draft cannot carry and the warm engine cannot read
+    for itself (see `_caller_session_id`). There
     is NO legacy one-shot flag form here (--to/--title/--body-file/etc.) —
     draft-then-send is the only workflow (DR-210).
 
@@ -2928,9 +2960,14 @@ def _cmd_send(args: argparse.Namespace) -> int:
             "cross-repo memos."
         )
 
+    send_params = {"dry_run": False, "topic": topic}
+    session_id = _caller_session_id()
+    if session_id:
+        send_params["session_id"] = session_id
+
     try:
         result = cc_invoke.route_mutation(
-            "memo.send", {"dry_run": False, "topic": topic}, sender_root, legacy_send
+            "memo.send", send_params, sender_root, legacy_send
         )
     except RuntimeError as exc:
         print(f"cross-repo-memo send: {exc}", file=sys.stderr)

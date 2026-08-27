@@ -390,6 +390,11 @@ _COMMIT_SINK_CALL_MARKERS = (
     # tuple bounds a mechanical scan, so the scan is only ever as complete as
     # its least-recently-updated name.
     "run_commit_pipeline(",
+    # C3 (docs/plans/2026-08-27-something-must-commit-ceremony-commit-v2.md):
+    # `ceremony.commit_v2` (ops/ceremony/commit_v2.py :: _handler) reaches git
+    # via `commit_paths(...)` directly -- not `run_commit_pipeline` -- so it
+    # needed its own marker, same lesson as the sixth-pass entry above.
+    "commit_paths(",
 )
 
 #: Bare callee names derived from ``_COMMIT_SINK_CALL_MARKERS`` by stripping

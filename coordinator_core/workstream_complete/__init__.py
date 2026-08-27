@@ -1912,8 +1912,20 @@ def _resolve_baton_claim_window_start(root: Path, gate: "SessionShapeGate") -> O
     `None` when there is no consumed handoff (e.g. a `single-session` close
     with nothing to join against) or its frontmatter carries no `claimed_at`
     — the claim window is then unbounded below, since there is no baton to
-    bound it against; the receipt still has to match on session id and
-    body (AC5), so this never widens the gate into a bypass."""
+    bound it against.
+
+    Honest scope of that unbounded-below case (reviewer finding F6,
+    docs/plans/2026-08-27-the-review-gate-measures-the-whole-session.md):
+    the session-id + non-blank-body checks (AC5) are the only floor left when
+    this returns `None`, and they do NOT exclude a stale receipt from an
+    EARLIER close attempt inside the SAME session — no `claimed_at` bound
+    can exclude it, since by definition it still matches `sid`. The
+    single-session (no consumed handoff) case is the common one, not a rare
+    edge: most dispatches never resume from a baton. This is accepted
+    product behavior, not a bypass this function's return value could ever
+    close on its own — see
+    `test_stale_same_session_receipt_with_no_consumed_handoff_still_counts`
+    for the pinned case."""
     text = _read_consumed_handoff_text(root, gate)
     if text is None:
         return None
@@ -4001,7 +4013,20 @@ def _resolve_review_brightline_floor_kwargs(
     write` names every record `{TIMESTAMP}-{SESSION_ID[:8]}.json` (verified
     on disk), so a plain substring match on the directory-entry NAME, before
     any file is opened, narrows the candidate set to this session's own
-    records with zero backfill gap and no new producer/index. The exact
+    records with no new producer/index.
+
+    "Zero backfill gap" was this note's original claim and it is off by one.
+    Audited 2026-08-27 over the live corpus (`state/review-trail/` plus
+    `archive/review-trail/`): 4710 of 4711 records carrying a `session_id`
+    also carry its first 8 chars in the FILENAME. The single exception,
+    `2026-08-01T175000Z-mise-close-origin-stub.json`, was hand-written and is
+    invisible to this filter. That drop is fail-safe in the only direction
+    that matters — a record the filter cannot see contributes no floor, so the
+    emitted range stays WIDER and more code gets reviewed, never less. Kept as
+    a measured one-record gap rather than a claimed zero, and not worth a
+    producer change.
+
+    The exact
     `session_id`-field check below is KEPT, unchanged, as the 8-char-
     collision guard: the name filter only decides what gets opened, never
     what gets included.

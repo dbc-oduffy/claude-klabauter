@@ -120,9 +120,7 @@ from pathlib import Path
 # outside the tracked repo tree; span-assert is read-only.
 GENERATES = []
 
-_LIB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib")
-if _LIB_DIR not in sys.path:
-    sys.path.insert(0, _LIB_DIR)
+import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
 from cc_invoke import require_colocated_engine_on_path, child_env  # noqa: E402
 
 _GIT_TIMEOUT = 10

@@ -723,3 +723,44 @@ def test_installed_settings_home_shim_importable_standalone_via_subprocess(tmp_p
         f"returncode={result.returncode} stdout={result.stdout!r} stderr={result.stderr!r}"
     )
     assert "IMPORT_OK" in result.stdout
+
+
+def test_run_target_in_process_puts_the_target_script_dir_on_sys_path(tmp_path: Path):
+    """A forwarded target may import its own ``lib.*`` siblings.
+
+    ``runpy.run_path`` on a plain FILE path contributes NOTHING to
+    ``sys.path`` -- it prepends only for a directory or zipfile argument.
+    ``_run_target_in_process`` therefore has to supply the target script's
+    own directory itself, alongside the claude-klabauter root. It did not, and every
+    ``entry_point_shim``-based CLI (``sizing-assemble``, ``pickup-assemble``)
+    died on the Windows in-process leg with ``No module named
+    'lib.entry_point_shim'`` before running a line of its own logic.
+
+    Pins the script-dir leg specifically: the claude-klabauter-live-root leg is exercised
+    by the ``coordinator_core`` import every real target already does, so a
+    regression there is loud, while this one is silent on the POSIX leg
+    (``os.execv`` gets the script dir from interpreter startup) and shows up
+    only on Windows.
+    """
+    claude_klabauter_root = tmp_path / "claude-klabauter"
+    bin_dir = claude_klabauter_root / "coordinator" / "bin"
+    (bin_dir / "lib").mkdir(parents=True)
+    (bin_dir / "lib" / "__init__.py").write_text("", encoding="utf-8")
+    (bin_dir / "lib" / "shim_under_test.py").write_text(
+        "def run_target(name, argv):\n    return 7\n", encoding="utf-8"
+    )
+    target = bin_dir / "target-cli.py"
+    target.write_text(
+        "import sys\n"
+        "from lib.shim_under_test import run_target\n"
+        "sys.exit(run_target('target-cli', sys.argv[1:]))\n",
+        encoding="utf-8",
+    )
+
+    path_before = list(sys.path)
+    rc = resolve_claude_klabauter._run_target_in_process(str(target), ["--flag"], str(claude_klabauter_root))
+
+    assert rc == 7
+    # Restored, not merely popped -- the target is free to mutate sys.path.
+    assert sys.path == path_before
+

@@ -38,6 +38,7 @@ from coordinator_core.ops.fleet.memo_send import (
     _MODE,
     _SENT_LEDGER_FILENAME,
     _memo_send,
+    _resolve_sent_by,
     _validate_send_params,
 )
 
@@ -158,8 +159,19 @@ class TestValidateSendParams:
         assert isinstance(result, dict)
         assert result["exit_code"] == 1
 
-    def test_known_param_keys_is_exactly_dry_run_and_topic(self):
-        assert _KNOWN_PARAM_KEYS == frozenset({"dry_run", "topic"})
+    def test_known_param_keys_is_exactly_dry_run_topic_and_session_id(self):
+        assert _KNOWN_PARAM_KEYS == frozenset({"dry_run", "topic", "session_id"})
+
+    def test_blank_session_id_rejected(self):
+        """An empty `session_id` is a caller bug, not an un-nameable caller.
+
+        The sentinel exists to record a resolution FAILURE; a blank param
+        would launder a caller's own mistake into that same value and make
+        the two indistinguishable on the delivered memo.
+        """
+        result = _validate_send_params({"dry_run": True, "topic": "x", "session_id": "  "})
+        assert isinstance(result, dict)
+        assert result["exit_code"] == 1
 
     def test_invalid_topic_slug_rejected(self):
         result = _validate_send_params({"dry_run": True, "topic": "NOT-A-SLUG!!"})
@@ -173,7 +185,13 @@ class TestValidateSendParams:
 
     def test_valid_params_pass_through(self):
         result = _validate_send_params({"dry_run": False, "topic": "a-topic"})
-        assert result == (False, "a-topic")
+        assert result == (False, "a-topic", None)
+
+    def test_session_id_passes_through_stripped(self):
+        result = _validate_send_params(
+            {"dry_run": False, "topic": "a-topic", "session_id": " sid-1 "}
+        )
+        assert result == (False, "a-topic", "sid-1")
 
 
 # ---------------------------------------------------------------------------
@@ -301,10 +319,14 @@ class TestEndToEndDelivery:
         assert "happy-topic.md" in stat_text
         assert "sent-ledger.jsonl" in stat_text
 
-    def _send_draft_without_sent_by(self, tmp_path, monkeypatch):
+    def _send_draft_without_sent_by(self, tmp_path, monkeypatch, session_id=None):
         """Drive a full send of a draft carrying no `sent_by` — the ordinary
         field-authored shape, since memo.draft never writes the field and
         memo.compose strips one. Returns (ledger row, delivery commit message).
+
+        `session_id` is the caller-supplied param the cold client stamps;
+        None omits it, which is the direct-invoke shape that falls back to
+        this process's own env.
         """
         sender_repo = _make_sender_git_repo(tmp_path)
         receiver_repo = _make_receiver_git_repo(tmp_path)
@@ -328,7 +350,10 @@ class TestEndToEndDelivery:
         _git(sender_repo, "add", "--", "state/memo-outbox/no-sentby-topic.md")
         _git(sender_repo, "commit", "-m", "stage draft no-sentby-topic")
 
-        result = _memo_send({"dry_run": False, "topic": "no-sentby-topic"}, repo_root=sender_repo)
+        params = {"dry_run": False, "topic": "no-sentby-topic"}
+        if session_id is not None:
+            params["session_id"] = session_id
+        result = _memo_send(params, repo_root=sender_repo)
 
         assert result["exit_code"] == 0, result
         ledger_path = sender_repo / "state" / "memo-outbox" / _SENT_LEDGER_FILENAME
@@ -385,6 +410,50 @@ class TestEndToEndDelivery:
             monkeypatch.delenv(var, raising=False)
         row, _ = self._send_draft_without_sent_by(tmp_path, monkeypatch)
         assert row["sent_by"] == "unresolved"
+
+    def test_caller_supplied_session_id_beats_the_process_env(self, tmp_path, monkeypatch):
+        """THE WARM-SERVER REGRESSION. memo.send runs on the resident engine,
+        one process shared by the whole box, so its `os.environ` names
+        whichever session booted the server — not this call's sender. An env
+        read there stamps a stranger's id; here the env is deliberately set
+        to that stranger and the param must win.
+        """
+        monkeypatch.setenv("COORDINATOR_SESSION_ID", "aaaaaaaa-0000-4000-8000-000000000000")
+        row, delivery_msg = self._send_draft_without_sent_by(
+            tmp_path, monkeypatch,
+            session_id="bbbbbbbb-1111-4111-8111-111111111111",
+        )
+        assert row["sent_by"] == "bbbbbbbb-1111-4111-8111-111111111111"
+        assert "Session-Id: bbbbbbbb-1111-4111-8111-111111111111" in delivery_msg
+        assert "aaaaaaaa-0000-4000-8000-000000000000" not in delivery_msg
+
+    def test_caller_supplied_session_id_resolves_a_server_with_no_env(
+        self, tmp_path, monkeypatch,
+    ):
+        """The other half of the same hazard: with the ladder's vars absent
+        from the server env — the 2026-08-27 case — both carriers of sender
+        identity failed at once. The param alone must restore both.
+        """
+        for var in ("COORDINATOR_SESSION_ID", "CLAUDE_SESSION_ID", "CLAUDE_CODE_SESSION_ID"):
+            monkeypatch.delenv(var, raising=False)
+        row, delivery_msg = self._send_draft_without_sent_by(
+            tmp_path, monkeypatch,
+            session_id="cccccccc-2222-4222-8222-222222222222",
+        )
+        assert row["sent_by"] == "cccccccc-2222-4222-8222-222222222222"
+        assert "Session-Id: cccccccc-2222-4222-8222-222222222222" in delivery_msg
+
+    def test_draft_carried_sent_by_still_outranks_the_param(self, tmp_path, monkeypatch):
+        """The param is inserted BELOW the draft's own value, not above it —
+        a draft that already names its sender is threaded straight through
+        (module docstring's Does-NOT list), and the new tier must not have
+        quietly promoted the caller over it.
+        """
+        assert _resolve_sent_by({"sent_by": "on-the-draft"}, "from-the-param") == "on-the-draft"
+
+    def test_param_is_preferred_over_env_at_the_resolver(self, monkeypatch):
+        monkeypatch.setenv("COORDINATOR_SESSION_ID", "from-the-env")
+        assert _resolve_sent_by({}, "from-the-param") == "from-the-param"
 
 
 # ---------------------------------------------------------------------------

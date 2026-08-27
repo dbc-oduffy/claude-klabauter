@@ -102,9 +102,8 @@ pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 _BIN_DIR = os.path.dirname(os.path.abspath(__file__))
 _LIB_DIR = os.path.join(_BIN_DIR, "lib")
-if _LIB_DIR not in sys.path:
-    sys.path.insert(0, _LIB_DIR)
 
+import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
 from bootstrap_discovery import (  # noqa: E402
     FAMILY_SELF_LOCATION,
     _bare_entrypoint_names,

@@ -72,9 +72,6 @@ import sys
 from pathlib import Path
 
 _BIN_DIR = Path(__file__).resolve().parent
-_LIB_DIR = _BIN_DIR / "lib"
-if str(_LIB_DIR) not in sys.path:
-    sys.path.insert(0, str(_LIB_DIR))
 
 _CLAUDE_KLABAUTER_ROOT = _BIN_DIR.parent.parent  # coordinator/bin/.. .. == claude-klabauter checkout root
 if str(_CLAUDE_KLABAUTER_ROOT) not in sys.path:

@@ -279,7 +279,7 @@ class TestCoordinatorWriteReviewTrail(_RepoIdentityHarness):
 class TestVerifyOrientationCacheSync(_RepoIdentityHarness):
     """verify-orientation-cache-sync.py is a READER (AC10 reclassification):
     no write path exists anywhere in this trampoline or the op it dispatches
-    into (it only sys.exit()s on verify outcomes) -- so a MISMATCH warns to
+    into (it only returns a verify outcome code) -- so a MISMATCH warns to
     stderr and still dispatches, it never refuses (DR-277)."""
 
     def _wire_state_root(self, mod, tmp_path: Path) -> Path:
@@ -298,9 +298,7 @@ class TestVerifyOrientationCacheSync(_RepoIdentityHarness):
         called = {"n": 0}
         self._setattr(mod, "_import_op_main", lambda: (lambda argv: called.__setitem__("n", called["n"] + 1) or 0))
 
-        with self.assertRaises(SystemExit) as ctx:
-            mod.main()
-        self.assertEqual(ctx.exception.code, 0)
+        self.assertEqual(mod.main(), 0)
         self.assertEqual(called["n"], 1, "the verify op must still be dispatched on MISMATCH (READER, no write to protect)")
 
     def test_unresolved_still_dispatches(self):
@@ -312,9 +310,7 @@ class TestVerifyOrientationCacheSync(_RepoIdentityHarness):
         called = {"n": 0}
         self._setattr(mod, "_import_op_main", lambda: (lambda argv: called.__setitem__("n", called["n"] + 1) or 0))
 
-        with self.assertRaises(SystemExit) as ctx:
-            mod.main()
-        self.assertEqual(ctx.exception.code, 0)
+        self.assertEqual(mod.main(), 0)
         self.assertEqual(called["n"], 1, "the verify op must still be dispatched on UNRESOLVED")
 
 

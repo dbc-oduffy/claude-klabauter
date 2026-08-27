@@ -115,6 +115,14 @@ Spec backlink: pln-wsc-tail-slim-down-op-scoped-c-e9a265 § C6
 Behavior reference (read for behavior, not structure, per the plan's Anti-scope):
     Port of: coordinator-session.sh cs_archive, cs_release_artifact,
     _cs_claim_held_by_me (DoE e34f2484, 2026-07-22).
+
+REMOVED 2026-08-27 (PM ruling, abd587695): the in-plane archival sweep
+`commit_pipeline._run_in_plane_archive_sweep` and its three legs are GONE from the
+commit path. Text below describing it is retained only as history of why this code
+looks the way it does -- it asserts nothing about the commit path today. Handoffs are
+archived at the occasions that create the work (pickup, workstream-complete,
+workday-complete, and the per-artifact lifecycle paths), never by sweeping a corpus on
+commit. See state/kill-ledger.md.
 """
 
 from __future__ import annotations

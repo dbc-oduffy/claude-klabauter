@@ -170,6 +170,47 @@ def test_gravestone_is_a_landing_word() -> None:
     assert entries[0].population == "LANDED"
 
 
+def _range_entry(status: str, *, start: int = 200, end: int = 202) -> str:
+    rows = "\n".join(f"| K-{n} | `fleet.op_{n}` | " for n in range(start, end + 1))
+    return (
+        f"## K-{start}..K-{end} — a range sweep\n\n"
+        f"- **Status:** {status}\n\n"
+        "| # | op | disposition |\n|---|---|---|\n"
+        f"{rows}\n\n"
+    )
+
+
+def test_range_heading_yields_one_entry_per_id_not_one() -> None:
+    entries = kli.parse_ledger(_range_entry("**CUT.**"))
+    assert [e.key for e in entries] == ["K-200", "K-201", "K-202"]
+
+
+def test_single_id_heading_still_yields_exactly_one() -> None:
+    entries = kli.parse_ledger(_entry("**LANDED**"))
+    assert len(entries) == 1
+
+
+def test_range_entries_attribute_op_names_from_the_table() -> None:
+    entries = kli.parse_ledger(_range_entry("**CUT.**"))
+    assert [e.op_name for e in entries] == ["fleet.op_200", "fleet.op_201", "fleet.op_202"]
+
+
+def test_range_heading_count_reconciles_with_entries_parsed() -> None:
+    ledger = _range_entry("**CUT.**") + _entry("**LANDED**", key="K-900")
+    heading_count = kli._heading_count(ledger)
+    entries = kli.parse_ledger(ledger)
+    assert heading_count == len(entries) == 4
+
+
+def test_cut_is_a_landing_word() -> None:
+    """`CUT.` is how the 200ms-sweep range heading (K-103..K-115) records a
+    landing. Absent this marker the entries fell through to CONTESTED — the
+    same classifier gap `gravestone` was added to close."""
+    entries = kli.parse_ledger(_entry("CUT.", title="`fleet.gone_op`"))
+    kli.classify(entries, live_ops=frozenset(), suspended_ops=frozenset())
+    assert entries[0].population == "LANDED"
+
+
 def test_the_real_ledger_has_no_contested_rows() -> None:
     """AC-7 of the-meter-02: `--fail-on-contested` exits 0 against the real
     ledger. A CONTESTED row here is a real ledger/registry disagreement to

@@ -110,7 +110,17 @@ Negative-spec:
     - NO trailing newline — oracle writes via ``printf '%s'`` (not ``echo``).
     - NO git commit from the handler (D2(v)).
     - NO rag store write (dual-write ban).
-    - NO write to any path outside ``state/review-trail/`` (D2(iv)).
+    - NO write to any TRACKED path outside ``state/review-trail/`` (D2(iv)).
+      The one exception, added by C1b (docs/plans/2026-08-27-the-reviewed-
+      set-is-a-file-not-a-computation.md): a successful write also folds
+      this record into the reviewed-set store under
+      ``.git/coordinator-review-trail/`` via
+      ``coordinator_core.review_trail.backfill.resolve_and_fold`` — the
+      same per-clone, gitignored-by-construction, untracked location
+      ``session_scope.touch_written_path`` already writes to
+      (``.git/coordinator-sessions/``) from this same handler. Never a
+      SECOND write to ``state/review-trail/`` itself, and never a git
+      commit (D2(v) below is unaffected).
     - NO cwd-based repo resolution; worktree derived from caller's ``repo_root`` param.
     - NO concurrent-session sentinel ambiguity detection (cs_resolve_session_id tier-4
       logic) — daemon context always supplies session_id via env. (The sentinel-file
@@ -155,6 +165,7 @@ from coordinator_core.ipc import CallerFacingValidationError, register_op
 from coordinator_core.ops._fm_util import extract_frontmatter_scalar
 from coordinator_core.ops.fleet._common import main_worktree_root
 from coordinator_core.ops.session_context import resolve_current_session_id
+from coordinator_core.review_trail import backfill as review_trail_backfill
 from coordinator_core.session import scope as session_scope
 
 logger = logging.getLogger(__name__)
@@ -2786,6 +2797,45 @@ def write_review_trail_entry(
             session_scope.touch_written_path(
                 resolved_session_id, str(rel_out_path).replace(os.sep, "/"), str(caller_worktree)
             )
+            # --- write-time reviewed-set resolution (C1b) ---
+            # Ordering is load-bearing (C1b brief): the record file above is
+            # ALREADY durably created (O_EXCL succeeded) before this runs —
+            # never the reverse. Applies coverage.py's five preserved credit
+            # rules and folds the result into the reviewed_set store
+            # (coordinator_core.review_trail.reviewed_set) keyed by this
+            # record's own relative path — the SAME record id
+            # `review_trail.backfill.run_backfill` derives for this file, so
+            # a write-time-folded record is never re-folded by a later
+            # backfill pass. Best-effort: a resolution failure here (a
+            # transient git error, an unresolvable endpoint) must never fail
+            # the write itself — it leaves the record UNRESOLVED, which the
+            # backfill path (coordinator_core.review_trail.backfill) heals
+            # on its next run, exactly like a crash between the two writes.
+            record_id = str(rel_out_path).replace(os.sep, "/")
+            try:
+                review_trail_backfill.resolve_and_fold(
+                    str(caller_worktree),
+                    [
+                        (
+                            record_id,
+                            {
+                                "sha_range": sha_range,
+                                "verdict": verdict,
+                                "scope_kind": scope_kind,
+                                "scope": scope,
+                                "session_id": resolved_session_id,
+                            },
+                        )
+                    ],
+                )
+            except Exception:
+                logger.warning(
+                    "review_trail.write: write-time reviewed-set resolution "
+                    "failed for %s — will be healed by the next "
+                    "review_trail.backfill.run_backfill pass",
+                    record_id,
+                    exc_info=True,
+                )
 
     result = {
         "out_path": str(out_path),

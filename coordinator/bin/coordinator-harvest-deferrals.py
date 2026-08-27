@@ -174,8 +174,6 @@ _BIN_DIR = os.path.dirname(os.path.abspath(__file__))
 # instead of re-deriving a partial (env-var-only) approximation of its
 # resolution chain. Mirrors the _LIB_DIR sys.path pattern used by both seams.
 _LIB_DIR = os.path.join(_BIN_DIR, "lib")
-if _LIB_DIR not in sys.path:
-    sys.path.insert(0, _LIB_DIR)
 
 # Bootstrap on the DISPATCH axis before anything below can bind
 # `coordinator_core` on the LOCATOR axis first. `cli_shared` (imported
@@ -186,6 +184,7 @@ if _LIB_DIR not in sys.path:
 # docstring), and once a package is bound in `sys.modules` no later
 # `sys.path` insert can rebind it. Must run before `import cli_shared` /
 # `from coordinator_registry import ...` below.
+import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
 from cc_invoke import _resolve_claude_klabauter_root, require_dispatch_engine_on_path  # noqa: E402
 
 _CLAUDE_KLABAUTER_ROOT = require_dispatch_engine_on_path()

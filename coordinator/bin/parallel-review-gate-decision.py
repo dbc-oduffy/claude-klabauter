@@ -125,9 +125,6 @@ _BIN_DIR = Path(__file__).resolve().parent
 _REPO_ROOT = _BIN_DIR.parent.parent
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
-_LIB_DIR = str(_BIN_DIR / "lib")
-if _LIB_DIR not in sys.path:
-    sys.path.insert(0, _LIB_DIR)
 
 from coordinator_core.contract.decision_object import (  # noqa: E402
     build_envelope,
@@ -136,6 +133,7 @@ from coordinator_core.contract.decision_object import (  # noqa: E402
 )
 from coordinator_core.contract.decision_object.judgment import build_disposition  # noqa: E402
 from coordinator_core.win_portability import no_console_creationflags  # noqa: E402
+import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
 from raw_cmdline_recovery import UnsoundRawCmdlineTransport, recover_windows_argv  # noqa: E402
 
 #: The .cmd launcher's own basename — used by `recover_windows_argv` to locate

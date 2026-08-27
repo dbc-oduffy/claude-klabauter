@@ -331,7 +331,7 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # memo.list (registry-only, scope "none"), this op enumerates the CALLING repo's
     # own state/handoffs/ + archive/handoffs/ trees for a given origin_plan_id, so it
     # needs the caller's own worktree resolved via main_worktree_root(common_dir),
-    # same keying class as queue.cluster/queue.age_ping's own-worktree reads. Without
+    # same keying class as queue.cluster's own-worktree reads. Without
     # this entry dispatch resolves repo_root=None and the handler returns a setup-error
     # envelope rather than silently reading the wrong (or no) repo.
     # Spec: cross-repo memo from claude-central-em, 2026-07-26.
@@ -493,18 +493,16 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "peer_notice.send":                      "common_dir",
     "peer_notice.check":                     "common_dir",
     "queue.promote":                         "common_dir",
-    # queue.cluster / queue.age_ping — keyed on git_common_dir: both cluster/scan the
-    # CALLER's own main-worktree-rooted queue-family directories (state/debt-backlog/,
+    # queue.cluster — keyed on git_common_dir: clusters the CALLER's own
+    # main-worktree-rooted queue-family directories (state/debt-backlog/,
     # state/bug-backlog/, state/improvement-queue/) via
     # queue_family.load_family_records(family, repo_root), same *keying* class as
     # queue.append's write scope (both need the caller's own worktree resolved via
     # common_dir), and the same read pattern as deliverable.rollup/memo.triage's
-    # own-worktree reads. Without this entry dispatch resolves repo_root=None and each op raises
-    # (queue.cluster) or returns an error envelope (queue.age_ping) rather than
-    # silently reading nothing / the wrong repo.
-    # Spec: docs/plans/2026-07-23-queue-triage-terminus-ops.md § C3/C4
+    # own-worktree reads. Without this entry dispatch resolves repo_root=None and the
+    # op raises rather than silently reading nothing / the wrong repo.
+    # Spec: docs/plans/2026-07-23-queue-triage-terminus-ops.md § C3
     "queue.cluster":                         "common_dir",
-    "queue.age_ping":                        "common_dir",
     # handoff.scaffold_from_queue — keyed on git_common_dir: writes a new
     # state/handoffs/*.md baton under the CALLER's own main-worktree-rooted tree
     # (handler derives worktree via main_worktree_root(repo_root)), same scope class
@@ -818,7 +816,6 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # Threading a common_dir in would imply a per-repo warm engine, which
     # is the opposite of the one-engine-per-machine rule it implements.
     # Spec: docs/plans/2026-08-16-one-engine-for-the-whole-box.md § C25.
-    "session.warm_start":                    "none",
     "session_baton.mint":                    "none",
     "session_baton.promote":                 "none",
     "session.reap":                          "common_dir",
@@ -858,6 +855,20 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # session.reap_claims_for_repos / session.record_pickup). Spec:
     # docs/plans/2026-08-03-narrow-subagent-commit-confinement-two-classes.md § C4a.
     "session.scope_report":                  "none",
+    # session.safe_commit_offer — MUTATING commit+push of THIS session's own
+    # claimed dirty paths, but scope "none" for the SAME reason as
+    # session.scope_report directly above, whose report it is the mutating
+    # counterpart to: it takes optional session_id/cwd wire params and resolves
+    # the calling session via
+    # coordinator_core.session.core.resolve_session_id(cwd) when session_id is
+    # absent, never deriving a target from the engine-supplied repo_root.
+    # LOAD-BEARING on the warm path: this process is the server, whose
+    # os.environ is its spawner's, so identity MUST come from the caller's cwd
+    # and never from this process's environment -- an env-only read here commits
+    # under the wrong session's claim. Registered 2026-08-27, replacing the
+    # module's `main()` CLI door (two interpreter starts to reach a warm engine
+    # that answers in 13ms through coordinator-invoke.exe -- DR-344).
+    "session.safe_commit_offer":             "none",
     # session.guard_settings_integrity — MUTATING (classification.py) but scope "none":
     # handler resolves config_dir from an explicit params["config_dir"] override or
     # falls back to CLAUDE_CONFIG_DIR/$HOME/.claude env resolution — never from
@@ -1286,6 +1297,10 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # own working tree/index; must resolve main_worktree_root(common_dir), matching
     # commit.anchors' precedent.
     "commit.exec_bit_change":                   "common_dir",
+    # ceremony.commit_v2 — common_dir: commits within the CALLER's own working
+    # tree/index; must resolve main_worktree_root(common_dir), matching
+    # commit.exec_bit_change / commit.anchors' precedent.
+    "ceremony.commit_v2":                       "common_dir",
     # fanout.poll_scratch_dir — "none": scratch_dir is an explicit caller-supplied
     # param (same class as cartography.*'s target_root), not derived from
     # repo_root/_origin_worktree.
@@ -1487,8 +1502,6 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # silently degrades to repo_root=None — see this module's own scope-table
     # caveat above for why that would be a silent behavior change, not a no-op.
     # Spec: docs/plans/2026-08-20-every-repo-detects-its-own-eol-drift.md § C5
-    "eol.census":                               "none",
-    "eol.audit_producers":                      "none",
     "eol.repair":                               "none",
     # "show_top", not "none": _op_census_report reads repo_root and forwards it
     # to census(repo_root=...), which resolves the corpus it walks from that

@@ -1807,10 +1807,18 @@ def get_op_handler(name: str, msg: Any = None) -> Optional[Callable]:
     # cold path masked it (env is inherited there), which is why it survived a live
     # 9-row publish round.
     #
-    # Defaulting to None keeps the in-process "path 3" callers
-    # (`safe_commit_offer.py`, `tail_ops.py`) reading the environment alone, which is
-    # correct for them: those resolve in the CALLER's own process, where the env IS
-    # the caller's.
+    # Defaulting to None keeps the in-process "path 3" callers (`tail_ops.py`)
+    # reading the environment alone, which is correct for them: those resolve in
+    # the CALLER's own process, where the env IS the caller's.
+    #
+    # `safe_commit_offer.py` was named here until 2026-08-27 and no longer
+    # belongs: it is now the `session.safe_commit_offer` op, so it resolves in
+    # THIS process, the server, whose env is its spawner's. Its handler takes
+    # identity from the caller's `cwd` wire param through
+    # `resolve_session_id(cwd)` for exactly that reason. A module moving from
+    # this list to the registry has to move its identity read with it — an
+    # env-only read left behind commits under the engine's session, not the
+    # caller's.
     if op_budget_suspension.is_suspended(name) and publish_lane.budget_for(name, msg) is None:
         raise op_budget_suspension.OpSuspendedError(
             op_budget_suspension.refusal_message(name)

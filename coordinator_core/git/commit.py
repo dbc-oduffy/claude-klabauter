@@ -156,29 +156,49 @@ def _worktree_blob(gitdir: Path, root: Path, rel: str, data: bytes) -> str:
     # a normaliser misclassifying 81% of this box's files hold a 68/68 suite
     # green, and that is the same hazard wearing a different hat.
     disposition = checkin_attrs.checkin_disposition(root, rel)
-    if disposition != checkin_attrs.UNSET:
+    if disposition == checkin_attrs.BINARY:
+        # `-text` -- no checkin conversion at all, so the raw bytes are
+        # always what git would have hashed. Zero cost, no CR check needed.
+        return write_object(gitdir, b"blob", data)
+    if disposition == checkin_attrs.TEXT:
+        # `text` / `text=auto` / `eol=lf` / `eol=crlf` -- checkin always
+        # normalizes CRLF -> LF (checkin_attrs.py's own point: the two `eol=`
+        # spellings differ only on checkout). CR-free content has nothing to
+        # normalize, so it is byte-identical to what git would write and
+        # costs nothing. CR-bearing content under this pin (this repo's
+        # `*.cmd`/`*.ps1` -> `eol=crlf` shape, measured with real CRLF
+        # bytes) is the surface `_autocrlf_checkin_normalize`'s corpus was
+        # never proven against -- an attribute-aware attempt at it produced
+        # wrong shas (see module docstring), so it is refused to the
+        # batched fallback rather than guessed.
+        if bytes([13]) not in data:
+            return write_object(gitdir, b"blob", data)
         raise FilterUnsupported(
-            f"{rel}: a text/eol/binary attribute ({disposition}) governs this "
-            "path's checkin conversion, which is not reproduced in process. "
-            "Refused rather than written wrong."
+            f"{rel}: a text/eol attribute ({disposition}) pins this path's "
+            "checkin conversion and its content contains CR bytes -- "
+            "normalizing that in process is not proven byte-identical to "
+            "git, so it is refused to the batched fallback rather than "
+            "guessed."
         )
+    if disposition == checkin_attrs.UNRESOLVED:
+        raise FilterUnsupported(
+            f"{rel}: an [attr] macro governs this path's checkin attribute "
+            "and is not resolved in process. Refused rather than guessed."
+        )
+
+    # UNSET -- no attribute matched, so `core.autocrlf` decides. A CR byte
+    # here is the shape `_autocrlf_checkin_normalize`'s corpus DID cover
+    # under autocrlf=true; with autocrlf off or unresolvable, git stores the
+    # bytes as-is and so do we.
     if bytes([13]) in data:
+        if _repo_autocrlf_true(root):
+            return write_object(gitdir, b"blob", _autocrlf_checkin_normalize(data))
         raise FilterUnsupported(
             f"{rel}: contains CR bytes -- checkin normalization for this path "
             "is not reproduced in process, and the raw bytes hash to a blob "
             "git disagrees with. Refused rather than silently committing "
             "different content."
         )
-    return write_object(gitdir, b"blob", data)
-    if disposition == checkin_attrs.TEXT:
-        return write_object(gitdir, b"blob", _autocrlf_checkin_normalize(data))
-
-    # UNSET -- no attribute matched, so `core.autocrlf` decides. A CR byte
-    # here is the shape `_autocrlf_checkin_normalize`'s corpus DID cover
-    # under autocrlf=true; with autocrlf off or unresolvable, git stores the
-    # bytes as-is and so do we.
-    if _repo_autocrlf_true(root):
-        return write_object(gitdir, b"blob", _autocrlf_checkin_normalize(data))
     return write_object(gitdir, b"blob", data)
 
 
@@ -424,11 +444,24 @@ def stage_paths_in_process(
     staged = []
     refused: list = []
     spelling: Dict[str, str] = {}
-    for raw_path in paths:
-        p = _index_key(root, raw_path)
+    keys = [_index_key(root, raw_path) for raw_path in paths]
+    # `git add`'s own mode decision for a TRACKED path is the index's
+    # existing entry, not a stat: on Windows `core.fileMode=false` makes
+    # the worktree bit uninformative (`_mode_for` always answers 100644
+    # there), so re-staging an executable file already tracked at 100755
+    # would otherwise silently drop it back to 100644.
+    existing = parse_index_identity(repo, wanted=set(keys))
+    for raw_path, p in zip(paths, keys):
         spelling[p] = raw_path
+        target = root / p
+        if target.is_dir():
+            # `IsADirectoryError` is an `OSError`, so without this a directory
+            # handed in as a path would fall into the deletion branch below and
+            # silently stage the removal of a name that is not a file. Refuse
+            # loudly instead -- this module takes explicit files only.
+            raise CommitRefused(f"path is a directory, not a file: {raw_path}")
         try:
-            data = (root / p).read_bytes()
+            data = target.read_bytes()
         except OSError:
             # ABSENT FROM DISK IS A DELETION, NOT A SKIP. `git add <path>` on a
             # removed file stages the removal, and the pipeline relies on that
@@ -438,8 +471,10 @@ def stage_paths_in_process(
             updates[p] = index_write.ABSENT
             staged.append(raw_path)
             continue
+        entry = existing.get(p)
+        mode = entry.mode if entry is not None else _mode_for(root / p)
         try:
-            updates[p] = (_mode_for(root / p), _worktree_blob(gitdir, root, p, data))
+            updates[p] = (mode, _worktree_blob(gitdir, root, p, data))
         except FilterUnsupported:
             refused.append(p)
             continue
@@ -451,8 +486,28 @@ def stage_paths_in_process(
                 "does not reproduce and no `blob_fallback` was supplied: "
                 + ", ".join(refused[:5])
             )
-        for rel, sha in blob_fallback(refused).items():
-            updates[rel] = (_mode_for(root / rel), sha)
+        resolved = blob_fallback(refused)
+        # The keys are INDEX KEYS, and that is checked rather than assumed.
+        # `_index_key` exists because an unnormalized path written into
+        # `updates` produces an entry the index does not contain -- silently.
+        # Trusting a caller-supplied resolver to have normalized its own keys
+        # would leave exactly that hole open on the fallback leg.
+        unknown = set(resolved) - set(refused)
+        if unknown:
+            raise CommitRefused(
+                "blob_fallback returned key(s) that were not asked for, so "
+                "they are not index keys: " + ", ".join(sorted(unknown)[:5])
+            )
+        missing = set(refused) - set(resolved)
+        if missing:
+            raise CommitRefused(
+                "blob_fallback resolved no blob for: "
+                + ", ".join(sorted(missing)[:5])
+            )
+        for rel, sha in resolved.items():
+            entry = existing.get(rel)
+            mode = entry.mode if entry is not None else _mode_for(root / rel)
+            updates[rel] = (mode, sha)
             staged.append(spelling.get(rel, rel))
 
     for raw_path in deleted_paths:

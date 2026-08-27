@@ -117,9 +117,7 @@ import tomllib  # stdlib, 3.11+
 # a checkout this script already lives inside) rather than importing
 # coordinator_core.machine_resolver/_machine_local in-process, per this
 # module's existing negative-spec above (dual-identity anti-pattern).
-_LIB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib")
-if _LIB_DIR not in sys.path:
-    sys.path.insert(0, _LIB_DIR)
+import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
 from cc_invoke import require_colocated_engine_on_path  # noqa: E402
 
 _CLAUDE_KLABAUTER_ROOT = require_colocated_engine_on_path(__file__)
@@ -726,7 +724,6 @@ def _check_only_requested(args: argparse.Namespace) -> bool:
 
 
 def main(argv: "list[str] | None" = None) -> int:
-    del argv  # this CLI takes no arguments; argv accepted for the warm-call contract
     parser = argparse.ArgumentParser(
         description=(
             "Idempotently seed enabledPlugins[<plugin>@<marketplace>] = true"
@@ -776,7 +773,7 @@ def main(argv: "list[str] | None" = None) -> int:
         action="store_true",
         help="Compute and report what would be seeded; write nothing.",
     )
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     local_path = _resolve_settings_local_path(args.settings_path)
     committed_path = _resolve_committed_settings_path(

@@ -50,15 +50,13 @@ import os
 import subprocess
 import sys
 
-_LIB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib")
-if _LIB_DIR not in sys.path:
-    sys.path.insert(0, _LIB_DIR)
 
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
 from coordinator_core.win_portability import is_executable, no_console_creationflags  # noqa: E402
+import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
 from machine_local_impl_resolve import (  # noqa: E402
     claude_home as _mlir_claude_home,
     settings_home as _mlir_settings_home,

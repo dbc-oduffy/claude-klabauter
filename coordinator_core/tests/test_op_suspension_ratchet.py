@@ -131,6 +131,7 @@ _RATIFIED_SUSPENSIONS = frozenset({
     # time (PROCESS_BAR_MS), not this module's 2000ms wall-clock occupancy bar --
     # see test_every_entry_carries_its_measured_evidence, which now reads both
     # axes. Six carry wall-clock-only evidence and say so in their own rows.
+    "ceremony.post_commit_tail",
     "write_surface.emit_manifest",
     "deliverable.cascade_terminal",
     "fleet.prune_closed_bugs",

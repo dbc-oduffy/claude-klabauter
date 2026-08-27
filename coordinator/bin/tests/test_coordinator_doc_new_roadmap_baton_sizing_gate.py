@@ -58,10 +58,9 @@ def _run(cli, monkeypatch, tmp_path: Path, *args: str) -> int:
     monkeypatch.setattr(sys, "argv", ["coordinator-doc-new", *args])
     monkeypatch.chdir(tmp_path)
     try:
-        cli.main()
+        return int(cli.main() or 0)
     except SystemExit as exc:
         return int(exc.code or 0)
-    return 0
 
 
 def _baton_args(out_path: Path) -> list[str]:

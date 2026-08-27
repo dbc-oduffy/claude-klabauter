@@ -50,9 +50,6 @@ import sys
 import pytest
 
 _REPO_BIN_DIR = os.path.dirname(os.path.abspath(__file__))
-_LIB_DIR = os.path.join(_REPO_BIN_DIR, "lib")
-if _LIB_DIR not in sys.path:
-    sys.path.insert(0, _LIB_DIR)
 
 import coordinator_registry as reg  # noqa: E402
 

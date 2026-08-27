@@ -69,10 +69,8 @@ import subprocess
 import sys
 
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-_LIB_DIR = os.path.join(_SCRIPT_DIR, "lib")
-if _LIB_DIR not in sys.path:
-    sys.path.insert(0, _LIB_DIR)
 
+import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
 from cc_invoke import require_engine_on_path  # noqa: E402
 
 # The engine root must be on sys.path before the coordinator_core import

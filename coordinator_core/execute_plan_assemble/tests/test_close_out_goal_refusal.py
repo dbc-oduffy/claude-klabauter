@@ -635,3 +635,244 @@ class TestGrandfatheredCorpusIsUnaffected:
             assert exit_code == expected["exit_code"], plan_rel
             assert actual == fixture_expected, plan_rel
             assert "goal_gate" not in result, plan_rel
+
+class TestGrandfatherDatePin:
+    """Arm 0 — a plan that declares no `prime_exit_criterion` at all.
+
+    Before this arm, absence was the gate's only unconditional exit, so an EM
+    who never wrote a criterion was never caught while one who wrote it and
+    got the observation wrong was. These pin the two bounds that keep the
+    refusal off the grandfathered corpus: the `created` date and the M+ size.
+    """
+
+    def _plan(self, tmp_path, *, created: str, tshirt=None, extra_fm: str = "") -> str:
+        sizing_line = ""
+        if tshirt is not None:
+            sizing = tmp_path / "state" / "sizings" / "s.yaml"
+            sizing.parent.mkdir(parents=True, exist_ok=True)
+            sizing.write_text(
+                "schema: sizing-object\nestimate:\n  tshirt: %s\n" % tshirt,
+                encoding="utf-8",
+            )
+            sizing_line = "sizing_object: state/sizings/s.yaml\n"
+        return "---\ntitle: t\ncreated: %s\n%s%s---\n\nbody\n" % (
+            created,
+            sizing_line,
+            extra_fm,
+        )
+
+    def test_m_plus_plan_created_on_the_date_refuses(self, tmp_path):
+        text = self._plan(tmp_path, created="2026-08-27", tshirt="M")
+        gate = coas._evaluate_goal_falsifier_gate(text, tmp_path)
+        assert gate is not None
+        assert gate["refused"] is True
+        assert gate["reason"] == coas.GOAL_REFUSAL_PRIME_ABSENT
+        # The refusal names the date, so a reader learns the rule without
+        # going to look it up.
+        assert coas.GRANDFATHER_DATE in gate["detail"]
+
+    def test_m_plus_plan_created_after_the_date_refuses(self, tmp_path):
+        text = self._plan(tmp_path, created="2026-09-15", tshirt="XL")
+        gate = coas._evaluate_goal_falsifier_gate(text, tmp_path)
+        assert gate is not None and gate["refused"] is True
+
+    def test_plan_created_before_the_date_is_grandfathered(self, tmp_path):
+        """The whole pre-existing corpus. `None`, not a non-refusing dict —
+        the caller adds no result-dict key at all on `None`, which is AC7's
+        differential-fixture guarantee."""
+        text = self._plan(tmp_path, created="2026-08-26", tshirt="XXL")
+        assert coas._evaluate_goal_falsifier_gate(text, tmp_path) is None
+
+    def test_small_plan_on_the_date_is_untouched(self, tmp_path):
+        """S/XS was never in scope — plan.schema.json scopes the falsifier
+        requirement to M+ and this arm inherits that bound rather than
+        widening it."""
+        text = self._plan(tmp_path, created="2026-08-27", tshirt="S")
+        assert coas._evaluate_goal_falsifier_gate(text, tmp_path) is None
+
+    def test_unlinked_sizing_object_declines_rather_than_refusing(self, tmp_path):
+        """Fails toward grandfathering, never toward refusal: an unread size
+        must not be the thing that blocks a stamp."""
+        text = self._plan(tmp_path, created="2026-08-27", tshirt=None)
+        assert coas._evaluate_goal_falsifier_gate(text, tmp_path) is None
+
+    def test_dangling_sizing_pointer_declines(self, tmp_path):
+        text = (
+            "---\ntitle: t\ncreated: 2026-08-27\n"
+            "sizing_object: state/sizings/never-existed.yaml\n---\n\nbody\n"
+        )
+        assert coas._evaluate_goal_falsifier_gate(text, tmp_path) is None
+
+    def test_unparseable_created_declines(self, tmp_path):
+        text = self._plan(tmp_path, created="'not-a-date'", tshirt="L")
+        assert coas._evaluate_goal_falsifier_gate(text, tmp_path) is None
+
+    def test_absent_created_declines(self, tmp_path):
+        sizing = tmp_path / "state" / "sizings" / "s.yaml"
+        sizing.parent.mkdir(parents=True, exist_ok=True)
+        sizing.write_text("estimate:\n  tshirt: M\n", encoding="utf-8")
+        text = "---\ntitle: t\nsizing_object: state/sizings/s.yaml\n---\n\nbody\n"
+        assert coas._evaluate_goal_falsifier_gate(text, tmp_path) is None
+
+    def test_yaml_parsed_date_object_is_handled(self, tmp_path):
+        """An unquoted ISO date loads as `datetime.date`, not `str` — the
+        frontmatter validator is lenient about exactly this coercion, so both
+        shapes reach here in the real corpus."""
+        text = self._plan(tmp_path, created="2026-08-28", tshirt="M")
+        assert "created: 2026-08-28" in text
+        gate = coas._evaluate_goal_falsifier_gate(text, tmp_path)
+        assert gate is not None and gate["refused"] is True
+
+    def test_status_override_suppresses_the_refusal(self, tmp_path):
+        """Same escape hatch every other arm honours (AC19), bound to the
+        body hash — not a new bypass."""
+        provisional = self._plan(tmp_path, created="2026-08-27", tshirt="M")
+        sha = canonical_body_sha(provisional)
+        text = self._plan(
+            tmp_path,
+            created="2026-08-27",
+            tshirt="M",
+            extra_fm=(
+                "status_override_by: sid\n"
+                "status_override_reason: 'body_sha=%s: ratified exception'\n"
+                "status_override_at: '2026-08-27T00:00:00Z'\n" % sha
+            ),
+        )
+        gate = coas._evaluate_goal_falsifier_gate(text, tmp_path)
+        assert gate is not None
+        assert gate["refused"] is False
+        assert gate["override"] is True
+
+    def test_declared_criterion_never_reaches_arm_zero(self, tmp_path):
+        """A plan that DOES declare the field is judged by the arms below,
+        not by this one — pins that arm 0 is an absence check only."""
+        text = (
+            "---\ntitle: t\ncreated: 2026-08-27\n"
+            "prime_exit_criterion:\n  statement: s\n---\n\nbody\n"
+        )
+        gate = coas._evaluate_goal_falsifier_gate(text, tmp_path)
+        assert gate is not None
+        assert gate["reason"] != coas.GOAL_REFUSAL_PRIME_ABSENT
+
+
+class TestAbsentFalsifierIsSizeGated:
+    """Arm 1(cont) — a plan that DECLARES a criterion and carries no usable
+    falsifier.
+
+    Before this arm the gate returned its non-refusing result here at every
+    lane, which applied the S-lane carve-out to all of them: the schema
+    scopes the falsifier requirement to M+ through `sizing_object`, and
+    nothing enforced it. Measured 2026-08-27 across four fixtures differing
+    only in t-shirt, all four non-refusing —
+    cross-repo/archive/2026-08-27-doe-claude-em-ac-12-needs-a-size-gate-not-the-verdict-gate.md.
+
+    These pin the size bound in BOTH directions: the M+ half must refuse, and
+    the S half must keep passing. A gate that only refuses is a gate that has
+    lost its carve-out.
+    """
+
+    def _plan(
+        self, tmp_path, *, created: str = "2026-08-28", tshirt=None, extra: str = ""
+    ) -> str:
+        sizing_line = ""
+        if tshirt is not None:
+            sizing = tmp_path / "state" / "sizings" / "s.yaml"
+            sizing.parent.mkdir(parents=True, exist_ok=True)
+            sizing.write_text(
+                "schema: sizing-object\nestimate:\n  tshirt: %s\n" % tshirt,
+                encoding="utf-8",
+            )
+            sizing_line = "sizing_object: state/sizings/s.yaml\n"
+        return (
+            "---\ntitle: t\ncreated: %s\n%s"
+            "prime_exit_criterion:\n"
+            "  statement: The surface behaves as claimed.\n"
+            "%s"
+            "exit_criterion_met:\n"
+            "  asserted: true\n"
+            "  falsifier_verdict: pass\n"
+            "---\n\nbody\n"
+        ) % (created, sizing_line, extra)
+
+    def test_m_plus_plan_with_no_falsifier_refuses(self, tmp_path):
+        gate = coas._evaluate_goal_falsifier_gate(
+            self._plan(tmp_path, tshirt="M"), tmp_path
+        )
+        assert gate["refused"] is True
+        assert gate["reason"] == coas.GOAL_REFUSAL_FALSIFIER_ABSENT
+        assert coas.GRANDFATHER_DATE in gate["detail"]
+
+    def test_the_refusal_covers_every_m_plus_lane(self, tmp_path):
+        for tshirt in ("M", "L", "XL"):
+            gate = coas._evaluate_goal_falsifier_gate(
+                self._plan(tmp_path, tshirt=tshirt), tmp_path
+            )
+            assert gate["refused"] is True, tshirt
+
+    def test_s_plan_with_no_falsifier_still_passes(self, tmp_path):
+        """The carve-out this arm exists to stop over-applying. S carries
+        statement+derived_from only, by design."""
+        gate = coas._evaluate_goal_falsifier_gate(
+            self._plan(tmp_path, tshirt="S"), tmp_path
+        )
+        assert gate["refused"] is False
+        assert gate["reason"] is None
+
+    def test_plan_created_before_the_date_is_grandfathered(self, tmp_path):
+        gate = coas._evaluate_goal_falsifier_gate(
+            self._plan(tmp_path, created="2026-08-26", tshirt="XL"), tmp_path
+        )
+        assert gate["refused"] is False
+
+    def test_unreadable_size_declines_rather_than_refusing(self, tmp_path):
+        """Fails toward passing, matching arm 0: an unread size must never be
+        the thing that blocks a stamp."""
+        gate = coas._evaluate_goal_falsifier_gate(
+            self._plan(tmp_path, tshirt=None), tmp_path
+        )
+        assert gate["refused"] is False
+
+    def test_named_exemption_is_honoured_at_m_plus(self, tmp_path):
+        """The schema's sanctioned escape hatch. Refusing a plan that took the
+        named route would punish the discipline the hatch exists to reward."""
+        extra = (
+            "  falsifier_exemption:\n"
+            "    class: unfalsifiable-by-observation-doctrine-or-schema-edit\n"
+            "    admission: Doctrine-only edit; no runtime surface a how could "
+            "observe. Drafting one was attempted and failed.\n"
+        )
+        gate = coas._evaluate_goal_falsifier_gate(
+            self._plan(tmp_path, tshirt="XL", extra=extra), tmp_path
+        )
+        assert gate["refused"] is False
+
+    def test_invented_exemption_class_does_not_buy_silence(self, tmp_path):
+        """The class is pinned to one spelling precisely so the hatch cannot be
+        widened by naming a new one."""
+        extra = (
+            "  falsifier_exemption:\n"
+            "    class: my-own-special-case\n"
+            "    admission: It seemed fine.\n"
+        )
+        gate = coas._evaluate_goal_falsifier_gate(
+            self._plan(tmp_path, tshirt="M", extra=extra), tmp_path
+        )
+        assert gate["refused"] is True
+        assert gate["reason"] == coas.GOAL_REFUSAL_FALSIFIER_ABSENT
+
+    def test_blank_admission_does_not_buy_silence(self, tmp_path):
+        extra = (
+            "  falsifier_exemption:\n"
+            "    class: unfalsifiable-by-observation-doctrine-or-schema-edit\n"
+            "    admission: '   '\n"
+        )
+        gate = coas._evaluate_goal_falsifier_gate(
+            self._plan(tmp_path, tshirt="M", extra=extra), tmp_path
+        )
+        assert gate["refused"] is True
+
+    def test_the_next_move_names_the_falsifier_not_the_statement(self, tmp_path):
+        """A plan that already wrote its statement must not be told to write
+        one -- that reads its own frontmatter back to it."""
+        assert "falsifier" in coas._FALSIFIER_ABSENT_NEXT_MOVE
+        assert "falsifier_exemption" in coas._FALSIFIER_ABSENT_NEXT_MOVE

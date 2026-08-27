@@ -1,22 +1,21 @@
-"""coordinator_core.ops.eol.tests.test_census -- op tests for "eol.census".
+"""coordinator_core.ops.eol.tests.test_census -- tests for `census()`, the
+FUNCTION.
 
-House convention (a)-(e), per this plan's C6 body:
-  (a) registration -- the op lands in the live _REGISTRY on import.
-  (b) negative paths -- missing target_root -> ValueError; a propagating
-      PathEscapeError is not swallowed by the handler.
-  (c) end-to-end round trip through the registered handler, against a
-      fixture repo carrying one violation of EACH direction plus one dirty
-      file that must be reported (flagged dirty, never dropped -- census
-      reports dirty violations, repair is what skips them, C3).
-  (d) a real dispatch_message() command-type smoke -- the _OP_KEY_SCOPE
-      keying path in-process handler tests do not exercise. A missing/wrong
-      op_scopes.py entry (e.g. "show_top"/"common_dir" instead of "none")
-      would raise ValueError here demanding `_origin_worktree`, since this
-      call deliberately omits that envelope field -- exactly the shape a
-      sibling repo's caller sends.
-  (e) classification assertion -- eol.census is OpClass.COMPUTE_ONLY, the
-      DR-208 affirmation granted at review per C5 (a read: three batched
-      read-only git spawns plus Path.read_bytes(), no write on any path).
+`eol.census` the OP ID is a K-062 gravestone (state/kill-ledger.md): the trio
+collapsed to the single `eol.repair`, which imports and calls `census()` on
+every run. So the mechanism is still on the hot path and still needs these
+tests -- what went away is the second op id over it, not the code.
+
+Shape:
+  - gravestone defence -- the op id stays out of _REGISTRY and
+    OP_CLASSIFICATION. Registration/dispatch/classification tests for the op id
+    itself were removed with the id; do not reinstate them.
+  - negative paths -- missing target_root -> ValueError; a propagating
+    PathEscapeError is not swallowed.
+  - end-to-end round trip against a fixture repo carrying one violation of EACH
+    direction plus one dirty file that must be reported (flagged dirty, never
+    dropped -- census reports dirty violations, repair is what skips them).
+  - F1 binary-content guard, both halves.
 
 Spawns real `git` against a fixture repo -- tiered off the per-commit path
 per this repo's spawn ratchet (coordinator_core/tests/test_no_new_spawning_tests.py).
@@ -26,19 +25,19 @@ Spec backlink: docs/plans/2026-08-20-every-repo-detects-its-own-eol-drift.md § 
 
 from __future__ import annotations
 
-import asyncio
 import subprocess
 
 import pytest
 
 # ---------------------------------------------------------------------------
-# Import guard -- MUST precede any test so @register_op fires first.
+# Imported deliberately: if someone re-decorates census.py, this import is
+# what makes the gravestone defence below see it.
 # ---------------------------------------------------------------------------
-import coordinator_core.ops.eol.census  # noqa: F401 -- fires @register_op
+import coordinator_core.ops.eol.census  # noqa: F401 -- imported so the gravestone defence sees any restored @register_op
 
-from coordinator_core.authz.classification import OP_CLASSIFICATION, OpClass
+from coordinator_core.authz.classification import OP_CLASSIFICATION
 from coordinator_core.cartography._guard import PathEscapeError
-from coordinator_core.ipc import _REGISTRY, dispatch_message
+from coordinator_core.ipc import _REGISTRY
 from coordinator_core.ops.eol.census import _eol_census, census
 from coordinator_core.win_portability import no_console_creationflags
 
@@ -93,19 +92,28 @@ def _new_fixture_repo(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# (a) registration
+# gravestone defence
 # ---------------------------------------------------------------------------
 
 
-def test_registration():
-    assert _OP_NAME in _REGISTRY, (
-        f"import guard failed: {_OP_NAME!r} not in _REGISTRY -- "
-        "coordinator_core.ops.eol.census @register_op did not fire"
+def test_op_id_stays_gravestoned():
+    """K-062 defence. `eol.census` the OP ID is a gravestone (state/kill-ledger.md);
+    `census()` the FUNCTION survives because `eol.repair` imports and calls it.
+    Re-decorating this module puts back the second registration the collapse
+    removed -- a second op id over one mechanism -- so assert its absence rather
+    than leaving the door unlatched."""
+    assert _OP_NAME not in _REGISTRY, (
+        f"{_OP_NAME!r} is registered again -- it is a K-062 gravestone. If a caller "
+        "genuinely needs a census against an arbitrary root, that is a param on "
+        "eol.repair, not a restored op id."
+    )
+    assert _OP_NAME not in OP_CLASSIFICATION, (
+        f"{_OP_NAME!r} has an OP_CLASSIFICATION entry again -- see above."
     )
 
 
 # ---------------------------------------------------------------------------
-# (b) negative paths
+# negative paths
 # ---------------------------------------------------------------------------
 
 
@@ -127,7 +135,7 @@ def test_path_escape_error_propagates_uncaught(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# (c) end-to-end round trip
+# end-to-end round trip
 # ---------------------------------------------------------------------------
 
 
@@ -159,39 +167,6 @@ def test_end_to_end_bidirectional_violations_and_dirty_flag(tmp_path):
         "unspecified_count": 1,  # .gitattributes carries no eol declaration
         "declared_count": 3,
     }
-
-
-# ---------------------------------------------------------------------------
-# (d) dispatch_message wire smoke -- the _OP_KEY_SCOPE keying path
-# ---------------------------------------------------------------------------
-
-
-def test_dispatch_message_wire_smoke_without_origin_worktree(tmp_path):
-    """No `_origin_worktree` envelope field -- the sibling-repo caller
-    shape. Proves op_scopes.py keys eol.census "none": a wrong scope entry
-    (e.g. "show_top") would raise here demanding _origin_worktree, a defect
-    the in-process handler tests above cannot see."""
-    d = _new_fixture_repo(tmp_path)
-    msg = {
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": _OP_NAME,
-        "params": {"target_root": str(d)},
-    }
-    response = asyncio.run(dispatch_message(msg))
-
-    assert "error" not in response, response.get("error")
-    result = response["result"]
-    assert result["violation_count"] == 3
-
-
-# ---------------------------------------------------------------------------
-# (e) classification
-# ---------------------------------------------------------------------------
-
-
-def test_classified_compute_only():
-    assert OP_CLASSIFICATION[_OP_NAME] is OpClass.COMPUTE_ONLY
 
 
 # ---------------------------------------------------------------------------

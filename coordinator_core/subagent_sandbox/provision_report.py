@@ -255,37 +255,98 @@ def _is_delegate_reviewer(agent_type: str, subagent_type: str) -> bool:
     )
 
 
-#: AC1's four-field receipt block, spliced into the sidecar's OWN
+#: Single-quote-doubling is the one YAML scalar quoting style this module
+#: needs and the cheapest to get right by hand -- stdlib-only, no PyYAML
+#: dependency on this cold, fleet-wide PreToolUse-Agent hook path (see
+#: module docstring's fail-open framing and ``_is_delegate_reviewer``'s own
+#: reviewer_vocabulary-leaf rationale for why a heavier import is a defect
+#: here, not a style choice).
+def _yaml_quoted_scalar(value: str) -> str:
+    """Render ``value`` as a YAML single-quoted scalar: embedded ``'``
+    doubled to escape (the single-quoted-style escape rule), and any
+    CR/LF folded to a single space -- a receipt field is an identifier or
+    an ISO-8601 timestamp, never legitimately multi-line, and a literal
+    newline inside a single-quoted YAML scalar is illegal syntax that
+    would corrupt every key after it in the block. Quoting closes F5's
+    hazard: `agent_type`/`subagent_type` are dispatch-payload-controlled
+    strings, and an unquoted colon-space, leading `-`/`#`/`[`/`{`, or
+    embedded newline would either corrupt the frontmatter block or get
+    parsed back as something other than a plain string, defeating
+    `_bare_agent_type`'s `rpartition(":")`-based stripping in the gate.
+    """
+    text = str(value).replace("\r\n", " ").replace("\r", " ").replace("\n", " ")
+    return "'" + text.replace("'", "''") + "'"
+
+
+#: AC1/AC2's four-field receipt block, spliced into the sidecar's OWN
 #: frontmatter (never a sibling file, never a close-time write) -- dispatch
-#: session id, agent id, agent type, and a UTC timestamp. C4 (constraint 8,
-#: AC2b) joins this against the covering baton's claim window with a plain
-#: directory listing + frontmatter read; nothing here resolves a baton or
-#: touches `commit_ledger.resolve_owner`/`baton_assemble` (AC12b legs i/ii).
-def _review_receipt_block(session_id: str, agent_id: str, agent_type: str, stamped_at: str) -> str:
+#: session id, agent id, agent type, and a UTC timestamp, under a key
+#: distinguishable per receipt kind (``review_receipt``/``integrator_receipt``
+#: -- see ``_is_delegate_reviewer``/``_is_review_integrator`` below for the
+#: mutually-exclusive callers). C4 (constraint 8, AC2b) joins this against
+#: the covering baton's claim window with a plain directory listing +
+#: frontmatter read; nothing here resolves a baton or touches
+#: `commit_ledger.resolve_owner`/`baton_assemble` (AC12b legs i/ii). All four
+#: fields are routed through ``_yaml_quoted_scalar`` -- see that function's
+#: docstring for the corruption hazard this closes.
+def _receipt_block(key: str, session_id: str, agent_id: str, agent_type: str, stamped_at: str) -> str:
     return (
-        "review_receipt:\n"
-        f"  session_id: {session_id}\n"
-        f"  agent_id: {agent_id}\n"
-        f"  agent_type: {agent_type}\n"
-        f"  stamped_at: {stamped_at}\n"
+        f"{key}:\n"
+        f"  session_id: {_yaml_quoted_scalar(session_id)}\n"
+        f"  agent_id: {_yaml_quoted_scalar(agent_id)}\n"
+        f"  agent_type: {_yaml_quoted_scalar(agent_type)}\n"
+        f"  stamped_at: {_yaml_quoted_scalar(stamped_at)}\n"
     )
 
 
-def _splice_review_receipt(doc_text: str, session_id: str, agent_id: str, agent_type: str, stamped_at: str) -> str:
-    """Insert the receipt block immediately before the frontmatter's closing
-    ``---\\n\\n`` delimiter -- the SAME splice point
+def _review_receipt_block(session_id: str, agent_id: str, agent_type: str, stamped_at: str) -> str:
+    """AC1's reviewer-keyed receipt block -- thin named wrapper over
+    ``_receipt_block`` so call sites still read as "the reviewer receipt",
+    not a bare key-string literal."""
+    return _receipt_block("review_receipt", session_id, agent_id, agent_type, stamped_at)
+
+
+def _integrator_receipt_block(session_id: str, agent_id: str, agent_type: str, stamped_at: str) -> str:
+    """AC2's integrator-keyed counterpart to ``_review_receipt_block`` --
+    same four fields, distinguishable key (``integrator_receipt:``) so
+    "review ran" (AC1) and "findings were applied" (AC2) stay separately
+    legible on the same sidecar shape family rather than colliding on one
+    key that could only ever mean one of the two."""
+    return _receipt_block("integrator_receipt", session_id, agent_id, agent_type, stamped_at)
+
+
+def _splice_receipt_block(
+    doc_text: str, key: str, session_id: str, agent_id: str, agent_type: str, stamped_at: str
+) -> str:
+    """Insert a ``key``-headed receipt block immediately before the
+    frontmatter's closing ``---\\n\\n`` delimiter -- the SAME splice point
     ``_append_lens_frontmatter_keys`` uses for the plan-derivable lens keys,
     but applied to the already-assembled ``doc_text`` (frontmatter + body)
     rather than to a bare frontmatter string, since every ``_build_*_doc_text``
     builder returns the two concatenated with no clean seam to split on.
-    ``str.index`` (not ``endswith``) finds the FIRST occurrence, which is
-    always the frontmatter's own closing fence -- no template's frontmatter
-    values or body content can contain the literal three-dash-blank-line
-    sequence ahead of it. Does not mutate ``_frontmatter`` itself (same pin
+
+    ``str.find`` (not ``index``): on a missing ``---\\n\\n`` fence -- a future
+    template builder emitting frontmatter without the exact double-newline
+    fence -- this returns ``doc_text`` UNSPLICED rather than raising. This is
+    a PreToolUse-Agent hook, cold on every dispatch fleet-wide; an uncaught
+    ``ValueError`` here would hard-fail every reviewer/integrator dispatch on
+    the box. Degrading to no receipt is the safe direction: C4's gate then
+    blocks on "no review dispatched" (constraint 4 -- ambiguity favors more
+    review), which is a normal, nameable gate outcome, not a bricked spawn.
+    Does not mutate ``_frontmatter`` itself (same pin
     ``_append_lens_frontmatter_keys`` already documents)."""
     marker = "---\n\n"
-    idx = doc_text.index(marker)
-    return doc_text[:idx] + _review_receipt_block(session_id, agent_id, agent_type, stamped_at) + doc_text[idx:]
+    idx = doc_text.find(marker)
+    if idx == -1:
+        return doc_text
+    return doc_text[:idx] + _receipt_block(key, session_id, agent_id, agent_type, stamped_at) + doc_text[idx:]
+
+
+def _splice_review_receipt(doc_text: str, session_id: str, agent_id: str, agent_type: str, stamped_at: str) -> str:
+    """Reviewer-keyed wrapper over ``_splice_receipt_block`` -- kept so
+    ``_provision``'s reviewer branch reads as "splice the review receipt",
+    not a bare key-string literal."""
+    return _splice_receipt_block(doc_text, "review_receipt", session_id, agent_id, agent_type, stamped_at)
 
 
 #: AC2 (docs/plans/2026-08-27-the-review-gate-measures-the-whole-session.md,
@@ -312,31 +373,14 @@ def _is_review_integrator(agent_type: str, subagent_type: str) -> bool:
     )
 
 
-#: AC2's own four-field receipt block, spliced into the integrator's OWN
-#: sidecar frontmatter under a DIFFERENT key (``integrator_receipt:``) than
-#: AC1's ``review_receipt:`` -- same four fields (session id, agent id,
-#: agent type, UTC timestamp), same splice point, distinguishable key so
-#: "review ran" (AC1) and "findings were applied" (AC2) stay separately
-#: legible on the same sidecar shape family rather than colliding on one
-#: key that could only ever mean one of the two.
-def _integrator_receipt_block(session_id: str, agent_id: str, agent_type: str, stamped_at: str) -> str:
-    return (
-        "integrator_receipt:\n"
-        f"  session_id: {session_id}\n"
-        f"  agent_id: {agent_id}\n"
-        f"  agent_type: {agent_type}\n"
-        f"  stamped_at: {stamped_at}\n"
-    )
-
-
 def _splice_integrator_receipt(doc_text: str, session_id: str, agent_id: str, agent_type: str, stamped_at: str) -> str:
-    """Integrator counterpart to ``_splice_review_receipt`` -- same splice
-    point (the frontmatter's closing ``---\\n\\n`` fence, first occurrence),
-    same never-mutate-``_frontmatter`` discipline, distinguishable block
+    """Integrator-keyed wrapper over ``_splice_receipt_block`` -- kept so
+    ``_provision``'s integrator branch reads as "splice the integrator
+    receipt", not a bare key-string literal. Same splice point (the
+    frontmatter's closing ``---\\n\\n`` fence, first occurrence), same
+    never-mutate-``_frontmatter`` discipline, distinguishable block
     (``integrator_receipt:`` rather than ``review_receipt:``)."""
-    marker = "---\n\n"
-    idx = doc_text.index(marker)
-    return doc_text[:idx] + _integrator_receipt_block(session_id, agent_id, agent_type, stamped_at) + doc_text[idx:]
+    return _splice_receipt_block(doc_text, "integrator_receipt", session_id, agent_id, agent_type, stamped_at)
 
 
 def _exit_interview_section() -> str:

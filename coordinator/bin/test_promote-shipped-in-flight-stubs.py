@@ -113,17 +113,24 @@ def _load_subject_fresh():
 
 def _run_main(op_main_fn):
     """Load a fresh subject with the given fake op main(), call its main(),
-    and capture the SystemExit code plus stdout/stderr."""
+    and capture the returned exit code plus stdout/stderr.
+
+    main() returns its code rather than raising SystemExit -- that is what
+    warm-serve requires of every bin entrypoint. SystemExit is still caught
+    because argparse raises it on a usage error.
+    """
     prior = _install_fakes(op_main_fn)
     out, err = io.StringIO(), io.StringIO()
     try:
         subject = _load_subject_fresh()
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
-            with pytest.raises(SystemExit) as exc_info:
-                subject.main()
+            try:
+                code = subject.main()
+            except SystemExit as exc:
+                code = exc.code
     finally:
         _restore_fakes(prior)
-    return exc_info.value.code, out.getvalue(), err.getvalue()
+    return code, out.getvalue(), err.getvalue()
 
 
 @pytest.fixture(autouse=True)

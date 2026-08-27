@@ -27,6 +27,7 @@ import pytest
 import yaml
 
 from coordinator_core.dispatch.provision import _build_sidecar_text
+from coordinator_core.frontmatter.schema_validate import parse_frontmatter
 from coordinator_core.frontmatter.schema_validate import parse_yaml
 from coordinator_core.subagent_sandbox.provision_report import _build_doc_text
 from coordinator_core.subagent_sandbox.provision_report import _build_run_report_doc_text
@@ -46,6 +47,8 @@ from coordinator_core.subagent_sandbox.provision_report import _PLAN_DERIVABLE_L
 from coordinator_core.subagent_sandbox.provision_report import _TEMPLATE_REGISTRY
 from coordinator_core.subagent_sandbox.provision_report import _provision
 from coordinator_core.subagent_sandbox.provision_report import main as provision_main
+from coordinator_core.subagent_sandbox.provision_report import _INTEGRATOR_AGENT_TYPE
+from coordinator_core.subagent_sandbox.provision_report import _splice_review_receipt
 from coordinator_core.testing.doe_root import doe_root_and_present
 
 # Real git repo is load-bearing: resolve_git_root() is asserted against a
@@ -961,10 +964,10 @@ _LEGACY_RUN_REPORT_TEMPLATE_WITH_REVIEW_RECEIPT = (
     "  gate_kind: none\n"
     "  write_files: []\n"
     "review_receipt:\n"
-    "  session_id: {lead_session_id}\n"
-    "  agent_id: {agent_id}\n"
-    "  agent_type: {agent_type}\n"
-    "  stamped_at: {spawned_at}\n"
+    "  session_id: '{lead_session_id}'\n"
+    "  agent_id: '{agent_id}'\n"
+    "  agent_type: '{agent_type}'\n"
+    "  stamped_at: '{spawned_at}'\n"
     "---\n\n"
     "## Run notes\n\n"
     "## Observations\n\n"
@@ -1027,6 +1030,126 @@ def test_provision_direct_call_no_type_key_in_payload_matches_legacy_shape(
     # reviewer dispatch must never carry both keys (AC2's distinguishability
     # read from the consuming side).
     assert "integrator_receipt:" not in text
+
+
+# ---------------------------------------------------------------------------
+# Reviewer finding F2 (nit): the reviewer/integrator `if`/`elif` exclusivity
+# in `_provision` is asserted only by this vocabulary fact, not by the
+# `if`/`elif` shape itself -- pin it so a future `DELEGATE_REVIEWERS` edit
+# that collides with the integrator persona fails loudly here.
+# ---------------------------------------------------------------------------
+
+
+def test_integrator_agent_type_is_not_a_delegate_reviewer() -> None:
+    from coordinator_core.reviewer_vocabulary import DELEGATE_REVIEWERS
+
+    assert _INTEGRATOR_AGENT_TYPE not in DELEGATE_REVIEWERS
+
+
+# ---------------------------------------------------------------------------
+# Reviewer findings F5/F3/F4 -- the collapsed `_receipt_block`/
+# `_splice_receipt_block` builder: YAML-quoted fields survive colon-space
+# and embedded newlines, and a missing frontmatter fence degrades to an
+# unspliced doc rather than raising.
+# ---------------------------------------------------------------------------
+
+
+def test_receipt_block_agent_type_with_colon_space_stays_parseable_and_bare_reads_correctly() -> None:
+    """A dispatch-payload-controlled `agent_type` containing a colon-space
+    must not corrupt the frontmatter block or get misread by the gate's
+    `rpartition(":")`-based bare-type stripping.
+
+    Review: coordinatorcode-reviewer (findings 1+2) -- asserted through
+    ``schema_validate.parse_frontmatter``, the RESTRICTED loader the
+    close-time gate (``workstream_complete/__init__.py::
+    _compute_review_receipt_gate``) actually reads with, not
+    ``yaml.safe_load``. The reviewer hand-walked this case against the real
+    reader and found it correct; this pins that walk in the suite instead of
+    leaving it as sidecar prose. See
+    ``test_receipt_block_round_trips_through_the_gates_own_parser`` below for
+    the full class of cases the reviewer hand-walked.
+    """
+    dangerous_agent_type = "coordinator: code-reviewer"
+    doc = _splice_review_receipt(
+        "---\nstatus: open\n---\n\n## Findings\n\n", "sid1", "agent1", dangerous_agent_type, "2026-08-27T00:00:00Z"
+    )
+    parsed = parse_frontmatter(doc)["frontmatter"]
+    receipt = parsed["review_receipt"]
+    assert receipt["agent_type"] == dangerous_agent_type
+    # The gate's own bare-stripping convention (rpartition on the LAST colon).
+    bare = receipt["agent_type"].rpartition(":")[2] if ":" in receipt["agent_type"] else receipt["agent_type"]
+    assert bare == " code-reviewer"
+
+
+def test_receipt_block_agent_type_with_newline_folds_to_a_space_and_stays_single_line() -> None:
+    """Review: coordinatorcode-reviewer (findings 1+2) -- asserted through
+    the restricted ``parse_frontmatter`` reader, not ``yaml.safe_load``; see
+    the colon-space test above for why."""
+    dangerous_agent_type = "coordinator:code-reviewer\nsession_id: injected"
+    doc = _splice_review_receipt(
+        "---\nstatus: open\n---\n\n## Findings\n\n", "sid1", "agent1", dangerous_agent_type, "2026-08-27T00:00:00Z"
+    )
+    frontmatter = doc.split("---\n")[1]
+    # A newline inside a YAML single-quoted scalar is illegal; this must not
+    # emit a raw newline that would smuggle an extra key into the block.
+    assert "\ninjected" not in frontmatter.lower()
+    parsed = parse_frontmatter(doc)["frontmatter"]
+    receipt = parsed["review_receipt"]
+    assert receipt["agent_type"] == "coordinator:code-reviewer session_id: injected"
+    assert receipt["session_id"] == "sid1"
+
+
+#: F1/F2's full round-trip class, hand-walked by the reviewer against
+#: ``schema_validate._parse_scalar``/``_strip_inline_comment``/
+#: ``_parse_yaml_lines`` rather than run -- suite-enforced here so a future
+#: edit to ``_yaml_quoted_scalar`` or to the restricted parser breaks a test
+#: instead of only breaking prose in an archived sidecar. Each entry is
+#: (label, input_value, expected_value_after_round_trip); the newline case's
+#: expected value is the documented fold-to-space contract, not the input
+#: verbatim.
+_RECEIPT_ROUND_TRIP_CASES = [
+    ("empty_string", "", ""),
+    ("lone_single_quote", "'", "'"),
+    ("already_single_quoted", "'quoted already'", "'quoted already'"),
+    ("colon_space", "coordinator: code-reviewer", "coordinator: code-reviewer"),
+    ("newline_folds_to_space", "coordinator:code-reviewer\ninjected", "coordinator:code-reviewer injected"),
+    ("hash_surrounded_by_space", "coordinator #tag reviewer", "coordinator #tag reviewer"),
+    ("tab", "coordinator\tcode-reviewer", "coordinator\tcode-reviewer"),
+    ("non_ascii", "coordinator:code-reviewér", "coordinator:code-reviewér"),
+]
+
+
+@pytest.mark.parametrize(
+    ("label", "value", "expected"),
+    _RECEIPT_ROUND_TRIP_CASES,
+    ids=[c[0] for c in _RECEIPT_ROUND_TRIP_CASES],
+)
+def test_receipt_block_round_trips_through_the_gates_own_parser(
+    label: str, value: str, expected: str
+) -> None:
+    """Suite-enforced version of the reviewer's hand-walk (coordinatorcode-
+    reviewer findings 1+2): every case the reviewer traced by hand against
+    ``schema_validate._parse_scalar``/``_strip_inline_comment``/
+    ``_parse_yaml_lines``, now proven through ``parse_frontmatter`` -- the
+    restricted loader the close-time gate actually reads with -- rather than
+    asserted only via ``yaml.safe_load`` (full-spec PyYAML, not the reader in
+    the loop). The two parsers happen to agree on all these inputs today;
+    this test proves that against the real reader instead of assuming it.
+    """
+    doc = _splice_review_receipt(
+        "---\nstatus: open\n---\n\n## Findings\n\n", "sid1", "agent1", value, "2026-08-27T00:00:00Z"
+    )
+    parsed = parse_frontmatter(doc)["frontmatter"]
+    assert parsed["review_receipt"]["agent_type"] == expected
+
+
+def test_splice_with_no_frontmatter_fence_returns_doc_unspliced_no_raise() -> None:
+    doc_text_no_fence = "## Findings\n\nno frontmatter fence in this doc at all\n"
+    result = _splice_review_receipt(
+        doc_text_no_fence, "sid1", "agent1", "coordinator:code-reviewer", "2026-08-27T00:00:00Z"
+    )
+    assert result == doc_text_no_fence
+    assert "review_receipt:" not in result
 
 
 @pytest.mark.parametrize(

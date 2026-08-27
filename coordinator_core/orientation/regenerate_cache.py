@@ -877,7 +877,12 @@ def emit_recent_commits(repo_root: Path) -> List[str]:
 # thin-pointer test applied without that context will wrongly cut them.
 # ---------------------------------------------------------------------------
 
-_LASTCLASS_RE = re.compile(r"\((direct push|powershell ssh push)/([a-z-]+) after")
+# `trampoline` is not a push route -- it is the CLI trampoline dying before
+# `auto_push.main()` ever runs (engine root unresolved, or
+# `coordinator_core` unimportable). Admitted here so that class reaches a
+# reader at all; kept lexically distinct from the two real routes so no one
+# reads it as a remote rejecting a push.
+_LASTCLASS_RE = re.compile(r"\((direct push|powershell ssh push|trampoline)/([a-z-]+) after")
 
 _ACTION_MAP = {
     "non-fast-forward": "branch diverged — reconcile (/workday-start Step 0.4.5) then push",
@@ -888,6 +893,17 @@ _ACTION_MAP = {
     "gh-size-limit": "see .git/push-failures.log; resolve, then push",
     "gh-lfs-quota": "see .git/push-failures.log; resolve, then push",
     "timeout": "push timed out — retry: git push (see .git/push-failures.log if it recurs)",
+    # Both trampoline classes: nothing reached the remote, so "retry the push"
+    # is the wrong instruction -- the install is what is broken, and the
+    # commits still need pushing by hand once it is fixed.
+    "claude-klabauter-unresolved": (
+        "auto-push could not resolve the engine root — no commit is being pushed "
+        "on ANY repo; repair the install, then: git push"
+    ),
+    "engine-unimportable": (
+        "auto-push loaded but could not import coordinator_core — no commit is "
+        "being pushed on ANY repo; repair the install, then: git push"
+    ),
 }
 
 # Recency bound for attributing a push-failures.log entry to the CURRENT

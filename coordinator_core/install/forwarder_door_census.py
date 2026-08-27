@@ -136,6 +136,7 @@ _INTERPRETER_START_SUFFIXES = (".py", ".ps1", ".cmd", ".bat")
 
 
 
+
 # The single write this module performs. STATIC, not shaped: `_write_allowlist`
 # takes `allowlist_path` as a defaulted parameter, but the default IS the
 # constant destination below and no production caller overrides it -- the
@@ -150,11 +151,14 @@ WRITE_SURFACE = WriteSurfaceDeclaration(
                     kind="file-path",
                     path="coordinator_core/ops/warm_entrypoint_allowlist.json",
                     reason=(
-                        "_write_allowlist regenerates the committed warm-load "
-                        "allowlist from the door-eligible bucket, UNION'd with "
-                        "the names already present -- it only ever adds, never "
-                        "removes, so a name seeded by C1 survives a re-census. "
-                        "In-repo committed artifact, not machine state"
+                        "_write_allowlist REGENERATES (never unions against "
+                        "on-disk content) the committed warm-load allowlist "
+                        "from the door-eligible bucket of THIS run's "
+                        "verdicts, over the full generator-known "
+                        "coordinator/bin/ population -- a name's presence "
+                        "in a prior run's output is never itself a reason "
+                        "it survives this one. In-repo committed artifact, "
+                        "not machine state"
                     ),
                 ),
             ),
@@ -693,26 +697,51 @@ def render_table(verdicts: "list[ForwarderVerdict]") -> str:
 
 
 def _write_allowlist(verdicts: "list[ForwarderVerdict]", allowlist_path: Path = _ALLOWLIST_PATH) -> "tuple[str, ...]":
-    """Populates the committed warm-load allowlist from the door-eligible
-    bucket, UNION'd with whatever names are already present (C1 seeds
-    `cross-repo-memo`, its own proving CLI, unconditionally -- this
-    function never removes an already-present name, it only adds
-    door-eligible ones). Returns the resulting sorted entrypoint tuple."""
-    existing: "tuple[str, ...]" = ()
-    if allowlist_path.is_file():
-        data = json.loads(allowlist_path.read_text(encoding="utf-8"))
-        existing = tuple(data.get("entrypoints", ()))
+    """REGENERATES the committed warm-load allowlist from THIS run's
+    door-eligible bucket alone, over the full generator-known
+    `coordinator/bin/` population `verdicts` was classified from --
+    `allowlist_path`'s prior on-disk content is never read and never
+    contributes a name. The prior shape
+    (`set(existing) | set(door_eligible_names(verdicts))`) was a union
+    that never removes: it took the file from 12 entries (C1's origin
+    count, the same census run) to 382 while its own `$comment` still
+    claimed a door-eligible provenance for all of them. A name that was
+    door-eligible in a past run but drops out of this run's population
+    (deleted CLI, or a script edit that trips a warm-safety hazard) is
+    correctly absent from the regenerated file; C1's proving CLI
+    (`cross-repo-memo`) needs no separate seed because the current census
+    already classifies it door-eligible on its own evidence. Returns the
+    resulting sorted entrypoint tuple, which is the full and only content
+    written.
 
-    merged = tuple(sorted(set(existing) | set(door_eligible_names(verdicts))))
+    Negative-spec: door-eligibility is NOT sufficient for a row. The name
+    must also resolve to `coordinator/bin/<name>.py`, because that is the
+    only shape `invoke_from_argv._resolve_entrypoint_script` will ever
+    look for -- a dozen `coordinator/bin` CLIs exist ONLY as extensionless
+    files, are classified door-eligible on their own evidence, and can
+    never be served. Without this filter C5's disposition of those twelve
+    is undone by the next census run, which is the regeneration's whole
+    point working against it. The predicate is duplicated from the
+    resolver rather than imported to keep the census free of an
+    `ops` import; if the resolver's shape changes, this changes with
+    it."""
+    merged = tuple(
+        name
+        for name in door_eligible_names(verdicts)
+        if Path(next(v.target for v in verdicts if v.name == name)).suffix == ".py"
+    )
     payload = {
         "$comment": (
             "Committed warm-load allowlist for invoke.from_argv's "
             "params.entrypoint (coordinator_core/ops/invoke_from_argv.py). "
             "A name absent from this list refuses (fail closed) rather than "
             "warm-loading an unvetted CLI's module body into the shared "
-            "server process ~50 concurrent sessions share. Populated "
-            "(chunk C2) from forwarder_door_census.py's 'door-eligible' "
-            "bucket, unioned with C1's seeded proving CLI -- see "
+            "server process ~50 concurrent sessions share. REGENERATED "
+            "(chunk C2 fix) each run from forwarder_door_census.py's "
+            "'door-eligible' bucket ALONE, over the full generator-known "
+            "coordinator/bin/ population this run classified -- never "
+            "unioned with this file's own prior content, which is how a "
+            "12-name origin count silently reached 382. See "
             "docs/research/spike-verdicts/2026-08-27-multi-name-native-"
             "invocation-surface.md, chunks C0-C2."
         ),

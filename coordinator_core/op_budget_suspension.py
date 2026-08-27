@@ -267,6 +267,14 @@ SUSPENDED_OPS: Dict[str, Dict[str, object]] = {
     "session.boot_sweep": {
         "measured": {"max_ms": 30016.6, "p50_ms": 30010.8, "n": 8},
         "note": "8/8 ended in caller_timeout at 30s.",
+        "disposition": (
+            "gravestone -- job was 'at session start, scan the whole "
+            "work-state corpus and tidy it up'. It never once finished: 8 of "
+            "8 calls hit the 30s ceiling and were cut off, so nothing has "
+            "ever depended on an outcome it produced. Comes back only if a "
+            "rebuild both completes inside budget AND something is shown to "
+            "depend on its output -- neither condition has ever held."
+        ),
         "spinoff": None,
     },
     # -----------------------------------------------------------------------
@@ -298,6 +306,46 @@ SUSPENDED_OPS: Dict[str, Dict[str, object]] = {
     # PM's ruling with the evidence gap named, not concealed. The remedy if one
     # is ever disputed is to measure it, and the instrument exists
     # (`benchmarks/process_time.batched_process_time_ms`).
+    #
+    # EVERY process_ms FIGURE BELOW IS A FLOOR, NOT A CEILING. The axis is
+    # `time.process_time()` (CPU time attributed to THIS interpreter), which
+    # cannot see, and does not sum, a child process's own CPU time. An op that
+    # spawns git or another subprocess pays a real cost this table's own
+    # process_ms number does not carry -- the recorded figure floors the
+    # op's true process cost rather than bounding it. This gap is silent on
+    # nine rows (the eight `process_ms` rows below plus `review_trail.write`'s
+    # `process_ms_cold`); the six WALL_CLOCK rows already name their own,
+    # different gap in the comment above.
+    #
+    # WHICH OF THE NINE SPAWN AT ALL -- the cheap discriminator that decides
+    # whether the floor gap above is live or moot for a given row (read
+    # directly off each row's implementation this session, not inferred):
+    #   spawns a subprocess:     ceremony.commit (commit_pipeline.py, git),
+    #                            handoff.archive_transition (git_native._git),
+    #                            review_trail.write (subprocess.run)
+    #   does NOT spawn:          ceremony.post_commit_tail, write_surface.
+    #                            emit_manifest, deliverable.cascade_terminal,
+    #                            fleet.prune_closed_bugs, roadmap.serve,
+    #                            handoff.reconcile_open
+    # The six that do not spawn are fine exactly as recorded -- their
+    # process_ms figure already covers the whole of their cost, because there
+    # is no child process for `time.process_time()` to miss. The floor
+    # caveat has teeth only on the three that spawn.
+    "ceremony.post_commit_tail": {
+        "measured": {"max_ms": 1937.5, "p50_ms": 421.9, "n": 241, "unit": "process_ms"},
+        "note": (
+            "K-116, a consequence of the same sweep rather than its own measurement: "
+            "this op resolved deliverable.cascade_terminal and "
+            "session.sweep_consumed_handoffs, both killed alongside it, so every "
+            "dispatch raised OpSuspendedError. The figures carried here are "
+            "ceremony.commit's -- the only path that reached it -- and are labelled "
+            "as inherited rather than passed off as this op's own. A registered op "
+            "that cannot succeed is worse than a gravestone. `run()` is retained "
+            "undecorated: wsc_tail.py calls it directly and never went through the "
+            "handler, so the in-process tail is unchanged."
+        ),
+        "spinoff": None,
+    },
     "write_surface.emit_manifest": {
         "measured": {"max_ms": 1562.5, "p50_ms": 1453.1, "n": 6, "unit": "process_ms"},
         "note": (
@@ -308,6 +356,16 @@ SUSPENDED_OPS: Dict[str, Dict[str, object]] = {
             "prose, a sent memo, or a sizing marked CLEARED 2026-08-06. No live "
             "consumer, in either repo."
         ),
+        "disposition": (
+            "gravestone -- job was 'publish a machine-readable list of the "
+            "files this engine is allowed to write, so the sibling repo can "
+            "check nobody wrote outside it'. Nothing reads it: checked in "
+            "DoE at a named commit, every hit was archive prose or a "
+            "cleared record, and the claimed consumption was stale "
+            "docstring, not a live check. Comes back only if a real "
+            "consumer of the manifest is found or built in a sibling repo -- "
+            "not by the manifest existing again."
+        ),
         "spinoff": None,
     },
     "deliverable.cascade_terminal": {
@@ -317,11 +375,31 @@ SUSPENDED_OPS: Dict[str, Dict[str, object]] = {
             "in-process callers (plan_status_transition._run_cascade); only the "
             "dispatchable op is dead."
         ),
+        "disposition": (
+            "JOB STILL DONE, RELOCATION MEASURED AND SOUND. The compute runs in "
+            "post_commit_tail._run_deliverable_cascade and plan_status_transition."
+            "_run_cascade. Measured AT THOSE CALL SITES at 16.3ms/call process, 0 "
+            "spawns (2 runs x 3 windows, N=20/window, "
+            "state/audits/2026-08-27-what-the-laundered-libraries-cost-at-their-"
+            "new-homes.md) — well under the 200ms bar, so 'retained as a library' "
+            "is true as written rather than a place cost went to hide. RECORDED "
+            "DISCREPANCY, not resolved: the 523.4ms p50 above does not reproduce "
+            "at this call shape. Either that figure was taken against a larger-"
+            "fanout deliverable_id or the compute has since been cut; a "
+            "larger-fanout id was not tested and may cost more."
+        ),
         "spinoff": None,
     },
     "fleet.prune_closed_bugs": {
         "measured": {"max_ms": 828.1, "p50_ms": 468.8, "n": 2, "unit": "process_ms"},
         "note": "n=2 — thin, and recorded as thin rather than rounded up.",
+        "disposition": (
+            "gravestone -- job was 'delete closed bug entries from the "
+            "backlog file'. Housekeeping on a file nothing blocks on, "
+            "evidenced by only 2 calls total. Comes back only if the "
+            "backlog grows to a size a person stops noticing and tidying "
+            "by hand -- not observed."
+        ),
         "spinoff": None,
     },
     "ceremony.commit": {
@@ -338,11 +416,36 @@ SUSPENDED_OPS: Dict[str, Dict[str, object]] = {
             "explicit pathspec (never a bare `git commit` — it swallows peer "
             "staged files on this shared tree)."
         ),
+        "disposition": (
+            "REQUIREMENT DISCHARGED — the note's own 'what still needs doing: "
+            "something must commit' is answered. ceremony.commit_v2 is live and "
+            "dispatchable (767079e6e), and it calls git/commit.py::commit_paths at "
+            "ops/ceremony/commit_v2.py:146 — so commit_paths, written and measured "
+            "at 0.00 spawns / 3.984ms process on the common case against 5.08 / "
+            "67.500ms for the `git add` + `git commit` architecture it replaces, is "
+            "no longer the caller-less v2 it was at d20d56893. THE FALLBACK ABOVE IS "
+            "THEREFORE STALE: dial ceremony.commit_v2 rather than reaching for bare "
+            "git. NOT a drop-in for every shape the old route accepted — CR bytes "
+            "under an eol=crlf pin and text/eol-attributed paths reach a batched "
+            "fallback rather than the zero-spawn path, and the 2 procs on the "
+            "new-file arm are explicit_stage's `git check-ignore -v`, deliberately "
+            "retained because a wrong gitignore match fails SILENTLY and commits a "
+            "file the operator deliberately ignored."
+        ),
         "spinoff": None,
     },
     "roadmap.serve": {
         "measured": {"max_ms": 578.1, "p50_ms": 406.2, "n": 585, "unit": "process_ms"},
         "note": "n=585, the best-evidenced row in this batch.",
+        "disposition": (
+            "gravestone -- but the JOB survives; only claude-klabauter's ownership of "
+            "it does not. Job was 'answer questions about the roadmap on "
+            "demand'. PM: 'can be handled by example-retrieval-repo, they do lots of "
+            "query stuff.' 585 calls made this the most-used row in the "
+            "whole set, and it is still not claude-klabauter's job -- a query surface "
+            "belongs to the repo that owns querying. This routes to "
+            "example-retrieval-repo as a cross-repo note, not a v2 owed here."
+        ),
         "spinoff": None,
     },
     "handoff.reconcile_open": {
@@ -382,6 +485,13 @@ SUSPENDED_OPS: Dict[str, Dict[str, object]] = {
     "cartography.churn": {
         "measured": {"max_ms": 2462.0, "p50_ms": 2462.0, "n": 1, "unit": "WALL_CLOCK"},
         "note": "n=1. One sample, wall clock, no process instrumentation.",
+        "disposition": (
+            "gravestone -- job was 'report which parts of the codebase are "
+            "churning most'. One call, ever. No implementation and no "
+            "caller survive, and nothing ever consumed the answer. Comes "
+            "back only if a consumer of a churn report is named first -- "
+            "not by rebuilding the report on spec."
+        ),
         "spinoff": None,
     },
     "handoff.has_live_children": {
@@ -391,16 +501,53 @@ SUSPENDED_OPS: Dict[str, Dict[str, object]] = {
             "handoff_close_origin_stub._try_close needs the children payload that "
             "has_live_children_many does not return. Do not restore the decorator."
         ),
+        "disposition": (
+            "GRAVESTONE — the job itself is not needed, PM ruling 2026-08-27: "
+            "'either the handoff is done or it's not... why would we check if "
+            "there are live children, ever?'. Two independent grounds, verified "
+            "before the ruling was applied. (1) Archiving strands nothing: "
+            "ceremony/resolver.py scans state/handoffs/ AND archive/handoffs/**, "
+            "dag.py resolves targets ever tracked under archive/handoffs/YYYY-MM/, "
+            "and baton_assemble resolves a moved predecessor silently — a child's "
+            "pointer to an archived parent keeps resolving. (2) The guard INVERTS "
+            "the contract it guards: handoff_archive_transition permits the git-mv "
+            "only when deployment_state is already terminal, and 'continued' — the "
+            "has-a-child state — is terminal, so the contract already says archive "
+            "it while this guard refuses exactly that case. Measured 218.4ms/call "
+            "process at its surviving call site (6 windows, 165-247ms, 0 spawns, "
+            "state/audits/2026-08-27-what-the-laundered-libraries-cost-at-their-"
+            "new-homes.md) — cost spent on a question with no consumer. Removal "
+            "belongs to the housekeeping requirement carried by "
+            "pln-one-corpus-read-or-the-houseke-18d29a; unwind baton_drift_sweep.py"
+            ":271/:515 and consumed_handoff_stamp.py:505 there, not here."
+        ),
         "spinoff": None,
     },
     "handoff.reconcile_close_terminal": {
         "measured": {"max_ms": 27947.1, "p50_ms": 3507.5, "n": 8, "unit": "WALL_CLOCK"},
         "note": "Module deleted outright; no non-test importers.",
+        "disposition": (
+            "gravestone -- job was 'close out a handoff whose work already "
+            "landed, then file it'. Module deleted outright, no importers. "
+            "A near-identical job already survives elsewhere in this table "
+            "as one third of the handoff-housekeeping family (handoff."
+            "reconcile_open et al.) -- the requirement lands there, not by "
+            "this row coming back."
+        ),
         "spinoff": None,
     },
     "merge_assemble.brief": {
         "measured": {"max_ms": 1357.2, "p50_ms": 1087.3, "n": 52, "unit": "WALL_CLOCK"},
         "note": "merge_assemble.apply survives in the same module and is untouched.",
+        "disposition": (
+            "gravestone -- job was 'summarise what is in a branch before "
+            "merging it'. Not convicted on performance: PM, verbatim, "
+            "'generated summary is weird'. The job does not need doing at "
+            "all -- a person reads the diff. merge_assemble.apply (the "
+            "other half of the same module) is unaffected and stays. Comes "
+            "back only if the PM decides the summary itself is wanted "
+            "again, never by making generation faster."
+        ),
         "spinoff": None,
     },
     "fleet.archive_completed_plans": {
@@ -408,6 +555,21 @@ SUSPENDED_OPS: Dict[str, Dict[str, object]] = {
         "note": (
             "Resolved in-process by ceremony/commit_pipeline.py and tail_ops.py; "
             "compute retained as a library, dispatchable op dead."
+        ),
+        "disposition": (
+            "NOTE ABOVE IS STALE — the cited call site no longer exists. "
+            "commit_pipeline._run_in_plane_archive_sweep, its cadence gate, its "
+            "cap accessor, _resync_shared_index_for_swept_paths and "
+            "consumed_handoff_stamp._fire_consumed_handoff_sweep were all deleted "
+            "at abd587695 (2026-08-27) on the PM ruling 'I do not want and will "
+            "not accept commits being saddled with something like this... take "
+            "them off the commit path. I do want automated housekeeping of this "
+            "stuff, that's very important to me.' So this compute runs NOWHERE on "
+            "the commit path now and could not be measured there. The housekeeping "
+            "REQUIREMENT survives that removal by the ruling's own words and is "
+            "carried by pln-one-corpus-read-or-the-houseke-18d29a, which owns "
+            "finding it a non-commit-path host. Not a gravestone: the job is "
+            "wanted, its host is open."
         ),
         "spinoff": None,
     },

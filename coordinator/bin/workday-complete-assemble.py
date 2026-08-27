@@ -50,9 +50,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-_LIB_DIR = str(Path(__file__).resolve().parent / "lib")
-if _LIB_DIR not in sys.path:
-    sys.path.insert(0, _LIB_DIR)
+import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
 from entry_point_shim import run_target  # noqa: E402
 
 if __name__ == "__main__":

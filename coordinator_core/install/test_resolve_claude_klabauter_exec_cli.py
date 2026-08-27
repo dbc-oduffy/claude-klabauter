@@ -612,3 +612,70 @@ def test_posix_branch_execv_oserror_of_any_cause_still_exits_127(tmp_path, monke
     err = capsys.readouterr().err
     assert "is missing or not executable" in err
     assert _REMEDIATION_TEXT in err
+
+
+# ---------------------------------------------------------------------------
+# sys.path regression, second entry -- `_run_target_in_process` must ALSO put
+# the target script's OWN directory on sys.path. `runpy.run_path` on a plain
+# FILE path contributes nothing to `sys.path` (it prepends only for a
+# directory or zipfile argument), so a bare sibling import that a direct
+# `python target.py` invocation resolves for free dies here.
+#
+# Distinct from the claude-klabauter-live-root case above and not covered by it: the root
+# insert satisfies `import coordinator_core`, never `from lib.X import Y`.
+# Observed live twice on the Windows in-process leg -- `sizing-assemble`
+# (`No module named 'lib.entry_point_shim'`) and `coordinator-auto-push`
+# invoked from the git post-commit hook (`No module named 'lib.cc_invoke'`),
+# the latter silently disabling auto-push fleet-wide until it was noticed in
+# a hook log.
+#
+# The sibling package is given a name no ambient install can satisfy, so an
+# in-process run is a genuine falsifier and no subprocess spawn is needed.
+# ---------------------------------------------------------------------------
+
+
+def test_run_target_in_process_puts_target_dir_on_sys_path(tmp_path):
+    script_dir = tmp_path / "bin"
+    sibling = script_dir / "_exec_cli_sibling_probe"
+    sibling.mkdir(parents=True)
+    (sibling / "__init__.py").write_text("VALUE = 'sibling-ok'\n", encoding="utf-8")
+
+    target = script_dir / "target_imports_sibling.py"
+    target.write_text(
+        "from _exec_cli_sibling_probe import VALUE\nprint(VALUE)\n", encoding="utf-8"
+    )
+
+    assert str(script_dir) not in sys.path, (
+        "sanity: the target's directory must not already be on sys.path, or "
+        "this test cannot falsify a missing insert"
+    )
+
+    before = list(sys.path)
+    code = resolve_claude_klabauter._run_target_in_process(
+        str(target), [], str(_MODULE_PATH.resolve().parents[3])
+    )
+
+    assert code == 0
+    assert sys.path == before, "sys.path must be restored, not merely popped"
+
+
+def test_run_target_dir_insert_is_falsifiable(tmp_path):
+    """The negative half: without the insert, the same target fails.
+
+    Guards the guard -- if a future edit made the sibling importable by some
+    other route, the test above would go green for the wrong reason.
+    """
+    script_dir = tmp_path / "bin"
+    sibling = script_dir / "_exec_cli_sibling_probe_neg"
+    sibling.mkdir(parents=True)
+    (sibling / "__init__.py").write_text("VALUE = 'x'\n", encoding="utf-8")
+
+    target = script_dir / "target_imports_sibling_neg.py"
+    target.write_text(
+        "from _exec_cli_sibling_probe_neg import VALUE\n", encoding="utf-8"
+    )
+
+    import runpy
+
+    with pytest.raises(ModuleNotFoundError):
+        runpy.run_path(str(target), run_name="__main__")

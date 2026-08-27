@@ -126,9 +126,7 @@ import tempfile
 # Shared memo composer — bin/lib/memo_compose.py (example-initiative tc-0 C4)
 # ---------------------------------------------------------------------------
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-_LIB_DIR = os.path.join(_SCRIPT_DIR, "lib")
-if _LIB_DIR not in sys.path:
-    sys.path.insert(0, _LIB_DIR)
+import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
 from memo_compose import (  # noqa: E402
     compose_memo as _memo_compose,  # Review: code-reviewer S3-F3 — use compose_memo (full-doc composer) instead of compose_frontmatter + manual concat
     _today,
@@ -5521,10 +5519,9 @@ Spec backlink (workflow): pln-workflow-skeleton-stamper-maki-adab0d
 # ---------------------------------------------------------------------------
 
 def main(argv: "list[str] | None" = None) -> int:
-    del argv  # this CLI takes no arguments; argv accepted for the warm-call contract
     """Entry point for coordinator-doc-new CLI."""
     # A4 — Early delegation for queue and lesson types.
-    # MUST run before parser.parse_args() because queue-type flags (--body, --risk,
+    # MUST run before parser.parse_args(argv) because queue-type flags (--body, --risk,
     # --severity, --change-kind, etc.) are not known to this parser — argparse would
     # reject them with "unrecognized arguments" before we could route to the delegate.
     # Both delegation functions call sys.exit() so control does not return here.
@@ -5538,7 +5535,7 @@ def main(argv: "list[str] | None" = None) -> int:
         _delegate_to_workflow_scaffold()  # calls sys.exit() — does not return
 
     parser = _build_parser()
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     doc_type = args.doc_type
 

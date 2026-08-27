@@ -565,6 +565,29 @@ def test_prime_exit_criterion_falsifier_end_to_end(monkeypatch, tmp_path, integr
     assert "jp-review-receipt-block-stamp" not in {jp["id"] for jp in second["judgment_points"]}
 
 
+def test_stale_same_session_receipt_with_no_consumed_handoff_still_counts(monkeypatch, tmp_path):
+    """F6 (docs/plans/2026-08-27-the-review-gate-measures-the-whole-session.md):
+    pins the accepted-but-unglamorous behavior `_resolve_baton_claim_window_start`'s
+    corrected docstring now names explicitly. No consumed handoff -> the claim
+    window is unbounded below, so a receipt stamped EARLIER in the SAME session
+    still counts -- no `claimed_at` bound could ever exclude it, since a
+    same-session receipt matches `sid` by construction. Session-id + non-blank
+    body (AC5) is the only floor in this case, and this test documents that as a
+    product decision rather than an unnoticed hole."""
+    _patch_gate(monkeypatch, _gate(consumed_handoff=""))
+    _write_clean_plan(tmp_path, "stale-same-session-plan")
+    # A receipt stamped well before "now", from no consumed handoff (single
+    # session, no baton to bound against) -- this must still unblock the close.
+    _write_sidecar(tmp_path, _SID, stamped_at="2020-01-01T00:00:00+00:00")
+
+    decision_object = wsc.brief(
+        decisions={"governing_plan_slug": "stale-same-session-plan", "subject": "x"}, repo_root=tmp_path
+    )
+
+    review_receipt_gate = decision_object["gates"]["review_receipt"]
+    assert review_receipt_gate["blocks"] is False
+
+
 def test_integrator_receipt_is_reported_but_never_required(monkeypatch, tmp_path):
     """AC2 at the READING end: "findings were applied" stays separately
     legible without becoming a second gate.

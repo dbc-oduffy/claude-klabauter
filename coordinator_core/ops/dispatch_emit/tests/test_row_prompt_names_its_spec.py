@@ -250,3 +250,91 @@ def test_row_prompt_splices_the_preamble_ahead_of_the_spec_pointer():
 def test_row_prompt_without_plan_context_is_unchanged():
     """`plan_context=None` (the default) never alters the pre-existing shape."""
     assert _row_prompt(_ROW, _PLAN, None) == _row_prompt(_ROW, _PLAN)
+
+
+_PLAN_WITH_EXIT_CRITERION = """---
+title: "A plan with a criterion"
+prime_exit_criterion:
+  statement: >-
+    Every executor prompt emitted for this plan names the criterion
+    its row is judged against.
+  falsifier:
+    how: "grep the emitted script"
+---
+
+# A plan with a criterion
+
+## Problem
+
+Executors never learned what the plan was for.
+
+## Tasks
+"""
+
+_PLAN_WITH_MALFORMED_FRONTMATTER = """---
+title: "Broken
+prime_exit_criterion: [unclosed
+---
+
+# Broken
+
+## Problem
+
+Something.
+
+## Tasks
+"""
+
+
+def test_derive_plan_context_reads_the_prime_exit_criterion_statement():
+    """The criterion comes out of FRONTMATTER, not a body section, and is
+    collapsed to one line -- a folded YAML scalar carries source line breaks
+    that must not reach a prompt preamble."""
+    ctx = derive_plan_context(_PLAN_WITH_EXIT_CRITERION, fallback_title="fallback")
+    assert ctx.exit_criterion == (
+        "Every executor prompt emitted for this plan names the criterion "
+        "its row is judged against."
+    )
+
+
+def test_derive_plan_context_exit_criterion_is_none_when_plan_declares_none():
+    """Fail-soft by omission, matching `goal`: a plan predating the
+    prime-exit-criterion shape carries `None`, never a placeholder."""
+    ctx = derive_plan_context(_PLAN_WITH_GOAL, fallback_title="fallback")
+    assert ctx.exit_criterion is None
+
+
+def test_derive_plan_context_survives_unparseable_frontmatter():
+    """An emit that dies on one plan's malformed frontmatter is worse than an
+    emit that loses one preamble line."""
+    ctx = derive_plan_context(
+        _PLAN_WITH_MALFORMED_FRONTMATTER, fallback_title="fallback"
+    )
+    assert ctx.exit_criterion is None
+
+
+def test_preamble_omits_the_criterion_line_when_absent():
+    ctx = PlanContext(title="T", goal=None, problem_excerpt="P")
+    preamble = _plan_context_preamble(ctx)
+    assert "Exit criterion:" not in preamble
+
+
+def test_preamble_puts_the_criterion_ahead_of_the_problem_excerpt():
+    """An executor reading only the top of its prompt should have what must
+    be observably true before it has the history of what was wrong."""
+    ctx = PlanContext(
+        title="T",
+        goal="G",
+        problem_excerpt="The old behaviour",
+        exit_criterion="The new behaviour is observable",
+    )
+    preamble = _plan_context_preamble(ctx)
+    assert "Exit criterion: The new behaviour is observable" in preamble
+    assert preamble.index("Exit criterion:") < preamble.index("Problem:")
+
+
+def test_row_prompt_carries_the_criterion_to_the_executor():
+    ctx = derive_plan_context(_PLAN_WITH_EXIT_CRITERION, fallback_title="fallback")
+    prompt = _row_prompt(_ROW, _PLAN, ctx)
+    assert "Exit criterion: Every executor prompt emitted" in prompt
+    assert prompt.index("Exit criterion:") < prompt.index("Your spec is the row")

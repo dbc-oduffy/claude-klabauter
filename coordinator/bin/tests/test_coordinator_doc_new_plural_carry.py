@@ -188,9 +188,11 @@ class MainKindGateDeliverableIdsPlanIdsTest(unittest.TestCase):
             "dlv-x-abc123",
         ]
         with mock.patch.object(sys, "argv", argv):
-            with self.assertRaises(SystemExit) as ctx:
-                _cli.main()
-        self.assertEqual(ctx.exception.code, 1)
+            try:
+                code = _cli.main()
+            except SystemExit as exc:
+                code = exc.code
+        self.assertEqual(code, 1)
 
     def test_plan_ids_refused_for_non_handoff_type(self):
         argv = [
@@ -201,9 +203,11 @@ class MainKindGateDeliverableIdsPlanIdsTest(unittest.TestCase):
             "pln-x-abc123",
         ]
         with mock.patch.object(sys, "argv", argv):
-            with self.assertRaises(SystemExit) as ctx:
-                _cli.main()
-        self.assertEqual(ctx.exception.code, 1)
+            try:
+                code = _cli.main()
+            except SystemExit as exc:
+                code = exc.code
+        self.assertEqual(code, 1)
 
 
 if __name__ == "__main__":

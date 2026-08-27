@@ -68,9 +68,7 @@ import os
 import sys
 from pathlib import Path
 
-_LIB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib")
-if _LIB_DIR not in sys.path:
-    sys.path.insert(0, _LIB_DIR)
+import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
 import cc_invoke  # noqa: E402
 from cc_invoke import route  # noqa: E402
 from repo_identity import resolve_checked_repo_root  # noqa: E402

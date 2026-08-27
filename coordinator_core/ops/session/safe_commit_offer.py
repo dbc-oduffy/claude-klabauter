@@ -20,7 +20,7 @@ nobody watching, and "offer" briefly read as a misnomer for what the module
 had become. That trigger registration has since been retired — verified this
 session against the DoE-claude repo's `coordinator/hooks/hooks.json`, whose
 `SessionEnd` array registers only `sessionend-archive-session.py`, not this
-module's CLI. Every surviving caller today is an EM-initiated ceremony
+module. Every surviving caller today is an EM-initiated ceremony
 (`/handoff`, `/quick-wrap`, `/workstream-complete`) — a session, not a stop
 event, choosing to commit while still running and still able to answer for
 it. The module genuinely offers again, `safe_commit_offer` describes it
@@ -95,17 +95,17 @@ deliberately:
 What did NOT change: the advisory-only disposition of a path left uncommitted
 (DR-227) — it is named in the diagnostics sink (`_log_excluded_diagnostic`)
 and never gated or blocked. (This sentence used to open with "the SessionEnd
-trigger reliability this module's CLI exists for". That trigger is retired;
-the CLI exists for the ceremonies now.)
+trigger reliability this module's CLI exists for". That trigger is retired,
+and so is the CLI; the OP exists for the ceremonies now.)
 
-THE ``"unattended"`` INVOKER HAS NO PRODUCER LEFT. ``--invoker
-<attended|unattended>`` is still accepted and ``commit_session_offer`` still
+THE ``"unattended"`` INVOKER HAS NO PRODUCER LEFT. ``params.invoker`` is
+still accepted and ``commit_session_offer`` still
 branches on it, but as of 2026-08-27 nothing in either repo passes
 ``"unattended"`` except this module's own tests: the SessionEnd registration
 that was its one real caller is retired, and the sole non-test caller
 (`coordinator_core.quick_wrap_assemble`) is a ceremony. The branch is kept
-rather than deleted because the flag is a CLI surface doe-claude-em's skills
-invoke by name and removing it is a cross-repo break, not a local tidy — the
+rather than deleted because the parameter is a wire surface doe-claude-em's
+skills pass by name and removing it is a cross-repo break, not a local tidy — the
 same reasoning that kept `PeerOwnedPath`'s ``"agent-race"`` value whole. Read
 its "Stop-event safety net" commit framing as describing a shape nothing
 currently produces, and if you are here because you found that framing in a
@@ -143,19 +143,18 @@ session-stop-events.yaml
 
 from __future__ import annotations
 
-GENERATES = []  # only direct file write is an append to coordinator-sessions/logs/sessionend-auto-commit-diagnostics.log under the git common dir; actual commits delegate to the ceremony.scoped_git_commit op, not written here
+GENERATES = []  # only direct file write is an append to coordinator-sessions/logs/sessionend-auto-commit-diagnostics.log under the git common dir; actual commits delegate to commit_pipeline.run_commit_pipeline, not written here
 
 import asyncio
-import json
 import posixpath
 import subprocess
-import sys
 import uuid
 from collections import OrderedDict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Literal, Optional, Sequence, TypedDict
 
+from coordinator_core.ipc import register_op
 from coordinator_core.ops.ceremony.commit_pipeline import PUSH_MODE_NEVER, run_commit_pipeline
 from coordinator_core.ops.dirty_tree_gate import parse_porcelain_paths
 from coordinator_core.session import core
@@ -1628,7 +1627,7 @@ def commit_session_offer(
 
 
 # ---------------------------------------------------------------------------
-# CLI
+# Diagnostics sinks
 # ---------------------------------------------------------------------------
 
 
@@ -1640,7 +1639,7 @@ def _log_failed_groups_diagnostic(
     the SessionEnd hook (`DoE-claude/coordinator/hooks/scripts/
     sessionend-auto-commit.py._log_diagnostic`) appends to, naming WHICH
     groups failed and why -- not merely that something did. Never raises; a
-    diagnostics-write failure must not break the CLI's own exit path.
+    diagnostics-write failure must not break the op's own return path.
 
     Review: code-reviewer (Finding 1) — `failed_groups` was computed and
     tested but never surfaced anywhere a human or the hook actually reads.
@@ -1675,8 +1674,8 @@ def _log_failed_groups_diagnostic(
 
 #: Bound on how many withheld paths get named inline in the diagnostics-log
 #: entry. The log line is a breadcrumb pointing at full detail, not the full
-#: detail (DR-227 -- advisory only, see `_log_excluded_diagnostic`); the CLI's
-#: own bounded `--dry-run --json` output is where the whole list lives.
+#: detail (DR-227 -- advisory only, see `_log_excluded_diagnostic`); the op's
+#: own bounded `dry_run=true` return is where the whole list lives.
 #:
 #: HISTORY, because the bound's justification changed even though its value
 #: did not. Pre-2026-08-21, `excluded` held roughly every unclaimed dirty path
@@ -1699,11 +1698,14 @@ def _log_excluded_diagnostic(
     ``coordinator-sessions/logs/sessionend-auto-commit-diagnostics.log`` file
     `_log_failed_groups_diagnostic` appends to (mirrors its directory
     resolution, exception-swallowing, and append shape exactly) -- naming the
-    withheld paths in the ONE sink the unattended SessionEnd hook can actually
-    surface, since that hook only inspects the subprocess exit code and never
-    reads this CLI's stdout (see `_log_failed_groups_diagnostic`'s own
-    docstring). Never raises; a diagnostics-write failure must not break the
-    CLI's own exit path.
+    withheld paths in the ONE sink an unattended caller could actually
+    surface. That framing is now historical on both counts: the SessionEnd
+    hook it was written for is retired, and since 2026-08-27 there is no
+    subprocess or exit code to inspect either — every caller reaches this
+    module as the `session.safe_commit_offer` op and gets the whole report
+    back on the wire. The sink stays because the diagnostics log outlives any
+    one call, which the return value does not. Never raises; a
+    diagnostics-write failure must not break the op's own return path.
 
     WHAT IS BEING NAMED, post-2026-08-21: a path this session holds that a
     PEER holds too. It is withheld because a shared path is not solely this
@@ -1737,7 +1739,7 @@ def _log_excluded_diagnostic(
         remaining = len(excluded) - len(preview)
         if remaining > 0:
             lines.append(
-                "  ... and %d more (see safe-commit-offer --dry-run --json "
+                "  ... and %d more (see coordinator-invoke session.safe_commit_offer dry_run=true "
                 "for the full list)" % remaining
             )
         with (log_dir / "sessionend-auto-commit-diagnostics.log").open(
@@ -1759,14 +1761,16 @@ def _log_dropped_groups_diagnostic(
     touched-path-bookkeeping): a caller-supplied group that loses some or all
     of its named paths to the `safe_set` filter previously appeared in
     neither `groups`, `failed_groups`, nor `excluded` -- this is the ONE sink
-    the unattended SessionEnd hook can actually surface for it, since that
-    hook only inspects the subprocess exit code and never reads this CLI's
-    stdout (see `_log_failed_groups_diagnostic`'s own docstring). Never
-    raises; a diagnostics-write failure must not break the CLI's own exit
+    that outlives the call, the return value having no reader once the caller
+    has moved on (the unattended SessionEnd hook this was written for is
+    retired, and since 2026-08-27 there is no subprocess exit code to inspect
+    either -- see `_log_failed_groups_diagnostic`'s own docstring). Never
+    raises; a diagnostics-write failure must not break the op's own return
     path.
 
     DR-227 -- advisory ONLY, same as `_log_excluded_diagnostic`. This never
-    changes `main`'s exit code and must never be wired to do so: a dropped
+    promotes itself into the op's `error` field and must never be wired to do
+    so: a dropped
     group means the caller named a path outside its own session's computed
     scope, not a failure of this module's own computation -- see
     `CommitOfferReport.dropped_groups`'s own docstring. Do not promote this to
@@ -1807,7 +1811,8 @@ def _log_dropped_groups_diagnostic(
 #: How many of a group's own paths get named inline before the rest collapse
 #: into a "... and N more" tail. Bounds the report the same way
 #: `_EXCLUDED_LOG_PREVIEW_COUNT` bounds the diagnostics-log entry; the full
-#: list is always one `--json` away, and for a LANDED group also in the commit
+#: list is always in the op's own structured return, and for a LANDED group
+#: also in the commit
 #: body `_default_groups` composes.
 _REPORT_PATH_PREVIEW_COUNT = 8
 
@@ -1958,7 +1963,7 @@ def _render_report(report: CommitOfferReport, worktree_root: Optional[str] = Non
         lines.append(
             "Excluded %d file(s) — %d claimed by another session, %d untouched by "
             "this session; left uncommitted on purpose (run `safe-commit-offer "
-            "--dry-run --json` for the full list)." % (len(excluded), owned, untouched)
+            "dry_run=true` for the full list)." % (len(excluded), owned, untouched)
         )
 
     dropped_groups = report.get("dropped_groups") or []
@@ -1971,7 +1976,7 @@ def _render_report(report: CommitOfferReport, worktree_root: Optional[str] = Non
         lines.append(
             "Dropped %d caller-supplied group(s) — named path(s) outside "
             "this session's computed scope, left uncommitted on purpose "
-            "(run `safe-commit-offer --dry-run --json` for the full list):"
+            "(run `coordinator-invoke session.safe_commit_offer dry_run=true` for the full list):"
             % len(dropped_groups)
         )
         shown = dropped_groups[:_DROPPED_GROUPS_PREVIEW_COUNT]
@@ -1990,7 +1995,7 @@ def _render_report(report: CommitOfferReport, worktree_root: Optional[str] = Non
             "Residue: %d file(s) still dirty after this commit, not this "
             "session's peer-owned/committed work, across %d class(es) "
             "(report-only -- nothing staged or blocked; see "
-            "`safe-commit-offer --dry-run --json` or `git status` for the "
+            "`coordinator-invoke session.safe_commit_offer dry_run=true` or `git status` for the "
             "full list):" % (total_residue, len(residue))
         )
         residue_items = list(residue.items())
@@ -2009,7 +2014,7 @@ def _render_report(report: CommitOfferReport, worktree_root: Optional[str] = Non
         if remaining_classes > 0:
             lines.append(
                 "  ... and %d more class(es) (see `safe-commit-offer "
-                "--dry-run --json` or `git status` for the full list)"
+                "dry_run=true` or `git status` for the full list)"
                 % remaining_classes
             )
 
@@ -2088,157 +2093,148 @@ def _render_report(report: CommitOfferReport, worktree_root: Optional[str] = Non
 
 _VALID_INVOKERS = ("attended", "unattended")
 
-_USAGE = (
-    "usage: safe-commit-offer [--session <id>] [--root <path>] [--json]\n"
-    "                          [--message <subject>] [--groups-json <file>]\n"
-    "                          [--invoker <attended|unattended>] [--dry-run]"
-)
+
+# ---------------------------------------------------------------------------
+# Op
+# ---------------------------------------------------------------------------
 
 
-def main(argv: List[str]) -> int:
-    """CLI: ``safe-commit-offer [--session <id>] [--root <path>] [--json]
-    [--message <subject>] [--groups-json <file>]
-    [--invoker <attended|unattended>] [--dry-run]``.
+@register_op("session.safe_commit_offer")
+def _handler(params: dict, repo_root=None) -> dict:
+    """session.safe_commit_offer — MUTATING: commits and pushes THIS session's
+    own claimed dirty paths. No confirmation step of any kind.
 
-    No confirmation step of any kind — this is the mutating auto-commit
-    entrypoint, meant to be called from an unattended trigger (a SessionEnd
-    hook) as well as an EM ceremony. ``--dry-run`` computes and prints
-    without committing, for inspection/testing only — never gate a real
-    invocation behind it.
+    Replaced this module's `main()` CLI on 2026-08-27. There is no Python door
+    left and none may be re-added: reaching the warm engine through an
+    interpreter cost two process starts (43ms for a bare interpreter, 146ms to
+    import this module) before the call resolved a session id or touched git,
+    against 13ms for the whole round trip through `coordinator-invoke.exe`.
+    The interpreter start WAS the defect, so a shim preserving it behind a
+    nicer name is not a compatibility surface — see DR-344 § "Warm engine,
+    <50ms to reach it", and this op's sizing-object
+    (`dlv-the-safe-commit-offer-answers-on-the-exe-0899da`).
 
-    ``--message <subject>`` — single group, all of ``safe_paths``, under the
-    given subject (a caller that already decided on ONE description).
-    ``--groups-json <file>`` — a JSON list of ``{"paths": [...], "message":
-    "..."}`` objects for a caller (e.g. an EM ceremony) with real per-group
-    judgment. Neither given — the mechanical `_default_groups` fallback.
+    Sync (not async): `commit_session_offer` drives the whole call under a
+    single `asyncio.run()`; ipc.py offloads sync handlers via
+    `asyncio.to_thread` (the `commit.exec_bit_change` pattern).
 
-    ``--invoker <attended|unattended>`` — declares which shape THIS call is,
-    consulted only by the mechanical `_default_groups` fallback (i.e. only
-    when neither `--message` nor `--groups-json` is given — those build
-    explicit groups themselves, so `--invoker` is inert alongside either).
-    ``"unattended"`` is the real SessionEnd-hook trigger: stop-event
-    safety-net framing. ``"attended"`` is an EM ceremony (e.g. `/quick-wrap`)
-    that chose this mechanical grouping over authoring its own: a deliberate
-    commit, mechanically bucketed. Omitted entirely — this CLI asserts
-    nothing about why the commit happened, only how the paths were bucketed;
-    see `_default_groups`'s own docstring for the full three-way contract.
-    Any other value is a usage error.
+    Op scope "none" (mirrors `session.scope_report`, which composes this
+    module's own `compute_offer` and resolves its target the same way): the
+    `repo_root` handler arg is unused and always None. Identity comes from
+    wire params, falling back to
+    `coordinator_core.session.core.resolve_session_id(cwd)` — the substrate's
+    canonical 4-tier resolver, anchored on the CALLER's `cwd`, never on this
+    server process's own environment. Load-bearing on the warm path: this
+    process is the server, whose `os.environ` is its spawner's, so an env-only
+    read here would resolve the ENGINE's identity and commit under the wrong
+    session's claim. `cwd` is what makes the resolution the caller's.
 
-    Exit codes: 0 — ran (an empty result is itself a valid "nothing to
-    commit" outcome, INCLUDING the benign already-committed no-op — that
-    shape must never be conflated with 4, see the module's wolf-crying
-    constraint). 1 — session id unresolvable. 2 — usage error. 4 — one or
-    more groups genuinely failed to commit (``report["failed_groups"]``
-    non-empty). The SessionEnd hook (`sessionend-auto-commit.py`) already
-    logs a diagnostic for any exit code outside ``{0, 1}``, so 4 surfaces
-    there with no change needed on that side (Review: code-reviewer,
-    Finding 1).
+    params:
+      session_id (str, optional)  — explicit session id; falls back to
+                                    `resolve_session_id(cwd)` as above.
+      cwd        (str, optional)  — the caller's working directory, threaded
+                                    into BOTH identity resolution and
+                                    `compute_offer`.
+      message    (str, optional)  — single group, all of `safe_paths`, under
+                                    this subject (a caller that already decided
+                                    on ONE description).
+      groups     (list, optional) — `[{"paths": [...], "message": "..."}]` for
+                                    a caller with real per-group judgment.
+                                    Mutually exclusive with `message`. This is
+                                    the inline replacement for the CLI's
+                                    `--groups-json <file>`: the wire carries the
+                                    list itself, so no caller writes a temp file
+                                    to hand a list to a local process.
+      invoker    (str, optional)  — "attended" | "unattended", consulted ONLY by
+                                    the mechanical `_default_groups` fallback
+                                    (i.e. only when neither `message` nor
+                                    `groups` is given — those build explicit
+                                    groups themselves, so `invoker` is inert
+                                    alongside either). See `_default_groups`'s
+                                    own docstring for the three-way contract.
+      dry_run    (bool, optional) — compute and return the offer WITHOUT
+                                    committing, for inspection only. Never gate
+                                    a real invocation behind it.
+
+    Returns the `CommitOfferReport` verbatim, plus `"rendered"`: the operator-
+    facing text `_render_report` produces. The report stays the structured
+    return — `rendered` is an additional field, never a replacement — because
+    the ceremonies that call this op echo that text rather than re-derive it,
+    and moving the rendering out would re-author it once per ceremony.
+
+    On a dry run, returns `{"dry_run": True, **offer}` with `rendered` naming
+    the safe-path count — never a commit.
+
+    On an unresolvable session id or a usage error, returns an error envelope
+    rather than raising: `{"error": str}` alongside empty result fields. The
+    CLI's exit codes are gone with the CLI; a caller distinguishes outcomes by
+    reading `error` and `failed_groups`, and `failed_groups` being non-empty is
+    the only "one or more groups genuinely failed to commit" signal. An empty
+    result is still a valid "nothing to commit" outcome, INCLUDING the benign
+    already-committed no-op — that shape must never be conflated with a
+    failure (see the module's wolf-crying constraint).
     """
-    explicit_session: Optional[str] = None
-    explicit_root: Optional[str] = None
-    as_json = False
-    dry_run = False
-    message: Optional[str] = None
-    groups_json_path: Optional[str] = None
-    invoker: Optional[str] = None
+    cwd = params.get("cwd")
+    message = params.get("message")
+    groups = params.get("groups")
+    invoker = params.get("invoker")
 
-    i = 0
-    while i < len(argv):
-        tok = argv[i]
-        if tok == "--session" and i + 1 < len(argv):
-            explicit_session = argv[i + 1]
-            i += 2
-        elif tok == "--root" and i + 1 < len(argv):
-            explicit_root = argv[i + 1]
-            i += 2
-        elif tok == "--message" and i + 1 < len(argv):
-            message = argv[i + 1]
-            i += 2
-        elif tok == "--groups-json" and i + 1 < len(argv):
-            groups_json_path = argv[i + 1]
-            i += 2
-        elif tok == "--invoker" and i + 1 < len(argv):
-            invoker = argv[i + 1]
-            i += 2
-        elif tok == "--json":
-            as_json = True
-            i += 1
-        elif tok == "--dry-run":
-            dry_run = True
-            i += 1
-        elif tok in ("-h", "--help"):
-            print(_USAGE, file=sys.stderr)
-            return 2
-        else:
-            print("safe-commit-offer: unrecognized argument %r" % tok, file=sys.stderr)
-            return 2
-
+    if message is not None and groups is not None:
+        return _error_envelope("params.message and params.groups are mutually exclusive")
     if invoker is not None and invoker not in _VALID_INVOKERS:
-        print(
-            "safe-commit-offer: --invoker must be one of %s (got %r)"
-            % (", ".join(_VALID_INVOKERS), invoker),
-            file=sys.stderr,
+        return _error_envelope(
+            "params.invoker must be one of %s (got %r)"
+            % (", ".join(_VALID_INVOKERS), invoker)
         )
-        return 2
+    if groups is not None and not isinstance(groups, list):
+        return _error_envelope("params.groups must be a list of {paths, message} objects")
 
-    session_id = explicit_session or core.resolve_session_id(explicit_root)
+    session_id = params.get("session_id") or core.resolve_session_id(cwd)
     if not session_id:
-        print(
-            "safe-commit-offer: could not resolve a session id unambiguously "
-            "(pass --session <id> explicitly).",
-            file=sys.stderr,
-        )
-        return 1
+        return _error_envelope("session_id could not be resolved")
 
-    if message is not None and groups_json_path is not None:
-        print(
-            "safe-commit-offer: --message and --groups-json are mutually exclusive",
-            file=sys.stderr,
-        )
-        return 2
+    if params.get("dry_run"):
+        offer = compute_offer(session_id, cwd)
+        return {
+            "dry_run": True,
+            "rendered": "DRY RUN — safe_paths: %d, excluded: %d"
+            % (len(offer["safe_paths"]), len(offer["excluded"])),
+            **offer,
+        }
 
-    if dry_run:
-        offer = compute_offer(session_id, explicit_root)
-        if as_json:
-            print(json.dumps(offer, indent=2))
-        else:
-            print(
-                "DRY RUN — safe_paths: %d, excluded: %d"
-                % (len(offer["safe_paths"]), len(offer["excluded"]))
-            )
-            for p in offer["safe_paths"]:
-                print("  %s" % p)
-        return 0
-
-    groups: Optional[List[CommitGroup]] = None
+    resolved_groups: Optional[List[CommitGroup]] = None
     if message is not None:
-        offer = compute_offer(session_id, explicit_root)
-        groups = [{"paths": offer["safe_paths"], "message": message}] if offer["safe_paths"] else []
-    elif groups_json_path is not None:
-        try:
-            with open(groups_json_path, "r", encoding="utf-8") as fh:
-                groups = json.load(fh)
-        except (OSError, ValueError) as exc:
-            print("safe-commit-offer: cannot read --groups-json: %s" % exc, file=sys.stderr)
-            return 2
+        offer = compute_offer(session_id, cwd)
+        resolved_groups = (
+            [{"paths": offer["safe_paths"], "message": message}]
+            if offer["safe_paths"]
+            else []
+        )
+    elif groups is not None:
+        resolved_groups = groups
 
-    report = commit_session_offer(session_id, explicit_root, groups, invoker)
-    worktree_root = core.git_root(explicit_root) or explicit_root or "."
-
-    if as_json:
-        print(json.dumps(report, indent=2))
-    else:
-        print(_render_report(report, worktree_root))
+    report = commit_session_offer(session_id, cwd, resolved_groups, invoker)
+    worktree_root = core.git_root(cwd) or cwd or "."
 
     _log_excluded_diagnostic(worktree_root, session_id, report["excluded"])
     _log_dropped_groups_diagnostic(worktree_root, session_id, report["dropped_groups"])
+    if report["failed_groups"]:
+        _log_failed_groups_diagnostic(worktree_root, session_id, report["failed_groups"])
 
-    failed_groups = report["failed_groups"]
-    if failed_groups:
-        _log_failed_groups_diagnostic(worktree_root, session_id, failed_groups)
-        return 4
-    return 0
+    return {**report, "rendered": _render_report(report, worktree_root)}
 
 
-if __name__ == "__main__":
-    sys.exit(main(sys.argv[1:]))
+def _error_envelope(message: str) -> dict:
+    """Structured refusal, never an exception — a handler that raises reaches
+    the caller as a generic JSON-RPC internal error, losing which of this op's
+    named preconditions actually failed.
+    """
+    return {
+        "session_id": "",
+        "groups": [],
+        "excluded": [],
+        "failed_groups": [],
+        "dropped_groups": [],
+        "error": message,
+        "rendered": "safe-commit-offer: %s" % message,
+    }

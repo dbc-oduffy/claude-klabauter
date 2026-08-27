@@ -59,9 +59,7 @@ import os
 import sys
 from pathlib import Path
 
-_LIB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib")
-if _LIB_DIR not in sys.path:
-    sys.path.insert(0, _LIB_DIR)
+import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
 from cc_invoke import require_dispatch_engine_on_path  # noqa: E402
 
 _VALID_INVOKERS = (
@@ -85,7 +83,6 @@ def _import_orientation_module():
 
 
 def main(argv: "list[str] | None" = None) -> int:
-    del argv  # this CLI takes no arguments; argv accepted for the warm-call contract
     parser = argparse.ArgumentParser(
         prog="regenerate-orientation-cache",
         description="Regenerate state/orientation_cache.md.",
@@ -106,7 +103,7 @@ def main(argv: "list[str] | None" = None) -> int:
             "Requires an existing cache file; mid-session invokers only."
         ),
     )
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     if args.pinboard_only is not None and args.pinboard is not None:
         print("ERROR: --pinboard and --pinboard-only are mutually exclusive", file=sys.stderr)

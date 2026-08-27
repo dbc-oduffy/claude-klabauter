@@ -58,9 +58,6 @@ import os
 import sys
 
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-_LIB_DIR = os.path.join(_SCRIPT_DIR, "lib")
-if _LIB_DIR not in sys.path:
-    sys.path.insert(0, _LIB_DIR)
 
 _REPO_ROOT = os.path.dirname(os.path.dirname(_SCRIPT_DIR))
 if _REPO_ROOT not in sys.path:

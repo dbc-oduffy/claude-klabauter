@@ -934,12 +934,22 @@ def _disposition_ref_evidence(
 # frontmatter. See this plan's own anti-scope: "the engine never executes
 # the falsifier."
 #
-# Grandfathering is presence-based, not date-based (AC7): a plan whose
-# `prime_exit_criterion` is absent entirely never reaches this gate at all
-# (`_evaluate_goal_falsifier_gate` returns `None` at its very first check,
-# and its caller in `close_out_and_stamp` adds no new result-dict key at
-# all on a `None` return) -- byte-identical to the pre-C2 result dict for
-# every plan on disk before this landed. A `prime_exit_criterion` present
+# Grandfathering was presence-based when C2 landed (AC7) and is now
+# presence-AND-date-based: a plan whose `prime_exit_criterion` is absent
+# still exits at the gate's very first check -- `None`, and its caller adds
+# no new result-dict key at all, byte-identical to the pre-C2 result dict
+# for every plan on disk before this landed -- UNLESS it is both M+ and
+# `created` on or after `GRANDFATHER_DATE`, which arm 0 refuses.
+#
+# Presence alone was not a grandfather rule, it was an opt-out: it exempted
+# the pre-C2 corpus (correct) and equally exempted a plan authored today
+# that simply declined to declare a criterion (not correct). The date is
+# what separates those two populations, and it is pinned as a literal
+# because "before this plan's landing commit" resolves differently in every
+# repo that asks -- DoE-claude cross-repo memo, 2026-08-27, § "Pin the
+# grandfather date". The M+ bound comes from plan.schema.json's own
+# read-side size rule for the falsifier: an S/XS plan omitting a criterion
+# was never in scope and still is not. A `prime_exit_criterion` present
 # but carrying no `falsifier` (absent, null, non-object, or missing any of
 # its four required keys -- `_falsifier_block`'s own TOTAL detection) is
 # arm 1's "unchanged behaviour, full stop": the gate still adds its
@@ -1055,6 +1065,149 @@ GOAL_REFUSAL_NOT_ASSERTED = "exit_criterion_not_asserted"
 GOAL_REFUSAL_BASELINE_REF_PREFIX = "baseline_ref_"
 GOAL_REFUSAL_VERDICT_NOT_PASS = "falsifier_verdict_not_pass"
 GOAL_REFUSAL_DERIVED_FROM_UNRESOLVABLE = "derived_from_unresolvable"
+GOAL_REFUSAL_PRIME_ABSENT = "prime_exit_criterion_absent"
+GOAL_REFUSAL_FALSIFIER_ABSENT = "falsifier_absent"
+
+_ISO_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+GRANDFATHER_DATE = "2026-08-27"
+"""The literal ISO date the prime-exit-criterion requirement starts binding.
+
+A plan whose `created` is strictly BEFORE this date is grandfathered and may
+omit `prime_exit_criterion` entirely; one created on or after it, and sized
+M+, must carry the block or its close-out refuses `implemented`.
+
+Why a pinned literal rather than "before this plan's landing commit": the
+landing commit is unresolvable from the sending repo's side, and a rule that
+different repos resolve differently is not one rule. Pinned by DoE-claude's
+cross-repo memo `2026-08-27-doe-claude-em-prime-exit-criterion-settled-shape`
+§ "Pin the grandfather date", which asked for exactly this literal.
+
+NEGATIVE SPEC: this date never moves forward. Advancing it would silently
+re-grandfather a cohort of plans that were authored under the requirement,
+which is the corpus-rewrite this gate exists to prevent."""
+
+_PRIME_ABSENT_NEXT_MOVE = (
+    "Author prime_exit_criterion (statement + derived_from, plus a falsifier "
+    "or a named falsifier_exemption) in this plan's frontmatter, then re-run "
+    "the close-out."
+)
+"""Arm 0's own next move. `_GOAL_REFUSAL_NEXT_MOVE` is wrong here and would
+misdirect: it says to re-run the observation, and this plan has no observation
+to re-run -- the field that would name one was never written. Same register as
+that constant (one useful move, no restatement of the refusal)."""
+
+
+def _plan_created_on_or_after_grandfather(fm: dict) -> bool:
+    """Whether the plan's `created` places it under the requirement.
+
+    Fails toward GRANDFATHERED (`False`) on anything it cannot read cleanly —
+    absent `created`, a non-scalar, or a value that does not lead with an ISO
+    date. That direction is deliberate and is the opposite of this module's
+    usual fail-loud posture: this arm's refusal blocks a close-out on a field's
+    ABSENCE, so a misparse would refuse a plan that is entitled to its stamp
+    and has no local evidence to argue back with. Every other arm of this gate
+    refuses on something the plan positively declared and got wrong; this one
+    cannot, so it declines rather than guesses.
+
+    `created` may arrive as a `datetime.date` (the YAML loader parses an
+    unquoted ISO date) or as a string, since `schema_validate`'s own leniency
+    accepts both for a `type: string` field. Both are compared lexically after
+    normalising to `YYYY-MM-DD`, which is correct for ISO-8601 dates and needs
+    no date arithmetic."""
+    created = fm.get("created")
+    if isinstance(created, datetime.datetime):
+        created = created.date()
+    if isinstance(created, datetime.date):
+        return created.isoformat() >= GRANDFATHER_DATE
+    if not isinstance(created, str):
+        return False
+    head = created.strip()[:10]
+    if not _ISO_DATE_RE.match(head):
+        return False
+    return head >= GRANDFATHER_DATE
+
+
+_MPLUS_TSHIRTS = frozenset({"M", "L", "XL", "XXL"})
+
+
+def _plan_is_m_plus(fm: dict, root: Path) -> bool:
+    """Whether the plan's linked sizing object sizes it M or larger.
+
+    The t-shirt lives in an external `state/sizings/<id>.yaml` document, which
+    is why the schema enforces the falsifier requirement READ-SIDE rather than
+    in JSON Schema (see plan.schema.json's own 2.6.0 bump note) — this is that
+    read.
+
+    Fails toward NOT-M-PLUS (`False`) on an absent, null, unresolvable, or
+    unreadable `sizing_object`, and on a sizing object carrying no usable
+    `estimate.tshirt`. Same direction and same reason as
+    `_plan_created_on_or_after_grandfather`: an unread size must never be the
+    thing that refuses a stamp. An S-or-XS plan omitting the criterion is
+    legitimate and is not this arm's business.
+
+    Reads at most one file and spawns nothing, so the gate's at-most-2 git
+    budget (spent by `baseline_ref`'s ancestor check) is untouched."""
+    sizing_ref = fm.get("sizing_object")
+    if not isinstance(sizing_ref, str) or not sizing_ref.strip():
+        return False
+    sizing_path = root / sizing_ref.strip()
+    try:
+        doc = yaml.safe_load(sizing_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, yaml.YAMLError):
+        return False
+    if not isinstance(doc, dict):
+        return False
+    estimate = doc.get("estimate")
+    if not isinstance(estimate, dict):
+        return False
+    tshirt = estimate.get("tshirt")
+    return isinstance(tshirt, str) and tshirt.strip().upper() in _MPLUS_TSHIRTS
+
+_EXEMPTION_CLASS = "unfalsifiable-by-observation-doctrine-or-schema-edit"
+
+
+def _falsifier_exemption(prime_exit_criterion: Any) -> Optional[dict]:
+    """Total, never-raising detection of a real `falsifier_exemption`, in
+    `_falsifier_block`'s own shape and for the same reason.
+
+    Returns the exemption only when it carries BOTH required fields in a
+    usable form: `class` at the single spelling the schema pins it to
+    (`_EXEMPTION_CLASS` -- held to one string so a later reader cannot widen
+    the hatch by inventing a new class name), and a non-blank `admission`.
+    Anything else -- a non-dict criterion, an absent or non-dict exemption, a
+    novel class string, a blank admission -- returns `None`, which the caller
+    reads as "no exemption was taken" and proceeds to the size gate.
+
+    The strictness is the point: this is the ONE sanctioned way past an M+
+    falsifier requirement, so a malformed exemption must not buy the same
+    silence a well-formed one does."""
+    if not isinstance(prime_exit_criterion, dict):
+        return None
+    exemption = prime_exit_criterion.get("falsifier_exemption")
+    if not isinstance(exemption, dict):
+        return None
+    if exemption.get("class") != _EXEMPTION_CLASS:
+        return None
+    admission = exemption.get("admission")
+    if not isinstance(admission, str) or not admission.strip():
+        return None
+    return exemption
+
+
+_FALSIFIER_ABSENT_NEXT_MOVE = (
+    "Author prime_exit_criterion.falsifier (how + baseline_output + "
+    "baseline_ref + expected_when_true, captured against a baseline that "
+    "reads FALSE), or a named falsifier_exemption if this criterion is "
+    "genuinely un-falsifiable by observation, then re-run the close-out."
+)
+"""The absent-falsifier arm's own next move, for `_PRIME_ABSENT_NEXT_MOVE`'s
+reason: `_GOAL_REFUSAL_NEXT_MOVE` says to re-run an observation, and this
+plan named none to re-run. Distinct from `_PRIME_ABSENT_NEXT_MOVE` too --
+that plan has no criterion at all, this one has a criterion and no
+instrument, and telling it to author a statement it already wrote misreads
+its own frontmatter back to it."""
+
 
 _GOAL_REFUSAL_NEXT_MOVE = (
     "Run the close-out skill, which re-runs the observation and records a fresh "
@@ -1081,13 +1234,24 @@ def _evaluate_goal_falsifier_gate(
 
     Predicate, in order (see the C2 dispatch brief for the full citation
     trail):
-      1. No `prime_exit_criterion` at all -> `None` (arm 1's grandfathering
-         -- the caller adds no new result-dict key on a `None` return,
-         which is AC7's own differential-fixture guarantee).
+      0. No `prime_exit_criterion` at all -> grandfathered to `None` UNLESS
+         the plan is both M+ (per its linked sizing object) and `created` on
+         or after `GRANDFATHER_DATE`, in which case it refuses
+         (`GOAL_REFUSAL_PRIME_ABSENT`), same `status_override_*` exception as
+         the arms below. Before this arm existed, absence was an
+         unconditional exit and the whole gate was opt-out by omission.
+         Everything the caller relies on for the genuinely grandfathered
+         corpus is unchanged: still `None`, still no new result-dict key,
+         which is AC7's own differential-fixture guarantee.
       5. `derived_from` resolution (AC20) -- independent of falsifier
          presence; an unresolvable link refuses (same override exception).
       1(cont). No usable `falsifier` block (`_falsifier_block` -- TOTAL,
-         never-raising detection) -> refused stays `False`, full stop.
+         never-raising detection) -> refuses (`GOAL_REFUSAL_FALSIFIER_ABSENT`)
+         on the SAME two bounds arm 0 uses, M+ and created on or after
+         `GRANDFATHER_DATE`, and only when no well-formed
+         `falsifier_exemption` was taken; otherwise refused stays `False`.
+         The size bound is the whole point of this arm: without it the S-lane
+         carve-out silently applied to every lane.
       2. `exit_criterion_met` absent, or present with `asserted: false` ->
          refuse (AC4), unless a current `status_override_*` attestation is
          present (AC19).
@@ -1115,7 +1279,41 @@ def _evaluate_goal_falsifier_gate(
         return None
     prime = fm.get("prime_exit_criterion")
     if prime is None:
-        return None
+        # Arm 0 (the grandfather-date pin). Absence of `prime_exit_criterion`
+        # was the ONLY unconditional exit from this gate, which made the gate
+        # skippable by simply not declaring the field -- an EM who never wrote
+        # a criterion was never caught, while one who wrote it and got the
+        # observation wrong was. Every other arm judges a positive declaration;
+        # this one is why the corpus could opt out of all of them.
+        #
+        # Bounded on BOTH axes so the refusal only reaches plans the
+        # requirement was actually authored for: `created` on or after
+        # GRANDFATHER_DATE, and M+ per the linked sizing object (the same
+        # read-side size rule plan.schema.json names for the falsifier itself).
+        # Either predicate failing to read cleanly declines -- see each
+        # helper's own docstring for why this arm alone fails toward
+        # grandfathering rather than toward refusal.
+        if not _plan_created_on_or_after_grandfather(fm):
+            return None
+        if not _plan_is_m_plus(fm, root):
+            return None
+        if _read_status_override(plan_text) is not None:
+            return {
+                "refused": False,
+                "reason": None,
+                "detail": None,
+                "override": True,
+            }
+        return {
+            "refused": True,
+            "reason": GOAL_REFUSAL_PRIME_ABSENT,
+            "detail": (
+                "plan declares no prime_exit_criterion, and is sized M+ with "
+                f"created on or after {GRANDFATHER_DATE} (plans created before "
+                "that date are grandfathered and skip this check)"
+            ),
+            "override": False,
+        }
 
     result: dict[str, Any] = {
         "refused": False,
@@ -1138,6 +1336,40 @@ def _evaluate_goal_falsifier_gate(
 
     falsifier = _falsifier_block(prime)
     if falsifier is None:
+        # Arm 1(cont), size-gated. A plan that declares a criterion and no
+        # usable falsifier used to leave here non-refusing at EVERY lane,
+        # which applied the S-lane carve-out to all of them: the schema
+        # expresses the carve-out as a rule keyed on `estimate.tshirt`, and
+        # nothing enforced it, so an M+ plan that never authored an
+        # observation was indistinguishable from an S plan that was never
+        # asked for one. Measured 2026-08-27 against four fixtures differing
+        # only in t-shirt (S/M/L/XL, all non-refusing) --
+        # cross-repo/archive/2026-08-27-doe-claude-em-ac-12-needs-a-size-gate-not-the-verdict-gate.md.
+        #
+        # Bounded exactly as arm 0 is, and for the same reasons: grandfather
+        # date first, then M+, each failing toward NOT refusing. A named
+        # `falsifier_exemption` is checked ahead of both -- it is the
+        # schema's own escape hatch for an M+ criterion genuinely
+        # un-falsifiable by observation, and refusing a plan that took the
+        # sanctioned route would punish the discipline the hatch exists to
+        # reward.
+        if _falsifier_exemption(prime) is not None:
+            return result
+        if not _plan_created_on_or_after_grandfather(fm):
+            return result
+        if not _plan_is_m_plus(fm, root):
+            return result
+        if override is not None:
+            result["override"] = True
+            return result
+        result["refused"] = True
+        result["reason"] = GOAL_REFUSAL_FALSIFIER_ABSENT
+        result["detail"] = (
+            "plan declares prime_exit_criterion with no usable falsifier, and "
+            f"is sized M+ with created on or after {GRANDFATHER_DATE} (an M+ "
+            "criterion genuinely un-falsifiable by observation takes a named "
+            "falsifier_exemption instead; S and XS carry no falsifier at all)"
+        )
         return result
 
     exit_criterion_met = fm.get("exit_criterion_met")
@@ -2753,10 +2985,18 @@ def close_out_and_stamp(
         # C2's third refusal class (AC4-AC6, AC18): the ONE next move,
         # `_GOAL_REFUSAL_NEXT_MOVE`'s own register -- lead with what to do,
         # not a generic refusal.
+        # Arm 0 refuses on a field that was never written, so it takes its own
+        # next move -- `_GOAL_REFUSAL_NEXT_MOVE` would tell the reader to
+        # re-run an observation this plan never named.
+        _next_move = _GOAL_REFUSAL_NEXT_MOVE
+        if goal_gate["reason"] == GOAL_REFUSAL_PRIME_ABSENT:
+            _next_move = _PRIME_ABSENT_NEXT_MOVE
+        elif goal_gate["reason"] == GOAL_REFUSAL_FALSIFIER_ABSENT:
+            _next_move = _FALSIFIER_ABSENT_NEXT_MOVE
         message = (
             f"{plan_path_rel}: not stamped -- prime exit criterion goal "
             f"observation refused ({goal_gate['reason']}): {goal_gate['detail']}. "
-            f"{_GOAL_REFUSAL_NEXT_MOVE}"
+            f"{_next_move}"
         )
     else:
         message = (

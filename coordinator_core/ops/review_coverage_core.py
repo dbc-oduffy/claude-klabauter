@@ -6,9 +6,15 @@ template-variant #1.
 Purpose: shared coverage-computation core for review-trail gates. Exposes two
 CLI modes via `main(argv)`:
 
-    --reviewed-set <trail-path> [<trail-path>...]
-        Prints one reviewed SHA per line on stdout (union across all records).
-        Returns exit 0 on success, 1 on fatal error.
+    --reviewed-set [<trail-path> ...]
+        Prints one reviewed SHA per line on stdout — the resident
+        reviewed-set store's full membership (docs/plans/2026-08-27-the-
+        reviewed-set-is-a-file-not-a-computation.md), optionally narrowed by
+        --intersect. Positional trail-path args are accepted for CLI/back-
+        compat but are NOT read in this mode (see "Migration note" below):
+        the store is never path- or trail-file-scoped, matching
+        `coordinator_core.ops.gate_dimension_review`'s identical migration
+        (C3, same plan). Returns exit 0 on success; this mode cannot fail.
 
     --segments-json <trail-path> [<trail-path>...]
         Prints a JSON array of segment objects on stdout:
@@ -39,6 +45,25 @@ Two DISTINCT error-class flags (guards-match-conditions-not-containers):
         Fail-safe either way: an unparseable/unresolvable record credits NO
         commits, so affected commits surface as MORE review, never less.
 
+Migration note (C4, docs/plans/2026-08-27-the-reviewed-set-is-a-file-not-a-
+computation.md § C4): --reviewed-set mode no longer loads, classifies, or
+resolves any trail record itself. All five credit rules (verdict filter,
+HEAD-anchored exclusion, kind partitioning, foreign-session narrowing, the
+never-path-scoped rule) already ran at WRITE time
+(`coordinator_core.review_trail.backfill.resolve_and_fold`, called by
+`ops/review_trail_write.py` and the one-shot `run_backfill`) and their
+result is already folded into the resident reviewed-set store. This mode is
+now a pure membership read of that store
+(`coordinator_core.review_trail.reviewed_set.read_reviewed_set`) — zero
+added git spawns, never a subprocess — exactly mirroring
+`coordinator_core.ops.gate_dimension_review`'s C3 migration onto the same
+store. `--on-record-error` / `--on-unresolvable-ref` / positional trail-path
+args are accepted but inert in this mode: there is nothing left for either
+flag to govern once no record is loaded or resolved here. --segments-json
+mode is UNCHANGED by this migration (see below) — it still needs each
+record's own per-range file attribution for seam detection, which the
+reviewed-set store's flat SHA union does not carry.
+
 Negative-spec:
     - --segments-json mode never batches its single `git log --format=%H
       --name-only <range>` spawn (C17 merged the former separate `git
@@ -48,11 +73,16 @@ Negative-spec:
       (sha_range, cwd), but combining ranges into one call is a separate,
       still-forbidden operation (SAFE_RANGE admits symbolic/live-HEAD
       endpoints — see build_segments's own comment).
-    - --reviewed-set mode also resolves each DISTINCT range independently
-      (one `git rev-list` per range, deduplicated, unioned) rather than
-      reproducing the bash oracle's single-batched-call optimization — see
-      build_reviewed_set's own docstring for why that optimization is a
-      confirmed open defect, not faithfully reproduced here.
+    - --reviewed-set mode does NOT call
+      `coordinator_core.review_trail.backfill.resolve_and_fold` (or any
+      other fold-triggering path) — that primitive is write-path-only ("NOT
+      a gate-path cost... no gate caller may trigger it", per its own
+      module docstring); a read-side caller that folded on demand would
+      reintroduce the per-call git-spawn cost this migration exists to
+      remove. A record not yet folded (write-time resolution pending, or a
+      backfill not yet run) is simply not yet in the store — the same
+      conservative "uncredited until folded" direction every other reader
+      of this store already accepts.
     - --intersect (reviewed-set mode only) filters the emitted union to SHAs
       present in a newline-separated file — verdict-preserving, mirrors
       review-coverage-gate.sh's --intersect tmpfile optimisation.
@@ -89,11 +119,11 @@ from coordinator_core.coverage import (
     SAFE_RANGE,
     _REVLIST_MAX_WORKERS,
     _TrailParseError,
-    _classify_bookkeeping_shas,
     _parse_trail_file,
     _verdict_counts,
     emit_unrecognized_kind_warning,
 )
+from coordinator_core.review_trail.reviewed_set import read_reviewed_set
 from coordinator_core.win_portability import no_console_creationflags
 
 _CREATIONFLAGS = no_console_creationflags()
@@ -361,128 +391,29 @@ def _classify(
 
 
 # ---------------------------------------------------------------------------
-# --reviewed-set mode — two-phase: classify (no git calls), then resolve each
-# DISTINCT range independently via its own `git rev-list` and union the result.
-#
-# Deliberate divergence from the bash oracle's fix-1b "one batched git rev-list
-# over every valid range" optimization — NOT reproduced here. That batching is
-# a confirmed, OPEN, tracked defect (state/bug-backlog/
-# 2026-07-03-review-coverage-core-batch-git-rev-list.yaml): `git rev-list
-# A..B B..C` treats the shared boundary SHA as an exclude-anchor for the
-# second range, dropping the first segment's commits from the union whenever
-# two records have adjacent/touching sha_ranges (confirmed via
-# review-coverage-core.test.sh TC14, which fails on the current bash oracle
-# baseline — 21/22, not 22/22). Fail-safe direction (under-count → those
-# commits surface as MORE required review, never a false pass) but still a
-# correctness defect with a filed fix proposal: "accumulate the union
-# per-range; the per-record fallback loop already accumulates correctly."
-# This port adopts that exact proposed fix — one `git rev-list` spawn PER
-# DISTINCT range (deduplicated), unioned — matching the approach
-# coordinator_core.coverage.build_reviewed_set already uses for the same
-# reason (see that module's own negative-spec on batching). Per Porter-brief-
-# addendum rule 7: a tracked, fail-safe-direction, already-proposed-fix defect
-# is fixed forward, not faithfully re-broken.
+# --reviewed-set mode — a pure membership read of the resident reviewed-set
+# store (docs/plans/2026-08-27-the-reviewed-set-is-a-file-not-a-computation.md
+# § C4). No record loading, no classification, no git calls: every credit
+# rule already ran at write time (`review_trail.backfill.resolve_and_fold`)
+# and its result is already folded into the store this reads. This mirrors
+# `coordinator_core.ops.gate_dimension_review`'s identical C3 migration onto
+# the same store — see this module's own docstring "Migration note".
 # ---------------------------------------------------------------------------
 
 
-#: `kind` values a bucket is credited against unconditionally, no differently
-#: from the pre-C6 behaviour — mirrors coverage.py's own
-#: `_UNRESTRICTED_CREDIT_KINDS` (C5). Kept as a tuple rather than a bare
-#: string comparison so a future kind addition greps to one obvious spot.
-_UNRESTRICTED_CREDIT_KINDS: Tuple[str, ...] = ("diff",)
-
-
-def _credit_from_kind_partition(
-    reviewed_by_kind: Dict[str, Set[str]],
-    cwd: Optional[str],
-) -> Set[str]:
-    """Collapse a per-kind reviewed partition into ONE credited set — the
-    same kind-aware crediting rule as `coordinator_core.coverage`'s
-    `_credit_from_kind_partition` (C5), applied here to this module's separate
-    resolve-and-union implementation so the two live copies answer AC6
-    identically (C6).
-
-    "diff" (and any future unrestricted kind, see `_UNRESTRICTED_CREDIT_KINDS`)
-    credits its resolved SHAs unconditionally, exactly as before this chunk.
-
-    "plan" credits ONLY the subset of its resolved SHAs that
-    `_classify_bookkeeping_shas` independently classifies PLANNING — reusing
-    the already-landed C2 classifier (imported from `coordinator_core.coverage`)
-    rather than inventing a second notion of "planning commit". This is the
-    fix for the naive "just delete the skip" shortcut named in the plan's
-    Anti-scope: that shortcut would credit a plan review's ENTIRE resolved
-    range unconditionally, including any code commits it happens to span —
-    worse than the false tail it replaces, and exploit-shaped (AC6).
-
-    Any other kind (there are none yet reachable — "integration" is skipped
-    in `_classify_shape` and never reaches this function) credits nothing,
-    fail-closed.
-    """
-    credited: Set[str] = set()
-    for kind in _UNRESTRICTED_CREDIT_KINDS:
-        credited |= reviewed_by_kind.get(kind, set())
-
-    plan_raw = reviewed_by_kind.get("plan", set())
-    if plan_raw:
-        _, planning_set, _note = _classify_bookkeeping_shas(list(plan_raw), cwd or ".", {})
-        credited |= (plan_raw & planning_set)
-
-    return credited
-
-
 def build_reviewed_set(
-    all_records: Sequence[Tuple[str, dict]],
-    on_unresolvable_ref: str,
     intersect_shas: Set[str],
     cwd: Optional[str] = None,
 ) -> Set[str]:
-    """Phase 1: classify (no git calls). Phase 2: resolve each DISTINCT
-    (range, kind) pair independently (dedup identical range+kind pairs first —
-    many trail records cite the same sha_range) and union into reviewed_set,
-    PARTITIONED BY `kind` (C6, mirroring coverage.py's build_reviewed_set —
-    C5) so a "plan" record's resolved SHAs are filtered to planning-artifact
-    commits before crediting (see `_credit_from_kind_partition`) rather than
-    crediting its whole range unconditionally."""
-    valid_ranges: List[Tuple[str, str, str]] = []
-    unrecognized_kind_counts: Dict[str, int] = {}
-    for _source_path, rec in all_records:
-        classified = _classify(rec, unrecognized_sink=unrecognized_kind_counts)
-        if classified is not None:
-            valid_ranges.append(classified)
-
-    emit_unrecognized_kind_warning(unrecognized_kind_counts)
-
-    if not valid_ranges:
-        return set()
-
-    # `kind` joins the dedup key — without it, a "plan" record and a "diff"
-    # record citing the identical sha_range would collapse to whichever
-    # parses first via `setdefault`, dropping the other kind's credit
-    # entirely (same collision case C5 fixed in coverage.py's dedup key).
-    distinct: Dict[Tuple[str, str], str] = {}
-    for sha_range, artifact, kind in valid_ranges:
-        distinct.setdefault((sha_range, kind), artifact)
-
-    reviewed_by_kind: Dict[str, Set[str]] = {}
-    for (sha_range, kind), artifact in distinct.items():
-        rc, shas_out, rev_err = _run(["git", "rev-list", sha_range], cwd=cwd)
-        if rc != 0:
-            last_err = rev_err.strip().splitlines()[-1] if rev_err.strip() else "git rev-list failed"
-            if on_unresolvable_ref == "skip":
-                print(
-                    f"WARN: skipping trail record with unresolvable range {sha_range!r}: "
-                    f"{last_err} ({artifact})",
-                    file=sys.stderr,
-                )
-                continue
-            print(f"ERROR: command failed: git rev-list {sha_range}\n{rev_err}", file=sys.stderr)
-            raise _FatalError(f"git rev-list {sha_range} failed")
-        bucket = reviewed_by_kind.setdefault(kind, set())
-        if shas_out:
-            for sha in shas_out.splitlines():
-                if sha and (not intersect_shas or sha in intersect_shas):
-                    bucket.add(sha)
-    return _credit_from_kind_partition(reviewed_by_kind, cwd)
+    """Return the resident reviewed-set store's full membership, optionally
+    narrowed to `intersect_shas` (verdict-preserving: the gate/CLI caller
+    only ever tests membership of its OWN commit list, so extra SHAs never
+    change the answer). Zero git spawns — `read_reviewed_set` is a resident,
+    `os.stat`-revalidated file read; see the module's "Migration note"."""
+    reviewed = read_reviewed_set(cwd or os.getcwd())
+    if intersect_shas:
+        return {sha for sha in reviewed if sha in intersect_shas}
+    return set(reviewed)
 
 
 # ---------------------------------------------------------------------------
@@ -861,17 +792,21 @@ def main(argv: Optional[Sequence[str]] = None, cwd: Optional[str] = None) -> int
 
     intersect_shas = _load_intersect_shas(intersect_file)
 
-    trail_files = _collect_trail_files(trail_files_env, trail_path_args)
     try:
-        all_records = _load_records(trail_files, week_start, today, on_record_error)
-
         if mode == "--reviewed-set":
-            reviewed = build_reviewed_set(all_records, on_unresolvable_ref, intersect_shas, cwd=cwd)
+            # No record loading here (see module docstring "Migration
+            # note"): trail_files_env / trail_path_args / on_record_error /
+            # on_unresolvable_ref are accepted for CLI back-compat but inert
+            # in this mode — the store is never trail-file-scoped.
+            reviewed = build_reviewed_set(intersect_shas, cwd=cwd)
             for sha in sorted(reviewed):
                 print(sha)
             return EXIT_OK
 
-        # mode == "--segments-json"
+        # mode == "--segments-json" — unchanged: still needs per-record
+        # classification and file attribution (see module docstring).
+        trail_files = _collect_trail_files(trail_files_env, trail_path_args)
+        all_records = _load_records(trail_files, week_start, today, on_record_error)
         segments = build_segments(all_records, on_unresolvable_ref, cwd=cwd)
         print(json.dumps(segments, indent=2))
         return EXIT_OK

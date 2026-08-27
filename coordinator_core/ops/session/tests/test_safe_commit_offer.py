@@ -1200,22 +1200,34 @@ class TestAutoCommitSession:
 
 
 # ---------------------------------------------------------------------------
-# (f) CLI
+# (f) The op handler
 # ---------------------------------------------------------------------------
+#
+# Ported 2026-08-27 from `TestMain`, which drove `safe_commit_offer.main(argv)`
+# and asserted on exit codes plus captured stdout. Both are gone with the CLI:
+# the op returns its whole report on the wire, so an outcome that used to be an
+# exit code is now a field. The mapping, kept explicit because those exit codes
+# are cited by name in this module's own docstrings and in DoE-claude's:
+#   exit 0 -> ran; `error` absent and `failed_groups` empty
+#   exit 1 -> `error` == "session_id could not be resolved"
+#   exit 2 -> `error` naming the violated precondition (usage)
+#   exit 4 -> `failed_groups` non-empty
+# The rendered operator text that used to be stdout is the `rendered` field,
+# which is why these assertions read it rather than `capsys`.
 
 
-class TestMain:
-    def test_dry_run_computes_without_committing(self, tmp_path, capsys):
+class TestHandler:
+    def test_dry_run_computes_without_committing(self, tmp_path):
         repo = _make_repo(tmp_path)
         core.init("mine", cwd=str(repo))
         (repo / "a.py").write_text("a")
         scope.touch("mine", "a.py", cwd=str(repo))
 
-        exit_code = safe_commit_offer.main(
-            ["--session", "mine", "--root", str(repo), "--dry-run", "--json"]
+        out = safe_commit_offer._handler(
+            {"session_id": "mine", "cwd": str(repo), "dry_run": True}
         )
-        assert exit_code == 0
-        out = json.loads(capsys.readouterr().out)
+        assert "error" not in out
+        assert out["dry_run"] is True
         assert out["safe_paths"] == ["a.py"]
         status = subprocess.run(
             ["git", "status", "--porcelain"], cwd=repo, capture_output=True, text=True
@@ -1229,18 +1241,18 @@ class TestMain:
     # proven under 2s and leaves the roster, and not before; nothing in this
     # module can lift it.
     @pytest.mark.designed_red
-    def test_message_flag_via_cli_commits(self, tmp_path, capsys):
+    def test_message_param_commits(self, tmp_path):
         repo = _make_repo(tmp_path)
         core.init("mine", cwd=str(repo))
         (repo / "a.py").write_text("a")
         scope.touch("mine", "a.py", cwd=str(repo))
 
-        exit_code = safe_commit_offer.main(
-            ["--session", "mine", "--root", str(repo), "--message", "hand-authored subject"]
+        out = safe_commit_offer._handler(
+            {"session_id": "mine", "cwd": str(repo), "message": "hand-authored subject"}
         )
-        assert exit_code == 0
-        out = capsys.readouterr().out
-        assert "hand-authored subject" in out
+        assert "error" not in out
+        assert out["failed_groups"] == []
+        assert "hand-authored subject" in out["rendered"]
         status = subprocess.run(
             ["git", "status", "--porcelain"], cwd=repo, capture_output=True, text=True
         ).stdout
@@ -1253,54 +1265,62 @@ class TestMain:
     # proven under 2s and leaves the roster, and not before; nothing in this
     # module can lift it.
     @pytest.mark.designed_red
-    def test_groups_json_flag(self, tmp_path, capsys):
+    def test_groups_param(self, tmp_path):
         repo = _make_repo(tmp_path)
         core.init("mine", cwd=str(repo))
         (repo / "a.py").write_text("a")
         scope.touch("mine", "a.py", cwd=str(repo))
 
-        groups_file = tmp_path / "groups.json"
-        groups_file.write_text(json.dumps([{"paths": ["a.py"], "message": "from json"}]))
-
-        exit_code = safe_commit_offer.main(
-            ["--session", "mine", "--root", str(repo), "--groups-json", str(groups_file)]
+        out = safe_commit_offer._handler(
+            {
+                "session_id": "mine",
+                "cwd": str(repo),
+                "groups": [{"paths": ["a.py"], "message": "from params"}],
+            }
         )
-        assert exit_code == 0
-        assert "from json" in capsys.readouterr().out
+        assert "error" not in out
+        assert "from params" in out["rendered"]
 
-    def test_message_and_groups_json_mutually_exclusive(self, tmp_path):
-        exit_code = safe_commit_offer.main(
-            ["--message", "x", "--groups-json", "y.json"]
-        )
-        assert exit_code == 2
+    def test_message_and_groups_mutually_exclusive(self, tmp_path):
+        out = safe_commit_offer._handler({"message": "x", "groups": []})
+        assert out["error"] == "params.message and params.groups are mutually exclusive"
 
-    def test_unresolvable_session_exits_1(self, tmp_path, capsys, monkeypatch):
+    def test_groups_must_be_a_list(self, tmp_path):
+        out = safe_commit_offer._handler({"groups": "not-a-list"})
+        assert "params.groups must be a list" in out["error"]
+
+    def test_bad_invoker_is_a_usage_error(self, tmp_path):
+        out = safe_commit_offer._handler({"invoker": "sideways"})
+        assert "params.invoker must be one of" in out["error"]
+
+    def test_unresolvable_session_returns_error_envelope(self, tmp_path, monkeypatch):
         repo = _make_repo(tmp_path)
         monkeypatch.delenv("COORDINATOR_SESSION_ID", raising=False)
         monkeypatch.delenv("CLAUDE_SESSION_ID", raising=False)
         monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
-        exit_code = safe_commit_offer.main(["--root", str(repo)])
-        assert exit_code == 1
-        assert "could not resolve" in capsys.readouterr().err
+        out = safe_commit_offer._handler({"cwd": str(repo)})
+        assert out["error"] == "session_id could not be resolved"
+        assert out["session_id"] == ""
 
-    def test_all_benign_noop_run_exits_0_not_4(self, tmp_path, capsys):
+    def test_benign_noop_reports_no_failure(self, tmp_path):
         # Regression guard: the ordinary already-committed no-op must NEVER
         # be conflated with a genuine `commit_failed` group -- `git commit`
-        # itself exits 1 on an empty commit set, so a version that cried
-        # wolf here would fire on every ordinary session end.
+        # itself exits 1 on an empty commit set, so a version that cried wolf
+        # here would fire on every ordinary ceremony run. Post-CLI the
+        # wolf-cry surface is `failed_groups`/`error`, not an exit code.
         repo = _make_repo(tmp_path)
         core.init("mine", cwd=str(repo))
-        exit_code = safe_commit_offer.main(["--session", "mine", "--root", str(repo)])
-        assert exit_code == 0
+        out = safe_commit_offer._handler({"session_id": "mine", "cwd": str(repo)})
+        assert "error" not in out
+        assert out["failed_groups"] == []
 
-    def test_genuine_commit_failure_exits_4_and_logs_diagnostic(
-        self, tmp_path, capsys, monkeypatch
+    def test_genuine_commit_failure_populates_failed_groups_and_logs_diagnostic(
+        self, tmp_path, monkeypatch
     ):
-        # Review: code-reviewer (Finding 1) — `failed_groups` was computed
-        # and tested but never surfaced anywhere a real caller (the
-        # SessionEnd hook, which only inspects the subprocess exit code)
-        # reads. Exit code 4 plus an in-process diagnostic write closes that
-        # gap without requiring a change on the hook's side.
+        # Review: code-reviewer (Finding 1) — `failed_groups` was computed and
+        # tested but never surfaced anywhere a real caller read. The
+        # diagnostics write is what closes that gap, and it outlives the call,
+        # which the return value does not.
         repo = _make_repo(tmp_path)
         core.init("mine", cwd=str(repo))
         (repo / "a.py").write_text("a")
@@ -1315,8 +1335,8 @@ class TestMain:
             ),
         )
 
-        exit_code = safe_commit_offer.main(["--session", "mine", "--root", str(repo)])
-        assert exit_code == 4
+        out = safe_commit_offer._handler({"session_id": "mine", "cwd": str(repo)})
+        assert out["failed_groups"] != []
 
         from coordinator_core.lifecycle import git_common_dir
 
@@ -1331,18 +1351,13 @@ class TestMain:
         assert "1 group(s) genuinely failed" in contents
         assert "unattributable paths: peer.py" in contents
 
-    def test_usage_error_exits_2(self, tmp_path, capsys):
-        exit_code = safe_commit_offer.main(["--bogus-flag"])
-        assert exit_code == 2
-
-    def test_withheld_contested_path_logs_diagnostic_and_stays_exit_0(
-        self, tmp_path, capsys
+    def test_withheld_contested_path_logs_diagnostic_and_is_not_a_failure(
+        self, tmp_path
     ):
-        # `_log_excluded_diagnostic` is the ONE sink the unattended SessionEnd
-        # hook can surface -- it reads the exit code and never stdout -- so a
+        # `_log_excluded_diagnostic` is the sink that outlives the call, so a
         # withheld path that never reaches it is a path nobody learns about.
-        # Exit code stays 0: withholding a contested path is the correct
-        # outcome (DR-227), never a failure.
+        # Withholding a contested path is the correct outcome (DR-227), never a
+        # failure -- `failed_groups` stays empty.
         repo = _make_repo(tmp_path)
         core.init("mine", cwd=str(repo))
         core.init("peer", cwd=str(repo))
@@ -1350,8 +1365,8 @@ class TestMain:
         scope.touch("mine", "shared.py", cwd=str(repo))
         scope.touch("peer", "shared.py", cwd=str(repo))
 
-        exit_code = safe_commit_offer.main(["--session", "mine", "--root", str(repo)])
-        assert exit_code == 0
+        out = safe_commit_offer._handler({"session_id": "mine", "cwd": str(repo)})
+        assert out["failed_groups"] == []
 
         from coordinator_core.lifecycle import git_common_dir
 
@@ -1367,7 +1382,7 @@ class TestMain:
         assert "shared.py" in contents
         assert "owned by session peer" in contents
 
-    def test_withheld_preview_bound_enforced_on_written_log(self, tmp_path, capsys):
+    def test_withheld_preview_bound_enforced_on_written_log(self, tmp_path):
         # The bound is enforced on what is WRITTEN, not merely on a rendered
         # string: only `_EXCLUDED_LOG_PREVIEW_COUNT` path lines appear and the
         # remainder is NAMED via an "and N more" tail rather than dropped
@@ -1384,8 +1399,8 @@ class TestMain:
             scope.touch("peer", rel, cwd=str(repo))
             paths.append(rel)
 
-        exit_code = safe_commit_offer.main(["--session", "mine", "--root", str(repo)])
-        assert exit_code == 0
+        out = safe_commit_offer._handler({"session_id": "mine", "cwd": str(repo)})
+        assert out["failed_groups"] == []
 
         from coordinator_core.lifecycle import git_common_dir
 
@@ -1400,42 +1415,31 @@ class TestMain:
         present = [rel for rel in paths if rel in contents]
         assert len(present) == safe_commit_offer._EXCLUDED_LOG_PREVIEW_COUNT
 
-    def test_all_dropped_group_renders_named_matched_and_logs_and_stays_exit_0(
-        self, tmp_path, capsys
-    ):
+    def test_all_dropped_group_is_named_matched_and_logged_not_a_failure(self, tmp_path):
         # Handoff item 1 (2026-08-03, touched-path-bookkeeping) -- an
-        # all-dropped caller-supplied group was previously silent: absent
-        # from `groups`, `failed_groups`, AND `excluded` (which is
-        # `compute_offer`-derived, not group-derived) all at once. This is
-        # the regression guard for the fix: the stdout render, the
-        # diagnostics-log sink, and the exit code all reflect it, and it is
-        # never reported as a commit failure.
+        # all-dropped caller-supplied group was previously silent: absent from
+        # `groups`, `failed_groups`, AND `excluded` (which is
+        # `compute_offer`-derived, not group-derived) all at once. This is the
+        # regression guard for the fix: the rendered text, the diagnostics-log
+        # sink, and `failed_groups` all reflect it, and it is never reported as
+        # a commit failure.
         repo = _make_repo(tmp_path)
         core.init("mine", cwd=str(repo))
         core.init("other", cwd=str(repo))
         (repo / "peer.py").write_text("p")
         scope.touch("other", "peer.py", cwd=str(repo))
 
-        groups_path = tmp_path / "groups.json"
-        groups_path.write_text(
-            json.dumps([{"paths": ["peer.py"], "message": "all-excluded group"}])
+        out = safe_commit_offer._handler(
+            {
+                "session_id": "mine",
+                "cwd": str(repo),
+                "groups": [{"paths": ["peer.py"], "message": "all-excluded group"}],
+            }
         )
 
-        exit_code = safe_commit_offer.main(
-            [
-                "--session",
-                "mine",
-                "--root",
-                str(repo),
-                "--groups-json",
-                str(groups_path),
-            ]
-        )
-        out = capsys.readouterr().out
-
-        assert exit_code == 0
-        assert "all-excluded group — named 1 paths, 0 matched" in out
-        assert "NOT committed" not in out
+        assert out["failed_groups"] == []
+        assert "all-excluded group — named 1 paths, 0 matched" in out["rendered"]
+        assert "NOT committed" not in out["rendered"]
 
         from coordinator_core.lifecycle import git_common_dir
 
@@ -1450,12 +1454,12 @@ class TestMain:
         assert "1 caller-supplied group(s) partially or fully dropped" in log_contents
         assert "all-excluded group — named 1 paths, 0 matched" in log_contents
 
-    def test_dropped_groups_render_and_log_are_bounded(self, tmp_path, capsys):
+    def test_dropped_groups_render_and_log_are_bounded(self, tmp_path):
         # Bounded-output guard: many dropped groups must still render (and
-        # log) a bounded number of lines plus an "and N more group(s)" tail
-        # -- never one line per group unbounded, the same shape the 1938-
-        # entry `excluded` incident this module already retired once for a
-        # different field.
+        # log) a bounded number of lines plus an "and N more group(s)" tail --
+        # never one line per group unbounded, the same shape the 1938-entry
+        # `excluded` incident this module already retired once for a different
+        # field.
         repo = _make_repo(tmp_path)
         core.init("mine", cwd=str(repo))
         core.init("other", cwd=str(repo))
@@ -1463,29 +1467,19 @@ class TestMain:
         total = safe_commit_offer._DROPPED_GROUPS_PREVIEW_COUNT + 3
         groups = []
         for i in range(total):
-            p = "peer_%02d.py" % i
-            (repo / p).write_text(str(i))
-            scope.touch("other", p, cwd=str(repo))
-            groups.append({"paths": [p], "message": "dropped group %02d" % i})
+            rel = "peer_%02d.py" % i
+            (repo / rel).write_text(str(i))
+            scope.touch("other", rel, cwd=str(repo))
+            groups.append({"paths": [rel], "message": "dropped group %02d" % i})
 
-        groups_path = tmp_path / "groups.json"
-        groups_path.write_text(json.dumps(groups))
-
-        exit_code = safe_commit_offer.main(
-            [
-                "--session",
-                "mine",
-                "--root",
-                str(repo),
-                "--groups-json",
-                str(groups_path),
-            ]
+        out = safe_commit_offer._handler(
+            {"session_id": "mine", "cwd": str(repo), "groups": groups}
         )
-        out = capsys.readouterr().out
+        rendered = out["rendered"]
 
-        assert exit_code == 0
-        assert "... and 3 more group(s)" in out
-        shown = [g for g in groups if g["message"] in out]
+        assert out["failed_groups"] == []
+        assert "... and 3 more group(s)" in rendered
+        shown = [g for g in groups if g["message"] in rendered]
         assert len(shown) == safe_commit_offer._DROPPED_GROUPS_PREVIEW_COUNT
 
         from coordinator_core.lifecycle import git_common_dir
@@ -1498,9 +1492,6 @@ class TestMain:
         )
         log_contents = log_file.read_text()
         assert "... and 3 more group(s)" in log_contents
-        logged = [g for g in groups if g["message"] in log_contents]
-        assert len(logged) == safe_commit_offer._DROPPED_GROUPS_PREVIEW_COUNT
-
 
 # ---------------------------------------------------------------------------
 # (g) AC0 — post-C2 dialect: a peer sub-agent claim still shadows a candidate
@@ -1988,10 +1979,10 @@ class TestGroupsSuppliedPathIgnoresInvoker:
         assert "rescued at session stop" not in report["groups"][0]["message"]
 
 
-class TestMainInvokerFlag:
+class TestHandlerInvokerParam:
     def test_rejects_unknown_invoker_value(self):
-        exit_code = safe_commit_offer.main(["--invoker", "bogus"])
-        assert exit_code == 2
+        out = safe_commit_offer._handler({"invoker": "bogus"})
+        assert "params.invoker must be one of" in out["error"]
 
     # designed_red: blocked on the `ceremony.scoped_git_commit` op SUSPENSION
     # (coordinator_core/op_budget_suspension.py, PM ruling 2026-08-21: measured
@@ -2000,17 +1991,16 @@ class TestMainInvokerFlag:
     # proven under 2s and leaves the roster, and not before; nothing in this
     # module can lift it.
     @pytest.mark.designed_red
-    def test_accepts_attended_and_unattended(self, tmp_path, capsys):
+    def test_accepts_attended_and_unattended(self, tmp_path):
         repo = _make_repo(tmp_path)
         core.init("mine", cwd=str(repo))
         for value in ("attended", "unattended"):
             (repo / ("f_%s.py" % value)).write_text(value)
             scope.touch("mine", "f_%s.py" % value, cwd=str(repo))
-            exit_code = safe_commit_offer.main(
-                ["--session", "mine", "--root", str(repo), "--invoker", value]
+            out = safe_commit_offer._handler(
+                {"session_id": "mine", "cwd": str(repo), "invoker": value}
             )
-            assert exit_code == 0
-        capsys.readouterr()
+            assert "error" not in out
 
 
 class TestNothingToCommitDistinguishesSeenFromClean:

@@ -22,9 +22,11 @@ this: process time on a shared box moves with peer load, import self-time does
 not.
 
 asyncio is on a path that never awaits anything unless the cadence-gated in-plane
-archive sweep actually runs, which is once per `_ARCHIVE_SWEEP_INTERVAL_S`, not
-once per commit. The two imports live inside `_run_in_plane_archive_sweep`,
-BELOW its cadence gate; `_archive_sweep_cap()` exists as a function for the same
+archive sweep actually ran. That sweep was REMOVED from the commit path entirely
+on 2026-08-27 (PM ruling, abd587695), along with `_run_in_plane_archive_sweep`,
+its cadence gate and `_archive_sweep_cap()`, so nothing on this path is entitled
+to those imports at all any more. The assertion below therefore catches a NEW hot-
+path dependency rather than a deferral that regressed; it got stricter, not stale.
 reason — binding the cap as a module-level constant is what forced the eager
 import in the first place, and would silently re-force it.
 
@@ -126,22 +128,10 @@ def test_commit_pipeline_import_does_not_pull_asyncio() -> None:
     assert not offenders, (
         "importing commit_pipeline pulled in modules the commit hot path must "
         f"not pay for: {', '.join(offenders)}.\n"
-        "These belong inside `_run_in_plane_archive_sweep`, below its cadence "
-        "gate -- see `_archive_sweep_cap()` for why the cap must stay a "
-        "function rather than a module-level constant."
-    )
-
-
-def test_sweep_still_reaches_its_deferred_imports() -> None:
-    """The deferral is a move, not a deletion: the sweep's own module and cap
-    still resolve when the sweep runs."""
-    from coordinator_core.ops.ceremony import commit_pipeline
-
-    cap = commit_pipeline._archive_sweep_cap()
-    assert isinstance(cap, int) and cap > 0, (
-        f"_archive_sweep_cap() returned {cap!r} -- plan_sweep's `cap` param is "
-        "required with no unbounded default, so this call site must supply a "
-        "real positive bound."
+        "The archival sweep that used to defer these below a cadence gate was "
+        "removed from the commit path entirely (PM ruling 2026-08-27), so there "
+        "is no longer any in-pipeline caller entitled to them at all -- a hit "
+        "here is a NEW dependency on the hot path, not a deferral that regressed."
     )
 
 

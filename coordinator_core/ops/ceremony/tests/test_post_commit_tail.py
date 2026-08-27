@@ -89,12 +89,6 @@ def _committed_content_at_head(repo: Path, rel: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-def test_op_is_registered():
-    handler = ipc.get_op_handler("ceremony.post_commit_tail")
-    assert handler is not None
-    assert handler is m._handler
-
-
 # ---------------------------------------------------------------------------
 # (b)-(f) run() composition/sequencing/timing
 # ---------------------------------------------------------------------------
@@ -532,71 +526,6 @@ def test_run_is_noop_safe_without_timing(monkeypatch, tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_handler_requires_sid_and_committed_sha(tmp_path):
-    result = _run(m._handler({}, repo_root=tmp_path))
-    assert result["exit_code"] == 1
-    assert "sid" in result["error"]
-
-    result = _run(m._handler({"sid": "sid-1"}, repo_root=tmp_path))
-    assert result["exit_code"] == 1
-    assert "committed_sha" in result["error"]
-
-
-def test_handler_requires_repo_root():
-    result = _run(m._handler({"sid": "sid-1", "committed_sha": "deadbeef"}, repo_root=None))
-    assert result["exit_code"] == 1
-    assert "repo_root" in result["error"]
-
-
-def test_handler_errors_when_close_origin_stub_unregistered(monkeypatch, tmp_path):
-    (tmp_path / ".git").mkdir(exist_ok=True)
-    monkeypatch.setattr(m, "get_op_handler", lambda name: None)
-    result = _run(
-        m._handler({"sid": "sid-1", "committed_sha": "deadbeef"}, repo_root=tmp_path)
-    )
-    assert result["exit_code"] == 1
-    assert "not registered" in result["error"]
-
-
-def test_handler_happy_path_dispatches_through_run(monkeypatch, tmp_path):
-    (tmp_path / ".git").mkdir(exist_ok=True)
-    async def _fake_stamp(*args: Any, **kwargs: Any) -> consumed_handoff_stamp.StampOutcome:
-        return _make_stamp_outcome(stamped=["state/handoffs/x.md"], follow_up_committed_sha="ffff")
-
-    monkeypatch.setattr(consumed_handoff_stamp, "post_commit_stamp_and_ship", _fake_stamp)
-
-    result = _run(
-        m._handler(
-            {"sid": "sid-1", "committed_sha": "deadbeef", "chain_terminal": True},
-            repo_root=tmp_path,
-        )
-    )
-
-    assert result["exit_code"] == 0
-    assert result["stamped"] == ["state/handoffs/x.md"]
-    assert result["follow_up_committed_sha"] == "ffff"
-    assert result["origin_stub_close"]["skipped"] == [
-        f"{m.OP_CLOSE_ORIGIN_STUB}:no-governing-plan-or-consumed-handoff"
-    ]
-
-
-def test_handler_reports_exit_code_2_on_stamp_error(monkeypatch, tmp_path):
-    (tmp_path / ".git").mkdir(exist_ok=True)
-    async def _fake_stamp(*args: Any, **kwargs: Any) -> consumed_handoff_stamp.StampOutcome:
-        return _make_stamp_outcome(errors=[{"path": "x.md", "error": "boom"}])
-
-    monkeypatch.setattr(consumed_handoff_stamp, "post_commit_stamp_and_ship", _fake_stamp)
-
-    result = _run(
-        m._handler(
-            {"sid": "sid-1", "committed_sha": "deadbeef", "chain_terminal": True},
-            repo_root=tmp_path,
-        )
-    )
-
-    assert result["exit_code"] == 2
-
-
 # ---------------------------------------------------------------------------
 # (k) DEC-3 HARD CONSTRAINT — never acquires ceremony_lock
 # ---------------------------------------------------------------------------
@@ -863,115 +792,6 @@ def test_run_cascade_failure_does_not_propagate(monkeypatch, tmp_path):
     assert any(
         "simulated deliverable.cascade_terminal crash" in f
         for f in outcome.deliverable_cascade_result["failed"]
-    )
-
-
-def test_run_cascade_handler_defaults_to_get_op_handler_when_not_injected(monkeypatch, tmp_path):
-    """No `cascade_handler` supplied (the `wsc_tail.py` call-site shape,
-    unchanged by C6b) resolves it internally via `get_op_handler` -- never a
-    required param existing callers must be updated to pass."""
-    _write_handoff(tmp_path, "state/handoffs/a.md", "dlv-alpha")
-
-    async def _fake_stamp(*args: Any, **kwargs: Any) -> consumed_handoff_stamp.StampOutcome:
-        return _make_stamp_outcome(stamped=["state/handoffs/a.md"])
-
-    monkeypatch.setattr(consumed_handoff_stamp, "post_commit_stamp_and_ship", _fake_stamp)
-
-    resolved_calls: list[str] = []
-
-    async def _fake_cascade(params: dict, repo_root: Path) -> dict:
-        resolved_calls.append(params["deliverable_id"])
-        return {"exit_code": 0, "advanced": [], "refused": []}
-
-    monkeypatch.setattr(m, "get_op_handler", lambda name: _fake_cascade if name == m.OP_DELIVERABLE_CASCADE else None)
-
-    outcome = _run(
-        m.run(
-            tmp_path,
-            tmp_path,
-            "sid-1",
-            "deadbeef",
-            chain_terminal=True,
-            governing_plan_slug="",
-            initial_consumed=[],
-            close_origin_stub_handler=_fake_close_origin_stub_noop,
-        )
-    )
-
-    assert resolved_calls == ["dlv-alpha"]
-    assert outcome.deliverable_cascade_result is not None
-
-
-def test_run_cascade_no_op_when_op_not_registered(monkeypatch, tmp_path):
-    _write_handoff(tmp_path, "state/handoffs/a.md", "dlv-alpha")
-
-    async def _fake_stamp(*args: Any, **kwargs: Any) -> consumed_handoff_stamp.StampOutcome:
-        return _make_stamp_outcome(stamped=["state/handoffs/a.md"])
-
-    monkeypatch.setattr(consumed_handoff_stamp, "post_commit_stamp_and_ship", _fake_stamp)
-    monkeypatch.setattr(m, "get_op_handler", lambda name: None)
-
-    outcome = _run(
-        m.run(
-            tmp_path,
-            tmp_path,
-            "sid-1",
-            "deadbeef",
-            chain_terminal=True,
-            governing_plan_slug="",
-            initial_consumed=[],
-            close_origin_stub_handler=_fake_close_origin_stub_noop,
-        )
-    )
-
-    assert outcome.deliverable_cascade_result["acted"] == []
-    assert outcome.deliverable_cascade_result["failed"] == []
-    assert any("not-registered" in s for s in outcome.deliverable_cascade_result["skipped"])
-
-
-def test_handler_happy_path_includes_deliverable_cascade_field(monkeypatch, tmp_path):
-    (tmp_path / ".git").mkdir(exist_ok=True)
-    async def _fake_stamp(*args: Any, **kwargs: Any) -> consumed_handoff_stamp.StampOutcome:
-        return _make_stamp_outcome()
-
-    monkeypatch.setattr(consumed_handoff_stamp, "post_commit_stamp_and_ship", _fake_stamp)
-
-    result = _run(
-        m._handler(
-            {"sid": "sid-1", "committed_sha": "deadbeef", "chain_terminal": True},
-            repo_root=tmp_path,
-        )
-    )
-
-    assert result["exit_code"] == 0
-    assert result["deliverable_cascade"] == {"acted": [], "skipped": [], "failed": []}
-
-
-def test_handler_reports_exit_code_2_on_cascade_failure(monkeypatch, tmp_path):
-    (tmp_path / ".git").mkdir(exist_ok=True)
-    # `_handler` derives worktree_root as `main_worktree_root(repo_root)` ==
-    # repo_root.parent -- monkeypatch `_read_meta` directly rather than
-    # depending on that derivation to locate a fixture file on disk.
-    async def _fake_stamp(*args: Any, **kwargs: Any) -> consumed_handoff_stamp.StampOutcome:
-        return _make_stamp_outcome(stamped=["state/handoffs/a.md"])
-
-    async def _boom(params: dict, repo_root: Path) -> dict:
-        raise RuntimeError("simulated cascade crash")
-
-    monkeypatch.setattr(consumed_handoff_stamp, "post_commit_stamp_and_ship", _fake_stamp)
-    monkeypatch.setattr(m, "_read_meta", lambda path: {"deliverable_id": "dlv-alpha"})
-    monkeypatch.setattr(m, "get_op_handler", lambda name: _boom)
-
-    result = _run(
-        m._handler(
-            {"sid": "sid-1", "committed_sha": "deadbeef", "chain_terminal": True},
-            repo_root=tmp_path,
-        )
-    )
-
-    assert result["exit_code"] == 2
-    assert any(
-        "simulated cascade crash" in f for f in result["deliverable_cascade"]["failed"]
     )
 
 
@@ -1422,19 +1242,3 @@ def test_run_gate_cascade_clear_failure_does_not_propagate(monkeypatch, tmp_path
     )
 
 
-def test_handler_happy_path_includes_gate_cascade_clear_field(monkeypatch, tmp_path):
-    (tmp_path / ".git").mkdir(exist_ok=True)
-    async def _fake_stamp(*args: Any, **kwargs: Any) -> consumed_handoff_stamp.StampOutcome:
-        return _make_stamp_outcome()
-
-    monkeypatch.setattr(consumed_handoff_stamp, "post_commit_stamp_and_ship", _fake_stamp)
-
-    result = _run(
-        m._handler(
-            {"sid": "sid-1", "committed_sha": "deadbeef", "chain_terminal": True},
-            repo_root=tmp_path,
-        )
-    )
-
-    assert result["exit_code"] == 0
-    assert result["gate_cascade_clear"] == {"acted": [], "skipped": [], "failed": []}

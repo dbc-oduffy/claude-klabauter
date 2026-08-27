@@ -61,8 +61,8 @@ def _invoke(*extra_args: str) -> int:
     argv = list(_MINIMAL_ARGS) + list(extra_args)
     with unittest.mock.patch("sys.argv", argv):
         try:
-            _cli_mod.main()
-            return 0
+            rc = _cli_mod.main()
+            return int(rc) if rc is not None else 0
         except SystemExit as exc:
             return int(exc.code) if exc.code is not None else 0
 

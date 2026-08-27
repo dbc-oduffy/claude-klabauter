@@ -3343,6 +3343,15 @@ _COMMITTING_OP_NAMES = frozenset(
         "fleet.archive_completed_plans",     # ops/fleet/archive_plans.py -- archive_and_commit(...)
         "fleet.archive_actioned_memos",      # ops/fleet/archive_actioned_memos.py -- archive_and_commit(...)
         "session.sweep_consumed_handoffs",   # ops/session/sweep_consumed_handoffs.py -- archive_and_commit(...)
+        # C3 (docs/plans/2026-08-27-something-must-commit-ceremony-commit-v2.md):
+        # `ceremony.commit_v2` (ops/ceremony/commit_v2.py :: _handler) is the
+        # fresh dispatchable identity over `commit.commit_paths`
+        # (coordinator_core/git/commit.py) -- it lands a git commit directly,
+        # NOT via `run_commit_pipeline`, so it needs its own name here AND its
+        # own sink marker (see `_COMMIT_SINK_CALL_MARKERS`'s sixth-pass note:
+        # adding the name without the marker leaves the next such op to be
+        # found by hand).
+        "ceremony.commit_v2",                # ops/ceremony/commit_v2.py -- commit_paths(...)
     }
 )
 _CEREMONY_INVOKE_MODULE = "coordinator_core.invoke"

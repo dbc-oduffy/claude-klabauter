@@ -57,8 +57,7 @@ _BIN_LIB_DIR = os.path.join(SCRIPT_DIR, "lib")
 # `create`/`attach`, function-scoped, not module scope) imports
 # `coordinator_core.win_portability`. Without this, the import dies with
 # ModuleNotFoundError on the mirror (coordinator_core not pip-installed).
-if _BIN_LIB_DIR not in sys.path:
-    sys.path.insert(0, _BIN_LIB_DIR)
+import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
 import cc_invoke  # noqa: E402
 
 cc_invoke.ensure_engine_on_path(__file__)
@@ -610,8 +609,6 @@ def _cmd_list_unattached(args: list[str]) -> int:
         print(f"  Supported: {', '.join(_LIST_UNATTACHED_FORMATS)}", file=sys.stderr)
         return 1
 
-    if _BIN_LIB_DIR not in sys.path:
-        sys.path.insert(0, _BIN_LIB_DIR)
     try:
         from records_query import query_records
     except ImportError as exc:

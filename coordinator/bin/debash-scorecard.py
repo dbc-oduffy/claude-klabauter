@@ -43,9 +43,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-_LIB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib")
-if _LIB_DIR not in sys.path:
-    sys.path.insert(0, _LIB_DIR)
+import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
 import cc_invoke  # noqa: E402
 
 cc_invoke.ensure_engine_on_path(__file__)
@@ -179,7 +177,6 @@ def delta(now: int, was: int) -> str:
 
 
 def main(argv: "list[str] | None" = None) -> int:
-    del argv  # this CLI takes no arguments; argv accepted for the warm-call contract
     ap = argparse.ArgumentParser(description="Report progress toward zero .sh in the DoE tree.")
     ap.add_argument("--json", action="store_true", help="emit machine-readable JSON")
     ap.add_argument(
@@ -187,7 +184,7 @@ def main(argv: "list[str] | None" = None) -> int:
         choices=("polyglot", "bash"),
         help="list the remaining runtime files of that kind, one per line",
     )
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
 
     coordinator = repo_root() / "coordinator"
     if not coordinator.is_dir():

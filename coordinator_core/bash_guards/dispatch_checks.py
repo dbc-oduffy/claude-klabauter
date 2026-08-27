@@ -4821,7 +4821,8 @@ def check_blanket_git_add(
     if not _GIT_ADD_GATE_RE.search(cmd) and not _ga_ps_segments:
         return None
 
-    rc, out = _run_git(["rev-parse", "--show-toplevel"], cwd=_bt_blanket_add_dash_c_cwd(cmd))
+    _ga_dash_c_cwd = _bt_blanket_add_dash_c_cwd(cmd)
+    rc, out = _run_git(["rev-parse", "--show-toplevel"], cwd=_ga_dash_c_cwd)
     git_root = out.strip() if rc == 0 else ""
     if not git_root:
         return None
@@ -4944,6 +4945,38 @@ def check_blanket_git_add(
                     should_deny = True
                     deny_reason = tok
                     break
+            # C3 (docs/plans/2026-08-27-a-pathspec-is-not-a-scope.md): a
+            # SUBTREE pathspec was deliberately unmatched above (the
+            # "root, not a subtree" asymmetry this module's own
+            # `_find_is_root_anchor` docstring names for `check_runaway_
+            # find`) -- DoE's cross-repo finding is that this is exactly
+            # the shape that swept three peer memos. Resolve what the add
+            # will actually stage (one `git add --dry-run` spawn, only for
+            # a token that is genuinely an existing directory -- a literal
+            # file token never reaches this branch, so the common single-
+            # file `git add path/to/file` case costs nothing extra, per
+            # DR-344) and refuse if it reaches a path this session did not
+            # write. Does NOT reuse `_bt_commit_own_pathspec`/its WHETHER-
+            # scoped boolean (that function's own docstring: never reuse a
+            # WHETHER-scoped boolean as a WHICH-paths answer) -- this is a
+            # new WHICH-paths answer for `git add`, Check 5's `git diff
+            # --cached --name-only -- <pathspec>` re-derivation pattern
+            # applied at the add site rather than a second predicate.
+            elif git_root and not tok.startswith("-"):
+                _ga_subtree_dir = _bt_add_resolve_subtree_dir_token(
+                    tok, git_root, _ga_dash_c_cwd
+                )
+                if _ga_subtree_dir is not None:
+                    _ga_foreign = _bt_add_subtree_foreign_paths(
+                        _ga_subtree_dir, _ga_dash_c_cwd, git_root, session_id
+                    )
+                    if _ga_foreign:
+                        should_deny = True
+                        deny_reason = "%s [foreign: %s]" % (
+                            tok,
+                            ", ".join(sorted(_ga_foreign)[:5]),
+                        )
+                        break
 
         if should_deny:
             full_seg_trimmed = seg.lstrip()[:120]
@@ -4971,6 +5004,90 @@ def check_blanket_git_add(
         % (matched_cmd,)
     ) + ("\n\nOr: %s" % _add_note if _add_note else "")
     return _deny(reason)
+
+
+def _bt_add_resolve_subtree_dir_token(
+    tok: str, git_root: str, cwd: Optional[str]
+) -> Optional[str]:
+    """C3: resolve a `git add` pathspec token to an absolute directory path
+    IFF it denotes an existing subtree under ``git_root`` -- returns
+    ``None`` for a root-anchor token (already handled by the caller's
+    earlier branches), a literal file token, or a nonexistent path, so the
+    per-add ``git`` spawn in `_bt_add_subtree_foreign_paths` only ever
+    fires for the directory shape this chunk targets (DR-344: the common
+    single-file `git add path/to/file` case must cost nothing extra)."""
+    if tok in (".", "./", ":/", ":/.") or tok.startswith(":"):
+        return None
+    if os.path.isabs(tok) or re.match(r"^[A-Za-z]:[\\/]", tok):
+        abs_tok = os.path.normpath(tok.rstrip("/\\")) or tok
+    else:
+        abs_tok = os.path.normpath(os.path.join(cwd or os.getcwd(), tok))
+    if _paths_match(abs_tok, git_root):
+        return None
+    if not os.path.isdir(abs_tok):
+        return None
+    return abs_tok
+
+
+def _bt_add_subtree_foreign_paths(
+    abs_dir: str, cwd: Optional[str], git_root: str, session_id: str
+) -> List[str]:
+    """C3: resolve WHICH paths a `git add -- <abs_dir>` would actually
+    stage (one ``git add --dry-run`` spawn -- the add-side analogue of
+    Check 5's ``git diff --cached --name-only -- <pathspec>``
+    re-derivation in `check_validate_commit`; NOT a reuse of
+    `_bt_commit_own_pathspec`'s WHETHER-scoped boolean, which that
+    function's own docstring says must never answer a WHICH-paths
+    question), then checks each resolved path against THIS session's own
+    claimed scope via ``session.touch_record.project_live_claims`` -- the
+    same reader `_rm_peer_claim_of` already uses for peer-claim checks,
+    not a second ownership predicate.
+
+    Fails toward the EMPTY list (never flagging) on any ambiguity --
+    missing session_id, a failed/unparseable dry-run, or a degraded
+    touch-record projection -- matching `check_blanket_git_add`'s existing
+    soft/fail-open posture (this guard is registered fail_closed=False;
+    see the override-log comment earlier in this module for the same
+    posture stated explicitly)."""
+    if not session_id:
+        return []
+    rc, out = _run_git(["add", "--dry-run", "--", abs_dir], cwd)
+    if rc != 0:
+        return []
+
+    staged: List[str] = []
+    for line in out.splitlines():
+        m = re.match(r"^add\s+'(.*)'$", line.strip())
+        if not m:
+            continue
+        raw = m.group(1)
+        raw_abs = raw if os.path.isabs(raw) else os.path.normpath(
+            os.path.join(cwd or os.getcwd(), raw)
+        )
+        try:
+            rel = os.path.relpath(raw_abs, git_root).replace(os.sep, "/")
+        except ValueError:
+            continue
+        staged.append(rel)
+    if not staged:
+        return []
+
+    try:
+        from coordinator_core.session.touch_record import (
+            project_live_claims,
+            sink_path,
+        )
+
+        sid_dir = os.path.join(git_root, ".git", "coordinator-sessions", session_id)
+        touch_record_path = sink_path(sid_dir)
+        projection = project_live_claims(touch_record_path, cwd=git_root)
+        if projection.degraded:
+            return []
+        my_claims = set(projection.claims.keys())
+    except Exception:
+        return []
+
+    return [p for p in staged if p not in my_claims]
 
 
 # ---------------------------------------------------------------------------

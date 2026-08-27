@@ -23,7 +23,6 @@ from coordinator_core.ops.gate_validate_invocable import (
     Verdict,
     _DIMENSION_REGISTRY,
 )
-from coordinator_core.ops.list_review_trail_records import ReviewTrailListError
 
 
 def test_review_registered_in_seam() -> None:
@@ -73,36 +72,16 @@ def test_review_unavailable_on_git_log_failure(monkeypatch) -> None:
     assert "bad revision" in result.detail
 
 
-def test_review_unavailable_when_trail_corpus_unreadable(monkeypatch) -> None:
-    monkeypatch.setattr(
-        gate_dimension_review, "_run_git", lambda args, cwd: (0, "deadbeef", "")
-    )
-
-    def _raise() -> None:
-        raise ReviewTrailListError("cannot resolve state/review-trail/")
-
-    monkeypatch.setattr(gate_dimension_review, "list_paths", lambda: _raise())
-    result = gate_dimension_review._review_dimension_check(
-        ["a.py"], "abc..HEAD", "/repo"
-    )
-    assert result.verdict is Verdict.UNAVAILABLE
-    assert "review-trail corpus" in result.detail
-
-
 def test_review_covered_when_all_commits_reviewed(monkeypatch) -> None:
     monkeypatch.setattr(
         gate_dimension_review,
         "_run_git",
         lambda args, cwd: (0, "deadbeef\ncafef00d", ""),
     )
-    monkeypatch.setattr(gate_dimension_review, "list_paths", lambda: ["trail.json"])
     monkeypatch.setattr(
         gate_dimension_review,
-        "build_reviewed_set",
-        lambda trail_paths, on_record_error, intersect_shas, repo_root: {
-            "deadbeef",
-            "cafef00d",
-        },
+        "read_reviewed_set",
+        lambda repo_root: {"deadbeef", "cafef00d"},
     )
     result = gate_dimension_review._review_dimension_check(
         ["a.py"], "abc..HEAD", "/repo"
@@ -117,11 +96,8 @@ def test_review_uncovered_when_a_commit_is_unreviewed(monkeypatch) -> None:
         "_run_git",
         lambda args, cwd: (0, "deadbeef\ncafef00d", ""),
     )
-    monkeypatch.setattr(gate_dimension_review, "list_paths", lambda: ["trail.json"])
     monkeypatch.setattr(
-        gate_dimension_review,
-        "build_reviewed_set",
-        lambda trail_paths, on_record_error, intersect_shas, repo_root: {"deadbeef"},
+        gate_dimension_review, "read_reviewed_set", lambda repo_root: {"deadbeef"}
     )
     result = gate_dimension_review._review_dimension_check(
         ["a.py"], "abc..HEAD", "/repo"
@@ -130,9 +106,106 @@ def test_review_uncovered_when_a_commit_is_unreviewed(monkeypatch) -> None:
     assert "uncovered" in result.detail
 
 
+def test_review_reads_reviewed_set_with_no_added_spawn(monkeypatch) -> None:
+    """The reviewed-set membership check must be a pure read — no
+    `list_paths`/`build_reviewed_set` git fan-out survives the C3
+    re-pointing (docs/plans/2026-08-27-the-reviewed-set-is-a-file-not-a-
+    computation.md § C3)."""
+    monkeypatch.setattr(
+        gate_dimension_review, "_run_git", lambda args, cwd: (0, "deadbeef", "")
+    )
+    calls: list[str] = []
+
+    def _fake_read_reviewed_set(repo_root: str):
+        calls.append(repo_root)
+        return {"deadbeef"}
+
+    monkeypatch.setattr(
+        gate_dimension_review, "read_reviewed_set", _fake_read_reviewed_set
+    )
+    result = gate_dimension_review._review_dimension_check(
+        ["a.py"], "abc..HEAD", "/repo"
+    )
+    assert result.verdict is Verdict.PASS
+    assert calls == ["/repo"]
+    assert not hasattr(gate_dimension_review, "build_reviewed_set")
+    assert not hasattr(gate_dimension_review, "list_paths")
+
+
 def test_review_result_dimension_name_matches_seam_contract() -> None:
     result = gate_dimension_review._review_dimension_check([], "abc..HEAD", "/repo")
     assert result.dimension == "review"
+
+
+def test_review_batches_changed_files_above_argv_cap(monkeypatch) -> None:
+    """Above the Windows argv cap, `changed_files` must be batched across
+    multiple `git log` calls (never splatted unbounded into one argv) and
+    the resulting commit lists unioned -- reproduces the fail-open trap at
+    `HEAD~200..HEAD` (1477 changed files) where a single unbounded call
+    overflowed argv (WinError 206) and was swallowed into UNAVAILABLE."""
+    changed_files = [f"some/long/enough/path/to/file_{i:05d}.py" for i in range(2000)]
+
+    calls: list[list[str]] = []
+
+    def _fake_run_git(args, cwd):
+        calls.append(args)
+        # each chunk "discovers" one distinct commit, proving the union
+        # actually accumulates across calls rather than only keeping the
+        # last chunk's result.
+        return 0, f"deadbeef{len(calls):04d}", ""
+
+    monkeypatch.setattr(gate_dimension_review, "_run_git", _fake_run_git)
+
+    seen_reads: list[str] = []
+
+    def _fake_read_reviewed_set(repo_root: str):
+        seen_reads.append(repo_root)
+        # every synthesized commit is "reviewed" -- the point of this test
+        # is the batching/union of commit_shas, not the reviewed-set content.
+        return {f"deadbeef{i:04d}" for i in range(1, len(calls) + 1)}
+
+    monkeypatch.setattr(
+        gate_dimension_review, "read_reviewed_set", _fake_read_reviewed_set
+    )
+
+    result = gate_dimension_review._review_dimension_check(
+        changed_files, "abc..HEAD", "/repo"
+    )
+
+    assert len(calls) > 1, "expected changed_files to be split across multiple git log calls"
+    for args in calls:
+        assert len(" ".join(args)) < 32767, "a single call must never exceed the argv cap"
+
+    assert result.verdict is Verdict.PASS
+    assert seen_reads == ["/repo"], "reviewed-set is read exactly once, never per chunk"
+
+
+def test_reap_findings_scope_excludes_json_trail_records() -> None:
+    """Monotonicity guard (module docstring's "Freshness rule, resident-set
+    edition"): the reviewed-set store never observes a deletion, which is
+    safe only because DR-218's reapers are scoped to
+    `state/review-trail/findings/*.md` sidecars and never touch the
+    creditable `state/review-trail/*.json` (or `archive/review-trail/
+    *.json`) records this dimension's reviewed set is built from. This test
+    pins that scope directly against the reaper modules' own constant, so a
+    future widening of either reaper to the `*.json` corpus fails this test
+    instead of silently defeating the append-only assumption above."""
+    import coordinator_core.ops.fleet._findings_reap as findings_reap
+    import coordinator_core.ops.fleet.reap_integrated_findings as reap_integrated
+    import coordinator_core.ops.fleet.reap_unintegrated_findings as reap_unintegrated
+
+    assert findings_reap._FINDINGS_SUBPATH == ("state", "review-trail", "findings")
+    # Both reap legs (a: integrated, b: unintegrated) must scan through the
+    # same shared, findings-scoped subpath -- neither leg may point directly
+    # at "state/review-trail" (the *.json record corpus) or any other path.
+    for mod in (reap_integrated, reap_unintegrated):
+        subpath = getattr(mod, "_FINDINGS_SUBPATH", findings_reap._FINDINGS_SUBPATH)
+        assert subpath == ("state", "review-trail", "findings")
+        assert subpath[-1] == "findings", (
+            "a reap leg scoped to the review-trail root (not the findings/ "
+            "subdir) could delete or rewrite a *.json record this "
+            "dimension's reviewed-set store credits permanently"
+        )
 
 
 def test_seam_run_dimension_uses_registered_review_check(monkeypatch) -> None:

@@ -38,10 +38,8 @@ import sys
 from pathlib import Path
 from typing import List, Tuple
 
-_LIB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib")
-if _LIB_DIR not in sys.path:
-    sys.path.insert(0, _LIB_DIR)
 
+import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
 from entry_point_shim import ASSEMBLE_TARGETS, UnknownTargetError, run_target  # noqa: E402
 
 _USAGE_FAIL = 2

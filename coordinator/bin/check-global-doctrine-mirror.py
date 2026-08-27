@@ -142,9 +142,7 @@ import os
 import shutil
 import sys
 
-_LIB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib")
-if _LIB_DIR not in sys.path:
-    sys.path.insert(0, _LIB_DIR)
+import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
 from coordinator_registry import _DoeUnresolvable, doe_root  # noqa: E402
 
 PROG = "check-global-doctrine-mirror.py"

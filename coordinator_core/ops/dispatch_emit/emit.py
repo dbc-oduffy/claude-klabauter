@@ -481,11 +481,18 @@ class PlanContext:
     ``goal`` is ``None`` on any plan carrying no ``## Goal`` section (AC13)
     — the caller composing the preamble omits that line entirely rather
     than emitting a placeholder.
+
+    ``exit_criterion`` is the plan's ``prime_exit_criterion.statement``, read
+    from FRONTMATTER rather than from a body section — the only field here
+    that does not come out of the plan's prose. It defaults to ``None`` so
+    every pre-existing construction site stays valid; a plan predating the
+    prime-exit-criterion shape simply omits the line.
     """
 
     title: str
     goal: Optional[str]
     problem_excerpt: Optional[str]
+    exit_criterion: Optional[str] = None
 
 
 # The section-heading vocabulary this module reads out of a plan BODY.
@@ -562,6 +569,14 @@ def derive_plan_context(plan_text: str, *, fallback_title: str) -> PlanContext:
     ``problem_excerpt`` is the ``## Problem`` section's first paragraph, or
     ``None`` when no such section exists (every plan today has one, but this
     function stays total rather than assuming it).
+
+    ``exit_criterion`` is read from the plan's FRONTMATTER
+    (``prime_exit_criterion.statement``), not from the body, and is ``None``
+    whenever the plan has no frontmatter, no ``prime_exit_criterion``, or a
+    statement that is absent/empty/not a string. Fail-soft by omission, the
+    same posture ``goal`` takes: a preamble that names no criterion is
+    correct for a plan that declares none, and a fabricated one would be
+    worse than silence.
     """
     goal_body = _plan_section_body(plan_text, _GOAL_HEADING)
     goal = _first_paragraph(goal_body) if goal_body is not None else None
@@ -575,7 +590,41 @@ def derive_plan_context(plan_text: str, *, fallback_title: str) -> PlanContext:
         title=_plan_title(plan_text, fallback_title),
         goal=goal,
         problem_excerpt=problem_excerpt,
+        exit_criterion=_prime_exit_criterion_statement(plan_text),
     )
+
+
+def _prime_exit_criterion_statement(plan_text: str) -> Optional[str]:
+    """``prime_exit_criterion.statement`` from ``plan_text``'s frontmatter,
+    whitespace-collapsed to one line, or ``None``.
+
+    Parses the frontmatter block as YAML rather than reaching for
+    ``read_fm_field_unquoted``: that helper reads a TOP-LEVEL scalar, and
+    this field is nested one level down. Every failure mode — no
+    frontmatter, unparseable YAML, a non-mapping document, a
+    ``prime_exit_criterion`` that is absent or not a mapping, a
+    ``statement`` that is missing, empty, or not a string — returns
+    ``None``. This function never raises on a malformed plan: an emitted
+    workflow losing one preamble line is recoverable, an emit that dies on
+    a plan's frontmatter is not.
+    """
+    split = split_frontmatter(plan_text)
+    if split is None:
+        return None
+    try:
+        doc = yaml.safe_load(split.fm_text)
+    except yaml.YAMLError:
+        return None
+    if not isinstance(doc, dict):
+        return None
+    block = doc.get("prime_exit_criterion")
+    if not isinstance(block, dict):
+        return None
+    statement = block.get("statement")
+    if not isinstance(statement, str):
+        return None
+    collapsed = " ".join(statement.split())
+    return collapsed or None
 
 
 def _plan_context_preamble(context: PlanContext) -> str:
@@ -585,12 +634,23 @@ def _plan_context_preamble(context: PlanContext) -> str:
     left to instruction alone).
 
     Line order: title, then ``Goal:`` ONLY when ``context.goal`` is present
-    (AC13 -- omitted entirely, never a placeholder line), then the Problem
-    excerpt when present.
+    (AC13 -- omitted entirely, never a placeholder line), then ``Exit
+    criterion:`` when the plan declares one, then the Problem excerpt when
+    present.
+
+    The exit criterion sits AHEAD of the Problem excerpt deliberately: the
+    Problem says what was wrong, the criterion says what must be observably
+    true for the row's work to have landed, and an executor that reads only
+    the first two lines should have the second of those. An executor that
+    never learns its plan's criterion is the one that builds a thing that is
+    wrong in a new way -- see
+    cross-repo/archive/2026-08-27-doe-claude-em-prime-exit-criterion-settled-shape.md.
     """
     lines = [f"Plan: {context.title}"]
     if context.goal:
         lines.append(f"Goal: {context.goal}")
+    if context.exit_criterion:
+        lines.append(f"Exit criterion: {context.exit_criterion}")
     if context.problem_excerpt:
         lines.append(f"Problem: {context.problem_excerpt}")
     preamble = "\n".join(lines)
@@ -1342,7 +1402,8 @@ def emit_script(
     consolidating what would otherwise be two separate re-reads (one for
     ``derive_review_tier``'s frontmatter-only ``sizing_object:`` citation, a
     second for ``derive_plan_context``'s ``## Goal``/``## Problem`` body
-    sections) into the ONE ``plan_path.read_text()`` call below, whose
+    sections and its frontmatter ``prime_exit_criterion.statement``) into
+    the ONE ``plan_path.read_text()`` call below, whose
     result both derivations consume via their ``plan_text``/``plan_text``
     parameters. Neither derivation, nor any per-row prompt composition
     downstream, opens the plan file again — this corrects the module's

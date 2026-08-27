@@ -23,13 +23,16 @@ Test coverage:
 """
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
 import subprocess
 import sys
 import tempfile
 import unittest
+from pathlib import Path
 
+from coordinator_core.ops.verify_parallel_review_lens_orthogonality import static_check
 from coordinator_core.win_portability import no_console_creationflags
 
 import pytest
@@ -135,6 +138,64 @@ def _make_doe_fixture(tmp: str) -> str:
             f.write("# agent\n")
 
     return tmp
+
+
+def _load_guard_module():
+    """Load parallel-review-orthogonality-guard.py by path (hyphenated
+    filename, not import-name-shaped) so its module-level
+    `_STATIC_FAILURE_MARKER` constant is reachable for the drift pin below.
+    Mirrors `test_bin_module_scope_carriers_importable.py::_load_by_path`.
+    """
+    module_name = "parallel_review_orthogonality_guard_under_test"
+    spec = importlib.util.spec_from_file_location(module_name, _CLI)
+    module = importlib.util.module_from_spec(spec)  # type: ignore[arg-type]
+    sys.modules[module_name] = module
+    try:
+        spec.loader.exec_module(module)  # type: ignore[union-attr]
+    finally:
+        sys.modules.pop(module_name, None)
+    return module
+
+
+class TestStaticFailureMarkerDrift(unittest.TestCase):
+    def test_guard_marker_matches_verify_op_static_failure_line(self):
+        # Finding 1 (code-reviewer, this slice): the guard's
+        # `_STATIC_FAILURE_MARKER` is a hand-duplicated copy of the verify
+        # op's own terminal line for a failing static check, with no shared
+        # source of truth. An importable-constant or distinct-exit-code fix
+        # was weighed and rejected (see dispatch report — engine-import cost
+        # on a deliberately thin bin wrapper, and the verify CLI's exit code
+        # is documented parity-critical against the retired bash oracle).
+        # This test is the substitute: it fails loudly, at the contract
+        # layer, the moment the two strings drift, instead of surfacing as a
+        # silently-crossed refusal message the way the bug this commit fixed
+        # did.
+        guard = _load_guard_module()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            skill_file = Path(tmp) / "SKILL.md"
+            skill_file.write_text(
+                "# parallel-code-review\n\n"
+                "## Lens-Domain Manifest\n\n"
+                "| Reviewer | Lens domain | Rationale |\n"
+                "|---|---|---|\n"
+                "| the Staff Engineer (`agents/missing-agent.md`) | code-semantics | ... |\n\n"
+                "---\n",
+                encoding="utf-8",
+            )
+            agents_dir = Path(tmp) / "agents"  # deliberately not created -> FAIL
+            out_lines, passed = static_check(skill_file, agents_dir)
+
+        self.assertFalse(passed)
+        self.assertIn(
+            guard._STATIC_FAILURE_MARKER,
+            "\n".join(out_lines),
+            "verify_parallel_review_lens_orthogonality.static_check()'s failure "
+            "line no longer contains the guard's _STATIC_FAILURE_MARKER — the "
+            "two are hand-duplicated copies of the same prose and have drifted. "
+            "Update parallel-review-orthogonality-guard.py's "
+            "_STATIC_FAILURE_MARKER to match.",
+        )
 
 
 class TestGuardStatic(unittest.TestCase):

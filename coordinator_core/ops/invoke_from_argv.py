@@ -91,6 +91,7 @@ import io
 import json
 import os
 import sys
+import threading
 from pathlib import Path
 from typing import Callable, Optional, cast
 
@@ -126,6 +127,25 @@ def _load_allowlist() -> frozenset:
 _WARM_ENTRYPOINT_ALLOWLIST = _load_allowlist()
 
 
+#: `os.chdir` is process-global — every thread in this warm server shares
+#: ONE current working directory. A named entrypoint's own `main(argv)` is
+#: a subprocess-shaped CLI that resolves its relative-path defaults (five
+#: allowlisted CLIs carry argparse `default="."`, per
+#: state/audits/2026-08-27-torn-read-hazard-sweep.md) via the process's
+#: real OS cwd — there is no way to hand it an "explicit cwd" that a bare
+#: `open("relative/path")` or a git subprocess launched with `cwd=None`
+#: will actually honor short of making the OS-level chdir true for the
+#: whole of that CLI's run. What this lock removes is the RACE named in
+#: the audit: two concurrent `invoke.from_argv` calls, each `os.chdir`-ing
+#: to a DIFFERENT caller's cwd, interleaving so that a session in the
+#: engine repo has `coordinator/bin/**` rewritten under it by a session it
+#: never dispatched. Holding this lock for the chdir/call/restore span
+#: makes the process-global directory unambiguous for the caller who
+#: legitimately owns it at any given instant — the shared process is never
+#: read from or written to under a directory it wasn't told about.
+_ENTRYPOINT_CWD_LOCK = threading.Lock()
+
+
 def _resolve_entrypoint_script(entrypoint: str) -> Path:
     """Validates `entrypoint` against the committed allowlist and against
     `coordinator/bin/<entrypoint>.py`'s on-disk existence, returning the
@@ -157,6 +177,28 @@ def _resolve_entrypoint_script(entrypoint: str) -> Path:
     return script
 
 
+
+def _ensure_bin_dir_importable() -> None:
+    """Puts `coordinator/bin` on `sys.path` once, so a loaded entrypoint can
+    `from lib.<module> import ...`.
+
+    Why this exists: every bin CLI used to carry its own three-line
+    `sys.path.insert(0, <bin>/lib)` preamble, executed at module scope inside
+    this shared warm server — 273 entrypoints each mutating interpreter global
+    state on import, which is the AC20 impurity and the (b) warm-loadable
+    hazard the census exists to exclude. The bootstrap now lives in exactly one
+    place (`coordinator/bin/lib/__init__.py`) and this function is what makes
+    that package reachable on the warm path. On the CLI path nothing is needed:
+    a script's own directory is already `sys.path[0]`.
+
+    Idempotent and cheap — a membership test on every call after the first.
+    Negative-spec: this does NOT add `<bin>/lib` itself. That stays the lib
+    package's own job, so there is one bootstrap, not two competing ones.
+    """
+    bin_dir = str(_ENGINE_ROOT / "coordinator" / "bin")
+    if bin_dir not in sys.path:
+        sys.path.insert(0, bin_dir)
+
 def _load_entrypoint_main(script: Path, entrypoint: str) -> Callable[[Optional[list]], int]:
     """Loads `script` and returns its `main` callable. Must only be called
     from inside `_run_entrypoint`'s op-boundary `try`/`except` — the module
@@ -177,6 +219,7 @@ def _load_entrypoint_main(script: Path, entrypoint: str) -> Callable[[Optional[l
     module cannot be loaded from `script`, or loads but defines no callable
     `main`.
     """
+    _ensure_bin_dir_importable()
     module_name = f"_invoke_from_argv_entrypoint_{entrypoint.replace('-', '_')}"
     spec = importlib.util.spec_from_file_location(module_name, script)
     if spec is None or spec.loader is None:
@@ -207,6 +250,14 @@ def _run_entrypoint(entrypoint: str, argv: list, cwd: str) -> dict:
     way `_dispatch_argv` captures the generic dispatcher's own prints, so a
     warm pool worker's real streams are never written to.
 
+    The chdir/call/restore span runs under `_ENTRYPOINT_CWD_LOCK` — see that
+    lock's own comment for why: `os.chdir` mutates process-global state in a
+    process ~50 sessions share, so two concurrent calls with different
+    `cwd`s would otherwise race, each observing (or clobbering) the other's
+    directory mid-call. The lock resolves the caller's cwd explicitly for
+    the sole duration it is entitled to it, rather than leaving the
+    process's actual directory to whichever caller chdir'd last.
+
     OP-BOUNDARY CONTAINMENT: `_resolve_entrypoint_script` (allowlist +
     existence) runs first and is allowed to raise `ValueError` normally —
     that is fail-closed INPUT validation, surfaced as a standard JSON-RPC
@@ -224,30 +275,31 @@ def _run_entrypoint(entrypoint: str, argv: list, cwd: str) -> dict:
 
     stdout_buf = io.StringIO()
     stderr_buf = io.StringIO()
-    previous_cwd = os.getcwd()
-    previous_sys_path = list(sys.path)
-    try:
-        os.chdir(cwd)
-        with contextlib.redirect_stdout(stdout_buf), contextlib.redirect_stderr(stderr_buf):
-            try:
-                main_fn = _load_entrypoint_main(script, entrypoint)
-                exit_code = main_fn(argv)
-            except SystemExit as exc:
-                code = exc.code
-                exit_code = 0 if code is None else (code if isinstance(code, int) else 1)
-            except Exception as exc:
-                print(
-                    f"invoke.from_argv: entrypoint {entrypoint!r} raised "
-                    f"{type(exc).__name__}: {exc}",
-                    file=stderr_buf,
-                )
-                exit_code = 1
-            else:
-                if not isinstance(exit_code, int):
-                    exit_code = 0 if exit_code is None else 1
-    finally:
-        os.chdir(previous_cwd)
-        sys.path[:] = previous_sys_path
+    with _ENTRYPOINT_CWD_LOCK:
+        previous_cwd = os.getcwd()
+        previous_sys_path = list(sys.path)
+        try:
+            os.chdir(cwd)
+            with contextlib.redirect_stdout(stdout_buf), contextlib.redirect_stderr(stderr_buf):
+                try:
+                    main_fn = _load_entrypoint_main(script, entrypoint)
+                    exit_code = main_fn(argv)
+                except SystemExit as exc:
+                    code = exc.code
+                    exit_code = 0 if code is None else (code if isinstance(code, int) else 1)
+                except Exception as exc:
+                    print(
+                        f"invoke.from_argv: entrypoint {entrypoint!r} raised "
+                        f"{type(exc).__name__}: {exc}",
+                        file=stderr_buf,
+                    )
+                    exit_code = 1
+                else:
+                    if not isinstance(exit_code, int):
+                        exit_code = 0 if exit_code is None else 1
+        finally:
+            os.chdir(previous_cwd)
+            sys.path[:] = previous_sys_path
 
     return {
         "stdout": stdout_buf.getvalue(),
