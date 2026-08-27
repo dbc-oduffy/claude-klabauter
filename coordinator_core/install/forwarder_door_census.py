@@ -92,15 +92,31 @@ from __future__ import annotations
 
 import ast
 import json
+import os
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Sequence
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _BIN_DIR = _REPO_ROOT / "coordinator" / "bin"
 _ALLOWLIST_PATH = _REPO_ROOT / "coordinator_core" / "ops" / "warm_entrypoint_allowlist.json"
 _PS1_POLICY_STATUS_FILENAME = "ps1-policy-gate-status.json"
+
+#: The bare name every caller types. Resolution of THIS name is what decides
+#: whether a call reaches the ~2.34ms native relay or an interpreter start.
+_DOOR_STEM = "coordinator-invoke"
+
+#: PowerShell consults a same-directory `.ps1` BEFORE PATHEXT's own order --
+#: it is not in PATHEXT and `shutil.which` will never report it. It is the
+#: sibling `install_warm_door :: claim_bare_name` exists to strip, so the
+#: resolver below must model it or it cannot see the original hazard.
+_POWERSHELL_FIRST_EXT = ".ps1"
+
+#: A bare-name winner with any of these suffixes -- or one sitting under a
+#: Python `Scripts/` directory (a pip console-script shim) -- starts an
+#: interpreter per call rather than relaying natively.
+_INTERPRETER_START_SUFFIXES = (".py", ".ps1", ".cmd", ".bat")
 
 
 def _settings_home_root() -> Path:
@@ -110,8 +126,6 @@ def _settings_home_root() -> Path:
     forwarders honor, falling back to the documented default. This module
     never fails for the settings home being absent -- see `render_table`,
     which only consults this path opportunistically."""
-    import os
-
     env = os.environ.get("COORDINATOR_SETTINGS_HOME")
     if env:
         return Path(env)
@@ -459,6 +473,122 @@ def to_json(verdicts: "list[ForwarderVerdict]") -> str:
     return json.dumps(payload, indent=2, sort_keys=False) + "\n"
 
 
+def resolve_bare_name(stem: str, path_dirs: Sequence[str], pathext: str) -> "list[Path]":
+    """Every file `stem` resolves to across `path_dirs`, in the order Windows
+    would try them: PATH directories outermost, and within each directory
+    PowerShell's `.ps1` first, then PATHEXT's own order, then the extensionless
+    file (which cmd tries only after PATHEXT).
+
+    PURE over its arguments -- takes PATH and PATHEXT rather than reading the
+    environment -- so the ordering logic is testable on a machine that has no
+    door installed. `bare_name_door_report` is the impure caller that supplies
+    the live environment.
+
+    `shutil.which` is deliberately not used: it answers for the CURRENT
+    process's rules, and the callers that matter are a PowerShell host and a
+    `CreateProcess` from the engine -- one of which prefers an extension
+    PATHEXT does not list at all."""
+    exts = [_POWERSHELL_FIRST_EXT]
+    exts += [e for e in pathext.split(os.pathsep) if e]
+    exts.append("")
+
+    hits: "list[Path]" = []
+    for raw_dir in path_dirs:
+        if not raw_dir:
+            continue
+        for ext in exts:
+            candidate = Path(raw_dir) / f"{stem}{ext.lower()}"
+            if candidate.is_file() and candidate not in hits:
+                hits.append(candidate)
+    return hits
+
+
+def bare_name_starts_an_interpreter(winner: Path) -> bool:
+    """True when `winner` costs an interpreter (or shell) start per call.
+
+    Its own predicate rather than folded into the report, so two findings stay
+    distinct: a bare name resolving to the WRONG door is one problem; one
+    resolving to something that starts an interpreter ahead of warmth is a
+    worse and more specific one -- break-class outright, per CLAUDE.md
+    § The brightline."""
+    if winner.suffix.lower() in _INTERPRETER_START_SUFFIXES:
+        return True
+    return winner.parent.name.lower() == "scripts"
+
+
+def bare_name_door_report() -> "list[str]":
+    """Report lines for what `coordinator-invoke`, typed bare, actually selects
+    on THIS machine's PATH.
+
+    WHY THIS IS A CENSUS LINE AND NOT A TEST (2026-08-27). The property is
+    about the real environment, and `coordinator_core`'s suite quarantines
+    `Path.home()` to a temp dir by design -- a pytest test of it can only ever
+    SKIP, which reads as coverage and is not. `resolve_bare_name` carries the
+    logic and is unit-tested; this carries the machine, and reports rather than
+    asserts.
+
+    THE LIVE HAZARD it exists to surface: a pip-installed console-script shim
+    (`<python>/Scripts/coordinator-invoke.exe`) is present by construction --
+    this package declares the console entry point. It loses to the settings-home
+    door on PATH ORDERING ALONE. A `pip install --user`, a venv activation, or
+    an installer that prepends flips it with no error and no runtime signal; the
+    only symptom is ~94ms of interpreter start plus engine import per call
+    against the door's ~2.34ms relay. `test_door_bare_name_ordering.py` pins the
+    installer's own `.ps1` sequencing; nothing pinned this."""
+    door = _settings_home_root() / "bin" / f"{_DOOR_STEM}.exe"
+    hits = resolve_bare_name(
+        _DOOR_STEM,
+        os.environ.get("PATH", "").split(os.pathsep),
+        os.environ.get("PATHEXT", ""),
+    )
+
+    lines = ["", "## Bare-name resolution", ""]
+    if not door.is_file():
+        lines.append(f"Door not installed at `{door}` -- nothing to resolve against.")
+        return lines
+    if not hits:
+        lines.append(
+            f"**BROKEN**: bare `{_DOOR_STEM}` resolves to NOTHING on this PATH, yet "
+            f"the door is installed at `{door}`. Its `bin/` is not on PATH, so no "
+            f"bare-name caller reaches the warm relay."
+        )
+        return lines
+
+    winner = hits[0]
+    lines.append(f"Winner: `{winner}`")
+    if winner != door:
+        lines.append(
+            f"**BROKEN**: expected the settings-home door at `{door}`. Everything "
+            f"typing the bare name reaches `{winner.name}` instead. Fix PATH "
+            f"ORDERING -- repointing callers at an absolute path hides the same "
+            f"breakage from every other caller."
+        )
+    if bare_name_starts_an_interpreter(winner):
+        lines.append(
+            f"**BREAK-CLASS**: `{winner}` starts an interpreter per call rather than "
+            f"relaying natively (CLAUDE.md § The brightline)."
+        )
+    if winner == door and not bare_name_starts_an_interpreter(winner):
+        lines.append("OK -- the bare name reaches the native door.")
+
+    shadowed = [h for h in hits[1:] if bare_name_starts_an_interpreter(h)]
+    if shadowed:
+        lines.append("")
+        lines.append("Interpreter-starting candidates LATER on PATH (ordering alone defuses them):")
+        lines += [f"- `{h}`" for h in shadowed]
+
+    sibling = door.with_suffix(_POWERSHELL_FIRST_EXT)
+    if sibling.is_file():
+        lines.append("")
+        lines.append(
+            f"**BROKEN**: `{sibling}` exists beside the door. PowerShell prefers a "
+            f"same-directory `.ps1` over an `.exe` regardless of PATHEXT, so every "
+            f"PowerShell caller is off the native relay. `install_warm_door :: "
+            f"claim_bare_name` removes this -- it either did not run or did not take."
+        )
+    return lines
+
+
 def render_table(verdicts: "list[ForwarderVerdict]") -> str:
     counts = bucket_counts(verdicts)
     lines = [
@@ -485,6 +615,8 @@ def render_table(verdicts: "list[ForwarderVerdict]") -> str:
             f"| {v.name} | {v.target} | {'PASS' if v.op_equivalent else 'FAIL'} | "
             f"{'PASS' if v.warm_loadable else 'FAIL'} | {v.bucket} |"
         )
+
+    lines += bare_name_door_report()
 
     ps1_status = _settings_home_root() / _PS1_POLICY_STATUS_FILENAME
     if ps1_status.is_file():

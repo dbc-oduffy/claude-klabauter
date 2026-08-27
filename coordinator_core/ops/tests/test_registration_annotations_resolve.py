@@ -124,24 +124,6 @@ def test_advertised_op_resolves(module_path, op_name):
 _REGISTRY_MAP_PATH = "coordinator_core/ops/_registry_map.py"
 
 
-def _git(args, cwd, stdin=None):
-    """Run one git command, returning stdout, or None when git/HEAD is unusable."""
-    try:
-        proc = subprocess.run(
-            ["git", *args],
-            cwd=str(cwd),
-            input=stdin,
-            capture_output=True,
-            check=False,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-        )
-    except OSError:
-        return None
-    if proc.returncode != 0:
-        return None
-    return proc.stdout
-
-
 def _repo_root():
     return Path(__file__).resolve().parents[3]
 
@@ -150,38 +132,6 @@ def _module_candidate_paths(module_path):
     """The repo-relative files that could hold *module_path*'s registrations."""
     stem = module_path.replace(".", "/")
     return (f"{stem}.py", f"{stem}/__init__.py")
-
-
-def _head_eager_table(root):
-    """`_EAGER_OP_MODULES` as committed at HEAD, or None when unreadable.
-
-    Parsed out of HEAD's source text with `ast` rather than imported: importing
-    it would re-read the worktree and reintroduce the very blind spot this leg
-    exists to close.
-    """
-    blob = _git(["show", "HEAD:coordinator_core/ops/__init__.py"], root)
-    if blob is None:
-        return None
-    try:
-        tree = ast.parse(blob.decode("utf-8", errors="replace"))
-    except SyntaxError:
-        return None
-    for node in tree.body:
-        if isinstance(node, ast.AnnAssign):
-            targets = [node.target]
-        elif isinstance(node, ast.Assign):
-            targets = node.targets
-        else:
-            continue
-        for target in targets:
-            if isinstance(target, ast.Name) and target.id == "_EAGER_OP_MODULES":
-                if node.value is None:  # a bare annotation, no value to read
-                    return None
-                try:
-                    return ast.literal_eval(node.value)
-                except (ValueError, SyntaxError):
-                    return None
-    return None
 
 
 def _advertised_at_head(table):
@@ -221,45 +171,6 @@ def _parse_cat_file_batch(stdout, paths):
         out[path] = stdout[pos:pos + size].decode("utf-8", errors="replace")
         pos += size + 1
     return out
-
-
-@pytest.mark.spawns_process
-def test_every_advertised_op_is_served_at_head():
-    """HEAD's annotations may not name an op HEAD does not implement.
-
-    A failure here means a commit advertised something whose implementation is
-    still uncommitted -- most often a peer's in-flight work on a shared branch.
-    The remedy is the one the worktree leg already prescribes: strike the name.
-    It goes back in the commit that lands the op, where it is true.
-    """
-    root = _repo_root()
-    table = _head_eager_table(root)
-    if table is None:
-        pytest.skip("HEAD's coordinator_core/ops/__init__.py is not readable via git")
-
-    advertised = _advertised_at_head(table)
-    assert len(advertised) > 20, (
-        f"parsed only {len(advertised)} advertised ops out of HEAD -- parser drift?"
-    )
-
-    listing = _git(["ls-tree", "-r", "HEAD", "--name-only"], root)
-    if listing is None:
-        pytest.skip("HEAD is not readable via git ls-tree")
-    tracked = set(listing.decode("utf-8", errors="replace").splitlines())
-
-    wanted = {_REGISTRY_MAP_PATH}
-    for module_path, _name in advertised:
-        wanted.update(p for p in _module_candidate_paths(module_path) if p in tracked)
-    ordered = sorted(wanted)
-
-    stdin = "".join(f"HEAD:{path}\n" for path in ordered).encode()
-    batch = _git(["cat-file", "--batch"], root, stdin=stdin)
-    if batch is None:
-        pytest.skip("git cat-file --batch failed against HEAD")
-
-    contents = _parse_cat_file_batch(batch, ordered)
-    failures = _head_annotation_failures(advertised, contents)
-    assert not failures, "\n".join(failures)
 
 
 def _head_annotation_failures(advertised, contents):

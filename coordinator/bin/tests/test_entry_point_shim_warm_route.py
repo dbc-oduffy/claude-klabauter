@@ -23,6 +23,14 @@ Negative-spec:
       own text: "not a branch this chunk writes"). Where a scenario needs
       route()'s real seam-absent behaviour, `cc_invoke.route` is stubbed
       to mirror that contract (call `legacy_fn()`), never re-derived.
+    - Does NOT exercise `_merge_assemble_entry`'s own `except (RuntimeError,
+      ImportError): return _merge_assemble_legacy_entry(argv)` branch (the
+      seam-absent-because-`cli.py`-doesn't-exist path) -- this module's
+      `_decouple_from_real_engine_root` fixture monkeypatches
+      `_import_engine_module` unconditionally, so that branch cannot be
+      reached from here. Deliberately left to C3's launcher/e2e suite,
+      which exercises the real (non-monkeypatched) import path. (Review:
+      coordinator-code-reviewer, Finding 3.)
 """
 from __future__ import annotations
 
@@ -306,6 +314,43 @@ def test_path_served_indicator_cold(monkeypatch, capsys):
 
 
 # ---------------------------------------------------------------------------
+# `_merge_assemble_checked_repo_root` -- DR-277 MISMATCH-warns-and-proceeds
+# convention. (Review: coordinator-code-reviewer, Finding 2.)
+# ---------------------------------------------------------------------------
+
+def test_checked_repo_root_mismatch_warns_to_stderr_and_still_dispatches(monkeypatch, capsys):
+    def _fake_resolve_checked_repo_root(explicit_root=None):
+        return "root", {"verdict": "MISMATCH", "message": "MISMATCH: repo root drifted"}
+
+    import repo_identity  # noqa: E402
+
+    monkeypatch.setattr(repo_identity, "resolve_checked_repo_root", _fake_resolve_checked_repo_root)
+    monkeypatch.setattr(
+        cc_invoke, "route", _stub_route(result={"exit_code": 0, "decision_object": {}})
+    )
+
+    code = entry_point_shim._merge_assemble_entry(["brief"])
+
+    err = capsys.readouterr().err
+    assert "MISMATCH" in err
+    assert code == 0
+
+
+# ---------------------------------------------------------------------------
+# `_APPLY_EXIT_PARTIAL_MUTATION` pin -- this module duplicates the value by
+# design (comment at its definition site: avoiding a cold-path import of
+# `apply_base`), so nothing else catches a drift between the two if
+# `apply_base.APPLY_EXIT_PARTIAL_MUTATION` is ever changed.
+# (Review: coordinator-code-reviewer, Finding 4.)
+# ---------------------------------------------------------------------------
+
+def test_apply_exit_partial_mutation_matches_apply_base_constant():
+    from coordinator_core.contract import apply_base
+
+    assert entry_point_shim._APPLY_EXIT_PARTIAL_MUTATION == apply_base.APPLY_EXIT_PARTIAL_MUTATION
+
+
+# ---------------------------------------------------------------------------
 # Obligation 3 (EM addendum) -- runtime import-closure GATE for
 # `coordinator_core.merge_assemble.cli`. AC10's own AST check on `cli.py`
 # cannot see this: `import coordinator_core.merge_assemble.cli` runs
@@ -335,96 +380,89 @@ _IMPORT_CLOSURE_PROBE = textwrap.dedent(
 )
 
 
-def _run_import_closure_probe() -> list[str]:
-    proc = subprocess.run(
+def _probe_import_closure(engine_root: Path) -> list[str]:
+    """Run `_IMPORT_CLOSURE_PROBE` in a FRESH interpreter rooted at `engine_root`
+    and return the resulting `sys.modules` keys.
+
+    Subprocess, never this process: the test interpreter's own `sys.modules` is
+    already polluted by every other test module's imports, so an in-process
+    snapshot would report modules this probe did not cause and could not
+    distinguish a leak from a neighbour's import.
+    """
+    completed = subprocess.run(
         [sys.executable, "-c", _IMPORT_CLOSURE_PROBE],
-        cwd=str(_REPO_ROOT),
         capture_output=True,
         text=True,
-        timeout=30,
+        cwd=str(engine_root),
         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
     )
-    assert proc.returncode == 0, (
-        f"import-closure probe failed: rc={proc.returncode}\n"
-        f"stdout={proc.stdout}\nstderr={proc.stderr}"
-    )
-    return json.loads(proc.stdout)
+    assert completed.returncode == 0, completed.stderr
+    return json.loads(completed.stdout)
+
+
+def _forbidden_hits(modules: list[str]) -> list[str]:
+    return [m for m in modules if any(s in m for s in _FORBIDDEN_IMPORT_SUBSTRINGS)]
 
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_runtime_import_closure_excludes_heavy_modules():
-    modules = _run_import_closure_probe()
-    offenders = [
-        m for m in modules if any(bad in m for bad in _FORBIDDEN_IMPORT_SUBSTRINGS)
-    ]
-    assert offenders == [], (
-        f"importing coordinator_core.merge_assemble.cli pulled in {offenders!r} -- "
-        "AC1's warm-path import-cost promise is broken (this is the runtime "
-        "gate AC10's AST check on cli.py alone cannot see, since these modules "
-        "load via merge_assemble/__init__.py's own module-scope imports, not "
-        "cli.py's)"
+def test_runtime_import_closure_excludes_heavy_modules() -> None:
+    """AC11: importing the leaf must not drag in the heavy graph AT RUNTIME.
+
+    AC10's AST walk over `cli.py` structurally cannot discharge this: Python
+    executes `merge_assemble/__init__.py` before the submodule, so a heavy
+    module-scope import living THERE is invisible to a scan of `cli.py` alone.
+    That was not hypothetical -- it was the real state of the tree until the
+    three imports in `__init__.py` were made lazy.
+    """
+    hits = _forbidden_hits(_probe_import_closure(_REPO_ROOT))
+    assert hits == [], (
+        "importing coordinator_core.merge_assemble.cli pulled in forbidden heavy "
+        f"modules: {hits!r}. A module-scope import was probably restored to "
+        "coordinator_core/merge_assemble/__init__.py -- move it back inside its "
+        "call site."
     )
 
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_runtime_import_closure_gate_can_actually_fail(tmp_path):
-    """Proves the gate above is not vacuous: temporarily restores a heavy
-    module-scope import into `merge_assemble/__init__.py`, re-runs the SAME
-    probe against that mutated file (via a throwaway copy of the package
-    directory so the real tree is never touched), and asserts the probe's
-    own `sys.modules` snapshot now contains the offending module -- i.e.
-    the assertion above would have gone red had the mutation landed in the
-    real tree.
+def test_runtime_import_closure_gate_can_actually_fail(tmp_path: Path) -> None:
+    """The gate above must be shown to FAIL when the property is violated.
 
-    Mutate-and-check happens against a COPY, never the real
-    `merge_assemble/__init__.py` (out of this chunk's `writes:` scope) --
-    no revert-of-real-file step is needed because nothing real was ever
-    changed.
+    Without this, a probe that silently stopped importing anything -- a renamed
+    module, a swallowed error, a typo in the forbidden list -- would keep
+    reporting green forever. Mutates a COPY in tmp_path; the real tree is never
+    written to.
     """
     import shutil
 
-    real_pkg_dir = _REPO_ROOT / "coordinator_core" / "merge_assemble"
-    real_core_dir = _REPO_ROOT / "coordinator_core"
-
-    mutant_root = tmp_path / "mutant_root"
-    mutant_core = mutant_root / "coordinator_core"
-    shutil.copytree(real_core_dir, mutant_core, ignore=shutil.ignore_patterns("__pycache__"))
-
-    init_path = mutant_core / "merge_assemble" / "__init__.py"
-    original_text = init_path.read_text(encoding="utf-8")
-    anchor = "from __future__ import annotations\n"
-    assert anchor in original_text, "expected __init__.py to open with a __future__ import"
-    mutated_text = original_text.replace(
-        anchor,
-        anchor
-        + "from coordinator_core.contract.decision_object.judgment import "
-        "build_judgment_point  # mutation-test-only\n",
-        1,
+    engine_copy = tmp_path / "engine"
+    shutil.copytree(
+        _REPO_ROOT / "coordinator_core",
+        engine_copy / "coordinator_core",
+        ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
     )
-    init_path.write_text(mutated_text, encoding="utf-8")
+    init_py = engine_copy / "coordinator_core" / "merge_assemble" / "__init__.py"
+    lines = init_py.read_text(encoding="utf-8").splitlines(keepends=True)
+    # AFTER the `from __future__` line, never before it: a __future__ import must
+    # be the first statement in the file, so prepending raises SyntaxError and the
+    # probe would fail for the wrong reason -- a red that proves nothing about
+    # import closure, which is exactly the vacuity this test exists to rule out.
+    insert_at = next(
+        (i + 1 for i, line in enumerate(lines) if line.startswith("from __future__")),
+        0,
+    )
+    lines.insert(
+        insert_at,
+        "from coordinator_core.contract.decision_object.envelope import "
+        "build_envelope  # noqa: F401,E402\n",
+    )
+    init_py.write_text("".join(lines), encoding="utf-8")
 
-    probe = textwrap.dedent(
-        """
-        import json
-        import sys
-        import coordinator_core.merge_assemble.cli  # noqa: F401
-        print(json.dumps(sorted(sys.modules.keys())))
-        """
-    )
-    proc = subprocess.run(
-        [sys.executable, "-c", probe],
-        cwd=str(mutant_root),
-        capture_output=True,
-        text=True,
-        timeout=30,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-    )
-    assert proc.returncode == 0, f"mutant probe failed to even run: {proc.stderr}"
-    modules = json.loads(proc.stdout)
-    offenders = [m for m in modules if any(bad in m for bad in _FORBIDDEN_IMPORT_SUBSTRINGS)]
-    assert offenders, (
-        "mutation did not reproduce a forbidden import -- the gate's fail "
-        "path cannot be trusted until this reproduces red"
+    hits = _forbidden_hits(_probe_import_closure(engine_copy))
+    assert hits, (
+        "the mutated copy restored a heavy module-scope import to "
+        "merge_assemble/__init__.py, so the closure probe MUST report a "
+        "forbidden module. It reported none, which means the gate above proves "
+        "nothing."
     )

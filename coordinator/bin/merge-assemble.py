@@ -42,16 +42,21 @@ def main(argv: list[str] | None = None) -> int:
     `door.c :: get_own_directory`, and hands it to `invoke.from_argv` as
     `params.entrypoint`; the server then calls THIS function in-process inside
     the already-warm server rather than paying a fresh cmd.exe shim plus a fresh
-    Python interpreter per call. Measured on this box before enrolment: the
-    forwarder cost 70.3ms of interpreter-and-imports BEFORE any dispatch
-    decision, against DR-347's ~60ms warm-reach bar, while the door served the
-    same op in 10.4ms process time.
+    Python interpreter per call. The property this removes is a cold interpreter
+    start ahead of warmth -- an unenrolled forwarder pays that cost before any
+    dispatch decision, against DR-347's ~60ms warm-reach bar; see the enrolment
+    commit/plan for the measured before/after on any given box, since those
+    numbers are box-specific and stale-by-default.
 
     Returns an int rather than calling `sys.exit`, because a hard exit inside
     the shared server process would take down a server ~50 concurrent sessions
     are using -- one of the properties `warm_entrypoint_allowlist.json` is the
     fail-closed gate on. All argument interpretation stays in `run_target`;
     this adds no second grammar (DR-347 Ruling 2's negative-spec)."""
+    # `argv is None` is unreachable via both real call sites (the door always
+    # passes an explicit list; `__main__` below passes sys.argv[1:] explicitly)
+    # -- kept only so a direct `main()` call (e.g. from a REPL or test) doesn't
+    # need to thread sys.argv itself.
     return run_target("merge-assemble", list(sys.argv[1:] if argv is None else argv))
 
 

@@ -305,3 +305,31 @@ def test_ac15_thesis_dialect_aware_and_bash_only_both_deny_under_powershell():
 
     assert _is_deny(bash_only_out), bash_only_out
     assert "anchored at" in _deny_reason(bash_only_out)
+
+
+def test_ac6a_no_opt_out_survives_a_hostile_payload():
+    """(a) Behavioural: every plausible opt-out spelling an agent might
+    invent -- real `COORDINATOR_ALLOW_*`/`COORDINATOR_OVERRIDE_*` env
+    prefixes, an invented `COORDINATOR_DISABLE_POWERSHELL_NORMALIZE`, and a
+    payload-level `normalize: false` field -- still normalizes the gating
+    value: `runaway-find` still denies under `tool_name="PowerShell"`
+    despite every one of these being present at once."""
+    payload = {
+        "tool_name": "PowerShell",
+        "tool_input": {"command": "find / -name foo"},
+        "session_id": "ac6a-probe",
+        "cwd": ".",
+        "normalize": False,
+        "env": {
+            "COORDINATOR_ALLOW_POWERSHELL_NORMALIZE": "1",
+            "COORDINATOR_OVERRIDE_POWERSHELL_NORMALIZE": "1",
+            "COORDINATOR_DISABLE_POWERSHELL_NORMALIZE": "1",
+            "COORDINATOR_ALLOW_TOOL_NAME_NORMALIZE": "1",
+        },
+    }
+    out = evaluate_payload_json(json.dumps(payload))
+    assert _is_deny(out), (
+        "a hostile payload carrying every plausible opt-out spelling must "
+        "still normalize -- got %r" % (out,)
+    )
+    assert "anchored at" in _deny_reason(out)

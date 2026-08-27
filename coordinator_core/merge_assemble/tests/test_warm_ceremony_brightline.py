@@ -883,7 +883,7 @@ def _average_batched_over_fresh_repos(
     base_dir.mkdir(parents=True, exist_ok=True)
     total_time = 0.0
     total_procs = 0.0
-    last_rc = None
+    rcs: list = []
     for i in range(samples):
         repo = base_dir / f"sample-{i}"
         repo.mkdir()
@@ -891,11 +891,17 @@ def _average_batched_over_fresh_repos(
         result = batched_process_time_ms(cmd, k=1, cwd=str(repo), env=env)
         total_time += result["process_time_ms"]
         total_procs += result["procs_per_call"]
-        last_rc = result["rc"]
+        rcs.append(result["rc"])
+    # Review: coordinatorcode-reviewer.afafdec30cc2f009d Finding 1 — a
+    # non-zero rc from any sample must not be silently averaged away; only
+    # the last sample's rc used to survive into the returned dict, so a
+    # crash on an earlier throwaway repo could hide behind a later success.
+    worst_rc = next((rc for rc in rcs if rc != 0), rcs[-1] if rcs else None)
     return {
         "process_time_ms": total_time / samples,
         "procs_per_call": total_procs / samples,
-        "rc": last_rc,
+        "rc": worst_rc,
+        "rcs": rcs,
         "k": samples,
     }
 

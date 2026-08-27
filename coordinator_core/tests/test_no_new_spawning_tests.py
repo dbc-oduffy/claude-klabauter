@@ -619,6 +619,9 @@ class _FunctionSpawnScanner(ast.NodeVisitor):
         # is NOT attributed to the outer test function).
         self.func_spawns: dict[str, list[ast.Call]] = {}
         self.func_decorators: dict[str, list[ast.expr]] = {}
+        #: nested def name -> nearest enclosing `test_*` name. Only set for a
+        #: def lexically inside a test body; see `_visit_def`.
+        self.func_enclosing_test: dict[str, str] = {}
         self._func_stack: list[str] = []
         # Enclosing CLASS decorators, innermost last -- see module docstring
         # Rule 4 "A THIRD declared form". pytest applies a class-level mark
@@ -673,6 +676,26 @@ class _FunctionSpawnScanner(ast.NodeVisitor):
         if not self._func_stack:
             for class_decorators in self._class_decorator_stack:
                 self.func_decorators[node.name].extend(class_decorators)
+        # LEXICAL CONTAINMENT (2026-08-27). A def nested inside a `test_*`
+        # body cannot execute unless that test executes, so the enclosing
+        # test's own marks already tier every spawn inside it. Record the
+        # nearest enclosing test so Rule 2/4 grade THAT test's decorators
+        # instead of reporting the nested helper as an uncollectible spawner.
+        #
+        # This is NOT the fixture case and does not soften it. A fixture is
+        # INJECTED -- the route from a test to it is invisible to a call
+        # walk, which is why that stays conservatively red. Nesting is the
+        # opposite: containment is lexical, already tracked here in
+        # `_func_stack`, and needs no resolution at all. The live case was
+        # `test_validate_frontmatter_schema_advisory.py`, whose `_git` is
+        # defined inside an already-`spawns_process`/`cadence`-marked test:
+        # correctly tiered at runtime, reported untiered for four days, and
+        # the message's remedy would have moved its 62 in-process siblings
+        # off the fast tier to fix a file that was never wrong.
+        for enclosing in reversed(self._func_stack):
+            if enclosing.startswith("test_"):
+                self.func_enclosing_test[node.name] = enclosing
+                break
         self._func_stack.append(node.name)
         self._alias_stack.append(_child_scope_aliases(self._alias_stack[-1], node.body))
         self.generic_visit(node)
@@ -1263,13 +1286,21 @@ def _analyze_file(path: Path, relpath: str) -> FileSpawnReport:
         if not (direct or indirect):
             continue
         any_func_spawn = True
-        spawning_funcs.append(fname)
+        # A def nested inside a `test_*` body is attributed to that test:
+        # it cannot run unless the test runs, so the test's own marks are
+        # what actually tier the spawn, and the test is what a reader must
+        # mark. Without this, a helper defined inside an already-marked test
+        # reports as an uncollectible spawner and drives the whole file to
+        # the module-level form -- see `_visit_def`'s note for the live case
+        # and for why this does not soften the fixture-injection rule.
+        attributed = scanner.func_enclosing_test.get(fname, fname)
+        spawning_funcs.append(attributed)
         if file_wide_marker:
             continue
-        decorators = scanner.func_decorators.get(fname, [])
+        decorators = scanner.func_decorators.get(attributed, [])
         if _has_spawns_process_marker(decorators):
             continue
-        unmarked_funcs.append(fname)
+        unmarked_funcs.append(attributed)
 
     has_any_spawn = bool(module_level_linenos) or any_func_spawn
     return FileSpawnReport(
@@ -2351,6 +2382,74 @@ def test_rule4_per_function_form_is_refused_when_a_spawner_is_not_collectible(
     )
     assert "inert" in reason, (
         f"the refusal must say WHY the decorator does not count, got: {reason!r}"
+    )
+
+
+def test_rule4_spawner_nested_inside_a_test_is_covered_by_that_test(
+    tmp_path: Path,
+) -> None:
+    """A def nested INSIDE a `test_*` body is tiered by that test's own mark.
+
+    The discriminator against the fixture case above, and the reason both can
+    be true at once: a fixture is INJECTED, so the route from test to spawn is
+    invisible to a call walk and the conservative red is right. A nested def
+    cannot execute unless its enclosing test executes -- containment is
+    lexical and this collector already tracks it -- so marking the test does
+    tier the spawn, and reporting the helper as an uncollectible spawner is a
+    FALSE red. The live case was
+    `write_guards/tests/test_validate_frontmatter_schema_advisory.py`, whose
+    `_git` sits inside an already-marked test: correctly tiered at runtime,
+    reported untiered, and the remedy would have moved its 62 in-process
+    siblings off the fast tier to fix a file that was never wrong.
+
+    Both directions asserted -- the marked case goes green AND the unmarked
+    case stays red. Only the second proves the fix did not simply stop
+    looking inside test bodies.
+    """
+    marked = tmp_path / "test_nested_marked.py"
+    marked.write_text(
+        "import subprocess\n"
+        "import pytest\n"
+        "@pytest.mark.spawns_process\n"
+        "@pytest.mark.cadence\n"
+        "def test_uses_nested_helper(tmp_path):\n"
+        "    def _git(*args):\n"
+        "        subprocess.run(['git', *args])\n"
+        "    _git('init')\n",
+        encoding="utf-8",
+    )
+    unmarked = tmp_path / "test_nested_unmarked.py"
+    unmarked.write_text(
+        "import subprocess\n"
+        "def test_uses_nested_helper(tmp_path):\n"
+        "    def _git(*args):\n"
+        "        subprocess.run(['git', *args])\n"
+        "    _git('init')\n",
+        encoding="utf-8",
+    )
+    with _swap_wrapper_resolver(tmp_path):
+        marked_report = _analyze_file(marked, "test_nested_marked.py")
+        marked_reason = _rule4_missing_cadence(marked, "test_nested_marked.py", marked_report)
+        unmarked_report = _analyze_file(unmarked, "test_nested_unmarked.py")
+        unmarked_reason = _rule4_missing_cadence(
+            unmarked, "test_nested_unmarked.py", unmarked_report
+        )
+
+    assert marked_report.spawning_funcs == ["test_uses_nested_helper"], (
+        "the nested spawn must be attributed to its enclosing test, not "
+        f"reported under the helper's own name: {marked_report.spawning_funcs}"
+    )
+    assert marked_reason is None, (
+        "a spawn nested inside a marked test IS tiered by that mark -- pytest "
+        f"deselects the test and the nested def never runs. Got: {marked_reason!r}"
+    )
+    assert unmarked_reason is not None, (
+        "a spawn nested inside an UNMARKED test must still be red -- the "
+        "attribution moves which name is reported, never whether the file is graded"
+    )
+    assert "test_uses_nested_helper" in unmarked_reason, (
+        "the red must name the enclosing TEST, which is what the reader marks, "
+        f"not the nested helper: {unmarked_reason!r}"
     )
 
 

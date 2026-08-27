@@ -104,32 +104,6 @@ def test_ac2_ac7_negative_oracles_are_disqualified_or_stale():
 # AC4 -- a "Bash" payload is unaffected (no double-normalization).
 # ---------------------------------------------------------------------------
 
-def test_ac6a_no_opt_out_survives_a_hostile_payload():
-    """(a) Behavioural: every plausible opt-out spelling an agent might
-    invent -- real `COORDINATOR_ALLOW_*`/`COORDINATOR_OVERRIDE_*` env
-    prefixes, an invented `COORDINATOR_DISABLE_POWERSHELL_NORMALIZE`, and a
-    payload-level `normalize: false` field -- still normalizes the gating
-    value: `runaway-find` still denies under `tool_name="PowerShell"`
-    despite every one of these being present at once."""
-    payload = {
-        "tool_name": "PowerShell",
-        "tool_input": {"command": "find / -name foo"},
-        "session_id": "ac6a-probe",
-        "cwd": ".",
-        "normalize": False,
-        "env": {
-            "COORDINATOR_ALLOW_POWERSHELL_NORMALIZE": "1",
-            "COORDINATOR_OVERRIDE_POWERSHELL_NORMALIZE": "1",
-            "COORDINATOR_DISABLE_POWERSHELL_NORMALIZE": "1",
-            "COORDINATOR_ALLOW_TOOL_NAME_NORMALIZE": "1",
-        },
-    }
-    out = evaluate_payload_json(json.dumps(payload))
-    assert _is_deny(out), (
-        "a hostile payload carrying every plausible opt-out spelling must "
-        "still normalize -- got %r" % (out,)
-    )
-    assert "anchored at" in _deny_reason(out)
 
 def test_ac6b_derivation_site_is_a_bare_membership_test_no_conditional_gate():
     """(b) Structural, via `ast`: the derivation site

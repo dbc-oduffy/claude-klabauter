@@ -430,10 +430,30 @@ def _merge_assemble_dispatch(op: str, params: dict, print_fn, result_key: str, *
         elif is_apply:
             # Post-dispatch (or undiscriminable — fail closed per AC6):
             # never retry cold, an apply directive may already have landed.
+            #
+            # `is_timeout_error` sharpens the OPERATOR MESSAGE only; it must not
+            # gate the routing above. AC6 fails closed on every undiscriminable
+            # residual, so a timeout and an unrecognized RuntimeError take the
+            # same branch by design. What differs is what we can honestly tell
+            # the operator: a timeout carries cc_invoke's own documented
+            # guarantee that the engine was NOT stopped, so the op may well have
+            # landed in full, whereas an unclassified failure leaves even that
+            # unknown. Routing them identically while reporting them identically
+            # would discard the one discriminator the transport actually exposes.
+            if cc_invoke.is_timeout_error(exc):
+                detail = (
+                    "the op ran past its budget; the engine was NOT stopped, so "
+                    "this apply may have landed in full"
+                )
+            else:
+                detail = (
+                    "the failure could not be classified as pre- or "
+                    "post-dispatch, so it is treated as post-dispatch"
+                )
             print(
-                f"{op}: apply transport failure after dispatch — the "
-                f"operator may be in a partial-mutation state (no cold "
-                f"retry): {exc}",
+                f"{op}: apply transport failure after dispatch — {detail}. The "
+                f"operator may be in a partial-mutation state "
+                f"({_APPLY_EXIT_PARTIAL_MUTATION}); no cold retry: {exc}",
                 file=sys.stderr,
             )
             return _APPLY_EXIT_PARTIAL_MUTATION
