@@ -945,10 +945,12 @@ def require_dispatch_engine_on_path() -> str:
     root = _front_insert_on_path(_resolve_claude_klabauter_root())
     report = _report_provenance("require_dispatch_engine_on_path", root, "dispatch")
     if report.verdict == PROVENANCE_DIVERGENT and not _is_source_twin(report):
+        # Plain-quoted, never `!r`: on Windows `repr()` doubles every backslash,
+        # so the path an operator would paste back is not the path they are shown.
         raise ProvenanceDivergenceError(
             "require_dispatch_engine_on_path: coordinator_core already bound "
-            f"from {report.imported_file!r}, diverges from dispatch root "
-            f"{report.engine_root!r}. Fix: call this before any earlier "
+            f"from '{report.imported_file}', diverges from dispatch root "
+            f"'{report.engine_root}'. Fix: call this before any earlier "
             "module-level coordinator_core-binding import."
         )
     return root

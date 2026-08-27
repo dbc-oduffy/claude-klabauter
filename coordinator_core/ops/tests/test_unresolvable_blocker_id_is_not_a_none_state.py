@@ -40,13 +40,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
 
 from coordinator_core.ops.handoff_transition import (
     _blocker_clears_gate,
     _resolve_blocker_deployment_state,
 )
-
 
 
 def _write_handoff(worktree: Path, name: str, **fields: object) -> None:
@@ -81,3 +79,38 @@ def test_unresolvable_id_refusal_does_not_claim_a_none_deployment_state(
         "refusal describes a deployment_state for a record that does not exist: "
         f"{detail!r}"
     )
+    # Assert what the message DOES say, not only what it no longer says: a rename
+    # that reintroduced the old catch-all under a new field name would satisfy the
+    # negative assertion alone.
+    assert "no handoff record" in detail, (
+        f"refusal does not name the dangling reference: {detail!r}"
+    )
+    assert "names-nothing-at-all" in detail, "refusal must name the offending id"
+
+
+def test_a_chain_going_dangling_mid_hop_names_the_hop_not_the_origin(
+    tmp_path: Path,
+) -> None:
+    """The chase re-resolves per hop, so the verdict must attribute to the hop.
+
+    A chain that starts real and goes dangling partway is the case that separates
+    "this blocker id is bad" from "this blocker's successor pointer is bad" — two
+    different records to go and fix. `_blocker_clears_gate` re-reads disk on every
+    hop, so `current_id` (not the original `blocker_id`) is what the refusal must
+    name.
+    """
+    _write_handoff(
+        tmp_path,
+        "real-origin",
+        stub_id="real-origin",
+        deployment_state="continued",
+        continued_into="no-such-successor",
+    )
+
+    clears, detail = _blocker_clears_gate("real-origin", tmp_path)
+
+    assert clears is False
+    assert "no-such-successor" in detail, (
+        f"refusal blames the origin instead of the dangling hop: {detail!r}"
+    )
+    assert "no handoff record" in detail

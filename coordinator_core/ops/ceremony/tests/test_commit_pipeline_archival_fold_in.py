@@ -734,3 +734,135 @@ def test_ac4_sync_handler_still_dispatches_and_honors_per_op_timeout(tmp_path, m
         f"own sync branch; got {result!r}"
     )
     assert "timed out" in result["error"]["message"]
+
+
+def _porcelain(repo: Path) -> str:
+    result = subprocess.run(
+        ["git", "status", "--porcelain"],
+        cwd=str(repo), capture_output=True, text=True, check=True,
+        creationflags=_NO_WINDOW,
+    )
+    return result.stdout
+
+
+def _land_move_in_head_without_touching_the_index(
+    repo: Path, src_rel: str, dst_rel: str
+) -> None:
+    """Reproduce what the ceremony commit does to a swept rename: move the bytes
+    with `os.replace`, then land the rename in HEAD via a PRIVATE index, leaving
+    the shared `.git/index` untold.
+
+    This is the shape, not an approximation of it: `apply_sweep` writes no index,
+    and `_commit_scoped_private_index` lands either through
+    `_commit_via_head_spine` (no index at all) or through exactly this private
+    `GIT_INDEX_FILE` ladder. Both leave the shared index holding src.
+    """
+    import os
+
+    src = repo / src_rel
+    dst = repo / dst_rel
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    os.replace(src, dst)
+
+    private_index = repo / ".git" / f"private-index-{uuid.uuid4().hex}"
+    env = {**os.environ, "GIT_INDEX_FILE": str(private_index)}
+
+    def _run(args, capture=False):
+        return subprocess.run(
+            ["git", *args], cwd=str(repo), check=True, capture_output=True,
+            text=True, env=env, creationflags=_NO_WINDOW,
+        )
+
+    _run(["read-tree", "HEAD"])
+    _run(["update-index", "--remove", "--", src_rel])
+    _run(["update-index", "--add", "--", dst_rel])
+    tree = _run(["write-tree"]).stdout.strip()
+    head = _run(["rev-parse", "HEAD"]).stdout.strip()
+    commit = _run(["commit-tree", tree, "-p", head, "-m", "sweep"]).stdout.strip()
+    _run(["update-ref", "HEAD", commit])
+    private_index.unlink(missing_ok=True)
+
+
+class TestSweptPathsAreResyncedIntoTheSharedIndex:
+    """The in-plane sweep's moved paths are the one part of its commit the shared
+    `.git/index` is never told about: they join `commit_paths` AFTER
+    `explicit_stage` (the pass's only `add_paths`) has run, and the commit itself
+    lands through a spine rewrite or a private index, neither of which writes
+    `.git/index`.
+
+    Left alone, that puts the index in disagreement with BOTH HEAD and the
+    worktree, which `git status` renders as a staged rename back OUT of the
+    archive plus the real archived file reported untracked -- a tree that reads
+    as though correctly-archived work had been un-archived, and which any
+    unscoped `git commit` would then commit, resurrecting the handoff. Observed
+    2026-08-27 after 355e27e7a swept three handoffs while committing an
+    unrelated test file.
+
+    The first test pins the WEDGE itself, so this file documents the defect and
+    not merely the remedy; the second pins the remedy.
+    """
+
+    _SRC = "state/handoffs/2026-01-01_wedge-fixture.md"
+    _DST = "archive/handoffs/2026-01/2026-01-01_wedge-fixture.md"
+
+    def _repo_at_the_wedge(self, tmp_path: Path) -> Path:
+        repo = _init_repo(tmp_path)
+        _seed_file(repo, self._SRC, "---\nstatus: consumed\n---\n")
+        _git(["add", "-A"], repo)
+        _git(["commit", "-q", "-m", "seed"], repo)
+        _land_move_in_head_without_touching_the_index(repo, self._SRC, self._DST)
+        return repo
+
+    def test_the_wedge_is_real_before_the_resync_runs(self, tmp_path):
+        repo = self._repo_at_the_wedge(tmp_path)
+        status = _porcelain(repo)
+        assert self._SRC in status and self._DST in status, (
+            "precondition: landing a swept rename without touching the shared "
+            f"index must leave BOTH paths dirty; got {status!r}"
+        )
+        assert not (repo / self._SRC).exists(), "src moved on disk"
+        assert (repo / self._DST).exists(), "dst present on disk"
+        assert self._DST in _committed_files_at_head(repo), (
+            "HEAD records the archived path -- only the index disagrees"
+        )
+
+    def test_resync_clears_the_wedge_without_touching_the_worktree(self, tmp_path):
+        repo = self._repo_at_the_wedge(tmp_path)
+
+        commit_pipeline_mod._resync_shared_index_for_swept_paths(
+            repo, [self._SRC], [self._DST]
+        )
+
+        assert _porcelain(repo) == "", (
+            "after the resync the index must agree with HEAD and the worktree; "
+            f"residue: {_porcelain(repo)!r}"
+        )
+        assert (repo / self._DST).exists(), (
+            "index-only: `git reset -q HEAD --` must never move or delete the "
+            "archived file itself"
+        )
+        assert not (repo / self._SRC).exists()
+
+    def test_empty_sweep_contributes_no_resync_and_no_spawn(self, tmp_path, monkeypatch):
+        repo = _init_repo(tmp_path)
+        spy = _spy_git(monkeypatch)
+        commit_pipeline_mod._resync_shared_index_for_swept_paths(repo, [], [])
+        assert spy["n"] == 0, (
+            "the overwhelming majority of ceremony commits sweep nothing -- that "
+            f"path must cost zero git processes; spawned {spy['n']}"
+        )
+
+    def test_a_peers_staged_work_survives_the_resync(self, tmp_path):
+        repo = self._repo_at_the_wedge(tmp_path)
+        _seed_file(repo, "peer.txt", "peer content\n")
+        _git(["add", "--", "peer.txt"], repo)
+
+        commit_pipeline_mod._resync_shared_index_for_swept_paths(
+            repo, [self._SRC], [self._DST]
+        )
+
+        status = _porcelain(repo)
+        assert "A  peer.txt" in status, (
+            "the resync is explicitly pathspec'd -- a peer's staged work on this "
+            f"shared tree must be untouched; got {status!r}"
+        )

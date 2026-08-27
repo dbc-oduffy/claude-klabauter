@@ -90,39 +90,39 @@ def _import_runner():
     return run_op_main
 
 
-def main() -> None:
-    argv = sys.argv[1:]
+def main(argv: "list[str] | None" = None) -> int:
+    argv = (sys.argv[1:] if argv is None else argv)
     if "-h" in argv or "--help" in argv:
         # Intercept BEFORE run_op_main -- see item 1 in the spec-backlinked
         # memo. Without this, --help was forwarded straight through as an
         # ignored positional and the backfill ran for real.
         print(__doc__)
-        sys.exit(0)
+        return 0
 
     try:
         run_op_main = _import_runner()
     except RuntimeError as exc:
         print(f"backfill-week-changelog-gaps.py: CLAUDE_KLABAUTER_ROOT resolution failed: {exc}", file=sys.stderr)
-        sys.exit(2)
+        return 2
     except ImportError as exc:
         print(
             f"backfill-week-changelog-gaps.py: coordinator_core.cli_entry not importable: {exc}",
             file=sys.stderr,
         )
-        sys.exit(2)
+        return 2
 
     try:
-        code = run_op_main("coordinator_core.ops.changelog_ops", sys.argv[1:])
+        code = run_op_main("coordinator_core.ops.changelog_ops", (sys.argv[1:] if argv is None else argv))
     except ImportError as exc:
         print(
             f"backfill-week-changelog-gaps.py: coordinator_core.ops.changelog_ops "
             f"not importable: {exc}",
             file=sys.stderr,
         )
-        sys.exit(2)
+        return 2
 
-    sys.exit(code)
+    return code
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

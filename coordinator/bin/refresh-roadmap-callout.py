@@ -41,18 +41,18 @@ def _import_main():
     return _op_main
 
 
-def main() -> None:
+def main(argv: "list[str] | None" = None) -> int:
     try:
         op_main = _import_main()
     except RuntimeError as exc:
         print(f"refresh-roadmap-callout.sh: CLAUDE_KLABAUTER_ROOT resolution failed: {exc}", file=sys.stderr)
-        sys.exit(1)
+        return 1
     except ImportError as exc:
         print(
             f"refresh-roadmap-callout.sh: coordinator_core.ops.refresh_roadmap_callout not importable: {exc}",
             file=sys.stderr,
         )
-        sys.exit(1)
+        return 1
 
     # DR-276: op_main takes a `self_commit=` kwarg that run_op_main's plain
     # argv-forwarding contract has no room for, so this CLI owns its own
@@ -63,9 +63,9 @@ def main() -> None:
     from coordinator_core.cli_entry import recording_declared_writes
 
     with recording_declared_writes():
-        code = op_main(sys.argv[1:], self_commit=True)
-    sys.exit(code)
+        code = op_main((sys.argv[1:] if argv is None else argv), self_commit=True)
+    return code
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

@@ -119,6 +119,7 @@ class _WalkCounter:
         monkeypatch.setattr(module, "_parse_index_bytes", _wrapped)
 
 
+@pytest.mark.designed_red  # RED until R6-R15 are threaded; bar is AC1's 1, actual 2
 def test_ordinary_commit_walk_count_at_parse_index_bytes(tmp_path, monkeypatch):
     """One modified, previously-tracked path, agree branch, no push, no
     archive sweep -- the ordinary commit this chunk's own reduction targets.
@@ -149,13 +150,19 @@ def test_ordinary_commit_walk_count_at_parse_index_bytes(tmp_path, monkeypatch):
 
     assert result.committed_sha is not None, result.diagnostics
 
-    assert full_walks.count <= 3, (
-        f"full-index (`git_state._parse_index_bytes`) walk count regressed: "
-        f"{full_walks.count} > 3 -- see this module's docstring for the "
-        f"pre-C6 baseline (7) this bounds against"
+    assert full_walks.count <= 1, (
+        f"full-index (`git_state._parse_index_bytes`) walk count is "
+        f"{full_walks.count}, over AC1's bar of 1. That one permitted walk is "
+        f"the CAS re-observation AC5 requires, by construction -- `read_index` "
+        f"takes no `wanted=` parameter. Every other full walk is a consumer "
+        f"that has not been threaded onto the pass `CommitContext` (R6-R15). "
+        f"The pre-C6 baseline was 7 and the intermediate C6 bar was 3; do NOT "
+        f"loosen this back to 3 to get green -- a loose bound here is what let "
+        f"C6 ship as `coded` having threaded 3 of 15 consumers."
     )
-    assert scoped_walks.count <= 3, (
-        f"scoped-index (`git_index._parse_index_bytes`) walk count "
-        f"regressed: {scoped_walks.count} > 3 -- see this module's "
-        f"docstring for the pre-C6 baseline (2) this bounds against"
+    assert scoped_walks.count <= 2, (
+        f"scoped-index (`git_index._parse_index_bytes`) walk count is "
+        f"{scoped_walks.count}, over AC1's bar of 2. R5 and R12 "
+        f"(`git_index.scoped_status`) are the two this plan threads; a third "
+        f"is an unthreaded consumer, not a regression to bound away."
     )

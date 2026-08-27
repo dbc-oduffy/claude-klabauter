@@ -1007,7 +1007,15 @@ def _commit_mutated_paths(
 # ---------------------------------------------------------------------------
 
 
-@register_op("deliverable.cascade_terminal")
+# `deliverable.cascade_terminal` was DELETED as an op 2026-08-27 under the 200ms
+# process-time bar (kill ledger K-104). The dispatchable surface is gone; this
+# body survives UNDECORATED because `plan_status_transition._run_cascade`
+# imports it by name at call time (a function-local import, to avoid an
+# archive_stamp cycle) and the terminal-state cascade still has to run.
+#
+# The lazy import is why removing this body left the module importable: it would
+# have failed only when a plan actually reached a terminal state. Re-adding
+# `@register_op` puts a deleted op back over the bar.
 async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC "deliverable.cascade_terminal" handler — the shared cascade entrypoint.
 

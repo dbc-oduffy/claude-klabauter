@@ -511,7 +511,15 @@ _ALLOWED: Dict[Tuple[str, str, str, str, str, int], str] = {
     ("coordinator_core", "ops/fleet/memo_reconcile_outbox.py", "_reconcile", "os.replace", "os.replace(path, target)", 1):
         "reconciles an already-sent outbox memo into .sent/ -- a closed-out "
         "artifact, not a session-touched worktree source path; batch "
-        "reconcile sweep with no session_id in scope",
+        "reconcile sweep with no session_id in scope. NOTE (2026-08-27): the "
+        "'no session_id in scope' half of this rationale is why the move is "
+        "exempt from relocate_touched_path, NOT a finding that the result "
+        "cannot be claimed -- the handler declares both ends of every move "
+        "through ipc.py's _SCOPE_TOUCH_PATHS_KEY, which resolves session "
+        "identity at the dispatch layer rather than needing one here. Before "
+        "that, every file this op landed in sent/ reached compute_scope as an "
+        "orphan -- one of the four undeclared-op-output orphans in "
+        "2026-08-27's scope-warnings.log.",
     ("coordinator_core", "ops/render_template.py", "_render_and_write_in_place", "os.replace", "os.replace(tmp_path, path)", 1):
         "atomic tmp->final rename; temp source never claimed",
     ("coordinator_core", "percolate/manifest.py", "write_manifest", "os.replace", "os.replace(tmp_path, path)", 1):

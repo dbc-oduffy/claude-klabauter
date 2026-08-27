@@ -427,7 +427,7 @@ class TestAssertPathsInSessionScopeAllowOrphans:
         assert ok_allow is False
 
     def test_r1_non_candidate_path_with_unreadable_peer_claim_still_denies(
-        self, tmp_path
+        self, tmp_path, monkeypatch
     ):
         """Staff-eng R1 regression, the EXACT non-candidate shape (pass-2
         re-review probe A, not probe B): a dirty path that this call never
@@ -469,14 +469,25 @@ class TestAssertPathsInSessionScopeAllowOrphans:
         # so the test proved nothing; on-disk census 2026-08-21 found the
         # bare shape only under `.archive/`, which the walk never reaches.
         scope.touch("peer", "peer.md", cwd=str(repo))
-        peer_touched = Path(core.session_dir("peer", cwd=str(repo))) / "touched.txt"
-        os.chmod(str(peer_touched), 0o000)
-        try:
-            ok, reason = assert_paths_in_session_scope(
-                "mine", ["peer.md"], cwd=str(repo), allow_orphans=True
-            )
-        finally:
-            os.chmod(str(peer_touched), 0o644)
+        # Unreadability is INJECTED AT THE READER, not by chmod-ing a
+        # `touched.txt`. Two reasons the old fixture stopped working: the sink
+        # is `touch-record.jsonl` now (so the chmod target did not exist and
+        # raised FileNotFoundError before the assertion ran), and `os.chmod`
+        # with 0o000 does not make a file unreadable to its owner on Windows
+        # at all -- this repo is Windows-first, so even a corrected filename
+        # would not have established the precondition here.
+        peer_dir = os.path.normcase(core.session_dir("peer", cwd=str(repo)))
+        real_reader = claim_index._read_stream_claims
+
+        def _unreadable(sink_path):
+            if os.path.normcase(str(sink_path)).startswith(peer_dir):
+                return {}, False
+            return real_reader(sink_path)
+
+        monkeypatch.setattr(claim_index, "_read_stream_claims", _unreadable)
+        ok, reason = assert_paths_in_session_scope(
+            "mine", ["peer.md"], cwd=str(repo), allow_orphans=True
+        )
 
         assert ok is False
         assert reason
@@ -744,7 +755,7 @@ class TestScopeReportOp:
 
 
 class TestPostCommitResidueReport:
-    """Proves AC3/AC4/AC5: after `auto_commit_session` lands a session's own
+    """Proves AC3/AC4/AC5: after `commit_session_offer` lands a session's own
     commit groups, a fresh `git status --porcelain` re-read still names any
     dirty path left behind, grouped by top-level `state/` class — but a path
     a live PEER session owns renders as owned, never as this session's own
@@ -781,7 +792,7 @@ class TestPostCommitResidueReport:
         leftover_dir.mkdir(parents=True)
         (leftover_dir / "residue.txt").write_text("left behind")
 
-        report = safe_commit_offer.auto_commit_session("mine", cwd=str(repo))
+        report = safe_commit_offer.commit_session_offer("mine", cwd=str(repo))
 
         # Sanity: only "mine.py" actually committed.
         assert len(report["groups"]) == 1
@@ -853,7 +864,7 @@ class TestPostCommitResidueReport:
         for i in range(60):
             (repo / ("orphan_%03d.py" % i)).write_text("o")
 
-        report = safe_commit_offer.auto_commit_session("mine", cwd=str(repo))
+        report = safe_commit_offer.commit_session_offer("mine", cwd=str(repo))
         residue = report["residue"]
         assert len(residue) > safe_commit_offer._RESIDUE_CLASS_PREVIEW_COUNT
 
@@ -888,7 +899,7 @@ class TestPostCommitResidueReport:
         for i in range(10):
             (leftover_dir / ("residue_%02d.txt" % i)).write_text("left behind")
 
-        report = safe_commit_offer.auto_commit_session("mine", cwd=str(repo))
+        report = safe_commit_offer.commit_session_offer("mine", cwd=str(repo))
         residue = report["residue"]
         assert "state/leftover" in residue
         assert len(residue["state/leftover"]) == 10
@@ -995,17 +1006,25 @@ class TestOwnershipReadout:
         (repo / "hidden.py").write_text("y")
         scope.touch("unreadable-peer", "hidden.py", cwd=str(repo))
 
-        blinded = os.path.join(
-            core.session_dir("unreadable-peer", cwd=str(repo)), "touched.txt"
+        # The unreadable-claim seam moved twice and this patch target moved
+        # with it. `_read_lines_discard_torn_tail` was DELETED by the
+        # 2026-08-21 rebuild; the reader is now
+        # `claim_index._read_stream_claims(sink) -> (claims, content_read_ok)`.
+        # Blind on the peer's session DIRECTORY rather than a `touched.txt`
+        # filename: the sink dialect is `touch-record.jsonl` now, and matching
+        # the old filename would silently patch nothing, leaving the
+        # precondition unestablished and the test green for the wrong reason.
+        blinded_dir = os.path.normcase(
+            core.session_dir("unreadable-peer", cwd=str(repo))
         )
-        real_reader = claim_index._read_lines_discard_torn_tail
+        real_reader = claim_index._read_stream_claims
 
-        def _unreadable(path):
-            if os.path.normcase(str(path)) == os.path.normcase(blinded):
-                return [], False
-            return real_reader(path)
+        def _unreadable(sink_path):
+            if os.path.normcase(str(sink_path)).startswith(blinded_dir):
+                return {}, False
+            return real_reader(sink_path)
 
-        monkeypatch.setattr(claim_index, "_read_lines_discard_torn_tail", _unreadable)
+        monkeypatch.setattr(claim_index, "_read_stream_claims", _unreadable)
 
         offer = safe_commit_offer.compute_offer("mine", cwd=str(repo))
         ownership = offer["ownership"]

@@ -139,6 +139,32 @@ class TestAC3AsyncioImportGraph:
             f"{result.stdout!r}"
         )
 
+    def test_dry_run_does_not_drag_asyncio(self, tmp_path):
+        # Review: coordinator:code-reviewer (07cbe322f slice, P2) -- the two
+        # tests above only pin the import graph at module-load time; neither
+        # actually calls `main(["--dry-run"])` and checks `sys.modules`, so a
+        # future re-merge of the two now-separated `import asyncio` blocks
+        # above the `if dry_run:` branch would silently reintroduce the
+        # ~31ms cost on every census with nothing here to catch it.
+        repo = _init_repo(tmp_path / "repo")
+        probe = (
+            "import sys, importlib.util as u; "
+            f"spec = u.spec_from_file_location('m', r'{_SCRIPT}'); "
+            "m = u.module_from_spec(spec); spec.loader.exec_module(m); "
+            "m.main(['--dry-run']); "
+            "print('asyncio_loaded=' + str('asyncio' in sys.modules))"
+        )
+        result = subprocess.run(
+            [sys.executable, "-c", probe],
+            cwd=str(repo), capture_output=True, text=True, timeout=60,
+            env=_GIT_ENV, **no_console_creationflags(),
+        )
+        assert result.returncode == 0, result.stderr
+        assert "asyncio_loaded=False" in result.stdout, (
+            "running the sweep CLI with --dry-run must not pay the asyncio "
+            f"import; got {result.stdout!r}"
+        )
+
     def test_main_still_loads_asyncio_because_archive_and_commit_is_a_coroutine(self):
         """TRIPWIRE, not a discharge. Pins AC-3's residual to the one named
         reason it survives. When `_common.archive_and_commit` goes sync and

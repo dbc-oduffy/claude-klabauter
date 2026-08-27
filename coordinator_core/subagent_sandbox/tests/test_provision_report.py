@@ -938,6 +938,44 @@ def test_build_doc_text_no_doc_type_matches_frozen_legacy_shape_byte_for_byte() 
     assert "## Completion" not in text
 
 
+#: C10 (docs/plans/2026-08-27-the-review-gate-measures-the-whole-session.md):
+#: the legacy template PLUS AC1's review receipt, which ``_provision`` splices
+#: in before the frontmatter's closing ``---`` for a delegate-reviewer dispatch.
+#: Kept as a separate frozen template rather than folded into
+#: ``_LEGACY_RUN_REPORT_TEMPLATE``, because that constant is the pre-``--type``
+#: shape and the direct ``_build_doc_text`` test above still has to prove those
+#: body bytes never moved. Two templates is the honest shape here: one asserts
+#: "the legacy bytes are untouched", the other "the receipt's bytes are exactly
+#: these". Spelled out in full rather than string-concatenated at assert time so
+#: that a receipt-shape change has to edit a visible expectation.
+_LEGACY_RUN_REPORT_TEMPLATE_WITH_REVIEW_RECEIPT = (
+    "---\n"
+    "status: open\n"
+    "agent_type: {agent_type}\n"
+    "spawned_at: {spawned_at}\n"
+    "lead_session_id: {lead_session_id}\n"
+    "divergence:\n"
+    "  diverged: false\n"
+    "commits: []\n"
+    "dispatch_feed:  # forward-declared, INERT until pcli-04 emitter\n"
+    "  gate_kind: none\n"
+    "  write_files: []\n"
+    "review_receipt:\n"
+    "  session_id: {lead_session_id}\n"
+    "  agent_id: {agent_id}\n"
+    "  agent_type: {agent_type}\n"
+    "  stamped_at: {spawned_at}\n"
+    "---\n\n"
+    "## Run notes\n\n"
+    "## Observations\n\n"
+    "## Exit interview\n\n"
+    "- What did you have to work out that the brief could have told you?\n\n"
+    "- What did you grep, read, or probe that turned out to be a dead end — and what were you actually looking for?\n\n"
+    "- Where did your tool access, permissions, or output contract fight you? What was missing that isn't deliberately withheld from this role — a guard denial is not a gap.\n\n"
+    "- Anything you wanted to say and had nowhere to put?\n\n"
+)
+
+
 def test_provision_direct_call_no_type_key_in_payload_matches_legacy_shape(
     git_repo: Path, policy_path: Path
 ) -> None:
@@ -948,7 +986,16 @@ def test_provision_direct_call_no_type_key_in_payload_matches_legacy_shape(
     Via _provision(), `lead_session_id` IS always available (it's the
     payload's own `session_id`, required for eligibility in the first
     place) -- unlike the direct 2-arg `_build_doc_text` call above, so
-    this byte-match substitutes the real session_id, not `null`."""
+    this byte-match substitutes the real session_id, not `null`.
+
+    C10: ``REPORT_SIDECAR_TYPE`` is ``coordinator:code-reviewer``, a member of
+    the delegate-reviewer vocabulary, so AC1's receipt is spliced into this
+    doc's frontmatter and these bytes legitimately changed. The assertion stays
+    a full byte-match against a frozen template that now carries the receipt --
+    deliberately NOT relaxed to a substring or key-subset check. Byte-parity is
+    this test's entire job: a change to what ``_provision`` writes should have
+    to come and edit a visible expectation, which is exactly what caught the
+    receipt here."""
     session_id = "sess-direct-no-type"
     payload = _payload(
         agent_id=BARE_HEX_AGENT_ID, agent_type=REPORT_SIDECAR_TYPE, session_id=session_id
@@ -962,14 +1009,24 @@ def test_provision_direct_call_no_type_key_in_payload_matches_legacy_shape(
     text = doc_path.read_text(encoding="utf-8")
 
     # spawned_at is a live UTC timestamp we don't control -- strip it via
-    # the same template, substituting the actual emitted value.
+    # the same template, substituting the actual emitted value. The receipt's
+    # `stamped_at` is the SAME value by construction (both are `_provision`'s
+    # one `spawned_at`), which this byte-match also pins: a receipt that
+    # re-derived its own clock would drift from the header and fail here.
     spawned_at_line = next(line for line in text.splitlines() if line.startswith("spawned_at: "))
     spawned_at = spawned_at_line[len("spawned_at: "):]
-    assert text == _LEGACY_RUN_REPORT_TEMPLATE.format(
-        agent_type=REPORT_SIDECAR_TYPE, spawned_at=spawned_at, lead_session_id=session_id
+    assert text == _LEGACY_RUN_REPORT_TEMPLATE_WITH_REVIEW_RECEIPT.format(
+        agent_type=REPORT_SIDECAR_TYPE,
+        spawned_at=spawned_at,
+        lead_session_id=session_id,
+        agent_id=BARE_HEX_AGENT_ID,
     )
     assert "## Divergence from plan" not in text
     assert "## Completion" not in text
+    # The integrator receipt is the OTHER branch of _provision's elif; a
+    # reviewer dispatch must never carry both keys (AC2's distinguishability
+    # read from the consuming side).
+    assert "integrator_receipt:" not in text
 
 
 @pytest.mark.parametrize(

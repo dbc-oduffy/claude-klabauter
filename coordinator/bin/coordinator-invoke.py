@@ -53,21 +53,23 @@ def _import_main():
     return _op_main
 
 
-def main() -> None:
+def main(argv: "list[str] | None" = None) -> int:
+    del argv  # this CLI takes no arguments; argv accepted for the warm-call contract
     try:
         op_main = _import_main()
     except RuntimeError as exc:
         print(f"coordinator-invoke.py: engine-root resolution failed: {exc}", file=sys.stderr)
-        sys.exit(1)
+        return 1
     except ImportError as exc:
         print(
             f"coordinator-invoke.py: coordinator_core.invoke.__main__ "
             f"not importable: {exc}",
             file=sys.stderr,
         )
-        sys.exit(1)
+        return 1
     op_main()
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

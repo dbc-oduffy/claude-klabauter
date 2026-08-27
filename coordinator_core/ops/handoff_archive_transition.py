@@ -877,7 +877,21 @@ def _commit_retained_supersede_flip(
 # ---------------------------------------------------------------------------
 
 
-@register_op("handoff.archive_transition")
+# `handoff.archive_transition` was DELETED as an op 2026-08-27 under the 200ms
+# process-time bar (kill ledger K-109). The dispatchable surface is gone; this
+# body survives UNDECORATED because the archival ceremony still runs at the
+# occasions that create the work -- pickup, workstream-complete,
+# workday-complete -- through `archive_stamp._call_handoff_archive_transition`,
+# which imports this symbol by name at call time.
+#
+# PM ruling 2026-08-27: boot-time archival is OUT and is not coming back; the
+# lifecycle occasions above are where handoffs get archived. That makes this
+# compute load-bearing for those paths, NOT a candidate for restoration as an
+# op. Re-adding `@register_op` puts a deleted op back over the bar.
+#
+# Found by a latent-break check, not by a test: the import is lazy, inside the
+# calling function, so removing this body left the module importable and would
+# have failed only when someone actually archived a handoff.
 async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC "handoff.archive_transition" — the 4-mode handoff archive ceremony.
 

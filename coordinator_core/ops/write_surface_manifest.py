@@ -524,16 +524,3 @@ def build_manifest(repo_root: Path | None = None) -> dict[str, Any]:
     }
 
 
-@register_op("write_surface.emit_manifest")
-def _emit_write_surface_manifest(params: dict, repo_root: Path | None = None) -> dict:
-    """JSON-RPC "write_surface.emit_manifest" handler.
-
-    Params: none consumed.
-
-    Returns the manifest dict built by `build_manifest` — `schema_version`, `generated_at`,
-    and a flat `entries` list mixing `status: declared` / `declared-empty` / `undeclared` /
-    `duplicate_writer_id` rows for every module discovered under `_SCAN_ROOTS` that
-    statically declares `WRITE_SURFACE` (see module docstring for the collection strategy
-    and the `undeclared`/`duplicate_writer_id` representations).
-    """
-    return build_manifest(repo_root)

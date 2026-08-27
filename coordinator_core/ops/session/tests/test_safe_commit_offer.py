@@ -3,7 +3,7 @@ coordinator_core.ops.session.tests.test_safe_commit_offer
 
 Tests for coordinator_core.ops.session.safe_commit_offer — the unattended
 stop-event auto-commit+push mechanism (compute_offer, path normalization,
-auto_commit_session, and the CLI main()).
+commit_session_offer, and the CLI main()).
 
 Coverage:
   (a) compute_offer — own-touched-safe, other-session-excluded-with-reason,
@@ -21,7 +21,7 @@ Coverage:
       directory entry keeps its trailing slash.
   (d) directory-entry expansion — `_dirty_files_under` finds dirty files
       under a given subdirectory via git, ignores files outside it.
-  (e) auto_commit_session — NO confirmation step (direct call lands a real
+  (e) commit_session_offer — NO confirmation step (direct call lands a real
       commit); default mechanical grouping; explicit `--message` single
       group; explicit `groups` never widens past computed safe_paths (a
       peer-owned path smuggled into a caller-supplied group is dropped, not
@@ -30,7 +30,7 @@ Coverage:
       exclusive flags, unresolvable-session exit 1, usage exit 2.
 
 Class B: substrate is untracked .git/coordinator-sessions/ — commit
-assertions here ARE made (auto_commit_session is the one mutating surface
+assertions here ARE made (commit_session_offer is the one mutating surface
 this module owns), scoped to the test's own tmp_path fixture repo, never
 the real corpus.
 
@@ -43,6 +43,7 @@ import asyncio
 import json
 import os
 import subprocess
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -90,7 +91,7 @@ def _fake_pipeline_result(**overrides) -> PipelineResult:
 
 # Real git spawn is load-bearing: compute_offer's dirty-set math and
 # `_dirty_files_under` read actual `git status`/diff output, and
-# auto_commit_session lands real commits under test — no mock stands in for
+# commit_session_offer lands real commits under test — no mock stands in for
 # git's own path-classification and index state here.
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
@@ -110,7 +111,7 @@ def _make_repo(tmp_path):
     return tmp_path
 
 
-def _agent_claim(agent_dir, *paths, owner_sid=None):
+def _agent_claim(agent_dir, *paths, owner_sid=None, ts=None):
     """Record an agent dir's claims in the one dialect its readers read.
 
     A bare-path ``touched.txt`` stopped being a claim surface when the compat
@@ -122,6 +123,13 @@ def _agent_claim(agent_dir, *paths, owner_sid=None):
     itself parses as ``<T|R> <ISO-ts> <path>`` would be reinterpreted as a
     journal line. No fixture path has that shape; pass an explicit verb if one
     ever does.
+
+    ``ts`` (C5, docs/plans/2026-08-27-safe-commit-offer-excludes-a-live-
+    agent.md) -- an explicit epoch-seconds float threaded onto every event
+    this call writes, letting a test place a claim's ``edit_ts`` inside or
+    outside ``liveness._ABANDONMENT_WINDOW_SEC`` deterministically instead of
+    depending on wall-clock "now". ``None`` (default) records "now", same as
+    every pre-C5 caller of this helper.
     """
     agent_dir = Path(agent_dir)
     if owner_sid is None:
@@ -144,6 +152,7 @@ def _agent_claim(agent_dir, *paths, owner_sid=None):
             agent_id=agent_dir.name,
             verb=event_verb,
             path=path,
+            timestamp=ts,
         )
     return sink
 
@@ -183,6 +192,117 @@ class TestComputeOffer:
         offer = safe_commit_offer.compute_offer("mine", cwd=str(repo))
         assert "shared.py" not in offer["safe_paths"]
         assert {"path": "shared.py", "reason": "owned by session other"} in offer["excluded"]
+
+    def test_a_recently_touched_agent_claim_is_withheld_as_in_flight(
+        self, tmp_path
+    ):
+        """CORRECTED (C5, docs/plans/2026-08-27-safe-commit-offer-excludes-
+        a-live-agent.md): C3's own fix was INERT in production -- an agent
+        id is NEVER a member of ``liveness.live_session_ids`` (that set
+        walks session dirs only, ``.agents`` is explicitly excluded), so the
+        live-set check C3 shipped folded every agent-attributed claim back
+        into ``safe_paths`` unconditionally, always, on the real tree. This
+        test asserts the REPLACEMENT mechanism instead: recency against
+        ``liveness._ABANDONMENT_WINDOW_SEC``. ``aid-recent`` here is given
+        NO session dir of its own at all (unlike C3's fixture) -- an agent id
+        is never a `live_session_ids` member in production and this fixture
+        does not pretend otherwise. Its claim's ``edit_ts`` is set to 60s
+        ago, well inside the abandonment window.
+
+        The corrected behaviour: a claim touched inside the window is
+        withheld from ``safe_paths`` (same as a contested peer path), named
+        in ``excluded`` with an operator-actionable reason, and surfaced in
+        ``ownership.peer`` as a ``PeerOwnedPath`` with
+        ``claim_source="agent"``."""
+        repo = _make_repo(tmp_path)
+        core.init("mine", cwd=str(repo))
+        agent = _agent_dir(repo, "aid-recent")
+        (agent / "em-session-id.txt").write_text("mine")
+        recent_ts = datetime.now(timezone.utc).timestamp() - 60
+        _agent_claim(agent, "docs/research/in-flight.md", ts=recent_ts)
+
+        offer = safe_commit_offer.compute_offer("mine", cwd=str(repo))
+
+        assert "docs/research/in-flight.md" not in offer["safe_paths"]
+        excluded_entries = [
+            e for e in offer["excluded"] if e["path"] == "docs/research/in-flight.md"
+        ]
+        assert len(excluded_entries) == 1
+        assert "aid-recent" in excluded_entries[0]["reason"]
+        peer_entries = [
+            p
+            for p in offer["ownership"]["peer"]
+            if p["path"] == "docs/research/in-flight.md"
+        ]
+        assert peer_entries == [
+            {
+                "path": "docs/research/in-flight.md",
+                "owner": "aid-recent",
+                "liveness": "live",
+                "claim_source": "agent",
+            }
+        ]
+
+    def test_a_stale_agent_claim_ages_out_and_stays_in_mine(self, tmp_path):
+        """The anti-scope guard (moved/rewritten for C5, docs/plans/2026-08-
+        27-safe-commit-offer-excludes-a-live-agent.md; previously named
+        ``test_a_dead_agents_orphaned_claim_stays_in_mine`` under C3's now-
+        retired liveness check): an agent dir whose dispatch already ended
+        -- the agent process itself exited without releasing -- still needs
+        its claim swept up by SOMEONE, or the path is orphaned forever (no
+        retention/reaper for claimant dirs -- see ``claim_index``'s own
+        docstring, INDEX PERSISTENCE). ``aid-stale`` here touched the path
+        just past ``liveness._ABANDONMENT_WINDOW_SEC`` ago -- old enough to
+        read as abandoned. Withholding every agent-owned claim regardless of
+        recency would regress this: a finished agent's write would never
+        again be offered to anyone as committable."""
+        repo = _make_repo(tmp_path)
+        core.init("mine", cwd=str(repo))
+        agent = _agent_dir(repo, "aid-stale")
+        (agent / "em-session-id.txt").write_text("mine")
+        from coordinator_core.session import liveness
+
+        stale_ts = (
+            datetime.now(timezone.utc).timestamp()
+            - liveness._ABANDONMENT_WINDOW_SEC
+            - 60
+        )
+        _agent_claim(agent, "docs/research/orphaned.md", ts=stale_ts)
+
+        offer = safe_commit_offer.compute_offer("mine", cwd=str(repo))
+
+        assert "docs/research/orphaned.md" in offer["safe_paths"]
+        assert [
+            e for e in offer["excluded"] if e["path"] == "docs/research/orphaned.md"
+        ] == []
+        assert [
+            p
+            for p in offer["ownership"]["peer"]
+            if p["path"] == "docs/research/orphaned.md"
+        ] == []
+
+    def test_an_agent_claim_with_no_parseable_timestamp_stays_in_mine(
+        self, tmp_path
+    ):
+        """BIAS pin (C5): a legacy claim line with no parseable timestamp is
+        absent from ``edit_ts`` entirely (``_IndexState``'s own contract),
+        and the docstring's deliberate default is to resolve every unknown
+        toward INCLUDING the path in ``safe_paths`` -- not toward treating an
+        unresolvable timestamp as still in-flight. ``timestamp=0.0`` is the
+        documented "unknown time" sentinel (`claim_index.rebuild`'s own
+        AC21 comment) that never enters ``edit_ts``."""
+        repo = _make_repo(tmp_path)
+        core.init("mine", cwd=str(repo))
+        agent = _agent_dir(repo, "aid-unknown-ts")
+        (agent / "em-session-id.txt").write_text("mine")
+        _agent_claim(agent, "docs/research/no-ts.md", ts=0.0)
+
+        offer = safe_commit_offer.compute_offer("mine", cwd=str(repo))
+
+        assert "docs/research/no-ts.md" in offer["safe_paths"]
+        assert [
+            e for e in offer["excluded"] if e["path"] == "docs/research/no-ts.md"
+        ] == []
 
     def test_an_unclaimed_dirty_file_is_not_this_sessions_to_commit(self, tmp_path):
         """A dirty file with no claim ANYWHERE is not this session's, and the
@@ -668,7 +788,7 @@ class TestDirtyFilesUnderBatch:
 
 
 # ---------------------------------------------------------------------------
-# (e) auto_commit_session — the mutating half, no confirmation
+# (e) commit_session_offer — the mutating half, no confirmation
 # ---------------------------------------------------------------------------
 
 
@@ -686,7 +806,7 @@ class TestAutoCommitSession:
         (repo / "a.py").write_text("a")
         scope.touch("mine", "a.py", cwd=str(repo))
 
-        report = safe_commit_offer.auto_commit_session("mine", cwd=str(repo))
+        report = safe_commit_offer.commit_session_offer("mine", cwd=str(repo))
 
         assert len(report["groups"]) == 1
         assert report["groups"][0]["committed"] is True
@@ -775,7 +895,7 @@ class TestAutoCommitSession:
             scope.touch("mine", p, cwd=str(repo))
             paths.append(p)
 
-        report = safe_commit_offer.auto_commit_session(
+        report = safe_commit_offer.commit_session_offer(
             "mine", cwd=str(repo), invoker="unattended"
         )
 
@@ -794,7 +914,7 @@ class TestAutoCommitSession:
     def test_nothing_to_commit_is_a_valid_noop(self, tmp_path):
         repo = _make_repo(tmp_path)
         core.init("mine", cwd=str(repo))
-        report = safe_commit_offer.auto_commit_session("mine", cwd=str(repo))
+        report = safe_commit_offer.commit_session_offer("mine", cwd=str(repo))
         assert report["groups"] == []
         assert report["excluded"] == []
 
@@ -814,7 +934,7 @@ class TestAutoCommitSession:
         scope.touch("mine", "a.py", cwd=str(repo))
         scope.touch("other", "peer.py", cwd=str(repo))
 
-        report = safe_commit_offer.auto_commit_session(
+        report = safe_commit_offer.commit_session_offer(
             "mine",
             cwd=str(repo),
             groups=[{"paths": ["a.py", "peer.py"], "message": "smuggled group"}],
@@ -834,7 +954,7 @@ class TestAutoCommitSession:
         (repo / "peer.py").write_text("p")
         scope.touch("other", "peer.py", cwd=str(repo))
 
-        report = safe_commit_offer.auto_commit_session(
+        report = safe_commit_offer.commit_session_offer(
             "mine",
             cwd=str(repo),
             groups=[{"paths": ["peer.py"], "message": "all-excluded group"}],
@@ -853,7 +973,7 @@ class TestAutoCommitSession:
         (repo / "peer.py").write_text("p")
         scope.touch("other", "peer.py", cwd=str(repo))
 
-        report = safe_commit_offer.auto_commit_session(
+        report = safe_commit_offer.commit_session_offer(
             "mine",
             cwd=str(repo),
             groups=[{"paths": ["peer.py"], "message": "all-excluded group"}],
@@ -880,7 +1000,7 @@ class TestAutoCommitSession:
         scope.touch("mine", "a.py", cwd=str(repo))
         scope.touch("other", "peer.py", cwd=str(repo))
 
-        report = safe_commit_offer.auto_commit_session(
+        report = safe_commit_offer.commit_session_offer(
             "mine",
             cwd=str(repo),
             groups=[{"paths": ["a.py", "peer.py"], "message": "partial group"}],
@@ -906,7 +1026,7 @@ class TestAutoCommitSession:
         (repo / "a.py").write_text("a")
         scope.touch("mine", "a.py", cwd=str(repo))
 
-        report = safe_commit_offer.auto_commit_session("mine", cwd=str(repo))
+        report = safe_commit_offer.commit_session_offer("mine", cwd=str(repo))
         assert report["dropped_groups"] == []
 
     # designed_red: blocked on the `ceremony.scoped_git_commit` op SUSPENSION
@@ -924,7 +1044,7 @@ class TestAutoCommitSession:
         scope.touch("mine", "a.py", cwd=str(repo))
         scope.touch("mine", "b.py", cwd=str(repo))
 
-        report = safe_commit_offer.auto_commit_session(
+        report = safe_commit_offer.commit_session_offer(
             "mine", cwd=str(repo), groups=[{"paths": ["a.py", "b.py"], "message": "one subject"}]
         )
         assert len(report["groups"]) == 1
@@ -940,7 +1060,7 @@ class TestAutoCommitSession:
     @pytest.mark.designed_red
     def test_explicit_group_prose_reaches_the_commit_body(self, tmp_path):
         # Review: code-reviewer (Finding 4) — the explicit-`groups` branch of
-        # auto_commit_session_async previously rebuilt each group without
+        # commit_session_offer_async previously rebuilt each group without
         # carrying `g.get("prose")` through, so caller-supplied body text was
         # silently dropped and only the mechanical `_default_groups` fallback
         # ever produced a non-empty commit body.
@@ -949,7 +1069,7 @@ class TestAutoCommitSession:
         (repo / "a.py").write_text("a")
         scope.touch("mine", "a.py", cwd=str(repo))
 
-        safe_commit_offer.auto_commit_session(
+        safe_commit_offer.commit_session_offer(
             "mine",
             cwd=str(repo),
             groups=[
@@ -968,7 +1088,7 @@ class TestAutoCommitSession:
     def test_nothing_to_commit_noop_has_no_failed_groups(self, tmp_path):
         repo = _make_repo(tmp_path)
         core.init("mine", cwd=str(repo))
-        report = safe_commit_offer.auto_commit_session("mine", cwd=str(repo))
+        report = safe_commit_offer.commit_session_offer("mine", cwd=str(repo))
         assert report["failed_groups"] == []
 
     def test_commit_failure_surfaces_via_failed_groups_not_swallowed(self, tmp_path, monkeypatch):
@@ -977,7 +1097,7 @@ class TestAutoCommitSession:
         scoped_git_commit` op to resolve by name any more (mocked here at
         `safe_commit_offer.run_commit_pipeline` instead of the retired
         `ipc.get_op_handler` seam). A declined/failed `PipelineResult` must
-        surface through `AutoCommitReport.failed_groups`, distinct from a
+        surface through `CommitOfferReport.failed_groups`, distinct from a
         landed commit (next test) -- constraint 2 of this rewiring's own
         brief: a false `committed: True` is worse than the prior dead
         stub."""
@@ -999,7 +1119,7 @@ class TestAutoCommitSession:
             safe_commit_offer, "run_commit_pipeline", fake_run_commit_pipeline
         )
 
-        report = safe_commit_offer.auto_commit_session("mine", cwd=str(repo))
+        report = safe_commit_offer.commit_session_offer("mine", cwd=str(repo))
 
         assert len(report["groups"]) == 1
         assert report["groups"][0]["committed"] is False
@@ -1033,7 +1153,7 @@ class TestAutoCommitSession:
             ),
         )
 
-        report = safe_commit_offer.auto_commit_session("mine", cwd=str(repo))
+        report = safe_commit_offer.commit_session_offer("mine", cwd=str(repo))
 
         assert len(report["groups"]) == 1
         assert report["groups"][0]["committed"] is True
@@ -1072,7 +1192,7 @@ class TestAutoCommitSession:
             ),
         )
 
-        report = safe_commit_offer.auto_commit_session("mine", cwd=str(repo))
+        report = safe_commit_offer.commit_session_offer("mine", cwd=str(repo))
 
         assert report["groups"][0]["reason"] is None
         rendered = safe_commit_offer._render_report(report)
@@ -1734,13 +1854,18 @@ def _make_memo_send_claude_home(tmp_path, receiver_repo):
 
 
 class TestMemoSendDeclaresOutboxWrites:
-    # designed_red: blocked on the `memo.send` op SUSPENSION
-    # (coordinator_core/op_budget_suspension.py, PM ruling 2026-08-21: measured
-    # max 30016ms against a 2000ms bar). NOT the attribution kill -- that was
-    # rebuilt and `_MECHANISM_DISABLED` is gone. This re-greens when the op is
-    # proven under 2s and leaves the roster, and not before; nothing in this
-    # module can lift it.
-    @pytest.mark.designed_red
+    # The `designed_red` marker and its "blocked on the memo.send op
+    # SUSPENSION" rationale are REMOVED (2026-08-27): memo.send is not on the
+    # suspension roster -- `op_budget_suspension.py` does not name it -- so
+    # that explanation was stale and the test was failing for an entirely
+    # different reason it attributed to a mechanism that had moved on.
+    #
+    # The real cause: memo.send's wire contract narrowed to (dry_run, topic).
+    # Every other field is read off the caller's already-staged
+    # `state/memo-outbox/<topic>.md` draft, "never off the wire" (the op's own
+    # refusal text). This test passed to/title/body/kind/summary as params and
+    # was refused before it reached the behaviour it guards. Staging a real
+    # draft is what the op actually asks for.
     def test_sent_ledger_write_lands_in_compute_offer_safe_paths(
         self, tmp_path, monkeypatch
     ):
@@ -1755,19 +1880,24 @@ class TestMemoSendDeclaresOutboxWrites:
         monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
         monkeypatch.delenv("COORDINATOR_SESSION_ID", raising=False)
 
+        outbox = sender / "state" / "memo-outbox"
+        outbox.mkdir(parents=True, exist_ok=True)
+        (outbox / "declare-touch-test.md").write_text(
+            "---\n"
+            "to: example-retrieval-repo-em\n"
+            "from: claude-klabauter-em\n"
+            "title: Test Memo\n"
+            "kind: fyi\n"
+            "summary: Test summary.\n"
+            "---\n\n"
+            "This is a test memo body.\n",
+        )
+
         msg = {
             "jsonrpc": "2.0",
             "id": 1,
             "method": "memo.send",
-            "params": {
-                "dry_run": False,
-                "topic": "declare-touch-test",
-                "to": "example-retrieval-repo-em",
-                "title": "Test Memo",
-                "body": "This is a test memo body.",
-                "kind": "fyi",
-                "summary": "Test summary.",
-            },
+            "params": {"dry_run": False, "topic": "declare-touch-test"},
             "_origin_worktree": str(sender),
         }
         d = asyncio.run(dispatch_message(msg))
@@ -1845,7 +1975,7 @@ class TestGroupsSuppliedPathIgnoresInvoker:
         (repo / "a.py").write_text("a")
         scope.touch("mine", "a.py", cwd=str(repo))
 
-        report = safe_commit_offer.auto_commit_session(
+        report = safe_commit_offer.commit_session_offer(
             "mine",
             str(repo),
             groups=[{"paths": ["a.py"], "message": "hand-authored subject"}],

@@ -824,8 +824,45 @@ def test_op_key_scope_table_covers_all_registered_ops():
 # Spec backlink: pln-coordinator-core-global-multip-9ddcf7 § C3
 # ---------------------------------------------------------------------------
 
+from coordinator_core.warm.client import WARM_DISPATCH_INDETERMINATE
+
+
+
+def test_compute_only_op_timeout_stays_a_flat_internal_error():
+    """The DISCRIMINATOR for F1: only a possibly-MUTATING op's timeout is
+    indeterminate. A COMPUTE_ONLY op keeps the flat INTERNAL_ERROR.
+
+    Re-running a read is free, so there is nothing for its caller to reconcile
+    and no reason to make it. `ping` is classified COMPUTE_ONLY in
+    OP_CLASSIFICATION, so `_op_may_mutate` answers False for it -- unlike the
+    unregistered `test.slow` above, which fail-closes to True. Without this
+    case the F1 change would look correct while quietly reclassifying every
+    timeout in the engine.
+    """
+    import coordinator_core.ipc as _ipc
+
+    async def _async_slow(params, ctx=None, repo_root=None):
+        await asyncio.sleep(60)
+        return {"should_not_reach": True}
+
+    orig_timeout = _ipc.DISPATCH_TIMEOUT_SECS
+    _ipc.DISPATCH_TIMEOUT_SECS = 0.05
+    try:
+        msg = {"jsonrpc": "2.0", "id": 41, "method": "ping", "params": {}}
+        with _RegistryScope({"ping": _async_slow}):
+            d = _run(dispatch_message(msg))
+    finally:
+        _ipc.DISPATCH_TIMEOUT_SECS = orig_timeout
+
+    assert "error" in d, f"stalled ping must error; got {d.get('result')}"
+    assert d["error"]["code"] == INTERNAL_ERROR, (
+        f"a COMPUTE_ONLY op's timeout must stay INTERNAL_ERROR (-32603), not be "
+        f"reclassified as indeterminate; got {d['error']['code']}"
+    )
+    assert "timed out" in d["error"]["message"]
+
 def test_timeout_poison_request():
-    """Async handler that stalls returns INTERNAL_ERROR 'timed out'; concurrent request completes.
+    """Async handler that stalls returns an indeterminate 'timed out'; concurrent request completes.
 
     AC-3 Gap-1: a runaway/hanging async op must not wedge the serve loop for all
     partitions beyond DISPATCH_TIMEOUT_SECS.  asyncio.wait_for cancels the stalled
@@ -836,7 +873,8 @@ def test_timeout_poison_request():
     1. "test.slow" — sleeps for 60s (simulated stall, timeout=0.05s fires first)
     2. "test.fast" — returns immediately
 
-    Asserts that "test.slow" returns INTERNAL_ERROR with "timed out" in the message,
+    Asserts that "test.slow" returns WARM_DISPATCH_INDETERMINATE with "timed out"
+    in the message,
     and "test.fast" returns a valid result, proving the event loop was not wedged.
     """
     import time as _time
@@ -869,13 +907,17 @@ def test_timeout_poison_request():
     finally:
         _ipc.DISPATCH_TIMEOUT_SECS = orig_timeout
 
-    # Slow handler must have timed out → INTERNAL_ERROR
+    # Slow handler must have timed out. `test.slow` is not in OP_CLASSIFICATION,
+    # and `_op_may_mutate` fail-closes an unknown op to True, so the timeout is
+    # reported as INDETERMINATE rather than as a flat failure (F1, 2026-08-27 --
+    # see `ipc._timeout_error_envelope`). The op may have run to completion in its
+    # abandoned thread; saying "failed" here is what got a landed commit retried.
     assert "error" in slow_result, (
         f"Slow (stalled) handler must return an error; got result: {slow_result.get('result')}"
     )
-    assert slow_result["error"]["code"] == INTERNAL_ERROR, (
-        f"Expected INTERNAL_ERROR (-32603) for timed-out handler; "
-        f"got code {slow_result['error']['code']}"
+    assert slow_result["error"]["code"] == WARM_DISPATCH_INDETERMINATE, (
+        f"Expected WARM_DISPATCH_INDETERMINATE (-32004) for a timed-out "
+        f"possibly-mutating handler; got code {slow_result['error']['code']}"
     )
     assert "timed out" in slow_result["error"]["message"], (
         f"Timeout error message must contain 'timed out'; "
@@ -1074,7 +1116,7 @@ def test_per_op_override_enforced_in_dispatch():
     assert "error" in d, (
         f"Op with tiny per-op override must time out; got result: {d.get('result')}"
     )
-    assert d["error"]["code"] == INTERNAL_ERROR
+    assert d["error"]["code"] == WARM_DISPATCH_INDETERMINATE
     assert "timed out" in d["error"]["message"]
     assert "0.05" in d["error"]["message"], (
         f"Timeout error message must report the per-op override value (0.05), "

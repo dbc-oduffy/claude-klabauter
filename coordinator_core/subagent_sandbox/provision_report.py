@@ -201,6 +201,144 @@ def _frontmatter(agent_type: str, spawned_at: str, lead_session_id: Optional[str
     )
 
 
+#: AC1 (docs/plans/2026-08-27-the-review-gate-measures-the-whole-session.md):
+#: the review receipt is stamped HERE, at dispatch, never resolved from
+#: `directives_review.py` or any close-time reader -- see this module's own
+#: docstring's "Additive second seam" discussion and C4's join at close for
+#: why dispatch-time is the load-bearing choice (a blank-vs-filled
+#: distinction the close-time join depends on). Reuses `review_trail_write`'s
+#: own closed `_DELEGATE_REVIEWERS` vocabulary BY NAME, never a re-derived
+#: second classifier (chunk brief, state/dispatch-briefs/2026-08-27-the-
+#: review-gate-measures-the-whole-session/C2.md) -- the same vocabulary
+#: `hooks/subagent_review_mark.py::_is_reviewer` already reuses this way, so
+#: a third independent copy of "what counts as a delegate reviewer" never
+#: gets a chance to drift from the other two.
+def _bare_agent_type(value: str) -> str:
+    """Strip a ``coordinator:``/``agent:``-shaped namespace prefix -- mirrors
+    ``review_trail_write.normalize_reviewer``'s own stripping convention
+    (the reviewer vocabulary is spelled bare, never namespaced), and is the
+    exact same stripping ``hooks/subagent_review_mark.py::_bare_type``
+    performs for the identical purpose on the SubagentStop side of this
+    receipt's lifecycle."""
+    _prefix, sep, bare = value.rpartition(":")
+    return bare if sep else value
+
+
+def _is_delegate_reviewer(agent_type: str, subagent_type: str) -> bool:
+    """True iff either resolved label's bare form is a member of the closed
+    delegate-reviewer vocabulary -- checked against BOTH labels, mirroring
+    ``_provision``'s own eligibility test just above (``agent_type in
+    policy.report_sidecar or subagent_type in policy.report_sidecar``), since
+    which of the two carries the reviewer-shaped value is not fixed across
+    callers.
+
+    Reads the vocabulary from ``ops.reviewer_vocabulary``, a stdlib-only leaf,
+    NOT from ``ops.review_trail_write`` which re-exports it (C9). Both spell the
+    same one set, so this is still reuse-by-name and not a second classifier --
+    but the import cost differs by two orders of magnitude, and this function is
+    called on every ``_provision``, which is a PreToolUse-Agent hook and
+    therefore cold on every agent dispatch fleet-wide. Measured: reaching it via
+    ``review_trail_write`` costs 34.4ms marginal here; via the leaf, 0.21ms.
+    ``review_trail_write`` is also the surface C5 gravestones, so a hot hook
+    must not hard-depend on it.
+
+    Local import retained (not merged into the module header): it avoids a
+    module-init-order cycle with ``coordinator_core.ops``, which imports modules
+    that in turn reach back into ``coordinator_core.hooks``/
+    ``coordinator_core.subagent_sandbox`` -- the same reason
+    ``subagent_review_mark.py::_is_reviewer`` gives for its own local import."""
+    from coordinator_core.reviewer_vocabulary import DELEGATE_REVIEWERS as _DELEGATE_REVIEWERS
+
+    return bool(
+        (agent_type and _bare_agent_type(agent_type) in _DELEGATE_REVIEWERS)
+        or (subagent_type and _bare_agent_type(subagent_type) in _DELEGATE_REVIEWERS)
+    )
+
+
+#: AC1's four-field receipt block, spliced into the sidecar's OWN
+#: frontmatter (never a sibling file, never a close-time write) -- dispatch
+#: session id, agent id, agent type, and a UTC timestamp. C4 (constraint 8,
+#: AC2b) joins this against the covering baton's claim window with a plain
+#: directory listing + frontmatter read; nothing here resolves a baton or
+#: touches `commit_ledger.resolve_owner`/`baton_assemble` (AC12b legs i/ii).
+def _review_receipt_block(session_id: str, agent_id: str, agent_type: str, stamped_at: str) -> str:
+    return (
+        "review_receipt:\n"
+        f"  session_id: {session_id}\n"
+        f"  agent_id: {agent_id}\n"
+        f"  agent_type: {agent_type}\n"
+        f"  stamped_at: {stamped_at}\n"
+    )
+
+
+def _splice_review_receipt(doc_text: str, session_id: str, agent_id: str, agent_type: str, stamped_at: str) -> str:
+    """Insert the receipt block immediately before the frontmatter's closing
+    ``---\\n\\n`` delimiter -- the SAME splice point
+    ``_append_lens_frontmatter_keys`` uses for the plan-derivable lens keys,
+    but applied to the already-assembled ``doc_text`` (frontmatter + body)
+    rather than to a bare frontmatter string, since every ``_build_*_doc_text``
+    builder returns the two concatenated with no clean seam to split on.
+    ``str.index`` (not ``endswith``) finds the FIRST occurrence, which is
+    always the frontmatter's own closing fence -- no template's frontmatter
+    values or body content can contain the literal three-dash-blank-line
+    sequence ahead of it. Does not mutate ``_frontmatter`` itself (same pin
+    ``_append_lens_frontmatter_keys`` already documents)."""
+    marker = "---\n\n"
+    idx = doc_text.index(marker)
+    return doc_text[:idx] + _review_receipt_block(session_id, agent_id, agent_type, stamped_at) + doc_text[idx:]
+
+
+#: AC2 (docs/plans/2026-08-27-the-review-gate-measures-the-whole-session.md,
+#: C3): the bare (namespace-stripped) ``agent_type``/``subagent_type`` this
+#: repo's routing table registers the review-integrator persona under
+#: (`coordinator:review-integrator`) -- see this module's docstring cross-
+#: refs into `coordinator_core.ops.append_integrator_dispositions` for the
+#: sibling doctrine. Deliberately its own single-member check, not folded
+#: into `_DELEGATE_REVIEWERS`: the integrator is not a delegate REVIEWER
+#: (it applies findings, it does not render a verdict) and C3's whole point
+#: is a receipt DISTINGUISHABLE from AC1's reviewer receipt, which a shared
+#: vocabulary membership test would blur.
+_INTEGRATOR_AGENT_TYPE = "review-integrator"
+
+
+def _is_review_integrator(agent_type: str, subagent_type: str) -> bool:
+    """True iff either resolved label's bare form is the review-integrator
+    persona -- checked against BOTH labels, mirroring
+    ``_is_delegate_reviewer``'s own both-labels check just above, since
+    which of the two carries the persona value is not fixed across callers."""
+    return bool(
+        (agent_type and _bare_agent_type(agent_type) == _INTEGRATOR_AGENT_TYPE)
+        or (subagent_type and _bare_agent_type(subagent_type) == _INTEGRATOR_AGENT_TYPE)
+    )
+
+
+#: AC2's own four-field receipt block, spliced into the integrator's OWN
+#: sidecar frontmatter under a DIFFERENT key (``integrator_receipt:``) than
+#: AC1's ``review_receipt:`` -- same four fields (session id, agent id,
+#: agent type, UTC timestamp), same splice point, distinguishable key so
+#: "review ran" (AC1) and "findings were applied" (AC2) stay separately
+#: legible on the same sidecar shape family rather than colliding on one
+#: key that could only ever mean one of the two.
+def _integrator_receipt_block(session_id: str, agent_id: str, agent_type: str, stamped_at: str) -> str:
+    return (
+        "integrator_receipt:\n"
+        f"  session_id: {session_id}\n"
+        f"  agent_id: {agent_id}\n"
+        f"  agent_type: {agent_type}\n"
+        f"  stamped_at: {stamped_at}\n"
+    )
+
+
+def _splice_integrator_receipt(doc_text: str, session_id: str, agent_id: str, agent_type: str, stamped_at: str) -> str:
+    """Integrator counterpart to ``_splice_review_receipt`` -- same splice
+    point (the frontmatter's closing ``---\\n\\n`` fence, first occurrence),
+    same never-mutate-``_frontmatter`` discipline, distinguishable block
+    (``integrator_receipt:`` rather than ``review_receipt:``)."""
+    marker = "---\n\n"
+    idx = doc_text.index(marker)
+    return doc_text[:idx] + _integrator_receipt_block(session_id, agent_id, agent_type, stamped_at) + doc_text[idx:]
+
+
 def _exit_interview_section() -> str:
     """The universal closing section every template inherits (commit
     c50cf8ac) -- do not vary its questions or position by type."""
@@ -915,6 +1053,22 @@ def _provision(payload: Dict[str, Any], policy_path: Optional[str], cwd: Optiona
     # SPAWNED agent's own id, session_id/lead_session_id is who dispatched
     # it. Never conflate the two when reading this doc downstream.
     doc_text = _build_doc_text(agent_type, spawned_at, doc_type, lead_session_id=session_id)
+
+    # AC1: stamp the review receipt on an eligible reviewer's OWN sidecar,
+    # at dispatch, before the very first write -- see _splice_review_receipt
+    # and _is_delegate_reviewer's docstrings above. Never applied to the
+    # plan-derivable branch above (its four emitters are not delegate
+    # reviewers) and never a second write -- one compose, one write, exactly
+    # as AC12b's dispatch-leg budget measures.
+    # AC2: the review-integrator counterpart, same seam, distinguishable
+    # block/key (see _splice_integrator_receipt's docstring) -- mutually
+    # exclusive with the branch above by construction (_INTEGRATOR_AGENT_TYPE
+    # is not a member of _DELEGATE_REVIEWERS), so an elif costs nothing over
+    # a second independent `if` while making that exclusivity explicit.
+    if _is_delegate_reviewer(agent_type, subagent_type):
+        doc_text = _splice_review_receipt(doc_text, str(session_id), agent_id or "", agent_type or "", spawned_at)
+    elif _is_review_integrator(agent_type, subagent_type):
+        doc_text = _splice_integrator_receipt(doc_text, str(session_id), agent_id or "", agent_type or "", spawned_at)
 
     if sanitized_provision_key is not None:
         # SUBSUME: deterministic + idempotent path mode (provision_key present).

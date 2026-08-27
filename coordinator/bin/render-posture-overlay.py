@@ -131,7 +131,7 @@ def _coordinator_root() -> str:
     return str(data_root("templates").parent)
 
 
-def main() -> None:
+def main(argv: "list[str] | None" = None) -> int:
     try:
         op_main = _import_main()
     except RuntimeError as exc:
@@ -139,14 +139,14 @@ def main() -> None:
             f"render-posture-overlay.py: CLAUDE_KLABAUTER_ROOT resolution failed: {exc}",
             file=sys.stderr,
         )
-        sys.exit(2)
+        return 2
     except ImportError as exc:
         print(
             f"render-posture-overlay.py: coordinator_core.ops.render_posture_overlay "
             f"not importable: {exc}",
             file=sys.stderr,
         )
-        sys.exit(2)
+        return 2
 
     try:
         recording_declared_writes = _import_recorder()
@@ -155,12 +155,12 @@ def main() -> None:
             f"render-posture-overlay.py: coordinator_core.cli_entry not importable: {exc}",
             file=sys.stderr,
         )
-        sys.exit(2)
+        return 2
 
     with recording_declared_writes():
-        code = op_main(sys.argv[1:], coordinator_root=_coordinator_root())
-    sys.exit(code)
+        code = op_main((sys.argv[1:] if argv is None else argv), coordinator_root=_coordinator_root())
+    return code
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

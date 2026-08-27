@@ -60,21 +60,21 @@ def _import_main():
     return _op_main
 
 
-def main() -> None:
+def main(argv: "list[str] | None" = None) -> int:
     try:
         op_main = _import_main()
     except RuntimeError as exc:
         print(f"coordinator-cockpit-emit-schema.py: CLAUDE_KLABAUTER_ROOT resolution failed: {exc}", file=sys.stderr)
-        sys.exit(1)
+        return 1
     except ImportError as exc:
         print(
             f"coordinator-cockpit-emit-schema.py: coordinator_core.contract."
             f"cockpit_schema.emit_schema not importable: {exc}",
             file=sys.stderr,
         )
-        sys.exit(1)
-    op_main(sys.argv[1:])
+        return 1
+    op_main((sys.argv[1:] if argv is None else argv))
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

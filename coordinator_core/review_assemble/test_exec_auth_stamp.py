@@ -852,3 +852,216 @@ def test_direct_in_process_mint_call_never_flips_status(tmp_path: Path) -> None:
     written = plan_path.read_text(encoding="utf-8")
     assert "status: draft" in written
     assert "status: approved" not in written
+
+
+def test_cli_mark_reviewed_leaves_plan_at_reviewed_without_authorizing(tmp_path: Path) -> None:
+    """The `mark-reviewed` verb is the review-integration rung producer: it
+    flips `draft -> reviewed` and writes NO `execution_authorized_*` field,
+    so a reviewed-and-integrated plan awaiting the PM is observably at
+    `reviewed` rather than indistinguishable from an unread `draft` (DoE
+    memo 2026-08-27-doe-claude-em-stamp-reviewed-bound-to-approval-
+    ceremony)."""
+    _init_repo(tmp_path)
+    plan_dir = tmp_path / "docs" / "plans"
+    plan_dir.mkdir(parents=True)
+    plan_path = plan_dir / "2026-08-27-cli-mark-reviewed.md"
+    plan_path.write_text(_PLAN_TEXT, encoding="utf-8")
+    _git(tmp_path, "add", str(plan_path.relative_to(tmp_path)))
+    _git(tmp_path, "commit", "-m", "add test plan")
+
+    import os
+
+    cwd = os.getcwd()
+    os.chdir(tmp_path)
+    try:
+        exit_code = main(["mark-reviewed", str(plan_path)])
+    finally:
+        os.chdir(cwd)
+
+    assert exit_code == EXIT_OK
+    written = plan_path.read_text(encoding="utf-8")
+    assert "status: reviewed" in written
+    assert "execution_authorized_by" not in written
+    assert "execution_authorized_sha" not in written
+
+    log = _git(tmp_path, "log", "--oneline", "-n", "10")
+    assert '"draft" -> reviewed' in log.stdout
+
+
+def test_cli_stamp_after_mark_reviewed_still_reaches_approved(tmp_path: Path) -> None:
+    """The `stamp` verb keeps its own `stamp-reviewed` fire, which is an
+    at-or-past rc-0 no-op once `mark-reviewed` has already run: the PM's
+    execution approval still lands `approved` and the four exec-auth
+    fields."""
+    _init_repo(tmp_path)
+    plan_dir = tmp_path / "docs" / "plans"
+    plan_dir.mkdir(parents=True)
+    plan_path = plan_dir / "2026-08-27-cli-mark-reviewed-then-stamp.md"
+    plan_path.write_text(_PLAN_TEXT, encoding="utf-8")
+    _git(tmp_path, "add", str(plan_path.relative_to(tmp_path)))
+    _git(tmp_path, "commit", "-m", "add test plan")
+
+    import os
+
+    cwd = os.getcwd()
+    os.chdir(tmp_path)
+    try:
+        assert main(["mark-reviewed", str(plan_path)]) == EXIT_OK
+        exit_code = main(["stamp", str(plan_path), "--by", "PM", "--note", "make it so"])
+    finally:
+        os.chdir(cwd)
+
+    assert exit_code == EXIT_OK
+    written = plan_path.read_text(encoding="utf-8")
+    assert "status: approved" in written
+    assert "execution_authorized_by: PM" in written
+
+
+def test_cli_mark_reviewed_is_convergent(tmp_path: Path) -> None:
+    """A second `mark-reviewed` on an already-reviewed plan is an rc-0
+    no-op (`_stamp_rung`'s at-or-past rule), not an error and not a second
+    commit."""
+    _init_repo(tmp_path)
+    plan_dir = tmp_path / "docs" / "plans"
+    plan_dir.mkdir(parents=True)
+    plan_path = plan_dir / "2026-08-27-cli-mark-reviewed-convergent.md"
+    plan_path.write_text(_PLAN_TEXT, encoding="utf-8")
+    _git(tmp_path, "add", str(plan_path.relative_to(tmp_path)))
+    _git(tmp_path, "commit", "-m", "add test plan")
+
+    import os
+
+    cwd = os.getcwd()
+    os.chdir(tmp_path)
+    try:
+        assert main(["mark-reviewed", str(plan_path)]) == EXIT_OK
+        first_log = _git(tmp_path, "log", "--oneline").stdout
+        assert main(["mark-reviewed", str(plan_path)]) == EXIT_OK
+        second_log = _git(tmp_path, "log", "--oneline").stdout
+    finally:
+        os.chdir(cwd)
+
+    assert first_log == second_log
+    assert "status: reviewed" in plan_path.read_text(encoding="utf-8")
+
+
+def test_cli_mark_reviewed_reports_a_failed_rung_in_its_exit_code(tmp_path: Path) -> None:
+    """Unlike the `stamp` verb's fail-open side-effect fire, `mark-reviewed`
+    exists ONLY to advance the rung -- so a rung that does not advance is a
+    non-zero exit, never a stderr line under an rc-0."""
+    _init_repo(tmp_path)
+
+    import os
+
+    cwd = os.getcwd()
+    os.chdir(tmp_path)
+    try:
+        exit_code = main(["mark-reviewed", "docs/plans/does-not-exist.md"])
+    finally:
+        os.chdir(cwd)
+
+    # Tightened from `!= EXIT_OK`: that also passes for EXIT_USAGE (2), which
+    # would mask a regression misclassifying a runtime refusal as an argv
+    # error -- Review: coordinator:code-reviewer session 403ab86c Finding 4.
+    assert exit_code == EXIT_BUSINESS_FAIL
+
+
+def test_cli_mark_reviewed_requires_a_plan_path() -> None:
+    """Usage error, not a traceback, when the path argument is missing."""
+    assert main(["mark-reviewed"]) == EXIT_USAGE
+
+
+def test_cli_mark_reviewed_refuses_a_frozen_status(tmp_path: Path) -> None:
+    """`mark-reviewed` is the first CLI-reachable caller of `stamp-reviewed`
+    to actually surface `_stamp_rung`'s frozen-status refusal (AC2) --
+    previously masked by the `stamp` verb's own at-or-past no-op almost
+    always applying. A `superseded` source must refuse non-zero and leave
+    the plan untouched, not silently land `reviewed` over a terminal status.
+    Review: coordinator:code-reviewer session 403ab86c Finding 3."""
+    _init_repo(tmp_path)
+    plan_dir = tmp_path / "docs" / "plans"
+    plan_dir.mkdir(parents=True)
+    plan_path = plan_dir / "2026-08-27-cli-mark-reviewed-frozen.md"
+    plan_path.write_text(_PLAN_TEXT.replace("status: draft", "status: superseded"), encoding="utf-8")
+    _git(tmp_path, "add", str(plan_path.relative_to(tmp_path)))
+    _git(tmp_path, "commit", "-m", "add test plan")
+
+    import os
+
+    cwd = os.getcwd()
+    os.chdir(tmp_path)
+    try:
+        exit_code = main(["mark-reviewed", str(plan_path)])
+    finally:
+        os.chdir(cwd)
+
+    assert exit_code == EXIT_BUSINESS_FAIL
+    written = plan_path.read_text(encoding="utf-8")
+    assert "status: superseded" in written
+    assert "status: reviewed" not in written
+
+
+def test_cli_mark_reviewed_refuses_an_unexpected_status(tmp_path: Path) -> None:
+    """AC5's other refusal branch: a status outside both `_FROZEN_STATUSES`
+    and `_FLIPPABLE_STATUSES` (an unparseable/typo'd value) must also abort
+    non-zero rather than being silently coerced to `reviewed`.
+    Review: coordinator:code-reviewer session 403ab86c Finding 3."""
+    _init_repo(tmp_path)
+    plan_dir = tmp_path / "docs" / "plans"
+    plan_dir.mkdir(parents=True)
+    plan_path = plan_dir / "2026-08-27-cli-mark-reviewed-unexpected.md"
+    plan_path.write_text(_PLAN_TEXT.replace("status: draft", "status: bogus"), encoding="utf-8")
+    _git(tmp_path, "add", str(plan_path.relative_to(tmp_path)))
+    _git(tmp_path, "commit", "-m", "add test plan")
+
+    import os
+
+    cwd = os.getcwd()
+    os.chdir(tmp_path)
+    try:
+        exit_code = main(["mark-reviewed", str(plan_path)])
+    finally:
+        os.chdir(cwd)
+
+    assert exit_code == EXIT_BUSINESS_FAIL
+    written = plan_path.read_text(encoding="utf-8")
+    assert "status: bogus" in written
+    assert "status: reviewed" not in written
+
+
+def test_cli_authorize_invocation_never_passes_through_reviewed(tmp_path: Path) -> None:
+    """`authorize-invocation` calls `_fire_stamp_approved` only, never
+    `_fire_stamp_reviewed` -- a never-reviewed plan reaching the
+    `/execute-plan` path must land `approved` directly and must NEVER be
+    observed at `reviewed` on the way, since that is the invariant that
+    stops a never-reviewed plan being stamped `reviewed` on this path.
+    Structural today (no shared call site with the `stamp` verb's two-fire
+    sequence); this test is what would fail if a future edit copy-pasted
+    that sequence in. Review: coordinator:code-reviewer session 403ab86c
+    Finding 5."""
+    _init_repo(tmp_path)
+    plan_dir = tmp_path / "docs" / "plans"
+    plan_dir.mkdir(parents=True)
+    plan_path = plan_dir / "2026-08-27-cli-authorize-invocation-never-reviewed.md"
+    plan_path.write_text(_PLAN_TEXT, encoding="utf-8")
+    _git(tmp_path, "add", str(plan_path.relative_to(tmp_path)))
+    _git(tmp_path, "commit", "-m", "add test plan")
+
+    import os
+
+    cwd = os.getcwd()
+    os.chdir(tmp_path)
+    try:
+        exit_code = main(
+            ["authorize-invocation", str(plan_path), "--typed-command", "/execute-plan"]
+        )
+    finally:
+        os.chdir(cwd)
+
+    assert exit_code == EXIT_OK
+    written = plan_path.read_text(encoding="utf-8")
+    assert "status: approved" in written
+
+    log = _git(tmp_path, "log", "--oneline", "-n", "10")
+    assert "-> reviewed" not in log.stdout
+    assert '"draft" -> approved' in log.stdout

@@ -70,7 +70,6 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "workflow.fire":                         "common_dir",
     "workflow.fire_status":                  "common_dir",
     # Working-tree, keyed on git_common_dir (shared across linked worktrees)
-    "handoff.has_live_children":             "common_dir",
     # Same class as handoff.has_live_children above — reads from the main-
     # worktree-rooted state/handoffs + archive/handoffs subtrees.
     "handoff.blocked_by_dependents":         "common_dir",
@@ -234,7 +233,6 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # Spec: docs/plans/2026-07-12-claude-klabauter-cartography-substrate-strand-a.md § C2/C3/C4.
     "cartography.tree":                      "none",
     "cartography.file_index":                "none",
-    "cartography.churn":                     "none",
     "cartography.symbols":                   "none",
     "cartography.edges":                     "none",
     # cartography.op_edges -- "none": same cartography.* target-resolution
@@ -326,7 +324,6 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # handlers derive worktree via main_worktree_root(common_dir), never repo_root directly.
     # DR-211 D4 async mandate + plan Key Decision 5.
     "fleet.archive_completed_handoffs":      "common_dir",
-    "fleet.prune_closed_bugs":               "common_dir",
     "fleet.aggregate_capability_index":      "common_dir",
     "fleet.reap_unintegrated_findings":      "common_dir",
     "fleet.reap_integrated_findings":        "common_dir",
@@ -411,20 +408,6 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # derives worktree via main_worktree_root(common_dir), same as handoff.stamp/ship
     # and the fleet.archive_shipped_handoffs act path it delegates to.
     "handoff.ship_and_archive":              "common_dir",
-    # handoff.archive_transition — the 4-mode (chain/stamp_shipped/stamp_only/
-    # supersede) archive-ceremony op;
-    # derives worktree via main_worktree_root(common_dir), same as handoff.stamp/
-    # handoff.transition/handoff.ship_and_archive. Spec: cross-repo DoE 7-bug
-    # route item 7. Position A (PM-ratified 2026-07-15): no branch-tip fallback,
-    # no Session-Id correction walk — item-7 eliminated at source, not patched.
-    "handoff.archive_transition":            "common_dir",
-    # handoff.reconcile_close_terminal — composed close (DR-084 human/session-only
-    # terminal) + archive (handoff.archive_transition mode="chain") for the
-    # "reconcile concluded terminal, no successor" shape; derives worktree via
-    # main_worktree_root(common_dir), same class as handoff.ship_and_archive/
-    # handoff.archive_transition. Spec: cross-repo/inbox/2026-08-04-market-
-    # intelligence-em-baton-terminal-state-not-cleared-programmatically.md.
-    "handoff.reconcile_close_terminal":      "common_dir",
     # handoff.backfill_claim_stamp — reconstructs a missing claim stamp
     # (claimed_at/claimed_by) from caller-supplied, git-verified evidence.
     # Derives worktree via main_worktree_root(common_dir), same class as
@@ -438,20 +421,11 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "handoff.repoint_origin":                "common_dir",
     "handoff.close_origin_stub":             "common_dir",
     "handoff.normalize":                     "common_dir",
-    # handoff.reconcile_open — keyed on git_common_dir: enumerates+decides over
-    # main-worktree-rooted state/handoffs/*.md, then delegates per-handoff mutation to
-    # handoff.ship_and_archive / handoff.transition gate-cascade-clear (both above,
-    # same "common_dir" scope). Orchestrating op, not a batch-mutation carve-out — see
-    # coordinator_core/ops/handoff_reconcile.py module docstring for the DR-212
-    # compliance argument. Spec:
-    # docs/plans/2026-07-13-claude-klabauter-auto-reconcile-open-handoffs.md § C4
-    "handoff.reconcile_open":                "common_dir",
     # initiative.serve_set + roadmap.serve — keyed on git_common_dir: both read from
     # main-worktree-rooted paths (state/initiatives/, state/handoffs/, archive/handoffs/);
     # handlers derive the worktree root via main_worktree_root(common_dir), mirroring
     # handoff_children.py. Spec: docs/plans/2026-07-05-claude-klabauter-served-initiative-roadmap-read-model.md § C2/C5
     "initiative.serve_set":                  "common_dir",
-    "roadmap.serve":                         "common_dir",
     # roadmap.link_stubs — keyed on git_common_dir: writes into main-worktree-
     # rooted state/handoffs/*.md (two files, the reciprocal blocked_by/blocks
     # edge), same key-scope class as handoff.transition/handoff.stamp above —
@@ -635,7 +609,6 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # main_worktree_root(common_dir) and writes the same state/week-changelog/{date}.md noun.
     "changelog.upsert_reviewed":             "common_dir",
     "plan.append_session":                   "common_dir",
-    "review_trail.write":                    "common_dir",
     # Backfill: records.query (strang-11 C1a COMPUTE_ONLY read op) was registered without an
     # _OP_KEY_SCOPE entry by a concurrent session, leaving the key-scope coverage gate RED on HEAD.
     # Reads main-worktree-rooted project records → common_dir (matches deliverable.rollup precedent).
@@ -745,17 +718,6 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # wrong worktree. Never writes.
     # Spec: docs/plans/2026-07-23-claude-klabauter-driven-ceremony-redesign.md § C17
     "ceremony.update_docs_scan":               "common_dir",
-    # deliverable.cascade_terminal / cascade_retract / cascade_backstop_sweep —
-    # keyed on git_common_dir: handlers read/write main-worktree-rooted
-    # state/handoffs/ + docs/plans/, same scope class as handoff.has_live_children.
-    # Both documented triggers (plan_status_transition._run_cascade,
-    # post_commit_tail._run_deliverable_cascade) call the handler function
-    # directly with an explicit repo_root=, bypassing dispatch — but any call
-    # routed through the registered-op JSON-RPC surface without this entry
-    # resolves repo_root=None and the handler raises rather than silently
-    # deriving against the wrong worktree.
-    # Review: coordinator:code-reviewer — op-registration quad completeness gap
-    "deliverable.cascade_terminal":            "common_dir",
     "deliverable.cascade_retract":              "common_dir",
     "deliverable.cascade_backstop_sweep":       "common_dir",
     # deliverable.fork_detect — keyed on git_common_dir for the same reason as the
@@ -866,13 +828,14 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # <common_dir>/coordinator-sessions/ — so it takes the same "common_dir"
     # scope. Mutates nothing.
     "session.audit_unreapable":               "common_dir",
-    # session.boot_sweep — rebuilt boot-time archival backstop (C5, docs/plans/
-    # 2026-08-22-the-boot-backstop-asks-git-nothing.md), module coordinator_core/
-    # ops/session/boot_backstop.py — op id preserved, module renamed from
-    # boot_sweep.py. Scope is unchanged: it reads/writes state/handoffs/ and
-    # archive/handoffs/ paths derived from the main worktree root and issues one
-    # scoped git add -A + git commit per run.
-    "session.boot_sweep":                    "common_dir",
+    # session.boot_sweep — GRAVESTONED 2026-08-27, K-059. No scope row, because
+    # there is no module to scope: the rebuild missed too (AC3 max 218.8ms against
+    # its own 200ms bar) and the requirement was retired by measurement, not by
+    # argument — 198 terminal handoffs archived in 7 days through
+    # fleet.archive_terminal_handoffs and the per-artifact lifecycle ops, with the
+    # backstop dead throughout. The name survives only in
+    # op_budget_suspension.SUSPENDED_OPS, which is the refusal door and needs no
+    # module behind it.
     # session.reap_claims_for_repos — fleet-generic per-repo claim-reap primitive: takes an
     # explicit target_roots[] param and reaps each, so it derives NO per-request repo key from
     # the caller's own tree → scope "none" (claude-klabauter's target-resolution convention: fleet-generic
@@ -1028,8 +991,13 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # corpus each of these sweeps classifies, so a per-worktree key would let two
     # worktrees sweep the same rows concurrently.
     "fleet.archive_actioned_memos":          "common_dir",
-    "fleet.archive_completed_plans":         "common_dir",
-    "session.sweep_consumed_handoffs":       "common_dir",
+    # fleet.archive_sweep_status — the receipt READER for the three sweeps above.
+    # common_dir, not "none": it reads the append-only receipt under the CALLER's own
+    # coordinator-sessions/ tree, so it must resolve main_worktree_root(common_dir) or
+    # it reports on claude-klabauter's clone rather than the caller's. Not "show_top": the
+    # receipt its writers append to is one per repo, shared across linked worktrees,
+    # so a per-worktree key would read a corpus no sweep ever writes.
+    "fleet.archive_sweep_status":            "common_dir",
     "fleet.migrate_handoff_vocabulary":       "common_dir",
     # fleet.archive_terminal_sizings — common_dir: git-mv's terminal
     # sizing entries into archive/sizings/YYYY-MM/ under the caller's own
@@ -1314,10 +1282,6 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # same repo; a common_dir key would answer for the wrong worktree's
     # uncommitted diff.
     "bug_sweep.verify_fix_files_changed":       "show_top",
-    # ceremony.commit — common_dir: stages and commits within the CALLER's own
-    # working tree/index via run_commit_pipeline; must resolve
-    # main_worktree_root(common_dir), matching commit.exec_bit_change below.
-    "ceremony.commit":                          "common_dir",
     # commit.exec_bit_change — common_dir: stages and commits within the CALLER's
     # own working tree/index; must resolve main_worktree_root(common_dir), matching
     # commit.anchors' precedent.
@@ -1485,14 +1449,6 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # accepted for handler-signature parity but IGNORED". Same "none" class as
     # plugin_health.drift/plugin_health.scan.
     "plugin_health.forwarder_drift":            "none",
-    # write_surface.emit_manifest — "none": the manifest describes CLAUDE-KLABAUTER'S OWN
-    # source tree (the package this handler ships inside), never a caller's repo,
-    # so there is no per-caller state to key on. `_repo_root_fallback` walks up
-    # from `__file__` precisely because the answer does not depend on who asked.
-    # Listed explicitly rather than left to the "none" default, per this table's
-    # own header: "All production ops are listed explicitly; a missing entry is an
-    # oversight, not a silent promotion."
-    "write_surface.emit_manifest":              "none",
     # diagnostics.* — "none", and here that value is exact rather than merely
     # closest-fitting: these three probes read no state at all (not a path, not an
     # env var, not a param), so there is genuinely no per-request repo key to
@@ -1557,7 +1513,6 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # `state/` tree `common_dir` ops share). "none" would drop the resolved
     # root and silently fall back to each function's own `resolve_repo_root()`
     # (a real git-command probe against ambient cwd) on every call.
-    "merge_assemble.brief":                      "show_top",
     "merge_assemble.apply":                      "show_top",
 }
 

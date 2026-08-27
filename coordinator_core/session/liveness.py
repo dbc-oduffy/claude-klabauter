@@ -389,22 +389,52 @@ def _dir_recency_fallback_epoch(sdir: str) -> int:
     (DoE 642195ba, follow-up 88929bea) -- see the call site's comment for the
     wrongful-takeover rationale this closes.
 
-    Returns the newest mtime among ``sdir``'s top-level REGULAR files (reusing
-    the already-ported ``core.mtime_epoch``, never a new stat helper), or
-    ``sdir``'s own directory mtime if it contains no regular files at all
+    Returns the newest mtime among ``sdir``'s top-level NON-EMPTY regular
+    files (reusing the already-ported ``core.mtime_epoch``, never a new stat
+    helper), or ``sdir``'s own directory mtime if it contains no such file
     (e.g. a session dir created but not yet populated). Returns 0 only if
     even the directory stat fails (TOCTOU: ``sdir`` removed between the
     caller's ``is_dir()`` check and this call) -- callers already treat 0 as
     "no recency signal" via the existing ``iso_to_epoch`` contract.
+
+    ZERO-BYTE FILES ARE SKIPPED, and that is the whole point rather than an
+    optimization: a file that exists but holds nothing is not evidence a
+    session did anything. This is the same ``exists()``-vs-has-content
+    predicate error ``touch_record.record_carries_content`` was minted to fix
+    on 2026-08-27 in ``legacy_touch_corpus_drain_check`` and
+    ``legacy_touch_corpus_migrate``; this was the third consumer, unknown at
+    the time. Measured here 2026-08-27: eight session dirs whose newest real
+    file dated from 2026-07-15/07-21 all read LIVE, on nothing but a
+    zero-byte ``touch-record.jsonl`` (residue of the pre-fix migration, which
+    created its sink before writing and left it empty when every entry
+    classified ``dropped``) whose mtime a boot-time sweep kept renewing -- so
+    they could never age out. A phantom-live session is not inert: it holds
+    claim-exclusion standing in ``compute_scope`` Step 3 and the reaper will
+    not reclaim its dir.
+
+    A size check, not a content read: ``st_size == 0`` is already in the
+    ``scandir`` stat and costs nothing, whereas opening each file to look for
+    a non-blank line would put a read on a hot liveness path. The two answers
+    differ only for a whitespace-only file, which no writer here produces.
     """
     newest = 0
     try:
         with os.scandir(sdir) as it:
             for entry in it:
-                if entry.is_file(follow_symlinks=False):
-                    candidate = core.mtime_epoch(entry.path)
-                    if candidate > newest:
-                        newest = candidate
+                if not entry.is_file(follow_symlinks=False):
+                    continue
+                try:
+                    if entry.stat(follow_symlinks=False).st_size == 0:
+                        continue
+                except OSError:
+                    # Unreadable stat: fall through and let mtime_epoch decide
+                    # rather than dropping the file. Fails toward LIVE, which
+                    # is this function's pre-existing direction (a wrongful
+                    # takeover is the harm it was written to close).
+                    pass
+                candidate = core.mtime_epoch(entry.path)
+                if candidate > newest:
+                    newest = candidate
     except OSError:
         newest = 0
     if newest:

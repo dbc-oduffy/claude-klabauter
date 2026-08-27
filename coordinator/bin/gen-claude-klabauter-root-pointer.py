@@ -179,7 +179,8 @@ def _resolve_claude_klabauter_root() -> str:
     return resolved
 
 
-def main() -> int:
+def main(argv: "list[str] | None" = None) -> int:
+    del argv  # this CLI takes no arguments; argv accepted for the warm-call contract
     parser = argparse.ArgumentParser(
         description="Project the claude-klabauter repo root into a cold-readable pointer file."
     )

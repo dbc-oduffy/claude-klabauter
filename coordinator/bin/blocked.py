@@ -62,7 +62,7 @@ def _import_runner():
     return run_op_main
 
 
-def main() -> None:
+def main(argv: "list[str] | None" = None) -> int:
     # Point the ported module at THIS script's own directory for
     # query-records.js -- mirrors the bash oracle's `$SCRIPT_DIR` exactly.
     os.environ.setdefault(
@@ -72,25 +72,25 @@ def main() -> None:
         run_op_main = _import_runner()
     except RuntimeError as exc:
         print(f"blocked.py: CLAUDE_KLABAUTER_ROOT resolution failed: {exc}", file=sys.stderr)
-        sys.exit(1)
+        return 1
     except ImportError as exc:
         print(
             f"blocked.py: coordinator_core.cli_entry not importable: {exc}",
             file=sys.stderr,
         )
-        sys.exit(1)
+        return 1
 
     try:
-        code = run_op_main("coordinator_core.ops.blocked", sys.argv[1:])
+        code = run_op_main("coordinator_core.ops.blocked", (sys.argv[1:] if argv is None else argv))
     except ImportError as exc:
         print(
             f"blocked.py: coordinator_core.ops.blocked not importable: {exc}",
             file=sys.stderr,
         )
-        sys.exit(1)
+        return 1
 
-    sys.exit(code)
+    return code
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

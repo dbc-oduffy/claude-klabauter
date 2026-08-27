@@ -1076,7 +1076,7 @@ def test_explicit_stage_red_proof_without_divergence_check_clobbers(tmp_path, mo
 
     monkeypatch.setattr(
         commit_pipeline_mod, "diverging_paths",
-        lambda paths, cwd=None, timeout=2.0, fail_loud=False: [],
+        lambda paths, cwd=None, timeout=2.0, fail_loud=False, context=None: [],
     )
 
     outcome = explicit_stage(repo, ["docs/notes.md"], caller_paths={"docs/notes.md"})
@@ -1135,7 +1135,7 @@ def test_explicit_stage_indeterminate_divergence_fails_loud_never_readds(tmp_pat
     _git(["add", "--", "docs/notes.md"], repo)
     _seed_file(repo, "docs/notes.md", "LATER EDIT\n")
 
-    def _boom(paths, cwd=None, timeout=2.0, fail_loud=False):
+    def _boom(paths, cwd=None, timeout=2.0, fail_loud=False, context=None):
         raise DivergenceCheckFailed("simulated git diff timeout")
 
     monkeypatch.setattr(commit_pipeline_mod, "diverging_paths", _boom)
@@ -1198,7 +1198,7 @@ def test_diverging_paths_chunked_bounds_argv_and_preserves_per_path_answers(monk
 
     calls: list[list[str]] = []
 
-    def _fake_diverging_paths(batch, cwd=None, timeout=2.0, fail_loud=False):
+    def _fake_diverging_paths(batch, cwd=None, timeout=2.0, fail_loud=False, context=None):
         calls.append(list(batch))
         return [p for p in batch if p in diverged_oracle]
 
@@ -1225,7 +1225,7 @@ def test_diverging_paths_chunked_small_batch_single_call(monkeypatch):
     calls: list[list[str]] = []
     real = commit_pipeline_mod.diverging_paths
 
-    def _spy(batch, cwd=None, timeout=2.0, fail_loud=False):
+    def _spy(batch, cwd=None, timeout=2.0, fail_loud=False, context=None):
         calls.append(list(batch))
         return real(batch, cwd=cwd, timeout=timeout, fail_loud=fail_loud)
 
@@ -1264,7 +1264,7 @@ def test_explicit_stage_large_batch_diverged_path_excluded_others_staged(tmp_pat
     calls: list[list[str]] = []
     real = commit_pipeline_mod.diverging_paths
 
-    def _spy(batch, cwd=None, timeout=2.0, fail_loud=False):
+    def _spy(batch, cwd=None, timeout=2.0, fail_loud=False, context=None):
         calls.append(list(batch))
         return real(batch, cwd=cwd, timeout=timeout, fail_loud=fail_loud)
 
@@ -1295,7 +1295,7 @@ def test_explicit_stage_large_batch_genuine_failure_still_indeterminate(monkeypa
 
     paths = [f"bulk/file{i:05d}.md" for i in range(5000)]
 
-    def _boom(batch, cwd=None, timeout=2.0, fail_loud=False):
+    def _boom(batch, cwd=None, timeout=2.0, fail_loud=False, context=None):
         raise DivergenceCheckFailed("simulated git diff failure")
 
     monkeypatch.setattr(commit_pipeline_mod, "diverging_paths", _boom)
@@ -1340,7 +1340,7 @@ def test_commit_trailer_output_byte_identical_across_agree_and_diverged_branches
     """AC7: `commit_scoped()`'s private-index branch replays the
     `prepare-commit-msg` hook's Session-Id/Deliverable-Id resolution via
     `compute_missing_trailer_args()` + `interpret-trailers --in-place`
-    (AC18, landed in `git_native.py`'s `_commit_scoped_private_index` --
+    (AC18, landed in `git_native.py`'s `_commit_scoped_in_process` --
     this chunk does not re-implement it, see this chunk's own "do not
     over-claim" scope note). The agree branch instead relies on the git
     HOOK to run that same replay -- a real hook is not installed in this
@@ -2247,6 +2247,37 @@ def test_pipeline_landed_but_unverified_via_genuine_commit_token_match_failure(
     assert "tasks/feature/todo.md" in _committed_files_at_head(repo)
 
 
+def _inject_partial_stage_failure(monkeypatch, keep=1, record=None):
+    """Drive the partial-mutation-then-failure staging shape.
+
+    The invariant these tests guard is unchanged: a path genuinely written
+    to `.git/index` before the staging step reports failure must still be
+    reconciled into `StageOutcome.acted`, so a caller's rollback bookkeeping
+    can see it. What changed is where it is injected. The old fault was a
+    fake `git_native.add_paths` returning a non-zero `GitResult`; `git add`
+    is gone from this path, so that injection never fires and staging simply
+    succeeds. The live seam is `commit.stage_paths_in_process`, which signals
+    failure by RAISING rather than by a return code.
+
+    `keep` is how much of the batch genuinely lands before the fault: an int
+    count, or `"half"`.
+    """
+    from coordinator_core.git import commit as _commit_mod
+
+    real = _commit_mod.stage_paths_in_process
+
+    def _partial(repo, paths, deleted_paths=(), blob_fallback=None):
+        paths = list(paths)
+        if record is not None:
+            record.append(paths)
+        n = len(paths) // 2 if keep == "half" else keep
+        if n:
+            real(repo, paths[:n], blob_fallback=blob_fallback)
+        raise RuntimeError("simulated partial-mutation staging failure")
+
+    monkeypatch.setattr(_commit_mod, "stage_paths_in_process", _partial)
+
+
 def test_stage_add_paths_partial_failure_residue_is_reconciled_into_acted(
     tmp_path, monkeypatch
 ):
@@ -2287,20 +2318,11 @@ def test_stage_add_paths_partial_failure_residue_is_reconciled_into_acted(
     _seed_file(repo, "normal.md", "normal content")
     _seed_file(repo, "other.md", "other content")
 
-    real_add_paths = git_native.add_paths
-
-    def _fake_add_paths(cwd, paths):
-        # Genuinely stage the first path (simulating a hypothetical
-        # partial-mutation-then-failure `add_paths` shape), then report a
-        # failure for the whole call.
-        real_add_paths(cwd, [paths[0]])
-        return GitResult(returncode=1, stdout="", stderr="simulated partial-mutation add failure")
-
-    monkeypatch.setattr(git_native, "add_paths", _fake_add_paths)
+    _inject_partial_stage_failure(monkeypatch, keep=1)
 
     outcome = explicit_stage(repo, ["normal.md", "other.md"], caller_paths=set())
 
-    assert outcome.failed, "expected a genuine git-add failure"
+    assert outcome.failed, "expected a genuine staging failure"
     assert outcome.acted == ["normal.md"], (
         "expected the genuinely-partially-staged residue reconciled into "
         f"`acted`, got {outcome.acted!r}"
@@ -2341,20 +2363,11 @@ def test_stage_add_paths_partial_failure_residue_reconciles_non_ascii_path(
     _seed_file(repo, non_ascii_name, "non-ascii content")
     _seed_file(repo, "other.md", "other content")
 
-    real_add_paths = git_native.add_paths
-
-    def _fake_add_paths(cwd, paths):
-        # Simulated partial-mutation-then-failure shape -- see the sibling
-        # test above (2026-08-26 update) for why the real `add_paths()` no
-        # longer produces this on its own.
-        real_add_paths(cwd, [paths[0]])
-        return GitResult(returncode=1, stdout="", stderr="simulated partial-mutation add failure")
-
-    monkeypatch.setattr(git_native, "add_paths", _fake_add_paths)
+    _inject_partial_stage_failure(monkeypatch, keep=1)
 
     outcome = explicit_stage(repo, [non_ascii_name, "other.md"], caller_paths=set())
 
-    assert outcome.failed, "expected a genuine git-add failure"
+    assert outcome.failed, "expected a genuine staging failure"
     assert outcome.acted == [non_ascii_name], (
         "expected the non-ASCII residue path to be reconciled into `acted` "
         f"despite git's C-quoting, got {outcome.acted!r}"
@@ -2401,17 +2414,7 @@ def test_stage_add_paths_partial_failure_residue_check_itself_fails_closed(
     _seed_file(repo, "normal.md", "normal content")
     _seed_file(repo, "other.md", "other content")
 
-    real_add_paths = git_native.add_paths
-
-    def _fake_add_paths(cwd, paths):
-        # Simulated partial-mutation-then-failure shape -- see
-        # `test_stage_add_paths_partial_failure_residue_is_reconciled_into_acted`
-        # (2026-08-26 update) for why the real `add_paths()` no longer
-        # produces this on its own.
-        real_add_paths(cwd, [paths[0]])
-        return GitResult(returncode=1, stdout="", stderr="simulated partial-mutation add failure")
-
-    monkeypatch.setattr(git_native, "add_paths", _fake_add_paths)
+    _inject_partial_stage_failure(monkeypatch, keep=1)
     monkeypatch.setattr(
         git_native,
         "diff_cached_name_only",
@@ -2422,7 +2425,7 @@ def test_stage_add_paths_partial_failure_residue_check_itself_fails_closed(
 
     assert outcome.acted == []
     assert len(outcome.failed) == 2
-    assert outcome.failed[0].startswith("git add:")
+    assert outcome.failed[0].startswith("stage:")
     assert "indeterminate" in outcome.failed[1]
 
     # normal.md genuinely got staged by the underlying `git add` before the
@@ -2721,24 +2724,16 @@ def test_explicit_stage_add_paths_single_call_at_scale_still_reconciles_partial_
     for p in bulk_paths:
         _seed_file(repo, p, "seed\n")
 
-    real_add_paths = git_native.add_paths
-    add_calls: list[list[str]] = []
-
-    def _fake_add_paths(cwd, paths):
-        add_calls.append(list(paths))
-        # Simulate a partial-mutation-then-failure `add_paths`: genuinely
-        # stage the first half of the batch, then report failure for the
-        # whole call -- defense-in-depth coverage per the sibling tests'
-        # 2026-08-26 update.
-        half = len(paths) // 2
-        real_add_paths(cwd, paths[:half])
-        return GitResult(returncode=1, stdout="", stderr="simulated partial-mutation add failure")
-
-    monkeypatch.setattr(git_native, "add_paths", _fake_add_paths)
+    stage_calls: list = []
+    _inject_partial_stage_failure(monkeypatch, keep="half", record=stage_calls)
 
     outcome = explicit_stage(repo, bulk_paths, caller_paths=set())
 
-    assert len(add_calls) == 1, "1200 paths must still fit in a single `git add` call"
+    assert len(stage_calls) == 1, (
+        "1200 paths must still be staged in a single in-process call -- the "
+        "argv cap that once forced chunking does not apply to an in-process "
+        f"index write, got {len(stage_calls)}"
+    )
     assert outcome.failed
     assert outcome.acted, "paths staged before the simulated failure must be reconciled into acted"
     staged_this_call = set(outcome.acted)
@@ -2749,17 +2744,16 @@ def test_explicit_stage_add_paths_single_call_at_scale_still_reconciles_partial_
         ), f"{p} reported in acted but not actually staged: {status_lines}"
 
 
-def test_explicit_stage_spawns_exactly_one_git_add(tmp_path, monkeypatch):
-    """`explicit_stage()` issues exactly ONE `git add` process regardless of
-    batch size (2026-08-26, DR-344, mirrors
-    `test_worktree_deletion_probe_spawns_exactly_one_git`'s spawn-count
-    guard shape). `git_native.add_paths()` now delivers its pathspec via
-    `--pathspec-from-file` instead of argv, so the chunk loop that used to
-    call it several times for a large batch (`_chunk_paths`, bounded by the
-    Windows argv cap) is gone -- one call, one spawn, at any batch size.
-    This is a large-enough batch (400+ long names) that the OLD chunked
-    shape would have needed several `git add` processes -- so this test
-    would genuinely have caught the regression."""
+def test_explicit_stage_spawns_zero_git_add(tmp_path, monkeypatch):
+    """`explicit_stage()` issues ZERO `git add` processes at any batch size.
+
+    This test previously asserted exactly one, and that one was the whole
+    point of the deliverable: `git add` was the only `.git/index` write in a
+    commit pass. Staging now happens in process via
+    `commit.stage_paths_in_process`, so the assertion inverts -- one spawn is
+    now the regression, not the target. 400+ long names, a batch the old
+    argv-chunked shape needed several processes for.
+    """
     from coordinator_core.ops.ceremony import git_native as _gn
 
     repo = _init_repo(tmp_path)
@@ -2789,9 +2783,9 @@ def test_explicit_stage_spawns_exactly_one_git_add(tmp_path, monkeypatch):
 
     assert outcome.exit_code == 0
     assert not outcome.failed
-    assert len(add_calls) == 1, (
+    assert add_calls == [], (
         f"explicit_stage spawned {len(add_calls)} `git add` process(es) for a "
-        f"{len(names)}-path batch; expected exactly 1"
+        f"{len(names)}-path batch; in-process staging must spawn none"
     )
     status_lines = _porcelain(repo)
     assert sum(1 for line in status_lines if line.startswith("A")) == len(names)
@@ -3777,10 +3771,16 @@ def test_pipeline_only_unstageable_paths_reports_clean_noop_not_failure(tmp_path
 
 
 def test_stage_failure_report_never_a_bare_exit_code(tmp_path, monkeypatch):
-    """When a genuine `git add` failure leaves `stderr` empty, the composed
+    """When a genuine staging failure carries no message, the composed
     `failed` reason names the attempted paths rather than a bare
-    `exit_code=N` -- the live-incident symptom this closes."""
-    from coordinator_core.ops.ceremony import git_native
+    `exit_code=N` -- the live-incident symptom this closes.
+
+    Injected at `commit.stage_paths_in_process` since `git add` left this
+    path; the silent-failure shape it guards is if anything MORE reachable
+    now, because a bare `raise SomeError` carries no message at all where a
+    subprocess at least had a return code.
+    """
+    from coordinator_core.git import commit as _commit_mod
 
     repo = _init_repo(tmp_path)
     _seed_file(repo, "README.md", "seed")
@@ -3789,19 +3789,15 @@ def test_stage_failure_report_never_a_bare_exit_code(tmp_path, monkeypatch):
 
     _seed_file(repo, "dirty.txt", "changed content")
 
-    real_add_paths = git_native.add_paths
+    class _Silent(Exception):
+        def __str__(self):
+            return ""
 
-    def _fake_add_paths(cwd, paths):
-        # Simulate a genuine `git add` failure with an EMPTY stderr (the
-        # confirmed-live shape for some git failure modes, e.g. the
-        # "nothing to commit" sibling case on the commit step).
-        return git_native.GitResult(returncode=1, stdout="", stderr="")
+    def _fake_stage(repo, paths, deleted_paths=(), blob_fallback=None):
+        raise _Silent()
 
-    monkeypatch.setattr(git_native, "add_paths", _fake_add_paths)
-    try:
-        outcome = explicit_stage(repo, ["dirty.txt"], caller_paths={"dirty.txt"})
-    finally:
-        monkeypatch.setattr(git_native, "add_paths", real_add_paths)
+    monkeypatch.setattr(_commit_mod, "stage_paths_in_process", _fake_stage)
+    outcome = explicit_stage(repo, ["dirty.txt"], caller_paths={"dirty.txt"})
 
     assert outcome.failed
     reason = outcome.failed[0]

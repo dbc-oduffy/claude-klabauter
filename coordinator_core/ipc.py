@@ -1752,6 +1752,36 @@ def get_op_handler(name: str, msg: Any = None) -> Optional[Callable]:
     Returns None only when the op is genuinely unregistered — callers should
     treat None as a not-found condition.
 
+    **TWO refusal shapes, and None is only one of them.** A SUSPENDED or KILLED
+    op does not return None: it raises ``op_budget_suspension.OpSuspendedError``
+    from the roster check below. The return annotation says ``Optional[Callable]``
+    and cannot say otherwise, so this paragraph is the only place the second
+    shape is written down. A caller that guards ``if handler is None`` and stops
+    there does not refuse a killed op — it crashes on one.
+
+    Handle BOTH, and route them to the SAME answer:
+
+        try:
+            handler = get_op_handler(key)
+        except OpSuspendedError:
+            handler = None          # or the caller's own fail-closed branch
+        if handler is None:
+            ...                     # the not-found path, unchanged
+
+    Folding the raise into the existing not-found branch is deliberate, not
+    laziness: a killed op should reach the fail-closed answer the unregistered
+    case already produced, never a second divergent path a caller has to reason
+    about separately.
+
+    Why this paragraph exists (2026-08-27): the kill sweep ``d20d56893`` added the
+    raise and left this docstring describing None as the only outcome. Thirteen
+    non-test call sites implement the contract it taught, all guarding ``is None``
+    with no ``try``; one of them raised out of ``post_commit_stamp_and_ship``
+    AFTER the ceremony commit had already landed, which is the worst available
+    shape — an operator distrusting a commit that actually succeeded. Fixing call
+    sites while leaving this text in place would reproduce the defect in the next
+    caller written against it.
+
     2026-07-25 break-class fix: this used to be a bare `_REGISTRY.get(name)`, which
     returned None for any sibling op not yet imported under lazy ops — breaking
     every caller that resolves a sibling op by key (e.g. `cutover.advance`
@@ -2242,14 +2272,7 @@ async def _dispatch_message_impl(msg: dict) -> dict:
                 _log().error(
                     "coordinator_core.ipc: op %r timed out after %ss", method, op_timeout
                 )
-                return {
-                    "jsonrpc": "2.0",
-                    "id": id_,
-                    "error": {
-                        "code": INTERNAL_ERROR,
-                        "message": f"op timed out after {op_timeout}s",
-                    },
-                }
+                return _timeout_error_envelope(method, op_timeout, id_)
             except asyncio.CancelledError:
                 raise
             except BaseException as exc:
@@ -2279,14 +2302,7 @@ async def _dispatch_message_impl(msg: dict) -> dict:
                 _log().error(
                     "coordinator_core.ipc: op %r timed out after %ss", method, op_timeout
                 )
-                return {
-                    "jsonrpc": "2.0",
-                    "id": id_,
-                    "error": {
-                        "code": INTERNAL_ERROR,
-                        "message": f"op timed out after {op_timeout}s",
-                    },
-                }
+                return _timeout_error_envelope(method, op_timeout, id_)
             except asyncio.CancelledError:
                 raise
             except BaseException as exc:
@@ -2325,6 +2341,91 @@ async def _dispatch_message_impl(msg: dict) -> dict:
         return {"jsonrpc": "2.0", "id": id_, "result": result}
     finally:
         _declared_writes_var.reset(_declared_writes_token)
+
+
+def _timeout_error_envelope(method: str, op_timeout: float, id_: Any) -> dict:
+    """The error envelope for a dispatch that exceeded its budget.
+
+    WHY A TIMED-OUT MUTATION IS NOT A FAILURE (F1, 2026-08-27). `asyncio.
+    wait_for` cancels the AWAIT, never the THREAD -- this module's own AC-3
+    comment above says so. So when a sync handler offloaded via `asyncio.
+    to_thread` breaches its budget, the handler keeps running to completion in
+    its thread: the commit lands, the handler computes the correct answer, and
+    that answer is discarded because nobody is waiting for it any more. The
+    caller then sees a bare `INTERNAL_ERROR` reading "op timed out", which is
+    indistinguishable from "the op did not run" -- and re-invokes.
+
+    That re-invocation is the actual defect. It has been observed six times on
+    `ceremony.scoped_git_commit`, proven by a Commit-Token mismatch between the
+    landed commit and the token its own retry searched for, and once it left a
+    duplicate empty commit in shared history. See
+    `state/bug-backlog/2026-08-26-run-commit-pipeline-reports-failure-af-
+    3f84418091fd.yaml`.
+
+    So: for an op that MAY MUTATE, report indeterminacy rather than failure,
+    reusing the envelope `warm/client.py` already landed one seam out --
+    `WARM_DISPATCH_INDETERMINATE` and `_MUTATION_INDETERMINATE_MESSAGE`,
+    classified by that module's fail-closed `_op_may_mutate` (an unknown op
+    answers True, because one honest error costs less than a mutation executed
+    twice). A COMPUTE_ONLY op keeps the plain `INTERNAL_ERROR`: re-running a
+    read is free, and nothing is gained by making its caller reconcile.
+
+    Negative-spec:
+      - Does NOT stop the abandoned thread. Nothing short of a cancellable
+        handler protocol does. A genuinely slow commit still occupies the box
+        for its full duration while its caller has moved on. This removes the
+        DOUBLE EXECUTION, which is the disease; the misreport was the symptom.
+      - Does NOT widen any budget. `CEREMONY_BUDGET_SECS` is untouched and must
+        stay untouched -- the ratchet's own rule is that the remedy is to make
+        the op cheaper, never to raise the number. What this changes is that a
+        breach is now a CLEAN failure, which is what that ratchet already
+        assumed it was.
+      - Imports `warm.client` LAZILY, inside the function. `warm.client`
+        imports this module (`_mutation_deadline_for` reads `_timeout_for`), so
+        a module-scope import here is a cycle; this module is also measured
+        against an import-budget ceiling and this path runs only on a timeout.
+      - An import that fails falls back to the historical `INTERNAL_ERROR`
+        rather than inventing a local copy of the constant -- a second copy of
+        a shared code is how the two spellings drift apart.
+    """
+    try:
+        from coordinator_core.warm.client import (  # noqa: PLC0415 - see docstring
+            WARM_DISPATCH_INDETERMINATE,
+            _MUTATION_INDETERMINATE_MESSAGE,
+            _op_may_mutate,
+        )
+    except Exception:  # pragma: no cover - defensive, see negative-spec
+        return {
+            "jsonrpc": "2.0",
+            "id": id_,
+            "error": {
+                "code": INTERNAL_ERROR,
+                "message": f"op timed out after {op_timeout}s",
+            },
+        }
+
+    if _op_may_mutate(method):
+        return {
+            "jsonrpc": "2.0",
+            "id": id_,
+            "error": {
+                "code": WARM_DISPATCH_INDETERMINATE,
+                "message": (
+                    f"{_MUTATION_INDETERMINATE_MESSAGE} "
+                    f"(op {method!r} timed out after {op_timeout}s)"
+                ),
+            },
+        }
+
+    return {
+        "jsonrpc": "2.0",
+        "id": id_,
+        "error": {
+            "code": INTERNAL_ERROR,
+            "message": f"op timed out after {op_timeout}s",
+        },
+    }
+
 
 
 async def dispatch_message(msg: dict, *, caller: Optional[str] = None) -> dict:

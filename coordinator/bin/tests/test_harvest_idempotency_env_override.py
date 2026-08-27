@@ -65,7 +65,7 @@ def _yaml_files_in(directory: str) -> list[str]:
     return sorted(f for f in os.listdir(directory) if f.endswith(".yaml"))
 
 
-def test_second_run_idempotent_with_env_override_and_mismatched_cwd() -> None:
+def test_second_run_idempotent_with_env_override_and_mismatched_cwd(stamped_engine_env: str) -> None:
     """Reproduces the confirmed defect directly: QUEUE_APPEND_OUTPUT_ROOT and
     LESSON_PROMOTE_OUTBOX_ROOT point at an isolated output root, but the harvest
     CLI is invoked from a SEPARATE cwd (this repo's coordinator/bin/tests dir,

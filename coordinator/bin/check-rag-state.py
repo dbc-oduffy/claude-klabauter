@@ -42,22 +42,22 @@ def _prepare_claude_klabauter_root() -> None:
     claude_klabauter_root = require_dispatch_engine_on_path()
 
 
-def main() -> None:
+def main(argv: "list[str] | None" = None) -> int:
     try:
         _prepare_claude_klabauter_root()
     except RuntimeError as exc:
         print(f"check-rag-state.py: CLAUDE_KLABAUTER_ROOT resolution failed: {exc}", file=sys.stderr)
-        sys.exit(1)
+        return 1
 
     from coordinator_core.cli_entry import run_op_main
 
     try:
-        code = run_op_main("coordinator_core.ops.check_rag_state", sys.argv[1:])
+        code = run_op_main("coordinator_core.ops.check_rag_state", (sys.argv[1:] if argv is None else argv))
     except ImportError as exc:
         print(f"check-rag-state.py: coordinator_core.ops.check_rag_state not importable: {exc}", file=sys.stderr)
-        sys.exit(1)
-    sys.exit(code)
+        return 1
+    return code
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

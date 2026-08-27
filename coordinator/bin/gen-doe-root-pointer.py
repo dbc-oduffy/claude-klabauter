@@ -38,29 +38,29 @@ def _import_runner():
     return run_op_main
 
 
-def main() -> None:
+def main(argv: "list[str] | None" = None) -> int:
     try:
         run_op_main = _import_runner()
     except RuntimeError as exc:
         print(f"gen-doe-root-pointer.py: engine-root resolution failed: {exc}", file=sys.stderr)
-        sys.exit(1)
+        return 1
     except ImportError as exc:
         print(
             f"gen-doe-root-pointer.py: coordinator_core.cli_entry not importable: {exc}",
             file=sys.stderr,
         )
-        sys.exit(1)
+        return 1
 
     try:
-        code = run_op_main("coordinator_core.ops.gen_doe_root_pointer", sys.argv[1:])
+        code = run_op_main("coordinator_core.ops.gen_doe_root_pointer", (sys.argv[1:] if argv is None else argv))
     except ImportError as exc:
         print(
             f"gen-doe-root-pointer.py: coordinator_core.ops.gen_doe_root_pointer not importable: {exc}",
             file=sys.stderr,
         )
-        sys.exit(1)
-    sys.exit(code)
+        return 1
+    return code
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

@@ -167,7 +167,7 @@ import dataclasses
 import os
 import time
 from datetime import datetime, timezone
-from typing import Dict, List, Optional, Sequence
+from typing import Dict, List, Optional, Sequence, Set
 
 from coordinator_core.session import core, touch_record
 from coordinator_core.session.path_dialect import canonicalize_relative_path
@@ -363,12 +363,35 @@ class _IndexState:
     design. A claimant with no parseable timestamp on its last ``T`` event
     (legacy/malformed line) is absent from this mapping even though it is
     still present in ``claims``.
+
+    ``agent_claims`` (C2, docs/plans/2026-08-27-safe-commit-offer-excludes-
+    a-live-agent.md) maps path -> ``{claimant_sid: [source, ...]}`` — the
+    SOURCE(s) currently contributing that sid's membership in ``claims`` for
+    that path. A source is either ``None`` (the claimant session's OWN
+    ``touch-record.jsonl`` directly claims this path) or a dispatched
+    agent's directory name (that agent claimed it on the session's behalf).
+    Both are tracked in the SAME per-file, per-path last-verb-wins fold
+    ``claims``/``edit_ts`` already use: an ``R`` release removes exactly the
+    ONE source (``None`` or one agent id) that file's release names, never
+    the whole sid — a session with two live agents, one of which releases,
+    still shows the other agent's source here. A sid present in ``claims``
+    but ABSENT from this mapping never happens (every ``claims`` membership
+    has at least one source); a sid whose ONLY source is a non-``None``
+    agent id (``None not in agent_claims[path][sid]``) holds that path
+    SOLELY through a dispatched agent's own touch record — the session's own
+    log has not (yet, or ever) claimed it directly. ``commit_set`` reads
+    this to keep such a path out of ``mine`` (see its own docstring);
+    ``agent_claims`` performs no liveness check of its own — it is pure
+    attribution, not a verdict.
     """
 
     claims: Dict[str, List[str]]
     complete: bool
     abort_cause: Optional[str] = None
     edit_ts: Dict[str, Dict[str, datetime]] = dataclasses.field(default_factory=dict)
+    agent_claims: Dict[str, Dict[str, List[Optional[str]]]] = dataclasses.field(
+        default_factory=dict
+    )
 
 
 def _read_stream_claims(sink_path: str) -> tuple:
@@ -418,11 +441,20 @@ def _agent_owner_sid(agent_dir_path: str) -> tuple:
 
 
 def _enumerate_claim_sinks(base: str) -> tuple:
-    """Enumerate every ``(touch-record.jsonl path, claimant session id)`` pair
-    under ``base`` — session dirs directly, agent dirs via their
-    ``em-session-id.txt`` back-pointer. Deterministically ordered (sorted
-    by entry name) so a capped-out walk aborts at a reproducible point.
-    Pure ``os.scandir``/``os.path`` calls — no file CONTENT is read here.
+    """Enumerate every ``(touch-record.jsonl path, claimant session id,
+    agent id)`` triple under ``base`` — session dirs directly (``agent id``
+    is ``None`` — the claim is the session's own, not any dispatched
+    agent's), agent dirs via their ``em-session-id.txt`` back-pointer
+    (``agent id`` is that agent dir's own name, the OWNER sid stays the
+    back-pointer target as before). Deterministically ordered (sorted by
+    entry name) so a capped-out walk aborts at a reproducible point. Pure
+    ``os.scandir``/``os.path`` calls — no file CONTENT is read here.
+
+    C2 (docs/plans/2026-08-27-safe-commit-offer-excludes-a-live-agent.md):
+    the agent id is a directory name already read by this walk (the
+    ``agent_entry.name`` this loop already held to resolve ``owner_sid`` via
+    the back-pointer) — widening the tuple to carry it costs ZERO new I/O,
+    same scan, same files, same parse.
 
     Returns ``(pairs, complete)``. ``complete`` is False iff a directory
     this walk was able to REACH could not be fully enumerated for a reason
@@ -464,7 +496,7 @@ def _enumerate_claim_sinks(base: str) -> tuple:
         # adds the third case: a legacy-only claimant, readable through the
         # compat union and otherwise unreleasable by any route.
         if _has_claim_surface(touched_path):
-            pairs.append((touched_path, entry.name))
+            pairs.append((touched_path, entry.name, None))
 
     agents_base = os.path.join(base, _AGENTS_SUBDIR)
     for agent_entry in _scandir_sorted(agents_base):
@@ -481,7 +513,7 @@ def _enumerate_claim_sinks(base: str) -> tuple:
             continue
         touched_path = os.path.join(agent_entry.path, _TOUCHED_FILENAME)
         if _has_claim_surface(touched_path):
-            pairs.append((touched_path, owner_sid))
+            pairs.append((touched_path, owner_sid, agent_entry.name))
 
     return pairs, complete
 
@@ -520,10 +552,11 @@ def rebuild(sessions_dir: Optional[str] = None, cwd: Optional[str] = None) -> _I
     process_deadline = time.process_time() + REBUILD_PROCESS_TIME_CAP_SECS
     claims: Dict[str, set] = {}
     edit_ts: Dict[str, Dict[str, datetime]] = {}
+    agent_claims: Dict[str, Dict[str, Set[Optional[str]]]] = {}
     touched_pairs, complete = _enumerate_claim_sinks(base)
     abort_cause: Optional[str] = None if complete else ABORT_CAUSE_IO_ERROR
 
-    for touched_path, claimant_sid in touched_pairs:
+    for touched_path, claimant_sid, agent_id in touched_pairs:
         if time.process_time() > process_deadline:
             complete = False
             if abort_cause is None:
@@ -538,6 +571,11 @@ def rebuild(sessions_dir: Optional[str] = None, cwd: Optional[str] = None) -> _I
         for path, event in stream_claims.items():
             if event.verb == touch_record.VERB_TOUCH:
                 claims.setdefault(path, set()).add(claimant_sid)
+                # C2: this file's source (None for the claimant's own dir,
+                # else the agent dir name) attributed to this claim.
+                agent_claims.setdefault(path, {}).setdefault(claimant_sid, set()).add(
+                    agent_id
+                )
                 # AC21: a legacy line with no parseable timestamp arrives as
                 # `timestamp=0.0` ("unknown time"). `edit_ts`'s own contract
                 # (see `_IndexState`) is that such a claimant is ABSENT from
@@ -555,16 +593,31 @@ def rebuild(sessions_dir: Optional[str] = None, cwd: Optional[str] = None) -> _I
                 # last-verb-wins fold).
                 claims.get(path, set()).discard(claimant_sid)
                 edit_ts.get(path, {}).pop(claimant_sid, None)
+                # C2: drop exactly THIS file's source attribution, not the
+                # whole sid -- a peer agent's own live claim is untouched.
+                sid_sources = agent_claims.get(path, {}).get(claimant_sid)
+                if sid_sources is not None:
+                    sid_sources.discard(agent_id)
 
     result_claims = {path: sorted(sids) for path, sids in claims.items() if sids}
     result_edit_ts = {
         path: dict(sids_ts) for path, sids_ts in edit_ts.items() if sids_ts
     }
+    result_agent_claims: Dict[str, Dict[str, List[Optional[str]]]] = {}
+    for path, sid_sources in agent_claims.items():
+        filtered = {
+            sid: sorted(sources, key=lambda s: (s is not None, s or ""))
+            for sid, sources in sid_sources.items()
+            if sources
+        }
+        if filtered:
+            result_agent_claims[path] = filtered
     return _IndexState(
         claims=result_claims,
         complete=complete,
         abort_cause=abort_cause,
         edit_ts=result_edit_ts,
+        agent_claims=result_agent_claims,
     )
 
 
@@ -668,6 +721,26 @@ class CommitSet:
     SHORT and both ``contested`` and ``peers`` may under-report. A caller must
     say so rather than presenting a partial answer as the answer;
     ``abort_cause`` names why.
+
+    ``in_flight_agent_claims`` (C2, docs/plans/2026-08-27-safe-commit-offer-
+    excludes-a-live-agent.md) is every path this session holds with NO peer
+    contesting it, whose ONLY source (see ``_IndexState.agent_claims``) is a
+    dispatched agent's own touch record -- this session's OWN
+    ``touch-record.jsonl`` has not directly claimed it. It is what the
+    Problem this plan chunk exists for was found by: a path a live in-flight
+    agent had JUST written, committed by the same session before that
+    agent's own claim was ever released back. It is deliberately NOT in
+    ``paths`` -- an agent-only claim is not yet unambiguously this session's
+    to commit -- but it is NOT ``contested`` either, since no PEER session
+    holds it; a caller folding it into either bucket misreports why a path
+    it edited is absent. Keyed path -> the agent id(s) currently attributed.
+    THIS FIELD PERFORMS NO LIVENESS CHECK: an entry here may belong to an
+    agent that finished and simply hasn't released yet, or one still
+    running -- ``commit_set`` reports attribution only; a caller deciding
+    whether to commit anyway must resolve liveness itself (C3). Expected
+    small (bounded by concurrent in-flight agents, not by the claim ledger
+    like ``peers``) but apply the same judgment as ``peers`` about crossing
+    the op wire before assuming that holds at scale.
     """
 
     paths: List[str]
@@ -675,6 +748,7 @@ class CommitSet:
     complete: bool
     abort_cause: Optional[str] = None
     peers: Dict[str, List[str]] = dataclasses.field(default_factory=dict)
+    in_flight_agent_claims: Dict[str, List[str]] = dataclasses.field(default_factory=dict)
 
 
 def commit_set(
@@ -715,11 +789,22 @@ def commit_set(
     it is absent here. Committing a path releases its claim, which is why this
     answers "still outstanding" rather than "ever touched" -- and why it is not
     a history query.
+
+    C2 (docs/plans/2026-08-27-safe-commit-offer-excludes-a-live-agent.md): a
+    path claimed on this session's behalf SOLELY through a dispatched
+    agent's own touch record (``state.agent_claims`` has no ``None`` source
+    for this sid on this path -- the session's own log never claimed it
+    directly) is excluded from ``mine`` and returned instead in
+    ``in_flight_agent_claims``. This function performs NO liveness check of
+    its own and spawns nothing -- it reports attribution, exactly as
+    ``peers``/``contested`` do; a caller deciding whether an in-flight agent
+    claim is safe to commit anyway resolves that separately (C3).
     """
     state = rebuild(sessions_dir=sessions_dir, cwd=cwd)
     mine: List[str] = []
     contested: Dict[str, List[str]] = {}
     peer_only: Dict[str, List[str]] = {}
+    in_flight_agent_claims: Dict[str, List[str]] = {}
     for path, claimants in state.claims.items():
         others = [c for c in claimants if c != session_id]
         if session_id not in claimants:
@@ -728,6 +813,10 @@ def commit_set(
             continue
         if others:
             contested[path] = others
+            continue
+        sources = state.agent_claims.get(path, {}).get(session_id, [])
+        if sources and None not in sources:
+            in_flight_agent_claims[path] = [s for s in sources if s is not None]
         else:
             mine.append(path)
     mine.sort()
@@ -737,6 +826,7 @@ def commit_set(
         complete=state.complete,
         abort_cause=state.abort_cause,
         peers=peer_only,
+        in_flight_agent_claims=in_flight_agent_claims,
     )
 
 

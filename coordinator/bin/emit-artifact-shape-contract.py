@@ -134,18 +134,18 @@ def _import_runner():
     return run_op_main
 
 
-def main() -> None:
+def main(argv: "list[str] | None" = None) -> int:
     try:
         run_op_main = _import_runner()
     except RuntimeError as exc:
         print(f"emit-artifact-shape-contract: engine-root resolution failed: {exc}", file=sys.stderr)
-        sys.exit(2)
+        return 2
     except ImportError as exc:
         print(
             f"emit-artifact-shape-contract: coordinator_core.cli_entry not importable: {exc}",
             file=sys.stderr,
         )
-        sys.exit(2)
+        return 2
 
     # This is DoE-side data (schemas/ input, artifact-shape-contract/ output) that
     # the claude-klabauter module has no way to locate on its own; hand it over via env var
@@ -156,7 +156,7 @@ def main() -> None:
 
     try:
         code = run_op_main(
-            "coordinator_core.ops.emit_artifact_shape_contract", sys.argv[1:]
+            "coordinator_core.ops.emit_artifact_shape_contract", (sys.argv[1:] if argv is None else argv)
         )
     except ImportError as exc:
         print(
@@ -164,10 +164,10 @@ def main() -> None:
             f"not importable: {exc}",
             file=sys.stderr,
         )
-        sys.exit(2)
+        return 2
 
-    sys.exit(code)
+    return code
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

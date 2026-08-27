@@ -77,7 +77,7 @@ def _resolve_plugin_root() -> str:
     return os.path.join(root, "coordinator")
 
 
-def main() -> None:
+def main(argv: "list[str] | None" = None) -> int:
     # Set CLAUDE_PLUGIN_ROOT (if unset) so the ported op — which cannot
     # locate the DoE coordinator/ tree via its own __file__ or a cwd()
     # fallback (see coordinator_core.ops.verify_templates_setup_sync's
@@ -94,17 +94,17 @@ def main() -> None:
         run_op_main = _import_run_op_main()
     except RuntimeError as exc:
         print(f"verify-templates-setup-sync.py: engine-root resolution failed: {exc}", file=sys.stderr)
-        sys.exit(1)
+        return 1
     except ImportError as exc:
         print(f"verify-templates-setup-sync.py: coordinator_core.cli_entry not importable: {exc}", file=sys.stderr)
-        sys.exit(1)
+        return 1
     try:
-        code = run_op_main("coordinator_core.ops.verify_templates_setup_sync", sys.argv[1:])
+        code = run_op_main("coordinator_core.ops.verify_templates_setup_sync", (sys.argv[1:] if argv is None else argv))
     except ImportError as exc:
         print(f"verify-templates-setup-sync.py: coordinator_core.ops.verify_templates_setup_sync not importable: {exc}", file=sys.stderr)
-        sys.exit(1)
-    sys.exit(code)
+        return 1
+    return code
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

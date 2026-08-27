@@ -80,8 +80,8 @@ def _resolve_plugin_root() -> Path:
     return data_root("snippets").parent
 
 
-def main() -> None:
-    args = sys.argv[1:]
+def main(argv: "list[str] | None" = None) -> int:
+    args = (sys.argv[1:] if argv is None else argv)
     subcommand = args[0] if args else ""
 
     if subcommand in ("--help", "-h"):
@@ -89,7 +89,7 @@ def main() -> None:
         print("  list-snippets")
         print("  list-consumers <snippet-name>")
         print("  list-for <consumer-path>")
-        sys.exit(0)
+        return 0
 
     claude_klabauter_root = require_dispatch_engine_on_path()
     try:
@@ -99,7 +99,7 @@ def main() -> None:
             f"snippet-registry: coordinator_core.snippet_sync.registry not importable: {exc}",
             file=sys.stderr,
         )
-        sys.exit(1)
+        return 1
 
     script_dir = Path(os.path.dirname(os.path.abspath(__file__)))
     plugin_root = _resolve_plugin_root()
@@ -110,24 +110,24 @@ def main() -> None:
         data = reg.load_registry(registry_toml)
     except reg.RegistryError as exc:
         print(str(exc), file=sys.stderr)
-        sys.exit(exc.exit_code)
+        return exc.exit_code
 
     if subcommand == "list-snippets":
         for name in reg.list_snippets(data):
             print(name)
-        sys.exit(0)
+        return 0
 
     if subcommand == "list-consumers":
         if len(args) < 2:
             print("Usage: snippet-registry list-consumers <snippet-name>", file=sys.stderr)
-            sys.exit(1)
+            return 1
         try:
             consumers = reg.resolve_consumers(
                 data, args[1], plugin_root, machine_local_bin=machine_local_bin
             )
         except reg.RegistryError as exc:
             print(str(exc), file=sys.stderr)
-            sys.exit(exc.exit_code)
+            return exc.exit_code
         # `resolve_consumers()` intentionally returns native-separator paths
         # (internal Path/os.path reopen-and-compare surface, confirmed by the
         # 2026-08-07 separator-cluster pass which reverted a same-shape fix
@@ -136,27 +136,27 @@ def main() -> None:
         # verify-snippet-sync's `--list` fix.
         for path in consumers:
             print(str(path).replace(os.sep, "/"))
-        sys.exit(0)
+        return 0
 
     if subcommand == "list-for":
         if len(args) < 2:
             print("Usage: snippet-registry list-for <consumer-path>", file=sys.stderr)
-            sys.exit(1)
+            return 1
         for name in reg.list_for(data, args[1], plugin_root, machine_local_bin=machine_local_bin):
             print(name)
-        sys.exit(0)
+        return 0
 
     if subcommand == "":
         print("Usage: snippet-registry <subcommand> [args]", file=sys.stderr)
         print("  list-snippets", file=sys.stderr)
         print("  list-consumers <snippet-name>", file=sys.stderr)
         print("  list-for <consumer-path>", file=sys.stderr)
-        sys.exit(1)
+        return 1
 
     print(f"ERROR: snippet-registry: unknown subcommand '{subcommand}'", file=sys.stderr)
     print("  Known subcommands: list-snippets, list-consumers, list-for", file=sys.stderr)
-    sys.exit(1)
+    return 1
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

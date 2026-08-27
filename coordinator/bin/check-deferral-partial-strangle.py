@@ -108,7 +108,8 @@ def _fetch_result() -> dict:
     return result if isinstance(result, dict) else {}
 
 
-def main() -> int:
+def main(argv: "list[str] | None" = None) -> int:
+    del argv  # this CLI takes no arguments; argv accepted for the warm-call contract
     result = _fetch_result()
     state = result.get("state", "")
 

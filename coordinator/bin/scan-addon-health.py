@@ -47,7 +47,7 @@ def _import_main():
     return _op_main
 
 
-def main() -> None:
+def main(argv: "list[str] | None" = None) -> int:
     # This script's own docstring contract (line 32)
     # says "Exit 0 always (advisory, never gating)". A sys.exit(1) here would
     # abort a caller (/workday-start, /workstream-start --check-sentinel-
@@ -58,16 +58,16 @@ def main() -> None:
         op_main = _import_main()
     except RuntimeError as exc:
         print(f"scan-addon-health.sh: CLAUDE_KLABAUTER_ROOT resolution failed: {exc}", file=sys.stderr)
-        sys.exit(0)
+        return 0
     except ImportError as exc:
         print(
             f"scan-addon-health.sh: coordinator_core.plugin_health.scan not importable: {exc}",
             file=sys.stderr,
         )
-        sys.exit(0)
+        return 0
 
-    sys.exit(op_main(sys.argv[1:]))
+    return op_main((sys.argv[1:] if argv is None else argv))
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

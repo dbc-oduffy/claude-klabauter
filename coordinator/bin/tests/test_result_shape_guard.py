@@ -77,7 +77,7 @@ def test_reap_native_non_dict_result(git_repo, monkeypatch, capsys):
 
     monkeypatch.setattr(mod.cc_invoke, "cc_invoke", _fake)
 
-    rc = mod._reap_native(dry_run=False, commit_prefix="", claude_klabauter_root="/fake/claude-klabauter")
+    rc = mod._reap_native(dry_run=False, commit_prefix="")
 
     assert rc == 0
     err = capsys.readouterr().err

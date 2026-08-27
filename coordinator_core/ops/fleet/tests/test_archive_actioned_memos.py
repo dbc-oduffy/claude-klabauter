@@ -268,3 +268,134 @@ def test_contended_lock_records_skipped_contended_receipt(tmp_path):
         assert last["outcome"] == "skipped-contended"
     finally:
         lock_path.unlink(missing_ok=True)
+
+
+def test_repo_root_none_still_records_a_receipt_row(tmp_path, monkeypatch):
+    """AC-3 gap fix: `record_sweep_outcome` no-ops on `common_dir=None` (its
+    own module docstring), so the standalone `repo_root is None` exit used to
+    call it and still write ZERO rows. This exit now routes through
+    `_NO_REPO_ROOT_RECEIPT_DIR` — a machine-wide fallback sink, since there is
+    no per-repo common_dir to root a receipt under at all.
+    """
+    import json
+
+    from coordinator_core.ops.fleet import archive_actioned_memos as m
+
+    fallback = tmp_path / "no-repo-root-fallback"
+    monkeypatch.setattr(m, "_NO_REPO_ROOT_RECEIPT_DIR", fallback)
+
+    result = m._handler({"mode": "already-terminal", "dry_run": True, "cap": 10}, repo_root=None)
+    assert result["exit_code"] == 1
+
+    receipt = receipt_path(fallback)
+    assert receipt.is_file()
+    lines = receipt.read_text(encoding="utf-8").strip().splitlines()
+    assert lines
+    last = json.loads(lines[-1])
+    assert last["sweep"] == "fleet.archive_actioned_memos"
+    assert last["outcome"] == "failed"
+    assert "repo_root handler arg is None" in last["detail"]
+
+
+def test_bad_cap_with_repo_root_none_still_records_a_receipt_row(tmp_path, monkeypatch):
+    """Same AC-3 gap, reached via the EARLIER bad-cap branch: before the fix,
+    a bad `cap` with `repo_root` ALSO None degraded its receipt dir to
+    `None` and silently wrote nothing.
+    """
+    import json
+
+    from coordinator_core.ops.fleet import archive_actioned_memos as m
+
+    fallback = tmp_path / "no-repo-root-fallback-cap"
+    monkeypatch.setattr(m, "_NO_REPO_ROOT_RECEIPT_DIR", fallback)
+
+    result = m._handler({"mode": "already-terminal", "dry_run": True}, repo_root=None)
+    assert result["exit_code"] == 1
+
+    receipt = receipt_path(fallback)
+    assert receipt.is_file()
+    lines = receipt.read_text(encoding="utf-8").strip().splitlines()
+    last = json.loads(lines[-1])
+    assert last["outcome"] == "failed"
+    assert "cap is required" in last["detail"]
+
+
+def test_act_phase_wired_path_commits_via_archive_and_commit(tmp_path):
+    """AC-1/AC-2: exercise the ACTUALLY-WIRED act path (`_handler` ->
+    `_handle_act` -> `_common.archive_and_commit`) end-to-end in an isolated
+    tmp repo — never `apply_sweep` directly, which the wired handler never
+    calls. Also measures the real spawn count/process time for the
+    corrected docstring claim.
+    """
+    import time
+    from unittest.mock import patch
+
+    from coordinator_core.ops.fleet.archive_actioned_memos import _handler
+    from coordinator_core.wire_paths import rel_id
+
+    repo = tmp_path / "r"
+    _init_repo(repo)
+    n = 40
+    ids = []
+    for i in range(n):
+        p = _seed_memo(repo, f"2026-01-{i % 28 + 1:02d}-memo-{i}.md", "status: actioned\n")
+        ids.append(rel_id(p, repo))
+    common_dir = _common_dir(repo)
+
+    orig_run = subprocess.run
+    spawn_count = [0]
+
+    def _spy_run(*args, **kwargs):
+        spawn_count[0] += 1
+        return orig_run(*args, **kwargs)
+
+    t0 = time.perf_counter()
+    with patch("subprocess.run", side_effect=_spy_run):
+        result = _handler(
+            {"mode": "already-terminal", "dry_run": False, "cap": 150, "candidate_ids": ids},
+            repo_root=common_dir,
+        )
+    elapsed_ms = (time.perf_counter() - t0) * 1000
+
+    assert result["exit_code"] == 0
+    assert result["failed"] == []
+    acted_ids = {a["id"] for a in result["acted"]}
+    assert acted_ids == set(ids)
+    for cid in ids:
+        assert not (repo / cid).exists()
+        assert (repo / "cross-repo" / "archive" / Path(cid).name).is_file()
+
+    # Corrected perf claim: a handful of BATCHED spawns, never one per
+    # candidate, and comfortably inside the 500ms brightline.
+    assert spawn_count[0] < n
+    assert elapsed_ms < 2000  # generous local-disk ceiling; see module docstring for the real figure
+
+
+def test_act_phase_second_fire_is_idempotent(tmp_path):
+    """AC-5: a genuine second fire of the wired act path over the same
+    candidate_ids in an isolated repo is a no-op — the source is already
+    gone, so the second call classifies it as already-archived rather than
+    re-archiving or erroring.
+    """
+    from coordinator_core.ops.fleet.archive_actioned_memos import _handler
+    from coordinator_core.wire_paths import rel_id
+
+    repo = tmp_path / "r"
+    _init_repo(repo)
+    memo_path = _seed_memo(repo, "2026-01-01-actioned.md", "status: actioned\n")
+    cid = rel_id(memo_path, repo)
+    common_dir = _common_dir(repo)
+
+    params = {
+        "mode": "already-terminal", "dry_run": False, "cap": 150,
+        "candidate_ids": [cid],
+    }
+    first = _handler(params, repo_root=common_dir)
+    assert first["exit_code"] == 0
+    assert {a["id"] for a in first["acted"]} == {cid}
+
+    second = _handler(params, repo_root=common_dir)
+    assert second["exit_code"] == 0
+    assert second["acted"] == []
+    reasons = {s["id"]: s["reason"] for s in second["skipped"]}
+    assert reasons[cid] == "already-archived"

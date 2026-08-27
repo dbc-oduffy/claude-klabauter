@@ -97,7 +97,7 @@ def _argv_with_default_root(argv: list) -> list:
     return ["--root", _default_coordinator_root()] + argv
 
 
-def main() -> None:
+def main(argv: "list[str] | None" = None) -> int:
     try:
         run_op_main = _import_run_op_main()
     except RuntimeError as exc:
@@ -105,18 +105,18 @@ def main() -> None:
             f"check-no-monolith-completion-append.py: CLAUDE_KLABAUTER_ROOT resolution failed: {exc}",
             file=sys.stderr,
         )
-        sys.exit(2)
+        return 2
     except ImportError as exc:
         print(
             f"check-no-monolith-completion-append.py: coordinator_core.cli_entry not importable: {exc}",
             file=sys.stderr,
         )
-        sys.exit(2)
+        return 2
 
     try:
         code = run_op_main(
             "coordinator_core.ops.check_no_monolith_completion_append",
-            _argv_with_default_root(sys.argv[1:]),
+            _argv_with_default_root((sys.argv[1:] if argv is None else argv)),
         )
     except ImportError as exc:
         print(
@@ -124,10 +124,10 @@ def main() -> None:
             f"coordinator_core.ops.check_no_monolith_completion_append not importable: {exc}",
             file=sys.stderr,
         )
-        sys.exit(2)
+        return 2
 
-    sys.exit(code)
+    return code
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

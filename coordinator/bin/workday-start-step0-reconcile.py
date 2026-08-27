@@ -66,7 +66,7 @@ def _import_run_op_main():
     return run_op_main
 
 
-def main() -> None:
+def main(argv: "list[str] | None" = None) -> int:
     try:
         run_op_main = _import_run_op_main()
     except RuntimeError as exc:
@@ -74,27 +74,27 @@ def main() -> None:
             f"workday-start-step0-reconcile.py: engine-root resolution failed: {exc}",
             file=sys.stderr,
         )
-        sys.exit(1)
+        return 1
     except ImportError as exc:
         print(
             "workday-start-step0-reconcile.py: "
             f"coordinator_core.cli_entry not importable: {exc}",
             file=sys.stderr,
         )
-        sys.exit(1)
+        return 1
 
     try:
-        code = run_op_main("coordinator_core.ops.workday_start_step0_reconcile", sys.argv[1:])
+        code = run_op_main("coordinator_core.ops.workday_start_step0_reconcile", (sys.argv[1:] if argv is None else argv))
     except ImportError as exc:
         print(
             "workday-start-step0-reconcile.py: "
             f"coordinator_core.ops.workday_start_step0_reconcile not importable: {exc}",
             file=sys.stderr,
         )
-        sys.exit(1)
+        return 1
 
-    sys.exit(code)
+    return code
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

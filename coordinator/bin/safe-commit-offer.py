@@ -113,23 +113,23 @@ def _import_main():
     return _op_main
 
 
-def main() -> None:
+def main(argv: "list[str] | None" = None) -> int:
     _install_sigterm_handler()
     try:
         op_main = _import_main()
     except RuntimeError as exc:
         print(f"safe-commit-offer: CLAUDE_KLABAUTER_ROOT resolution failed: {exc}", file=sys.stderr)
-        sys.exit(_EXIT_TRANSPORT_FAIL)
+        return _EXIT_TRANSPORT_FAIL
     except ImportError as exc:
         print(
             f"safe-commit-offer: coordinator_core.ops.session.safe_commit_offer "
             f"not importable: {exc}",
             file=sys.stderr,
         )
-        sys.exit(_EXIT_TRANSPORT_FAIL)
+        return _EXIT_TRANSPORT_FAIL
 
-    sys.exit(op_main(sys.argv[1:]))
+    return op_main((sys.argv[1:] if argv is None else argv))
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

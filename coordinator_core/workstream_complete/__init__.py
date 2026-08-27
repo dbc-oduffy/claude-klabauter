@@ -227,7 +227,7 @@ import os
 import re
 import subprocess
 import sys
-from datetime import timezone
+from datetime import datetime, timezone
 from pathlib import Path
 from types import ModuleType
 from typing import Any, Mapping, NamedTuple, Optional, Sequence
@@ -1047,15 +1047,19 @@ def _directive(
 #: ceremony-rebuilt-from-the-requirement.md): `_build_legacy_coverage_and_
 #: trail_directives` / `build_write_trail_directives` / `_build_write_trail_
 #: args` / `_apply_write_trail_gate_memo` formerly emitted `wsc-coverage-
-#: gate-runner.py write-trail` — a subcommand PM ruling 2026-08-23 REMOVED
-#: (`coordinator/bin/wsc-coverage-gate-runner.py:29` records the removal;
-#: the CLI now offers only `claim-plan`). argparse rejected every emitted
-#: directive with exit 2, `apply` exited 4 PARTIAL_MUTATION, and the tail
-#: was never attempted — measured twice independently (session `cb4ea2e4`,
-#: this repo; DoE-claude session `39644554`). No review trail is owed —
-#: that is the ruling, not a gap — so this builder is DROPPED, not
-#: replaced: `brief()` no longer calls it and no directive named
-#: `d-write-trail*` is ever emitted.
+#: gate-runner.py write-trail` — a subcommand removed from that CLI per
+#: DR-372/DR-374 (`coordinator/bin/wsc-coverage-gate-runner.py:29` records
+#: the removal; the CLI now offers only `claim-plan`). This drop-note
+#: previously cited a "PM ruling 2026-08-23" as its basis; that ruling is
+#: not locatable (no kill-ledger entry names it — K-046 names three losses,
+#: none of them the trail) and the citation is corrected to DR-372, which
+#: rules the per-commit review trail retired outright. argparse rejected
+#: every emitted directive with exit 2, `apply` exited 4 PARTIAL_MUTATION,
+#: and the tail was never attempted — measured twice independently
+#: (session `cb4ea2e4`, this repo; DoE-claude session `39644554`). No
+#: review trail is owed — that is DR-372's ruling, not a gap — so this
+#: builder is DROPPED, not replaced: `brief()` no longer calls it and no
+#: directive named `d-write-trail*` is ever emitted.
 
 
 #: `schema_validate.describe`'s own name for the record `coordinator-lesson-
@@ -1837,6 +1841,264 @@ def _dispatch_has_live_children(root: Path, candidate: str) -> dict[str, Any]:
 _LEG_A_TERMINAL_PLAN_STATUS = frozenset(
     {"implemented", "shipped", "superseded", "deferred", "abandoned", "complete"}
 )
+
+
+# ---------------------------------------------------------------------------
+# C4 (docs/plans/2026-08-27-the-review-gate-measures-the-whole-session.md,
+# AC2b/AC3/AC4/AC5/AC7): the review-receipt gate. Reaching any
+# `_LEG_A_TERMINAL_PLAN_STATUS` member other than `superseded`/`abandoned`
+# (constraint 2's total mapping — `_status_requires_review_receipt` below)
+# requires at least one COUNTING receipt: a sidecar under this session's own
+# `state/subagent-share/<sid>/` directory whose `agent_type` frontmatter
+# (namespace-stripped) names a `coordinator_core.reviewer_vocabulary.
+# DELEGATE_REVIEWERS` member, whose `lead_session_id` matches this baton's
+# session id, whose `spawned_at` timestamp falls inside this baton's claim
+# window (`claimed_at` -> now — AC2b), and whose BODY is non-empty (AC5:
+# non-empty is the whole content test, never a judgment on quality).
+# Missing, blank, unreadable, wrong agent type, or outside the window all
+# resolve toward BLOCKING (constraint 4: ambiguity favors more review, never
+# less). This module only READS the receipt C2/C3 stamp at dispatch
+# (`subagent_sandbox.provision_report._provision`) — it never writes one.
+# ---------------------------------------------------------------------------
+
+
+class ReviewReceiptGate(NamedTuple):
+    #: True whenever `target_status` is a member of the mapping this gate
+    #: covers at all (i.e. every `_LEG_A_TERMINAL_PLAN_STATUS` member and
+    #: any unrecognised value) — `False` only for the two escape-hatch
+    #: statuses (`superseded`/`abandoned`), which this gate never blocks.
+    applies: bool
+    #: True iff `applies` and no counting receipt was found — the fact
+    #: promoted into `jp-review-receipt-block-stamp` (constraint 2: never
+    #: an EM-answerable judgment point, only a derived block).
+    blocks: bool
+    #: Human-readable evidence — which receipt satisfied the gate, or what
+    #: is missing and how to satisfy it (constraint 4's naming requirement).
+    detail: str
+
+
+def _status_requires_review_receipt(status: Any) -> bool:
+    """Constraint 2's total mapping: `False` for `superseded`/`abandoned`
+    only (the PM's own escape hatch — `abandoned` is the terminal-status
+    equivalent of the spine-row disposition `wont_do`); `True` for every
+    other `_LEG_A_TERMINAL_PLAN_STATUS` member AND any unrecognised value.
+    The mapping is total, not partial: an unclassified status resolves
+    toward requiring review (constraint 4), never toward silently passing
+    it through. Never raises — a non-string `status` is simply not one of
+    the two named exceptions."""
+    return status not in ("superseded", "abandoned")
+
+
+def _parse_review_receipt_timestamp(value: Any) -> Optional[datetime]:
+    """Best-effort ISO-8601 parse for a receipt/claim timestamp — `None`
+    on anything unparsable, mirroring every other degrade-never-raise
+    timestamp read in this module. A `None` result is treated by the
+    caller as "cannot be bounded", never as "out of window" — the window
+    check only excludes a receipt it can positively place outside the
+    bounds."""
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        return datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _resolve_baton_claim_window_start(root: Path, gate: "SessionShapeGate") -> Optional[str]:
+    """AC2b's lower bound: the covering baton's own `claimed_at` — read
+    from the consumed handoff's frontmatter via `_read_consumed_handoff_text`
+    (the exact text this path already reads for Step 2.96's completeness
+    checklist and Step 2's governing-plan resolution, never a second read).
+    `None` when there is no consumed handoff (e.g. a `single-session` close
+    with nothing to join against) or its frontmatter carries no `claimed_at`
+    — the claim window is then unbounded below, since there is no baton to
+    bound it against; the receipt still has to match on session id and
+    body (AC5), so this never widens the gate into a bypass."""
+    text = _read_consumed_handoff_text(root, gate)
+    if text is None:
+        return None
+    try:
+        frontmatter = parse_frontmatter(text).get("frontmatter")
+    except Exception:
+        return None
+    if not isinstance(frontmatter, dict):
+        return None
+    claimed_at = frontmatter.get("claimed_at")
+    return claimed_at if isinstance(claimed_at, str) and claimed_at.strip() else None
+
+
+def _compute_review_receipt_gate(
+    root: Path, sid: str, target_status: str, claimed_at: Optional[str]
+) -> ReviewReceiptGate:
+    """The SOLE call site (AC7 leg ii) deciding whether `target_status` may
+    be reached without a review receipt. No boolean/optional parameter here
+    skips the check — `claimed_at` narrows the claim window, it does not
+    disable the gate.
+
+    AC2b's join: a directory listing over `state/subagent-share/<sid>/`
+    (constraint 8 — a path string and a stat, no history walk, no
+    `baton_assemble` hop) plus a frontmatter read per candidate. A sidecar
+    counts iff it carries a `review_receipt:` BLOCK — the one the dispatch
+    seam splices in (`provision_report._splice_review_receipt`) — and that
+    block satisfies (a) `agent_type` (namespace-stripped) names a
+    `reviewer_vocabulary.DELEGATE_REVIEWERS` member, (b) `session_id` equals
+    `sid`, (c) `stamped_at` resolves neither strictly before `claimed_at`
+    (when both parse) nor strictly after now, and (d) the sidecar's body
+    (post-frontmatter text) is non-blank (AC5). Missing, blank, unreadable,
+    or outside the window -> `blocks=True`, `detail` names what to do.
+
+    C11 — WHY THE RECEIPT BLOCK AND NOT THE SIDECAR HEADER. The first
+    implementation keyed on the sidecar's top-level `agent_type` /
+    `lead_session_id` / `spawned_at`. Those are written for EVERY provisioned
+    agent by `_provision`, reviewer or not, so the gate passed identically
+    with the entire receipt mechanism (C2, C3) reverted: no test went red,
+    and AC1/AC2's stamp became decorative. The receipt block is the only
+    field on this sidecar whose presence means "a reviewer was actually
+    dispatched" — a floor resting on anything else is a floor resting on
+    provisioning, which happens regardless of review. Do not "simplify" this
+    back to the header fields; that is the same defect, not a cleanup.
+
+    An `integrator_receipt:` block is reported in `detail` but never
+    required (AC2) — "findings were applied" stays separately legible without
+    becoming a second gate that would block every close whose review found
+    nothing to apply."""
+    if not _status_requires_review_receipt(target_status):
+        return ReviewReceiptGate(
+            applies=False,
+            blocks=False,
+            detail=(
+                f"status {target_status!r} is constraint 2's escape hatch "
+                "(superseded/abandoned) — no review receipt required"
+            ),
+        )
+
+    from coordinator_core.reviewer_vocabulary import DELEGATE_REVIEWERS
+
+    sidecar_dir = root / "state" / "subagent-share" / sid
+    no_receipt_detail = (
+        f"no counting review receipt for session {sid!r} under "
+        f"{sidecar_dir.as_posix()} (missing, blank, wrong agent type, or "
+        "outside the claim window) — dispatch a reviewer "
+        "(coordinator_core.reviewer_vocabulary.DELEGATE_REVIEWERS) and let it "
+        f"finish before reaching status: {target_status!r}"
+    )
+    if not sidecar_dir.is_dir():
+        return ReviewReceiptGate(applies=True, blocks=True, detail=no_receipt_detail)
+
+    window_start = _parse_review_receipt_timestamp(claimed_at)
+    now = datetime.now(timezone.utc)
+
+    integrator_receipts: list[str] = []
+    reviewer_hit: Optional[str] = None
+
+    for candidate in sorted(sidecar_dir.glob("*.md")):
+        try:
+            text = candidate.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        try:
+            parsed = parse_frontmatter(text)
+        except Exception:
+            continue
+        frontmatter = parsed.get("frontmatter")
+        body = parsed.get("body")
+        if not isinstance(frontmatter, dict):
+            continue
+
+        # C11: read the RECEIPT BLOCK the dispatch seam splices in
+        # (`provision_report._splice_review_receipt` /
+        # `_splice_integrator_receipt`), never the sidecar's generic
+        # provisioning header. The header's `agent_type`/`lead_session_id`/
+        # `spawned_at` are written for EVERY provisioned agent, so keying on
+        # them made this gate pass identically with the whole receipt
+        # mechanism reverted -- C2 and C3 became decorative and no test went
+        # red, which is exactly what AC13 forbids. The receipt block is the
+        # only field on this sidecar whose presence means "a review was
+        # dispatched", so it is the only field the floor may rest on.
+        for key, sink in (("review_receipt", None), ("integrator_receipt", integrator_receipts)):
+            receipt = frontmatter.get(key)
+            if not isinstance(receipt, dict):
+                continue
+            if receipt.get("session_id") != sid:
+                continue
+            receipt_agent_type = receipt.get("agent_type")
+            if not isinstance(receipt_agent_type, str):
+                continue
+            # AC5: a blank sidecar is an ABORTED review, not a pass. The
+            # receipt exists (it is stamped at dispatch, before the agent
+            # runs) precisely so that "dispatched then died" is
+            # distinguishable from "never dispatched" -- both must block, and
+            # this is the check that makes the distinction cost nothing.
+            if not isinstance(body, str) or not body.strip():
+                continue
+            stamped_at = _parse_review_receipt_timestamp(receipt.get("stamped_at"))
+            if window_start is not None and stamped_at is not None and stamped_at < window_start:
+                continue
+            if stamped_at is not None and stamped_at > now:
+                continue
+
+            if sink is not None:
+                sink.append(candidate.as_posix())
+                continue
+
+            bare = receipt_agent_type.rpartition(":")[2] if ":" in receipt_agent_type else receipt_agent_type
+            if bare not in DELEGATE_REVIEWERS:
+                continue
+            if reviewer_hit is None:
+                reviewer_hit = candidate.as_posix()
+
+    if reviewer_hit is not None:
+        # AC2: the integrator receipt is reported alongside, never required.
+        # "Review ran" is the floor (AC3); "findings were applied" is a
+        # separate fact the plan asks to keep legible, not a second gate --
+        # inventing one here would be scope this plan did not authorise, and
+        # would block every close whose review found nothing to apply.
+        if integrator_receipts:
+            applied = f"; integrator receipt: {integrator_receipts[0]}"
+        else:
+            applied = "; no integrator receipt (review ran, findings not recorded as applied)"
+        return ReviewReceiptGate(
+            applies=True,
+            blocks=False,
+            detail=f"review receipt found: {reviewer_hit}{applied}",
+        )
+
+    return ReviewReceiptGate(applies=True, blocks=True, detail=no_receipt_detail)
+
+
+def build_review_receipt_block_stamp_judgment_point(gate: ReviewReceiptGate) -> dict[str, Any]:
+    """Mirrors `build_open_spine_rows_block_stamp_judgment_point`'s pattern
+    (a computed fact promoted into a judgment point and appended as a
+    directive dependency) exactly, per this chunk's brief. Constraint 2:
+    the answer here is DERIVED from `gate` — a single disposition with an
+    empty `resolves`, never offered to the EM as an answerable decision.
+    There is no EM pick that clears this short of an actual counting
+    receipt landing or the target status genuinely being `superseded`/
+    `abandoned`. Only ever called once the caller has confirmed
+    `gate.blocks` — raises rather than emitting a degenerate message on any
+    other gate shape."""
+    if not gate.blocks:
+        raise ValueError(
+            "build_review_receipt_block_stamp_judgment_point called on a gate that "
+            "does not block — caller should not have promoted this gate to a "
+            "judgment point"
+        )
+    return build_untrusted_gate_judgment_point(
+        id="jp-review-receipt-block-stamp",
+        question=(
+            "No counting review receipt covers this close — stamping a "
+            "receipt-requiring terminal status without one is exactly the gap "
+            f"this gate exists to close. {gate.detail}"
+        ),
+        dispositions=[build_disposition("review-not-yet-logged", resolves=[])],
+        evidence=f"gates.review_receipt.blocks: True — {gate.detail}",
+        reason=(
+            "Dispatch a reviewer (or, if this close is already reviewed, confirm "
+            "its sidecar is non-empty and inside this session's claim window), "
+            "then re-run apply. There is no override — superseded/abandoned are "
+            "the only statuses that close without a receipt (constraint 2)."
+        ),
+    )
 
 
 def _resolve_session_handoff_plan_by_deliverable_id(root: Path, deliverable_id: str) -> Optional[Path]:
@@ -4290,6 +4552,31 @@ def brief(decisions: Optional[dict[str, Any]] = None, repo_root: Optional[Path] 
             directives, "d-stamp-plan-implemented", "jp-landed-reconciliation-block-stamp"
         )
 
+    # C4 (docs/plans/2026-08-27-the-review-gate-measures-the-whole-session.md,
+    # AC2b/AC3/AC4/AC5/AC7): `d-stamp-plan-implemented` targets `status:
+    # implemented` (the only member `_LEG_A_TERMINAL_PLAN_STATUS` this
+    # directive itself ever stamps — the literal below names that, it does
+    # not invent it), so this is the one call site of `_compute_review_
+    # receipt_gate` (AC7 leg ii). Mirrors the open-spine/landed-
+    # reconciliation wiring immediately above, line for line: a computed
+    # fact promoted into a judgment point and a directive dependency
+    # appended, never an EM-answerable decision (constraint 2). The claim
+    # window's lower bound (`claimed_at`) is the covering baton's own
+    # frontmatter, already read by `_read_consumed_handoff_text` elsewhere
+    # on this path (`_resolve_baton_claim_window_start`) — no new git spawn,
+    # no history walk, no `baton_assemble` hop (constraint 8, AC12).
+    review_receipt_claim_window_start = _resolve_baton_claim_window_start(root, gate)
+    review_receipt_gate = _compute_review_receipt_gate(
+        root, gate.sid, "implemented", review_receipt_claim_window_start
+    )
+    if review_receipt_gate.blocks and any(
+        d["id"] == "d-stamp-plan-implemented" for d in directives
+    ):
+        judgment_points.append(build_review_receipt_block_stamp_judgment_point(review_receipt_gate))
+        _append_directive_dependency(
+            directives, "d-stamp-plan-implemented", "jp-review-receipt-block-stamp"
+        )
+
     # C2 (docs/plans/2026-08-15-judgment-points-that-gate-nothing-stop-
     # being-questions.md): route every judgment point assembled above
     # through C1's shared predicate. Asked points (including every point
@@ -4431,6 +4718,7 @@ def brief(decisions: Optional[dict[str, Any]] = None, repo_root: Optional[Path] 
             "completeness_checklist": completeness_gate._asdict(),
             "open_spine_row_worklist": open_spine_row_gate._asdict(),
             "landed_reconciliation": landed_reconciliation_gate._asdict(),
+            "review_receipt": review_receipt_gate._asdict(),
             "consumed_handoff_completeness": consumed_handoff_completeness_gate._asdict(),
             "review_scale": review_scale_payload,
             "stage_paths_candidates": stage_paths_candidates,

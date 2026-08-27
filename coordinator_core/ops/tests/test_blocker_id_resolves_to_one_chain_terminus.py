@@ -167,6 +167,11 @@ def test_both_resolvers_agree_on_the_same_chain(tmp_path: Path) -> None:
     live = [r for r in records if "archive" not in r["_path"]]
     archived = [r for r in records if "archive" in r["_path"]]
 
+    # `_index_by_id` is called directly rather than `_memoized_index_by_id` (the
+    # path production callers route through) because the memo wrapper caches by
+    # list-object identity, and this test constructs a fresh list on every run --
+    # memoization would be a no-op here, and going through the wrapper would only
+    # obscure which primitive is actually under test.
     index = _index_by_id(archived + live)
     compute_side = index.get("chain-01")
     act_side = _resolve_blocker_deployment_state("chain-01", tmp_path)

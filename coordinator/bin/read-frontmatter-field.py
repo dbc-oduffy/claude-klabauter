@@ -75,33 +75,33 @@ def _resolve_run_op_main():
     return run_op_main
 
 
-def main() -> None:
+def main(argv: "list[str] | None" = None) -> int:
     try:
         run_op_main = _resolve_run_op_main()
     except RuntimeError as exc:
         print(f"read-frontmatter-field.py: CLAUDE_KLABAUTER_ROOT resolution failed: {exc}", file=sys.stderr)
         sys.stdout.write("")
-        sys.exit(0)
+        return 0
     except ImportError as exc:
         print(
             f"read-frontmatter-field.py: coordinator_core.cli_entry not importable: {exc}",
             file=sys.stderr,
         )
         sys.stdout.write("")
-        sys.exit(0)
+        return 0
 
     try:
-        code = run_op_main("coordinator_core.ops.read_frontmatter_field", sys.argv[1:])
+        code = run_op_main("coordinator_core.ops.read_frontmatter_field", (sys.argv[1:] if argv is None else argv))
     except ImportError as exc:
         print(
             f"read-frontmatter-field.py: coordinator_core.ops.read_frontmatter_field not importable: {exc}",
             file=sys.stderr,
         )
         sys.stdout.write("")
-        sys.exit(0)
+        return 0
 
-    sys.exit(code)
+    return code
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

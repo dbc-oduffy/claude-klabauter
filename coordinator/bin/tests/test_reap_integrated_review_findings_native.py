@@ -80,7 +80,7 @@ def _stub_cc_invoke(monkeypatch, *, result: Dict[str, Any] = None, raises: Excep
 def test_reap_native_success_op_exit_0(git_repo, monkeypatch, capsys):
     _stub_cc_invoke(monkeypatch, result={"exit_code": 0, "reaped": ["a.md"], "failed": []})
 
-    rc = _mod._reap_native(dry_run=False, commit_prefix="", claude_klabauter_root="/fake/claude-klabauter")
+    rc = _mod._reap_native(dry_run=False, commit_prefix="")
 
     assert rc == 0
     out = capsys.readouterr()
@@ -94,7 +94,7 @@ def test_reap_native_partial_op_exit_2(git_repo, monkeypatch, capsys):
         result={"exit_code": 2, "reaped": ["a.md"], "failed": ["b.md"]},
     )
 
-    rc = _mod._reap_native(dry_run=False, commit_prefix="", claude_klabauter_root="/fake/claude-klabauter")
+    rc = _mod._reap_native(dry_run=False, commit_prefix="")
 
     assert rc == 0
     out = capsys.readouterr()
@@ -107,7 +107,7 @@ def test_reap_native_partial_op_exit_2(git_repo, monkeypatch, capsys):
 def test_reap_native_unrecognized_op_exit(git_repo, monkeypatch, capsys):
     _stub_cc_invoke(monkeypatch, result={"exit_code": 9, "reaped": [], "failed": []})
 
-    rc = _mod._reap_native(dry_run=False, commit_prefix="", claude_klabauter_root="/fake/claude-klabauter")
+    rc = _mod._reap_native(dry_run=False, commit_prefix="")
 
     assert rc == 0
     out = capsys.readouterr()
@@ -117,7 +117,7 @@ def test_reap_native_unrecognized_op_exit(git_repo, monkeypatch, capsys):
 def test_reap_native_transport_runtime_error_squashed_to_exit_0(git_repo, monkeypatch, capsys):
     _stub_cc_invoke(monkeypatch, raises=RuntimeError("transport down"))
 
-    rc = _mod._reap_native(dry_run=False, commit_prefix="", claude_klabauter_root="/fake/claude-klabauter")
+    rc = _mod._reap_native(dry_run=False, commit_prefix="")
 
     assert rc == 0
     out = capsys.readouterr()
@@ -150,7 +150,7 @@ def test_reap_native_summary_passes_limit_param_and_suppresses_raw_json(git_repo
     monkeypatch.setattr(_mod.cc_invoke, "cc_invoke", _fake)
 
     rc = _mod._reap_native(
-        dry_run=True, commit_prefix="", claude_klabauter_root="/fake/claude-klabauter", summary=True, summary_limit=2
+        dry_run=True, commit_prefix="", summary=True, summary_limit=2
     )
 
     assert rc == 0
@@ -172,7 +172,7 @@ def test_reap_native_no_summary_omits_limit_param(git_repo, monkeypatch, capsys)
 
     monkeypatch.setattr(_mod.cc_invoke, "cc_invoke", _fake)
 
-    rc = _mod._reap_native(dry_run=True, commit_prefix="", claude_klabauter_root="/fake/claude-klabauter")
+    rc = _mod._reap_native(dry_run=True, commit_prefix="")
 
     assert rc == 0
     assert "summary_limit" not in seen_params, "summary_limit must be omitted when --summary is not set"

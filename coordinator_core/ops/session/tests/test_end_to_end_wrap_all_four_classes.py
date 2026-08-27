@@ -25,7 +25,7 @@ whether the writer itself claims what it wrote):
      `coordinator_core/ops/tests/test_artifact_emit_scope_touch.py`'s own
      precedent; the declaration path itself is exercised for real.
 
-Then runs a real wrap ceremony — `safe_commit_offer.auto_commit_session`,
+Then runs a real wrap ceremony — `safe_commit_offer.commit_session_offer`,
 the only wrap mechanism actually landed as of this chunk (C6's claim-aware
 Step 2.5 branch is still `pending` in the plan's own AC8 row) — and asserts
 NONE of the four remain dirty afterward.
@@ -115,34 +115,6 @@ def _write_policy(tmp_path: Path, *eligible_types: str) -> Path:
     return path
 
 
-def _fake_ctx(repo_root: Path) -> MagicMock:
-    """Same stand-in as test_artifact_emit_scope_touch.py's `_fake_ctx` —
-    avoids the full 21-section envelope build (and its `requires_vendor_pin`
-    fixture cost) without bypassing the declaration path under test."""
-    ctx = MagicMock(spec=EmitContext)
-    ctx.repo_root = repo_root
-    ctx.central_state_root = repo_root / "state"
-    ctx.repo_name = "fixture/c7-end-to-end-wrap"
-    ctx.full_enrichment = True
-    return ctx
-
-
-def _fake_emit_writing_real_file(ctx, out=None):
-    """Stand-in for `envelope.emit`: performs the SAME single write it does
-    (`out_path.write_text(...)`) so the declared path exists on disk for
-    `_record_self_reported_touches`'s containment/isfile check."""
-    out_path = Path(out) if out is not None else (ctx.central_state_root / "cockpit-emission.json")
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text(json.dumps({"ok": True}) + "\n", encoding="utf-8")
-    return {
-        "ok": True,
-        "out": str(out_path),
-        "schema_version": "test",
-        "emitted_at": "2026-08-05T00:00:00Z",
-        "section_count": 0,
-        "malformed_counts": {},
-        "malformed_total": 0,
-    }
 
 
 def test_wrap_leaves_none_of_the_four_classes_dirty_and_refuses_peer_artifact(
@@ -205,43 +177,28 @@ def test_wrap_leaves_none_of_the_four_classes_dirty_and_refuses_peer_artifact(
     # class has no writer left to exercise. Three classes remain; the
     # sweep's contract over them is unchanged.
     # -----------------------------------------------------------------
-    # Class 4 — ops/artifact_emit.py's "artifact.emit" op, driven through
-    # the REAL ipc.dispatch_message (the only seam that turns a handler's
-    # _scope_touch_paths self-report into a claim), for the closing
-    # session.
+    # Class 4 — ops/artifact_emit.py's "artifact.emit" op — is REMOVED
+    # (state/kill-ledger.md, PM ruling 2026-08-23: CUT IN FULL, and
+    # `op_budget_suspension.py` records it "closed forever"). The module,
+    # the op and its registration are all gone, so the class has no writer
+    # left to exercise -- exactly the disposition Class 3 got above.
+    #
+    # This leg was left in place when the op was cut and failed on its own
+    # import guard ("artifact.emit not registered"), which is the failure
+    # mode a string-keyed guard over a killed op always takes: it cannot
+    # pass and it names nothing a reader can fix. Removed rather than
+    # skipped, so the file does not carry a permanently-red assertion about
+    # a mechanism that no longer exists.
+    #
+    # Two classes remain; the sweep's contract over them is unchanged.
     # -----------------------------------------------------------------
-    assert "artifact.emit" in ipc._REGISTRY, "import guard: artifact.emit not registered"
-    monkeypatch.setenv("CLAUDE_SESSION_ID", session_id)
-    monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
-    monkeypatch.delenv("COORDINATOR_SESSION_ID", raising=False)
-
-    fake_ctx = _fake_ctx(repo)
-    with patch(
-        "coordinator_core.ops.artifact_emit._envelope.resolve_context",
-        return_value=fake_ctx,
-    ), patch(
-        "coordinator_core.ops.artifact_emit._envelope.emit",
-        side_effect=_fake_emit_writing_real_file,
-    ):
-        msg = {
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "artifact.emit",
-            "params": {},
-            "_origin_worktree": str(repo),
-        }
-        d = asyncio.run(dispatch_message(msg))
-    assert "error" not in d, d
-    c4_out_path = Path(d["result"]["out"])
-    assert c4_out_path.is_file()
-    c4_rel = c4_out_path.relative_to(repo).as_posix()  # git status emits POSIX separators on Windows too
 
     # -----------------------------------------------------------------
     # Pre-wrap sanity: every one of the four newly-written files (three
     # classes + the peer's) is genuinely dirty in the working tree.
     # -----------------------------------------------------------------
     before = _dirty_status(repo)
-    for rel in (c1_mine_rel, c2_rel, c4_rel, peer_rel):
+    for rel in (c1_mine_rel, c2_rel, peer_rel):
         assert rel in before, f"fixture failure: {rel!r} is not dirty before the wrap"
 
     # -----------------------------------------------------------------
@@ -250,7 +207,7 @@ def test_wrap_leaves_none_of_the_four_classes_dirty_and_refuses_peer_artifact(
     # attributed to the peer, never to "mine".
     # -----------------------------------------------------------------
     offer = safe_commit_offer.compute_offer(session_id, cwd=str(repo))
-    for rel in (c1_mine_rel, c2_rel, c4_rel):
+    for rel in (c1_mine_rel, c2_rel):
         assert rel in offer["safe_paths"], (
             f"{rel!r} did not reach safe_paths: safe_paths={offer['safe_paths']!r} "
             f"orphans={offer['orphans']!r} excluded={offer['excluded']!r}"
@@ -258,21 +215,38 @@ def test_wrap_leaves_none_of_the_four_classes_dirty_and_refuses_peer_artifact(
     assert peer_rel not in offer["safe_paths"]
     ownership = offer["ownership"]
     assert ownership["degraded"] is False
-    peer_entry = next((p for p in ownership["peer"] if p["path"] == peer_rel), None)
+
+    # Attribution is asserted through `full_ownership_map`, not through
+    # `offer["ownership"]["peer"]`. `compute_offer` builds that bucket from
+    # `CommitSet.contested` alone -- paths THIS session claims that a peer
+    # claims too -- so a path only the PEER claims is absent from it by
+    # construction, and this assertion read `peer: []` forever.
+    #
+    # The fix is NOT to fold `CommitSet.peers` into `compute_offer`: that
+    # collection is sized by the claim ledger (~405 entries on this repo) and
+    # its own docstring says to keep it OUT of anything crossing the op wire
+    # (~72KB as JSON), in-process consumers only. `full_ownership_map` IS that
+    # in-process consumer and already walks `peers` alongside `contested`.
+    #
+    # The guarantee that actually protects the peer -- their artifact never
+    # reaching this session's pathspec -- is asserted directly above, and
+    # holds independently of which readout names the owner.
+    _mine, peer_map = safe_commit_offer.full_ownership_map(session_id, cwd=str(repo))
+    peer_entry = peer_map.get(peer_rel)
     assert peer_entry is not None, (
         f"peer artifact {peer_rel!r} was not attributed to a named peer: "
-        f"ownership={ownership!r}"
+        f"peer_map={peer_map!r}"
     )
     assert peer_entry["owner"] == peer_id
 
     # -----------------------------------------------------------------
     # THE PROOF: run the real wrap ceremony for the closing session.
     # -----------------------------------------------------------------
-    report = safe_commit_offer.auto_commit_session(session_id, cwd=str(repo))
+    report = safe_commit_offer.commit_session_offer(session_id, cwd=str(repo))
     assert report["failed_groups"] == [], report["failed_groups"]
 
     after = _dirty_status(repo)
-    for rel in (c1_mine_rel, c2_rel, c4_rel):
+    for rel in (c1_mine_rel, c2_rel):
         assert rel not in after, (
             f"{rel!r} is STILL dirty after the wrap — the writer's claim did "
             f"not survive to a committable state: git status:\n{after}"
@@ -289,4 +263,4 @@ def test_wrap_leaves_none_of_the_four_classes_dirty_and_refuses_peer_artifact(
 
     committed_paths = {p for g in report["groups"] for p in g["paths"]}
     assert peer_rel not in committed_paths
-    assert {c1_mine_rel, c2_rel, c4_rel} <= committed_paths
+    assert {c1_mine_rel, c2_rel} <= committed_paths

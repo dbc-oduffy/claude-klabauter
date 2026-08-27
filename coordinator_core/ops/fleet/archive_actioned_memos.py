@@ -68,12 +68,38 @@ Negative-spec:
     NOTHING (`os.replace` only); `plan_sweep`'s own worktree-dirty rail is at
     most ONE `git status --porcelain` spawn, scoped to survivors, and can be
     skipped entirely via `known_dirty_relpaths` exactly like the precedent.
+
+CORRECTED PERF CLAIM (2026-08-27, re-measured against the actually-WIRED
+path): an earlier draft of this docstring characterised the whole op as
+"0 git spawns / ~7-8ms" by measuring `apply_sweep` in isolation.
+`apply_sweep` is NOT what `_handler`'s dry_run:false branch calls —
+`_handle_act` calls `_common.archive_and_commit` instead (the same batched
+os.replace-plus-`_commit_via_head_spine` mover every other fleet sweep now
+uses), and `apply_sweep` above is exercised only by this module's own unit
+tests, never by the wired op. Measured cold, real git, this repo's own
+230-candidate live corpus (`cross-repo/inbox/`, 2026-08-27):
+  - dry_run:true — ONE `git status --porcelain` spawn (worktree-dirty rail,
+    survivors only), ~154ms process time for the full 548-file inbox scan.
+  - dry_run:false (act, 230 candidates, one archive_and_commit call) — FOUR
+    batched `git restore --staged` spawns (the post-commit main-index
+    resync, chunked by argv-length, never one spawn per candidate), ~287ms
+    process time. Both numbers are comfortably inside the 500ms brightline
+    (docs/decisions/DR-344) and each individual spawn is well under the
+    200ms per-process ceiling — no rerouting was needed once measured
+    against the path that actually runs. `_common.archive_and_commit`'s own
+    module docstring (2026-08-26 rewrite) is the reason apply_sweep-style
+    zero-spawn behaviour does NOT hold end-to-end: `os.replace` and
+    `_commit_via_head_spine` are spawn-free, but the post-commit main-index
+    resync (`git restore --staged`, batched) is a real, justified,
+    per-invocation git cost that this module's own claim previously omitted
+    rather than measured.
 """
 
 from __future__ import annotations
 
 import logging
 import os
+import tempfile
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
@@ -125,6 +151,23 @@ _SCAN_REASON_LIVE_CLAIM = "live-claim-holder: claim dir holds a live session"
 # `_RECOMMENDED_CAP_CHOICE` framing; `cap` stays a required param with no
 # default.
 _RECOMMENDED_CAP_CHOICE = 150
+
+# Fallback receipt sink for the one setup-error shape that has NO common_dir
+# to root a receipt under at all (`repo_root` handler arg absent/None, with
+# or without an also-bad `cap`). `_sweep_receipt.record_sweep_outcome` is
+# common_dir-rooted by design and unconditionally no-ops when handed
+# `None` (see its own module docstring/negative-spec) — before this constant
+# existed, both the bad-cap branch (which degrades its receipt dir to `None`
+# when `repo_root` is also `None`) and the standalone `repo_root is None`
+# branch called `record_sweep_outcome` and had it silently write ZERO rows,
+# a genuine gap in the "every exit path calls record_sweep_outcome" AC-3
+# guarantee this handler's own docstring claims. A machine-wide temp
+# location is the only siting that survives "there is no repo to root it
+# under" — it is deliberately NOT the per-repo
+# `<common_dir>/coordinator-sessions/archive-sweeps.receipt.jsonl` file
+# every other exit writes to, so a reader diagnosing a `repo_root:None`
+# failure must look here instead.
+_NO_REPO_ROOT_RECEIPT_DIR = Path(tempfile.gettempdir()) / "coordinator-fleet-no-repo-root"
 
 
 def _memo_sessions_dir(common_dir: Path) -> Path:
@@ -499,7 +542,11 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
 
     cap = params.get("cap")
     if not isinstance(cap, int) or isinstance(cap, bool) or cap <= 0:
-        _receipt_dir = Path(repo_root) if repo_root is not None else None
+        # No common_dir to root a receipt under when repo_root is ALSO None —
+        # fall back to the machine-wide sink rather than letting
+        # record_sweep_outcome's own None-no-op swallow this row (see
+        # _NO_REPO_ROOT_RECEIPT_DIR's own comment).
+        _receipt_dir = Path(repo_root) if repo_root is not None else _NO_REPO_ROOT_RECEIPT_DIR
         record_sweep_outcome(
             _receipt_dir, _OP_KEY, "failed",
             detail=f"cap is required and must be a positive int, got {cap!r}",
@@ -512,7 +559,10 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
 
     if repo_root is None:
         _LOG.error("archive_actioned_memos: repo_root handler arg is None")
-        record_sweep_outcome(None, _OP_KEY, "failed", detail="repo_root handler arg is None")
+        record_sweep_outcome(
+            _NO_REPO_ROOT_RECEIPT_DIR, _OP_KEY, "failed",
+            detail="repo_root handler arg is None",
+        )
         return build_setup_error_result(mode, dry_run, "repo_root handler arg is None")
 
     common_dir = Path(repo_root) if not isinstance(repo_root, Path) else repo_root

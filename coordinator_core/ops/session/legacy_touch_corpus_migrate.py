@@ -153,6 +153,16 @@ _EM_SESSION_ID_FILENAME = "em-session-id.txt"
 #: Per-dir status labels this module reports. Mutually exclusive.
 _STATUSES = (
     "migrated",
+    #: Entries existed and EVERY one was dropped by the containment rule, so
+    #: nothing was salvaged and no sink is written (2026-08-27). Distinct from
+    #: `migrated` with `entries_written == 0`, which this used to be reported
+    #: as: that reading left an empty sink which then satisfied the old
+    #: exists()-based already-drained predicate here and in
+    #: `legacy_touch_corpus_drain_check`, permanently marking the dir done with
+    #: its claims invisible. Distinct from `unrecognized_shape` too -- the dir
+    #: is recognized and readable, its corpus is simply unsalvageable, which is
+    #: `migrate_touched_prefix`'s repair to make, not this drain's.
+    "stranded_all_dropped",
     "already_drained",
     "skipped_no_owner",
     "unrecognized_shape",
@@ -287,7 +297,15 @@ def plan_dir(touched_path: Path, sessions_base: Path, worktree_root: Path) -> Di
     record_path = touched_path.with_name(_TOUCH_RECORD_FILENAME)
     kind, session_id, agent_id = _classify_dir(touched_path, sessions_base)
 
-    if record_path.exists():
+    # EXISTENCE IS NOT DRAINAGE (2026-08-27) -- shares one predicate with
+    # `legacy_touch_corpus_drain_check`, homed in `touch_record` (see
+    # `record_carries_content`'s docstring for the incident). This was
+    # `record_path.exists()`, which is the one shape a FAILED run of THIS
+    # function leaves behind: the sink is created before events are written,
+    # so a run that creates the file and writes nothing marks the dir
+    # `already_drained` on every subsequent run and can never repair itself.
+    # Eight dirs on claude-klabauter sat that way with 167 stranded claims.
+    if touch_record.record_carries_content(record_path):
         return DirOutcome(
             touched_path=touched_path,
             record_path=record_path,
@@ -330,6 +348,44 @@ def plan_dir(touched_path: Path, sessions_base: Path, worktree_root: Path) -> Di
             agent_id=agent_id,
             status="read_error",
             read_error=str(exc),
+        )
+
+    # A run that salvages NOTHING is not a migration (2026-08-27). Reporting
+    # `migrated` with `entries_written == 0` was the lie that made this drain
+    # unrepeatable: the apply path still created the sink, the empty sink then
+    # satisfied the old `record_path.exists()` predicate in BOTH this function
+    # and `legacy_touch_corpus_drain_check`, and the dir was permanently
+    # `already_drained` with every one of its claims stranded. Measured here
+    # 2026-08-27: eight session dirs, 167 legacy entries, 100% dropped
+    # (141 escaping the worktree after normalization, 26 unresolvable
+    # absolutes), reported as eight successful migrations over a gate showing
+    # zero undrained.
+    #
+    # `stranded_all_dropped` is deliberately its OWN status rather than a
+    # variant of `migrated` or a reuse of `unrecognized_shape`: the dir IS
+    # recognized and IS readable, the entries are simply all unsalvageable
+    # under the containment rule, which is a corpus-repair question
+    # (`migrate_touched_prefix`'s territory) and not something re-running this
+    # drain can ever fix. The apply path must leave NO sink for these -- see
+    # its own guard -- so a later corpus repair can still drain the dir.
+    # `drop_manifest` non-empty is the discriminator, NOT `not surviving`
+    # alone: an EMPTY (or all-blank) touched.txt has nothing to salvage and
+    # its empty sibling is a CORRECT drain -- that dir really is finished, and
+    # `test_empty_touched_file_still_creates_empty_sibling` pins it. Only a dir
+    # that HAD entries and lost every one of them to the containment rule is
+    # stranded, because only that dir still holds claims nothing can see.
+    if drop_manifest and not surviving:
+        return DirOutcome(
+            touched_path=touched_path,
+            record_path=record_path,
+            kind=kind,
+            session_id=session_id,
+            agent_id=agent_id,
+            status="stranded_all_dropped",
+            entries_written=0,
+            entries_dropped=len(drop_manifest),
+            entries_blank=blank_count,
+            drop_manifest=drop_manifest,
         )
 
     return DirOutcome(

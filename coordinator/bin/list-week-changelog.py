@@ -64,30 +64,30 @@ def _import_runner():
     return run_op_main
 
 
-def main() -> None:
+def main(argv: "list[str] | None" = None) -> int:
     try:
         run_op_main = _import_runner()
     except RuntimeError as exc:
         print(f"list-week-changelog.py: CLAUDE_KLABAUTER_ROOT resolution failed: {exc}", file=sys.stderr)
-        sys.exit(0)
+        return 0
     except ImportError as exc:
         print(
             f"list-week-changelog.py: coordinator_core.cli_entry not importable: {exc}",
             file=sys.stderr,
         )
-        sys.exit(0)
+        return 0
 
     try:
-        code = run_op_main("coordinator_core.ops.list_week_changelog", sys.argv[1:])
+        code = run_op_main("coordinator_core.ops.list_week_changelog", (sys.argv[1:] if argv is None else argv))
     except ImportError as exc:
         print(
             f"list-week-changelog.py: coordinator_core.ops.list_week_changelog not importable: {exc}",
             file=sys.stderr,
         )
-        sys.exit(0)
+        return 0
 
-    sys.exit(code)
+    return code
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

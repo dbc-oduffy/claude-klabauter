@@ -72,7 +72,7 @@ def _import_runner():
     return run_op_main
 
 
-def main() -> None:
+def main(argv: "list[str] | None" = None) -> int:
     # Matches the ported module's own token contract (see docstring above): a
     # "could not determine" outcome — including a claude-klabauter-link failure, which
     # is just another flavor of "could not determine" — is reported as the
@@ -84,27 +84,27 @@ def main() -> None:
     except RuntimeError as exc:
         print("unknown-error")
         print(f"rollup-derive: CLAUDE_KLABAUTER_ROOT resolution failed: {exc}", file=sys.stderr)
-        sys.exit(0)
+        return 0
     except ImportError as exc:
         print("unknown-error")
         print(
             f"rollup-derive: coordinator_core.cli_entry not importable: {exc}",
             file=sys.stderr,
         )
-        sys.exit(0)
+        return 0
 
     try:
-        code = run_op_main("coordinator_core.ops.rollup_derive", sys.argv[1:])
+        code = run_op_main("coordinator_core.ops.rollup_derive", (sys.argv[1:] if argv is None else argv))
     except ImportError as exc:
         print("unknown-error")
         print(
             f"rollup-derive: coordinator_core.ops.rollup_derive not importable: {exc}",
             file=sys.stderr,
         )
-        sys.exit(0)
+        return 0
 
-    sys.exit(code)
+    return code
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

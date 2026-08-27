@@ -166,6 +166,7 @@ from coordinator_core.wire_paths import rel_id as _archive_sweep_rel_id
 _chunk_paths = git_native._chunk_paths
 _DIVERGENCE_CHECK_ARGV_BUDGET_CHARS = git_native._DIVERGENCE_CHECK_ARGV_BUDGET_CHARS
 
+from coordinator_core.git import commit as commit_mod
 from coordinator_core.git.commit_context import CommitContext, build_commit_context
 from coordinator_core.git.git_index import IndexParseError as _ScopedIndexParseError
 from coordinator_core.git.git_state import (
@@ -687,6 +688,7 @@ def _diverging_paths_chunked(
     cwd: str,
     *,
     timeout: float,
+    context: Optional[CommitContext] = None,
 ) -> Set[str]:
     """Chunked `diverging_paths(..., fail_loud=True)` for `explicit_stage()`'s
     divergence check, closing the Windows argv-length defect a single
@@ -716,10 +718,18 @@ def _diverging_paths_chunked(
     `explicit_stage()`'s own `try`/`except DivergenceCheckFailed` still
     refuses the whole call rather than guess at paths whose chunk never
     got an answer.
+
+    `context` (C6b, R4/R5): the caller's own generation-A `CommitContext`,
+    forwarded verbatim to every chunk's `diverging_paths()` call -- each
+    chunk asks about a subset of the SAME `paths` the context was already
+    scoped to, so no chunk needs its own walk. `None` (the default, and
+    every pre-C6b caller) is unaffected.
     """
     diverged: Set[str] = set()
     for chunk in _chunk_paths(paths):
-        diverged.update(diverging_paths(chunk, cwd=cwd, timeout=timeout, fail_loud=True))
+        diverged.update(
+            diverging_paths(chunk, cwd=cwd, timeout=timeout, fail_loud=True, context=context)
+        )
     return diverged
 
 
@@ -1115,12 +1125,28 @@ def _swept_rename_delete_paths(
     return swept_rename, swept_delete
 
 
+
+class _StageOk:
+    ok = True; returncode = 0; stdout = ""; stderr = ""
+
+
+class _StageFailed:
+    ok = False; returncode = 1; stdout = ""
+    def __init__(self, stderr): self.stderr = stderr
+
+
 def explicit_stage(
     worktree_root: Union[str, Path],
     paths: Sequence[str],
     caller_paths: Optional[Set[str]] = None,
 ) -> StageOutcome:
-    """Tolerant/reconciling explicit-path stage: `git add -- <to_stage>`.
+    """Tolerant/reconciling explicit-path stage of `to_stage`, ZERO spawns.
+
+    Staging is `commit.stage_paths_in_process`, not `git add` -- that spawn
+    was this pass's only `.git/index` write and it is gone. `git add` is
+    named throughout the notes below only as the historical shape whose
+    behaviour a rule was written against; nothing here shells out to it.
+
 
     Detects paths already swept (git mv'd or staged-deleted) by a concurrent
     peer/tail op and skips them rather than letting a batch `git add` fail on
@@ -1308,10 +1334,11 @@ def explicit_stage(
     `_worktree_deleted_paths`'s own docstring for the 2026-08-26 fix that
     made this probe fail loud instead of degrading).
 
-    Atomicity of `git add` on failure (2026-08-26: `add_paths()` moved from
-    a chunked argv loop to a single `--pathspec-from-file` call -- see its
-    own docstring): a `to_stage` batch now either stages IN FULL or stages
-    NOTHING -- `git add` is atomic per invocation. On the failure branch,
+    Atomicity on failure: a `to_stage` batch either stages IN FULL or
+    stages NOTHING. `git add` gave this per invocation; the in-process
+    index write gives it by writing `.git/index` once, under
+    `.git/index.lock`, after every blob is resolved -- so a refusal
+    part-way through leaves the index untouched. On the failure branch,
     `acted` is still NOT unconditionally assumed `[]` -- it is reconciled
     against real index state scoped to `to_stage` (`git diff --cached
     --name-only -- <to_stage>`, never a bare/unscoped read that could sweep
@@ -1551,6 +1578,7 @@ def explicit_stage(
                 ignore_candidates = [
                     p for p in existing if _worktree_key(root, p) not in _ignore_index
                 ]
+    ignore_indeterminate: set = set()
     if ignore_candidates:
         ignore_result = git_native.check_ignore(root, ignore_candidates)
         if ignore_result.returncode in (0, 1):
@@ -1559,14 +1587,17 @@ def explicit_stage(
                 for match in git_native.parse_check_ignore_stdin_z(ignore_result.stdout)
             }
         else:
-            # Indeterminate check-ignore answer -- fail closed by treating
-            # nothing as ignored (existing pre-fix behavior for this batch);
-            # a genuinely ignored path still gets caught below by `git add`
-            # itself, just without this pre-filter's benefit for this one
-            # call. Never silently swallowed: surfaced narrowly, not as a
-            # hard `failed` entry, since the ordinary `git add` path below
-            # remains a correct (if less tolerant) fallback.
+            # Indeterminate check-ignore answer. This used to fall through and
+            # let `git add` refuse a genuinely ignored path on its own merits.
+            # `git add` is gone, and `stage_paths_in_process` reads no
+            # `.gitignore` -- it would have STAGED the very path the pre-filter
+            # could not classify. So the refusal moves here: these candidates
+            # (untracked and existing, the only shape `git add` ever refused)
+            # are held back from staging and reported as failures rather than
+            # classified `ignored`, which would assert a verdict check-ignore
+            # never returned.
             ignored_set = set()
+            ignore_indeterminate = set(ignore_candidates)
     else:
         ignored_set = set()
 
@@ -1604,6 +1635,7 @@ def explicit_stage(
                 existing,
                 cwd=str(root),
                 timeout=_DIVERGENCE_CHECK_TIMEOUT_SECS,
+                context=gen_a_context,
             )
             if existing
             else set()
@@ -1648,14 +1680,16 @@ def explicit_stage(
     # missing path to diverge from; `diverging_paths()` is scoped to
     # `existing` only and was never asked about these. Appended to
     # `to_stage` here so `git_native.add_paths()` stages the removal (see
-    # that function's own docstring) in the SAME batched `git add` call as
-    # ordinary content changes -- one subprocess, not two.
+    # that function's own docstring) in the SAME staging call as ordinary
+    # content changes -- one index write, not two. Partitioned back out at
+    # the call site: `git add` INFERRED a removal from an absent file,
+    # `stage_paths_in_process` requires it DECLARED.
     to_stage.extend(to_delete)
 
     # `staged_paths` covers every existing path (diverged ones are already
     # staged -- just not by this call -- non-diverged ones become staged
     # below), every already-staged deletion (staged before this call, not
-    # re-`git add`-ed), and every worktree deletion this call is about to
+    # re-staged by this call), and every worktree deletion this call is about to
     # stage; order follows the original `paths` ordering restricted to each
     # subset.
     staged_paths = list(existing) + list(already_staged_deletions) + list(to_delete)
@@ -1685,21 +1719,74 @@ def explicit_stage(
     # delivers `to_stage` via `--pathspec-from-file` instead of argv (see
     # its own docstring), so the Windows `CreateProcess` argv-length cap
     # that used to force this call into per-chunk `git add` spawns no
-    # longer applies -- one spawn regardless of batch size. `git add` is
-    # atomic per invocation, so this call either stages the WHOLE batch or
-    # stages NOTHING -- there is no longer a partial-batch window between
-    # chunks for a later path in the same call to fail into. The
+    # longer applies -- ZERO spawns regardless of batch size, since the
+    # argv cap does not reach an in-process index write at all. The write
+    # is atomic, so this call either stages the WHOLE batch or stages
+    # NOTHING -- there is no partial-batch window for a later path in the
+    # same call to fail into. The
     # post-failure residue reconciliation immediately below is unaffected:
     # it reconciles against real index state over the FULL `to_stage`
     # either way, so it now typically finds an empty residue (the whole
     # batch failed, or none of it did) rather than a genuine partial-add
     # residue -- both are still handled correctly.
-    add_result = git_native.add_paths(root, to_stage)
+    # `git add` deleted. Its job -- run the checkin filters, write the blobs,
+    # record them in `.git/index` -- is `commit.stage_paths_in_process` plus a
+    # batched fallback for the paths whose conversion is not reproduced in
+    # process (attribute-pinned: *.cmd, *.ps1, *.sh, *.patch, _goldens/**).
+    # Zero processes when nothing is refused; ONE for the whole refused set
+    # otherwise, never one per path.
+    def _fallback(paths):
+        res = git_native._hash_worktree_blobs(list(paths), cwd=root)
+        if not res.ok:
+            raise RuntimeError(res.stderr or "hash-object fallback failed")
+        shas = res.stdout.splitlines()
+        return {p: shas[i].strip() for i, p in enumerate(paths) if i < len(shas)}
+
+    # `to_stage` carries removals folded in at the `to_stage.extend(to_delete)`
+    # above, because `git add -- <vanished path>` INFERS a deletion from the
+    # filesystem. `stage_paths_in_process` does not infer -- a removal is
+    # DECLARED via `deleted_paths`, deliberately. Partition here rather than
+    # teaching the committer to guess intent from an absent file: the pipeline
+    # is the layer that knows a vanished path was a move, and `_worktree_
+    # deleted_paths`/`to_delete` is where that knowledge already lives.
+    # Presence on disk is the tiebreak for anything `to_delete` did not name,
+    # so a path deleted after `to_delete` was computed still stages as a
+    # removal rather than raising on an unreadable worktree file.
+    held_failures: List[str] = []
+    if ignore_indeterminate:
+        held = [p for p in to_stage if p in ignore_indeterminate]
+        if held:
+            to_stage = [p for p in to_stage if p not in ignore_indeterminate]
+            existing = [p for p in existing if p not in ignore_indeterminate]
+            for p in held:
+                held_failures.append(
+                    f"{p}: check-ignore returned no verdict; refusing to stage "
+                    "a path that may be ignored"
+                )
+
+    _removals = [p for p in to_stage if p in set(to_delete) or not (root / p).exists()]
+    _removal_set = set(_removals)
+    _present = [p for p in to_stage if p not in _removal_set]
+
+    try:
+        commit_mod.stage_paths_in_process(
+            root, _present, deleted_paths=_removals, blob_fallback=_fallback
+        )
+        add_result = _StageOk()
+    except Exception as exc:
+        # EMPTY stays empty. Substituting the exception's class name here
+        # would satisfy `_reason_from_git_result`'s first branch and suppress
+        # the attempted-path fallback below -- the bare `exit_code=N` shape
+        # that fallback exists to prevent, reintroduced by the diagnostic
+        # meant to improve it.
+        detail = str(exc)
+        add_result = _StageFailed(f"{type(exc).__name__}: {detail}" if detail else "")
     if add_result.ok:
         deletion_paths.extend(to_delete)
         return StageOutcome(
-            exit_code=missing_caller_exit_code,
+            exit_code=missing_caller_exit_code or (1 if held_failures else 0),
             acted=list(to_stage),
+            failed=held_failures,
             skipped=skipped,
             staged_paths=staged_paths,
             swept_renames=swept_renames,
@@ -1777,7 +1864,7 @@ def explicit_stage(
     # membership test under-reports residue for an absolute caller path --
     # the invisible-residue shape this reconciliation exists to close.
     reconciled_acted = [p for p in to_stage if _worktree_key(root, p) in residue]
-    failed_entries = [f"git add: {reason}"]
+    failed_entries = [f"stage: {reason}"]
     if residue_indeterminate:
         assert residue_failure is not None
         failed_entries.append(
@@ -2604,7 +2691,7 @@ def commit(
             # `test_benign_already_committed_noop_does_not_cry_wolf` guards.
             # `explicit_stage()`'s OWN `reason` composition (the incident's
             # actually-cited bug) is safe to fix because its `failed` entries
-            # are always prefixed `"git add: {reason}"`, never bare -- this
+            # are always prefixed `"stage: {reason}"`, never bare -- this
             # call site has no such prefix, so bare is the load-bearing shape.
             #
             # AC10 (C6, same plan): `stdout_diagnostic` carries whatever
@@ -2763,9 +2850,21 @@ def commit(
         log_grep_paths = _chunk_paths(commit_paths)[0]
         match_result = git_native.log_grep(
             root,
-            token_trailer,
+            f"^{re.escape(token_trailer)}$",
             extra_args=[
-                "--fixed-strings",
+                # ANCHORED, corrected 2026-08-27 (F2). This pass used
+                # `--fixed-strings` on the bare trailer -- an UNANCHORED
+                # substring match, so a commit inside `pre_sha..HEAD` that
+                # merely QUOTES this token in its prose (an investigation
+                # note, a backlog entry, a handoff -- this repo's own records
+                # do exactly that, routinely) would be adopted as the
+                # candidate. The fallback `_search` above already anchors
+                # `^...$` with `--extended-regexp` for precisely this reason
+                # and says so; there was no reason for the two branches of one
+                # reconcile to disagree. Adopting the wrong commit is the ONE
+                # direction worse than this function's designed
+                # false-negative bias, and the asymmetry was free to remove.
+                "--extended-regexp",
                 "--format=%H",
                 # S1 Finding 4: `--full-history` -- plain history
                 # simplification can prune THIS call's own commit from a
@@ -4166,64 +4265,400 @@ def _stamp_archive_sweep(common_dir: Path) -> None:
         pass
 
 
+#: `_run_in_plane_archive_sweep`'s ONE real engineering call, documented here
+#: because there is no code to point at for the path not taken.
+#:
+#: The precedent's negative-spec promises "zero ADDITIONAL git processes",
+#: and `archive_actioned_memos`'s own worktree-dirty rail asks the exact same
+#: question (`git status --porcelain`, "is anything under my corpus dirty")
+#: that the handoffs leg's `plan_sweep` already asks for its own corpus. Both
+#: modules expose a `known_dirty_relpaths=` parameter seemingly built for an
+#: in-plane caller to precompute the answer once and hand it to both --
+#: EXCEPT that parameter is scoped to a survivor list each module only
+#: produces AFTER its own pure-memory classification pass has already
+#: narrowed the corpus (`_scan_terminal`/`_scan_terminal_memos`'s own
+#: "CLASSIFY FIRST, DIRTY-CHECK ONLY THE SURVIVORS" contract, C3). Getting
+#: that survivor list before calling either `plan_sweep` means either
+#: re-implementing each module's classification externally (never re-derive
+#: a parallel rule that can drift from the real one), or exposing a
+#: classify-only step as a new public seam on `archive_terminal_handoffs.py`/
+#: `archive_actioned_memos.py` -- both out of this chunk's file scope
+#: (`commit_pipeline.py` + its own tests only).
+#:
+#: An EARLIER draft of this module computed one combined
+#: `git status --porcelain -- state/handoffs cross-repo/inbox` unconditionally,
+#: before either corpus's classification ran, and threaded the result through
+#: both `known_dirty_relpaths=` parameters. That call is *reachable* (both
+#: signatures accept it) but WRONG on the cost axis this whole family is
+#: built around: `_scan_terminal`'s own docstring guarantee is "a scan with
+#: zero survivors never pays either cost", proven by this repo's own
+#: `test_in_plane_sweep_spawns_no_git_process_when_nothing_is_terminal` --
+#: and an eager, unconditional combined call pays the spawn on EVERY sweeping
+#: commit regardless of whether either corpus has a single survivor,
+#: literally the regression that test exists to catch. Reverted rather than
+#: shipped once that measurement landed.
+#:
+#: THE HONEST ANSWER: this leg does NOT share the git spawn across corpora.
+#: Each leg calls its own module's `plan_sweep` with `known_dirty_relpaths`
+#: left at its default (`None`), exactly as the standalone op path already
+#: does, so each corpus pays only the spawn IT already owned before this
+#: chunk: zero when nothing survives classification (both modules), and one
+#: scoped `git status --porcelain` when something does. `archive_plans` has no
+#: dirty rail at all, so it never enters this question. The net NEW spawn this
+#: chunk adds to a sweeping ceremony commit, versus the handoffs-only baseline
+#: that ran before it: at most ONE -- the memos leg's own scoped `git status
+#: --porcelain`, paid only on a commit where at least one memo survives
+#: classification (measured 2026-08-27 at ~154ms process time for this repo's
+#: full 548-file inbox scan, comfortably inside the 200ms per-process ceiling
+#: and the 500ms end-to-end brightline). Plans adds zero spawns in every case.
+
+
+def _archive_sweep_handoffs_leg(
+    worktree_root: Path, common_dir: Path
+) -> Tuple[List[str], List[str], bool]:
+    """The original in-plane handoff leg, unchanged in composition (no dirty-
+    set sharing -- see the module-level note above), now also recording its
+    outcome to the receipt (`_sweep_receipt.record_sweep_outcome`) --
+    previously this leg was the one corpus of the three with NO receipt row
+    at all, so a silent in-plane failure here was invisible exactly the way
+    the receipt module's own docstring says an archival failure must never
+    be.
+
+    Returns `(srcs, dsts, completed)` -- `completed` is True iff this leg's
+    own `plan_sweep` ran to completion (whether or not it found anything to
+    move), the same "the classification pass ran" signal the pre-existing
+    cadence-stamp comment already used for the single-leg case. `False` on
+    import failure, lock-acquire failure, or lock contention -- any of those
+    means the job did not run this pass, so the shared cadence marker must
+    not treat the interval as served.
+    """
+    try:
+        from coordinator_core.ops.fleet import archive_terminal_handoffs
+    except Exception:
+        _LOG.warning(
+            "run_commit_pipeline: in-plane archive-sweep module import failed "
+            "-- contributing no paths (non-fatal)", exc_info=True,
+        )
+        return [], [], False
+
+    from coordinator_core.ops.fleet._sweep_receipt import record_sweep_outcome
+
+    op_key = "fleet.archive_completed_handoffs"
+
+    try:
+        lock_path = archive_terminal_handoffs._acquire_sweep_lock(common_dir)
+    except Exception as exc:
+        _LOG.warning(
+            "run_commit_pipeline: in-plane archive-sweep lock acquisition failed "
+            "-- contributing no paths (non-fatal)", exc_info=True,
+        )
+        record_sweep_outcome(common_dir, op_key, "failed", detail=f"lock acquire raised: {exc}")
+        return [], [], False
+
+    if lock_path is None:
+        record_sweep_outcome(common_dir, op_key, "skipped-contended")
+        return [], [], False
+
+    try:
+        try:
+            moves, _skipped = archive_terminal_handoffs.plan_sweep(
+                worktree_root, common_dir, _archive_sweep_cap(),
+            )
+        except Exception as exc:
+            _LOG.warning(
+                "run_commit_pipeline: in-plane archive-sweep plan_sweep failed "
+                "-- contributing no paths (non-fatal)", exc_info=True,
+            )
+            record_sweep_outcome(common_dir, op_key, "failed", detail=str(exc))
+            return [], [], False
+
+        if not moves:
+            record_sweep_outcome(common_dir, op_key, "nothing-to-do")
+            return [], [], True
+
+        try:
+            acted, failed = archive_terminal_handoffs.apply_sweep(moves)
+        except Exception as exc:
+            _LOG.warning(
+                "run_commit_pipeline: in-plane archive-sweep apply_sweep failed "
+                "-- contributing no paths (non-fatal)", exc_info=True,
+            )
+            record_sweep_outcome(common_dir, op_key, "failed", count=len(moves), detail=str(exc))
+            return [], [], True
+
+        acted_ids = {a["id"] for a in acted if a.get("archived")}
+        srcs: List[str] = []
+        dsts: List[str] = []
+        for move in moves:
+            if move.candidate_id not in acted_ids:
+                continue
+            srcs.append(_archive_sweep_rel_id(move.src, worktree_root))
+            dsts.append(_archive_sweep_rel_id(move.dst, worktree_root))
+
+        if failed:
+            record_sweep_outcome(common_dir, op_key, "failed", count=len(failed), detail=str(failed[:5]))
+        elif srcs:
+            record_sweep_outcome(common_dir, op_key, "applied", count=len(srcs))
+        else:
+            record_sweep_outcome(common_dir, op_key, "nothing-to-do")
+        return srcs, dsts, True
+    finally:
+        archive_terminal_handoffs._release_sweep_lock(lock_path)
+
+
+def _archive_sweep_plans_leg(
+    worktree_root: Path, common_dir: Path
+) -> Tuple[List[str], List[str], bool]:
+    """Same composition as the handoff leg (`plan_sweep` + `apply_sweep`,
+    that module's own single-flight lock, non-fatal on every phase), retargeted
+    at `fleet.archive_completed_plans`. No dirty-set parameter -- `archive_plans
+    .plan_sweep` has no worktree-dirty rail at all (no `git status` call
+    anywhere in that module). Returns `(srcs, dsts, completed)`, same contract
+    as the handoffs leg.
+    """
+    try:
+        from coordinator_core.ops.fleet import archive_plans
+    except Exception:
+        _LOG.warning(
+            "run_commit_pipeline: in-plane archive-sweep (plans) module import "
+            "failed -- contributing no paths (non-fatal)", exc_info=True,
+        )
+        return [], [], False
+
+    from coordinator_core.ops.fleet._sweep_receipt import record_sweep_outcome
+
+    op_key = "fleet.archive_completed_plans"
+
+    try:
+        lock_path = archive_plans._acquire_sweep_lock(common_dir)
+    except Exception as exc:
+        _LOG.warning(
+            "run_commit_pipeline: in-plane archive-sweep (plans) lock acquisition "
+            "failed -- contributing no paths (non-fatal)", exc_info=True,
+        )
+        record_sweep_outcome(common_dir, op_key, "failed", detail=f"lock acquire raised: {exc}")
+        return [], [], False
+
+    if lock_path is None:
+        record_sweep_outcome(common_dir, op_key, "skipped-contended")
+        return [], [], False
+
+    try:
+        try:
+            moves, _skipped = archive_plans.plan_sweep(
+                worktree_root, common_dir, _archive_sweep_cap(),
+            )
+        except Exception as exc:
+            _LOG.warning(
+                "run_commit_pipeline: in-plane archive-sweep (plans) plan_sweep "
+                "failed -- contributing no paths (non-fatal)", exc_info=True,
+            )
+            record_sweep_outcome(common_dir, op_key, "failed", detail=str(exc))
+            return [], [], False
+
+        if not moves:
+            record_sweep_outcome(common_dir, op_key, "nothing-to-do")
+            return [], [], True
+
+        try:
+            acted, failed = archive_plans.apply_sweep(moves)
+        except Exception as exc:
+            _LOG.warning(
+                "run_commit_pipeline: in-plane archive-sweep (plans) apply_sweep "
+                "failed -- contributing no paths (non-fatal)", exc_info=True,
+            )
+            record_sweep_outcome(common_dir, op_key, "failed", count=len(moves), detail=str(exc))
+            return [], [], True
+
+        acted_ids = {a["id"] for a in acted if a.get("archived")}
+        srcs: List[str] = []
+        dsts: List[str] = []
+        for move in moves:
+            if move.candidate_id not in acted_ids:
+                continue
+            srcs.append(_archive_sweep_rel_id(move.src, worktree_root))
+            dsts.append(_archive_sweep_rel_id(move.dst, worktree_root))
+
+        if failed:
+            record_sweep_outcome(common_dir, op_key, "failed", count=len(failed), detail=str(failed[:5]))
+        elif srcs:
+            record_sweep_outcome(common_dir, op_key, "applied", count=len(srcs))
+        else:
+            record_sweep_outcome(common_dir, op_key, "nothing-to-do")
+        return srcs, dsts, True
+    finally:
+        archive_plans._release_sweep_lock(lock_path)
+
+
+def _archive_sweep_memos_leg(
+    worktree_root: Path, common_dir: Path
+) -> Tuple[List[str], List[str], bool]:
+    """Same composition again, retargeted at `fleet.archive_actioned_memos`.
+    No dirty-set sharing (see the module-level note above) -- `known_dirty_
+    relpaths` is left at its default so this leg pays exactly the spawn the
+    standalone op's own dry_run:true path already pays: zero when nothing
+    survives classification, one scoped `git status --porcelain` otherwise.
+    Lock rail is this module's own `_memo_lock_path` / `_acquire_sweep_lock_at`
+    (a DIFFERENT lock file from the handoff/plan legs, so none of the three
+    sweeps ever contend on another's mutex) plus `_release_sweep_lock`
+    (imported unmodified from `archive_terminal_handoffs`, which only ever
+    unlinks whatever path it is given). Returns `(srcs, dsts, completed)`,
+    same contract as the other two legs.
+    """
+    try:
+        from coordinator_core.ops.fleet import archive_actioned_memos
+        from coordinator_core.ops.fleet.archive_terminal_handoffs import _release_sweep_lock
+    except Exception:
+        _LOG.warning(
+            "run_commit_pipeline: in-plane archive-sweep (memos) module import "
+            "failed -- contributing no paths (non-fatal)", exc_info=True,
+        )
+        return [], [], False
+
+    from coordinator_core.ops.fleet._sweep_receipt import record_sweep_outcome
+
+    op_key = "fleet.archive_actioned_memos"
+
+    try:
+        lock_path = archive_actioned_memos._memo_lock_path(common_dir)
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        acquired = archive_actioned_memos._acquire_sweep_lock_at(lock_path)
+    except Exception as exc:
+        _LOG.warning(
+            "run_commit_pipeline: in-plane archive-sweep (memos) lock acquisition "
+            "failed -- contributing no paths (non-fatal)", exc_info=True,
+        )
+        record_sweep_outcome(common_dir, op_key, "failed", detail=f"lock acquire raised: {exc}")
+        return [], [], False
+
+    if not acquired:
+        record_sweep_outcome(common_dir, op_key, "skipped-contended")
+        return [], [], False
+
+    try:
+        try:
+            moves, _skipped = archive_actioned_memos.plan_sweep(
+                worktree_root, common_dir, archive_actioned_memos._RECOMMENDED_CAP_CHOICE,
+            )
+        except Exception as exc:
+            _LOG.warning(
+                "run_commit_pipeline: in-plane archive-sweep (memos) plan_sweep "
+                "failed -- contributing no paths (non-fatal)", exc_info=True,
+            )
+            record_sweep_outcome(common_dir, op_key, "failed", detail=str(exc))
+            return [], [], False
+
+        if not moves:
+            record_sweep_outcome(common_dir, op_key, "nothing-to-do")
+            return [], [], True
+
+        try:
+            acted, failed = archive_actioned_memos.apply_sweep(moves)
+        except Exception as exc:
+            _LOG.warning(
+                "run_commit_pipeline: in-plane archive-sweep (memos) apply_sweep "
+                "failed -- contributing no paths (non-fatal)", exc_info=True,
+            )
+            record_sweep_outcome(common_dir, op_key, "failed", count=len(moves), detail=str(exc))
+            return [], [], True
+
+        acted_ids = {a["id"] for a in acted if a.get("archived")}
+        srcs: List[str] = []
+        dsts: List[str] = []
+        for move in moves:
+            if move.candidate_id not in acted_ids:
+                continue
+            srcs.append(_archive_sweep_rel_id(move.src, worktree_root))
+            dsts.append(_archive_sweep_rel_id(move.dst, worktree_root))
+
+        if failed:
+            record_sweep_outcome(common_dir, op_key, "failed", count=len(failed), detail=str(failed[:5]))
+        elif srcs:
+            record_sweep_outcome(common_dir, op_key, "applied", count=len(srcs))
+        else:
+            record_sweep_outcome(common_dir, op_key, "nothing-to-do")
+        return srcs, dsts, True
+    finally:
+        _release_sweep_lock(lock_path)
+
+
 def _run_in_plane_archive_sweep(
     worktree_root: Path, common_dir: Optional[Path]
 ) -> Tuple[List[str], List[str]]:
-    """Classify + apply one terminal-handoff archival sweep IN-PROCESS, on the
-    ceremony's own commit hot path (C4, docs/plans/2026-08-25-the-terminal-
-    handoff-sweep-stops-being-an-op.md § C4 -- replaces the killed
-    `tail_ops.fire_archive_sweeps_detached`).
+    """Classify + apply one terminal-handoff, one completed-plan, and one
+    actioned-memo archival sweep IN-PROCESS, on the ceremony's own commit hot
+    path (C4, docs/plans/2026-08-25-the-terminal-handoff-sweep-stops-being-an-
+    op.md § C4 -- replaces the killed `tail_ops.fire_archive_sweeps_detached`;
+    extended 2026-08-27 per state/audits/2026-08-27-the-archival-occasion-map-
+    re-verified.md, which found `fleet.archive_completed_plans` and
+    `fleet.archive_actioned_memos` registered, reachable, and reachable by NO
+    occasion at all).
 
-    Composes `archive_terminal_handoffs.plan_sweep` (classification, every
-    exclusion rail -- live-claim, `shipped_in` resolvability, childlessness,
-    dest-conflict, worktree-dirty) and `.apply_sweep` (`os.replace` only, ZERO
-    git spawns) -- never re-implements either. Guarded by that module's own
-    `_acquire_sweep_lock`/`_release_sweep_lock` single-flight rail so this
-    leg and `fleet.archive_completed_handoffs`'s own act path never race the
-    same `os.replace` targets; a contended lock is a first-class non-error
-    skip (empty result), same as that op's own handler treats it, never a
-    raised exception.
+    ONE cadence-gated occasion now serves all three corpora -- see
+    `_ARCHIVE_SWEEP_INTERVAL_S` -- rather than three independent gates, so a
+    single shared cadence marker decides whether ANY corpus work happens this
+    commit. Each corpus is then composed via that corpus's own `plan_sweep`
+    (classification) + `apply_sweep` (`os.replace`, zero spawns) in its own
+    leg function (`_archive_sweep_handoffs_leg` / `_archive_sweep_plans_leg` /
+    `_archive_sweep_memos_leg`) -- never the registered op handler, never
+    `archive_and_commit` -- each leg guarded by ITS OWN module's single-flight
+    lock so this path and that op's own act path never race the same
+    `os.replace` targets.
+
+    ISOLATION ACROSS LEGS: each leg's try/except is scoped to that leg alone.
+    A raise from the memos leg (import failure, lock contention, an exception
+    from `plan_sweep`/`apply_sweep`) degrades to that leg contributing no
+    paths WITHOUT discarding whatever the handoffs or plans legs already
+    applied -- the three legs run sequentially and each leg's return value is
+    unioned into the caller's `commit_paths`, never gated on a sibling leg's
+    success.
+
+    NO SHARED GIT SPAWN -- see the module-level note directly above
+    `_archive_sweep_handoffs_leg` for why an eager combined dirty-rail call
+    was tried and reverted (it broke the "zero survivors, zero spawn" cost
+    invariant `_scan_terminal`'s own docstring guarantees, caught by this
+    repo's own `test_in_plane_sweep_spawns_no_git_process_when_nothing_is_
+    terminal`). Each leg pays only the spawn it already owned before this
+    chunk: net new spawn for a sweeping commit is at most ONE (the memos
+    leg's own scoped `git status --porcelain`, paid only when a memo survives
+    classification) -- not the two a naive triple-composition would add.
 
     Returns `(srcs, dsts)` -- repo-relative path lists, ONE entry per
-    successfully-applied move, in the SAME order -- for the caller to union
-    into `commit_paths` alongside `stage.swept_renames`'s own src/dst pair
-    (see `run_commit_pipeline`'s call site). A move `apply_sweep` reports as
-    `failed` contributes to NEITHER list -- its src still exists at the old
-    path and its dst was never created, so naming either half here would
-    hand `commit_scoped()` a pathspec entry with nothing real behind it.
+    successfully-applied move across all three corpora, in the SAME order --
+    for the caller to union into `commit_paths` alongside `stage.swept_renames`
+    's own src/dst pair (see `run_commit_pipeline`'s call site). A move
+    `apply_sweep` reports as `failed` contributes to NEITHER list.
 
-    CADENCE-GATED, not per-commit. The OCCASION is every ceremony commit; the
-    JOB is due every `_ARCHIVE_SWEEP_INTERVAL_S`. When the gate is closed this
-    returns `([], [])` having read nothing at all -- see the gate's own comment
-    for the measurement that motivated it. When it is open the sweep rides the
-    ceremony commit exactly as before, so "zero additional processes, zero
-    additional commits" is unchanged; what changed is how often the corpus work
-    happens, never how its results are delivered.
+    CADENCE-GATED, not per-commit. See `_ARCHIVE_SWEEP_INTERVAL_S` for the
+    per-corpus classification costs (handoffs p50 31ms, plans p50 15.6ms,
+    memos p50 154ms) that motivate gating ALL THREE behind one marker rather
+    than paying any of them on every commit. The shared marker is stamped
+    only once EVERY leg reports `completed=True` (its own `plan_sweep` ran to
+    completion) -- a leg that never reached `plan_sweep` (import failure, lock
+    contention, a raising lock acquire) means the job did not run this pass
+    for that corpus, so the interval must not be marked served, mirroring the
+    pre-existing single-leg cadence contract (`test_cadence_gate_does_not_
+    stamp_when_the_sweep_fails` et al.) extended across all three legs.
 
     Non-fatal contract (module docstring "HARD CONSTRAINT" precedent,
-    inherited from `archive_and_commit`): NEVER raises. `common_dir is None`
-    (the pass's own git-common-dir resolution failed -- see
-    `_resolve_pass_common_dir`), a failed import of the fleet module, a
-    raising `_acquire_sweep_lock`, and any exception from `plan_sweep`/
-    `apply_sweep` themselves all degrade to `([], [])` -- an archival
-    failure must never flip the ceremony's exit code, and a failed sweep
-    contributes no paths, leaving `commit_paths` exactly what it would have
-    been without this call. The import and the lock are inside that contract,
-    not before it: reaching the sweep is as much a part of the sweep as
-    running it, and every caller of this function is mid-commit with nothing
-    to gain from either failure being terminal.
+    inherited from `archive_and_commit`): NEVER raises, for any of the three
+    legs. `common_dir is None` short-circuits before any leg runs.
+
+    Each leg now also records its own outcome via `_sweep_receipt
+    .record_sweep_outcome` -- previously only the plans/memos STANDALONE op
+    handlers did this; the in-plane handoffs leg had no receipt row at all,
+    which is corrected here alongside the two new legs.
 
     Negative-spec:
-      - Does NOT spawn git -- `plan_sweep`'s own rails spawn `git status
-        --porcelain` (worktree-dirty) and `git cat-file --batch`
-        (`shipped_in`); `apply_sweep` spawns nothing. Neither is a NEW spawn
-        this call site adds -- both already run on the standalone op's own
-        act path (AC-3's "zero ADDITIONAL git processes", not zero total).
+      - Does NOT spawn git beyond each leg's own pre-existing rail (handoffs'
+        worktree-dirty + `shipped_in`'s `git cat-file --batch`; memos' own
+        worktree-dirty, paid only on survivors) -- `apply_sweep` spawns
+        nothing for any of the three, and `archive_plans` has no rail at all.
       - Does NOT commit anything itself -- the caller folds the returned
         paths into its own `commit_paths` and lands them on the SAME commit
-        it was already making (AC-3/AC-10).
+        it was already making.
       - Does NOT re-implement `_common.py :: archive_and_commit` -- that
-        helper is untouched (AC-6) and stays the standalone op's own commit
+        helper is untouched and stays each standalone op's own commit
         mechanism, never this leg's.
     """
     if common_dir is None:
@@ -4256,102 +4691,126 @@ def _run_in_plane_archive_sweep(
     if not _archive_sweep_due(common_dir, _ARCHIVE_SWEEP_INTERVAL_S):
         return [], []
 
-    # Deferred PAST the cadence gate, deliberately: importing the fleet
-    # module pulls its own dependency tree into every commit for a job that
-    # runs once per `_ARCHIVE_SWEEP_INTERVAL_S`. Below the gate, the
-    # interpreter pays it only on the commits that sweep.
-    #
-    # `plan_sweep` is now SYNCHRONOUS (C2, docs/plans/2026-08-26-the-sweep-
-    # stops-paying-for-a-room-it-nev.md), so this call site no longer wraps
-    # it in `asyncio.run(...)` and no longer imports `asyncio` at all --
-    # confirmed live before this change: `inspect.iscoroutinefunction(
-    # archive_terminal_handoffs.plan_sweep)` was `True`, and the OLD
-    # `asyncio.run(...)` call against a now-sync `plan_sweep` would raise
-    # `ValueError: a coroutine was expected`, silently swallowed by the
-    # `except Exception:` below into `return [], []` -- disabling in-plane
-    # archiving forever with only a logged warning as its trace (staff-eng
-    # Finding 0). Calling `plan_sweep` directly is the fix, not a
-    # side-effect of the sync migration.
-    #
-    # Guarded, because a deferred import is a runtime operation on a hot path
-    # and fails like one. Observed 2026-08-27 mid-publish-round: this line
-    # raised `ImportError: cannot import name 'parse_index_identity' from
+    # Deferred PAST the cadence gate, deliberately: importing any fleet module
+    # pulls its own dependency tree into every commit for a job that runs once
+    # per `_ARCHIVE_SWEEP_INTERVAL_S`. Below the gate, the interpreter pays it
+    # only on the commits that sweep. Each leg does its own deferred import
+    # (see each leg function), guarded exactly as this call site always was:
+    # observed 2026-08-27 mid-publish-round, an unguarded import here raised
+    # `ImportError: cannot import name 'parse_index_identity' from
     # 'coordinator_core.git.git_index'` -- a transient inconsistency in a tree
-    # ~50 peer sessions share -- and took the whole round down at its commit
-    # step, AFTER all 9 rows had synced clean. Every other archival failure
-    # below is already non-fatal by construction; an unguarded import was the
-    # one way for the optional sweep to flip a ceremony's exit code.
-    try:
-        from coordinator_core.ops.fleet import archive_terminal_handoffs
-    except Exception:
-        _LOG.warning(
-            "run_commit_pipeline: in-plane archive-sweep module import failed "
-            "-- contributing no paths (non-fatal)", exc_info=True,
-        )
-        return [], []
+    # ~50 peer sessions share -- and took a whole ceremony commit down at its
+    # commit step. An unguarded import was the one way for the optional sweep
+    # to flip a ceremony's exit code; every leg below guards its own.
 
-    # Same reasoning one call further in: `_acquire_sweep_lock` returning None
-    # is the CONTENDED answer, already handled below as a first-class skip --
-    # but it reaches the filesystem to say it, so it can raise instead of
-    # answering, and that raise is an archival failure like any other.
-    try:
-        lock_path = archive_terminal_handoffs._acquire_sweep_lock(common_dir)
-    except Exception:
-        _LOG.warning(
-            "run_commit_pipeline: in-plane archive-sweep lock acquisition failed "
-            "-- contributing no paths (non-fatal)", exc_info=True,
-        )
-        return [], []
+    all_srcs: List[str] = []
+    all_dsts: List[str] = []
 
-    if lock_path is None:
-        # Contended -- another instance (the standalone op's act path, or a
-        # concurrent ceremony) holds the sweep right now. First-class
-        # non-error skip, retained for the next sweep -- never an error that
-        # flips this ceremony's exit code.
-        return [], []
+    # Each leg is independently non-fatal and independently contributes its
+    # own srcs/dsts -- a raise or a contended lock inside ANY one leg degrades
+    # to that leg alone contributing nothing, never discarding what a sibling
+    # leg already applied (see module docstring "ISOLATION ACROSS LEGS"). No
+    # dirty-set sharing between legs -- see the module-level note above
+    # `_archive_sweep_handoffs_leg` for why.
+    handoff_srcs, handoff_dsts, handoff_completed = _archive_sweep_handoffs_leg(worktree_root, common_dir)
+    all_srcs.extend(handoff_srcs)
+    all_dsts.extend(handoff_dsts)
 
-    try:
-        try:
-            moves, _skipped = archive_terminal_handoffs.plan_sweep(
-                worktree_root, common_dir, _archive_sweep_cap()
-            )
-        except Exception:
-            _LOG.warning(
-                "run_commit_pipeline: in-plane archive-sweep plan_sweep failed "
-                "-- contributing no paths (non-fatal)", exc_info=True,
-            )
-            return [], []
+    plan_srcs, plan_dsts, plan_completed = _archive_sweep_plans_leg(worktree_root, common_dir)
+    all_srcs.extend(plan_srcs)
+    all_dsts.extend(plan_dsts)
 
-        # The classification pass ran to completion -- that IS the run this
-        # cadence gates, whether or not it found anything to move. Stamping
-        # only on a non-empty result would reopen the gate on every commit for
-        # exactly the corpus this sweep currently produces (0 moves against 237
-        # records), which is the case the gate exists for.
+    memo_srcs, memo_dsts, memo_completed = _archive_sweep_memos_leg(worktree_root, common_dir)
+    all_srcs.extend(memo_srcs)
+    all_dsts.extend(memo_dsts)
+
+    # The shared cadence marker is stamped only if EVERY leg's own
+    # classification pass ran to completion -- a leg that never reached
+    # `plan_sweep` (import failure, lock contention, a raising lock acquire)
+    # means the job did not run for that corpus this pass, so the interval
+    # must stay open for an immediate retry, exactly as the pre-existing
+    # single-leg contract required (see docstring). A per-leg failure is
+    # already visible via that leg's own `record_sweep_outcome` row.
+    if handoff_completed and plan_completed and memo_completed:
         _stamp_archive_sweep(common_dir)
 
-        if not moves:
-            return [], []
+    return all_srcs, all_dsts
 
+
+def _resync_shared_index_for_swept_paths(
+    root: Path, srcs: List[str], dsts: List[str]
+) -> None:
+    """Point the SHARED `.git/index` back at HEAD for the paths the in-plane
+    archive sweep moved, AFTER that sweep's commit has landed.
+
+    Without this, a sweep that actually moves something leaves the shared index
+    describing a repo state that exists nowhere else. Three facts compose into
+    the gap, none of them a failure on its own:
+      - `apply_sweep` moves bytes with `os.replace` and writes no index;
+      - the swept src/dst join `commit_paths` ONLY -- they are folded in AFTER
+        `explicit_stage`, which is this pass's one and only `add_paths` call
+        (`coordinator_core/git/commit_context.py` § "Two generations, not one"
+        states that invariant: `add_paths` is the sole `.git/index` mutation in
+        a commit pass);
+      - the commit lands through `_commit_via_head_spine` or a private
+        `GIT_INDEX_FILE`, neither of which touches `.git/index`.
+    So HEAD and the worktree both say "archived" while the index still holds src
+    present and dst absent. `git status` renders that as an `RD` staged rename
+    back OUT of the archive plus the real archived file reported untracked --
+    a tree that reads as though someone un-archived correctly-archived work, and
+    which any unscoped `git commit` would then commit, resurrecting the handoff.
+    Observed 2026-08-27: 355e27e7a swept three handoffs while committing an
+    unrelated test file and left all three wedged.
+
+    This is the same index-from-HEAD remedy `_common._resync_main_index_for_moves`
+    already applies on the `archive_and_commit` leg -- a leg this in-plane path
+    does not use, which is why it never inherited the resync.
+
+    `git reset -q HEAD -- <paths>` is index-only and explicitly pathspec'd, so a
+    peer's own staged work on this shared tree is untouched (`reset_paths` carries
+    that contract, and its bare-pathspec refusal, for the rollback path already).
+
+    Best-effort by construction: the commit is authoritative and has already
+    landed, so a failure here is post-commit hygiene -- logged, never raised.
+    Chunked against `_ARGV_PATHSPEC_BUDGET` for the same reason the sibling
+    resync is: a cap-sized sweep's pathspec is otherwise unrunnable on Windows
+    (WinError 206), and a chunk keeps each rename's src/dst pair whole so a
+    failure never resyncs half a rename.
+    """
+    if not srcs and not dsts:
+        return
+
+    # (Review: code-reviewer -- Finding 2: `zip` silently truncates on a
+    # length mismatch, resyncing a subset of the sweep with no error
+    # signal; assert the pairing invariant this function's docstring
+    # already claims ("a chunk keeps each rename's src/dst pair whole").)
+    assert len(srcs) == len(dsts), (
+        "_resync_shared_index_for_swept_paths: srcs/dsts length mismatch "
+        f"({len(srcs)} vs {len(dsts)})"
+    )
+
+    from coordinator_core.ops.fleet._common import _argv_group_chunks
+
+    pairs = [((src, dst), (src, dst)) for src, dst in zip(srcs, dsts)]
+    for chunk in _argv_group_chunks(pairs):
+        paths = [token for _pair, tokens in chunk for token in tokens]
         try:
-            acted, _failed = archive_terminal_handoffs.apply_sweep(moves)
+            result = git_native.reset_paths(root, paths)
         except Exception:
             _LOG.warning(
-                "run_commit_pipeline: in-plane archive-sweep apply_sweep failed "
-                "-- contributing no paths (non-fatal)", exc_info=True,
+                "run_commit_pipeline: in-plane archive-sweep index resync raised "
+                "for %d path(s) -- commit already landed, index may show a stale "
+                "staged rename out of the archive (non-fatal)",
+                len(paths), exc_info=True,
             )
-            return [], []
-
-        acted_ids = {a["id"] for a in acted if a.get("archived")}
-        srcs: List[str] = []
-        dsts: List[str] = []
-        for move in moves:
-            if move.candidate_id not in acted_ids:
-                continue
-            srcs.append(_archive_sweep_rel_id(move.src, worktree_root))
-            dsts.append(_archive_sweep_rel_id(move.dst, worktree_root))
-        return srcs, dsts
-    finally:
-        archive_terminal_handoffs._release_sweep_lock(lock_path)
+            continue
+        if result.returncode != 0:
+            _LOG.warning(
+                "run_commit_pipeline: in-plane archive-sweep index resync FAILED "
+                "for %d path(s): %s -- commit already landed, index may show a "
+                "stale staged rename out of the archive (non-fatal)",
+                len(paths), result.stderr,
+            )
 
 
 def run_commit_pipeline(
@@ -4991,6 +5450,16 @@ def run_commit_pipeline(
                 f"verified -- {commit_outcome.stderr}"
             )
 
+            # (Review: code-reviewer -- Finding 1: this `landed = True` site
+            # returns at both of its own exits below without ever reaching
+            # the resync call further down -- HEAD already moved (sha
+            # verification is orthogonal to whether the commit landed), so
+            # the in-plane sweep's shared-index wedge must be closed here
+            # too, not only at the final `landed = True` site.)
+            _resync_shared_index_for_swept_paths(
+                root, archive_sweep_srcs, archive_sweep_dsts
+            )
+
             if push_mode != PUSH_MODE_SYNC:
                 return PipelineResult(
                     stage=stage,
@@ -5085,6 +5554,17 @@ def run_commit_pipeline(
         # history, not index-only residue; nothing left to roll back
         # regardless of what push_with_retry() below does.
         landed = True
+
+        # The in-plane archive sweep's own moved paths are the one part of
+        # this commit the shared index was never told about -- they joined
+        # `commit_paths` AFTER `explicit_stage` (this pass's only `add_paths`)
+        # had already run. Resync them from HEAD now that HEAD is the archived
+        # state; see `_resync_shared_index_for_swept_paths`. A no-op (and no
+        # spawn) on every commit whose sweep was gated, contended, or empty,
+        # which is the overwhelming majority.
+        _resync_shared_index_for_swept_paths(
+            root, archive_sweep_srcs, archive_sweep_dsts
+        )
 
         if on_committed is not None and commit_outcome.committed_sha is not None:
             # AC18 crash-resumption hook (Finding 2 fix) -- persist the

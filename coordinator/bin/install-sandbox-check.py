@@ -112,7 +112,7 @@ def _import_main():
     return _op_main
 
 
-def main() -> None:
+def main(argv: "list[str] | None" = None) -> int:
     try:
         op_main = _import_main()
     except RuntimeError as exc:
@@ -123,10 +123,10 @@ def main() -> None:
             "repos.claude_klabauter machine-local registry key, then re-run.",
             file=sys.stderr,
         )
-        sys.exit(_TRANSPORT_FAILURE_RC)
+        return _TRANSPORT_FAILURE_RC
     except ImportError as exc:
         print(f"install-sandbox-check: coordinator_core.install.sandbox_check not importable: {exc}", file=sys.stderr)
-        sys.exit(_TRANSPORT_FAILURE_RC)
+        return _TRANSPORT_FAILURE_RC
 
     # Resolve the default COORDINATOR_ROOT via doe_root() (see
     # _resolve_coordinator_root() docstring) — the claude-klabauter module cannot do
@@ -135,7 +135,7 @@ def main() -> None:
     # not inside the DoE clone, so dirname(script_dir) no longer points at
     # the tree that owns templates/. An explicit --coordinator-root on argv
     # still wins verbatim and skips this resolution entirely.
-    argv = list(sys.argv[1:])
+    argv = list((sys.argv[1:] if argv is None else argv))
     # Review: code-reviewer (nit, Finding 8) — startswith("--coordinator-root")
     # also matched an unrelated future flag such as --coordinator-root-verbose
     # or --coordinator-rootfoo, wrongly treating it as an already-supplied
@@ -145,8 +145,8 @@ def main() -> None:
         coordinator_root = _resolve_coordinator_root()
         argv = ["--coordinator-root", coordinator_root] + argv
 
-    sys.exit(op_main(argv))
+    return op_main(argv)
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

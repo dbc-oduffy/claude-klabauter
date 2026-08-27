@@ -79,30 +79,30 @@ def _import_run_op_main():
     return run_op_main
 
 
-def main() -> None:
+def main(argv: "list[str] | None" = None) -> int:
     try:
         run_op_main = _import_run_op_main()
     except RuntimeError as exc:
         print(f"parse-completeness-item: CLAUDE_KLABAUTER_ROOT resolution failed: {exc}", file=sys.stderr)
-        sys.exit(_TRANSPORT_FAILURE_EXIT)
+        return _TRANSPORT_FAILURE_EXIT
     except ImportError as exc:
         print(
             f"parse-completeness-item: coordinator_core.cli_entry not importable: {exc}",
             file=sys.stderr,
         )
-        sys.exit(_TRANSPORT_FAILURE_EXIT)
+        return _TRANSPORT_FAILURE_EXIT
 
     try:
-        code = run_op_main("coordinator_core.ops.parse_completeness_item", sys.argv[1:])
+        code = run_op_main("coordinator_core.ops.parse_completeness_item", (sys.argv[1:] if argv is None else argv))
     except ImportError as exc:
         print(
             f"parse-completeness-item: coordinator_core.ops.parse_completeness_item not importable: {exc}",
             file=sys.stderr,
         )
-        sys.exit(_TRANSPORT_FAILURE_EXIT)
+        return _TRANSPORT_FAILURE_EXIT
 
-    sys.exit(code)
+    return code
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

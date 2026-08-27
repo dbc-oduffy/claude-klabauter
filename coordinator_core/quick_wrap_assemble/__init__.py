@@ -51,7 +51,7 @@ the EM's. `git mv` on a dirty record would drag in-flight work into `archive/`.
 
 READ-ONLY, by construction, WITH ONE NAMED CARVE-OUT (C5, see Negative-spec below): this
 module reads disk/git state, and `brief()` additionally calls C4's hardened
-`auto_commit_session_async` in-process to commit this session's own claimed dirty paths
+`commit_session_offer_async` in-process to commit this session's own claimed dirty paths
 before returning. Every OTHER mutating action is still returned as a `directives[]` entry
 naming an existing atomic CLI.
 
@@ -59,7 +59,7 @@ Negative-spec:
     - Do NOT add a mutating code path here, beyond the ONE narrow carve-out C5
       (docs/plans/2026-08-20-the-close-ceremony-commits-what-the-session-wrote.md § C5)
       already introduced: `_run_close_commit`'s in-process call to
-      `coordinator_core.ops.session.safe_commit_offer.auto_commit_session_async`,
+      `coordinator_core.ops.session.safe_commit_offer.commit_session_offer_async`,
       replacing the former `safe-commit-offer` directive by explicit PM ruling (being
       asked whether to commit was itself the defect). That carve-out is closed — do not
       widen it into a general precedent for "the assembler should just do X" for any
@@ -113,7 +113,7 @@ from coordinator_core.frontmatter.primitives import (
     split_frontmatter,
 )
 from coordinator_core.ops.extract_scope_paths import _extract_scope_paths
-from coordinator_core.ops.session.safe_commit_offer import auto_commit_session_async
+from coordinator_core.ops.session.safe_commit_offer import commit_session_offer_async
 from coordinator_core.ops.session_commits import resolve_session_commits
 from coordinator_core.session import session_facts
 from coordinator_core.session_baton.store import merge_baton
@@ -531,7 +531,7 @@ def _directives(fold: dict[str, Any], *, fold_degraded: bool = False) -> list[di
     § C5): the former `safe-commit-offer` directive (step 1) is GONE from this list —
     being asked whether to commit was itself the defect (PM ruling), and an agent
     directive that may never actually run satisfies that ruling less completely than
-    calling `auto_commit_session_async` in-process does. `brief()` now makes that call
+    calling `commit_session_offer_async` in-process does. `brief()` now makes that call
     itself, before this function is invoked; see `_run_close_commit`. This function no
     longer emits any commit-shaped directive at all — do not re-add one.
 
@@ -694,13 +694,13 @@ def _judgment_points(
 
 def _run_close_commit(root: Path, sid: str) -> dict[str, Any]:
     """C5 (docs/plans/2026-08-20-the-close-ceremony-commits-what-the-session-
-    wrote.md § C5): call C4's hardened `auto_commit_session_async` in-process
+    wrote.md § C5): call C4's hardened `commit_session_offer_async` in-process
     instead of emitting `safe-commit-offer` as an agent directive that may
     never actually run. Engine-side and deterministic — no prompt, no EM
     decision, no doctrine the operator has to remember.
 
     Fail-open by construction: any exception here is swallowed into a
-    synthesized `"error"`-status `AutoCommitReport` rather than raised into
+    synthesized `"error"`-status `CommitOfferReport` rather than raised into
     `brief()`'s own envelope computation — a failure inside this call must
     never prevent the close ceremony's own decision-object computation from
     completing (AC9's own "does not prevent the ceremony from completing").
@@ -711,7 +711,7 @@ def _run_close_commit(root: Path, sid: str) -> dict[str, Any]:
     without this module writing anywhere new for it (AC9's second half).
     """
     try:
-        report = asyncio.run(auto_commit_session_async(sid, str(root), invoker="attended"))
+        report = asyncio.run(commit_session_offer_async(sid, str(root), invoker="attended"))
         return dict(report)
     except Exception as exc:  # noqa: BLE001 — must never block brief()'s own computation
         return {
@@ -723,7 +723,7 @@ def _run_close_commit(root: Path, sid: str) -> dict[str, Any]:
             "residue": {},
             "outcome": {
                 "status": "error",
-                "detail": f"auto_commit_session_async raised {type(exc).__name__}: {exc}",
+                "detail": f"commit_session_offer_async raised {type(exc).__name__}: {exc}",
                 "committed_paths": [],
                 "conflicted_paths": [],
             },

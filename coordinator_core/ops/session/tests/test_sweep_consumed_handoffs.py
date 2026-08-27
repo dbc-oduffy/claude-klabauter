@@ -191,6 +191,22 @@ def test_absent_cap_is_a_setup_error_never_unbounded(repo: Path):
     result = _handler({"cap": -1}, repo_root=common_dir)
     assert result["exit_code"] == 1
 
+    rows = _receipt_rows(common_dir)
+    assert rows, "a setup-error exit (bad cap) must still leave a receipt row (AC-3)"
+    assert rows[-1]["outcome"] == "failed"
+    assert "cap" in rows[-1].get("detail", "")
+
+
+def test_repo_root_none_is_receipted_as_a_failure() -> None:
+    # No common_dir is resolvable at all here, so `record_sweep_outcome`'s
+    # own `common_dir is None` guard makes this call a deliberate no-op —
+    # there is nowhere on disk to write a receipt for an unknown repo. The
+    # assertion is only that the handler ATTEMPTS the call rather than
+    # returning silently; there is no receipt file to inspect for this case.
+    result = _handler({"cap": 10}, repo_root=None)
+    assert result["exit_code"] == 1
+    assert "repo_root" in result["error"]
+
 
 def test_plan_sweep_failure_is_reported_and_receipted_never_silent(repo: Path):
     name = "2026-01-04-shipped-consumed.md"

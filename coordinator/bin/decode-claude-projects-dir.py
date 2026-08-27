@@ -60,26 +60,26 @@ def _prepare_claude_klabauter_root() -> None:
     claude_klabauter_root = require_dispatch_engine_on_path()
 
 
-def main() -> None:
+def main(argv: "list[str] | None" = None) -> int:
     try:
         _prepare_claude_klabauter_root()
     except RuntimeError as exc:
         print(f"decode-claude-projects-dir.py: engine-root resolution failed: {exc}", file=sys.stderr)
-        sys.exit(2)
+        return 2
 
     from coordinator_core.cli_entry import run_op_main
 
     try:
-        code = run_op_main("coordinator_core.ops.decode_claude_projects_dir", sys.argv[1:])
+        code = run_op_main("coordinator_core.ops.decode_claude_projects_dir", (sys.argv[1:] if argv is None else argv))
     except ImportError as exc:
         print(
             f"decode-claude-projects-dir.py: coordinator_core.ops.decode_claude_projects_dir not importable: {exc}",
             file=sys.stderr,
         )
-        sys.exit(2)
+        return 2
 
-    sys.exit(code)
+    return code
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

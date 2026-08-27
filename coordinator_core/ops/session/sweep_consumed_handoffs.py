@@ -138,19 +138,25 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     boundary is scoped to that one call, deferred-imported so the
     nothing-to-move path never pays it.
     """
+    if repo_root is None:
+        _LOG.error("%s: repo_root handler arg is None", _SWEEP_KEY)
+        _sweep_receipt.record_sweep_outcome(
+            None, _SWEEP_KEY, "failed", detail="repo_root handler arg is None"
+        )
+        return _setup_error("repo_root handler arg is None")
+
+    common_dir = Path(repo_root) if not isinstance(repo_root, Path) else repo_root
+
     cap = params.get("cap")
     if not isinstance(cap, int) or isinstance(cap, bool) or cap <= 0:
-        return _setup_error(
+        detail = (
             f"cap is required and must be a positive int, got {cap!r} — "
             f"no unbounded default (mirrors fleet.archive_completed_handoffs's "
             f"own cap-axis decision)"
         )
+        _sweep_receipt.record_sweep_outcome(common_dir, _SWEEP_KEY, "failed", detail=detail)
+        return _setup_error(detail)
 
-    if repo_root is None:
-        _LOG.error("%s: repo_root handler arg is None", _SWEEP_KEY)
-        return _setup_error("repo_root handler arg is None")
-
-    common_dir = Path(repo_root) if not isinstance(repo_root, Path) else repo_root
     worktree = main_worktree_root(common_dir)
 
     lock_path = _acquire_sweep_lock(common_dir)

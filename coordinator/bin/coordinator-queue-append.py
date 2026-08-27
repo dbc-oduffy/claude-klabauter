@@ -1676,14 +1676,14 @@ Spec backlink: docs/plans/2026-06-25-example-initiative-tc-2-queues-lessons-cons
 # ---------------------------------------------------------------------------
 
 
-def main() -> None:
+def main(argv: "list[str] | None" = None) -> int:
     """Entry point for coordinator-queue-append CLI."""
     # F12: --schema NAME --help (or -h) routes to per-schema help BEFORE argparse's
     # own --help handling fires (argparse would otherwise print generic top-level
     # help and exit, never reaching this branch). --help without --schema falls
     # through unchanged to parser.parse_args()'s normal top-level help.
     # Spec backlink: tasks/2026-07-08-install-dogfood-friction.md § F12
-    _argv = sys.argv[1:]
+    _argv = (sys.argv[1:] if argv is None else argv)
     if "--help" in _argv or "-h" in _argv:
         _schema_arg = _extract_schema_arg(_argv)
         if _schema_arg:
@@ -1726,7 +1726,7 @@ def main() -> None:
             f"error: unknown schema '{schema_name}'. Known: {known}.",
             file=sys.stderr,
         )
-        sys.exit(1)
+        return 1
 
     # Apply schema-specific status defaults before validation.
     if args.schema == "lessons" and args.status is None:
@@ -1824,7 +1824,7 @@ def main() -> None:
                 f"Valid values: {', '.join(_VALID_QUEUE_SCOPES)}.",
                 file=sys.stderr,
             )
-            sys.exit(1)
+            return 1
         queue_scope = args.queue_scope
 
     # Review: code-reviewer — F1: schema guard for --queue-scope; only improvement-queue supports it.
@@ -1839,7 +1839,7 @@ def main() -> None:
             f"(got '{schema_name}').",
             file=sys.stderr,
         )
-        sys.exit(1)
+        return 1
 
     # Review: code-reviewer — (F3-parity hoist) _current_repo_root() spawns a
     # `git rev-parse`; hoist once here and reuse below (coordinator_root_path,
@@ -1917,7 +1917,7 @@ def main() -> None:
                     f"error: --sequence must be an integer, got {args.sequence!r}",
                     file=sys.stderr,
                 )
-                sys.exit(1)
+                return 1
             # Review: code-reviewer — F4 (nit): int("-5") parses successfully with
             # no range check. The schema docstring/help text says sequence starts
             # at 1 and increments — reject non-positive values consistent with
@@ -1927,7 +1927,7 @@ def main() -> None:
                     f"error: --sequence must be >= 1 (starts at 1, increments), got {sequence}",
                     file=sys.stderr,
                 )
-                sys.exit(1)
+                return 1
             fields = {
                 "workstream": args.workstream,
                 "field": args.field,
@@ -2077,7 +2077,7 @@ def main() -> None:
                     "  Reference: plugins/coordinator-claude/coordinator/docs/wiki/machine-local-registry.md §4c",
                     file=sys.stderr,
                 )
-                sys.exit(1)
+                return 1
             print(
                 f"warn: coordinator-queue-append: the engine root unresolvable — "
                 f"skipping meta-repo per-project write: {exc}",
@@ -2213,7 +2213,7 @@ def main() -> None:
         )
     except RuntimeError as _exc:
         print(f"error: coordinator-queue-append: native transport failed: {_exc}", file=sys.stderr)
-        sys.exit(1)
+        return 1
 
     # Legacy path: legacy_fn() already handled validate, write, and print(out_path).
     # Returns None on normal completion or on _ClaudeKlabauterUnresolvable graceful-skip.
@@ -2260,4 +2260,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

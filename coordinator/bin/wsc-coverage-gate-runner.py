@@ -26,11 +26,13 @@ Subcommands (argv[1] selects):
       killed; all three went with it. See
       docs/wiki/cost-budgets-and-the-kill-disposition.md.
 
-  write-trail — REMOVED (PM ruling 2026-08-23, kill review_trail.write). Its
-      whole job was an argv-forwarding passthrough to
-      coordinator-write-review-trail.py, which was deleted along with the
-      review_trail.write op it trampolined. See the removal comment above
-      `_build_parser` (where the subcommand used to be registered).
+  write-trail — REMOVED (DR-372, DR-374). Its whole job was an argv-
+      forwarding passthrough to coordinator-write-review-trail.py. Neither
+      that CLI nor the review_trail.write op it trampolined has been
+      deleted — both are still on disk, gravestoned per DR-374 pending a
+      follow-on deletion chunk, not removed by this subcommand's own
+      absence. See the removal comment above `_build_parser` (where the
+      subcommand used to be registered).
 
   brightline-gate — REMOVED (state/kill-ledger.md K-007, 2026-08-19, PM
       ruling). The chain-terminal two-oracle gate: this subcommand, its
@@ -80,8 +82,9 @@ from raw_cmdline_recovery import UnsoundRawCmdlineTransport, recover_windows_arg
 #: docstring. The `write-trail --sha-range` subcommand this originally guarded
 #: (a git rev/range typed directly at the CLI, e.g. the `sha^..sha`
 #: predecessor-range shape cmd.exe's `%*` batch-parameter population silently
-#: strips a literal `^` from) was removed 2026-08-23 (PM ruling, kill
-#: review_trail.write); kept for `claim-plan`'s own argv, refusing on an
+#: strips a literal `^` from) was removed here per DR-372/DR-374 (the
+#: review_trail.write op and its CLI are gravestoned, not deleted — both
+#: remain on disk); kept for `claim-plan`'s own argv, refusing on an
 #: unvouchable capture same as before.
 _LAUNCHER_CMD_NAME = "wsc-coverage-gate-runner.cmd"
 
@@ -136,12 +139,14 @@ def cmd_claim_plan(args: argparse.Namespace) -> int:
 
 
 # ---------------------------------------------------------------------------
-# write-trail — REMOVED (PM ruling 2026-08-23, kill review_trail.write). This
-# subcommand's entire job was an argv-forwarding passthrough to the sibling
-# coordinator-write-review-trail.py, which was itself deleted along with the
-# review_trail.write op it trampolined. Kill-means-kill, no successor built
-# yet. See docs/wiki/cost-budgets-and-the-kill-disposition.md for the sibling
-# removal precedents (coverage-gate/brightline-gate) this follows.
+# write-trail — REMOVED from THIS CLI (DR-372, DR-374). This subcommand's
+# entire job was an argv-forwarding passthrough to the sibling
+# coordinator-write-review-trail.py. Neither that CLI nor the
+# review_trail.write op it trampolined has been deleted — DR-372 rules no
+# review trail is owed, and DR-374 gravestones the surface (both remain on
+# disk pending a follow-on deletion chunk); this is not the
+# coverage-gate/brightline-gate kill-means-kill shape. See
+# docs/decisions/DR-374-the-retired-review-trail-surface-is-gravestoned.md.
 # ---------------------------------------------------------------------------
 
 

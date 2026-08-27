@@ -60,28 +60,28 @@ def _import_run_op_main():
     return run_op_main
 
 
-def main() -> None:
+def main(argv: "list[str] | None" = None) -> int:
     try:
         run_op_main = _import_run_op_main()
     except RuntimeError as exc:
         print(f"learn-lessons-config-update.py: CLAUDE_KLABAUTER_ROOT resolution failed: {exc}", file=sys.stderr)
-        sys.exit(0)
+        return 0
     except ImportError as exc:
         print(
             f"learn-lessons-config-update.py: coordinator_core.cli_entry not importable: {exc}",
             file=sys.stderr,
         )
-        sys.exit(0)
+        return 0
     try:
-        code = run_op_main("coordinator_core.ops.learn_lessons_config_update", sys.argv[1:])
+        code = run_op_main("coordinator_core.ops.learn_lessons_config_update", (sys.argv[1:] if argv is None else argv))
     except ImportError as exc:
         print(
             f"learn-lessons-config-update.py: coordinator_core.ops.learn_lessons_config_update not importable: {exc}",
             file=sys.stderr,
         )
-        sys.exit(0)
-    sys.exit(code)
+        return 0
+    return code
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

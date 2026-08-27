@@ -122,6 +122,29 @@ _RATIFIED_SUSPENSIONS = frozenset({
     # the kill ruling asked for. Rebuilt op measured 212.5ms CPU / 267.2ms wall
     # via its handler against the row's 26111.9ms. See the removal note in
     # op_budget_suspension.SUSPENDED_OPS for the full reasoning.
+    #
+    # --- the 200ms sweep, PM ruling 2026-08-27 (kill ledger K-103..K-115) -----
+    # Fourteen rows added in one commit. These are GRAVESTONES, not suspensions:
+    # each was drained from the four registration surfaces in the same commit, so
+    # the row is a name with no code behind it, keeping the refusal loud instead
+    # of degrading to METHOD_NOT_FOUND. The bar they died on is 200ms of PROCESS
+    # time (PROCESS_BAR_MS), not this module's 2000ms wall-clock occupancy bar --
+    # see test_every_entry_carries_its_measured_evidence, which now reads both
+    # axes. Six carry wall-clock-only evidence and say so in their own rows.
+    "write_surface.emit_manifest",
+    "deliverable.cascade_terminal",
+    "fleet.prune_closed_bugs",
+    "ceremony.commit",
+    "roadmap.serve",
+    "handoff.reconcile_open",
+    "handoff.archive_transition",
+    "review_trail.write",
+    "session.sweep_consumed_handoffs",
+    "cartography.churn",
+    "handoff.has_live_children",
+    "handoff.reconcile_close_terminal",
+    "merge_assemble.brief",
+    "fleet.archive_completed_plans",
 })
 
 
@@ -183,6 +206,38 @@ def test_every_entry_carries_its_measured_evidence():
         assert isinstance(occupancy_secs, (int, float)), (
             f"{op}: occupancy_secs is not a number"
         )
+
+        # Amended 2026-08-27: a THIRD admission axis. The 200ms sweep
+        # (K-103..K-115) convicts on process time against PROCESS_BAR_MS, an
+        # axis `admitted_on` cannot see -- it takes a wall-clock max and an
+        # occupancy figure, and a row like write_surface.emit_manifest (1562.5ms
+        # max, well under the 2000ms wall bar) is a real breach on the axis that
+        # actually governs. Reading only the two old axes would have called
+        # every row in that sweep "a dial in disguise" and demanded its
+        # reinstatement. The unit is carried per-row rather than inferred, so
+        # this check reads what the row says it was judged on.
+        unit = str(measured.get("unit") or "")
+        p50_ms = measured.get("p50_ms")
+        if unit.startswith("process_ms"):
+            assert isinstance(p50_ms, (int, float)), f"{op}: p50_ms is not a number"
+            assert float(p50_ms) > op_budget_suspension.PROCESS_BAR_MS, (
+                f"{op} carries unit={unit!r} but its p50 ({p50_ms}ms process) does "
+                f"not breach the {op_budget_suspension.PROCESS_BAR_MS}ms process "
+                f"bar. A row judged on process time must breach on process time."
+            )
+            continue
+        if unit == "WALL_CLOCK":
+            # Convicted without a process-time measurement. The gap is real and
+            # is NAMED in the row's own note rather than papered over; what this
+            # guard can still enforce is that the wall figure is at least a
+            # breach of the bar it was read against.
+            assert isinstance(p50_ms, (int, float)), f"{op}: p50_ms is not a number"
+            assert float(p50_ms) > op_budget_suspension.PROCESS_BAR_MS, (
+                f"{op} is convicted on wall clock alone and does not even breach "
+                f"the {op_budget_suspension.PROCESS_BAR_MS}ms bar on that looser "
+                f"unit. Measure it with benchmarks/process_time before keeping it."
+            )
+            continue
 
         reasons = admitted_on(float(max_ms), float(occupancy_secs))
         assert reasons, (
@@ -246,7 +301,7 @@ def test_live_op_still_resolves():
 #: was — see `op_budget_suspension`'s module docstring.
 _REFUSAL_TAIL = (
     "Killed, not suspended -- the old implementation does not come back. "
-    "If the job is still needed, plan a new one under 500ms."
+    "If the job is still needed, plan a new one under 200ms."
 )
 
 
@@ -433,8 +488,17 @@ def test_rows_without_a_sanctioned_fallback_name_none():
         if record.get("fallback"):
             continue
         message = op_budget_suspension.refusal_message(op)
-        head = f"{op} is off: max "
-        assert message.startswith(head), message
+        # The figure-and-bar clause is rendered in the unit the row was judged
+        # in (op_budget_suspension._bar_clause), so the prefix is "is off: "
+        # plus one of three shapes rather than a hardcoded "max ". Pinning the
+        # literal "max " asserted the OLD wall-clock framing and would fail
+        # every process-time row in the 2026-08-27 sweep -- which is the
+        # framing those rows exist to correct, not a regression.
+        assert message.startswith(f"{op} is off: "), message
+        assert any(
+            marker in message
+            for marker in ("ms process time against", "WALL CLOCK against", "against a ")
+        ), message
         assert message.endswith(_REFUSAL_TAIL), message
 
 

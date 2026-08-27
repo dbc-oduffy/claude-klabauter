@@ -410,151 +410,6 @@ async def has_live_children_many(
     return codes
 
 
-@register_op("handoff.has_live_children")
-async def _handoff_has_live_children(params: dict, repo_root: Optional[Path] = None) -> dict:
-    """JSON-RPC "handoff.has_live_children" handler.
-
-    Port of: handoff-has-live-children.sh (DoE 50ec0809, 2026-07-19) into the
-    coordinator_core resident service.  Accepts the same logical parameters as
-    the bash --exclude / --edge-kinds flags and returns reply fields that the
-    C7 veneer maps to shell exit codes 0/1/2.
-
-    Params (all optional except candidate):
-        candidate   (str)            — absolute or repo-relative path of the
-                                       handoff to test.  Required.
-        exclude     (list[str])      — paths to drop from the scan set before
-                                       checking (mirrors --exclude repeatable flag).
-        edge_kinds  (str | list)     — CSV string or list of edge-kind names to
-                                       follow.  Defaults to all three kinds when
-                                       absent (mirrors EDGE_KINDS_CSV :44).
-
-    Returns a dict with keys:
-        referenced         (bool)    — True → has live children (veneer → exit 0);
-                                       False → safe to archive  (veneer → exit 1).
-                                       ABSENT on error/indeterminate (exit_code=2) —
-                                       callers MUST check exit_code before referenced.
-        children           (list)    — sorted list of absolute paths that reference
-                                       the candidate.
-        live_session_count (int)     — count of currently-live coordinator sessions
-                                       (informational; from liveness.resolve_live_session_ids).
-        exit_code          (int)     — authoritative field: 0, 1, or 2.
-        error              (str)     — set on internal error / indeterminate (exit_code=2).
-
-    Exit-code contract (mirrored from bash):
-        exit_code 0 → referenced=True  → do NOT archive
-        exit_code 1 → referenced=False → safe to archive
-        exit_code 2 → error/indeterminate → fail-closed, treat as do-not-archive
-    """
-    # asyncio deferred to first use here (not module scope) — this is the only function
-    # in the module touching the asyncio namespace at runtime; a module-scope
-    # `import asyncio` dragged asyncio.base_events (~7ms) into every eager op import
-    # even for callers that never invoke handoff.has_live_children. Spec:
-    # docs/plans/2026-07-24-canonical-resolution-engine.md task W0-1.
-    import asyncio
-
-    # ------------------------------------------------------------------
-    # 1. Parse + validate params
-    # ------------------------------------------------------------------
-    candidate: str = params.get("candidate") or ""
-    exclude: List[str] = params.get("exclude") or []
-    edge_kinds: Optional[Set[str]] = _parse_edge_kinds(params.get("edge_kinds"))
-
-    if not candidate:
-        return _indeterminate("missing required param: candidate")
-
-    # ------------------------------------------------------------------
-    # 2. Build live set — replaces query-records.js double-spawn (:150-158)
-    # ------------------------------------------------------------------
-    # C1b-ii: repo_root is the router-supplied git common dir.
-    #
-    # Review: code-reviewer (F1) — repo_root is the git common dir (<worktree>/.git), so
-    # main_worktree_root() (= common_dir.parent) correctly derives the worktree root.
-    if repo_root is not None:
-        worktree_root = main_worktree_root(repo_root)  # router common_dir → worktree root
-    else:
-        return _indeterminate(
-            "no repo_root resolved — _origin_worktree missing from request"
-        )
-
-    # Containment (Review: op-family path-containment sweep, 2026-07-08): candidate
-    # MUST resolve under state/handoffs/ or archive/handoffs/ — this op's live-set
-    # spans both (see docs/problems/2026-07-08-op-family-path-containment-investigation.md
-    # § 4). `exclude` is never resolved to a read, so it is NOT guarded here.
-    allowed_roots = [
-        worktree_root / "state" / "handoffs",
-        worktree_root / "archive" / "handoffs",
-    ]
-    resolved_candidate = contained_path(Path(candidate), allowed_roots)
-    if resolved_candidate is None:
-        return _indeterminate(f"candidate escapes state/handoffs or archive/handoffs: {candidate}")
-    candidate_abs = str(resolved_candidate)
-    if not os.path.isfile(candidate_abs):
-        return _indeterminate(f"candidate not found on disk: {candidate}")
-
-    live_paths, scan_errors = await asyncio.to_thread(_collect_handoff_paths, worktree_root)
-
-    # --- Tier 2 (behaviour change -- PM sign-off required) ---
-    # Fail-closed on an unscannable subtree — a live child could be sitting
-    # under it, which would make `referenced` falsely False (safe-to-archive)
-    # if we silently proceeded on whatever partial set we could read. This is
-    # the same fail-closed posture as the empty-live-set guard just below,
-    # applied to the "we couldn't fully look" case rather than the "we looked
-    # and found nothing" case.
-    if scan_errors:
-        return _indeterminate(
-            "enumeration incomplete — cannot rule out a live child under an "
-            "unscannable subtree: " + "; ".join(scan_errors)
-        )
-    # --- end Tier 2 ---
-
-    # Fail-closed on empty live set — mirrors the bash oracle's fail-closed guard
-    if not live_paths:
-        return _indeterminate(
-            "empty live set: cannot determine children "
-            "(handoff-has-live-children.sh:196-199 fail-closed guard)"
-        )
-
-    # ------------------------------------------------------------------
-    # 3. Reverse-membership check via archival.reverse_membership
-    # ------------------------------------------------------------------
-    try:
-        children = reverse_membership(
-            candidate_abs,
-            live_paths,
-            exclude=exclude if exclude else None,
-            edge_kinds=edge_kinds,
-        )
-    except (ValueError, TypeError) as exc:
-        return _indeterminate(f"reverse_membership error: {exc}")
-    except Exception as exc:  # noqa: BLE001
-        return _indeterminate(f"unexpected error in reverse_membership: {exc}")
-
-    # ------------------------------------------------------------------
-    # 4. Liveness seam — route through canonical coordinator_core.liveness
-    #    (RAW-PID-LIVENESS floor: no ps -p / kill -0 / psutil.pid_exists here).
-    #    resolve_live_session_ids() returns empty frozenset on error; the result
-    #    is informational metadata only — the core membership decision (referenced)
-    #    matches the bash implementation which does not filter by session liveness.
-    # ------------------------------------------------------------------
-    # resolve_live_session_ids() is a pure in-process meta.json scan
-    # (liveness.py:120-147, TTL-cached) — no subprocess shell-out. Still
-    # wrapped in to_thread so the scan never stalls the asyncio event loop
-    # (AC-3 Gap-3 — ipc.py:486-491); the field is informational only and
-    # does not affect exit_code / referenced.
-    live_sids = await asyncio.to_thread(resolve_live_session_ids)  # frozenset[str]; empty on any error
-
-    # ------------------------------------------------------------------
-    # 5. Build reply
-    # ------------------------------------------------------------------
-    referenced = len(children) > 0
-    return {
-        "referenced": referenced,
-        "children": sorted(children),
-        "live_session_count": len(live_sids),
-        "exit_code": 0 if referenced else 1,
-    }
-
-
 # ---------------------------------------------------------------------------
 # Error-shape helper — exit_code=2, fail-closed
 # ---------------------------------------------------------------------------
@@ -828,3 +683,153 @@ def _handoff_blocked_by_dependents(params: dict, repo_root: Optional[Path] = Non
         return _blocked_by_indeterminate(f"candidate not found on disk: {candidate}")
 
     return blocked_by_dependents(candidate_abs, worktree_root, exclude=exclude if exclude else None)
+
+
+# `handoff.has_live_children` was DELETED as an op under the 200ms process-time
+# bar (kill ledger K-060). The verdict it computes is still required in-process
+# by `handoff_close_origin_stub._try_close`, which needs the `children` payload
+# that `has_live_children_many` does not return -- so the body survives here as
+# an undecorated helper with no registry entry, reachable only by direct import.
+# Restoring the `@register_op` line puts the op back over the bar; do not.
+async def _handoff_has_live_children(params: dict, repo_root: Optional[Path] = None) -> dict:
+    """JSON-RPC "handoff.has_live_children" handler.
+
+    Port of: handoff-has-live-children.sh (DoE 50ec0809, 2026-07-19) into the
+    coordinator_core resident service.  Accepts the same logical parameters as
+    the bash --exclude / --edge-kinds flags and returns reply fields that the
+    C7 veneer maps to shell exit codes 0/1/2.
+
+    Params (all optional except candidate):
+        candidate   (str)            — absolute or repo-relative path of the
+                                       handoff to test.  Required.
+        exclude     (list[str])      — paths to drop from the scan set before
+                                       checking (mirrors --exclude repeatable flag).
+        edge_kinds  (str | list)     — CSV string or list of edge-kind names to
+                                       follow.  Defaults to all three kinds when
+                                       absent (mirrors EDGE_KINDS_CSV :44).
+
+    Returns a dict with keys:
+        referenced         (bool)    — True → has live children (veneer → exit 0);
+                                       False → safe to archive  (veneer → exit 1).
+                                       ABSENT on error/indeterminate (exit_code=2) —
+                                       callers MUST check exit_code before referenced.
+        children           (list)    — sorted list of absolute paths that reference
+                                       the candidate.
+        live_session_count (int)     — count of currently-live coordinator sessions
+                                       (informational; from liveness.resolve_live_session_ids).
+        exit_code          (int)     — authoritative field: 0, 1, or 2.
+        error              (str)     — set on internal error / indeterminate (exit_code=2).
+
+    Exit-code contract (mirrored from bash):
+        exit_code 0 → referenced=True  → do NOT archive
+        exit_code 1 → referenced=False → safe to archive
+        exit_code 2 → error/indeterminate → fail-closed, treat as do-not-archive
+    """
+    # asyncio deferred to first use here (not module scope) — this is the only function
+    # in the module touching the asyncio namespace at runtime; a module-scope
+    # `import asyncio` dragged asyncio.base_events (~7ms) into every eager op import
+    # even for callers that never invoke handoff.has_live_children. Spec:
+    # docs/plans/2026-07-24-canonical-resolution-engine.md task W0-1.
+    import asyncio
+
+    # ------------------------------------------------------------------
+    # 1. Parse + validate params
+    # ------------------------------------------------------------------
+    candidate: str = params.get("candidate") or ""
+    exclude: List[str] = params.get("exclude") or []
+    edge_kinds: Optional[Set[str]] = _parse_edge_kinds(params.get("edge_kinds"))
+
+    if not candidate:
+        return _indeterminate("missing required param: candidate")
+
+    # ------------------------------------------------------------------
+    # 2. Build live set — replaces query-records.js double-spawn (:150-158)
+    # ------------------------------------------------------------------
+    # C1b-ii: repo_root is the router-supplied git common dir.
+    #
+    # Review: code-reviewer (F1) — repo_root is the git common dir (<worktree>/.git), so
+    # main_worktree_root() (= common_dir.parent) correctly derives the worktree root.
+    if repo_root is not None:
+        worktree_root = main_worktree_root(repo_root)  # router common_dir → worktree root
+    else:
+        return _indeterminate(
+            "no repo_root resolved — _origin_worktree missing from request"
+        )
+
+    # Containment (Review: op-family path-containment sweep, 2026-07-08): candidate
+    # MUST resolve under state/handoffs/ or archive/handoffs/ — this op's live-set
+    # spans both (see docs/problems/2026-07-08-op-family-path-containment-investigation.md
+    # § 4). `exclude` is never resolved to a read, so it is NOT guarded here.
+    allowed_roots = [
+        worktree_root / "state" / "handoffs",
+        worktree_root / "archive" / "handoffs",
+    ]
+    resolved_candidate = contained_path(Path(candidate), allowed_roots)
+    if resolved_candidate is None:
+        return _indeterminate(f"candidate escapes state/handoffs or archive/handoffs: {candidate}")
+    candidate_abs = str(resolved_candidate)
+    if not os.path.isfile(candidate_abs):
+        return _indeterminate(f"candidate not found on disk: {candidate}")
+
+    live_paths, scan_errors = await asyncio.to_thread(_collect_handoff_paths, worktree_root)
+
+    # --- Tier 2 (behaviour change -- PM sign-off required) ---
+    # Fail-closed on an unscannable subtree — a live child could be sitting
+    # under it, which would make `referenced` falsely False (safe-to-archive)
+    # if we silently proceeded on whatever partial set we could read. This is
+    # the same fail-closed posture as the empty-live-set guard just below,
+    # applied to the "we couldn't fully look" case rather than the "we looked
+    # and found nothing" case.
+    if scan_errors:
+        return _indeterminate(
+            "enumeration incomplete — cannot rule out a live child under an "
+            "unscannable subtree: " + "; ".join(scan_errors)
+        )
+    # --- end Tier 2 ---
+
+    # Fail-closed on empty live set — mirrors the bash oracle's fail-closed guard
+    if not live_paths:
+        return _indeterminate(
+            "empty live set: cannot determine children "
+            "(handoff-has-live-children.sh:196-199 fail-closed guard)"
+        )
+
+    # ------------------------------------------------------------------
+    # 3. Reverse-membership check via archival.reverse_membership
+    # ------------------------------------------------------------------
+    try:
+        children = reverse_membership(
+            candidate_abs,
+            live_paths,
+            exclude=exclude if exclude else None,
+            edge_kinds=edge_kinds,
+        )
+    except (ValueError, TypeError) as exc:
+        return _indeterminate(f"reverse_membership error: {exc}")
+    except Exception as exc:  # noqa: BLE001
+        return _indeterminate(f"unexpected error in reverse_membership: {exc}")
+
+    # ------------------------------------------------------------------
+    # 4. Liveness seam — route through canonical coordinator_core.liveness
+    #    (RAW-PID-LIVENESS floor: no ps -p / kill -0 / psutil.pid_exists here).
+    #    resolve_live_session_ids() returns empty frozenset on error; the result
+    #    is informational metadata only — the core membership decision (referenced)
+    #    matches the bash implementation which does not filter by session liveness.
+    # ------------------------------------------------------------------
+    # resolve_live_session_ids() is a pure in-process meta.json scan
+    # (liveness.py:120-147, TTL-cached) — no subprocess shell-out. Still
+    # wrapped in to_thread so the scan never stalls the asyncio event loop
+    # (AC-3 Gap-3 — ipc.py:486-491); the field is informational only and
+    # does not affect exit_code / referenced.
+    live_sids = await asyncio.to_thread(resolve_live_session_ids)  # frozenset[str]; empty on any error
+
+    # ------------------------------------------------------------------
+    # 5. Build reply
+    # ------------------------------------------------------------------
+    referenced = len(children) > 0
+    return {
+        "referenced": referenced,
+        "children": sorted(children),
+        "live_session_count": len(live_sids),
+        "exit_code": 0 if referenced else 1,
+    }

@@ -2516,20 +2516,50 @@ def _is_attribution_search(
 # of collection size -- an early-exit search over a variable-length collection, not per-item
 # amplification. Frozen precedent, named in the register's own MISCLASSIFIED block:
 # `check_destructive_git_orphan`, "single-shot call on a returning branch".
+#
+# The "at most once per invocation of the enclosing function" bound only holds because `return`
+# always exits the whole function AND `break` is accepted only when the loop passed in has no
+# further enclosing loop of its own (`_has_enclosing_loop`, `has_outer_loop`) -- a `break` exits
+# only the loop it lexically sits inside, so a `break`-only proof scoped to a NESTED loop's own
+# body would say nothing about an outer loop that keeps iterating regardless. See
+# `_is_single_shot_terminal`'s docstring for the mechanics.
 # --------------------------------------------------------------------------
 
 
-def _is_single_shot_terminal(call: ast.Call, loop: ast.AST | None) -> bool:
+def _has_enclosing_loop(fn: ast.AST, loop: ast.AST) -> bool:
+    """Whether `loop` itself sits inside a FURTHER enclosing loop construct in `fn` -- distinct
+    from `_enclosing_loop_of`, which finds the innermost loop around a CALL. Feeds discriminator
+    17's `has_outer_loop` gate: a `break` only exits the loop it is lexically inside, so a
+    single-shot proof scoped to `loop`'s own body says nothing about an outer loop that keeps
+    iterating regardless of what the inner loop does on any one pass."""
+    for node in ast.walk(fn):
+        if node is loop:
+            continue
+        if not isinstance(node, (ast.For, ast.AsyncFor, *_COMPREHENSIONS)):
+            continue
+        if any(sub is loop for sub in ast.walk(node)):
+            return True
+    return False
+
+
+def _is_single_shot_terminal(
+    call: ast.Call, loop: ast.AST | None, has_outer_loop: bool = False
+) -> bool:
     """DISCRIMINATOR 17 -- see the block comment above.
 
     Mechanically decidable rule: walk the chain of statements whose subtree contains `call`,
     innermost first, each paired with the statement LIST that directly holds it. At each level,
-    if that same list also holds -- somewhere AFTER the statement under test -- a `Return` or
-    `Break` that is itself a DIRECT element of the list (not nested inside a further `If`), the
-    call is single-shot: that terminator fires unconditionally once the block already reached to
-    get here is entered, which is exactly the entry condition already satisfied to reach the
-    call. Any level finding one is sufficient, and the innermost-first order means the tightest,
-    least-assuming proof wins.
+    if that same list also holds -- somewhere AFTER the statement under test -- a `Return` that
+    is itself a DIRECT element of the list (not nested inside a further `If`), the call is
+    single-shot: `Return` exits the enclosing FUNCTION unconditionally, regardless of how many
+    loops it is nested inside. A `Break` at the same position is single-shot ONLY when `loop`
+    itself has no further enclosing loop (`has_outer_loop` is False) -- `Break` exits only the
+    loop it lexically sits inside, so when `loop` is nested inside another loop, a `break` in
+    `loop`'s own body proves nothing about the OUTER loop's iteration; the call can still fire
+    once per outer item. `has_outer_loop=True` and a `Break`-only terminator therefore declines
+    (keeps reporting) rather than guess reachability across the outer loop's own control flow.
+    Any level finding a qualifying terminator is sufficient, and the innermost-first order means
+    the tightest, least-assuming proof wins.
 
     Deliberately declines a `Return`/`Break` nested inside a SIBLING `If` -- that terminator is
     conditional on a different test than whatever already gates the call, so it proves nothing
@@ -2538,7 +2568,9 @@ def _is_single_shot_terminal(call: ast.Call, loop: ast.AST | None) -> bool:
     publish::check_allowlist_string::_run_child`): each is found at a DIFFERENT ancestor level
     (the call's own containing statement for the first two, one level up -- the enclosing `try`
     -- for the third, whose own body has nothing after the call), which is why the walk considers
-    every level rather than stopping at the first."""
+    every level rather than stopping at the first. None of the three real sites is nested inside
+    a further loop, so `has_outer_loop` is False for all of them and this widening changes
+    nothing about their outcome."""
     if loop is None:
         return False
     loop_body = getattr(loop, "body", None)
@@ -2574,7 +2606,16 @@ def _is_single_shot_terminal(call: ast.Call, loop: ast.AST | None) -> bool:
         _stmt, body = indexed[id(stmt)]
         idx = body.index(stmt)
         for later in body[idx + 1 :]:
-            if isinstance(later, (ast.Return, ast.Break)):
+            #: A `Continue` reached BEFORE the terminator sends control back to the loop head,
+            #: so the terminator never fires on that pass and the call runs again on the next
+            #: item -- the single-shot proof does not hold at this level. Abandon this level
+            #: rather than returning False outright: an outer ancestor's own sibling list may
+            #: still carry an unconditional terminator that no `continue` precedes.
+            if isinstance(later, ast.Continue):
+                break
+            if isinstance(later, ast.Return):
+                return True
+            if isinstance(later, ast.Break) and not has_outer_loop:
                 return True
     return False
 
@@ -4147,8 +4188,17 @@ def find_unbatched_per_item_spawns(
                 continue
             # Discriminator 17: the call sits on a path that `break`s or `return`s in the same
             # iteration, so it executes at most once per invocation regardless of collection
-            # size -- an early-exit search, not per-item amplification.
-            if _is_single_shot_terminal(node, _loop_node):
+            # size -- an early-exit search, not per-item amplification. A `break` only exits the
+            # loop it lexically sits inside, so when `_loop_node` is itself nested inside a
+            # further enclosing loop, only `return` still proves single-shot -- see
+            # `_has_enclosing_loop` and `_is_single_shot_terminal`'s `has_outer_loop` gate.
+            if _is_single_shot_terminal(
+                node,
+                _loop_node,
+                _enclosing_fn is not None
+                and _loop_node is not None
+                and _has_enclosing_loop(_enclosing_fn, _loop_node),
+            ):
                 continue
             # Discriminator 13: the loop is the RETAINED PER-ITEM FALLBACK behind a batched
             # primary -- it runs only when the batch failed, recovering per-item attribution
@@ -7397,6 +7447,11 @@ def test_discriminator_single_shot_terminal_own_block_not_flagged(tmp_path):
     )
     violations = find_unbatched_per_item_spawns((tmp_path,))
     assert "_existence_detail" not in {site.callee for site in violations}
+    # P2 strengthening: the co-located `npm test` call in the SAME loop is a genuine per-item
+    # spawn and must still be reported -- a test that only checks the single-shot site's
+    # absence would still pass if discriminator 17 (or a regression) over-suppressed the whole
+    # loop rather than just the single-shot call.
+    assert "main" in {site.enclosing for site in violations}
 
 
 def test_discriminator_single_shot_terminal_outer_block_not_flagged(tmp_path):
@@ -7433,6 +7488,14 @@ def test_discriminator_single_shot_terminal_outer_block_not_flagged(tmp_path):
     )
     violations = find_unbatched_per_item_spawns((tmp_path,))
     assert "_run_child" not in {site.callee for site in violations}
+    # P2 note: unlike `own_block`'s sibling `npm` call, this fixture's loop body ends with an
+    # unconditional `break` as the LAST top-level statement, so under the current sibling-level
+    # walk every statement in the loop (at any depth) has that `break` as a same-level-or-outer
+    # later sibling -- there is no co-located call that would survive as a control against
+    # whole-loop over-suppression without also exercising a distinct, pre-existing gap (the walk
+    # does not check whether a `continue` between a statement and the trailing `break` can skip
+    # it) that is out of scope for this fix. `own_block`'s sibling-call assertion above already
+    # covers the over-suppression regression this test class is meant to guard against.
 
 
 def test_discriminator_single_shot_terminal_declines_sibling_conditional_terminator(tmp_path):
@@ -7460,6 +7523,29 @@ def test_discriminator_single_shot_terminal_declines_sibling_conditional_termina
         "                return None\n"
         "        print(item)\n"
         "    return None\n",
+        encoding="utf-8",
+    )
+    violations = find_unbatched_per_item_spawns((tmp_path,))
+    assert [site.enclosing for site in violations] == ["scan"]
+
+
+def test_discriminator_single_shot_terminal_nested_loop_break_still_flagged(tmp_path):
+    """P1 fixture (code review of chunk C4): a `break` only exits the loop it is lexically
+    inside. A call inside an INNER loop whose `break` exits only that inner loop leaves the
+    OUTER loop still iterating, so the call still fires once per OUTER item -- genuine per-item
+    amplification, and discriminator 17 must decline to suppress it. Without this fixture,
+    `_is_single_shot_terminal` indexed only the innermost enclosing loop's own body and would
+    have wrongly treated the inner `break` as proof the call fires at most once per invocation of
+    the whole function, when it only bounds calls per iteration of the inner loop."""
+    fixture = tmp_path / "disc_single_shot_nested_loop.py"
+    fixture.write_text(
+        "import subprocess\n"
+        "\n"
+        "def scan(items):\n"
+        "    for outer in items:\n"
+        "        for x in outer.things:\n"
+        "            subprocess.run(['git', 'log', x])\n"
+        "            break\n",
         encoding="utf-8",
     )
     violations = find_unbatched_per_item_spawns((tmp_path,))

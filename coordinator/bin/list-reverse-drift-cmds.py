@@ -71,26 +71,26 @@ def _prepare_claude_klabauter_root() -> None:
     claude_klabauter_root = require_dispatch_engine_on_path()
 
 
-def main() -> None:
+def main(argv: "list[str] | None" = None) -> int:
     try:
         _prepare_claude_klabauter_root()
     except RuntimeError as exc:
         print(f"list-reverse-drift-cmds.py: CLAUDE_KLABAUTER_ROOT resolution failed: {exc}", file=sys.stderr)
-        sys.exit(1)
+        return 1
 
     from coordinator_core.cli_entry import run_op_main
 
     try:
-        code = run_op_main("coordinator_core.ops.list_reverse_drift_cmds", sys.argv[1:])
+        code = run_op_main("coordinator_core.ops.list_reverse_drift_cmds", (sys.argv[1:] if argv is None else argv))
     except ImportError as exc:
         print(
             f"list-reverse-drift-cmds.py: coordinator_core.ops.list_reverse_drift_cmds not importable: {exc}",
             file=sys.stderr,
         )
-        sys.exit(1)
+        return 1
 
-    sys.exit(code)
+    return code
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

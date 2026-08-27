@@ -26,6 +26,7 @@ carriers named in the dispatch brief that motivated this fix.
 from __future__ import annotations
 
 import importlib.util
+import sys
 from pathlib import Path
 
 import pytest
@@ -58,7 +59,20 @@ def _load_by_path(module_name: str, filename: str):
     assert path.is_file(), f"carrier missing on disk: {path}"
     spec = importlib.util.spec_from_file_location(module_name, path)
     module = importlib.util.module_from_spec(spec)  # type: ignore[arg-type]
-    spec.loader.exec_module(module)  # type: ignore[union-attr]
+    # Registered in sys.modules BEFORE exec, not just returned: a carrier
+    # defining a `@dataclass` needs `sys.modules[cls.__module__]` resolvable
+    # during class-body execution (stdlib `dataclasses._is_type` does a
+    # module lookup by name, not by the module object in hand) — omitting
+    # this raises `AttributeError: 'NoneType' object has no attribute
+    # '__dict__'` from inside `dataclasses.py`, unrelated to the carrier's
+    # own code, for any carrier that happens to use a string-annotated
+    # dataclass field.
+    sys.modules[module_name] = module
+    try:
+        spec.loader.exec_module(module)  # type: ignore[union-attr]
+    except BaseException:
+        sys.modules.pop(module_name, None)
+        raise
     return module
 
 

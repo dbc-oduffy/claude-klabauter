@@ -5,7 +5,7 @@ C5 (docs/plans/2026-08-20-the-close-ceremony-commits-what-the-session-wrote.md
 § C5): the two REACHABLE close ceremonies — `/quick-wrap`
 (`coordinator_core.quick_wrap_assemble.brief`) and `/workstream-complete`'s
 in-process tail sequencer (`coordinator_core.ops.ceremony.wsc_tail._handler`)
-— were to each fire C4's hardened `auto_commit_session_async` in-process,
+— were to each fire C4's hardened `commit_session_offer_async` in-process,
 deterministically, rather than relying on an agent-executed directive that
 may never actually run.
 
@@ -14,14 +14,14 @@ NOT — see "wsc_tail: BLOCKED" below; this file covers `/quick-wrap` only.
 `/handoff` is explicitly out of scope for this chunk (see the chunk body).
 
 wsc_tail: BLOCKED (2026-08-20, this chunk's own execution). Wiring an
-in-process `auto_commit_session_async` call into
+in-process `commit_session_offer_async` call into
 `coordinator_core.ops.ceremony.wsc_tail._handler` breaks the PM-ratified
 wsc-tail-sub-2s-invoke-budget invariant (module docstring "Push-mode /
 result-contract decision" section; DEC-1/DEC-3,
 docs/plans/2026-07-22-wsc-tail-sub-2s-invoke-budget.md): measured
 `coordinator_core/ops/ceremony/tests/test_wsc_tail_parity.py::
 test_kpi_wsc_tail_blocking_path_under_2s` at 3.386s (budget <2.0s) with the
-safety net wired in synchronously — `auto_commit_session_async`'s
+safety net wired in synchronously — `commit_session_offer_async`'s
 `compute_offer`/`compute_scope` call chain runs several of its own git
 spawns, and that test file (out of this chunk's declared `writes:` scope) is
 a hard KPI gate, not a soft parity check. The same wiring also breaks that
@@ -34,7 +34,7 @@ report for the full BLOCKED writeup; the `wsc_tail.py` edit was reverted in
 this chunk rather than shipped red.
 
 This file asserts, for `/quick-wrap` only:
-  1. `auto_commit_session_async` is invoked IN-PROCESS by `brief()` (never
+  1. `commit_session_offer_async` is invoked IN-PROCESS by `brief()` (never
      merely emitted as a `safe-commit-offer` directive for an agent to run
      later).
   2. A failure inside that call does not prevent the ceremony from
@@ -124,11 +124,11 @@ def test_quick_wrap_calls_auto_commit_in_process(qw_repo, monkeypatch):
         return _empty_outcome_report(session_id)
 
     _stub_facts_all_computed(monkeypatch, qw_repo)
-    monkeypatch.setattr(qwa, "auto_commit_session_async", _fake)
+    monkeypatch.setattr(qwa, "commit_session_offer_async", _fake)
 
     envelope = qwa.brief()
 
-    assert calls, "quick_wrap_assemble.brief() must call auto_commit_session_async in-process"
+    assert calls, "quick_wrap_assemble.brief() must call commit_session_offer_async in-process"
     assert calls[0][0] == _SID
     assert calls[0][3] == "attended"
     assert "safe-commit-offer" not in [d["cli"] for d in envelope["directives"]]
@@ -139,7 +139,7 @@ def test_quick_wrap_auto_commit_failure_does_not_block_completion(qw_repo, monke
         raise RuntimeError("boom")
 
     _stub_facts_all_computed(monkeypatch, qw_repo)
-    monkeypatch.setattr(qwa, "auto_commit_session_async", _boom)
+    monkeypatch.setattr(qwa, "commit_session_offer_async", _boom)
 
     envelope = qwa.brief()  # must not raise
 
@@ -154,7 +154,7 @@ def test_quick_wrap_renders_outcome_and_residue(qw_repo, monkeypatch):
         return _committed_outcome_report(session_id, residue)
 
     _stub_facts_all_computed(monkeypatch, qw_repo)
-    monkeypatch.setattr(qwa, "auto_commit_session_async", _fake)
+    monkeypatch.setattr(qwa, "commit_session_offer_async", _fake)
 
     envelope = qwa.brief()
 

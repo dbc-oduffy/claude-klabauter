@@ -114,7 +114,9 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ("coordinator_core.ops.cutover_advance", 'registers "cutover.advance"'),
     (
         "coordinator_core.ops.handoff_children",
-        'registers "handoff.has_live_children" and "handoff.blocked_by_dependents"',
+        'registers "handoff.blocked_by_dependents" (handoff.has_live_children was '
+        'DELETED 2026-08-27, kill ledger K-113; the module stays eager for the '
+        'surviving op and for the undecorated compute in-process callers use)',
     ),
     (
         "coordinator_core.hooks",
@@ -136,12 +138,11 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ("coordinator_core.ops.fleet.work_state", 'registers "fleet.work_state"'),
     ("coordinator_core.ops.fleet.record_history", 'registers "fleet.record_history"'),
     ("coordinator_core.ops.fleet.archive_terminal_handoffs", 'registers "fleet.archive_completed_handoffs"'),
-    ("coordinator_core.ops.fleet.archive_plans", 'registers "fleet.archive_completed_plans"'),
-    ("coordinator_core.ops.fleet.archive_actioned_memos", 'registers "fleet.archive_actioned_memos"'),
-    ("coordinator_core.ops.session.sweep_consumed_handoffs", 'registers "session.sweep_consumed_handoffs"'),
-    ("coordinator_core.ops.fleet.prune_bugs", 'registers "fleet.prune_closed_bugs"'),
     ("coordinator_core.ops.fleet.capability_index", 'registers "fleet.aggregate_capability_index"'),
+    ("coordinator_core.ops.fleet.sweep_status", 'registers "fleet.archive_sweep_status"'),
+    ("coordinator_core.ops.fleet.archive_actioned_memos", 'registers "fleet.archive_actioned_memos"'),
     ("coordinator_core.ops.commit_anchors", 'registers "commit.anchors"'),
+    ("coordinator_core.ops.ceremony.commit_exec_bit", 'registers "commit.exec_bit_change"'),
     ("coordinator_core.ops.memo_transition", 'registers "memo.transition"'),
     ("coordinator_core.ops.handoff_transition", 'registers "handoff.transition"'),
     ("coordinator_core.ops.handoff_stamp", 'registers "handoff.stamp"'),
@@ -152,9 +153,6 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ("coordinator_core.ops.propagate_body", 'registers "handoff.propagate"'),
     ("coordinator_core.ops.handoff_phase_stamp", 'registers "handoff.stamp_phase"'),
     ("coordinator_core.ops.handoff_ship_archive", 'registers "handoff.ship_and_archive"'),
-    ("coordinator_core.ops.handoff_reconcile", 'registers "handoff.reconcile_open"'),
-    ("coordinator_core.ops.handoff_archive_transition", 'registers "handoff.archive_transition"'),
-    ("coordinator_core.ops.handoff_reconcile_close_terminal", 'registers "handoff.reconcile_close_terminal"'),
     ("coordinator_core.ops.handoff_backfill_claim_stamp", 'registers "handoff.backfill_claim_stamp"'),
     ("coordinator_core.ops.handoff_repoint_origin", 'registers "handoff.repoint_origin"'),
     ("coordinator_core.ops.handoff_normalize", 'registers "handoff.normalize"'),
@@ -163,7 +161,6 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ("coordinator_core.ops.plan_capture_persist", 'registers "plan.persist_capture"'),
     ("coordinator_core.ops.handoff_match", 'registers "handoff.match_candidates"'),
     ("coordinator_core.ops.initiatives_serve", 'registers "initiative.serve_set"'),
-    ("coordinator_core.ops.roadmap_serve", 'registers "roadmap.serve"'),
     ("coordinator_core.ops.roadmap_link_stubs", 'registers "roadmap.link_stubs"'),
     ("coordinator_core.ops.queue_append", 'registers "queue.append"'),
     ("coordinator_core.ops.decision_record_mint",
@@ -188,10 +185,6 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     (
         "coordinator_core.ops.spec_backlink_resolve",
         'registers "spec_backlink.resolve", "spec_backlink.rewrite"',
-    ),
-    (
-        "coordinator_core.ops.deliverable_cascade",
-        'registers "deliverable.cascade_terminal" (C6 terminal-state-propagation cascade)',
     ),
     (
         "coordinator_core.ops.sizing_decline",
@@ -268,7 +261,6 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
         # trust FIRST to learn what exists.
         'registers "completion.flip_to_released", "plan.append_session" (strang-10 B, DR-216)',
     ),
-    ("coordinator_core.ops.review_trail_write", 'registers "review_trail.write" (strang-10 B, DR-216)'),
     (
         "coordinator_core.ops.review_trail_readjudication_report",
         'registers "review_trail.readjudication_report" '
@@ -287,20 +279,6 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ("coordinator_core.ops.fleet.reap_unintegrated_findings", 'registers "fleet.reap_unintegrated_findings"'),
     ("coordinator_core.ops.fleet.reap_integrated_findings", 'registers "fleet.reap_integrated_findings"'),
     ("coordinator_core.ops.session.reap", 'registers "session.reap", "session.reap_claims_for_repos", "session.audit_unreapable"'),
-    (
-        "coordinator_core.ops.session.boot_backstop",
-        # `session.boot_sweep` struck from this annotation 2026-08-26, found by
-        # `tests/test_registration_annotations_resolve.py` on the run that added
-        # it. The rebuilt backstop this entry describes did NOT clear the bar
-        # either -- 30017ms against 2000ms, 8/8 caller_timeout -- and the op was
-        # killed, so the table was advertising a name that could only refuse.
-        # Its last caller, `coordinator/bin/sweep-boot.py`, is now a gravestone.
-        # The module stays eagerly imported: the suspension door lives in it, and
-        # de-registering it would turn a loud refusal into METHOD_NOT_FOUND.
-        "eagerly imported for its suspension door; registers no dispatchable op "
-        "(session.boot_sweep killed 2026-08-23, see docs/plans/2026-08-22-the-"
-        "boot-backstop-asks-git-nothing.md for the rebuild that also missed)",
-    ),
     ("coordinator_core.ops.session.guard_settings_integrity", 'registers "session.guard_settings_integrity"'),
     ("coordinator_core.ops.session.record_pickup", 'registers "session.record_pickup"'),
     ("coordinator_core.ops.session.scope_report", 'registers "session.scope_report"'),
@@ -325,7 +303,6 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ("coordinator_core.plugin_health.forwarder_drift", 'registers "plugin_health.forwarder_drift"'),
     ("coordinator_core.ops.cartography_tree", 'registers "cartography.tree"'),
     ("coordinator_core.ops.cartography_file_index", 'registers "cartography.file_index"'),
-    ("coordinator_core.ops.cartography_churn", 'registers "cartography.churn"'),
     ("coordinator_core.ops.cartography_symbols", 'registers "cartography.symbols"'),
     ("coordinator_core.ops.cartography_edges", 'registers "cartography.edges", "cartography.count_references"'),
     ("coordinator_core.ops.cartography_op_edges", 'registers "cartography.op_edges"'),
@@ -449,8 +426,6 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
         'registers "bug_sweep.verify_fix_files_changed"',
     ),
     ("coordinator_core.ops.hibernate_machine", 'registers "machine.hibernate"'),
-    ("coordinator_core.ops.ceremony.commit_exec_bit", 'registers "commit.exec_bit_change"'),
-    ("coordinator_core.ops.ceremony.commit_op", 'registers "ceremony.commit"'),
     ("coordinator_core.ops.run_pre_ci_hooks", 'registers "percolate.run_pre_ci_hooks"'),
     ("coordinator_core.ops.scan_content_leakage", 'registers "percolate.scan_content_leakage_tiers"'),
     (
@@ -529,10 +504,6 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ("coordinator_core.ops.priority_set", 'registers "priority.set"'),
     ("coordinator_core.ops.priority_drain", 'registers "priority.drain"'),
     ("coordinator_core.ops.distill_curate_clusters", 'registers "distill.curate_clusters"'),
-    (
-        "coordinator_core.ops.write_surface_manifest",
-        'registers "write_surface.emit_manifest"',
-    ),
     (
         "coordinator_core.ops.diagnostics_probes",
         'registers "diagnostics.always_succeeds", "diagnostics.always_refuses", '

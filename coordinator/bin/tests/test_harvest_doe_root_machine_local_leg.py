@@ -266,7 +266,7 @@ plan_id: "pln-doe-root-machine-local-leg-test"
         fh.write(content)
 
 
-def test_second_run_idempotent_end_to_end() -> None:
+def test_second_run_idempotent_end_to_end(stamped_engine_env: str) -> None:
     """Spawns the real harvest CLI twice end-to-end and asserts full
     idempotency (both rows queued on run 1, both deduped on run 2), with
     both write seams forced onto their legacy path via their respective

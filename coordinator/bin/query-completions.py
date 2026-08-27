@@ -39,24 +39,24 @@ def _import_runner():
     return run_op_main
 
 
-def main() -> None:
+def main(argv: "list[str] | None" = None) -> int:
     try:
         run_op_main = _import_runner()
     except RuntimeError as exc:
         print(f"query-completions.py: CLAUDE_KLABAUTER_ROOT resolution failed: {exc}", file=sys.stderr)
-        sys.exit(1)
+        return 1
     except ImportError as exc:
         print(f"query-completions.py: coordinator_core.cli_entry not importable: {exc}", file=sys.stderr)
-        sys.exit(1)
+        return 1
 
     try:
-        code = run_op_main("coordinator_core.ops.query_completions", sys.argv[1:])
+        code = run_op_main("coordinator_core.ops.query_completions", (sys.argv[1:] if argv is None else argv))
     except ImportError as exc:
         print(f"query-completions.py: coordinator_core.ops.query_completions not importable: {exc}", file=sys.stderr)
-        sys.exit(1)
+        return 1
 
-    sys.exit(code)
+    return code
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

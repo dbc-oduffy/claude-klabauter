@@ -43,7 +43,6 @@ OP_MODULE_MAP: Dict[str, str] = {
     # plan-s-7aa417a58bce.yaml
     "decision_record.mint_id":                "coordinator_core.ops.decision_record_mint",
     "decision_record.release_id":             "coordinator_core.ops.decision_record_mint",
-    "handoff.has_live_children":              "coordinator_core.ops.handoff_children",
     "handoff.blocked_by_dependents":          "coordinator_core.ops.handoff_children",
     # peer_notice.send / peer_notice.check — same-repo peer-contention notice channel
     # (see op_scopes.py::_OP_KEY_SCOPE's peer_notice.* entries, both "common_dir"),
@@ -56,7 +55,6 @@ OP_MODULE_MAP: Dict[str, str] = {
     # fallback rather than breaking dispatch, which is why it went unnoticed.
     "peer_notice.send":                       "coordinator_core.ops.peer_notice_send",
     "peer_notice.check":                      "coordinator_core.ops.peer_notice_check",
-    "handoff.reconcile_close_terminal":       "coordinator_core.ops.handoff_reconcile_close_terminal",
     "op_census.breaches":                     "coordinator_core.ops.op_budget_breaches",
     # coordinator_core.hooks registers all 16 hooks.* ops (6 advisory + 8 bookkeeping
     # + 1 pull/poll arrival-check + 1 subagent-fabrication check) in a single module
@@ -97,15 +95,12 @@ OP_MODULE_MAP: Dict[str, str] = {
     "goal.close_day_apply":                   "coordinator_core.ops.goal_close_day",
     "goals.reassess_krs":                     "coordinator_core.goals.reassess_krs",
     "orientation.regenerate_cache":            "coordinator_core.orientation.regenerate_cache",
-    "session.boot_sweep":                     "coordinator_core.ops.session.boot_backstop",
     "fleet.archive_completed_handoffs":       "coordinator_core.ops.fleet.archive_terminal_handoffs",
-    "fleet.archive_completed_plans":          "coordinator_core.ops.fleet.archive_plans",
     "fleet.archive_actioned_memos":           "coordinator_core.ops.fleet.archive_actioned_memos",
-    "session.sweep_consumed_handoffs":        "coordinator_core.ops.session.sweep_consumed_handoffs",
+    "fleet.archive_sweep_status":             "coordinator_core.ops.fleet.sweep_status",
     "fleet.handoffs_for_plan":                "coordinator_core.ops.fleet.plan_handoffs",
     "fleet.work_state":                       "coordinator_core.ops.fleet.work_state",
     "fleet.record_history":                   "coordinator_core.ops.fleet.record_history",
-    "fleet.prune_closed_bugs":                "coordinator_core.ops.fleet.prune_bugs",
     "fleet.aggregate_capability_index":       "coordinator_core.ops.fleet.capability_index",
     "distill.curate_clusters":                "coordinator_core.ops.distill_curate_clusters",
     "gate_liveness.resolve":                  "coordinator_core.ops.gate_liveness.resolve",
@@ -119,8 +114,6 @@ OP_MODULE_MAP: Dict[str, str] = {
     "handoff.stamp_phase":                    "coordinator_core.ops.handoff_phase_stamp",
     "handoff.backfill_claim_stamp":           "coordinator_core.ops.handoff_backfill_claim_stamp",
     "handoff.ship_and_archive":               "coordinator_core.ops.handoff_ship_archive",
-    "handoff.reconcile_open":                 "coordinator_core.ops.handoff_reconcile",
-    "handoff.archive_transition":             "coordinator_core.ops.handoff_archive_transition",
     "handoff.repoint_origin":                 "coordinator_core.ops.handoff_repoint_origin",
     "handoff.normalize":                      "coordinator_core.ops.handoff_normalize",
     "handoff.correct_body":                   "coordinator_core.ops.handoff_correct_body",
@@ -135,7 +128,6 @@ OP_MODULE_MAP: Dict[str, str] = {
     "plan.persist_capture":                   "coordinator_core.ops.plan_capture_persist",
     "handoff.match_candidates":               "coordinator_core.ops.handoff_match",
     "initiative.serve_set":                   "coordinator_core.ops.initiatives_serve",
-    "roadmap.serve":                          "coordinator_core.ops.roadmap_serve",
     # roadmap.link_stubs — DR-264, chunk C4 (docs/plans/2026-08-05-roadmap-graph-
     # enforcement-gap.md): the first op that AUTHORS a blocked_by/blocks
     # roadmap-dependency edge (reciprocal, two-file compound transaction).
@@ -161,7 +153,6 @@ OP_MODULE_MAP: Dict[str, str] = {
     # Spec: pln-spec-backlinks-cite-a-stable-d-451b3e § C1
     "spec_backlink.resolve":                  "coordinator_core.ops.spec_backlink_resolve",
     "spec_backlink.rewrite":                  "coordinator_core.ops.spec_backlink_resolve",
-    "deliverable.cascade_terminal":            "coordinator_core.ops.deliverable_cascade",
     "sizing.decline":                          "coordinator_core.ops.sizing_decline",
     "sizing.ship":                              "coordinator_core.ops.sizing_ship",
     "sizing.record_spike_verdict":              "coordinator_core.ops.sizing_spike_verdict",
@@ -169,7 +160,6 @@ OP_MODULE_MAP: Dict[str, str] = {
     "deliverable.cascade_retract":             "coordinator_core.ops.cascade_retract",
     "deliverable.cascade_backstop_sweep":      "coordinator_core.ops.cascade_backstop_sweep",
     "deliverable.fork_detect":                 "coordinator_core.ops.deliverable_fork_detect",
-    "ceremony.commit":                        "coordinator_core.ops.ceremony.commit_op",
     "ceremony.post_commit_tail":              "coordinator_core.ops.ceremony.post_commit_tail",
     "push.outstanding":                       "coordinator_core.ops.push_outstanding",
     "records.query":                          "coordinator_core.ops.records_query",
@@ -182,7 +172,6 @@ OP_MODULE_MAP: Dict[str, str] = {
     "changelog.upsert_reviewed":              "coordinator_core.ops.changelog_ops",
     "cruft_sweep.run":                        "coordinator_core.ops.cruft_sweep",
     "plan.append_session":                    "coordinator_core.ops.completion_ops",
-    "review_trail.write":                     "coordinator_core.ops.review_trail_write",
     "review_trail.readjudication_report":     "coordinator_core.ops.review_trail_readjudication_report",
     "fleet.backfill_dispositionless_memos":   "coordinator_core.ops.fleet.backfill_memo_disposition",
     "fleet.reap_unintegrated_findings":       "coordinator_core.ops.fleet.reap_unintegrated_findings",
@@ -211,7 +200,6 @@ OP_MODULE_MAP: Dict[str, str] = {
     "plugin_health.forwarder_drift":          "coordinator_core.plugin_health.forwarder_drift",
     "cartography.tree":                       "coordinator_core.ops.cartography_tree",
     "cartography.file_index":                 "coordinator_core.ops.cartography_file_index",
-    "cartography.churn":                      "coordinator_core.ops.cartography_churn",
     "cartography.symbols":                    "coordinator_core.ops.cartography_symbols",
     "cartography.edges":                      "coordinator_core.ops.cartography_edges",
     "cartography.op_edges":                   "coordinator_core.ops.cartography_op_edges",
@@ -320,7 +308,6 @@ OP_MODULE_MAP: Dict[str, str] = {
     "tracker.push_suggestion":                "coordinator_core.ops.tracker.push_suggestion",
     "priority.set":                           "coordinator_core.ops.priority_set",
     "priority.drain":                         "coordinator_core.ops.priority_drain",
-    "write_surface.emit_manifest":            "coordinator_core.ops.write_surface_manifest",
     # diagnostics.* — the three write-free transport-failure probes; one shared
     # owning module, same many-keys-one-value shape as the hooks.* entries above.
     # Spec: docs/plans/2026-08-07-safe-target-for-transport-failure-probes.md § C1
@@ -352,10 +339,6 @@ OP_MODULE_MAP: Dict[str, str] = {
     "eol.audit_producers":                     "coordinator_core.ops.eol.audit_producers",
     "eol.repair":                              "coordinator_core.ops.eol.repair",
     "warm_guard.evaluate":                     "coordinator_core.ops.warm_guard_evaluate",
-    # merge_assemble.brief / merge_assemble.apply — one module registers both
-    # ops (mirrors the shared-value shape above), chunk C6, docs/plans/
-    # 2026-08-26-merges-directives-stop-starting-interpreters.md.
-    "merge_assemble.brief":                    "coordinator_core.merge_assemble.ops",
     "merge_assemble.apply":                    "coordinator_core.merge_assemble.ops",
 }
 

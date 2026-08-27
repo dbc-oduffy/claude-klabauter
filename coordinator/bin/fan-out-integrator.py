@@ -100,29 +100,29 @@ def _import_run_op_main():
     return run_op_main
 
 
-def main() -> None:
+def main(argv: "list[str] | None" = None) -> int:
     try:
         run_op_main = _import_run_op_main()
     except RuntimeError as exc:
         print(f"fan-out-integrator.py: engine-root resolution failed: {exc}", file=sys.stderr)
-        sys.exit(3)
+        return 3
     except ImportError as exc:
         print(
             f"fan-out-integrator.py: coordinator_core.cli_entry not importable: {exc}",
             file=sys.stderr,
         )
-        sys.exit(3)
+        return 3
 
     try:
-        code = run_op_main("coordinator_core.ops.fan_out_integrator", sys.argv[1:])
+        code = run_op_main("coordinator_core.ops.fan_out_integrator", (sys.argv[1:] if argv is None else argv))
     except ImportError as exc:
         print(
             f"fan-out-integrator.py: coordinator_core.ops.fan_out_integrator not importable: {exc}",
             file=sys.stderr,
         )
-        sys.exit(3)
-    sys.exit(code)
+        return 3
+    return code
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

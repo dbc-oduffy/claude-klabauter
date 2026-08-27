@@ -732,6 +732,17 @@ def _escape_for_js_template_literal(text: str) -> str:
     )
 
 
+#: Why each negative clause below is spelled out rather than left to judgment:
+#: every one names a refusal measured live, where the committer was correct
+#: about the fact and wrong about what it implied. Executing one plan
+#: (`pln-the-discriminators-that-alread-1545b5`, 2026-08-27) produced five
+#: halts, four of them from this prompt and none a real problem: an executor's
+#: own `state/subagent-share/**` sidecar read as pathspec divergence; ~30
+#: peer-staged paths in a shared index read as "would be swept into my commit";
+#: a declared write target the chunk legitimately did not change read as a
+#: guard failure. Each cost a `resumeFromRunId`. The provenance check is
+#: genuinely one-directional -- it exists to catch a pathspec entry no executor
+#: touched, never to police what an executor touched beyond the pathspec.
 _PROVENANCE_HEADING = (
     "Pathspec provenance: the pathspec above is this wave's declared "
     "`writes:` scope. The executor report(s) below are, direct from the "
@@ -739,6 +750,37 @@ _PROVENANCE_HEADING = (
     "wave -- verify the handed pathspec against what they actually "
     "reported, and refuse any path in the pathspec that the reports do "
     "not corroborate."
+    "\n\nThe check is ONE-DIRECTIONAL. A path the reports name that is NOT "
+    "in the pathspec is outside this wave's declared writes scope and is NOT "
+    "a divergence: `state/subagent-share/**` executor sidecars in particular "
+    "are dispatch-layer bookkeeping, never chunk work. Leave them "
+    "uncommitted and do not refuse over them."
+    "\n\nSHARED TREE: this repo is worked by many concurrent sessions, and "
+    "the index routinely holds staged paths belonging to peers. That is the "
+    "normal state, not a divergence and not a refusal condition -- your "
+    "scoped-commit route commits only the paths in the pathspec and cannot "
+    "sweep peer-staged work into your commit. Never unstage, revert, or "
+    "commit a peer's paths, and never ask for the index to be cleared."
+    "\n\nUNCHANGED DECLARED PATHS: a path in the pathspec that this wave's "
+    "executor legitimately did not change (reported as examined-but-unchanged) "
+    "must be DROPPED from the pathspec and the remainder committed. A chunk "
+    "whose diagnosis did not license an edit to one of its declared write "
+    "targets is an ordinary outcome. Refuse only if NO declared path changed."
+    "\n\nALREADY COMMITTED: a run resumed after an edit re-runs commit phases "
+    "that already succeeded. Tracked-and-clean alone is NOT evidence of that "
+    "-- it is equally true of a path this run never touched. Before "
+    "reporting a landed wave satisfied, find THIS wave's own commit via "
+    "`git log` (chunk id in the subject or `Deliverable-Id:` trailer) and "
+    "report that commit's sha with the success token. No matching commit: "
+    "investigate as a real failure, do not report success on clean-tree "
+    "alone."
+    "\n\nLANDED BUT UNVERIFIED SHA: `run_commit_pipeline` returns "
+    "`exit_code=1` WITH `landed=True` and `committed_sha=None` when the "
+    "commit was created but its token trailer matched zero or several "
+    "candidates in the search window. Read `landed`, never `exit_code` "
+    "alone. Recover the sha with `git log` over your own pathspec -- if "
+    "several candidates match, pick the one carrying this wave's own chunk "
+    "id (subject or `Deliverable-Id:` trailer) -- and report success."
 )
 
 

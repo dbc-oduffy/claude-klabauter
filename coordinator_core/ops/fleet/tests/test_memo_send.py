@@ -301,7 +301,11 @@ class TestEndToEndDelivery:
         assert "happy-topic.md" in stat_text
         assert "sent-ledger.jsonl" in stat_text
 
-    def test_sent_by_absent_on_draft_uses_unresolved_sentinel(self, tmp_path, monkeypatch):
+    def _send_draft_without_sent_by(self, tmp_path, monkeypatch):
+        """Drive a full send of a draft carrying no `sent_by` — the ordinary
+        field-authored shape, since memo.draft never writes the field and
+        memo.compose strips one. Returns (ledger row, delivery commit message).
+        """
         sender_repo = _make_sender_git_repo(tmp_path)
         receiver_repo = _make_receiver_git_repo(tmp_path)
         claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": receiver_repo})
@@ -329,6 +333,57 @@ class TestEndToEndDelivery:
         assert result["exit_code"] == 0, result
         ledger_path = sender_repo / "state" / "memo-outbox" / _SENT_LEDGER_FILENAME
         row = json.loads(ledger_path.read_text(encoding="utf-8").splitlines()[0])
+        delivery_msg = _git(
+            receiver_repo, "log", "-1", "--format=%B"
+        ).stdout.decode("utf-8")
+        return row, delivery_msg
+
+    def test_sent_by_absent_on_draft_is_resolved_at_send_time(self, tmp_path, monkeypatch):
+        """A draft with no `sent_by` gets one resolved HERE, at send time.
+
+        That is the whole point of the field: memo.draft never authors it and
+        memo.compose strips it, so a send that does not resolve it ships every
+        field-authored memo unrepliable. Regression for the 2026-08-25 rebuild,
+        which delegated the duty upward to a caller that never existed.
+        """
+        monkeypatch.setenv("COORDINATOR_SESSION_ID", "6f1e0c9a-1111-4222-8333-444455556666")
+        row, _ = self._send_draft_without_sent_by(tmp_path, monkeypatch)
+        assert row["sent_by"] == "6f1e0c9a-1111-4222-8333-444455556666"
+
+    def test_delivery_commit_carries_a_session_id_trailer(self, tmp_path, monkeypatch):
+        """The delivery commit carries `Session-Id:` as a SECOND, independent
+        carrier of sender identity.
+
+        DoE's resolve-peer-address.py names a commit trailer as one of three
+        inputs to the only sanctioned session-id -> peer-name join, and an
+        inbound memo has no claim decision to consult instead. On 2026-08-25
+        three memos whose frontmatter carrier had already failed still named
+        their sender through this trailer alone.
+        """
+        monkeypatch.setenv("COORDINATOR_SESSION_ID", "6f1e0c9a-1111-4222-8333-444455556666")
+        _, delivery_msg = self._send_draft_without_sent_by(tmp_path, monkeypatch)
+        # Its own final paragraph, or git's trailer parser does not see it.
+        assert delivery_msg.rstrip("\n").endswith(
+            "\n\nSession-Id: 6f1e0c9a-1111-4222-8333-444455556666"
+        ), delivery_msg
+
+    def test_delivery_commit_omits_the_trailer_when_unresolved(self, tmp_path, monkeypatch):
+        """No trailer at all beats a `Session-Id: unresolved` one — a trailer
+        exists to be joined to an address, and a sentinel value would be one
+        every reader must learn to reject. The absence is recorded in the
+        memo's `sent_by:` frontmatter, which is where it belongs."""
+        for var in ("COORDINATOR_SESSION_ID", "CLAUDE_SESSION_ID", "CLAUDE_CODE_SESSION_ID"):
+            monkeypatch.delenv(var, raising=False)
+        _, delivery_msg = self._send_draft_without_sent_by(tmp_path, monkeypatch)
+        assert "Session-Id" not in delivery_msg, delivery_msg
+
+    def test_sent_by_unresolvable_session_uses_the_sentinel(self, tmp_path, monkeypatch):
+        """The sentinel is the resolution-FAILURE case, never the ordinary one:
+        an un-nameable sender says so in the field, is never silently omitted,
+        and never fails the delivery."""
+        for var in ("COORDINATOR_SESSION_ID", "CLAUDE_SESSION_ID", "CLAUDE_CODE_SESSION_ID"):
+            monkeypatch.delenv(var, raising=False)
+        row, _ = self._send_draft_without_sent_by(tmp_path, monkeypatch)
         assert row["sent_by"] == "unresolved"
 
 

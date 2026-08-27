@@ -154,6 +154,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 try:
@@ -1042,12 +1043,27 @@ def _run_lesson_promote(row: dict, key: str, dry_run: bool) -> bool:
         )
         return False
 
+    # `--body` is single-line ONLY: coordinator-lesson-promote refuses a newline
+    # outright ("--body contains a newline; pass --body-file instead"). A harvested
+    # row's body is prose and routinely multi-line, so the single-arg form failed
+    # every such row -- the doctrine-edit harvest path could not write at all.
+    # `rstrip("\n")` was never enough: it clears the trailing newline and leaves
+    # every interior one.
+    body_text = str(body).rstrip("\n")
+    body_file: "str | None" = None
+    if "\n" in body_text:
+        handle = tempfile.NamedTemporaryFile(
+            "w", suffix=".txt", delete=False, encoding="utf-8", newline="\n"
+        )
+        with handle:
+            handle.write(body_text)
+        body_file = handle.name
+
     cmd = [
         *prefix,
         "--title",
         str(row["title"]),
-        "--body",
-        str(body).rstrip("\n"),
+        *(["--body-file", body_file] if body_file else ["--body", body_text]),
         "--change-kind",
         str(row["change_kind"]),
         "--target-wiki",
@@ -1066,6 +1082,14 @@ def _run_lesson_promote(row: dict, key: str, dry_run: bool) -> bool:
             file=sys.stderr,
         )
         return False
+    finally:
+        if body_file:
+            # The child has read it by the time run() returns on either path,
+            # including the timeout one -- run() has already killed the child.
+            try:
+                os.unlink(body_file)
+            except OSError:
+                pass
     if result.returncode != 0:
         print(
             f"error: coordinator-harvest-deferrals: coordinator-lesson-promote failed for "

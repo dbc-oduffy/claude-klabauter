@@ -91,18 +91,18 @@ def _import_main():
     return _op_main
 
 
-def main() -> None:
+def main(argv: "list[str] | None" = None) -> int:
     try:
         op_main = _import_main()
     except RuntimeError as exc:
         print(f"generate-repomap.py: engine-root resolution failed: {exc}", file=sys.stderr)
-        sys.exit(1)
+        return 1
     except ImportError as exc:
         print(
             f"generate-repomap.py: coordinator_core.ops.generate_repomap not importable: {exc}",
             file=sys.stderr,
         )
-        sys.exit(1)
+        return 1
 
     # plugin_root mirrors the original .sh's own resolution:
     # ${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)} —
@@ -113,8 +113,8 @@ def main() -> None:
     )
     # site mirrors the original .sh's own $0 in its ERROR line — whatever
     # invocation-time path/argv[0] the caller used, not a fixed basename.
-    sys.exit(op_main(sys.argv[1:], plugin_root=plugin_root, site=sys.argv[0]))
+    return op_main((sys.argv[1:] if argv is None else argv), plugin_root=plugin_root, site=sys.argv[0])
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

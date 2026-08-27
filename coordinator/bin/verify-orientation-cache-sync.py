@@ -117,24 +117,24 @@ def _import_op_main():
     return _op_main
 
 
-def main() -> None:
-    argv = sys.argv[1:]
+def main(argv: "list[str] | None" = None) -> int:
+    argv = (sys.argv[1:] if argv is None else argv)
 
     try:
         state_root = _resolve_state_root()
     except RuntimeError as exc:
         print(f"verify-orientation-cache-sync: STATE_ROOT resolution failed: {exc}", file=sys.stderr)
-        sys.exit(2)
+        return 2
 
     cache_file = os.path.join(state_root, "orientation_cache.md")
 
     if argv and argv[0] == "--list":
         print(cache_file)
-        sys.exit(0)
+        return 0
 
     if not os.path.isfile(cache_file):
         print(f"verify-orientation-cache-sync: no cache file at {cache_file} — nothing to verify")
-        sys.exit(0)
+        return 0
 
     # Review: code-reviewer P3 — _resolve_repo_root() re-resolves the engine root
     # unguarded; safe today only because _resolve_state_root() above already
@@ -145,23 +145,23 @@ def main() -> None:
         repo_root = _resolve_repo_root()
     except RuntimeError as exc:
         print(f"verify-orientation-cache-sync: engine-root resolution failed: {exc}", file=sys.stderr)
-        sys.exit(2)
+        return 2
 
     try:
         op_main = _import_op_main()
     except RuntimeError as exc:
         print(f"verify-orientation-cache-sync: engine-root resolution failed: {exc}", file=sys.stderr)
-        sys.exit(2)
+        return 2
     except ImportError as exc:
         print(
             "verify-orientation-cache-sync: "
             f"coordinator_core.ops.verify_orientation_cache_sync not importable: {exc}",
             file=sys.stderr,
         )
-        sys.exit(2)
+        return 2
 
-    sys.exit(op_main([cache_file, repo_root]))
+    return op_main([cache_file, repo_root])
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

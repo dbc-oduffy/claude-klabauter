@@ -257,7 +257,7 @@ def test_multiple_fenced_blocks_is_warn_and_skip() -> None:
         shutil.rmtree(tmpdir, ignore_errors=True)
 
 
-def test_template_comment_is_located_and_deferred_row_harvested() -> None:
+def test_template_comment_is_located_and_deferred_row_harvested(stamped_engine_env: str) -> None:
     """Regression for the silent-data-loss bug: a plan that still carries
     the writing-plans.md template's unedited authoring HTML comment
     directly under '## Tasks' (which embeds a literal
@@ -619,7 +619,7 @@ def test_coverage_checker_prompt_documents_the_exact_flag_text() -> None:
 # ===========================================================================
 
 
-def test_harvest_call_site_project_scope_queue_append() -> None:
+def test_harvest_call_site_project_scope_queue_append(stamped_engine_env: str) -> None:
     name = "test_harvest_call_site_project_scope_queue_append"
     result, tmpdir = _run_harvest_in_isolated_repo(_FIXTURE_VALID)
     try:
@@ -638,7 +638,7 @@ def test_harvest_call_site_project_scope_queue_append() -> None:
         shutil.rmtree(tmpdir, ignore_errors=True)
 
 
-def test_harvest_call_site_doctrine_edit_routes_to_lesson_promote() -> None:
+def test_harvest_call_site_doctrine_edit_routes_to_lesson_promote(stamped_engine_env: str) -> None:
     name = "test_harvest_call_site_doctrine_edit_routes_to_lesson_promote"
     result, tmpdir = _run_harvest_in_isolated_repo(_FIXTURE_VALID)
     try:
@@ -672,7 +672,7 @@ def test_harvest_call_site_doctrine_edit_routes_to_lesson_promote() -> None:
         shutil.rmtree(tmpdir, ignore_errors=True)
 
 
-def test_harvest_call_site_second_run_is_idempotent() -> None:
+def test_harvest_call_site_second_run_is_idempotent(stamped_engine_env: str) -> None:
     name = "test_harvest_call_site_second_run_is_idempotent"
     tmpdir = tempfile.mkdtemp(prefix="harvest-idem-test-")
     try:
@@ -736,7 +736,7 @@ _FIXTURE_CASE_AGAINST = os.path.join(_FIXTURES_DIR, "valid-spine-with-case-again
 _IMPROVEMENT_QUEUE_SCHEMA = os.path.join(str(data_root("schemas")), "improvement-queue.schema.json")
 
 
-def test_harvest_carries_case_against_through_to_queue_entry() -> None:
+def test_harvest_carries_case_against_through_to_queue_entry(stamped_engine_env: str) -> None:
     name = "test_harvest_carries_case_against_through_to_queue_entry"
     result, tmpdir = _run_harvest_in_isolated_repo(_FIXTURE_CASE_AGAINST)
     try:
@@ -778,7 +778,7 @@ def test_harvest_carries_case_against_through_to_queue_entry() -> None:
         shutil.rmtree(tmpdir, ignore_errors=True)
 
 
-def test_harvest_omits_case_against_when_row_carries_none() -> None:
+def test_harvest_omits_case_against_when_row_carries_none(stamped_engine_env: str) -> None:
     name = "test_harvest_omits_case_against_when_row_carries_none"
     result, tmpdir = _run_harvest_in_isolated_repo(_FIXTURE_CASE_AGAINST)
     try:

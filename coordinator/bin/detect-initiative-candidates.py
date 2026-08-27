@@ -230,43 +230,52 @@ def _emit(records: list[dict], format_: str) -> None:
         sys.stdout.write(_render_text(candidates))
 
 
-def main() -> int:
-    argv = sys.argv[1:]
-    if "--help" in argv or "-h" in argv:
-        # Handled before any stdin touch (§ entrypoint gate contract: every
-        # scanned entrypoint is launched with `--help` and stdin=DEVNULL —
-        # `sys.stdin.isatty()` is False for DEVNULL too, so without this
-        # early exit `--help` would fall through to the stdin-pipe branch
-        # below and fail on an empty read, misreporting a clean-launch CLI
-        # as broken). No prior code path in this file handled `--help` at
-        # all; this closes that gap the same way every other CLI here does.
-        sys.stdout.write(__doc__ or "")
+def main(argv: "list[str] | None" = None) -> int:
+    # argv threading: this CLI reads sys.argv at depth (argparse and helpers),
+    # so the warm-call path swaps it for the duration rather than rewriting every read.
+    # NOT re-entrant: a threaded server must serialise calls into this entrypoint.
+    _prev_argv = sys.argv
+    if argv is not None:
+        sys.argv = [sys.argv[0], *argv]
+    try:
+        argv = sys.argv[1:]
+        if "--help" in argv or "-h" in argv:
+            # Handled before any stdin touch (§ entrypoint gate contract: every
+            # scanned entrypoint is launched with `--help` and stdin=DEVNULL —
+            # `sys.stdin.isatty()` is False for DEVNULL too, so without this
+            # early exit `--help` would fall through to the stdin-pipe branch
+            # below and fail on an empty read, misreporting a clean-launch CLI
+            # as broken). No prior code path in this file handled `--help` at
+            # all; this closes that gap the same way every other CLI here does.
+            sys.stdout.write(__doc__ or "")
+            return 0
+    
+        opts = _parse_args(argv)
+    
+        # Determine input source: stdin pipe or direct native self-query.
+        stdin_is_pipe = not sys.stdin.isatty()
+    
+        if stdin_is_pipe:
+            # Read JSON from stdin (supports: query-records --unattached | detect-initiative-candidates)
+            buf = sys.stdin.read()
+            try:
+                records = json.loads(buf)
+            except json.JSONDecodeError as e:
+                sys.stderr.write("ERROR: failed to parse JSON from stdin: %s\n" % e)
+                return 1
+            _emit(records, opts["format"])
+        else:
+            # Self-query the native records surface directly (see module docstring § Self-query).
+            try:
+                records = _query_unattached_all(opts["root"])
+            except Exception as e:  # noqa: BLE001 — CLI boundary: any failure -> diagnostic + exit 1
+                sys.stderr.write("ERROR: records.query invocation failed: %s\n" % e)
+                return 1
+            _emit(records, opts["format"])
+    
         return 0
-
-    opts = _parse_args(argv)
-
-    # Determine input source: stdin pipe or direct native self-query.
-    stdin_is_pipe = not sys.stdin.isatty()
-
-    if stdin_is_pipe:
-        # Read JSON from stdin (supports: query-records --unattached | detect-initiative-candidates)
-        buf = sys.stdin.read()
-        try:
-            records = json.loads(buf)
-        except json.JSONDecodeError as e:
-            sys.stderr.write("ERROR: failed to parse JSON from stdin: %s\n" % e)
-            return 1
-        _emit(records, opts["format"])
-    else:
-        # Self-query the native records surface directly (see module docstring § Self-query).
-        try:
-            records = _query_unattached_all(opts["root"])
-        except Exception as e:  # noqa: BLE001 — CLI boundary: any failure -> diagnostic + exit 1
-            sys.stderr.write("ERROR: records.query invocation failed: %s\n" % e)
-            return 1
-        _emit(records, opts["format"])
-
-    return 0
+    finally:
+        sys.argv = _prev_argv
 
 
 if __name__ == "__main__":

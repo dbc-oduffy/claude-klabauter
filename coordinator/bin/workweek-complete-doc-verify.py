@@ -54,7 +54,7 @@ except RuntimeError as _exc:
 from coordinator_core.cli_entry import run_op_main  # noqa: E402
 
 
-def main() -> None:
+def main(argv: "list[str] | None" = None) -> int:
     """Zero-arg trampoline: reads `sys.argv` itself and forwards args-only
     (no `argv[0]` program-name placeholder) to `doc_content_verify.main` via
     `run_op_main` — the exact CLI shape `check-arch-audit-staleness.py`
@@ -69,8 +69,8 @@ def main() -> None:
     parity with every other operator-CLI trampoline, though
     `doc_content_verify` is read-only and declares nothing — this is a
     consistency conversion, not a behavior change (see module docstring)."""
-    sys.exit(run_op_main("coordinator_core.ops.doc_content_verify", sys.argv[1:]))
+    return run_op_main("coordinator_core.ops.doc_content_verify", (sys.argv[1:] if argv is None else argv))
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

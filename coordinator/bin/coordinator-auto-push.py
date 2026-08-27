@@ -86,25 +86,25 @@ def _import_main():
     return _op_main
 
 
-def main() -> None:
+def main(argv: "list[str] | None" = None) -> int:
     try:
         op_main = _import_main()
     except RuntimeError as exc:
         # CLAUDE_KLABAUTER_ROOT resolution failed. Auto-push must never block a commit,
         # so this is a loud stderr note, not a nonzero exit.
         print(f"coordinator-auto-push: CLAUDE_KLABAUTER_ROOT resolution failed: {exc}", file=sys.stderr)
-        sys.exit(0)
+        return 0
     except ImportError as exc:
         print(
             f"coordinator-auto-push: coordinator_core.hooks.auto_push not importable: {exc}",
             file=sys.stderr,
         )
-        sys.exit(0)
+        return 0
 
     # auto_push.main() always returns 0 internally (broad except + best-effort
     # log on any internal error) -- no additional try/except needed here.
-    sys.exit(op_main(sys.argv[1:]))
+    return op_main((sys.argv[1:] if argv is None else argv))
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

@@ -102,7 +102,7 @@ def _resolve_run_op_main():
     return run_op_main
 
 
-def main() -> None:
+def main(argv: "list[str] | None" = None) -> int:
     try:
         run_op_main = _resolve_run_op_main()
     except RuntimeError as exc:
@@ -110,27 +110,27 @@ def main() -> None:
             f"validate-install-contract.py: engine-root resolution failed: {exc}",
             file=sys.stderr,
         )
-        sys.exit(2)
+        return 2
     except ImportError as exc:
         print(
             "validate-install-contract.py: coordinator_core.cli_entry not importable: "
             f"{exc}",
             file=sys.stderr,
         )
-        sys.exit(2)
+        return 2
 
     try:
-        code = run_op_main("coordinator_core.ops.validate_install_contract", sys.argv[1:])
+        code = run_op_main("coordinator_core.ops.validate_install_contract", (sys.argv[1:] if argv is None else argv))
     except ImportError as exc:
         print(
             "validate-install-contract.py: coordinator_core.ops.validate_install_contract "
             f"not importable: {exc}",
             file=sys.stderr,
         )
-        sys.exit(2)
+        return 2
 
-    sys.exit(code)
+    return code
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

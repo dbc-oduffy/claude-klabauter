@@ -76,7 +76,7 @@ def _import_runner():
     return run_op_main
 
 
-def main() -> None:
+def main(argv: "list[str] | None" = None) -> int:
     try:
         run_op_main = _import_runner()
     except RuntimeError as exc:
@@ -84,26 +84,26 @@ def main() -> None:
             f"normalize-consumed-frontmatter.py: CLAUDE_KLABAUTER_ROOT resolution failed: {exc}",
             file=sys.stderr,
         )
-        sys.exit(3)
+        return 3
     except ImportError as exc:
         print(
             "normalize-consumed-frontmatter.py: "
             f"coordinator_core.cli_entry not importable: {exc}",
             file=sys.stderr,
         )
-        sys.exit(3)
+        return 3
 
     try:
-        code = run_op_main("coordinator_core.ops.normalize_claimed_frontmatter", sys.argv[1:])
+        code = run_op_main("coordinator_core.ops.normalize_claimed_frontmatter", (sys.argv[1:] if argv is None else argv))
     except ImportError as exc:
         print(
             "normalize-consumed-frontmatter.py: "
             f"coordinator_core.ops.normalize_claimed_frontmatter not importable: {exc}",
             file=sys.stderr,
         )
-        sys.exit(3)
-    sys.exit(code)
+        return 3
+    return code
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

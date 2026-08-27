@@ -71,6 +71,13 @@ is a CLI-verb-layer hook, not a mint-level one:
 never flip plan status when called directly, in-process, by a caller other
 than `main()`/`_main_authorize_invocation`.
 
+Third verb, `mark-reviewed` (DoE-claude memo 2026-08-27-doe-claude-em-stamp-
+reviewed-bound-to-approval-ceremony): the EARLIER, dedicated producer of the
+`reviewed` rung, reachable at review-integration completion rather than at PM
+execution-approval, writing no authorization field at all -- see
+`_main_mark_reviewed`. By the time `stamp` runs on a plan that went through it,
+`stamp`'s own `stamp-reviewed` fire is an at-or-past rc-0 no-op.
+
 Negative-spec:
   - Does NOT enforce the write-bar (has the PM actually named execution?).
     That judgment call stays the calling skill's, per
@@ -606,8 +613,64 @@ USAGE = (
     "usage: review-exec-auth-stamp stamp <plan-path> --by <who> "
     "(--note <note> | --append-note <text>) [--at <YYYY-MM-DD>]\n"
     "       review-exec-auth-stamp authorize-invocation <plan-path> "
-    "--typed-command </command> [--utterance <PM's verbatim words>] [--at <YYYY-MM-DD>]"
+    "--typed-command </command> [--utterance <PM's verbatim words>] [--at <YYYY-MM-DD>]\n"
+    "       review-exec-auth-stamp mark-reviewed <plan-path>"
 )
+
+
+def _main_mark_reviewed(rest: list[str]) -> int:
+    """`mark-reviewed <plan-path>` -- the review-integration rung verb: flips
+    the plan `draft -> reviewed` and NOTHING else.
+
+    Exists because `reviewed` is a real transitory state a plan occupies
+    between review-integration completion and the PM being asked about
+    execution (DoE-claude `coordinator/docs/wiki/coordinator-tripwires/
+    plan-status-ladder.md`: `reviewed` is earned when *"review integration
+    completes"*). Before this verb the only producer of that rung was
+    `_fire_stamp_reviewed` on the `stamp` verb, which runs at PM
+    EXECUTION-approval and is superseded by `_fire_stamp_approved` in the
+    same invocation -- so no plan was ever observed at `reviewed`, and a
+    fully reviewed-and-integrated plan awaiting the PM read `draft`,
+    indistinguishable from one nobody had looked at (DoE-claude memo
+    2026-08-27-doe-claude-em-stamp-reviewed-bound-to-approval-ceremony).
+
+    Divergence from `_fire_stamp_reviewed`'s additive-side-effect contract,
+    deliberate: the rung advance IS this verb's whole job, not a side effect
+    of a stamp that already landed, so a rung failure IS this verb's exit
+    code. It never fails open.
+
+    The `stamp` verb keeps its own `_fire_stamp_reviewed` fire: once this
+    earlier verb has run, that one is an at-or-past rc-0 no-op
+    (`plan_status_transition._stamp_rung`, AC4), and it stays the only
+    producer for a `/review` that never reached `mark-reviewed`.
+
+    Writes no `execution_authorized_*` field: authorization is the PM's act
+    at the `stamp` verb, and a reviewed plan is explicitly NOT an authorized
+    one.
+    """
+    import sys
+
+    from coordinator_core.ops import plan_status_transition
+
+    if not rest or rest[0].startswith("--"):
+        print("review-exec-auth-stamp: missing required <plan-path>", file=sys.stderr)
+        return EXIT_USAGE
+    plan_path = rest[0]
+    if len(rest) > 1:
+        print(
+            f"review-exec-auth-stamp: unrecognized argument: {rest[1]}",
+            file=sys.stderr,
+        )
+        return EXIT_USAGE
+
+    # `plan_status_transition.main` only ever returns 0 or 1 (verified by
+    # reading every `return` in `main`/`_stamp_rung`/`_stamp_reviewed` --
+    # Review: coordinator:code-reviewer session 403ab86c Finding 1) -- there
+    # is no callee-side usage code to pass through, so the two-way outcome
+    # space below is honest rather than implying a distinction the callee
+    # does not make.
+    rc = plan_status_transition.main(["stamp-reviewed", "--plan", plan_path])
+    return EXIT_OK if rc == 0 else EXIT_BUSINESS_FAIL
 
 
 def _main_authorize_invocation(rest: list[str]) -> int:
@@ -672,6 +735,9 @@ def main(argv: list[str]) -> int:
     `authorize-invocation` is the second verb: the PM-invocation mint, which
     supplies its own `by`/`note` and delegates to the same single stamping
     surface -- see `_main_authorize_invocation`.
+
+    `mark-reviewed` is the third verb: the review-integration rung advance,
+    which writes no authorization field at all -- see `_main_mark_reviewed`.
     """
     import json
     import sys
@@ -682,6 +748,9 @@ def main(argv: list[str]) -> int:
 
     if argv[:1] and argv[0] == "authorize-invocation":
         return _main_authorize_invocation(argv[1:])
+
+    if argv[:1] and argv[0] == "mark-reviewed":
+        return _main_mark_reviewed(argv[1:])
 
     if not argv or argv[0] != "stamp":
         print(USAGE, file=sys.stderr)

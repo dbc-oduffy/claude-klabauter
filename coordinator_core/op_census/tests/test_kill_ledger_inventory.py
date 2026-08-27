@@ -161,6 +161,15 @@ def test_rebuilt_must_say_so_and_must_actually_be_live() -> None:
     assert "absent from the live registry" in " ".join(absent[0].notes)
 
 
+def test_gravestone_is_a_landing_word() -> None:
+    """`GRAVESTONE.` is how the ledger records a cut with the requirement
+    retired outright (K-059). Absent a marker for it, the entry fell through
+    to CONTESTED — the classifier's own defect, not the ledger's."""
+    entries = kli.parse_ledger(_entry("GRAVESTONE.", title="`session.gone_op`"))
+    kli.classify(entries, live_ops=frozenset(), suspended_ops=frozenset())
+    assert entries[0].population == "LANDED"
+
+
 def test_the_real_ledger_has_no_contested_rows() -> None:
     """AC-7 of the-meter-02: `--fail-on-contested` exits 0 against the real
     ledger. A CONTESTED row here is a real ledger/registry disagreement to

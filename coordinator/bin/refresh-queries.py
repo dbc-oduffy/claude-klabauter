@@ -86,20 +86,20 @@ def _import_main():
     return _op_main
 
 
-def main() -> None:
+def main(argv: "list[str] | None" = None) -> int:
     try:
         op_main = _import_main()
     except RuntimeError as exc:
         print(f"refresh-queries.py: CLAUDE_KLABAUTER_ROOT resolution failed: {exc}", file=sys.stderr)
-        sys.exit(3)
+        return 3
     except ImportError as exc:
         print(
             f"refresh-queries.py: coordinator_core.text.refresh_queries not importable: {exc}",
             file=sys.stderr,
         )
-        sys.exit(3)
-    sys.exit(op_main(sys.argv[1:]))
+        return 3
+    return op_main((sys.argv[1:] if argv is None else argv))
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

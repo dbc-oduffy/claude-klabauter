@@ -51,10 +51,10 @@ def _import_normalize_snippet():
     return normalize_snippet
 
 
-def main() -> None:
-    if "--help" in sys.argv[1:] or "-h" in sys.argv[1:]:
+def main(argv: "list[str] | None" = None) -> int:
+    if "--help" in (sys.argv[1:] if argv is None else argv) or "-h" in (sys.argv[1:] if argv is None else argv):
         sys.stdout.write(__doc__ or "")
-        sys.exit(0)
+        return 0
 
     text = sys.stdin.read()
     if not text:
@@ -64,23 +64,23 @@ def main() -> None:
         # success here previously read as "checked, clean" to an operator or
         # agent that forgot to pipe anything in.
         sys.stderr.write(__doc__ or "")
-        sys.exit(1)
+        return 1
 
     try:
         normalize_snippet = _import_normalize_snippet()
     except RuntimeError as exc:
         print(f"normalize-snippet: CLAUDE_KLABAUTER_ROOT resolution failed: {exc}", file=sys.stderr)
-        sys.exit(1)
+        return 1
     except ImportError as exc:
         print(
             f"normalize-snippet: coordinator_core.text.normalize_snippet not importable: {exc}",
             file=sys.stderr,
         )
-        sys.exit(1)
+        return 1
 
     result = normalize_snippet(text)
     sys.stdout.write(result)
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

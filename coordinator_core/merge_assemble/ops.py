@@ -44,23 +44,6 @@ from coordinator_core.merge_assemble import brief as _brief
 from coordinator_core.merge_assemble.apply import apply as _apply
 
 
-@register_op("merge_assemble.brief")
-async def _merge_assemble_brief(params: dict[str, Any], repo_root: Optional[Path]) -> dict[str, Any]:
-    """COMPUTE_ONLY adapter over `merge_assemble.brief()` — recomputes the
-    read-only merge decision object (branch_state, version_bump proposal,
-    directives[], judgment_points[]) and returns it verbatim; writes nothing.
-
-    params:
-        decisions:  optional dict, forwarded to `brief(decisions=...)`.
-        tag_prefix: optional str, default "v", forwarded to `brief(tag_prefix=...)`.
-    """
-    brief_kwargs: dict[str, Any] = {"decisions": params.get("decisions"), "repo_root": repo_root}
-    if "tag_prefix" in params:
-        brief_kwargs["tag_prefix"] = params["tag_prefix"]
-    result = _brief(**brief_kwargs)
-    return {"exit_code": result.exit_code, "decision_object": result.decision_object}
-
-
 @register_op("merge_assemble.apply")
 async def _merge_assemble_apply(params: dict[str, Any], repo_root: Optional[Path]) -> dict[str, Any]:
     """MUTATING adapter over `merge_assemble.apply.apply()` — recomputes the

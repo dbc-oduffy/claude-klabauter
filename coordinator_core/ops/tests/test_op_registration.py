@@ -82,7 +82,8 @@ from coordinator_core.benchmarks.budget import resolve_budget
 _CARTOGRAPHY_OPS = (
     "cartography.tree",
     "cartography.file_index",
-    "cartography.churn",
+    # cartography.churn -- DELETED 2026-08-27 (kill ledger K-111, 200ms sweep).
+    # Module removed outright; no non-test importers.
     "cartography.symbols",
     "cartography.edges",
 )
@@ -614,9 +615,12 @@ import coordinator_core.pickup_assemble
 import coordinator_core.ops
 coordinator_core.ops._eager_import_all()
 from coordinator_core.ipc import _REGISTRY
-assert "deliverable.cascade_terminal" in _REGISTRY, (
-    "deliverable.cascade_terminal missing from _REGISTRY after "
-    "pickup_assemble-then-ops import order"
+# deliverable.cascade_terminal was DELETED 2026-08-27 (kill ledger K-104,
+# 200ms sweep). The import-order hazard this probe guards is unchanged and
+# still worth pinning -- cascade_backstop_sweep exercises the same
+# pickup_assemble-then-ops path through the same package.
+assert "deliverable.cascade_terminal" not in _REGISTRY, (
+    "deliverable.cascade_terminal is killed and must not re-register"
 )
 assert "deliverable.cascade_backstop_sweep" in _REGISTRY, (
     "deliverable.cascade_backstop_sweep missing from _REGISTRY after "

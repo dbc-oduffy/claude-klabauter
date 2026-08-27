@@ -62,19 +62,19 @@ def _import_main():
     return _op_main
 
 
-def main() -> None:
+def main(argv: "list[str] | None" = None) -> int:
     try:
         op_main = _import_main()
     except RuntimeError as exc:
         print(f"verify-ue-overrides.py: engine-root resolution failed: {exc}", file=sys.stderr)
-        sys.exit(1)
+        return 1
     except ImportError as exc:
         print(
             f"verify-ue-overrides.py: coordinator_core.ops.verify_ue_overrides not "
             f"importable: {exc}",
             file=sys.stderr,
         )
-        sys.exit(1)
+        return 1
     script_dir = os.path.dirname(os.path.abspath(__file__))
 
     # DR-276: op_main takes a positional `script_dir` argument that
@@ -86,9 +86,9 @@ def main() -> None:
     from coordinator_core.cli_entry import recording_declared_writes
 
     with recording_declared_writes():
-        code = op_main(sys.argv[1:], script_dir)
-    sys.exit(code)
+        code = op_main((sys.argv[1:] if argv is None else argv), script_dir)
+    return code
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

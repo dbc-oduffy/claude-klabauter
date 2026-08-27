@@ -26,6 +26,7 @@ import json
 import os
 import re
 import subprocess
+import sys
 from pathlib import Path
 from typing import List, Tuple
 
@@ -259,6 +260,23 @@ class _SubprocessSpy:
             return _completed(0, self._commit_stdout, "")
         if "run-all-checks.py" in joined:
             return _completed(self._ci_returncode, self._ci_stdout, "")
+
+        # Step 2b's gate runs IN-PROCESS now (`_run_step` -> `module.main(argv)`,
+        # the spawn-elimination change), so `percolate-gate`'s own git legs land
+        # HERE instead of the gate's whole stdout being answered by the
+        # `_PERCOLATE_GATE` branch above. That branch is not dead -- it still
+        # answers a spawned gate -- but `_cmd_inverse_drift`'s `git log` reaches
+        # the stub directly and had nothing to match.
+        #
+        # No lines == no inverse drift, which is exactly what `drift_stdout`'s
+        # "anchor_mode: 30day-fallback\n" stood for while the gate was spawned:
+        # the fixture has only ever modelled a clean dest. A test that wants
+        # drift feeds commit lines here, not gate stdout.
+        if cmd and str(cmd[0]) == "git" and "log" in cmd:
+            return _completed(0, "", "")
+        if cmd and str(cmd[0]) == "git" and "rev-parse" in cmd:
+            return _completed(1, "", "unknown revision")
+
         raise AssertionError(f"unhandled subprocess.run call in test stub: {cmd!r}")
 
 
@@ -309,6 +327,55 @@ def _parse_fixture_change_lines(stdout_text: str) -> "List[Tuple[str, str]]":
         if match:
             changes.append((match.group(1), match.group(2)))
     return changes
+
+
+def _install_sibling_cli_stub(monkeypatch, spy: "_SubprocessSpy") -> None:
+    """Re-open the fixture's injection point after the spawn-elimination change.
+
+    `_run_step` used to `subprocess.run([python, script, *argv])`, so stubbing
+    `subprocess.run` (§ `_SubprocessSpy`) answered every step CLI wholesale. It
+    now imports the sibling via `_sibling_cli(script)` and calls `module.main(argv)`
+    IN-PROCESS, which means the spy's `_PERCOLATE_GATE` / `_PARSE_DRYRUN` branches
+    stopped being reachable: the real modules ran instead, and only their internal
+    git legs reached the spy. The visible symptom was `step3_gate_fires` coming
+    from a real parse of a fixture-less dry run -- always false -- so every
+    gate-fires test silently exercised the no-gate path.
+
+    This stubs `_sibling_cli`, NOT `_run_step`: `_run_step`'s own contract (its
+    exception-to-returncode mapping, its stdout/stderr capture, the ordering the
+    call-sequence assertions read) stays under test. Only the module it hands back
+    is fixture-supplied, and only for the argv shapes the fixture models -- anything
+    else falls through to the real sibling, so a newly-added step is a visible
+    failure rather than a silent stub hit.
+    """
+    real_sibling_cli = _mod._sibling_cli
+
+    def _fake_sibling_cli(script):
+        real_module = real_sibling_cli(script)
+
+        def _main(argv):
+            if str(script) == str(_mod._PARSE_DRYRUN):
+                out = spy._parse2_stdout if "--medium-leak-count" in argv else spy._parse1_stdout
+                print(out, end="")
+                return 0
+            if str(script) == str(_mod._PERCOLATE_GATE):
+                if "scan-secrets" in argv:
+                    print(spy._scan_stdout, end="")
+                    return spy._scan_returncode
+                if "inverse-drift" in argv:
+                    print(spy._drift_stdout, end="")
+                    return 0
+            # Unmodelled step or subcommand (`resolve-root`, and anything added
+            # later): run the real thing rather than invent an answer for it.
+            return real_module.main(argv)
+
+        class _StubModule:
+            main = staticmethod(_main)
+
+        return _StubModule
+
+    monkeypatch.setattr(_mod, "_sibling_cli", _fake_sibling_cli)
+    monkeypatch.setattr(_mod, "_SIBLING_CLI_MODULES", {})
 
 
 def _install_manifest_stub(monkeypatch, spy: "_SubprocessSpy") -> None:
@@ -451,6 +518,7 @@ def _run_round(tmp_path, monkeypatch, *, ci_returncode=0, ci_exists=True, gate_f
         toplevel_returncode=toplevel_returncode,
     )
     _install_manifest_stub(monkeypatch, spy)
+    _install_sibling_cli_stub(monkeypatch, spy)
     monkeypatch.setattr(_mod.subprocess, "run", spy)
     monkeypatch.setattr(_mod, "_branch0_gate", lambda target, root: str(source_dir))
     monkeypatch.setattr(_mod, "_resolve_dest", lambda target, root: str(dest))
@@ -646,6 +714,7 @@ def test_large_pathspec_commit_argv_stays_bounded_not_on_argv(tmp_path, monkeypa
         parse2_stdout=_parse2_stdout(False),
     )
     _install_manifest_stub(monkeypatch, spy)
+    _install_sibling_cli_stub(monkeypatch, spy)
     monkeypatch.setattr(_mod.subprocess, "run", spy)
     monkeypatch.setattr(_mod, "_branch0_gate", lambda target, root: str(source_dir))
     monkeypatch.setattr(_mod, "_resolve_dest", lambda target, root: str(dest))
@@ -977,10 +1046,24 @@ def test_resolve_percolate_root_failure_returns_usage_error(tmp_path, monkeypatc
     monkeypatch.setattr(_mod, "_resolve_dest", lambda target, root: str(tmp_path / "unused"))
     monkeypatch.setattr(_mod, "_resolve_central_state", lambda: None)
 
+    # `resolve-root` is a `_run_step` call, so it resolves through `_sibling_cli`
+    # in-process; a `subprocess.run` interceptor is downstream of the thing under
+    # test and let the REAL gate answer instead.
+    def _fail_resolve_root(script):
+        class _Failing:
+            @staticmethod
+            def main(argv):
+                if "resolve-root" in argv:
+                    print("no root", file=sys.stderr)
+                    return 1
+                raise AssertionError(f"unexpected step before percolate-root resolution: {argv!r}")
+
+        return _Failing
+
+    monkeypatch.setattr(_mod, "_sibling_cli", _fail_resolve_root)
+    monkeypatch.setattr(_mod, "_SIBLING_CLI_MODULES", {})
+
     def _fail_run(cmd, **kwargs):
-        joined = " ".join(str(c) for c in cmd)
-        if "resolve-root" in joined:
-            return _completed(1, "", "no root")
         raise AssertionError(f"unexpected call before percolate-root resolution: {cmd!r}")
 
     monkeypatch.setattr(_mod.subprocess, "run", _fail_run)
@@ -1041,13 +1124,27 @@ def test_inverse_drift_failure_returns_fail(tmp_path, monkeypatch):
     )
     _install_manifest_stub(monkeypatch, spy)
 
-    def _drift_fail(cmd, **kwargs):
-        joined = " ".join(str(c) for c in cmd)
-        if str(_mod._PERCOLATE_GATE) in joined and "inverse-drift" in cmd:
-            return _completed(1, "", "drift exploded")
-        return spy(cmd, **kwargs)
+    # Fails the step at `_sibling_cli`, not at `subprocess.run`: Step 2b runs
+    # IN-PROCESS now, so a `subprocess.run` interceptor never sees the gate at
+    # all and this test silently exercised a SUCCEEDING drift step.
+    _install_sibling_cli_stub(monkeypatch, spy)
+    _real_sibling_cli = _mod._sibling_cli
 
-    monkeypatch.setattr(_mod.subprocess, "run", _drift_fail)
+    def _drift_fail_sibling(script):
+        real_module = _real_sibling_cli(script)
+
+        class _Failing:
+            @staticmethod
+            def main(argv):
+                if str(script) == str(_mod._PERCOLATE_GATE) and "inverse-drift" in argv:
+                    print("drift exploded", file=sys.stderr)
+                    return 1
+                return real_module.main(argv)
+
+        return _Failing
+
+    monkeypatch.setattr(_mod, "_sibling_cli", _drift_fail_sibling)
+    monkeypatch.setattr(_mod.subprocess, "run", spy)
     monkeypatch.setattr(_mod, "_branch0_gate", lambda target, root: str(source_dir))
     monkeypatch.setattr(_mod, "_resolve_dest", lambda target, root: str(dest))
     monkeypatch.setattr(_mod, "_resolve_central_state", lambda: None)
@@ -2008,6 +2105,7 @@ def test_noop_with_dest_already_in_sync_does_nothing(tmp_path, monkeypatch):
         dest_ahead_stdout="# branch.ab +0 -0\n",
     )
     _install_manifest_stub(monkeypatch, spy)
+    _install_sibling_cli_stub(monkeypatch, spy)
     monkeypatch.setattr(_mod.subprocess, "run", spy)
     monkeypatch.setattr(_mod, "_branch0_gate", lambda target, root: str(source_dir))
     monkeypatch.setattr(_mod, "_resolve_dest", lambda target, root: str(dest))
@@ -2045,6 +2143,7 @@ def test_realrun_noop_with_unpushed_dest_commits_still_publishes(tmp_path, monke
         dest_ahead_stdout="# branch.ab +1 -0\n",
     )
     _install_manifest_stub(monkeypatch, spy)
+    _install_sibling_cli_stub(monkeypatch, spy)
     monkeypatch.setattr(_mod.subprocess, "run", spy)
     monkeypatch.setattr(_mod, "_branch0_gate", lambda target, root: str(source_dir))
     monkeypatch.setattr(_mod, "_resolve_dest", lambda target, root: str(dest))
@@ -2826,6 +2925,7 @@ def test_default_no_op_reports_pass_noop_from_single_real_run(tmp_path, monkeypa
         dest_ahead_stdout="# branch.ab +0 -0\n",
     )
     _install_manifest_stub(monkeypatch, spy)
+    _install_sibling_cli_stub(monkeypatch, spy)
     monkeypatch.setattr(_mod.subprocess, "run", spy)
     monkeypatch.setattr(_mod, "_branch0_gate", lambda target, root: str(source_dir))
     monkeypatch.setattr(_mod, "_resolve_dest", lambda target, root: str(dest))
@@ -2850,9 +2950,26 @@ def test_default_no_op_reports_pass_noop_from_single_real_run(tmp_path, monkeypa
 
 def _branch0_stderr(monkeypatch, capsys, gate_stdout: str) -> str:
     """Drive `_branch0_gate` against a canned failing gate result and return
-    what it wrote to stderr. Stubs `_mod._run`, the module's own subprocess
-    boundary, so nothing spawns."""
-    monkeypatch.setattr(_mod, "_run", lambda *a, **k: _completed(1, gate_stdout))
+    what it wrote to stderr.
+
+    Stubs `_sibling_cli`, which is the seam `_branch0_gate` actually reaches
+    (`_run_step` -> `module.main(argv)`). It stubbed `_mod._run` until 2026-08-27,
+    and `_branch0_gate` has never called `_run` -- so the REAL gate answered every
+    time and the canned `gate_stdout` argument was inert. The routed case failed
+    outright; the every-other-failure case passed for the wrong reason, because the
+    real gate happened to emit a `MISSING_TARGETS` with no `route:` line.
+    """
+    def _canned_sibling_cli(script):
+        class _Canned:
+            @staticmethod
+            def main(argv):
+                print(gate_stdout, end="")
+                return 1
+
+        return _Canned
+
+    monkeypatch.setattr(_mod, "_sibling_cli", _canned_sibling_cli)
+    monkeypatch.setattr(_mod, "_SIBLING_CLI_MODULES", {})
     assert _mod._branch0_gate("klabauter", "/percolate-root") is None
     return capsys.readouterr().err
 

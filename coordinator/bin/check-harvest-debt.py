@@ -59,23 +59,23 @@ def _import_main():
     return _op_main
 
 
-def main() -> None:
+def main(argv: "list[str] | None" = None) -> int:
     try:
         op_main = _import_main()
     except RuntimeError as exc:
         # CLAUDE_KLABAUTER_ROOT resolution failed. This is an orientation nudge, not a
         # gate -- never block the caller on a transport failure.
         print(f"check-harvest-debt.sh: CLAUDE_KLABAUTER_ROOT resolution failed: {exc}", file=sys.stderr)
-        sys.exit(0)
+        return 0
     except ImportError as exc:
         print(
             f"check-harvest-debt.sh: coordinator_core.ops.check_harvest_debt not importable: {exc}",
             file=sys.stderr,
         )
-        sys.exit(0)
+        return 0
 
-    sys.exit(op_main(sys.argv[1:]))
+    return op_main((sys.argv[1:] if argv is None else argv))
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

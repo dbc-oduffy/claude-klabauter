@@ -690,14 +690,19 @@ def parse_consumed_handoff_acceptance_criteria(text: str) -> Optional[dict[str, 
 
 
 # The status column is found by NAME, never by position. Measured over
-# docs/plans/ on 2026-08-26: 245 of 313 AC tables carry a column literally
-# headed "status"; the remaining 68 head their third column "verified by",
-# "discharged by", "oracle", "evidence", or "instrument" -- none of which is
-# a status, and several of which hold a chunk id (C8, C2) or a prose
-# instruction. Reading the last cell positionally misclassified every one of
-# those, which is why this is a named lookup and why a table without the
-# column is UNREADABLE rather than guessed at.
-_AC_TABLE_STATUS_HEADER = "status"
+# docs/plans/ on 2026-08-26: 265 of 313 AC tables carry a column literally
+# headed "status", 7 head it "state" -- a true synonym, added to this set --
+# and the remaining 68 head their third column "verified by", "discharged
+# by", "oracle", "evidence", or "instrument" -- none of which is a status,
+# and several of which hold a chunk id (C8, C2) or a prose instruction.
+# Reading the last cell positionally misclassified every one of those, which
+# is why this is a named lookup and why a table without the column is
+# UNREADABLE rather than guessed at. The set stays closed at exactly these
+# two names: "state" is genuinely the same concept as "status", but none of
+# the five non-status headers above is, and widening this set to catch them
+# would reintroduce the same misclassification the named lookup exists to
+# prevent.
+_AC_TABLE_STATUS_HEADERS = frozenset({"status", "state"})
 
 _AC_TABLE_ROW_RE = re.compile(r"^\|\s*(AC[0-9][A-Za-z0-9]*)\s*\|")
 # Leading tokens in a status cell recognised as OPEN or DONE. Measured over
@@ -800,11 +805,11 @@ def parse_plan_acceptance_criteria_table(text: str) -> Optional[dict[str, int]]:
             # LAST cell is a status in only some plans, and is a chunk id, a
             # verification method, or an evidence pointer in the rest.
             if status_column is None and any(
-                cell.casefold() == _AC_TABLE_STATUS_HEADER for cell in cells
+                cell.casefold() in _AC_TABLE_STATUS_HEADERS for cell in cells
             ):
                 status_column = next(
                     i for i, cell in enumerate(cells)
-                    if cell.casefold() == _AC_TABLE_STATUS_HEADER
+                    if cell.casefold() in _AC_TABLE_STATUS_HEADERS
                 )
             continue
         total += 1

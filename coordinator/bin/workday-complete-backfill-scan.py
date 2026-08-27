@@ -60,7 +60,7 @@ def _import_main():
     return _op_main
 
 
-def main() -> None:
+def main(argv: "list[str] | None" = None) -> int:
     try:
         op_main = _import_main()
     except RuntimeError as exc:
@@ -68,17 +68,17 @@ def main() -> None:
             f"workday-complete-backfill-scan: engine-root resolution failed: {exc}",
             file=sys.stderr,
         )
-        sys.exit(0)
+        return 0
     except ImportError as exc:
         print(
             "workday-complete-backfill-scan: "
             f"coordinator_core.ops.workday_complete_backfill_scan not importable: {exc}",
             file=sys.stderr,
         )
-        sys.exit(0)
+        return 0
 
-    sys.exit(op_main(sys.argv[1:]))
+    return op_main((sys.argv[1:] if argv is None else argv))
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

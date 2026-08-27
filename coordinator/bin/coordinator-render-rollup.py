@@ -89,7 +89,7 @@ def _resolve_run_op_main():
     return run_op_main
 
 
-def main() -> None:
+def main(argv: "list[str] | None" = None) -> int:
     try:
         run_op_main = _resolve_run_op_main()
     except RuntimeError as exc:
@@ -100,28 +100,28 @@ def main() -> None:
             f"coordinator-render-rollup.py: engine-root resolution failed: {exc}",
             file=sys.stderr,
         )
-        sys.exit(0)
+        return 0
     except ImportError as exc:
         print(
             f"coordinator-render-rollup.py: coordinator_core.cli_entry not importable: {exc}",
             file=sys.stderr,
         )
-        sys.exit(0)
+        return 0
 
     try:
         # op_main() owns the missing-arg (exit 1) vs fail-open-skip (exit 0)
         # distinction internally — no additional try/except needed here.
-        code = run_op_main("coordinator_core.ops.coordinator_render_rollup", sys.argv[1:])
+        code = run_op_main("coordinator_core.ops.coordinator_render_rollup", (sys.argv[1:] if argv is None else argv))
     except ImportError as exc:
         print(
             f"coordinator-render-rollup.py: coordinator_core.ops.coordinator_render_rollup "
             f"not importable: {exc}",
             file=sys.stderr,
         )
-        sys.exit(0)
+        return 0
 
-    sys.exit(code)
+    return code
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

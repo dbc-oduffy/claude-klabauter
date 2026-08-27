@@ -30,6 +30,15 @@
 #     execution_authorized_{by,at,sha,note} fields onto the plan's own
 #     frontmatter, atomically. MUTATING. Idempotent — re-stamping with
 #     identical values is a no-op.
+#   mark-reviewed <plan-path>
+#     The review-integration rung advance: flips the plan draft -> reviewed
+#     and writes no execution_authorized_* field. Runs when review
+#     integration completes, BEFORE the PM is asked about execution — the
+#     `reviewed` rung the `stamp` verb's own fire could never leave a plan
+#     sitting at. MUTATING (plan status only). Convergent — a plan already
+#     at or past `reviewed` is an rc-0 no-op. Unlike the `stamp` verb's
+#     side-effect fire, a failed rung advance here IS this subcommand's
+#     exit code.
 #
 # Exit codes (locally scoped to this CLI, NOT inherited — see the contract's
 # own § Exit-code contract):

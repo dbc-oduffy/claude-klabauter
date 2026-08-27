@@ -55,7 +55,7 @@ def _resolve_run_op_main():
     return run_op_main
 
 
-def main() -> None:
+def main(argv: "list[str] | None" = None) -> int:
     try:
         run_op_main = _resolve_run_op_main()
     except RuntimeError as exc:
@@ -66,25 +66,25 @@ def main() -> None:
             f"check-machine-local-regeneratability: CLAUDE_KLABAUTER_ROOT resolution failed: {exc}",
             file=sys.stderr,
         )
-        sys.exit(0)
+        return 0
     except ImportError as exc:
         print(
             f"check-machine-local-regeneratability: coordinator_core.cli_entry not importable: {exc}",
             file=sys.stderr,
         )
-        sys.exit(0)
+        return 0
 
     try:
-        code = run_op_main("coordinator_core.ops.check_machine_local_regeneratability", sys.argv[1:])
+        code = run_op_main("coordinator_core.ops.check_machine_local_regeneratability", (sys.argv[1:] if argv is None else argv))
     except ImportError as exc:
         print(
             f"check-machine-local-regeneratability: coordinator_core.ops.check_machine_local_regeneratability not importable: {exc}",
             file=sys.stderr,
         )
-        sys.exit(0)
+        return 0
 
-    sys.exit(code)
+    return code
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

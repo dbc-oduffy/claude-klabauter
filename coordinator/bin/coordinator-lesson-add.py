@@ -267,7 +267,8 @@ def _dedup_check(new_title):
     return matches
 
 
-def main():
+def main(argv: "list[str] | None" = None) -> int:
+    del argv  # this CLI takes no arguments; argv accepted for the warm-call contract
     parser = argparse.ArgumentParser(
         prog="coordinator-lesson-add",
         description=(
@@ -354,7 +355,7 @@ def main():
                 ' — re-run with --force to add anyway, or amend the existing entry',
                 file=sys.stderr,
             )
-            sys.exit(1)
+            return 1
 
     cmd = [
         sys.executable, _QUEUE_APPEND,
@@ -382,8 +383,8 @@ def main():
         cmd,
         **no_console_passthrough_kwargs(),
     )
-    sys.exit(result.returncode)
+    return result.returncode
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

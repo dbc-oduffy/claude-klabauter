@@ -95,7 +95,7 @@ def _import_runner():
     return run_op_main
 
 
-def main() -> None:
+def main(argv: "list[str] | None" = None) -> int:
     # EDIT_LIVE_HOOK_SCRIPT_DIR tells the ported module where THIS trampoline
     # lives, so its Bash-matcher hooks.json detection can resolve
     # ../hooks/hooks.json relative to this bin/ directory -- the same
@@ -110,25 +110,25 @@ def main() -> None:
         run_op_main = _import_runner()
     except RuntimeError as exc:
         print(f"edit-live-hook.sh: engine-root resolution failed: {exc}", file=sys.stderr)
-        sys.exit(EXIT_TRANSPORT_FAILURE)
+        return EXIT_TRANSPORT_FAILURE
     except ImportError as exc:
         print(
             f"edit-live-hook.sh: coordinator_core.cli_entry not importable: {exc}",
             file=sys.stderr,
         )
-        sys.exit(EXIT_TRANSPORT_FAILURE)
+        return EXIT_TRANSPORT_FAILURE
 
     try:
-        code = run_op_main("coordinator_core.ops.edit_live_hook", sys.argv[1:])
+        code = run_op_main("coordinator_core.ops.edit_live_hook", (sys.argv[1:] if argv is None else argv))
     except ImportError as exc:
         print(
             f"edit-live-hook.sh: coordinator_core.ops.edit_live_hook not importable: {exc}",
             file=sys.stderr,
         )
-        sys.exit(EXIT_TRANSPORT_FAILURE)
+        return EXIT_TRANSPORT_FAILURE
 
-    sys.exit(code)
+    return code
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

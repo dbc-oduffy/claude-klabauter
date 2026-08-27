@@ -71,8 +71,8 @@ def _print_help() -> None:
     sys.stdout.write(_USAGE_TEXT or "")
 
 
-def main() -> None:
-    argv = sys.argv[1:]
+def main(argv: "list[str] | None" = None) -> int:
+    argv = (sys.argv[1:] if argv is None else argv)
 
     goals_dir = ""
     since = "7d"
@@ -84,13 +84,13 @@ def main() -> None:
         if arg == "--goals-dir":
             if i + 1 >= len(argv):
                 print("ERROR: --goals-dir requires an argument", file=sys.stderr)
-                sys.exit(1)
+                return 1
             goals_dir = argv[i + 1]
             i += 2
         elif arg == "--since":
             if i + 1 >= len(argv):
                 print("ERROR: --since requires an argument", file=sys.stderr)
-                sys.exit(1)
+                return 1
             since = argv[i + 1]
             i += 2
         elif arg == "--dry-run":
@@ -98,10 +98,10 @@ def main() -> None:
             i += 1
         elif arg in ("--help", "-h"):
             _print_help()
-            sys.exit(0)
+            return 0
         else:
             print(f"ERROR: Unknown argument: {arg}", file=sys.stderr)
-            sys.exit(1)
+            return 1
 
     # Repo whose state/goals + state/week-changelog we operate on: the caller's
     # cwd-derived git root (matches the bash script's "never rely on cwd for
@@ -125,11 +125,11 @@ def main() -> None:
         result = cc_invoke("goals.reassess_krs", params, cwd_repo_root)
     except RuntimeError as exc:
         print(f"reassess-goal-krs: op transport failed: {exc}", file=sys.stderr)
-        sys.exit(1)
+        return 1
 
     if not isinstance(result, dict):
         print(f"reassess-goal-krs: malformed result from cc_invoke: not a dict ({result!r})", file=sys.stderr)
-        sys.exit(1)
+        return 1
 
     for warning in result.get("warnings") or []:
         print(f"WARNING: {warning}", file=sys.stderr)
@@ -140,14 +140,14 @@ def main() -> None:
             f"reassess-goal-krs: op reported failure: {result.get('error', '(no error message)')}",
             file=sys.stderr,
         )
-        sys.exit(1)
+        return 1
 
     report = result.get("report", "")
     if report:
         print(report)
 
-    sys.exit(0)
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

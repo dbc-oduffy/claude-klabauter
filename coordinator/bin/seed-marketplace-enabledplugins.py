@@ -725,7 +725,8 @@ def _check_only_requested(args: argparse.Namespace) -> bool:
     return env_val in ("1", "true", "yes")
 
 
-def main() -> int:
+def main(argv: "list[str] | None" = None) -> int:
+    del argv  # this CLI takes no arguments; argv accepted for the warm-call contract
     parser = argparse.ArgumentParser(
         description=(
             "Idempotently seed enabledPlugins[<plugin>@<marketplace>] = true"

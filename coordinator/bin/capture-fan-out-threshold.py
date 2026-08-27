@@ -74,7 +74,7 @@ def _import_run_op_main():
     return run_op_main
 
 
-def main() -> None:
+def main(argv: "list[str] | None" = None) -> int:
     try:
         run_op_main = _import_run_op_main()
     except RuntimeError as exc:
@@ -82,26 +82,26 @@ def main() -> None:
             f"capture-fan-out-threshold.sh: CLAUDE_KLABAUTER_ROOT resolution failed: {exc}",
             file=sys.stderr,
         )
-        sys.exit(1)
+        return 1
     except ImportError as exc:
         print(
             f"capture-fan-out-threshold.sh: coordinator_core.cli_entry not importable: {exc}",
             file=sys.stderr,
         )
-        sys.exit(1)
+        return 1
 
     try:
-        code = run_op_main("coordinator_core.ops.capture_fan_out_threshold", sys.argv[1:])
+        code = run_op_main("coordinator_core.ops.capture_fan_out_threshold", (sys.argv[1:] if argv is None else argv))
     except ImportError as exc:
         print(
             f"capture-fan-out-threshold.sh: coordinator_core.ops.capture_fan_out_threshold "
             f"not importable: {exc}",
             file=sys.stderr,
         )
-        sys.exit(1)
+        return 1
 
-    sys.exit(code)
+    return code
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

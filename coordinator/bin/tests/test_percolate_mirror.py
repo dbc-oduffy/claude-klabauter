@@ -184,6 +184,52 @@ def _wire(monkeypatch, order, *, dirty=False, scan_rc=0, drift_anchor="marker", 
         raise AssertionError(f"unhandled: {cmd!r}")
 
     monkeypatch.setattr(_mod._round, "_run", _fake_run)
+
+    # The commit pathspec comes from the manifest publish.py PERSISTS, never from
+    # parsing its stdout (`percolate-mirror.py`'s own comment says so, matching
+    # percolate-round's C4 fix). Nothing in this test process writes that manifest,
+    # so without this stub `_pathspec_from_manifest` is empty, the mirror prints
+    # "publish reported no changed files; nothing to commit" and returns before the
+    # commit step -- which is why the ordering assertions stopped seeing "commit".
+    # Mirrors `test_percolate_round.py::_install_manifest_stub`'s shape.
+    declared = frozenset({"a.py"})
+
+    def _fake_read_fresh_manifest(repo_root, not_before):
+        return _mod._round._RoundManifest(
+            round_id="test",
+            added_or_updated=declared,
+            removed=frozenset(),
+            declared_payload=declared,
+        )
+
+    monkeypatch.setattr(_mod._round, "_read_fresh_round_manifest", _fake_read_fresh_manifest)
+    monkeypatch.setattr(
+        _mod._round, "_pathspec_from_manifest", lambda manifest, repo_root: sorted(declared)
+    )
+
+    # The commit leg is an in-process `run_commit_pipeline` call now, not a
+    # `scoped-git-commit` spawn, so the "commit" ordering marker comes from here
+    # rather than from `_fake_run`'s argv branch. Same reasoning as
+    # `test_percolate_round.py::_install_commit_pipeline_stub`.
+    from coordinator_core.ops.ceremony import commit_pipeline
+
+    def _fake_pipeline(repo_root, **kwargs):
+        order.append("commit")
+        return commit_pipeline.PipelineResult(
+            stage=commit_pipeline.StageOutcome(exit_code=0),
+            deletion_gate=None,
+            dirty_gate=None,
+            carry_gate=None,
+            op_scope_gate=None,
+            commit=None,
+            push=None,
+            committed_sha="deadbeef1234",
+            pushed=None,
+            commit_failed=False,
+            integrity_breach=False,
+        )
+
+    monkeypatch.setattr(commit_pipeline, "run_commit_pipeline", _fake_pipeline)
     return targets, publish_calls
 
 

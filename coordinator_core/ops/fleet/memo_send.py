@@ -46,10 +46,12 @@ Negative-spec:
     tree when `commit_authored_new_file` declines (AC4) — a decline fails
     the receiver item loud; the sender-side receipt is never written for
     that item (see the ordering note above).
-  - Does NOT resolve `sent_by` fresh at send time when the draft already
-    carries one (2026-08-13 session-identity contract) — the draft's own
-    `sent_by:` value is threaded straight through. `_SENT_BY_UNRESOLVED` is
-    the explicit sentinel for the absent case, never silent omission.
+  - Does NOT overwrite a `sent_by` the draft already carries — that value is
+    threaded straight through. Send time is where session identity is
+    RESOLVED (2026-08-13 session-identity contract C7): the draft/compose
+    pair deliberately never writes the field, so on the ordinary path this op
+    resolves it itself. `_SENT_BY_UNRESOLVED` is the explicit sentinel for a
+    resolution FAILURE, never silent omission — and never the ordinary case.
   - Does NOT overwrite an existing receiver-inbox file — refused twice,
     independently: an existence pre-check AND the `O_EXCL` open flag (AC6).
   - Does NOT trust a wire-supplied inbox path — `to` is resolved solely via
@@ -99,20 +101,78 @@ from coordinator_core.ops.fleet._memo_resolver import (
     suggest_nearest_receiver as _suggest_nearest_receiver,
 )
 from coordinator_core.ops.fleet._memo_summary import is_placeholder_summary
+from coordinator_core.ops.session_context import resolve_current_session_id
 
 _LOG = logging.getLogger(__name__)
 
 # Mode constant for the envelope mode field (memo.send is a single-mode op).
 _MODE = "send"
 
-# sent_by (2026-08-13 session-identity-earns-its-keep) — explicit sentinel for
-# "the draft this send reads never resolved its own session id" — a memo that
-# cannot name its sender must SAY SO, never omit the field silently. This op
-# does NOT re-resolve session identity at send time (the plan's own
-# instruction): whatever the draft's `sent_by:` carries — a resolved UUID, or
-# this sentinel already stamped by memo.draft/memo.compose — is threaded
-# straight through unchanged.
+# sent_by (2026-08-13 session-identity-earns-its-keep, C7) — explicit sentinel
+# for "this send could not resolve its own session id" — a memo that cannot
+# name its sender must SAY SO, never omit the field silently.
 _SENT_BY_UNRESOLVED = "unresolved"
+
+
+def _resolve_sent_by(fm: dict) -> str:
+    """The sender session id for this send: the draft's own value if it has
+    one, otherwise resolved fresh from session identity, otherwise the
+    sentinel.
+
+    Send time is the ONLY place this field is resolved. `memo.draft` and
+    `memo.compose` never author it and `memo.compose` actively strips one
+    (`_memo_compose` has no path that acquires it; sent_by never joins
+    `_CARRIED_DRAFT_FIELDS`), so a field-authored memo reaches here with the
+    field absent every time — leaving it to the caller makes the sentinel the
+    only reachable outcome, which is what silently made ~49 delivered memos
+    unrepliable between 2026-08-25 and 2026-08-27.
+
+    Negative-spec: never RAISES on an unresolvable session — an un-nameable
+    sender degrades the memo's repliability, it does not fail the delivery.
+    """
+    carried = fm.get("sent_by")
+    if isinstance(carried, str) and carried.strip():
+        return carried
+    return resolve_current_session_id() or _SENT_BY_UNRESOLVED
+
+
+def _delivery_commit_message(topic: str, from_id: str, sent_by: str) -> str:
+    """The receiver-side delivery commit's message, carrying a `Session-Id:`
+    trailer when the sender is nameable.
+
+    The trailer is the SECOND carrier of sender identity, independent of the
+    memo's own `sent_by:` frontmatter, and it is the one DoE's
+    `resolve-peer-address.py` declares as an input (alongside `claimed_by` on
+    a handoff and `created_by_session` on a queue entry) — an inbound memo has
+    no claim decision to consult, so without this the only sanctioned
+    session-id -> peer-name join has nothing to read. On 2026-08-25, three
+    memos whose frontmatter carrier had already failed still named their
+    sender through this trailer alone; that is the case for carrying both.
+
+    Stamped programmatically here because the receiver-side commit takes
+    `git_native.commit_authored_new_file`'s zero-spawn arm, which runs no
+    hooks and no `interpret-trailers` — so this does NOT ride the
+    prepare-commit-msg shim that fails open when its path goes stale.
+
+    Negative-spec: an unresolved sender means NO trailer, never a
+    `Session-Id: unresolved` line — a trailer exists to be joined to an
+    address, and a sentinel one would be a value the resolver must learn to
+    reject. The frontmatter field is where the absence is recorded. The
+    trailer is its own final paragraph, blank-line separated, or git's
+    trailer parser does not see it.
+
+    Negative-spec: a session id is durable ATTRIBUTION, not a stamped address
+    — a resume or `/clear` mints a new id while the peer name and pid persist,
+    so a reader must resolve this to an address at point of use and expect a
+    miss. Never treat it as a promise the sender is still reachable.
+    """
+    message = (
+        f"cross-repo memo delivery: {topic}\n\n"
+        f"Delivered by memo.send from {from_id}.\n"
+    )
+    if sent_by != _SENT_BY_UNRESOLVED:
+        message += f"\nSession-Id: {sent_by}\n"
+    return message
 
 # Param keys this handler declares; anything else fails loud rather than
 # being silently dropped (mirrors the pre-kill C9/A11 fix's discipline).
@@ -283,7 +343,7 @@ def _compose_delivered_content(
             scoped_to=fm.get("scoped_to"),
             in_reply_to=fm.get("in_reply_to"),
             space=fm.get("space"),
-            sent_by=fm.get("sent_by") or _SENT_BY_UNRESOLVED,
+            sent_by=_resolve_sent_by(fm),
         )
     except ValueError as exc:
         return None, f"memo.send: {exc}"
@@ -488,8 +548,7 @@ def _memo_send(params: dict, repo_root=None) -> dict:
 
     rel_path = "cross-repo/inbox/" + filename
     msg_file = _write_msg_file(
-        f"cross-repo memo delivery: {topic}\n\n"
-        f"Delivered by memo.send from {from_id}.\n"
+        _delivery_commit_message(topic, from_id, _resolve_sent_by(fm))
     )
     try:
         commit_result = git_native.commit_authored_new_file(
@@ -561,7 +620,7 @@ def _memo_send(params: dict, repo_root=None) -> dict:
         topic=topic, to=to, kind=fm.get("kind"), summary=delivered_fm.get("summary"),
         delivered_to=delivered_to, in_reply_to=fm.get("in_reply_to"),
         delivery_commit_sha=delivery_commit_sha,
-        sent_by=fm.get("sent_by") or _SENT_BY_UNRESOLVED,
+        sent_by=_resolve_sent_by(fm),
     )
     appended_line = json.dumps(row, ensure_ascii=False) + "\n"
 

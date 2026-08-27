@@ -76,7 +76,7 @@ def _import_main():
     return _op_main
 
 
-def main() -> None:
+def main(argv: "list[str] | None" = None) -> int:
     # This tool is best-effort/advisory (feeds /workday-start and
     # merging-to-main's pre-merge scan; never a hard gate) — a claude-klabauter-link
     # (transport) failure degrades to exit 0 loud-on-stderr, matching the
@@ -86,15 +86,15 @@ def main() -> None:
         op_main = _import_main()
     except RuntimeError as exc:
         print(f"orphan-branch-sweep.py: CLAUDE_KLABAUTER_ROOT resolution failed: {exc}", file=sys.stderr)
-        sys.exit(0)
+        return 0
     except ImportError as exc:
         print(
             f"orphan-branch-sweep.py: coordinator_core.ops.orphan_branch_sweep not importable: {exc}",
             file=sys.stderr,
         )
-        sys.exit(0)
-    sys.exit(op_main(sys.argv[1:]))
+        return 0
+    return op_main((sys.argv[1:] if argv is None else argv))
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

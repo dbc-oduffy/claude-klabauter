@@ -124,33 +124,43 @@ def _import_runner():
     return run_op_main
 
 
-def main() -> None:
+def main(argv: "list[str] | None" = None) -> int:
+    # argv threading: this CLI reads sys.argv at depth (argparse and helpers),
+    # so the warm-call path swaps it for the duration rather than rewriting every read.
+    # NOT re-entrant: a threaded server must serialise calls into this entrypoint.
+    _prev_argv = sys.argv
+    if argv is not None:
+        sys.argv = [sys.argv[0], *argv]
     try:
-        run_op_main = _import_runner()
-    except RuntimeError as exc:
-        print(f"verify-templates-bin-sync.sh: engine-root resolution failed: {exc}", file=sys.stderr)
-        sys.exit(1)
-    except ImportError as exc:
-        print(
-            f"verify-templates-bin-sync.sh: coordinator_core.cli_entry not importable: {exc}",
-            file=sys.stderr,
-        )
-        sys.exit(1)
-
-    plugin_root = _resolve_plugin_root()
-    mode = sys.argv[1] if len(sys.argv) > 1 else "verify"
-
-    try:
-        code = run_op_main("coordinator_core.ops.verify_templates_bin_sync", [plugin_root, mode])
-    except ImportError as exc:
-        print(
-            f"verify-templates-bin-sync.sh: coordinator_core.ops.verify_templates_bin_sync not importable: {exc}",
-            file=sys.stderr,
-        )
-        sys.exit(1)
-
-    sys.exit(code)
+        try:
+            run_op_main = _import_runner()
+        except RuntimeError as exc:
+            print(f"verify-templates-bin-sync.sh: engine-root resolution failed: {exc}", file=sys.stderr)
+            return 1
+        except ImportError as exc:
+            print(
+                f"verify-templates-bin-sync.sh: coordinator_core.cli_entry not importable: {exc}",
+                file=sys.stderr,
+            )
+            return 1
+    
+        plugin_root = _resolve_plugin_root()
+        mode = sys.argv[1] if len(sys.argv) > 1 else "verify"
+    
+        try:
+            code = run_op_main("coordinator_core.ops.verify_templates_bin_sync", [plugin_root, mode])
+        except ImportError as exc:
+            print(
+                f"verify-templates-bin-sync.sh: coordinator_core.ops.verify_templates_bin_sync not importable: {exc}",
+                file=sys.stderr,
+            )
+            return 1
+    
+        return code
+    finally:
+        sys.argv = _prev_argv
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

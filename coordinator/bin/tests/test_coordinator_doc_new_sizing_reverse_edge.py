@@ -46,6 +46,33 @@ from pathlib import Path
 
 import yaml
 
+#: A schema-VALID minimal sizing record. `sizing-object.schema.json` is
+#: `additionalProperties: false` with nine required keys, so the old
+#: `id: example` fixture could never survive the reverse edge's own
+#: post-mutation validation: `id` is not a property of the schema at all,
+#: and eight of the nine required keys were absent. The reverse edge writes
+#: `plan` and `status`; every other key here exists only to be valid.
+_MINIMAL_SIZING_KEYS = (
+    "schema: sizing-object\n"
+    "intent: example\n"
+    "estimate:\n"
+    "  tshirt: S\n"
+    "  provisional: true\n"
+    "route: dispatch\n"
+    "detents: []\n"
+    "fork: null\n"
+    "xl_exit: null\n"
+    "premise:\n"
+    "  provenance: not-applicable\n"
+    "  evidence: example\n"
+)
+
+
+def _sizing_yaml(status: str, plan: str) -> str:
+    """A valid sizing record at `status`, pointing at `plan`."""
+    return _MINIMAL_SIZING_KEYS + "status: %s\nplan: %s\n" % (status, plan)
+
+
 from coordinator_core.win_portability import no_console_creationflags
 
 import pytest
@@ -122,7 +149,7 @@ class MutateSizingReverseEdgeHelperTest(unittest.TestCase):
     """Unit coverage of the pure mutation helper, independent of the CLI/locked_rmw path."""
 
     def test_first_routing_sets_plan_and_status(self):
-        old_text = "id: example\nstatus: sized\nplan: null\n"
+        old_text = _sizing_yaml("sized", "null")
         new_text = _cli._mutate_sizing_reverse_edge(old_text, "docs/plans/2026-08-10-example.md")
         self.assertIn("plan: \"docs/plans/2026-08-10-example.md\"", new_text)
         self.assertIn("status: routed", new_text)
@@ -130,13 +157,13 @@ class MutateSizingReverseEdgeHelperTest(unittest.TestCase):
     def test_reroute_to_different_plan_raises_mutate_abort(self):
         from coordinator_core.locked_write import MutateAbort
 
-        old_text = 'id: example\nstatus: routed\nplan: "docs/plans/2026-08-01-other.md"\n'
+        old_text = _sizing_yaml("routed", '"docs/plans/2026-08-01-other.md"')
         with self.assertRaises(MutateAbort) as ctx:
             _cli._mutate_sizing_reverse_edge(old_text, "docs/plans/2026-08-10-example.md")
         self.assertIn("docs/plans/2026-08-01-other.md", str(ctx.exception))
 
     def test_idempotent_rerun_same_plan_does_not_raise(self):
-        old_text = 'id: example\nstatus: routed\nplan: "docs/plans/2026-08-10-example.md"\n'
+        old_text = _sizing_yaml("routed", '"docs/plans/2026-08-10-example.md"')
         new_text = _cli._mutate_sizing_reverse_edge(old_text, "docs/plans/2026-08-10-example.md")
         self.assertIn("plan: \"docs/plans/2026-08-10-example.md\"", new_text)
         self.assertIn("status: routed", new_text)
@@ -149,7 +176,7 @@ class MutateSizingReverseEdgeHelperTest(unittest.TestCase):
         """
         from coordinator_core.locked_write import MutateAbort
 
-        old_text = "id: example\nstatus: declined\nplan: null\n"
+        old_text = _sizing_yaml("declined", "null")
         with self.assertRaises(MutateAbort) as ctx:
             _cli._mutate_sizing_reverse_edge(old_text, "docs/plans/2026-08-10-example.md")
         self.assertIn("declined", str(ctx.exception))
@@ -183,7 +210,7 @@ class FullCliReverseEdgeHappyPathTest(unittest.TestCase):
             sizing_dir = repo / "state" / "sizings"
             sizing_dir.mkdir(parents=True)
             sizing_file = sizing_dir / "2026-08-10-example.yaml"
-            sizing_file.write_text("id: example\nstatus: sized\nplan: null\n")
+            sizing_file.write_text(_sizing_yaml("sized", "null"))
             result = _run_cli(
                 repo, out_path, "Reverse edge happy path plan",
                 "state/sizings/2026-08-10-example.yaml",
@@ -205,7 +232,7 @@ class FullCliReverseEdgeClobberGuardTest(unittest.TestCase):
             sizing_dir = repo / "state" / "sizings"
             sizing_dir.mkdir(parents=True)
             sizing_file = sizing_dir / "2026-08-10-example.yaml"
-            original_text = 'id: example\nstatus: routed\nplan: "docs/plans/2026-08-01-existing-owner.md"\n'
+            original_text = _sizing_yaml("routed", '"docs/plans/2026-08-01-existing-owner.md"')
             sizing_file.write_text(original_text)
 
             result = _run_cli(

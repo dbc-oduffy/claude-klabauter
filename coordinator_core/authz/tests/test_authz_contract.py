@@ -52,7 +52,10 @@ from coordinator_core.authz.classification import (
 class TestClassify:
     # Review: code-reviewer — parametrize so each op gets its own pass/fail signal; a broken
     # "ping" classification no longer masks a simultaneously broken "cutover.gate".
-    @pytest.mark.parametrize("op_name", ["ping", "cutover.gate", "handoff.has_live_children"])
+    # handoff.has_live_children was the third pcore-03 beachhead op until it was
+    # DELETED 2026-08-27 (kill ledger K-113, 200ms sweep). Its compute survives
+    # undecorated in ops/handoff_children.py; the dispatchable op does not.
+    @pytest.mark.parametrize("op_name", ["ping", "cutover.gate"])
     def test_known_ops_return_correct_class(self, op_name: str) -> None:
         assert classify(op_name) is OpClass.COMPUTE_ONLY
 
@@ -163,7 +166,7 @@ class TestDriftGuard:
 
     def test_known_beachhead_ops_are_present(self) -> None:
         """Confirm the three pcore-03 beachhead ops are individually registered."""
-        for op_name in ("ping", "cutover.gate", "handoff.has_live_children"):
+        for op_name in ("ping", "cutover.gate"):
             assert op_name in coordinator_core.ipc._REGISTRY, (
                 f"Expected beachhead op {op_name!r} to be in _REGISTRY but it was absent. "
                 "If the op was renamed, update OP_CLASSIFICATION and this assertion."

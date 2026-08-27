@@ -43,7 +43,6 @@ contradiction. Either alone is fine.
 from __future__ import annotations
 
 import ast
-import re
 import sys
 from pathlib import Path
 
@@ -67,11 +66,31 @@ _ENGINE_ROW = "claude-klabauter"
 _DISPATCH_SEAM = "require_dispatch_engine_on_path"
 _COLOCATED_SEAM = "require_colocated_engine_on_path"
 
-#: A CALL of a seam, never a mention of one -- every file fixed by this guard
-#: names the dispatch seam in the prose explaining why it is off it, and a bare
-#: substring test would read that remediation text as the violation.
-_DISPATCH_CALL_RE = re.compile(rf"\b{_DISPATCH_SEAM}\s*\(")
-_COLOCATED_CALL_RE = re.compile(rf"\b{_COLOCATED_SEAM}\s*\(")
+
+def _calls_seam(source: str, seam: str) -> bool:
+    """True when `source` CALLS `seam` -- never when it merely mentions one.
+
+    AST, for the same reason `_imported_coordinator_core_tops` is AST: a
+    `\\bname\\s*\\(` regex reads `require_dispatch_engine_on_path()` written
+    inside a comment or docstring as a call, and every file this guard has
+    already fixed names the dispatch seam in the prose explaining why it is
+    off it. `percolate-round.py` was reported as an offender on exactly that
+    text while making no such call.
+    """
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:  # pragma: no cover - a broken file is another test's finding
+        return False
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        name = func.id if isinstance(func, ast.Name) else (
+            func.attr if isinstance(func, ast.Attribute) else None
+        )
+        if name == seam:
+            return True
+    return False
 
 
 def _denied_top_level_packages() -> set[str]:
@@ -148,7 +167,7 @@ def _offenders() -> list[tuple[Path, str, set[str]]]:
     found: list[tuple[Path, str, set[str]]] = []
     for script in sorted(_BIN_DIR.glob("*.py")):
         source = script.read_text(encoding="utf-8", errors="replace")
-        if not _DISPATCH_CALL_RE.search(source):
+        if not _calls_seam(source, _DISPATCH_SEAM):
             continue
         hit = _imported_coordinator_core_tops(source) & denied
         if hit:
@@ -202,9 +221,9 @@ def test_the_three_measured_clis_resolve_a_root_holding_their_imports(cli_name: 
         pytest.skip(f"{cli_name} absent from this tree")
     source = script.read_text(encoding="utf-8", errors="replace")
 
-    if _COLOCATED_CALL_RE.search(source):
+    if _calls_seam(source, _COLOCATED_SEAM):
         root = Path(cc_invoke.resolve_colocated_claude_klabauter_root(str(script)))
-    elif _DISPATCH_CALL_RE.search(source):
+    elif _calls_seam(source, _DISPATCH_SEAM):
         root = Path(cc_invoke._resolve_claude_klabauter_root())
     else:  # pragma: no cover - a third axis would need its own reasoning here
         pytest.fail(

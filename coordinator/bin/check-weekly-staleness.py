@@ -67,7 +67,7 @@ def _resolve_run_op_main():
     return run_op_main
 
 
-def main() -> None:
+def main(argv: "list[str] | None" = None) -> int:
     # Never-block convention (matches the original bash's `echo UNKNOWN; exit 0`
     # short-circuits): a resolution/import failure prints UNKNOWN and exits 0,
     # rather than failing loud like a gate/config-writer trampoline would.
@@ -76,27 +76,27 @@ def main() -> None:
     except RuntimeError as exc:
         print(f"check-weekly-staleness.py: CLAUDE_KLABAUTER_ROOT resolution failed: {exc}", file=sys.stderr)
         print("UNKNOWN")
-        sys.exit(0)
+        return 0
     except ImportError as exc:
         print(
             f"check-weekly-staleness.py: coordinator_core.cli_entry not importable: {exc}",
             file=sys.stderr,
         )
         print("UNKNOWN")
-        sys.exit(0)
+        return 0
 
     try:
-        code = run_op_main("coordinator_core.ops.check_weekly_staleness", sys.argv[1:])
+        code = run_op_main("coordinator_core.ops.check_weekly_staleness", (sys.argv[1:] if argv is None else argv))
     except ImportError as exc:
         print(
             f"check-weekly-staleness.py: coordinator_core.ops.check_weekly_staleness not importable: {exc}",
             file=sys.stderr,
         )
         print("UNKNOWN")
-        sys.exit(0)
+        return 0
 
-    sys.exit(code)
+    return code
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

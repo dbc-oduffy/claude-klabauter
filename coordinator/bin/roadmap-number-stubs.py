@@ -59,18 +59,18 @@ def _import_main():
     return _op_main
 
 
-def main() -> None:
+def main(argv: "list[str] | None" = None) -> int:
     try:
         op_main = _import_main()
     except RuntimeError as exc:
         print(f"roadmap-number-stubs: CLAUDE_KLABAUTER_ROOT resolution failed: {exc}", file=sys.stderr)
-        sys.exit(3)
+        return 3
     except ImportError as exc:
         print(
             f"roadmap-number-stubs: coordinator_core.roadmap.number_stubs not importable: {exc}",
             file=sys.stderr,
         )
-        sys.exit(3)
+        return 3
 
     # Review: code-reviewer — F3, op_main's call was unguarded; a RuntimeError
     # escaping resolve_root() (now caught inside op_main itself, see
@@ -78,11 +78,11 @@ def main() -> None:
     # otherwise surface as a raw Python traceback here instead of a clean
     # exit-code contract.
     try:
-        sys.exit(op_main(sys.argv[1:]))
+        return op_main((sys.argv[1:] if argv is None else argv))
     except Exception as exc:  # noqa: BLE001 — last-resort trampoline guard
         print(f"roadmap-number-stubs: {exc}", file=sys.stderr)
-        sys.exit(2)
+        return 2
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

@@ -148,6 +148,8 @@ if IS_WINDOWS:
 
     _JOB_OBJECT_BASIC_ACCOUNTING_INFORMATION = 1
     _CREATE_SUSPENDED = 0x00000004
+    _PROCESS_SET_QUOTA = 0x0100
+    _PROCESS_TERMINATE = 0x0001
     _TH32CS_SNAPTHREAD = 0x00000004
     _THREAD_SUSPEND_RESUME = 0x0002
 
@@ -289,6 +291,116 @@ def _windows_spawn_into_job(
         raise ctypes.WinError(ctypes.get_last_error())
     _resume_all_threads(proc.pid)
     return proc.wait()
+
+
+class LiveTreeAccountant:
+    """Job-object accounting for an ALREADY-RUNNING process tree, read as a
+    DELTA across an interval rather than as a total.
+
+    The gap this closes: `batched_process_time_ms` and
+    `single_invocation_tree_process_time` both measure a command this module
+    spawns, so every process they account for is a descendant of that spawn.
+    A WARM-SERVER op is not shaped that way. The client the caller runs is a
+    JSON-RPC framer over a pipe; the op's real work -- and every `git` child
+    it spawns, and every `conhost.exe` Windows allocates alongside one
+    (DR-373) -- is charged to the long-lived SERVER process, which is not in
+    the client's tree at all. Measuring the client and calling it the op's
+    process time reports the framer and presents it as the op.
+
+    Usage: attach once to the server pid, then bracket each invocation with
+    `snapshot()` and subtract. Anything the server charged BEFORE attachment
+    (boot, `_preload_op_registry`'s ~703ms of imports) is excluded from both
+    readings by construction, so the delta is the interval's cost and never
+    an amortised share of startup.
+
+    Children inherit job membership at creation, so a `git` spawned after
+    attachment is counted; one spawned before it is not. A detached listener
+    started at server boot is therefore outside the accounting -- correct,
+    since it is a boot cost and not a per-op one.
+
+    NOT a second accounting mechanism: this reuses
+    `_windows_query_job_accounting` and the same
+    `_JOB_OBJECT_BASIC_ACCOUNTING_INFORMATION` info class the batched and
+    single-invocation paths already read, so there is one job instrument in
+    this module, not a sibling that drifts from it.
+
+    QUANTISATION — READ THIS BEFORE BRACKETING A SINGLE CALL. Job accounting
+    lands on ~15.6ms scheduler ticks, so a `snapshot()` pair around ONE
+    invocation can only ever return a multiple of the tick: it reports a tick
+    COUNT, not a cost. Worse, a median over tick-quantised per-call samples
+    picks the low mode rather than the mean, so the error is biased downward
+    and does not average out by taking more samples the same way.
+
+    Two figures published from this module read exactly 15.62ms and 31.25ms --
+    1x and 2x the tick -- and both were retracted (`001b0a669`); the re-run
+    bracketed showed the second was really ~51ms, nearly double, and the error
+    ran AGAINST the route being argued for. That is the shape to expect: a
+    number landing suspiciously close to a tick multiple is evidence of the
+    instrument, not of the work.
+
+    BRACKET N CALLS INSIDE ONE WINDOW AND DIVIDE. One `snapshot()` before N
+    invocations, one after, `/ N` -- that divides the quantisation error by N
+    rather than paying it per sample. Repeat the whole window a few times and
+    report the spread; do not median per-call deltas. Below roughly a 200ms
+    bar, per-call bracketing is not a measurement.
+
+    Windows only -- `NotImplementedError` elsewhere, never a silent degrade
+    to a wrong unit.
+    """
+
+    def __init__(self, pid: int) -> None:
+        if not IS_WINDOWS:
+            raise NotImplementedError(
+                "LiveTreeAccountant is Windows-only (job-object accounting); "
+                f"no implementation for {sys.platform}"
+            )
+        self.pid = int(pid)
+        self._job = _k32.CreateJobObjectW(None, None)
+        if not self._job:
+            raise ctypes.WinError(ctypes.get_last_error())
+        handle = _k32.OpenProcess(
+            _PROCESS_SET_QUOTA | _PROCESS_TERMINATE, False, self.pid
+        )
+        if not handle:
+            _k32.CloseHandle(wintypes.HANDLE(self._job))
+            self._job = None
+            raise ctypes.WinError(ctypes.get_last_error())
+        try:
+            if not _k32.AssignProcessToJobObject(
+                wintypes.HANDLE(self._job), wintypes.HANDLE(handle)
+            ):
+                raise ctypes.WinError(ctypes.get_last_error())
+        finally:
+            _k32.CloseHandle(wintypes.HANDLE(handle))
+
+    def snapshot(self) -> dict:
+        """Cumulative job accounting since attachment.
+
+        Returns `{"process_time_ms": float, "procs": int}` -- user+kernel CPU
+        across every process in the job (terminated ones included; the job
+        keeps charging them), and the job's `TotalProcesses`, which counts
+        the attached root itself.
+        """
+        info = _windows_query_job_accounting(self._job)
+        return {
+            "process_time_ms": (info.TotalUserTime + info.TotalKernelTime) / 10000.0,
+            "procs": int(info.TotalProcesses),
+        }
+
+    def close(self) -> None:
+        """Releases the job handle. Does NOT terminate anything: no
+        `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` is set, so the server and its
+        children outlive the accountant -- closing the instrument must never
+        be able to kill the thing being measured."""
+        if self._job:
+            _k32.CloseHandle(wintypes.HANDLE(self._job))
+            self._job = None
+
+    def __enter__(self) -> "LiveTreeAccountant":
+        return self
+
+    def __exit__(self, *_exc) -> None:
+        self.close()
 
 
 def _windows_batched_process_time_ms(

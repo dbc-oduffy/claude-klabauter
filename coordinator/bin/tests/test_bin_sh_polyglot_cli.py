@@ -62,6 +62,13 @@ def _scratch_bin(tmp_path):
     bin_dir.mkdir()
     shutil.copy(GUARD, str(bin_dir / "check-bin-sh-polyglot.py"))
     shutil.copy(SIBLING_GUARD, str(bin_dir / "check-sh-suffix-polyglot.py"))
+    # The guards bootstrap `cc_invoke` off their OWN `<bin>/lib`, so a scratch
+    # bin without one dies on ModuleNotFoundError before it can classify
+    # anything — a green that never ran. Copied, not symlinked: the guard
+    # scans `bin/` itself, and `lib/` being a real subdirectory is what its
+    # "does NOT scan subdirectories" negative-spec is stated against.
+    shutil.copytree(os.path.join(_BIN_DIR, "lib"), str(bin_dir / "lib"),
+                    ignore=shutil.ignore_patterns("__pycache__"))
     return bin_dir
 
 

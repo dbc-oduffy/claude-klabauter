@@ -1685,10 +1685,10 @@ _CLUSTER_D3_OPEN_DISPOSITION: dict[str, tuple[tuple[str, str, str, int], ...]] =
         ("coordinator_core/git_scope.py", "_probe_foreign_repo", "git", 0),
         ("coordinator_core/git_scope.py", "scoped_cat_file_batch", "git", 0),
     ),
-    "session.boot_sweep": (
-        ("coordinator_core/git/run.py", "run_git", "git", 0),
-        ("coordinator_core/session/scope.py", "_git_run", "git", 0),
-    ),
+    # `session.boot_sweep` rows removed 2026-08-27: the op is gravestoned
+    # (K-059) and `ops/session/boot_backstop.py` is deleted. A frozen row
+    # naming a path that no longer exists cannot fail loud -- it just
+    # silently pins a site nothing reaches.
     "session.commits": (
         ("coordinator_core/ops/ceremony/git_native.py", "_git._invoke", "<dynamic>", 0),
     ),
@@ -1746,7 +1746,6 @@ _CLUSTER_D3_OPEN_ENTRYPOINTS: dict[str, tuple[str, str]] = {
     "review.snapshot_diff_and_head": ("coordinator_core/ops/ceremony/snapshot_diff_and_head.py", "_handler"),
     "review_trail.write": ("coordinator_core/ops/review_trail_write.py", "_review_trail_write_handler"),
     "schema.drift_gate": ("coordinator_core/ops/schema_drift_gate.py", "_handler"),
-    "session.boot_sweep": ("coordinator_core/ops/session/boot_backstop.py", "_handler"),
     "session.commits": ("coordinator_core/ops/session_commits.py", "_handler"),
     "session.reap_claims_for_repos": ("coordinator_core/ops/session/reap.py", "_handler_reap_claims_for_repos"),
     "session_ledger.aggregate_chain_loe": (
@@ -3761,7 +3760,6 @@ _FROZEN_UNENROLLED_SPAWN_SITES: frozenset = frozenset(
         ("coordinator_core/ops/run_semgrep_scan.py", "_run_semgrep", "semgrep", 0),
         ("coordinator_core/ops/run_shellcheck_sweep.py", "_lint_one_file", "shellcheck", 0),
         ("coordinator_core/ops/run_shellcheck_sweep.py", "_run_git", "git", 0),
-        ("coordinator_core/ops/session/boot_backstop.py", "_git", "git", 0),
         ("coordinator_core/ops/session/guard_settings_integrity.py", "evaluate_settings_integrity", "git", 0),
         ("coordinator_core/ops/session/resolve_chain_terminal_disposition.py", "_run_git", "git", 0),
         ("coordinator_core/ops/session_baton_promote.py", "_scaffold_via_doc_new", "<dynamic>", 0),
@@ -5255,20 +5253,6 @@ _NAMED_ARGV0_DISPOSITIONS_B: dict[tuple[str, str, str, int], str] = {
         "non-budgeted scope as this file's other site."
     ),
     (
-        "coordinator_core/ops/session/boot_backstop.py",
-        "_git",
-        "git",
-        0,
-    ): (
-        "2026-08-23 exempt -- C5 of docs/plans/2026-08-22-the-boot-"
-        "backstop-asks-git-nothing.md collapsed boot_sweep.py's four "
-        "fixed sequential `_commit_consumed_metadata` git ordinals "
-        "(deployment_state / shipped_in / orphan-sweep-notes.md) into "
-        "this one `boot_backstop.py::_git` site; `session.boot_sweep` "
-        "and `session.boot_backstop` (its replacement) have no "
-        "registered `_BUDGETED_ENTRYPOINTS` op."
-    ),
-    (
         "coordinator_core/ops/session/resolve_chain_terminal_disposition.py",
         "_run_git",
         "git",
@@ -5301,7 +5285,6 @@ _NAMED_ARGV0_DISPOSITIONS_B: dict[tuple[str, str, str, int], str] = {
 #: entries.
 _TRANCHE_B_FILES: frozenset = frozenset({
     "coordinator_core/ops/cruft_sweep.py",
-    "coordinator_core/ops/session/boot_backstop.py",
     "coordinator_core/ops/orphan_branch_sweep.py",
     "coordinator_core/ops/bootstrap_repo.py",
     "coordinator_core/ops/commit_anchors.py",
@@ -5348,15 +5331,17 @@ def test_named_argv0_sites_in_tranche_b_are_dispositioned_on_their_own_terms():
         "reaches outside tranche b's own file scope:\n"
         + "\n".join(f"  {k}" for k in stale)
     )
-    assert len(_NAMED_ARGV0_DISPOSITIONS_B) == 29, (
+    assert len(_NAMED_ARGV0_DISPOSITIONS_B) == 28, (
         f"_NAMED_ARGV0_DISPOSITIONS_B carries "
-        f"{len(_NAMED_ARGV0_DISPOSITIONS_B)} entries, not the 29 "
+        f"{len(_NAMED_ARGV0_DISPOSITIONS_B)} entries, not the 28 "
         "still-frozen named-argv0 sites tranche b's own file list names "
         "now that C6 (2026-08-23) drained the 2 dead "
         "`_ensure_session_dir` ordinals, C5 of docs/plans/2026-08-22-the-"
         "boot-backstop-asks-git-nothing.md collapsed boot_sweep.py's four "
         "`_commit_consumed_metadata` ordinals into one `boot_backstop.py::"
-        "_git` site, and fleet.archive_shipped_handoffs's kill (2026-08-25, "
+        "_git` site -- which the 2026-08-27 gravestone of session.boot_sweep "
+        "(K-059) then removed outright along with its module, taking this "
+        "count from 29 to 28 -- and fleet.archive_shipped_handoffs's kill (2026-08-25, "
         "C1b) removed archive_shipped_handoffs.py's `_sha_reachable` site "
         "along with the whole module -- a count drift "
         "here means either a site was missed or one was double-counted."

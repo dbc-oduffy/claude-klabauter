@@ -90,7 +90,7 @@ def _import_run_op_main():
     return run_op_main
 
 
-def main() -> None:
+def main(argv: "list[str] | None" = None) -> int:
     try:
         run_op_main = _import_run_op_main()
     except RuntimeError as exc:
@@ -102,7 +102,7 @@ def main() -> None:
             "FAIL: /architecture-audit Step 6.5 atlas-refresh gate could not run "
             "(claude-klabauter-link resolution failed) — treat as gate-not-satisfied and retry."
         )
-        sys.exit(0)
+        return 0
     except ImportError as exc:
         print(
             f"verify-arch-audit-atlas-refresh.py: coordinator_core.cli_entry not importable: {exc}",
@@ -112,10 +112,10 @@ def main() -> None:
             "FAIL: /architecture-audit Step 6.5 atlas-refresh gate could not run "
             "(claude-klabauter-link import failed) — treat as gate-not-satisfied and retry."
         )
-        sys.exit(0)
+        return 0
 
     try:
-        code = run_op_main("coordinator_core.ops.verify_arch_audit_atlas_refresh", sys.argv[1:])
+        code = run_op_main("coordinator_core.ops.verify_arch_audit_atlas_refresh", (sys.argv[1:] if argv is None else argv))
     except ImportError as exc:
         print(
             f"verify-arch-audit-atlas-refresh.py: coordinator_core.ops.verify_arch_audit_atlas_refresh not importable: {exc}",
@@ -125,10 +125,10 @@ def main() -> None:
             "FAIL: /architecture-audit Step 6.5 atlas-refresh gate could not run "
             "(claude-klabauter-link import failed) — treat as gate-not-satisfied and retry."
         )
-        sys.exit(0)
+        return 0
 
-    sys.exit(code)
+    return code
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

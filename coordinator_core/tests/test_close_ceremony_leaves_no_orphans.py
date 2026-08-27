@@ -24,7 +24,7 @@ here; a test against unwired code would be red-by-construction or a stub
 proving nothing, and both are worse than an absent test.
 
 This is a git-spawning integration test: `compute_offer` (reached via
-`quick_wrap_assemble.brief()` -> `auto_commit_session_async` ->
+`quick_wrap_assemble.brief()` -> `commit_session_offer_async` ->
 `safe_commit_offer.compute_offer`) shells out to `git diff`/`git ls-files` for
 its dirty scan, and the fixture itself needs a real `git init` repo (mirrors
 `coordinator_core/ops/test_research_dir_restructure.py` and
@@ -59,7 +59,7 @@ from coordinator_core.ops.review_trail_write import write_review_trail_entry
 from coordinator_core.session import core as session_core
 
 # Real `git init` fixture + real `git diff`/`git status` scans reached through
-# quick_wrap_assemble.brief() -> auto_commit_session_async -> compute_offer.
+# quick_wrap_assemble.brief() -> commit_session_offer_async -> compute_offer.
 # Spawn ratchet: coordinator_core/tests/test_no_unbatched_per_item_git_spawn.py
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -68,7 +68,7 @@ def _make_repo(tmp_path: Path) -> Path:
     """A real, empty git repo with one initial commit (mirrors
     test_review_trail_write_declares.py's `git_repo` fixture, plus the
     initial commit `test_safe_commit_offer.py::_make_repo` also carries --
-    `auto_commit_session_async`'s own commit path needs a resolvable HEAD)."""
+    `commit_session_offer_async`'s own commit path needs a resolvable HEAD)."""
     subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
     subprocess.run(
         ["git", "config", "user.email", "t@example.com"], cwd=tmp_path, check=True

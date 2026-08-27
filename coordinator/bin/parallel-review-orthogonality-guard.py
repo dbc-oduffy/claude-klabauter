@@ -111,6 +111,13 @@ _FREEZE_CLI = _BIN_DIR / "freeze-review-diff.py"
 _STATIC_REFUSAL = "Lens-orthogonality assertion failed; refusing to dispatch."
 _CHUNK_REFUSAL = "Chunk partitions are not disjoint by file-scope; refusing to dispatch."
 
+#: The verify CLI's own terminal line for a failing STATIC check. `--chunk-manifest`
+#: runs the static check FIRST and short-circuits on it (that CLI's § RUNTIME), so
+#: mode alone does not identify which check refused — keying the refusal on the mode
+#: told an operator their partitions overlapped when the manifest table was simply
+#: missing, and the manifest was never opened.
+_STATIC_FAILURE_MARKER = "Lens-orthogonality (static) check failed."
+
 
 def _run(argv: list[str]) -> subprocess.CompletedProcess:
     """
@@ -142,7 +149,8 @@ def _cmd_guard(args: argparse.Namespace) -> int:
     if proc.returncode == 0:
         return 0
 
-    refusal = _CHUNK_REFUSAL if args.chunk_manifest else _STATIC_REFUSAL
+    static_failed = _STATIC_FAILURE_MARKER in (proc.stdout or "") + (proc.stderr or "")
+    refusal = _STATIC_REFUSAL if static_failed or not args.chunk_manifest else _CHUNK_REFUSAL
     print(refusal, file=sys.stderr)
     return 1
 

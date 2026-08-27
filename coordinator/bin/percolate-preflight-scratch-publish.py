@@ -183,46 +183,55 @@ def _import_main():
     return run_op_main
 
 
-def main() -> int:
+def main(argv: "list[str] | None" = None) -> int:
+    # argv threading: this CLI reads sys.argv at depth (argparse and helpers),
+    # so the warm-call path swaps it for the duration rather than rewriting every read.
+    # NOT re-entrant: a threaded server must serialise calls into this entrypoint.
+    _prev_argv = sys.argv
+    if argv is not None:
+        sys.argv = [sys.argv[0], *argv]
     try:
-        run_op_main = _import_main()
-    except RuntimeError as exc:
-        print(
-            f"percolate-preflight-scratch-publish.py: CLAUDE_KLABAUTER_ROOT resolution failed: {exc}",
-            file=sys.stderr,
-        )
-        return 3
-    except ImportError as exc:
-        print(
-            "percolate-preflight-scratch-publish.py: "
-            f"coordinator_core.cli_entry not importable: {exc}",
-            file=sys.stderr,
-        )
-        return 3
-
-    # COORDINATOR_ROOT is resolved via _resolve_coordinator_root() (CLAUDE_PLUGIN_ROOT
-    # env override, else <claude_klabauter_root>/coordinator via _resolve_claude_klabauter_root()) -- NOT
-    # this file's own directory. Post-DR-261 this file's directory's parent DOES equal
-    # the coordinator root (both live in this repo now), but resolution still goes
-    # through the registry ladder rather than __file__ -- see _resolve_coordinator_root()'s
-    # docstring for why. The op module owns the engine logic but not this repo's directory
-    # layout (DR-047-style separation, now both sides engine-side post-DR-261), so this
-    # trampoline supplies the resolved root explicitly rather than the module guessing.
-    if "--coordinator-root" not in sys.argv[1:]:
-        coordinator_root = _resolve_coordinator_root()
-        argv = ["--coordinator-root", coordinator_root] + sys.argv[1:]
-    else:
-        argv = sys.argv[1:]
-
-    try:
-        return run_op_main("coordinator_core.ops.percolate_preflight_scratch_publish", argv)
-    except ImportError as exc:
-        print(
-            "percolate-preflight-scratch-publish.py: "
-            f"coordinator_core.ops.percolate_preflight_scratch_publish not importable: {exc}",
-            file=sys.stderr,
-        )
-        return 3
+        try:
+            run_op_main = _import_main()
+        except RuntimeError as exc:
+            print(
+                f"percolate-preflight-scratch-publish.py: CLAUDE_KLABAUTER_ROOT resolution failed: {exc}",
+                file=sys.stderr,
+            )
+            return 3
+        except ImportError as exc:
+            print(
+                "percolate-preflight-scratch-publish.py: "
+                f"coordinator_core.cli_entry not importable: {exc}",
+                file=sys.stderr,
+            )
+            return 3
+    
+        # COORDINATOR_ROOT is resolved via _resolve_coordinator_root() (CLAUDE_PLUGIN_ROOT
+        # env override, else <claude_klabauter_root>/coordinator via _resolve_claude_klabauter_root()) -- NOT
+        # this file's own directory. Post-DR-261 this file's directory's parent DOES equal
+        # the coordinator root (both live in this repo now), but resolution still goes
+        # through the registry ladder rather than __file__ -- see _resolve_coordinator_root()'s
+        # docstring for why. The op module owns the engine logic but not this repo's directory
+        # layout (DR-047-style separation, now both sides engine-side post-DR-261), so this
+        # trampoline supplies the resolved root explicitly rather than the module guessing.
+        if "--coordinator-root" not in sys.argv[1:]:
+            coordinator_root = _resolve_coordinator_root()
+            argv = ["--coordinator-root", coordinator_root] + sys.argv[1:]
+        else:
+            argv = sys.argv[1:]
+    
+        try:
+            return run_op_main("coordinator_core.ops.percolate_preflight_scratch_publish", argv)
+        except ImportError as exc:
+            print(
+                "percolate-preflight-scratch-publish.py: "
+                f"coordinator_core.ops.percolate_preflight_scratch_publish not importable: {exc}",
+                file=sys.stderr,
+            )
+            return 3
+    finally:
+        sys.argv = _prev_argv
 
 
 if __name__ == "__main__":

@@ -1082,6 +1082,30 @@ def test_compose_script_commit_prompt_states_provenance_and_passes_run_checks():
     assert errors == []
 
 
+def test_compose_script_commit_prompt_names_every_measured_false_refusal():
+    """The provenance block must keep naming all four non-divergences.
+
+    Each corresponds to a halt measured while executing
+    `pln-the-discriminators-that-alread-1545b5` (2026-08-27), where the
+    committer read a true fact as a reason to refuse and cost a
+    `resumeFromRunId`. Asserting the emitted SCRIPT rather than the module
+    constant is deliberate: what reaches the agent is the only thing that
+    changes its behaviour, and a refactor that stops threading the block
+    through would leave a constant-level assertion green."""
+    waves = _two_wave_fixture()
+    script = compose_script(waves, name="wf", description="two waves")
+
+    assert "ONE-DIRECTIONAL" in script
+    assert "state/subagent-share/**" in script
+    assert "SHARED TREE" in script
+    assert "UNCHANGED DECLARED PATHS" in script
+    assert "ALREADY COMMITTED" in script
+    assert "LANDED BUT UNVERIFIED SHA" in script
+
+    errors = [f for f in run_checks(script) if f.severity is Severity.ERROR]
+    assert errors == []
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))
 

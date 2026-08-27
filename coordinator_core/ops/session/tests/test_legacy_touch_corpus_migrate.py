@@ -102,13 +102,21 @@ def test_dropped_entry_is_reported_and_never_written(tmp_path):
     report = run_migration(sessions_base, tmp_path, apply=True)
 
     outcome = report.dirs[0]
-    assert outcome.status == "migrated"
+    # A dir that HAD entries and lost every one to the containment rule is
+    # `stranded_all_dropped`, never `migrated` (2026-08-27). Reporting it as a
+    # migration -- and leaving the empty sink this used to assert -- is what
+    # made the drain unrepeatable: the sink satisfied the old exists()-based
+    # already-drained predicate in both this module and the drain check, so the
+    # dir was permanently "done" with its claims invisible to compute_scope.
+    assert outcome.status == "stranded_all_dropped"
     assert outcome.entries_written == 0
     assert outcome.entries_dropped == 1
     assert outcome.drop_manifest[0]["path"] == "../escape.py"
     record_path = sessions_base / "sid-1" / "touch-record.jsonl"
-    assert record_path.exists()
-    assert record_path.read_bytes() == b""
+    assert not record_path.exists(), (
+        "an all-dropped dir must be left with NO sink, so a later corpus "
+        "repair can still drain it"
+    )
 
 
 @pytest.mark.spawns_process
@@ -265,6 +273,9 @@ def test_totals_and_report_shape(tmp_path):
     report = run_migration(sessions_base, tmp_path, apply=False)
 
     totals = report.totals()
-    assert totals["migrated"] == 2
+    # sid-1 salvages its entry (migrated); sid-2's only entry escapes the
+    # worktree, so it is stranded, not migrated.
+    assert totals["migrated"] == 1
+    assert totals["stranded_all_dropped"] == 1
     assert report.entries_written_total() == 1
     assert report.entries_dropped_total() == 1

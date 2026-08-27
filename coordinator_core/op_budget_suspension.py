@@ -269,6 +269,148 @@ SUSPENDED_OPS: Dict[str, Dict[str, object]] = {
         "note": "8/8 ended in caller_timeout at 30s.",
         "spinoff": None,
     },
+    # -----------------------------------------------------------------------
+    # K-103 .. K-115 — the 200ms sweep, PM ruling 2026-08-27. (`review_trail.write`
+    # is NOT part of this batch's numbering: it was already ruled a gravestone
+    # today at K-060 under DR-372/DR-374, and this commit is the drain that entry
+    # names as its follow-on. It rides along here for the registration work only.)
+    #
+    # The bar for these fourteen is 200ms of PROCESS time, not this table's
+    # own SUSPENSION_BAR_MS (2000ms) and not DR-344's 500ms brightline. PM
+    # ruling, verbatim across three turns: "Everything still over the bar gets
+    # deleted", "any over 200ms get killed. deleted", "422ms for a commit is an
+    # offender". This is the same threshold the `session.boot_sweep` gravestone
+    # convicted on three commits earlier at 77341a0fa ("one process over 200ms
+    # needs a fix, and this spends 6 processes on one archival batch"), so the
+    # number is not new here — its application as a DELETE disposition is.
+    #
+    # Every row below is a gravestone, not a suspension: the code is drained
+    # from the registration surfaces in the same commit. A name with no
+    # implementation keeps the refusal loud instead of degrading to
+    # METHOD_NOT_FOUND — the property the boot_sweep row exists to hold.
+    #
+    # UNIT IS STATED PER ROW, AND IT IS NOT UNIFORM. Eight rows carry process
+    # time from the `process_ms` column of the op-latency sink. Six carry WALL
+    # CLOCK only, because they have zero `process_ms` rows on this corpus —
+    # they were never instrumented on the axis that governs. This module's own
+    # header says a suspension justified by wall clock is not evidence, and
+    # that judgement is not suspended for these six: they are convicted on the
+    # PM's ruling with the evidence gap named, not concealed. The remedy if one
+    # is ever disputed is to measure it, and the instrument exists
+    # (`benchmarks/process_time.batched_process_time_ms`).
+    "write_surface.emit_manifest": {
+        "measured": {"max_ms": 1562.5, "p50_ms": 1453.1, "n": 6, "unit": "process_ms"},
+        "note": (
+            "AST-parses every module under _SCAN_ROOTS and imports each candidate "
+            "on every dispatch. This module's own docstring claimed DoE reads the "
+            "manifest in a lockstep test; that was checked at DoE 042963e67 "
+            "(work/machine-a/2026-08-22) and is STALE — every hit there is archive "
+            "prose, a sent memo, or a sizing marked CLEARED 2026-08-06. No live "
+            "consumer, in either repo."
+        ),
+        "spinoff": None,
+    },
+    "deliverable.cascade_terminal": {
+        "measured": {"max_ms": 1218.8, "p50_ms": 523.4, "n": 4, "unit": "process_ms"},
+        "note": (
+            "Compute retained as a library in ops/deliverable_cascade.py for the "
+            "in-process callers (plan_status_transition._run_cascade); only the "
+            "dispatchable op is dead."
+        ),
+        "spinoff": None,
+    },
+    "fleet.prune_closed_bugs": {
+        "measured": {"max_ms": 828.1, "p50_ms": 468.8, "n": 2, "unit": "process_ms"},
+        "note": "n=2 — thin, and recorded as thin rather than rounded up.",
+        "spinoff": None,
+    },
+    "ceremony.commit": {
+        "measured": {"max_ms": 1937.5, "p50_ms": 421.9, "n": 241, "unit": "process_ms"},
+        "note": (
+            "The repo's own commit route. ~75ms of the 421.9 is interpreter start "
+            "plus module import (measured k=20: bare 25.8ms, +commit_op 75.0ms), "
+            "so ~347ms is its own work — NOT the boot_sweep shape where the "
+            "mechanism was never the dominant term. Deleting it does recover real "
+            "process time. What still needs doing: something must commit."
+        ),
+        "fallback": (
+            "No sanctioned in-repo route remains. Use git directly with an "
+            "explicit pathspec (never a bare `git commit` — it swallows peer "
+            "staged files on this shared tree)."
+        ),
+        "spinoff": None,
+    },
+    "roadmap.serve": {
+        "measured": {"max_ms": 578.1, "p50_ms": 406.2, "n": 585, "unit": "process_ms"},
+        "note": "n=585, the best-evidenced row in this batch.",
+        "spinoff": None,
+    },
+    "handoff.reconcile_open": {
+        "measured": {"max_ms": 7250.0, "p50_ms": 320.3, "n": 42, "unit": "process_ms"},
+        "note": (
+            "Wall clock read p50 16193.2ms against 320.3ms process — a 50x gap "
+            "that is peer load, not this op. Convicted on the process figure."
+        ),
+        "spinoff": None,
+    },
+    "handoff.archive_transition": {
+        "measured": {"max_ms": 828.1, "p50_ms": 250.0, "n": 24, "unit": "process_ms"},
+        "note": "Closest to the line of the process-measured rows; 250.0 > 200.",
+        "spinoff": None,
+    },
+    "review_trail.write": {
+        "measured": {"max_ms": 212.5, "p50_ms": 212.5, "n": 1, "unit": "process_ms_cold"},
+        "note": (
+            "Dead on DR-372/DR-374, NOT on the 200ms bar — kill-ledger K-060 "
+            "already ruled this surface a gravestone on 2026-08-27 and named "
+            "this drain as its follow-on chunk. Recorded because the process "
+            "figures alone would not have carried it: 212.5ms cold / 46.9ms "
+            "warm, and warm is how it runs. It was suspended once before on "
+            "wall clock and the PM reinstated it 2026-08-23; that reversal is "
+            "not being repeated here on the same evidence, it is superseded by "
+            "a separate ruling. Last ban's cost, for the next reader: no review "
+            "was recordable fleet-wide while it held."
+        ),
+        "spinoff": None,
+    },
+    # --- convicted WITHOUT process-time evidence (wall clock only) ----------
+    "session.sweep_consumed_handoffs": {
+        "measured": {"max_ms": 104963.8, "p50_ms": 17411.8, "n": 198, "unit": "WALL_CLOCK"},
+        "note": "No process_ms rows exist for this op. Never instrumented.",
+        "spinoff": None,
+    },
+    "cartography.churn": {
+        "measured": {"max_ms": 2462.0, "p50_ms": 2462.0, "n": 1, "unit": "WALL_CLOCK"},
+        "note": "n=1. One sample, wall clock, no process instrumentation.",
+        "spinoff": None,
+    },
+    "handoff.has_live_children": {
+        "measured": {"max_ms": 7120.0, "p50_ms": 1666.6, "n": 233, "unit": "WALL_CLOCK"},
+        "note": (
+            "Compute retained UNDECORATED in ops/handoff_children.py — "
+            "handoff_close_origin_stub._try_close needs the children payload that "
+            "has_live_children_many does not return. Do not restore the decorator."
+        ),
+        "spinoff": None,
+    },
+    "handoff.reconcile_close_terminal": {
+        "measured": {"max_ms": 27947.1, "p50_ms": 3507.5, "n": 8, "unit": "WALL_CLOCK"},
+        "note": "Module deleted outright; no non-test importers.",
+        "spinoff": None,
+    },
+    "merge_assemble.brief": {
+        "measured": {"max_ms": 1357.2, "p50_ms": 1087.3, "n": 52, "unit": "WALL_CLOCK"},
+        "note": "merge_assemble.apply survives in the same module and is untouched.",
+        "spinoff": None,
+    },
+    "fleet.archive_completed_plans": {
+        "measured": {"max_ms": 27940.0, "p50_ms": 996.1, "n": 246, "unit": "WALL_CLOCK"},
+        "note": (
+            "Resolved in-process by ceremony/commit_pipeline.py and tail_ops.py; "
+            "compute retained as a library, dispatchable op dead."
+        ),
+        "spinoff": None,
+    },
     # fleet.archive_completed_handoffs — REMOVED 2026-08-26 by PM ruling, and
     # pruned from test_op_suspension_ratchet._RATIFIED_SUSPENSIONS in this same
     # commit (that direction was got wrong once before; see that frozenset's
@@ -394,16 +536,9 @@ def refusal_message(method: str) -> str:
     the slot would be the same improvisation the field exists to prevent.
     """
     record = SUSPENDED_OPS.get(method)
-    max_ms = 0.0
     fallback = ""
     note = ""
     if isinstance(record, dict):
-        measured = record.get("measured")
-        if isinstance(measured, dict):
-            try:
-                max_ms = float(measured.get("max_ms") or 0.0)
-            except (TypeError, ValueError):
-                max_ms = 0.0
         raw_fallback = record.get("fallback")
         if isinstance(raw_fallback, str):
             fallback = raw_fallback.strip()
@@ -429,10 +564,52 @@ def refusal_message(method: str) -> str:
         # hundreds of times over it. That distinction is exactly what a sizing
         # decision turns on, so it is rendered here rather than left for a
         # reader to go find.
-        f"{method} is off: max {max_ms:.0f}ms against a "
-        f"{SUSPENSION_BAR_MS:.0f}ms bar. "
+        # THE BAR NAMED MUST BE THE BAR IT DIED ON. The 200ms sweep
+        # (K-060..K-073) convicts on process time against a 200ms line;
+        # rendering those rows against SUSPENDED_BAR_MS told the caller the op
+        # was 1938ms into a 2000ms budget -- under it -- when the actual finding
+        # was 421.9ms of process time against 200ms. Same defect class as the
+        # instrument note above: the record was honest, the message was not.
+        f"{method} is off: {_bar_clause(record)}. "
         + (f"How that number arose: {note} " if note else "")
         + (f"{fallback} " if fallback else "")
         + "Killed, not suspended -- the old implementation does not come "
-        "back. If the job is still needed, plan a new one under 500ms."
+        "back. If the job is still needed, plan a new one under 200ms."
     )
+
+
+#: The process-time line the 2026-08-27 sweep convicts on (PM ruling). Distinct
+#: from `SUSPENSION_BAR_MS`, which is a wall-clock box-occupancy bar, and from
+#: DR-344's 500ms brightline. Like both, it may be LOWERED, never raised.
+PROCESS_BAR_MS: float = 200.0
+
+
+def _bar_clause(record: object) -> str:
+    """The `<figure> against a <bar>` clause, in the unit the row was judged in.
+
+    A row carrying `measured.unit` starting with `process_ms` is a 200ms
+    process-time conviction; `WALL_CLOCK` names itself as such so a reader can
+    see the evidence gap rather than infer a process figure that was never
+    taken; anything else falls back to the legacy `SUSPENSION_BAR_MS` framing
+    the pre-2026-08-27 rows were written against.
+    """
+    measured = record.get("measured") if isinstance(record, dict) else None
+    if not isinstance(measured, dict):
+        return f"measured over a {SUSPENSION_BAR_MS:.0f}ms bar"
+    unit = str(measured.get("unit") or "")
+    try:
+        p50 = float(measured.get("p50_ms") or 0.0)
+        mx = float(measured.get("max_ms") or 0.0)
+    except (TypeError, ValueError):
+        p50 = mx = 0.0
+    if unit.startswith("process_ms"):
+        return (
+            f"p50 {p50:.0f}ms process time against a {PROCESS_BAR_MS:.0f}ms bar"
+        )
+    if unit == "WALL_CLOCK":
+        return (
+            f"p50 {p50:.0f}ms WALL CLOCK against a {PROCESS_BAR_MS:.0f}ms process "
+            "bar -- this op has no process-time measurement, and the gap is "
+            "named rather than filled"
+        )
+    return f"max {mx:.0f}ms against a {SUSPENSION_BAR_MS:.0f}ms bar"

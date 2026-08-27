@@ -40,9 +40,17 @@ from coordinator_core.ops.handoff_children import _handoff_has_live_children
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 _OP_NAME = "handoff.has_live_children"
-assert _OP_NAME in _REGISTRY, (
-    f"import guard failed: {_OP_NAME!r} not in _REGISTRY — "
-    "coordinator_core.ops.handoff_children @register_op did not fire"
+# INVERTED 2026-08-27 (kill ledger K-113). The op was deleted under the 200ms
+# sweep; `_handoff_has_live_children` survives UNDECORATED because
+# handoff_close_origin_stub._try_close resolves it in-process and needs the
+# `children` payload `has_live_children_many` does not return. The tests below
+# exercise that compute and stay valuable — what must no longer be true is the
+# registration. Asserting the negative keeps this file a guard against the
+# decorator being restored rather than a stale import check.
+assert _OP_NAME not in _REGISTRY, (
+    f"{_OP_NAME!r} is in _REGISTRY — it was killed under the 200ms bar and must "
+    "not re-register. Restoring @register_op on handoff_children puts a deleted "
+    "op back over the bar."
 )
 
 

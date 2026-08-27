@@ -92,21 +92,21 @@ def _import_main():
     return _op_main
 
 
-def main() -> None:
+def main(argv: "list[str] | None" = None) -> int:
     try:
         op_main = _import_main()
     except RuntimeError as exc:
         print(f"{_PROG}: engine-root resolution failed: {exc}", file=sys.stderr)
-        sys.exit(_EXIT_TRANSPORT_FAILURE)
+        return _EXIT_TRANSPORT_FAILURE
     except ImportError as exc:
         print(
             f"{_PROG}: coordinator_core.ops.verify_parallel_review_lens_orthogonality not importable: {exc}",
             file=sys.stderr,
         )
-        sys.exit(_EXIT_TRANSPORT_FAILURE)
+        return _EXIT_TRANSPORT_FAILURE
 
-    sys.exit(op_main(sys.argv[1:]))
+    return op_main((sys.argv[1:] if argv is None else argv))
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

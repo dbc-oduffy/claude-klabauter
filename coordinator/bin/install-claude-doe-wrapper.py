@@ -43,20 +43,20 @@ def _resolve_run_op_main():
     return run_op_main
 
 
-def main() -> None:
+def main(argv: "list[str] | None" = None) -> int:
     try:
         run_op_main = _resolve_run_op_main()
     except RuntimeError as exc:
         print(f"install-claude-doe-wrapper.py: CLAUDE_KLABAUTER_ROOT resolution failed: {exc}", file=sys.stderr)
-        sys.exit(1)
+        return 1
     except ImportError as exc:
         print(
             f"install-claude-doe-wrapper.py: coordinator_core.cli_entry not importable: {exc}",
             file=sys.stderr,
         )
-        sys.exit(1)
+        return 1
 
-    argv = sys.argv[1:]
+    argv = (sys.argv[1:] if argv is None else argv)
     if "--wrapper-src" not in argv:
         argv = argv + ["--wrapper-src", _default_wrapper_src()]
 
@@ -68,10 +68,10 @@ def main() -> None:
             f"not importable: {exc}",
             file=sys.stderr,
         )
-        sys.exit(1)
+        return 1
 
-    sys.exit(code)
+    return code
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

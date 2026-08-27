@@ -5520,7 +5520,8 @@ Spec backlink (workflow): pln-workflow-skeleton-stamper-maki-adab0d
 # Main
 # ---------------------------------------------------------------------------
 
-def main() -> None:
+def main(argv: "list[str] | None" = None) -> int:
+    del argv  # this CLI takes no arguments; argv accepted for the warm-call contract
     """Entry point for coordinator-doc-new CLI."""
     # A4 — Early delegation for queue and lesson types.
     # MUST run before parser.parse_args() because queue-type flags (--body, --risk,
@@ -5586,7 +5587,7 @@ def main() -> None:
             f"Known types: {known}.",
             file=sys.stderr,
         )
-        sys.exit(1)
+        return 1
 
     # Resolve title default.
     title = args.title
@@ -5638,10 +5639,10 @@ def main() -> None:
     if doc_type == "memo":
         if not args.to:
             print("error: --to is required for --type memo.", file=sys.stderr)
-            sys.exit(1)
+            return 1
         if not args.topic:
             print("error: --topic is required for --type memo.", file=sys.stderr)
-            sys.exit(1)
+            return 1
         # Security: guard --to with the same slug allowlist as --topic.
         # The --to value is interpolated into an HTML comment in the memo scaffold body
         # (<!-- Send when ready: ... --to {to} ... -->); a value containing '-->'
@@ -5653,7 +5654,7 @@ def main() -> None:
                 "Use lowercase alphanumeric + dashes, starting with alphanum.",
                 file=sys.stderr,
             )
-            sys.exit(1)
+            return 1
         topic_slug = args.topic
         if not _SLUG_RE.match(topic_slug):
             print(
@@ -5661,7 +5662,7 @@ def main() -> None:
                 "Use lowercase alphanumeric + dashes, starting with alphanum.",
                 file=sys.stderr,
             )
-            sys.exit(1)
+            return 1
 
     # Validate sidecar-specific required fields.
     if doc_type in _SIDECAR_TYPES:
@@ -5670,7 +5671,7 @@ def main() -> None:
                 f"error: --plan <stem> is required for --type {doc_type}.",
                 file=sys.stderr,
             )
-            sys.exit(1)
+            return 1
         # Review: code-reviewer slice-B F1 — parse-time allowlist guard: reject stems containing
         # path separators, dots, colons, newlines or any char outside [a-z0-9-].
         # Prevents path traversal (../../evil) and YAML-breaking values (:, newline).
@@ -5683,17 +5684,17 @@ def main() -> None:
                 "Path separators, dots, colons, and other metacharacters are not allowed.",
                 file=sys.stderr,
             )
-            sys.exit(1)
+            return 1
 
     # Validate run-report-specific required fields (doc_type is already normalized
     # from the flight-recorder alias by this point — see main()'s alias check above).
     if doc_type == "run-report":
         if not args.plan:
             print("error: --plan <path> is required for --type run-report.", file=sys.stderr)
-            sys.exit(1)
+            return 1
         if not args.chunk:
             print("error: --chunk <id> is required for --type run-report.", file=sys.stderr)
-            sys.exit(1)
+            return 1
         # Review: code-reviewer item-5 F1 — parse-time slug guard on --chunk mirrors the --plan guard for
         # sidecar types. Closes path-injection: without this, `--chunk ../../../x` reaches
         # os.path.join("tasks", plan_slug, "flight", f"{cid}.md") carrying the raw traversal.
@@ -5706,7 +5707,7 @@ def main() -> None:
                 "Path separators, dots, colons, and other metacharacters are not allowed.",
                 file=sys.stderr,
             )
-            sys.exit(1)
+            return 1
         # --out is REQUIRED for run-report — the retired tasks/<plan-slug>/flight/<chunk-id>.md
         # default-path guess was removed (DEC-3 subsume, docs/plans/2026-07-13-subagent-run-
         # report-subsume.md § C4 defect3). The universal sidecar now lives under
@@ -5718,7 +5719,7 @@ def main() -> None:
                 _missing_out_message("run-report (and its --type flight-recorder alias)"),
                 file=sys.stderr,
             )
-            sys.exit(1)
+            return 1
 
     # Validate subagent-sidecar-specific required fields — mirrors the
     # run-report validation block above (same slug-guard rationale: --plan
@@ -5727,10 +5728,10 @@ def main() -> None:
     if doc_type == "subagent-sidecar":
         if not args.plan:
             print("error: --plan <path> is required for --type subagent-sidecar.", file=sys.stderr)
-            sys.exit(1)
+            return 1
         if not args.chunk:
             print("error: --chunk <id> is required for --type subagent-sidecar.", file=sys.stderr)
-            sys.exit(1)
+            return 1
         if not _SLUG_RE.match(args.chunk):
             print(
                 f"error: --chunk '{args.chunk}' is not a valid chunk id. "
@@ -5738,19 +5739,19 @@ def main() -> None:
                 "Path separators, dots, colons, and other metacharacters are not allowed.",
                 file=sys.stderr,
             )
-            sys.exit(1)
+            return 1
         # --out is REQUIRED — the live sidecar path is computed by
         # coordinator_core.dispatch.provision at spawn time, exactly the same
         # rationale as --type run-report's --out requirement above.
         if not args.out:
             print(_missing_out_message("subagent-sidecar"), file=sys.stderr)
-            sys.exit(1)
+            return 1
 
     # Validate audit-record-specific required fields.
     if doc_type == "audit-record":
         if not args.system:
             print("error: --system <name> is required for --type audit-record.", file=sys.stderr)
-            sys.exit(1)
+            return 1
         # Guard --system with the slug allowlist — same rationale as --plan for sidecars.
         # System name is embedded in the YAML frontmatter system: field and the output filename;
         # non-slug characters (dots, colons, slashes, newlines) would break both surfaces.
@@ -5761,7 +5762,7 @@ def main() -> None:
                 "Path separators, dots, colons, and other metacharacters are not allowed.",
                 file=sys.stderr,
             )
-            sys.exit(1)
+            return 1
 
     # Validate completion-specific fields.
     if doc_type == "completion":
@@ -5771,7 +5772,7 @@ def main() -> None:
                 f"Must be one of: {', '.join(_COMPLETION_NATURE_ENUM)}.",
                 file=sys.stderr,
             )
-            sys.exit(1)
+            return 1
         # Review: code-reviewer — F3: --chain is YAML-interpolated; guard with _SLUG_RE like other slug args.
         if args.chain and not _SLUG_RE.match(args.chain):
             print(
@@ -5779,7 +5780,7 @@ def main() -> None:
                 "Use lowercase alphanumeric + dashes only (^[a-z0-9][a-z0-9-]*$).",
                 file=sys.stderr,
             )
-            sys.exit(1)
+            return 1
 
     # Validate plan-specific --sizing-object / --no-sizing-object: the write-time
     # half of the plan sizing-citation gate. A supplied path that does not resolve
@@ -5805,7 +5806,7 @@ def main() -> None:
                 "with --no-sizing-object, not both.",
                 file=sys.stderr,
             )
-            sys.exit(1)
+            return 1
         if not args.sizing_object and not args.no_sizing_object:
             print(
                 f"error: --type {doc_type} requires an explicit sizing answer — "
@@ -5815,7 +5816,7 @@ def main() -> None:
                 "this record genuinely has none.",
                 file=sys.stderr,
             )
-            sys.exit(1)
+            return 1
         if args.sizing_object:
             _sizing_repo_root = _current_repo_root() or "."
             _sizing_abs_path = os.path.join(_sizing_repo_root, args.sizing_object)
@@ -5826,16 +5827,16 @@ def main() -> None:
                     "first via coordinator:sizing, then re-run with the resolved path.",
                     file=sys.stderr,
                 )
-                sys.exit(1)
+                return 1
 
     # Validate review-findings-specific required fields.
     if doc_type == "review-findings":
         if not args.slice_id:
             print("error: --slice <id> is required for --type review-findings.", file=sys.stderr)
-            sys.exit(1)
+            return 1
         if not args.scope:
             print("error: --scope <comma-paths> is required for --type review-findings.", file=sys.stderr)
-            sys.exit(1)
+            return 1
         # review F8 — paths are expected (separators, dots fine) but markdown metacharacters
         # in the heading/Scope: line produce structurally odd sidecar markdown; block the
         # most obvious injection vectors while leaving path syntax unrestricted.
@@ -5846,14 +5847,14 @@ def main() -> None:
                 f"(newline, carriage-return, backtick, or markdown comment close).",
                 file=sys.stderr,
             )
-            sys.exit(1)
+            return 1
         if not _SLICE_RE.match(args.slice_id):
             print(
                 f"error: --slice '{args.slice_id}' is not a valid slice id. "
                 "Use alphanumeric + dashes only (^[a-zA-Z0-9][a-zA-Z0-9-]*$).",
                 file=sys.stderr,
             )
-            sys.exit(1)
+            return 1
 
     # Validate roadmap-baton-specific fields.
     if doc_type == "roadmap-baton":
@@ -5863,14 +5864,14 @@ def main() -> None:
                 "Use lowercase alphanumeric + dashes only (^[a-z0-9][a-z0-9-]*$).",
                 file=sys.stderr,
             )
-            sys.exit(1)
+            return 1
         if args.stub_id and not _SLUG_RE.match(args.stub_id):
             print(
                 f"error: --stub-id '{args.stub_id}' is not a valid slug. "
                 "Use lowercase alphanumeric + dashes only (^[a-z0-9][a-z0-9-]*$).",
                 file=sys.stderr,
             )
-            sys.exit(1)
+            return 1
 
     # Resolve branch (for handoff/spinoff/plan).
     branch = args.branch if args.branch else _current_branch()
@@ -6191,7 +6192,7 @@ def main() -> None:
             _assert_dr_id_unique(_decisions_dir, _resolved_dr_id)
         except _DrAllocatorError as exc:
             print(f"error: {exc}", file=sys.stderr)
-            sys.exit(1)
+            return 1
 
     # Kind-gate the fan-in down-edge. Mirrors --predecessor's own handoff-only
     # contract (schema rule A3a-3 _cf_spinoff_predecessor_none makes the spinoff
@@ -6210,7 +6211,7 @@ def main() -> None:
             "carries a predecessor edge at all.",
             file=sys.stderr,
         )
-        sys.exit(1)
+        return 1
 
     # --summary/--gated-open are handoff-scoped, same posture as
     # --additional-predecessor above: refused fail-loud for every other
@@ -6235,7 +6236,7 @@ def main() -> None:
             "handoff-only fields.",
             file=sys.stderr,
         )
-        sys.exit(1)
+        return 1
 
     # --deliverable-ids/--plan-ids are handoff-scoped plural carriers (C1),
     # same posture as --additional-predecessor/--summary above: refused
@@ -6252,7 +6253,7 @@ def main() -> None:
             "--deliverable-ids and --plan-ids are handoff-only fields.",
             file=sys.stderr,
         )
-        sys.exit(1)
+        return 1
 
     # Generate scaffold content.
     if doc_type == "handoff":
@@ -6442,7 +6443,7 @@ def main() -> None:
                 f"via coordinator-doc-new (neverManuallyScaffoldable: true). {_reason}",
                 file=sys.stderr,
             )
-            sys.exit(2)
+            return 2
         raise AssertionError(f"unreachable doc_type: {doc_type!r}")
 
     # Resolve output path.
@@ -6586,7 +6587,7 @@ def main() -> None:
             )
         except _MutateAbort as _abort_exc:
             print(f"error: {_abort_exc}", file=sys.stderr)
-            sys.exit(1)
+            return 1
 
     # Write the scaffolded file.
     #
@@ -6698,7 +6699,8 @@ def main() -> None:
         )
     else:
         print(out_path)
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

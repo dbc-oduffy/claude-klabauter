@@ -150,7 +150,7 @@ def _import_run_op_main():
     return run_op_main
 
 
-def main() -> None:
+def main(argv: "list[str] | None" = None) -> int:
     os.environ.setdefault("CLAUDE_PLUGIN_ROOT", _plugin_root())
     try:
         run_op_main = _import_run_op_main()
@@ -159,24 +159,24 @@ def main() -> None:
             f"verify-dist-publish-repo-sync.py: engine-root resolution failed: {exc}",
             file=sys.stderr,
         )
-        sys.exit(3)
+        return 3
     except ImportError as exc:
         print(
             f"verify-dist-publish-repo-sync.py: coordinator_core.cli_entry not importable: {exc}",
             file=sys.stderr,
         )
-        sys.exit(3)
+        return 3
     try:
-        code = run_op_main("coordinator_core.ops.verify_dist_publish_repo_sync", sys.argv[1:])
+        code = run_op_main("coordinator_core.ops.verify_dist_publish_repo_sync", (sys.argv[1:] if argv is None else argv))
     except ImportError as exc:
         print(
             "verify-dist-publish-repo-sync.py: "
             f"coordinator_core.ops.verify_dist_publish_repo_sync not importable: {exc}",
             file=sys.stderr,
         )
-        sys.exit(3)
-    sys.exit(code)
+        return 3
+    return code
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

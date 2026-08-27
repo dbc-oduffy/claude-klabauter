@@ -131,22 +131,65 @@ def _make_fake_python3(tmp_path: Path, capture_file: Path) -> Path:
         encoding="utf-8",
     )
     shim.chmod(shim.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
+
+    # Windows is first-class here, and an extensionless bash script is not
+    # invocable by pwsh's `Get-Command` (PATHEXT, not the executable bit,
+    # decides). Without a `.cmd` twin the ladder silently resolved the REAL
+    # python3.exe, which then failed on a path that does not exist -- so the
+    # test reported "the ladder never reached the reader line" when what
+    # actually happened is that it reached it with the wrong interpreter.
+    if os.name == "nt":
+        (fake_bin / "python3.cmd").write_text(
+            "@echo off\r\n"
+            # The space before `>` is load-bearing: `%~1>` makes cmd parse the
+            # trailing `1>` as a stdout-redirect handle, and the capture file
+            # comes out empty.
+            f'echo %~1 > "{capture_file}"\r\n'
+            "exit /b 1\r\n",
+            encoding="utf-8",
+        )
     return fake_bin
 
 
 def _derive_settings_home(reader_path: str) -> str:
-    """<settings-home>/bin/_machine_local.py -> <settings-home>.
+    r"""<settings-home>/bin/_machine_local.py -> <settings-home>.
 
-    The captured reader_path came straight out of bash's own plain "/"
-    string-concat (claude-machine-local.sh composes
-    ``"$_ml_settings_home/bin/_machine_local.py"`` with no path-arithmetic
-    library involved) -- always POSIX-separated regardless of host OS. Parse
-    it with ``posixpath``, not ``pathlib.Path`` -- on Windows, ``Path()``
-    silently re-renders a POSIX-separated string with backslashes on
-    ``str()``, which broke this comparison against the (also POSIX) expected
-    literals in ``_SCENARIOS`` for every non-Windows-native input.
+    Both ladders reach here, and they do NOT agree on a separator.
+    ``claude-machine-local.sh`` composes ``"$_ml_settings_home/bin/
+    _machine_local.py"`` by plain "/" string-concat -- POSIX-separated on
+    every host. ``claude-machine-local.ps1`` composes the same path with
+    ``Join-Path``, which on Windows renders ``\`` -- so the captured value is
+    ``C:\...\bin\_machine_local.py``, and a bare ``posixpath.dirname`` pair
+    sees ONE component and returns ``""``. That is the whole of the .ps1
+    half's parity failure: the ladder resolved correctly and the harness
+    could not read its answer.
+
+    So normalize the dialect first, then parse with ``posixpath`` -- not
+    ``pathlib.Path``, which on Windows silently re-renders a POSIX-separated
+    string with backslashes on ``str()`` and breaks the comparison against
+    ``_SCENARIOS``'s (also POSIX) expected literals. ``_same_home`` canonicalizes
+    the separator on the compare side for the same reason.
     """
-    return posixpath.dirname(posixpath.dirname(reader_path))
+    return posixpath.dirname(posixpath.dirname(reader_path.replace("\\", "/")))
+
+
+
+def _same_home(resolved: str, expected: str) -> bool:
+    r"""Compare two settings-home paths across path DIALECTS.
+
+    git-bash renders a Windows drive path in MSYS form (`/c/Users/...`) while
+    the canonical Python-side resolver that built `_SCENARIOS`'s expectation
+    renders it natively (`C:\Users\...`). Both name the same directory, so
+    comparing them as raw strings failed the default (no-env) scenario on
+    Windows only -- a dialect difference reported as a ladder disagreement.
+    """
+    def _canon(value: str) -> str:
+        value = value.replace("\\", "/")
+        if len(value) > 2 and value[0] == "/" and value[2] == "/" and value[1].isalpha():
+            value = value[1] + ":" + value[2:]
+        return value.rstrip("/").lower()
+
+    return _canon(resolved) == _canon(expected)
 
 
 @pytest.mark.parametrize("env_overrides,expected_settings_home", _SCENARIOS)
@@ -161,7 +204,10 @@ def test_sh_ladder_matches_canonical_precedence(tmp_path, env_overrides, expecte
             env.pop(key, None)
         else:
             env[key] = value
-    env["PATH"] = f"{fake_bin}:{env.get('PATH', '')}"
+    # `os.pathsep`, not a literal ":" -- on Windows the separator is ";" and a
+    # colon-joined value makes the whole prepended entry unresolvable, so the
+    # fake shim is never found and the real python3 answers instead.
+    env["PATH"] = f"{fake_bin}{os.pathsep}{env.get('PATH', '')}"
 
     result = subprocess.run(
         ["bash", "-c", f"source '{_SH_SCRIPT}'"],
@@ -171,9 +217,9 @@ def test_sh_ladder_matches_canonical_precedence(tmp_path, env_overrides, expecte
         f"Fake python3 shim was never invoked — .sh ladder did not reach the "
         f"reader-invocation line. stderr: {result.stderr!r}"
     )
-    reader_path = capture_file.read_text(encoding="utf-8")
+    reader_path = capture_file.read_text(encoding="utf-8").strip()
     resolved = _derive_settings_home(reader_path)
-    assert resolved == expected_settings_home, (
+    assert _same_home(resolved, expected_settings_home), (
         f".sh resolved settings-home {resolved!r}, expected {expected_settings_home!r} "
         f"(env: {env_overrides!r}, stderr: {result.stderr!r})"
     )
@@ -194,7 +240,10 @@ def test_ps1_ladder_matches_canonical_precedence(tmp_path, env_overrides, expect
             env.pop(key, None)
         else:
             env[key] = value
-    env["PATH"] = f"{fake_bin}:{env.get('PATH', '')}"
+    # `os.pathsep`, not a literal ":" -- on Windows the separator is ";" and a
+    # colon-joined value makes the whole prepended entry unresolvable, so the
+    # fake shim is never found and the real python3 answers instead.
+    env["PATH"] = f"{fake_bin}{os.pathsep}{env.get('PATH', '')}"
 
     result = subprocess.run(
         [_PWSH, "-NoProfile", "-NonInteractive", "-Command", f". '{_PS1_SCRIPT}'"],
@@ -204,9 +253,9 @@ def test_ps1_ladder_matches_canonical_precedence(tmp_path, env_overrides, expect
         f"Fake python3 shim was never invoked — .ps1 ladder did not reach the "
         f"reader-invocation line. stderr: {result.stderr!r}"
     )
-    reader_path = capture_file.read_text(encoding="utf-8")
+    reader_path = capture_file.read_text(encoding="utf-8").strip()
     resolved = _derive_settings_home(reader_path)
-    assert resolved == expected_settings_home, (
+    assert _same_home(resolved, expected_settings_home), (
         f".ps1 resolved settings-home {resolved!r}, expected {expected_settings_home!r} "
         f"(env: {env_overrides!r}, stderr: {result.stderr!r})"
     )

@@ -35,13 +35,32 @@ Spec backlink: docs/plans/2026-07-27-computed-commit-mechanism-selection.md
   caller that decides the commit MECHANISM on this answer.)
 Spec backlink: docs/dispatch-briefs/2026-08-26-the-commit-op-stops-asking-
   git-eleven-times/C3e.md
+
+C6b (docs/plans/2026-08-27-the-commit-op-resolves-one-pass-context.md, R4/
+R5): `diverging_paths` now takes an OPTIONAL `context:
+coordinator_core.git.commit_context.CommitContext`, already resolved by the
+caller's own generation-A `build_commit_context()` call, scoped to (at
+least) `paths`. When given, this function reads the caller's already-
+resolved `(index, index_stat, head, on_disk, worktree_stat)` facts straight
+off it instead of calling `git_state.read_index` (R4, a full walk) and
+`git_index.scoped_status` -> `parse_index_identity` (R5, a second, non-
+participating scoped walk) -- the identical `X`/`Y` predicate, read off
+data the caller already paid for once. `context=None` (the default) is
+byte-identical to this function's pre-C6b behaviour: every existing caller
+that has not been threaded a context yet is unaffected.
+
+Negative-spec: `context` is consulted ONLY for the two in-process reads it
+replaces (staged identity, HEAD identity, stat pair). It is never consulted
+for the `fail_loud` fallback spawn (`_spawn_diverging_subset`) -- that
+spawn answers about `undetermined`, a subset a context (built once, before
+any of THIS call's own settling) cannot itself resolve any further.
 """
 
 from __future__ import annotations
 
 import subprocess
 from pathlib import Path
-from typing import List, NamedTuple, Optional, Tuple
+from typing import TYPE_CHECKING, List, NamedTuple, Optional, Tuple
 
 from coordinator_core.git.content_hash import content_matches_index_sha
 from coordinator_core.git.git_index import IndexParseError as _IndexStatIndexParseError
@@ -50,6 +69,9 @@ from coordinator_core.git.git_state import IndexParseError as _FullIndexParseErr
 from coordinator_core.git.git_state import head_blobs as _head_blobs
 from coordinator_core.git.git_state import read_index as _read_index
 from coordinator_core.win_portability import no_console_creationflags
+
+if TYPE_CHECKING:
+    from coordinator_core.git.commit_context import CommitContext
 
 
 class DivergenceCheckFailed(Exception):
@@ -227,6 +249,7 @@ def diverging_paths(
     *,
     timeout: float = 2.0,
     fail_loud: bool = False,
+    context: "Optional[CommitContext]" = None,
 ) -> List[str]:
     """Return the sorted subset of `paths` whose STAGED (index) content
     differs from their WORKTREE content, scoped to `paths`.
@@ -301,6 +324,21 @@ def diverging_paths(
 
     root = Path(cwd) if cwd is not None else Path(".")
 
+    # Repo-relative, forward-slashed keys -- `read_index`/`scoped_status`/
+    # `head_blobs`/`CommitContext.paths` key everything this way, and
+    # (unlike the spawn this replaces) there is no `git` process here to
+    # resolve an absolute-path input on this function's behalf. See
+    # `_repo_relative_key`.
+    relative = {p: _repo_relative_key(root, p) for p in paths}
+
+    if context is not None:
+        settled, undetermined = _settle_from_context(context, paths, relative, root)
+        if undetermined:
+            settled.update(
+                _spawn_diverging_subset(undetermined, cwd, timeout=timeout, fail_loud=fail_loud)
+            )
+        return sorted(settled)
+
     try:
         index_snapshot = _read_index(cwd if cwd is not None else ".")
     except (_FullIndexParseError, _IndexStatIndexParseError) as exc:
@@ -310,12 +348,6 @@ def diverging_paths(
                 f"{len(paths)} path(s) -- divergence indeterminate ({exc})"
             ) from exc
         return []
-
-    # Repo-relative, forward-slashed keys -- `read_index`/`scoped_status`/
-    # `head_blobs` key everything this way, and (unlike the spawn this
-    # replaces) there is no `git` process here to resolve an absolute-path
-    # input on this function's behalf. See `_repo_relative_key`.
-    relative = {p: _repo_relative_key(root, p) for p in paths}
 
     # Only a STAGED path can diverge at all (a `1` porcelain record needs an
     # index entry to exist in the first place) -- an unstaged path is
@@ -337,7 +369,7 @@ def diverging_paths(
             ) from exc
         return []
 
-    settled: "set[str]" = set()
+    settled = set()
     undetermined: List[str] = []
 
     for p in staged:
@@ -371,3 +403,69 @@ def diverging_paths(
         settled.update(_spawn_diverging_subset(undetermined, cwd, timeout=timeout, fail_loud=fail_loud))
 
     return sorted(settled)
+
+
+def _settle_from_context(
+    context: "CommitContext",
+    paths: List[str],
+    relative: "dict[str, str]",
+    root: Path,
+) -> Tuple["set[str]", List[str]]:
+    """The context-scoped equivalent of `diverging_paths`'s own read+settle
+    block above, folding R4 (`read_index`) and R5 (`scoped_status` ->
+    `parse_index_identity`) into ZERO index walks -- `context.paths[rel]`
+    already carries `index` (mode, sha), `index_stat` (size, mtime,
+    mtime_nsec), `head` (mode, sha), `on_disk`, and `worktree_stat`, the
+    exact union both walks existed to answer. The stat-match arithmetic
+    mirrors `git_index.scoped_status` verbatim (guarded `mtime_nsec`
+    comparison and all) -- see that function's own docstring for why the
+    comparison is nanosecond- rather than second-granular.
+
+    A path absent from `context.paths` (outside the generation-A context's
+    own scope) is treated as undetermined -- see this module's own
+    docstring "Negative-spec" for why: it falls through to the same
+    `_spawn_diverging_subset` fallback every other undetermined case does,
+    never silently read as "not staged".
+    """
+    settled: "set[str]" = set()
+    undetermined: List[str] = []
+
+    for p in paths:
+        rel = relative[p]
+        path_ctx = context.paths.get(rel)
+        if path_ctx is None:
+            undetermined.append(p)
+            continue
+        if path_ctx.index is None:
+            continue  # not staged -- cannot diverge at all
+
+        x_diverged = path_ctx.head is None or path_ctx.index != path_ctx.head
+        if not x_diverged:
+            continue  # X == "." -- cannot diverge regardless of Y
+
+        if not path_ctx.on_disk:
+            settled.add(rel)  # Y: deleted
+            continue
+
+        cached_stat = path_ctx.index_stat
+        wstat = path_ctx.worktree_stat
+        stat_matches = (
+            cached_stat is not None
+            and wstat is not None
+            and cached_stat[0] == (wstat.st_size & 0xFFFFFFFF)
+            and cached_stat[1] == int(wstat.st_mtime)
+        )
+        if stat_matches and cached_stat[2]:
+            stat_matches = cached_stat[2] == wstat.st_mtime_ns % 1_000_000_000
+        if stat_matches:
+            continue  # Y == "." (clean)
+
+        match = content_matches_index_sha(root, rel, path_ctx.index[1])
+        if match is True:
+            continue
+        if match is False:
+            settled.add(rel)
+            continue
+        undetermined.append(p)
+
+    return settled, undetermined

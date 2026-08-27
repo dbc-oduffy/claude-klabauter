@@ -515,7 +515,7 @@ def test_close_gate_emits_every_named_field(repo: Path, monkeypatch):
 def test_safe_commit_offer_is_a_directive_not_a_judgment_point(repo: Path, monkeypatch):
     """C5 (docs/plans/2026-08-20-the-close-ceremony-commits-what-the-session-wrote.md
     § C5): being asked whether to commit was itself the defect, by explicit PM ruling —
-    so this is now an in-process `auto_commit_session_async` call, never a directive an
+    so this is now an in-process `commit_session_offer_async` call, never a directive an
     agent might not run and never a judgment point to decide."""
     _stub_facts_all_computed(monkeypatch, repo)
 
@@ -538,7 +538,7 @@ def test_safe_commit_offer_is_a_directive_not_a_judgment_point(repo: Path, monke
             },
         }
 
-    monkeypatch.setattr(qwa, "auto_commit_session_async", _fake_auto_commit)
+    monkeypatch.setattr(qwa, "commit_session_offer_async", _fake_auto_commit)
 
     envelope = qwa.brief()
 
@@ -557,7 +557,7 @@ def test_auto_commit_failure_does_not_block_the_ceremony(repo: Path, monkeypatch
     async def _boom(session_id, cwd=None, groups=None, invoker=None):
         raise RuntimeError("simulated auto-commit failure")
 
-    monkeypatch.setattr(qwa, "auto_commit_session_async", _boom)
+    monkeypatch.setattr(qwa, "commit_session_offer_async", _boom)
 
     envelope = qwa.brief()
 

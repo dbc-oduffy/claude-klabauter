@@ -86,7 +86,7 @@ def _import_main():
     return _op_main
 
 
-def main() -> None:
+def main(argv: "list[str] | None" = None) -> int:
     # Review: code-reviewer — business codes 0/1/2/3 are all already spoken
     # for here (2 = "missing dep or file not found", a repo-content problem);
     # a claude-klabauter-link failure is an architecturally distinct failure mode (a
@@ -102,18 +102,18 @@ def main() -> None:
             f"verify-snippet-registry-consistency: engine-root resolution failed: {exc}",
             file=sys.stderr,
         )
-        sys.exit(_TRANSPORT_FAILURE_EXIT)
+        return _TRANSPORT_FAILURE_EXIT
     except ImportError as exc:
         print(
             "verify-snippet-registry-consistency: "
             f"coordinator_core.snippet_sync.verify_registry_consistency not importable: {exc}",
             file=sys.stderr,
         )
-        sys.exit(_TRANSPORT_FAILURE_EXIT)
+        return _TRANSPORT_FAILURE_EXIT
 
     plugin_root = _resolve_plugin_root()
-    sys.exit(op_main([plugin_root] + sys.argv[1:]))
+    return op_main([plugin_root] + (sys.argv[1:] if argv is None else argv))
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

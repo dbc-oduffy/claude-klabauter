@@ -718,12 +718,22 @@ def test_commit_set_withholds_a_contested_path_but_names_it(tmp_path):
 
 
 def test_commit_set_includes_paths_an_agent_touched_for_this_session(tmp_path):
+    """INVERTED (C3, docs/plans/2026-08-27-safe-commit-offer-excludes-a-
+    live-agent.md): this test used to assert that a path claimed SOLELY
+    through a dispatched agent's own touch record joined ``paths`` alongside
+    the session's own direct claim -- the exact over-reach this plan exists
+    to correct (the same defect ``test_commit_set_offers_a_live_agents_
+    inflight_claim_as_the_ems_own`` pins in isolation, below). C2 already
+    split that attribution out of ``paths`` into ``in_flight_agent_claims``;
+    this test now asserts THAT split for a claim set that mixes both
+    sources, so a future reader does not "restore" the old union."""
     _session_touched(tmp_path, "sid-mine", [_touch_line("T", "em.py")])
     _agent_touched(tmp_path, "agent-1", "sid-mine", [_touch_line("T", "worker.py")])
 
     result = claim_index.commit_set("sid-mine", sessions_dir=str(tmp_path))
 
-    assert result.paths == ["em.py", "worker.py"]
+    assert result.paths == ["em.py"]
+    assert result.in_flight_agent_claims == {"worker.py": ["agent-1"]}
 
 
 def test_commit_set_spawns_no_subprocess(tmp_path, monkeypatch):
@@ -756,6 +766,79 @@ def test_commit_set_propagates_an_unresolvable_base_as_incomplete(monkeypatch):
     assert result.complete is False
     assert result.abort_cause == claim_index.ABORT_CAUSE_EMPTY_BASE
     assert result.paths == []
+
+
+# ---------------------------------------------------------------------------
+# C1 (docs/plans/2026-08-27-safe-commit-offer-excludes-a-live-agent.md) --
+# reproduction: a live agent's in-flight claim is offered as the EM's own.
+# ---------------------------------------------------------------------------
+
+
+def test_commit_set_offers_a_live_agents_inflight_claim_as_the_ems_own(tmp_path):
+    """INVERTED (C3, docs/plans/2026-08-27-safe-commit-offer-excludes-a-
+    live-agent.md): observed shape, that plan's Problem section -- during
+    docs/plans/2026-08-27-the-fact-layer-is-measured-on-the-one-hot-path.md
+    a dispatched executor was mid-write on a research artifact, still LIVE,
+    when ``safe_commit_offer`` committed that same path as the EM's own --
+    the EM session itself never touched it.
+
+    THIS TEST USED TO PIN THAT OVER-REACH ON PURPOSE (the RED-FIRST
+    reproduction C2/C3 fixed against). C2 corrected it AT THIS SURFACE:
+    ``commit_set`` performs no liveness check of its own (module docstring)
+    -- it now reports a path claimed SOLELY through a dispatched agent's own
+    touch record via ``in_flight_agent_claims``, attribution without a
+    verdict, and keeps it OUT of ``paths`` unconditionally regardless of
+    whether that agent is live or dead. The liveness VERDICT (live agent ->
+    stays excluded; dead/undetermined agent -> folds back into what the
+    session may commit) is resolved one layer up, at
+    ``safe_commit_offer.compute_offer`` -- see
+    ``TestComputeOffer::test_a_dispatched_agents_inflight_claim_is_offered_
+    as_the_ems_own`` (now the corrected assertion) in this repo's
+    ``coordinator_core/ops/session/tests/test_safe_commit_offer.py``."""
+    base = str(tmp_path)
+    _agent_touched(
+        base, "agent-live", "sess-em", [_touch_line("T", "docs/research/in-flight.md")]
+    )
+
+    result = claim_index.commit_set("sess-em", sessions_dir=base)
+
+    assert result.paths == []
+    assert result.in_flight_agent_claims == {"docs/research/in-flight.md": ["agent-live"]}
+    assert result.contested == {}
+    assert result.peers == {}
+
+
+def test_commit_set_reports_attribution_only_no_liveness_verdict_for_an_agent_claim(
+    tmp_path,
+):
+    """MOVED here from ``test_commit_set_leaves_a_dead_agents_orphaned_claim_
+    in_mine`` (C3, docs/plans/2026-08-27-safe-commit-offer-excludes-a-live-
+    agent.md): that test asserted DEAD-agent behaviour at this surface, but
+    ``commit_set`` performs NO liveness check of its own (module docstring)
+    -- a guard asserting a dead-agent verdict here asserts something this
+    surface is designed never to know, whether the agent behind the claim is
+    live, dead, or undetermined. The real dead-agent regression guard now
+    lives at ``safe_commit_offer.compute_offer``, the surface where
+    liveness is actually resolved -- see ``TestComputeOffer::
+    test_a_dead_agents_orphaned_claim_stays_in_mine`` in
+    ``coordinator_core/ops/session/tests/test_safe_commit_offer.py``.
+
+    What THIS surface knows, and all this test asserts: a path claimed
+    SOLELY through a dispatched agent's own touch record is attributed to
+    that agent and withheld from ``paths`` -- present instead in
+    ``in_flight_agent_claims`` -- with no verdict rendered either way.
+    """
+    base = str(tmp_path)
+    _agent_touched(
+        base, "agent-1", "sess-em", [_touch_line("T", "docs/research/orphaned.md")]
+    )
+
+    result = claim_index.commit_set("sess-em", sessions_dir=base)
+
+    assert result.paths == []
+    assert result.in_flight_agent_claims == {"docs/research/orphaned.md": ["agent-1"]}
+    assert result.contested == {}
+    assert result.peers == {}
 
 
 # ---------------------------------------------------------------------------

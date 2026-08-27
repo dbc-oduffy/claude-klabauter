@@ -82,7 +82,7 @@ def _import_runner():
     return run_op_main
 
 
-def main() -> None:
+def main(argv: "list[str] | None" = None) -> int:
     try:
         run_op_main = _import_runner()
     except RuntimeError as exc:
@@ -90,16 +90,16 @@ def main() -> None:
             f"gen-claude-doe-launcher.py: engine-root resolution failed: {exc}",
             file=sys.stderr,
         )
-        sys.exit(1)
+        return 1
     except ImportError as exc:
         print(
             "gen-claude-doe-launcher.py: coordinator_core.cli_entry not importable: "
             f"{exc}",
             file=sys.stderr,
         )
-        sys.exit(1)
+        return 1
 
-    argv = sys.argv[1:]
+    argv = (sys.argv[1:] if argv is None else argv)
     if "--template-dir" not in argv and "-h" not in argv and "--help" not in argv:
         try:
             argv = argv + ["--template-dir", _default_template_dir()]
@@ -109,7 +109,7 @@ def main() -> None:
                 f"--template-dir: {exc}",
                 file=sys.stderr,
             )
-            sys.exit(1)
+            return 1
 
     try:
         code = run_op_main("coordinator_core.ops.gen_claude_doe_launcher", argv)
@@ -119,10 +119,10 @@ def main() -> None:
             f"coordinator_core.ops.gen_claude_doe_launcher not importable: {exc}",
             file=sys.stderr,
         )
-        sys.exit(1)
+        return 1
 
-    sys.exit(code)
+    return code
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

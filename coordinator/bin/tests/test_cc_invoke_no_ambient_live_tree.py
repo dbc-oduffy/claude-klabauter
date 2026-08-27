@@ -42,8 +42,6 @@ import pytest
 _TESTS_DIR = Path(__file__).resolve().parent
 _BIN_DIR = _TESTS_DIR.parent
 _LIB_DIR = _BIN_DIR / "lib"
-_CC_INVOKE_PY = _LIB_DIR / "cc_invoke.py"
-_MLIR_PY = _LIB_DIR / "machine_local_impl_resolve.py"
 
 if str(_LIB_DIR) not in sys.path:
     sys.path.insert(0, str(_LIB_DIR))
@@ -150,8 +148,12 @@ def _build_self_locatable_checkout_with_gate_stub(root: Path, *, gate_answer: st
     )
 
     cc_invoke_copy = lib_dir / "cc_invoke.py"
-    shutil.copyfile(_CC_INVOKE_PY, cc_invoke_copy)
-    shutil.copyfile(_MLIR_PY, lib_dir / "machine_local_impl_resolve.py")
+    # Copy the WHOLE lib, not a hand-listed pair. A named copy set silently
+    # stops being complete the next time a module is split out of cc_invoke —
+    # which is what `engine_bootstrap` (2026-08-21) did, leaving the child
+    # dying on `ModuleNotFoundError` rather than exercising the resolver.
+    for module in sorted(_LIB_DIR.glob("*.py")):
+        shutil.copyfile(module, lib_dir / module.name)
     return checkout_root, cc_invoke_copy
 
 

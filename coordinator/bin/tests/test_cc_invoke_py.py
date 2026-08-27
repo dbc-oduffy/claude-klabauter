@@ -2557,9 +2557,24 @@ class TestDiagnosticsProbesEndToEnd(unittest.TestCase):
     """
 
     def _invoke(self, op: str) -> Any:
-        """Route `op` through `cc_invoke` to a real engine child in THIS checkout."""
+        """Route `op` through `cc_invoke` to a real engine child.
+
+        The ENGINE root is the box's stamped published engine, not this
+        checkout. This class's subject is how a transport/op failure SURFACES
+        to a `cc_invoke` caller, never which tree served it -- and a source
+        checkout carries no build stamp, so `ipc.py`'s dispatch-axis stamp gate
+        refuses it before any handler runs and every probe here reports the
+        refusal instead of the failure mode it was written to pin. The REPO
+        root stays this checkout: that is the op's subject, and it is a
+        different axis from which engine executes.
+        """
+        from engine_stamp_probe import _stamped_dispatch_root
+
+        engine_root = _stamped_dispatch_root()
+        if engine_root is None:
+            pytest.skip("no stamped engine on this box — a real engine child is unreachable")
         with unittest.mock.patch.object(_mod, "_op_timeout_ceiling", return_value=120):
-            return _mod.cc_invoke(op, {}, str(_REPO_ROOT), _claude_klabauter_root=str(_REPO_ROOT))
+            return _mod.cc_invoke(op, {}, str(_REPO_ROOT), _claude_klabauter_root=engine_root)
 
     @pytest.mark.spawns_process
     def test_always_succeeds_returns_its_result(self) -> None:

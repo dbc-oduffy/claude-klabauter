@@ -174,7 +174,7 @@ def _init_repo(tmp_path: Path) -> Path:
     return repo
 
 
-def test_end_to_end_file_index_against_tmp_git_repo(tmp_path: Path) -> None:
+def test_end_to_end_file_index_against_tmp_git_repo(tmp_path: Path, stamped_engine_env: str) -> None:
     repo = _init_repo(tmp_path)
 
     proc = subprocess.run(
@@ -197,7 +197,7 @@ def test_end_to_end_file_index_against_tmp_git_repo(tmp_path: Path) -> None:
     assert "a.py" in result["index"]
 
 
-def test_end_to_end_tree_against_tmp_git_repo(tmp_path: Path) -> None:
+def test_end_to_end_tree_against_tmp_git_repo(tmp_path: Path, stamped_engine_env: str) -> None:
     repo = _init_repo(tmp_path)
 
     proc = subprocess.run(

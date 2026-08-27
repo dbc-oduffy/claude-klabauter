@@ -18,18 +18,25 @@ invoke `python -m coordinator_core.invoke ceremony.scoped_git_commit
 --params-file <path> --repo <root> --bare` -- that op was killed 2026-08-23
 (DR-344; `coordinator-invoke ceremony.scoped_git_commit ...` now returns
 `Method not found: 'ceremony.scoped_git_commit'`), and the `--repo` flag it
-passed was independently rejected by DR-279 for a `scope="none"` op. The
-suggestion now writes a small retry SCRIPT (not a `--params-file` payload)
-that calls `coordinator_core.ops.ceremony.commit_pipeline ::
-run_commit_pipeline` in-process -- that function has no op-registry/CLI
-entry point -- and emits `<python> <script-path>`.
+passed was independently rejected by DR-279 for a `scope="none"` op.
 
-This suite asserts the printed command (1) never names the killed
-`ceremony.scoped_git_commit` method, (2) references the retry script it
-wrote to disk via a `.py` tempfile path rather than embedding the params
-JSON as positional argv, and (3) resolves `PYTHONPATH`/its module
-invocation root off `cc_invoke._resolve_claude_klabauter_root()` (the DISPATCH axis),
-not the LOCATOR-axis resolver.
+2026-08-26 (C5): the generated retry SCRIPT went too. `do_pathspec`'s
+`-- <paths>` form routes through the `ceremony.commit` op in-process, so
+the correct retry command is THIS SAME script invoked with `-- <paths>`:
+no tempfile, no `PYTHONPATH`, no engine-root resolution, and therefore
+nothing left for a killed-op class of drift to attach to.
+`_resolve_claude_klabauter_root` is no longer a name on the module at all.
+
+This suite pins the shape that survived: the printed suggestion (1) never
+names the killed `ceremony.scoped_git_commit` method, (2) reproduces the
+caller's own invocation rather than pointing at a generated artifact, (3)
+resolves no engine root on any axis, and (4) renders an absent attribution
+signal as "every path unattributed", never as "0 foreign".
+
+Negative-spec: this file no longer covers a tempfile retry script, a
+`--params-file` payload, or a `PYTHONPATH` resolution axis -- all three
+were deleted, and a test that pins deleted mechanics is the drift this
+file's own history is a record of.
 
 Loaded by file path (`importlib.machinery.SourceFileLoader`), matching this
 directory's existing hyphenated-module idiom (see
@@ -71,64 +78,58 @@ def test_retry_command_never_names_the_killed_op(monkeypatch):
     caller a command the engine's op registry no longer has."""
     mod = _load_cli_module()
     monkeypatch.setattr(mod, "_current_dirty_files", lambda: ["a/b.py", "c/d.py"])
-    monkeypatch.setattr(mod, "_resolve_claude_klabauter_root", lambda: "/fake/dispatch/root")
-    monkeypatch.setattr(mod, "_resolve_python_invocation", lambda: ("python3", []))
 
-    suggestion = mod._scoped_commit_suggestion("test subject", host_is_windows=False)
+    suggestion = mod._scoped_commit_suggestion("test subject")
 
     assert "scoped_git_commit" not in suggestion
     assert "--repo" not in suggestion
 
 
-def test_retry_command_uses_script_file_not_positional_argv(monkeypatch):
+def test_retry_command_reproduces_this_same_script_not_a_generated_artifact(monkeypatch):
+    """C5's shape: the suggestion is the caller's own invocation, corrected.
+    A generated tempfile script is the thing that went stale unnoticed for
+    eleven days, so its absence is the property worth pinning -- no `.py`
+    artifact path, no params JSON, and the placeholder that keeps the line
+    non-executable verbatim."""
     mod = _load_cli_module()
     monkeypatch.setattr(mod, "_current_dirty_files", lambda: ["a/b.py", "c/d.py"])
-    monkeypatch.setattr(mod, "_resolve_claude_klabauter_root", lambda: "/fake/dispatch/root")
-    monkeypatch.setattr(mod, "_resolve_python_invocation", lambda: ("python3", []))
 
-    suggestion = mod._scoped_commit_suggestion("test subject", host_is_windows=False)
+    suggestion = mod._scoped_commit_suggestion("test subject")
 
-    # The params (worktree_root/paths/message) are written into the retry
-    # SCRIPT on disk, never embedded as positional argv in the printed
-    # command -- only the script's own tempfile path appears.
+    # Only the FIRST line is the command; the lines beneath it are the
+    # attribution banner, whose entries are dirty paths and may legitimately
+    # end in `.py`.
+    command_line = suggestion.splitlines()[0]
+
+    assert command_line.strip().startswith("coordinator-safe-commit ")
+    assert command_line.endswith("-- <trim-to-your-own-paths>")
+    assert ".py" not in command_line
     assert '"worktree_root"' not in suggestion
     assert '"paths"' not in suggestion
-    assert ".py" in suggestion
 
 
-def test_retry_command_resolves_pythonpath_via_dispatch_axis(monkeypatch):
+def test_retry_command_resolves_no_engine_root_on_any_axis():
+    """The suggestion carries no interpreter, no `PYTHONPATH`, and no engine
+    root, so neither resolver seam is reachable from it. Pinned as the
+    absence of the NAMES: a reintroduced resolution rung would land here
+    first, and the previous shape's whole defect class lived on this axis
+    choice."""
     mod = _load_cli_module()
-    monkeypatch.setattr(mod, "_current_dirty_files", lambda: ["a/b.py"])
-    calls: list[str] = []
 
-    def _fake_dispatch_root():
-        calls.append("dispatch")
-        return "/fake/dispatch/root"
-
-    monkeypatch.setattr(mod, "_resolve_claude_klabauter_root", _fake_dispatch_root)
-    monkeypatch.setattr(mod, "_resolve_python_invocation", lambda: ("python3", []))
-
-    suggestion_posix = mod._scoped_commit_suggestion("test subject", host_is_windows=False)
-    assert calls == ["dispatch"]
-    assert "/fake/dispatch/root" in suggestion_posix
-
-    calls.clear()
-    suggestion_win = mod._scoped_commit_suggestion("test subject", host_is_windows=True)
-    assert calls == ["dispatch"]
-    assert "/fake/dispatch/root" in suggestion_win
+    assert not hasattr(mod, "_resolve_claude_klabauter_root")
+    assert not hasattr(mod, "resolve_engine_root")
 
 
-def test_claude_klabauter_root_resolution_failure_message_also_uses_script_file(monkeypatch):
+def test_absent_attribution_signal_renders_as_unattributed_not_as_zero_foreign(monkeypatch):
+    """A missing `touched.txt` signal must never render as "0 of N are
+    foreign" -- a false all-clear manufactured from absent data is the
+    failure this banner exists to prevent."""
     mod = _load_cli_module()
-    monkeypatch.setattr(mod, "_current_dirty_files", lambda: ["a/b.py"])
+    monkeypatch.setattr(mod, "_current_dirty_files", lambda: ["a/b.py", "c/d.py"])
+    monkeypatch.setattr(mod, "_own_touched_paths_for_banner", lambda: (None, "no session id"))
 
-    def _raise():
-        raise RuntimeError("no engine root")
+    suggestion = mod._scoped_commit_suggestion("test subject")
 
-    monkeypatch.setattr(mod, "_resolve_claude_klabauter_root", _raise)
-
-    suggestion = mod._scoped_commit_suggestion("test subject", host_is_windows=False)
-
-    assert ".py" in suggestion
-    assert "scoped_git_commit" not in suggestion
-    assert '"worktree_root"' not in suggestion
+    assert "attribution unavailable (no session id)" in suggestion
+    assert suggestion.count("[foreign/unattributed]") == 2
+    assert "0 of 2" not in suggestion

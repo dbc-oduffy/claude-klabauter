@@ -218,6 +218,67 @@ def test_failed_sweep_records_receipt_outcome(tmp_path: Path) -> None:
     assert row["outcome"] == "failed"
 
 
+def test_sidecar_with_live_primary_is_never_archived_alone(tmp_path: Path) -> None:
+    # The verified corpus defect: a primary plan still `status: draft` (live)
+    # whose review sidecar independently reads a terminal status must NOT be
+    # archived out from under its still-live primary.
+    worktree = tmp_path
+    common_dir = tmp_path
+
+    _write_plan(worktree, "2026-08-08-live-primary.md", "draft")
+    _write_plan(worktree, "2026-08-08-live-primary.prior-art-check.md", "implemented")
+
+    skipped: list = []
+    moves, _ = m.plan_sweep(worktree, common_dir, cap=10, scan_skipped=skipped)
+
+    ids = {mv.candidate_id for mv in moves}
+    assert not any("prior-art-check" in cid for cid in ids)
+    assert not any(cid.endswith("live-primary.md") for cid in ids)
+
+    reasons = {row["id"]: row["reason"] for row in skipped}
+    sidecar_reason = reasons["docs/plans/2026-08-08-live-primary.prior-art-check.md"]
+    assert sidecar_reason.startswith(m._SCAN_REASON_SIDECAR_FOLLOWS_PRIMARY)
+
+
+def test_sidecar_with_terminal_primary_is_archived(tmp_path: Path) -> None:
+    worktree = tmp_path
+    common_dir = tmp_path
+
+    _write_plan(worktree, "2026-08-09-done-primary.md", "implemented")
+    _write_plan(worktree, "2026-08-09-done-primary.review.md", "implemented")
+
+    moves, skipped = m.plan_sweep(worktree, common_dir, cap=10)
+    ids = {mv.candidate_id for mv in moves}
+    assert "docs/plans/2026-08-09-done-primary.md" in ids
+    assert "docs/plans/2026-08-09-done-primary.review.md" in ids
+
+
+def test_orphan_sidecar_with_no_primary_is_refused(tmp_path: Path) -> None:
+    worktree = tmp_path
+    common_dir = tmp_path
+
+    _write_plan(worktree, "2026-08-10-ghost.review.md", "implemented")
+
+    skipped: list = []
+    moves, _ = m.plan_sweep(worktree, common_dir, cap=10, scan_skipped=skipped)
+    assert not moves
+    reasons = {row["id"]: row["reason"] for row in skipped}
+    assert reasons["docs/plans/2026-08-10-ghost.review.md"].startswith(m._SCAN_REASON_SIDECAR_ORPHAN)
+
+
+def test_setup_errors_record_receipt_rows(tmp_path: Path) -> None:
+    common_dir = tmp_path
+
+    # Bad cap, with a resolvable repo_root -> receipt row expected.
+    result = m._handler({"dry_run": True, "cap": 0}, repo_root=common_dir)
+    assert result.get("exit_code") == 1 or "cap" in json.dumps(result)
+    row = _read_last_receipt_row(common_dir)
+    assert row["outcome"] == "failed"
+
+    # repo_root None -> setup error, no common_dir to write to, must not raise.
+    m._handler({"dry_run": True, "cap": 1}, repo_root=None)
+
+
 def test_sweep_lock_round_trips(tmp_path: Path) -> None:
     common_dir = tmp_path
     lock1 = m._acquire_sweep_lock(common_dir)

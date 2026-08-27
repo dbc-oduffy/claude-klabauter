@@ -1,25 +1,47 @@
 """
-coordinator_core.ops.session.safe_commit_offer — automatic, unattended
-stop-event commit+push for a session's own claimed dirty paths.
+coordinator_core.ops.session.safe_commit_offer — EM-initiated commit+push of
+a session's own claimed dirty paths, offered by a ceremony the operator ran.
+
+NOT automatic, NOT unattended, NOT stop-event driven. This line said exactly
+that until 2026-08-27 and was wrong: the SessionEnd registration it described
+had been retired, and a summary line is the most-read text in a module, so it
+outranked the corrected paragraph below it for every reader who stopped at
+the first sentence. If a future change reinstates an unattended trigger, this
+sentence is the first thing that must change with it.
 
 PIVOT (PM ruling, 2026-07-31, superseding this module's original "offer,
 then one confirmation" shape): "I get annoyed when I'm asked if there should
 be a commit or not. y'all are the engineers... I don't want work lost." The
 confirmation step this module originally computed FOR is gone — being asked
-whether to commit was itself the defect. Module filename kept as-is (the
-pathspec computation this name describes is unchanged) even though it no
-longer merely "offers" — see `auto_commit_session` below for the part that
-changed.
+whether to commit was itself the defect. RECORDED AS HISTORY, and reversed
+since: at the time of that PIVOT, the module's own SessionEnd-hook trigger
+was still registered, so an unattended, unconfirmed commit could fire with
+nobody watching, and "offer" briefly read as a misnomer for what the module
+had become. That trigger registration has since been retired — verified this
+session against the DoE-claude repo's `coordinator/hooks/hooks.json`, whose
+`SessionEnd` array registers only `sessionend-archive-session.py`, not this
+module's CLI. Every surviving caller today is an EM-initiated ceremony
+(`/handoff`, `/quick-wrap`, `/workstream-complete`) — a session, not a stop
+event, choosing to commit while still running and still able to answer for
+it. The module genuinely offers again, `safe_commit_offer` describes it
+correctly, and the name stays; a future reader must read this paragraph as
+the reversal's record, not as license to reinstate a SessionEnd registration
+this module no longer expects.
 
 The REAL failure mode this exists to prevent, per the PM, restated: not
 primarily cross-session sweeps (those are accepted collateral of a many-EM
 workflow — see below) but sessions finishing real work and never committing
 it at all. A dirty tree with 40+ uncommitted paths, some from sessions that
-are simply gone, is data loss waiting on a machine failure. So the stop-event
-TRIGGER reliability matters as much as the computation — see
-`docs/wiki/scoped-safety-commits.md` § 3b and the SessionEnd hook script this
-module's CLI is designed to be called from
-(`coordinator/hooks/scripts/sessionend-auto-commit.py`, DoE-claude side).
+are simply gone, is data loss waiting on a machine failure. That failure mode
+is unchanged; what changed is who is responsible for catching it. This module
+no longer has a stop-event trigger, so it cannot catch the session that dies
+without committing — `/workday-complete`'s dirty-tree sweep
+(`coordinator_core/ops/workday_complete_step2_5_dirty_tree.py`) is the named
+backstop for that case, and retiring the unattended trigger was accepted on
+exactly that basis. See `docs/wiki/scoped-safety-commits.md` § 3b.
+`coordinator/hooks/scripts/sessionend-auto-commit.py` (DoE-claude side) still
+exists on disk but is NO LONGER REGISTERED and no longer calls this module —
+do not read it as a live caller.
 
 Composition, not new computation — ONE primitive since the 2026-08-21
 rebuild:
@@ -70,19 +92,41 @@ deliberately:
     imports them by name -- but they are no longer this module's own path.
     See their section comment below.
 
-What did NOT change: the SessionEnd trigger reliability this module's CLI
-exists for, and the advisory-only disposition of a path left uncommitted
+What did NOT change: the advisory-only disposition of a path left uncommitted
 (DR-227) — it is named in the diagnostics sink (`_log_excluded_diagnostic`)
-and never gated or blocked.
+and never gated or blocked. (This sentence used to open with "the SessionEnd
+trigger reliability this module's CLI exists for". That trigger is retired;
+the CLI exists for the ceremonies now.)
+
+THE ``"unattended"`` INVOKER HAS NO PRODUCER LEFT. ``--invoker
+<attended|unattended>`` is still accepted and ``commit_session_offer`` still
+branches on it, but as of 2026-08-27 nothing in either repo passes
+``"unattended"`` except this module's own tests: the SessionEnd registration
+that was its one real caller is retired, and the sole non-test caller
+(`coordinator_core.quick_wrap_assemble`) is a ceremony. The branch is kept
+rather than deleted because the flag is a CLI surface doe-claude-em's skills
+invoke by name and removing it is a cross-repo break, not a local tidy — the
+same reasoning that kept `PeerOwnedPath`'s ``"agent-race"`` value whole. Read
+its "Stop-event safety net" commit framing as describing a shape nothing
+currently produces, and if you are here because you found that framing in a
+real commit message, that is a finding worth chasing: it means something
+started declaring itself unattended again.
 
 Read-only halves stay read-only; the mutating half
-(`auto_commit_session`/`auto_commit_session_async`) is the ONLY part of this
-module that stages, commits, or pushes — and it does so by composing the
-ALREADY-EXISTING `ceremony.scoped_git_commit` op in-process (via
-`coordinator_core.ipc.get_op_handler`), never a hand-rolled `git commit`.
-That op already pushes-with-retry as part of its own contract (see its
-module docstring) — auto-push for this mechanism is therefore the SAME seam
-`scoped-git-commit` already uses, not a second push path. It is also already
+(`commit_session_offer`/`commit_session_offer_async`) is the ONLY part of this
+module that stages, commits, or pushes — and it does so by composing an
+ALREADY-EXISTING commit primitive in-process, never a hand-rolled
+`git commit`. That primitive is
+`ops.ceremony.commit_pipeline.run_commit_pipeline`, called directly (see
+`_commit_group`). It is NOT `ceremony.scoped_git_commit`: that op was
+DELETED 2026-08-23 over the DR-344 brightline and is registered nowhere
+outside a test fixture, so resolving it by name gets "Method not found".
+This paragraph claimed the deleted op until 2026-08-27 — `_commit_group`
+was rewired on 2026-08-26 and the module docstring was not updated with it,
+which is how a killed op name outlives the call site that dropped it.
+The pipeline pushes-with-retry as part of its own contract, so auto-push
+here is the SAME seam `close_out_and_stamp` already uses, not a second push
+path. It is also already
 written to coexist with `coordinator_core.hooks.auto_push`'s post-commit
 git hook (`_resolve_push_report`'s docstring: a `False` from its own push
 step is treated as UNKNOWN, not failure, deferring to the confirmed remote
@@ -119,7 +163,7 @@ from coordinator_core.win_portability import no_console_creationflags
 from coordinator_core.session import claim_index
 from coordinator_core.session.claims import my_agent_touched
 from coordinator_core.session import scope as scope_module
-from coordinator_core.session.liveness import live_session_ids
+from coordinator_core.session.liveness import _ABANDONMENT_WINDOW_SEC, live_session_ids
 
 class ExcludedPath(TypedDict):
     path: str
@@ -145,6 +189,20 @@ class PeerOwnedPath(TypedDict):
     sibling plans consume, and narrowing a Literal a consumer already
     switches on is a breaking change for no gain.
 
+    C3 (docs/plans/2026-08-27-safe-commit-offer-excludes-a-live-agent.md)
+    restores a real producer for `claim_source="agent"`: `compute_offer`
+    now emits it for a path this session holds SOLELY through a live
+    dispatched agent's own touch record (`claim_index.CommitSet.
+    in_flight_agent_claims`) -- the owning session has not directly claimed
+    it, so the claim is not this session's own to fold into `mine` while
+    that agent is still in flight. `"agent-race"` still has NO producer
+    anywhere in this package -- it would name two LIVE claimants racing on
+    the SAME path (this session's own claim vs. a peer's), a case this
+    chunk does not create a code path for and does not attempt to detect.
+    Kept in the `Literal` for the same reason it was kept before: it is a
+    wire shape two sibling plans consume, and narrowing a value set a
+    consumer already switches on is a breaking change for no gain.
+
     Never constructed for a claim this call cannot stand behind -- see
     `compute_offer`'s ownership paragraph (AC7: never print an owner this
     call cannot stand behind)."""
@@ -157,7 +215,7 @@ class PeerOwnedPath(TypedDict):
 
 class OwnershipReadout(TypedDict):
     """The four-bucket, per-session ownership readout (C5) -- EXTENDS the
-    post-commit residue report C3 shipped (`AutoCommitReport.residue`,
+    post-commit residue report C3 shipped (`CommitOfferReport.residue`,
     `SafeCommitOffer.excluded`), it does not replace either. Those stay
     candidate-set-only, by their own docstrings; this is the surface that
     answers "who does the claim index say holds this path", not merely "is
@@ -249,7 +307,7 @@ class DroppedGroup(TypedDict):
     """One caller-supplied `CommitGroup` (handoff item 1,
     `state/handoffs/2026-08-03-touched-path-bookkeeping.md`) that lost some
     or all of its named paths to `safe_set` filtering in
-    `auto_commit_session_async` -- i.e. `len(kept) < len(g["paths"])`,
+    `commit_session_offer_async` -- i.e. `len(kept) < len(g["paths"])`,
     total-drop and partial-drop alike. A group that loses every path
     previously vanished from `groups`, `failed_groups`, and `excluded`
     (which is `compute_offer`-derived, not group-derived) all at once --
@@ -263,7 +321,7 @@ class DroppedGroup(TypedDict):
     `safe_paths`; `matched < named` is the entry's own reason for existing.
     Never populated for `_default_groups` output (the unattended-trigger
     fallback): that grouping is computed FROM `safe_paths` itself, so it can
-    never lose a path to this filter -- see `auto_commit_session_async`."""
+    never lose a path to this filter -- see `commit_session_offer_async`."""
 
     message: str
     named: int
@@ -273,7 +331,7 @@ class DroppedGroup(TypedDict):
 class CommitOutcome(TypedDict):
     """C4 (2026-08-20 the-close-ceremony-commits-what-the-session-wrote plan)
     -- the structured, caller-renderable verdict for ONE
-    `auto_commit_session_async` call, additive alongside `groups`/
+    `commit_session_offer_async` call, additive alongside `groups`/
     `failed_groups`/`residue` (never a replacement for any of them; those
     still carry their own per-group detail). AC9's own requirement: "return
     the outcome ... as a structured result the caller can render, not only a
@@ -319,18 +377,18 @@ class CommitOutcome(TypedDict):
     ``conflicted_paths`` -- populated ONLY by the (c) dirty-conflict check;
     empty for every other status. A path here was in this call's OWN
     computed `safe_paths` but ALSO named in `ownership["peer"]` -- withheld
-    from every group before any `ceremony.scoped_git_commit` call, never
+    from every group before any commit call, never
     partially staged then rolled back.
 
     (b) post-stage verify (brief item (b): `git diff --cached --name-only`
     after staging, compared against the expected claim set) is NOT
     represented in this TypedDict -- staging itself is owned by
-    `ceremony.scoped_git_commit`, an op this module composes in-process
+    `ops.ceremony.commit_pipeline.run_commit_pipeline`, which this module composes in-process
     rather than reaching into (see this module's own docstring, "Composition,
     not new computation"). Implementing a true post-STAGE (pre-commit) verify
     would require observing that op's index state mid-call, which is outside
     this chunk's `writes:` scope -- named here as a follow-up chunk against
-    `coordinator_core.ops.ceremony.scoped_git_commit` itself, not implemented
+    `coordinator_core.ops.ceremony.commit_pipeline` itself, not implemented
     in this module."""
 
     status: Literal[
@@ -345,7 +403,7 @@ class CommitOutcome(TypedDict):
     conflicted_paths: List[str]
 
 
-class AutoCommitReport(TypedDict):
+class CommitOfferReport(TypedDict):
     session_id: str
     groups: List[GroupResult]
     excluded: List[ExcludedPath]
@@ -373,7 +431,7 @@ class AutoCommitReport(TypedDict):
     # see `_compute_residue`, Review: code-reviewer Finding 2), grouped by
     # top-level
     # `state/` class. Purely additive: nothing here feeds back into
-    # `safe_set`/`resolved_groups` in `auto_commit_session_async`, so it
+    # `safe_set`/`resolved_groups` in `commit_session_offer_async`, so it
     # cannot widen the commit boundary (AC4, negative-spec: "do not widen
     # what any ceremony commits"). Empty is the common case and is not an
     # error -- an empty `residue` after a healthy commit is exactly what a
@@ -758,6 +816,51 @@ def compute_offer(session_id: str, cwd: Optional[str] = None) -> SafeCommitOffer
     NAMED, because a silent omission reintroduces exactly the doubt this
     answer exists to remove.
 
+    C3 (docs/plans/2026-08-27-safe-commit-offer-excludes-a-live-agent.md)
+    tried to resolve ``answer.in_flight_agent_claims`` against
+    ``live_session_ids`` and shipped an INERT fix: `liveness.py ::
+    _NON_SESSION_DIR_NAMES` excludes the agent plane from that set by
+    design, so an agent id is NEVER a member of it and the check folded
+    every in-flight agent claim back into ``safe_paths`` unconditionally,
+    in production, forever. There is no agent-liveness primitive anywhere
+    in this repo (no pid, no start/stop marker under `.agents/<aid>/`) and
+    building one is out of scope here (it needs a real dispatch-completion
+    hook, which lives in doe-claude's tree). C5 (this chunk) replaces the
+    liveness check with a RECENCY check instead: a claim is treated as
+    in-flight only while its most recent touch-record timestamp for this
+    path/session falls inside ``liveness._ABANDONMENT_WINDOW_SEC`` (the
+    same constant ``session_abandoned`` already uses, imported rather than
+    re-valued -- docs/research/2026-08-19-abandonment-signal-census.md).
+    Outside that window the claim is treated as abandoned and the path
+    stays in ``safe_paths``, same as before this fix existed.
+
+    RESIDUAL, named rather than papered over: ``edit_ts`` records the
+    FIRST edit of a claim run, not the latest (``_IndexState``'s own
+    contract; DR-296 reads it as-is), so an agent that holds one path open
+    and keeps re-editing it for longer than the window ages that path out
+    and it is offered again -- this narrows the collision window this plan
+    exists to close, it does not close it. A genuine fix needs a real
+    dispatch-completion signal.
+
+    BIAS, deliberate: every unknown resolves toward INCLUDING the path in
+    ``safe_paths`` (today's behaviour, and the direction the plan's
+    Anti-scope demands) -- a claim with no parseable timestamp anywhere in
+    ``edit_ts`` (a legacy line -- see ``_IndexState``'s own contract) is
+    NOT excluded on that basis alone.
+
+    A recency-in-window claim is withheld from ``safe_paths`` exactly like
+    a contested peer path -- named in ``excluded`` with an
+    operator-actionable reason, and surfaced in ``ownership.peer`` as a
+    ``PeerOwnedPath`` with ``claim_source="agent"``. An OUT-OF-WINDOW (or
+    unresolvable-timestamp) claim is folded back into ``safe_paths`` -- the
+    claim is old enough to treat as this session's own to commit, same as
+    ``test_commit_set_leaves_a_dead_agents_orphaned_claim_in_mine`` (moved
+    to this module's own test file, ``TestComputeOffer``, since this is the
+    surface that actually knows the verdict) exists to guard. The
+    per-path edit-timestamp lookup is resolved ONCE per call (one
+    ``claim_index.lookup`` over every in-flight-agent-claimed path this
+    call saw), never once per path.
+
     ``orphans`` -- ALWAYS EMPTY, and that is the contract, not a degradation.
     An orphan is a DIRTY path claimed by nobody; dirtiness left this answer by
     PM ruling (2026-08-21) and this function no longer reads the worktree, so
@@ -775,7 +878,7 @@ def compute_offer(session_id: str, cwd: Optional[str] = None) -> SafeCommitOffer
     incomplete (aborted on its wall-clock cap, an I/O error, or an
     unresolvable base). Both ``safe_paths`` and ``excluded`` may then be SHORT,
     so a caller must say so rather than presenting a partial answer as the
-    answer; ``auto_commit_session_async``'s hardening (a) commits nothing at
+    answer; ``commit_session_offer_async``'s hardening (a) commits nothing at
     all on it.
 
     ``ownership`` -- the same four buckets as before (mine / named peer /
@@ -804,6 +907,7 @@ def compute_offer(session_id: str, cwd: Optional[str] = None) -> SafeCommitOffer
     answer = claim_index.commit_set(session_id, cwd=cwd)
     degraded = not answer.complete
 
+    safe_paths: List[str] = list(answer.paths)
     excluded: List[ExcludedPath] = []
     peer: List[PeerOwnedPath] = []
     unattributed: List[str] = []
@@ -829,14 +933,69 @@ def compute_offer(session_id: str, cwd: Optional[str] = None) -> SafeCommitOffer
             }
         )
 
+    # C5 (docs/plans/2026-08-27-safe-commit-offer-excludes-a-live-agent.md,
+    # this chunk): C3's `live_session_ids`-based verdict is INERT in
+    # production -- see this function's own docstring for the measured
+    # reason -- so the verdict is resolved on RECENCY instead. One
+    # `claim_index.lookup` over every in-flight-agent-claimed path this call
+    # saw resolves every needed timestamp in one pass (never once per path).
+    if answer.in_flight_agent_claims and not degraded:
+        try:
+            agent_edit_ts = claim_index.lookup(
+                list(answer.in_flight_agent_claims), cwd=cwd
+            ).edit_ts
+        except Exception:  # noqa: BLE001 - a readout must never raise
+            agent_edit_ts = {}
+    else:
+        agent_edit_ts = {}
+
+    now = datetime.now(timezone.utc)
+    for path in sorted(answer.in_flight_agent_claims):
+        if degraded:
+            unattributed.append(path)
+            continue
+        owner_agent = answer.in_flight_agent_claims[path][0]
+        # `edit_ts` is keyed by claimant_sid, already resolved to this
+        # OWNING SESSION's id (not the raw agent id) -- see `rebuild`'s own
+        # `claimant_sid`/`agent_id` split.
+        claim_ts = agent_edit_ts.get(path, {}).get(session_id)
+        in_window = (
+            claim_ts is not None
+            and (now - claim_ts).total_seconds() < _ABANDONMENT_WINDOW_SEC
+        )
+        if in_window:
+            excluded.append(
+                {
+                    "path": path,
+                    "reason": "in-flight claim touched by dispatched agent %s "
+                    "%ds ago" % (owner_agent, int((now - claim_ts).total_seconds())),
+                }
+            )
+            peer.append(
+                {
+                    "path": path,
+                    "owner": owner_agent,
+                    "liveness": "live",
+                    "claim_source": "agent",
+                }
+            )
+        else:
+            # No parseable timestamp, or the touch aged out of the
+            # abandonment window: fold back into `safe_paths` -- see the
+            # docstring's BIAS paragraph for why an unresolvable timestamp
+            # is deliberately NOT treated as still in-flight.
+            safe_paths.append(path)
+
+    safe_paths.sort()
+
     return {
         "session_id": session_id,
-        "safe_paths": list(answer.paths),
+        "safe_paths": safe_paths,
         "excluded": excluded,
         "orphans": [],
         "indeterminate": degraded,
         "ownership": {
-            "mine": list(answer.paths),
+            "mine": list(safe_paths),
             "peer": peer,
             "unattributed": unattributed,
             "degraded": degraded,
@@ -846,7 +1005,7 @@ def compute_offer(session_id: str, cwd: Optional[str] = None) -> SafeCommitOffer
 
 # ---------------------------------------------------------------------------
 # Grouping (mechanical fallback — an EM/ceremony with real judgment should
-# prefer passing explicit `groups` instead, see `auto_commit_session`)
+# prefer passing explicit `groups` instead, see `commit_session_offer`)
 # ---------------------------------------------------------------------------
 
 
@@ -1038,6 +1197,47 @@ def _residue_class(path: str) -> str:
     return segments[0] if segments else path
 
 
+def _excluded_with_peer_owned_dirty(
+    excluded: List[ExcludedPath],
+    session_id: str,
+    worktree_root: Optional[str],
+) -> List[ExcludedPath]:
+    """``compute_offer``'s ``excluded`` plus the peer-owned paths that are
+    actually DIRTY right now — the operator-facing half of the peer-only
+    attribution fix (2026-08-27).
+
+    ``compute_offer`` builds ``excluded`` from ``CommitSet.contested`` alone:
+    paths THIS session claims that a peer claims too. A path only the PEER
+    claims is not "excluded" from an offer it was never in, so by that
+    function's own contract it does not belong there — and ``compute_offer``
+    must stay a pure, worktree-free projection of the claim index, so it
+    cannot ask what is dirty.
+
+    But the REPORT has a different reader with a different question. An
+    operator looking at "what did this ceremony not commit, and why" needs
+    ``peer.py`` named and attributed, or its absence reads as an unexplained
+    gap — and the next move after an unexplained gap is a bulk sweep over a
+    peer's uncommitted work.
+
+    Scoped to DIRTY paths deliberately: ``CommitSet.peers`` is sized by the
+    claim ledger (~405 entries on this repo, see its docstring), not by the
+    tree. Emitting all of it would bury the few paths an operator can act on.
+    Returns ``excluded`` unchanged when the worktree is unavailable.
+    """
+    if not worktree_root:
+        return excluded
+    peers = claim_index.commit_set(session_id, cwd=worktree_root).peers
+    if not peers:
+        return excluded
+    already = {e["path"] for e in excluded}
+    extra: List[ExcludedPath] = [
+        {"path": path, "reason": "owned by session %s" % (peers[path][0],)}
+        for path in sorted(set(_current_dirty_paths(worktree_root)) & set(peers))
+        if path not in already
+    ]
+    return list(excluded) + extra
+
+
 def _compute_residue(
     session_id: str,
     group_results: List[GroupResult],
@@ -1046,14 +1246,14 @@ def _compute_residue(
     """What the ceremony left dirty, grouped by `_residue_class` -- the
     diagnostic AC3 exists to add. REPORT-ONLY (AC4): read-only throughout,
     computed strictly AFTER `group_results` already landed, and never fed
-    back into any pathspec -- the caller (`auto_commit_session_async`) only
+    back into any pathspec -- the caller (`commit_session_offer_async`) only
     attaches this dict to the returned report, it never reads it back into
     `safe_set`/`resolved_groups`.
 
     Attribution before residue (AC5): a dirty path this call did NOT commit
     is first checked against a FRESH `compute_offer(session_id, ...)`
     re-read -- taken here, immediately before residue is computed, NOT the
-    `offer["excluded"]` snapshot `auto_commit_session_async` took BEFORE the
+    `offer["excluded"]` snapshot `commit_session_offer_async` took BEFORE the
     commit groups ran. Review: code-reviewer (Finding 2) -- that earlier
     snapshot predates every `git commit` subprocess call this session just
     ran; a peer session that dirtied a new file, or wrote its own claim for
@@ -1095,9 +1295,28 @@ def _compute_residue(
         if str(e.get("reason", "")).startswith("owned by session")
     }
 
+    # PEER-ONLY CLAIMS ARE ATTRIBUTED HERE, NOT VIA `excluded` (fixed
+    # 2026-08-27). `compute_offer`'s `excluded` is built from
+    # `CommitSet.contested` alone -- paths THIS session claims that a peer
+    # claims too. A path only the PEER claims never reaches it, so the
+    # `"owned by session"` filter above missed exactly the case AC5 names and
+    # a live peer's in-flight file rendered as this ceremony's residue: the
+    # harm this function's own docstring calls out, and the shape that nudges
+    # an operator into a bulk sweep over a peer's uncommitted work.
+    #
+    # Attributed at THIS seam rather than by widening `excluded`, deliberately:
+    # `CommitSet.peers` is sized by the claim ledger (~405 entries on this
+    # repo, see its own docstring), not by the dirty tree, so folding it into
+    # `excluded` would bury the handful of genuinely-withheld paths an
+    # operator needs to see under hundreds of irrelevant ones. Here the
+    # question is only ever asked about paths that are actually dirty.
+    peer_claimed = claim_index.commit_set(session_id, cwd=worktree_root).peers
+
     buckets: "OrderedDict[str, List[str]]" = OrderedDict()
     for path in _current_dirty_paths(worktree_root):
         if path in committed_paths or path in owned_paths:
+            continue
+        if path in peer_claimed:
             continue
         buckets.setdefault(_residue_class(path), []).append(path)
     return buckets
@@ -1133,7 +1352,7 @@ async def _commit_group(
     does. `attributed_session_id` is the one that actually stamps the
     commit's `Session-Id:` trailer -- this passes the REAL caller-supplied
     `session_id` (this session's own committing identity, threaded in from
-    `auto_commit_session_async`), never the synthetic nonce, so the landed
+    `commit_session_offer_async`), never the synthetic nonce, so the landed
     commit is attributed to the session that actually owns the paths.
 
     `push_mode=PUSH_MODE_NEVER` -- same choice `close_out_and_stamp` makes
@@ -1194,14 +1413,34 @@ async def _commit_group(
     }
 
 
-async def auto_commit_session_async(
+async def commit_session_offer_async(
     session_id: str,
     cwd: Optional[str] = None,
     groups: Optional[List[CommitGroup]] = None,
     invoker: Optional[str] = None,
-) -> AutoCommitReport:
+) -> CommitOfferReport:
     """Compute this session's safe pathspec and commit+push it — NO
-    confirmation step, by explicit PM ruling. ``groups`` lets a caller with
+    confirmation step, by explicit PM ruling.
+
+    RENAMED 2026-08-27, from ``auto_commit_session``. The old name's "auto"
+    was defensible only under one reading — unconfirmed, which is still true
+    (the 2026-07-31 PIVOT removed the group-by-group confirmation step) —
+    and false under the reading every passing user actually takes:
+    unattended. A name that needs a paragraph explaining which of two senses
+    it means is not saying what it does, which is precisely what this
+    module's Axis-2 reconciliation was for. The argument for keeping it was
+    migration cost (73 references across 9 files); that was cost talking,
+    not correctness, and the migration was mechanical.
+
+    "Offer" is the module's own noun and the surviving callers are all
+    EM-initiated ceremonies, so this verb reads as what it is: commit the
+    offer this session computed for itself. There is deliberately NO
+    backward-compatible alias — the old name has no caller outside this repo
+    (DoE-claude's retired `sessionend-auto-commit.py` mentions it in prose
+    only, never imports it), and an alias would preserve the ambiguity this
+    rename exists to remove.
+
+    ``groups`` lets a caller with
     real judgment (an EM-run ceremony) supply its own meaningful
     grouping/messages; any path in a supplied group that is NOT in this
     session's own computed ``safe_paths`` is silently dropped from its group
@@ -1217,7 +1456,7 @@ async def auto_commit_session_async(
 
     C4 hardening (a) — read ``offer["indeterminate"]``/
     ``offer["ownership"]["degraded"]`` BEFORE building any group or calling
-    ``ceremony.scoped_git_commit`` at all: either being ``True`` means this
+    the commit pipeline at all: either being ``True`` means this
     call's own claim reads were degraded call-wide, so attribution is
     untrustworthy for EVERY path this call would otherwise claim as
     "mine" — not merely that the unattributed paths are free to leave out.
@@ -1232,7 +1471,7 @@ async def auto_commit_session_async(
     docstring) — this is belt-and-braces against future drift in that
     invariant, per the brief's own note that this is "structurally
     near-impossible for this pathspec specifically" — withheld from every
-    group BEFORE any ``ceremony.scoped_git_commit`` call, never partially
+    group BEFORE any commit call, never partially
     staged then rolled back. Named in the returned ``outcome`` as
     ``conflicted_paths``.
     """
@@ -1311,7 +1550,7 @@ async def auto_commit_session_async(
 
     if conflict_set:
         # (c) — strip conflicted paths out of every group BEFORE any of
-        # them reach `_commit_group`/`ceremony.scoped_git_commit`. A group
+        # them reach `_commit_group`/`run_commit_pipeline`. A group
         # that loses every one of its paths this way is dropped entirely,
         # same as an empty-`kept` caller-supplied group above.
         filtered_groups: List[CommitGroup] = []
@@ -1366,7 +1605,9 @@ async def auto_commit_session_async(
     return {
         "session_id": session_id,
         "groups": group_results,
-        "excluded": offer["excluded"],
+        "excluded": _excluded_with_peer_owned_dirty(
+            offer["excluded"], session_id, worktree_root
+        ),
         "failed_groups": failed_groups,
         "dropped_groups": dropped_groups,
         "residue": residue,
@@ -1374,16 +1615,16 @@ async def auto_commit_session_async(
     }
 
 
-def auto_commit_session(
+def commit_session_offer(
     session_id: str,
     cwd: Optional[str] = None,
     groups: Optional[List[CommitGroup]] = None,
     invoker: Optional[str] = None,
-) -> AutoCommitReport:
+) -> CommitOfferReport:
     """Sync wrapper — a single ``asyncio.run()`` drives the whole call
     (matches the single-event-loop convention other in-process op composers
     use, e.g. ``coordinator_core.ops.promote_shipped_in_flight_stubs``)."""
-    return asyncio.run(auto_commit_session_async(session_id, cwd, groups, invoker))
+    return asyncio.run(commit_session_offer_async(session_id, cwd, groups, invoker))
 
 
 # ---------------------------------------------------------------------------
@@ -1528,7 +1769,7 @@ def _log_dropped_groups_diagnostic(
     changes `main`'s exit code and must never be wired to do so: a dropped
     group means the caller named a path outside its own session's computed
     scope, not a failure of this module's own computation -- see
-    `AutoCommitReport.dropped_groups`'s own docstring. Do not promote this to
+    `CommitOfferReport.dropped_groups`'s own docstring. Do not promote this to
     a gate.
     """
     if not dropped_groups:
@@ -1649,7 +1890,7 @@ _DEGRADED_SCOPE_NOTICE = (
 )
 
 
-def _render_report(report: AutoCommitReport, worktree_root: Optional[str] = None) -> str:
+def _render_report(report: CommitOfferReport, worktree_root: Optional[str] = None) -> str:
     """Render the operator-facing report: detail first, VERDICT LAST.
 
     Two properties are load-bearing, both from the 2026-08-03 live incident
@@ -1981,7 +2222,7 @@ def main(argv: List[str]) -> int:
             print("safe-commit-offer: cannot read --groups-json: %s" % exc, file=sys.stderr)
             return 2
 
-    report = auto_commit_session(session_id, explicit_root, groups, invoker)
+    report = commit_session_offer(session_id, explicit_root, groups, invoker)
     worktree_root = core.git_root(explicit_root) or explicit_root or "."
 
     if as_json:

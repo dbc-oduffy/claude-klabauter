@@ -36,7 +36,8 @@ if _REPO_ROOT not in sys.path:
 from git_hook_install import ensure_post_commit_hook  # noqa: E402
 
 
-def main() -> int:
+def main(argv: "list[str] | None" = None) -> int:
+    del argv  # this CLI takes no arguments; argv accepted for the warm-call contract
     try:
         return ensure_post_commit_hook(_BIN_DIR)
     except Exception as exc:  # never block a session start

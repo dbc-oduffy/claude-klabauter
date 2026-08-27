@@ -140,6 +140,29 @@ def test_suffixed_ac_ids_are_counted() -> None:
     assert parse_plan_acceptance_criteria_table(suffixed)["total"] == 2
 
 
+def test_state_headed_table_parses_identically_to_status_headed() -> None:
+    """"State" is the one accepted synonym for "status" -- a table headed
+    that way must parse its rows exactly as a "Status"-headed table does."""
+    state_headed = _TABLE_PLAN.replace("| ID | Criterion | Status |", "| ID | Criterion | State |")
+    assert parse_plan_acceptance_criteria_table(state_headed) == parse_plan_acceptance_criteria_table(_TABLE_PLAN)
+
+
+def test_state_header_casefold_variants_both_match() -> None:
+    upper = _TABLE_PLAN.replace("| ID | Criterion | Status |", "| ID | Criterion | STATE |")
+    lower = _TABLE_PLAN.replace("| ID | Criterion | Status |", "| ID | Criterion | state |")
+    expected = parse_plan_acceptance_criteria_table(_TABLE_PLAN)
+    assert parse_plan_acceptance_criteria_table(upper) == expected
+    assert parse_plan_acceptance_criteria_table(lower) == expected
+
+
+def test_discharged_by_headed_table_stays_unreadable() -> None:
+    """A non-status third-column header must NOT be silently read -- rows
+    still count as unreadable rather than being picked up positionally."""
+    discharged_by = _TABLE_PLAN.replace("| ID | Criterion | Status |", "| ID | Criterion | Discharged by |")
+    result = parse_plan_acceptance_criteria_table(discharged_by)
+    assert result == {"done": 0, "total": 2, "open": 0, "unreadable": 2}
+
+
 def test_gate_resolves_a_fully_met_table_plan_as_not_applicable(tmp_path: Path) -> None:
     """End to end: the regression that blocked the stamp. A landed plan with
     every table row met must not report `indeterminate`."""

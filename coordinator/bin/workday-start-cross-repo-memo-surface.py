@@ -94,7 +94,7 @@ def _resolve_run_op_main():
     return run_op_main
 
 
-def main() -> None:
+def main(argv: "list[str] | None" = None) -> int:
     try:
         run_op_main = _resolve_run_op_main()
     except RuntimeError as exc:
@@ -104,29 +104,29 @@ def main() -> None:
             f"workday-start-cross-repo-memo-surface.py: engine-root resolution failed: {exc}",
             file=sys.stderr,
         )
-        sys.exit(0)
+        return 0
     except ImportError as exc:
         print(
             "workday-start-cross-repo-memo-surface.py: "
             f"coordinator_core.cli_entry not importable: {exc}",
             file=sys.stderr,
         )
-        sys.exit(0)
+        return 0
 
     try:
         # The ported op's main() always returns 0 internally (best-effort
         # surfacer, never a gate) -- no additional try/except needed here.
-        code = run_op_main("coordinator_core.ops.workday_start_cross_repo_memo_surface", sys.argv[1:])
+        code = run_op_main("coordinator_core.ops.workday_start_cross_repo_memo_surface", (sys.argv[1:] if argv is None else argv))
     except ImportError as exc:
         print(
             "workday-start-cross-repo-memo-surface.py: "
             f"coordinator_core.ops.workday_start_cross_repo_memo_surface not importable: {exc}",
             file=sys.stderr,
         )
-        sys.exit(0)
+        return 0
 
-    sys.exit(code)
+    return code
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

@@ -80,7 +80,7 @@ def _import_runner():
     return run_op_main
 
 
-def main() -> None:
+def main(argv: "list[str] | None" = None) -> int:
     try:
         run_op_main = _import_runner()
     except RuntimeError as exc:
@@ -88,17 +88,17 @@ def main() -> None:
             f"prune-resolved-queue-entries.py: CLAUDE_KLABAUTER_ROOT resolution failed: {exc}",
             file=sys.stderr,
         )
-        sys.exit(2)
+        return 2
     except ImportError as exc:
         print(
             f"prune-resolved-queue-entries.py: coordinator_core.cli_entry not importable: {exc}",
             file=sys.stderr,
         )
-        sys.exit(2)
+        return 2
 
     try:
         code = run_op_main(
-            "coordinator_core.ops.prune_resolved_queue_entries", sys.argv[1:]
+            "coordinator_core.ops.prune_resolved_queue_entries", (sys.argv[1:] if argv is None else argv)
         )
     except ImportError as exc:
         print(
@@ -106,10 +106,10 @@ def main() -> None:
             f"coordinator_core.ops.prune_resolved_queue_entries not importable: {exc}",
             file=sys.stderr,
         )
-        sys.exit(2)
+        return 2
 
-    sys.exit(code)
+    return code
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

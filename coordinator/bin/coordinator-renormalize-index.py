@@ -79,30 +79,30 @@ def _import_run_op_main():
     return run_op_main
 
 
-def main() -> None:
+def main(argv: "list[str] | None" = None) -> int:
     try:
         run_op_main = _import_run_op_main()
     except RuntimeError as exc:
         print(f"coordinator-renormalize-index: engine-root resolution failed: {exc}", file=sys.stderr)
-        sys.exit(2)
+        return 2
     except ImportError as exc:
         print(
             f"coordinator-renormalize-index: coordinator_core.cli_entry not importable: {exc}",
             file=sys.stderr,
         )
-        sys.exit(2)
+        return 2
 
     try:
-        code = run_op_main("coordinator_core.ops.renormalize_index", sys.argv[1:])
+        code = run_op_main("coordinator_core.ops.renormalize_index", (sys.argv[1:] if argv is None else argv))
     except ImportError as exc:
         print(
             f"coordinator-renormalize-index: coordinator_core.ops.renormalize_index not importable: {exc}",
             file=sys.stderr,
         )
-        sys.exit(2)
+        return 2
 
-    sys.exit(code)
+    return code
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

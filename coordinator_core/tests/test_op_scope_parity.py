@@ -110,7 +110,8 @@ def test_token_readers_in_dunder_all():
 def test_known_scoped_ops_in_worktree_scoped_ops():
     """Known worktree-scoped ops must be members of WORKTREE_SCOPED_OPS."""
     assert "ci.run_pip_audit" in WORKTREE_SCOPED_OPS
-    assert "handoff.has_live_children" in WORKTREE_SCOPED_OPS
+    # handoff.has_live_children -- DELETED 2026-08-27 (kill ledger K-113).
+    # Its scope row went with it; the remaining three still pin the contract.
     assert "hooks.nudge_foreground_agent_dispatch" in WORKTREE_SCOPED_OPS
     assert "hooks.nudge_em_code_dispatch" in WORKTREE_SCOPED_OPS
 

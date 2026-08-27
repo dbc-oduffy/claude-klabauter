@@ -326,6 +326,43 @@ class TouchEvent:
     path: str
 
 
+def record_carries_content(record_path: "Path | str") -> bool:
+    """True only if ``record_path`` exists AND holds at least one non-blank
+    line -- the SSOT for "this dir has a real touch record", as distinct from
+    "a file by that name is present".
+
+    Lives here, with the record format, because two consumers need the same
+    answer and both previously asked ``Path.exists()`` instead:
+    ``ops.session.legacy_touch_corpus_drain_check`` (the gate on removing the
+    legacy union-read) and ``ops.session.legacy_touch_corpus_migrate`` (the
+    drain itself). ``exists()`` is wrong for both in the SAME direction: the
+    migration creates its sink before writing into it, so a run that creates
+    the file and writes nothing leaves a zero-byte record that reads as
+    "drained" to the gate AND as "already_drained" to the migration -- the
+    drain cannot repair what it half-did, and the gate reports green over it.
+    Measured 2026-08-27 on claude-klabauter: eight sessions, 167 legacy claims
+    stranded against empty siblings, gate reporting zero undrained.
+
+    Unreadable (OSError, undecodable bytes) returns False -- both callers
+    must fail toward "work still to do", never toward a green gate, since the
+    loss they guard is unrecoverable claim destruction.
+
+    Deliberately content-only: it does NOT validate schema or parse events.
+    A record holding malformed lines is still a record; whether its lines
+    decode is ``decode_line``'s question, and a stricter predicate here would
+    silently reclassify a populated record as undrained and invite a second
+    migration over it.
+    """
+    try:
+        with open(record_path, "r", encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                if line.strip():
+                    return True
+    except OSError:
+        return False
+    return False
+
+
 def sink_path(claimant_dir: "Path | str") -> Path:
     """The record sink inside *claimant_dir* — a session dir or an agent dir.
 

@@ -2,7 +2,7 @@
 coordinator_core.ops.session.tests.test_claimed_artifact_commit
 
 C4 (2026-08-20 the-close-ceremony-commits-what-the-session-wrote plan) --
-hardening tests for `safe_commit_offer.auto_commit_session_async`'s three
+hardening tests for `safe_commit_offer.commit_session_offer_async`'s three
 named hardenings: (a) degraded/indeterminate claim reads commit NOTHING,
 (c) a claimed path also present in this call's own `ownership["peer"]`
 bucket fails closed, plus AC6 (peer isolation, same directory) and AC9 (the
@@ -21,11 +21,13 @@ Spec backlink: coordinator_core/ops/session/safe_commit_offer.py
 from __future__ import annotations
 
 import os
+from types import SimpleNamespace
 import subprocess
 from pathlib import Path
 
 import pytest
 
+from coordinator_core.ops.ceremony import commit_pipeline
 from coordinator_core.session import claim_index, core, scope
 from coordinator_core.ops.session import safe_commit_offer
 
@@ -65,7 +67,7 @@ class TestAC6PeerIsolationSameDirectory:
         scope.touch("mine", "state/mine.txt", cwd=str(repo))
         scope.touch("peer", "state/peer.txt", cwd=str(repo))
 
-        report = safe_commit_offer.auto_commit_session(
+        report = safe_commit_offer.commit_session_offer(
             "mine", cwd=str(repo), invoker="unattended"
         )
 
@@ -101,21 +103,25 @@ class TestDegradedOrIndeterminateCommitsNothing:
         # old seam leaves the precondition unestablished and takes the test
         # red for a reason unrelated to the code under test.
         scope.touch("other", "shared.py", cwd=str(repo))
-        other_touched = os.path.join(
-            core.session_dir("other", cwd=str(repo)), "touched.txt"
-        )
-        real_reader = claim_index._read_lines_discard_torn_tail
+        # The seam moved AGAIN after the comment above was written:
+        # `_read_lines_discard_torn_tail` was deleted outright by the
+        # 2026-08-21 rebuild, so patching it raised AttributeError and took
+        # this test red for exactly the reason that comment warns about. The
+        # reader is now `claim_index._read_stream_claims(sink) ->
+        # (claims, content_read_ok)`. Blind on the peer's session DIRECTORY,
+        # not a `touched.txt` filename -- the sink is `touch-record.jsonl`
+        # now, and filename matching would patch nothing silently.
+        other_dir = os.path.normcase(core.session_dir("other", cwd=str(repo)))
+        real_reader = claim_index._read_stream_claims
 
-        def _unreadable(path):
-            if os.path.normcase(str(path)) == os.path.normcase(other_touched):
-                return [], False
-            return real_reader(path)
+        def _unreadable(sink_path):
+            if os.path.normcase(str(sink_path)).startswith(other_dir):
+                return {}, False
+            return real_reader(sink_path)
 
-        monkeypatch.setattr(
-            claim_index, "_read_lines_discard_torn_tail", _unreadable
-        )
+        monkeypatch.setattr(claim_index, "_read_stream_claims", _unreadable)
 
-        report = safe_commit_offer.auto_commit_session("mine", cwd=str(repo))
+        report = safe_commit_offer.commit_session_offer("mine", cwd=str(repo))
 
         assert report["groups"] == []
         assert report["failed_groups"] == []
@@ -145,24 +151,28 @@ class TestDegradedOrIndeterminateCommitsNothing:
         # old seam leaves the precondition unestablished and takes the test
         # red for a reason unrelated to the code under test.
         scope.touch("other", "shared.py", cwd=str(repo))
-        other_touched = os.path.join(
-            core.session_dir("other", cwd=str(repo)), "touched.txt"
-        )
-        real_reader = claim_index._read_lines_discard_torn_tail
+        # The seam moved AGAIN after the comment above was written:
+        # `_read_lines_discard_torn_tail` was deleted outright by the
+        # 2026-08-21 rebuild, so patching it raised AttributeError and took
+        # this test red for exactly the reason that comment warns about. The
+        # reader is now `claim_index._read_stream_claims(sink) ->
+        # (claims, content_read_ok)`. Blind on the peer's session DIRECTORY,
+        # not a `touched.txt` filename -- the sink is `touch-record.jsonl`
+        # now, and filename matching would patch nothing silently.
+        other_dir = os.path.normcase(core.session_dir("other", cwd=str(repo)))
+        real_reader = claim_index._read_stream_claims
 
-        def _unreadable(path):
-            if os.path.normcase(str(path)) == os.path.normcase(other_touched):
-                return [], False
-            return real_reader(path)
+        def _unreadable(sink_path):
+            if os.path.normcase(str(sink_path)).startswith(other_dir):
+                return {}, False
+            return real_reader(sink_path)
 
-        monkeypatch.setattr(
-            claim_index, "_read_lines_discard_torn_tail", _unreadable
-        )
+        monkeypatch.setattr(claim_index, "_read_stream_claims", _unreadable)
 
         offer = safe_commit_offer.compute_offer("mine", cwd=str(repo))
         assert offer["ownership"]["degraded"] is True  # precondition for this test
 
-        report = safe_commit_offer.auto_commit_session("mine", cwd=str(repo))
+        report = safe_commit_offer.commit_session_offer("mine", cwd=str(repo))
         assert report["outcome"]["status"] in ("skipped_indeterminate", "skipped_degraded")
         assert report["groups"] == []
 
@@ -171,7 +181,7 @@ class TestEmptyClaimSetIsCleanNoop:
     def test_empty_safe_paths_reports_empty_outcome(self, tmp_path):
         repo = _make_repo(tmp_path)
         core.init("mine", cwd=str(repo))
-        report = safe_commit_offer.auto_commit_session("mine", cwd=str(repo))
+        report = safe_commit_offer.commit_session_offer("mine", cwd=str(repo))
         assert report["groups"] == []
         assert report["outcome"]["status"] == "empty"
         assert report["outcome"]["committed_paths"] == []
@@ -182,17 +192,41 @@ class TestGitFailureReturnsNonBlocking:
     def test_unregistered_handler_is_non_blocking_and_reports_failed_group(
         self, tmp_path, monkeypatch
     ):
-        """A `ceremony.scoped_git_commit` git-level failure must never raise
-        out of `auto_commit_session_async` -- it comes back as a structured
-        `failed_groups` entry, and the call itself completes normally."""
+        """A git-level commit failure must never raise out of
+        `commit_session_offer_async` -- it comes back as a structured
+        `failed_groups` entry, and the call itself completes normally.
+
+        The failure is injected at `run_commit_pipeline`, which is what
+        `_commit_group` actually calls. It previously patched
+        `coordinator_core.ipc.get_op_handler` to return None, simulating an
+        unregistered `ceremony.scoped_git_commit`; that op was DELETED
+        2026-08-23 and `_commit_group` was rewired on 2026-08-26 to call the
+        pipeline DIRECTLY, "never re-resolved by op name" (its own docstring).
+        So the patch stopped intercepting anything, the commit succeeded, and
+        `failed_groups` came back empty -- the test failed while the behaviour
+        it guards was fine. Patch the seam the code actually uses."""
         repo = _make_repo(tmp_path)
         core.init("mine", cwd=str(repo))
         (repo / "a.py").write_text("a")
         scope.touch("mine", "a.py", cwd=str(repo))
 
-        monkeypatch.setattr("coordinator_core.ipc.get_op_handler", lambda name: None)
+        # Failure is a RETURN VALUE, not an exception: `_commit_group` reads
+        # `pipeline_result.commit_failed` and maps it onto `GroupResult`. A
+        # raising stub would test a path the real pipeline never takes.
+        def _failed_commit(*args, **kwargs):
+            return SimpleNamespace(
+                committed_sha=None,
+                commit_failed=True,
+                diagnostics=["simulated git-level commit failure"],
+                push_status=commit_pipeline.PUSH_STATUS_NOT_ATTEMPTED,
+                reason=None,
+            )
 
-        report = safe_commit_offer.auto_commit_session("mine", cwd=str(repo))
+        monkeypatch.setattr(
+            safe_commit_offer, "run_commit_pipeline", _failed_commit
+        )
+
+        report = safe_commit_offer.commit_session_offer("mine", cwd=str(repo))
 
         assert len(report["failed_groups"]) == 1
         assert report["failed_groups"][0]["commit_failed"] is True
@@ -225,7 +259,7 @@ class TestDirtyPathAlreadyDirtyFromAnotherWriterFailsClosed:
         group rather than committed. `mine`/`peer` are mutually exclusive
         by construction in `_compute_ownership` today (see that function's
         own docstring), so this test drives the check directly against
-        `auto_commit_session_async`'s own filtering logic by monkeypatching
+        `commit_session_offer_async`'s own filtering logic by monkeypatching
         `compute_offer` to hand back a conflicting shape -- proving the
         withhold fires on the ownership signal itself, not merely on
         `compute_scope`'s current invariant holding true forever."""
@@ -259,7 +293,7 @@ class TestDirtyPathAlreadyDirtyFromAnotherWriterFailsClosed:
         safe_commit_offer.compute_offer = _fake_compute_offer
         try:
             report = asyncio.run(
-                safe_commit_offer.auto_commit_session_async(
+                safe_commit_offer.commit_session_offer_async(
                     "mine", cwd=str(repo), invoker="unattended"
                 )
             )

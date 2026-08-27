@@ -2946,7 +2946,9 @@ class _BlockerState(NamedTuple):
     resolved: bool = True
 
 
-_UNRESOLVED_BLOCKER_STATE = _BlockerState(None, None, None, resolved=False)
+_UNRESOLVED_BLOCKER_STATE = _BlockerState(
+    deployment_state=None, closed_reason=None, continued_into=None, resolved=False
+)
 
 
 def _resolve_blocker_deployment_state(blocker_id: str, worktree: Path) -> _BlockerState:
@@ -3034,7 +3036,11 @@ def _resolve_blocker_deployment_state(blocker_id: str, worktree: Path) -> _Block
         return _UNRESOLVED_BLOCKER_STATE
     matches = collapse_to_chain_heads(matches)
     if len(matches) > 1:
-        return _BlockerState(_AMBIGUOUS_BLOCKER_SENTINEL, None, None)
+        return _BlockerState(
+            deployment_state=_AMBIGUOUS_BLOCKER_SENTINEL,
+            closed_reason=None,
+            continued_into=None,
+        )
     return _BlockerState(
         deployment_state=matches[0].get("deployment_state"),
         closed_reason=matches[0].get("closed_reason"),

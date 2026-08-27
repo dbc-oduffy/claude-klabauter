@@ -51,7 +51,7 @@ def _import_runner():
     return run_op_main
 
 
-def main() -> None:
+def main(argv: "list[str] | None" = None) -> int:
     try:
         run_op_main = _import_runner()
     except RuntimeError as exc:
@@ -59,27 +59,27 @@ def main() -> None:
             f"write-workday-start-marker: engine-root resolution failed: {exc}",
             file=sys.stderr,
         )
-        sys.exit(0)
+        return 0
     except ImportError as exc:
         print(
             f"write-workday-start-marker: coordinator_core.cli_entry "
             f"not importable: {exc}",
             file=sys.stderr,
         )
-        sys.exit(0)
+        return 0
 
     try:
-        code = run_op_main("coordinator_core.ops.write_workday_start_marker", sys.argv[1:])
+        code = run_op_main("coordinator_core.ops.write_workday_start_marker", (sys.argv[1:] if argv is None else argv))
     except ImportError as exc:
         print(
             f"write-workday-start-marker: coordinator_core.ops.write_workday_start_marker "
             f"not importable: {exc}",
             file=sys.stderr,
         )
-        sys.exit(0)
+        return 0
 
-    sys.exit(code)
+    return code
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

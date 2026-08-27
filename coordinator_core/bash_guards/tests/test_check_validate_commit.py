@@ -128,8 +128,7 @@ class TestCheckFiveScopedStaging:
         assert core.init(other_sid, cwd=root)
         _push_started_at_to_future(root, sid)
 
-        other_touched = Path(root) / ".git" / "coordinator-sessions" / other_sid / "touched.txt"
-        other_touched.write_text("foo.txt\n", encoding="utf-8")
+        _claim(root, other_sid, "foo.txt")
 
         (tmp_path / "foo.txt").write_text("hello\n", encoding="utf-8")
         _git(root, "add", "foo.txt")
@@ -151,8 +150,7 @@ class TestCheckFiveScopedStaging:
 
         (tmp_path / "foo.txt").write_text("hello\n", encoding="utf-8")
         _git(root, "add", "foo.txt")
-        touched = Path(root) / ".git" / "coordinator-sessions" / sid / "touched.txt"
-        touched.write_text("foo.txt\n", encoding="utf-8")
+        _claim(root, sid, "foo.txt")
 
         result = dispatch_checks.check_validate_commit(
             'git commit -m "add foo"', sid, cwd=root
@@ -183,7 +181,7 @@ class TestCheckFiveScopedStaging:
         agent_dir = Path(root) / ".git" / "coordinator-sessions" / ".agents" / agent_id
         agent_dir.mkdir(parents=True)
         (agent_dir / "em-session-id.txt").write_text(sid + "\n", encoding="utf-8")
-        (agent_dir / "touched.txt").write_text("foo.txt\n", encoding="utf-8")
+        _claim(root, sid, "foo.txt", agent_id=agent_id)
 
         result = dispatch_checks.check_validate_commit(
             'git commit -m "add foo"', sid, cwd=root
@@ -378,8 +376,7 @@ class TestCheckFiveStrictModePromotion:
         _git(root, "add", "sibling.txt")
         _git(root, "commit", "-q", "-m", "seed sibling.txt")
 
-        other_touched = Path(root) / ".git" / "coordinator-sessions" / other_sid / "touched.txt"
-        other_touched.write_text("sibling.txt\n", encoding="utf-8")
+        _claim(root, other_sid, "foo.txt")
 
         _git(root, "rm", "-q", "sibling.txt")
 
@@ -755,6 +752,39 @@ class TestCheckFiveOwnerAttributionIntegration:
 # Check 8 -- frontmatter mutation subject discipline
 # ---------------------------------------------------------------------------
 
+
+
+def _claim(root: str, sid: str, *paths: str, agent_id: str = None) -> None:
+    """Record `paths` as claimed by `sid` through the CANONICAL writer.
+
+    These tests used to write `touched.txt` directly. That file is the RETIRED
+    legacy record (`docs/plans/2026-08-25-the-legacy-touch-record-is-retired-
+    by-repointing-its-writers.md`): the live record is `touch-record.jsonl` and
+    `compute_scope` no longer reads the legacy name at all, so every such test
+    was staging a claim into a file nothing reads and then asserting on the
+    result. Three of them had been red ever since, unmarked, which is how a
+    "compute_scope calls a session's own file an orphan" defect got filed
+    against code that was working correctly.
+
+    Goes through `touch_record.append_event` rather than hand-writing JSON so
+    the schema (v/verb/ts/sid/agent/path) stays the writer's business -- a
+    hand-rolled record here silently degrades to "malformed_line" and
+    reproduces the same false negative one layer down.
+    """
+    from coordinator_core.session import touch_record
+
+    sdir = Path(root) / ".git" / "coordinator-sessions" / sid
+    if agent_id is not None:
+        sdir = Path(root) / ".git" / "coordinator-sessions" / ".agents" / agent_id
+    sdir.mkdir(parents=True, exist_ok=True)
+    for path in paths:
+        touch_record.append_event(
+            touch_record.sink_path(sdir),
+            session_id=sid,
+            agent_id=agent_id,
+            verb="T",
+            path=path,
+        )
 
 def _stage_frontmatter_change(root: str, tmp_path: Path, rel_path: str, old: str, new: str) -> None:
     target = tmp_path / rel_path

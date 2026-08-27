@@ -728,37 +728,23 @@ def _commit_via_pipeline_fallback(args, worktree_root: str) -> dict:
     wrong-worktree commit on a box that runs linked worktrees, so it is
     resolved explicitly rather than passed through from `os.getcwd()`.
     """
-    from coordinator_core.ops.ceremony.commit_op import _handler
+    # ceremony.commit was DELETED 2026-08-27 under the 200ms process-time bar
+    # (kill ledger K-106), and this in-process fallback went with it -- a
+    # fallback that re-enters the killed handler is the op, by another door.
+    #
+    # This refuses with the gravestone's own message rather than the
+    # ImportError that removing `_handler` would otherwise raise here. The
+    # distinction is the whole point of the SUSPENDED_OPS row: a caller
+    # mid-workflow needs the disposition and the sanctioned alternative, and an
+    # ImportError gives it neither. See op_budget_suspension.refusal_message's
+    # own note on what a refused commit agent does when told nothing useful --
+    # it invents a disposition it was not given.
+    from coordinator_core import op_budget_suspension
 
-    common_dir = subprocess.run(
-        ["git", "rev-parse", "--git-common-dir"],
-        cwd=worktree_root,
-        capture_output=True,
-        text=True,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-    )
-    if common_dir.returncode != 0:
-        return {
-            "committed": False,
-            "error": (
-                "ceremony.commit is unregistered in the serving engine and the "
-                "in-process fallback could not resolve the git common dir: "
-                + (common_dir.stderr or "").strip()
-            ),
-        }
-
-    resolved = Path(common_dir.stdout.strip())
-    if not resolved.is_absolute():
-        resolved = Path(worktree_root) / resolved
-
-    return _handler(
-        {
-            "subject": args.subject,
-            "stage_paths": list(args.paths),
-            "caller_paths": list(args.paths),
-        },
-        repo_root=resolved,
-    )
+    return {
+        "committed": False,
+        "error": op_budget_suspension.refusal_message("ceremony.commit"),
+    }
 
 
 def _commit_message_argv(subject: str, body: str) -> List[str]:

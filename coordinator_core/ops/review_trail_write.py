@@ -306,18 +306,15 @@ _VALID_REVIEWERS = frozenset(
 # data to. Splitting the sets would buy a maintained divergence against a
 # consumer that does not exist. Pinned by
 # `tests/test_review_trail_write.py :: test_delegate_reviewers_arms_the_commit_ledger_mark`.
-_DELEGATE_REVIEWERS = frozenset(
-    {
-        "code-reviewer",
-        "staff-eng",
-        "code-reviewer+staff-eng",
-        "eng-director",
-        "senior-front-end",
-        "staff-ux",
-        "staff-data-sci",
-        "ubt-compile",
-    }
-)
+# C9 (docs/plans/2026-08-27-the-review-gate-measures-the-whole-session.md): the
+# set itself now lives in `ops.reviewer_vocabulary`, a stdlib-only leaf, and is
+# re-exported here under its original private name so every by-name consumer
+# (including the test named above) keeps working unchanged. Moved because
+# `subagent_sandbox.provision_report._provision` — a PreToolUse-Agent hook, cold
+# on EVERY agent dispatch — must consult this vocabulary per dispatch, and
+# importing THIS module to read it measured 34.4ms marginal. Do not inline the
+# frozenset back here: that reintroduces the cost at the reader, not here.
+from coordinator_core.reviewer_vocabulary import DELEGATE_REVIEWERS as _DELEGATE_REVIEWERS
 _JUSTIFICATION_REVIEWERS = frozenset({"waived", "em-verified"})
 _EVIDENCE_EXEMPT_REVIEWERS = frozenset({"wsc-auto-adjudication"})
 
@@ -2837,116 +2834,3 @@ def write_review_trail_entry(
 # ---------------------------------------------------------------------------
 
 
-@register_op("review_trail.write")
-async def _review_trail_write_handler(
-    params: dict, repo_root: Optional[Path] = None
-) -> dict:
-    """JSON-RPC ``review_trail.write`` handler — write a review-trail JSON entry.
-
-    MUTATING (writes one JSON record to ``state/review-trail/``; DR-216 carve-out).
-    Delegates blocking FS I/O to ``asyncio.to_thread`` (DR-216 D3 async-loop mandate).
-
-    ``repo_root`` receives ``git_common_dir(caller_worktree)`` via
-    ``_OP_KEY_SCOPE: common_dir`` (ipc.py). Handler calls ``main_worktree_root(repo_root)``
-    to derive the caller's worktree root before any path construction.
-
-    Required params:
-        sha_range  (str)  — e.g. ``abc1234..def5678``.
-        reviewer   (str)  — one of: code-reviewer, staff-eng, code-reviewer+staff-eng, eng-director,
-                      senior-front-end, staff-ux, staff-data-sci, waived, ubt-compile,
-                      wsc-auto-adjudication, em-verified.
-        scope      (str)  — one of: chain, session, workstream-close-auto.
-        verdict    (str)  — one of: ok, warn, blocked, waived, pending.
-        diff_loc   (int)  — non-negative LOC count (also accepted as str, cast to int).
-
-    Optional params:
-        scope_kind (str)  — one of: diff, plan, integration (default: diff).
-        workstream (str)  — workstream slug override; null → scan/env/fallback.
-        reviewed_paths (list[str]) — reviewed-path set (only persisted when scope_kind
-                      is ``diff``; see ``write_review_trail_entry``'s docstring).
-        reviewer_evidence (str) — evidence correlating ``reviewer`` with an artifact
-                      showing a review occurred; see ``write_review_trail_entry``'s
-                      docstring and the module-level "reviewer_evidence" comment block.
-        execution_basis (str) — one of ``executed`` | ``read-only``; see
-                      ``write_review_trail_entry``'s docstring. Absence means unknown.
-    Returns:
-        {"out_path": str, "sha_range": str, "reviewer": str, "scope": str,
-         "scope_kind": str, "verdict": str, "diff_loc": int,
-         "session_id": str, "workstream": str | None,
-         "reviewed_paths": list[str] | None}  # key present only when scope_kind == "diff"
-
-    On unresolvable session_id: logs ERROR and raises ``ValueError``
-    (callers must not invoke this handler without an active session).
-    """
-    # Derive caller's worktree root from the socket-authoritative common_dir.
-    caller_worktree: Optional[Path] = None
-    if repo_root is not None:
-        caller_worktree = main_worktree_root(repo_root)
-
-    # Resolve session_id through the canonical resolver, NEVER a raw
-    # `os.environ` read.
-    #
-    # Negative-spec (state/bug-backlog/2026-08-19-inherited-chain-commit-
-    # review-records-are-unwritable.yaml, own-commit case): this used to read
-    # `os.environ` directly. Under warm serving this handler runs inside a
-    # long-lived server process whose environment names WHOEVER SPAWNED IT,
-    # not the session whose request it is currently serving — so every record
-    # was stamped against a stranger's identity. `warm.entry_seam.per_request_state`
-    # already binds the
-    # true caller's cold-resolved identity via
-    # `session.core.session_identity_override`; only a resolver that reads
-    # that contextvar sees it, and a raw env read steps straight past it.
-    # The cold path is unchanged — the resolver's own env ladder serves it.
-    #
-    # Also negative-spec: do NOT accept `params["session_id"]`. Identity is an
-    # input to an anti-forgery guard; a wire-supplied value would let any
-    # caller claim any session's commits as its own. (`ipc.py` does not strip
-    # unknown params keys, so the key can arrive — it is ignored, deliberately.
-    # A 2026-08-19 fix attempt that threaded `session_id` through
-    # `freeze-review-diff`'s `route_mutation` params was refuted precisely
-    # because this handler never read it; the param was never the seam.)
-    session_id = (resolve_current_session_id(caller_worktree) or "").strip()
-
-    # Cast diff_loc to int (params may carry it as a string from CLI serialization).
-    raw_diff_loc = params.get("diff_loc", 0)
-    try:
-        diff_loc = int(raw_diff_loc)
-    except (TypeError, ValueError) as exc:
-        raise ValueError(
-            f"review_trail.write: diff_loc must be a non-negative integer, got {raw_diff_loc!r}"
-        ) from exc
-
-    raw_reviewed_paths = params.get("reviewed_paths")
-    if raw_reviewed_paths is not None and not isinstance(raw_reviewed_paths, list):
-        raise ValueError(
-            "review_trail.write: reviewed_paths must be a list of strings when provided, "
-            f"got {raw_reviewed_paths!r}"
-        )
-
-    result = await asyncio.to_thread(
-        write_review_trail_entry,
-        sha_range=params.get("sha_range", ""),
-        reviewer=params.get("reviewer", ""),
-        scope=params.get("scope", ""),
-        verdict=params.get("verdict", ""),
-        diff_loc=diff_loc,
-        scope_kind=params.get("scope_kind", "diff"),
-        session_id=session_id if session_id else None,
-        workstream=params.get("workstream"),
-        reviewed_paths=raw_reviewed_paths,
-        reviewer_evidence=params.get("reviewer_evidence"),
-        execution_basis=params.get("execution_basis"),
-        caller_worktree=caller_worktree,
-        # C1 (docs/plans/2026-08-15-the-review-trail-write-stops-paying-n-
-        # wa.md): intended as an internal-only in-process passthrough —
-        # never a documented public param (see this function's own
-        # docstring's "Optional params" list, which deliberately omits it).
-        # BUT `ipc.py` does not strip unknown params keys, so a wire caller
-        # can send this key too — treat it as attacker-controlled. Safe
-        # because every consumer of the resulting dict is restricted to
-        # advisory-only data; see `write_review_trail_entry`'s
-        # `_batch_context` docstring and `build_batch_attribution_context`'s
-        # "SECURITY INVARIANT" paragraph.
-        _batch_context=params.get("_batch_context"),
-    )
-    return result

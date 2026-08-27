@@ -147,18 +147,18 @@ def test_unknown_flag_exits_2(candidate):
 # (a) --exclude threaded, and (c) --edge-kinds passthrough
 # ---------------------------------------------------------------------------
 
-def test_baseline_has_live_children(candidate, successor):
-    del successor  # referenced implicitly via the live handoff set on disk
+def test_baseline_has_live_children(stamped_engine_env, candidate, successor):
+    del successor, stamped_engine_env  # live handoff set on disk; engine root via fixture
     rc, out, err = _run_veneer(candidate)
     assert rc == 0, "expected exit 0 (has live children), got {} stdout={!r} stderr={!r}".format(rc, out, err)
 
 
-def test_exclude_successor_safe_to_archive(candidate, successor):
+def test_exclude_successor_safe_to_archive(stamped_engine_env, candidate, successor):
     rc, out, err = _run_veneer("--exclude", successor, candidate)
     assert rc == 1, "expected exit 1 (safe to archive), got {} stdout={!r} stderr={!r}".format(rc, out, err)
 
 
-def test_edge_kinds_passthrough(candidate, successor):
-    del successor
+def test_edge_kinds_passthrough(stamped_engine_env, candidate, successor):
+    del successor, stamped_engine_env
     rc, out, err = _run_veneer("--edge-kinds", "predecessor,additional_predecessors", candidate)
     assert rc == 0, "expected exit 0 (predecessor-field reference detected), got {} stdout={!r} stderr={!r}".format(rc, out, err)

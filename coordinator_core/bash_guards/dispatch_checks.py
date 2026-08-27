@@ -5706,22 +5706,68 @@ def check_validate_commit(
     # FLIP TO DENY-BY-DEFAULT IS READY BUT WITHHELD (2026-08-27). The PM ruled
     # for it; the one-line change is
     #     scope_strict = not _override("COORDINATOR_SCOPE_STRICT_OFF", payload=payload)
-    # and it was written, exercised against this repo's live shared index, and
-    # backed out again on the same pass. It is withheld because
-    # `session.scope.compute_scope()` currently misclassifies a session's OWN
-    # touched file as an orphan: with `touched.txt` naming `foo.txt`, a freshly
-    # staged `foo.txt` comes back `my_scope=[] orphans=['foo.txt']` and
-    # `attribution={}` (reproduced standalone 2026-08-27). Under warn-only that
-    # is a spurious SCOPE line; under the flip it is a DENY of a commit the
-    # session is entitled to make -- exactly the false-positive outage the
-    # 2026-08-03 ruling below feared, which is the one objection to strict mode
-    # that today's sweep evidence does NOT answer.
     #
-    # Blocking red, unmarked, pre-existing (baseline-measured, not caused by
-    # this pass): test_own_scoped_file_no_scope_warning,
-    # test_dispatched_agent_touched_file_no_scope_warning,
-    # test_foreign_file_owned_by_another_session_warns_with_owner.
-    # Land the flip once those are green; nothing else gates it. ---
+    # THE TWO BLOCKERS THIS COMMENT USED TO NAME ARE BOTH RETIRED. Do not
+    # re-derive them from an older revision of this comment:
+    #
+    #   - "compute_scope misclassifies a session's OWN touched file as an
+    #     orphan" was a BAD REPRO, withdrawn at `89ac844cc`. It wrote
+    #     `touched.txt` -- the RETIRED record. The live one is
+    #     `touch-record.jsonl`. Re-proved 2026-08-27 through the canonical
+    #     writer (`session.scope.touch`) on a throwaway repo: a staged,
+    #     touched `foo.txt` comes back `my_scope=['foo.txt'] orphans=[]`.
+    #   - The three named reds (test_own_scoped_file_no_scope_warning,
+    #     test_dispatched_agent_touched_file_no_scope_warning,
+    #     test_foreign_file_owned_by_another_session_warns_with_owner) were
+    #     repointed to the live record at `ca1929145` and are green.
+    #
+    # The successor handoff's "167 stranded claims" blocker is retired on the
+    # same fault: those 167 live in `touched.txt` across 8 dirs, which
+    # `_read_touch_record_as_legacy_lines` stopped reading on 2026-08-26. The
+    # LIVE corpus is clean -- 265 `touch-record.jsonl` files, 2667 entries,
+    # ZERO escaping the worktree (census 2026-08-27), and
+    # `legacy_touch_corpus_straggler_check` reads 0 legacy-only dirs. Nothing
+    # `compute_scope` reads can strand a claim. `migrate_touched_prefix` is
+    # NOT the repair for them either: post-C1 it PRUNES `../`-escaping entries
+    # rather than rescuing them, so "run it and see if it rescues them" is a
+    # premise that tool cannot satisfy.
+    #
+    # THE ONE REMAINING GATE IS THE ORPHAN ARM, measured on production
+    # traffic rather than argued. `scope-warnings.log` across this repo's live
+    # sessions holds 46 warn events for 2026-08-27, 4 sessions -- each one a
+    # DENY under the flip. 29 of the 46 name a real peer owner and are TRUE
+    # positives (the sweep class the flip exists to stop; cf. `52c66b212`).
+    # The other 17, over 10 distinct paths, render `owner:orphan`: nothing
+    # claims the path at all. Under warn-only that is a spurious SCOPE line;
+    # under the flip it denies a commit the session is entitled to make, which
+    # is the false-positive outage the 2026-08-03 ruling below feared.
+    #
+    # The 17 orphans are THREE causes, not one, and the dominant one is not
+    # what it first looks like:
+    #
+    #   - DELETIONS (6): `ops/session/tests/test_boot_backstop.py`,
+    #     `state/audits/data/.../measure.py`. A removed file gets no touch
+    #     claim from any writer, so it can only ever render orphan. Check 5
+    #     already folds deleted paths into `_scope_set` for the commit-scope
+    #     set (see the `--diff-filter=D` block above) -- the WARN loop does
+    #     not, and that asymmetry is the first thing to close.
+    #   - ARCHIVAL MOVES (5): `archive/handoffs/**`, `state/handoffs/**`.
+    #     `archive_terminal_handoffs`/`archive_actioned_memos` are exempted
+    #     from `relocate_touched_path` on the reasoned allow-list in
+    #     `session/tests/test_no_untracked_relocation.py` for having no
+    #     session_id in scope -- true of the mover, but it leaves the moved
+    #     file unclaimed at the sink.
+    #   - UNDECLARED OP OUTPUTS (4): `state/sizings/*.yaml` (3),
+    #     `state/memo-outbox/sent/*` (1). Files no Edit/Write hook touches,
+    #     whose writing op did not declare them through `ipc.py`'s
+    #     `_SCOPE_TOUCH_PATHS_KEY`. `memo.reconcile_outbox` was one of these
+    #     and now declares both ends of its moves; the sizings writer has not
+    #     been traced yet.
+    #
+    # So the flip gates on driving that arm to zero: close the deleted-path
+    # asymmetry in the warn loop, give the archival movers a claim seam, trace
+    # the sizings writer, then re-read `scope-warnings.log` over a full day
+    # and confirm only named-owner events remain. Nothing else. ---
     scope_strict = _override("COORDINATOR_SCOPE_STRICT", payload=payload)
     if session_id:
         git_root = _run_git(["rev-parse", "--show-toplevel"], _cwd)[1].strip()

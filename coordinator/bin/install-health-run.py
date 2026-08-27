@@ -50,20 +50,20 @@ def _import_main():
     return _op_main, recording_declared_writes
 
 
-def main() -> None:
+def main(argv: "list[str] | None" = None) -> int:
     try:
         op_main, recording_declared_writes = _import_main()
     except RuntimeError as exc:
         print(f"install-health-run.py: CLAUDE_KLABAUTER_ROOT resolution failed: {exc}", file=sys.stderr)
-        sys.exit(1)
+        return 1
     except ImportError as exc:
         print(f"install-health-run.py: coordinator_core.ops.install_health_run not importable: {exc}", file=sys.stderr)
-        sys.exit(1)
+        return 1
 
     with recording_declared_writes():
-        code = op_main(sys.argv[1:], script_path=os.path.abspath(__file__))
-    sys.exit(code)
+        code = op_main((sys.argv[1:] if argv is None else argv), script_path=os.path.abspath(__file__))
+    return code
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

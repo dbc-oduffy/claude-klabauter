@@ -138,10 +138,16 @@ def test_measure_import_set_raises_on_a_bad_module_path():
 def test_reconcile_import_set_readings_returns_armed_unarmed_and_historical():
     """AC3d reconciliation: a live re-measurement under both shapes, plus
     whatever historical readings this module records for the same path --
-    never one silently overwriting the other."""
-    live = reconcile_import_set_readings("coordinator_core.ops.session.boot_backstop")
+    never one silently overwriting the other.
 
-    assert live["module"] == "coordinator_core.ops.session.boot_backstop"
+    Retargeted 2026-08-27 off `ops.session.boot_backstop`, which was
+    gravestoned (K-059) and no longer exists. What this test owns is the
+    HARNESS's reconciliation shape, not that one particular op is measurable,
+    so it now probes a module that is live and will stay live. The
+    absent-module arm has its own test below and is unaffected."""
+    live = reconcile_import_set_readings("coordinator_core.ops.session.reap")
+
+    assert live["module"] == "coordinator_core.ops.session.reap"
     assert live["live_module_absent"] is False
     assert live["armed"]["armed"] is True
     assert live["unarmed"]["armed"] is False

@@ -57,22 +57,22 @@ def _import_run_op_main():
     return run_op_main
 
 
-def main() -> None:
+def main(argv: "list[str] | None" = None) -> int:
     try:
         run_op_main = _import_run_op_main()
     except RuntimeError as exc:
         print(f"list-review-trail-records.py: CLAUDE_KLABAUTER_ROOT resolution failed: {exc}", file=sys.stderr)
-        sys.exit(1)
+        return 1
     except ImportError as exc:
         print(f"list-review-trail-records.py: coordinator_core.cli_entry not importable: {exc}", file=sys.stderr)
-        sys.exit(1)
+        return 1
     try:
-        code = run_op_main("coordinator_core.ops.list_review_trail_records", sys.argv[1:])
+        code = run_op_main("coordinator_core.ops.list_review_trail_records", (sys.argv[1:] if argv is None else argv))
     except ImportError as exc:
         print(f"list-review-trail-records.py: coordinator_core.ops.list_review_trail_records not importable: {exc}", file=sys.stderr)
-        sys.exit(1)
-    sys.exit(code)
+        return 1
+    return code
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

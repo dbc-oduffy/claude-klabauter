@@ -144,17 +144,17 @@ def _resolve_cs_lib(plugin_root: Path) -> "Path | None":
     return candidate if candidate.is_file() else None
 
 
-def main() -> None:
-    args = sys.argv[1:]
+def main(argv: "list[str] | None" = None) -> int:
+    args = (sys.argv[1:] if argv is None else argv)
     if "--help" in args or "-h" in args:
         sys.stdout.write(__doc__ or "")
-        sys.exit(0)
+        return 0
     if not args:
         # Bare/no-argument invocation is a usage error, not documented help:
         # fail loud on stderr so a no-arg call can never be misread as a
         # passing verification gate.
         sys.stderr.write(__doc__ or "")
-        sys.exit(2)
+        return 2
 
     name = args[0]
     mode = args[1] if len(args) > 1 else "verify"
@@ -163,7 +163,7 @@ def main() -> None:
         claude_klabauter_root = require_dispatch_engine_on_path()
     except RuntimeError as exc:
         print(f"verify-snippet-sync: engine-root resolution failed: {exc}", file=sys.stderr)
-        sys.exit(1)
+        return 1
     try:
         from coordinator_core.snippet_sync.verify import run
     except ImportError as exc:
@@ -171,7 +171,7 @@ def main() -> None:
             f"verify-snippet-sync: coordinator_core.snippet_sync.verify not importable: {exc}",
             file=sys.stderr,
         )
-        sys.exit(1)
+        return 1
 
     script_dir = Path(os.path.dirname(os.path.abspath(__file__)))
     plugin_root = _resolve_plugin_root()
@@ -197,8 +197,8 @@ def main() -> None:
         print(Path(line).as_posix() if mode == "--list" else line)
     for line in outcome.stderr_lines:
         print(line, file=sys.stderr)
-    sys.exit(outcome.exit_code)
+    return outcome.exit_code
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

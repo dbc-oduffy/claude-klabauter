@@ -84,7 +84,8 @@ def _import_orientation_module():
     return mod
 
 
-def main() -> None:
+def main(argv: "list[str] | None" = None) -> int:
+    del argv  # this CLI takes no arguments; argv accepted for the warm-call contract
     parser = argparse.ArgumentParser(
         prog="regenerate-orientation-cache",
         description="Regenerate state/orientation_cache.md.",
@@ -109,20 +110,20 @@ def main() -> None:
 
     if args.pinboard_only is not None and args.pinboard is not None:
         print("ERROR: --pinboard and --pinboard-only are mutually exclusive", file=sys.stderr)
-        sys.exit(2)
+        return 2
 
     try:
         mod = _import_orientation_module()
     except RuntimeError as exc:
         print(f"regenerate-orientation-cache: CLAUDE_KLABAUTER_ROOT resolution failed: {exc}", file=sys.stderr)
-        sys.exit(1)
+        return 1
     except ImportError as exc:
         print(
             f"regenerate-orientation-cache: coordinator_core.orientation.regenerate_cache "
             f"not importable: {exc}",
             file=sys.stderr,
         )
-        sys.exit(1)
+        return 1
 
     repo_root = mod.resolve_repo_root(Path.cwd())
 
@@ -139,16 +140,16 @@ def main() -> None:
                 f"{args.invoker!r}) — ceremony invokers clear the pinboard via a full regen.",
                 file=sys.stderr,
             )
-            sys.exit(2)
+            return 2
         cache_file = mod.resolve_cache_file(repo_root)
         try:
             output = mod.patch_pinboard_only(cache_file, args.pinboard_only, check=args.check)
         except FileNotFoundError as exc:
             print(f"ERROR: {exc}", file=sys.stderr)
-            sys.exit(2)
+            return 2
         except TimeoutError as exc:
             print(f"ERROR: {exc}", file=sys.stderr)
-            sys.exit(1)
+            return 1
         if args.check:
             sys.stdout.write(output)
         else:
@@ -170,11 +171,11 @@ def main() -> None:
         )
     except ValueError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
-        sys.exit(2)
+        return 2
 
     if result["skipped"]:
         print(result["reason"], file=sys.stderr)
-        sys.exit(0)
+        return 0
 
     if args.check:
         sys.stdout.write(result["output"])
@@ -186,7 +187,8 @@ def main() -> None:
             f"(invoker={args.invoker}, tier={result['tier']})",
             file=sys.stderr,
         )
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

@@ -76,7 +76,7 @@ def _import_run_op_main():
     return run_op_main
 
 
-def main() -> None:
+def main(argv: "list[str] | None" = None) -> int:
     try:
         run_op_main = _import_run_op_main()
     except RuntimeError as exc:
@@ -85,7 +85,7 @@ def main() -> None:
             f"so the op backing this gate was never located and no citation was read: {exc}",
             file=sys.stderr,
         )
-        sys.exit(2)
+        return 2
     except ImportError as exc:
         print(
             f"verify-skill-anchor-links: COULD NOT CHECK — engine root resolved but "
@@ -93,10 +93,10 @@ def main() -> None:
             f"so no citation was read: {exc}",
             file=sys.stderr,
         )
-        sys.exit(2)
+        return 2
 
     try:
-        code = run_op_main("coordinator_core.ops.verify_skill_anchor_links", sys.argv[1:])
+        code = run_op_main("coordinator_core.ops.verify_skill_anchor_links", (sys.argv[1:] if argv is None else argv))
     except ImportError as exc:
         print(
             f"verify-skill-anchor-links: COULD NOT CHECK — engine root resolved but "
@@ -104,10 +104,10 @@ def main() -> None:
             f"so no citation was read: {exc}",
             file=sys.stderr,
         )
-        sys.exit(2)
+        return 2
 
-    sys.exit(code)
+    return code
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

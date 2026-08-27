@@ -178,7 +178,8 @@ def delta(now: int, was: int) -> str:
     return f"{was} -> {now}  ({diff:+d}, {pct:+d}%)"
 
 
-def main() -> int:
+def main(argv: "list[str] | None" = None) -> int:
+    del argv  # this CLI takes no arguments; argv accepted for the warm-call contract
     ap = argparse.ArgumentParser(description="Report progress toward zero .sh in the DoE tree.")
     ap.add_argument("--json", action="store_true", help="emit machine-readable JSON")
     ap.add_argument(

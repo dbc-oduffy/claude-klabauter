@@ -66,28 +66,28 @@ def _prepare_claude_klabauter_root() -> None:
     claude_klabauter_root = require_dispatch_engine_on_path()
 
 
-def main() -> None:
+def main(argv: "list[str] | None" = None) -> int:
     try:
         _prepare_claude_klabauter_root()
     except RuntimeError as exc:
         print(f"check-arch-audit-staleness.py: CLAUDE_KLABAUTER_ROOT resolution failed: {exc}", file=sys.stderr)
         print("UNKNOWN")
-        sys.exit(0)
+        return 0
 
     from coordinator_core.cli_entry import run_op_main
 
     try:
-        code = run_op_main("coordinator_core.ops.check_arch_audit_staleness", sys.argv[1:])
+        code = run_op_main("coordinator_core.ops.check_arch_audit_staleness", (sys.argv[1:] if argv is None else argv))
     except ImportError as exc:
         print(
             f"check-arch-audit-staleness.py: coordinator_core.ops.check_arch_audit_staleness not importable: {exc}",
             file=sys.stderr,
         )
         print("UNKNOWN")
-        sys.exit(0)
+        return 0
 
-    sys.exit(code)
+    return code
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

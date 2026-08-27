@@ -61,22 +61,22 @@ def _import_main():
     return _op_main
 
 
-def main() -> None:
+def main(argv: "list[str] | None" = None) -> int:
     try:
         op_main = _import_main()
     except RuntimeError as exc:
         print(f"check-sidecar-fill.py: CLAUDE_KLABAUTER_ROOT resolution failed: {exc}", file=sys.stderr)
-        sys.exit(1)
+        return 1
     except ImportError as exc:
         print(
             f"check-sidecar-fill.py: coordinator_core.subagent_sandbox.detect_unfilled_sidecar "
             f"not importable: {exc}",
             file=sys.stderr,
         )
-        sys.exit(1)
+        return 1
 
     try:
-        sys.exit(op_main(sys.argv[1:]))
+        return op_main((sys.argv[1:] if argv is None else argv))
     except SystemExit:
         raise
     except Exception as exc:
@@ -84,8 +84,8 @@ def main() -> None:
             f"check-sidecar-fill.py: detect_unfilled_sidecar.main() failed: {exc}",
             file=sys.stderr,
         )
-        sys.exit(1)
+        return 1
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

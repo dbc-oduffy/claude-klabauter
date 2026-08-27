@@ -211,26 +211,26 @@ _USAGE = (
 )
 
 
-def main() -> None:
-    argv = sys.argv[1:]
+def main(argv: "list[str] | None" = None) -> int:
+    argv = (sys.argv[1:] if argv is None else argv)
     if argv:
         if argv[0] in ("-h", "--help"):
             print(_USAGE)
-            sys.exit(0)
+            return 0
         print(_USAGE)
-        sys.exit(2)
+        return 2
 
     response = _get_raw_response()
     if response is None:
-        sys.exit(0)
+        return 0
     try:
         lines = _render(response)
     except Exception:
-        sys.exit(0)
+        return 0
     for line in lines:
         print(line)
-    sys.exit(0)
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

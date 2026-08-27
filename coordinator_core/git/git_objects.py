@@ -674,6 +674,39 @@ def _read_ref_raw(ref_path: Path) -> Optional[str]:
     return content or None
 
 
+def read_packed_ref(gitdir: Path, ref: str) -> Optional[str]:
+    """`<sha>` for `ref` out of `<gitdir>/packed-refs`, or `None`.
+
+    `packed-refs` is a flat text file, one ref per line, `<sha> SP <refname>`.
+    Two line kinds are skipped: a leading `#` (the `# pack-refs with: ...`
+    header) and a leading `^` (a tag's peeled-object line, which annotates the
+    PRECEDING line rather than naming a ref of its own -- taking its sha would
+    return the tagged commit under the tag's own name).
+
+    This is the whole of the "pack-then-loose ref resolution" that
+    `_resolve_cas_ref_target` previously declined to reproduce as too risky.
+    It is a two-field split on a file git documents; the risk it was weighed
+    against -- silently CAS-ing against the wrong file -- is not present,
+    because the caller uses this only as the comparand when NO loose file
+    exists, which is precisely when git itself reads the packed value.
+
+    Deliberately NOT a general packed-refs parser: no `--sort`, no peel
+    resolution, no `worktree/` per-worktree ref namespace. One exact-name
+    lookup, which is all `cas_ref` needs.
+    """
+    try:
+        text = (gitdir / "packed-refs").read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    for line in text.splitlines():
+        if not line or line[0] in "#^":
+            continue
+        sha, _, name = line.partition(" ")
+        if name.strip() == ref:
+            return sha.strip() or None
+    return None
+
+
 def _log_all_ref_updates(gitdir: Path) -> bool:
     """`core.logAllRefUpdates` -- git defaults this to true for any repo
     with a worktree (only a bare repo defaults it to false); this reads
@@ -776,7 +809,19 @@ def cas_ref(
         return False
     try:
         os.close(fd)
+        # Loose first, packed second -- git's own precedence. After a
+        # `git pack-refs --all` there is no loose file for a branch, and the
+        # ref's real value lives only in `packed-refs`; reading just the loose
+        # path would see `None` there and mis-compare against `expected`.
+        #
+        # The write below stays a loose-file write, which is also git's own
+        # behaviour: the next ref update after a pack writes a loose ref that
+        # SHADOWS the packed entry. The stale packed line is inert from that
+        # moment and `git gc` reaps it. This is not a second write path and
+        # `packed-refs` is never rewritten here.
         current = _read_ref_raw(ref_path)
+        if current is None:
+            current = read_packed_ref(gitdir, ref)
         if current != expected:
             return False
         lock_path.write_bytes(new.encode("ascii") + b"\n")

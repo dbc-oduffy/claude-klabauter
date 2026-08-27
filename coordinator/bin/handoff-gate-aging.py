@@ -65,30 +65,30 @@ def _import_runner():
     return run_op_main
 
 
-def main() -> None:
+def main(argv: "list[str] | None" = None) -> int:
     try:
         run_op_main = _import_runner()
     except RuntimeError as exc:
         print(f"handoff-gate-aging: engine-root resolution failed: {exc}", file=sys.stderr)
-        sys.exit(2)
+        return 2
     except ImportError as exc:
         print(
             f"handoff-gate-aging: coordinator_core.cli_entry not importable: {exc}",
             file=sys.stderr,
         )
-        sys.exit(2)
+        return 2
 
     try:
-        code = run_op_main("coordinator_core.ops.handoff_gate_aging", sys.argv[1:])
+        code = run_op_main("coordinator_core.ops.handoff_gate_aging", (sys.argv[1:] if argv is None else argv))
     except ImportError as exc:
         print(
             f"handoff-gate-aging: coordinator_core.ops.handoff_gate_aging not importable: {exc}",
             file=sys.stderr,
         )
-        sys.exit(2)
+        return 2
 
-    sys.exit(code)
+    return code
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

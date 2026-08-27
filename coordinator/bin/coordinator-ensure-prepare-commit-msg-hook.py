@@ -35,29 +35,38 @@ if _REPO_ROOT not in sys.path:
 from git_hook_install import ensure_prepare_commit_msg_hook  # noqa: E402
 
 
-def main() -> int:
-    # `--fleet` was hand-parsed here between 2026-08-08 (b66dec143) and
-    # 2026-08-11; fleet-wide healing now has its own named entrypoint,
-    # `coordinator-ensure-hooks-fleet`. The flag is answered rather than
-    # ignored: a caller that still passes it would otherwise get a
-    # single-repo heal reported as a fleet heal -- the accepted-and-ignored
-    # shape doe-claude-em refused to write into /workday-start Step -0.45
-    # (cross-repo/inbox/2026-08-11-doe-claude-em-fleet-flag-request-is-not-
-    # actionable-entrypoints-read-no-argv.md). Redirect is stderr-only and
-    # still exits 0 via the cwd heal below: this runs on the session-boot
-    # path and must never block a session start.
-    if "--fleet" in sys.argv[1:]:
-        print(
-            "coordinator-ensure-prepare-commit-msg-hook: --fleet is no longer "
-            "handled here -- run `coordinator-ensure-hooks-fleet` for every "
-            "registered repo. Healing this repo only.",
-            file=sys.stderr,
-        )
+def main(argv: "list[str] | None" = None) -> int:
+    # argv threading: this CLI reads sys.argv at depth (argparse and helpers),
+    # so the warm-call path swaps it for the duration rather than rewriting every read.
+    # NOT re-entrant: a threaded server must serialise calls into this entrypoint.
+    _prev_argv = sys.argv
+    if argv is not None:
+        sys.argv = [sys.argv[0], *argv]
     try:
-        return ensure_prepare_commit_msg_hook(_BIN_DIR)
-    except Exception as exc:  # never block a session start
-        print(f"coordinator-ensure-prepare-commit-msg-hook: {exc}", file=sys.stderr)
-        return 0
+        # `--fleet` was hand-parsed here between 2026-08-08 (b66dec143) and
+        # 2026-08-11; fleet-wide healing now has its own named entrypoint,
+        # `coordinator-ensure-hooks-fleet`. The flag is answered rather than
+        # ignored: a caller that still passes it would otherwise get a
+        # single-repo heal reported as a fleet heal -- the accepted-and-ignored
+        # shape doe-claude-em refused to write into /workday-start Step -0.45
+        # (cross-repo/inbox/2026-08-11-doe-claude-em-fleet-flag-request-is-not-
+        # actionable-entrypoints-read-no-argv.md). Redirect is stderr-only and
+        # still exits 0 via the cwd heal below: this runs on the session-boot
+        # path and must never block a session start.
+        if "--fleet" in sys.argv[1:]:
+            print(
+                "coordinator-ensure-prepare-commit-msg-hook: --fleet is no longer "
+                "handled here -- run `coordinator-ensure-hooks-fleet` for every "
+                "registered repo. Healing this repo only.",
+                file=sys.stderr,
+            )
+        try:
+            return ensure_prepare_commit_msg_hook(_BIN_DIR)
+        except Exception as exc:  # never block a session start
+            print(f"coordinator-ensure-prepare-commit-msg-hook: {exc}", file=sys.stderr)
+            return 0
+    finally:
+        sys.argv = _prev_argv
 
 
 if __name__ == "__main__":

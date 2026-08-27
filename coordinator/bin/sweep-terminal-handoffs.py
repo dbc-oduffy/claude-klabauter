@@ -59,12 +59,17 @@ bash fallback — a genuinely seam-absent install surfaces as a transport
 failure (RuntimeError), caught below and logged (best-effort ceremony).
 
 Liveness stamp: mirrors the retired predecessor's own liveness contract --
-every completion that reaches the sweep-processing tail (exit 0, including
-zero-candidates/all-retained, AND exit 1, dispatch failure) stamps the
-shared `archive_sweeps` housekeeping-liveness key
+every ACT-path completion that reaches the sweep-processing tail (exit 0,
+including zero-candidates/all-retained, AND exit 1, dispatch failure) stamps
+the shared `archive_sweeps` housekeeping-liveness key
 (`coordinator_core.ops.ceremony.housekeeping_liveness.stamp_liveness`).
 The internal-error path (exit 2 -- not a git repo) returns before reaching
-the tail and never stamps.
+the tail and never stamps. A `--dry-run` census also never stamps -- it
+returns from its own early branch before the ACT-only tail below, for the
+reason given in the Usage section above (a census is not a sweep).
+[Review: coordinator:code-reviewer, 07cbe322f slice, P3 -- this section
+predated --dry-run and read as if only the exit-2 path skipped the stamp;
+--dry-run skips it too, for a different reason, now stated here.]
 
 Index-lock disposition (staff-eng F3, C4): this script's `archive_and_commit`
 call is the ONLY tracked-worktree-mutating call this CLI makes -- it never

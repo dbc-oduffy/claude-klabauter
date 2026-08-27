@@ -1892,7 +1892,7 @@ def _release_path_claim_everywhere(
         return
     normalized_target = claim_index._normalize_key(path)
     pairs, _complete = claim_index._enumerate_claim_sinks(base)
-    for touched_path, claimant_sid in pairs:
+    for touched_path, claimant_sid, _agent_id in pairs:
         if claimant_sid not in sids:
             continue
         # The enumerator reaches BOTH planes: the legacy `touched.txt` line

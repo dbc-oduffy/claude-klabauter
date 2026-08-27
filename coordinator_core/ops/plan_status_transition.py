@@ -2104,8 +2104,11 @@ def _stamp_reviewed(opts: _Opts) -> int:
     """Perform the stamp-reviewed verb (C2): flips ``draft -> reviewed``.
 
     See ``_stamp_rung`` for the shared contract (AC2-AC5). Fires from inside
-    the ``review-exec-auth-stamp`` binary (AC10) -- ceremony-reachable by
-    design, not a human-typed CLI line (see ``_stamp_rung``'s own docstring
+    the ``review-exec-auth-stamp`` binary (AC10) -- from its ``mark-reviewed``
+    verb at review-integration completion (the producer that actually leaves a
+    plan observable at this rung) and, redundantly and as an at-or-past no-op
+    by then, from its ``stamp`` verb at PM execution-approval -- ceremony-
+    reachable by design, not a human-typed CLI line (see ``_stamp_rung``'s own docstring
     for why this positively diverges from ``_stamp_superseded``/``_stamp_
     reopened``'s negative-spec).
     """

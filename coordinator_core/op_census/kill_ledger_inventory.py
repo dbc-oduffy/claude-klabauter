@@ -84,6 +84,13 @@ _LANDED_MARKERS = (
     "deleted",
     "killed",
     "relocated",
+    # A gravestone is a cut that landed with nothing replacing it — the
+    # requirement retired, not deferred. It reads as LANDED here because that is
+    # what it is on the registry: the op is gone and stays gone. Absent from this
+    # tuple the status matched no rule at all and K-059 fell to CONTESTED, which
+    # is this module's own stated defect ("a status vocabulary the rules cannot
+    # place is the classifier's, not the ledger's") reported against the ledger.
+    "gravestone",
 )
 _NON_CUT_MARKERS = (
     "not yet cut",

@@ -70,6 +70,8 @@ from typing import List, Optional
 GENERATES = []  # read-only: writes nothing, creates nothing, deletes nothing
 
 _TOUCHED_FILENAME = "touched.txt"
+from coordinator_core.session import touch_record
+
 _TOUCH_RECORD_FILENAME = "touch-record.jsonl"
 _EXCLUDED_COMPONENT = ".archive"
 
@@ -118,7 +120,26 @@ def check_drain(sessions_base: Path) -> DrainCheckReport:
     for touched_path in _iter_touched_files(sessions_base):
         report.scanned += 1
         record_path = touched_path.with_name(_TOUCH_RECORD_FILENAME)
-        if not record_path.exists():
+        # EXISTENCE IS NOT DRAINAGE (2026-08-27). This was `not record_path.
+        # exists()`, which counted an EMPTY sibling as drained. That is the one
+        # shape the drain actually produces on failure: `legacy_touch_corpus_
+        # migrate` creates the sink before writing into it, so a migration that
+        # creates the file and then writes nothing leaves a zero-byte record
+        # that satisfied the old predicate exactly. Measured on this repo
+        # 2026-08-27: the check reported `undrained: []` over 133 scanned dirs
+        # while eight sessions carried 167 legacy claims against an empty
+        # sibling -- claims `compute_scope` cannot see, on paths any peer's
+        # scope check therefore reads as orphans and is free to sweep. That is
+        # precisely the "strands every claim recorded in it" loss this module's
+        # own docstring exists to gate against, and the gate read green through
+        # it.
+        #
+        # A record that cannot be read is not a record: the predicate now
+        # requires READABLE, NON-BLANK content, and an unreadable sibling
+        # counts as UNDRAINED (fail toward reporting work left to do, never
+        # toward a green gate -- this module gates C8's union-read removal,
+        # where a false green is unrecoverable claim loss).
+        if not touch_record.record_carries_content(record_path):
             report.undrained.append(touched_path)
     return report
 

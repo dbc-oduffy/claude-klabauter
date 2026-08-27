@@ -63,29 +63,29 @@ def _import_runner():
     return run_op_main
 
 
-def main() -> None:
+def main(argv: "list[str] | None" = None) -> int:
     try:
         run_op_main = _import_runner()
     except RuntimeError as exc:
         print(f"check-atlas-watch-drift: CLAUDE_KLABAUTER_ROOT resolution failed: {exc}", file=sys.stderr)
-        sys.exit(0)
+        return 0
     except ImportError as exc:
         print(
             f"check-atlas-watch-drift: coordinator_core.cli_entry not importable: {exc}",
             file=sys.stderr,
         )
-        sys.exit(0)
+        return 0
 
     try:
-        code = run_op_main("coordinator_core.ops.check_atlas_watch_drift", sys.argv[1:])
+        code = run_op_main("coordinator_core.ops.check_atlas_watch_drift", (sys.argv[1:] if argv is None else argv))
     except ImportError as exc:
         print(
             f"check-atlas-watch-drift: coordinator_core.ops.check_atlas_watch_drift not importable: {exc}",
             file=sys.stderr,
         )
-        sys.exit(0)
-    sys.exit(code)
+        return 0
+    return code
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

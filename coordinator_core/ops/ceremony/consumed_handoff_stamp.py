@@ -480,7 +480,21 @@ async def _live_children_guard(
     indeterminate is indistinguishable from an ordinary exit-2 one to
     either caller of this function today.
     """
-    handler = get_op_handler("handoff.has_live_children")
+    # Two unavailability shapes, one fail-closed answer. `get_op_handler`
+    # returns None for an UNREGISTERED op but RAISES OpSuspendedError for a
+    # KILLED one (`ipc.py`'s kill-switch branch), and `handoff.has_live_children`
+    # is killed (K-113) with its compute retained undecorated in
+    # `ops/handoff_children.py`. An uncaught raise here would turn this
+    # function's documented fail-closed contract into a crash out of the WSC
+    # tail, so the raise degrades to the same indeterminate/retain answer the
+    # unregistered case already produced -- never to a silent ship.
+    try:
+        handler = get_op_handler("handoff.has_live_children")
+    except Exception as exc:
+        return True, {
+            "exit_code": 2,
+            "error": f"handoff.has_live_children unavailable: {exc}",
+        }
     if handler is None:
         # Fail-closed: treat as indeterminate/retain if the op somehow isn't
         # registered (should be unreachable — this module imports the
@@ -1019,6 +1033,24 @@ async def post_commit_stamp_and_ship(
     )
     follow_up_shas: list[str] = [follow_up_sha] if follow_up_sha else []
 
+    # Sweep occasion (fleet.archive_completed_handoffs' K-047 gap, `state/
+    # audits/2026-08-27-the-archival-occasion-map-re-verified.md`): this
+    # follow-up commit lands via `git_native.commit_scoped` directly, never
+    # through `run_commit_pipeline`, so `commit_pipeline.
+    # _run_in_plane_archive_sweep` -- the sweep every ordinary ceremony
+    # commit rides -- is NEVER reached by this path. Fired here, AFTER
+    # `follow_up_sha` confirms the commit actually landed (never before --
+    # `session.sweep_consumed_handoffs`'s own rails refuse a candidate whose
+    # `shipped_in` does not resolve against on-disk git history, so firing
+    # pre-commit would archive nothing and waste the pass). Gated on
+    # `follow_up_sha` alone, not on push outcome: the sweep only needs the
+    # commit to exist locally (`plan_sweep`'s `shipped_in` resolvability rail
+    # reads local git history, not the remote), and a push failure/decline
+    # must not suppress the one occasion this workstream's terminal close
+    # gets to archive what it just stamped.
+    if follow_up_sha:
+        await asyncio.to_thread(_fire_consumed_handoff_sweep, worktree_root, repo_root)
+
     return StampOutcome(
         stamped=outcome_stamped,
         skipped_future_dated=rejected_paths,
@@ -1032,6 +1064,95 @@ async def post_commit_stamp_and_ship(
         follow_up_push_status=follow_up_push_status,
         follow_up_error=follow_up_error,
     )
+
+
+def _fire_consumed_handoff_sweep(worktree_root: Path, repo_root: Path) -> None:
+    """Fire `session.sweep_consumed_handoffs` after this pass's own
+    stamp/ship follow-up commit has landed -- the occasion `state/audits/
+    2026-08-27-the-archival-occasion-map-re-verified.md` names: this
+    module's follow-up commit lands via `git_native.commit_scoped` directly
+    and is never routed through `run_commit_pipeline`, so the in-plane
+    sweep that rides every ordinary ceremony commit
+    (`commit_pipeline._run_in_plane_archive_sweep`) never sees the handoff
+    this pass just made terminal.
+
+    UNCONDITIONAL, not cadence-gated (deliberate divergence from the
+    in-plane sweep's `_ARCHIVE_SWEEP_INTERVAL_S` gate). That gate exists
+    because the in-plane sweep reaches this line on EVERY ceremony commit
+    across ~50 concurrent sessions, and a corpus-sized classification pass
+    that often is the exact cost the gate was built to amortize. This call
+    site is reached once per chain-terminal workstream close -- rare by
+    construction (`post_commit_stamp_and_ship` no-ops immediately on
+    `chain_terminal=False`, and a workstream close is definitionally a
+    once-per-workstream event) -- so there is no per-commit cost to
+    amortize, and gating it on a cadence interval would risk skipping the
+    one occasion that matters: a workstream's terminal close may be the
+    last commit that checkout ever sees, so a missed sweep here has no
+    guaranteed next occasion to catch it later, unlike the in-plane sweep
+    where the next ordinary commit is expected to arrive soon.
+
+    NON-FATAL by construction, mirroring `_run_in_plane_archive_sweep`'s own
+    contract (see that function's docstring): the stamp+ship commit has
+    already landed by the time this fires, so nothing here may flip this
+    pass's exit code or undo the stamp. The deferred import is INSIDE the
+    try/except, not before it -- reaching the sweep is as much a part of
+    the sweep as running it (an import on a hot path fails like a runtime
+    operation, and did so live on 2026-08-27; see `commit_pipeline.
+    _run_in_plane_archive_sweep`'s own guarded-import comment for the
+    precedent this mirrors).
+
+    The op's own handler (`coordinator_core.ops.session.
+    sweep_consumed_handoffs._handler`) already treats a contended
+    single-flight lock (shared with `archive_terminal_handoffs`) as a
+    first-class non-error skip and records every outcome via
+    `_sweep_receipt.record_sweep_outcome` -- this wrapper adds nothing on
+    top of that except the non-fatal boundary itself, so a raising import,
+    a missing registration, or an unexpected exception from the handler are
+    the only things this function's own try/except needs to absorb.
+    """
+    try:
+        from coordinator_core.ops.fleet.archive_terminal_handoffs import (
+            _RECOMMENDED_CAP_CHOICE,
+        )
+    except Exception:
+        _LOG.warning(
+            "post_commit_stamp_and_ship: consumed-handoff sweep import "
+            "failed -- skipping (non-fatal)", exc_info=True,
+        )
+        return
+
+    # `get_op_handler` has TWO ways of saying "you cannot have this op", and
+    # only one of them is a return value. A killed op raises OpSuspendedError
+    # rather than returning None (`ipc.py`'s kill-switch branch), so the
+    # `handler is None` arm below covers the unregistered case ONLY. Both
+    # belong inside this function's non-fatal boundary: the module contract is
+    # that a sweep this path cannot run degrades to a logged skip, never to an
+    # exception out of `post_commit_stamp_and_ship` -- whose own call site
+    # (`await asyncio.to_thread(_fire_consumed_handoff_sweep, ...)`) has no
+    # try/except of its own, so a raise here propagates out of a ceremony
+    # whose commit has ALREADY LANDED.
+    try:
+        handler = get_op_handler("session.sweep_consumed_handoffs")
+    except Exception:
+        _LOG.warning(
+            "post_commit_stamp_and_ship: session.sweep_consumed_handoffs "
+            "unavailable -- skipping (non-fatal)", exc_info=True,
+        )
+        return
+    if handler is None:
+        _LOG.warning(
+            "post_commit_stamp_and_ship: session.sweep_consumed_handoffs "
+            "not registered -- skipping (non-fatal)"
+        )
+        return
+
+    try:
+        handler({"cap": _RECOMMENDED_CAP_CHOICE}, repo_root)
+    except Exception:
+        _LOG.warning(
+            "post_commit_stamp_and_ship: consumed-handoff sweep failed -- "
+            "non-fatal, stamp+ship commit already landed", exc_info=True,
+        )
 
 
 def _commit_and_push_follow_up(

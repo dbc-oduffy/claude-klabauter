@@ -64,6 +64,12 @@ _SAMPLE_STDIN = json.dumps(
 def _run(stdin_bytes: bytes, tmp_path: Path, extra_env: dict[str, str] | None = None) -> subprocess.CompletedProcess:
     env = dict(os.environ)
     env["TMPDIR"] = str(tmp_path)
+    # The sidecar lives under the SETTINGS HOME, not a tempdir --
+    # `context_usage_sidecar.sidecar_path` carries that as an explicit
+    # negative-spec ("this is NOT a tempdir path. It was one."). Without this
+    # the CLI wrote into the real ~/.coordinator-claude-settings and the
+    # assertions looked for a file nothing had produced since the move.
+    env["COORDINATOR_SETTINGS_HOME"] = str(tmp_path)
     env.pop("COORDINATOR_STATUSLINE_DEBUG", None)
     if extra_env:
         env.update(extra_env)
@@ -80,7 +86,9 @@ def _run(stdin_bytes: bytes, tmp_path: Path, extra_env: dict[str, str] | None = 
 
 
 def _sidecar_path(tmp_path: Path, session_id: str) -> Path:
-    return tmp_path / f"context-usage-{session_id}"
+    """Mirrors `context_usage_sidecar.sidecar_path` with `tmp_path` as the
+    settings home (§ `_run`'s COORDINATOR_SETTINGS_HOME)."""
+    return tmp_path / "state" / "context-window" / f"{session_id}.json"
 
 
 @pytest.fixture(autouse=True)
@@ -113,7 +121,7 @@ def test_sidecar_written_from_representative_stdin(tmp_path):
     assert sidecar.exists()
     payload = json.loads(sidecar.read_bytes())
     assert payload["context_window"]["used_percentage"] == 25
-    assert isinstance(payload["stamp"], (int, float))
+    assert isinstance(payload["captured_at"], (int, float))
 
 
 def test_inner_command_invoked_with_identical_stdin_and_stdout_reproduced(tmp_path):
@@ -186,6 +194,7 @@ def test_selftest_prints_resolved_sidecar_path(tmp_path):
     _SETTINGS_PATH.unlink(missing_ok=True)
     env = dict(os.environ)
     env["TMPDIR"] = str(tmp_path)
+    env["COORDINATOR_SETTINGS_HOME"] = str(tmp_path)
     result = subprocess.run(
         [sys.executable, str(_SCRIPT), "--selftest"],
         input=_SAMPLE_STDIN,

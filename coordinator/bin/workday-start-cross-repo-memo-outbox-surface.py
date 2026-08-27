@@ -66,7 +66,7 @@ def _import_runner():
     return run_op_main
 
 
-def main() -> None:
+def main(argv: "list[str] | None" = None) -> int:
     try:
         run_op_main = _import_runner()
     except RuntimeError as exc:
@@ -76,19 +76,19 @@ def main() -> None:
             f"workday-start-cross-repo-memo-outbox-surface.py: engine-root resolution failed: {exc}",
             file=sys.stderr,
         )
-        sys.exit(0)
+        return 0
     except ImportError as exc:
         print(
             f"workday-start-cross-repo-memo-outbox-surface.py: coordinator_core.cli_entry "
             f"not importable: {exc}",
             file=sys.stderr,
         )
-        sys.exit(0)
+        return 0
 
     try:
         code = run_op_main(
             "coordinator_core.ops.workday_start_cross_repo_memo_outbox_surface",
-            sys.argv[1:],
+            (sys.argv[1:] if argv is None else argv),
         )
     except ImportError as exc:
         print(
@@ -96,10 +96,10 @@ def main() -> None:
             f"workday_start_cross_repo_memo_outbox_surface not importable: {exc}",
             file=sys.stderr,
         )
-        sys.exit(0)
+        return 0
 
-    sys.exit(code)
+    return code
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

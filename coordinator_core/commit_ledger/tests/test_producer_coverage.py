@@ -101,14 +101,11 @@ _EXEMPT_PRODUCERS = {
         "scope to wire here -- left unwired and flagged for a follow-up "
         "sweep rather than silently widened past this chunk's brief scope."
     ),
-    "ops/session/boot_backstop.py": (
-        "NEW producer (`_commit_relocations`), found 2026-08-25 -- commits "
-        "into the recovery worktree, not this repo's own tree. The file is "
-        "under active concurrent edit by another dispatched session on this "
-        "branch; wiring the ledger means touching that live surface mid-edit. "
-        "Left unwired and flagged for a follow-up sweep rather than raced "
-        "against a peer's in-flight change."
-    ),
+    # ops/session/boot_backstop.py carried a deferral row here until
+    # 2026-08-27. It is gone, not deferred: the module was gravestoned (K-059)
+    # and its `_commit_relocations` producer went with it. A deferral row for a
+    # deleted file is the stale-roster hazard this ledger exists to catch, so it
+    # is removed rather than left to read as outstanding work.
     "percolate/round.py": (
         "NEW producer (`step_commit`), found 2026-08-25 -- commits into "
         "`context.dest_repo_root`, a SIBLING repo mirror, not this repo's "

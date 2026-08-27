@@ -347,9 +347,19 @@ def test_router_line_command_actually_resolves(tmp_path):
     assert gsi._KS_DETAIL_COMMAND == (
         "python3 -m coordinator_core.invoke session.guard_hooks_kill_switch_detail --bare"
     )
+    # `--allow-unstamped-dispatch` is added HERE, to the test's own argv, and
+    # deliberately NOT to `_KS_DETAIL_COMMAND` asserted above -- that string is
+    # what an operator is told to run, and they run it against a PUBLISHED
+    # engine where the build stamp exists. This tree is a source checkout, so
+    # the engine refuses the dispatch outright ("engine root ... has no build
+    # stamp -- not a published engine ... or pass --allow-unstamped-dispatch
+    # for deliberate manual testing"), which is precisely what this is. Without
+    # the flag the test fails on the tree it runs in rather than on whether the
+    # op resolves, which is the only thing it is asking.
     argv = [
         sys.executable, "-m", "coordinator_core.invoke",
         "session.guard_hooks_kill_switch_detail", "--bare",
+        "--allow-unstamped-dispatch",
     ]
     env = dict(os.environ)
     env["CLAUDE_CONFIG_DIR"] = str(config_dir)

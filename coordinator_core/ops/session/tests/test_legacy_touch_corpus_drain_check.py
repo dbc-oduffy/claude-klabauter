@@ -55,7 +55,7 @@ def test_touched_only_dir_counts_as_undrained(tmp_path):
 def test_dir_with_sibling_record_counts_as_drained(tmp_path):
     sessions_base = tmp_path / "coordinator-sessions"
     _write(sessions_base / "sid-1" / "touched.txt", "a/b.py\n")
-    _write(sessions_base / "sid-1" / "touch-record.jsonl", "")
+    _write(sessions_base / "sid-1" / "touch-record.jsonl", '{"v":1,"verb":"T","ts":1.0,"sid":"sid-1","agent":null,"path":"a/b.py"}\n')
 
     report = check_drain(sessions_base)
 
@@ -88,7 +88,7 @@ def test_mixed_corpus_reports_correct_count(tmp_path):
     sessions_base = tmp_path / "coordinator-sessions"
     _write(sessions_base / "sid-1" / "touched.txt", "a/b.py\n")
     _write(sessions_base / "sid-2" / "touched.txt", "c/d.py\n")
-    _write(sessions_base / "sid-2" / "touch-record.jsonl", "")
+    _write(sessions_base / "sid-2" / "touch-record.jsonl", '{"v":1,"verb":"T","ts":1.0,"sid":"sid-2","agent":null,"path":"c/d.py"}\n')
     _write(sessions_base / ".agents" / "aid-1" / "touched.txt", "e/f.py\n")
 
     report = check_drain(sessions_base)
@@ -114,10 +114,32 @@ def test_main_exits_nonzero_when_undrained(tmp_path, capsys):
 def test_main_exits_zero_when_fully_drained(tmp_path, capsys):
     sessions_base = tmp_path / "coordinator-sessions"
     _write(sessions_base / "sid-1" / "touched.txt", "a/b.py\n")
-    _write(sessions_base / "sid-1" / "touch-record.jsonl", "")
+    _write(sessions_base / "sid-1" / "touch-record.jsonl", '{"v":1,"verb":"T","ts":1.0,"sid":"sid-1","agent":null,"path":"a/b.py"}\n')
 
     exit_code = main(["--sessions-base", str(sessions_base)])
 
     assert exit_code == 0
     out = capsys.readouterr().out
     assert "undrained (touched.txt only, no sibling): 0" in out
+
+
+def test_empty_sibling_over_real_claims_is_undrained(tmp_path):
+    """An EMPTY touch-record.jsonl beside a touched.txt that still holds
+    claims is UNDRAINED, not drained.
+
+    Regression, 2026-08-27. The predicate was `record_path.exists()`, so a
+    zero-byte sink left by a failed migration read as success. Measured on
+    claude-klabauter: 133 dirs scanned, `undrained: []` reported, while eight
+    sessions held 167 legacy claims against empty siblings -- claims
+    compute_scope cannot see, on paths every peer's scope check therefore
+    treats as orphans and is free to sweep. This module gates removal of
+    the legacy union-read, so a false green here is unrecoverable loss.
+    """
+    sessions_base = tmp_path / "coordinator-sessions"
+    _write(sessions_base / "sid-1" / "touched.txt", "a/b.py\n")
+    _write(sessions_base / "sid-1" / "touch-record.jsonl", "")
+
+    report = check_drain(sessions_base)
+
+    assert report.scanned == 1
+    assert report.undrained_count == 1

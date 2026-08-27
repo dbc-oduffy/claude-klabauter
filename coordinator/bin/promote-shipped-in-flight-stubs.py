@@ -94,7 +94,7 @@ def _import_main():
     return _op_main, recording_declared_writes
 
 
-def main() -> None:
+def main(argv: "list[str] | None" = None) -> int:
     # Never-block posture (this is a best-effort /workday-start closer, not a
     # fail-loud gate): a claude-klabauter-link failure degrades to exit 0 with a loud
     # stderr diagnostic, matching the ported module's own always-exit-0
@@ -106,20 +106,20 @@ def main() -> None:
             f"promote-shipped-in-flight-stubs.py: CLAUDE_KLABAUTER_ROOT resolution failed: {exc}",
             file=sys.stderr,
         )
-        sys.exit(0)
+        return 0
     except ImportError as exc:
         print(
             "promote-shipped-in-flight-stubs.py: "
             f"coordinator_core.ops.promote_shipped_in_flight_stubs not importable: {exc}",
             file=sys.stderr,
         )
-        sys.exit(0)
+        return 0
 
     with recording_declared_writes(cwd=_DOE_REPO_ROOT):
-        code = op_main(sys.argv[1:], repo_root=_DOE_REPO_ROOT)
+        code = op_main((sys.argv[1:] if argv is None else argv), repo_root=_DOE_REPO_ROOT)
 
-    sys.exit(code)
+    return code
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

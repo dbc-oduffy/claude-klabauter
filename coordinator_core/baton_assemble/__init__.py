@@ -3061,7 +3061,19 @@ def _resolved_predecessor_sizing_object(
         candidate = root / candidate
     if not candidate.is_file():
         return ""
-    return _fm_field(_read_frontmatter(candidate), "sizing_object") or ""
+    value = (_fm_field(_read_frontmatter(candidate), "sizing_object") or "").strip()
+    # `_fm_field` returns RAW frontmatter text, never a YAML-parsed value, so an
+    # explicitly-null `sizing_object: null` arrives as the truthy string "null"
+    # and was forwarded verbatim as `--sizing-object=null`. coordinator-doc-new
+    # then resolves it as a path and refuses: "'null' does not resolve on disk
+    # (looked for <root>/null)" -- which made EVERY roadmap-baton carrying an
+    # explicit null sizing unable to hand off at all, the same class of dead end
+    # this function's own docstring records being fixed for the missing-flag case.
+    # An explicit null is the ABSENCE of a sizing object, so it takes the same
+    # `--no-sizing-object` limb as a field that was never written.
+    if value.lower() in {"null", "~", "none"}:
+        return ""
+    return value
 
 
 def _resolved_predecessor_roadmap_identity(

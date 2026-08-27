@@ -31,26 +31,4 @@
 #
 # Spec backlink: PM ruling 2026-07-21 + 2026-07-28 re-scope/ratchet-conversion
 # amendments (docs/wiki/cross-platform-invocation-parity.md, DR-076).
-coordinator/bin/claude-home
-coordinator/bin/coordinator-auto-push
-coordinator/bin/coordinator-doc-new.py
-coordinator/bin/coordinator-fold-execution-record.py
-coordinator/bin/coordinator-harvest-deferrals.py
-coordinator/bin/coordinator-lesson-promote.py
 coordinator/bin/coordinator-prepare-commit-msg
-coordinator/bin/coordinator-queue-append.py
-coordinator/bin/coordinator-renormalize-index.py
-coordinator/bin/coordinator-safe-commit.py
-coordinator/bin/coordinator-settings-home
-coordinator/bin/cross-repo-memo.py
-coordinator/bin/cruft-sweep.py
-coordinator/bin/cutover-cli.py
-coordinator/bin/detect-initiative-candidates.py
-coordinator/bin/emit-artifact-shape-contract.py
-coordinator/bin/handoff-carry-gate.py
-coordinator/bin/handoff-gate-aging.py
-coordinator/bin/machine-local
-coordinator/bin/queue-triage.py
-coordinator/bin/regenerate-orientation-cache.py
-coordinator/bin/schema-drift-gate.py
-coordinator/bin/verify-snippet-sync.py

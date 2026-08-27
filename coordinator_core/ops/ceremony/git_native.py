@@ -3252,11 +3252,38 @@ def _commit_scoped_private_index(
     # re-open the exact "committing nothing when something was actually
     # asked for" confusion this parameter exists to prevent for the
     # ORDINARY (index-present) no-op case, applied to the wrong case.
+    # C6b (docs/plans/2026-08-27-the-commit-op-resolves-one-pass-context.md):
+    # `create_missing_dirs=True` -- the ONE precondition-miss shape this
+    # branch actually hits at nonzero rate, a brand-new file under a
+    # brand-new subdirectory (`_rewrite_head_spine` cannot re-point into a
+    # spine that does not carry the new directory at all) -- now routes
+    # through `_synthesize_absent_spine_dirs` instead of falling to the
+    # ladder below, so that shape reaches AC1's 0-spawn target too. See
+    # `_synthesize_absent_spine_dirs`'s own docstring for exactly what it
+    # fills in and refuses.
+    #
+    # The ladder itself (`read-tree HEAD` / per-path `update-index
+    # --cacheinfo` / `git rm --pathspec-from-file` / `write-tree` /
+    # `commit-tree` / `update-ref`) is DELIBERATELY KEPT, not deleted as
+    # this chunk's own dispatch brief originally specified -- the brief's
+    # "0 spawns, not 1" instruction did not have this evidence:
+    # `test_agree_branch_commits_correctly_immediately_after_pack_refs`
+    # (this module's own suite) proves `_resolve_cas_ref_target` genuinely
+    # refuses after `git pack-refs --all` (no loose ref file for HEAD's
+    # branch until the next `git gc`/ref update touches it), a real,
+    # already-tested repo state on ANY worktree that has ever run
+    # maintenance, not a hypothetical. Deleting the ladder made that test
+    # fail loud instead of falling back and landing the commit correctly --
+    # a regression on a preserved invariant this chunk's brief also binds
+    # ("An implementation that reaches 0 spawns ... has broken the only
+    # thing this branch is for"). Reported as a brief divergence, not
+    # silently reconciled -- see this chunk's own run-report sidecar.
     fast_result = _commit_via_head_spine(
         root, assembled, old_head, msg_file,
         index_stat_identity=index_snapshot.stat_identity,
         caller="_commit_scoped_private_index",
         refuse_noop=index_snapshot.stat_identity is not None,
+        create_missing_dirs=True,
     )
     if fast_result is not None:
         if not fast_result.ok:

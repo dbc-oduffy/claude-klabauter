@@ -89,33 +89,33 @@ def _fallback_claude_home() -> str:
     return os.path.join(base, ".claude")
 
 
-def main() -> None:
+def main(argv: "list[str] | None" = None) -> int:
     try:
         run_op_main = _import_run_op_main()
     except RuntimeError as exc:
         print(f"learn-lessons-roots.sh: CLAUDE_KLABAUTER_ROOT resolution failed: {exc}", file=sys.stderr)
         print(_fallback_claude_home())
-        sys.exit(0)
+        return 0
     except ImportError as exc:
         print(
             f"learn-lessons-roots.sh: coordinator_core.cli_entry not importable: {exc}",
             file=sys.stderr,
         )
         print(_fallback_claude_home())
-        sys.exit(0)
+        return 0
 
     try:
-        code = run_op_main("coordinator_core.ops.learn_lessons_roots", sys.argv[1:])
+        code = run_op_main("coordinator_core.ops.learn_lessons_roots", (sys.argv[1:] if argv is None else argv))
     except ImportError as exc:
         print(
             f"learn-lessons-roots.sh: coordinator_core.ops.learn_lessons_roots not importable: {exc}",
             file=sys.stderr,
         )
         print(_fallback_claude_home())
-        sys.exit(0)
+        return 0
 
-    sys.exit(code)
+    return code
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

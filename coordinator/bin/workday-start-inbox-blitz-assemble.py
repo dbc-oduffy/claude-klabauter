@@ -452,7 +452,8 @@ def _resolve_repo_root() -> str:
     return os.getcwd()
 
 
-def main() -> int:
+def main(argv: "list[str] | None" = None) -> int:
+    del argv  # this CLI takes no arguments; argv accepted for the warm-call contract
     repo_root = _resolve_repo_root()
     result = _fetch_result(repo_root)
     candidates = result.get("candidates")

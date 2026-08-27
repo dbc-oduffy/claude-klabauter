@@ -590,29 +590,35 @@ def main(argv: Optional[List[str]] = None) -> int:
                 f"({len(targets)} row(s), {len(pathspec)} file(s))"
             )
             print(f"=== percolate-mirror {mirror_root} — commit ({len(pathspec)} file(s)) ===")
-            with tempfile.TemporaryDirectory() as tmpdir:
-                pathspec_file = Path(tmpdir) / "commit-pathspec.txt"
-                pathspec_file.write_text("\n".join(pathspec) + "\n", encoding="utf-8", newline="\n")
-                commit = _round._run(
-                    [
-                        sys.executable,
-                        str(_round._SCOPED_GIT_COMMIT),
-                        "-m",
-                        subject,
-                        "--repo",
-                        repo_root,
-                        "--json",
-                        "--pathspec-from-file",
-                        str(pathspec_file),
-                    ],
-                    timeout=_round._COMMIT_LEG_TIMEOUT_SECS,
-                )
-            print(commit.stdout.strip())
-            if commit.returncode != 0:
+            # `ceremony.scoped_git_commit` was KILLED 2026-08-23 (DR-344) and
+            # `_round._SCOPED_GIT_COMMIT` went with it, so this leg raised
+            # AttributeError the moment it was reached -- dead from the day of the
+            # kill, and invisible because the tests above it never got past
+            # "nothing to commit". Routed onto the same in-process seam
+            # percolate-round's own commit leg uses (§ C6, 2026-08-25).
+            import uuid  # noqa: PLC0415 - lazy, matching percolate-round's own commit leg
+            from coordinator_core.ops.ceremony import commit_pipeline  # noqa: PLC0415
+
+            pipeline_result = commit_pipeline.run_commit_pipeline(
+                repo_root,
+                session_id=f"percolate-mirror-{uuid.uuid4().hex}",
+                subject=subject,
+                stage_paths=pathspec,
+                caller_paths=set(pathspec),
+                push_mode=commit_pipeline.PUSH_MODE_NEVER,
+            )
+            committed = (
+                pipeline_result.committed_sha is not None or pipeline_result.sha_unverified
+            )
+            if not committed:
                 _round._print_step_failure(
-                    "commit (scoped-git-commit)", ["scoped-git-commit"], commit.stderr
+                    "commit (ceremony.commit)",
+                    ["run_commit_pipeline"],
+                    pipeline_result.reason or "commit did not land",
                 )
                 return _round._EXIT_FAIL
+            sha = pipeline_result.committed_sha or "(sha unverified)"
+            print(f"percolate-mirror {mirror_root} — commit {sha[:12]}")
 
             if args.no_publish:
                 print("")
