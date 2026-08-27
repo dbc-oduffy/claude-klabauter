@@ -23,15 +23,14 @@ from __future__ import annotations
 import os
 import sys
 
-import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
-from cc_invoke import require_dispatch_engine_on_path  # noqa: E402
-
-
 def _import_runner():
     """DR-276: routed through `coordinator_core.cli_entry.run_op_main` rather
     than calling the op's `main` directly, so any paths it declares become a
     session scope-touch claim (query_completions is read-only today, but the
     seam is uniform across every trampoline over this route)."""
+    import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
+    from cc_invoke import require_dispatch_engine_on_path
+
     claude_klabauter_root = require_dispatch_engine_on_path()
     from coordinator_core.cli_entry import run_op_main
     return run_op_main

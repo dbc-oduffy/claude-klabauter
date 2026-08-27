@@ -57,9 +57,6 @@ from __future__ import annotations
 import os
 import sys
 
-import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
-from cc_invoke import require_dispatch_engine_on_path  # noqa: E402
-
 # Generator-provenance declaration (C2, generator_provenance.py's AST reader).
 # THIS file is a thin CLI trampoline (see module docstring) -- `sources`
 # names the real implementation locus, `coordinator_core/ops/generate_exec_summary.py`
@@ -85,6 +82,9 @@ def _import_runner():
     a session scope-touch claim. Without that, everything this CLI writes is an
     orphan at the `scoped_git_commit` sink.
     """
+    import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
+    from cc_invoke import require_dispatch_engine_on_path
+
     claude_klabauter_root = require_dispatch_engine_on_path()
     from coordinator_core.cli_entry import run_op_main
     return run_op_main

@@ -65,11 +65,6 @@ import os
 import sys
 
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
-from cc_invoke import require_dispatch_engine_on_path  # noqa: E402
-from coordinator_data_root import data_root  # noqa: E402
-
-_PLUGIN_ROOT = os.environ.get("CLAUDE_PLUGIN_ROOT") or str(data_root("snippets").parent)
 
 
 # DR-276: routed through `coordinator_core.cli_entry.run_op_main` rather than a
@@ -92,7 +87,12 @@ def _import_run_op_main():
     rung-1 short-circuit and never needs its own fallback ladder in the normal
     call shape.
     """
-    os.environ.setdefault("CLAUDE_PLUGIN_ROOT", _PLUGIN_ROOT)
+    import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
+    from cc_invoke import require_dispatch_engine_on_path
+    from coordinator_data_root import data_root
+
+    plugin_root = os.environ.get("CLAUDE_PLUGIN_ROOT") or str(data_root("snippets").parent)
+    os.environ.setdefault("CLAUDE_PLUGIN_ROOT", plugin_root)
     claude_klabauter_root = require_dispatch_engine_on_path()
     from coordinator_core.cli_entry import run_op_main
     return run_op_main

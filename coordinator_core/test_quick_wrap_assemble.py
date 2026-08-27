@@ -519,10 +519,10 @@ def test_safe_commit_offer_is_a_directive_not_a_judgment_point(repo: Path, monke
     agent might not run and never a judgment point to decide."""
     _stub_facts_all_computed(monkeypatch, repo)
 
-    calls: list[tuple[str, str, object, str | None]] = []
+    calls: list[tuple[str, str, object]] = []
 
-    async def _fake_auto_commit(session_id, cwd=None, groups=None, invoker=None):
-        calls.append((session_id, cwd, groups, invoker))
+    async def _fake_auto_commit(session_id, cwd=None, groups=None):
+        calls.append((session_id, cwd, groups))
         return {
             "session_id": session_id,
             "groups": [],
@@ -542,7 +542,11 @@ def test_safe_commit_offer_is_a_directive_not_a_judgment_point(repo: Path, monke
 
     envelope = qwa.brief()
 
-    assert calls == [(_SID, str(repo), None, "attended")]
+    # No framing argument: `invoker` was deleted 2026-08-27 (no producer could
+    # substantiate the attended/unattended claim it selected). This stub's
+    # signature is the guard -- it fails loud if the call re-grows one, which
+    # `brief()`'s own fail-open would otherwise swallow into an error report.
+    assert calls == [(_SID, str(repo), None)]
     assert "safe-commit-offer" not in [d["cli"] for d in envelope["directives"]]
     assert not any("commit" in p["question"].lower() for p in envelope["judgment_points"])
     assert envelope["gates"]["commit_outcome"]["status"] == "empty"

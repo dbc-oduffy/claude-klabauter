@@ -112,8 +112,6 @@ _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__f
 if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
-from coordinator_core.win_portability import is_executable  # noqa: E402
-
 _METACHAR_RE = re.compile(r"\$\(|`|; ")
 _ESCAPED_QUOTE_RE = re.compile(r"\\[\"']")
 
@@ -182,6 +180,8 @@ def _venv_interp(repo_root: str | None) -> str | None:
     """
     if not repo_root:
         return None
+    from coordinator_core.win_portability import is_executable
+
     for rel in ("bin/python", "Scripts/python.exe"):
         cand = os.path.join(repo_root, ".venv", *rel.split("/"))
         if os.path.isfile(cand) and is_executable(cand):

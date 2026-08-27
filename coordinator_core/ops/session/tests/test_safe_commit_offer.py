@@ -879,12 +879,11 @@ class TestAutoCommitSession:
     @pytest.mark.designed_red
     def test_default_grouping_subject_stays_bounded_body_carries_the_list(self, tmp_path):
         """Regression guard for the enumerated-filenames-in-subject shape:
-        the subject must stay short/bounded regardless of file count, and
-        the full path list + safety-net framing must land in the commit
-        BODY, not the subject. Passes ``invoker="unattended"`` explicitly —
-        the real SessionEnd-hook shape this test exercises; see
-        TestDefaultGroupsInvokerFraming for the attended/undeclared
-        counterparts, which do not carry safety-net framing."""
+        the subject must stay short/bounded regardless of file count, and the
+        full path list must land in the commit BODY, not the subject. The
+        bound is the point and it is independent of framing — see
+        TestDefaultGroupsFraming for what the body may and may not claim now
+        that ``invoker`` is deleted (2026-08-27)."""
         repo = _make_repo(tmp_path)
         core.init("mine", cwd=str(repo))
         paths = []
@@ -895,9 +894,7 @@ class TestAutoCommitSession:
             scope.touch("mine", p, cwd=str(repo))
             paths.append(p)
 
-        report = safe_commit_offer.commit_session_offer(
-            "mine", cwd=str(repo), invoker="unattended"
-        )
+        report = safe_commit_offer.commit_session_offer("mine", cwd=str(repo))
 
         assert len(report["groups"]) == 1
         subject = report["groups"][0]["message"]
@@ -1288,10 +1285,6 @@ class TestHandler:
     def test_groups_must_be_a_list(self, tmp_path):
         out = safe_commit_offer._handler({"groups": "not-a-list"})
         assert "params.groups must be a list" in out["error"]
-
-    def test_bad_invoker_is_a_usage_error(self, tmp_path):
-        out = safe_commit_offer._handler({"invoker": "sideways"})
-        assert "params.invoker must be one of" in out["error"]
 
     def test_unresolvable_session_returns_error_envelope(self, tmp_path, monkeypatch):
         repo = _make_repo(tmp_path)
@@ -1952,56 +1945,69 @@ class TestMemoSendDeclaresOutboxWrites:
 
 
 # ---------------------------------------------------------------------------
-# (g) --invoker framing (example-cockpit-repo-em memo, 2026-08-17): a deliberate
-# ceremony commit through the mechanical `_default_groups` fallback must not
-# be mislabelled as an unattended stop-event rescue. `invoker=None` — the
-# undeclared case — must assert nothing about why the commit happened.
+# (g) Mechanical-fallback commit framing. The `invoker` parameter that used to
+# select between three framings was DELETED 2026-08-27 (no producer ever passed
+# it; doe-claude-em confirmed neither surviving ceremony call site passes one or
+# intends to). What these tests now lock is the ONE surviving shape and, more
+# importantly, the claims it must never make.
+#
+# The originating incident still governs (example-cockpit-repo-em memo, 2026-08-17):
+# a deliberate, curated ceremony commit landed in history confidently
+# mislabelled an unattended stop-event rescue. Deleting the parameter does not
+# reinstate that bug — it removes the vocabulary that made it expressible — so
+# the negative assertions below outlive the parameter and are the real subject
+# of this section.
 # ---------------------------------------------------------------------------
 
 
-class TestDefaultGroupsInvokerFraming:
-    def test_unattended_keeps_stop_event_subject_and_prose(self):
-        # Regression lock for the real SessionEnd path — byte-for-byte the
-        # original framing.
-        groups = safe_commit_offer._default_groups(["a.py"], "sess123456", "unattended")
-        assert len(groups) == 1
-        subject = groups[0]["message"]
-        prose = groups[0]["prose"]
-        assert subject == "auto-commit: 1 file(s) rescued at session stop (session sess12, (repo root))"
-        assert "Stop-event safety net" in prose
-        assert "ended without committing them itself" in prose
-        assert "docs/wiki/scoped-safety-commits.md § 3b" in prose
-
-    def test_attended_has_no_stop_event_claim(self):
-        groups = safe_commit_offer._default_groups(["a.py"], "sess123456", "attended")
-        assert len(groups) == 1
-        subject = groups[0]["message"]
-        prose = groups[0]["prose"]
-        assert subject == "auto-commit: 1 file(s) (session sess12, (repo root))"
-        assert "rescued at session stop" not in prose
-        assert "ended without committing them itself" not in prose
-        assert "deliberate" in prose
-
-    def test_undeclared_invoker_has_no_stop_event_claim(self):
-        groups = safe_commit_offer._default_groups(["a.py"], "sess123456", None)
-        assert len(groups) == 1
-        subject = groups[0]["message"]
-        prose = groups[0]["prose"]
-        # Subject matches the attended shape (still short/bounded).
-        assert subject == "auto-commit: 1 file(s) (session sess12, (repo root))"
-        assert "rescued at session stop" not in prose
-        assert "ended without committing them itself" not in prose
-        # Nor may it claim the opposite (deliberate/ceremony) framing —
-        # undeclared means undeclared, not defaulted either way.
-        assert "ceremony" not in prose.lower()
-
-    def test_default_invoker_argument_is_none_shaped(self):
-        # Calling without the keyword at all reproduces the undeclared shape.
+class TestDefaultGroupsFraming:
+    def test_body_asserts_how_never_why(self):
         groups = safe_commit_offer._default_groups(["a.py"], "sess123456")
-        assert "rescued at session stop" not in groups[0]["prose"]
+        assert len(groups) == 1
+        subject = groups[0]["message"]
+        prose = groups[0]["prose"]
+
+        # Short and bounded: count + subsystem key + short session id, never an
+        # enumerated file list (unreadable in `git log --oneline`).
+        assert subject == "auto-commit: 1 file(s) (session sess12, (repo root))"
+
+        # It may say HOW the paths were bucketed...
+        assert "asserts nothing about why it happened" in prose
+        assert "subsystem-" in prose
+        assert "  - a.py" in prose
+
+    def test_no_stop_event_claim(self):
+        """The retired `"unattended"` framing. No caller can substantiate it:
+        the SessionEnd trigger is gone, and anything that can dial the op can
+        reach this fallback. A subject claiming a rescue is a claim about WHY.
+        """
+        prose = safe_commit_offer._default_groups(["a.py"], "sess123456")[0]["prose"]
+        subject = safe_commit_offer._default_groups(["a.py"], "sess123456")[0]["message"]
+        assert "rescued at session stop" not in subject
+        assert "Stop-event safety net" not in prose
+        assert "ended without committing them itself" not in prose
+
+    def test_no_deliberate_ceremony_claim(self):
+        """The retired `"attended"` framing, and the half easier to lose: having
+        removed the false "accident" story, do not default to the opposite false
+        story. This function cannot know a ceremony ran.
+        """
+        prose = safe_commit_offer._default_groups(["a.py"], "sess123456")[0]["prose"]
+        assert "ceremony" not in prose.lower()
+        assert "deliberate" not in prose.lower()
+
+    def test_takes_no_framing_argument(self):
+        """The deletion itself. A third positional would silently be a framing
+        selector again; this pins the signature so re-adding one is a test
+        failure rather than a quiet regression.
+        """
+        import inspect
+
+        params = list(inspect.signature(safe_commit_offer._default_groups).parameters)
+        assert params == ["safe_paths", "session_id"]
 
 
-class TestGroupsSuppliedPathIgnoresInvoker:
+class TestGroupsSuppliedPathKeepsAuthoredFraming:
     # designed_red: blocked on the `ceremony.scoped_git_commit` op SUSPENSION
     # (coordinator_core/op_budget_suspension.py, PM ruling 2026-08-21: measured
     # max 150021ms against a 2000ms bar). NOT the attribution kill -- that was
@@ -2009,7 +2015,7 @@ class TestGroupsSuppliedPathIgnoresInvoker:
     # proven under 2s and leaves the roster, and not before; nothing in this
     # module can lift it.
     @pytest.mark.designed_red
-    def test_explicit_groups_path_never_consults_invoker(self, tmp_path):
+    def test_explicit_groups_reach_the_commit_verbatim(self, tmp_path):
         repo = _make_repo(tmp_path)
         core.init("mine", cwd=str(repo))
         (repo / "a.py").write_text("a")
@@ -2019,37 +2025,23 @@ class TestGroupsSuppliedPathIgnoresInvoker:
             "mine",
             str(repo),
             groups=[{"paths": ["a.py"], "message": "hand-authored subject"}],
-            invoker="unattended",
         )
         assert len(report["groups"]) == 1
         assert report["groups"][0]["message"] == "hand-authored subject"
-        # Neither invoker-specific framing string leaked into an
-        # explicit-groups commit — `_default_groups` was never called.
+        # A caller that authored its own framing must not have the mechanical
+        # fallback's wording grafted onto it — `_default_groups` was never called.
         assert "rescued at session stop" not in report["groups"][0]["message"]
 
 
-class TestHandlerInvokerParam:
-    def test_rejects_unknown_invoker_value(self):
-        out = safe_commit_offer._handler({"invoker": "bogus"})
-        assert "params.invoker must be one of" in out["error"]
-
-    # designed_red: blocked on the `ceremony.scoped_git_commit` op SUSPENSION
-    # (coordinator_core/op_budget_suspension.py, PM ruling 2026-08-21: measured
-    # max 150021ms against a 2000ms bar). NOT the attribution kill -- that was
-    # rebuilt and `_MECHANISM_DISABLED` is gone. This re-greens when the op is
-    # proven under 2s and leaves the roster, and not before; nothing in this
-    # module can lift it.
-    @pytest.mark.designed_red
-    def test_accepts_attended_and_unattended(self, tmp_path):
-        repo = _make_repo(tmp_path)
-        core.init("mine", cwd=str(repo))
-        for value in ("attended", "unattended"):
-            (repo / ("f_%s.py" % value)).write_text(value)
-            scope.touch("mine", "f_%s.py" % value, cwd=str(repo))
-            out = safe_commit_offer._handler(
-                {"session_id": "mine", "cwd": str(repo), "invoker": value}
-            )
-            assert "error" not in out
+class TestHandlerRejectsRetiredInvokerParam:
+    def test_invoker_param_is_ignored_not_honoured(self):
+        """A ceremony still passing the retired param must not silently get a
+        framing back. The param is gone, so the call is refused for the reason
+        it is actually deficient (identity), never quietly accepted with the
+        old three-way behaviour resurrected.
+        """
+        out = safe_commit_offer._handler({"invoker": "unattended"})
+        assert "caller identity could not be established" in out["error"]
 
 
 class TestNothingToCommitDistinguishesSeenFromClean:

@@ -30,8 +30,6 @@ from __future__ import annotations
 import os
 import sys
 
-import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
-from entry_point_shim import run_target  # noqa: E402
 
 def main(argv: list[str] | None = None) -> int:
     """Warm-loadable entry point for the native door (DR-347 Ruling 2).
@@ -55,6 +53,9 @@ def main(argv: list[str] | None = None) -> int:
     # passes an explicit list; `__main__` below passes sys.argv[1:] explicitly)
     # -- kept only so a direct `main()` call (e.g. from a REPL or test) doesn't
     # need to thread sys.argv itself.
+    import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
+    from entry_point_shim import run_target
+
     return run_target("merge-assemble", list(sys.argv[1:] if argv is None else argv))
 
 

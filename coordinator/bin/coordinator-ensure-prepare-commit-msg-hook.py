@@ -30,14 +30,13 @@ _REPO_ROOT = os.path.dirname(os.path.dirname(_BIN_DIR))
 if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
-import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
-from git_hook_install import ensure_prepare_commit_msg_hook  # noqa: E402
-
-
 def main(argv: "list[str] | None" = None) -> int:
     # argv threading: this CLI reads sys.argv at depth (argparse and helpers),
     # so the warm-call path swaps it for the duration rather than rewriting every read.
     # NOT re-entrant: a threaded server must serialise calls into this entrypoint.
+    import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
+    from git_hook_install import ensure_prepare_commit_msg_hook
+
     _prev_argv = sys.argv
     if argv is not None:
         sys.argv = [sys.argv[0], *argv]

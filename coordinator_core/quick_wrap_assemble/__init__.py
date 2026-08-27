@@ -711,7 +711,7 @@ def _run_close_commit(root: Path, sid: str) -> dict[str, Any]:
     without this module writing anywhere new for it (AC9's second half).
     """
     try:
-        report = asyncio.run(commit_session_offer_async(sid, str(root), invoker="attended"))
+        report = asyncio.run(commit_session_offer_async(sid, str(root)))
         return dict(report)
     except Exception as exc:  # noqa: BLE001 — must never block brief()'s own computation
         return {

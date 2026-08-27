@@ -74,11 +74,6 @@ from __future__ import annotations
 import os
 import sys
 
-import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
-from cc_invoke import require_dispatch_engine_on_path  # noqa: E402
-from coordinator_registry import _DoeUnresolvable, doe_root  # noqa: E402
-
-
 def _resolve_coordinator_root() -> str:
     """Resolve the DoE-side coordinator/ root that owns schemas/ (input) and
     artifact-shape-contract/ (default output).
@@ -98,6 +93,9 @@ def _resolve_coordinator_root() -> str:
     env_root = os.environ.get("CLAUDE_PLUGIN_ROOT")
     if env_root:
         return env_root
+    import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
+    from coordinator_registry import _DoeUnresolvable, doe_root
+
     try:
         root = doe_root()
     except _DoeUnresolvable as exc:
@@ -126,6 +124,9 @@ def _import_runner():
     become a session scope-touch claim. Without that, everything this CLI
     writes is an orphan at the `scoped_git_commit` sink.
     """
+    import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
+    from cc_invoke import require_dispatch_engine_on_path
+
     claude_klabauter_root = require_dispatch_engine_on_path()
     from coordinator_core.cli_entry import run_op_main
 

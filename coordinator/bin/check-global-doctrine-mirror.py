@@ -142,9 +142,6 @@ import os
 import shutil
 import sys
 
-import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
-from coordinator_registry import _DoeUnresolvable, doe_root  # noqa: E402
-
 PROG = "check-global-doctrine-mirror.py"
 
 # (mirror-relative filename, ~/.claude-relative filename) -- currently identical
@@ -200,6 +197,9 @@ def _repo_root() -> str:
     never-block hook, so an unresolvable DoE root must not silently
     masquerade as the "mirror absent, skip" case.
     """
+    import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
+    from coordinator_registry import _DoeUnresolvable, doe_root
+
     try:
         return doe_root()
     except _DoeUnresolvable as exc:

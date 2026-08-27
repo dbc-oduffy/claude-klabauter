@@ -4737,14 +4737,13 @@ _ORACLE_CLAIMS: dict[tuple[str, str, str], tuple[str, str]] = {
     # --- `git rev-list` cannot express a union of ranges (cadence tier) ---
     # One measured fact, six call sites. This is the shape the prose register got RIGHT and
     # could not prove: the claim was true, and nothing tested it at five of the six sites.
-    ("coordinator_core/coverage.py", "_reviewed_via_graph_walk", "_run"): (
-        "test_git_argument_surface::test_git_rev_list_exclusions_are_global",
-        "cadence",
-    ),
-    ("coordinator_core/ops/review_coverage_core.py", "build_reviewed_set", "_run"): (
-        "test_git_argument_surface::test_git_rev_list_exclusions_are_global",
-        "cadence",
-    ),
+    #: TWO ENTRIES RETIRED 2026-08-27, on the guard's own instruction ("no longer match any
+    #: detected site -- delete them"), verified before deleting rather than on its say-so:
+    #: `coverage.py::_reviewed_via_graph_walk` no longer exists at all, and
+    #: `review_coverage_core.py::build_reviewed_set` still exists with ZERO `_run` calls
+    #: inside any loop. Both were retired by peer work, not by anything here. The oracle they
+    #: named still exists, still passes, and is still load-bearing for the sites below — a
+    #: retired site is the register shrinking correctly, never a reason to weaken the claim.
     ("coordinator_core/ops/review_coverage_core.py", "build_segments", "_run"): (
         "test_git_argument_surface::test_git_rev_list_exclusions_are_global",
         "cadence",

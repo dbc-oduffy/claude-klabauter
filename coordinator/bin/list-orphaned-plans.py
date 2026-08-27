@@ -57,15 +57,6 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from coordinator_core.ops.draft_plan_aging import (  # noqa: E402
-    AGING_THRESHOLD_DAYS,
-    list_orphaned,
-)
-from coordinator_core.orient_assemble.reader_result import (  # noqa: E402
-    truncate_external_text,
-)
-from coordinator_core.git.repo_root import show_toplevel  # noqa: E402
-
 _USAGE_FAIL = 2
 
 #: Cap on `unrecognized_status` lines printed — mirrors
@@ -82,6 +73,8 @@ def _resolve_repo_root(positional: str | None) -> str | None:
     CLI (see module docstring); the registered op and the orient-assemble
     reader both keep the explicit-repo_root discipline instead.
     """
+    from coordinator_core.git.repo_root import show_toplevel
+
     if positional:
         return positional
     return show_toplevel()
@@ -96,6 +89,9 @@ def _usage(prog: str) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    from coordinator_core.ops.draft_plan_aging import AGING_THRESHOLD_DAYS, list_orphaned
+    from coordinator_core.orient_assemble.reader_result import truncate_external_text
+
     argv = sys.argv[1:] if argv is None else argv
     prog = "list-orphaned-plans"
 

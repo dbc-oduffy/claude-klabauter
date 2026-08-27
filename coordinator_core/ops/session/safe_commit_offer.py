@@ -104,16 +104,21 @@ and never gated or blocked. (This sentence used to open with "the SessionEnd
 trigger reliability this module's CLI exists for". That trigger is retired,
 and so is the CLI; the OP exists for the ceremonies now.)
 
-THE ``"unattended"`` INVOKER HAS NO PRODUCER LEFT. ``params.invoker`` is
-still accepted and ``commit_session_offer`` still
-branches on it, but as of 2026-08-27 nothing in either repo passes
-``"unattended"`` except this module's own tests: the SessionEnd registration
-that was its one real caller is retired, and the sole non-test caller
-(`coordinator_core.quick_wrap_assemble`) is a ceremony. The branch is kept
-rather than deleted because the parameter is a wire surface doe-claude-em's
-skills pass by name and removing it is a cross-repo break, not a local tidy — the
-same reasoning that kept `PeerOwnedPath`'s ``"agent-race"`` value whole. Read
-its "Stop-event safety net" commit framing as describing a shape nothing
+THE ``invoker`` PARAMETER IS DELETED (2026-08-27) and must not come back
+without a producer. It framed a commit three ways — ``"unattended"`` (a
+stop-event rescue), ``"attended"`` (a deliberate ceremony), and undeclared.
+The SessionEnd registration that was ``"unattended"``'s only real caller was
+retired, no engine caller ever passed any value, and doe-claude-em confirmed
+neither surviving ceremony call site passes one or intends to. It was kept for
+a while on the theory that it was a wire surface a sibling's skills named — that
+theory was never checked with the sibling, and was wrong.
+
+What survives is the UNDECLARED framing, because it is the only one that is
+true of every caller. ``"attended"`` asserted a deliberate ceremony, which this
+op cannot know: it answers on the warm door and anything that can dial it can
+reach the mechanical fallback. A commit body may say how the paths were
+bucketed; it may not claim why the commit happened. Read the retired
+"Stop-event safety net" framing as describing a shape nothing
 currently produces, and if you are here because you found that framing in a
 real commit message, that is a finding worth chasing: it means something
 started declaring itself unattended again.
@@ -1015,15 +1020,11 @@ def compute_offer(session_id: str, cwd: Optional[str] = None) -> SafeCommitOffer
 
 
 def _default_groups(
-    safe_paths: List[str], session_id: str, invoker: Optional[str] = None
+    safe_paths: List[str], session_id: str
 ) -> List[CommitGroup]:
     """Mechanical grouping used ONLY when the caller supplies no explicit
     `groups` — i.e. no EM/human judgment authored a per-group description for
-    THIS call. That covers two materially different callers, distinguished
-    by ``invoker``: an unattended trigger (a SessionEnd hook, ``"unattended"``)
-    with nobody watching, and an EM-run ceremony (``"attended"``, e.g.
-    `/quick-wrap` step 1) that chose to skip authoring per-group descriptions
-    and fall back to this mechanical bucketing on purpose. Groups by the
+    THIS call. Groups by the
     path's top-two segments (a coarse subsystem boundary —
     `coordinator/skills`, `state/handoffs`, a bare top-level dir when there's
     only one segment) rather than either extreme the PM named as worse than
@@ -1035,35 +1036,28 @@ def _default_groups(
     default only bounds the mechanical case, it doesn't aspire to replace
     authored judgment.
 
-    ``invoker`` resolves the commit's own framing three ways — see the
-    module's dispatching memo (example-cockpit-repo-em, 2026-08-17) for the
-    incident this fixes: a deliberate, curated ceremony commit landing in
-    history confidently mislabelled as an unattended accident, because this
-    function previously asserted the stop-event story unconditionally.
+    THE BODY ASSERTS HOW, NEVER WHY. It says the paths were bucketed
+    mechanically and nothing about the reason the commit happened. That is the
+    surviving half of the ``invoker`` contract deleted 2026-08-27 (see the
+    module docstring): the parameter framed a commit as a stop-event rescue or
+    as a deliberate ceremony, and neither claim is one this function can
+    substantiate now that any caller can reach it through the warm door.
 
-      - ``"unattended"`` — the real SessionEnd-hook shape. Subject/prose
-        frame this as a stop-event safety net: nobody committed the work,
-        this call exists so it is not lost. Byte-for-byte the same wording
-        this function has always produced.
-      - ``"attended"`` — an EM ceremony chose this fallback. The GROUPING is
-        mechanical (no per-group description was authored this call), but
-        the commit's EXISTENCE is deliberate — the session is still running
-        and chose to commit. Prose says so; it must NOT claim the session
-        ended or that anything was rescued.
-      - ``None`` (default) — the caller did not declare which shape this is.
-        This function then asserts NOTHING about why the commit happened —
-        it does not know, and guessing either way risks the same
-        mislabelling this fix exists to retire. Subject matches
-        ``"attended"``'s (still short/bounded); prose names the grouping as
-        an uncurated mechanical bucketing without a stop-event or ceremony
-        claim either way.
+    The incident that produced ``invoker`` still governs the wording — see the
+    module's dispatching memo (example-cockpit-repo-em, 2026-08-17): a deliberate,
+    curated ceremony commit landed in history confidently mislabelled an
+    unattended accident, because this function asserted the stop-event story
+    unconditionally. Deleting the parameter does not reinstate that bug, it
+    removes the vocabulary that made it expressible. Do not reintroduce a
+    "rescued at session stop" subject without a producer that can prove it — the
+    session is still running and chose to commit, and this function cannot
+    tell that from a stop-event rescue.
 
     Subject/body split (PM framing, 2026-07-31: "if I have to commit, it's a
-    safety [net] because someone forgot to commit" — the origin framing,
-    still exactly true for ``"unattended"``; the ``"attended"``/``None``
-    shapes above are this function's later, narrower correction, not a
-    reversal of it). The subject stays SHORT and BOUNDED across all three
-    shapes — file count + subsystem key + short session id, never an
+    safety [net] because someone forgot to commit" — the origin framing, true
+    of the stop-event trigger that no longer exists; the narrower shape here is
+    this function's later correction, not a reversal of it). The subject stays
+    SHORT and BOUNDED — file count + subsystem key + short session id, never an
     enumerated file list (unbounded at N paths, unreadable in a `git log
     --oneline`). The full path list, and which subsystem key grouped them,
     live in the BODY (`prose`) in every shape, where length costs nothing and
@@ -1091,45 +1085,17 @@ def _default_groups(
 
     groups: List[CommitGroup] = []
     for key, paths in buckets.items():
-        if invoker == "unattended":
-            subject = "auto-commit: %d file(s) rescued at session stop (session %s, %s)" % (
-                len(paths), session_id[:6], key
-            )
-            prose = (
-                "Stop-event safety net, not a deliberate change — these files were left "
-                "uncommitted when session %s ended without committing them itself. This "
-                "commit exists so the work is not lost, not to curate history; the good "
-                "archaeological commits are the deliberate ones a session makes while it "
-                "is still running. See docs/wiki/scoped-safety-commits.md § 3b.\n\n"
-                "Grouped under %r (this session's own touch-list claim, subsystem-"
-                "bucketed):\n%s"
-            ) % (session_id, key, "\n".join("  - %s" % p for p in paths))
-        elif invoker == "attended":
-            subject = "auto-commit: %d file(s) (session %s, %s)" % (
-                len(paths), session_id[:6], key
-            )
-            prose = (
-                "Ceremony commit, mechanically grouped — session %s chose this "
-                "fallback rather than authoring per-group descriptions, so the "
-                "GROUPING below is mechanical (subsystem-bucketed), not the commit's "
-                "existence: this is a deliberate commit an EM ceremony made while "
-                "still running, not a stop-event rescue.\n\n"
-                "Grouped under %r (this session's own touch-list claim, subsystem-"
-                "bucketed):\n%s"
-            ) % (session_id, key, "\n".join("  - %s" % p for p in paths))
-        else:
-            subject = "auto-commit: %d file(s) (session %s, %s)" % (
-                len(paths), session_id[:6], key
-            )
-            prose = (
-                "Mechanically grouped, invoker undeclared — session %s did not "
-                "declare whether this call is attended or unattended, so this "
-                "commit asserts nothing about why it happened, only how the paths "
-                "below were bucketed (subsystem-grouped, no per-group description "
-                "authored this call).\n\n"
-                "Grouped under %r (this session's own touch-list claim, subsystem-"
-                "bucketed):\n%s"
-            ) % (session_id, key, "\n".join("  - %s" % p for p in paths))
+        subject = "auto-commit: %d file(s) (session %s, %s)" % (
+            len(paths), session_id[:6], key
+        )
+        prose = (
+            "Mechanically grouped — this commit asserts nothing about why it "
+            "happened, only how the paths below were bucketed (subsystem-"
+            "grouped, no per-group description authored this call). Session %s "
+            "reached this fallback rather than supplying explicit groups.\n\n"
+            "Grouped under %r (this session's own touch-list claim, subsystem-"
+            "bucketed):\n%s"
+        ) % (session_id, key, "\n".join("  - %s" % p for p in paths))
         groups.append({"paths": paths, "message": subject, "prose": prose})
     return groups
 
@@ -1422,7 +1388,6 @@ async def commit_session_offer_async(
     session_id: str,
     cwd: Optional[str] = None,
     groups: Optional[List[CommitGroup]] = None,
-    invoker: Optional[str] = None,
 ) -> CommitOfferReport:
     """Compute this session's safe pathspec and commit+push it — NO
     confirmation step, by explicit PM ruling.
@@ -1451,13 +1416,6 @@ async def commit_session_offer_async(
     session's own computed ``safe_paths`` is silently dropped from its group
     — the auto-commit boundary is COMPUTED, never caller-widened. ``None``
     (the default) uses ``_default_groups``.
-
-    ``invoker`` is consulted ONLY on the ``groups is None`` path — threaded
-    straight through to ``_default_groups`` to resolve that fallback's
-    commit framing (``"attended"`` / ``"unattended"`` / ``None`` — see that
-    function's own docstring for the three-way split). A caller supplying
-    explicit ``groups`` already authored its own framing in ``prose``, so
-    ``invoker`` is inert there.
 
     C4 hardening (a) — read ``offer["indeterminate"]``/
     ``offer["ownership"]["degraded"]`` BEFORE building any group or calling
@@ -1524,7 +1482,7 @@ async def commit_session_offer_async(
 
     dropped_groups: List[DroppedGroup] = []
     if groups is None:
-        resolved_groups = _default_groups(offer["safe_paths"], session_id, invoker)
+        resolved_groups = _default_groups(offer["safe_paths"], session_id)
     else:
         resolved_groups = []
         for g in groups:
@@ -1624,12 +1582,11 @@ def commit_session_offer(
     session_id: str,
     cwd: Optional[str] = None,
     groups: Optional[List[CommitGroup]] = None,
-    invoker: Optional[str] = None,
 ) -> CommitOfferReport:
     """Sync wrapper — a single ``asyncio.run()`` drives the whole call
     (matches the single-event-loop convention other in-process op composers
     use, e.g. ``coordinator_core.ops.promote_shipped_in_flight_stubs``)."""
-    return asyncio.run(commit_session_offer_async(session_id, cwd, groups, invoker))
+    return asyncio.run(commit_session_offer_async(session_id, cwd, groups))
 
 
 # ---------------------------------------------------------------------------
@@ -2097,9 +2054,6 @@ def _render_report(report: CommitOfferReport, worktree_root: Optional[str] = Non
     return "\n".join(lines)
 
 
-_VALID_INVOKERS = ("attended", "unattended")
-
-
 # ---------------------------------------------------------------------------
 # Op
 # ---------------------------------------------------------------------------
@@ -2170,13 +2124,6 @@ def _handler(params: dict, repo_root=None) -> dict:
                                     `--groups-json <file>`: the wire carries the
                                     list itself, so no caller writes a temp file
                                     to hand a list to a local process.
-      invoker    (str, optional)  — "attended" | "unattended", consulted ONLY by
-                                    the mechanical `_default_groups` fallback
-                                    (i.e. only when neither `message` nor
-                                    `groups` is given — those build explicit
-                                    groups themselves, so `invoker` is inert
-                                    alongside either). See `_default_groups`'s
-                                    own docstring for the three-way contract.
       dry_run    (bool, optional) — compute and return the offer WITHOUT
                                     committing, for inspection only. Never gate
                                     a real invocation behind it.
@@ -2202,15 +2149,9 @@ def _handler(params: dict, repo_root=None) -> dict:
     cwd = params.get("cwd")
     message = params.get("message")
     groups = params.get("groups")
-    invoker = params.get("invoker")
 
     if message is not None and groups is not None:
         return _error_envelope("params.message and params.groups are mutually exclusive")
-    if invoker is not None and invoker not in _VALID_INVOKERS:
-        return _error_envelope(
-            "params.invoker must be one of %s (got %r)"
-            % (", ".join(_VALID_INVOKERS), invoker)
-        )
     if groups is not None and not isinstance(groups, list):
         return _error_envelope("params.groups must be a list of {paths, message} objects")
 
@@ -2244,7 +2185,7 @@ def _handler(params: dict, repo_root=None) -> dict:
     elif groups is not None:
         resolved_groups = groups
 
-    report = commit_session_offer(session_id, cwd, resolved_groups, invoker)
+    report = commit_session_offer(session_id, cwd, resolved_groups)
     worktree_root = core.git_root(cwd) or cwd or "."
 
     _log_excluded_diagnostic(worktree_root, session_id, report["excluded"])

@@ -215,7 +215,7 @@ def test_stamp_directive_depends_on_the_claim_landing():
     gate. The `{d-claim-plan-execution-lock.landed}` arg token is what
     actually enforces this — see `build_plan_claim_and_stamp_directives`'s
     own docstring for the incident this closes."""
-    directives = build_plan_claim_and_stamp_directives(GoverningPlan(slug="dr-129-plan", path=Path("unused")))
+    directives = build_plan_claim_and_stamp_directives(GoverningPlan(slug="dr-129-plan", path=Path("docs/plans/dr-129-plan.md"), rel="docs/plans/dr-129-plan.md"))
     by_id = {d["id"]: d for d in directives}
     assert by_id["d-stamp-plan-implemented"]["depends_on"] == "d-claim-plan-execution-lock"
     assert by_id["d-claim-plan-execution-lock"]["depends_on"] is None
@@ -234,7 +234,7 @@ def test_stamp_directive_does_not_execute_when_claim_is_denied():
 
     from coordinator_core.workstream_complete import apply as ws_apply
 
-    directives = build_plan_claim_and_stamp_directives(GoverningPlan(slug="dr-129-plan", path=Path("unused")))
+    directives = build_plan_claim_and_stamp_directives(GoverningPlan(slug="dr-129-plan", path=Path("docs/plans/dr-129-plan.md"), rel="docs/plans/dr-129-plan.md"))
 
     stamp_calls: list[list[str]] = []
 
@@ -282,7 +282,7 @@ def test_review_verified_directive_emitted_alongside_stamp_when_review_present()
         build_review_verified_directive,
     )
 
-    plan = GoverningPlan(slug="some-plan", path=Path("unused"))
+    plan = GoverningPlan(slug="some-plan", path=Path("docs/plans/some-plan.md"), rel="docs/plans/some-plan.md")
     stamp_directives = build_plan_claim_and_stamp_directives(plan)
     attest_directives = build_review_verified_directive(
         plan, {"review": {"sha_range": "a..b", "reviewer": "code-reviewer", "scope": "chain"}}
@@ -298,7 +298,7 @@ def test_review_verified_directive_depends_on_the_claim_landing():
         build_review_verified_directive,
     )
 
-    plan = GoverningPlan(slug="some-plan", path=Path("unused"))
+    plan = GoverningPlan(slug="some-plan", path=Path("docs/plans/some-plan.md"), rel="docs/plans/some-plan.md")
     directives = build_review_verified_directive(plan, {"review": {"sha_range": "a..b"}})
     by_id = {d["id"]: d for d in directives}
     assert by_id["d-attest-review-verified"]["depends_on"] == "d-claim-plan-execution-lock"
@@ -312,7 +312,7 @@ def test_review_verified_directive_absent_when_no_review_happened():
         build_review_verified_directive,
     )
 
-    plan = GoverningPlan(slug="some-plan", path=Path("unused"))
+    plan = GoverningPlan(slug="some-plan", path=Path("docs/plans/some-plan.md"), rel="docs/plans/some-plan.md")
     assert build_review_verified_directive(plan, {}) == []
     assert build_review_verified_directive(plan, {"review": None}) == []
     assert build_review_verified_directive(plan, {"review": {}}) == []
@@ -324,6 +324,51 @@ def test_review_verified_directive_absent_without_a_governing_plan():
     )
 
     assert build_review_verified_directive(None, {"review": {"sha_range": "a..b"}}) == []
+
+
+def test_directives_carry_the_resolved_path_not_a_docs_plans_guess(tmp_path):
+    """A plan resolved OUTSIDE `docs/plans/` reaches every directive at the
+    path the resolver actually returned.
+
+    The distilled-plan case is the live one: `/distill` moves a shipped plan
+    to `archive/specs/<month>/`, the consumed handoff's `governing_plan:`
+    frontmatter points there, resolution succeeds -- and every consumer that
+    rebuilt `f"docs/plans/{slug}.md"` from the slug handed its CLI a path that
+    does not exist. `apply` then exits 4 on any workstream closing on a
+    distilled plan, dropping queued deferrals silently while the stamp failure
+    reads as cosmetic.
+    """
+    slug = "2026-08-27-plan-goal-as-a-first-class-exit-criterion"
+    archived = tmp_path / "archive" / "specs" / "2026-08"
+    archived.mkdir(parents=True)
+    (archived / f"{slug}.md").write_text("---\n---\n", encoding="utf-8")
+    rel = f"archive/specs/2026-08/{slug}.md"
+
+    resolved, source = resolve_governing_plan_with_source(
+        tmp_path, decisions={}, handoff_governing_plan_field=rel
+    )
+    assert source == "handoff_frontmatter"
+    assert resolved is not None and resolved.rel == rel
+
+    directives = build_governing_plan_directives(
+        tmp_path,
+        decisions={"review": {"sha_range": "a..b"}},
+        handoff_governing_plan_field=rel,
+    )
+    by_id = {d["id"]: d for d in directives}
+
+    assert by_id["d-stamp-plan-implemented"]["args"][1] == rel
+    assert by_id["d-attest-review-verified"]["args"][1] == rel
+    assert by_id["d-harvest-deferrals-1"]["args"] == ["--plan", rel]
+
+    # The claim lock still keys on the SLUG -- it names the plan, it does not
+    # locate it -- so the fix must not have widened that arg to a path.
+    assert by_id["d-claim-plan-execution-lock"]["args"] == ["claim-plan", slug]
+
+    # Nothing anywhere in the emitted argv reconstructs the docs/plans guess.
+    assert not any(
+        f"docs/plans/{slug}.md" in a for d in directives for a in d["args"] if isinstance(a, str)
+    )
 
 
 def test_build_governing_plan_directives_composes_the_attest_directive(tmp_path):

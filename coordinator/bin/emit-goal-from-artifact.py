@@ -75,9 +75,6 @@ import tempfile
 
 _BIN_DIR = os.path.dirname(os.path.abspath(__file__))
 
-import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
-import cc_invoke  # noqa: E402
-
 
 def _no_console_kw() -> dict:
     """Lazily resolve claude_klabauter_root onto sys.path, then splat the canonical
@@ -92,6 +89,9 @@ def _no_console_kw() -> dict:
     that RuntimeError into a silent None here, losing the remediation text
     before either caller's except clause ever saw it.
     """
+    import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
+    import cc_invoke
+
     cc_invoke.require_engine_on_path(__file__)
     from coordinator_core.win_portability import no_console_creationflags
 
@@ -117,6 +117,9 @@ def _resolve_read_frontmatter_field():
     precondition (exit 1) by main(), matching the bash oracle's jq-absent /
     helper-not-found fatal-precondition class.
     """
+    import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
+    import cc_invoke
+
     cc_invoke.require_engine_on_path(__file__)
     from coordinator_core.ops.read_frontmatter_field import read_frontmatter_field
 
@@ -129,6 +132,9 @@ def _resolve_repo_root(root_override: str) -> str | None:
             return os.path.abspath(root_override)
         return None
     try:
+        import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
+        import cc_invoke
+
         cc_invoke.require_engine_on_path(__file__)
         from coordinator_core.git.repo_root import show_toplevel
     except (RuntimeError, ImportError):

@@ -47,23 +47,30 @@ import json
 import sys
 from pathlib import Path
 
-import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
-from cc_invoke import require_colocated_engine_on_path  # noqa: E402
+def _bootstrap_engine() -> None:
+    """Bootstrap coordinator/bin/lib onto sys.path and resolve the engine root.
 
-try:
-    require_colocated_engine_on_path(__file__)
-except RuntimeError as _exc:
-    print(f"{Path(__file__).name}: engine-root resolution failed: {_exc}", file=sys.stderr)
-    sys.exit(1)
+    Moved out of module scope so this file carries no non-stdlib import at
+    module scope — same failure/exit behavior preserved.
+    """
+    import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
+    from cc_invoke import require_colocated_engine_on_path
 
-from coordinator_core.distill.log_normalize import (  # noqa: E402
-    AlreadyCanonicalError,
-    NotLegacyShapedError,
-    normalize_log,
-)
+    try:
+        require_colocated_engine_on_path(__file__)
+    except RuntimeError as _exc:
+        print(f"{Path(__file__).name}: engine-root resolution failed: {_exc}", file=sys.stderr)
+        sys.exit(1)
 
 
 def main(argv: list[str] | None = None) -> int:
+    _bootstrap_engine()
+    from coordinator_core.distill.log_normalize import (
+        AlreadyCanonicalError,
+        NotLegacyShapedError,
+        normalize_log,
+    )
+
     parser = argparse.ArgumentParser(
         description="One-time migration of a legacy pipe-table distillation log to C1 canonical shape."
     )

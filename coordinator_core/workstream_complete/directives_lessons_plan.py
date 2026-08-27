@@ -124,8 +124,34 @@ FREE_VALUE_KEYS: tuple[str, ...] = (
 
 
 class GoverningPlan(NamedTuple):
+    """A resolved governing plan: its slug, the file that was actually found,
+    and that file's repo-relative form.
+
+    Negative-spec:
+        - Do NOT rebuild a plan path from `slug` at a consumer. `slug` names
+          the plan; it does not locate it. A plan resolved from a consumed
+          handoff's `governing_plan:` frontmatter, or from an explicit
+          `decisions` path, legitimately lives outside `_GOVERNING_PLAN_GLOB_
+          DIRS` -- `archive/specs/<month>/` for a distilled plan is the common
+          case -- so `f"docs/plans/{slug}.md"` names a file the resolver never
+          returned and which need not exist. `rel` is the field a directive's
+          argv takes; it is populated at every construction site precisely so
+          the wrong path is not expressible downstream.
+    """
+
     slug: str
     path: Path
+    rel: str
+
+
+def _rel_to_repo(candidate: Path, repo_root: Path) -> str:
+    """`candidate`'s repo-relative POSIX form, or its absolute POSIX form when
+    it lies outside `repo_root` (an explicitly-supplied absolute path may).
+    Never raises -- a path the CLI can open beats a path-shaped guess."""
+    try:
+        return candidate.relative_to(repo_root).as_posix()
+    except ValueError:
+        return candidate.as_posix()
 
 
 def _normalize_handoff_governing_plan_field(raw: Optional[Any]) -> Optional[str]:
@@ -242,7 +268,7 @@ def resolve_governing_plan_with_source(
         for dirname in _GOVERNING_PLAN_GLOB_DIRS:
             candidate = repo_root / dirname / f"{slug}.md"
             if candidate.is_file():
-                return GoverningPlan(slug=slug, path=candidate), "decisions_slug"
+                return GoverningPlan(slug=slug, path=candidate, rel=_rel_to_repo(candidate, repo_root)), "decisions_slug"
         return None, "decisions_slug_not_found"
 
     path_override = decisions.get(_KEY_GOVERNING_PLAN_PATH)
@@ -251,7 +277,7 @@ def resolve_governing_plan_with_source(
         if not candidate.is_absolute():
             candidate = repo_root / candidate
         if candidate.is_file():
-            return GoverningPlan(slug=candidate.stem, path=candidate), "decisions_path"
+            return GoverningPlan(slug=candidate.stem, path=candidate, rel=_rel_to_repo(candidate, repo_root)), "decisions_path"
         return None, "decisions_path_not_found"
 
     handoff_value = _normalize_handoff_governing_plan_field(handoff_governing_plan_field)
@@ -260,7 +286,7 @@ def resolve_governing_plan_with_source(
         if not candidate.is_absolute():
             candidate = repo_root / candidate
         if candidate.is_file():
-            return GoverningPlan(slug=candidate.stem, path=candidate), "handoff_frontmatter"
+            return GoverningPlan(slug=candidate.stem, path=candidate, rel=_rel_to_repo(candidate, repo_root)), "handoff_frontmatter"
         return None, "handoff_frontmatter_not_found"
 
     return None, "none"
@@ -336,7 +362,7 @@ def build_plan_claim_and_stamp_directives(governing_plan: Optional[GoverningPlan
         return []
     assert governing_plan is not None  # narrows for the type checker; predicate already proved it
     slug = governing_plan.slug
-    plan_rel = f"docs/plans/{slug}.md"
+    plan_rel = governing_plan.rel
     return [
         _directive("d-claim-plan-execution-lock", "wsc-coverage-gate-runner", ["claim-plan", slug]),
         _directive(
@@ -395,7 +421,7 @@ def build_review_verified_directive(
     if not decisions.get("review"):
         return []
     assert governing_plan is not None  # narrows for the type checker; predicate already proved it
-    plan_rel = f"docs/plans/{governing_plan.slug}.md"
+    plan_rel = governing_plan.rel
     return [
         _directive(
             "d-attest-review-verified",
@@ -441,7 +467,7 @@ def build_deferral_harvest_directives(governing_plans: list[GoverningPlan]) -> l
             _directive(
                 f"d-harvest-deferrals-{idx + 1}",
                 "coordinator-harvest-deferrals",
-                ["--plan", f"docs/plans/{plan.slug}.md"],
+                ["--plan", plan.rel],
             )
         )
     return directives
@@ -480,7 +506,7 @@ def build_governing_plan_directives(
         for dirname in _GOVERNING_PLAN_GLOB_DIRS:
             candidate = repo_root / dirname / f"{slug}.md"
             if candidate.is_file():
-                harvest_targets.append(GoverningPlan(slug=slug, path=candidate))
+                harvest_targets.append(GoverningPlan(slug=slug, path=candidate, rel=_rel_to_repo(candidate, repo_root)))
                 break
     directives += build_deferral_harvest_directives(harvest_targets)
     return directives

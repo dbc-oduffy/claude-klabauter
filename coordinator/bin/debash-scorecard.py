@@ -43,11 +43,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
-import cc_invoke  # noqa: E402
-
-cc_invoke.ensure_engine_on_path(__file__)
-
 # Baseline recount from MASTER-disposition.md (2026-07-15), so the scorecard
 # shows direction of travel rather than a bare current number.
 BASELINE = {"all": 666, "tests": 278, "runtime": 388}
@@ -177,6 +172,11 @@ def delta(now: int, was: int) -> str:
 
 
 def main(argv: "list[str] | None" = None) -> int:
+    import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
+    import cc_invoke
+
+    cc_invoke.ensure_engine_on_path(__file__)
+
     ap = argparse.ArgumentParser(description="Report progress toward zero .sh in the DoE tree.")
     ap.add_argument("--json", action="store_true", help="emit machine-readable JSON")
     ap.add_argument(

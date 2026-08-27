@@ -92,13 +92,13 @@ tasks/2026-07-16-clean-slate-recon/PORTER-BRIEF-ADDENDUM.md § 1)."""
 import os
 import sys
 
-import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
-from cc_invoke import require_dispatch_engine_on_path  # noqa: E402
-
 _TRANSPORT_FAIL = 3
 
 
 def _import_module():
+    import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
+    from cc_invoke import require_dispatch_engine_on_path
+
     claude_klabauter_root = require_dispatch_engine_on_path()
     import coordinator_core.archive_stamp as _mod
 

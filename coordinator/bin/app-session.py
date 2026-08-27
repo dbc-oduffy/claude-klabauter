@@ -64,11 +64,6 @@ import json
 import os
 import sys
 
-import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
-import cc_invoke  # noqa: E402
-
-cc_invoke.ensure_engine_on_path(__file__)
-
 _USAGE_FAIL = 2
 _TRANSPORT_FAIL = 3
 
@@ -112,6 +107,11 @@ def _usage(prog: str) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
+    import cc_invoke
+
+    cc_invoke.ensure_engine_on_path(__file__)
+
     argv = sys.argv[1:] if argv is None else argv
     prog = "app-session"
 

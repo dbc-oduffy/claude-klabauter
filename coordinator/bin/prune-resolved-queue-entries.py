@@ -54,10 +54,6 @@ to improvement-queue.md and bug-backlog.md, invoked from /update-docs
 import os
 import sys
 
-import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
-from cc_invoke import require_dispatch_engine_on_path  # noqa: E402
-
-
 def _import_runner():
     """Resolve the engine root, put it on sys.path, and import the DR-276 runner.
 
@@ -72,6 +68,9 @@ def _import_runner():
     replaces becomes a session scope-touch claim. Without that, this file's
     write is an orphan at the `scoped_git_commit` sink.
     """
+    import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
+    from cc_invoke import require_dispatch_engine_on_path
+
     claude_klabauter_root = require_dispatch_engine_on_path()
     from coordinator_core.cli_entry import run_op_main
 

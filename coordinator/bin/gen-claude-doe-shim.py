@@ -64,11 +64,6 @@ from __future__ import annotations
 import os
 import sys
 
-import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
-from cc_invoke import require_dispatch_engine_on_path  # noqa: E402
-from coordinator_data_root import data_root  # noqa: E402
-
-
 def _default_template_path(shell_family: str = "bash") -> str:
     """Mirror the bash oracle's `${_script_dir}/../templates/shell/claude-doe-shim.sh.tmpl`
     default. Resolved via `coordinator_data_root.data_root()`'s co-located/
@@ -85,6 +80,9 @@ def _default_template_path(shell_family: str = "bash") -> str:
     reports "Template valid", and a profile that fails at every subsequent
     shell start. An unrecognized family falls through to the bash template and
     is rejected downstream by the engine's own `--shell` validation."""
+    import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
+    from coordinator_data_root import data_root
+
     stem = "claude-doe-shim.ps1.tmpl" if shell_family == "powershell" else "claude-doe-shim.sh.tmpl"
     return os.path.join(str(data_root("templates")), "shell", stem)
 
@@ -124,6 +122,9 @@ def _import_runner():
     rc-file source block this CLI writes are orphans at the
     `scoped_git_commit` sink.
     """
+    import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
+    from cc_invoke import require_dispatch_engine_on_path
+
     claude_klabauter_root = require_dispatch_engine_on_path()
     from coordinator_core.cli_entry import run_op_main
 

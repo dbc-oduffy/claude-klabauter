@@ -42,6 +42,20 @@ def test_review_unavailable_without_repo_root() -> None:
     assert "repo_root" in result.detail
 
 
+# 40-hex or the parser treats it as a touched path, not a commit header. An
+# abbreviated stub sha makes every test below pass vacuously via the
+# "no commits touch changed_files" branch -- which is what happened when the
+# pathspec moved out of argv and these stubs were not updated with it.
+_SHA_A = "a" * 40
+_SHA_B = "b" * 40
+
+
+def _log_z(*records: "tuple[str, str]") -> "tuple[int, str, str]":
+    """`git log --pretty=format:%H --name-only -z` output: NUL-separated
+    records, each a sha newline-joined to a path it touched."""
+    return 0, "".join(f"{sha}\n{path}\0" for sha, path in records), ""
+
+
 def test_review_covered_when_no_changed_files() -> None:
     result = gate_dimension_review._review_dimension_check([], "abc..HEAD", "/repo")
     assert result.verdict is Verdict.PASS
@@ -76,12 +90,12 @@ def test_review_covered_when_all_commits_reviewed(monkeypatch) -> None:
     monkeypatch.setattr(
         gate_dimension_review,
         "_run_git",
-        lambda args, cwd: (0, "deadbeef\ncafef00d", ""),
+        lambda args, cwd: _log_z((_SHA_A, "a.py"), (_SHA_B, "a.py")),
     )
     monkeypatch.setattr(
         gate_dimension_review,
         "read_reviewed_set",
-        lambda repo_root: {"deadbeef", "cafef00d"},
+        lambda repo_root: {_SHA_A, _SHA_B},
     )
     result = gate_dimension_review._review_dimension_check(
         ["a.py"], "abc..HEAD", "/repo"
@@ -94,10 +108,10 @@ def test_review_uncovered_when_a_commit_is_unreviewed(monkeypatch) -> None:
     monkeypatch.setattr(
         gate_dimension_review,
         "_run_git",
-        lambda args, cwd: (0, "deadbeef\ncafef00d", ""),
+        lambda args, cwd: _log_z((_SHA_A, "a.py"), (_SHA_B, "a.py")),
     )
     monkeypatch.setattr(
-        gate_dimension_review, "read_reviewed_set", lambda repo_root: {"deadbeef"}
+        gate_dimension_review, "read_reviewed_set", lambda repo_root: {_SHA_A}
     )
     result = gate_dimension_review._review_dimension_check(
         ["a.py"], "abc..HEAD", "/repo"
@@ -112,13 +126,13 @@ def test_review_reads_reviewed_set_with_no_added_spawn(monkeypatch) -> None:
     re-pointing (docs/plans/2026-08-27-the-reviewed-set-is-a-file-not-a-
     computation.md § C3)."""
     monkeypatch.setattr(
-        gate_dimension_review, "_run_git", lambda args, cwd: (0, "deadbeef", "")
+        gate_dimension_review, "_run_git", lambda args, cwd: _log_z((_SHA_A, "a.py"))
     )
     calls: list[str] = []
 
     def _fake_read_reviewed_set(repo_root: str):
         calls.append(repo_root)
-        return {"deadbeef"}
+        return {_SHA_A}
 
     monkeypatch.setattr(
         gate_dimension_review, "read_reviewed_set", _fake_read_reviewed_set
@@ -137,22 +151,40 @@ def test_review_result_dimension_name_matches_seam_contract() -> None:
     assert result.dimension == "review"
 
 
-def test_review_batches_changed_files_above_argv_cap(monkeypatch) -> None:
-    """Above the Windows argv cap, `changed_files` must be batched across
-    multiple `git log` calls (never splatted unbounded into one argv) and
-    the resulting commit lists unioned -- reproduces the fail-open trap at
-    `HEAD~200..HEAD` (1477 changed files) where a single unbounded call
-    overflowed argv (WinError 206) and was swallowed into UNAVAILABLE."""
+def test_review_cost_is_invariant_in_changed_files_above_argv_cap(monkeypatch) -> None:
+    """Above the Windows argv cap the check must still answer, at ONE spawn.
+
+    Two regressions are pinned here, in the order they were shipped.
+
+    The original fail-open: `HEAD~200..HEAD` (1477 changed files) splatted
+    `changed_files` into one argv, overflowed the Windows cap (WinError 206)
+    and was swallowed into UNAVAILABLE -- a large changeset, the kind most
+    worth reviewing, silently received no coverage.
+
+    The fix for it: pathspec-batching that argv closed the fail-open but made
+    the cost linear in the changeset -- 2000 paths measured 718.75ms across 55
+    processes, over the DR-344 500ms brightline, on a branch whose bulk
+    changesets run past 26,000 files. So the pathspec leaves argv entirely and
+    the intersection happens in process.
+
+    The invariant is therefore EXACTLY ONE `git log`, carrying no pathspec, at
+    any changeset size.
+    """
     changed_files = [f"some/long/enough/path/to/file_{i:05d}.py" for i in range(2000)]
 
     calls: list[list[str]] = []
 
     def _fake_run_git(args, cwd):
         calls.append(args)
-        # each chunk "discovers" one distinct commit, proving the union
-        # actually accumulates across calls rather than only keeping the
-        # last chunk's result.
-        return 0, f"deadbeef{len(calls):04d}", ""
+        # `git log --name-only -z` shape: NUL-separated records, each a sha
+        # newline-joined to the first of its touched paths. Two commits, one
+        # touching a path the caller asked about and one touching a path it
+        # did not -- so an implementation that credits every commit in the
+        # range regardless of paths fails this test.
+        return _log_z(
+            (_SHA_A, "some/long/enough/path/to/file_00007.py"),
+            (_SHA_B, "some/other/untouched/file.py"),
+        )
 
     monkeypatch.setattr(gate_dimension_review, "_run_git", _fake_run_git)
 
@@ -160,9 +192,7 @@ def test_review_batches_changed_files_above_argv_cap(monkeypatch) -> None:
 
     def _fake_read_reviewed_set(repo_root: str):
         seen_reads.append(repo_root)
-        # every synthesized commit is "reviewed" -- the point of this test
-        # is the batching/union of commit_shas, not the reviewed-set content.
-        return {f"deadbeef{i:04d}" for i in range(1, len(calls) + 1)}
+        return {_SHA_A}
 
     monkeypatch.setattr(
         gate_dimension_review, "read_reviewed_set", _fake_read_reviewed_set
@@ -172,12 +202,69 @@ def test_review_batches_changed_files_above_argv_cap(monkeypatch) -> None:
         changed_files, "abc..HEAD", "/repo"
     )
 
-    assert len(calls) > 1, "expected changed_files to be split across multiple git log calls"
-    for args in calls:
-        assert len(" ".join(args)) < 32767, "a single call must never exceed the argv cap"
+    assert len(calls) == 1, (
+        "cost must be invariant in len(changed_files): exactly one git log, "
+        f"got {len(calls)}"
+    )
+    assert "--" not in calls[0], "no pathspec may reach argv -- that is the cap overflow"
+    for path in changed_files[:5]:
+        assert path not in calls[0]
+    assert len(" ".join(calls[0])) < 32767
 
+    assert result.verdict is Verdict.PASS, (
+        "the one commit touching a caller-named path is reviewed, so PASS -- "
+        "never UNAVAILABLE, which is the fail-open this pins"
+    )
+    assert seen_reads == ["/repo"], "reviewed-set is read exactly once"
+
+
+def test_review_ignores_commits_touching_no_caller_named_path(monkeypatch) -> None:
+    """The in-process intersection must actually filter.
+
+    Taking the pathspec out of argv means git no longer does the filtering,
+    so a commit in the range that touches nothing the caller asked about must
+    be dropped here -- otherwise every commit in the range gets credited and
+    the gate reports on work it was never asked about.
+    """
+    def _fake_run_git(args, cwd):
+        return _log_z((_SHA_A, "unrelated/module.py"), (_SHA_B, "also/unrelated.py"))
+
+    monkeypatch.setattr(gate_dimension_review, "_run_git", _fake_run_git)
+    monkeypatch.setattr(
+        gate_dimension_review, "read_reviewed_set", lambda repo_root: set()
+    )
+
+    result = gate_dimension_review._review_dimension_check(
+        ["the/only/path/i/asked/about.py"], "abc..HEAD", "/repo"
+    )
+
+    # No commit touches the caller's path, so nothing needs a review stamp --
+    # PASS despite the reviewed-set being empty.
     assert result.verdict is Verdict.PASS
-    assert seen_reads == ["/repo"], "reviewed-set is read exactly once, never per chunk"
+    assert "no commits" in result.detail
+
+
+def test_review_matches_windows_spelled_changed_files(monkeypatch) -> None:
+    """A caller passing backslashes must still match git's forward slashes.
+
+    Windows is first-class here, and the intersection is now a string compare
+    this module owns rather than a pathspec git normalises.
+    """
+    def _fake_run_git(args, cwd):
+        return _log_z((_SHA_A, "coordinator_core/coverage.py"))
+
+    monkeypatch.setattr(gate_dimension_review, "_run_git", _fake_run_git)
+    monkeypatch.setattr(
+        gate_dimension_review, "read_reviewed_set", lambda repo_root: set()
+    )
+
+    result = gate_dimension_review._review_dimension_check(
+        [r"coordinator_core\coverage.py"], "abc..HEAD", "/repo"
+    )
+
+    assert result.verdict is Verdict.FAIL, (
+        "the backslash-spelled path must match, leaving one unreviewed commit"
+    )
 
 
 def test_reap_findings_scope_excludes_json_trail_records() -> None:

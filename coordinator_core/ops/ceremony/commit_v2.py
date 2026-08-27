@@ -25,12 +25,16 @@ and derives the caller's worktree via `main_worktree_root(repo_root)`.
 `params.repo_root` is the optional D3 consistency assertion only
 (`check_repo_root`), never the worktree-resolution source.
 
-Scope of THIS row (C3): register the op and wire it straight to
-`commit_paths`. It does NOT yet fix the two known correctness gaps
-(exec-bit-on-commit, the `eol=crlf` CR-byte fallback) -- those are C4's row,
-landing in `commit.py` itself, which this handler picks up for free once C4
-lands (no `blob_fallback` is supplied here, so a `FilterUnsupported` refusal
-propagates as a structured error rather than being silently swallowed).
+Scope of THIS row (C4): the handler supplies `blob_fallback` --
+`commit.hash_worktree_blobs_via_spawn`, restated small in `git/commit.py`
+rather than imported from `git_native.py`'s `_hash_worktree_blobs` (barred by
+the negative-spec below) -- so an `eol=crlf`-pinned path carrying CR bytes,
+refused by `commit_paths`' own in-process check, lands via ONE batched
+`git hash-object -w --stdin-paths` spawn per commit rather than propagating
+as a structured `FilterUnsupported` error. A refusal `commit_paths` cannot
+resolve even with the fallback (the fallback itself fails, or returns no sha
+for a path) still propagates as a structured error, unmodified in substance
+-- this handler does not catch, retry, or widen it.
 
 Spec backlinks:
     docs/plans/2026-08-27-something-must-commit-ceremony-commit-v2.md § C3
@@ -59,7 +63,13 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Optional
 
-from coordinator_core.git.commit import CommitRefused, FilterUnsupported, commit_paths
+from coordinator_core.git.commit import (
+    CommitRefused,
+    FilterUnsupported,
+    commit_paths,
+    hash_worktree_blobs_via_spawn,
+)
+from functools import partial
 from coordinator_core.ipc import register_op
 from coordinator_core.ops.fleet._common import check_repo_root, main_worktree_root
 
@@ -106,8 +116,8 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         on success, or {"committed": False, "sha": None, "error": str} on any
         structured refusal (an empty pathspec, a directory in `paths`, an
         unresolvable CAS ref, a lost CAS race, or a path needing a checkin
-        conversion this module does not yet reproduce -- the `eol=crlf`
-        fallback lands in C4, not here).
+        conversion neither this module nor its `blob_fallback` can
+        reproduce).
 
     Keying scope: common_dir -- repo_root arg is the .git common dir; the
     caller's worktree is main_worktree_root(repo_root).
@@ -149,6 +159,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             message,
             deleted_paths=raw_deleted,
             prefer_staged=raw_prefer_staged,
+            blob_fallback=partial(hash_worktree_blobs_via_spawn, cwd=worktree_root),
         )
     except (CommitRefused, FilterUnsupported) as exc:
         return _error(str(exc))

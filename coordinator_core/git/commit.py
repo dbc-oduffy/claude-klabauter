@@ -202,6 +202,50 @@ def _worktree_blob(gitdir: Path, root: Path, rel: str, data: bytes) -> str:
     return write_object(gitdir, b"blob", data)
 
 
+def hash_worktree_blobs_via_spawn(
+    paths: Sequence[str],
+    *,
+    cwd: Union[str, Path],
+) -> Dict[str, str]:
+    """The ONE-spawn `blob_fallback` for `commit_paths`/`stage_paths_in_process`:
+    `git hash-object -w --stdin-paths`, batched over every refused path in a
+    single call regardless of how many there are (the path list travels over
+    stdin, not argv, so there is no Windows argv-length cap to chunk against).
+
+    Restated here, small, rather than imported from
+    `coordinator_core.ops.ceremony.git_native`'s `_hash_object_stdin_paths` /
+    `_hash_worktree_blobs` -- `commit_v2`'s handler (this module's caller) is
+    barred from importing `commit_pipeline.py` or `git_native.py` in any form
+    (docs/plans/2026-08-27-something-must-commit-ceremony-commit-v2.md, C3
+    body), so the ONE-spawn shape those modules already proved is restated
+    directly against git, not re-derived.
+
+    Returns `{path: blob_sha}` for every path in `paths`, in the same order
+    `paths` was given (git's own `--stdin-paths` output-order contract).
+    Raises `CommitRefused` on a non-zero exit or a sha count that does not
+    match the path count -- never returns a partial or misaligned mapping.
+    """
+    if not paths:
+        return {}
+    from coordinator_core.git.run import run_git
+
+    stdin_data = ("\n".join(paths) + "\n").encode("utf-8", "surrogateescape")
+    result = run_git(["hash-object", "-w", "--stdin-paths"], cwd=str(cwd), input=stdin_data)
+    if result.returncode != 0:
+        raise CommitRefused(
+            "git hash-object -w --stdin-paths failed for "
+            f"{len(paths)} path(s): {result.stderr.strip()}"
+        )
+    shas = [line for line in result.stdout.splitlines() if line]
+    if len(shas) != len(paths):
+        raise CommitRefused(
+            "git hash-object -w --stdin-paths returned "
+            f"{len(shas)} sha(s) for {len(paths)} refused path(s) -- "
+            "refusing to guess an alignment"
+        )
+    return dict(zip(paths, shas))
+
+
 def _identity() -> Tuple[str, str]:
     name = os.environ.get("GIT_COMMITTER_NAME") or os.environ.get("GIT_AUTHOR_NAME")
     email = os.environ.get("GIT_COMMITTER_EMAIL") or os.environ.get("GIT_AUTHOR_EMAIL")

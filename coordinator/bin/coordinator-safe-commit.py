@@ -106,7 +106,7 @@ Usage forms:
   coordinator-safe-commit --body-file <path> "<subject>"     # multi-paragraph message
   coordinator-safe-commit "<subject>" -- <path> [<path>...]  # pathspec —
                                                                # routed through
-                                                               # ceremony.commit
+                                                               # ceremony.commit_v2
 
 2026-08-06 (cross-repo/inbox/2026-08-06-doe-claude-em-safe-commit-pathspec-
 and-allowlist-naming.md, Defect 1): the `-- <paths>` form above is a
@@ -114,13 +114,17 @@ passthrough — originally it shelled out to `scoped-git-commit -m "<subject>"
 -- <paths>` (coordinator_core/ops/ceremony/scoped_git_commit.py) rather than
 re-implementing pathspec-scoped staging here; that delegate was killed
 2026-08-23 (DR-344) and refused (`do_pathspec`) until this restore, which
-repoints the same passthrough at `ceremony.commit`
+repointed the same passthrough at `ceremony.commit`
 (coordinator_core/ops/ceremony/commit_op.py), dispatched in-process via
 `coordinator_core.ipc.dispatch_from_hook` rather than a CLI subprocess —
-delegate, don't duplicate, same rationale as the original fix. Incompatible
-with `--blanket`, `--scope-from`, `--include-orphans`,
-`--allow-out-of-scope-dirty`, and `--body-file` (the op has no
-body/orphan-claim/handoff-scope support of its own).
+delegate, don't duplicate, same rationale as the original fix. `ceremony.
+commit` was ITSELF killed 2026-08-27 (200ms process-time bar,
+`coordinator_core/op_budget_suspension.py`) and this passthrough repointed
+again, to `ceremony.commit_v2` (docs/plans/2026-08-27-something-must-commit-
+ceremony-commit-v2.md, C7) — see `do_pathspec`'s own docstring for the
+current wiring. Incompatible with `--blanket`, `--scope-from`,
+`--include-orphans`, `--allow-out-of-scope-dirty`, and `--body-file` (the op
+has no body/orphan-claim/handoff-scope support of its own).
 
 Negative-spec: `--dry-run` must NEVER reach `git add`/`git commit` and must
 NEVER mutate the staged index or refs, in EVERY mode and EVERY combination —
@@ -276,8 +280,10 @@ Optional flags (combinable):
                                     -m <body>`, never replaces the subject.
 
 The `-- <path> [<path>...]` form commits exactly the given paths, routed
-through the `ceremony.commit` op (coordinator_core/ops/ceremony/commit_op.py)
-in-process — not the killed `scoped-git-commit` CLI (DR-344, 2026-08-23).
+through the `ceremony.commit_v2` op
+(coordinator_core/ops/ceremony/commit_v2.py) — not the killed
+`scoped-git-commit` CLI (DR-344, 2026-08-23) nor the killed `ceremony.commit`
+op it repointed to before (2026-08-27, 200ms process-time bar).
 Still incompatible with --blanket, --scope-from, --include-orphans,
 --allow-out-of-scope-dirty, and --body-file.
 
@@ -408,9 +414,15 @@ def do_pathspec(args: "Args") -> None:
     pathspec-scoped staging here — delegate, don't duplicate, same rationale
     as the pre-kill form's own docstring).
 
-    The replacement is the `ceremony.commit` op
-    (coordinator_core/ops/ceremony/commit_op.py, this plan's C1), spawned via
-    `cc_invoke.cc_invoke()` (`coordinator/bin/lib/cc_invoke.py`) — the same
+    REPOINTED 2026-08-27 (docs/plans/2026-08-27-something-must-commit-
+    ceremony-commit-v2.md, C7): the prior replacement, `ceremony.commit`
+    (`coordinator_core/ops/ceremony/commit_op.py`), was itself KILLED at the
+    200ms process-time bar (`coordinator_core/op_budget_suspension.py`) --
+    p50 421.9ms process time, n=241. The current replacement is
+    `ceremony.commit_v2` (`coordinator_core/ops/ceremony/commit_v2.py`), a
+    fresh dispatchable identity over the zero-spawn `commit.commit_paths`
+    (`coordinator_core/git/commit.py`) -- spawned via `cc_invoke.cc_invoke()`
+    (`coordinator/bin/lib/cc_invoke.py`), same as before: the same
     warm-first-then-cold-`coordinator_core.invoke` transport every other
     thin CLI door in `coordinator/bin/` uses (see `priority-set.py`,
     `set-goal-kr-status.py`), not a direct `coordinator_core.ipc` import:
@@ -425,23 +437,30 @@ def do_pathspec(args: "Args") -> None:
     otherwise, neither of which requires this process's own import to be a
     published/stamped engine).
 
-    `stage_paths` and `caller_paths` are both `args.paths` (this wrapper's
-    whole job here is "commit exactly these paths", so caller_paths has no
-    separate signal to narrow from); no session id, orphan-claim, or
-    handoff-scope machinery applies to this explicit-path form, mirroring
-    the killed CLI's own scope.
+    `params.paths`/`params.deleted_paths` are split from `args.paths` via
+    `_split_paths_for_commit_v2` (a path absent from the worktree is a
+    deletion) -- this wrapper's whole job here is "commit exactly these
+    paths", so nothing narrows or widens that set. No session id,
+    orphan-claim, or handoff-scope machinery applies to this explicit-path
+    form, mirroring the killed CLI's own scope. There is no in-process
+    fallback for an unregistered op any more: `ceremony.commit_v2` not being
+    registered is a real, reportable failure now, not something to route
+    around by re-entering a killed handler (see this plan's own note on why
+    a fallback that reaches the old pipeline is how the deleted path becomes
+    the live path again).
 
-    Negative-spec: does NOT resurrect `scoped-git-commit` or any string-keyed
-    reference to it — the op name is `ceremony.commit`, a fresh identity
-    (commit_op.py's own docstring), not the killed op reincarnated.
+    Negative-spec: does NOT resurrect `scoped-git-commit`, `ceremony.commit`,
+    or any string-keyed reference to either — the op name is
+    `ceremony.commit_v2`, a fresh identity (commit_v2.py's own docstring),
+    not either killed op reincarnated.
 
     AC8 reconcile (2026-08-26, docs/plans/2026-08-26-the-commit-becomes-a-
     warm-served-op.md § AC8, "RESOLVED — reconcile, not prevention"): an
     attempt id is minted before dispatch and threaded through as an
-    `Attempt-Id:` commit trailer via `ceremony.commit`'s own `trailers`
-    param (the same unconditional-trailer machinery `commit_trailers.py`
-    already stamps `Session-Id:`/`Deliverable-Id:` through — reused, not a
-    second mechanism). On an INDETERMINATE outcome (a `cc_invoke` timeout, a
+    `Attempt-Id:` trailer appended to the commit message body (`ceremony.
+    commit_v2` has no separate `trailers` param -- it is a thin envelope over
+    `commit_paths`, not the `commit_trailers.py` machinery the killed op
+    carried). On an INDETERMINATE outcome (a `cc_invoke` timeout, a
     `BrokenPipeError`-shaped failure, or a malformed/ambiguous envelope —
     see `_is_indeterminate_outcome`'s own docstring for the exact,
     deliberately narrow predicate) this caller reconciles BEFORE reporting
@@ -470,35 +489,50 @@ def do_pathspec(args: "Args") -> None:
     attempt_trailer = f"Attempt-Id: {attempt_id}"
     pre_sha = _resolve_pre_sha_for_reconcile(worktree_root)
 
+    present_paths, deleted_paths = _split_paths_for_commit_v2(worktree_root, args.paths)
+    message = f"{args.subject}\n\n{attempt_trailer}"
     params = {
-        "subject": args.subject,
-        "stage_paths": args.paths,
-        "caller_paths": args.paths,
-        "trailers": attempt_trailer,
+        "paths": present_paths,
+        "deleted_paths": deleted_paths,
+        "message": message,
     }
     try:
-        result = cc_invoke("ceremony.commit", params, worktree_root)
+        result = cc_invoke("ceremony.commit_v2", params, worktree_root)
     except BrokenPipeError as exc:
         _reconcile_after_indeterminate(args, worktree_root, attempt_trailer, pre_sha, exc)
         return
     except RuntimeError as exc:
-        if _op_is_unregistered(exc):
-            result = _commit_via_pipeline_fallback(args, worktree_root)
-        elif _is_indeterminate_outcome(exc):
+        if _is_indeterminate_outcome(exc):
             _reconcile_after_indeterminate(args, worktree_root, attempt_trailer, pre_sha, exc)
             return
-        else:
-            print(f"ERROR: ceremony.commit: {exc}", file=sys.stderr)
-            sys.exit(1)
+        print(f"ERROR: ceremony.commit_v2: {exc}", file=sys.stderr)
+        sys.exit(1)
 
     if not result.get("committed"):
         print(
-            f"ERROR: ceremony.commit did not commit: {result.get('error') or result}",
+            f"ERROR: ceremony.commit_v2 did not commit: {result.get('error') or result}",
             file=sys.stderr,
         )
         sys.exit(1)
 
     print(f"committed sha={result.get('sha')}", file=sys.stderr)
+
+
+def _split_paths_for_commit_v2(worktree_root: str, paths: Sequence[str]) -> "tuple[List[str], List[str]]":
+    """Split `paths` into (present, deleted) relative to `worktree_root`, for
+    `ceremony.commit_v2`'s `params.paths`/`params.deleted_paths` split -- a
+    distinction the killed `ceremony.commit`'s `stage_paths`/`caller_paths`
+    shape never needed (`git add` handled a missing path as a deletion
+    transparently). A path absent from the worktree is treated as deleted;
+    everything else is treated as present (added/modified)."""
+    present: List[str] = []
+    deleted: List[str] = []
+    for p in paths:
+        if p and os.path.exists(os.path.join(worktree_root, p)):
+            present.append(p)
+        elif p:
+            deleted.append(p)
+    return present, deleted
 
 
 def _is_indeterminate_outcome(exc: RuntimeError) -> bool:
@@ -584,7 +618,7 @@ def _reconcile_after_indeterminate(
     pre_sha: Optional[str],
     exc: Exception,
 ) -> None:
-    """The AC8 mechanism itself: on an indeterminate `ceremony.commit`
+    """The AC8 mechanism itself: on an indeterminate `ceremony.commit_v2`
     outcome, search recent branch history for a commit already carrying
     this call's own `Attempt-Id:` trailer BEFORE reporting anything.
 
@@ -612,7 +646,7 @@ def _reconcile_after_indeterminate(
         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
     )
     if common_dir.returncode != 0:
-        print(f"ERROR: ceremony.commit: {exc}", file=sys.stderr)
+        print(f"ERROR: ceremony.commit_v2: {exc}", file=sys.stderr)
         print(
             "Reconcile could not run: git common dir unresolved "
             f"({(common_dir.stderr or '').strip()}). Do not assume the "
@@ -648,7 +682,7 @@ def _reconcile_after_indeterminate(
 
     if probe.sha is not None:
         print(
-            f"committed sha={probe.sha} — ceremony.commit exceeded its deadline "
+            f"committed sha={probe.sha} — ceremony.commit_v2 exceeded its deadline "
             f"({exc}), but the commit is confirmed landed via reconcile "
             "(Attempt-Id trailer found in history): this is a slow success, "
             "not a failure.",
@@ -665,7 +699,7 @@ def _reconcile_after_indeterminate(
     # only escaped a duplicate because the retry found the pathspec clean.
     # See state/lessons/2026-08-26-a-reconcile-that-runs-too-soon-says-retry-
     # is-safe.md. The outcome here is UNKNOWN and must read as unknown.
-    print(f"ERROR: ceremony.commit: {exc}", file=sys.stderr)
+    print(f"ERROR: ceremony.commit_v2: {exc}", file=sys.stderr)
     print(
         "Reconcile found no commit carrying this attempt's Attempt-Id trailer "
         f"after re-probing for {_RECONCILE_SETTLE_SECS:.0f}s "
@@ -686,63 +720,6 @@ def _reconcile_after_indeterminate(
 #: reported unknown.
 _RECONCILE_SETTLE_SECS = 3.0
 _RECONCILE_POLL_SECS = 0.25
-
-
-def _op_is_unregistered(exc: Exception) -> bool:
-    """True when the engine answered "I do not have that op" rather than
-    "that op failed".
-
-    JSON-RPC -32601 is Method-not-found. It is the ONE dispatch failure that
-    says nothing about the commit: the request never reached a handler, so
-    nothing was staged, nothing was written, and re-doing the work locally
-    cannot double-commit. Every other RuntimeError out of `cc_invoke` may
-    have executed some or all of the op, and this plan's AC8 is explicit that
-    an indeterminate dispatch is not retryable -- so this predicate must stay
-    narrow. Widen it and a commit becomes retryable that is not.
-
-    Why this can fire at all: claude-klabauter is the engine SOURCE, but invocations on
-    a normal box serve from the published mirror. An op registered here and
-    not yet published is present-but-unreachable, and `-32601` is exactly what
-    that gap looks like from the caller.
-    """
-    return "-32601" in str(exc) or "Method not found" in str(exc)
-
-
-def _commit_via_pipeline_fallback(args, worktree_root: str) -> dict:
-    """Run `ceremony.commit`'s OWN handler in-process when the serving engine
-    has no such op registered.
-
-    This calls the handler function itself, not a reconstruction of what it
-    does. Same params in, same result dict out, same `run_commit_pipeline`
-    stage -> gate -> commit critical section underneath -- so the scoped
-    form keeps its full gate set and audit trail here. That is what makes
-    this a fallback rather than a bypass, and why it is not
-    COORDINATOR_OVERRIDE_SCOPE territory. It is emphatically not a bare
-    `git commit`, which would sweep the whole shared index including a
-    peer's staged work.
-
-    `repo_root` is the git COMMON DIR, per the handler's own keying-scope
-    note -- not the worktree. Getting that wrong is a silent
-    wrong-worktree commit on a box that runs linked worktrees, so it is
-    resolved explicitly rather than passed through from `os.getcwd()`.
-    """
-    # ceremony.commit was DELETED 2026-08-27 under the 200ms process-time bar
-    # (kill ledger K-106), and this in-process fallback went with it -- a
-    # fallback that re-enters the killed handler is the op, by another door.
-    #
-    # This refuses with the gravestone's own message rather than the
-    # ImportError that removing `_handler` would otherwise raise here. The
-    # distinction is the whole point of the SUSPENDED_OPS row: a caller
-    # mid-workflow needs the disposition and the sanctioned alternative, and an
-    # ImportError gives it neither. See op_budget_suspension.refusal_message's
-    # own note on what a refused commit agent does when told nothing useful --
-    # it invents a disposition it was not given.
-    from coordinator_core import op_budget_suspension
-
-    return {
-        "committed": False,
-        "error": op_budget_suspension.refusal_message("ceremony.commit"),
-    }
 
 
 def _commit_message_argv(subject: str, body: str) -> List[str]:
@@ -861,9 +838,10 @@ def _scoped_commit_suggestion(subject: str) -> str:
     it, and nothing re-verified it in between — eleven days of shipping a
     dead retry command to every caller who hit this refusal.
 
-    `do_pathspec`'s `-- <paths>` form now routes through the `ceremony.commit`
-    op in-process (this plan's C1, `coordinator_core/ops/ceremony/
-    commit_op.py`), so the correct retry command is simply THIS SAME script
+    `do_pathspec`'s `-- <paths>` form now routes through the
+    `ceremony.commit_v2` op (docs/plans/2026-08-27-something-must-commit-
+    ceremony-commit-v2.md § C3, `coordinator_core/ops/ceremony/
+    commit_v2.py`), so the correct retry command is simply THIS SAME script
     invoked with `-- <paths>` — no tempfile, no PYTHONPATH/interpreter
     resolution, no Windows/POSIX shell-form branching to keep in sync with a
     generated payload. The caller already knows how to invoke
@@ -1319,8 +1297,7 @@ def resolve_session_id(cs_core, cs_liveness) -> str:
                 "with explicit-path commit:",
                 file=sys.stderr,
             )
-            print("  git add -- <your-paths>", file=sys.stderr)
-            print('  git commit -m "<subject>"', file=sys.stderr)
+            print('  git add -- <your-paths> && git commit -m "<subject>" -- <your-paths>', file=sys.stderr)
             sys.exit(1)
 
     if len(live_sessions) == 1:
@@ -1338,8 +1315,7 @@ def resolve_session_id(cs_core, cs_liveness) -> str:
         "others' files swept), the safer fallback is to bypass the helper:",
         file=sys.stderr,
     )
-    print("  git add -- <your-paths>", file=sys.stderr)
-    print('  git commit -m "<subject>"', file=sys.stderr)
+    print('  git add -- <your-paths> && git commit -m "<subject>" -- <your-paths>', file=sys.stderr)
     return ""
 
 
@@ -1349,8 +1325,7 @@ def _print_no_live_session_error() -> None:
         file=sys.stderr,
     )
     print("Fallback: bypass the helper with explicit-path commit:", file=sys.stderr)
-    print("  git add -- <your-paths>", file=sys.stderr)
-    print('  git commit -m "<subject>"', file=sys.stderr)
+    print('  git add -- <your-paths> && git commit -m "<subject>" -- <your-paths>', file=sys.stderr)
 
 
 # ---------------------------------------------------------------------------
@@ -2204,7 +2179,7 @@ def do_scoped(
                     file=sys.stderr,
                 )
                 print(
-                    '  git reset && git add -- <paths> && git commit -m "<subject>"  (fallback)',
+                    '  git reset && git add -- <paths> && git commit -m "<subject>" -- <paths>  (fallback)',
                     file=sys.stderr,
                 )
                 print("Dirty file(s):", file=sys.stderr)
@@ -2225,8 +2200,7 @@ def do_scoped(
                     file=sys.stderr,
                 )
                 print("Fallback: bypass the helper with explicit-path commit:", file=sys.stderr)
-                print("  git add -- <your-paths>", file=sys.stderr)
-                print('  git commit -m "<subject>"', file=sys.stderr)
+                print('  git add -- <your-paths> && git commit -m "<subject>" -- <your-paths>', file=sys.stderr)
                 sys.exit(1)
 
         # commit_scoped (C3, coordinator_core.ops.ceremony.git_native) picks
@@ -2331,8 +2305,7 @@ def do_scope_from(args: "Args", session_id: str, cs_core, cs_liveness, cs_scope,
             "bypass this helper and commit only the files you actually touched:",
             file=sys.stderr,
         )
-        print("  git add -- <your-paths>", file=sys.stderr)
-        print('  git commit -m "<subject>"', file=sys.stderr)
+        print('  git add -- <your-paths> && git commit -m "<subject>" -- <your-paths>', file=sys.stderr)
         print(
             "COORDINATOR_OVERRIDE_SCOPE=1 is an audit-trail-degraded emergency "
             "hatch, not the routine answer to a missing scope: field — prefer "

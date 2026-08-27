@@ -118,9 +118,6 @@ import os
 import sys
 from typing import Any, Dict, List, Optional
 
-import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
-from cc_invoke import ensure_engine_on_path  # noqa: E402
-
 
 def _render(response: Any) -> List[str]:
     """Render result.surfaced[] as one '[auto-reconcile] ...' line per entry,
@@ -184,6 +181,9 @@ def _get_raw_response() -> Optional[Dict[str, Any]]:
             return json.loads(raw_env)
         except Exception:
             return None
+
+    import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
+    from cc_invoke import ensure_engine_on_path
 
     claude_klabauter_root = ensure_engine_on_path(__file__)
     if not claude_klabauter_root:

@@ -36,9 +36,6 @@ from __future__ import annotations
 import os
 import sys
 
-import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
-from cc_invoke import require_dispatch_engine_on_path  # noqa: E402
-
 
 def _import_run_op_main():
     """Resolve the engine root and import `run_op_main` (DR-276: routes the op
@@ -46,6 +43,9 @@ def _import_run_op_main():
     `_import_main()` + `sys.exit(op_main(argv))` tail, so any path the op
     declares via `declare_write` becomes a session scope-touch claim instead
     of an unclaimed orphan at the `scoped_git_commit` sink)."""
+    import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
+    from cc_invoke import require_dispatch_engine_on_path
+
     claude_klabauter_root = require_dispatch_engine_on_path()
     from coordinator_core.cli_entry import run_op_main
     return run_op_main

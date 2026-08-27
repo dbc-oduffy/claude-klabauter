@@ -37,11 +37,15 @@ Spec backlink: coordinator_core/ops/check_posix_exec_assumptions.py (source-
 # --- routing half: this file is now a thin shim over entry_point_shim.run_gate_target ---
 from __future__ import annotations
 
-import os
 import sys
 
-import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
-from entry_point_shim import run_gate_target  # noqa: E402
+
+def main(argv: list[str]) -> int:
+    import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
+    from entry_point_shim import run_gate_target
+
+    return run_gate_target("check-posix-exec-assumptions", argv[1:])
+
 
 if __name__ == "__main__":
-    sys.exit(run_gate_target("check-posix-exec-assumptions", sys.argv[1:]))
+    sys.exit(main(sys.argv))

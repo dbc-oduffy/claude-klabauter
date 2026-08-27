@@ -1259,7 +1259,13 @@ def build_directives(
         for dirname in directives_lessons_plan._GOVERNING_PLAN_GLOB_DIRS:  # noqa: SLF001 - same-package sibling constant
             candidate = repo_root / dirname / f"{slug}.md"
             if candidate.is_file():
-                harvest_targets.append(directives_lessons_plan.GoverningPlan(slug=slug, path=candidate))
+                harvest_targets.append(
+                    directives_lessons_plan.GoverningPlan(
+                        slug=slug,
+                        path=candidate,
+                        rel=directives_lessons_plan._rel_to_repo(candidate, repo_root),  # noqa: SLF001 - same-package sibling helper
+                    )
+                )
                 break
     directives.extend(directives_lessons_plan.build_deferral_harvest_directives(harvest_targets))
 

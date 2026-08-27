@@ -74,10 +74,6 @@ package.
 import os
 import sys
 
-import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
-from cc_invoke import _resolve_claude_klabauter_root, require_engine_on_path  # noqa: E402
-
-
 def _resolve_coordinator_root() -> str:
     """Resolve the coordinator/ content root (owns bin/ guards; setup/ is its sibling —
     see coordinator_core.ops.percolate_preflight_scratch_publish.CoordinatorPaths).
@@ -118,6 +114,9 @@ def _resolve_coordinator_root() -> str:
     if _resolve_claude_klabauter_root() cannot resolve: this is a pre-flight gate script, not a
     never-block hook.
     """
+    import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
+    from cc_invoke import _resolve_claude_klabauter_root
+
     env_root = os.environ.get("CLAUDE_PLUGIN_ROOT")
     if env_root:
         return env_root
@@ -175,6 +174,9 @@ def _import_main():
     `_resolve_claude_klabauter_root()` ladder like `_resolve_coordinator_root()`
     above. — Review: code-reviewer P2 finding + EM ruling, 2026-08-07.
     """
+    import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
+    from cc_invoke import require_engine_on_path
+
     require_engine_on_path(__file__)
     from coordinator_core.cli_entry import run_op_main
 

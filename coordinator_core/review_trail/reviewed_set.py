@@ -378,12 +378,21 @@ def _resolve_endpoints_batch(tokens: List[str], repo_root: str) -> Dict[str, Opt
     Token count per record is fixed at 2 regardless of the range's commit span, and
     the spawn count is now fixed at 1 regardless of token count — strictly stronger
     than the flat-cost property the write-time measurement depends on."""
-    if not tokens:
-        return {}
-    exprs = [tok + "^{commit}" for tok in tokens]
-    lines = _batch_check(exprs, repo_root)
     result: Dict[str, Optional[str]] = {tok: None for tok in tokens}
-    for tok, line in zip(tokens, lines):
+    # A token carrying an embedded newline would be TWO stdin lines and draw TWO output
+    # lines, shifting every later token by one and handing it another token's SHA. Verified
+    # exploitable (review, 2026-08-27): a valid 40-hex commit SHA was attributed to the wrong
+    # token this way. Positional framing is what makes the one-spawn form safe, so anything
+    # that can break the framing is refused BEFORE it reaches stdin rather than validated
+    # after — a misattributed SHA is written to a durable store and never noticed, while an
+    # unresolved one only marks its record unresolved. `\r` is refused with `\n` because
+    # `text=True` newline translation makes a lone `\r` a line terminator on this platform.
+    # Nothing legitimate reaches here with either: these are `L..R` endpoints off a record.
+    safe = [tok for tok in tokens if "\n" not in tok and "\r" not in tok]
+    if not safe:
+        return result
+    lines = _batch_check([tok + "^{commit}" for tok in safe], repo_root)
+    for tok, line in zip(safe, lines):
         parts = line.split()
         if len(parts) >= 2 and parts[1] == "commit" and _SHA_RE.match(parts[0]):
             result[tok] = parts[0]

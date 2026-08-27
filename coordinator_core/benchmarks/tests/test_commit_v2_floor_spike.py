@@ -94,7 +94,6 @@ quarantine and silently skips this gate on a box that has the door."""
 
 ARMS = [
     ("ping", "{}", "envelope floor -- no repo, no params, no work"),
-    ("queue.age_ping", "{}", "live op, light work"),
     ("fleet.archive_sweep_status", "{}", "live op, reads disk"),
 ]
 """Live ops only. Every op in the kill batch is drained from the registration

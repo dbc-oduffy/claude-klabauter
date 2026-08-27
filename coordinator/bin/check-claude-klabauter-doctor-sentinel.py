@@ -56,9 +56,6 @@ from __future__ import annotations
 import os
 import sys
 
-import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
-from cc_invoke import require_colocated_engine_on_path  # noqa: E402
-
 
 def _import_run_op_main():
     """Resolve the CO-LOCATED engine root and import the in-process runner.
@@ -80,6 +77,9 @@ def _import_run_op_main():
     (AC-axis) cross-checks every dispatch-axis trampoline against the store's
     rename table, so a third instance fails a test rather than going quiet.
     """
+    import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
+    from cc_invoke import require_colocated_engine_on_path
+
     claude_klabauter_root = require_colocated_engine_on_path(__file__)
     from coordinator_core.cli_entry import run_op_main
     return run_op_main

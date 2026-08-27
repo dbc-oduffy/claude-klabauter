@@ -498,16 +498,34 @@ async def _live_children_guard(
     # is sound and load-bearing, so it stays; the seam below is restored rather
     # than the eight tests rewritten around it.
     #
-    # OPEN QUESTION INHERITED, NOT ANSWERED HERE: `claude-klabauter-74` reports a
-    # PM ruling gravestoning `handoff.has_live_children` on necessity -- a handoff
-    # with children is continued (terminal, archive) and one without has nothing
-    # to strand (archive), so the guard inverts the contract it guards. That
-    # ruling is NOT in the written record: `state/kill-ledger.md` K-113 records
-    # the compute deliberately retained for in-process callers, and
-    # `docs/problems/2026-08-27-the-killed-op-surface-which-jobs-still-n.md`
-    # row 12 triages this job "laundered -- still needed". If the gravestone
-    # lands, this guard and its eight tests go together; deleting them on a
-    # relayed ruling ahead of the record is the failure mode, not the fix.
+    # THIS GUARD IS A DELETION CANDIDATE. Not yet deleted, and the distinction
+    # is the whole point of the note.
+    #
+    # The PM ruling exists, verbatim, answering a 218ms figure: "having live
+    # children, what do I care? either the handoff is done or it's not. if it's
+    # been continued into a child, then it's done, we archive it, it's killed.
+    # if it doesn't have any children, then its fate is still to archive. why
+    # would we check if there are live children, ever?" It reached this session
+    # third-hand first, was recorded here as unsourced, and was then sourced to
+    # a real PM turn by `claude-klabauter-74`.
+    #
+    # SCOPE, which is what the record got wrong twice. The ruling reaches the
+    # ARCHIVE-TIME CHECK -- this guard -- and NOT the compute in
+    # `ops/handoff_children.py`. `handoff_close_origin_stub` imports
+    # `_handoff_has_live_children` and gates on its tri-state exit codes,
+    # needing a `children` payload `has_live_children_many` does not return;
+    # verified in that module this session, not taken on report. K-113 records
+    # exactly that and is **NOT superseded on the compute**. The disposition in
+    # `op_budget_suspension.py` originally read "the job itself is not needed",
+    # which is broader than the PM's words support, and was scoped to the
+    # archive-time check at `1ab3923ff`.
+    #
+    # WHY THE GUARD IS STILL HERE. No DR exists yet, and `claude-klabauter-74` is
+    # taking it to their PM rather than writing one off a rhetorical question.
+    # When that lands, this guard and its eight tests go together and the seam
+    # restored above goes with them -- it was built to be cheap to delete for
+    # exactly this outcome. Killing the compute is a different deletion and is
+    # still not argued for.
     #
     # REPOINTED 2026-08-27: `handoff.has_live_children` is killed (K-113) and
     # resolving it through the registry can now only ever yield the fail-closed

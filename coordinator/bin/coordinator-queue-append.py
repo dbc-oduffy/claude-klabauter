@@ -128,27 +128,73 @@ import sys
 import tempfile
 from typing import Any
 
-# PARSE-only, never a serializer — the YAML-emission section below (§ YAML
-# emission) stays hand-serialized, no pyyaml on the write path; yaml.safe_load
-# is used exclusively by the C2 round-trip gate in _build_yaml to VALIDATE the
-# already-hand-composed document, never to construct it.
-import yaml
+yaml = None  # type: ignore  # bound by _bootstrap_imports()
 
-# ---------------------------------------------------------------------------
-# Shared registry loader — bin/lib/coordinator_registry.py derives REPO_ALIASES
-# and shared identity-resolution helpers from schemas/coordinator-registry.manifest.json
-# at import time. Local copies of _repo_key_to_em_id, _same_path, and _em_id_for_root
-# are deleted; the canonical implementations live in coordinator_registry.
-# ---------------------------------------------------------------------------
-import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
-from coordinator_registry import (  # noqa: E402
-    REPO_ALIASES as _REPO_KEY_ALIASES,
-    repo_key_to_em_id as _repo_key_to_em_id,
-    _same_path,
-)
-from cc_invoke import route as _cc_route  # noqa: E402
-import cli_shared  # noqa: E402
-from repo_identity import resolve_checked_repo_root  # noqa: E402
+
+def _bootstrap_imports() -> None:
+    """Import every non-stdlib dependency this module needs and bind it (plus
+    the small aliases derived from them) at module scope, called from main()
+    (C6d import-motion: module bodies stay inert on both the warm door and the
+    un-bootstrapped settings-home forwarder load routes).
+
+    yaml: PARSE-only, never a serializer — the YAML-emission section below
+    (§ YAML emission) stays hand-serialized, no pyyaml on the write path;
+    yaml.safe_load is used exclusively by the C2 round-trip gate in
+    _build_yaml to VALIDATE the already-hand-composed document, never to
+    construct it.
+    """
+    global yaml, _REPO_KEY_ALIASES, _repo_key_to_em_id, _same_path
+    global _cc_route, cli_shared, resolve_checked_repo_root
+    global _MACHINE_LOCAL_IMPL_ENV, _CLAUDE_HOME_ENV, _CLAUDE_KLABAUTER_ROOT_ENV
+    global _claude_home, _claude_klabauter_root, _machine_local_impl, _resolve_python
+    global _machine_local_get, _machine_local_repos_keys, _resolve_from_repo
+
+    import yaml
+
+    # -----------------------------------------------------------------------
+    # Shared registry loader — bin/lib/coordinator_registry.py derives REPO_ALIASES
+    # and shared identity-resolution helpers from schemas/coordinator-registry.manifest.json
+    # at import time. Local copies of _repo_key_to_em_id, _same_path, and _em_id_for_root
+    # are deleted; the canonical implementations live in coordinator_registry.
+    # -----------------------------------------------------------------------
+    import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
+    from coordinator_registry import (
+        REPO_ALIASES as _REPO_KEY_ALIASES,
+        repo_key_to_em_id as _repo_key_to_em_id,
+        _same_path,
+    )
+    from cc_invoke import route as _cc_route
+    import cli_shared
+    from repo_identity import resolve_checked_repo_root
+
+    # Env var overrides for test isolation. Canonical spellings now live in
+    # bin/lib/cli_shared.py (T2-g2a consolidation) — aliased here so existing
+    # doc/error-message references in this file don't need a rename.
+    _MACHINE_LOCAL_IMPL_ENV = cli_shared.MACHINE_LOCAL_IMPL_ENV
+    _CLAUDE_HOME_ENV = cli_shared.CLAUDE_HOME_ENV
+
+    # Env var for CLAUDE_KLABAUTER_ROOT override — mirrors coordinator-claude-klabauter-root.sh §4b
+    # idempotency gate. Set to the claude-klabauter repo root to bypass machine-local resolution.
+    # Spec backlink: pln-stop-the-rot-claude-klabauter-state-home-placement-4cc787 § AC1 / AC13
+    _CLAUDE_KLABAUTER_ROOT_ENV = cli_shared.CLAUDE_KLABAUTER_ROOT_ENV
+
+    # _claude_home / _claude_klabauter_root / _machine_local_impl / _resolve_python /
+    # _machine_local_get / _machine_local_repos_keys / _current_repo_root: extracted
+    # to bin/lib/cli_shared.py (T2-g2a consolidation, ~150 LoC dup with
+    # coordinator-lesson-promote). Thin aliases preserve the pre-consolidation call
+    # sites below without a mass rename.
+    _claude_home = cli_shared.claude_home
+    _claude_klabauter_root = cli_shared.claude_klabauter_root
+    _machine_local_impl = cli_shared.machine_local_impl
+    _resolve_python = cli_shared.resolve_python
+    _machine_local_get = cli_shared.machine_local_get
+    _machine_local_repos_keys = cli_shared.machine_local_repos_keys
+
+    # _resolve_from_repo: extracted to bin/lib/cli_shared.py (T2-g2a
+    # consolidation) — same cwd git-root -> machine-local reverse-lookup ->
+    # doe_claude -> unregistered -> "unknown-sender-em" ladder, byte-identical
+    # to the pre-consolidation body.
+    _resolve_from_repo = cli_shared.resolve_from_repo
 
 # ---------------------------------------------------------------------------
 # Native schema seam — schema introspection and validation via the
@@ -323,15 +369,10 @@ _SLUG_MAX_CHARS = 40
 
 # Env var overrides for test isolation. Canonical spellings now live in
 # bin/lib/cli_shared.py (T2-g2a consolidation) — aliased here so existing
-# doc/error-message references in this file don't need a rename.
-_MACHINE_LOCAL_IMPL_ENV = cli_shared.MACHINE_LOCAL_IMPL_ENV
-_CLAUDE_HOME_ENV = cli_shared.CLAUDE_HOME_ENV
+# doc/error-message references in this file don't need a rename. Bound in
+# _bootstrap_imports() (C6d import-motion): _MACHINE_LOCAL_IMPL_ENV,
+# _CLAUDE_HOME_ENV, _CLAUDE_KLABAUTER_ROOT_ENV.
 _QUEUE_APPEND_OUTPUT_ROOT_ENV = "QUEUE_APPEND_OUTPUT_ROOT"
-
-# Env var for CLAUDE_KLABAUTER_ROOT override — mirrors coordinator-claude-klabauter-root.sh §4b
-# idempotency gate. Set to the claude-klabauter repo root to bypass machine-local resolution.
-# Spec backlink: pln-stop-the-rot-claude-klabauter-state-home-placement-4cc787 § AC1 / AC13
-_CLAUDE_KLABAUTER_ROOT_ENV = cli_shared.CLAUDE_KLABAUTER_ROOT_ENV
 
 
 class _ClaudeKlabauterUnresolvable(RuntimeError):
@@ -361,13 +402,8 @@ class _ClaudeKlabauterUnresolvable(RuntimeError):
 # _machine_local_get / _machine_local_repos_keys / _current_repo_root: extracted
 # to bin/lib/cli_shared.py (T2-g2a consolidation, ~150 LoC dup with
 # coordinator-lesson-promote). Thin aliases preserve the pre-consolidation call
-# sites below without a mass rename.
-_claude_home = cli_shared.claude_home
-_claude_klabauter_root = cli_shared.claude_klabauter_root
-_machine_local_impl = cli_shared.machine_local_impl
-_resolve_python = cli_shared.resolve_python
-_machine_local_get = cli_shared.machine_local_get
-_machine_local_repos_keys = cli_shared.machine_local_repos_keys
+# sites below without a mass rename — bound in _bootstrap_imports() (C6d
+# import-motion).
 
 
 def _current_repo_root() -> str | None:
@@ -428,7 +464,7 @@ def _resolve_session_id() -> str:
 # _resolve_from_repo: extracted to bin/lib/cli_shared.py (T2-g2a consolidation) —
 # same cwd git-root -> machine-local reverse-lookup -> doe_claude -> unregistered
 # -> "unknown-sender-em" ladder, byte-identical to the pre-consolidation body.
-_resolve_from_repo = cli_shared.resolve_from_repo
+# Bound in _bootstrap_imports() (C6d import-motion).
 
 
 # ---------------------------------------------------------------------------
@@ -1676,6 +1712,7 @@ Spec backlink: docs/plans/2026-06-25-example-initiative-tc-2-queues-lessons-cons
 
 def main(argv: "list[str] | None" = None) -> int:
     """Entry point for coordinator-queue-append CLI."""
+    _bootstrap_imports()
     # F12: --schema NAME --help (or -h) routes to per-schema help BEFORE argparse's
     # own --help handling fires (argparse would otherwise print generic top-level
     # help and exit, never reaching this branch). --help without --schema falls

@@ -57,9 +57,6 @@ import sys
 
 _BIN_DIR = os.path.dirname(os.path.abspath(__file__))
 
-import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
-import cc_invoke  # noqa: E402
-
 PROG = "handoff-has-live-children.py"
 
 
@@ -69,6 +66,9 @@ def _no_console_kw() -> dict:
     splat the canonical no-console-window kwarg. ``{}`` on any resolution/
     import failure (fail-open)."""
     try:
+        import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
+        import cc_invoke
+
         if cc_invoke.ensure_engine_on_path(__file__) is None:
             return {}
         from coordinator_core.win_portability import no_console_creationflags
@@ -96,6 +96,9 @@ def _resolve_repo_root(candidate_abs: str) -> str | None:
     per-repo git root, and it also lets the test harness point candidates at fixture
     repos with their own .git.
     """
+    import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
+    import cc_invoke
+
     if cc_invoke.ensure_engine_on_path(__file__) is None:
         return None
     from coordinator_core.git.repo_root import show_toplevel
@@ -112,6 +115,9 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
+    import cc_invoke
+
     argv = sys.argv[1:] if argv is None else argv
 
     try:

@@ -521,9 +521,15 @@ SUSPENDED_OPS: Dict[str, Dict[str, object]] = {
             "warm, and warm is how it runs. It was suspended once before on "
             "wall clock and the PM reinstated it 2026-08-23; that reversal is "
             "not being repeated here on the same evidence, it is superseded by "
-            "a separate ruling. Last ban's cost, for the next reader: no review "
-            "was recordable fleet-wide while it held."
+            "a separate ruling."
         ),
+        "fallback": (
+            "A review IS recordable — dispatch a review agent and its filled "
+            "sidecar is the receipt (DR-372). Blank sidecar means the review "
+            "aborted; filled means it ran. Nothing is hand-recorded, and no "
+            "replacement op is owed."
+        ),
+        "successor_live": True,
         "spinoff": None,
     },
     # --- convicted WITHOUT process-time evidence (wall clock only) ----------
@@ -552,7 +558,8 @@ SUSPENDED_OPS: Dict[str, Dict[str, object]] = {
             "has_live_children_many does not return. Do not restore the decorator."
         ),
         "disposition": (
-            "GRAVESTONE — the job itself is not needed, PM ruling 2026-08-27: "
+            "GRAVESTONE, SCOPED TO THE ARCHIVE-TIME CHECK — not to the compute. PM "
+            "ruling 2026-08-27, verbatim in-session: "
             "'either the handoff is done or it's not... why would we check if "
             "there are live children, ever?'. Two independent grounds, verified "
             "before the ruling was applied. (1) Archiving strands nothing: "
@@ -569,7 +576,16 @@ SUSPENDED_OPS: Dict[str, Dict[str, object]] = {
             "new-homes.md) — cost spent on a question with no consumer. Removal "
             "belongs to the housekeeping requirement carried by "
             "pln-one-corpus-read-or-the-houseke-18d29a; unwind baton_drift_sweep.py"
-            ":271/:515 and consumed_handoff_stamp.py:505 there, not here."
+            ":271/:515 and consumed_handoff_stamp.py:505 there, not here. "
+            "SCOPE LIMIT, and it is a real one: the ruling argues the ARCHIVE-TIME "
+            "CHECK has no consumer. It does NOT reach the compute in "
+            "ops/handoff_children.py, which has a separate consumer the argument "
+            "never addressed — handoff_close_origin_stub imports "
+            "_handoff_has_live_children (:250) and gates on its exit codes (:128-131), "
+            "needing a children payload has_live_children_many does not return. "
+            "K-113 says exactly that and is NOT superseded on the compute. Killing the "
+            "guard and killing the compute are different deletions; only the first is "
+            "argued for here."
         ),
         "spinoff": None,
     },
@@ -785,9 +801,30 @@ def refusal_message(method: str) -> str:
         f"{method} is off: {_bar_clause(record)}. "
         + (f"How that number arose: {note} " if note else "")
         + (f"{fallback} " if fallback else "")
-        + "Killed, not suspended -- the old implementation does not come "
-        "back. If the job is still needed, plan a new one under 200ms."
+        + "Killed, not suspended -- the old implementation does not come back."
+        + (
+            ""
+            if _successor_is_live(record)
+            else " If the job is still needed, plan a new one under 200ms."
+        )
     )
+
+
+def _successor_is_live(record: object) -> bool:
+    """True when a row's `fallback` names a ratified successor that already
+    does the job, so the caller has somewhere to go right now.
+
+    The closing `plan a new one under 200ms` is the correct disposition for a
+    row whose job is genuinely unhomed, and the wrong one for a row whose job
+    was rehomed by ruling — it sends a reader off to build what already
+    exists. `review_trail.write` is the measured case: DR-372 rehomed the job
+    to the dispatched-agent sidecar receipt, and two DoE sessions
+    (doe-claude-1c and doe-claude-2e, 2026-08-27) independently read the
+    refusal as a fleet-wide capability gap rather than as a pointer to the
+    live mechanism. Same defect class as the two instrument notes above: the
+    record was honest, the message was not.
+    """
+    return bool(isinstance(record, dict) and record.get("successor_live"))
 
 
 #: The process-time line the 2026-08-27 sweep convicts on (PM ruling). Distinct

@@ -48,10 +48,14 @@ autonomous-verb.py` over `workday_complete.autonomous_verb`.
 from __future__ import annotations
 
 import sys
-from pathlib import Path
 
-import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
-from entry_point_shim import run_target  # noqa: E402
+
+def main(argv: list[str]) -> int:
+    import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
+    from entry_point_shim import run_target  # noqa: E402
+
+    return run_target("workday-complete-assemble", argv[1:])
+
 
 if __name__ == "__main__":
-    sys.exit(run_target("workday-complete-assemble", sys.argv[1:]))
+    sys.exit(main(sys.argv))

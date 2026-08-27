@@ -1758,6 +1758,63 @@ def _assembled_commit_is_noop(
     return True
 
 
+def declare_move_claims(result: dict, moves: List["Move"], acted: List[dict]) -> dict:
+    """Declare BOTH ends of every landed archival move on the op result, so the
+    sink is claimed by the session that archived it.
+
+    Purpose: `archive_terminal_handoffs` / `archive_actioned_memos` are exempt
+    from `session.scope.relocate_touched_path` on the reasoned allow-list in
+    `session/tests/test_no_untracked_relocation.py` — correctly, since a bulk
+    background sweep has no `session_id` in scope to restate a claim onto. That
+    rationale is about the MOVER, not about the RESULT: it explains why the
+    claim cannot be restated inside the mover, and was never a finding that the
+    moved file must stay unclaimed. Left unclaimed, an archived record reaches
+    `compute_scope` as an owner-less orphan and `dispatch_checks` Check 5
+    renders `owner:orphan` — the arm gating the scope-strict flip to deny.
+
+    The seam is the one `memo_reconcile_outbox` already uses for the identical
+    shape: declare the real write set on the result under `ipc.py`'s
+    `_SCOPE_TOUCH_PATHS_KEY` contract, and let identity resolve at the dispatch
+    layer instead of needing a `session_id` here. Both ends are declared,
+    because a move is a deletion at the source as well as a write at the sink
+    and Check 5's sink must be able to attribute the deletion too.
+
+    Occurrence, measured rather than assumed (2026-08-27): the live act path
+    for both ops is `archive_and_commit`, which commits its own moves, so an
+    archived path is normally never left staged for a session's own later
+    commit — and a census of every `scope-warnings.log` in this repo found ZERO
+    archival-shaped orphan events. What this closes is the residual case that
+    same function documents: when the post-commit main-index resync exhausts
+    its retry budget, stale rename residue IS left staged in the main index.
+    That is the incident behind three memos resurrecting from `archive/` across
+    2026-08-01/02, and it is the shape a session then trips over. Cheap and
+    latent, not hot.
+
+    Declares only paths in `acted` — never the full `moves` list. A move that
+    failed moved nothing, and `_SCOPE_TOUCH_PATHS_KEY`'s contract is the REAL
+    write set, never an intended surface (`ipc.py`'s own contract comment, and
+    the landed lesson behind it). Under-declaration is the safe direction; a
+    declared path that was not written is not.
+
+    Mutates and returns `result` for call-site brevity. A batch with nothing
+    acted leaves it untouched — no empty key.
+    """
+    by_id = {m.candidate_id: m for m in moves}
+    written: List[str] = []
+    for entry in acted:
+        move = by_id.get(entry.get("id"))
+        if move is None:
+            continue
+        written.append(str(move.dst))
+        written.append(str(move.src))
+    if written:
+        # Literal key, matching `memo_reconcile_outbox`'s own call site —
+        # importing `ipc` here to reach `_SCOPE_TOUCH_PATHS_KEY` would drag the
+        # dispatcher into every fleet op module's import path.
+        result["_scope_touch_paths"] = written
+    return result
+
+
 async def archive_and_commit(
     worktree_root: Path,
     moves: List[Move],

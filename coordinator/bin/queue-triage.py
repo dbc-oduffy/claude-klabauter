@@ -1,14 +1,14 @@
 # Unix shebang — was generator-owned by gen-launcher-shim.py --ensure-unix; that mode was retired 2026-07-28 (POSIX-EXEC-ASSUMPTION-GUARD, PM ruling) and no longer regenerates this line.
 """
-coordinator/bin/queue-triage — one CLI fronting the three queue-triage-terminus
-ops (queue.cluster, queue.age_ping, handoff.scaffold_from_queue).
+coordinator/bin/queue-triage — one CLI fronting the queue-triage-terminus
+ops (queue.cluster, handoff.scaffold_from_queue).
 
 Purpose: extensionless entrypoint, naked Python, matching
 coordinator-queue-append's shape (same noun family, same consumer). ONE CLI
-with a `<leg>` argument (cluster | age-ping | scaffold-baton) rather than
-three near-identical scripts, each leg taking a queue-family argument — the
+with a `<leg>` argument (cluster | scaffold-baton) rather than
+near-identical scripts, each leg taking a queue-family argument — the
 sender's stated preference (docs/plans/2026-07-23-queue-triage-terminus-ops.md
-§ C7). Cluster and age-ping route via `cc_invoke.route()` (compute-only);
+§ C7). Cluster routes via `cc_invoke.route()` (compute-only);
 scaffold-baton routes via `cc_invoke.route_mutation()` (mutating, and honors
 the op's in-envelope exit_code/error refusal shape). Every leg prints the
 op's ratified response envelope as JSON to stdout unchanged — this CLI adds
@@ -16,17 +16,20 @@ no rendering, no summarization, no second copy of any envelope shape.
 
 Spec backlink: pln-queue-triage-terminus-ops-clus-043c40 § C7
 
-Op keys (do not confuse the third with `queue.scaffold_baton` — the module
+A third leg, `age-ping` (`queue.age_ping`), was deleted 2026-08-27 under the
+brightline kill bar — it cost ~425-465ms of process time per dispatch and had
+no live caller. See docs/gravestones/queue-age-ping.md.
+
+Op keys (do not confuse the second with `queue.scaffold_baton` — the module
 that registers it is `queue_scaffold_baton.py` by filename convention only;
 the op KEY is `handoff.scaffold_from_queue`, since it writes
 `state/handoffs/`, outside DR-213's queue-write carve-out):
     queue.cluster
-    queue.age_ping
     handoff.scaffold_from_queue
 
-The `<family>` positional is uniform across all three legs for CLI-shape
-symmetry. `queue.cluster` and `queue.age_ping` forward it directly into their
-params (`family` / `families=[family]`). `handoff.scaffold_from_queue` has no
+The `<family>` positional is uniform across both legs for CLI-shape
+symmetry. `queue.cluster` forwards it directly into its
+params (`family`). `handoff.scaffold_from_queue` has no
 `family` param at all — it derives family from each item's `path` — so here
 `<family>` is used ONLY to expand a bare `--entry-path` filename into its
 likely repo-relative location (`state/<family>/<filename>`); it is never
@@ -78,14 +81,13 @@ from coordinator_core.argv_fidelity import (  # noqa: E402
 from coordinator_core.git.repo_root import show_toplevel  # noqa: E402
 
 _OP_CLUSTER = "queue.cluster"
-_OP_AGE_PING = "queue.age_ping"
 _OP_SCAFFOLD = "handoff.scaffold_from_queue"
 
 # Review: code-reviewer — Finding 1 (P1): scaffold-baton's `family` is
 # interpolated into a filesystem path (`_entry_path_for`) with no parse-time
 # guard, unlike `entry_path` (checked for separators before use). Charset-only
-# allowlist, scoped to scaffold-baton's `family` alone — cluster/age-ping's
-# `family` never touches a filesystem path (it goes straight into op params),
+# allowlist, scoped to scaffold-baton's `family` alone — cluster's `family`
+# never touches a filesystem path (it goes straight into op params),
 # so this is not a general family-legitimacy check (that stays the op's job).
 # Mirrors coordinator-queue-append's `_validate_workstream_identifier` shape.
 _FAMILY_ARG_RE = re.compile(r"^[a-z][a-z0-9-]*$")
@@ -116,7 +118,7 @@ def _resolve_repo_root(explicit: str | None) -> str | None:
 
 
 def _dispatch_read(op: str, params: dict, repo_root: str) -> tuple[Any, int]:
-    """Cluster/age-ping dispatch — route() is compute-only, bare result on success.
+    """Cluster dispatch — route() is compute-only, bare result on success.
 
     Returns (result, exit_code). Only a transport failure (RuntimeError) is
     possible here — route() never interprets an in-envelope exit_code/error
@@ -172,7 +174,7 @@ def _family_arg(value: str) -> str:
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="queue-triage",
-        description="Front the queue-triage-terminus ops: cluster, age-ping, scaffold-baton.",
+        description="Front the queue-triage-terminus ops: cluster, scaffold-baton.",
         epilog=(
             "NOTE: --repo-root may appear before OR after the leg name "
             "(e.g. both `queue-triage --repo-root R cluster debt-backlog` and "
@@ -212,23 +214,6 @@ def _build_parser() -> argparse.ArgumentParser:
     p_cluster.add_argument("--where", default=None)
     p_cluster.add_argument("--since", default=None)
     p_cluster.add_argument("--limit", type=int, default=None)
-
-    p_age = sub.add_parser(
-        "age-ping",
-        parents=[_repo_root_parent],
-        help="queue.age_ping — parked entries past threshold",
-    )
-    p_age.add_argument(
-        "family", type=_family_arg, help="queue-family directory name, e.g. bug-backlog"
-    )
-    p_age.add_argument("--threshold-days", type=int, default=None)
-    p_age.add_argument(
-        "--exclude-path",
-        action="append",
-        default=None,
-        dest="exclude_paths",
-        help="repo-relative path already dispositioned this cycle (repeatable)",
-    )
 
     p_scaffold = sub.add_parser(
         "scaffold-baton",
@@ -311,15 +296,6 @@ def _build_cluster_params(args: argparse.Namespace) -> dict:
     return params
 
 
-def _build_age_ping_params(args: argparse.Namespace) -> dict:
-    params: dict[str, Any] = {"families": [args.family]}
-    if args.threshold_days is not None:
-        params["threshold_days"] = args.threshold_days
-    if args.exclude_paths is not None:
-        params["exclude_paths"] = args.exclude_paths
-    return params
-
-
 def _build_scaffold_params(args: argparse.Namespace) -> dict:
     params: dict[str, Any] = {}
     if args.entry_path:
@@ -357,8 +333,6 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.leg == "cluster":
         result, exit_code = _dispatch_read(_OP_CLUSTER, _build_cluster_params(args), repo_root)
-    elif args.leg == "age-ping":
-        result, exit_code = _dispatch_read(_OP_AGE_PING, _build_age_ping_params(args), repo_root)
     else:
         try:
             refuse_newline_argv(args.body, flag_name="--body")

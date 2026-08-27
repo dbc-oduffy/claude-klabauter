@@ -89,12 +89,6 @@ for _p in (str(_LIB_DIR), str(_RESOLVE_CLAUDE_KLABAUTER_DIR), str(_BIN_DIR)):
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-import cli_shared  # noqa: E402
-import _resolve_claude_klabauter  # noqa: E402
-
-from coordinator_core.machine_resolver import registry_get  # noqa: E402
-from coordinator_core.win_portability import same_path  # noqa: E402
-
 _EXIT_OK = 0
 _EXIT_GIT_OP_FAILED = 1
 _EXIT_USAGE = 2
@@ -116,6 +110,8 @@ def _run(cmd, **kwargs) -> subprocess.CompletedProcess:
 
 def _resolve_tree() -> Optional[str]:
     """`repos.claude_klabauter`, or `None` if unset."""
+    import cli_shared
+
     return cli_shared.machine_local_get(_REPOS_KEY)
 
 
@@ -168,6 +164,9 @@ def _is_publish_mirror(tree: str) -> bool:
     # coordinator_core importable, so the CLI shell-out this replaced was
     # an added process spawn for no reason (machine load norm:
     # docs/wiki/machine-load-norm.md).
+    from coordinator_core.machine_resolver import registry_get
+    from coordinator_core.win_portability import same_path
+
     mirror_path = registry_get(_PUBLISH_MIRROR_PATH_KEY)
     if not mirror_path:
         return False
@@ -178,6 +177,7 @@ def _declared_track_ref_branch() -> Optional[str]:
     """The local branch `_expected_local_branch` derives from the declared
     `publish.mirrors.claude_klabauter.track_ref`, or `None` if undeclared."""
     from publish import _expected_local_branch  # noqa: PLC0415 -- see Finding 3 below
+    from coordinator_core.machine_resolver import registry_get
 
     track_ref = registry_get(_TRACK_REF_KEY)
     if not track_ref:
@@ -186,6 +186,8 @@ def _declared_track_ref_branch() -> Optional[str]:
 
 
 def _cmd_report(args: argparse.Namespace) -> int:
+    import _resolve_claude_klabauter
+
     tree = _resolve_tree()
     declared = _resolve_claude_klabauter.resolve_engine_target()
 
@@ -314,6 +316,8 @@ def _cmd_set(args: argparse.Namespace) -> int:
 
 
 def _build_parser() -> argparse.ArgumentParser:
+    import _resolve_claude_klabauter
+
     parser = argparse.ArgumentParser(
         prog="klabauter-channel",
         description=(

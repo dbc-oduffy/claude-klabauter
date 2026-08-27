@@ -64,10 +64,6 @@ import argparse
 import os
 import sys
 
-import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
-from cc_invoke import RouteMutationError, route_mutation  # noqa: E402
-from repo_identity import resolve_checked_repo_root  # noqa: E402
-
 
 def _legacy_fn():
     """Big-bang cutover: no bash fallback. Always raises.
@@ -93,6 +89,9 @@ def _repo_root() -> str:
     refuses (AC4). Falls back to os.getcwd() when no root at all resolves,
     preserving this script's pre-existing best-effort behavior.
     """
+    import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
+    from repo_identity import resolve_checked_repo_root
+
     root, verdict = resolve_checked_repo_root(explicit_root=None)
     if verdict["verdict"] == "MISMATCH":
         print(verdict["message"], file=sys.stderr)
@@ -100,6 +99,9 @@ def _repo_root() -> str:
 
 
 def main(argv: list[str] | None = None) -> int:
+    import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
+    from cc_invoke import RouteMutationError, route_mutation
+
     parser = argparse.ArgumentParser(
         prog="close-origin-stub-on-ship.py",
         description=(

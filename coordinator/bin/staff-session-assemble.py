@@ -34,11 +34,15 @@
 # --- routing half: this file is now a thin shim over entry_point_shim.run_target ---
 from __future__ import annotations
 
-import os
 import sys
 
-import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
-from entry_point_shim import run_target  # noqa: E402
+
+def main(argv: list[str]) -> int:
+    import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
+    from entry_point_shim import run_target  # noqa: E402
+
+    return run_target("staff-session-assemble", argv[1:])
+
 
 if __name__ == "__main__":
-    sys.exit(run_target("staff-session-assemble", sys.argv[1:]))
+    sys.exit(main(sys.argv))

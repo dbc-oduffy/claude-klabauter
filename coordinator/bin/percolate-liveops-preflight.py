@@ -87,26 +87,6 @@ from __future__ import annotations
 import os
 import sys
 
-import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
-from cc_invoke import _resolve_claude_klabauter_root, require_dispatch_engine_on_path  # noqa: E402
-
-# Same seam `resolve_claude_klabauter_root_with_class()` uses to determine the ONE
-# engine source tree (C4, 2026-08-18) — imported directly rather than
-# re-deriving the discriminant against `engine.working_repos.*` a second
-# time (the exact duplication C4 exists to kill; see that module's
-# `_is_claude_klabauter_source_tree` docstring for why a structural comparison
-# replaced the retired per-repo exemption family).
-_RESOLVE_CLAUDE_KLABAUTER_LIB_DIR = os.path.join(
-    os.path.dirname(os.path.abspath(__file__)), "..", "lib", "resolve-claude-klabauter"
-)
-if _RESOLVE_CLAUDE_KLABAUTER_LIB_DIR not in sys.path:
-    sys.path.insert(0, _RESOLVE_CLAUDE_KLABAUTER_LIB_DIR)
-from _resolve_claude_klabauter import (  # noqa: E402
-    ClaudeKlabauterResolutionError,
-    _ml_dir as _claude_klabauter_ml_dir,
-    _resolve_claude_klabauter_root as _resolve_claude_klabauter_source_root,
-)
-
 _TRANSPORT_FAIL = 3
 
 _HELP_FLAGS = ("--help", "-h", "help")
@@ -114,6 +94,9 @@ _SUBCOMMANDS = "subcommands: run (default when no args)"
 
 
 def _import_modules():
+    import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
+    from cc_invoke import require_dispatch_engine_on_path
+
     claude_klabauter_root = require_dispatch_engine_on_path()
     import coordinator_core.session.liveness as liveness_mod
     import coordinator_core.session.peer_roster as peer_roster_mod
@@ -181,6 +164,23 @@ def _build_id_to_address(peer_roster_mod, repo_path: str) -> "dict[str, str]":
 
 
 def _run(liveness_mod, peer_roster_mod, machine_resolver_mod) -> int:
+    # Same seam `resolve_claude_klabauter_root_with_class()` uses to determine the ONE
+    # engine source tree (C4, 2026-08-18) — imported directly rather than
+    # re-deriving the discriminant against `engine.working_repos.*` a second
+    # time (the exact duplication C4 exists to kill; see that module's
+    # `_is_claude_klabauter_source_tree` docstring for why a structural comparison
+    # replaced the retired per-repo exemption family).
+    _resolve_claude_klabauter_lib_dir = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "..", "lib", "resolve-claude-klabauter"
+    )
+    if _resolve_claude_klabauter_lib_dir not in sys.path:
+        sys.path.insert(0, _resolve_claude_klabauter_lib_dir)
+    from _resolve_claude_klabauter import (
+        ClaudeKlabauterResolutionError,
+        _ml_dir as _claude_klabauter_ml_dir,
+        _resolve_claude_klabauter_root as _resolve_claude_klabauter_source_root,
+    )
+
     repos = _load_registry_prefix(machine_resolver_mod, "repos.")
 
     # The ONE path that IS the engine's own live source tree — same

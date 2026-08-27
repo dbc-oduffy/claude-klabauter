@@ -62,9 +62,6 @@ import os
 import sys
 from pathlib import Path
 
-import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
-from cc_invoke import require_dispatch_engine_on_path  # noqa: E402
-
 
 def _import_module():
     """Resolve the engine root, put it on sys.path, and import the ported op
@@ -81,6 +78,9 @@ def _import_module():
     resolution of the source-of-truth checkout, so it is returned rather than
     re-resolved a second time via a separate ladder call.
     """
+    import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
+    from cc_invoke import require_dispatch_engine_on_path
+
     claude_klabauter_root = require_dispatch_engine_on_path()
     from coordinator_core.plugin_health import forwarder_drift as _op_module
 

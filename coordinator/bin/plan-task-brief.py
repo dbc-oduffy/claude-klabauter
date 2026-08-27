@@ -69,9 +69,6 @@ from pathlib import Path
 
 _BIN_DIR = Path(__file__).resolve().parent
 
-import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
-import cc_invoke  # noqa: E402
-
 # The IN-set (executor-relevant fields) — an explicit allowlist, not
 # derived by subtracting a denylist from whatever a row happens to carry.
 # See module docstring's Field partition section.
@@ -136,6 +133,9 @@ def main(argv: "list[str] | None" = None) -> int:
     # engine checkout, so the colocated resolver is expected to succeed —
     # fail loud (exit 2, usage/environment class) if it doesn't.
     try:
+        import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
+        import cc_invoke
+
         cc_invoke.require_engine_on_path(__file__)
         from coordinator_core.frontmatter.body_blocks import LocateStatus
         from coordinator_core.ops.plan_tasks_render import load_rows

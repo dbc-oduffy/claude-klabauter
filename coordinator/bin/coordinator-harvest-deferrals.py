@@ -157,12 +157,6 @@ import sys
 import tempfile
 from pathlib import Path
 
-try:
-    import yaml  # type: ignore
-except ImportError:
-    yaml = None
-
-
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
@@ -175,83 +169,102 @@ _BIN_DIR = os.path.dirname(os.path.abspath(__file__))
 # resolution chain. Mirrors the _LIB_DIR sys.path pattern used by both seams.
 _LIB_DIR = os.path.join(_BIN_DIR, "lib")
 
-# Bootstrap on the DISPATCH axis before anything below can bind
-# `coordinator_core` on the LOCATOR axis first. `cli_shared` (imported
-# below) transitively imports `repo_identity`, which resolves and imports
-# `coordinator_core` at ITS OWN module level via the LOCATOR-axis
-# `require_engine_on_path(__file__)` — on a conformant box the two axes can
-# return different roots (see `require_dispatch_engine_on_path`'s own
-# docstring), and once a package is bound in `sys.modules` no later
-# `sys.path` insert can rebind it. Must run before `import cli_shared` /
-# `from coordinator_registry import ...` below.
-import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
-from cc_invoke import _resolve_claude_klabauter_root, require_dispatch_engine_on_path  # noqa: E402
-
-_CLAUDE_KLABAUTER_ROOT = require_dispatch_engine_on_path()
-# LOAD-BEARING, NOT DEAD. Do not delete on an unused-import sweep: this line is
-# what BINDS coordinator_core, and binding it HERE is the whole fix.
-# require_dispatch_engine_on_path() above only mutates sys.path -- it imports
-# nothing. Without this line the next module-level import below (a binder module
-# that resolves on the LOCATOR axis) wins the race and binds coordinator_core off
-# the working tree instead of the dispatch root, and no later sys.path insert can
-# rebind an already-imported package. Removing it restores a silent wrong-tree
-# divergence that require_dispatch_engine_on_path now raises on.
-# Why: docs/plans/2026-08-26-the-seam-reports-what-it-got.md C9,
-# docs/research/engine-provenance-carrier-dependence.md
-import coordinator_core  # noqa: E402,F401
-
-from coordinator_registry import doe_root, _DoeUnresolvable  # noqa: E402
-
-# cli_shared.claude_klabauter_root() resolves repos.claude_klabauter (CLAUDE_KLABAUTER_ROOT env ->
-# machine-local registry) — the SAME function coordinator-queue-append's
-# _output_path() central branch calls for improvement-queue since commit
-# 5b908173 ("central scope routes to claude-klabauter, not DoE — reconcile the two
-# implementations", 2026-07-23). doe_root() resolves the DIFFERENT
-# repos.doe_claude key and is the correct root ONLY for lessons-outbox
-# (coordinator-lesson-promote's _outbox_root() was not touched by that
-# commit). Importing both, distinctly, is deliberate — do not conflate them.
-import cli_shared  # noqa: E402
-_claude_klabauter_root = cli_shared.claude_klabauter_root
-
-# coordinator-queue-append / coordinator-lesson-promote are extensionless
-# Python scripts — CreateProcess can't exec them directly on Windows
-# (WinError 193). find_cli_cmd() resolves each to a Windows-safe argv
-# prefix (PATH probe, then sys.executable + sibling-path fallback);
-# resolution is memoized per CLI per process (below) since _harvest()
-# calls these once per row and the probe itself spawns subprocesses.
-#
-# `_queue_append_locator` is a sibling module in THIS script's own
-# directory (`coordinator/bin/`, not `lib/`) — running this script directly
-# (`python3 coordinator-harvest-deferrals`) implicitly puts `_BIN_DIR` on
-# `sys.path[0]`, but the in-process dispatch every consumes-manifest CLI is
-# ALSO invoked through (`workstream_complete.apply._load_cli_module`, via
-# `importlib.util.spec_from_file_location`) never gets that implicit entry
-# — only an actual `__main__` script does. Left unguarded, this import
-# always raised `ModuleNotFoundError` under in-process dispatch, so every
-# `d-harvest-deferrals-*` directive (workstream_complete/directives_lessons_
-# plan.py's `build_deferral_harvest_directives`, ungated, fires once per
-# governing plan) always landed in `report["failed"]` (2026-07-27
-# arg-mismatch audit — a load-time defect found alongside, not caused by,
-# the prog-slot mismatch this audit chunk targets). Mirrors the `_LIB_DIR`
-# sys.path insertion immediately above.
-if _BIN_DIR not in sys.path:
-    sys.path.insert(0, _BIN_DIR)
-from _queue_append_locator import find_cli_cmd  # noqa: E402
-
-# Grouping-approval contract (2026-07-29). Selection on a GOVERNED plan keys
-# on the plan's approved `defer` grouping rather than each row's pm_approved
-# boolean — see `_select_harvest_candidates`.
-#
-# `coordinator_core` is already bound on the dispatch axis by the bootstrap
-# above (moved ahead of `cli_shared`/`coordinator_registry` — see the comment
-# there); this import just reaches into the now-established package.
-from coordinator_core.frontmatter.schema_validate import (  # noqa: E402
-    compute_grouping_digest,
-    is_governed_plan,
-    parse_frontmatter,
-)
-
 _CLI_CMD_CACHE: dict[str, list[str] | None] = {}
+
+yaml = None  # type: ignore  # bound by _bootstrap_imports()
+
+
+def _bootstrap_imports() -> None:
+    """Import every non-stdlib dependency this module needs and bind it at
+    module scope, called from main() (C6d import-motion: module bodies stay
+    inert on both the warm door and the un-bootstrapped settings-home
+    forwarder load routes). Order is load-bearing — preserved verbatim from
+    the former module-scope sequence; see the inline comments below.
+    """
+    global yaml, coordinator_core, doe_root, _DoeUnresolvable
+    global cli_shared, _claude_klabauter_root, find_cli_cmd
+    global compute_grouping_digest, is_governed_plan, parse_frontmatter
+
+    try:
+        import yaml  # type: ignore
+    except ImportError:
+        yaml = None
+
+    # Bootstrap on the DISPATCH axis before anything below can bind
+    # `coordinator_core` on the LOCATOR axis first. `cli_shared` (imported
+    # below) transitively imports `repo_identity`, which resolves and imports
+    # `coordinator_core` at ITS OWN module level via the LOCATOR-axis
+    # `require_engine_on_path(__file__)` — on a conformant box the two axes can
+    # return different roots (see `require_dispatch_engine_on_path`'s own
+    # docstring), and once a package is bound in `sys.modules` no later
+    # `sys.path` insert can rebind it. Must run before `import cli_shared` /
+    # `from coordinator_registry import ...` below.
+    import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
+    from cc_invoke import _resolve_claude_klabauter_root, require_dispatch_engine_on_path  # noqa: F401
+
+    require_dispatch_engine_on_path()
+    # LOAD-BEARING, NOT DEAD. Do not delete on an unused-import sweep: this line is
+    # what BINDS coordinator_core, and binding it HERE is the whole fix.
+    # require_dispatch_engine_on_path() above only mutates sys.path -- it imports
+    # nothing. Without this line the next module-level import below (a binder module
+    # that resolves on the LOCATOR axis) wins the race and binds coordinator_core off
+    # the working tree instead of the dispatch root, and no later sys.path insert can
+    # rebind an already-imported package. Removing it restores a silent wrong-tree
+    # divergence that require_dispatch_engine_on_path now raises on.
+    # Why: docs/plans/2026-08-26-the-seam-reports-what-it-got.md C9,
+    # docs/research/engine-provenance-carrier-dependence.md
+    import coordinator_core  # noqa: F401
+
+    from coordinator_registry import doe_root, _DoeUnresolvable
+
+    # cli_shared.claude_klabauter_root() resolves repos.claude_klabauter (CLAUDE_KLABAUTER_ROOT env ->
+    # machine-local registry) — the SAME function coordinator-queue-append's
+    # _output_path() central branch calls for improvement-queue since commit
+    # 5b908173 ("central scope routes to claude-klabauter, not DoE — reconcile the two
+    # implementations", 2026-07-23). doe_root() resolves the DIFFERENT
+    # repos.doe_claude key and is the correct root ONLY for lessons-outbox
+    # (coordinator-lesson-promote's _outbox_root() was not touched by that
+    # commit). Importing both, distinctly, is deliberate — do not conflate them.
+    import cli_shared
+    _claude_klabauter_root = cli_shared.claude_klabauter_root
+
+    # coordinator-queue-append / coordinator-lesson-promote are extensionless
+    # Python scripts — CreateProcess can't exec them directly on Windows
+    # (WinError 193). find_cli_cmd() resolves each to a Windows-safe argv
+    # prefix (PATH probe, then sys.executable + sibling-path fallback);
+    # resolution is memoized per CLI per process (below) since _harvest()
+    # calls these once per row and the probe itself spawns subprocesses.
+    #
+    # `_queue_append_locator` is a sibling module in THIS script's own
+    # directory (`coordinator/bin/`, not `lib/`) — running this script directly
+    # (`python3 coordinator-harvest-deferrals`) implicitly puts `_BIN_DIR` on
+    # `sys.path[0]`, but the in-process dispatch every consumes-manifest CLI is
+    # ALSO invoked through (`workstream_complete.apply._load_cli_module`, via
+    # `importlib.util.spec_from_file_location`) never gets that implicit entry
+    # — only an actual `__main__` script does. Left unguarded, this import
+    # always raised `ModuleNotFoundError` under in-process dispatch, so every
+    # `d-harvest-deferrals-*` directive (workstream_complete/directives_lessons_
+    # plan.py's `build_deferral_harvest_directives`, ungated, fires once per
+    # governing plan) always landed in `report["failed"]` (2026-07-27
+    # arg-mismatch audit — a load-time defect found alongside, not caused by,
+    # the prog-slot mismatch this audit chunk targets). Mirrors the `_LIB_DIR`
+    # sys.path insertion immediately above.
+    if _BIN_DIR not in sys.path:
+        sys.path.insert(0, _BIN_DIR)
+    from _queue_append_locator import find_cli_cmd
+
+    # Grouping-approval contract (2026-07-29). Selection on a GOVERNED plan keys
+    # on the plan's approved `defer` grouping rather than each row's pm_approved
+    # boolean — see `_select_harvest_candidates`.
+    #
+    # `coordinator_core` is already bound on the dispatch axis by the bootstrap
+    # above (moved ahead of `cli_shared`/`coordinator_registry` — see the comment
+    # there); this import just reaches into the now-established package.
+    from coordinator_core.frontmatter.schema_validate import (
+        compute_grouping_digest,
+        is_governed_plan,
+        parse_frontmatter,
+    )
 
 
 def _resolve_cli_cmd(cli_name: str) -> list[str] | None:
@@ -1250,6 +1263,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    _bootstrap_imports()
     parser = _build_parser()
     args = parser.parse_args(argv)
 

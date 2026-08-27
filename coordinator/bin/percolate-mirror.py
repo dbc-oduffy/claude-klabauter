@@ -59,46 +59,83 @@ def _load_round_module():
     return module
 
 
-# The engine root is put on `sys.path` EXPLICITLY here, not inherited from
-# `_load_round_module()` below. That call does happen to leave the engine
-# reachable — `percolate-round.py` inserts `coordinator/lib` at its own import
-# time — but depending on it made this file's bootstrap an undeclared
-# side effect of a sibling's import order: reorder or slim that sibling and
-# this import dies with `ModuleNotFoundError: coordinator_core` on the
-# published mirror, with nothing here naming the dependency. Declaring it is
-# the same seam ~175 other CLIs under this directory already use.
-#
-# MUST run before `_load_round_module()` executes below: `percolate-round.py`
-# binds `coordinator_core` at ITS OWN module level off a bare self-location
-# `sys.path` insert (no `require_dispatch_engine_on_path()` call of its own,
-# no LOCATOR-axis bootstrap) — once that exec_module() call runs, whatever
-# root it happened to bind wins, and no later `sys.path` insert here can
-# rebind an already-imported package.
-# NOTE `_BIN_DIR / "lib"`, not `_LIB_DIR` — this file's `_LIB_DIR` is
-# `coordinator/lib` (the percolate helpers), while `cc_invoke` lives in
-# `coordinator/bin/lib`. They are different directories.
-_CC_INVOKE_DIR = str(_BIN_DIR / "lib")
-if _CC_INVOKE_DIR not in sys.path:
-    sys.path.insert(0, _CC_INVOKE_DIR)
-import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
-from cc_invoke import require_dispatch_engine_on_path  # noqa: E402
+def __getattr__(name: str):
+    """PEP 562 module `__getattr__` -- lets a caller that reaches for
+    `<this module>._round` / `.publish_lane` BEFORE `main()` has run (e.g.
+    this file's own test suite, which monkeypatches `_mod._round`'s
+    attributes ahead of calling `_mod.main()`) trigger `_bootstrap_engine()`
+    lazily on first access, instead of requiring `_round`/`publish_lane` to
+    already be module globals at import time. Only fires when the name is
+    NOT already present in this module's `__dict__` -- once
+    `_bootstrap_engine()` has run once (via this hook or via `main()`), the
+    plain global wins on every later lookup and this function is not called
+    again for that name."""
+    if name in ("_round", "publish_lane"):
+        _bootstrap_engine()
+        return globals()[name]
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
-require_dispatch_engine_on_path()
-# LOAD-BEARING, NOT DEAD. Do not delete on an unused-import sweep: this line is
-# what BINDS coordinator_core, and binding it HERE is the whole fix.
-# require_dispatch_engine_on_path() above only mutates sys.path -- it imports
-# nothing. Without this line the next module-level import below (a binder module
-# that resolves on the LOCATOR axis) wins the race and binds coordinator_core off
-# the working tree instead of the dispatch root, and no later sys.path insert can
-# rebind an already-imported package. Removing it restores a silent wrong-tree
-# divergence that require_dispatch_engine_on_path now raises on.
-# Why: docs/plans/2026-08-26-the-seam-reports-what-it-got.md C9,
-# docs/research/engine-provenance-carrier-dependence.md
-import coordinator_core  # noqa: E402,F401
 
-_round = _load_round_module()
+def _bootstrap_engine() -> None:
+    """Resolve the engine root and bind `_round`/`publish_lane` module
+    globals. Called once, first thing in `main()` (or lazily via
+    `__getattr__` above, for a caller that reaches for `_round`/
+    `publish_lane` before `main()` runs).
 
-from coordinator_core import publish_lane  # noqa: E402  type: ignore[import-not-found]
+    The engine root is put on `sys.path` EXPLICITLY here, not inherited from
+    `_load_round_module()` below. That call does happen to leave the engine
+    reachable — `percolate-round.py` inserts `coordinator/lib` at its own import
+    time — but depending on it made this file's bootstrap an undeclared
+    side effect of a sibling's import order: reorder or slim that sibling and
+    this import dies with `ModuleNotFoundError: coordinator_core` on the
+    published mirror, with nothing here naming the dependency. Declaring it is
+    the same seam ~175 other CLIs under this directory already use.
+
+    MUST run before `_load_round_module()` executes below: `percolate-round.py`
+    binds `coordinator_core` at ITS OWN module level off a bare self-location
+    `sys.path` insert (no `require_dispatch_engine_on_path()` call of its own,
+    no LOCATOR-axis bootstrap) — once that exec_module() call runs, whatever
+    root it happened to bind wins, and no later `sys.path` insert here can
+    rebind an already-imported package.
+    NOTE `_BIN_DIR / "lib"`, not `_LIB_DIR` — this file's `_LIB_DIR` is
+    `coordinator/lib` (the percolate helpers), while `cc_invoke` lives in
+    `coordinator/bin/lib`. They are different directories.
+    """
+    global _round, publish_lane
+
+    if "_round" in globals():
+        # Already bootstrapped (via `main()` or a prior `__getattr__` hit) --
+        # re-running would call `_load_round_module()` again and rebind
+        # `_round` to a BRAND NEW module object (`importlib.util.module_
+        # from_spec` + `exec_module` builds a fresh module every call), which
+        # would silently orphan any monkeypatch a caller already applied to
+        # the first-bootstrapped `_round`. Idempotent by construction.
+        return
+
+    cc_invoke_dir = str(_BIN_DIR / "lib")
+    if cc_invoke_dir not in sys.path:
+        sys.path.insert(0, cc_invoke_dir)
+    import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
+    from cc_invoke import require_dispatch_engine_on_path
+
+    require_dispatch_engine_on_path()
+    # LOAD-BEARING, NOT DEAD. Do not delete on an unused-import sweep: this line is
+    # what BINDS coordinator_core, and binding it HERE is the whole fix.
+    # require_dispatch_engine_on_path() above only mutates sys.path -- it imports
+    # nothing. Without this line the next import below (a binder module
+    # that resolves on the LOCATOR axis) wins the race and binds coordinator_core off
+    # the working tree instead of the dispatch root, and no later sys.path insert can
+    # rebind an already-imported package. Removing it restores a silent wrong-tree
+    # divergence that require_dispatch_engine_on_path now raises on.
+    # Why: docs/plans/2026-08-26-the-seam-reports-what-it-got.md C9,
+    # docs/research/engine-provenance-carrier-dependence.md
+    import coordinator_core  # noqa: F401
+
+    _round = _load_round_module()
+
+    from coordinator_core import publish_lane as _publish_lane  # type: ignore[import-not-found]
+
+    publish_lane = _publish_lane
 
 
 def _mirror_groups(percolate_root: str) -> Dict[str, List[str]]:
@@ -435,6 +472,8 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Optional[List[str]] = None) -> int:
+    _bootstrap_engine()
+
     # Declared here and not inherited from `percolate-round`: this module imports that
     # one by path for its helpers and never calls its `main()`, so the round's own
     # declaration does not run for a mirror publish — and this driver spawns

@@ -63,13 +63,6 @@ _REPO_ROOT = os.path.dirname(os.path.dirname(_SCRIPT_DIR))
 if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
-from coordinator_core.clustering.candidates import (  # noqa: E402
-    _extract_keywords,
-    _humanize,
-    _normalize_tags,
-    detect_candidates,
-)
-
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
@@ -220,6 +213,8 @@ def _render_text(candidates: list[dict]) -> str:
 
 
 def _emit(records: list[dict], format_: str) -> None:
+    from coordinator_core.clustering.candidates import detect_candidates
+
     candidates = detect_candidates(records)
     if format_ == "json":
         sys.stdout.write(json.dumps(candidates, indent=2) + "\n")

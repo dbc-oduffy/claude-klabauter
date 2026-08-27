@@ -277,7 +277,6 @@ _FORBIDDEN_ATTRS = ("glob", "rglob", "iterdir")
 _FORBIDDEN_CALL_NAMES = ("safe_load",)
 _AC2_TARGET_MODULES = (
     "queue_cluster.py",
-    "queue_age_ping.py",
     "queue_scaffold_baton.py",
 )
 

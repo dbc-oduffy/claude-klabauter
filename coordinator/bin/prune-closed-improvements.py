@@ -68,21 +68,25 @@ import os
 import sys
 from pathlib import Path
 
-import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
-import cc_invoke  # noqa: E402
-from cc_invoke import route  # noqa: E402
-from repo_identity import resolve_checked_repo_root  # noqa: E402
+def _load_family_records():
+    """Import cc_invoke/repo_identity/queue_family, ensuring the engine root
+    is on sys.path first.
 
-# coordinator_core is co-located in this same repo (the engine plane) --
-# resolvable only from the repo root, which is not on sys.path when this
-# file is run directly (only its own dir and lib/ are). coordinator_core.ops
-# registers ops lazily, unconditionally, so the queue_family import below
-# never pays coordinator_core.ops's eager op-registration sweep it does not
-# need (it only wants the read seam).
-_REPO_ROOT = str(Path(__file__).resolve().parent.parent.parent)
-if _REPO_ROOT not in sys.path:
-    sys.path.insert(0, _REPO_ROOT)
-from coordinator_core.ops.queue_family import load_family_records  # noqa: E402
+    coordinator_core is co-located in this same repo (the engine plane) --
+    resolvable only from the repo root, which is not on sys.path when this
+    file is run directly (only its own dir and lib/ are). coordinator_core.ops
+    registers ops lazily, unconditionally, so the queue_family import below
+    never pays coordinator_core.ops's eager op-registration sweep it does not
+    need (it only wants the read seam).
+    """
+    import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
+
+    _repo_root = str(Path(__file__).resolve().parent.parent.parent)
+    if _repo_root not in sys.path:
+        sys.path.insert(0, _repo_root)
+    from coordinator_core.ops.queue_family import load_family_records
+
+    return load_family_records
 
 
 def _no_fallback() -> None:
@@ -99,6 +103,9 @@ def _resolve_repo_root() -> str:
     refuses (AC4). Falls back to os.getcwd() when no root at all resolves,
     preserving this script's pre-existing best-effort behavior.
     """
+    import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
+    from repo_identity import resolve_checked_repo_root
+
     root, verdict = resolve_checked_repo_root(explicit_root=None)
     if verdict["verdict"] == "MISMATCH":
         print(verdict["message"], file=sys.stderr)
@@ -106,6 +113,12 @@ def _resolve_repo_root() -> str:
 
 
 def main(argv: list[str] | None = None) -> int:
+    import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
+    import cc_invoke
+    from cc_invoke import route
+
+    load_family_records = _load_family_records()
+
     argv = sys.argv[1:] if argv is None else argv
     dry_run_only = False
     explicit_repo_root: str | None = None

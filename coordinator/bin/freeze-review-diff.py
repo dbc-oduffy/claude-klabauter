@@ -189,14 +189,6 @@ _CLAUDE_KLABAUTER_REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(_CLAUDE_KLABAUTER_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_CLAUDE_KLABAUTER_REPO_ROOT))
 
-from coordinator_core.cli_entry import recording_declared_writes  # noqa: E402
-from coordinator_core.ops.review_freeze_diff import (  # noqa: E402
-    _validate_slice_id,
-    freeze_diff,
-)
-import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
-from raw_cmdline_recovery import UnsoundRawCmdlineTransport, recover_windows_argv  # noqa: E402
-
 #: The .cmd launcher's own basename — used by `recover_windows_argv` to locate
 #: where this invocation's own arguments begin within the raw `%CMDCMDLINE%`
 #: capture (see `raw_cmdline_recovery` module docstring). `--range` is a git
@@ -324,6 +316,9 @@ def _open_pending_trail_record(
 
 
 def main(argv: list[str]) -> int:
+    from coordinator_core.cli_entry import recording_declared_writes
+    from coordinator_core.ops.review_freeze_diff import _validate_slice_id, freeze_diff
+
     parser = argparse.ArgumentParser(prog=_PROG, add_help=False)
     parser.add_argument("--range", dest="range_", default="")
     parser.add_argument("--slice-id", dest="slice_id", default="")
@@ -409,6 +404,9 @@ def main(argv: list[str]) -> int:
 
 
 if __name__ == "__main__":
+    import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
+    from raw_cmdline_recovery import UnsoundRawCmdlineTransport, recover_windows_argv
+
     try:
         _argv = recover_windows_argv(sys.argv[1:], _LAUNCHER_CMD_NAME)
     except UnsoundRawCmdlineTransport:

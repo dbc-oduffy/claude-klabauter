@@ -63,5 +63,9 @@ def _main(argv: list[str]) -> int:
     return mod.main(argv)
 
 
+def main(argv: list[str]) -> int:
+    return _main(argv[1:])
+
+
 if __name__ == "__main__":
-    sys.exit(_main(sys.argv[1:]))
+    sys.exit(main(sys.argv))

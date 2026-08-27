@@ -70,17 +70,23 @@ import sys
 
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
-import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
-from cc_invoke import require_engine_on_path  # noqa: E402
 
-# The engine root must be on sys.path before the coordinator_core import
-# below: this file is also published into the claude-klabauter mirror, where
-# coordinator_core is NOT pip-installed and the interpreter's sys.path[0] is
-# this bin/ directory, not the checkout root. Same bootstrap as
-# coordinator/bin/coordinator-lesson-add (9b979ee5f).
-require_engine_on_path(__file__)
+def _win_portability_flags() -> dict:
+    """Lazily resolve the engine root and return `no_console_creationflags()`.
 
-from coordinator_core.win_portability import no_console_creationflags  # noqa: E402
+    The engine root must be on sys.path before the coordinator_core import
+    below: this file is also published into the claude-klabauter mirror, where
+    coordinator_core is NOT pip-installed and the interpreter's sys.path[0] is
+    this bin/ directory, not the checkout root. Same bootstrap as
+    coordinator/bin/coordinator-lesson-add (9b979ee5f)."""
+    import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
+    from cc_invoke import require_engine_on_path
+
+    require_engine_on_path(__file__)
+
+    from coordinator_core.win_portability import no_console_creationflags
+
+    return no_console_creationflags()
 
 
 # ---------------------------------------------------------------------------
@@ -93,7 +99,7 @@ def _commit_log(commit_range: str) -> str:
         capture_output=True,
         text=True,
         check=False,
-        **no_console_creationflags(),
+        **_win_portability_flags(),
     )
     return proc.stdout.rstrip("\n")
 
@@ -136,7 +142,7 @@ def _changed_files(commit_range: str) -> list[str]:
         capture_output=True,
         text=True,
         check=False,
-        **no_console_creationflags(),
+        **_win_portability_flags(),
     )
     return [line for line in proc.stdout.splitlines() if line]
 

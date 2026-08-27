@@ -79,9 +79,6 @@ Prior bash implementation: see git log (coordinator/bin/coordinator-fold-executi
 import os
 import sys
 
-import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
-from cc_invoke import require_dispatch_engine_on_path  # noqa: E402
-
 
 def _import_main():
     """Resolve the engine root, put it on sys.path, and import the ported CLI entry.
@@ -93,6 +90,9 @@ def _import_main():
     deliberately NOT used here (variant-#1 direct-import trampoline — see
     tasks/2026-07-16-clean-slate-recon/r1-doe-port-template.md § 1).
     """
+    import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
+    from cc_invoke import require_dispatch_engine_on_path
+
     claude_klabauter_root = require_dispatch_engine_on_path()
     from coordinator_core.ops.fold_execution_record import main as _op_main
 

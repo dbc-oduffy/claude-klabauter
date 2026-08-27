@@ -54,9 +54,6 @@ from __future__ import annotations
 import os
 import sys
 
-import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
-from cc_invoke import require_dispatch_engine_on_path  # noqa: E402
-
 # SCRIPT_DIR-relative repo root — this file lives at <repo>/coordinator/bin/,
 # so its grandparent is <repo>. Matches the retired bash body's
 # `SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"` +
@@ -85,6 +82,9 @@ def _import_main():
     `coordinator_core.cli_entry.recording_declared_writes`, the sanctioned
     seam for exactly this case (see that context manager's own docstring).
     """
+    import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
+    from cc_invoke import require_dispatch_engine_on_path
+
     claude_klabauter_root = require_dispatch_engine_on_path()
     from coordinator_core.cli_entry import recording_declared_writes
     from coordinator_core.ops.promote_shipped_in_flight_stubs import main as _op_main

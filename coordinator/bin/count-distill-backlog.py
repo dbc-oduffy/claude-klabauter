@@ -26,9 +26,6 @@ import json
 import os
 import sys
 
-import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
-from coordinator_registry import _DoeUnresolvable, doe_root  # noqa: E402
-
 PROG = "count-distill-backlog.py"
 
 THRESHOLD_DAYS = 30
@@ -73,6 +70,9 @@ def _resolve_root() -> str:
     reporting/gate script, not a never-block hook, so an unresolvable root
     must not silently degrade to counting the wrong repo's backlog.
     """
+    import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
+    from coordinator_registry import _DoeUnresolvable, doe_root
+
     claude_home_env = os.environ.get("CLAUDE_HOME")
     if claude_home_env:
         parent_form = os.path.join(claude_home_env, ".claude")

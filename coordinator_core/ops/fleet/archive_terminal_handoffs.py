@@ -128,6 +128,7 @@ from coordinator_core.ops.fleet._common import (
     _REASON_DEST_CONFLICT,
     _TERMINAL_DEPLOYMENT_STATES,
     archive_and_commit,
+    declare_move_claims,
     build_act_result,
     build_dry_run_result,
     build_setup_error_result,
@@ -1412,7 +1413,9 @@ def _handle_act(
         acted.extend(new_acted)
         failed.extend(new_failed)
 
-    return build_act_result(mode, acted, skipped, failed)
+    return declare_move_claims(
+        build_act_result(mode, acted, skipped, failed), moves, acted,
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -63,9 +63,6 @@ import os
 import sys
 
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
-from cc_invoke import require_dispatch_engine_on_path  # noqa: E402
-from coordinator_registry import _DoeUnresolvable, doe_root  # noqa: E402
 
 
 def _resolve_plugin_root() -> str | None:
@@ -91,6 +88,8 @@ def _resolve_plugin_root() -> str | None:
     override = os.environ.get("COORDINATOR_CURRENCY_PLUGIN_ROOT", "")
     if override:
         return override
+    import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
+    from coordinator_registry import _DoeUnresolvable, doe_root
     try:
         return os.path.join(doe_root(), "coordinator")
     except _DoeUnresolvable:
@@ -98,6 +97,8 @@ def _resolve_plugin_root() -> str | None:
 
 
 def _import_main():
+    import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
+    from cc_invoke import require_dispatch_engine_on_path
     claude_klabauter_root = require_dispatch_engine_on_path()
     from coordinator_core.ops.probe_onboarding_currency import main as _op_main
     return _op_main

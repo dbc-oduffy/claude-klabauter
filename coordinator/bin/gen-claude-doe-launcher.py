@@ -41,11 +41,6 @@ from __future__ import annotations
 import os
 import sys
 
-import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
-from cc_invoke import require_dispatch_engine_on_path  # noqa: E402
-from coordinator_data_root import data_root  # noqa: E402
-
-
 def _default_template_dir() -> str:
     """Mirror the bash oracle's `${_script_dir}/../templates/bin` default.
 
@@ -55,6 +50,9 @@ def _default_template_dir() -> str:
     while `templates/` stayed in DoE-claude (DR-047 contract/engine split), so
     a `${script_dir}/../templates` walk no longer lands anywhere.
     """
+    import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
+    from coordinator_data_root import data_root
+
     return os.path.join(str(data_root("templates")), "bin")
 
 
@@ -74,6 +72,9 @@ def _import_runner():
     launchers this generator writes are orphans at the `scoped_git_commit`
     sink.
     """
+    import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
+    from cc_invoke import require_dispatch_engine_on_path
+
     claude_klabauter_root = require_dispatch_engine_on_path()
     from coordinator_core.cli_entry import run_op_main
 

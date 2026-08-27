@@ -31,13 +31,12 @@ _REPO_ROOT = os.path.dirname(os.path.dirname(_BIN_DIR))
 if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
-import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
-from git_hook_install import ensure_post_commit_hook  # noqa: E402
-
-
 def main(argv: "list[str] | None" = None) -> int:
     del argv  # this CLI takes no arguments; argv accepted for the warm-call contract
     try:
+        import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
+        from git_hook_install import ensure_post_commit_hook
+
         return ensure_post_commit_hook(_BIN_DIR)
     except Exception as exc:  # never block a session start
         print(f"coordinator-ensure-post-commit-hook: {exc}", file=sys.stderr)

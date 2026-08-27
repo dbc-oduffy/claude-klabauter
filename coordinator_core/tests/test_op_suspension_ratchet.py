@@ -302,10 +302,18 @@ def test_live_op_still_resolves():
 #: without the warm engine to bring it back", which told every reader that
 #: tuning the dead implementation was the route back. It is not, and never
 #: was — see `op_budget_suspension`'s module docstring.
-_REFUSAL_TAIL = (
-    "Killed, not suspended -- the old implementation does not come back. "
-    "If the job is still needed, plan a new one under 200ms."
-)
+#:
+#: Split 2026-08-27 into an invariant head and a conditional clause. The head
+#: holds for every row. The clause is the right disposition only for a row
+#: whose job is genuinely unhomed; on a row whose job was rehomed BY RULING it
+#: sends the reader off to build what already exists. `review_trail.write` is
+#: the measured case — DR-372 rehomed the job to the dispatched-agent sidecar
+#: receipt, and two DoE sessions read the refusal as a fleet-wide capability
+#: gap. Both directions are pinned below so the clause cannot be dropped from a
+#: row that still owes it, nor kept on a row that does not.
+_REFUSAL_TAIL_HEAD = "Killed, not suspended -- the old implementation does not come back."
+_REFUSAL_TAIL_PLAN_CLAUSE = " If the job is still needed, plan a new one under 200ms."
+_REFUSAL_TAIL = _REFUSAL_TAIL_HEAD + _REFUSAL_TAIL_PLAN_CLAUSE
 
 
 def test_refusal_never_offers_a_way_around_it():
@@ -330,10 +338,29 @@ def test_refusal_never_offers_a_way_around_it():
             assert token.lower() not in lowered, (
                 f"{op}'s refusal names {token!r}: {message!r}"
             )
-        assert _REFUSAL_TAIL.lower() in lowered, (
+        assert _REFUSAL_TAIL_HEAD.lower() in lowered, (
             f"{op}'s refusal omits the disposition, which is the whole message: "
             f"the code is dead and only a new implementation replaces it"
         )
+        record = op_budget_suspension.SUSPENDED_OPS[op]
+        successor_live = bool(
+            isinstance(record, dict) and record.get("successor_live")
+        )
+        if successor_live:
+            assert _REFUSAL_TAIL_PLAN_CLAUSE.lower() not in lowered, (
+                f"{op}'s job was rehomed by ruling, so its refusal must not send "
+                f"the reader off to plan a replacement that already exists: {message!r}"
+            )
+            assert record.get("fallback"), (
+                f"{op} declares successor_live with no fallback naming the live "
+                f"mechanism — the reader is then told the op is dead and given "
+                f"nowhere to go, which is the defect the flag exists to fix"
+            )
+        else:
+            assert _REFUSAL_TAIL_PLAN_CLAUSE.lower() in lowered, (
+                f"{op}'s job is unhomed and its refusal omits the plan-a-new-one "
+                f"disposition: {message!r}"
+            )
 
 
 

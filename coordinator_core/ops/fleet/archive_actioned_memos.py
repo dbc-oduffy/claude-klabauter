@@ -484,7 +484,7 @@ def _handle_act(
     if moves:
         import asyncio
 
-        from coordinator_core.ops.fleet._common import archive_and_commit
+        from coordinator_core.ops.fleet._common import archive_and_commit, declare_move_claims
 
         n = len(moves)
         commit_subject = (
@@ -501,7 +501,9 @@ def _handle_act(
         acted.extend(new_acted)
         failed.extend(new_failed)
 
-    return build_act_result(mode, acted, skipped, failed)
+    return declare_move_claims(
+        build_act_result(mode, acted, skipped, failed), moves, acted,
+    )
 
 
 @register_op(_OP_KEY)

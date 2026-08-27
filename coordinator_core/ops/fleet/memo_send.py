@@ -46,6 +46,11 @@ Negative-spec:
     tree when `commit_authored_new_file` declines (AC4) — a decline fails
     the receiver item loud; the sender-side receipt is never written for
     that item (see the ordering note above).
+  - Does NOT deliver an unattributed memo SILENTLY — when `sent_by` lands as
+    the sentinel, `acted[0].sender_unattributed` says so on the result
+    envelope and `cross-repo-memo send` prints it. The delivery still
+    succeeds (an un-nameable sender is a degraded memo, not a failed one),
+    but it is never invisible.
   - Does NOT overwrite a `sent_by` the draft already carries — that value is
     threaded straight through. Send time is where session identity is
     RESOLVED (2026-08-13 session-identity contract C7): the draft/compose
@@ -306,7 +311,7 @@ def _read_draft(draft_path: Path) -> tuple[Optional[dict], Optional[str], Option
 
 
 def _compose_delivered_content(
-    *, fm: dict, body: str, today: str,
+    *, fm: dict, body: str, today: str, sent_by: str,
 ) -> tuple[Optional[str], Optional[str]]:
     """Compose the delivered (status: open) memo content from a draft's
     parsed frontmatter + body. Returns (content, error) — exactly one non-None.
@@ -343,7 +348,7 @@ def _compose_delivered_content(
             scoped_to=fm.get("scoped_to"),
             in_reply_to=fm.get("in_reply_to"),
             space=fm.get("space"),
-            sent_by=_resolve_sent_by(fm),
+            sent_by=sent_by,
         )
     except ValueError as exc:
         return None, f"memo.send: {exc}"
@@ -455,7 +460,16 @@ def _memo_send(params: dict, repo_root=None) -> dict:
         )
 
     today = datetime.date.today().isoformat()
-    content, compose_error = _compose_delivered_content(fm=fm, body=body, today=today)
+    # Resolved ONCE and threaded to all three carriers: the delivered memo's
+    # frontmatter, the delivery commit's Session-Id: trailer, and the
+    # sent-ledger row. Three independent calls could disagree, leaving a
+    # reader who joins them with three answers to one question -- and the
+    # sender_unattributed flag below has to describe the value actually
+    # stamped, not a fourth resolution of it.
+    sent_by = _resolve_sent_by(fm)
+    content, compose_error = _compose_delivered_content(
+        fm=fm, body=body, today=today, sent_by=sent_by,
+    )
     if compose_error is not None:
         return build_setup_error_result(_MODE, dry_run, compose_error)
 
@@ -548,7 +562,7 @@ def _memo_send(params: dict, repo_root=None) -> dict:
 
     rel_path = "cross-repo/inbox/" + filename
     msg_file = _write_msg_file(
-        _delivery_commit_message(topic, from_id, _resolve_sent_by(fm))
+        _delivery_commit_message(topic, from_id, sent_by)
     )
     try:
         commit_result = git_native.commit_authored_new_file(
@@ -620,7 +634,7 @@ def _memo_send(params: dict, repo_root=None) -> dict:
         topic=topic, to=to, kind=fm.get("kind"), summary=delivered_fm.get("summary"),
         delivered_to=delivered_to, in_reply_to=fm.get("in_reply_to"),
         delivery_commit_sha=delivery_commit_sha,
-        sent_by=_resolve_sent_by(fm),
+        sent_by=sent_by,
     )
     appended_line = json.dumps(row, ensure_ascii=False) + "\n"
 
@@ -689,6 +703,16 @@ def _memo_send(params: dict, repo_root=None) -> dict:
         "committed": True,
         "delivery_commit_sha": delivery_commit_sha,
         "sender_committed": bool(sender_commit.ok),
+        # A DELIVERY THAT CANNOT NAME ITS SENDER SAYS SO, AT SEND TIME.
+        # The sentinel is otherwise write-only: it lands in the delivered
+        # memo's frontmatter and the ledger row, and nothing reads either
+        # again, so the sender learns nothing and the receiver learns only
+        # when it tries to reply. That is exactly how the 2026-08-25 rebuild
+        # shipped 67 unattributed memos over three days before the RECEIVING
+        # repo reported it back to us. Surfacing it on the envelope makes the
+        # next occurrence cost one line at send time instead of a cross-repo
+        # memo, a sizing, and two sessions' investigation.
+        "sender_unattributed": sent_by == _SENT_BY_UNRESOLVED,
     }
     if not sender_commit.ok:
         # The stderr is the whole diagnosis, and a WARNING alone loses it: the

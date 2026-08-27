@@ -70,11 +70,21 @@ from pathlib import Path
 _SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(_SCRIPT_DIR / "lib"))
 
-import cc_invoke  # noqa: E402  (path insert above must precede this import)
-from raw_cmdline_recovery import UnsoundRawCmdlineTransport  # noqa: E402
-from repo_identity import resolve_checked_repo_root  # noqa: E402
+cc_invoke = None  # type: ignore  # bound by _bootstrap_imports()
 
-cc_invoke.ensure_engine_on_path(__file__)
+
+def _bootstrap_imports() -> None:
+    """Import every non-stdlib dependency this module needs and bind it at
+    module scope, called from main() (C6d import-motion: module bodies stay
+    inert on both the warm door and the un-bootstrapped settings-home
+    forwarder load routes).
+    """
+    global cc_invoke, resolve_checked_repo_root
+
+    import cc_invoke  # noqa: F401  (path insert above must precede this import)
+    from repo_identity import resolve_checked_repo_root
+
+    cc_invoke.ensure_engine_on_path(__file__)
 
 
 def _no_console_creationflags() -> dict:
@@ -279,6 +289,7 @@ def _no_fallback() -> None:
 
 
 def main(argv: list[str]) -> int:
+    _bootstrap_imports()
     parser = argparse.ArgumentParser(
         prog="coordinator-write-review-trail.py",
         add_help=False,  # -h left unclaimed, mirrors the bash oracle (no --help handling)
@@ -429,6 +440,8 @@ def main(argv: list[str]) -> int:
 
 
 if __name__ == "__main__":
+    from raw_cmdline_recovery import UnsoundRawCmdlineTransport
+
     try:
         _argv = _recover_windows_argv(sys.argv[1:])
     except UnsoundRawCmdlineTransport:

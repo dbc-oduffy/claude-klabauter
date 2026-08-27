@@ -64,10 +64,6 @@ from __future__ import annotations
 import os
 import sys
 
-import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
-from cc_invoke import require_dispatch_engine_on_path  # noqa: E402
-from coordinator_registry import _DoeUnresolvable, doe_root  # noqa: E402
-
 _TRANSPORT_FAILURE_RC = 3
 
 
@@ -90,6 +86,9 @@ def _resolve_coordinator_root() -> str:
     resolve — this is a gate script, not a never-block hook, so an
     unresolvable DoE root must not degrade to a silent no-op default.
     """
+    import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
+    from coordinator_registry import _DoeUnresolvable, doe_root
+
     try:
         root = doe_root()
     except _DoeUnresolvable as exc:
@@ -105,6 +104,9 @@ def _resolve_coordinator_root() -> str:
 
 
 def _import_main():
+    import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
+    from cc_invoke import require_dispatch_engine_on_path
+
     claude_klabauter_root = require_dispatch_engine_on_path()
     from coordinator_core.install.sandbox_check import main as _op_main
     return _op_main

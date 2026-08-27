@@ -58,22 +58,6 @@ _REPO_ROOT = _BIN_DIR.parent.parent
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from coordinator_core.contract.decision_object.envelope import (  # noqa: E402
-    build_envelope,
-    emit,
-    extend_exit_codes,
-)
-from coordinator_core.contract.decision_object.judgment import (  # noqa: E402
-    build_disposition,
-    build_untrusted_gate_judgment_point,
-)
-
-PercolateParseExitCode = extend_exit_codes(
-    "PercolateParseExitCode",
-    USAGE=2,
-    TRANSPORT_FAIL=3,
-)
-
 #: Step 3's sensitive-path predicate (L214-219 / Step 2's L102-106) — same
 #: four categories in both places, kept as one constant so the two checks
 #: can't drift apart.
@@ -187,6 +171,11 @@ def _gate_judgment_point(
         reasons.append(f"{medium_leak_count} MEDIUM content-leak hit(s)")
     if inverse_drift_count >= 1:
         reasons.append(f"{inverse_drift_count} real inverse-drift commit(s)")
+    from coordinator_core.contract.decision_object.judgment import (
+        build_disposition,
+        build_untrusted_gate_judgment_point,
+    )
+
     evidence = "; ".join(reasons) if reasons else "no gate-fire condition met"
     return build_untrusted_gate_judgment_point(
         id="jp_step3_percolate_confirmation_gate",
@@ -203,6 +192,18 @@ def _gate_judgment_point(
 
 
 def _cmd_parse_dryrun(args: argparse.Namespace) -> int:
+    from coordinator_core.contract.decision_object.envelope import (
+        build_envelope,
+        emit,
+        extend_exit_codes,
+    )
+
+    PercolateParseExitCode = extend_exit_codes(
+        "PercolateParseExitCode",
+        USAGE=2,
+        TRANSPORT_FAIL=3,
+    )
+
     stdout_path = Path(args.stdout_file)
     source_dir = Path(args.source_dir)
     try:

@@ -294,12 +294,30 @@ class TestEndToEndDelivery:
         assert rows[0]["sent_by"] == "d218a65c-2c5b-472e-879c-ae9ed1747030"
 
         # Write 3: one sender-side commit covering all three paths.
-        sender_status = _git(sender_repo, "status", "--porcelain")
-        assert sender_status.stdout.decode("utf-8").strip() == ""
+        #
+        # PROVEN FROM HEAD, NEVER FROM A CLEAN TREE. Both branches of
+        # `git_native.commit_scoped` build their tree under a throwaway index
+        # (GIT_INDEX_FILE redirected) and land it with `commit-tree` +
+        # `update-ref`, deliberately leaving the SHARED index untouched --
+        # mutating it would clobber the ~50 concurrent sessions this repo's
+        # load norm assumes. So a correct receipt commit leaves the committed
+        # paths looking staged-deleted to `git status` until something else
+        # refreshes the index, and asserting a clean tree here asserts the
+        # opposite of the design. HEAD's content is the actual contract.
         last_commit = _git(sender_repo, "show", "--stat", "--format=", "HEAD")
         stat_text = last_commit.stdout.decode("utf-8")
         assert "happy-topic.md" in stat_text
         assert "sent-ledger.jsonl" in stat_text
+        # The three writes are IN the commit, not merely on disk beside it.
+        _git(sender_repo, "cat-file", "-e", "HEAD:state/memo-outbox/sent/happy-topic.md")
+        _git(sender_repo, "cat-file", "-e", "HEAD:state/memo-outbox/sent-ledger.jsonl")
+        gone = _git(
+            sender_repo, "cat-file", "-e", "HEAD:state/memo-outbox/happy-topic.md",
+            check=False,
+        )
+        assert gone.returncode != 0, (
+            "the outbox original must be DELETED in HEAD, not merely moved on disk"
+        )
 
     def _send_draft_without_sent_by(self, tmp_path, monkeypatch):
         """Drive a full send of a draft carrying no `sent_by` — the ordinary
@@ -376,6 +394,46 @@ class TestEndToEndDelivery:
             monkeypatch.delenv(var, raising=False)
         _, delivery_msg = self._send_draft_without_sent_by(tmp_path, monkeypatch)
         assert "Session-Id" not in delivery_msg, delivery_msg
+
+    def test_unresolved_sender_is_reported_on_the_envelope(self, tmp_path, monkeypatch):
+        """An un-nameable sender is DELIVERED, and SAID.
+
+        The sentinel is write-only otherwise -- it reaches the delivered
+        memo and the ledger row, and nothing reads either back, which is how
+        67 unattributed memos shipped over three days in 2026-08 before the
+        receiving repo reported it. The envelope flag is what makes the next
+        one cost a line at send time.
+        """
+        for var in ("COORDINATOR_SESSION_ID", "CLAUDE_SESSION_ID", "CLAUDE_CODE_SESSION_ID"):
+            monkeypatch.delenv(var, raising=False)
+        sender_repo = _make_sender_git_repo(tmp_path)
+        receiver_repo = _make_receiver_git_repo(tmp_path)
+        claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": receiver_repo})
+        monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
+        _write_draft(sender_repo, "unattributed-topic", sent_by="")
+
+        result = _memo_send(
+            {"dry_run": False, "topic": "unattributed-topic"}, repo_root=sender_repo
+        )
+
+        assert result["exit_code"] == 0, result
+        assert result["acted"][0]["sender_unattributed"] is True
+
+    def test_named_sender_is_not_flagged_unattributed(self, tmp_path, monkeypatch):
+        """The flag is not always-on: a resolved sender clears it."""
+        monkeypatch.setenv("COORDINATOR_SESSION_ID", "6f1e0c9a-1111-4222-8333-444455556666")
+        sender_repo = _make_sender_git_repo(tmp_path)
+        receiver_repo = _make_receiver_git_repo(tmp_path)
+        claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": receiver_repo})
+        monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
+        _write_draft(sender_repo, "attributed-topic", sent_by="")
+
+        result = _memo_send(
+            {"dry_run": False, "topic": "attributed-topic"}, repo_root=sender_repo
+        )
+
+        assert result["exit_code"] == 0, result
+        assert result["acted"][0]["sender_unattributed"] is False
 
     def test_sent_by_unresolvable_session_uses_the_sentinel(self, tmp_path, monkeypatch):
         """The sentinel is the resolution-FAILURE case, never the ordinary one:
@@ -499,13 +557,15 @@ class TestNoReceiverHooksFire:
             "committed -- this is the bug this test exists for"
         )
 
-        # The receipt is COMMITTED, not merely staged: a clean tree is the proof.
-        sender_status = _git(sender_repo, "status", "--porcelain")
-        assert sender_status.stdout.decode("utf-8").strip() == ""
-
+        # The receipt is COMMITTED, not merely staged -- and HEAD is the proof,
+        # not a clean tree. `commit_scoped` commits through a private index and
+        # never refreshes the shared one (see the note in
+        # `test_happy_path_three_writes`), so the committed paths still read as
+        # staged-deleted afterwards. That is the design, not a failed commit.
         sent_path = sender_repo / "state" / "memo-outbox" / "sent" / "untracked-topic.md"
         assert sent_path.exists()
         _git(sender_repo, "cat-file", "-e", "HEAD:state/memo-outbox/sent/untracked-topic.md")
+        _git(sender_repo, "cat-file", "-e", "HEAD:state/memo-outbox/sent-ledger.jsonl")
         assert not (sender_repo / "state" / "memo-outbox" / "untracked-topic.md").exists()
 
     def test_receiver_side_hooks_never_fire(self, tmp_path, monkeypatch):

@@ -31,12 +31,12 @@ from __future__ import annotations
 import os
 import sys
 
-import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
-from cc_invoke import require_dispatch_engine_on_path  # noqa: E402
-
 
 def main(argv: "list[str] | None" = None) -> int:
     try:
+        import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
+        from cc_invoke import require_dispatch_engine_on_path
+
         claude_klabauter_root = require_dispatch_engine_on_path()
     except RuntimeError as exc:
         print(f"cmd-autorun-guard.py: CLAUDE_KLABAUTER_ROOT resolution failed: {exc}", file=sys.stderr)

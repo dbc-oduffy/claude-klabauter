@@ -59,10 +59,6 @@ import sys
 
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
-import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
-import cc_invoke  # noqa: E402  (sys.path mutated above)
-from cc_invoke import _resolve_claude_klabauter_root, require_dispatch_engine_on_path  # noqa: E402
-
 GENERATES = []  # writes only to DoE-side cutover records (state/roadmap/lifecycle-vocab/cutovers/), never under this claude-klabauter checkout — see _repo_root_for's docstring
 
 _TRANSPORT_FAIL = 3
@@ -106,6 +102,9 @@ def _repo_root_for(record_path: str) -> str:
     # sweep-boot.py, reaper-resting-batons.py, etc.), which all wrap this
     # exact resolution in `try/except Exception` for the same reason.
     try:
+        import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
+        from cc_invoke import _resolve_claude_klabauter_root
+
         claude_klabauter_root = _resolve_claude_klabauter_root()
         if claude_klabauter_root and claude_klabauter_root not in sys.path:
             sys.path.insert(0, claude_klabauter_root)
@@ -123,6 +122,9 @@ def _run_gate_shaped_op(op_key: str, record_path: str) -> int:
     share this single call-and-render path. Mirrors
     `review-coverage-gate.py`'s result handling exactly.
     """
+    import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
+    import cc_invoke
+
     repo_root = _repo_root_for(record_path)
     params = {"record": record_path}
 
@@ -241,6 +243,9 @@ def _cmd_confirm_consumer(rest: list[str]) -> int:
     )
 
     try:
+        import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
+        from cc_invoke import require_dispatch_engine_on_path
+
         claude_klabauter_root = require_dispatch_engine_on_path()
     except RuntimeError as exc:
         print(f"cutover-cli: confirm-consumer: engine-root resolution failed: {exc}", file=sys.stderr)

@@ -87,12 +87,12 @@ docs/plans/2026-08-27-the-reviewed-set-is-a-file-not-a-computation.md § C3
 
 from __future__ import annotations
 
+import re
 import subprocess
 import sys
 from pathlib import Path
 from typing import List, Optional
 
-from coordinator_core.git.argv_batch import _chunk_paths
 from coordinator_core.ops.gate_validate_invocable import (
     DimensionResult,
     Verdict,
@@ -103,6 +103,11 @@ from coordinator_core.win_portability import no_console_creationflags
 
 _GIT_TIMEOUT_SECS = 60
 _CREATIONFLAGS = no_console_creationflags()
+
+#: Distinguishes a commit sha from a touched path in `git log --name-only -z`
+#: output. Anchored and full-width: a 40-hex *path* would otherwise be read as
+#: a commit header and silently re-anchor every path after it.
+_FULL_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 
 
 def _run_git(args: List[str], cwd: str) -> "tuple[int, str, str]":
@@ -157,25 +162,52 @@ def _review_dimension_check(
 
     repo_root_str = str(repo_root)
 
-    # `changed_files` can exceed the Windows argv cap on a large changeset
-    # (~1400+ paths) if splatted into a single `git log` call unbounded;
-    # batch through the promoted `_chunk_paths` primitive and union the
-    # resulting commit lists rather than raising the budget or truncating
-    # the pathspec (either of which would under-report touched commits and
-    # fail open in a quieter way).
-    commit_sha_set: "set[str]" = set()
-    for path_chunk in _chunk_paths(changed_files):
-        rc, out, err = _run_git(
-            ["log", "--pretty=%H", diff_base, "--", *path_chunk], cwd=repo_root_str
+    # ONE spawn, invariant in len(changed_files).
+    #
+    # `changed_files` cannot go into argv at all: above ~1400 paths it
+    # overflows the Windows cap (WinError 206) and the whole check used to
+    # fail open with UNAVAILABLE. Pathspec-batching that argv (the first fix)
+    # closed the fail-open but bought a cost linear in the changeset: 2000
+    # paths measured 718.75ms across 55 processes, over the DR-344 500ms
+    # brightline, and the bulk changesets on this branch run past 26,000
+    # files. `git log` has no `--pathspec-from-file`, so the pathspec is
+    # taken out of the argument list entirely: ask git once for the range's
+    # own commits-and-touched-paths and intersect in process, where the
+    # comparison is free.
+    #
+    # Set membership, not a scan: cost is O(paths in range), independent of
+    # how many paths the caller asked about.
+    #
+    # `-z` because a non-ASCII path is otherwise quoted and would not match
+    # the caller's own spelling. Separators are normalised on both sides so a
+    # Windows caller passing backslashes still matches git's forward slashes.
+    wanted = {p.replace("\\", "/").strip() for p in changed_files if p.strip()}
+
+    rc, out, err = _run_git(
+        ["log", "--pretty=format:%H", "--name-only", "-z", diff_base], cwd=repo_root_str
+    )
+    if rc != 0:
+        last_err = err.strip().splitlines()[-1] if err.strip() else "git log failed"
+        return DimensionResult(
+            dimension="review",
+            verdict=Verdict.UNAVAILABLE,
+            detail=f"could not resolve commits for diff_base={diff_base!r}: {last_err}",
         )
-        if rc != 0:
-            last_err = err.strip().splitlines()[-1] if err.strip() else "git log failed"
-            return DimensionResult(
-                dimension="review",
-                verdict=Verdict.UNAVAILABLE,
-                detail=f"could not resolve commits for diff_base={diff_base!r}: {last_err}",
-            )
-        commit_sha_set.update(line for line in out.splitlines() if line)
+
+    # Records are NUL-separated; a commit's sha arrives newline-joined to the
+    # first of its paths. Classify per line: 40-hex is a sha, anything else
+    # non-empty is a path belonging to the sha most recently seen.
+    commit_sha_set: "set[str]" = set()
+    current_sha: Optional[str] = None
+    for field in out.split("\0"):
+        for line in field.split("\n"):
+            line = line.strip()
+            if not line:
+                continue
+            if _FULL_SHA_RE.match(line):
+                current_sha = line
+            elif current_sha is not None and line.replace("\\", "/") in wanted:
+                commit_sha_set.add(current_sha)
 
     commit_shas = list(commit_sha_set)
     if not commit_shas:

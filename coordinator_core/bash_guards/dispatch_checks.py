@@ -5881,10 +5881,32 @@ def check_validate_commit(
     #     and now declares both ends of its moves; the sizings writer has not
     #     been traced yet.
     #
+    # THE CENSUS ABOVE NO LONGER HOLDS (re-measured 2026-08-27, evidence and
+    # method: state/audits/2026-08-27-the-orphan-arm-is-not-the-three-causes-
+    # named.md). Across every `scope-warnings.log` in the repo, live and
+    # archived: 150 orphan events over 22 paths, not 17 over 10 -- and NONE of
+    # them archival-shaped, none on the deletion paths named above. Only the
+    # sizings-writer line survives contact.
+    #
+    # The arm is dominated by a FOURTH cause not named above: long-tracked
+    # source files staged with no touch record at all (`ops/eol/*.py` at 19
+    # events apiece, 74+ between them). Something stages an edit to an
+    # already-tracked file through a path that records no claim; that is what
+    # the flip actually waits on, and it is untraced.
+    #
+    # The archival-mover seam named below IS built (`_common.declare_move_
+    # claims`, declaring both ends of every landed move through ipc.py's
+    # `_SCOPE_TOUCH_PATHS_KEY`) -- kept for the residual `archive_and_commit`
+    # documents rather than for events on the board, since the live act path
+    # commits its own moves and nothing has fired it automatically since
+    # `abd587695`.
+    #
     # So the flip gates on driving that arm to zero: close the deleted-path
-    # asymmetry in the warn loop, give the archival movers a claim seam, trace
-    # the sizings writer, then re-read `scope-warnings.log` over a full day
-    # and confirm only named-owner events remain. Nothing else. ---
+    # asymmetry in the warn loop, TRACE THE FOURTH CAUSE (the arm's bulk),
+    # trace the sizings writer, then re-read `scope-warnings.log` over a full
+    # day and confirm only named-owner events remain. Re-census before acting
+    # on any figure in this comment, including the corrected ones -- the count
+    # accrues live. The archival-mover leg is done. ---
     scope_strict = _override("COORDINATOR_SCOPE_STRICT", payload=payload)
     if session_id:
         git_root = _run_git(["rev-parse", "--show-toplevel"], _cwd)[1].strip()

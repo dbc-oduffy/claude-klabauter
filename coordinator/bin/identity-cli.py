@@ -36,7 +36,6 @@ _LIB_DIR = os.path.join(
 )
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
-import identity as mod  # noqa: E402
 
 _SUBCOMMANDS = (
     "subcommands: resolve-subagent-identity | build-canonical-agent-id | format-ok"
@@ -51,6 +50,8 @@ def _usage(prog: str) -> int:
 
 
 def main(argv: list[str]) -> int:
+    import identity as mod
+
     if not argv:
         return _usage("identity-cli")
     subcmd, rest = argv[0], argv[1:]

@@ -67,9 +67,7 @@ class TestAC6PeerIsolationSameDirectory:
         scope.touch("mine", "state/mine.txt", cwd=str(repo))
         scope.touch("peer", "state/peer.txt", cwd=str(repo))
 
-        report = safe_commit_offer.commit_session_offer(
-            "mine", cwd=str(repo), invoker="unattended"
-        )
+        report = safe_commit_offer.commit_session_offer("mine", cwd=str(repo))
 
         assert len(report["groups"]) == 1
         assert report["groups"][0]["paths"] == ["state/mine.txt"]
@@ -293,9 +291,7 @@ class TestDirtyPathAlreadyDirtyFromAnotherWriterFailsClosed:
         safe_commit_offer.compute_offer = _fake_compute_offer
         try:
             report = asyncio.run(
-                safe_commit_offer.commit_session_offer_async(
-                    "mine", cwd=str(repo), invoker="unattended"
-                )
+                safe_commit_offer.commit_session_offer_async("mine", cwd=str(repo))
             )
         finally:
             safe_commit_offer.compute_offer = orig

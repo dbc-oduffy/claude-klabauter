@@ -54,27 +54,18 @@ only, never wallclock (DR-344/CLAUDE.md: wallclock is excluded from every
 gate on this repo; `test_commit_op_wallclock_budget.py` owns that axis
 under its own AC4/AC7).
 
-EOL=CRLF SHAPE, MEASURED FINDING (this chunk, not assumed from the plan's
-text). The plan's C6 body expects the `eol=crlf` shape to be "reported
-separately with its 2 spawns" -- i.e. that CR-bearing content under an
-`eol=crlf` pin reaches C4's batched fallback and lands. Probed directly
-against the current `ceremony.commit_v2` handler (`coordinator_core/ops/
-ceremony/commit_v2.py`, C3): the handler calls `commit_paths` with no
-`blob_fallback` supplied (its own docstring says so explicitly), so a CR-
-bearing `eol=crlf` path is REFUSED in process (`committed: false`, a
-structured `FilterUnsupported` error) rather than routed to the 2-spawn
-fallback -- C4 landed the fallback CAPABILITY inside `commit.py` itself, but
-the op-level wiring that would pass a `blob_fallback` callable into
-`commit_paths` from `commit_v2.py` is not present on this tree today. This
-file measures and reports that REFUSAL path honestly (0 job-object spawns,
-`committed: false` on every sample) rather than asserting the 2-spawn
-success figure the plan's prose anticipated -- a design/wiring gap in
-`commit_v2.py`, outside this chunk's `writes:` scope (`coordinator_core/
-benchmarks/tests/` only) to fix. Recorded here as a MEASURED finding for
-whichever chunk owns wiring `blob_fallback` into the op, not remediated by
-this one. The `eol=crlf` leg stays UNGATED either way (this chunk's own
-body: "reported separately"), so this finding does not fail the gate this
-file exists to enforce -- it changes what the reported numbers mean.
+EOL=CRLF SHAPE, MEASURED (this row). `commit_v2.py`'s handler now supplies
+`blob_fallback` (`commit.hash_worktree_blobs_via_spawn`, one batched
+`git hash-object -w --stdin-paths` spawn per commit), so a CR-bearing
+`eol=crlf` path reaches C4's fallback and LANDS rather than being refused in
+process. The `eol=crlf` leg stays UNGATED against the LF target's ms/procs
+numbers either way (this chunk's own body: "reported separately" -- its
+2-spawn cost is a known, accepted cost of a different shape, not a
+regression of the zero-spawn LF path) -- but EVERY reported arm, gated or
+not, is asserted to have actually committed: a fast-reading arm that
+transports rc==0 while `committed: false` on every sample is a corrupted
+gate wearing a "success" label, not a cheap arm, and this file fails loudly
+on that shape rather than only reporting it.
 
 DOOR COLD-MISS TRAP (dispatch brief, this plan's C6 body verbatim). The
 door's cold fallback spawns `{engine_root}\\coordinator\\bin\\coordinator-
@@ -496,11 +487,18 @@ def test_c6_commit_v2_process_time_gate(warm_root, tmp_path_factory) -> None:
     crlf_ok = sum(1 for c in crlf_committed if c)
     print(
         f"eol=crlf shape commit outcome: {crlf_ok}/{len(crlf_committed)} actually "
-        f"committed (committed=true); see this module's docstring's "
-        f"EOL=CRLF SHAPE, MEASURED FINDING section -- the current op handler "
-        f"supplies no blob_fallback, so CR-bearing content under this pin is "
-        f"REFUSED in process today, which is why this shape's spawn count "
-        f"below reads far under the plan's anticipated 2-spawn fallback figure."
+        f"committed (committed=true)"
+    )
+    # Every REPORTED arm, not only the gated one -- an arm that reads fast
+    # and cheap because nothing actually committed is a corrupted gate, not
+    # evidence about a shape's real cost. See module docstring's EOL=CRLF
+    # SHAPE, MEASURED section.
+    assert crlf_ok == len(crlf_committed), (
+        f"[gate corruption guard] arm=eol=crlf: {len(crlf_committed) - crlf_ok} "
+        f"of {len(crlf_committed)} dispatches transported rc==0 but returned "
+        f"committed=false (or an unparseable envelope) -- this arm's fast/cheap "
+        f"reading would be measuring refusals, not the C4 fallback's real cost. "
+        f"committed flags: {crlf_committed}"
     )
 
     # --- THE GATE: unpinned-LF shape only, prime exit criterion. ---
@@ -530,7 +528,5 @@ def test_c6_commit_v2_process_time_gate(warm_root, tmp_path_factory) -> None:
         f"eol=crlf shape (reported, NOT gated against the LF target): "
         f"process_time mean={_mean(crlf_ms_values)}ms (per-window {crlf_ms_values}) "
         f"procs mean={_mean(crlf_procs_values)} (per-window {crlf_procs_values}) -- "
-        f"{crlf_ok}/{len(crlf_committed)} committed=true (see MEASURED FINDING "
-        f"docstring section: today this measures the in-process REFUSAL path, "
-        f"0 spawns, not C4's anticipated 2-spawn fallback success path)"
+        f"{crlf_ok}/{len(crlf_committed)} committed=true (C4's fallback path)"
     )
