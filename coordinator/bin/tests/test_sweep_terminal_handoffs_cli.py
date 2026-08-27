@@ -226,3 +226,102 @@ class TestAC8DR277DispositionUnchanged:
             f"MATCH proceeds silently — nothing goes to stderr; got {err!r}"
         )
         assert code == 0
+
+
+_TERMINAL_HANDOFF = """---
+title: A terminal handoff the census must name
+status: consumed
+deployment_state: abandoned
+---
+
+body
+"""
+
+
+class TestDryRunCensus:
+    """`--dry-run` is the operator's census surface over the same `plan_sweep`
+    classification the acting path runs.
+
+    Its reason for existing is that the only other census route — the op's
+    `dry_run:true` preview — returns `candidates: []` under `exit_code:1`
+    from `fleet/_common.py :: _setup_error`, so a caller reading the
+    candidate list instead of the exit code cannot tell a REFUSED invocation
+    from an empty corpus. That mis-read is what the 2026-08-27 zero-vs-25
+    disagreement was.
+
+    The load-bearing property is not that the census prints — it is that it
+    prints WITHOUT acting: no move, no commit, and no `archive_sweeps`
+    liveness stamp (a census must not hold the cadence gate open on behalf of
+    a sweep that never ran).
+    """
+
+    def _run_dry_run(self, tmp_path, *, seed_terminal: bool = True):
+        mod = _load_module()
+        repo = _init_repo(tmp_path / "repo")
+        if seed_terminal:
+            (repo / "state" / "handoffs" / "2026-01-01_census-fixture.md").write_text(
+                _TERMINAL_HANDOFF, encoding="utf-8"
+            )
+            subprocess.run(
+                ["git", "add", "-A"], cwd=str(repo), check=True,
+                capture_output=True, text=True, env=_GIT_ENV, timeout=15,
+                **no_console_creationflags(),
+            )
+            subprocess.run(
+                ["git", "commit", "-q", "-m", "seed handoff"], cwd=str(repo), check=True,
+                capture_output=True, text=True, env=_GIT_ENV, timeout=15,
+                **no_console_creationflags(),
+            )
+
+        mod.resolve_checked_repo_root = lambda explicit_root=None: (
+            str(repo),
+            {"verdict": "MATCH", "message": "", "session_root": None,
+             "resolved_root": None, "sid": "sid-census"},
+        )
+        stamped = []
+        mod._stamp_archive_sweeps_liveness = lambda root: stamped.append(root)
+
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = mod.main(["--dry-run"])
+        return repo, code, out.getvalue(), err.getvalue(), stamped
+
+    def test_census_names_what_it_would_move_and_moves_nothing(self, tmp_path):
+        repo, code, out, err, _stamped = self._run_dry_run(tmp_path)
+        src = repo / "state" / "handoffs" / "2026-01-01_census-fixture.md"
+        assert code == 0, f"census exits 0; got {code}, stderr={err!r}"
+        assert "2026-01-01_census-fixture.md" in out, (
+            "the census must NAME the record it would move — an unnamed count "
+            f"is the very ambiguity this flag exists to remove; got {out!r}"
+        )
+        assert src.exists(), "a census must not move the record it names"
+        assert not (repo / "archive" / "handoffs").exists(), (
+            "a census must not create the archive destination"
+        )
+        head = subprocess.run(
+            ["git", "log", "--oneline", "-1", "--format=%s"], cwd=str(repo),
+            capture_output=True, text=True, env=_GIT_ENV, timeout=15,
+            **no_console_creationflags(),
+        ).stdout.strip()
+        assert head == "seed handoff", (
+            f"a census must not commit; HEAD subject is {head!r}"
+        )
+
+    def test_census_does_not_stamp_the_archive_sweeps_liveness_key(self, tmp_path):
+        _repo, code, _out, _err, stamped = self._run_dry_run(tmp_path)
+        assert code == 0
+        assert stamped == [], (
+            "a census is not a sweep — stamping `archive_sweeps` would let a "
+            "run of censuses hold the cadence gate open while nothing was "
+            f"ever archived; got {stamped!r}"
+        )
+
+    def test_empty_corpus_census_says_so_rather_than_printing_nothing(self, tmp_path):
+        _repo, code, out, _err, _stamped = self._run_dry_run(
+            tmp_path, seed_terminal=False
+        )
+        assert code == 0
+        assert "no terminal handoffs would be archived" in out, (
+            "an empty census must say it is empty — silence is the failure "
+            f"mode this flag exists to fix; got {out!r}"
+        )

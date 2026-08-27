@@ -312,6 +312,13 @@ _NEWLY_ADDED_COMMITTING_OPS = (
     "fleet.prune_closed_bugs",
     "handoff.archive_transition",
     "handoff.ship_and_archive",
+    # Sixth pass (2026-08-27) -- `ceremony.commit`, registered 2026-08-26 at
+    # `ec503138c` as the replacement for the killed `ceremony.scoped_git_
+    # commit` (K-045). It is the op the guard's own deny message names as the
+    # sanctioned route, which is precisely why its absence from the set was
+    # the worst one available: the guard told a blocked subagent to use the
+    # one op it would not then stop.
+    "ceremony.commit",
 )
 
 
@@ -371,6 +378,18 @@ _COMMIT_SINK_CALL_MARKERS = (
     "rm_and_commit(",
     "commit_scoped(",
     "commit_with_message_file(",
+    # Sixth pass (2026-08-27): the marker list is the ratchet's real reach,
+    # and it was one name short of the op every commit now routes through.
+    # `ceremony.commit` (ops/ceremony/commit_op.py :: _handler) calls
+    # `run_commit_pipeline(...)` directly -- a genuine sink, absent from the
+    # four markers above -- so the scan walked that module, found no Call it
+    # recognized, and passed while `ceremony.commit` sat outside
+    # _COMMITTING_OP_NAMES. The guard meant to deny a subagent's committing-op
+    # invoke therefore granted the live committer by name. Found by plan
+    # triage, not by this test, which is the tell: a hand-maintained marker
+    # tuple bounds a mechanical scan, so the scan is only ever as complete as
+    # its least-recently-updated name.
+    "run_commit_pipeline(",
 )
 
 #: Bare callee names derived from ``_COMMIT_SINK_CALL_MARKERS`` by stripping

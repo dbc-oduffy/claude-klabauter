@@ -308,7 +308,17 @@ static wchar_t *current_user_sid_w(void) {
 
     TOKEN_USER *tu = (TOKEN_USER *)buf;
     LPWSTR sid_str = NULL;
-    if (ConvertSidToStringSidW(tu->User.the Game Dev Reviewer, &sid_str)) {
+    /* The security-identifier member of Win32's `TOKEN_USER` collides with a
+     * reviewer persona name the publish transform scrubs. Both halves are
+     * handled: `percolate/substitute.py :: _is_member_access` stops the
+     * transform rewriting the field (it once shipped a `door.c` whose call
+     * below read `tu->User.the Game Dev Reviewer`, which cannot compile), and
+     * the line escape below stops the mirror's own identity checker flagging
+     * the surviving literal. Renaming is not available: the field spelling is
+     * Microsoft's. This comment deliberately does NOT write that member name
+     * as prose -- prose is exactly what the transform is right to rewrite,
+     * and an earlier version of this comment scrubbed itself into a finding. */
+    if (ConvertSidToStringSidW(tu->User.Sid, &sid_str)) {  /* noqa: identity-names */
         size_t chars = wcslen(sid_str) + 1;
         result = (wchar_t *)malloc(chars * sizeof(wchar_t));
         if (result) memcpy(result, sid_str, chars * sizeof(wchar_t));

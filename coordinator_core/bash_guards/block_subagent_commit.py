@@ -1224,6 +1224,37 @@ PRIORITY = 40
 #: predicate applied only inside the already-resolved-and-matched branch.
 _GIT_COMMIT_AGENT_TYPE = "coordinator:git-commit-agent"
 
+#: Named-persona commit grant (PM ruling 2026-08-27): the Opus-tier reviewer/
+#: synthesizer personas carry the EM's permission set with respect to THIS
+#: module -- a member never trips the subagent-commit deny. Every other guard
+#: in the chain (`blanket-git-add`, the `destructive-git-*` cohort, Check 5's
+#: scoped-staging deny) still applies to them exactly as it applies to the EM,
+#: which is what "the EM's permission set" means here: not an exemption from
+#: git hygiene, only from the no-self-commit rule.
+#:
+#: Resolved from the HARNESS-SUPPLIED `payload["agent_type"]` ONLY, never
+#: `effective_type` -- the same discipline `_GIT_COMMIT_AGENT_TYPE` is held to
+#: and for the same reason. `effective_type` ORs in `_read_backpointer_
+#: subagent_type`, a disk read a subagent can write to itself; keying an
+#: unconditional commit grant off that leg would let any subagent forge
+#: membership by naming itself `coordinator:staff-eng` in its own backpointer.
+#: Deliberately NOT folded into `_ALLOWED_SUBAGENT_TYPES` below, which is
+#: checked against `effective_type` and therefore carries exactly that
+#: forgery exposure.
+#:
+#: Known, accepted boundary, unchanged from this module's header: model tier
+#: is not observable at this PreToolUse seam, so "Opus-tier" is enforced by
+#: the model-guard hook on dispatch, not here -- a persona dispatched with a
+#: `model:` override is admitted by type alone.
+_NAMED_PERSONA_COMMIT_TYPES: frozenset = frozenset({
+    "coordinator:eng-director",
+    "coordinator:staff-eng",
+    "coordinator:staff-data-sci",
+    "coordinator:senior-front-end",
+    "coordinator:staff-ux",
+    "coordinator:vp-product",
+})
+
 #: Forward-compatibility hook (the Director of Engineering Finding D6) -- still empty. Its original
 #: docstring described it as reserved for "a future named-Opus member";
 #: `coordinator:git-commit-agent` (C3 above) is the first live subagent
@@ -3267,6 +3298,25 @@ _COMMITTING_OP_NAMES = frozenset(
         # verified against handler source:
         "handoff.transition",               # ops/handoff_transition.py -- archive_and_commit(...)
         "fleet.migrate_handoff_vocabulary",  # ops/fleet/migrate_handoff_vocabulary.py -- archive_and_commit(...)
+        # Sixth pass (2026-08-27) -- and this one is the entry whose absence
+        # mattered most, because `ceremony.commit` is not one more committing
+        # op among many: it is THE dispatchable committer, the op the guard's
+        # own denial message points a blocked subagent at. It was registered
+        # 2026-08-26 (`ec503138c`) and sat outside this set for a day, so
+        # `_has_committing_op_invoke` returned False for the single invoke
+        # spelling most likely to be tried. The `commit` substring in its name
+        # gets it past `_prefilter_mentions_commit`, which is what made the
+        # gap quiet: the cheap filter admits it, then the full matcher waves
+        # it through, so nothing anywhere reported a miss.
+        #
+        # The registry ratchet did not catch it either: its handler reaches
+        # git via `run_commit_pipeline(...)`, a sink name the scan's marker
+        # tuple did not carry. Both legs fixed together -- adding the name
+        # here without adding the marker there would leave the next such op
+        # to be found by hand as well. See the sixth-pass note on
+        # `_COMMIT_SINK_CALL_MARKERS` in
+        # tests/test_subagent_commit_prefilter_and_flags.py.
+        "ceremony.commit",                  # ops/ceremony/commit_op.py -- run_commit_pipeline(...)
     }
 )
 _CEREMONY_INVOKE_MODULE = "coordinator_core.invoke"
@@ -6385,6 +6435,12 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     effective_type = agent_type or subagent_type or ""
 
     if effective_type and effective_type in _ALLOWED_SUBAGENT_TYPES:
+        return None
+
+    # Named-persona grant (PM ruling 2026-08-27) -- `agent_type` alone, never
+    # `effective_type`; see `_NAMED_PERSONA_COMMIT_TYPES` for why the
+    # backpointer leg is excluded from an unconditional commit grant.
+    if agent_type and agent_type in _NAMED_PERSONA_COMMIT_TYPES:
         return None
 
     # C3 (2026-08-03-narrow-subagent-commit-confinement-two-classes.md): the

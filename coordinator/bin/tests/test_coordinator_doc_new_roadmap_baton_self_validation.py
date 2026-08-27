@@ -353,5 +353,58 @@ class RoadmapBatonBackfillClassRegressionTest(unittest.TestCase):
         )
 
 
+class RoadmapBatonBlocksCarryTest(unittest.TestCase):
+    """`--blocks` (repeatable): the one graph field carried rather than stubbed.
+
+    A continuation minted under its predecessor's `stub_id` used to author
+    `blocks: []` while the whole down-graph still resolved on that `stub_id`, so
+    `reconcile.gate_eval._has_asymmetry` read every dependent's edge as severed
+    and reported a symmetric graph as a data defect. A lost down-edge is not a
+    placeholder awaiting fill -- nothing surfaces that it went missing.
+    """
+
+    def _fm(self, **kwargs):
+        content = _cli._scaffold_roadmap_baton(
+            title="t",
+            branch="b",
+            roadmap_id="rm-blocks",
+            stub_id="stub-blocks",
+            deliverable_id=None,
+            initiative=None,
+            category=None,
+            **kwargs,
+        )
+        return yaml.safe_load(content.split("---", 2)[1])
+
+    def test_blocks_are_emitted_verbatim_in_order(self):
+        fm = self._fm(blocks=["the-meter-02", "archival-sweeps-03"])
+        self.assertEqual(fm["blocks"], ["the-meter-02", "archival-sweeps-03"])
+
+    def test_omitted_blocks_stay_the_empty_list(self):
+        """Byte-identical to every caller that does not pass the flag."""
+        self.assertEqual(self._fm()["blocks"], [])
+
+    def test_blank_entries_are_dropped_never_emitted_as_empty_strings(self):
+        """An empty entry would author a `blocks` member nothing can resolve --
+        a dangling edge is worse than the missing one this flag exists to fix."""
+        fm = self._fm(blocks=["dep-01", "   ", ""])
+        self.assertEqual(fm["blocks"], ["dep-01"])
+
+    def test_carried_blocks_still_validate_against_the_schema(self):
+        """The emitter validates its own output before writing (Defect 2 above);
+        the carried list must not be what breaks that."""
+        content = _cli._scaffold_roadmap_baton(
+            title="t",
+            branch="b",
+            roadmap_id="rm-blocks",
+            stub_id="stub-blocks",
+            deliverable_id=None,
+            initiative=None,
+            category=None,
+            blocks=["dep-01", "dep-02"],
+        )
+        _cli._assert_scaffold_content_valid(content, "roadmap-baton", "state/handoffs/x.md")
+
+
 if __name__ == "__main__":
     unittest.main()

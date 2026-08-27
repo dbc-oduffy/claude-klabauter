@@ -1,4 +1,0 @@
-{
-  "content": "---\nkind: fyi\nstatus: actioned\nactioned_note: '42'\npicked_up_at: '2026-01-02T10:00:00Z'\npicked_up_by: session-parity-memo-test\nfrom: sender-session\nsummary: A test memo for parity testing.\ncreated: 2026-06-01\n---\n",
-  "rc": 0
-}

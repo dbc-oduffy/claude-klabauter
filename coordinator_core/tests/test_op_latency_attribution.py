@@ -125,7 +125,12 @@ def test_none_scoped_op_served_warm_attributes_to_caller_not_server(tmp_path, mo
     )
 
     lines = [json.loads(l) for l in caller_sink.read_text(encoding="utf-8").splitlines()]
-    assert len(lines) == 2  # started + complete
+    # started + complete + the chokepoint process_time row. The count is
+    # bookkeeping; the invariant under test is that EVERY row a dispatch emits
+    # lands on the caller's repo, so the process-time row is asserted here
+    # alongside the other two rather than excluded from the check.
+    assert {line["kind"] for line in lines} == {"started", "complete", "process_time"}
+    assert len(lines) == 3
     for line in lines:
         assert line["repo_key"] == str(caller_common_dir)
 

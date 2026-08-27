@@ -23,8 +23,10 @@ from pathlib import Path
 import pytest
 
 from coordinator_core.benchmarks.isolated_clone import (
+    CloneTeardownLeak,
     RootlessCloneDestination,
     mkdtemp_for_clone,
+    rmtree_or_raise,
 )
 
 
@@ -40,7 +42,7 @@ def test_rootless_destination_is_refused() -> None:
         with pytest.raises(RootlessCloneDestination):
             mkdtemp_for_clone(rootless, prefix="should-not-exist-")
     finally:
-        shutil.rmtree(rootless, ignore_errors=True)
+        rmtree_or_raise(rootless, label="test_isolated_clone_destination")
 
 
 def test_rootless_destination_mints_nothing_before_raising() -> None:
@@ -54,7 +56,7 @@ def test_rootless_destination_mints_nothing_before_raising() -> None:
             "scratch tree was created before the destination was validated"
         )
     finally:
-        shutil.rmtree(rootless, ignore_errors=True)
+        rmtree_or_raise(rootless, label="test_isolated_clone_destination")
 
 
 def test_in_repo_destination_is_allowed(tmp_path: Path) -> None:
@@ -68,7 +70,7 @@ def test_in_repo_destination_is_allowed(tmp_path: Path) -> None:
         assert minted.exists()
         assert minted.is_relative_to(tmp_path)
     finally:
-        shutil.rmtree(minted, ignore_errors=True)
+        rmtree_or_raise(minted, label="test_isolated_clone_destination")
 
 
 def test_git_file_counts_as_a_root(tmp_path: Path) -> None:
@@ -80,4 +82,40 @@ def test_git_file_counts_as_a_root(tmp_path: Path) -> None:
     try:
         assert minted.exists()
     finally:
-        shutil.rmtree(minted, ignore_errors=True)
+        rmtree_or_raise(minted, label="test_isolated_clone_destination")
+
+
+def test_surviving_clone_raises_rather_than_warning(tmp_path: Path) -> None:
+    """A tree that cannot be removed fails the run.
+
+    This is the finding the first cut of this module got wrong: it emitted
+    `warnings.warn` and returned False, which -- with no `filterwarnings` in
+    `pyproject.toml` -- leaves the run PASSING, the same observable outcome as
+    the `ignore_errors=True` it replaced. A leaked clone means a live orphaned
+    process; it has to turn something red.
+
+    Simulated by pointing the helper at a path it cannot clear: a directory
+    replaced by a file mid-call is awkward to stage portably, so this asserts
+    the raise on the simpler observable -- a root that still exists after the
+    removal attempt, forced by making removal a no-op via a read-only handle
+    the test itself holds open on Windows and a chmod-guarded parent elsewhere.
+    """
+    doomed = tmp_path / "survivor"
+    doomed.mkdir()
+    held = doomed / "held.txt"
+    held.write_text("x")
+    handle = held.open("r")  # a live handle blocks rmtree on Windows
+    try:
+        if doomed.exists():
+            try:
+                rmtree_or_raise(doomed, label="leak-proof", reaped=[])
+            except CloneTeardownLeak as exc:
+                assert "survived teardown" in str(exc)
+                return
+        # POSIX removes a tree with an open handle without complaint; there the
+        # raise cannot be provoked this way and the contract is unexercised
+        # rather than violated.
+        assert not doomed.exists(), "removal neither succeeded nor raised"
+    finally:
+        handle.close()
+        shutil.rmtree(doomed, ignore_errors=True)

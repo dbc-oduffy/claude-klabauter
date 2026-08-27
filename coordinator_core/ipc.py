@@ -2423,9 +2423,9 @@ async def dispatch_message(msg: dict, *, caller: Optional[str] = None) -> dict:
     # (MEASUREMENT_SCOPE_PER_OP_HANDLER's comment has the population this fixed).
     process_start = _time.process_time()
     spawn_start = _spawn_count_or_none()
-    _depth = _DISPATCH_DEPTH.get() + 1
-    _depth_token = _DISPATCH_DEPTH.set(_depth)
-    alone_at_entry = _enter_dispatch(_depth)
+    _ancestors = _ANCESTOR_RECORDS.get()
+    _record = _enter_dispatch(_ancestors)
+    _ancestor_token = _ANCESTOR_RECORDS.set(_ancestors + (_record,))
     # Push this frame's child-CPU accumulator; the parent's, if any, is restored
     # in `finally` via the token so a raise cannot strand a frame on the stack.
     _nested_parent = _NESTED_DISPATCH_CPU_MS.get()
@@ -2514,8 +2514,8 @@ async def dispatch_message(msg: dict, *, caller: Optional[str] = None) -> dict:
     finally:
         elapsed_ms = (_time.perf_counter() - perf_start) * 1000.0
         span_ms = (_time.process_time() - process_start) * 1000.0
-        alone_at_exit = _exit_dispatch(_depth)
-        _DISPATCH_DEPTH.reset(_depth_token)
+        uncontaminated = _exit_dispatch(_record)
+        _ANCESTOR_RECORDS.reset(_ancestor_token)
         try:
             children_ms = sum(_NESTED_DISPATCH_CPU_MS.get() or ())
         except Exception:
@@ -2527,7 +2527,13 @@ async def dispatch_message(msg: dict, *, caller: Optional[str] = None) -> dict:
         # so the subtraction cannot legitimately go negative, and a negative
         # figure on disk would read as a measurement nobody can interpret.
         own_ms = span_ms - children_ms
-        if own_ms < 0.0:
+        # A negative delta is not always clock noise. Children dispatched
+        # CONCURRENTLY each charge their whole span to this frame, and their
+        # spans overlap on one process-wide clock, so the sum can legitimately
+        # exceed it. Review (slice-a Finding 3): clamping in silence discards
+        # that signal. Clamp, and say the figure is no longer this op's own.
+        clamped = own_ms < 0.0
+        if clamped:
             own_ms = 0.0
         # Charge the WHOLE span to the parent, not `own_ms`: the parent must
         # exclude everything its child's span consumed, children included.
@@ -2546,13 +2552,12 @@ async def dispatch_message(msg: dict, *, caller: Optional[str] = None) -> dict:
             record_op_process_time(
                 op=method if isinstance(method, str) else "<unknown>",
                 process_ms=own_ms,
-                # Derived from what was actually observed, never assumed: a
-                # SIBLING dispatched at any point during this span contaminates
-                # the delta, so both ends must have seen none. An ancestor is
-                # not a sibling -- see `_IN_FLIGHT_DISPATCHES`' own comment.
+                # Derived from what was observed across the WHOLE span, never
+                # from two snapshots of it -- see `_enter_dispatch`'s own
+                # comment for the sibling this used to miss.
                 measurement_scope=(
                     MEASUREMENT_SCOPE_PER_OP_HANDLER
-                    if (alone_at_entry and alone_at_exit)
+                    if (uncontaminated and not clamped)
                     else MEASUREMENT_SCOPE_PROCESS_WIDE
                 ),
                 source_path="dispatch_chokepoint",
@@ -2662,43 +2667,71 @@ _NESTED_DISPATCH_CPU_MS: "contextvars.ContextVar[Optional[List[float]]]" = (
     contextvars.ContextVar("coordinator_core.ipc.nested_dispatch_cpu_ms", default=None)
 )
 
-#: Dispatches in flight in THIS process, guarded by `_IN_FLIGHT_LOCK`, and this
-#: dispatch's own nesting depth.
+#: Contamination is observed CONTINUOUSLY, not sampled at two instants.
 #:
-#: Contamination is a SIBLING, never an ANCESTOR. A parent that composed this op
-#: is blocked awaiting it and burns no CPU during this span, so its presence
-#: in flight takes nothing away from the delta -- counting it as contamination
-#: would label every composed op PROCESS_WIDE and hand the brightline a
-#: pessimised figure for exactly the ops most worth measuring. So the test is
-#: `in_flight == depth` (every in-flight dispatch is an ancestor of this one),
-#: not `in_flight == 1`. Anything above that is a genuine concurrent sibling --
-#: the warm server's threaded accept path -- and PROCESS_WIDE is then the honest
-#: label. Derived per dispatch at BOTH ends, never assumed.
-_IN_FLIGHT_DISPATCHES = 0
-_IN_FLIGHT_LOCK = threading.Lock()
+#: The first cut of this compared a global in-flight count against this
+#: dispatch's nesting depth at entry and at exit. Review (2026-08-27, slice-a
+#: Finding 1) showed that misses a sibling that both starts and finishes
+#: strictly INSIDE this dispatch's span: neither sample point sees it, yet its
+#: CPU is in this span's `process_time()` delta. The row would then claim
+#: `per_op_handler` -- the narrowest, most-trusted scope, the one the brightline
+#: is read in -- while carrying another op's CPU. A discriminator that is wrong
+#: in the direction of overclaiming precision is worse than no discriminator.
+#:
+#: So each dispatch owns a record, and an entering dispatch marks every active
+#: record that is not one of its own ancestors -- and is marked by them in turn.
+#: Contamination is therefore recorded the moment the overlap exists, whenever
+#: within the span it happens, rather than inferred from two snapshots.
+#:
+#: An ancestor is never contamination: a parent awaiting its child burns no CPU
+#: during the child's span, and treating it as a sibling would label every
+#: composed op PROCESS_WIDE -- pessimising exactly the ops most worth measuring.
+#: Ancestry is carried explicitly on `_ANCESTOR_RECORDS` rather than inferred
+#: from a count, because a count cannot tell an ancestor from a stranger.
 
-#: This dispatch's nesting depth (1 for a top-level dispatch). A ContextVar so
-#: each asyncio task carries its own chain rather than reading a sibling's.
-_DISPATCH_DEPTH: "contextvars.ContextVar[int]" = contextvars.ContextVar(
-    "coordinator_core.ipc.dispatch_depth", default=0
+
+class _DispatchRecord:
+    """One in-flight dispatch, and whether a non-ancestor overlapped its span."""
+
+    __slots__ = ("contaminated",)
+
+    def __init__(self) -> None:
+        self.contaminated = False
+
+
+_ACTIVE_DISPATCHES: "List[_DispatchRecord]" = []
+_ACTIVE_DISPATCH_LOCK = threading.Lock()
+
+#: This dispatch's ancestor records, innermost last. A ContextVar so each
+#: asyncio task carries its own chain rather than reading a sibling's.
+_ANCESTOR_RECORDS: "contextvars.ContextVar[tuple]" = contextvars.ContextVar(
+    "coordinator_core.ipc.ancestor_dispatch_records", default=()
 )
 
 
-def _enter_dispatch(depth: int) -> bool:
-    """Register a dispatch as in flight. True if no SIBLING is in flight."""
-    global _IN_FLIGHT_DISPATCHES
-    with _IN_FLIGHT_LOCK:
-        _IN_FLIGHT_DISPATCHES += 1
-        return _IN_FLIGHT_DISPATCHES == depth
+def _enter_dispatch(ancestors: tuple) -> "_DispatchRecord":
+    """Register a dispatch as in flight, cross-marking it against every active
+    non-ancestor. The list is short (in-flight dispatches, not history), so the
+    scan is a handful of identity comparisons under a lock already held for a
+    list append."""
+    rec = _DispatchRecord()
+    with _ACTIVE_DISPATCH_LOCK:
+        for other in _ACTIVE_DISPATCHES:
+            if not any(other is a for a in ancestors):
+                other.contaminated = True
+                rec.contaminated = True
+        _ACTIVE_DISPATCHES.append(rec)
+    return rec
 
 
-def _exit_dispatch(depth: int) -> bool:
-    """Deregister a dispatch. True if no SIBLING was in flight at exit."""
-    global _IN_FLIGHT_DISPATCHES
-    with _IN_FLIGHT_LOCK:
-        uncontended = _IN_FLIGHT_DISPATCHES == depth
-        _IN_FLIGHT_DISPATCHES -= 1
-        return uncontended
+def _exit_dispatch(rec: "_DispatchRecord") -> bool:
+    """Deregister a dispatch. True if no non-ancestor ever overlapped its span."""
+    with _ACTIVE_DISPATCH_LOCK:
+        for i, other in enumerate(_ACTIVE_DISPATCHES):
+            if other is rec:
+                del _ACTIVE_DISPATCHES[i]
+                break
+        return not rec.contaminated
 
 
 def _telemetry_sid() -> Optional[str]:

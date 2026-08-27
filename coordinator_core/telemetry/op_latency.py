@@ -125,6 +125,7 @@ Spec backlink: state/handoffs/2026-08-08-engine-fails-the-load-norm.md
 
 from __future__ import annotations
 
+import collections
 import json
 import os
 import sys
@@ -333,7 +334,7 @@ def tail_entries(path, *, tail_bytes: int, max_rows: int):
     row and is dropped. Never raises: a missing or unreadable generation yields
     ``([], False)``.
     """
-    entries: list = []
+    window: "collections.deque" = collections.deque(maxlen=max_rows)
     try:
         size = path.stat().st_size
         with open(path, "rb") as fh:
@@ -342,8 +343,6 @@ def tail_entries(path, *, tail_bytes: int, max_rows: int):
                 fh.seek(start)
                 fh.readline()
             for raw_line in fh:
-                if len(entries) >= max_rows:
-                    break
                 line = raw_line.strip()
                 if not line:
                     continue
@@ -352,10 +351,10 @@ def tail_entries(path, *, tail_bytes: int, max_rows: int):
                 except (json.JSONDecodeError, ValueError):
                     continue
                 if isinstance(entry, dict):
-                    entries.append(entry)
+                    window.append(entry)
     except OSError:
         return [], False
-    return entries, size > tail_bytes
+    return list(window), size > tail_bytes
 
 
 def sink_generations(repo_root: Path) -> list:
@@ -842,6 +841,7 @@ def record_fact_span(
     t_start: float,
     elapsed_ms: float,
     outcome: str,
+    process_ms: Optional[float] = None,
     repo_root: Optional[Path] = None,
     sid: Optional[str] = None,
 ) -> None:
@@ -889,10 +889,17 @@ def record_fact_span(
     caller of five of the six facts — is out of this chunk's ``writes:``
     scope (``session_facts.py``'s own module docstring: "Does not edit
     ``quick_wrap_assemble/__init__.py``"). Per-fact rows are the only shape
-    implementable without touching that file, so that is what is built here;
-    grouping by ``sid`` at read time recovers the per-ceremony breakdown AC4
-    needs directly from these per-fact rows, at the cost of one row per fact
-    instead of one row per ceremony call.
+    implementable without touching that file, so that is what is built here.
+
+    THIS ROW SHAPE CANNOT PRODUCE A PER-CEREMONY AGGREGATE, and an earlier
+    version of this docstring claimed it could: "grouping by ``sid`` at read
+    time recovers the per-ceremony breakdown". It does not. ``sid`` is the
+    SESSION id and is stable across every ceremony invocation a session makes,
+    so grouping N invocations by it collapses them into one — measured, ten
+    real ``brief()`` calls yield an aggregate of n=1. A reader wanting the
+    aggregate must either sum per-fact statistics (honest arithmetic, but not
+    a distribution) or wait for a per-invocation correlation id. Tracked:
+    ``state/bug-backlog/2026-08-27-fact-span-rows-cannot-yield-a-per-ceremo-d9be470c2039.yaml``.
 
     Same fail-open contract as the other three row kinds: resolves the sink
     via ``coordinator_core.lifecycle.git_common_dir``, honours
@@ -902,6 +909,7 @@ def record_fact_span(
         "fact": fact,
         "t_start": t_start,
         "elapsed_ms": elapsed_ms,
+        "process_ms": process_ms,
         "outcome": outcome,
         "pid": os.getpid(),
         "sid": sid,

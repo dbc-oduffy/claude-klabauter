@@ -3066,7 +3066,7 @@ def _resolved_predecessor_sizing_object(
 
 def _resolved_predecessor_roadmap_identity(
     predecessor_path: Optional[str], root: Optional[Path]
-) -> tuple[str, str]:
+) -> tuple[str, str, list[str]]:
     """The resolved predecessor's own `roadmap_id`/`stub_id` frontmatter
     fields, same fail-open-to-`""` resolution shape as the sibling
     `_resolved_predecessor_*` readers above -- feeds DR-172's mint-time
@@ -3076,23 +3076,72 @@ def _resolved_predecessor_roadmap_identity(
     roadmap-baton inheriting the same roadmap identity rather than a bare
     `handoff`.
 
-    NOT carried here (named, not silently dropped): `blocks`, `blocked_by`,
-    `sprint`, `wave`. `coordinator-doc-new`'s roadmap-baton scaffold has no
-    passthrough flag for any of the four today -- adding one is a
-    `coordinator/bin/coordinator-doc-new.py` change, outside this chunk's
-    declared write scope. A freshly-minted roadmap-baton successor therefore
-    gets that scaffold's own PLACEHOLDER graph-field stubs for those four
-    fields, not the predecessor's values, until that follow-on lands."""
+    `blocks` IS now carried, as the third element -- the follow-on this
+    docstring used to defer. Carrying `stub_id` without `blocks` was not a
+    cosmetic gap: the successor inherits the identity the whole down-graph
+    resolves against, then authors `blocks: []` against it, so every dependent's
+    edge reads as severed the moment the successor becomes the chain head.
+    `reconcile.gate_eval._has_asymmetry` then reports a symmetric graph as a data
+    defect and `handoff.reconcile_open` refuses the baton. Nothing surfaces the
+    loss at mint time, which is precisely why it cannot stay a placeholder for
+    the author to fill: `sprint`/`wave` are visibly unset stubs, a dropped
+    down-edge is invisible. `coordinator-doc-new` grew `--blocks` (repeatable,
+    carry-through verbatim) for this.
+
+    STILL not carried, named rather than silently dropped: `blocked_by`,
+    `sprint`, `wave`. `blocked_by` is excluded ON PURPOSE, not for scope --
+    it is derived readiness state (`--gated-open` owns it, `_derive_readiness`
+    reads it), so inheriting a predecessor's gates would re-park a successor on
+    blockers that may have cleared while the predecessor was in flight.
+    `sprint`/`wave` are `bin/roadmap-number-stubs` topo outputs, not lineage.
+
+    Fail-open to `[]` on the same terms as the two string fields: a
+    missing/unreadable predecessor, or one with no `blocks`, yields the empty
+    list and the scaffold's own `blocks: []` default, never a raise."""
     if not predecessor_path or root is None:
-        return "", ""
+        return "", "", []
     candidate = Path(predecessor_path)
     if not candidate.is_absolute():
         candidate = root / candidate
     if not candidate.is_file():
-        return "", ""
+        return "", "", []
 
     fm = _read_frontmatter(candidate)
-    return (_fm_field(fm, "roadmap_id") or "", _fm_field(fm, "stub_id") or "")
+    return (
+        _fm_field(fm, "roadmap_id") or "",
+        _fm_field(fm, "stub_id") or "",
+        _fm_string_list(fm, "blocks"),
+    )
+
+
+def _fm_string_list(fm: str, key: str) -> list[str]:
+    """A frontmatter LIST field's string entries, or `[]`.
+
+    The sibling `_fm_field` reader (`read_fm_field_unquoted`) is scalar-only: on a
+    list it returns the raw `["a", "b"]` text for the flow spelling and nothing at
+    all for the block spelling, so neither shape survives it. `blocks:` is authored
+    both ways across the corpus, so this parses the frontmatter proper rather than
+    pattern-matching one spelling and silently dropping the other -- a dropped
+    `blocks` entry is exactly the class of silent edge loss the carry exists to stop.
+
+    Fail-open to `[]` on unparseable frontmatter, matching every
+    `_resolved_predecessor_*` reader's own contract: never a raise, never a partial
+    list passed off as complete.
+    """
+    if not fm:
+        return []
+    import yaml
+
+    try:
+        parsed = yaml.safe_load(fm) or {}
+    except Exception:  # noqa: BLE001 -- malformed frontmatter degrades to [], never raises
+        return []
+    if not isinstance(parsed, dict):
+        return []
+    value = parsed.get(key)
+    if not isinstance(value, list):
+        return []
+    return [entry.strip() for entry in value if isinstance(entry, str) and entry.strip()]
 
 
 def _build_closed_predecessor_decline_judgment_point(
@@ -3416,14 +3465,24 @@ def _build_directives(
             else _resolved_predecessor_canonical_kind(lineage.get("predecessor"), root)
         )
         if _mint_pred_kind == "roadmap-baton":
-            _pred_roadmap_id, _pred_stub_id = _resolved_predecessor_roadmap_identity(
-                lineage.get("predecessor"), root
-            )
+            (
+                _pred_roadmap_id,
+                _pred_stub_id,
+                _pred_blocks,
+            ) = _resolved_predecessor_roadmap_identity(lineage.get("predecessor"), root)
             d1_args[0] = "--type=roadmap-baton"
             if _pred_roadmap_id:
                 d1_args.append(f"--roadmap-id={_pred_roadmap_id}")
             if _pred_stub_id:
                 d1_args.append(f"--stub-id={_pred_stub_id}")
+            # The down-edges travel with the `stub_id` they are authored against.
+            # Emitting `--stub-id` without these hands the successor the identity
+            # the whole down-graph resolves on and an empty `blocks:` to answer it
+            # with -- see `_resolved_predecessor_roadmap_identity`'s docstring for
+            # why that reads downstream as a severed graph rather than as a stub
+            # awaiting fill.
+            for _blocked in _pred_blocks:
+                d1_args.append(f"--blocks={_blocked}")
             # `--type=roadmap-baton` refuses without an explicit sizing answer.
             # A continuation inherits the predecessor's sizing -- same sized
             # work is what makes it a continuation. No sizing on the

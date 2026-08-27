@@ -2161,6 +2161,37 @@ def _seg_confirmed_not_git_invocation(seg: str) -> bool:
     return head in _CHECK2_SAFE_NONSPAWNING_HEADS
 
 
+_RESET_MODE_FLAGS = ("--hard", "--soft", "--mixed", "--keep", "--merge")
+
+
+def _reset_ref_moving_mode(seg: str):
+    """Return the reset MODE string for a segment that is a ref-moving
+    `git reset`, or None if the segment is not one.
+
+    Ref-moving is the property CHECK 1 actually cares about (see its own
+    comment): every mode here moves the branch ref and therefore orphans the
+    same commits. The mode is returned rather than a bool purely so the deny
+    messages can name the command the operator actually typed -- reporting a
+    `--soft` reset as `git reset --hard` would send them to verify the wrong
+    thing.
+
+    Returns the DEFAULT mode `--mixed` for a bare `git reset <target>`, which
+    is what git itself does. That is not a widening: a bare reset resolves
+    target HEAD and CHECK 1's own `rev-list --count HEAD..HEAD` is zero, so it
+    denies nothing on its own -- but `git reset HEAD~1`, which IS a silent
+    ref-move, is caught.
+
+    Deliberately word-boundary matched on `reset` exactly as the pre-existing
+    gate was, so no segment that previously reached CHECK 1 stops reaching it.
+    """
+    if not re.search(r"\breset\b", seg):
+        return None
+    for flag in _RESET_MODE_FLAGS:
+        if re.search(r"(^|\s)" + re.escape(flag) + r"(\s|$)", seg):
+            return flag
+    return "--mixed"
+
+
 def check_destructive_git_orphan(
     cmd: str,
     session_id: str = "",
@@ -2268,8 +2299,29 @@ def check_destructive_git_orphan(
         c_dir = _extract_git_c_dir(seg)
         git_cwd = _orphan_c_cwd(c_dir)
 
-        # CHECK 1 -- git reset --hard <target>
-        if re.search(r"\breset\b", seg) and re.search(r"--hard", seg):
+        # CHECK 1 -- git reset <target>, any ref-moving mode
+        #
+        # WIDENED 2026-08-27 (PM ruling) from `--hard` only. Orphaning is a
+        # property of the BRANCH REF MOVING BACKWARDS, not of what the reset
+        # does to the index or worktree: `--soft`, `--mixed` and `--hard` all
+        # move the ref, so all three drop the same commits out of branch
+        # history. `--soft` merely keeps their CONTENT staged, which makes the
+        # loss quieter, not smaller -- the live incident this closes is a
+        # `reset --soft HEAD~1` that dropped a peer's commit (487855c59,
+        # "memo.send: ac-table-collapse") out of a shared branch while leaving
+        # its file staged and byte-identical, so nothing about the working
+        # tree looked wrong afterwards. Under the old `--hard`-only gate that
+        # command reached no check at all.
+        #
+        # Both arms below widen soundly: a subshell-resolved target is equally
+        # unverifiable in any mode, and the `rev-list --count <target>..HEAD`
+        # probe already measures ref movement rather than mode. Non-ref-moving
+        # forms stay out via the PRE-EXISTING guards, not the mode gate -- the
+        # `--` pathspec form is excluded below, `git reset <path>` resolves no
+        # commit so its `rev-parse --verify <path>^{commit}` fails, and a bare
+        # `git reset` resolves target HEAD and counts zero.
+        _reset_mode = _reset_ref_moving_mode(seg)
+        if _reset_mode:
             after = re.sub(r".*(^|\s)reset(\s|$)", " ", seg, count=1)
             # A lone `$(`/backtick in `after` is not proof of a subshell-
             # resolved target: prose that NAMES the hazard (a markdown code
@@ -2291,7 +2343,7 @@ def check_destructive_git_orphan(
             # delimiters still in it is shell, where they mean what they say.
             if re.search(r"\$\(.*\)|`.*`", after, re.DOTALL):
                 return _deny(
-                    "BLOCKED: 'git reset --hard' with a subshell-resolved "
+                    "BLOCKED: 'git reset %s' with a subshell-resolved " % _reset_mode +
                     "target ($(...) or backticks) cannot be verified safe — "
                     "the hook will not execute the subshell to learn what it "
                     "points at.\n\n"
@@ -2344,11 +2396,11 @@ def check_destructive_git_orphan(
                             )
                             return _deny(
                                 (
-                                    "BLOCKED: 'git reset --hard %s' would drop %d "
+                                    "BLOCKED: 'git reset %s %s' would drop %d "
                                     "commit(s) from branch '%s'.\n\n"
                                     "These commits are reachable from HEAD but NOT from "
                                     "%s, so the reset orphans them:\n%s%s\n\n"
-                                    "This is the 2026-05-28 near-miss shape: a hard reset to "
+                                    "This is the 2026-05-28 near-miss shape: a reset to "
                                     "a ref that is BEHIND your current work. Before overriding, "
                                     "re-derive the TRUE state yourself (do not trust a "
                                     "remembered count):\n"
@@ -2356,7 +2408,7 @@ def check_destructive_git_orphan(
                                     "would lose; must be 0 to be safe\n"
                                     "  git branch -a --contains HEAD          # other refs "
                                     "that already hold this work"
-                                    % (target, n, cur_branch, target, subjects, more, target)
+                                    % (_reset_mode, target, n, cur_branch, target, subjects, more, target)
                                 )
                                 + _reset_trailer
                             )
@@ -5649,7 +5701,27 @@ def check_validate_commit(
     # mode (COORDINATOR_SCOPE_STRICT=1) promotes this to a DENY (Phase 5 --
     # the bash's dormant strict-mode branch is now live here; see the module
     # docstring "KNOWN PORTING GAPS", CLOSED entry for this promotion). Reuses
-    # compute_scope() -- no separate declared-scope carrier is introduced. ---
+    # compute_scope() -- no separate declared-scope carrier is introduced.
+    #
+    # FLIP TO DENY-BY-DEFAULT IS READY BUT WITHHELD (2026-08-27). The PM ruled
+    # for it; the one-line change is
+    #     scope_strict = not _override("COORDINATOR_SCOPE_STRICT_OFF", payload=payload)
+    # and it was written, exercised against this repo's live shared index, and
+    # backed out again on the same pass. It is withheld because
+    # `session.scope.compute_scope()` currently misclassifies a session's OWN
+    # touched file as an orphan: with `touched.txt` naming `foo.txt`, a freshly
+    # staged `foo.txt` comes back `my_scope=[] orphans=['foo.txt']` and
+    # `attribution={}` (reproduced standalone 2026-08-27). Under warn-only that
+    # is a spurious SCOPE line; under the flip it is a DENY of a commit the
+    # session is entitled to make -- exactly the false-positive outage the
+    # 2026-08-03 ruling below feared, which is the one objection to strict mode
+    # that today's sweep evidence does NOT answer.
+    #
+    # Blocking red, unmarked, pre-existing (baseline-measured, not caused by
+    # this pass): test_own_scoped_file_no_scope_warning,
+    # test_dispatched_agent_touched_file_no_scope_warning,
+    # test_foreign_file_owned_by_another_session_warns_with_owner.
+    # Land the flip once those are green; nothing else gates it. ---
     scope_strict = _override("COORDINATOR_SCOPE_STRICT", payload=payload)
     if session_id:
         git_root = _run_git(["rev-parse", "--show-toplevel"], _cwd)[1].strip()

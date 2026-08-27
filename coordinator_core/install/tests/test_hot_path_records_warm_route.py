@@ -68,9 +68,65 @@ _LISTENER_WAIT_ATTEMPTS = 20
 _LISTENER_WAIT_INTERVAL_SECS = 0.5
 
 
+def _capture_real_engine_root():
+    """Resolve the stamped engine root ONCE, at collection time, under the
+    REAL (un-quarantined) HOME.
+
+    Same capture-before-quarantine shape as `coordinator_core/conftest.py`'s
+    own `_REAL_USER_SITE` and `_capture_real_doe_root`, for the same class of
+    reason. `resolve_engine_root_for_install` walks a home-anchored ladder
+    (`machine-local repos.claude_klabauter`, then the published-mirror probe),
+    and conftest monkeypatches HOME/USERPROFILE per test -- so resolving it
+    INSIDE a test yields `kind='none'` on a box that demonstrably has a
+    published engine root, and this test would fail for the environment
+    rather than for the regression it exists to catch.
+    """
+    try:
+        from coordinator_core.install.engine_root_for_install import (
+            resolve_engine_root_for_install,
+        )
+
+        return resolve_engine_root_for_install()
+    except Exception:  # pragma: no cover - defensive, mirrors conftest's own
+        return None
+
+
+_REAL_ENGINE_ROOT = _capture_real_engine_root()
+
+
+def _capture_real_door_path():
+    """The installed door binary's path, resolved ONCE at collection time
+    under the REAL (un-quarantined) HOME -- same reason as
+    `_capture_real_engine_root` above. `settings_home()` is home-anchored,
+    so resolving it inside a test points at the per-test quarantine
+    directory, where no door has ever been installed and never will be.
+    """
+    try:
+        return _settings_home.settings_home() / "bin" / door_install.DOOR_INSTALLED_NAME
+    except Exception:  # pragma: no cover - defensive, mirrors conftest's own
+        return None
+
+
+_REAL_DOOR_PATH = _capture_real_door_path()
+
+
 def _ensure_warm_listener() -> str:
-    """Bring a real warm listener up for `_REPO_ROOT`, or fail with a named
-    reason -- never skip (module docstring's THE HOLE THIS CLOSES).
+    """Bring a real warm listener up against the STAMPED ENGINE ROOT, or
+    fail with a named reason -- never skip (module docstring's THE HOLE
+    THIS CLOSES).
+
+    THE ENGINE ROOT IS NOT `_REPO_ROOT`, corrected 2026-08-27. This loop
+    used to pass `_REPO_ROOT` as `ensure_listener`'s argument. That
+    parameter is named `engine_root` and is gated on a stamped one before
+    any of its three branches -- "an unstamped tree is not an engine ...
+    so a listener spawned against it could only ever answer
+    `_serve_line`'s untrusted-caller refusal". Claude-klabauter is a
+    CONSUMER of the engine, never a host of it (`claude-klabauter` is the
+    published twin that carries the stamp), so the old call could only
+    ever return `None`, and this test could only ever fail here -- not
+    because the hot path had regressed, but because it was asking an
+    unstampable tree to host. The repo whose work is done stays
+    `_REPO_ROOT`; only the HOST moves.
 
     `warm.supervisor.ensure_listener` is fail-open and non-blocking by its
     own contract, so a single call cannot distinguish "no server, ever"
@@ -80,15 +136,25 @@ def _ensure_warm_listener() -> str:
     """
     from coordinator_core.warm import supervisor
 
+    resolved = _REAL_ENGINE_ROOT
+    if resolved is None or resolved.root is None:
+        pytest.fail(
+            "No engine root resolved for this box at collection time "
+            f"(resolved={resolved!r}) -- "
+            "this test asserts a POSITIVE route guard and refuses to skip; "
+            "a box with no published engine root cannot host the warm "
+            "server the hot path routes through."
+        )
+
     for _ in range(_LISTENER_WAIT_ATTEMPTS):
-        url = supervisor.ensure_listener(_REPO_ROOT)
+        url = supervisor.ensure_listener(resolved.root)
         if url:
             return url
         time.sleep(_LISTENER_WAIT_INTERVAL_SECS)
 
     pytest.fail(
-        "No warm listener came up for "
-        f"{_REPO_ROOT} after {_LISTENER_WAIT_ATTEMPTS} attempts "
+        "No warm listener came up for engine root "
+        f"{resolved.root} after {_LISTENER_WAIT_ATTEMPTS} attempts "
         f"({_LISTENER_WAIT_ATTEMPTS * _LISTENER_WAIT_INTERVAL_SECS:.0f}s total) -- "
         "this test asserts a POSITIVE route guard and refuses to skip on a "
         "cold box (see module docstring); bring a warm server up for this "
@@ -100,8 +166,8 @@ def _resolve_door_path() -> Path:
     """The installed door binary this box actually resolves through PATH,
     or a named `pytest.fail` -- never a skip, mirroring `_ensure_warm_listener`.
     """
-    door_path = _settings_home.settings_home() / "bin" / door_install.DOOR_INSTALLED_NAME
-    if not door_path.is_file():
+    door_path = _REAL_DOOR_PATH
+    if door_path is None or not door_path.is_file():
         pytest.fail(
             f"No installed door binary at {door_path} -- this test asserts a "
             "POSITIVE route guard against the REAL door and refuses to skip "

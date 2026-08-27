@@ -276,7 +276,11 @@ from coordinator_core.machine_resolver import registry_get
 from coordinator_core.ops._fm_util import extract_frontmatter_scalar
 from coordinator_core.ops._path_guard import contained_path
 from coordinator_core.ops.fleet._common import main_worktree_root
-from coordinator_core.reconcile.gate_eval import derive_readiness, reduce_gate_evidence
+from coordinator_core.reconcile.gate_eval import (
+    collapse_to_chain_heads,
+    derive_readiness,
+    reduce_gate_evidence,
+)
 from coordinator_core.sibling_fact import resolve_leg
 
 # ---------------------------------------------------------------------------
@@ -2724,6 +2728,15 @@ def _gate_recheck(
             # but a bare `last_gate_recheck:` date — AC9's vacuity, at the one
             # moment that matters most.
             fm = _retire_gate_evidence(fm)
+            # blocked_by — the THIRD field ready_to_fire forbids in an unresolved
+            # state, and the one this verb used to leave behind. Without it, the
+            # refusal `_gate_cascade_clear` raises on an unresolvable blocker
+            # ("Adjudicate the dependent instead: gate-recheck with cleared: true")
+            # named a door that could not open: this path flipped
+            # deployment_state, left blocked_by populated, and `_validate_fm`
+            # below then refused the whole write. Neither verb could discharge
+            # such a gate, and each pointed at the other.
+            fm = _retire_blocked_by(fm, fm_dict)
 
         # Post-mutation schema validation gate — raise MutateAbort to skip the write.
         errors = _validate_fm(fm)
@@ -2846,6 +2859,53 @@ def _insert_fm_array_field(fm: str, key: str, items: list, after_key: str) -> st
     return trimmed + eol + new_line + eol
 
 
+def _retire_blocked_by(fm: str, fm_dict: dict) -> str:
+    """MOVE every remaining `blocked_by` entry into `no_longer_blocked_by`.
+
+    Sibling of `_retire_gate_dependency`/`_retire_gate_evidence`: the three
+    fields a `ready_to_fire` record may not carry in an unresolved state, and
+    the adjudicated-clear path must discharge all three or its own post-mutation
+    `_validate_fm` refuses the write.
+
+    MOVE, never a plain removal — handoff.schema.json's union invariant across
+    the two arrays (bug-backlog 2026-08-14-gate-cascade-clear-drops-blocked-by-
+    entries-instead-of-moving.yaml). Reuses `_gate_cascade_clear`'s own
+    append-if-absent shape rather than a second convention, so this repo's
+    writers of `no_longer_blocked_by` continue to agree.
+
+    Whole-array, not clause-wise: `gate-recheck --cleared` adjudicates the
+    WHOLE gate (it strips `gate_dependency` entirely rather than reducing it
+    clause by clause), so a partial structural discharge would leave prose and
+    structure disagreeing — the state the full-drain-narrow abort in
+    `_gate_cascade_clear` exists to prevent.
+
+    Writes no `gate_cleared_by`: that field is SHA provenance for "which commit
+    discharged the gate", and an adjudicated clear has no commit to name. Its
+    provenance is `last_gate_recheck` plus the retired prose in
+    `blocking_notes`.
+    """
+    current_blocked_by = fm_dict.get("blocked_by") or []
+    if not isinstance(current_blocked_by, list) or not current_blocked_by:
+        return fm
+
+    existing_no_longer = fm_dict.get("no_longer_blocked_by") or []
+    if not isinstance(existing_no_longer, list):
+        existing_no_longer = []
+    new_no_longer_blocked_by = list(existing_no_longer)
+    for bid in current_blocked_by:
+        if bid not in new_no_longer_blocked_by:
+            new_no_longer_blocked_by.append(bid)
+
+    fm = _replace_fm_array_field(fm, "blocked_by", [])
+    if read_fm_field(fm, "no_longer_blocked_by") is not None:
+        fm = _replace_fm_array_field(fm, "no_longer_blocked_by", new_no_longer_blocked_by)
+    else:
+        fm = _insert_fm_array_field(
+            fm, "no_longer_blocked_by", new_no_longer_blocked_by, "blocked_by"
+        )
+    return fm
+
+
 # ---------------------------------------------------------------------------
 # gate-cascade-clear
 # ---------------------------------------------------------------------------
@@ -2870,14 +2930,23 @@ class _BlockerState(NamedTuple):
 
     `deployment_state` is `None` when no handoff resolves the id at all, or
     `_AMBIGUOUS_BLOCKER_SENTINEL` when more than one distinct handoff does.
+
+    `resolved` discriminates the two ways `deployment_state` arrives as `None`:
+    no record matched the id at all (a dangling `blocked_by` reference — the id
+    is the defect), versus a record that matched but carries no
+    `deployment_state` of its own (the blocker record is the defect). Both
+    refuse to clear a gate, but they are different data errors with different
+    remedies, and a caller that cannot tell them apart can only emit refusal
+    text describing a record that may not exist.
     """
 
     deployment_state: Optional[str]
     closed_reason: Optional[str]
     continued_into: Optional[str]
+    resolved: bool = True
 
 
-_UNRESOLVED_BLOCKER_STATE = _BlockerState(None, None, None)
+_UNRESOLVED_BLOCKER_STATE = _BlockerState(None, None, None, resolved=False)
 
 
 def _resolve_blocker_deployment_state(blocker_id: str, worktree: Path) -> _BlockerState:
@@ -2891,9 +2960,11 @@ def _resolve_blocker_deployment_state(blocker_id: str, worktree: Path) -> _Block
     a blocker may hold (shipped/closed/continued/abandoned), and clearing a
     `closed` or `continued` blocker needs those extra fields to decide, so this
     single disk re-scan collects them all rather than adding a second scan per
-    blocker. `_UNRESOLVED_BLOCKER_STATE` (all fields None) is returned when no
-    handoff resolves the id at all (unresolvable id — treated as a stale/invalid
-    claim by the caller).
+    blocker. `_UNRESOLVED_BLOCKER_STATE` (all fields None, `resolved=False`) is
+    returned when no handoff resolves the id at all (unresolvable id — treated as
+    a stale/invalid claim by the caller). `resolved` is what lets the caller say
+    so: a matched record carrying no `deployment_state` produces the same `None`
+    and is a different defect.
 
     Per-root discrimination: state/handoffs/ is scanned non-recursively — it has
     a sibling state/handoffs/.archive/ holding stale local copies that must NOT
@@ -2917,12 +2988,28 @@ def _resolve_blocker_deployment_state(blocker_id: str, worktree: Path) -> _Block
     `_BlockerState` whose deployment_state is `_AMBIGUOUS_BLOCKER_SENTINEL`
     (never a real terminal value) so the caller's act-time re-verification
     fails loud rather than silently trusting glob-sort order.
+
+    CONTINUATION CHAINS ARE NOT DUPLICATES, and that guard could not tell the
+    difference: a `stub_id` names an entire chain of handoffs, so a baton picked
+    up four times matched five records here and the guard read every one of them
+    as a competing claim. Measured: `ceremony-restore-01` matched 10 records and
+    this function returned `<ambiguous-duplicate-id>`, so `_blocker_clears_gate`
+    answered False forever and `_gate_cascade_clear` could never clear that
+    blocker's dependents no matter what shipped — a permanent wedge presenting as
+    an integrity guard. The match set is therefore collapsed to its chain heads
+    (`reconcile.gate_eval.collapse_to_chain_heads`, the SAME primitive the
+    compute-time index uses — the two resolvers must agree, and previously
+    disagreed in opposite directions on the same corpus) BEFORE the duplicate
+    check. What survives the collapse is held to the guard exactly as before: a
+    genuine cross-family `stub_id` collision still fails loud here. Deliberately
+    not a widened tolerance — nothing about the ambiguity posture is relaxed;
+    records the chain has already moved past simply stop counting as claims.
     """
     search_roots = [
         (worktree / "state" / "handoffs", False),
         (worktree / "archive" / "handoffs", True),
     ]
-    matches: List[_BlockerState] = []
+    matches: List[Dict[str, Any]] = []
     for root, recursive in search_roots:
         if not root.is_dir():
             continue
@@ -2941,18 +3028,18 @@ def _resolve_blocker_deployment_state(blocker_id: str, worktree: Path) -> _Block
             except Exception:  # noqa: BLE001
                 continue
             if blocker_id in (fm_dict.get("stub_id"), fm_dict.get("handoff_id")):
-                matches.append(
-                    _BlockerState(
-                        deployment_state=fm_dict.get("deployment_state"),
-                        closed_reason=fm_dict.get("closed_reason"),
-                        continued_into=fm_dict.get("continued_into"),
-                    )
-                )
+                fm_dict["_path"] = str(candidate)
+                matches.append(fm_dict)
     if not matches:
         return _UNRESOLVED_BLOCKER_STATE
+    matches = collapse_to_chain_heads(matches)
     if len(matches) > 1:
         return _BlockerState(_AMBIGUOUS_BLOCKER_SENTINEL, None, None)
-    return matches[0]
+    return _BlockerState(
+        deployment_state=matches[0].get("deployment_state"),
+        closed_reason=matches[0].get("closed_reason"),
+        continued_into=matches[0].get("continued_into"),
+    )
 
 
 def _blocker_clears_gate(blocker_id: str, worktree: Path) -> Tuple[bool, str]:
@@ -3019,6 +3106,13 @@ def _blocker_clears_gate(blocker_id: str, worktree: Path) -> Tuple[bool, str]:
 
         if ds == "abandoned":
             return False, f"{current_id!r} is abandoned"
+
+        if not state.resolved:
+            return False, (
+                f"{current_id!r} resolves to no handoff record under "
+                "state/handoffs/ or archive/handoffs/ (dangling blocked_by "
+                "reference; fix the reference, not the blocker)"
+            )
 
         return False, f"{current_id!r} live deployment_state: {ds!r}"
 

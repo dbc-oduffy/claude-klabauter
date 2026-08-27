@@ -20,7 +20,18 @@
       {"kind": "literal", "line": "# source_memo: YYYY-MM-DD-<topic>.md"},
       {"kind": "literal", "line": "# scope:"},
       {"kind": "literal", "line": "#   - path/or/item/one"},
-      {"kind": "literal", "line": "#   - path/or/item/two"}
+      {"kind": "literal", "line": "#   - path/or/item/two"},
+      {"kind": "literal", "line": "# prime_exit_criterion:              # falsifier block — read-side owed only at"},
+      {"kind": "literal", "line": "#                                     # estimate.tshirt M/L/XL; scaffold time can't"},
+      {"kind": "literal", "line": "#                                     # know that, so this stays commented, not a"},
+      {"kind": "literal", "line": "#                                     # live stub (schema 2.8.0, plan.schema.json)"},
+      {"kind": "literal", "line": "#   statement:                       # one falsifiable sentence"},
+      {"kind": "literal", "line": "#   derived_from:                    # state/sizings/<id>.yaml OR <goal_id>#kr-<kr-id>"},
+      {"kind": "literal", "line": "#   falsifier:"},
+      {"kind": "literal", "line": "#     how:"},
+      {"kind": "literal", "line": "#     baseline_output:"},
+      {"kind": "literal", "line": "#     baseline_ref:"},
+      {"kind": "literal", "line": "#     expected_when_true:             # NEW in 2.8.0 — do not omit"}
     ]
   },
   "body": [

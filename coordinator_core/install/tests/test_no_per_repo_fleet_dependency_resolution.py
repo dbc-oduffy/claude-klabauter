@@ -206,15 +206,20 @@ def _collect_import_aliases(tree: ast.AST) -> dict[str, str]:
 
 
 def _collect_name_string_map(tree: ast.AST) -> dict[str, list[str]]:
-    """Fixed-point pass over the module's assignments: names bound (directly
-    or transitively through another already-known name) to an expression
-    that itself contains a literal string constant. Mirrors the sibling C3
-    guard's flat, module-wide (not per-scope) taint tracking, so that
+    """Module-wide convenience wrapper over `_map_from_assigns`, retained for
+    callers that want the whole module in one flat map. The GUARD itself no
+    longer uses this -- see `_collect_scoped_name_string_maps` for why."""
+    return _map_from_assigns([n for n in ast.walk(tree) if isinstance(n, ast.Assign)])
+
+
+def _map_from_assigns(assigns: "list[ast.Assign]") -> dict[str, list[str]]:
+    """Fixed-point pass over `assigns`: names bound (directly or transitively
+    through another already-known name) to an expression that itself contains
+    a literal string constant. This is the tracking that lets
     `py = str(Path(home) / '.fleet-env')` followed by
-    `subprocess.run([py, ...])` is still seen as reaching the `.fleet-env`
-    literal, not just a bare Name the direct-constant scan would miss."""
+    `subprocess.run([py, ...])` be seen as reaching the `.fleet-env` literal,
+    not just a bare Name the direct-constant scan would miss."""
     mapping: dict[str, list[str]] = {}
-    assigns = [n for n in ast.walk(tree) if isinstance(n, ast.Assign)]
     changed = True
     while changed:
         changed = False
@@ -293,6 +298,67 @@ def _is_venv_creation_shape(call: ast.Call, name: str | None, mapping: dict[str,
     return False
 
 
+def _assigns_by_scope(tree: ast.AST) -> "dict[tuple[str, ...], list[ast.Assign]]":
+    """Every `ast.Assign` in `tree`, bucketed by its lexical scope path --
+    `()` for module scope, `("outer",)` for a top-level def, `("outer",
+    "inner")` for a nested one."""
+    buckets: "dict[tuple[str, ...], list[ast.Assign]]" = {}
+
+    def walk(node: ast.AST, path: "tuple[str, ...]") -> None:
+        for child in ast.iter_child_nodes(node):
+            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                walk(child, path + (child.name,))
+            elif isinstance(child, ast.ClassDef):
+                walk(child, path + (child.name,))
+            else:
+                if isinstance(child, ast.Assign):
+                    buckets.setdefault(path, []).append(child)
+                walk(child, path)
+
+    walk(tree, ())
+    return buckets
+
+
+def _collect_scoped_name_string_maps(
+    tree: ast.AST,
+) -> "dict[tuple[str, ...], dict[str, list[str]]]":
+    """Per-scope taint maps: for each lexical scope, the names reaching a
+    string literal FROM THAT SCOPE -- its own assignments plus those of every
+    enclosing scope, exactly as Python name resolution reads them.
+
+    WHY NOT ONE FLAT MODULE-WIDE MAP, corrected 2026-08-27. This guard used a
+    single flat map for the whole module, on the stated grounds that it
+    mirrored a sibling guard and caught the same-function alias shape above.
+    It does catch that -- and in a large module it also reports a flood of
+    false positives, because the map is keyed by BARE NAME with no scope. One
+    legitimately-tainted local in the one function allowed to build a
+    `.fleet-env` path (`_seed_fleet_env_root_from_klabauter`, the sanctioned
+    WRITER) put every generic local it happens to share with the rest of the
+    file into the tainted set. Measured on `scripts/setup.py` at the time of
+    this fix: 47 tainted names including `proc`, `value`, `output`, `detail`,
+    `lines`, `m` and `match` -- which flagged 18 sites across 17 unrelated
+    functions, 11 of them nothing more than `proc = subprocess.run(...)`.
+
+    Scoping costs the guard nothing it was actually built to catch: the alias
+    shape it names in its own docstring is same-scope by construction, and a
+    module-level binding still reaches every scope below it. What it stops is
+    one function's local renaming another function's local.
+    """
+    buckets = _assigns_by_scope(tree)
+    scopes = set(buckets) | {()}
+    for path in list(scopes):
+        for i in range(len(path)):
+            scopes.add(path[:i])
+
+    maps: "dict[tuple[str, ...], dict[str, list[str]]]" = {}
+    for path in scopes:
+        visible: "list[ast.Assign]" = []
+        for i in range(len(path) + 1):
+            visible.extend(buckets.get(path[:i], []))
+        maps[path] = _map_from_assigns(visible)
+    return maps
+
+
 class FleetDependencyResolutionVisitor(ast.NodeVisitor):
     """Collects (lineno, description, enclosing_function) for every
     fleet-dependency-resolution violation found in one parsed module: a
@@ -304,11 +370,26 @@ class FleetDependencyResolutionVisitor(ast.NodeVisitor):
     INNERMOST enclosing def (or None at module scope), so a nested helper never
     inherits its parent's carve-out."""
 
-    def __init__(self, mapping: dict[str, list[str]], import_aliases: dict[str, str]) -> None:
-        self._mapping = mapping
+    def __init__(
+        self,
+        mapping: "dict[tuple[str, ...], dict[str, list[str]]]",
+        import_aliases: dict[str, str],
+    ) -> None:
+        self._scoped_maps = mapping
         self._import_aliases = import_aliases
         self._func_stack: list[str] = []
         self.violations: list[tuple[int, str, str | None]] = []
+
+    @property
+    def _mapping(self) -> dict[str, list[str]]:
+        """The taint map visible from the CURRENT lexical scope -- see
+        `_collect_scoped_name_string_maps` for why this is not one flat
+        module-wide map. Falls back to module scope for a scope that bound
+        no names of its own."""
+        path = tuple(self._func_stack)
+        while path not in self._scoped_maps and path:
+            path = path[:-1]
+        return self._scoped_maps.get(path, self._scoped_maps.get((), {}))
 
     @property
     def _enclosing_function(self) -> str | None:
@@ -419,7 +500,7 @@ def find_per_repo_fleet_dependency_resolutions(roots: tuple[Path, ...]) -> list[
                 tree = ast.parse(source, filename=str(path))
             except SyntaxError:
                 continue
-            mapping = _collect_name_string_map(tree)
+            mapping = _collect_scoped_name_string_maps(tree)
             import_aliases = _collect_import_aliases(tree)
             visitor = FleetDependencyResolutionVisitor(mapping, import_aliases)
             visitor.visit(tree)

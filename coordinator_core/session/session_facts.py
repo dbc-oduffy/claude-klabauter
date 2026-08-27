@@ -117,16 +117,38 @@ from coordinator_core.telemetry.op_latency import record_fact_span
 #: changes what the wrapped fact returns (module docstring's "zero `raise`
 #: statements by design" is preserved, since `record_fact_span` itself never
 #: raises).
+#:
+#: THE AXIS NAMES MATTER HERE, and the first draft got them wrong.
+#: `time.perf_counter` is WALL CLOCK, not process time. The plan's Method
+#: section says "`perf_counter` around each fact call, reported in process
+#: time" — those are two different clocks, and DR-344 closes with "no
+#: wall-clock budget re-entering under a different name", so the conflation is
+#: exactly the failure that DR is written against. What this wrapper emits as
+#: `elapsed_ms` is therefore recorded as what it is: the C0-ruled SECONDARY,
+#: load-dependent wall-clock leg, context only, never an adjudication axis.
+#: `process_ms` carries `time.process_time()` — this process's own CPU,
+#: load-independent — beside it.
+#:
+#: `process_ms` UNDER-REPORTS a spawn-dominated fact and must never be read as
+#: that fact's true cost: `time.process_time()` excludes child processes, and
+#: on Windows (first-class here) `os.times()` reports zero children CPU, so a
+#: fact whose cost is mostly `git` subprocesses shows near-zero `process_ms`
+#: while costing hundreds of ms. That gap is precisely why the STRUCTURAL leg
+#: (spawn count and file-read count, `benchmarks/fact_layer_hot_path.py`) is
+#: the primary, load-independent axis and this timing pair is secondary.
 def _timed_fact(fact_name: str, worktree_root: Path, sid: Any, fn, *args) -> dict:
     t0 = time.perf_counter()
+    c0 = time.process_time()
     t_start = time.time()
     record = fn(*args)
     elapsed_ms = (time.perf_counter() - t0) * 1000.0
+    process_ms = (time.process_time() - c0) * 1000.0
     outcome = "degraded" if record.get("degraded") else "computed"
     record_fact_span(
         fact=f"session_facts.{fact_name}",
         t_start=t_start,
         elapsed_ms=elapsed_ms,
+        process_ms=process_ms,
         outcome=outcome,
         repo_root=worktree_root,
         sid=sid if isinstance(sid, str) else None,

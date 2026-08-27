@@ -40,10 +40,15 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+from typing import List, Optional
 from unittest.mock import patch
 
 from coordinator_core.ops.fleet import prune_bugs
-from coordinator_core.ops.fleet._common import _REASON_DEST_CONFLICT, _is_identical_duplicate
+from coordinator_core.ops.fleet._common import (
+    _REASON_DEST_CONFLICT,
+    _is_identical_duplicate,
+    Move,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -112,11 +117,21 @@ def _run(coro):
     return asyncio.run(coro)
 
 
-async def _fake_archive_and_commit(worktree_root, moves, subject):
-    """Records what it was asked to move; never spawns git."""
-    _fake_archive_and_commit.captured = list(moves)
-    acted = [{"id": m.candidate_id, "archived": True} for m in moves]
-    return acted, []
+class _MoverSpy:
+    """Records what archive_and_commit was asked to move; never spawns git.
+
+    One instance per test rather than attributes stashed on a shared function
+    object: the stash needed a manual reset before every use, and a test that
+    forgot one would read the previous test's moves as its own.
+    """
+
+    def __init__(self) -> None:
+        self.captured: Optional[List[Move]] = None
+
+    async def __call__(self, worktree_root, moves, subject):
+        self.captured = list(moves)
+        acted = [{"id": m.candidate_id, "archived": True} for m in moves]
+        return acted, []
 
 
 def _make_bug(worktree: Path, name: str, *, status: str = "closed") -> Path:
@@ -140,10 +155,10 @@ def test_wedge_shape_reports_dest_conflict_not_already_archived(tmp_path: Path) 
     dst = dst_dir / "2026-08-01-wedged.yaml"
     dst.write_text("status: closed\ntitle: a DIFFERENT archived copy\n", encoding="utf-8")
 
+    spy = _MoverSpy()
     with patch.object(prune_bugs, "check_repo_root", lambda param_root, common_dir_arg: None), \
          patch.object(prune_bugs, "main_worktree_root", lambda common_dir: worktree), \
-         patch.object(prune_bugs, "archive_and_commit", _fake_archive_and_commit):
-        _fake_archive_and_commit.captured = None
+         patch.object(prune_bugs, "archive_and_commit", spy):
         result = _run(prune_bugs._handler(
             {"mode": "already-terminal", "dry_run": False, "candidate_ids": [cid]},
             repo_root=str(worktree),
@@ -151,7 +166,7 @@ def test_wedge_shape_reports_dest_conflict_not_already_archived(tmp_path: Path) 
 
     assert result["skipped"] == [{"id": cid, "reason": _REASON_DEST_CONFLICT}]
     assert result["acted"] == []
-    assert _fake_archive_and_commit.captured is None, (
+    assert spy.captured is None, (
         "a genuine conflict must never reach the mover — it is not idempotent "
         "replay, so no Move should have been built"
     )
@@ -174,10 +189,10 @@ def test_byte_identical_twin_converges_via_force_overwrite(tmp_path: Path) -> No
     dst = dst_dir / "2026-08-01-dup.yaml"
     dst.write_text(body, encoding="utf-8")
 
+    spy = _MoverSpy()
     with patch.object(prune_bugs, "check_repo_root", lambda param_root, common_dir_arg: None), \
          patch.object(prune_bugs, "main_worktree_root", lambda common_dir: worktree), \
-         patch.object(prune_bugs, "archive_and_commit", _fake_archive_and_commit):
-        _fake_archive_and_commit.captured = None
+         patch.object(prune_bugs, "archive_and_commit", spy):
         result = _run(prune_bugs._handler(
             {"mode": "already-terminal", "dry_run": False, "candidate_ids": [cid]},
             repo_root=str(worktree),
@@ -185,8 +200,8 @@ def test_byte_identical_twin_converges_via_force_overwrite(tmp_path: Path) -> No
 
     assert result["skipped"] == []
     assert result["acted"] == [{"id": cid, "archived": True}]
-    assert _fake_archive_and_commit.captured is not None
-    assert len(_fake_archive_and_commit.captured) == 1
-    move = _fake_archive_and_commit.captured[0]
+    assert spy.captured is not None
+    assert len(spy.captured) == 1
+    move = spy.captured[0]
     assert move.candidate_id == cid
     assert move.force is True, "byte-identical convergence must force-overwrite, not skip"

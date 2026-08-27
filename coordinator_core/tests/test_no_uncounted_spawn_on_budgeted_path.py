@@ -932,8 +932,9 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
     #     claim below rests on the CURRENT `git_common_dir` behaviour, hand-verified, not on
     #     that stale sentence.
     #
-    # The fourth, `merge_assemble.brief`, is NOT enrolled -- see the resolver-gap paragraph
-    # and `_KNOWN_RESOLVER_GAP_OPS` below, next to `merge_assemble.apply`'s own disposition.
+    # The fourth, `merge_assemble.brief`, is NOT enrolled -- it has real, non-empty evidence
+    # (the closed resolver-gap paragraph below) and is a pinned, un-legitimized residual instead,
+    # next to `merge_assemble.apply`'s own disposition.
     "hooks.agent_postuse_dispatch": (
         "coordinator_core/hooks/agent_postuse_dispatch.py",
         ("_handler",),
@@ -961,36 +962,45 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
     # `test_registry_divergence_and_residual_stay_accounted`, which no longer flags it since
     # its evidence is non-empty.
     #
-    # `merge_assemble.brief` measures EMPTY here too, but hand-tracing it (D11, 2026-08-27,
-    # HEAD) shows this is a genuine RESOLVER GAP, not spawn-freedom: `_merge_assemble_brief`
-    # calls `merge_assemble.brief()` (`coordinator_core/merge_assemble/__init__.py`), which
-    # calls `compute_branch_state`/`compute_version_bump_proposal` (same file), each of which
-    # calls `_run_git` (same file) -> `subprocess.run` directly.
+    # `merge_assemble.brief` MEASURED EMPTY here through D11 (2026-08-27, HEAD), which
+    # hand-traced it to a genuine RESOLVER GAP, not spawn-freedom: `_merge_assemble_brief` calls
+    # `merge_assemble.brief()` (`coordinator_core/merge_assemble/__init__.py`), which calls
+    # `compute_branch_state`/`compute_version_bump_proposal` (same file), each of which calls
+    # `_run_git` (same file) -> `subprocess.run` directly.
     #
     # CAUSE CORRECTED BY THE EM, 2026-08-27, same session that landed D11. D11's own note
     # called this "a same-file, 3-hop, plain direct-call chain the walker's current call-depth
-    # does not follow". That is NOT the gap, and the distinction decides what a future chunk
-    # has to build. `_reachable_functions` is a transitive BFS with no depth limit and
-    # `_direct_call_targets` resolves same-file direct calls, so hops 2-4 (`brief` ->
-    # `compute_branch_state` -> `_run_git` -> `subprocess.run`, all inside `__init__.py`) are
-    # followed fine. The chain dies at HOP 1, and it is CROSS-module: `ops.py` reaches the
-    # handler's callee via `from coordinator_core.merge_assemble import brief as _brief`, a
-    # `from <PACKAGE> import <fn>` whose function is defined in that package's `__init__.py`.
-    # `_import_function_aliases` pins the alias to the module NAMED in the import statement,
-    # and `coordinator_core.merge_assemble` resolves to a package directory rather than to
-    # `coordinator_core/merge_assemble/__init__.py`, so the alias never lands in `func_defs`
-    # and the seed set is empty from the first hop. The fix a future chunk owes is package-
-    # `__init__` alias resolution, NOT a deeper call walk -- and it is a class, not one op:
-    # every `from pkg import fn` where `fn` lives in `pkg/__init__.py` measures empty the same
-    # way. Distinct from `merge_assemble.apply`'s by-reference dispatch table, so D8's fix does
-    # not cover it.
+    # does not follow". That was NOT the gap, and the distinction decided what closed it.
+    # `_reachable_functions` is a transitive BFS with no depth limit and `_direct_call_targets`
+    # resolves same-file direct calls, so hops 2-4 (`brief` -> `compute_branch_state` ->
+    # `_run_git` -> `subprocess.run`, all inside `__init__.py`) were followed fine. The chain
+    # died at HOP 1, and it was CROSS-module: `ops.py` reaches the handler's callee via
+    # `from coordinator_core.merge_assemble import brief as _brief`, a `from <PACKAGE> import
+    # <fn>` whose function is defined in that package's `__init__.py`. `_import_function_aliases`
+    # pins the alias to the module NAMED in the import statement, and
+    # `coordinator_core.merge_assemble` resolved to a package directory rather than to
+    # `coordinator_core/merge_assemble/__init__.py`, so the alias never landed in `func_defs` and
+    # the seed set was empty from the first hop. This was a class of gap, not one op: every
+    # `from pkg import fn` where `fn` lives in `pkg/__init__.py` measured empty the same way.
+    # Distinct from `merge_assemble.apply`'s by-reference dispatch table, so D8's fix did not
+    # cover it.
     #
-    # Enrolling `merge_assemble.brief` here with an empty spawn tuple would certify a live,
-    # git-spawning op as spawn-free, which is false. Fixing the resolver was out of D11's
-    # `writes:` scope (this test file only);
-    # `_KNOWN_RESOLVER_GAP_OPS` below keeps it out of both the enrolment ratchet and the
-    # residual-emptiness assertion until a future chunk either widens the walker or gives it a
-    # real (non-empty) legitimization. Reported, not silenced.
+    # CLOSED 2026-08-27 (`state/audits/2026-08-27-package-init-resolver-gap-population.md`
+    # measured the population before this fix landed): `_module_index` now also registers each
+    # package's bare dotted name (`pkg/__init__.py` -> `"pkg"`, additive-only, never overwriting
+    # a real module's own key) alongside its `"pkg.__init__"` entry, so `from pkg import fn`
+    # resolves into `pkg/__init__.py`'s `func_defs` like any other cross-module import. The
+    # census measured 62 static aliases (61 distinct triples) across 12 packages relying on this
+    # missing key, and re-ran the op-level walk over all 279 live ops with function-granular
+    # entrypoints: exactly 2 ops moved -- `merge_assemble.brief` (0 -> non-empty, the case this
+    # comment names) and `merge_assemble.apply` (already non-empty via D8's edge, gained the same
+    # newly-reached `_run_git` site through a second, independent route). No
+    # `_BUDGETED_ENTRYPOINTS` row was affected by either. `merge_assemble.brief` now measures a
+    # real, non-empty reachable spawn set (the same `_run_git` site) and is no longer a resolver
+    # gap: it is a pinned, un-legitimized residual (`_STATIC_SPAWN_COUNT_PINS`) like
+    # `merge_assemble.apply` above, not a mechanical enrolment (an empty spawn tuple would
+    # certify a live, git-spawning op as spawn-free, which was never true) and no longer a member
+    # of `_KNOWN_RESOLVER_GAP_OPS` (retired to an empty frozenset just below).
 }
 
 #: Live ops whose function-granular reachable-spawn measurement is a known RESOLVER GAP, not
@@ -1000,7 +1010,15 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
 #: enrol check so that check does not assert a false "should have been enrolled" for an op
 #: this file has already hand-verified as non-empty. NOT enrolled in `_BUDGETED_ENTRYPOINTS`
 #: (that would certify the opposite falsehood): stays a reported, un-legitimized residual.
-_KNOWN_RESOLVER_GAP_OPS = frozenset({"merge_assemble.brief"})
+#: EMPTIED 2026-08-27: `merge_assemble.brief` was the sole member, contained here solely
+#: because `_module_index` had no bare-package-name key for `pkg/__init__.py` (see
+#: `_module_index`'s own docstring and the `_BUDGETED_ENTRYPOINTS` prose block above). Now that
+#: the resolver carries that key, `merge_assemble.brief`'s function-granular reachable spawn set
+#: measures genuinely non-empty (one `_run_git` site) and it is a live, unenrolled residual with
+#: real evidence like any other -- no longer a gap case, so it needs no entry here. Left as a
+#: `frozenset()` rather than deleted so a future gap of this same shape has a named place to go
+#: rather than reintroducing the mechanism from scratch.
+_KNOWN_RESOLVER_GAP_OPS: frozenset[str] = frozenset()
 
 #: C4 (pln-reconcile-open-comes-back-under-the-bar, 2026-08-26) MEASUREMENT NOTE:
 #: `handoff.reconcile_open` was rebuilt from first principles after DR-344's kill bar deleted
@@ -2372,12 +2390,27 @@ def _module_dotted_name(relpath: str) -> str | None:
 
 
 def _module_index(records: list[_FileRecord]) -> dict[str, str]:
-    """dotted module name -> relpath, over every in-scope `coordinator_core` file."""
+    """dotted module name -> relpath, over every in-scope `coordinator_core` file.
+
+    Also registers each package's own bare dotted name (`pkg/__init__.py` -> `"pkg.__init__"`
+    AND `"pkg"`) pointing at the same `__init__.py` relpath, additive-only and never overwriting
+    an existing key -- a real module legitimately occupying that bare name keeps its own entry.
+    Without this second key, `from <pkg> import <fn>` where `<fn>` is defined at module scope in
+    `pkg/__init__.py` resolves `module_index.get("<pkg>")` to nothing (see
+    `_import_function_aliases`'s own module docstring), silently emptying the BFS seed set at hop
+    1 even though the function genuinely exists and may spawn -- closed 2026-08-27, see
+    `state/audits/2026-08-27-package-init-resolver-gap-population.md` (62 static aliases / 12
+    packages measured; 2 of 279 live ops moved)."""
     out: dict[str, str] = {}
     for record in records:
         dotted = _module_dotted_name(record.relpath)
         if dotted:
             out[dotted] = record.relpath
+    for record in records:
+        if record.relpath.endswith("/__init__.py"):
+            pkg = _package_dotted(record.relpath)
+            if pkg and pkg not in out:
+                out[pkg] = record.relpath
     return out
 
 
@@ -3355,7 +3388,11 @@ def _module_index_for_test(records: list[_FileRecord]) -> dict[str, str]:
     `_module_dotted_name`), which a bare `tmp_path` fixture (relpaths like `"entry.py"`,
     `"wrapper.py"`) never matches. This test-only variant maps every discovered file's own
     basename-minus-`.py` as its dotted name, matching the flat single-directory fixture shape the
-    self-test above builds (`import helper` / `import wrapper` at top level, no package)."""
+    self-test above builds (`import helper` / `import wrapper` at top level, no package).
+    Deliberately NOT given `_module_index`'s package-`__init__` bare-name key (2026-08-27): every
+    fixture built against this variant is a flat single-directory tree with no `pkg/__init__.py`
+    shape, so the gap that extra pass closes never arises here -- adding it would be an untested
+    no-op, not parity."""
     out: dict[str, str] = {}
     for record in records:
         if record.relpath.endswith(".py"):
@@ -5338,9 +5375,23 @@ def test_named_argv0_sites_in_tranche_b_are_dispositioned_on_their_own_terms():
 #: those 33 exempt-with-dated-rationale entries, plus the 149th,
 #: previously-uninventoried site (`fleet/memo_send.py::
 #: _resolve_committed_sha`, 'git', 0), are all enrolled instead --
-#: `memo.send` is now a `_BUDGETED_ENTRYPOINTS` row, its own shipped
-#: ratchet (`test_memo_send_spawn_budget.py`) supplies the ASSERTION leg,
-#: and every one of the 6 sites carries a `_LEGITIMIZED_SITES` entry below.
+#: `memo.send` became a `_BUDGETED_ENTRYPOINTS` row, its then-shipped
+#: ratchet (`test_memo_send_spawn_budget.py`) supplied the ASSERTION leg,
+#: and every one of the 6 sites carried a `_LEGITIMIZED_SITES` entry below.
+#:
+#: SUPERSEDED THE SAME DAY, and this paragraph is history, not the live
+#: shape -- read `_STATIC_SPAWN_COUNT_PINS` and `_BUDGETED_ENTRYPOINTS` for
+#: that. `c07062c99` (2026-08-23) deleted `ops/fleet/memo_send.py` WHOLE
+#: (3623 lines) under DR-344's kill bar, taking `test_memo_send_spawn_
+#: budget.py` (818 lines) and `test_memo_send.py` with it; the op was then
+#: rebuilt from first principles at `7c5785e58` (2026-08-25) as 651 lines.
+#: So today `memo.send` is NOT enrolled, holds no `_LEGITIMIZED_SITES`
+#: entry, and is covered by a `_STATIC_SPAWN_COUNT_PINS` entry of 8 --
+#: D7's COUNT tier, which AC20c states in-band is not execution evidence.
+#: The ratchet is not a regression awaiting repair: it asserted against an
+#: implementation that no longer exists, and kill means kill forever. What
+#: is genuinely open is whether the REBUILT op earns an execution-backed
+#: legitimation; that is new work against new code, not a restore.
 #: `_NAMED_ARGV0_DISPOSITIONS_C` therefore drops from 33 to 28 (the 5
 #: memo_send.py rows removed); `_UNINVENTORIED_SITE_DISPOSITION` (the
 #: dispatch brief's own uninventoried-site route, formerly used for the
@@ -6023,10 +6074,25 @@ def _measure_static_spawn_counts(op_names, entrypoints) -> dict[str, int]:
 #: each a fresh `_measure_static_spawn_counts` read against the live tree, not transcribed.
 #: `merge_assemble.apply` is a NEWLY-appeared live op with no prior pin
 #: (`test_static_spawn_count_pins_cover_every_unlegitimized_residual_op`'s own missing leg,
-#: introduced by D8's new edge): its `_measure_static_spawn_counts` reachable-site count is 0
-#: (has spawn evidence per `ops_with_spawn_evidence`, but 0 sites survive the
-#: `_reachable_functions`/`_on_path_spawn_sites` walk this file's predicates all share) --
-#: pinned at that measured 0, not silently enrolled or omitted.
+#: introduced by D8's new edge): its `_measure_static_spawn_counts` reachable-site count was 0
+#: at that time (has spawn evidence per `ops_with_spawn_evidence`, but 0 sites survived the
+#: `_reachable_functions`/`_on_path_spawn_sites` walk this file's predicates all share, since D8's
+#: by-reference-dispatch-table edge alone reaches only spawn-free functions in `apply.py`) --
+#: pinned at that measured 0 at the time.
+#: RETIGHTENED 2026-08-27 (`_module_index`'s package-`__init__` bare-name key,
+#: `state/audits/2026-08-27-package-init-resolver-gap-population.md`): `ops.py` also imports
+#: `build_directives`/`resolve_repo_root` (and other helpers) from the PACKAGE
+#: `coordinator_core.merge_assemble`, whose functions live in `merge_assemble/__init__.py` --
+#: that route was the actual resolver gap, separate from D8's by-reference table, and it was
+#: silently contributing zero rather than the one real `_run_git` site
+#: (`coordinator_core/merge_assemble/__init__.py:123`) both `merge_assemble.apply` and
+#: `merge_assemble.brief` share. Re-measured directly against the fixed corpus via
+#: `_live_static_pin_targets` + `_measure_static_spawn_counts`: pre-fix both measure 0, post-fix
+#: both measure 1 (the single shared `_run_git` site, deduplicated by `_on_path_spawn_sites`) --
+#: not the audit census's own Leg-B narrative (0->1 / 2->3), whose throwaway script measured a
+#: different delta than this file's own predicates reproduce; the census's raw counts are not
+#: transcribed here without this file's own re-derivation, which is what these two entries are.
+#: Both pinned at their freshly measured 1.
 _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     "plugin_health.sentinel": 26,
     "handoff.archive_transition": 12,
@@ -6054,7 +6120,8 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     "warm_guard.evaluate": 10,
     "distill.apply_disposal": 9,
     "memo.transition": 9,
-    "merge_assemble.apply": 0,
+    "merge_assemble.apply": 1,
+    "merge_assemble.brief": 1,
     "ceremony.post_commit_tail": 7,
     "cruft_sweep.run": 8,
     "memo.send": 8,

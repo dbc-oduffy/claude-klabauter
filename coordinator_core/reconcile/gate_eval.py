@@ -630,6 +630,99 @@ def _path_basename(path: Any) -> Optional[str]:
     return path.replace("\\", "/").rsplit("/", 1)[-1]
 
 
+#: A record whose `deployment_state` says the chain has moved past it. Referenced
+#: by `collapse_to_chain_heads` below and by `_chase_continuation`'s own hop logic.
+_CONTINUED_STATE = "continued"
+
+
+def _predecessor_refs(record: Dict[str, Any]) -> List[str]:
+    """Every path-shaped predecessor reference a handoff record carries.
+
+    `predecessor` (the primary continuation up-edge) plus every entry of
+    `additional_predecessors` (the fan-in legs). The literal `none` is the
+    scaffolder's no-predecessor sentinel (`coordinator-doc-new --type handoff`
+    emits `predecessor: none` when the flag is not passed), never a path, and is
+    excluded here rather than at each call site.
+    """
+    values: List[Any] = [record.get("predecessor")]
+    extra = record.get("additional_predecessors")
+    if isinstance(extra, list):
+        values.extend(extra)
+    return [
+        v.strip()
+        for v in values
+        if isinstance(v, str) and v.strip() and v.strip() != "none"
+    ]
+
+
+def collapse_to_chain_heads(records: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Drop every record of a continuation chain the chain has already moved past.
+
+    Shared by BOTH id resolvers, which is the whole point: compute-time
+    `_index_by_id` (below) and act-time `handoff_transition.py::
+    _resolve_blocker_deployment_state` each independently resolve a `blocked_by`
+    id against a corpus where one `stub_id` names an entire continuation chain, not
+    one record. They disagreed in opposite directions on the same corpus and both
+    were wrong: the compute index silently returned whichever record its caller's
+    walker happened to append last (archived entries are appended AFTER live ones,
+    so a superseded record beat the live head), while the act-time resolver saw
+    `len(matches) > 1` and returned `<ambiguous-duplicate-id>`, wedging
+    `_gate_cascade_clear` permanently. Measured on this corpus: `ceremony-restore-01`
+    named 10 records (5 live, 5 archived); this collapse resolves them to exactly one.
+
+    Three supersession signals, ORed — a record is superseded when ANY holds:
+      1. `deployment_state: continued` — the authored, stamped supersession
+         (`archive_stamp.py`'s supersede mode).
+      2. a non-empty `continued_into` — the successor pointer that stamp writes.
+      3. another record IN THIS SAME GROUP names it via `predecessor` /
+         `additional_predecessors`.
+    (3) is not redundant with (1)/(2) and is what actually makes this total. The
+    successor's `predecessor` field is written when the successor is MINTED; the
+    predecessor's own `continued`/`continued_into` stamp is a SEPARATE later step
+    that is not always reached (4 of the 10 records in the corpus above carry a
+    successor that names them while carrying no supersession stamp of their own).
+    Trusting only the stamp leaves those 4 competing with the real head; reading
+    the successor's up-edge closes the gap without a second disk pass, because the
+    caller already holds the whole group.
+
+    Matching is by path BASENAME, the same conservative proxy `get_by_path` uses
+    and for the same reason — this module is COMPUTE_ONLY and never re-reads a
+    path off disk (see module docstring). A record with no path-shaped field
+    attached simply cannot be matched by signal (3) and falls back to (1)/(2).
+
+    Returns the surviving heads, in the caller's original order. NEGATIVE SPEC:
+    never returns empty. A group in which EVERY record is superseded is a legitimate
+    shape — a fully-continued blocker whose successor lives under a different
+    `stub_id`, which `_chase_continuation` and `_blocker_clears_gate` both handle by
+    reading `continued_into` — so the whole group is returned unchanged rather than
+    resolving to nothing. Collapsing that case to empty would turn a resolvable
+    blocker into a dangling ref, which is strictly worse than the collision this
+    function exists to fix. Nor does this function DECIDE anything about a group
+    that still has more than one head after the collapse: that is a genuine
+    duplicate-id data defect, and each caller keeps its own established posture for
+    it (compute-time: documented last-write-wins; act-time: fail loud as ambiguous).
+    """
+    superseded_basenames = set()
+    for record in records:
+        for ref in _predecessor_refs(record):
+            basename = _path_basename(ref)
+            if basename:
+                superseded_basenames.add(basename)
+
+    heads: List[Dict[str, Any]] = []
+    for record in records:
+        if record.get("deployment_state") == _CONTINUED_STATE:
+            continue
+        continued_into = record.get("continued_into")
+        if isinstance(continued_into, str) and continued_into.strip():
+            continue
+        own = _path_basename(record.get("_path")) or _path_basename(record.get("path"))
+        if own and own in superseded_basenames:
+            continue
+        heads.append(record)
+    return heads or list(records)
+
+
 class _TypedHandoffIndex:
     """Prefix-discriminated two-index resolver: durable `handoff_id` vs `stub_id`/`id`.
 
@@ -727,13 +820,14 @@ def _index_by_id(handoffs: Sequence[Dict[str, Any]]) -> "_TypedHandoffIndex":
     by_handoff_id: Dict[str, Dict[str, Any]] = {}
     by_stub_id: Dict[str, Dict[str, Any]] = {}
     by_path_basename: Dict[str, Dict[str, Any]] = {}
+    stub_candidates: "OrderedDict[str, List[Dict[str, Any]]]" = OrderedDict()
     for h in handoffs:
         handoff_id = h.get("handoff_id")
         if isinstance(handoff_id, str) and _HANDOFF_ID_PATTERN.match(handoff_id):
             by_handoff_id[handoff_id] = h
         hid = h.get("id") or h.get("stub_id")
         if isinstance(hid, str) and hid:
-            by_stub_id[hid] = h
+            stub_candidates.setdefault(hid, []).append(h)
         # C5 continued_into path-fallback support (`get_by_path`): index
         # whatever path-shaped field the caller's collector attached
         # (`_path` for the live set; a generic `path` fallback for any other
@@ -743,6 +837,19 @@ def _index_by_id(handoffs: Sequence[Dict[str, Any]]) -> "_TypedHandoffIndex":
         basename = _path_basename(h.get("_path")) or _path_basename(h.get("path"))
         if basename:
             by_path_basename[basename] = h
+    # One `stub_id` names a whole CONTINUATION CHAIN, not one record, so the slot
+    # is resolved from the collapsed head set (`collapse_to_chain_heads`) rather
+    # than by whichever record the caller's walker appended last. That ordering
+    # was never a decision: `_collect_all_handoffs_for_gate_index` appends the
+    # archived half AFTER the live half, so a superseded record beat the live head
+    # on every chain — `_has_asymmetry` then read the head's real `blocks:` list
+    # off a record that had been authored `blocks: []`, and reported a symmetric
+    # graph as a data defect. `[-1]` preserves the documented last-write-wins
+    # posture for whatever survives the collapse: a group with more than one head
+    # is a genuine cross-family `stub_id` collision (this function's docstring
+    # below), unchanged by this and still not detected here.
+    for hid, candidates in stub_candidates.items():
+        by_stub_id[hid] = collapse_to_chain_heads(candidates)[-1]
     return _TypedHandoffIndex(by_handoff_id, by_stub_id, by_path_basename)
 
 
@@ -939,8 +1046,6 @@ def _resolved_without_baton_reason(
     reason = entry.get("reason")
     return reason if isinstance(reason, str) and reason.strip() else "no reason authored"
 
-
-_CONTINUED_STATE = "continued"
 
 #: C5 continued_into chase depth cap. `continued` is authored as a one-hop
 #: redirect in every corpus instance observed (lvv-05 -> its dr084 successor,

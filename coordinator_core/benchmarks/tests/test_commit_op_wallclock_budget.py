@@ -194,7 +194,7 @@ from coordinator_core.benchmarks.process_time import (
 from coordinator_core.benchmarks.isolated_clone import (
     mkdtemp_for_clone,
     reap_processes_under,
-    rmtree_or_warn,
+    rmtree_or_raise,
 )
 from coordinator_core.warm import breadcrumb
 from coordinator_core.session.core import stable_pid_alive
@@ -463,7 +463,7 @@ def warm_engine_root() -> Iterator[Path]:
         # one predicate a deliberately-reparented process still answers to.
         reaped = reap_processes_under(tmp_parent)
         shutil.rmtree(breadcrumb.svc_dir(engine_root=isolated_root), ignore_errors=True)
-        rmtree_or_warn(tmp_parent, label="commit_op_engine_root", reaped=reaped)
+        rmtree_or_raise(tmp_parent, label="commit_op_engine_root", reaped=reaped)
 
 
 # ---------------------------------------------------------------------------

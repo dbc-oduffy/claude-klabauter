@@ -36,6 +36,7 @@ from coordinator_core.git.git_state import (  # noqa: E402
     head_sha,
     index_read_cache_scope,
     read_index,
+    read_index_stat_identity,
 )
 
 _SIGNATURE = b"DIRC"
@@ -396,6 +397,69 @@ def test_read_index_fresh_true_bypasses_an_open_cache_scope(tmp_path):
         # cache entry for later ordinary callers.
         still_cached = read_index(repo)
         assert "b.txt" not in still_cached
+
+
+# ---------------------------------------------------------------------------
+# read_index_stat_identity -- the stat-only accessor, C6
+
+
+def test_read_index_stat_identity_matches_read_index_fresh(tmp_path):
+    repo = _plain_repo(tmp_path)
+    raw = _build_index([{"mode": 0o100644, "sha": "1" * 40, "name": "a.txt"}])
+    _write_index(repo / ".git", raw)
+
+    assert read_index_stat_identity(repo) == read_index(repo, fresh=True).stat_identity
+
+
+def test_read_index_stat_identity_missing_index_returns_none(tmp_path):
+    repo = _plain_repo(tmp_path)
+
+    assert read_index_stat_identity(repo) is None
+
+
+def test_read_index_stat_identity_sharedindex_sibling_fails_loud(tmp_path):
+    repo = _plain_repo(tmp_path)
+    raw = _build_index([{"mode": 0o100644, "sha": "f" * 40, "name": "g.txt"}])
+    gitdir = repo / ".git"
+    _write_index(gitdir, raw)
+    (gitdir / "sharedindex.abc123").write_bytes(b"\x00" * 12)
+
+    with pytest.raises(IndexParseError):
+        read_index_stat_identity(repo)
+
+
+def test_read_index_stat_identity_never_reads_or_parses_index_body(tmp_path, monkeypatch):
+    """The whole point of this accessor: it must never touch `read_bytes()`
+    or `_parse_index_bytes()` -- only `Path.stat()`."""
+    from coordinator_core.git import git_state
+
+    repo = _plain_repo(tmp_path)
+    raw = _build_index([{"mode": 0o100644, "sha": "1" * 40, "name": "a.txt"}])
+    _write_index(repo / ".git", raw)
+
+    def _boom(*args, **kwargs):
+        raise AssertionError("read_index_stat_identity must not parse the index body")
+
+    monkeypatch.setattr(git_state, "_parse_index_bytes", _boom)
+    monkeypatch.setattr(Path, "read_bytes", _boom, raising=False)
+
+    identity = read_index_stat_identity(repo)
+    assert identity is not None
+
+
+def test_read_index_stat_identity_never_populates_the_call_cache(tmp_path):
+    """Unconditionally fresh: even inside an open `index_read_cache_scope()`,
+    a subsequent ordinary `read_index()` call must not be served a value
+    this accessor's own read produced."""
+    repo = _plain_repo(tmp_path)
+    raw = _build_index([{"mode": 0o100644, "sha": "1" * 40, "name": "a.txt"}])
+    _write_index(repo / ".git", raw)
+
+    with index_read_cache_scope():
+        read_index_stat_identity(repo)
+        cached = read_index(repo)  # first ordinary call in this scope
+        assert "a.txt" in cached  # a real parse happened; the cache wasn't
+        # silently pre-populated by the stat-only accessor's own call.
 
 
 # ---------------------------------------------------------------------------

@@ -39,6 +39,13 @@ ADDING A SITE. If new code legitimately needs an explicit destination, add it
 to `_SANCTIONED_SITES` with the one-line reason, in the same commit. That
 review -- a human saying why this destination is correct -- IS the mechanism.
 Do not widen the sink list or loosen the predicate to make a site pass.
+
+WHAT THIS PREDICATE DOES NOT SEE. `_sink_name` matches by bare function/
+attribute name, so `from tempfile import mkdtemp as md; md(dir=...)` reads as
+a call to `md`, not `mkdtemp`, and slips past. Accepted for the same reason
+the companion self-teardown gate discloses its own AST limits: this is a
+speed bump against the ordinary, non-adversarial way the next site gets
+written, not a security boundary against someone deliberately evading it.
 """
 
 from __future__ import annotations

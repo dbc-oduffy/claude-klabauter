@@ -689,9 +689,20 @@ def _git(worktree: Path, args: List[str]) -> GitResult:
 
 def _commit_relocations(worktree: Path, moved: List[dict]) -> dict:
     """ONE scoped `git add -A` over exactly the two directories this module
-    ever touches, plus ONE `git commit` — never `git mv` (git derives every
-    rename as R100 from the add alone; spike-verified 18/18 on the live
-    corpus) and never a per-file spawn.
+    ever touches, plus ONE `git commit` SCOPED TO THE SAME TWO PATHS — never
+    `git mv` (git derives every rename as R100 from the add alone;
+    spike-verified 18/18 on the live corpus) and never a per-file spawn.
+
+    The commit's `-- state/handoffs archive/handoffs` pathspec is load-bearing
+    and must not be dropped. The `add` was scoped from the start, but the
+    commit was bare until 2026-08-27, and a bare `git commit` writes the WHOLE
+    INDEX: on this shared worktree a peer with anything staged outside these
+    two directories had it swallowed into an "archive N terminal handoff(s)"
+    commit attributed to whichever session happened to boot next. Found while
+    arming this op, with a peer's `state/memo-outbox/sent/` files staged and
+    in the blast radius. The pathspec form also takes the working-tree content
+    of exactly these paths, which is what the preceding `add -A` staged, so
+    the committed result is unchanged for this module's own work.
 
     Returns {"committed": bool, "sha": None, "reason": str|None}. `sha` is
     always None — this chunk does not need it and a `git rev-parse HEAD`
@@ -713,7 +724,10 @@ def _commit_relocations(worktree: Path, moved: List[dict]) -> dict:
         }
 
     message = f"session.boot_sweep backstop: archive {len(moved)} terminal handoff(s)"
-    commit = _git(worktree, ["commit", "-m", message])
+    commit = _git(
+        worktree,
+        ["commit", "-m", message, "--", "state/handoffs", "archive/handoffs"],
+    )
     if commit.returncode != 0:
         return {
             "committed": False,

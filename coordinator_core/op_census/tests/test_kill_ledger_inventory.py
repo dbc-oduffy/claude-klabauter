@@ -103,12 +103,25 @@ def test_convicted_but_unlanded_is_its_own_population_not_a_disagreement() -> No
     assert entries[0].population == "CONVICTED"
 
 
-def test_a_convicted_op_already_gone_reads_as_landed() -> None:
+def test_a_convicted_op_already_gone_is_contested_not_silently_landed() -> None:
+    """No population is ever inferred from liveness — not even the plausible
+    one. An op gone while its entry still reads CONVICTED is a ledger that has
+    not caught up, which is a disagreement to surface, not a landing to assume."""
     entries = kli.parse_ledger(
         _entry("CONVICTED ON PROCESS TIME — rebuild from first principles.", title="`handoff.doomed_op`")
     )
     kli.classify(entries, live_ops=frozenset(), suspended_ops=frozenset())
-    assert entries[0].population == "LANDED"
+    assert entries[0].population == "CONTESTED"
+    assert "already absent from the live registry" in " ".join(entries[0].notes)
+
+
+def test_a_marker_late_in_a_status_field_does_not_earn_a_population() -> None:
+    """A status runs to 260 chars. A phrase that far in is prose about some
+    other entry, not this entry's own disposition."""
+    late = "removed" + (" filler" * 30) + " then rebuilt elsewhere, not by this repo"
+    entries = kli.parse_ledger(_entry(late, title="`fleet.late_marker_op`"))
+    kli.classify(entries, live_ops=frozenset({"fleet.late_marker_op"}), suspended_ops=frozenset())
+    assert entries[0].population == "CONTESTED"
 
 
 def test_convicted_does_not_steal_the_candidate_population() -> None:

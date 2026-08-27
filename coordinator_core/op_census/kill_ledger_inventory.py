@@ -32,7 +32,10 @@ Population vocabulary, derived not asserted:
                    the named op is still live.
 - ``CONVICTED``  — convicted, cut not yet landed. The op is expected to still be
                    live; that is the state the entry describes, not a
-                   disagreement with it.
+                   disagreement with it. An op already gone while its entry
+                   still reads CONVICTED is NOT quietly promoted to LANDED —
+                   that would infer a population from liveness. It is
+                   CONTESTED, like every other unstated fact.
 - ``NON_CUT``    — proposed-and-blocked, closed-superseded, acquitted, or a
                    relocation.
 - ``CUT_ELSEWHERE`` — the cut landed in another plane (the ledger entry says so
@@ -212,8 +215,13 @@ def classify(
         # Windowed like `is_landed`: every CANDIDATE status says "NOT YET
         # CONVICTED" further along, and `is_candidate` claims those first.
         is_convicted = "convicted" in status[:40] and not is_candidate
-        is_cross_plane = any(marker in status for marker in _CROSS_PLANE_MARKERS)
-        is_rebuilt = any(marker in status for marker in _REBUILT_MARKERS)
+        # Windowed like `is_landed`/`is_non_cut` above, and for the same
+        # reason (slice-b Finding 2): a status field runs to 260 chars, and a
+        # phrase appearing late in one is prose ABOUT some other entry, not
+        # this entry's own disposition. An unwindowed match would let a passing
+        # reference to another op's rebuild earn this entry the population.
+        is_cross_plane = any(marker in status[:100] for marker in _CROSS_PLANE_MARKERS)
+        is_rebuilt = any(marker in status[:100] for marker in _REBUILT_MARKERS)
         # Windowed to the status line's opening, like `is_landed` above: a
         # LANDED entry's authority prose says things like "closed out by C1g",
         # and an unwindowed substring test reads that as a CLOSED status.
@@ -248,7 +256,18 @@ def classify(
         elif is_convicted:
             entry.population = "CONVICTED"
             if entry.op_live is False:
-                entry.population = "LANDED"
+                # Review (slice-b Finding 1): promoting this to LANDED because
+                # the op went missing is inferring a population from liveness --
+                # the exact move CONVICTED/CUT_ELSEWHERE/REBUILT exist to
+                # forbid, made two branches from where it is forbidden. A cut
+                # that landed is a fact the ledger states; an op that quietly
+                # vanished from the registry while its entry still reads
+                # CONVICTED is a disagreement, and disagreements are surfaced.
+                entry.population = "CONTESTED"
+                entry.notes.append(
+                    f"status says CONVICTED but `{entry.op_name}` is already absent from the "
+                    "live registry -- record the landing in the entry"
+                )
         elif is_non_cut or "not yet cut" in entry.title.lower() or "candidate" in entry.title.lower():
             entry.population = "NON_CUT"
         elif is_landed:

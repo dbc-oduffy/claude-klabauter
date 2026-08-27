@@ -957,7 +957,6 @@ def dirty_tree_gate(
                           for any caller that needs it.
     """
     root = Path(worktree_root)
-    known_scope = _build_known_scope(root)
     scoped = gate_paths is not None
     gate_scope: Set[str] = set(gate_paths) if gate_paths else set()
 
@@ -1023,8 +1022,6 @@ def dirty_tree_gate(
                 # axis -- not answered by this fast path. Both false: not
                 # a member of either reachable axis at all.
                 continue
-            if path in known_scope:
-                continue
             unattributable.append(path)
 
         return DirtyTreeOutcome(passed=not unattributable, unattributable=unattributable)
@@ -1036,6 +1033,7 @@ def dirty_tree_gate(
     # search to, so the diverged-bytes axis still needs `git diff-files`'s
     # real content comparison.
     all_paths: List[str] = _dirty_candidate_paths(root, None)
+    known_scope = _build_known_scope(root)
 
     # (a)'s "staged" classification no longer trusts git status's own X
     # column -- it is recomputed from `read_index` + `head_blobs` (the

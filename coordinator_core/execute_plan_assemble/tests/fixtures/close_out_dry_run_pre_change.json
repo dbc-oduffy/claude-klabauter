@@ -1,0 +1,143 @@
+{
+  "docs/plans/2026-07-04-strang-01-tc3-emission-port-facade-respin.md": {
+    "exit_code": 0,
+    "result": {
+      "ac_table_desync": null,
+      "commit": {
+        "commit_failed": false,
+        "committed_sha": null,
+        "diagnostics": [
+          "dry_run: commit suppressed (would stage/commit ['docs/plans/2026-07-04-strang-01-tc3-emission-port-facade-respin.md'])"
+        ],
+        "push_status": "not-attempted",
+        "pushed": null,
+        "pushed_count": null,
+        "pushed_range": null
+      },
+      "disposition_ref_rejections": {},
+      "dry_run": true,
+      "gates": {
+        "repo_identity": {
+          "message": "repo-identity: sid=7c2792b1-f2b8-40f7-aa95-b48048386647 session_root=X:\\claude-klabauter resolved_root=X:\\claude-klabauter verdict=MATCH \u2014 anchor cwd is contained within repo_root",
+          "resolved_root": "X:\\claude-klabauter",
+          "session_root": "X:\\claude-klabauter",
+          "sid": "7c2792b1-f2b8-40f7-aa95-b48048386647",
+          "verdict": "MATCH"
+        }
+      },
+      "message": "docs/plans/2026-07-04-strang-01-tc3-emission-port-facade-respin.md: 7 chunk(s) still uncommitted, committed partial state -- if delivered, resolve the row's own disposition_ref to the covering commit sha (`plan-tasks-resolve --coded <sha>` per row, verified against HEAD ancestry), then re-run close-out-and-stamp [dry-run: no write/commit performed]",
+      "missing_chunk_ids": [
+        "C1 [M]",
+        "C4a [M]",
+        "C4b [D]",
+        "C2 [D]",
+        "C3 [D]",
+        "C4c [D]",
+        "C6 [M]"
+      ],
+      "open_chunk_ids": [],
+      "origin_stub_close": {
+        "acted": [],
+        "failed": [],
+        "skipped": []
+      },
+      "partial_evaluation_stamped": true,
+      "shipped": false,
+      "stamped": false,
+      "status_target": null
+    }
+  },
+  "docs/plans/2026-07-05-strang-03-cross-repo-memo-send-strangle.md": {
+    "exit_code": 0,
+    "result": {
+      "ac_table_desync": null,
+      "commit": {
+        "commit_failed": false,
+        "committed_sha": null,
+        "diagnostics": [
+          "dry_run: commit suppressed (would stage/commit ['docs/plans/2026-07-05-strang-03-cross-repo-memo-send-strangle.md'])"
+        ],
+        "push_status": "not-attempted",
+        "pushed": null,
+        "pushed_count": null,
+        "pushed_range": null
+      },
+      "disposition_ref_rejections": {},
+      "dry_run": true,
+      "gates": {
+        "repo_identity": {
+          "message": "repo-identity: sid=7c2792b1-f2b8-40f7-aa95-b48048386647 session_root=X:\\claude-klabauter resolved_root=X:\\claude-klabauter verdict=MATCH \u2014 anchor cwd is contained within repo_root",
+          "resolved_root": "X:\\claude-klabauter",
+          "session_root": "X:\\claude-klabauter",
+          "sid": "7c2792b1-f2b8-40f7-aa95-b48048386647",
+          "verdict": "MATCH"
+        }
+      },
+      "message": "docs/plans/2026-07-05-strang-03-cross-repo-memo-send-strangle.md: 7 chunk(s) still uncommitted, committed partial state -- if delivered, resolve the row's own disposition_ref to the covering commit sha (`plan-tasks-resolve --coded <sha>` per row, verified against HEAD ancestry), then re-run close-out-and-stamp [dry-run: no write/commit performed]",
+      "missing_chunk_ids": [
+        "C1",
+        "C2",
+        "C3",
+        "C4",
+        "C6",
+        "C5",
+        "C7"
+      ],
+      "open_chunk_ids": [],
+      "origin_stub_close": {
+        "acted": [],
+        "failed": [],
+        "skipped": []
+      },
+      "partial_evaluation_stamped": true,
+      "shipped": false,
+      "stamped": false,
+      "status_target": null
+    }
+  },
+  "docs/plans/2026-07-05-strang-05-advisory-hook-degrade-silent-routing.md": {
+    "exit_code": 0,
+    "result": {
+      "ac_table_desync": null,
+      "commit": {
+        "commit_failed": false,
+        "committed_sha": null,
+        "diagnostics": [
+          "dry_run: commit suppressed (would stage/commit ['docs/plans/2026-07-05-strang-05-advisory-hook-degrade-silent-routing.md'])"
+        ],
+        "push_status": "not-attempted",
+        "pushed": null,
+        "pushed_count": null,
+        "pushed_range": null
+      },
+      "disposition_ref_rejections": {},
+      "dry_run": true,
+      "gates": {
+        "repo_identity": {
+          "message": "repo-identity: sid=7c2792b1-f2b8-40f7-aa95-b48048386647 session_root=X:\\claude-klabauter resolved_root=X:\\claude-klabauter verdict=MATCH \u2014 anchor cwd is contained within repo_root",
+          "resolved_root": "X:\\claude-klabauter",
+          "session_root": "X:\\claude-klabauter",
+          "sid": "7c2792b1-f2b8-40f7-aa95-b48048386647",
+          "verdict": "MATCH"
+        }
+      },
+      "message": "docs/plans/2026-07-05-strang-05-advisory-hook-degrade-silent-routing.md: 4 chunk(s) still uncommitted, committed partial state -- if delivered, resolve the row's own disposition_ref to the covering commit sha (`plan-tasks-resolve --coded <sha>` per row, verified against HEAD ancestry), then re-run close-out-and-stamp [dry-run: no write/commit performed]",
+      "missing_chunk_ids": [
+        "C1",
+        "C2",
+        "C3",
+        "C4"
+      ],
+      "open_chunk_ids": [],
+      "origin_stub_close": {
+        "acted": [],
+        "failed": [],
+        "skipped": []
+      },
+      "partial_evaluation_stamped": true,
+      "shipped": false,
+      "stamped": false,
+      "status_target": null
+    }
+  }
+}

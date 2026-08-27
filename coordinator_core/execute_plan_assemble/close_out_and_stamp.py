@@ -153,6 +153,7 @@ from coordinator_core.execute_plan_assemble.row_spans import (  # noqa: F401 -- 
 )
 from coordinator_core.frontmatter.body_blocks import LocateStatus, locate_fenced_block
 from coordinator_core.frontmatter.primitives import (
+    canonical_body_sha,
     insert_fm_field,
     read_fm_field,
     read_fm_field_unquoted,
@@ -905,6 +906,286 @@ def _disposition_ref_evidence(
         else:
             rejections[chunk_id] = reason
     return verified, rejections
+
+
+# ---------------------------------------------------------------------------
+# The goal-falsifier stamp-decision gate (C2, 2026-08-27, "the close ceremony
+# refuses a goal nothing observed" -- docs/plans/2026-08-27-the-close-
+# ceremony-refuses-a-goal-nothing-observed.md § C2, AC4-AC6/AC7/AC8/AC18-20):
+# a THIRD refusal class alongside the two already live at this stamp-
+# decision gate -- the halted path (a commit-required row without verified
+# evidence skips the stamp) and hard `EXIT_BUSINESS_FAIL` (repo-identity
+# MISMATCH, malformed spine). This one fires only on the branch that would
+# otherwise become `status: implemented`: a plan whose own
+# `prime_exit_criterion.falsifier` names an observation is not allowed to
+# ship implemented on the strength of the spine oracle alone when that
+# observation was never recorded, was recorded inert (`asserted: false`),
+# has a baseline that cannot be trusted (`baseline_ref` fails the same
+# ancestor check `_verify_disposition_ref` already applies to
+# `disposition_ref`), or recorded a verdict other than `pass`.
+#
+# VERDICT, NOT DELTA (the defect this closes -- see the dispatch brief's own
+# replay against a real plan): the gate reads `exit_criterion_met.
+# falsifier_verdict` as an already-judged enum, never a raw-text comparison
+# against `baseline_output`. `coordinator_core.goals.falsifier_compare`
+# (C1) is gravestoned and has no caller here or anywhere else -- this gate
+# performs NO digest, NO comparison, and NO execution of any observation:
+# it only ever reads two already-recorded scalars off the plan's own
+# frontmatter. See this plan's own anti-scope: "the engine never executes
+# the falsifier."
+#
+# Grandfathering is presence-based, not date-based (AC7): a plan whose
+# `prime_exit_criterion` is absent entirely never reaches this gate at all
+# (`_evaluate_goal_falsifier_gate` returns `None` at its very first check,
+# and its caller in `close_out_and_stamp` adds no new result-dict key at
+# all on a `None` return) -- byte-identical to the pre-C2 result dict for
+# every plan on disk before this landed. A `prime_exit_criterion` present
+# but carrying no `falsifier` (absent, null, non-object, or missing any of
+# its four required keys -- `_falsifier_block`'s own TOTAL detection) is
+# arm 1's "unchanged behaviour, full stop": the gate still adds its
+# `goal_gate` key (since `prime_exit_criterion` itself was present), but
+# never refuses.
+# ---------------------------------------------------------------------------
+
+_REQUIRED_FALSIFIER_KEYS = ("how", "baseline_output", "baseline_ref", "expected_when_true")
+
+
+def _falsifier_block(prime_exit_criterion: Any) -> Optional[dict]:
+    """Total, never-raising detection of a real `falsifier` sub-object (AC7):
+    a non-dict `prime_exit_criterion`, an absent/non-dict `falsifier`, or a
+    `falsifier` missing any of its four required non-blank string keys ALL
+    return `None` here -- the caller's own arm 1 ("plan declares no
+    falsifier -> unchanged behaviour, full stop") reads a `None` return
+    identically regardless of WHICH of those shapes produced it, and this
+    function never raises on any of them (a malformed/unparseable shape is
+    exactly the case it exists to route safely, not to crash on)."""
+    if not isinstance(prime_exit_criterion, dict):
+        return None
+    falsifier = prime_exit_criterion.get("falsifier")
+    if not isinstance(falsifier, dict):
+        return None
+    for key in _REQUIRED_FALSIFIER_KEYS:
+        value = falsifier.get(key)
+        if not isinstance(value, str) or not value.strip():
+            return None
+    return falsifier
+
+
+def _read_status_override(plan_text: str) -> Optional[dict[str, str]]:
+    """The sanctioned escape for arms 2-5 (AC19): an existing
+    `status_override_by`/`_reason`/`_at` attestation (the same trio
+    `plan_status_transition._stamp_implemented` already writes for the
+    frozen-status override), bound to the CURRENT plan-body hash
+    (`canonical_body_sha`) by requiring that hash appear, verbatim hex,
+    inside `status_override_reason` -- an override attested against an
+    earlier body state does not silently keep suppressing the falsifier
+    refusal after the body has since been re-authored underneath it. All
+    three fields must be present and non-blank, and the plan's own body
+    must hash at all (a plan whose frontmatter cannot be split has no body
+    to bind against). Returns the three raw field values plus the bound
+    hash on a valid, current attestation, or `None` on anything else --
+    never raises."""
+    split = split_frontmatter(plan_text)
+    if split is None:
+        return None
+    by = read_fm_field_unquoted(split.fm_text, "status_override_by")
+    reason = read_fm_field_unquoted(split.fm_text, "status_override_reason")
+    at = read_fm_field_unquoted(split.fm_text, "status_override_at")
+    if not by or not by.strip():
+        return None
+    if not reason or not reason.strip():
+        return None
+    if not at or not at.strip():
+        return None
+    body_sha = canonical_body_sha(plan_text)
+    if not body_sha or body_sha not in reason:
+        return None
+    return {"by": by.strip(), "reason": reason.strip(), "at": at.strip(), "body_sha": body_sha}
+
+
+def _resolve_derived_from(derived_from: str, root: Path) -> Optional[str]:
+    """Resolves `prime_exit_criterion.derived_from` against the plan's own
+    repo (AC20) -- a link a reader can open and compare, never a
+    self-declared provenance flag. The schema's own `pattern` already
+    narrows the string to one of two shapes; this reads the SAME string
+    without re-validating that pattern:
+
+      - `state/sizings/<id>.yaml` -- must exist as a real file in `root`.
+      - `<goal_id>#kr-<kr-id>` -- `goal_id` must name a goal whose own `id`
+        field is found among `state/goals/*.yaml`, AND that goal's
+        `key_results[]` must carry an entry whose `id` equals the FULL
+        `kr-<kr-id>` token after the `#` -- an id, never an array index,
+        the same anchor rule `kr-suggestion.schema.json` already uses.
+
+    Returns `None` on a resolved link, otherwise a short message naming
+    WHICH half failed. At most one filesystem read (the sizing-path shape)
+    or one directory scan (the KR shape) -- zero git spawns, so AC14's
+    at-most-2 budget (spent entirely by `baseline_ref`'s own ancestor
+    check) is untouched. A malformed/unreadable `state/goals/*.yaml` file
+    is skipped, never fatal -- mirrors this module's degrade-quietly
+    posture everywhere else it reads a corpus of caller-authored YAML."""
+    if "#" not in derived_from:
+        sizing_path = root / derived_from
+        if not sizing_path.is_file():
+            return f"sizing object not found: {derived_from}"
+        return None
+
+    goal_id, _, kr_id = derived_from.partition("#")
+    goals_dir = root / "state" / "goals"
+    if not goals_dir.is_dir():
+        return f"goal id not found (no state/goals/ directory): {goal_id}"
+    for goal_path in sorted(goals_dir.glob("*.yaml")):
+        try:
+            doc = yaml.safe_load(goal_path.read_text(encoding="utf-8", errors="replace"))
+        except (OSError, yaml.YAMLError):
+            continue
+        if not isinstance(doc, dict) or doc.get("id") != goal_id:
+            continue
+        key_results = doc.get("key_results")
+        if isinstance(key_results, list):
+            for kr in key_results:
+                if isinstance(kr, dict) and kr.get("id") == kr_id:
+                    return None
+        return f"key result id not found: {kr_id} in goal {goal_id}"
+    return f"goal id not found: {goal_id}"
+
+
+GOAL_REFUSAL_EXIT_CRITERION_ABSENT = "exit_criterion_met_absent"
+GOAL_REFUSAL_NOT_ASSERTED = "exit_criterion_not_asserted"
+GOAL_REFUSAL_BASELINE_REF_PREFIX = "baseline_ref_"
+GOAL_REFUSAL_VERDICT_NOT_PASS = "falsifier_verdict_not_pass"
+GOAL_REFUSAL_DERIVED_FROM_UNRESOLVABLE = "derived_from_unresolvable"
+
+_GOAL_REFUSAL_NEXT_MOVE = (
+    "Run the close-out skill, which re-runs the observation and records a fresh "
+    "exit_criterion_met verdict -- this engine only ever reads what a prior run "
+    "already recorded and never re-runs a plan's falsifier itself."
+)
+"""Shared tail for the goal-gate's refusal message, in `_FIDELITY_NEXT_MOVE`'s
+own register (AC18): lead with the ONE useful next move, not a generic
+refusal. A separate constant, not a reuse of `_FIDELITY_NEXT_MOVE` itself --
+that constant answers a different problem (a stamp-fidelity write-diff
+defect); this one answers "the observation this refusal is about was never
+re-run", which the close-out skill (not this engine) is the thing that
+re-runs."""
+
+
+def _evaluate_goal_falsifier_gate(
+    plan_text: str, root: Path
+) -> Optional[dict[str, Any]]:
+    """The third refusal class this gate's own module-level comment block
+    names (C2): evaluated ONLY at the point `close_out_and_stamp` would
+    otherwise set `status_target = "implemented"` -- a plan that is halted
+    for spine reasons already skips its stamp for THAT reason, and never
+    reaches here.
+
+    Predicate, in order (see the C2 dispatch brief for the full citation
+    trail):
+      1. No `prime_exit_criterion` at all -> `None` (arm 1's grandfathering
+         -- the caller adds no new result-dict key on a `None` return,
+         which is AC7's own differential-fixture guarantee).
+      5. `derived_from` resolution (AC20) -- independent of falsifier
+         presence; an unresolvable link refuses (same override exception).
+      1(cont). No usable `falsifier` block (`_falsifier_block` -- TOTAL,
+         never-raising detection) -> refused stays `False`, full stop.
+      2. `exit_criterion_met` absent, or present with `asserted: false` ->
+         refuse (AC4), unless a current `status_override_*` attestation is
+         present (AC19).
+      3. `falsifier.baseline_ref` fails `_verify_disposition_ref` -> refuse,
+         naming which of its four reasons (AC6), same override exception.
+      4. `exit_criterion_met.falsifier_verdict != "pass"` -> refuse (AC5) --
+         one enum read, never a comparison of `falsifier_output` against
+         `baseline_output` (the retired delta rule).
+
+    Returns `None` only for step 1's absent-prime-exit-criterion case;
+    every other path returns a dict:
+    `{"refused": bool, "reason": Optional[str], "detail": Optional[str],
+    "override": bool}`. `override` is `True` whenever a current
+    `status_override_*` attestation suppressed what would otherwise have
+    been a refusal (AC19) -- callers must report that as an override, never
+    as a clean stamp. Never raises."""
+    split = split_frontmatter(plan_text)
+    if split is None:
+        return None
+    try:
+        fm = yaml.safe_load(split.fm_text)
+    except yaml.YAMLError:
+        return None
+    if not isinstance(fm, dict):
+        return None
+    prime = fm.get("prime_exit_criterion")
+    if prime is None:
+        return None
+
+    result: dict[str, Any] = {
+        "refused": False,
+        "reason": None,
+        "detail": None,
+        "override": False,
+    }
+    override = _read_status_override(plan_text)
+
+    derived_from = prime.get("derived_from") if isinstance(prime, dict) else None
+    if isinstance(derived_from, str) and derived_from.strip():
+        failure = _resolve_derived_from(derived_from.strip(), root)
+        if failure is not None:
+            if override is None:
+                result["refused"] = True
+                result["reason"] = GOAL_REFUSAL_DERIVED_FROM_UNRESOLVABLE
+                result["detail"] = failure
+                return result
+            result["override"] = True
+
+    falsifier = _falsifier_block(prime)
+    if falsifier is None:
+        return result
+
+    exit_criterion_met = fm.get("exit_criterion_met")
+    if not isinstance(exit_criterion_met, dict) or "asserted" not in exit_criterion_met:
+        if override is None:
+            result["refused"] = True
+            result["reason"] = GOAL_REFUSAL_EXIT_CRITERION_ABSENT
+            result["detail"] = "exit_criterion_met is absent or not an object carrying 'asserted'"
+            return result
+        result["override"] = True
+        return result
+
+    if exit_criterion_met.get("asserted") is False:
+        if override is None:
+            result["refused"] = True
+            result["reason"] = GOAL_REFUSAL_NOT_ASSERTED
+            result["detail"] = (
+                "exit_criterion_met.asserted is false: "
+                f"{exit_criterion_met.get('reason') or 'no reason recorded'}"
+            )
+            return result
+        result["override"] = True
+        return result
+
+    baseline_ref = falsifier.get("baseline_ref")
+    sha, ref_reason = _verify_disposition_ref(root, baseline_ref)
+    if sha is None:
+        if override is None:
+            result["refused"] = True
+            result["reason"] = f"{GOAL_REFUSAL_BASELINE_REF_PREFIX}{ref_reason}"
+            result["detail"] = (
+                f"prime_exit_criterion.falsifier.baseline_ref did not verify: {ref_reason}"
+            )
+            return result
+        result["override"] = True
+        return result
+
+    verdict = exit_criterion_met.get("falsifier_verdict")
+    if verdict != "pass":
+        if override is None:
+            result["refused"] = True
+            result["reason"] = GOAL_REFUSAL_VERDICT_NOT_PASS
+            result["detail"] = f"exit_criterion_met.falsifier_verdict is {verdict!r}, not 'pass'"
+            return result
+        result["override"] = True
+        return result
+
+    return result
 
 
 # Admits `disposition_detail:` to the fidelity gate's allowed-change set
@@ -2023,6 +2304,25 @@ def close_out_and_stamp(
     else:
         status_target = None
 
+    # C2 goal-falsifier stamp-decision gate (see this module's own § "The
+    # goal-falsifier stamp-decision gate" comment block above
+    # `_evaluate_goal_falsifier_gate` for the full design): evaluated ONLY
+    # on the branch that would otherwise ship `implemented` -- a plan
+    # already halted for spine reasons never reaches this gate at all,
+    # since it has no stamp to lose. A refusal downgrades `status_target`
+    # from `"implemented"` to `None` (no stamp at all, same as the halted
+    # path's own "nothing to write" posture) rather than to `"landed"`,
+    # since `landed` names spine-resolution incompleteness specifically,
+    # which is not what a goal-observation gap means. `goal_gate` stays
+    # `None` (no new result-dict key added at all) whenever the plan never
+    # declared a `prime_exit_criterion` -- AC7's own differential-fixture
+    # guarantee for the grandfathered corpus.
+    goal_gate: Optional[dict[str, Any]] = None
+    if status_target == "implemented":
+        goal_gate = _evaluate_goal_falsifier_gate(text, root)
+        if goal_gate is not None and goal_gate.get("refused"):
+            status_target = None
+
     # Delivery proof for `_reach_post_commit_tail_stub_close` (PM ruling --
     # let a positive, complete delivery proof close the origin stub
     # directly). Built ONLY on the full-shipped path (`status_target ==
@@ -2228,6 +2528,14 @@ def close_out_and_stamp(
             f"close-out: {plan_path_rel} not stamped -- no ## Tasks spine or "
             "## Dispatch Ledger to consult, so no evidence source was ever "
             "read"
+        )
+    elif goal_gate is not None and goal_gate.get("refused"):
+        # C2's third refusal class -- the spine oracle would have shipped
+        # `implemented`, but the plan's own goal observation refused (see
+        # this module's own § "The goal-falsifier stamp-decision gate").
+        subject = (
+            f"close-out: {plan_path_rel} not stamped -- prime exit criterion "
+            f"goal observation refused ({goal_gate['reason']}): {goal_gate['detail']}"
         )
     else:
         subject = (
@@ -2441,6 +2749,15 @@ def close_out_and_stamp(
             f"{plan_path_rel}: not stamped -- no ## Tasks spine or "
             "## Dispatch Ledger to consult, so no evidence source was ever read"
         )
+    elif goal_gate is not None and goal_gate.get("refused"):
+        # C2's third refusal class (AC4-AC6, AC18): the ONE next move,
+        # `_GOAL_REFUSAL_NEXT_MOVE`'s own register -- lead with what to do,
+        # not a generic refusal.
+        message = (
+            f"{plan_path_rel}: not stamped -- prime exit criterion goal "
+            f"observation refused ({goal_gate['reason']}): {goal_gate['detail']}. "
+            f"{_GOAL_REFUSAL_NEXT_MOVE}"
+        )
     else:
         message = (
             f"{plan_path_rel}: {len(missing)} chunk(s) still uncommitted, "
@@ -2488,7 +2805,7 @@ def close_out_and_stamp(
         # written.
         message += " [dry-run: no write/commit performed]"
 
-    return EXIT_OK, {
+    result: dict[str, Any] = {
         "shipped": shipped,
         "stamped": stamped,
         "status_target": status_target,
@@ -2503,6 +2820,15 @@ def close_out_and_stamp(
         "origin_stub_close": origin_stub_result,
         "gates": {"repo_identity": repo_identity_gate},
     }
+    # `goal_gate` is added ONLY when the C2 gate was actually consulted at
+    # all (`goal_gate is not None` -- a plan that never declared a
+    # `prime_exit_criterion` never reaches `_evaluate_goal_falsifier_gate`
+    # in the first place, see the stamp-decision-gate call site above) --
+    # AC7's own differential-fixture guarantee depends on this key being
+    # ABSENT, not merely `None`-valued, for the grandfathered corpus.
+    if goal_gate is not None:
+        result["goal_gate"] = goal_gate
+    return EXIT_OK, result
 
 
 def main(argv: list[str]) -> int:

@@ -212,3 +212,40 @@ def test_breached_units_is_append_only_and_never_cleared():
     budget.check("first")
     budget.check("second")
     assert budget.breached_units == ("first", "second")
+
+
+class TestFleetDialsAreUntouchedByTheFactLayerPlan:
+    """AC8, plan 2026-08-27-the-fact-layer-is-measured-on-the-one-hot-path.
+
+    `fl-core-04` arms its OWN dial (X) in
+    `coordinator_core/session/session_facts_budget.py` and must leave DR-325's
+    two fleet dials byte-identical. The plan never edits
+    `composition_budget.py`; this assertion is the mechanical proof, and it
+    lives here rather than there for the same reason X does — the check
+    belongs beside the constants it pins, not beside the new dial.
+    """
+
+    #: DR-325's armed values, docs/research/2026-08-18-composition-budget-armed-values.md.
+    PRE_PLAN_FLEET_AGGREGATE_ELAPSED_BUDGET = 1200.0
+    PRE_PLAN_FLEET_MAX_INVOCATIONS = 110
+
+    def test_fleet_aggregate_elapsed_budget_is_unchanged(self):
+        from coordinator_core.composition_budget import FLEET_AGGREGATE_ELAPSED_BUDGET
+
+        assert FLEET_AGGREGATE_ELAPSED_BUDGET == self.PRE_PLAN_FLEET_AGGREGATE_ELAPSED_BUDGET
+
+    def test_fleet_max_invocations_is_unchanged(self):
+        from coordinator_core.composition_budget import FLEET_MAX_INVOCATIONS
+
+        assert FLEET_MAX_INVOCATIONS == self.PRE_PLAN_FLEET_MAX_INVOCATIONS
+
+    def test_the_fact_layer_dial_is_a_separate_constant_in_a_separate_module(self):
+        """X must not have been added beside the fleet dials — the whole
+        argument of the plan's "Where X lives" section."""
+        from coordinator_core import composition_budget
+        from coordinator_core.session import session_facts_budget
+
+        assert not hasattr(
+            composition_budget, "FACT_LAYER_PER_CEREMONY_GIT_SPAWN_BUDGET"
+        )
+        assert hasattr(session_facts_budget, "FACT_LAYER_PER_CEREMONY_GIT_SPAWN_BUDGET")

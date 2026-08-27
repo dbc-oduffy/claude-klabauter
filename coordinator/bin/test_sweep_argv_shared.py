@@ -2,14 +2,19 @@
 `sweep_argv.parse_repo_root_argv` leading-dash-argument guard
 (coordinator/bin/lib/sweep_argv.py).
 
-Every CLI parametrized here (`sweep-actioned-memos.py`, `sweep-boot.py`)
-previously either took `argv[0]`
+Every CLI parametrized here previously either took `argv[0]`
 unconditionally as the repo-root positional, or fell through to treating any
 unrecognized leading-dash token as a positional — both shapes forwarded `--help`
 (or a typo'd flag) downstream as a bogus repo-root value instead of rejecting it.
 This file asserts the fix closes the class, not just the one originally-reported
-instance (sweep-actioned-memos.py) — new CLIs adopting the shared helper get
-this coverage for free by being added to `_CLI_SCRIPTS` below.
+instance (sweep-actioned-memos.py, deleted under the kill bar at c07062c99) —
+new CLIs adopting the shared helper get this coverage for free by being added
+to `_CLI_SCRIPTS` below.
+
+`_CLI_SCRIPTS` names scripts, not history: an entry whose script has been
+deleted goes red for a reason that has nothing to do with argv handling, which
+is exactly the false signal this parity file exists to keep clean. The
+originally-reported instance was dropped from the list when its script was.
 
 Runs each CLI as a real subprocess with `--help` / an unrecognized flag only —
 both paths return before any transport/repo-root resolution work, so this is
@@ -38,8 +43,8 @@ pytestmark = [
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 _CLI_SCRIPTS = [
-    "sweep-actioned-memos.py",
     "sweep-boot.py",
+    "sweep-terminal-handoffs.py",
 ]
 
 

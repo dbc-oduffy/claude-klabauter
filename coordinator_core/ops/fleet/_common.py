@@ -37,7 +37,7 @@ import os
 import sys
 import tempfile
 from pathlib import Path
-from typing import TYPE_CHECKING, Dict, List, Mapping, NamedTuple, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Dict, List, Mapping, NamedTuple, Optional, Tuple, Union, cast
 
 if TYPE_CHECKING:
     # Type-checking only. `asyncio` is imported at FUNCTION scope by the two
@@ -2232,8 +2232,11 @@ async def archive_and_commit(
         # reason to have extraneous functions and unnecessary code") rather
         # than kept-as-stated-precondition — a proven-redundant guard is dead
         # weight, not documentation.
+        # The cast carries the proof above to the type-checker, which cannot
+        # follow the if/elif chain that establishes it. A runtime `is not None`
+        # here would be the redundant guard the PM ruling already removed.
         if spine_error is None and _assembled_commit_is_noop(
-            head_spine, assembled
+            cast(Mapping[str, Mapping[str, Tuple[int, str]]], head_spine), assembled
         ):
             spine_error = (
                 "empty-spine-commit: computed tree equals HEAD's tree -- "
@@ -2721,13 +2724,19 @@ async def rm_and_commit(
             # finds nothing and the resolver falls through to its
             # session-keyed tiers; passing them anyway keeps both call
             # sites' argument shape identical.
+            reaped_pairs = [
+                (p, rid)
+                for p in paths
+                for rid in [_rel_id(p)]
+                if rid is not None and rid in reaped_ids
+            ]
             message = _message_with_hookless_trailers(
                 subject,
                 worktree_root,
-                [str(p) for p in paths if _rel_id(p) in reaped_ids],
+                [str(p) for p, _ in reaped_pairs],
             )
             assembled: Dict[str, Union[Tuple[int, str], object]] = {
-                _rel_id(p): _ABSENT for p in paths if _rel_id(p) in reaped_ids
+                rid: _ABSENT for _, rid in reaped_pairs
             }
             msg_fd, msg_path = tempfile.mkstemp(prefix="fleet-git-msg-")
             try:
@@ -2841,7 +2850,7 @@ async def rm_and_commit(
             release_paths = [
                 rid for p in paths
                 for rid in [_rel_id(p)]
-                if rid in reaped_ids
+                if rid is not None and rid in reaped_ids
             ]
             if release_paths:
                 await asyncio.to_thread(

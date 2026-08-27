@@ -185,7 +185,7 @@ from coordinator_core.benchmarks.process_time import (
 from coordinator_core.benchmarks.isolated_clone import (
     mkdtemp_for_clone,
     reap_processes_under,
-    rmtree_or_warn,
+    rmtree_or_raise,
 )
 from coordinator_core.warm import breadcrumb
 from coordinator_core.warm.engine_root import is_engine_root
@@ -376,7 +376,7 @@ def warm_engine_root() -> Iterator[Path]:
         # by construction never collide with a real clone's, and this run
         # is the only possible writer of anything under it.
         shutil.rmtree(breadcrumb.svc_dir(engine_root=isolated_root), ignore_errors=True)
-        rmtree_or_warn(tmp_parent, label="warm_engine_root", reaped=reaped)
+        rmtree_or_raise(tmp_parent, label="warm_engine_root", reaped=reaped)
 
 
 # =========================================================================
@@ -587,7 +587,7 @@ def warm_engine_root_darwin() -> Iterator[Path]:
         # to remove unconditionally for the same freshly-minted-path reason.
         shutil.rmtree(breadcrumb.svc_dir(engine_root=isolated_root), ignore_errors=True)
         shutil.rmtree(runtime_base, ignore_errors=True)
-        rmtree_or_warn(tmp_parent, label="warm_engine_root_darwin", reaped=reaped)
+        rmtree_or_raise(tmp_parent, label="warm_engine_root_darwin", reaped=reaped)
         if prior_runtime_base is None:
             os.environ.pop(breadcrumb.RUNTIME_BASE_ENV, None)
         else:

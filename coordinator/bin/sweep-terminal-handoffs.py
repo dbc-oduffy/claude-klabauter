@@ -28,16 +28,31 @@ rationale, only cites the constant by name so the two never silently drift
 apart unnoticed (a future bump there is expected to be echoed here).
 
 Usage:
-    python3 sweep-terminal-handoffs.py
+    python3 sweep-terminal-handoffs.py [--dry-run]
+
+`--dry-run` is the operator's CENSUS surface: it runs the same `plan_sweep`
+classification the acting path runs and prints the records that WOULD move,
+then returns without calling `archive_and_commit`. It exists because the only
+other census route is the op's `dry_run:true` preview, whose setup-error
+envelope (`fleet/_common.py :: _setup_error`) carries `candidates: []` under
+`exit_code:1` — so a caller that branches on the candidate list instead of
+the exit code reads a refused invocation as "nothing to sweep". That
+mis-read is what 2026-08-27's zero-vs-25 disagreement actually was
+(state/improvement-queue/2026-08-27-fleet-archive-completed-handoffs-has-no-
+00d6c9ec1a7d.yaml). A dry run mutates nothing, spawns no commit, and does
+NOT stamp the `archive_sweeps` housekeeping-liveness key — a census is not
+a sweep, and stamping one would let a run of censuses hold the cadence gate
+open while nothing was ever archived.
 
 Exit codes:
-    0 — normal (including zero-candidates, all-retained, and a fully
-        successful sweep).
+    0 — normal (including zero-candidates, all-retained, a completed
+        `--dry-run` census, and a fully successful sweep).
     1 — the sweep failed: either a caught exception from `plan_sweep`/
         `archive_and_commit` or a partial `archive_and_commit` result
         (some moves failed). Candidates are retained for the next sweep
-        either way.
-    2 — internal error (not inside a git repo).
+        either way. A `--dry-run` census that raises out of `plan_sweep`
+        returns 1 the same way.
+    2 — internal error (not inside a git repo), or a malformed argv.
 
 Big-bang cutover (2026-07-19 Windows de-bash campaign, Wave F1): no legacy
 bash fallback — a genuinely seam-absent install surfaces as a transport
@@ -80,6 +95,10 @@ if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 import cc_invoke  # noqa: E402  # pyright: ignore[reportMissingImports] — added to sys.path at runtime by the _LIB_DIR injection above, not statically resolvable
 from repo_identity import resolve_checked_repo_root  # noqa: E402  # pyright: ignore[reportMissingImports] — same runtime _LIB_DIR sys.path injection as cc_invoke above
+from sweep_argv import parse_repo_root_argv  # noqa: E402  # pyright: ignore[reportMissingImports] — same runtime _LIB_DIR sys.path injection as cc_invoke above
+
+_USAGE = "usage: python sweep-terminal-handoffs.py [-h] [--dry-run]"
+_DRY_RUN_FLAG = "--dry-run"
 
 # Mirrors coordinator_core/ops/fleet/archive_terminal_handoffs.py's own
 # `_RECOMMENDED_CAP_CHOICE` -- see module docstring "Cap" section for why
@@ -160,12 +179,41 @@ def _no_fallback() -> None:
     )
 
 
-def main(_argv: "list[str] | None" = None) -> int:
-    """`_argv` is unused: this script owns no argv-parsed options and delegates
-    everything to `plan_sweep` + `archive_and_commit`, called directly
-    in-process. Kept for call signature conformance with the sibling
-    sweep-script test harnesses, which call `mod.main(argv if argv is not
-    None else [])` uniformly."""
+def _print_planned_moves(moves) -> None:
+    """Print the records a `--dry-run` census would move, oldest-first.
+
+    Deliberately prints the id AND the destination: "what would move" is only
+    half the operator's question, and a destination already occupied by a
+    different file is refused later by `plan_sweep` under
+    `archive-dest-conflict` rather than moved.
+    """
+    if not moves:
+        print("dry run: no terminal handoffs would be archived")
+        return
+    print(f"dry run: {len(moves)} terminal handoff(s) would be archived:")
+    for move in moves:
+        print(f"  {move.candidate_id}  ->  {move.dst}")
+
+
+def main(argv: "list[str] | None" = None) -> int:
+    """`argv` carries one flag, `--dry-run` (see the module docstring's Usage
+    section); everything else is delegated to `plan_sweep` +
+    `archive_and_commit`, called directly in-process. The sibling
+    sweep-script test harnesses call `mod.main(argv if argv is not None else
+    [])` uniformly, so the default must stay `None`-meaning-`sys.argv[1:]`.
+    """
+    argv = sys.argv[1:] if argv is None else argv
+    _positional, flags, early_exit = parse_repo_root_argv(
+        argv,
+        prog="sweep-terminal-handoffs.py",
+        usage=_USAGE,
+        known_flags=frozenset({_DRY_RUN_FLAG}),
+        max_positional=0,
+    )
+    if early_exit is not None:
+        return early_exit
+    dry_run = _DRY_RUN_FLAG in flags
+
     git_repo_root, verdict = resolve_checked_repo_root(explicit_root=None)
     if git_repo_root is None:
         print("sweep-terminal-handoffs.py: not inside a git repo", file=sys.stderr)
@@ -187,16 +235,18 @@ def main(_argv: "list[str] | None" = None) -> int:
     # against DR-344's 500ms brightline -- and the cost was the round trips,
     # not the work.
     _ensure_claude_klabauter_on_path()
-    import asyncio
     from coordinator_core.ops.fleet.archive_terminal_handoffs import plan_sweep
-    from coordinator_core.ops.fleet._common import archive_and_commit, main_worktree_root
+    from coordinator_core.ops.fleet._common import main_worktree_root
     from coordinator_core.git.repo_root import git_common_dir
 
     # `plan_sweep` is now SYNCHRONOUS (C2, docs/plans/2026-08-26-the-sweep-
     # stops-paying-for-a-room-it-nev.md); `archive_and_commit` (a separate,
     # out-of-scope module under active rewrite elsewhere -- staff-eng
-    # Finding 9) remains a coroutine, so `asyncio` stays imported here for
-    # the single `asyncio.run(...)` boundary that still drives it below.
+    # Finding 9) remains a coroutine, so `asyncio` is imported below on the
+    # ACT path only, for the single `asyncio.run(...)` boundary that still
+    # drives it. A `--dry-run` census reaches neither, so it must not pay the
+    # ~31ms `import asyncio` (which drags ssl/socket) to classify records —
+    # the same cost C2 deleted from the op module's classification path.
 
     try:
         common_dir = Path(git_common_dir(cwd=str(repo_root)))
@@ -205,6 +255,23 @@ def main(_argv: "list[str] | None" = None) -> int:
         return 1
 
     worktree_root = main_worktree_root(common_dir)
+
+    if dry_run:
+        scan_skipped: "list[dict]" = []
+        try:
+            moves, skipped = plan_sweep(
+                worktree_root, common_dir, _CAP, scan_skipped=scan_skipped,
+            )
+        except Exception as exc:  # noqa: BLE001 -- mirrors the act path's own catch
+            print(f"sweep-terminal-handoffs.py: dry run failed: {exc}", file=sys.stderr)
+            return 1
+        _print_planned_moves(moves)
+        _print_refusal_census(scan_skipped, skipped)
+        return 0
+
+    import asyncio
+
+    from coordinator_core.ops.fleet._common import archive_and_commit
 
     async def _sweep() -> dict:
         scan_skipped: "list[dict]" = []

@@ -5,12 +5,19 @@ A `kind: roadmap-baton` predecessor's successor mints AS a roadmap-baton
 (not the bare `handoff` doc type), carrying `roadmap_id`/`stub_id` forward
 via `coordinator-doc-new`'s existing `--roadmap-id`/`--stub-id` flags.
 
-NOT covered here (named, not silently assumed passing): `blocks`,
-`blocked_by`, `sprint`, `wave`. `coordinator-doc-new`'s roadmap-baton
-scaffold has no passthrough flag for any of the four -- adding one is a
-`coordinator/bin/coordinator-doc-new.py` change, outside this chunk's
-declared write scope. See `_resolved_predecessor_roadmap_identity`'s own
-docstring in `coordinator_core/baton_assemble/__init__.py`.
+`blocks` is now carried too, via `coordinator-doc-new`'s `--blocks`
+(repeatable) -- the follow-on this module used to defer. Carrying `stub_id`
+without it handed the successor the identity the whole down-graph resolves
+against and an empty `blocks:` to answer it with, so every dependent's edge
+read as severed the moment the successor became the chain head.
+
+STILL not covered here (named, not silently assumed passing):
+`blocked_by`, `sprint`, `wave`. `blocked_by` is excluded on purpose -- it is
+derived readiness state, so inheriting a predecessor's gates would re-park a
+successor on blockers that may have cleared. `sprint`/`wave` are
+`bin/roadmap-number-stubs` topo outputs, not lineage. See
+`_resolved_predecessor_roadmap_identity`'s own docstring in
+`coordinator_core/baton_assemble/__init__.py`.
 
 Spec backlink: coordinator_core/baton_assemble/__init__.py
 `_resolved_predecessor_roadmap_identity`, `_build_directives`'s mint-kind
@@ -34,7 +41,9 @@ def _stub_operator_config(monkeypatch):
     monkeypatch.setattr(ba, "resolve_operator_config", lambda: dict(_FAKE_OPERATOR_CONFIG))
 
 
-def _roadmap_baton_predecessor(tmp_path, *, roadmap_id="rm-c10", stub_id="stub-c10"):
+def _roadmap_baton_predecessor(
+    tmp_path, *, roadmap_id="rm-c10", stub_id="stub-c10", blocks=None
+):
     return _write_artifact(
         tmp_path / "state" / "handoffs" / "2026-08-18-roadmap-baton-predecessor.md",
         [
@@ -44,7 +53,8 @@ def _roadmap_baton_predecessor(tmp_path, *, roadmap_id="rm-c10", stub_id="stub-c
             f"roadmap_id: {roadmap_id}",
             f"stub_id: {stub_id}",
             'predecessor: "none"',
-        ],
+        ]
+        + ([f"blocks: [{', '.join(blocks)}]"] if blocks else []),
     )
 
 
@@ -119,6 +129,64 @@ class TestRoadmapIdentityFieldsCarried:
         d1 = next(d for d in decision["directives"] if d["cli"] == "coordinator-doc-new")
         assert "--roadmap-id=rm-partial-only" in d1["args"]
         assert not any(a.startswith("--stub-id=") for a in d1["args"])
+
+
+class TestBlocksCarriedWithTheStubId:
+    """The down-edges travel with the `stub_id` they are authored against.
+
+    Before this, a continuation minted under the predecessor's `stub_id` with
+    `blocks: []`; the whole down-graph still resolved on that `stub_id`, so
+    `reconcile.gate_eval._has_asymmetry` read every dependent's edge as severed
+    and reported a symmetric graph as a data defect. Measured on the live corpus:
+    `ceremony-restore-01`, whose four pre-continuation records each named three
+    dependents while every continuation named none.
+    """
+
+    def test_blocks_are_forwarded_one_flag_per_entry(self, tmp_path):
+        artifact = _roadmap_baton_predecessor(
+            tmp_path, blocks=["the-meter-02", "archival-sweeps-03"]
+        )
+        decision = ba.brief("handoff", str(artifact), repo_root=tmp_path).decision_object
+        d1 = next(d for d in decision["directives"] if d["cli"] == "coordinator-doc-new")
+        assert "--blocks=the-meter-02" in d1["args"]
+        assert "--blocks=archival-sweeps-03" in d1["args"]
+
+    def test_blocks_travel_with_the_stub_id_never_without_it(self, tmp_path):
+        """The coupling, not just the flag: whenever `--stub-id` is emitted for a
+        predecessor that authored `blocks`, the matching `--blocks` flags are
+        emitted in the SAME directive. Emitting one without the other is the
+        defect, so the invariant is asserted rather than the two halves
+        independently."""
+        artifact = _roadmap_baton_predecessor(tmp_path, blocks=["dep-01"])
+        decision = ba.brief("handoff", str(artifact), repo_root=tmp_path).decision_object
+        d1 = next(d for d in decision["directives"] if d["cli"] == "coordinator-doc-new")
+        assert any(a.startswith("--stub-id=") for a in d1["args"])
+        assert any(a.startswith("--blocks=") for a in d1["args"])
+
+    def test_predecessor_with_no_blocks_omits_the_flag(self, tmp_path):
+        """Fail-open to the scaffold's own `blocks: []`, matching every sibling
+        `_resolved_predecessor_*` reader -- never a forwarded empty string."""
+        artifact = _roadmap_baton_predecessor(tmp_path)
+        decision = ba.brief("handoff", str(artifact), repo_root=tmp_path).decision_object
+        d1 = next(d for d in decision["directives"] if d["cli"] == "coordinator-doc-new")
+        assert not any(a.startswith("--blocks=") for a in d1["args"])
+
+    def test_ordinary_handoff_predecessor_carries_no_blocks(self, tmp_path):
+        """Scoped to the roadmap-baton mint-kind flip, same gate as
+        `--roadmap-id`/`--stub-id`: a plain session-handoff successor has no
+        roadmap identity for a down-edge to hang off."""
+        artifact = _write_artifact(
+            tmp_path / "state" / "handoffs" / "2026-08-18-ordinary-with-blocks.md",
+            [
+                "deliverable_id: DEL-ORDINARY-BLOCKS",
+                "handoff_id: hnd-ordinary-blocks-1a2b94",
+                "blocks: [dep-01]",
+            ],
+        )
+        decision = ba.brief("handoff", str(artifact), repo_root=tmp_path).decision_object
+        d1 = next(d for d in decision["directives"] if d["cli"] == "coordinator-doc-new")
+        assert "--type=handoff" in d1["args"]
+        assert not any(a.startswith("--blocks=") for a in d1["args"])
 
 
 class TestSingleLiveStubIdAfterSuccession:

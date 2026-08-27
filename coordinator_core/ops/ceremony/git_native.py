@@ -86,6 +86,7 @@ from coordinator_core.git.git_state import (
     head_sha as _git_state_head_sha,
     head_tree_sha as _git_state_head_tree_sha,
     read_index,
+    read_index_stat_identity,
     read_tree_spine,
 )
 from coordinator_core.git_lock_retry import run_with_lock_retry
@@ -4536,7 +4537,11 @@ def _commit_via_head_spine(
         # compares the same snapshot its comparand came from and can never
         # fail. See `_agree_branch_cas_refusal`'s identical `fresh=True`
         # re-observation and `_index_blobs`'s own `fresh` docstring above.
-        fresh_identity = read_index(root, fresh=True).stat_identity
+        # `read_index_stat_identity` (C6, docs/plans/2026-08-27-the-commit-
+        # op-resolves-one-pass-context.md) obtains the same value as
+        # `read_index(root, fresh=True).stat_identity` without paying for a
+        # full entry parse this call never consulted.
+        fresh_identity = read_index_stat_identity(root)
         if fresh_identity != index_stat_identity:
             return GitResult(
                 returncode=1,

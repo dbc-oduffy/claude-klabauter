@@ -110,11 +110,34 @@ FACT_NAMES = (
 FACT_WITH_NO_PRODUCTION_CONSUMER = "session_magnitude_attributed"
 
 #: The facade's one production call site (Problem section, substrate finding 0):
-#: `quick_wrap_assemble/__init__.py :: _read_close_gate_facts` calls five of the
-#: six facts in sequence. Stated here so a consumer of this module's figures does
-#: not have to re-derive "per-ceremony" means "per this one call site" from the
-#: timing corpus alone.
-PRODUCTION_CALL_SITE = "coordinator_core/quick_wrap_assemble/__init__.py::_read_close_gate_facts"
+#: `quick_wrap_assemble/__init__.py :: brief` calls five of the six facts in
+#: sequence (its own lines "Reads all five close-gate facts off
+#: `coordinator_core.session.session_facts`"). Stated here so a consumer of this
+#: module's figures does not have to re-derive "per-ceremony" means "per this one
+#: call site" from the timing corpus alone.
+#:
+#: The plan body and this stub's roadmap baton both name this site
+#: `_read_close_gate_facts`. NO SUCH FUNCTION EXISTS, in this repo or in git
+#: history — the name is a drafting error carried from the plan's Problem
+#: section into the first draft of this constant. `brief` is the real site,
+#: verified by grep: `_read_close_gate_facts` has zero definitions and zero
+#: callers. Corrected rather than preserved, because a constant naming a
+#: function that does not exist sends the next reader looking for a hot path
+#: that was never there.
+PRODUCTION_CALL_SITE = "coordinator_core/quick_wrap_assemble/__init__.py::brief"
+
+#: Rows whose `fact` is not one of the six served facts are NOT production
+#: measurements and are excluded from every figure this module renders.
+#:
+#: This is not hypothetical: C3's instrumentation-cost measurement ran an ad-hoc
+#: 200-call microbenchmark through the live `record_fact_span`, so the production
+#: sink permanently carries 200 rows named `session_facts.microbench_noop` plus
+#: 200 named `benchmark_probe.microbench`. A reader keying on the
+#: `session_facts.` prefix alone would fold 200 synthetic ~0.00ms rows into the
+#: per-fact and aggregate distributions and report a facade an order of
+#: magnitude cheaper than it is. Allow-list the six real names; never
+#: prefix-match.
+PRODUCTION_FACT_ROW_NAMES = frozenset(f"session_facts.{name}" for name in FACT_NAMES)
 
 
 # ---------------------------------------------------------------------------
@@ -355,8 +378,24 @@ def read_fact_span_rows(
     rows: list = []
     for path in sink_generations(repo_root):
         entries, _head_truncated = tail_entries(path, tail_bytes=tail_bytes, max_rows=max_rows)
-        rows.extend(entry for entry in entries if entry.get("kind") == FACT_SPAN_KIND)
+        rows.extend(entry for entry in entries if _is_production_fact_span(entry))
     return rows
+
+
+def _is_production_fact_span(entry) -> bool:
+    """A `"fact_span"` row carrying a real production measurement.
+
+    Excludes synthetic rows sharing the `session_facts.` prefix — see
+    `PRODUCTION_FACT_ROW_NAMES`. A BUFFERED row (no `fact` key, a `facts` map
+    instead) has no single name to allow-list and is admitted on shape; the
+    per-fact names inside it are filtered by `compute_timing_distributions`
+    against `FACT_NAMES`.
+    """
+    if not isinstance(entry, dict) or entry.get("kind") != FACT_SPAN_KIND:
+        return False
+    if isinstance(entry.get("facts"), dict):
+        return True
+    return entry.get("fact") in PRODUCTION_FACT_ROW_NAMES
 
 
 @dataclass
@@ -417,45 +456,91 @@ class FactTimingStats:
 def compute_timing_distributions(rows) -> dict:
     """Per-fact `FactTimingStats` plus an aggregate, from parsed "fact_span" rows.
 
-    Expected row shape (C1's buffered-emission design, one row per ceremony
-    invocation): `{"kind": "fact_span", "t_start": float, "sid": str|None,
-    "facts": {<fact_name>: {"elapsed_ms": float, "degraded": bool}, ...}}`.
-    A malformed row (not a dict, no "facts" mapping) is skipped rather than
-    raising — this is a reader over a sink several live processes append to.
+    TWO row shapes are accepted, because C1 and C2 were authored against
+    different ones and only the first is actually on disk:
+
+    - PER-FACT (what `session_facts._timed_fact` emits, and the only shape the
+      live sink contains): `{"kind": "fact_span", "t_start": float,
+      "sid": str|None, "fact": "session_facts.<name>", "elapsed_ms": float,
+      "process_ms": float|None, "outcome": "computed"|"degraded"}`. Rows are
+      grouped by `sid` to recover the per-ceremony aggregate — the read-time
+      regrouping `record_fact_span`'s docstring names as the cost of not
+      buffering.
+    - BUFFERED (this plan's PREFERRED shape, never built):
+      `{..., "facts": {<name>: {"elapsed_ms": float, "degraded": bool}}}`.
+      Kept because it is the shape this module's own tests were written
+      against; a reader that dropped it would silently zero any corpus written
+      if the buffered flush hook is ever added.
+
+    Reading only the buffered shape is why the first artifact reported the
+    whole timing leg "unobserved" over a corpus that already held rows.
+
+    A malformed row (not a dict, carrying neither shape) is skipped rather
+    than raising — this is a reader over a sink several live processes append
+    to.
 
     Returns `{"per_fact": {<fact_name>: FactTimingStats, ...}, "aggregate":
     FactTimingStats}` — `"aggregate"` sums every fact's own elapsed_ms per
     ceremony invocation into one row-per-invocation total, the number AC4
     requires reported ALONGSIDE (never instead of) the per-fact figures.
+
+    A per-fact row with no `sid` cannot be attributed to a ceremony
+    invocation, so it contributes to its own fact's distribution but NOT to
+    the aggregate — counting it as its own one-fact "invocation" would report
+    an aggregate far cheaper than any real ceremony.
     """
     per_fact: dict = {name: FactTimingStats(fact=name) for name in FACT_NAMES}
     aggregate = FactTimingStats(fact="__aggregate__")
 
+    #: sid -> {fact_name: elapsed_ms} for the per-fact shape.
+    by_invocation: dict = {}
+
+    def _short(fact_name: str) -> str:
+        return fact_name.split(".")[-1]
+
     for row in rows:
         if not isinstance(row, dict):
             continue
+
         facts = row.get("facts")
-        if not isinstance(facts, dict):
+        if isinstance(facts, dict):
+            invocation_total = 0.0
+            invocation_had_computed = False
+            for fact_name, breakdown in facts.items():
+                if not isinstance(breakdown, dict):
+                    continue
+                elapsed = breakdown.get("elapsed_ms")
+                if not isinstance(elapsed, (int, float)):
+                    continue
+                stats = per_fact.setdefault(fact_name, FactTimingStats(fact=fact_name))
+                if breakdown.get("degraded"):
+                    stats.degraded_ms.append(float(elapsed))
+                else:
+                    stats.computed_ms.append(float(elapsed))
+                    invocation_total += float(elapsed)
+                    invocation_had_computed = True
+            if invocation_had_computed:
+                aggregate.computed_ms.append(invocation_total)
             continue
 
-        invocation_total = 0.0
-        invocation_had_computed = False
-        for fact_name, breakdown in facts.items():
-            if not isinstance(breakdown, dict):
-                continue
-            elapsed = breakdown.get("elapsed_ms")
-            if not isinstance(elapsed, (int, float)):
-                continue
-            stats = per_fact.setdefault(fact_name, FactTimingStats(fact=fact_name))
-            if breakdown.get("degraded"):
-                stats.degraded_ms.append(float(elapsed))
-            else:
-                stats.computed_ms.append(float(elapsed))
-                invocation_total += float(elapsed)
-                invocation_had_computed = True
+        raw_name = row.get("fact")
+        elapsed = row.get("elapsed_ms")
+        if not isinstance(raw_name, str) or not isinstance(elapsed, (int, float)):
+            continue
 
-        if invocation_had_computed:
-            aggregate.computed_ms.append(invocation_total)
+        fact_name = _short(raw_name)
+        stats = per_fact.setdefault(fact_name, FactTimingStats(fact=fact_name))
+        if row.get("outcome") == "degraded":
+            stats.degraded_ms.append(float(elapsed))
+            continue
+
+        stats.computed_ms.append(float(elapsed))
+        sid = row.get("sid")
+        if isinstance(sid, str):
+            by_invocation.setdefault(sid, {})[fact_name] = float(elapsed)
+
+    for breakdown in by_invocation.values():
+        aggregate.computed_ms.append(sum(breakdown.values()))
 
     return {"per_fact": per_fact, "aggregate": aggregate}
 

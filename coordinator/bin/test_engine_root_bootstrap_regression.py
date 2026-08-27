@@ -850,7 +850,6 @@ _RESOLVER_FAMILY_BY_FILE = {
     "spawn-census": frozenset({"self_location"}),
     "standup.py": frozenset({"env_first"}),
     "sweep-terminal-handoffs.py": frozenset({"env_first"}),
-    "test_sweep_actioned_memos.py": frozenset({"env_first"}),
     "tests/test_cc_invoke_py.py": frozenset({"env_first", "self_location"}),
     "tests/test_checked_repo_resolver.py": frozenset({"env_first"}),
     "tests/test_checked_repo_resolver_c4.py": frozenset({"env_first"}),

@@ -32,6 +32,7 @@ from coordinator_core.telemetry.op_latency import (
     record_fact_span,
     record_op_latency,
     record_op_started,
+    tail_entries,
 )
 
 
@@ -820,3 +821,44 @@ def test_breach_summary_ignores_fact_span_rows():
     assert result["totals"]["complete_rows"] == 0
     assert result["totals"]["over_bar"] == 0
     assert result["ops"] == []
+
+
+class TestTailEntriesKeepsNewestRows:
+    """`tail_entries` promises "newest rows kept" and argues in its own
+    docstring that recency is what both its consumers need. A `max_rows` cap
+    applied from the head of the byte window silently returns the OLDEST rows
+    and makes every recently-appended row invisible — which is how a live
+    corpus reads as empty to a bounded reader."""
+
+    def _sink(self, tmp_path: Path, rows: int) -> Path:
+        path = tmp_path / "op-latency.jsonl"
+        with open(path, "w", encoding="utf-8") as fh:
+            for i in range(rows):
+                fh.write(json.dumps({"t_start": float(i), "seq": i}) + "\n")
+        return path
+
+    def test_max_rows_keeps_the_newest_rows_not_the_oldest(self, tmp_path):
+        path = self._sink(tmp_path, 500)
+
+        entries, _ = tail_entries(path, tail_bytes=8 * 1024 * 1024, max_rows=10)
+
+        assert len(entries) == 10
+        assert [e["seq"] for e in entries] == list(range(490, 500))
+
+    def test_a_row_appended_last_survives_the_cap(self, tmp_path):
+        path = self._sink(tmp_path, 300)
+        with open(path, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps({"t_start": 999.0, "seq": 300, "kind": "fact_span"}) + "\n")
+
+        entries, _ = tail_entries(path, tail_bytes=8 * 1024 * 1024, max_rows=50)
+
+        assert any(e.get("kind") == "fact_span" for e in entries)
+        assert entries[-1]["seq"] == 300
+
+    def test_under_the_cap_every_row_is_returned_in_file_order(self, tmp_path):
+        path = self._sink(tmp_path, 25)
+
+        entries, head_truncated = tail_entries(path, tail_bytes=8 * 1024 * 1024, max_rows=1000)
+
+        assert head_truncated is False
+        assert [e["seq"] for e in entries] == list(range(25))

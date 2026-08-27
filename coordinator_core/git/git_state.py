@@ -103,6 +103,7 @@ __all__ = [
     "IndexSnapshot",
     "IndexParseError",
     "read_index",
+    "read_index_stat_identity",
     "index_read_cache_scope",
     "head_branch",
     "head_sha",
@@ -261,6 +262,58 @@ def read_index(repo: Union[str, Path], *, fresh: bool = False) -> IndexSnapshot:
     if cache is not None:
         cache[index_path] = snapshot
     return snapshot
+
+
+def read_index_stat_identity(repo: Union[str, Path]) -> Optional[StatIdentity]:
+    """`read_index(repo, fresh=True).stat_identity` WITHOUT reading or
+    parsing the index body -- for a caller (a compare-and-swap re-
+    observation) that only ever consulted `.stat_identity` and threw the
+    parsed entries away. `IndexSnapshot.stat_identity` (see that class) is
+    built purely from `index_path.stat()` -- three integers off the
+    filesystem -- so a caller that never touches `IndexSnapshot`'s `{path:
+    IndexEntry}` body has no reason to pay `_parse_index_bytes`'s full
+    five-figure-entry walk to obtain it.
+
+    Negative-spec (mirrors this module's own, see the module docstring):
+        - UNCONDITIONALLY FRESH. This function never consults
+          `_INDEX_CALL_CACHE` and never populates it -- there is no
+          `fresh` parameter, because there is no non-fresh mode to opt out
+          of. A cached stat identity here would defeat the one property a
+          CAS re-observation needs: proof that THIS call, not a memoised
+          one, touched the filesystem just now.
+        - Same split-index refusal as `read_index`: a `sharedindex.*`
+          sibling next to the index file raises `IndexParseError`, same as
+          the full reader. A CAS re-observation that silently succeeded
+          against a split index would be a new instance of the exact
+          defect C1 closed (a re-observation that cannot actually fail) --
+          refusing the same way `read_index` does is the conservative
+          choice, not a stricter one invented here.
+        - Returns `None` for a genuinely absent index file (no `.git/index`
+          at all -- an unborn repo), matching `read_index`'s own
+          `stat_identity=None` fold for that state, not a raise.
+
+    Reads `resolve_git_dir(repo)/index` (worktree-private, per this
+    module's own MANDATORY REUSE note) via a single `Path.stat()` call --
+    no `read_bytes()`, no `_parse_index_bytes()`.
+    """
+    gitdir = resolve_git_dir(repo)
+    index_path = gitdir / "index"
+
+    for sibling in _iter_sharedindex_siblings(gitdir):
+        raise IndexParseError(
+            f"split index detected ({sibling.name} present alongside "
+            f"{index_path}); this module refuses to guess which half is "
+            "authoritative"
+        )
+
+    try:
+        st = index_path.stat()
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        raise IndexParseError(f"could not read {index_path}: {exc}") from exc
+
+    return StatIdentity(st_mtime_ns=st.st_mtime_ns, st_size=st.st_size, st_ino=st.st_ino)
 
 
 def _iter_sharedindex_siblings(gitdir: Path):

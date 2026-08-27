@@ -54,6 +54,11 @@ import json
 import os
 from pathlib import Path
 from typing import Any, Optional
+from coordinator_core.install.write_surface import (
+    ShapedClause,
+    WriteSurfaceDeclaration,
+    WriteSurfaceEntry,
+)
 
 #: The record file the platform reads to resolve an installed plugin.
 _INSTALLED_PLUGINS_REL = ("plugins", "installed_plugins.json")
@@ -69,6 +74,35 @@ STATUS_NO_ENTRY = "no-entry"
 STATUS_ALREADY_LIVE = "already-live"
 STATUS_REPOINTED = "repointed"
 STATUS_UNREADABLE = "unreadable"
+
+
+
+# The single write this module performs: repointing the live plugin record
+# so a marketplace-installed copy stops shadowing the working tree. Declared
+# SHAPED rather than STATIC because the destination root is the caller's
+# `claude_home` parameter, not a constant this module owns -- only the tail
+# (`plugins/installed_plugins.json`) is fixed.
+WRITE_SURFACE = WriteSurfaceDeclaration(
+    writer_id="live-plugin-registration",
+    source_module="coordinator_core.install.live_plugin_registration",
+    clauses=(
+        ShapedClause(
+            discovered_by="assert_live_plugin_registration (claude_home param)",
+            entry_template=WriteSurfaceEntry(
+                kind="file-path",
+                path="<caller-supplied-claude_home>/plugins/installed_plugins.json",
+                reason=(
+                    "_atomic_write_json rewrites each matching plugin "
+                    "record's installPath to the live plugin root and drops "
+                    "its gitCommitSha. Gated twice: `dry_run` suppresses the "
+                    "write entirely, and `changed` stays False when every "
+                    "record already points live, so the already-live path "
+                    "performs no write at all"
+                ),
+            ),
+        ),
+    ),
+)
 
 
 def read_plugin_name(live_plugin_root: Path) -> Optional[str]:
@@ -90,6 +124,30 @@ def read_plugin_name(live_plugin_root: Path) -> Optional[str]:
 
 def _same_path(a: str, b: str) -> bool:
     return os.path.normcase(os.path.normpath(a)) == os.path.normcase(os.path.normpath(b))
+
+
+def _is_within(candidate: str, root: str) -> bool:
+    """Whether `candidate` sits inside `root`.
+
+    WHY NOT A BARE `os.path.commonpath`. On Windows that raises
+    `ValueError: Paths don't have the same drive` for two absolute paths on
+    different drives -- and different drives is not an error condition here,
+    it is the clearest possible NO. A plugin recorded at `X:/...` against a
+    cache root at `C:/...` is simply not a displaced copy inside the cache,
+    and the caller wants that answer rather than an exception. The same
+    ValueError also fires for a mixed relative/absolute pair, which is
+    likewise a NO rather than a fault.
+
+    Negative-spec: resolves nothing and touches no disk -- a pure string
+    comparison over normcase/normpath, matching `_same_path` above. A
+    symlinked path that reaches into `root` by another name reads as
+    outside; that is deliberate, because the records this reads are compared
+    literally elsewhere in this module too.
+    """
+    try:
+        return _same_path(os.path.commonpath([candidate, root]), root)
+    except ValueError:
+        return False
 
 
 def assert_live_plugin_registration(
@@ -152,7 +210,7 @@ def assert_live_plugin_registration(
                 previous
                 if isinstance(previous, str)
                 and not _same_path(previous, live_str)
-                and _same_path(os.path.commonpath([previous, cache_root]), cache_root)
+                and _is_within(previous, cache_root)
                 else None
             )
             report["entries"].append({

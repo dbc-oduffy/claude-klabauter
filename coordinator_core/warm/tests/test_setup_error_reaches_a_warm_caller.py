@@ -109,7 +109,7 @@ def _run_dispatch_with(monkeypatch, fake_dispatch):
 
 
 def test_server_attaches_collected_diagnostics_to_the_frame(monkeypatch):
-    async def fake_dispatch(msg):
+    async def fake_dispatch(msg, *, caller=None):
         emit_diagnostic("fleet op setup error: scoped_to.sha does not resolve")
         return {"jsonrpc": "2.0", "id": 1, "result": {"exit_code": 1, "mode": "send"}}
 
@@ -122,7 +122,7 @@ def test_server_attaches_collected_diagnostics_to_the_frame(monkeypatch):
 
 
 def test_server_adds_no_key_when_the_op_emitted_nothing(monkeypatch):
-    async def fake_dispatch(msg):
+    async def fake_dispatch(msg, *, caller=None):
         return {"jsonrpc": "2.0", "id": 1, "result": {"exit_code": 0, "mode": "send"}}
 
     response = _run_dispatch_with(monkeypatch, fake_dispatch)
@@ -133,11 +133,11 @@ def test_server_does_not_leak_one_requests_diagnostics_into_the_next(monkeypatch
     """Connections are served on their own threads against one long-lived
     process — the reason this is a per-request ContextVar and not a capture of
     the process-global `sys.stderr`."""
-    async def noisy(msg):
+    async def noisy(msg, *, caller=None):
         emit_diagnostic("first request's reason")
         return {"jsonrpc": "2.0", "id": 1, "result": {"exit_code": 1}}
 
-    async def quiet(msg):
+    async def quiet(msg, *, caller=None):
         return {"jsonrpc": "2.0", "id": 2, "result": {"exit_code": 0}}
 
     first = _run_dispatch_with(monkeypatch, noisy)

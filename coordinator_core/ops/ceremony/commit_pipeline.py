@@ -166,6 +166,8 @@ from coordinator_core.wire_paths import rel_id as _archive_sweep_rel_id
 _chunk_paths = git_native._chunk_paths
 _DIVERGENCE_CHECK_ARGV_BUDGET_CHARS = git_native._DIVERGENCE_CHECK_ARGV_BUDGET_CHARS
 
+from coordinator_core.git.commit_context import CommitContext, build_commit_context
+from coordinator_core.git.git_index import IndexParseError as _ScopedIndexParseError
 from coordinator_core.git.git_state import (
     IndexParseError,
     head_blobs,
@@ -740,12 +742,28 @@ class WorktreeDeletionProbeFailed(Exception):
     """
 
 
-def _worktree_deleted_paths(root: Path, paths: Sequence[str]) -> Set[str]:
+def _worktree_deleted_paths(
+    root: Path, paths: Sequence[str], context: Optional[CommitContext] = None
+) -> Set[str]:
     """ONE unscoped, fail-loud `git status --no-optional-locks
     --porcelain=v2 -z` read for `explicit_stage()`'s unstaged-deletion
     classification probe, intersected in-process against `paths` --
     the fail-loud replacement for the old `git ls-files --deleted` probe
     (`WorktreeDeletionProbeFailed`'s own docstring covers that incident).
+
+    `context` (C6, docs/plans/2026-08-27-the-commit-op-resolves-one-pass-
+    context.md) -- OPTIONAL, an already-resolved `CommitContext` scoped to
+    (at least) `paths`, from `explicit_stage()`'s own generation-A context
+    build. When given, this call answers entirely off `context` (`index is
+    not None and not on_disk` is the same "staged but missing from disk"
+    predicate the in-process `read_index` fast path below implements) and
+    performs NO `read_index` call of its own -- the whole reason the caller
+    builds one context and shares it across this function and the
+    ignore-index pre-filter, instead of each doing its own full walk.
+    `None` (the default) preserves this function's own pre-C6 behaviour
+    exactly, `read_index` call and `git status` fallback included -- every
+    caller outside this pass (and every existing test invoking this
+    function directly) is unaffected.
 
     Returns the CWD-relative name subset of `paths` whose worktree content
     is missing while its index still matches HEAD (a plain `rm` never
@@ -826,6 +844,16 @@ def _worktree_deleted_paths(root: Path, paths: Sequence[str]) -> Set[str]:
     # handles and this reader declines, so the capability must not narrow.
     # → docs/plans/2026-08-26-the-commit-op-stops-asking-git-eleven-times.md C2
     requested_keys = {_worktree_key(root, p) for p in paths}
+
+    if context is not None:
+        return {
+            key
+            for key in requested_keys
+            if (path_ctx := context.paths.get(key)) is not None
+            and path_ctx.index is not None
+            and not path_ctx.on_disk
+        }
+
     try:
         snapshot = read_index(root)
     except IndexParseError:
@@ -991,7 +1019,7 @@ def _require_worktree_root(worktree_root: Union[str, Path]) -> Path:
 
 
 def _swept_rename_delete_paths(
-    root: Path, paths: Sequence[str]
+    root: Path, paths: Sequence[str], context: Optional[CommitContext] = None
 ) -> Tuple[Dict[str, str], Set[str]]:
     """`(swept_rename, swept_delete)` for `paths` -- the same two facts
     `explicit_stage()` used to read via a single unpathspec'd `git diff
@@ -1002,6 +1030,24 @@ def _swept_rename_delete_paths(
     path (see that gate's own `_is_staged` for the identical index-vs-HEAD
     shape this mirrors) -- with a scoped git fallback for the one case an
     index/HEAD comparison genuinely cannot answer on its own.
+
+    `context` (C6, docs/plans/2026-08-27-the-commit-op-resolves-one-pass-
+    context.md) -- OPTIONAL, an already-resolved `CommitContext` scoped to
+    (at least) `paths`, from `explicit_stage()`'s own generation-A context
+    build. This function's REVERSE sha->paths rename search still cannot be
+    answered from `context` (a concurrent peer's rename destination is, by
+    construction, never a path this call's own pathspec names -- see
+    `commit_context`'s own "NOTHING materialises an entry outside `paths`"
+    section), so `context` is used ONLY to answer the cheaper, narrower
+    question this function asks FIRST: "is any of `paths` even absent from
+    the index?" When `context` shows every requested path present (the
+    overwhelming-majority case -- nothing was swept), this function returns
+    empty results WITHOUT its own `read_index` call at all. Only when at
+    least one path is genuinely absent does it fall back to the full
+    `read_index` walk the reverse search needs -- unchanged from this
+    function's pre-C6 behaviour for that (rare) case. `None` (the default)
+    preserves this function's own pre-C6 behaviour exactly for every caller
+    outside this pass.
 
     A path `p` that is absent from the current index but present at HEAD is
     either a swept DELETE or a swept RENAME. An EXACT `(mode, sha)` match
@@ -1033,8 +1079,21 @@ def _swept_rename_delete_paths(
     if not paths:
         return swept_rename, swept_delete
 
+    if context is not None:
+        absent_from_index = [
+            p
+            for p in paths
+            if (path_ctx := context.paths.get(p)) is None or path_ctx.index is None
+        ]
+        if not absent_from_index:
+            return swept_rename, swept_delete
+
     index_snapshot = read_index(root)
-    head_result = head_blobs(root, paths)
+    absent_from_index = [p for p in paths if p not in index_snapshot]
+    if not absent_from_index:
+        return swept_rename, swept_delete
+
+    head_result = head_blobs(root, absent_from_index)
     if not head_result:
         return swept_rename, swept_delete
 
@@ -1042,11 +1101,9 @@ def _swept_rename_delete_paths(
     for ip, entry in index_snapshot.items():
         sha_to_paths.setdefault(entry.sha, []).append(ip)
 
-    for p in paths:
+    for p in absent_from_index:
         head_entry = head_result.get(p)
         if head_entry is None:
-            continue
-        if p in index_snapshot:
             continue
         _, head_sha_value = head_entry
         candidates = [ip for ip in sha_to_paths.get(head_sha_value, []) if ip != p]
@@ -1289,6 +1346,32 @@ def explicit_stage(
     if not paths:
         return StageOutcome(exit_code=0, skipped=["stage:no-paths-provided"])
 
+    # C6 (docs/plans/2026-08-27-the-commit-op-resolves-one-pass-context.md):
+    # ONE generation-A pass context, scoped to this call's own `paths` --
+    # the single scoped index walk shared by `_worktree_deleted_paths()`
+    # (R2) and the ignore-index pre-filter (R3) below, replacing what were
+    # TWO separate full `read_index()` walks (one per consumer) with ONE
+    # `build_commit_context()` call. `_swept_rename_delete_paths()` (R1,
+    # just below) is now ALSO threaded through this context, but only for
+    # its cheaper "is anything even absent from the index" pre-check -- its
+    # reverse sha->paths rename search still needs the FULL index (a
+    # concurrent peer's rename destination is, by construction, never a
+    # path this call's own pathspec names), which a context scoped to
+    # `paths` cannot answer, so that fallback keeps its own `read_index`
+    # call unchanged for the rare case at least one path is genuinely
+    # absent. A parse failure
+    # here (`IndexV4Unsupported`/`IndexParseError`, from
+    # `coordinator_core.git.git_index` -- a SEPARATE exception hierarchy
+    # from `git_state.IndexParseError`, see `commit_context`'s own
+    # docstring) folds to `context=None`: every consumer below still has its
+    # own unchanged fallback for that case, exactly as before this chunk.
+    try:
+        gen_a_context: Optional[CommitContext] = build_commit_context(
+            root, [_worktree_key(root, p) for p in paths]
+        )
+    except _ScopedIndexParseError:
+        gen_a_context = None
+
     # C2 (2026-08-26, state/dispatch-briefs/2026-08-26-the-commit-op-stops-
     # asking-git-eleven-times/C2.md, spawn 1): the pre-add "what's already
     # swept" read, in-process via `read_index` + `head_blobs` -- see
@@ -1302,7 +1385,7 @@ def explicit_stage(
     # propagating.
     try:
         swept_rename, swept_delete = _swept_rename_delete_paths(
-            root, [_worktree_key(root, p) for p in paths]
+            root, [_worktree_key(root, p) for p in paths], context=gen_a_context
         )
     except IndexParseError:
         swept_rename = {}
@@ -1332,7 +1415,7 @@ def explicit_stage(
     # and converted into a `StageOutcome` failure, mirroring the divergence
     # check's own `try`/`except` shape a few lines down.
     try:
-        worktree_deleted = _worktree_deleted_paths(root, paths)
+        worktree_deleted = _worktree_deleted_paths(root, paths, context=gen_a_context)
     except WorktreeDeletionProbeFailed as exc:
         return StageOutcome(
             exit_code=-1,
@@ -1441,17 +1524,33 @@ def explicit_stage(
     # that silently disagreed with git would be worse than the ~22ms it
     # saves. Where a real pattern question remains, THE SPAWN ANSWERS IT.
     # → docs/plans/2026-08-26-the-commit-op-stops-asking-git-eleven-times.md C2c
+    # C6: reuses `gen_a_context` (built once, above) instead of its own
+    # `read_index` call -- a path is tracked iff its context entry's `index`
+    # field is not `None`, the identical "present in the index" test the
+    # pre-C6 `_worktree_key(root, p) not in _ignore_index` membership check
+    # made against a freshly-read full snapshot. Falls back to that same
+    # per-call `read_index` when `gen_a_context` is `None` (a parse failure
+    # already folded above), preserving this pre-filter's own behaviour
+    # exactly for that case.
     ignored_caller_paths: List[str] = []
     ignore_candidates = existing
     if existing:
-        try:
-            _ignore_index = read_index(root)
-        except IndexParseError:
-            _ignore_index = None
-        if _ignore_index is not None:
+        if gen_a_context is not None:
             ignore_candidates = [
-                p for p in existing if _worktree_key(root, p) not in _ignore_index
+                p
+                for p in existing
+                if (path_ctx := gen_a_context.paths.get(_worktree_key(root, p))) is None
+                or path_ctx.index is None
             ]
+        else:
+            try:
+                _ignore_index = read_index(root)
+            except IndexParseError:
+                _ignore_index = None
+            if _ignore_index is not None:
+                ignore_candidates = [
+                    p for p in existing if _worktree_key(root, p) not in _ignore_index
+                ]
     if ignore_candidates:
         ignore_result = git_native.check_ignore(root, ignore_candidates)
         if ignore_result.returncode in (0, 1):

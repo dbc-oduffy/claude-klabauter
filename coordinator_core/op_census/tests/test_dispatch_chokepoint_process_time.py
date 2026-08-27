@@ -27,16 +27,30 @@ def _burn(ms: float) -> None:
 
 @pytest.fixture
 def sink(monkeypatch):
-    """Capture telemetry rows instead of writing them to the real sink."""
+    """Capture telemetry rows, and restore the op registry afterwards.
+
+    `register_op` mutates the process-wide `ipc._REGISTRY`. Left unrestored,
+    these fixture ops leak into every later test in the same process — which is
+    how this file first broke `test_dispatch_message.py`'s
+    `test_op_key_scope_table_covers_all_registered_ops`: that test enumerates
+    the live registry and found ops with no `_OP_KEY_SCOPE` entry. Registering
+    inside a snapshot/restore keeps a test double out of everyone else's
+    registry, the same shape as `_RegistryScope` in the ipc test modules.
+    """
     import coordinator_core.telemetry.op_latency as ol
 
     rows = []
     monkeypatch.setattr(ol, "_write_entry", lambda entry, repo_root=None: rows.append(entry))
+    before = dict(ipc._REGISTRY)
     try:
         ipc.allow_unstamped_dispatch()
     except Exception:
         pass
-    return rows
+    try:
+        yield rows
+    finally:
+        ipc._REGISTRY.clear()
+        ipc._REGISTRY.update(before)
 
 
 def _process_rows(rows, op):
@@ -128,16 +142,48 @@ def test_a_concurrent_sibling_downgrades_the_scope(sink) -> None:
     assert scopes == {ipc.MEASUREMENT_SCOPE_PROCESS_WIDE}, scopes
 
 
-def test_the_in_flight_counter_survives_a_raising_handler(sink) -> None:
-    """A leaked in-flight slot would permanently downgrade every later row on
+def test_a_sibling_contained_entirely_within_a_span_is_still_caught(sink) -> None:
+    """The case two-point sampling missed (slice-a Finding 1): a sibling that
+    both starts and finishes strictly INSIDE a longer dispatch's span. Neither
+    of the old sample points saw it, yet its CPU was in the long op's delta, so
+    the row claimed `per_op_handler` — the narrowest scope, the one the
+    brightline is read in — while carrying another op's CPU."""
+    started = threading.Event()
+
+    @ipc.register_op("test.contained_long")
+    def _long(params, repo_root=None):
+        started.set()
+        _burn(400)
+        return {"exit_code": 0}
+
+    @ipc.register_op("test.contained_short")
+    def _short(params, repo_root=None):
+        _burn(20)
+        return {"exit_code": 0}
+
+    t = threading.Thread(target=lambda: _dispatch("test.contained_long"))
+    t.start()
+    assert started.wait(timeout=5)
+    time.sleep(0.05)          # land wholly inside the long op's span
+    _dispatch("test.contained_short")
+    t.join()
+
+    for op in ("test.contained_long", "test.contained_short"):
+        assert _process_rows(sink, op)[0]["measurement_scope"] == (
+            ipc.MEASUREMENT_SCOPE_PROCESS_WIDE
+        ), op
+
+
+def test_the_active_dispatch_list_survives_a_raising_handler(sink) -> None:
+    """A leaked active record would permanently downgrade every later row on
     this process to PROCESS_WIDE — a silent, sticky loss of the per-op scope."""
     @ipc.register_op("test.chokepoint_boom")
     def _h(params, repo_root=None):
         raise RuntimeError("boom")
 
-    before = ipc._IN_FLIGHT_DISPATCHES
+    before = len(ipc._ACTIVE_DISPATCHES)
     _dispatch("test.chokepoint_boom")
-    assert ipc._IN_FLIGHT_DISPATCHES == before
+    assert len(ipc._ACTIVE_DISPATCHES) == before
     assert _process_rows(sink, "test.chokepoint_boom"), "a failed op still cost CPU"
 
 
@@ -146,6 +192,14 @@ def test_meter_never_blends_measurement_scopes() -> None:
     a number in no unit at all — the hazard `measurement_scope` exists to stop."""
     from coordinator_core.op_census import meter
 
+    # All three, not just the default: `meter` re-declares these literals, so a
+    # rename on one side alone would silently desync its filter from the values
+    # actually written to disk, and rows would read as "no samples" rather than
+    # "a literal drifted" (slice-a Finding 4).
+    assert meter.SCOPE_PER_OP_HANDLER == ipc.MEASUREMENT_SCOPE_PER_OP_HANDLER
+    assert meter.SCOPE_PER_OP_PROCESS == ipc.MEASUREMENT_SCOPE_PER_OP_PROCESS
+    assert meter.SCOPE_PROCESS_WIDE == ipc.MEASUREMENT_SCOPE_PROCESS_WIDE
+    assert set(meter.SCOPES) == set(ipc._MEASUREMENT_SCOPES)
     assert meter.DEFAULT_SCOPE == ipc.MEASUREMENT_SCOPE_PER_OP_HANDLER
     with pytest.raises(ValueError, match="unknown measurement scope"):
         meter.measure(ipc.Path("."), scope="per-op-handler")

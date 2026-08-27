@@ -75,15 +75,43 @@ def test_per_item_sites_are_named_not_folded_into_a_bound():
 
 
 def test_read_fact_span_rows_bounded_and_filtered(tmp_path, monkeypatch):
+    """The fixture shape here is ONE ROW PER FACT, carrying a `fact` name —
+    what `session_facts._timed_fact` actually emits. The buffered
+    `{"facts": {...}}` map was the plan's preferred shape and was never built
+    (C1's `record_fact_span` docstring says why: the flush hook would have to
+    live in `quick_wrap_assemble/__init__.py`, outside C1's `writes:` scope)."""
     sink = tmp_path / "op-latency.jsonl"
     rows = [
-        {"kind": "fact_span", "t_start": 100.0, "sid": "s1", "facts": {}},
+        {
+            "kind": "fact_span",
+            "t_start": 100.0,
+            "sid": "s1",
+            "fact": "session_facts.session_pickup_kind",
+            "elapsed_ms": 2.0,
+            "outcome": "computed",
+        },
         {"kind": "complete", "op": "handoff.reconcile_open"},  # not a fact_span row
-        {"kind": "fact_span", "t_start": 101.0, "sid": "s2", "facts": {}},
+        {
+            "kind": "fact_span",
+            "t_start": 101.0,
+            "sid": "s2",
+            "fact": "session_facts.session_diff_brightline",
+            "elapsed_ms": 9.0,
+            "outcome": "computed",
+        },
+        # Synthetic microbenchmark row under the same `session_facts.` prefix —
+        # excluded by name, never by prefix. See PRODUCTION_FACT_ROW_NAMES.
+        {
+            "kind": "fact_span",
+            "t_start": 102.0,
+            "sid": "s3",
+            "fact": "session_facts.microbench_noop",
+            "elapsed_ms": 0.0,
+            "outcome": "computed",
+        },
     ]
     _write_jsonl(sink, rows)
 
-    monkeypatch.setattr(flhp, "read_fact_span_rows", flhp.read_fact_span_rows)
     import coordinator_core.telemetry.op_latency as op_latency
 
     monkeypatch.setattr(op_latency, "sink_generations", lambda repo_root: [sink])
@@ -91,6 +119,10 @@ def test_read_fact_span_rows_bounded_and_filtered(tmp_path, monkeypatch):
     result = flhp.read_fact_span_rows(Path("unused-repo-root"))
     assert len(result) == 2
     assert all(r["kind"] == "fact_span" for r in result)
+    assert [r["fact"] for r in result] == [
+        "session_facts.session_pickup_kind",
+        "session_facts.session_diff_brightline",
+    ]
 
 
 def test_compute_timing_distributions_splits_computed_and_degraded():
@@ -272,3 +304,74 @@ def test_render_include_ambient_false_skips_the_join(tmp_path, monkeypatch):
 
     report = flhp.render(tmp_path, include_ambient=False)
     assert report.ambient_context == []
+
+
+def test_per_fact_rows_are_grouped_by_sid_into_a_ceremony_aggregate():
+    """The shape C1 actually emits. The aggregate must be the SUM across one
+    ceremony's facts, not one row per fact — an aggregate built per-row would
+    report the facade at the cost of its cheapest single fact."""
+    rows = [
+        {
+            "kind": "fact_span",
+            "sid": "s1",
+            "fact": "session_facts.session_pickup_kind",
+            "elapsed_ms": 10.0,
+            "outcome": "computed",
+        },
+        {
+            "kind": "fact_span",
+            "sid": "s1",
+            "fact": "session_facts.session_diff_brightline",
+            "elapsed_ms": 90.0,
+            "outcome": "computed",
+        },
+        {
+            "kind": "fact_span",
+            "sid": "s2",
+            "fact": "session_facts.session_pickup_kind",
+            "elapsed_ms": 20.0,
+            "outcome": "computed",
+        },
+    ]
+
+    result = flhp.compute_timing_distributions(rows)
+
+    assert result["per_fact"]["session_pickup_kind"].computed_ms == [10.0, 20.0]
+    assert result["per_fact"]["session_diff_brightline"].computed_ms == [90.0]
+    assert sorted(result["aggregate"].computed_ms) == [20.0, 100.0]
+
+
+def test_a_degraded_per_fact_row_lands_in_the_degraded_population():
+    rows = [
+        {
+            "kind": "fact_span",
+            "sid": "s1",
+            "fact": "session_facts.session_fold_sidecars",
+            "elapsed_ms": 3.0,
+            "outcome": "degraded",
+        },
+    ]
+
+    result = flhp.compute_timing_distributions(rows)
+
+    stats = result["per_fact"]["session_fold_sidecars"]
+    assert stats.degraded_ms == [3.0]
+    assert stats.computed_ms == []
+    assert result["aggregate"].computed_ms == []
+
+
+def test_a_per_fact_row_without_a_sid_is_excluded_from_the_aggregate():
+    rows = [
+        {
+            "kind": "fact_span",
+            "sid": None,
+            "fact": "session_facts.session_terminal_sizings",
+            "elapsed_ms": 55.0,
+            "outcome": "computed",
+        },
+    ]
+
+    result = flhp.compute_timing_distributions(rows)
+
+    assert result["per_fact"]["session_terminal_sizings"].computed_ms == [55.0]
+    assert result["aggregate"].computed_ms == []

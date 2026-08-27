@@ -79,6 +79,7 @@ _SWEPT_HELP_ENTRYPOINTS = (
     "sizing-assemble.py",
     "snippet-registry.py",
     "staff-session-assemble.py",
+    "sweep-terminal-handoffs.py",
     "workstream-complete-assemble.py",
 )
 

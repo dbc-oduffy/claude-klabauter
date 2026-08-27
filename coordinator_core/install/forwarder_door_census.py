@@ -98,6 +98,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from collections.abc import Sequence
 from typing import Optional
+from coordinator_core.install.write_surface import (
+    StaticClause,
+    WriteSurfaceDeclaration,
+    WriteSurfaceEntry,
+)
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _BIN_DIR = _REPO_ROOT / "coordinator" / "bin"
@@ -128,6 +133,34 @@ _POWERSHELL_FIRST_EXT = ".ps1"
 #: Python `Scripts/` directory (a pip console-script shim) -- starts an
 #: interpreter per call rather than relaying natively.
 _INTERPRETER_START_SUFFIXES = (".py", ".ps1", ".cmd", ".bat")
+
+
+
+# The single write this module performs. STATIC, not shaped: `_write_allowlist`
+# takes `allowlist_path` as a defaulted parameter, but the default IS the
+# constant destination below and no production caller overrides it -- the
+# parameter exists so the module's own tests can point it at a tmp_path.
+WRITE_SURFACE = WriteSurfaceDeclaration(
+    writer_id="forwarder-door-census",
+    source_module="coordinator_core.install.forwarder_door_census",
+    clauses=(
+        StaticClause(
+            entries=(
+                WriteSurfaceEntry(
+                    kind="file-path",
+                    path="coordinator_core/ops/warm_entrypoint_allowlist.json",
+                    reason=(
+                        "_write_allowlist regenerates the committed warm-load "
+                        "allowlist from the door-eligible bucket, UNION'd with "
+                        "the names already present -- it only ever adds, never "
+                        "removes, so a name seeded by C1 survives a re-census. "
+                        "In-repo committed artifact, not machine state"
+                    ),
+                ),
+            ),
+        ),
+    ),
+)
 
 
 def _settings_home_root() -> Path:
