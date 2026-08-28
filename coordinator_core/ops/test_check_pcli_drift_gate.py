@@ -164,6 +164,30 @@ def test_hash_drift_fires_on_mismatch(tmp_path):
     assert any("hash mismatch" in r for r in reasons)
 
 
+def test_hash_drift_is_eol_insensitive(tmp_path):
+    """The digest is a cross-repo agreement with DoE's export generator, so it
+    must not depend on which OS checked the sources out. CRLF and LF content
+    that differs only in line endings hashes identically on both sides."""
+    lf = tmp_path / "lf.md"
+    crlf = tmp_path / "crlf.md"
+    lf.write_bytes(b"alpha\nbeta\n")
+    crlf.write_bytes(b"alpha\r\nbeta\r\n")
+    expected = hashlib.sha256(b"alpha\nbeta\n").hexdigest()
+
+    assert gate.compute_hash_drift(tmp_path, "sha256", {"lf.md": expected}) == []
+    assert gate.compute_hash_drift(tmp_path, "sha256", {"crlf.md": expected}) == []
+
+
+def test_hash_drift_still_fires_on_real_content_change(tmp_path):
+    """EOL normalization must not soften the leg: a genuine content edit still
+    drifts, so the CRLF tolerance above is not blanket tolerance."""
+    target = tmp_path / "file.md"
+    target.write_bytes(b"alpha\r\nbeta\r\n")
+    expected = hashlib.sha256(b"alpha\nGAMMA\n").hexdigest()
+    reasons = gate.compute_hash_drift(tmp_path, "sha256", {"file.md": expected})
+    assert any("hash mismatch" in r for r in reasons)
+
+
 def test_hash_drift_raises_gate_error_on_unsupported_algorithm(tmp_path):
     with pytest.raises(gate.GateError):
         gate.compute_hash_drift(tmp_path, "not-a-real-algorithm", {})

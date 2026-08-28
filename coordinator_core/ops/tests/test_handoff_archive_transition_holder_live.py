@@ -62,10 +62,30 @@ pytestmark = [
 ]
 
 _OP_NAME = "handoff.archive_transition"
-assert _OP_NAME in _REGISTRY, (
-    f"import guard failed: {_OP_NAME!r} not in _REGISTRY — "
-    "coordinator_core.ops.handoff_archive_transition @register_op did not fire"
-)
+# The import guard below was an `assert` at module scope until 2026-08-28, when it
+# turned a deliberate kill into a COLLECTION ERROR for the whole tree: `handoff.
+# archive_transition` was retired under the 200ms process-time bar (d20d56893, plan
+# "The remainder of the killed op surface"), which stripped its `@register_op`, and
+# the module itself now says so at its own line 890 — "Re-adding `@register_op` puts
+# a deleted op back over the bar." An assert that fires at import makes every pytest
+# run across `coordinator_core/` interrupt at collection, so the fast tier stopped
+# being runnable fleet-wide for a reason unrelated to any test in it.
+#
+# Skip rather than delete, and rather than mute. Deleting pre-empts a disposition
+# that is not this file's to make: the housekeeping REQUIREMENT these tests belong to
+# is carried by `pln-one-corpus-read-or-the-houseke-18d29a`, still `status: draft`.
+# The skip is self-retiring — it keys off the registry, so if that plan ever lands a
+# v2 op under this name these tests collect again on their own, and if it lands under
+# a new name (the norm — kill means kill forever) they stay skipped until deleted with
+# the rest of the killed surface. A skip is visible in a run summary; a collection
+# error is only visible as the absence of everything after it.
+if _OP_NAME not in _REGISTRY:
+    pytest.skip(
+        f"{_OP_NAME} was retired under the 200ms bar (d20d56893) — these tests pin "
+        "the killed op's behaviour and are held for the killed-op surface sweep; "
+        "disposition owned by pln-one-corpus-read-or-the-houseke-18d29a",
+        allow_module_level=True,
+    )
 
 
 class _Repo:

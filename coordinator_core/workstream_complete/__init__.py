@@ -1362,6 +1362,8 @@ def build_directives(
     # this close).
     _brightline_args = review_brightline_gate_directive.get("args") or []
     close_coverage_diff_base = _brightline_args[2] if len(_brightline_args) == 3 else None
+    if close_coverage_diff_base is None:
+        close_coverage_diff_base = _session_own_range_from_disk(repo_root, gate.sid)
     close_coverage_changed_files = list(decisions.get("stage_paths") or [])
     directives.append(
         directives_review.build_close_coverage_advisory_directive(
@@ -3835,6 +3837,48 @@ def _git_is_ancestor(root: Path, ancestor_sha: str, descendant_sha: str) -> bool
     except (OSError, subprocess.SubprocessError):
         return False
     return proc.returncode == 0
+
+
+def _session_own_range_from_disk(root: Optional[Path], sid: Optional[str]) -> Optional[str]:
+    """This session's own commit range, resolved with ZERO added subprocesses.
+
+    The close ceremony's ordinary single-close path never resolves
+    `floor_kwargs` (no prior review-trail record), so the review-brightline
+    gate directive's argv carries no range for the close coverage advisory to
+    reuse. Without this, the advisory takes its silent leg on exactly the
+    path it was funded for -- the author closing a first session, who is the
+    one most likely to hold uncredited commits.
+
+    Both endpoints come from disk, never from git:
+
+    - The floor is `.git/coordinator-sessions/<sid>/head_at_start`, written
+      at session start, a concrete 40-hex sha.
+    - The tip is the literal token `HEAD`, which `git log <sha>..HEAD`
+      resolves itself. Calling `_resolve_head_sha` here to get a concrete sha
+      would buy a `rev-parse` this range does not need.
+
+    Returns `None` -- and the advisory then stays silent, per D2 -- on any
+    missing/unreadable file or malformed sha. Never raises, never spawns."""
+    if root is None or not sid:
+        return None
+    try:
+        floor = (root / ".git" / "coordinator-sessions" / sid / "head_at_start").read_text(
+            encoding="utf-8"
+        ).strip()
+    except (OSError, ValueError):
+        return None
+    if not _is_concrete_sha_str(floor):
+        return None
+    return f"{floor}..HEAD"
+
+
+def _is_concrete_sha_str(value: str) -> bool:
+    """40 hex digits, nothing else -- the same strictness
+    `directives_review._is_concrete_sha` applies, kept local so this module
+    stays `directives_review`-independent on the read path."""
+    if len(value) != 40:
+        return False
+    return all(c in "0123456789abcdefABCDEF" for c in value)
 
 
 def _resolve_head_sha(root: Path) -> Optional[str]:

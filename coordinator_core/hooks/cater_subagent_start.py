@@ -174,6 +174,7 @@ from coordinator_core.subagent_sandbox.provision_report import (
     _exit_interview_section,
     _frontmatter,
     _provision,
+    _receipt_agent_type,
     _sanitize_segment,
     assemble_contract_blocks_for_payload,
 )
@@ -826,9 +827,26 @@ def _resolve_sidecar_leg(
     # Same shape gate as above: an eligible type whose `_provision` came
     # back empty still only gets a sentinel when `agent_id` is in the
     # EM-derivable canonical shape.
+    #
+    # The stamped type is RESOLVED against the same vocabulary the
+    # `sidecar_eligible` gate just consulted, not raw `agent_type`. That gate
+    # reads BOTH legs, so a named dispatch admitted via `subagent_type` would
+    # otherwise be recorded under `agent_type` -- which for a named dispatch is
+    # the teammate's NAME, as this function's own docstring states. Two-leg
+    # gate, one-leg record: the same asymmetry fixed in `provision_report`'s
+    # receipt stamp and, earlier, in `block_reviewer_bash_outside_allowlist`'s
+    # `effective_type` selection (its Divergence 16). Nothing reads this field
+    # programmatically today, so this is a correctness-of-record fix rather
+    # than a live-defect one -- but the sentinel is a file an EM opens and
+    # reads, and it named the wrong agent.
     sentinel_path = ""
     if agent_id and _NAMED_TEAMMATE_CANONICAL_SHAPE_RE.fullmatch(agent_id):
-        sentinel_path = _write_miss_sentinel(payload, cwd, agent_id, agent_type)
+        sentinel_path = _write_miss_sentinel(
+            payload,
+            cwd,
+            agent_id,
+            _receipt_agent_type(agent_type or "", subagent_type or "", policy.report_sidecar),
+        )
     return sentinel_path, _compose_sidecar_miss_text(
         sentinel_path, is_named=bool(agent_id and _is_named_teammate_agent_id(agent_id))
     )

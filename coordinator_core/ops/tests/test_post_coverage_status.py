@@ -261,10 +261,10 @@ def test_no_token_posts_nothing_rather_than_assuming_covered(monkeypatch):
     assert computed == [], "an unpostable run must not spend the verdict computation"
 
 
-def test_credential_manager_leg_is_inert_off_windows(monkeypatch):
-    monkeypatch.setattr(pcs_mod.sys, "platform", "linux")
-
-    assert pcs_mod._token_from_windows_credential_manager() is None
+def test_credential_manager_leg_is_inert_off_windows():
+    # Review: coordinatorcode-reviewer Finding 1 -- inject the platform value
+    # rather than mutating the process-wide sys.platform singleton.
+    assert pcs_mod._token_from_windows_credential_manager(platform="linux") is None
 
 
 @pytest.mark.parametrize(

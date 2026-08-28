@@ -85,15 +85,29 @@ NEGATIVE-SPEC
     seam in claude-klabauter at `4dc8e6633`, counting every `subprocess.Popen`/`os.system`
     the process raised; before it the counter saw the git chokepoint only, so a
     private `subprocess.run` was invisible. A row carries the new meaning only if
-    the engine that WROTE it had that commit. The published klabauter mirror
-    (whose path `coordinator-invoke.exe` pins as its `engine_root`; resolve it
-    with `machine-local get repos.klabauter`, never a literal drive letter) is a
-    separate tree on its own publish cadence, so rows written
-    through the installed exe keep the git-only meaning until the fix percolates
-    there — a date filter will misread every one of them. Both meanings remain a
-    floor against job accounting. A population spanning the move mixes them in
-    one column and the git-only half reads low. Said on the row, said here, and
-    said in the rendered output.
+    the engine that WROTE it had that commit — but NO FIELD on any sink row
+    names which engine tree or commit wrote it, so that is a description of the
+    mechanism, not a rule a reader can APPLY to a given row: there is no
+    row-level test for "which meaning does row X carry?" The published
+    klabauter mirror (whose path `coordinator-invoke.exe` pins as its
+    `engine_root`; resolve it with `machine-local get repos.klabauter`, never a
+    literal drive letter) is a separate tree on its own publish cadence, so rows
+    written through the installed exe keep the git-only meaning until the fix
+    percolates there — a date filter will misread every one of them, because
+    the split is per-tree, not per-timestamp. Nothing on disk records WHEN that
+    percolation happens; the only way to check is to resolve the mirror's path
+    and read ITS OWN commit against `4dc8e6633` directly, out-of-band, rather
+    than from anything in the sink. Absent that external check, read a
+    population CONSERVATIVELY: treat it as possibly git-only throughout, since a
+    population cannot establish for itself which meaning its own rows carry.
+    Both meanings remain a floor against job accounting — plausibly by ~2x on a
+    git-heavy path even at the wider meaning
+    (`telemetry.spawn_counter`'s own negative-spec: 8 Python-created processes
+    against 16 job-accounted on the same gate path,
+    `state/audits/2026-08-25-close-ceremony-gate-path-caller-census.md`). A
+    population spanning the move mixes both meanings in one column, unreadably
+    and after the fact irreversibly, and the git-only half reads low. Said here
+    and said in the rendered output.
 
 Spec backlink: state/handoffs/2026-08-25_roadmap-the-meter-02.md
 """
@@ -484,15 +498,25 @@ def render(
             "raised; before it the counter saw the git chokepoint "
             "(coordinator_core.git.run.run_git) only, so a private subprocess.run "
             "was invisible. A row carries the new meaning only if the engine that "
-            "WROTE it had that commit, and the published klabauter mirror is a "
-            "separate tree on its own publish cadence -- so rows written through "
-            "the installed exe keep the git-only meaning until the fix percolates "
-            "there. DO NOT filter this population by date: it will misread every "
-            "such row. A population spanning both meanings mixes them in one "
-            "column and the git-only half reads low. (b) a Python-keyed count is low "
-            "against job accounting regardless: a CreateProcess-keyed census of "
-            "the close ceremony's gate path found 8 Python-created processes "
-            "against 16 counted by the job object, cause unresolved "
+            "WROTE it had that commit -- but no field on any sink row names which "
+            "engine tree or commit wrote it, so that is NOT a rule you can apply "
+            "to a given row; there is no per-row test. The published klabauter "
+            "mirror is a separate tree on its own publish cadence, so rows "
+            "written through the installed exe keep the git-only meaning until "
+            "the fix percolates there. DO NOT filter this population by date: "
+            "the split is per-tree, not per-timestamp, and nothing on disk "
+            "records when percolation happened -- the only check is resolving "
+            "the mirror's path (machine-local get repos.klabauter) and reading "
+            "ITS OWN commit against 4dc8e6633 directly, out-of-band. Absent that "
+            "check, read this population CONSERVATIVELY: assume it is possibly "
+            "git-only throughout, since it cannot establish which meaning its "
+            "own rows carry. A population spanning both meanings mixes them in "
+            "one column, unreadably and after the fact, and the git-only half "
+            "reads low. (b) a Python-keyed count is low against job accounting "
+            "regardless, plausibly by ~2x on a git-heavy path even at the wider "
+            "meaning: a CreateProcess-keyed census of the close ceremony's gate "
+            "path found 8 Python-created processes against 16 counted by the "
+            "job object, cause unresolved "
             "(state/audits/2026-08-25-close-ceremony-gate-path-caller-census.md). "
             "Never compare a count from this field against a job-accounted count."
         ),

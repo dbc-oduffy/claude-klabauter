@@ -1265,6 +1265,16 @@ def _write_native_door_forwarder(
 # `test_bin_launcher_parity.py::test_raw_cmdline_entrypoints_matches_substrate_targets`
 # as the drift guard. Extend BOTH sets together, or that test goes red.
 #
+# 2026-08-28: `scoped-git-commit` REMOVED from both sets. DR-344 killed the
+# CLI and 47c78a3a5 deleted the file; the two registrations and four tests
+# naming it were left behind. A set entry naming a non-existent target opts
+# nothing in -- `_agent_cmd_raw_cmdline_block` is only ever reached through
+# `_derive_agent_helper_target_map`, which no longer resolves the name -- so
+# the residue was inert in production and surfaced only as a red suite. The
+# "shrink both sets together in a chunk that owns gen-launcher-shim.py"
+# follow-up recorded below is DISCHARGED by that same change; the sentence
+# is kept because it is the reason the deferral existed, not a live one.
+#
 # CORRECTED (docs/plans/2026-08-15-the-caret-fix-went-to-the-caller-that-never-broke.md):
 # the capture this set opts a target into is NOT a fix for the caret loss, and the
 # 2026-08-10 fix (docs/plans/2026-08-10-caret-fix-on-the-wrong-launcher.md) plus its guard
@@ -1384,7 +1394,6 @@ def _write_dispatch_root_bake(engine_root: Path, root: str, resolution_class: st
 _RAW_CMDLINE_TARGETS = frozenset(
     {
         "coordinator-write-review-trail.py",
-        "scoped-git-commit",
         "cross-repo-memo.py",
         "freeze-review-diff.py",
         "parallel-review-gate-decision.py",

@@ -204,7 +204,7 @@ def _wire(monkeypatch, order, *, dirty=False, scan_rc=0, drift_anchor="marker", 
 
     monkeypatch.setattr(_mod._round, "_read_fresh_round_manifest", _fake_read_fresh_manifest)
     monkeypatch.setattr(
-        _mod._round, "_pathspec_from_manifest", lambda manifest, repo_root: sorted(declared)
+        _mod._round, "_pathspec_from_manifest", lambda manifest, repo_root: (sorted(declared), _mod._round._no_filter_drops())
     )
 
     # The commit leg is an in-process `run_commit_pipeline` call now, not a

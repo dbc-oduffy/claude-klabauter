@@ -128,6 +128,16 @@ import coordinator_core.ops.handoff_author_fork  # noqa: F401
 import coordinator_core.ops.handoff_phase_stamp  # noqa: F401
 import coordinator_core.ops.handoff_archive_transition  # noqa: F401
 
+# d6's door since 2026-08-28. Same REGISTRATION-TRIGGER role as the imports
+# above, and load-bearing for the same reason: `_invoke_op_in_process` resolves
+# out of `coordinator_core.ipc`'s registry, which is empty for a module never
+# imported. `handoff_archive_transition` above stays imported alongside it --
+# `handoff.housekeeping` reaches that module's `_handler` as a LIBRARY for its
+# targeted-transition leg, so the module must load either way; what changed is
+# that its OP KEY is no longer resolved here (it is suspended, and resolving it
+# is what raised `OpSuspendedError` and left every predecessor un-superseded).
+import coordinator_core.ops.handoff_housekeeping  # noqa: F401
+
 # `handoff.transition` (verb="claim") is the single writer d6's ledger
 # reconcile delegates its re-stamp to (`_reconcile_claim_from_ledger`). The
 # import is the REGISTRATION TRIGGER, not decoration: `_invoke_op_in_process`
@@ -280,7 +290,20 @@ def _invoke_op_in_process(op_name: str, params: dict[str, Any], repo_root: Path)
     `handoff.author_fork`/`handoff.stamp_phase`. A `"show_top"`-scoped op gets the
     worktree root unconverted; a `"none"`-scoped op gets `None`, matching
     `resolve_op_repo_key`'s own "no repo state accessed" contract.
+
+    SYNC AND ASYNC HANDLERS BOTH, decided by `inspect.iscoroutinefunction` -- the
+    same predicate `ipc.py`'s own dispatch loop uses, reused here for the same
+    reason the scope table above is: this in-process shortcut must not diverge
+    from the transport path. An unconditional `asyncio.run(handler(...))` works
+    only for coroutine ops and raises `ValueError: a coroutine was expected` on a
+    sync one, which is not a hypothetical shape -- `fleet.archive_terminal_
+    handoffs`, `session.sweep_consumed_handoffs` and `handoff.housekeeping` are
+    all sync at their op boundary, because only their commit leg is a coroutine
+    and making the whole op async for that would push `asyncio.run` onto every
+    caller.
     """
+    import inspect
+
     from coordinator_core.ipc import get_op_handler, OP_KEY_SCOPE
     from coordinator_core.lifecycle import git_common_dir
 
@@ -296,7 +319,9 @@ def _invoke_op_in_process(op_name: str, params: dict[str, Any], repo_root: Path)
     else:
         op_repo_root = None
 
-    return asyncio.run(handler(params, op_repo_root))
+    if inspect.iscoroutinefunction(handler):
+        return asyncio.run(handler(params, op_repo_root))
+    return handler(params, op_repo_root)
 
 
 def _dispatch_handoff_stamp_phase(args: list[str], repo_root: Path) -> dict[str, Any]:
@@ -713,23 +738,38 @@ def _reconcile_claim_from_ledger(
 def _dispatch_handoff_supersede_predecessor(args: list[str], repo_root: Path) -> dict[str, Any]:
     """kind=handoff's d6 (2026-07-27, computed-skills-b4 plan C1 -- the
     push-side succession writer): the fix for a continuation baton's
-    predecessor being left non-terminal forever. Composes the existing op
-    `handoff.archive_transition` mode="supersede" -- stamps the
-    PREDECESSOR status:claimed + deployment_state:continued +
-    continued_into:<this successor> and archives it (git mv to
-    archive/handoffs/YYYY-MM/ + commit), all in ONE call, once the guard
-    clears.
+    predecessor being left non-terminal forever. Stamps the PREDECESSOR
+    status:claimed + deployment_state:continued + continued_into:<this
+    successor> and archives it (git mv to archive/handoffs/YYYY-MM/ + commit),
+    all in ONE call.
+
+    ROUTED THROUGH `handoff.housekeeping` SINCE 2026-08-28, and the rewire is
+    the whole point of the change rather than a refactor.
+    `handoff.archive_transition` is in `SUSPENDED_OPS`, so `get_op_handler`
+    refused it before it was ever composed and this directive degraded on every
+    single `/handoff` in the fleet -- every continuation baton's predecessor
+    left non-terminal, which is the PM-quoted d6 outage. `handoff.housekeeping`
+    is the live door over the same surviving compute: it reaches
+    `handoff_archive_transition._handler` as a LIBRARY (its op key stays dead --
+    kill means kill forever, PM 2026-08-23) and returns that op's result
+    verbatim under `transition`. Governing plan:
+    `docs/plans/2026-08-27-one-corpus-read-or-the-housekeeping-job-dies-a-
+    fourth-time.md`, chunk C5.
 
     args: [predecessor_path, continued_into, exclude_path] -- `continued_into`
     and `exclude_path` are the SAME value (this successor's own already-
     normalized artifact_path, per `_build_directives`'s d6 emission).
-    `exclude` is REQUIRED, not optional: the live-children guard's default
-    edge kinds include `predecessor` over a live set spanning state/ AND
-    archive/, and the successor names its own predecessor via the
-    `predecessor:` field it was scaffolded with -- omitting `exclude` makes
-    the guard see the freshly-minted successor as the predecessor's OWN
-    live child and "retain gracefully", silently no-opping the entire
-    point of this directive.
+
+    `exclude_path` NO LONGER REACHES THE OP, and the reason it used to is gone
+    rather than merely unused. It fed the live-children guard, which was deleted
+    from all four of its sites on 2026-08-28 per the PM ruling that having a
+    child says nothing about whether a handoff should be archived ("either a
+    baton is used up or it's not"). The old hazard it defended -- the guard
+    seeing this run's freshly-minted successor as the predecessor's own live
+    child, retaining gracefully, and silently no-opping this entire directive --
+    cannot occur, because nothing on this path asks about children any more.
+    The third arg is still consumed HERE, by `_cleanup_successor`, which is why
+    the emission shape is unchanged.
 
     FAIL POSTURE (do not key on the op's exit_code): the op returns
     exit_code:0 even on a graceful retain -- an unrelated live child, or an
@@ -915,32 +955,42 @@ def _dispatch_handoff_supersede_predecessor(args: list[str], repo_root: Path) ->
     from coordinator_core.op_budget_suspension import OpSuspendedError
 
     try:
-        result = _invoke_op_in_process(
-            "handoff.archive_transition",
+        housekeeping = _invoke_op_in_process(
+            "handoff.housekeeping",
             {
-                "handoff_path": predecessor_path,
-                "mode": "supersede",
-                "continued_into": continued_into,
-                # ABSOLUTE, resolved against this call's own `repo_root` --
-                # never the repo-relative token `_build_directives` emitted.
-                # `dag.referenced_by` filters its live set with
-                # `os.path.abspath(str(ex))`, which resolves a relative
-                # `exclude` against the PROCESS CWD, not the worktree root
-                # (`coordinator_core/dag.py:~1513`). Any `apply` invoked from a
-                # subdirectory of the repo therefore excluded a path that does
-                # not exist, the live-children guard saw this run's OWN
-                # successor as an unrelated live child (it names the
-                # predecessor via `predecessor:`, which d1 stamps), and
-                # `handoff.archive_transition` retained the predecessor instead
-                # of archiving it -- a silent half-succession, reported
-                # `superseded: True, moved: False`. `continued_into` stays
-                # repo-relative: it is FRONTMATTER, contractually
-                # repo-relative, and an absolute value there would author a
-                # machine-specific edge.
-                "exclude": [str(repo_root / exclude_path)] if exclude_path else [],
+                # The corpus legs are deliberately OFF. This directive runs
+                # inside `apply()`'s transaction, mid-`/handoff`, and its remit
+                # is one succession -- not a fleet-wide close pass and not a
+                # 150-move archival commit landing on the operator's tree while
+                # they are minting a baton. `close: False` and `cap: 1` reduce
+                # `handoff.housekeeping` to its step-0 transition plus a scan
+                # that can file at most the predecessor this call just made
+                # terminal. The ceremony occasions the PM named -- pickup,
+                # workday/workstream start and complete -- are where the full
+                # sweep runs.
+                "close": False,
+                "cap": 1,
+                "transition": {
+                    "handoff_path": predecessor_path,
+                    "mode": "supersede",
+                    # `continued_into` stays repo-relative: it is FRONTMATTER,
+                    # contractually repo-relative, and an absolute value there
+                    # would author a machine-specific edge.
+                    "continued_into": continued_into,
+                },
             },
             repo_root,
         )
+        # `handoff.housekeeping` returns the transition op's own dict verbatim,
+        # unmodified -- this handler's fail posture below reads `superseded` off
+        # it, and re-shaping the envelope anywhere in between would silently
+        # break that predicate.
+        result = housekeeping.get("transition") or {}
+        if housekeeping.get("exit_code") != 0 and not result:
+            raise RuntimeError(
+                "handoff.housekeeping refused before the transition ran "
+                f"({housekeeping.get('error')!r})"
+            )
     except OpSuspendedError as exc:
         # `get_op_handler` refuses BEFORE the op is composed, so the predecessor
         # is byte-identical and nothing is half-applied -- the same
@@ -952,7 +1002,7 @@ def _dispatch_handoff_supersede_predecessor(args: list[str], repo_root: Path) ->
         # every `/handoff` in the repo loses its one irreversible artifact.
         print(
             "baton-assemble apply: handoff.supersede_predecessor degraded -- "
-            f"handoff.archive_transition is off ({exc}). The successor was "
+            f"handoff.housekeeping is off ({exc}). The successor was "
             "minted and every other directive in this run proceeded normally; "
             f"{predecessor_path!r} was left exactly as it was. Stamp it "
             f"deployment_state: continued with continued_into: {continued_into!r} "
@@ -964,7 +1014,7 @@ def _dispatch_handoff_supersede_predecessor(args: list[str], repo_root: Path) ->
             "args": args,
             "result": None,
             "degraded": {
-                "reason": "archive-transition-off",
+                "reason": "housekeeping-off",
                 "predecessor": predecessor_path,
                 "continued_into": continued_into,
                 "error": str(exc),
@@ -977,7 +1027,7 @@ def _dispatch_handoff_supersede_predecessor(args: list[str], repo_root: Path) ->
     if not result.get("superseded"):
         _cleanup_successor()
         raise RuntimeError(
-            "handoff.archive_transition mode='supersede' did not supersede "
+            "handoff.housekeeping's supersede transition did not supersede "
             f"{predecessor_path!r} (superseded=False; exit_code="
             f"{result.get('exit_code')!r}, retained={result.get('retained')!r}, "
             f"retain_reason={result.get('retain_reason')!r}, "

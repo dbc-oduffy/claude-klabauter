@@ -1,0 +1,419 @@
+"""coordinator/lib/percolate/assembled_mirror_gate.py — gate: the ASSEMBLED
+published mirror (the union of every row that composes it) must reach a
+verdict on its own documented fast-tier command.
+
+## The defect this closes
+
+`pytest -m 'not cadence and not pending_fix and not designed_red'
+--collect-only -q`, run from a fresh clone of the published mirror, aborted
+with "Interrupted: 8 errors during collection" — zero tests ran, so
+`/coordinator:validate` (which resolves its command from `fast_test_cmd`)
+could never return a pass on that clone. `coordinator/lib/percolate/
+import_closure.py` (C1, same plan) is a PER-ROW gate: it proves each row's
+own restricted tree resolves its own `coordinator_core` imports. Nine rows
+compose the published mirror, each closed within itself while their union
+is not — classes 2 (a dropped registry entry) and 3 (a dropped data file)
+are invisible to import analysis at any depth, on any row. This gate does
+not analyse imports; it runs the actual, documented command against the
+actual assembled tree, so it is blind to none of the three orphan classes
+the parent plan enumerates.
+
+Spec: docs/plans/2026-08-28-a-dropped-module-must-not-leave-its-test-behind.md
+chunk C2.
+
+## BLOCKING PRECONDITION discharged: (i), POST-SYNC bytes — never pre-sync
+
+The parent plan's C2 body requires this module to pick, explicitly, between
+running the check on POST-SYNC bytes (i) or demonstrating that the identity
+transform (`claude-klabauter`/`claude_klabauter` -> `claude_klabauter`) cannot change
+import resolution (ii) — and forbids abstaining.
+
+(ii) is not available. `coordinator_core/percolate/substitute.py`'s own
+module docstring documents a whole-file, `tokenize`-based, `.py`-aware
+identifier-context pass that exists SPECIFICALLY so a content rewrite can
+land inside Python source without producing a `SyntaxError` at the call
+site the rewritten line becomes source for. A mechanism built to rewrite
+identifiers inside `.py` files without breaking their syntax is, by
+construction, a mechanism that can rewrite a token appearing inside an
+`import X` / `from X import Y` statement — exactly the shape the parent
+plan's option (ii) names as a falsifier ("a rename that touches a module
+path or a `from X import` target falsifies this"). This is a measurement
+over the transform's own rule set (its docstring's stated purpose), not an
+argument that the transform "only touches strings".
+
+Therefore: this module's entry point, `run_assembled_mirror_gate`, MUST be
+invoked with `tree_root` pointing at the destination tree AFTER
+`sync_mirror`/`sync_flat_mirror` has both copied files and applied the
+row's copy-time content transform — never at the pre-sync restricted tree
+`build_allowlisted_source` produces. A caller that points `tree_root` at
+pre-sync bytes is answering a materially easier question than the one the
+parent plan's prime exit criterion asks, and this module has no way to
+detect that misuse from inside `tree_root` alone — the wiring caller owns
+that precondition. (Recorded here, per the parent plan's instruction to
+name the choice in this chunk's commit message: BLOCKING PRECONDITION
+discharged as (i).)
+
+## Scope
+
+This module owns MECHANISM only: build the subprocess invocation, isolate
+it from `sys.path` contamination, run it, and parse its own reported
+collected-count / error shape. It does not decide WHEN in the publish
+pipeline to call `run_assembled_mirror_gate`, and does not itself read
+`setup/publish-allowlist-declarations.yaml` or any exemption ledger — that
+wiring is `coordinator/bin/publish.py`'s job (C3, same plan, not this
+chunk).
+
+Negative spec: never runs the full suite. `--collect-only` answers the
+prime exit criterion; execution does not (parent plan Anti-scope, "Do not
+run the full suite to check this").
+
+## C6: `find_modules_missing_tests` — the inverse gap, WARN-shaped
+
+`run_assembled_mirror_gate` above answers "does the tree collect", and is
+blind to a shipped module whose test silently did not ship alongside it
+(measured 2026-08-28: a fix published while its two new test files did
+not) — tests participate in no import closure, so neither the deny-list
+filter nor C1's closure gate can see the absence. `find_modules_missing_
+tests` walks the same assembled tree a second pass and reports, per
+shipped first-party module, whether a same-stem test file shipped with
+it. WARN, never refuse: plenty of modules legitimately have no test, and
+a hard gate here would be un-landable on day one. See that function's own
+docstring for the matching rule and `format_test_coverage_warning` for
+the denominator-carrying render.
+"""
+
+from __future__ import annotations
+
+import os
+import re
+import subprocess
+import sys
+import time
+from dataclasses import dataclass
+from pathlib import Path
+
+MARKER_EXPRESSION = "not cadence and not pending_fix and not designed_red"
+"""The tree's own documented fast-tier marker expression (parent plan's
+prime exit criterion, verbatim) — never widened or narrowed here; a tree
+that changes its own marker vocabulary changes what this gate runs, not
+the other way around."""
+
+DEFAULT_TIMEOUT_S = 60.0
+"""Parent plan's own budget note: "one pytest collection per publish, not
+per op ... If it exceeds ~60s, run C1 first and escalate to the full
+collection only when C1 is clean". This is the wiring caller's (C3's)
+escalation threshold to apply, not a value this module enforces by
+itself — the default here is the same number so a caller that does not
+override it inherits the documented budget rather than an arbitrary one."""
+
+_NO_CONSOLE = {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)}
+# See coordinator/lib/percolate/publish_sync.py's identical constant for the
+# rationale: a console-subsystem child with no console of its own opens a
+# visible window on Windows; every subprocess this module spawns is
+# short-lived and output-captured. 0 on POSIX, where the flag does not exist.
+
+_COLLECTED_COUNT_RE = re.compile(r"(\d+)(?:/\d+)?\s+tests?\s+collected\b")
+_ERROR_TAIL_RE = re.compile(r"\berror(?:s)?\b", re.IGNORECASE)
+_INTERRUPTED_RE = re.compile(r"\binterrupted\b", re.IGNORECASE)
+_NO_TESTS_RE = re.compile(r"\bno tests (?:ran|collected)\b", re.IGNORECASE)
+
+
+@dataclass(frozen=True)
+class MirrorCollectionResult:
+    """The verdict `run_assembled_mirror_gate` reaches. `passed` is the sole
+    field a caller needs to decide refuse-vs-proceed; everything else is
+    for the refusal message / diagnostics.
+
+    `collected_count` and `errored` are reported SEPARATELY and must never
+    be collapsed into one number — the parent plan is explicit: "A
+    collection that errors and one that finds nothing must not read
+    alike." `collected_count == 0, errored == False` (marker deselected
+    everything, or the tree genuinely has no tests) reads differently from
+    `collected_count == 0, errored == True` (collection was interrupted
+    before it could report a count at all) — both are `passed == False`
+    (any non-zero exit refuses, per the parent plan body), but a refusal
+    message built from this result can and must say which happened.
+    """
+
+    passed: bool
+    collected_count: int
+    errored: bool
+    exit_code: "int | None"
+    timed_out: bool
+    elapsed_s: float
+    command: tuple[str, ...]
+    tree_root: str
+    stdout_tail: str
+    stderr_tail: str
+
+
+def _tail(text: str, n_lines: int = 40) -> str:
+    lines = text.splitlines()
+    return "\n".join(lines[-n_lines:])
+
+
+def _parse_collection_summary(stdout: str) -> "tuple[int, bool]":
+    """Return `(collected_count, errored)` parsed from pytest's `-q
+    --collect-only` stdout. `errored` is True whenever the summary reads as
+    an interrupted/erroring collection rather than a clean (possibly
+    zero-result) one — see `MirrorCollectionResult`'s own docstring for why
+    the two zero-count shapes must stay distinguishable.
+
+    Deliberately over-collects into `errored=True` on any summary shape
+    this function does not recognise: this feeds a publish refusal gate,
+    and misreading a genuine collection error as a clean empty collection
+    is the dangerous direction, not the reverse (same asymmetry
+    `import_closure.py`'s `_unguarded_import_nodes` documents for its own
+    guard/unguarded split)."""
+    stripped = stdout.rstrip()
+    if not stripped:
+        return 0, True
+    tail_line = stripped.splitlines()[-1]
+
+    m = _COLLECTED_COUNT_RE.search(stdout)
+    if m:
+        # A recognised "N (of M) tests collected" summary line always wins,
+        # even if an earlier line in the body happens to contain the word
+        # "error" (e.g. a deselected test's id containing "error_handling").
+        return int(m.group(1)), False
+
+    if _INTERRUPTED_RE.search(tail_line) or _ERROR_TAIL_RE.search(tail_line):
+        return 0, True
+
+    if _NO_TESTS_RE.search(tail_line):
+        return 0, False
+
+    # Unrecognised summary shape — fail closed into "errored" rather than
+    # silently reporting a clean zero (see docstring).
+    return 0, True
+
+
+def _subprocess_env() -> "dict[str, str]":
+    """A copy of the current environment with `PYTHONPATH` removed — the
+    only generic vector by which claude-klabauter's own source tree could leak onto
+    the child's `sys.path` and let a module resolve from claude-klabauter instead of
+    (or in addition to) the tree actually under test. Combined with
+    `cwd=tree_root` in the caller (Python's own `-m pytest` invocation adds
+    the CURRENT directory, not the parent process's, to `sys.path[0]`),
+    this is what "a `sys.path` that cannot reach claude-klabauter" means in practice —
+    there is no portable way to positively assert an empty `sys.path` from
+    outside the child process, so this gate closes the one channel it can:
+    the environment it hands the child."""
+    env = dict(os.environ)
+    env.pop("PYTHONPATH", None)
+    return env
+
+
+def run_assembled_mirror_gate(
+    tree_root: "Path | str",
+    *,
+    python_executable: "str | None" = None,
+    timeout_s: float = DEFAULT_TIMEOUT_S,
+) -> MirrorCollectionResult:
+    """Run the tree's own documented fast-tier command, in `--collect-only
+    -q` form, as a subprocess with `cwd=tree_root` and an environment that
+    cannot leak claude-klabauter onto the child's `sys.path` (`_subprocess_env`).
+    `tree_root` MUST be POST-SYNC bytes — see this module's own docstring,
+    "BLOCKING PRECONDITION discharged: (i)"; this function does not and
+    cannot verify that from inside `tree_root` alone.
+
+    `python_executable` defaults to `sys.executable` — the interpreter this
+    gate itself runs under, per every other subprocess-spawning site in
+    this plan's family (no separate interpreter resolution invented here).
+
+    A `subprocess.TimeoutExpired` is caught and reported as
+    `passed=False, errored=True, timed_out=True` rather than propagated —
+    a gate that raises out of a caller's `run_pre_sync_gates` loop on a
+    slow tree is a crash, not a refusal, and the parent plan's own budget
+    note treats "exceeds ~60s" as an escalation signal for the WIRING
+    caller (C3) to act on, not a reason for this function to blow up.
+    """
+    tree_root = Path(tree_root)
+    executable = python_executable or sys.executable
+    command = (
+        executable,
+        "-m",
+        "pytest",
+        "-m",
+        MARKER_EXPRESSION,
+        "--collect-only",
+        "-q",
+    )
+
+    start = time.perf_counter()
+    try:
+        result = subprocess.run(
+            command,
+            cwd=str(tree_root),
+            env=_subprocess_env(),
+            capture_output=True,
+            text=True,
+            timeout=timeout_s,
+            check=False,
+            **_NO_CONSOLE,
+        )
+    except subprocess.TimeoutExpired as exc:
+        elapsed_s = time.perf_counter() - start
+        return MirrorCollectionResult(
+            passed=False,
+            collected_count=0,
+            errored=True,
+            exit_code=None,
+            timed_out=True,
+            elapsed_s=elapsed_s,
+            command=command,
+            tree_root=str(tree_root),
+            stdout_tail=_tail(exc.stdout or ""),
+            stderr_tail=_tail(exc.stderr or ""),
+        )
+    elapsed_s = time.perf_counter() - start
+
+    collected_count, errored = _parse_collection_summary(result.stdout)
+    passed = result.returncode == 0 and not errored
+
+    return MirrorCollectionResult(
+        passed=passed,
+        collected_count=collected_count,
+        errored=errored,
+        exit_code=result.returncode,
+        timed_out=False,
+        elapsed_s=elapsed_s,
+        command=command,
+        tree_root=str(tree_root),
+        stdout_tail=_tail(result.stdout),
+        stderr_tail=_tail(result.stderr),
+    )
+
+
+_TEST_STEM_PREFIX = "test_"
+_TEST_STEM_SUFFIX = "_test"
+_NON_SUBJECT_STEMS = frozenset({"__init__", "conftest"})
+
+
+@dataclass(frozen=True)
+class ModuleTestCoverageReport:
+    """The verdict `find_modules_missing_tests` reaches. WARN-shaped, never
+    a refusal — `missing` is reported alongside `examined_count` so a
+    caller (and this module's own `format_test_coverage_warning`) can
+    always print the denominator: "0 modules missing tests" over
+    `examined_count == 0` is the abstention this plan exists to kill, and
+    must never read the same as "0 modules missing tests" over a real
+    population (parent plan Anti-scope, "Every leg must report its
+    denominator")."""
+
+    examined_count: int
+    missing: "tuple[str, ...]"
+
+    @property
+    def missing_count(self) -> int:
+        return len(self.missing)
+
+
+def _is_test_file(stem: str) -> bool:
+    return stem.startswith(_TEST_STEM_PREFIX) or stem.endswith(_TEST_STEM_SUFFIX)
+
+
+def _test_subject_stem(stem: str) -> str:
+    """Strip the test-naming convention off `stem` so a subject module's
+    own stem can be looked up against it — `test_foo` and `foo_test` both
+    reduce to `foo`. Only one of the two affixes is ever present (a file
+    already matched `_is_test_file` to get here), so stripping both in
+    sequence is safe and idempotent."""
+    if stem.startswith(_TEST_STEM_PREFIX):
+        stem = stem[len(_TEST_STEM_PREFIX) :]
+    if stem.endswith(_TEST_STEM_SUFFIX):
+        stem = stem[: -len(_TEST_STEM_SUFFIX)]
+    return stem
+
+
+def find_modules_missing_tests(tree_root: "Path | str") -> ModuleTestCoverageReport:
+    """Walk every `.py` file physically inside `tree_root` (the assembled,
+    POST-SYNC mirror — same tree, same walk shape `find_import_closure_
+    violations` uses over a restricted row) and report, for each SHIPPED
+    first-party module, whether a corresponding test file shipped
+    alongside it. This is klabauter#3's exact inverse: C1/C2 catch a
+    module a test still reaches for after it was dropped; this catches a
+    module that shipped while ITS test did not (parent plan body, "a fix
+    published to the mirror while its two new test files did not,
+    silently").
+
+    Matching is by STEM, not by directory adjacency, deliberately —
+    `test_foo.py` counts as `foo.py`'s test wherever in `tree_root` it
+    landed. The assembled mirror routinely ships a module and its test at
+    different depths (row `coordinator_core` ships `foo.py` at the tree
+    root while its test lives under `tests/`), and a directory-adjacency
+    requirement would misreport every one of those as missing. This is
+    the same READERS-not-CALLERS posture C1's docstring names: the walk
+    asks "does some test file's stem name this module", not "does this
+    exact directory contain one".
+
+    WARN, never refuse — this function returns a report, not a
+    pass/fail verdict; a hard gate here would be un-landable on day one
+    (parent plan C6 body, "plenty of modules legitimately have no test").
+    `__init__.py` and `conftest.py` are excluded from the examined
+    population: neither is a "module" with an independently-expected test
+    file by convention, and counting them would inflate `missing` with
+    entries no author would ever action.
+
+    A file that fails to parse its own STEM (impossible — stems come from
+    `Path.stem`, never from source content) is not a concern here; unlike
+    `find_import_closure_violations`, this function never reads file
+    CONTENTS, only names, so it has no `SyntaxError` case to skip."""
+    tree_root = Path(tree_root)
+    py_files = sorted(tree_root.rglob("*.py"))
+
+    test_stems: set[str] = set()
+    for py_file in py_files:
+        stem = py_file.stem
+        if _is_test_file(stem):
+            test_stems.add(_test_subject_stem(stem))
+
+    examined_count = 0
+    missing: list[str] = []
+    for py_file in py_files:
+        stem = py_file.stem
+        if _is_test_file(stem) or stem in _NON_SUBJECT_STEMS:
+            continue
+        examined_count += 1
+        if stem not in test_stems:
+            missing.append(py_file.relative_to(tree_root).as_posix())
+
+    return ModuleTestCoverageReport(examined_count=examined_count, missing=tuple(sorted(missing)))
+
+
+def format_test_coverage_warning(report: ModuleTestCoverageReport) -> str:
+    """Render `report` as the WARN line a wiring caller prints — never a
+    refusal. Always states the denominator (`examined_count`) alongside
+    the count, per the parent plan's "0 modules missing tests" abstention
+    warning: a caller that prints only `missing_count` cannot distinguish
+    a clean tree from one this function never walked."""
+    return (
+        "assembled-mirror-gate: WARN — "
+        f"{report.missing_count} module(s) missing a test, "
+        f"over {report.examined_count} module(s) examined"
+        + ("\n" + "\n".join(f"  - {path}" for path in report.missing) if report.missing else "")
+    )
+
+
+def format_refusal(result: MirrorCollectionResult) -> str:
+    """Render `result` as the refusal message a wiring caller (C3) prints
+    when `result.passed` is False. Reports the denominator explicitly (the
+    parent plan's Anti-scope: "Do not build a gate that can abstain ...
+    Every leg must report its denominator") — a caller that only prints
+    "assembled mirror gate failed" without the collected count and the
+    errored/clean-zero distinction reproduces the abstention defect this
+    plan exists to close."""
+    if result.timed_out:
+        shape = f"TIMED OUT after {result.elapsed_s:.1f}s (budget {DEFAULT_TIMEOUT_S:.0f}s)"
+    elif result.errored:
+        shape = f"collection ERRORED (exit={result.exit_code}), 0 tests collected"
+    else:
+        shape = f"collection completed cleanly but found {result.collected_count} test(s)"
+    return (
+        "assembled-mirror-gate: REFUSED — "
+        f"{shape} — tree_root={result.tree_root} "
+        f"command={' '.join(result.command)!r} "
+        f"({result.elapsed_s:.2f}s)\n"
+        f"stdout (tail):\n{result.stdout_tail}\n"
+        f"stderr (tail):\n{result.stderr_tail}"
+    )

@@ -387,3 +387,74 @@ def test_handler_writes_surfaced_history_even_in_dry_run_with_nothing_surfaced(t
     _run(hr._handler({}, repo_root=tmp_path))
     history_path = hr._history_path(tmp_path)
     assert history_path.is_file()
+
+
+# ---------------------------------------------------------------------------
+# C3 — the live+archived gate index loads lazily, on first need, at most once.
+# docs/plans/2026-08-27-one-corpus-read-or-the-housekeeping-job-dies-a-fourth-time.md
+# ---------------------------------------------------------------------------
+
+
+def _count_gate_index_loads(monkeypatch, open_handoffs) -> int:
+    """Run one `_handler` pass and return how many times the live+archived
+    gate-index walk was actually invoked.
+
+    Counts CALLS, never wall clock. The claim under test is "fewer files
+    read"; on a box running 50-70 concurrent sessions a timing assertion
+    would measure the peers (see the plan's Anti-scope, "Do not measure in
+    wall clock").
+    """
+    loads: list[str] = []
+
+    _patch_common_seams(monkeypatch, open_handoffs=open_handoffs)
+
+    def _counting(worktree):
+        loads.append(str(worktree))
+        return (open_handoffs, [])
+
+    monkeypatch.setattr(hr, "_collect_all_handoffs_for_gate_index", _counting)
+    _run(hr._handler({}, Path("/repo")))
+    return len(loads)
+
+
+def _handoff(name: str, state: str) -> Dict[str, Any]:
+    return {
+        "handoff_id": name,
+        "_path": f"/repo/state/handoffs/{name}.md",
+        "deployment_state": state,
+        "blocked_by": "some-stub-id" if state == hr._AWAITING_GATE_STATE else None,
+    }
+
+
+def test_gate_index_is_not_walked_when_nothing_is_awaiting_gate(monkeypatch):
+    """The whole point of C3: a cycle with no gated handoff pays nothing.
+
+    Measured warm at 1ac97e6e1, this walk is 78-94ms p50 over 1,687 files
+    (281ms on a cold first call), against a 200ms process-time bar. It was
+    computed unconditionally until 2026-08-28 and consumed only for
+    `awaiting_gate` handoffs -- 16 of 253 on the real corpus.
+    """
+    opens = [_handoff(f"open{i}", "ready_to_fire") for i in range(12)]
+    assert _count_gate_index_loads(monkeypatch, opens) == 0
+
+
+def test_gate_index_is_walked_once_when_something_is_awaiting_gate(monkeypatch):
+    """Lazy, not removed -- an `awaiting_gate` handoff can legitimately name
+    an ARCHIVED record via `blocked_by`, which is the entire reason the
+    archived half of this walk exists."""
+    opens = [_handoff(f"open{i}", "ready_to_fire") for i in range(12)]
+    opens.append(_handoff("gated0", hr._AWAITING_GATE_STATE))
+    assert _count_gate_index_loads(monkeypatch, opens) == 1
+
+
+def test_gate_index_is_memoised_not_rewalked_per_gated_handoff(monkeypatch):
+    """A memo, not a cache: five gated handoffs pay ONE walk, and it is
+    discarded with the call.
+
+    This is the assertion that fails if a later edit moves the load back
+    inside the loop -- which would read as correct and cost five walks. It is
+    not a claim that repeat reads are free; see the plan's Anti-scope, "Do not
+    claim a win from a cache"."""
+    opens = [_handoff(f"open{i}", "ready_to_fire") for i in range(12)]
+    opens += [_handoff(f"gated{i}", hr._AWAITING_GATE_STATE) for i in range(5)]
+    assert _count_gate_index_loads(monkeypatch, opens) == 1

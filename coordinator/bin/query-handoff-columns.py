@@ -75,14 +75,64 @@ def _no_legacy() -> None:
     raise RuntimeError("query-handoff-columns: native seam required (no bash fallback)")
 
 
+_BOOTSTRAP_NAMES = ("cc_invoke", "resolve_checked_repo_root")
+
+
+def _bootstrap_imports() -> None:
+    """Bind every non-stdlib dependency this door needs at module scope
+    (C6k import-motion: the module body stays inert on both the warm door
+    and the un-bootstrapped settings-home forwarder load routes). Idempotent
+    by construction: a name already bound (via a prior call, or a test
+    reaching for `mod.resolve_checked_repo_root` ahead of calling `main()`)
+    is left alone rather than clobbered by a real import.
+    """
+    if "cc_invoke" in globals():
+        return
+
+    global cc_invoke, resolve_checked_repo_root
+
+    import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
+    import cc_invoke
+    from repo_identity import resolve_checked_repo_root
+
+
+def __getattr__(name: str):
+    """PEP 562 hook so a caller reaching for a bootstrapped name (`cc_invoke`,
+    `resolve_checked_repo_root`) before `main()` has run -- this file's own
+    test suite patches `resolve_checked_repo_root` as a module attribute
+    ahead of calling `mod.main()` / `mod._resolve_repo_root()` -- triggers
+    `_bootstrap_imports()` lazily rather than finding the name absent.
+
+    NEGATIVE SPEC -- the forced re-run defeats the sentinel guard
+    (`"cc_invoke" in globals()`) without destroying a caller's
+    `mock.patch.object` of a DIFFERENT bootstrapped name: `_saved` snapshots
+    and restores every already-present bootstrapped name around the forced
+    re-run, so a monkeypatch on one name survives a lazy fetch of another.
+    """
+    if name in _BOOTSTRAP_NAMES:
+        _bootstrap_imports()
+        if name not in globals():
+            _saved = {k: globals().pop(k) for k in _BOOTSTRAP_NAMES if k in globals()}
+            try:
+                _bootstrap_imports()
+            finally:
+                globals().update(_saved)
+        try:
+            return globals()[name]
+        except KeyError:
+            raise AttributeError(
+                f"module {__name__!r} has no attribute {name!r}"
+            ) from None
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
 def _resolve_repo_root() -> str:
     """Resolve the repo root via the checked resolver (`repo_identity.
     resolve_checked_repo_root`) — mirrors emit-cockpit-snapshot.py's own
     migrated `_resolve_repo_root`. READER (AC10): a MISMATCH verdict is
     warned to stderr and the resolved root used anyway (DR-277); UNRESOLVED
     never refuses either (AC4)."""
-    import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
-    from repo_identity import resolve_checked_repo_root
+    _bootstrap_imports()
 
     repo_root, verdict = resolve_checked_repo_root(explicit_root=None)
     if repo_root is None:
@@ -147,8 +197,7 @@ def _parse_args(argv: list[str]) -> dict[str, object]:
 
 
 def main(argv: list[str] | None = None) -> int:
-    import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
-    import cc_invoke
+    _bootstrap_imports()
 
     argv = sys.argv[1:] if argv is None else argv
     params = _parse_args(argv)

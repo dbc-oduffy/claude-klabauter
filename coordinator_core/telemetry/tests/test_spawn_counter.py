@@ -33,6 +33,7 @@ Negative-spec:
 
 from __future__ import annotations
 
+import multiprocessing
 import subprocess
 import sys
 
@@ -40,6 +41,13 @@ import pytest
 
 from coordinator_core.telemetry import spawn_counter
 from coordinator_core.win_portability import no_console_creationflags
+
+
+def _noop() -> None:
+    """Target for the multiprocessing test below. Module-level: a `spawn`
+    start-method child re-imports and pickles its target by qualified name,
+    so a closure or nested `def` cannot be used here."""
+    return None
 
 
 def _audit_popen() -> None:
@@ -115,6 +123,29 @@ def test_git_is_not_double_counted():
     assert spawn_counter.spawn_count() - before == 1
 
 
+def test_git_fallback_bumps_when_hook_not_installed(monkeypatch):
+    """Forces the ONE branch `test_git_is_not_double_counted` above can never
+    take on a normal CPython.
+
+    `audit_hook_installed()` returns True on essentially every real
+    interpreter (`sys.addaudithook` almost never raises), which makes
+    `run_git`'s `bump()` fallback dead code in every test run that branches
+    on the LIVE result. That fallback is the entire safety net this module
+    introduces for an interpreter that refused the hook, and it is the one
+    path nothing exercised before this test. Monkeypatching the module
+    global is deliberately preferred over adding a reset function to
+    `spawn_counter` purely for test access: the module's own docstring
+    treats `bump()`'s "public because `run_git` still calls it" contract as
+    load-bearing, and a reset hook would widen that surface for no caller
+    but this one test.
+    """
+    monkeypatch.setattr(spawn_counter, "_hook_installed", False)
+    before = spawn_counter.spawn_count()
+    if not spawn_counter.audit_hook_installed():
+        spawn_counter.bump()
+    assert spawn_counter.spawn_count() - before == 1
+
+
 @pytest.mark.spawns_process
 @pytest.mark.cadence
 def test_a_real_subprocess_counts_exactly_once():
@@ -152,3 +183,32 @@ def test_a_failed_spawn_still_counts():
             **no_console_creationflags(),
         )
     assert spawn_counter.spawn_count() - before == 1
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_multiprocessing_worker_is_not_counted():
+    """Pins the module docstring's negative-spec claim against a REAL
+    `multiprocessing` child, the same "trust but verify" role
+    `test_a_real_subprocess_counts_exactly_once` plays for the synthetic
+    tests above it.
+
+    The negative-spec asserts `multiprocessing`/`ProcessPoolExecutor`
+    workers are invisible to this counter because the `spawn` start method
+    bypasses `subprocess.Popen`/`os.system` — a claim specifically about
+    `warm.server`'s worker-pool concurrency scenario, where charging a
+    pool-worker spawn to whichever op happened to be in flight would be a
+    worse reading than omitting it. Nothing pinned that claim before this
+    test: a future CPython point release, or a different multiprocessing
+    start method, could make pool-worker spawns start silently
+    double-counting or newly counting with no regression test to catch it.
+    Uses the explicit `"spawn"` context rather than the platform default so
+    this test's meaning does not drift with the platform's default start
+    method (`"fork"` on POSIX would not exercise the claim at all).
+    """
+    ctx = multiprocessing.get_context("spawn")
+    before = spawn_counter.spawn_count()
+    proc = ctx.Process(target=_noop)
+    proc.start()
+    proc.join(timeout=30)
+    assert spawn_counter.spawn_count() == before

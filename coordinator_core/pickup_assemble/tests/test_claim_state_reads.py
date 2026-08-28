@@ -194,6 +194,150 @@ def test_compute_liveness_signal_no_ledger_no_mirror_does_not_fire(tmp_path, mon
     assert fired is False
 
 
+def test_compute_liveness_signal_fires_for_a_holder_live_in_a_sibling_repo(
+    tmp_path, monkeypatch
+):
+    """The cross-repo holder (bug-backlog 2026-08-13-session-live-s-repo-
+    scoping-makes-a-live-...). `session_live` is repo-scoped and answers False
+    for a holder the harness registry confirms is live with its cwd in a
+    sibling repo. Read through this reaper that rendered as "no live holder",
+    so the brief nudged the EM to take over a claim whose holder was alive and
+    reachable — takeover-bait, which is why the failure direction matters more
+    than the frequency."""
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    _seed_handoff(repo, "h1.md")
+    _make_ledger_claim(repo, "h1.md", "peer-sid")
+
+    monkeypatch.setattr(pa._liveness, "session_live", lambda sid, cwd=None: False)
+    monkeypatch.setattr(
+        pa._liveness,
+        "session_verdict",
+        lambda sid, cwd=None: (
+            True,
+            "harness-registry-elsewhere",
+            "/some/sibling-repo",
+        )
+        if sid == "peer-sid"
+        else None,
+    )
+
+    fm = {"status": "open", "deployment_state": "active"}
+    fired = pa.compute_liveness_signal(
+        repo, fm, artifact_path="state/handoffs/h1.md", self_session_id="self-sid"
+    )
+
+    assert fired is True
+
+
+def test_compute_liveness_signal_elsewhere_arm_does_not_widen_the_in_repo_answer(
+    tmp_path, monkeypatch
+):
+    """The elsewhere arm is ADDITIVE, and this pins that it stays additive.
+
+    `session_live` and `session_verdict` are not the same computation in-repo —
+    `session_live` honours the `COORDINATOR_SESSION_LAYER1_DISABLE` rollback
+    lever and `_verdict_for_sdir` deliberately does not — so accepting any
+    truthy verdict here would silently re-answer the in-repo case rather than
+    only adding the cross-repo one. A `stable-pid` verdict reading live while
+    `session_live` reads not-live is exactly that structural disagreement, and
+    it must NOT fire this signal."""
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    _seed_handoff(repo, "h1.md")
+    _make_ledger_claim(repo, "h1.md", "peer-sid")
+
+    monkeypatch.setattr(pa._liveness, "session_live", lambda sid, cwd=None: False)
+    monkeypatch.setattr(
+        pa._liveness,
+        "session_verdict",
+        lambda sid, cwd=None: (True, "stable-pid", None),
+    )
+
+    fm = {"status": "open", "deployment_state": "active"}
+    fired = pa.compute_liveness_signal(
+        repo, fm, artifact_path="state/handoffs/h1.md", self_session_id="self-sid"
+    )
+
+    assert fired is False
+
+
+def _claim_dir_holding(tmp_path, sid):
+    cdir = tmp_path / "claims" / "artifact"
+    cdir.mkdir(parents=True)
+    (cdir / "session_id").write_text(sid, encoding="utf-8")
+    return cdir
+
+
+def test_claim_holder_live_or_elsewhere_sees_a_holder_working_in_a_sibling_repo(
+    tmp_path, monkeypatch
+):
+    """The claim layer's half of the same defect, and the worse half.
+
+    `claim_holder_live` resolves the claim dir's `session_id` and hands it to
+    the repo-scoped `session_live`, so a holder live in a sibling repo reads
+    not-live and the claim reads takeable. Unlike `compute_liveness_signal`'s
+    advisory signal, this one feeds `compute_claim_grant` — the MUTATING path.
+    The cost of getting it wrong is a live peer's claim taken out from under
+    them mid-work, not a misleading brief."""
+    cdir = _claim_dir_holding(tmp_path, "peer-sid")
+
+    monkeypatch.setattr(pa._liveness, "claim_holder_live", lambda c, cwd=None: False)
+    monkeypatch.setattr(
+        pa._liveness,
+        "session_verdict",
+        lambda sid, cwd=None: (
+            True,
+            "harness-registry-elsewhere",
+            "/some/sibling-repo",
+        )
+        if sid == "peer-sid"
+        else None,
+    )
+
+    assert pa._claim_holder_live_or_elsewhere(cdir, str(tmp_path), "peer-sid") is True
+
+
+def test_claim_holder_live_or_elsewhere_does_not_widen_the_in_repo_answer(
+    tmp_path, monkeypatch
+):
+    """Additive, not a re-answer. A `stable-pid` verdict reading live while
+    `claim_holder_live` reads not-live is the in-repo structural disagreement
+    (`COORDINATOR_SESSION_LAYER1_DISABLE`), and it must not resurrect a claim
+    the claim layer has decided is takeable."""
+    cdir = _claim_dir_holding(tmp_path, "peer-sid")
+
+    monkeypatch.setattr(pa._liveness, "claim_holder_live", lambda c, cwd=None: False)
+    monkeypatch.setattr(
+        pa._liveness,
+        "session_verdict",
+        lambda sid, cwd=None: (True, "stable-pid", None),
+    )
+
+    assert pa._claim_holder_live_or_elsewhere(cdir, str(tmp_path), "peer-sid") is False
+
+
+def test_claim_holder_live_or_elsewhere_never_consults_the_registry_when_live(
+    tmp_path, monkeypatch
+):
+    """The primitive stays FIRST and authoritative — a live in-repo holder
+    short-circuits, so the registry is never reached. Pins that this is an
+    added arm rather than a replacement."""
+    cdir = _claim_dir_holding(tmp_path, "peer-sid")
+    consulted = []
+
+    monkeypatch.setattr(pa._liveness, "claim_holder_live", lambda c, cwd=None: True)
+
+    def _boom(sid, cwd=None):
+        consulted.append(sid)
+        raise AssertionError("session_verdict must not be reached when live in-repo")
+
+    monkeypatch.setattr(pa._liveness, "session_verdict", _boom)
+
+    assert pa._claim_holder_live_or_elsewhere(cdir, str(tmp_path), "peer-sid") is True
+    assert consulted == []
+
+
 # ---------------------------------------------------------------------------
 # Row 18 — _lineage_related_sessions + compute_competing_claim
 # ---------------------------------------------------------------------------

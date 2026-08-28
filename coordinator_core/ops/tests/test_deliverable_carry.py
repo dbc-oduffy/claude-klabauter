@@ -84,3 +84,110 @@ def test_never_raises_on_a_directory_path(tmp_path):
         resolve_explicit_predecessor_edge_deliverable_id(read_frontmatter_field, str(a_directory))
         is None
     )
+
+
+# --- session-chain tier: the liveness gate (2026-08-28) ---------------------
+#
+# Spec backlink: state/bug-backlog/2026-08-28-the-session-chain-tier-carries-
+#                off-a-shipped-baton.yaml
+
+from coordinator_core.lifecycle_constants import HANDOFF_TERMINAL_DEPLOYMENT  # noqa: E402
+from coordinator_core.ops.deliverable_carry import (  # noqa: E402
+    resolve_session_chain_deliverable_id,
+)
+
+import pytest  # noqa: E402
+
+
+def test_live_chain_carries_the_positive_control(tmp_path):
+    """The tier's whole reason to exist still fires: a held handoff that has
+    not shipped is the chain being authored into, and its id carries."""
+    handoff = tmp_path / "handoff.md"
+    _write_frontmatter(
+        handoff,
+        status="claimed",
+        deployment_state="in-progress",
+        deliverable_id="dlv-live-chain-aaa111",
+    )
+
+    assert (
+        resolve_session_chain_deliverable_id(read_frontmatter_field, str(handoff))
+        == "dlv-live-chain-aaa111"
+    )
+
+
+@pytest.mark.parametrize("terminal_state", sorted(HANDOFF_TERMINAL_DEPLOYMENT))
+def test_terminal_chain_falls_through_to_mint(tmp_path, terminal_state):
+    """A session goes on holding its claim after the chain ships — the held
+    handoff outlives the work, so a terminal `deployment_state` must NOT
+    carry, or the session's next deliverable joins its last one's spine.
+
+    Parametrised over the canonical four-member set rather than a literal:
+    both three-member copies in the tree omit `abandoned`, and this gate must
+    not silently narrow if one of them is ever substituted."""
+    handoff = tmp_path / "handoff.md"
+    _write_frontmatter(
+        handoff,
+        status="claimed",
+        deployment_state=terminal_state,
+        deliverable_id="dlv-shipped-chain-bbb222",
+    )
+
+    assert resolve_session_chain_deliverable_id(read_frontmatter_field, str(handoff)) is None
+
+
+def test_claimed_status_alone_does_not_block_the_carry(tmp_path):
+    """`status` is the wrong axis and this pins it. `claimed` is a member of
+    HANDOFF_TERMINAL_STATUS *and* the status of every actively-worked
+    handoff, so a gate written against `status` would disable the tier
+    outright. Only `deployment_state` separates the two."""
+    handoff = tmp_path / "handoff.md"
+    _write_frontmatter(
+        handoff, status="claimed", deliverable_id="dlv-claimed-but-live-ccc333"
+    )
+
+    assert (
+        resolve_session_chain_deliverable_id(read_frontmatter_field, str(handoff))
+        == "dlv-claimed-but-live-ccc333"
+    )
+
+
+def test_absent_deployment_state_carries(tmp_path):
+    """Unset is the pre-terminal default; treating absence as terminal would
+    break the ordinary live chain. Direction stated so a later 'fail closed'
+    edit has to argue with a test."""
+    handoff = tmp_path / "handoff.md"
+    _write_frontmatter(handoff, deliverable_id="dlv-no-deployment-state-ddd444")
+
+    assert (
+        resolve_session_chain_deliverable_id(read_frontmatter_field, str(handoff))
+        == "dlv-no-deployment-state-ddd444"
+    )
+
+
+def test_terminal_does_not_mean_the_chain_is_finished_and_the_gate_still_mints(tmp_path):
+    """Reviewer finding (2026-08-28, S1-code): the gate's docstring originally
+    asserted that a terminal handoff implies a finished deliverable chain. It
+    does not. `shipped` means "terminal with resolvable commit evidence", not
+    "released", and `continued` says by name that a successor exists. Measured
+    on this corpus: of 7 distinct deliverable_ids carried by terminal handoffs,
+    3 have a non-handoff artifact newer than the handoff.
+
+    So this pins the gate as a chosen DEFAULT rather than an invariant: given a
+    terminal handoff on a chain that is still being authored into, the tier
+    mints rather than carries. That is the deliberate direction -- a spurious
+    second id is visible at a rollup and mergeable, while joining new work onto
+    a closed spine corrupts shared history -- and the author's escape is to pass
+    the id explicitly at the flag tier, which precedes this one.
+
+    If this assertion is ever inverted, the docstring's cost argument must be
+    re-made, not just the constant swapped."""
+    handoff = tmp_path / "handoff.md"
+    _write_frontmatter(
+        handoff,
+        status="claimed",
+        deployment_state="continued",
+        deliverable_id="dlv-chain-still-open-eee555",
+    )
+
+    assert resolve_session_chain_deliverable_id(read_frontmatter_field, str(handoff)) is None

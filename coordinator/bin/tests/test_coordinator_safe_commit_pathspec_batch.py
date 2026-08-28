@@ -82,3 +82,55 @@ def test_empty_pathspec_list_is_a_zero_spawn_noop(monkeypatch):
 
     assert result is None
     assert calls == []
+
+
+def test_pathspec_dry_run_never_dispatches_do_pathspec(monkeypatch, tmp_path):
+    """Pins the third real incident of this file's dry-run gate class:
+    `--dry-run "<subject>" -- <paths>` reached a real commit because
+    `main()`'s pathspec branch dispatched to `do_pathspec` without ever
+    reading `args.dry_run` (`do_pathspec` itself does not read it either,
+    since it delegates staging unconditionally to `ceremony.commit_v2` via
+    `cc_invoke`). Asserting `do_pathspec` is never called is the structural
+    check the reviewer called for -- `do_pathspec` is this module's sole
+    caller of `cc_invoke`/`ceremony.commit_v2`, so "do_pathspec not called"
+    and "no commit dispatched" are the same fact. Asserting only on printed
+    preview text would not have caught this regression shape."""
+    mod = _load_cli_module()
+    monkeypatch.chdir(tmp_path)
+    dispatched = []
+    monkeypatch.setattr(mod, "do_pathspec", lambda args: dispatched.append(args))
+
+    mod.main(["--dry-run", "subject", "--", "somefile.py"])
+
+    assert dispatched == []
+
+
+def test_pathspec_dry_run_preview_matches_split_paths_including_deletion(
+    monkeypatch, tmp_path, capsys
+):
+    """Second half of Finding 1: the previewed present/deleted split must
+    match `_split_paths_for_commit_v2`'s own classification, including the
+    deletion case (a pathspec absent from the worktree)."""
+    mod = _load_cli_module()
+    monkeypatch.chdir(tmp_path)
+    present_file = tmp_path / "present.py"
+    present_file.write_text("x = 1\n", encoding="utf-8")
+    missing_path = "deleted.py"
+
+    expected_present, expected_deleted = mod._split_paths_for_commit_v2(
+        str(tmp_path), ["present.py", missing_path]
+    )
+    assert expected_present == ["present.py"]
+    assert expected_deleted == [missing_path]
+
+    monkeypatch.setattr(mod, "do_pathspec", lambda args: (_ for _ in ()).throw(
+        AssertionError("do_pathspec must not be dispatched on --dry-run")
+    ))
+
+    mod.main(["--dry-run", "subject", "--", "present.py", missing_path])
+
+    captured = capsys.readouterr()
+    for path in expected_present:
+        assert f"  {path}" in captured.err
+    for path in expected_deleted:
+        assert f"  {path} [deleted]" in captured.err

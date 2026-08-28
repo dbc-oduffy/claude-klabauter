@@ -3054,7 +3054,7 @@ def test_pathspec_from_manifest_names_untracked_declared_payload_path(tmp_path):
     manifest = _mod._RoundManifest(
         round_id="r1", declared_payload=frozenset({"kept.md", "new.md"})
     )
-    pathspec = _mod._pathspec_from_manifest(manifest, str(repo))
+    pathspec = _mod._pathspec_from_manifest(manifest, str(repo))[0]
     assert "new.md" in pathspec
     assert "kept.md" not in pathspec  # unchanged from HEAD -- not named
 
@@ -3073,7 +3073,7 @@ def test_pathspec_from_manifest_names_head_diverged_worktree_equal_path(tmp_path
     manifest = _mod._RoundManifest(
         round_id="r1", declared_payload=frozenset({"stranded.md"})
     )
-    pathspec = _mod._pathspec_from_manifest(manifest, str(repo))
+    pathspec = _mod._pathspec_from_manifest(manifest, str(repo))[0]
     assert "stranded.md" in pathspec
 
 
@@ -3098,7 +3098,7 @@ def test_removal_side_is_live_at_the_shipped_flag_value(tmp_path):
         declared_payload=frozenset({"kept.md"}),
         published_dest_dirs=frozenset({"."}),
     )
-    pathspec = _mod._pathspec_from_manifest(manifest, str(repo))
+    pathspec = _mod._pathspec_from_manifest(manifest, str(repo))[0]
     assert "gone.md" in pathspec, (
         "removal side did not fire while enabled -- see _REMOVAL_SIDE_ENABLED"
     )
@@ -3136,7 +3136,7 @@ def test_pathspec_from_manifest_names_head_only_path_for_removal(tmp_path, monke
         declared_payload=frozenset({"kept.md"}),
         published_dest_dirs=frozenset({"."}),
     )
-    pathspec = _mod._pathspec_from_manifest(manifest, str(repo))
+    pathspec = _mod._pathspec_from_manifest(manifest, str(repo))[0]
     assert "gone.md" in pathspec
     assert "kept.md" not in pathspec
 
@@ -3166,7 +3166,7 @@ def test_removal_side_scopes_whole_tree_for_a_root_published_row(tmp_path, monke
         declared_payload=frozenset({"LICENSE"}),
         published_dest_dirs=frozenset({"."}),
     )
-    pathspec = _mod._pathspec_from_manifest(manifest, str(repo))
+    pathspec = _mod._pathspec_from_manifest(manifest, str(repo))[0]
     assert "whoami/cli.py" in pathspec
     assert "LICENSE" not in pathspec
 
@@ -3186,7 +3186,7 @@ def test_removal_side_still_fires_on_nothing_without_published_dest_dirs(tmp_pat
     manifest = _mod._RoundManifest(
         round_id="r1", declared_payload=frozenset({"kept.md"})
     )
-    pathspec = _mod._pathspec_from_manifest(manifest, str(repo))
+    pathspec = _mod._pathspec_from_manifest(manifest, str(repo))[0]
     assert "gone.md" not in pathspec
 
 
@@ -3206,7 +3206,7 @@ def test_pathspec_from_manifest_never_names_undeclared_staging_directory(tmp_pat
     manifest = _mod._RoundManifest(
         round_id="r1", declared_payload=frozenset({"kept.md"})
     )
-    pathspec = _mod._pathspec_from_manifest(manifest, str(repo))
+    pathspec = _mod._pathspec_from_manifest(manifest, str(repo))[0]
     assert pathspec == ["kept.md"]
     assert not any("publish-staging" in p for p in pathspec)
 

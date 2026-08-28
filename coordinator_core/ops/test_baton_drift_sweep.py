@@ -863,12 +863,15 @@ def test_retained_eligible_false_when_holder_live(
 def test_retained_eligible_true_when_holder_dead_and_exclude_applied(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """AC2 dead-holder fixture: holder dead AND the only live child is the
-    continued_into target itself — eligible must be True. This is the case
-    that regresses if the exclude is dropped or passed relative (the
-    successor names `parent.md` via `predecessor:`, so without an absolute
-    exclude the guard reads the successor as its own live child and the hit
-    reads ineligible)."""
+    """AC2 dead-holder fixture: holder dead — eligible must be True.
+
+    Name and shape kept from when this test also covered the `exclude`
+    machinery (the successor names `parent.md` via `predecessor:`, so without
+    an absolute exclude the live-children guard read the successor as its own
+    live child). That guard was deleted 2026-08-28 on a PM ruling, and the
+    exclude went with it — there is no longer a ground for the successor to
+    trip. The fixture still exercises the surviving holder ground with a
+    successor present, so it is kept rather than rewritten."""
     root = tmp_path / "repo"
     common_dir = _fake_common_dir(root)
     monkeypatch.setattr(_sweep_mod, "git_common_dir", lambda worktree_root: common_dir)
@@ -887,6 +890,44 @@ def test_retained_eligible_true_when_holder_dead_and_exclude_applied(
     assert result["retained"] == 1
     key = str(parent.resolve())
     assert result["retained_paths"] == [key]
+    assert result["retained_eligible"][key] is True
+
+
+def test_retained_eligible_true_despite_a_live_unrelated_child(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The PM ruling, pinned: having a live child says NOTHING about whether a
+    baton should be archived — either the baton is used up or it is not.
+
+    This test would have FAILED before 2026-08-28. The live-children ground
+    made eligibility False whenever any non-excluded live child referenced the
+    record; only the `continued_into` successor was ever excluded, so a second,
+    unrelated live referencer held the record ineligible forever. Holder dead
+    is now the whole predicate.
+
+    Guarding against re-introduction, not just asserting today's behaviour: the
+    cheap way to "fix" a future report that looks too eager is to put a
+    child-liveness ground back here, which would silently restore the stall
+    this deletion removed and would not fail any other test in this file."""
+    root = tmp_path / "repo"
+    common_dir = _fake_common_dir(root)
+    monkeypatch.setattr(_sweep_mod, "git_common_dir", lambda worktree_root: common_dir)
+    monkeypatch.setattr(
+        _archive_transition_mod, "cs_claim_holder_live", lambda claim_dir_str: False
+    )
+
+    parent = root / "state" / "handoffs" / "parent.md"
+    _write_retained_handoff(parent, continued_into="successor.md")
+    _write_handoff(root / "state" / "handoffs" / "successor.md", predecessor="parent.md")
+    # The second referencer is the point: live, non-terminal, and NOT the
+    # continued_into target, so the old exclude could never have covered it.
+    _write_handoff(root / "state" / "handoffs" / "bystander.md", predecessor="parent.md")
+    _make_claim_dir(common_dir, "parent.md", session_id="dead-session-xyz789")
+
+    result = baton_drift_sweep(root)
+
+    key = str(parent.resolve())
+    assert result["retained"] == 1
     assert result["retained_eligible"][key] is True
 
 

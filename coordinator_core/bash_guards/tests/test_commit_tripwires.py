@@ -803,6 +803,57 @@ class TestCheckStagedPathspecDivergence:
         assert "guard-override-keys.md" in result
         assert "COORDINATOR_OVERRIDE_PATHSPEC_DIVERGENCE" not in result
 
+    def test_unreadable_index_says_so_instead_of_going_silent(self, tmp_path, monkeypatch):
+        """DEMONSTRATED-RED before the `fail_loud=True` fix.
+
+        The guard used to take `diverging_paths`' default `fail_loud=False`, so
+        an `IndexParseError` collapsed to `[]`, `not diverging` was true, and the
+        commit was waved through with NO warning. The condition that makes the
+        index unreadable -- a peer holding `.git/index` -- is the SAME contention
+        that causes the discarding this check exists to catch, so the guard went
+        silent exactly when it was most needed. Measured at 2/200 under 12-way
+        concurrency on one repo.
+
+        Asserts the indeterminate branch NAMES what it could not establish. It
+        must not assert a divergence it never measured either -- that would be
+        the mirror defect of the silence.
+        """
+        root = _init_repo(tmp_path)
+        (tmp_path / "shared.txt").write_text("line1\n", encoding="utf-8")
+        _git(root, "add", "shared.txt")
+        _git(root, "commit", "-q", "-m", "seed shared.txt")
+
+        def _unreadable(*_a, **kwargs):
+            assert kwargs.get("fail_loud") is True, (
+                "the guard must ask for the loud contract -- with the default "
+                "this raise would be swallowed to [] and the commit waved through"
+            )
+            raise commit_tripwires.DivergenceCheckFailed("index held by a peer")
+
+        monkeypatch.setattr(commit_tripwires, "_diverging_paths", _unreadable)
+
+        em_payload = {
+            "tool_name": "Bash",
+            "session_id": "11111111-2222-3333-4444-555555555555",
+            "tool_input": {"command": 'git commit -m "test" -- shared.txt'},
+        }
+        result = commit_tripwires.check_staged_pathspec_divergence(
+            'git commit -m "test" -- shared.txt', root, payload=em_payload
+        )
+
+        assert result is not None, "an unreadable index must not read as clean"
+        assert result.startswith("OFFER:")
+        assert "shared.txt" in result
+        assert "could NOT" in result
+        assert "SC-DR-015" in result
+        # It reports an indeterminate READ, never an established divergence.
+        # Pinned on the ASSERTIVE clause from the real-divergence offer ("and the
+        # STAGED content there differs"), not on the bare phrase: the
+        # indeterminate text legitimately contains "whether the STAGED content
+        # there differs ... could NOT be determined", which is the opposite claim.
+        assert "and the STAGED content there differs" not in result
+        assert "could NOT be determined" in result
+
     def test_offer_to_a_non_em_audience_carries_no_override_pointer(self, tmp_path):
         """The other half of the audience gate, so the inversion above cannot
         silently flip back: with no envelope to resolve, the offer still fires

@@ -100,18 +100,23 @@ filename. See
 `cross-repo/inbox/2026-07-23-claude-central-em-wsc-tail-stamp-ship-silent-skip.md`
 for the confirmed real-world case this fixes.
 
-R4 (AC9, Position A): `_live_children_guard()` branches on `exit_code`
-authoritatively (0=has live children / 1=safe / 2=indeterminate,
-`handoff.has_live_children`'s own contract) and RETAINS (does NOT stamp) on
-BOTH exit_code 0 (real live children) AND exit_code 2 (indeterminate,
-fail-closed) — never keys off the `referenced` field, which is deliberately
-ABSENT on exit_code=2 (see `coordinator_core/ops/handoff_children.py`
-`_indeterminate()` docstring) so a `referenced`-only gate would fail OPEN.
-`_live_children_guard()` is called TWICE per candidate (2026-07-28, ceremony-
-lock-hold-resurrection Row 7): once as a pre-lock filter in the main loop
-below, once again inside the stamp write's own `locked_rmw` lock hold
-(`_stamp_with_live_children_recheck`) immediately before the write lands —
-closing the window where a successor could be authored between the two.
+R4 (AC9, Position A) — **DELETED 2026-08-28.** This leg used to run a
+`_live_children_guard()` per candidate, retaining (declining to stamp) when
+`handoff.has_live_children` reported live children (exit_code 0) or could not
+tell (exit_code 2, fail-closed), and it ran that guard TWICE per candidate --
+once as a pre-lock filter and once inside the stamp's own `locked_rmw` hold.
+Both calls are gone, on a PM ruling: having a child says nothing about whether
+a baton should be archived -- either the baton is used up or it is not. The
+guard's own predicate contradicted the contract it was defending, since
+`continued` (the has-a-child state) is itself terminal in
+`_TERMINAL_DEPLOYMENT_STATES`.
+
+The fail-closed exit_code=2 branch went with it, and that is the half worth
+naming: with nothing to be indeterminate ABOUT, a branch that retained every
+candidate whenever the guard could not resolve is not a safety, it is a silent
+permanent stall. Do not reintroduce either branch here without a ruling that
+reverses the one above.
+
 Row 6's companion fix (`_ship_with_cas`) makes the stamp/ship pair safe
 against an interleaved peer write via a CAS on the exact text the stamp
 write produced, without merging the two writes into one lock acquisition.
@@ -184,8 +189,6 @@ from pathlib import Path
 from typing import Any, Optional
 
 from coordinator_core.git.commit_trailers import _read_deliverable_id_from_frontmatter
-from coordinator_core.ipc import get_op_handler
-from coordinator_core.op_budget_suspension import OpSuspendedError
 from coordinator_core.lifecycle_constants import HANDOFF_TERMINAL_DEPLOYMENT
 from coordinator_core.locked_write import LockTimeout, MutateAbort, locked_rmw
 from coordinator_core.ops._path_guard import contained_path
@@ -204,25 +207,19 @@ from coordinator_core.ops.ceremony.resolver import find_all_consumed_handoffs
 from coordinator_core.ops.fleet._common import main_worktree_root
 from coordinator_core.session import scope as session_scope
 
-# Import side-effect: registers "handoff.has_live_children" and "handoff.stamp"
-# in the ipc op-registry so get_op_handler() below resolves via a direct
-# registry hit rather than its lazy-import fallback (get_op_handler()
-# self-resolves a MISS since 2026-07-25, so this pre-import is belt-and-braces,
-# not strictly required for correctness).
+# The stamp/ship writes do NOT route through the async op-registry handlers
+# (2026-07-28, Row 6/Row 7 CAS fix): `build_stamp_mutate`/`build_ship_mutate`
+# are PUBLIC mutate-closure builders `handoff_stamp.py`/`handoff_transition.py`
+# factored out precisely so this module can compose them inside a SINGLE
+# `locked_rmw` call each (`_stamp_locked`, `_ship_with_cas` below) — routing
+# that composition through the handlers would mean a SECOND, separate
+# `locked_rmw` acquisition per write, which is exactly the non-atomic gap Row 6
+# exists to close.
 #
-# The R4(a) pre-lock guard (`_live_children_guard`, below) still calls
-# "handoff.has_live_children" through the public op-registry contract. The
-# stamp/ship writes themselves do NOT (2026-07-28, Row 6/Row 7 CAS fix):
-# `build_stamp_mutate`/`build_ship_mutate` are PUBLIC mutate-closure builders
-# `handoff_stamp.py`/`handoff_transition.py` factored out precisely so this
-# module can compose them with its own in-lock re-verification inside a
-# SINGLE `locked_rmw` call each (`_stamp_with_live_children_recheck`,
-# `_ship_with_cas` below) — routing that composition through the async
-# op-registry handlers would mean a SECOND, separate `locked_rmw` acquisition
-# per write, which is exactly the non-atomic gap Row 6/Row 7 exist to close.
-import coordinator_core.ops.handoff_children  # noqa: F401
-import coordinator_core.ops.handoff_stamp  # noqa: F401
-from coordinator_core.ops.handoff_children import CONCLUSION_EDGE_KINDS
+# The registry-warming side-effect imports that used to sit here went with the
+# R4(a) live-children guard on 2026-08-28 (see module docstring R4): that guard
+# was this module's ONLY `get_op_handler` caller, so nothing here resolves an op
+# by name any more and there is no registry to warm.
 from coordinator_core.ops.handoff_stamp import build_stamp_mutate
 from coordinator_core.ops.handoff_transition import _PathNotContained, _resolve_path, build_ship_mutate
 
@@ -383,7 +380,7 @@ def redrive_consumed_set(
 
 
 # ---------------------------------------------------------------------------
-# R4(a) — handoff.has_live_children guard (Position A)
+# Already-terminal no-op detection
 # ---------------------------------------------------------------------------
 
 
@@ -452,167 +449,6 @@ def _already_terminal_no_op(relpath: str, fm: dict[str, Any]) -> bool:
     return True
 
 
-async def _live_children_guard(
-    handoff_abs_path: str, *, repo_root: Path
-) -> tuple[bool, dict]:
-    """Return (retain, raw_reply) for one consumed-handoff candidate.
-
-    ``retain`` is True (do NOT stamp/ship — a live successor still names
-    this handoff, or the check was indeterminate) on exit_code 0 (real live
-    children) AND exit_code 2 (indeterminate, fail-closed) — NEVER on the
-    `referenced` field alone, which `handoff.has_live_children` deliberately
-    omits on exit_code=2 (see module docstring R4).
-
-    An UNEXPECTED exception raised by the handler (anything other than a
-    clean exit-code return) is caught here and translated into the same
-    exit_code=2 fail-closed shape — this is the ONE call site for
-    "handoff.has_live_children", reached from both the pre-lock filter and
-    the in-lock recheck (`_stamp_with_live_children_recheck`), so guarding
-    it here covers both without duplicating the try/except at either call
-    site. Only `Exception` is caught: `asyncio.CancelledError` (Python
-    3.8+, `BaseException`, not `Exception`) and `KeyboardInterrupt`/
-    `SystemExit` (also `BaseException`) are never caught by `except
-    Exception` and continue to propagate uninterrupted — a bare `except:`
-    or `except BaseException:` would swallow those and is deliberately not
-    used. The reply carries `crashed: True` plus the exception's type/repr
-    for a caller inspecting the raw reply dict directly — that detail is
-    NOT currently surfaced through `StampOutcome`, which records only the
-    path in `skipped_indeterminate` (`list[str]`), so a crashed-handler
-    indeterminate is indistinguishable from an ordinary exit-2 one to
-    either caller of this function today.
-    """
-    # Two unavailability shapes, one fail-closed answer. `get_op_handler`
-    # returns None for an UNREGISTERED op but RAISES OpSuspendedError for a
-    # KILLED one (`ipc.py`'s kill-switch branch), and `handoff.has_live_children`
-    # is killed (K-113) with its compute retained undecorated in
-    # `ops/handoff_children.py`. An uncaught raise here would turn this
-    # function's documented fail-closed contract into a crash out of the WSC
-    # tail, so the raise degrades to the same indeterminate/retain answer the
-    # unregistered case already produced -- never to a silent ship.
-    # ADOPTED 2026-08-27 by session 74ad45a4 (archival-sweeps-03), deliberately
-    # and not silently. The repoint below was swept into `abd587695` by a
-    # whole-file stage and had no author: `93795dbb` was named circumstantially,
-    # denied it on timestamps that check out (`abd587695` landed 17:06:24, their
-    # first write of any kind was 17:13:36), and the identification was retracted
-    # by the session that made it. No write-verb touch record names this file. It
-    # is sound and load-bearing, so it stays; the seam below is restored rather
-    # than the eight tests rewritten around it.
-    #
-    # THIS GUARD IS A DELETION CANDIDATE. Not yet deleted, and the distinction
-    # is the whole point of the note.
-    #
-    # The PM ruling exists, verbatim, answering a 218ms figure: "having live
-    # children, what do I care? either the handoff is done or it's not. if it's
-    # been continued into a child, then it's done, we archive it, it's killed.
-    # if it doesn't have any children, then its fate is still to archive. why
-    # would we check if there are live children, ever?" It reached this session
-    # third-hand first, was recorded here as unsourced, and was then sourced to
-    # a real PM turn by `claude-klabauter-74`.
-    #
-    # SCOPE, which is what the record got wrong twice. The ruling reaches the
-    # ARCHIVE-TIME CHECK -- this guard -- and NOT the compute in
-    # `ops/handoff_children.py`. `handoff_close_origin_stub` imports
-    # `_handoff_has_live_children` and gates on its tri-state exit codes,
-    # needing a `children` payload `has_live_children_many` does not return;
-    # verified in that module this session, not taken on report. K-113 records
-    # exactly that and is **NOT superseded on the compute**. The disposition in
-    # `op_budget_suspension.py` originally read "the job itself is not needed",
-    # which is broader than the PM's words support, and was scoped to the
-    # archive-time check at `1ab3923ff`.
-    #
-    # WHY THE GUARD IS STILL HERE. No DR exists yet, and `claude-klabauter-74` is
-    # taking it to their PM rather than writing one off a rhetorical question.
-    # When that lands, this guard and its eight tests go together and the seam
-    # restored above goes with them -- it was built to be cheap to delete for
-    # exactly this outcome. Killing the compute is a different deletion and is
-    # still not argued for.
-    #
-    # REPOINTED 2026-08-27: `handoff.has_live_children` is killed (K-113) and
-    # resolving it through the registry can now only ever yield the fail-closed
-    # indeterminate below -- which retains every candidate forever and silently
-    # stops this lifecycle path from ever shipping one. The op is dead; the
-    # compute it wrapped is not, and this is an in-process caller, which is the
-    # shape the retention exists for. Bind the undecorated function directly.
-    #
-    # PM ruling 2026-08-27: handoffs are archived at the occasions that create
-    # the work -- pickup, workstream-complete, workday-complete -- so this path
-    # has to keep working. The try/except stays: it degrades an unexpected raise
-    # to indeterminate/retain rather than crashing out of the WSC tail, and
-    # never to a silent ship.
-    try:
-        handler = get_op_handler("handoff.has_live_children")
-    except OpSuspendedError:
-        # `handoff.has_live_children` is killed (K-113) and the registry now
-        # refuses it. The op is dead; the compute it wrapped is retained
-        # undecorated in `ops/handoff_children.py` exactly for in-process
-        # callers like this one, so fall through to it rather than degrading to
-        # the indeterminate below -- which would retain every candidate forever
-        # and silently stop this lifecycle path from ever shipping one.
-        #
-        # PM ruling 2026-08-27: handoffs are archived at pickup,
-        # workstream-complete and workday-complete, so this path has to work.
-        #
-        # Resolution stays routed through `get_op_handler` FIRST rather than
-        # importing the compute directly: this module's tests inject their fake
-        # by patching `get_op_handler` at module scope, and a direct import
-        # bypasses that seam and takes eight of them red for a reason that has
-        # nothing to do with what they assert.
-        try:
-            from coordinator_core.ops.handoff_children import (
-                _handoff_has_live_children as handler,
-            )
-        except Exception as exc:
-            return True, {
-                "exit_code": 2,
-                "error": f"handoff.has_live_children compute unavailable: {exc}",
-            }
-    except Exception as exc:
-        return True, {
-            "exit_code": 2,
-            "error": f"handoff.has_live_children unavailable: {exc}",
-        }
-    if handler is None:
-        # Fail-closed: treat as indeterminate/retain if the op somehow isn't
-        # registered (should be unreachable — this module imports the
-        # registering module at import time — but never silently ship on a
-        # missing dependency).
-        return True, {
-            "exit_code": 2,
-            "error": "handoff.has_live_children not registered",
-        }
-    try:
-        # This is the WSC tail — the writer that actually stamps `shipped_in:
-        # <sha>` and flips `deployment_state -> shipped`, in place, post-commit,
-        # no `git mv`. It answers the conclusion question ("may this workstream
-        # CONCLUDE?"), not the archival question — see dag.CONTINUATION_
-        # EDGE_KINDS for why the spinoff edge (`forked_from`) is excluded
-        # from that question. Must agree with `workstream_complete`'s leg-B
-        # advisory gate (`_dispatch_has_live_children` / `_LEG_B_EDGE_KINDS`)
-        # — otherwise that advisory gate could say "a live spinoff does not
-        # block the close" while THIS writer, the one that actually performs
-        # the close, still retains on that same spinoff (example-cockpit-repo-em,
-        # 2026-08-05, cross-repo/inbox/2026-08-05-example-cockpit-repo-em-wsc-leg-
-        # b-counts-spinoffs-as-live-children.md). Archival protection is NOT
-        # weakened by this — `fleet.archive_completed_handoffs` runs its own
-        # `reverse_membership` guard at the op's archival default (all three
-        # edge kinds; see `ops/fleet/archive_handoffs.py::_is_terminal`'s
-        # Check 3), entirely independent of this call.
-        reply = await handler(
-            {"candidate": handoff_abs_path, "edge_kinds": CONCLUSION_EDGE_KINDS},
-            repo_root,
-        )
-    except Exception as exc:
-        return True, {
-            "exit_code": 2,
-            "crashed": True,
-            "error": f"handoff.has_live_children raised {type(exc).__name__}: {exc}",
-            "exception_type": type(exc).__name__,
-        }
-    exit_code = reply.get("exit_code")
-    retain = exit_code in (0, 2)
-    return retain, reply
-
-
 # ---------------------------------------------------------------------------
 # Row 7 (in-lock live-children re-check) + Row 6 (stamp/ship pair CAS) —
 # 2026-07-28 ceremony-lock-hold-resurrection spinoff, rows 6/7 of
@@ -630,7 +466,7 @@ async def _live_children_guard(
 class _StampAttempt:
     """Outcome of one in-lock stamp attempt (Row 7 CAS).
 
-    Four mutually exclusive shapes: `retain_live`, `retain_indeterminate`,
+    Two mutually exclusive shapes:
     `ok` (the write landed or was an idempotent no-op), or all three False
     with `error` set. A retain means the write never happened (`MutateAbort`,
     no disk change). `error` names why the write attempt failed for a
@@ -646,44 +482,34 @@ class _StampAttempt:
 
     ok: bool = False
     applied: bool = False
-    retain_live: bool = False
-    retain_indeterminate: bool = False
     error: Optional[str] = None
     result_text: Optional[str] = None
 
 
-async def _stamp_with_live_children_recheck(
+async def _stamp_locked(
     relpath: str, handoff_abs_path: str, committed_sha: str, *, repo_root: Path
 ) -> _StampAttempt:
-    """Row 7: close the gap between the pre-lock `_live_children_guard` call
-    (in the caller's loop, above) and the stamp write actually landing.
+    """Apply the `shipped_in` stamp under the target file's own `locked_rmw`
+    lock.
 
-    Composes `handoff_stamp.build_stamp_mutate`'s pure mutate closure with a
-    SECOND call to the SAME `_live_children_guard` the pre-lock filter
-    already calls -- there is exactly one live-children check
-    implementation, invoked twice: once as a cheap early-out before any lock
-    is taken, once here, immediately before the write, with the target
-    file's lock already held by THIS `locked_rmw` call. If a successor was
-    authored in the window between those two calls, this second call sees
-    it and raises `MutateAbort` -- the lock releases cleanly, nothing is
-    written, and the caller routes the retain into
-    `StampOutcome.skipped_live_children` / `skipped_indeterminate`, the same
-    buckets the pre-lock retain path already used.
-
-    The recheck runs via `asyncio.run()` inside the mutate callable. That
-    callable executes on a plain `ThreadPoolExecutor` thread (`locked_rmw`
-    itself is reached via `asyncio.to_thread`), which never has a running
-    event loop of its own -- nesting a fresh loop there is safe; it is not
-    re-entering the loop that is awaiting this coroutine.
+    Was `_stamp_with_live_children_recheck` until 2026-08-28. Row 7's whole
+    job was to re-run the live-children guard a second time inside the lock,
+    closing the window between the pre-lock check and the write in which a
+    peer could author a successor. **That window is not narrowed here any
+    more, it is gone**: the guard was deleted on a PM ruling (a baton is
+    either used up or it is not; having a child says nothing about whether it
+    should be archived), so a successor appearing mid-flight no longer
+    changes the answer and there is nothing left to race against. Deleting
+    the recheck is therefore not a relaxation of Row 7 — it is the removal of
+    a CAS protecting a predicate that no longer exists.
 
     Mirrors `handoff_stamp._handler`'s own containment guard (resolved path
     must be under ``state/handoffs/``) -- this function calls
     `build_stamp_mutate` directly rather than routing through `_handler`
     (see the module-level import-side-effect comment for why), so it must
-    replicate that check itself rather than silently losing it.
+    replicate that check itself rather than silently losing it. That guard is
+    NOT part of what Row 7 deleted and must stay.
     """
-    import asyncio
-
     worktree_root = main_worktree_root(repo_root)
     resolved = contained_path(
         Path(handoff_abs_path), [worktree_root / "state" / "handoffs"]
@@ -693,35 +519,22 @@ async def _stamp_with_live_children_recheck(
             error=f"handoff_path escapes state/handoffs/: {handoff_abs_path!r}"
         )
 
+    import asyncio
+
     stamp_mutate, stamp_state = build_stamp_mutate(
         relpath, committed_sha, "ship-commit", force=False
     )
-    _retain_reply: list[Optional[dict]] = [None]
-
-    def _combined_mutate(old_text: str) -> str:
-        retain, reply = asyncio.run(
-            _live_children_guard(handoff_abs_path, repo_root=repo_root)
-        )
-        if retain:
-            _retain_reply[0] = reply
-            raise MutateAbort("row7-recheck-retain")
-        return stamp_mutate(old_text)
 
     try:
         result_text = await asyncio.to_thread(
-            locked_rmw, resolved, _combined_mutate, repo_root=repo_root
+            locked_rmw, resolved, stamp_mutate, repo_root=repo_root
         )
     except LockTimeout as exc:
         return _StampAttempt(error=f"stamp lock timeout: {exc}")
     except MutateAbort as exc:
-        reply = _retain_reply[0]
-        if reply is not None:
-            if reply.get("exit_code") == 0:
-                return _StampAttempt(retain_live=True)
-            return _StampAttempt(retain_indeterminate=True)
-        # A MutateAbort not raised by the recheck -- the stamp mutate's own
-        # abort path (e.g. no parseable frontmatter). Surfaced as an error,
-        # matching the pre-refactor stamp_reply.get("error") shape.
+        # With the recheck gone, the ONLY remaining MutateAbort source is the
+        # stamp mutate's own abort path (e.g. no parseable frontmatter), so
+        # there is no longer a retain reply to disambiguate against.
         return _StampAttempt(
             error=str(exc.args[0]) if exc.args else "stamp mutate aborted"
         )
@@ -744,7 +557,7 @@ async def _ship_with_cas(
     order, so splitting them buys nothing and this function does not
     attempt it).
 
-    ``expected_text`` is the exact text `_stamp_with_live_children_recheck`
+    ``expected_text`` is the exact text `_stamp_locked`
     observed on disk the instant its own write completed (`locked_rmw`'s
     return value). This ship attempt re-reads the file fresh under ITS OWN
     lock (same as `handoff_transition._ship` always did) and compares that
@@ -817,13 +630,11 @@ class StampOutcome:
 
     stamped: list[str] = field(default_factory=list)
     skipped_future_dated: list[str] = field(default_factory=list)
-    skipped_live_children: list[str] = field(default_factory=list)
-    skipped_indeterminate: list[str] = field(default_factory=list)
     #: Already in a terminal `deployment_state` — either shipped-and-archived,
     #: or any other terminal state regardless of location (see
     #: `_already_terminal_no_op`) — a genuine no-op, never
-    #: promoted to `failed` the way `skipped_future_dated`/
-    #: `skipped_live_children`/`skipped_indeterminate` are on a stamp-nothing
+    #: promoted to `failed` the way
+    #: `skipped_future_dated` is on a stamp-nothing
     #: chain-terminal close (those name an actionable remediation; this one
     #: names nothing left to do).
     skipped_already_terminal: list[str] = field(default_factory=list)
@@ -966,7 +777,7 @@ async def post_commit_stamp_and_ship(
     caller's own single detached push spawned after the whole tail completes.
     """
     # asyncio deferred to first use here (not module scope, and re-deferred
-    # locally in `_stamp_with_live_children_recheck` / `_ship_with_cas`
+    # locally in `_stamp_locked` / `_ship_with_cas`
     # below for the same reason) — a module-scope `import asyncio` dragged
     # asyncio.base_events (~8ms) into every eager-loaded op import path that
     # never calls post_commit_stamp_and_ship. Spec:
@@ -991,23 +802,11 @@ async def post_commit_stamp_and_ship(
     accepted_paths, rejected_paths = reject_future_dated(redrived_paths)
 
     outcome_stamped: list[str] = []
-    outcome_live: list[str] = []
-    outcome_indeterminate: list[str] = []
     outcome_already_terminal: list[str] = []
     outcome_errors: list[dict[str, str]] = []
 
     for relpath in accepted_paths:
         handoff_abs = str(worktree_root / relpath)
-
-        # R4(a) — live-children guard: RETAIN (skip) on exit_code 0 (real
-        # live children) or 2 (indeterminate, fail-closed).
-        retain, reply = await _live_children_guard(handoff_abs, repo_root=repo_root)
-        if retain:
-            if reply.get("exit_code") == 0:
-                outcome_live.append(relpath)
-            else:
-                outcome_indeterminate.append(relpath)
-            continue
 
         # Already-terminal no-op guard: a predecessor reached a terminal
         # `deployment_state` — stamped `shipped_in`/`shipped` directly via
@@ -1030,21 +829,9 @@ async def post_commit_stamp_and_ship(
         # shipped, or schema_validate.py's _cf_shipped_in_required (Rule
         # A3a-2) hard-fails the ship transition for any handoff created on or
         # after 2026-05-29.
-        #
-        # Row 7: the write itself re-verifies the live-children premise a
-        # SECOND time, inside the stamp's own `locked_rmw` lock hold, right
-        # before the write lands -- closing the gap between the pre-lock
-        # guard call above and this write (see
-        # `_stamp_with_live_children_recheck`'s docstring).
-        stamp_attempt = await _stamp_with_live_children_recheck(
+        stamp_attempt = await _stamp_locked(
             relpath, handoff_abs, committed_sha, repo_root=repo_root
         )
-        if stamp_attempt.retain_live:
-            outcome_live.append(relpath)
-            continue
-        if stamp_attempt.retain_indeterminate:
-            outcome_indeterminate.append(relpath)
-            continue
         if not stamp_attempt.ok:
             outcome_errors.append(
                 {"path": relpath, "error": stamp_attempt.error or "stamp failed"}
@@ -1077,8 +864,6 @@ async def post_commit_stamp_and_ship(
     if not outcome_stamped:
         return StampOutcome(
             skipped_future_dated=rejected_paths,
-            skipped_live_children=outcome_live,
-            skipped_indeterminate=outcome_indeterminate,
             skipped_already_terminal=outcome_already_terminal,
             errors=outcome_errors,
         )
@@ -1128,8 +913,6 @@ async def post_commit_stamp_and_ship(
     return StampOutcome(
         stamped=outcome_stamped,
         skipped_future_dated=rejected_paths,
-        skipped_live_children=outcome_live,
-        skipped_indeterminate=outcome_indeterminate,
         skipped_already_terminal=outcome_already_terminal,
         errors=outcome_errors,
         follow_up_committed_sha=follow_up_sha,

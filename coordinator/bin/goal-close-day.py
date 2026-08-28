@@ -85,10 +85,59 @@ def _parse_args(argv: list[str]) -> dict:
     return {"decisions": decisions}
 
 
-def main(argv: list[str]) -> int:
+_BOOTSTRAP_NAMES = ("cc_invoke", "mutation_refusal_message", "resolve_checked_repo_root")
+
+
+def _bootstrap_imports() -> None:
+    """Bind every non-stdlib dependency this door needs at module scope
+    (C6k import-motion: the module body stays inert on both the warm door
+    and the un-bootstrapped settings-home forwarder load routes). Idempotent
+    by construction: a name already bound (via a prior call, or a test
+    reaching for `mod.cc_invoke` ahead of calling `main()`) is left alone
+    rather than clobbered by a real import.
+    """
+    if "cc_invoke" in globals():
+        return
+
+    global cc_invoke, mutation_refusal_message, resolve_checked_repo_root
+
     import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
     from cc_invoke import cc_invoke, mutation_refusal_message
     from repo_identity import resolve_checked_repo_root
+
+
+def __getattr__(name: str):
+    """PEP 562 hook so a caller reaching for a bootstrapped name (`cc_invoke`,
+    `mutation_refusal_message`, `resolve_checked_repo_root`) before `main()`
+    has run -- this file's own test suite patches these as module attributes
+    ahead of calling `mod.main()` -- triggers `_bootstrap_imports()` lazily
+    rather than finding the name absent.
+
+    NEGATIVE SPEC -- the forced re-run defeats the sentinel guard
+    (`"cc_invoke" in globals()`) without destroying a caller's
+    `mock.patch.object` of a DIFFERENT bootstrapped name: `_saved` snapshots
+    and restores every already-present bootstrapped name around the forced
+    re-run, so a monkeypatch on one name survives a lazy fetch of another.
+    """
+    if name in _BOOTSTRAP_NAMES:
+        _bootstrap_imports()
+        if name not in globals():
+            _saved = {k: globals().pop(k) for k in _BOOTSTRAP_NAMES if k in globals()}
+            try:
+                _bootstrap_imports()
+            finally:
+                globals().update(_saved)
+        try:
+            return globals()[name]
+        except KeyError:
+            raise AttributeError(
+                f"module {__name__!r} has no attribute {name!r}"
+            ) from None
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+def main(argv: list[str]) -> int:
+    _bootstrap_imports()
 
     parsed = _parse_args(argv)
 

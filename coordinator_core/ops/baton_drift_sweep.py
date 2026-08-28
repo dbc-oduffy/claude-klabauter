@@ -212,10 +212,17 @@ per-hit CURRENT eligibility (holder now dead AND live-children guard now clears,
 SAME two accessors the retain grounds themselves call) — never the unrecoverable historical
 retain_kind, never a mutation. Draining a hit is a separate, operator-initiated act.
 
-Reuses, does not reimplement: `handoff_archive_transition._handoff_live_holder_session` and
-`handoff_children._handoff_has_live_children` — the exact two accessors the retain grounds
-this leg detects call internally, so eligibility can never drift from what a re-run of
-`archive_transition` mode=supersede would itself decide.
+Reuses, does not reimplement: `handoff_archive_transition._handoff_live_holder_session` — the
+accessor the surviving retain ground calls internally, so eligibility can never drift from what
+a re-run of `archive_transition` mode=supersede would itself decide.
+
+The live-children accessor was the second half of this pair until 2026-08-28, when the guard was
+deleted from the archival decision on a PM ruling (having a child says nothing about whether a
+baton should be archived — either it is used up or it is not). Because this leg exists to mirror
+that decision, the accessor had to leave here in the same move: a report-only predicate that
+outlives the decision it reports on is not a conservative leftover, it reports records as
+ineligible that the archival path now archives. Never re-add a ground here that the archival
+path does not itself check.
 
 Negative-spec (FIFTH LEG / C1):
   - REPORT-ONLY — computes and returns; calls no `archive_transition` verb, no git mv, no
@@ -268,7 +275,7 @@ from coordinator_core.dag import (
 from coordinator_core.frontmatter.primitives import read_fm_field, split_frontmatter
 from coordinator_core.lifecycle import git_common_dir
 from coordinator_core.ops.handoff_archive_transition import _handoff_live_holder_session
-from coordinator_core.ops.handoff_children import _collect_handoff_paths, _handoff_has_live_children
+from coordinator_core.ops.handoff_children import _collect_handoff_paths
 
 # Mirrors handoff_archive_transition._TERMINAL_DEPLOYMENT_STATES (vendored, not
 # imported — see module docstring).
@@ -455,9 +462,6 @@ def _referencers_of(
 
 def _retained_supersede_eligibility(
     path: str,
-    continued_into: str,
-    node_repo_root: str,
-    id_index: Dict[str, str],
     common_dir: "Path | None",
 ) -> bool:
     """CURRENT eligibility (AC2) for a `retained`-bucket hit — whether the
@@ -465,41 +469,38 @@ def _retained_supersede_eligibility(
     TODAY, not why it was retained originally (that cause was never
     persisted — see the module's `retained` docstring entry).
 
-    Eligible only when BOTH retain grounds
-    `handoff_archive_transition::_supersede_continued`'s own gates check have
-    now cleared:
-      - holder liveness: `_handoff_live_holder_session` (the SAME accessor
-        the live-holder retain ground calls) returns None for this record.
-      - live children: `handoff.has_live_children` (the SAME guard the
-        live-parent/indeterminate retain ground calls), with `exclude` set
-        to the successor's OWN absolute path — omitting the exclude makes
-        the successor read as its own live child (it names this record via
-        `predecessor:`/`continued_into` by construction) and every hit would
-        read ineligible regardless of the true holder/child state.
+    Eligible when the holder-liveness retain ground has cleared:
+    `_handoff_live_holder_session` (the SAME accessor that ground calls)
+    returns None for this record.
 
-    A `continued_into` value this module cannot resolve to an on-disk path
-    (id/path shape it has no evidence for) cannot be safely excluded, so the
-    live-children guard is called WITHOUT an exclude in that case — fail-
-    closed (the successor then counts as its own live child, reading
-    ineligible) rather than guessing a path. `include_history_tier=False`
-    on the resolve: this call must never spawn a per-record git subprocess
-    (coordinator_core/tests/test_no_unbatched_per_item_git_spawn.py governs
-    this file's family) — the successor is always disk-resident by the time
-    a `continued` stamp names it, so tiers 1-2 (pure filesystem) are
-    sufficient.
+    **A divergence recorded here earlier on 2026-08-28 is now CLOSED, and it
+    closed the way this note required.** For part of that day this leg was more
+    permissive than the archival path it reports on, because
+    `_supersede_continued` still carried a live-children retain of its own. The
+    reason it had been left alone was a cited decision record, "DR-224 AC4" —
+    which turned out not to exist (DR-224 contains no AC4, and its contract
+    runs the other way). That guard is gone (`bd7959eaa`), as is the fleet
+    sweep's Check 3 (`b445fa0de`), so report and decision agree again: archival
+    retains on a live claim HOLDER and on nothing else.
+
+    The rule the note stated still binds. If these two ever diverge again,
+    close it by changing the archival path — never by re-adding a children
+    ground to this report.
+
+    **This leg is REPORT-ONLY, and that is exactly why the live-children
+    ground had to leave it too.** The guard was deleted from the archival
+    decision on a PM ruling (a baton is either used up or it is not; having a
+    child says nothing about whether it should be archived). A report whose
+    eligibility predicate outlived the decision it reports on would not be
+    conservative — it would be WRONG in the expensive direction, reporting
+    records as ineligible that the archival path now archives, and it is read
+    by operators deciding whether to drain a hit by hand.
+
+    The `exclude`/successor-path machinery went with it. Its whole job was to
+    stop the successor reading as its own live child; with no live-children
+    ground there is nothing to exclude from, and `continued_into` no longer
+    needs resolving to a path here at all.
     """
-    import asyncio
-
-    handoff_dir = os.path.dirname(path)
-    target_abs = resolve_target(
-        continued_into,
-        handoff_dir,
-        node_repo_root,
-        id_index=id_index,
-        include_history_tier=False,
-    )
-    exclude = [target_abs] if target_abs and target_abs != "git-history" else []
-
     if common_dir is not None:
         try:
             holder_session = _handoff_live_holder_session(Path(path), common_dir)
@@ -507,20 +508,8 @@ def _retained_supersede_eligibility(
             holder_session = "<indeterminate>"
     else:
         holder_session = "<indeterminate>"
-    holder_cleared = holder_session is None
 
-    guard_repo_root = common_dir if common_dir is not None else Path(node_repo_root)
-    try:
-        guard_result = asyncio.run(
-            _handoff_has_live_children(
-                {"candidate": path, "exclude": exclude}, guard_repo_root
-            )
-        )
-        children_cleared = guard_result.get("exit_code") == 1
-    except Exception:
-        children_cleared = False
-
-    return holder_cleared and children_cleared
+    return holder_session is None
 
 
 def baton_drift_sweep(worktree_root: Path) -> dict:
@@ -633,14 +622,6 @@ def baton_drift_sweep(worktree_root: Path) -> dict:
     retained_paths: List[str] = []
     retained_eligible: Dict[str, bool] = {}
 
-    # Built once, off the SAME dag_index the reverse-predecessor index above
-    # already scanned (its per-file reads are cache-backed by _read_meta — see
-    # that function's own docstring — so this second pass costs no new I/O on
-    # the common case). Reused only to resolve `continued_into` values that
-    # are a handoff_id rather than a path (C1's retained-bucket eligibility
-    # check, below).
-    id_index = build_handoff_id_index(dag_index)
-
     # C8: resolved once for the whole sweep, mirroring resolve_claim_state's own
     # hot-path contract (pass a pre-resolved common_dir to skip a second
     # git_common_dir resolution per baton; git_common_dir is itself lru_cache'd,
@@ -672,7 +653,7 @@ def baton_drift_sweep(worktree_root: Path) -> dict:
                     retained += 1
                     retained_paths.append(path)
                     retained_eligible[path] = _retained_supersede_eligibility(
-                        path, continued_into.strip(), repo_root, id_index, common_dir
+                        path, common_dir
                     )
             continue
 

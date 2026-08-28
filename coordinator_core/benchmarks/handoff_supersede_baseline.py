@@ -16,9 +16,13 @@ descendant's, and a distinct-pid count that includes the root. The k-batched
 primitive is wrong here by construction — the transition mutates the repo, so
 the second invocation of a batch measures a different job than the first.
 
-A `floor` mode measures the same CLI reaching only its usage path, so the
-interpreter-start + import cost that is not the transition's own work is
-attributed rather than charged to it.
+A `floor` mode measures the same CLI reaching `_import_module()` and then
+refusing on a missing argument, so the interpreter-start + engine-import cost
+that is not the transition's own work is attributed rather than charged to it.
+It passes a bare subcommand, NEVER an empty argv: `archive-stamp-cli`'s
+`main()` returns on `if not argv` BEFORE `_import_module()` runs, so an
+empty-argv floor skips the engine import entirely and every `mode - floor`
+subtraction then charges the whole of that import to the op.
 
 `procs` is NOT the spawn count. It counts distinct pids in the job including
 the root, and on Windows each `git` child arrives with a `conhost.exe`
@@ -118,7 +122,8 @@ deployment_state, so a non-terminal fixture measures a refusal, not the move.
 """
 
 ARGV = {
-    "floor": [],
+    # A bare subcommand, not `[]` — see the floor note in the module docstring.
+    "floor": ["chain-archive-handoff"],
     "supersede": [
         "supersede-archive-handoff",
         "state/handoffs/2026-08-27-probe-pred.md",
@@ -165,11 +170,11 @@ def sample(mode: str, out_dir: Path, idx: int) -> dict:
     root.mkdir()
     try:
         build_fixture(root)
-        env = dict(os.environ)
-        env["COORDINATOR_REPO_ROOT"] = str(root)
+        # `cwd` IS the repo-root isolation — `archive_stamp._resolve_repo_root_for`
+        # resolves off it. No env var participates; do not add one back.
         res = single_invocation_tree_process_time(
             [sys.executable, str(CLI), *ARGV[mode]],
-            env=env,
+            env=dict(os.environ),
             cwd=str(root),
             stdout_path=str(out_dir / f"{mode}-{idx}.out"),
             stderr_path=str(out_dir / f"{mode}-{idx}.err"),
@@ -199,14 +204,44 @@ def measure(n: int, out_dir: Path) -> dict:
     return report
 
 
+def check(report: dict) -> list:
+    """Refuse a baseline built from invocations that did not do the job.
+
+    Without this the recorded numbers time whatever happened. A fixture
+    regression, changed `--exclude` semantics, or the CLI's own
+    `_TRANSPORT_FAIL` on an unresolvable engine root each produce a full,
+    plausible-looking table — and these figures are cited as the target a
+    rebuild must beat. `rc` and `archived` were already collected here;
+    nothing read them.
+    """
+    problems = []
+    for mode in ("supersede", "chain"):
+        rcs = report[mode]["rcs"]
+        if rcs != [0]:
+            problems.append(f"{mode}: expected every sample rc 0, got {rcs}")
+        if not report[mode]["archived_last"]:
+            problems.append(f"{mode}: archived nothing — the fixture did not exercise the path")
+    if report["floor"]["archived_last"]:
+        problems.append(
+            f"floor: archived {report['floor']['archived_last']} — the floor mode did work"
+        )
+    return problems
+
+
 def main(argv: list[str]) -> int:
     declare_benchmark_origin()
     n = int(argv[1]) if len(argv) > 1 else 15
     out_dir = Path(tempfile.mkdtemp(prefix="handoff-baseline-out-"))
-    try:
-        report = measure(n, out_dir)
-    finally:
-        shutil.rmtree(out_dir, ignore_errors=True)
+    report = measure(n, out_dir)
+    problems = check(report)
+    if problems:
+        # Per-sample stdout/stderr is the only evidence of WHY a sample failed,
+        # so it survives exactly the run that needs it.
+        print(f"BASELINE REFUSED — per-sample stdio kept at {out_dir}", file=sys.stderr)
+        for line in problems:
+            print(f"  {line}", file=sys.stderr)
+        return 1
+    shutil.rmtree(out_dir, ignore_errors=True)
     print(json.dumps(report, indent=2))
     for mode, row in report.items():
         print(

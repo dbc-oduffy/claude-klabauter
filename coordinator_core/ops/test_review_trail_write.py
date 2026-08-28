@@ -37,7 +37,6 @@ from coordinator_core.ops.review_trail_write import (
     _reject_empty_sha_range,
     _resolve_ref_to_sha,
     _resolve_symbolic_range,
-    _review_trail_write_handler,
     _scan_workstream,
     _validate,
     write_review_trail_entry,
@@ -214,12 +213,22 @@ def test_validate_single_invalid_enum_message_is_unchanged() -> None:
     assert " | review_trail.write: " not in str(exc.value)
 
 
-def test_validate_hints_the_bare_name_for_an_agent_id_reviewer() -> None:
-    """`coordinator:code-reviewer` is the value nearest to hand at the seam --
-    it differs from the accepted one by a namespace prefix, so name it."""
-    with pytest.raises(ValueError, match=r"did you mean 'code-reviewer'\?"):
-        _validate("a..b", "coordinator:code-reviewer", "chain", "ok", 10, "diff")
+def test_validate_accepts_a_namespaced_reviewer_by_normalising_it() -> None:
+    """Replaces an assertion that went stale when the behaviour improved.
 
+    This test used to require `_validate` to REFUSE `coordinator:code-reviewer`
+    with "did you mean 'code-reviewer'?". `normalize_reviewer` now strips the
+    namespace prefix and accepts, and its docstring gives the reason: a refusal
+    that names its own remedy makes the caller walk the path twice, and every
+    caller of the open-loop record write swallows the refusal by design, so the
+    round trip was never actually taken.
+
+    The old test read as a live defect for as long as it was invisible behind a
+    collection interrupt in this same file. It was not one -- the hint was
+    removed on purpose. Pinned in the accepting direction so the file keeps a
+    detector here rather than a stale red.
+    """
+    assert _validate("a..b", "coordinator:code-reviewer", "chain", "ok", 10, "diff") is None
 
 def test_validate_offers_no_hint_for_an_unrelated_reviewer() -> None:
     with pytest.raises(ValueError) as exc:
@@ -676,9 +685,29 @@ def test_write_review_trail_entry_rejects_empty_sha_range(tmp_path: Path) -> Non
 
 # ---------------------------------------------------------------------------
 # _review_trail_write_handler — JSON-RPC op entrypoint
+#
+# The handler and its `@register_op` were removed by d20d56893 ("fourteen ops
+# are deleted under a 200ms process-time bar"); `review_trail.write` is out of
+# scope for the killed-op sweep under DR-372/DR-374 by separate ruling, so the
+# op stays dead and this file's other 43 tests still cover the module's LIVE
+# helpers. Until 2026-08-28 the removed name was still in this module's import
+# list, which made the whole tree fail at COLLECTION — the fast tier stopped
+# being runnable fleet-wide over two skipped tests.
+#
+# Skipped rather than deleted: the two cases below are the only record of the
+# op's entrypoint contract (param casting, session-id stamping, out_path
+# derivation), and a v2 under DR-372/DR-374 would want them as a spec even
+# though it will not import this name. Deleting them is the killed-op sweep's
+# call to make, not this file's.
 # ---------------------------------------------------------------------------
 
+pytestmark_handler_retired = pytest.mark.skip(
+    reason="_review_trail_write_handler was removed with the op (d20d56893); "
+    "disposition belongs to the killed-op surface sweep under DR-372/DR-374"
+)
 
+
+@pytestmark_handler_retired
 def test_handler_writes_entry_under_repo_root(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -708,6 +737,7 @@ def test_handler_writes_entry_under_repo_root(
     assert out_path.parent == worktree / "state" / "review-trail"
 
 
+@pytestmark_handler_retired
 def test_handler_rejects_non_integer_diff_loc(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

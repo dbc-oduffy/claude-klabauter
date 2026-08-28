@@ -310,3 +310,20 @@ def test_never_spawns_a_subprocess(tmp_path: Path, monkeypatch) -> None:
     assert receipt_credited_shas(
         tmp_path, [(_SHA_A, "2026-08-28T11:00:00+00:00", _SESSION)]
     ) == {_SHA_A}
+
+
+def test_multiple_session_id_trailers_are_rejected_not_split(tmp_path: Path) -> None:
+    """`git log --format=%(trailers:separator=%x20)` space-joins the values of
+    TWO `Session-Id:` trailers on one commit into a single field. That joined
+    string contains a space, which `_SESSION_ID_RE` has no branch for, so it
+    is rejected outright rather than credited under either half. Un-pinned
+    before this test: the mechanism was confirmed by reading the regex, not
+    exercised — a future loosening of `_SESSION_ID_RE` (e.g. to permit
+    whitespace, or a bug that only strips one side) could silently start
+    crediting on a malformed multi-trailer commit with no test to catch it."""
+    _write_sidecar(tmp_path, _SESSION, stamped_at="2026-08-28T12:00:00+00:00")
+    joined = f"{_SESSION} {_OTHER_SESSION}"
+    credited = receipt_credited_shas(
+        tmp_path, [(_SHA_A, "2026-08-28T11:00:00+00:00", joined)]
+    )
+    assert credited == set()

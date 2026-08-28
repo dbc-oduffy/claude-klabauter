@@ -329,6 +329,24 @@ def compute_staleness(
 # ---------------------------------------------------------------------------
 
 
+def _normalize_eol(raw: bytes) -> bytes:
+    """Collapse CRLF and lone CR to LF before hashing.
+
+    NEGATIVE SPEC: this is not cosmetic. The digest is a cross-repo agreement
+    between DoE's `export-catering-resolution.py` (producer) and this gate
+    (consumer). Hashing raw working-tree bytes makes the value checkout-
+    dependent -- git's autocrlf hands a Windows clone CRLF and a Linux clone LF
+    for byte-identical tracked content, so a clean Linux clone would read
+    identical content as drift. Both sides normalize as of DoE 8bb443991;
+    changing this without changing the producer re-opens the split.
+
+    Applied to bytes rather than decoded text on purpose: the sources include
+    files this gate has no encoding contract for, and CR/LF are unambiguous at
+    the byte level in every ASCII-compatible encoding these sources use.
+    """
+    return raw.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+
+
 def compute_hash_drift(
     source_root: "str | Path",
     hash_algorithm: Any,
@@ -358,7 +376,7 @@ def compute_hash_drift(
             reasons.append(f"source_hashes entry '{rel_path}' not found under {source_root}")
             continue
         digest = hashlib.new(hash_algorithm)
-        digest.update(file_path.read_bytes())
+        digest.update(_normalize_eol(file_path.read_bytes()))
         actual = digest.hexdigest()
         if actual.lower() != str(expected).lower():
             reasons.append(

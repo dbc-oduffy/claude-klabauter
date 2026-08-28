@@ -46,6 +46,21 @@ Population vocabulary, derived not asserted:
                    from-scratch rebuild the entry records. The op is live again
                    on purpose. The entry's cost figures belong to the dead
                    predecessor and must not be quoted against the rebuild.
+- ``WITHDRAWN``  — the NOMINATION was wrong and the op stays, unchanged. Nothing
+                   was cut and nothing was rebuilt, so neither LANDED nor
+                   REBUILT describes it: there is no dead predecessor and no
+                   replacement. Distinct from NON_CUT, which records a cut
+                   proposed and blocked, or superseded, or an acquittal on the
+                   merits of the code — a withdrawal says the entry should not
+                   have been opened.
+                   K-040 is the worked case: `records.history` was nominated on
+                   an unestablished requirement leg, and a consumer census that
+                   read only this repo could not see the cross-repo caller that
+                   established it. The op is live and must be — liveness is the
+                   stated outcome, so it is not contested; an op ABSENT under a
+                   withdrawn entry is, because something cut it anyway.
+                   Expect this population to recur: a census blind to
+                   cross-repo callers will keep nominating ops that have them.
 - ``CONTESTED``  — the ledger's status and the live registry disagree. Never
                    silently resolved: a CONTESTED row is a defect report about
                    the ledger, surfaced by name.
@@ -121,6 +136,13 @@ _CROSS_PLANE_MARKERS = ("not by this repo",)
 #: for the same reason as `_CROSS_PLANE_MARKERS`: an entry earns this population
 #: by recording the rebuild, never by the classifier inferring one from liveness.
 _REBUILT_MARKERS = ("then rebuilt",)
+#: A nomination retracted with the op left standing. Literal and leading, for the
+#: same reason as the two tuples above: an entry earns this population by opening
+#: with the retraction, never by the classifier inferring one from a live op that
+#: happens to carry a kill entry. Deliberately NOT matching the bare word
+#: "withdrawn" anywhere in the status — a LANDED entry's prose can mention a
+#: withdrawn objection, and this population must not be reachable by that.
+_WITHDRAWN_MARKERS = ("withdrawn",)
 
 
 @dataclass
@@ -281,6 +303,12 @@ def classify(
         # reference to another op's rebuild earn this entry the population.
         is_cross_plane = any(marker in status[:100] for marker in _CROSS_PLANE_MARKERS)
         is_rebuilt = any(marker in status[:100] for marker in _REBUILT_MARKERS)
+        # Windowed to the OPENING of the status, tighter than the others: a
+        # withdrawal is the first thing such an entry says, and the word can
+        # appear later in any entry's prose about a withdrawn objection or a
+        # withdrawn recommendation. 40 chars is the same window `is_landed`
+        # uses for the same reason.
+        is_withdrawn = any(marker in status[:40] for marker in _WITHDRAWN_MARKERS)
         # Windowed to the status line's opening, like `is_landed` above: a
         # LANDED entry's authority prose says things like "closed out by C1g",
         # and an unwindowed substring test reads that as a CLOSED status.
@@ -292,6 +320,18 @@ def classify(
                 entry.population = "CONTESTED"
                 entry.notes.append(
                     f"status says CANDIDATE but `{entry.op_name}` is absent from the live registry"
+                )
+        elif is_withdrawn:
+            # Checked ahead of the cut populations because a withdrawal is not
+            # one: nothing landed, so `is_landed` never fires, and falling
+            # through to the final `else` is precisely the CONTESTED that
+            # reported this module's own vocabulary gap as a ledger defect.
+            entry.population = "WITHDRAWN"
+            if entry.op_live is False:
+                entry.population = "CONTESTED"
+                entry.notes.append(
+                    f"status withdraws the nomination but `{entry.op_name}` is absent from "
+                    "the live registry -- something cut it anyway"
                 )
         elif is_landed and is_rebuilt:
             entry.population = "REBUILT"
@@ -374,14 +414,27 @@ def render(entries: Sequence[LedgerEntry], *, heading_count: int) -> str:
         lines.append("No CONTESTED rows: every entry's status agrees with the live registry.")
         lines.append("")
 
-    for population in (
+    # Preference ORDER, not the set of populations that may be rendered. The
+    # set is whatever the classifier actually produced: a population absent
+    # from this literal used to be dropped from the report silently, so an
+    # entry that vanished read exactly like an entry that did not exist. That
+    # is the same failure this module exists to prevent one level up -- it
+    # reports disagreements by name rather than resolving them quietly -- and
+    # it bit on the WITHDRAWN addition, which classified correctly and then
+    # rendered nowhere. Anything unranked sorts last rather than disappearing.
+    _ORDER = (
         "LANDED",
         "CANDIDATE",
         "CONVICTED",
         "REBUILT",
+        "WITHDRAWN",
         "NON_CUT",
         "CUT_ELSEWHERE",
         "CONTESTED",
+    )
+    produced = {e.population for e in entries}
+    for population in sorted(
+        produced, key=lambda p: (_ORDER.index(p) if p in _ORDER else len(_ORDER), p)
     ):
         rows = [e for e in entries if e.population == population]
         if not rows:

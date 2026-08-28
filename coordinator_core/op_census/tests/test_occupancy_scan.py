@@ -330,7 +330,22 @@ def test_n_times_p50_is_the_robust_twin_of_occupancy(tmp_path, monkeypatch):
 
 def test_classify_liveness_three_known_answers():
     # AC1b: coverage.gate dead, hooks.track_touched_files live,
-    # handoff.reconcile_open live -- against a real combined registry read.
+    # handoff.reconcile_open DEAD as of the K-108 cut (2026-08-27, d20d56893)
+    # -- against a real combined registry read.
+    #
+    # This third answer was LIVE when the test was written and flipped when the
+    # 200ms sweep cut the op. It is asserted DEAD rather than deleted because a
+    # known-answer test earns its keep from answers that can change: an oracle
+    # that only ever sees live ops never demonstrates it can report a dead one
+    # against the real registry.
+    #
+    # The op reads DEAD by an IMPORT-GRAPH ACCIDENT and that is worth knowing
+    # here, because it means this assertion is load-bearing in a way the other
+    # two are not. `coordinator_core/ops/handoff_reconcile.py` still executes a
+    # module-level `register_op("handoff.reconcile_open", _handler)`; it is
+    # absent from the runtime registry only because nothing imports the module
+    # any more. If any future edit re-imports it, this goes red and the message
+    # is "the cut is incomplete", not "the test is stale".
     registry = live_registry_op_names()
     result = classify_liveness(
         ["coverage.gate", "hooks.track_touched_files", "handoff.reconcile_open"],
@@ -339,7 +354,7 @@ def test_classify_liveness_three_known_answers():
     )
     assert result["coverage.gate"] is Liveness.DEAD
     assert result["hooks.track_touched_files"] is Liveness.LIVE
-    assert result["handoff.reconcile_open"] is Liveness.LIVE
+    assert result["handoff.reconcile_open"] is Liveness.DEAD
 
 
 def test_classify_liveness_reports_unclassifiable_when_a_module_is_poisoned():

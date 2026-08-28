@@ -63,9 +63,7 @@ from coordinator_core.ops.ceremony.git_native import (
 from coordinator_core.ops.fleet.archive_terminal_handoffs import (
     _REASON_DEST_CONFLICT,
     _SCAN_REASON_CONSUMED_BY_LIVE,
-    _SCAN_REASON_LIVE_CHILD,
     _SCAN_REASON_LIVE_CLAIM,
-    _SCAN_REASON_MEMBERSHIP_ERROR,
     _SCAN_REASON_NOT_TERMINAL,
     _SCAN_REASON_WORKTREE_DIRTY,
     _dirty_handoff_relpaths,
@@ -257,13 +255,18 @@ def test_ac3_live_forked_from_child_refusal_is_named_in_skipped(repo: Path):
 
     act = _run(_handle_act("already-terminal", repo, common_dir, [cid], cap=10))
 
+    # Inverted 2026-08-28. This asserted the parent was RETAINED and its
+    # refusal named. Check 3 is deleted (PM ruling: having a child says
+    # nothing about whether a baton should be archived), and the
+    # `forked_from` half it rested on cited a "DR-224, AC4" that does not
+    # exist — DR-224's actual contract makes has-children mean SUPERSEDE.
     acted_ids = [item["id"] for item in act.get("acted", [])]
-    assert cid not in acted_ids, (
-        f"a live forked_from child must retain its parent (DR-324 narrowing); got {act!r}"
+    assert cid in acted_ids, (
+        f"a live forked_from child must no longer retain its parent; got {act!r}"
     )
-    skipped = [s for s in act.get("skipped", []) if s.get("id") == cid]
-    assert skipped, f"live-forked_from-child refusal must appear in skipped[]; got {act!r}"
-    assert skipped[0].get("reason"), f"skipped entry must carry a named reason; got {skipped!r}"
+    assert not [s for s in act.get("skipped", []) if s.get("id") == cid], (
+        f"the parent must not be refused at all; got {act!r}"
+    )
 
 
 def test_ac3_dest_conflict_refusal_is_named_in_skipped(repo: Path):
@@ -777,7 +780,20 @@ def test_ac2_worktree_dirty_rail_names_itself(repo: Path):
     assert reason == _SCAN_REASON_WORKTREE_DIRTY, reason
 
 
-def test_ac2_live_child_rail_names_itself(repo: Path):
+def test_a_live_forked_from_child_no_longer_retains_the_parent(repo: Path):
+    """Was `test_ac2_live_child_rail_names_itself`, inverted 2026-08-28.
+
+    Check 3 (childlessness) was deleted on the PM ruling that having a child
+    says nothing about whether a baton should be archived. The child seeded
+    here is a `forked_from` spinoff — the last edge kind still blocking after
+    DR-324 narrowed succession edges away — and its retain rested on a
+    "DR-224, AC4" citation that does not resolve (DR-224 contains no AC4). The
+    premise is pinned false in
+    coordinator_core/tests/test_coverage_dag_archived_repo_root.py.
+
+    A refusal reason of None means the record was NOT refused: it survives the
+    scan and is archivable, which is the point.
+    """
     parent_name = "2026-02-03-parent.md"
     _seed(repo, parent_name, "status: claimed\ndeployment_state: continued")
     _seed(
@@ -788,8 +804,9 @@ def test_ac2_live_child_rail_names_itself(repo: Path):
 
     reason = _scan_reasons(repo).get(_cid(parent_name))
 
-    assert reason is not None, "a parent retained by a live child must be named, not dropped"
-    assert reason == _SCAN_REASON_LIVE_CHILD, reason
+    assert reason is None, (
+        f"a live forked_from child must no longer retain its parent; got {reason!r}"
+    )
 
 
 def test_ac2_live_claim_rail_names_itself(repo: Path):
@@ -875,8 +892,7 @@ def test_ac4_scan_reasons_never_reach_the_cockpit_wire(repo: Path):
     for scan_reason in (
         _SCAN_REASON_NOT_TERMINAL,
         _SCAN_REASON_WORKTREE_DIRTY,
-        _SCAN_REASON_LIVE_CHILD,
-        _SCAN_REASON_LIVE_CLAIM,
+            _SCAN_REASON_LIVE_CLAIM,
         _SCAN_REASON_CONSUMED_BY_LIVE,
     ):
         assert not any(r.startswith(scan_reason) for r in wire_reasons), (
@@ -933,22 +949,12 @@ def test_c3_dirty_and_non_terminal_reason_precedence_is_not_terminal(repo: Path)
     assert reason != _SCAN_REASON_WORKTREE_DIRTY
 
 
-def test_ac10_membership_error_rail_names_itself(repo: Path):
-    """AC-10: the sixth `_SCAN_REASON_*` rail (`_SCAN_REASON_MEMBERSHIP_ERROR`,
-    the fail-closed `reverse_membership` ValueError arm) previously had no
-    covering `test_ac2_*_rail_names_itself` test.
-    """
-    name = "2026-05-11-membership-error.md"
-    _seed(repo, name, "status: claimed")
-
-    with patch(
-        "coordinator_core.ops.fleet.archive_terminal_handoffs.reverse_membership",
-        side_effect=ValueError("boom"),
-    ):
-        reason = _scan_reasons(repo).get(_cid(name))
-
-    assert reason is not None, "a reverse_membership error must be named, not dropped (fail-closed)"
-    assert reason.startswith(_SCAN_REASON_MEMBERSHIP_ERROR), reason
+# `test_ac10_membership_error_rail_names_itself` was DELETED 2026-08-28 with the
+# arm it covered. `_SCAN_REASON_MEMBERSHIP_ERROR` was the fail-closed
+# `reverse_membership` ValueError rail: an error computing children retained the
+# record forever. With Check 3 gone children do not decide archival, so an error
+# computing them is not a reason to retain -- and `reverse_membership` is no
+# longer imported by that module, leaving nothing to patch.
 
 
 def test_c3_dirty_check_pathspec_scoped_to_survivors_only(repo: Path):
@@ -1231,9 +1237,19 @@ def test_ac11_unconditional_legs_are_not_paid_when_nothing_survives(repo: Path):
     ):
         _run(plan_sweep(repo, common_dir, cap=50))
 
-    assert "index" in reached and "sids" in reached, (
-        f"a surviving candidate must reach both legs, else the negative arm "
-        f"above is vacuous; reached {reached!r}"
+    # One leg, not two, since 2026-08-28: the reverse-edge index build was
+    # deleted with Check 3 — it existed only to answer "does anything still
+    # point at this node?", which nothing asks any more. The `index` spy is
+    # kept above so this test still fails loudly if a future change
+    # reintroduces that build; `resolve_live_session_ids` is now the only
+    # unconditional leg whose laziness this test guards.
+    assert "sids" in reached, (
+        f"a surviving candidate must reach the live-session leg, else the "
+        f"negative arm above is vacuous; reached {reached!r}"
+    )
+    assert "index" not in reached, (
+        f"the reverse-edge index build was deleted with Check 3; something "
+        f"has reintroduced a corpus-wide edge index; reached {reached!r}"
     )
 
 

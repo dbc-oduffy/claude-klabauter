@@ -247,6 +247,9 @@ from coordinator_core.guard_advisory_counter import (
     record_advisory_fire as _record_advisory_fire,
     record_deny_fire as _record_deny_fire,
 )
+from coordinator_core.warm.caller_context import (
+    resolve_caller_context as _resolve_caller_context,
+)
 from coordinator_core.bash_guards._advisory_dedupe import (
     advisory_dedupe_key as _advisory_dedupe_key,
     already_advised as _already_advised,
@@ -283,6 +286,10 @@ from coordinator_core.bash_guards.check_test_suite_invocation import (
 from coordinator_core.bash_guards.block_subagent_commit import (
     check as _check_subagent_commit,
     MATCHERS as _matchers_subagent_commit,
+)
+from coordinator_core.bash_guards.guard_host_subagent_bash_ban import (
+    check as _check_host_subagent_bash_ban,
+    MATCHERS as _matchers_host_subagent_bash_ban,
 )
 from coordinator_core.bash_guards.check_raw_pid_liveness import (
     check as _check_raw_pid_liveness,
@@ -326,6 +333,10 @@ from coordinator_core.bash_guards.block_subagent_grant_acquisition import (
 from coordinator_core.bash_guards.block_subagent_guard_grant import (
     check as _check_subagent_guard_grant,
     MATCHERS as _matchers_subagent_guard_grant,
+)
+from coordinator_core.bash_guards.guard_repo_setup_claude_home_refusal import (
+    check as _check_repo_setup_claude_home_refusal,
+    MATCHERS as _matchers_repo_setup_claude_home_refusal,
 )
 from coordinator_core.bash_guards.block_noncanonical_branch_creation import (
     check as _check_block_noncanonical_branch_creation,
@@ -758,6 +769,89 @@ def _crash_deny(guard_name: str, exc: BaseException, resolution_class: Optional[
     }
 
 
+_PLUGIN_ROOT_UNRESOLVED_GUARD_NAME = "plugin-root-unresolved"
+"""Synthetic ``guard_name`` label ``resolve_plugin_root_loud`` records its
+counted event under (``guard_advisory_counter.record_advisory_fire``'s first
+positional argument is a bare string, not a registered ``GuardEntry.name`` --
+see that module's own docstring, "Guard name and UTC timestamp only"). Not a
+`guard_chain` entry itself: a plugin-root miss is a resolution-failure signal
+one or more OTHER guards (C3's manifest read, C4/C5's ported guards) may hit
+mid-evaluation, not a guard with its own detection surface."""
+
+
+def resolve_plugin_root_loud(
+    payload: Optional[Dict[str, Any]], session_id: str, cwd: str
+) -> Optional[str]:
+    """Resolve this call's ``plugin_root`` via the shared per-call accessor
+    (``warm.caller_context.resolve_caller_context``), LOUD-fail-open on a
+    miss rather than the silent ``None`` ``resolve_plugin_root()``'s existing
+    cosmetic callers already tolerate (C2, state/dispatch-briefs/2026-08-28-
+    the-four-folded-bash-guards-get-registered-not-folded/C2.md).
+
+    Every consumer this dispatcher will grow that needs ``plugin_root`` (C3's
+    manifest read, C4/C5's ported guards) is itself a CONFINEMENT_DENY guard
+    that already fails open on a resolution miss -- a manifest-less guard has
+    nothing to key its detection on, so it correctly declines rather than
+    denies. A resolution failure passing silently through that fail-open path
+    would therefore look identical to "nothing to deny here", which is wrong:
+    an install with a broken/missing plugin root is a DEGRADED guard chain,
+    not a clean one, and that degradation must be visible.
+
+    Two DELIBERATELY REJECTED alternatives, both named so a future reader
+    does not re-litigate them:
+
+      - A hard fail-closed deny on a miss. Rejected -- bricks Bash entirely
+        on an OSS-mirror install with no ``coordinator-claude`` plugin
+        installed at all, which is a legitimate (if degraded) install shape,
+        not a violation.
+      - A silent fail-open (the status quo `resolve_plugin_root()` callers
+        already have). Rejected -- a resolution failure of the confinement
+        guards' own manifest source is not something today's chain can
+        currently even notice happened.
+
+    So: LOUD fail-open -- a `stderr` line (this dispatcher's existing
+    diagnostic channel; see every other ``print(..., file=sys.stderr)`` in
+    this module) plus a COUNTED event, via the already-landed
+    ``guard_advisory_counter.record_advisory_fire`` (this module already
+    imports it for the advisory-fire seam in the guard loop below -- this is
+    a call to a landed mechanism, not a mechanism to build, per C2's own
+    body). The counted event follows that recorder's own no-op-on-
+    unresolvable-``session_id``/no-write-failure-propagation contract:
+    wrapped in ``try/except Exception: pass`` here, exactly like every other
+    call site of this recorder in this module, so a counter write failure can
+    never turn this resolution miss into anything worse than the miss itself.
+
+    Returns ``None`` on a miss (never raises) -- the caller (a future
+    consuming guard) is responsible for its OWN fail-open behavior on that
+    ``None``, same as it always would be for `resolve_plugin_root()`'s
+    existing ``Optional[str]`` contract; this function only makes the miss
+    LOUD, it does not change what happens next.
+
+    No consumer yet (2026-08-28): nothing in `guard_chain` calls this today
+    -- C3/C4/C5 are this function's first consumers, landing in later chunks
+    of the same plan. Defining it here, ungated, mirrors C0's own "no caller
+    wiring yet" shape for the identical reason: the miss-handling contract
+    is worth pinning and testing on its own, independent of any one
+    consumer's timing.
+    """
+    plugin_root = _resolve_caller_context(payload).plugin_root
+    if plugin_root is None:
+        print(
+            "bash_guards.dispatch: plugin_root could not be resolved for this "
+            "call (the per-call payload carried none, and the ambient "
+            "fallback rungs -- CLAUDE_PLUGIN_ROOT, the coordinator-claude "
+            "plugin directory, the .doe-root pointer -- all missed); any "
+            "guard whose detection depends on a plugin-root-rooted manifest "
+            "degrades to its own no-manifest fail-open for this call.",
+            file=sys.stderr,
+        )
+        try:
+            _record_advisory_fire(_PLUGIN_ROOT_UNRESOLVED_GUARD_NAME, session_id, cwd)
+        except Exception:  # noqa: BLE001 -- counter write failure must never widen this miss
+            pass
+    return plugin_root
+
+
 _ANY_DECLARED_MATCHERS_CACHE: Optional["frozenset[str]"] = None
 
 
@@ -823,6 +917,7 @@ def _any_declared_matchers() -> "frozenset[str]":
             _matchers_multiprobe_banner,
             _matchers_plumbing_and_loops,
             _matchers_disarm_marker_sentinel_creation,
+            _matchers_repo_setup_claude_home_refusal,
         )
     return _ANY_DECLARED_MATCHERS_CACHE
 
@@ -1862,6 +1957,18 @@ def _build_guard_chain(
         # (all fire on git-history/identity confinement, which outrank a
         # machine-load deny); supersedes nudge-subagent-scoped-commit.
         GuardEntry("block-subagent-commit", lambda: _check_subagent_commit(payload), True, GuardBand.CONFINEMENT_DENY, AdvisoryValue.NOT_COST_ARGUED, matchers=tuple(_matchers_subagent_commit)),
+        # guard-host-subagent-bash-ban -- registered port of DoE's folded
+        # `_run_folded_bash_guards` entry (C6, state/dispatch-briefs/2026-08-
+        # 28-the-four-folded-bash-guards-get-registered-not-folded/C6.md).
+        # Pinned alongside the three identity/confinement guards above for
+        # the identical reason: fires on identity confinement (a resolved
+        # subagent + this host's `subagent_bash_policy: deny` opt-in), which
+        # outranks a machine-load deny, and must sit ahead of `offer-git-c`
+        # so a `cd <dir> && <cmd>` prefix cannot bypass it via that guard's
+        # rewrite short-circuit. MATCHERS pinned to ("Bash",) ONLY -- see
+        # that module's own docstring "SCOPED TO `Bash`" section; do not
+        # widen this one onto COMMAND_TOOL_NAMES alongside its siblings.
+        GuardEntry("guard-host-subagent-bash-ban", lambda: _check_host_subagent_bash_ban(payload), True, GuardBand.CONFINEMENT_DENY, AdvisoryValue.NOT_COST_ARGUED, matchers=tuple(_matchers_host_subagent_bash_ban)),
         # This one is a hard-deny (fail_closed) and belongs on this side of every
         # rewriting guard for the same reason as the three above. It previously sat
         # further down the chain, behind `offer-git-c`. No bypass was demonstrated for
@@ -1893,6 +2000,19 @@ def _build_guard_chain(
         # short-circuit ordering requirement as every entry in this
         # CONFINEMENT_DENY run.
         GuardEntry("block-subagent-guard-grant", lambda: _check_subagent_guard_grant(payload), True, GuardBand.CONFINEMENT_DENY, AdvisoryValue.NOT_COST_ARGUED, matchers=tuple(_matchers_subagent_guard_grant)),
+        # guard-repo-setup-claude-home-refusal -- ported from DoE-claude's
+        # in-process fold (docs/plans/2026-08-28-the-four-folded-bash-
+        # guards-get-registered-not-folded.md, C5). Hard-deny, NOT identity-
+        # gated (fires for every caller, EM included): makes repo-setup's
+        # "never target ~/.claude" precondition executable rather than
+        # prose. Its predicate keys on command text naming the scaffold
+        # mechanism plus a resolved target root, structurally disjoint from
+        # every guard above and below it, so its position among the
+        # CONFINEMENT_DENY entries is a convenience, not a behaviour
+        # dependency -- registered at the tail of the hard-deny run, same
+        # `offer-git-c` short-circuit ordering requirement as every entry in
+        # this CONFINEMENT_DENY run.
+        GuardEntry("guard-repo-setup-claude-home-refusal", lambda: _check_repo_setup_claude_home_refusal(payload), True, GuardBand.CONFINEMENT_DENY, AdvisoryValue.NOT_COST_ARGUED, matchers=tuple(_matchers_repo_setup_claude_home_refusal)),
         # Advisory (never a deny) sibling of `destructive-git-revert` above
         # (Review: staff-eng, Finding 0). Registered here -- after EVERY
         # CONFINEMENT_DENY hard-deny guard, and ahead of `offer-git-c`'s

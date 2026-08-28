@@ -94,7 +94,7 @@ from pathlib import Path
 from typing import Dict, Iterator, NamedTuple, Optional, Sequence, Tuple, Union
 
 from coordinator_core.git.git_dir import resolve_git_common_dir, resolve_git_dir
-from coordinator_core.git.git_objects import _read_object
+from coordinator_core.git.git_objects import _read_object, _retry_transient_read
 from coordinator_core.git.run import run_git
 
 __all__ = [
@@ -236,7 +236,12 @@ def read_index(repo: Union[str, Path], *, fresh: bool = False) -> IndexSnapshot:
             return cached
 
     try:
-        raw = index_path.read_bytes()
+        # THE COMMIT PATH'S OWN READER, and the first read `diverging_paths`
+        # issues on its `context is None` arm -- so a transient failure here
+        # became the `IndexParseError` that collapses the staged-content guard
+        # to `[]`. Measured bare against the retried sibling under identical
+        # load: 11 failures in 12,727 attempts where the sibling had 0.
+        raw = _retry_transient_read(index_path.read_bytes)
     except FileNotFoundError:
         snapshot = IndexSnapshot({}, None)
         if cache is not None:
@@ -252,7 +257,7 @@ def read_index(repo: Union[str, Path], *, fresh: bool = False) -> IndexSnapshot:
             "authoritative"
         )
 
-    st = index_path.stat()
+    st = _retry_transient_read(index_path.stat)
     stat_identity = StatIdentity(
         st_mtime_ns=st.st_mtime_ns, st_size=st.st_size, st_ino=st.st_ino
     )
@@ -307,7 +312,8 @@ def read_index_stat_identity(repo: Union[str, Path]) -> Optional[StatIdentity]:
         )
 
     try:
-        st = index_path.stat()
+        # The CAS re-observation's own read. Same transient, same ladder.
+        st = _retry_transient_read(index_path.stat)
     except FileNotFoundError:
         return None
     except OSError as exc:

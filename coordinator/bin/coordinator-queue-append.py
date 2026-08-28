@@ -130,6 +130,59 @@ from typing import Any
 
 yaml = None  # type: ignore  # bound by _bootstrap_imports()
 
+_BOOTSTRAP_DONE = False
+
+_BOOTSTRAPPED_NAMES = (
+    "yaml",
+    "_REPO_KEY_ALIASES",
+    "_repo_key_to_em_id",
+    "_same_path",
+    "_cc_route",
+    "cli_shared",
+    "resolve_checked_repo_root",
+    "_MACHINE_LOCAL_IMPL_ENV",
+    "_CLAUDE_HOME_ENV",
+    "_CLAUDE_KLABAUTER_ROOT_ENV",
+    "_claude_home",
+    "_claude_klabauter_root",
+    "_machine_local_impl",
+    "_resolve_python",
+    "_machine_local_get",
+    "_machine_local_repos_keys",
+    "_resolve_from_repo",
+)
+
+
+def __getattr__(name: str):
+    """PEP 562 hook so a caller reaching for a deferred name (a test
+    monkeypatching `cli._cc_route` or any other name `_bootstrap_imports()`
+    binds, before `main()` has run, or any consumer importing rather than
+    executing this module) triggers `_bootstrap_imports()` lazily instead of
+    finding the name absent.
+
+    NEGATIVE SPEC -- the forced re-run is not belt-and-braces.
+    `_bootstrap_imports()` short-circuits on `_BOOTSTRAP_DONE`, so a name
+    that leaves `__dict__` AFTER the bootstrap has run is never rebound by
+    a plain call. `mock.patch.object` does exactly that: it reads the name
+    through this hook (so the value is not in `__dict__` at enter), sets
+    its mock, and on exit `delattr`s rather than restoring -- then probes
+    `hasattr`, which lands here with the flag already set. Without the
+    reset that probe raises KeyError instead of returning the name.
+    """
+    if name in _BOOTSTRAPPED_NAMES:
+        _bootstrap_imports()
+        if name not in globals():
+            global _BOOTSTRAP_DONE
+            _BOOTSTRAP_DONE = False
+            _bootstrap_imports()
+        try:
+            return globals()[name]
+        except KeyError:
+            raise AttributeError(
+                f"module {__name__!r} has no attribute {name!r}"
+            ) from None
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
 
 def _bootstrap_imports() -> None:
     """Import every non-stdlib dependency this module needs and bind it (plus
@@ -142,7 +195,15 @@ def _bootstrap_imports() -> None:
     yaml.safe_load is used exclusively by the C2 round-trip gate in
     _build_yaml to VALIDATE the already-hand-composed document, never to
     construct it.
+
+    Idempotent, guarded by `_BOOTSTRAP_DONE` -- a repeat call (e.g. via
+    `__getattr__` re-triggering) is a no-op once every name has bound, so a
+    test's `mock.patch.object` on one bootstrapped name survives a second
+    caller elsewhere invoking this function.
     """
+    global _BOOTSTRAP_DONE
+    if _BOOTSTRAP_DONE:
+        return
     global yaml, _REPO_KEY_ALIASES, _repo_key_to_em_id, _same_path
     global _cc_route, cli_shared, resolve_checked_repo_root
     global _MACHINE_LOCAL_IMPL_ENV, _CLAUDE_HOME_ENV, _CLAUDE_KLABAUTER_ROOT_ENV
@@ -195,6 +256,8 @@ def _bootstrap_imports() -> None:
     # doe_claude -> unregistered -> "unknown-sender-em" ladder, byte-identical
     # to the pre-consolidation body.
     _resolve_from_repo = cli_shared.resolve_from_repo
+
+    _BOOTSTRAP_DONE = True
 
 # ---------------------------------------------------------------------------
 # Native schema seam — schema introspection and validation via the

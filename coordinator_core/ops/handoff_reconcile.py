@@ -247,8 +247,32 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     dry_run, dry_run_override = _resolve_dry_run(policy, params if isinstance(params, dict) else {})
 
     open_handoffs = _collect_open_handoffs(worktree)
-    all_handoffs, scan_errors = _collect_all_handoffs_for_gate_index(worktree)
-    scan_incomplete = bool(scan_errors)
+
+    # The live+archived gate index is loaded LAZILY, on first need, and at most
+    # once per call.
+    #
+    # It was computed unconditionally here until 2026-08-28. It is consumed at
+    # exactly ONE site -- `evaluate_gate`, inside the loop below, reached only
+    # for handoffs in `deployment_state: awaiting_gate` (they can legitimately
+    # name archived records via `blocked_by`, which is why the archived half of
+    # the walk exists at all). On the real corpus that is 16 of 253 open
+    # handoffs; on any cycle with none, the whole walk was waste.
+    #
+    # Cost, measured warm at 1ac97e6e1 over 1,687 files with os.times()
+    # user+system, 0 spawns: 78-94ms p50, and 281ms on a cold first call --
+    # against a 200ms process-time bar for the job this sits inside. The
+    # live-only read next to it is 15.6ms.
+    #
+    # A memo, NOT a cache: it is discarded with the call. The point is to skip
+    # the read when nothing needs it, never to make a redundant second read
+    # invisible -- a repeat consumer within one call is legitimately the same
+    # corpus, and the win claimed here is fewer files read, not a warmed cache.
+    _gate_index: list[tuple] = []
+
+    def _load_gate_index() -> tuple:
+        if not _gate_index:
+            _gate_index.append(_collect_all_handoffs_for_gate_index(worktree))
+        return _gate_index[0]
 
     gates_cleared: List[Dict[str, Any]] = []
     surfaced: List[Dict[str, Any]] = []
@@ -266,11 +290,13 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         if isinstance(handoff_path, str) and handoff_path:
             gate_evidence = _read_gate_evidence_resolved(Path(handoff_path), today)
 
+        all_handoffs, scan_errors = _load_gate_index()
+
         result = evaluate_gate(
             handoff,
             all_handoffs,
             witness_candidates=None,  # R11 — see module docstring; prose path never clears here.
-            scan_incomplete=scan_incomplete,
+            scan_incomplete=bool(scan_errors),
             scan_errors=scan_errors,
             gate_evidence=gate_evidence,
         )

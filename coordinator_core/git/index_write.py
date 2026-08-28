@@ -50,6 +50,7 @@ from pathlib import Path
 from typing import Dict, Mapping, Optional, Sequence, Tuple, Union
 
 from coordinator_core.git.git_dir import resolve_git_dir
+from coordinator_core.git.git_objects import _replace_with_retry
 from coordinator_core.git.tree_spine import _ABSENT
 
 _SIGNATURE = b"DIRC"
@@ -76,6 +77,31 @@ class IndexWriteError(Exception):
 class IndexWriteLockBusy(IndexWriteError):
     """`.git/index.lock` already exists -- a peer is mid-write. The caller
     retries or refuses; this module never waits and never steals a lock."""
+
+
+class IndexStaleAfterCommit(IndexWriteError):
+    """THE COMMIT LANDED AND ONLY THE INDEX IS STALE -- the one outcome on
+    this surface that must not be retried.
+
+    `commit.py` splices the index AFTER the ref swap, deliberately: an index
+    matching a commit that never landed is the same lie in the other
+    direction. So a failure at the splice is on the far side of durability.
+    The work is in history, the caller holds a real sha, and the only damage
+    is that peers' `git status` misreports those paths until any subsequent
+    index write refreshes it.
+
+    Distinguished from its siblings because the difference decides what the
+    caller does, and getting it wrong is expensive in both directions.
+    `IndexWriteError` and `IndexWriteLockBusy` are raised BEFORE any bytes
+    reach `.git/index` and before the ref moves, so retrying is correct
+    there. Retrying THIS one commits the same work twice. That hazard is not
+    hypothetical: `commit_pipeline`'s `NameError` produced exactly this shape
+    for real earlier today, with two peer commits reported as failures after
+    they had landed, and the fix was to teach the caller which side of the ref
+    it was on. `CommitOutcome` carries a sha on success and had nothing that
+    said "committed, index stale" -- this type is that missing word, and it
+    turns a retry hazard into a `git status`.
+    """
 
 
 def _entry_span(raw: bytes, offset: int) -> Tuple[bytes, int]:
@@ -152,6 +178,12 @@ def splice_index(
 
     Raises `IndexWriteLockBusy` if `.git/index.lock` exists. Raises
     `IndexWriteError` before writing anything on any shape it refuses.
+
+    Raises `IndexStaleAfterCommit` when the final `os.replace` cannot land
+    because a peer holds `.git/index`. This one is NOT a before-writing
+    refusal like the two above, and callers must not treat it as one: this
+    function is called after the ref swap, so the commit has already landed
+    and only the index is stale. Retrying it commits the same work twice.
     """
     gitdir = resolve_git_dir(repo)
     index_path = gitdir / "index"
@@ -223,7 +255,26 @@ def splice_index(
     try:
         with os.fdopen(fd, "wb") as handle:
             handle.write(body)
-        os.replace(lock_path, index_path)
+        if not _replace_with_retry(lock_path, index_path):
+            # WAS UNWRAPPED, AND THAT BROKE THE DOCUMENTED CONTRACT. This
+            # function's own docstring promises `IndexWriteLockBusy` or
+            # `IndexWriteError`; the `try:` around this line carries only a
+            # `finally:`, so a Windows `PermissionError` escaped as neither and
+            # a caller written correctly against that contract still would not
+            # catch it. Captured at 2/200 with 12 concurrent committers.
+            #
+            # A LOST INDEX WRITE IS NOT A LOST COMMIT, and the distinction is
+            # the whole disposition here: `commit.py` splices the index AFTER
+            # the ref swap, deliberately (an index matching a commit that never
+            # landed is the same lie in the other direction), so reaching this
+            # line means the commit ALREADY LANDED. The failure leaves a stale
+            # index, not lost work, and the honest report says so rather than
+            # implying the commit failed.
+            raise IndexStaleAfterCommit(
+                f"{index_path} could not be updated -- a peer held it. The "
+                f"commit LANDED; only the shared index is stale. `git status` "
+                f"may misreport these paths until any index write refreshes it."
+            )
     finally:
         if lock_path.exists():
             try:

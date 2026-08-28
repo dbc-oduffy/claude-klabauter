@@ -69,8 +69,17 @@ def _git(args: list[str], cwd: Path) -> subprocess.CompletedProcess:
     )
 
 
-def _run(coro):
-    return asyncio.run(coro)
+def _run(result):
+    """`archive_terminal_handoffs._handler` is SYNC and returns a dict.
+
+    This shim used to be `asyncio.run(coro)`, which had every test in this
+    file erroring with "a coroutine was expected, got {...}" — independently
+    of, and predating, the 2026-08-28 guard deletion. Kept as a shim rather
+    than inlined so the call sites below stay readable.
+    """
+    if hasattr(result, "__await__"):
+        return asyncio.run(result)
+    return result
 
 
 def _init_repo(worktree: Path) -> None:
@@ -186,9 +195,13 @@ def test_continued_with_only_live_succession_child_archives(tmp_path: Path) -> N
     assert len(archived) == 1, archived
 
 
-def test_continued_with_only_live_forked_from_child_retains(tmp_path: Path) -> None:
-    """AC4: a live `forked_from` child still retains — the exemption is
-    narrow (succession only), not wholesale."""
+def test_continued_with_only_live_forked_from_child_now_archives(tmp_path: Path) -> None:
+    """INVERTED 2026-08-28. This pinned "a live `forked_from` child still
+    retains", cited to DR-224 AC4. That citation does not resolve — DR-224
+    contains no AC4, and its actual contract makes has-children mean
+    SUPERSEDE. Check 3 was deleted on the PM ruling that having a child says
+    nothing about whether a baton should be archived; the premise is pinned
+    false in tests/test_coverage_dag_archived_repo_root.py."""
     worktree = tmp_path / "repo"
     _init_repo(worktree)
 
@@ -203,23 +216,23 @@ def test_continued_with_only_live_forked_from_child_retains(tmp_path: Path) -> N
     result = _act(worktree, cid)
 
     assert result["failed"] == [], result
-    assert result["acted"] == [], result
-    assert result["skipped"] == [
-        {"id": cid, "reason": "terminality-drift: no longer classifies as terminal"}
-    ], result
+    assert result["skipped"] == [], result
+    assert result["acted"] == [{"id": cid, "archived": True}], result
 
-    assert predecessor_path.exists(), (
-        "a live forked_from child must still retain — file must stay in place"
+    assert not predecessor_path.exists(), (
+        "a live forked_from child must no longer retain the record"
     )
     archived = list((worktree / "archive" / "handoffs").rglob(predecessor_name))
-    assert archived == []
+    assert len(archived) == 1, archived
 
 
-def test_continued_with_both_succession_and_fork_child_retains(tmp_path: Path) -> None:
-    """The case `_classify_heir_children`'s short-circuit would have got
-    wrong: a record with BOTH a live succession child and a live
-    `forked_from` child must NOT archive — the succession child alone does
-    not exempt the still-live fork child (DR-224/AC4)."""
+def test_continued_with_both_succession_and_fork_child_now_archives(tmp_path: Path) -> None:
+    """INVERTED 2026-08-28, and kept rather than deleted because the SHAPE is
+    still worth covering: a record carrying both child kinds at once. Under
+    the old narrowing this was the case a naive `_classify_heir_children`
+    reuse got wrong. With Check 3 gone neither kind retains, so the record
+    archives — but the fixture still exercises the both-kinds path, which is
+    where a future partial reintroduction of the guard would show up first."""
     worktree = tmp_path / "repo"
     _init_repo(worktree)
 
@@ -237,15 +250,12 @@ def test_continued_with_both_succession_and_fork_child_retains(tmp_path: Path) -
     result = _act(worktree, cid)
 
     assert result["failed"] == [], result
-    assert result["acted"] == [], result
-    assert result["skipped"] == [
-        {"id": cid, "reason": "terminality-drift: no longer classifies as terminal"}
-    ], result
+    assert result["skipped"] == [], result
+    assert result["acted"] == [{"id": cid, "archived": True}], result
 
-    assert predecessor_path.exists(), (
-        "the live forked_from child must retain even alongside a live "
-        "succession child — a bare _classify_heir_children reuse would have "
-        "misclassified this as heir and archived it"
+    assert not predecessor_path.exists(), (
+        "neither child kind retains any more; a record carrying both must "
+        "still archive"
     )
     archived = list((worktree / "archive" / "handoffs").rglob(predecessor_name))
-    assert archived == []
+    assert len(archived) == 1, archived

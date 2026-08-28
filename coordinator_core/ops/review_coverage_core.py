@@ -154,10 +154,19 @@ _USAGE = (
 )
 
 
-def _run(cmd: List[str], cwd: Optional[str] = None) -> Tuple[int, str, str]:
+def _run(
+    cmd: List[str], cwd: Optional[str] = None, stdin_text: Optional[str] = None
+) -> Tuple[int, str, str]:
     """Run cmd; return (returncode, stdout.strip(), stderr). Never raises —
     a spawn failure or timeout degrades to a non-zero rc + diagnostic stderr,
-    same shape as a normal git failure (A2: timeout + stdin=DEVNULL always set)."""
+    same shape as a normal git failure (A2: timeout + stdin=DEVNULL always set).
+
+    `stdin_text` feeds git's `--stdin` rev input, which is how
+    `_batch_single_commit_segments` passes a thousand SHAs without going near
+    the ~32KB Windows command-line ceiling. Omitted (the default), stdin stays
+    `DEVNULL` exactly as before: a git subcommand that decides to read stdin
+    must never inherit this process's and block a ceremony forever.
+    """
     try:
         result = subprocess.run(
             cmd,
@@ -165,7 +174,8 @@ def _run(cmd: List[str], cwd: Optional[str] = None) -> Tuple[int, str, str]:
             text=True,
             cwd=cwd,
             timeout=_GIT_TIMEOUT_SECS,
-            stdin=subprocess.DEVNULL,
+            stdin=subprocess.DEVNULL if stdin_text is None else None,
+            input=stdin_text,
             **_CREATIONFLAGS,
         )
         return result.returncode, result.stdout.strip(), result.stderr
@@ -473,6 +483,110 @@ def _parse_combined_log_output(text: str) -> Tuple[Set[str], Set[str]]:
     return shas, files
 
 
+#: A range naming exactly one commit: `<sha>~1..<sha>` or `<sha>^..<sha>`,
+#: the same abbreviation on both sides. This is the shape the review-trail
+#: writer emits for a single-commit review, and measured 2026-08-28 it is
+#: 1028 of 1043 distinct ranges in a week's corpus (98.6%).
+_SINGLE_COMMIT_RANGE_RE = re.compile(r"^([0-9a-fA-F]{7,40})(?:~1|\^)\.\.\1$")
+
+
+def _batch_single_commit_segments(
+    ranges: Sequence[str], cwd: Optional[str] = None
+) -> Dict[str, Tuple[Set[str], Set[str]]]:
+    """Resolve every `<sha>~1..<sha>` range in `ranges` with ONE git spawn.
+
+    WHY THIS AND NOT MULTI-RANGE BATCHING. `build_segments` resolves one
+    `git log --format=%H --name-only <range>` per distinct range, and the
+    negative spec below it is correct and stays: git evaluates a range as the
+    single set expression `reachable(positives) \\ reachable(negatives)`, so
+    passing several ranges to one invocation silently drops commits whenever
+    one range's include-tip is another's exclude-anchor -- the adjacent-range
+    under-count already filed as
+    archive/bug-backlog/2026-07/2026-07-03-review-coverage-core-batch-git-rev-list.yaml.
+    This function never combines ranges. It exploits a different fact: a range
+    of the form `X~1..X` over a single-parent commit denotes exactly `{X}`
+    without any reachability walk at all, so those ranges need no range
+    evaluation -- only `X`'s own identity and file list, which
+    `git log --no-walk` produces for arbitrarily many commits in one pass.
+    Ranges of every other shape are absent from the returned mapping and take
+    the unchanged per-range path.
+
+    Correctness conditions, each enforced rather than assumed:
+
+    * EXACTLY ONE PARENT. On a merge, `X~1..X` is `X` plus the whole
+      second-parent branch, which is not `{X}` -- `%P` is read and any commit
+      whose parent count is not 1 is omitted from the mapping, falling back.
+      A root commit (no parents) is omitted for the same reason: `X~1` does
+      not resolve, and the fallback path reproduces the existing
+      skip-or-fail behaviour for an unresolvable ref.
+    * FULL SHA. The mapping's SHA set carries `%H`, never the possibly
+      abbreviated spelling from the range string, matching what the per-range
+      path returns.
+    * UNRESOLVABLE SHAS DO NOT POISON THE BATCH. Unknown revs are filtered
+      against `git cat-file --batch-check` first, so one stale cross-machine
+      SHA cannot fail the single invocation and push a thousand ranges back
+      onto the slow path. Anything filtered out simply falls back.
+
+    Never raises: any non-zero rc returns an empty mapping and every range
+    takes the pre-existing path, so this is a pure cost optimisation with no
+    new failure mode.
+    """
+    wanted: Dict[str, str] = {}
+    for sha_range in ranges:
+        m = _SINGLE_COMMIT_RANGE_RE.match(sha_range)
+        if m:
+            wanted[sha_range] = m.group(1)
+    if not wanted:
+        return {}
+
+    probe = "\n".join(sorted(set(wanted.values())))
+    rc, out, _err = _run(
+        ["git", "cat-file", "--batch-check=%(objectname) %(objecttype)"],
+        cwd=cwd,
+        stdin_text=probe + "\n",
+    )
+    if rc != 0:
+        return {}
+    resolved: Set[str] = set()
+    for line in out.splitlines():
+        parts = line.split()
+        if len(parts) == 2 and parts[1] == "commit" and _FULL_SHA_RE.match(parts[0]):
+            resolved.add(parts[0])
+    if not resolved:
+        return {}
+
+    rc, out, _err = _run(
+        ["git", "log", "--no-walk", "--stdin", "--format=%H%x1f%P", "--name-only"],
+        cwd=cwd,
+        stdin_text="\n".join(sorted(resolved)) + "\n",
+    )
+    if rc != 0:
+        return {}
+
+    by_sha: Dict[str, Tuple[Set[str], Set[str]]] = {}
+    current: Optional[str] = None
+    for raw_line in out.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        if "\x1f" in line:
+            sha, _, parents = line.partition("\x1f")
+            current = sha if len(parents.split()) == 1 else None
+            if current:
+                by_sha[current] = ({current}, set())
+            continue
+        if current:
+            by_sha[current][1].add(line)
+
+    memo: Dict[str, Tuple[Set[str], Set[str]]] = {}
+    for sha_range, abbrev in wanted.items():
+        for full, pair in by_sha.items():
+            if full.startswith(abbrev.lower()):
+                memo[sha_range] = pair
+                break
+    return memo
+
+
 def build_segments(
     all_records: Sequence[Tuple[str, dict]],
     on_unresolvable_ref: str,
@@ -495,6 +609,23 @@ def build_segments(
     segment_memo: Dict[str, Tuple[Set[str], Set[str]]] = {}
     segment_skip: Set[str] = set()
     unrecognized_kind_counts: Dict[str, int] = {}
+
+    # Pre-resolve the single-commit ranges in ONE spawn (plus one existence
+    # probe) and seed the memo with them; the loop below is unchanged and
+    # simply finds them already present. Measured on a 1252-record week
+    # 2026-08-28: 1043 distinct ranges, of which 1028 are this shape, taking
+    # the op from 2087 processes / 32.6s to a two-spawn prefix plus 15
+    # per-range calls. A range this cannot resolve is absent from the memo
+    # and takes the original path, so the fallback needs no separate branch.
+    _prescan_kinds: Dict[str, int] = {}
+    _prescan = [
+        classified[0]
+        for classified in (
+            _classify(rec, unrecognized_sink=_prescan_kinds) for _path, rec in all_records
+        )
+        if classified is not None
+    ]
+    segment_memo.update(_batch_single_commit_segments(_prescan, cwd=cwd))
 
     for _source_path, rec in all_records:
         classified = _classify(rec, unrecognized_sink=unrecognized_kind_counts)

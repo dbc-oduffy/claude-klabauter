@@ -3445,7 +3445,7 @@ def check_destructive_rm(
                         "To preserve the work first, COPY it aside — never "
                         "stash on this tree, which a dozen sessions share "
                         "(`stash@{0}` is whoever stashed last, not you):\n"
-                        '  cp -r -- "%s" "$TMPDIR/preserved-$(basename "%s")"\n\n'
+                        '  cp -r -- "%s" "${TMPDIR:-/tmp}/preserved-$(basename "%s")"\n\n'
                         "Reserve irreversible deletion for genuinely "
                         "disposable, self-authored, uncontested paths."
                         % (tgt, disp, more, root, tgt_abs, tgt_abs, tgt_abs)
@@ -5936,9 +5936,11 @@ def check_validate_commit(
     # docstring "KNOWN PORTING GAPS", CLOSED entry for this promotion). Reuses
     # compute_scope() -- no separate declared-scope carrier is introduced.
     #
-    # FLIP TO DENY-BY-DEFAULT IS READY BUT WITHHELD (2026-08-27). The PM ruled
-    # for it; the one-line change is
-    #     scope_strict = not _override("COORDINATOR_SCOPE_STRICT_OFF", payload=payload)
+    # FLIPPED TO DENY-BY-DEFAULT (2026-08-28, C6 of plan 2026-08-27-a-
+    # pathspec-is-not-a-scope). The PM ruled for it and the retired census
+    # gate below is superseded -- see that plan's C6 dispatch brief for the
+    # ruling. Strict mode is now the default; COORDINATOR_SCOPE_STRICT_OFF is
+    # the escape hatch back to warn-only.
     #
     # THE TWO BLOCKERS THIS COMMENT USED TO NAME ARE BOTH RETIRED. Do not
     # re-derive them from an older revision of this comment:
@@ -6027,7 +6029,7 @@ def check_validate_commit(
     # day and confirm only named-owner events remain. Re-census before acting
     # on any figure in this comment, including the corrected ones -- the count
     # accrues live. The archival-mover leg is done. ---
-    scope_strict = _override("COORDINATOR_SCOPE_STRICT", payload=payload)
+    scope_strict = not _override("COORDINATOR_SCOPE_STRICT_OFF", payload=payload)
     if session_id:
         git_root = _run_git(["rev-parse", "--show-toplevel"], _cwd)[1].strip()
         if git_root:

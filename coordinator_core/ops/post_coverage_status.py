@@ -236,15 +236,20 @@ def _decode_credential_blob(blob: bytes) -> Optional[str]:
     return None
 
 
-def _token_from_windows_credential_manager() -> Optional[str]:
+def _token_from_windows_credential_manager(*, platform: str = sys.platform) -> Optional[str]:
     """Read gh's keyring-stored token via `advapi32!CredReadW`, or None.
 
     An in-process DLL call through `ctypes` -- no subprocess, so nothing here
     needs a shell-out carve-out. Returns None on every non-Windows host and
-    on every failure mode (DLL unavailable, target absent, blob undecodable),
+    on every failure mode (DLL unavailable, target absent, blob undecodable,
+    a malformed target or ABI mismatch surfacing as `ctypes.ArgumentError`),
     so the caller's fail-closed contract is unchanged.
+
+    `platform` is injectable (Review: coordinatorcode-reviewer Finding 1) so
+    tests can exercise the non-Windows branch without mutating the
+    process-wide `sys.platform` singleton.
     """
-    if sys.platform != "win32":
+    if platform != "win32":
         return None
 
     import ctypes
@@ -267,7 +272,7 @@ def _token_from_windows_credential_manager() -> Optional[str]:
         ]
 
     try:
-        advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
+        advapi32 = ctypes.WinDLL("advapi32")
         advapi32.CredReadW.argtypes = [
             wintypes.LPCWSTR,
             wintypes.DWORD,
@@ -290,7 +295,11 @@ def _token_from_windows_credential_manager() -> Optional[str]:
             ok = advapi32.CredReadW(
                 target, _CRED_TYPE_GENERIC, 0, ctypes.byref(pointer)
             )
-        except OSError:
+        except (OSError, ctypes.ArgumentError):
+            # Review: coordinatorcode-reviewer Finding 2 -- a malformed target
+            # or ABI mismatch raises ctypes.ArgumentError, not OSError; catch
+            # both so leg 4 matches this module's "fails closed, never raises"
+            # docstring claim rather than propagating out of resolve_token().
             continue
         if not ok or not pointer:
             continue

@@ -1758,7 +1758,7 @@ def _assembled_commit_is_noop(
     return True
 
 
-def declare_move_claims(result: dict, moves: List["Move"], acted: List[dict]) -> dict:
+def declare_move_claims(result: dict, moves: List[Move], acted: List[dict]) -> dict:
     """Declare BOTH ends of every landed archival move on the op result, so the
     sink is claimed by the session that archived it.
 

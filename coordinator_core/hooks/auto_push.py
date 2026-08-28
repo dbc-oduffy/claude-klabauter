@@ -2118,6 +2118,66 @@ def drain_pending_push(repo_root: str) -> None:
         pass
 
 
+def _engine_source_root_for_currency() -> "Path":
+    """The claude-klabauter source tree, taken as the root of the package this module is
+    running from — an IDENTITY, never a registry lookup.
+
+    Separate function so the scope test in `_refresh_engine_currency_cache` has
+    a seam a test can point at a fixture repo, instead of the test having to
+    weaken the scope test itself (which is that function's own subject).
+    """
+    from pathlib import Path as _Path
+
+    return _Path(__file__).resolve().parents[2]
+
+
+def _refresh_engine_currency_cache(repo_root: str) -> None:
+    """Recompute and persist the publish-lag verdict the forwarder door reads
+    (`warm.skew.write_currency_cache`) — best-effort, silent, never raises.
+
+    WHY THE POST-COMMIT PATH OWNS THIS. The door cannot compute it: it is
+    forbidden to import `coordinator_core` at all, and the computation costs
+    two git subprocesses. This path already spawns git many times and runs on
+    exactly the event that invalidates the answer, so the verdict is correct by
+    construction rather than by timeout.
+
+    Scoped to the engine's own repo, and the scope test is IDENTITY, not a
+    registry lookup: the source tree for this lag is the tree this module is
+    running from, so the hook fires the refresh only when `repo_root` IS that
+    tree. This hook fires in every fleet repo on the box, and a lag computed
+    against example-retrieval-repo's history would be a number about nothing. A different
+    repo, a box with no mirror registered, or an execution out of the published
+    mirror itself all write nothing — the ordinary state, not a failure, and
+    any prior verdict is left untouched rather than replaced with a wrong one.
+
+    Deliberately not logged on failure. Every other best-effort leg in this
+    module logs because a missed push strands a peer; a missed cache refresh
+    costs one advisory line staying quiet, and a per-commit diagnostic for that
+    is the wallpaper this file's own `_ENV_SUPPRESS_FOR_SYNC_PUSH` comment
+    rejects.
+    """
+    try:
+        from pathlib import Path as _Path
+
+        from coordinator_core.engine_root import (
+            is_published_engine_mirror,
+            published_engine_mirror_path,
+        )
+        from coordinator_core.warm import skew as _skew
+
+        source = _Path(_engine_source_root_for_currency())
+        if source != _Path(repo_root).resolve():
+            return
+        if is_published_engine_mirror(str(source)):
+            return
+        mirror = published_engine_mirror_path()
+        if not mirror:
+            return
+        _skew.write_currency_cache(_Path(mirror), source)
+    except Exception:
+        return
+
+
 def run_push_with_retry(repo_root: str, branch: str, *, _skip_hold: bool = False) -> None:
     """Attempt the push up to MAX_ATTEMPTS times, retrying retryable classes
     with a class-appropriate backoff. Logs a forensic failure entry and
@@ -2157,6 +2217,19 @@ def run_push_with_retry(repo_root: str, branch: str, *, _skip_hold: bool = False
     actually succeeded (AC14), never on failure or a retry-in-progress.
     """
     if not _skip_hold:
+        # Refresh the engine-currency verdict the forwarder door reads. Placed
+        # HERE, and nowhere else, for one property this function's own
+        # docstring already states: it "only ever runs in the already-detached
+        # child", so the 15.6ms of process time (measured k=5, 2026-08-28) is
+        # paid by a process nobody is waiting on, never by the `git commit` the
+        # parent hook is holding up. `_skip_hold` marks the drain's own nested
+        # call, so this cannot fire twice for one commit.
+        #
+        # Ahead of the push, not after it, and not gated on push success: the
+        # COMMIT is the event that invalidates the verdict. A commit that fails
+        # to push still changed what the door should say.
+        _refresh_engine_currency_cache(repo_root)
+
         # The free drain point (AC14): every commit's own post-commit hook
         # already respawns a detached child that ends up here for ITS OWN
         # branch -- draining any due/stale record (this branch's own from a

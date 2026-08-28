@@ -201,15 +201,20 @@ def test_t9_state_root_rule5_meta_repo_error_faithfully_treated_as_false(repo, m
 def test_t10_resolved_engine_class_refuses_write_loudly(repo, tmp_path, monkeypatch, capsys):
     """Spec backlink: commit 5dedf53b9 (state_root's published-mirror guard).
 
-    When the meta-repo branch resolves via `coordinator_claude_klabauter_root_with_class`
+    When the meta-repo branch resolves via `coordinator_engine_root_with_class`
     to a `resolved-engine` class (a published claude-klabauter-style mirror,
     not a live working tree), the generator must refuse loudly rather than
     write claude-klabauter state into the mirror. Reuses
     `coordinator_core.state_root._claude_klabauter_state`'s own guard -- this test
-    monkeypatches `coordinator_claude_klabauter_root_with_class` as SEEN THROUGH
+    monkeypatches `coordinator_engine_root_with_class` as SEEN THROUGH
     `state_root`'s own import binding (not generate_exec_summary's), which is
     only reachable if the fix actually calls through that shared mechanism
     rather than a reimplemented copy.
+
+    Patched under the name state_root imports it as: `848072a10` renamed it
+    from `coordinator_claude_klabauter_root_with_class` and did not carry this stub or
+    substrate's, so both sites died in setup on AttributeError rather than on
+    anything they assert.
     """
     monkeypatch.setattr(meta_repo_identity, "is_meta_repo", lambda _root: True)
 
@@ -218,7 +223,7 @@ def test_t10_resolved_engine_class_refuses_write_loudly(repo, tmp_path, monkeypa
     def _fake_with_class():
         return (mirror_root, "resolved-engine")
 
-    monkeypatch.setattr(state_root_mod, "coordinator_claude_klabauter_root_with_class", _fake_with_class)
+    monkeypatch.setattr(state_root_mod, "coordinator_engine_root_with_class", _fake_with_class)
 
     rc = mod.main([])
     err = capsys.readouterr().err
@@ -241,7 +246,7 @@ def test_t11_live_working_tree_class_unchanged_behavior(repo, tmp_path, monkeypa
     def _fake_with_class():
         return (live_root, "live-working-tree")
 
-    monkeypatch.setattr(state_root_mod, "coordinator_claude_klabauter_root_with_class", _fake_with_class)
+    monkeypatch.setattr(state_root_mod, "coordinator_engine_root_with_class", _fake_with_class)
 
     result = mod._resolve_state_root(str(repo))
     assert result == os.path.join(live_root, "state")

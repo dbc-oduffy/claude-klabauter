@@ -161,7 +161,7 @@ from coordinator_core import chain_attribution, session_attribution
 from coordinator_core.git import repo_root as repo_root_seam
 from coordinator_core.session_attribution import GitLogFailed
 from coordinator_core.claim_state import resolve_claim_state
-from coordinator_core.ipc import CallerFacingValidationError, register_op
+from coordinator_core.ipc import CallerFacingValidationError
 from coordinator_core.ops._fm_util import extract_frontmatter_scalar
 from coordinator_core.ops.fleet._common import main_worktree_root
 from coordinator_core.ops.session_context import resolve_current_session_id

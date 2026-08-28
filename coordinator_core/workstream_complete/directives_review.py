@@ -1795,12 +1795,20 @@ def _emit_close_coverage_advisory(
     UNAVAILABLE contract plus this advisory's own additional never-raise
     guarantee (D2 names "an exception" as its own arm, distinct from the
     dimension's internal UNAVAILABLE verdict)."""
-    from coordinator_core.ops.gate_dimension_review import _review_dimension_check
-    from coordinator_core.ops.gate_validate_invocable import Verdict
-
     if not changed_files or not diff_base or repo_root is None:
         return
     try:
+        # Inside the guard, not above it. An ImportError here -- a circular
+        # import introduced elsewhere, a rename of either module, a
+        # half-applied refactor -- would otherwise propagate out of
+        # `build_directives` and abort the whole close ceremony before
+        # `_execute_directives` runs. That is strictly worse than the K-001
+        # gating this advisory exists to avoid: a refusal at least reports a
+        # verdict, a crash kills the close. The docstring's "never raises" is
+        # only true with the imports under the guard.
+        from coordinator_core.ops.gate_dimension_review import _review_dimension_check
+        from coordinator_core.ops.gate_validate_invocable import Verdict
+
         result = _review_dimension_check(list(changed_files), diff_base, repo_root)
     except Exception:
         return
@@ -1809,6 +1817,20 @@ def _emit_close_coverage_advisory(
     message = _render_close_coverage_advisory_message(result.detail)
     if message is None:
         return
+    # Prose to stdout ahead of the report, matching `apply.py`'s established
+    # convention (`render_disabled_op_lines`, "Ahead of the report, never
+    # after it") -- a consumer of this CLI's stdout must already tolerate
+    # non-JSON prefix lines rather than json.loads()-ing the whole stream.
+    # This fires during `build_directives`, earlier than and outside that
+    # function's emission point, and the message is deliberately NOT folded
+    # into `report`. Reviewer finding 4 proposed adding a
+    # `report["close_coverage_advisory"]` key so a programmatic caller could
+    # see the advisory fired; refused, on purpose. The advisory's audience is
+    # a human reading their own terminal at close, and stdout is that channel.
+    # A machine-readable field has no named consumer today and invites one
+    # tomorrow -- and the first thing a consumer does with a coverage signal
+    # is branch on it, which is the drift K-001 died of. The observability
+    # gap is real and accepted: nothing should be able to gate on this.
     print(message)
 
 

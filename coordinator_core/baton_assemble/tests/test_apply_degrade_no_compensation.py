@@ -393,7 +393,7 @@ class TestAKilledArchiveTransitionDegradesToo:
         _write_artifact(tmp_path / _PRED_REL, list(_PREDECESSOR_FM))
         return successor_rel, successor_abs
 
-    def test_a_killed_archive_transition_degrades_and_keeps_the_successor(
+    def test_a_killed_housekeeping_op_degrades_and_keeps_the_successor(
         self, tmp_path, monkeypatch
     ):
         from coordinator_core.op_budget_suspension import OpSuspendedError
@@ -415,7 +415,12 @@ class TestAKilledArchiveTransitionDegradesToo:
             "module exists to prevent"
         )
         assert result["result"] is None
-        assert result["degraded"]["reason"] == "archive-transition-off"
+        # Renamed from "archive-transition-off" 2026-08-28 with d6's rewire
+        # onto `handoff.housekeeping`: the reason names WHICH op is off, and
+        # after the rewire `handoff.archive_transition`'s key is never resolved
+        # on this path at all -- so the old string named an op that could no
+        # longer be the cause of this degrade.
+        assert result["degraded"]["reason"] == "housekeeping-off"
         assert result["degraded"]["predecessor"] == _PRED_REL
         assert result["degraded"]["continued_into"] == successor_rel
 

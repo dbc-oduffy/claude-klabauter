@@ -75,6 +75,7 @@ import os
 import sys
 
 from coordinator_core.frontmatter.baton_class import kind_values_for_canonical
+from coordinator_core.lifecycle_constants import HANDOFF_TERMINAL_DEPLOYMENT
 
 # Accepted `kind` values for a genuine roadmap stub, at the session-state
 # parent tier (AC1). `handoff.schema.json` x-schema-version 4.0.0 RETIRED
@@ -351,8 +352,67 @@ def resolve_session_chain_deliverable_id(
     mints its own id by PM ruling (2026-08-05) — the caller, which is the
     only place that knows the doc_type being scaffolded, is what enforces
     that; this function has no doc_type to gate on and must not grow one.
+
+    THE LIVENESS GATE, and why it reads `deployment_state` rather than
+    `status` (2026-08-28, filed from a session that closed one baton and
+    picked up the next). "The chain this session is authoring into" is a
+    claim about a LIVE chain, and a session goes on holding its claim after
+    that chain ships: `unclaim-handoff` correctly refuses to release a
+    terminal claim, so the held handoff outlives the work. Without this
+    gate the tier joins the session's NEXT deliverable onto its LAST one's
+    spine — the same unrepairable-in-place split the tier was built to
+    close, in the opposite direction, and just as silent.
+
+    `status` is the WRONG axis and gating on it would disable this tier
+    outright: `claimed` is a member of `HANDOFF_TERMINAL_STATUS`, and it is
+    also the status of every actively-worked handoff, so a `status` gate
+    cannot tell the live chain from the finished one. `deployment_state`
+    can — `HANDOFF_TERMINAL_DEPLOYMENT` (`shipped`, `abandoned`,
+    `continued`, `closed`) is the discriminator `baton_assemble`'s own
+    live-holder scan already uses for exactly this question. Do not
+    substitute either three-member `_TERMINAL_DEPLOYMENT_STATES` copy in
+    the tree: both omit `abandoned`, which would carry off a dead baton.
+
+    Absent/blank `deployment_state` carries, and that direction is
+    deliberate: an unset value is the pre-terminal default, so treating it
+    as terminal would break the ordinary live chain this tier exists to
+    serve. `--new-chain` remains the author's exemption for the residue.
+
+    THE GATE IS A DEFAULT, NOT AN INVARIANT, and an earlier revision of this
+    docstring overstated it. It is NOT true that a terminal handoff implies a
+    finished deliverable chain: `shipped` means "terminal with resolvable
+    commit evidence", not "released" (see `lifecycle_constants`' own comment),
+    and `continued` says by name that a successor exists. Measured on this
+    corpus 2026-08-28: of 7 distinct `deliverable_id`s carried by terminal
+    handoffs, **3** have a non-handoff artifact newer than the terminal
+    handoff. Work is authored into terminal chains.
+
+    So both directions can be wrong, and this gate picks which error to make
+    by default. It errs toward MINTING a second id, because the two failures
+    are not symmetric in cost: a spurious second id is visible at a
+    deliverable rollup and mergeable by hand, while silently joining new work
+    onto a closed record corrupts a spine that is already in shared history.
+
+    Both errors have an operator escape, which is why a default is
+    defensible at all. To JOIN a terminal chain deliberately, pass the id
+    explicitly (the flag tier, which precedes this one). To break out of a
+    live chain, `--new-chain`. Neither is a workaround; both are the
+    author saying which chain they meant, which is a fact this tier cannot
+    read off disk.
     """
     if not chain_artifact_path or not os.path.isfile(chain_artifact_path):
+        return None
+
+    deployment_state = read_frontmatter_field(chain_artifact_path, "deployment_state")
+    if deployment_state in HANDOFF_TERMINAL_DEPLOYMENT:
+        print(
+            "deliverable_carry: session-chain tier — session-held handoff "
+            f"'{chain_artifact_path}' is terminal "
+            f"(deployment_state: {deployment_state!r}) — the chain this "
+            "session just left, not the one it is authoring into; falling "
+            "through to mint",
+            file=sys.stderr,
+        )
         return None
 
     dlvr_id = read_frontmatter_field(chain_artifact_path, "deliverable_id")

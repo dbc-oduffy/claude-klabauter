@@ -96,6 +96,7 @@ OP_MODULE_MAP: Dict[str, str] = {
     "goals.reassess_krs":                     "coordinator_core.goals.reassess_krs",
     "orientation.regenerate_cache":            "coordinator_core.orientation.regenerate_cache",
     "fleet.archive_completed_handoffs":       "coordinator_core.ops.fleet.archive_terminal_handoffs",
+    "handoff.housekeeping":                   "coordinator_core.ops.handoff_housekeeping",
     "fleet.archive_actioned_memos":           "coordinator_core.ops.fleet.archive_actioned_memos",
     "fleet.archive_sweep_status":             "coordinator_core.ops.fleet.sweep_status",
     "fleet.handoffs_for_plan":                "coordinator_core.ops.fleet.plan_handoffs",

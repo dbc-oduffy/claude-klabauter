@@ -1070,12 +1070,27 @@ def test_raw_cmdline_block_bodies_match_between_generators():
     Review: staff-eng (Finding 4). Renders both for a shared target name and
     asserts byte equality, so the claim the docstrings make is actually
     enforced rather than merely stated.
+
+    The sample target is taken FROM the live set, never hardcoded. It was
+    `"scoped-git-commit"` until 2026-08-28, when that CLI's retirement (DR-344,
+    file deleted at 47c78a3a5) dropped it from both sets -- and the substrate
+    half then rendered "" for it, so this test failed claiming a drift that had
+    not happened. A literal here re-arms that trap on the next retirement.
     """
     gen = _load_gen_launcher_shim()
-    from coordinator_core.install.substrate import _agent_cmd_raw_cmdline_block
+    from coordinator_core.install.substrate import (
+        _RAW_CMDLINE_TARGETS,
+        _agent_cmd_raw_cmdline_block,
+    )
 
+    sample = sorted(_RAW_CMDLINE_TARGETS)[0]
     gen_block = gen._cmd_raw_cmdline_block(True)
-    substrate_block = _agent_cmd_raw_cmdline_block("scoped-git-commit")
+    substrate_block = _agent_cmd_raw_cmdline_block(sample)
+    assert substrate_block, (
+        f"the substrate half rendered nothing for '{sample}', which came out of "
+        "_RAW_CMDLINE_TARGETS itself -- _agent_cmd_raw_cmdline_block's membership "
+        "check no longer agrees with the set it reads"
+    )
     assert gen_block == substrate_block, (
         "gen-launcher-shim.py::_cmd_raw_cmdline_block and substrate.py::"
         "_agent_cmd_raw_cmdline_block have drifted in rendered body -- both "

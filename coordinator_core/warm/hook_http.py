@@ -46,6 +46,8 @@ from __future__ import annotations
 import json
 from typing import Any, Dict, Mapping, Optional, Tuple
 
+from coordinator_core.warm.caller_context import resolve_caller_context
+
 #: `hook_event_name` values whose verdict can BLOCK the operation. A missing guard on one of
 #: these is a safety regression; a missing guard on any other event is a lost advisory. The
 #: distinction drives `unreachable_response` and nothing else -- this module never decides
@@ -294,12 +296,24 @@ def payload_from_event(event: Mapping[str, Any]) -> Dict[str, Any]:
     `agent_type` (SubagentStart) all reached the op as absent, so the op could not tell a
     missing field from an empty one. `env` is the ONLY key narrowed, because it is the only
     one that would put arbitrary session secrets on the wire.
+
+    `plugin_root` RIDES THIS BODY AS A COMPUTED FIELD, never a forwarded env var. Measured
+    (staff-eng finding 2, C1 dispatch brief): the harness's own posted event body carries no
+    `plugin_root` under any spelling, so `payload_from_event`'s verbatim copy has nothing to
+    forward for it. This function therefore COMPUTES it once, HERE, at forward time, via
+    `warm.caller_context.resolve_caller_context` -- the shared accessor `bash_guards/
+    dispatch.py` reads on the other end of this seam -- rather than leaving every downstream
+    reader (`provision_report.assemble_contract_blocks_for_payload` today, the guard chain
+    once C6/C7 wire it) to call `provision_report.resolve_plugin_root()`'s ambient probe
+    independently. One computed value on the wire, not N independent re-resolutions that
+    could in principle disagree.
     """
     raw_env = event.get("env")
     payload = {k: v for k, v in event.items() if k != "env"}
     payload["env"] = forwardable_env(raw_env) if isinstance(raw_env, Mapping) else {}
     for key in ("session_id", "cwd", "hook_event_name", "permission_mode", "tool_name", "tool_input"):
         payload.setdefault(key, None)
+    payload["plugin_root"] = resolve_caller_context(payload).plugin_root
     return payload
 
 

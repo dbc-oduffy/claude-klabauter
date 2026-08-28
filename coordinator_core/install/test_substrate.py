@@ -560,16 +560,23 @@ def test_agent_cmd_forwarder_cache_hit_region_never_spawns_where_or_findstr(tmp_
     assert "start " not in hit_region.lower()
 
 
-# --- _RAW_CMDLINE_TARGETS coverage -- scoped-git-commit / cross-repo-memo ----
+# --- _RAW_CMDLINE_TARGETS coverage -- cross-repo-memo ------------------------
 #
 # cross-repo/inbox/2026-08-07-doe-claude-em-cmd-forwarder-drops-everything-
 # after-a-newline.md: `%*`-populated batch parameters silently lose everything
 # after a literal newline in an argument (a `.cmd` forwarder parse-time
 # defect, not a caller-side quoting bug -- see `_agent_cmd_raw_cmdline_block`'s
 # docstring). `coordinator-write-review-trail.py` was the only target opted
-# into the `%CMDCMDLINE%`-capture workaround; `scoped-git-commit` and
-# `cross-repo-memo` take multi-line arguments as a matter of course (commit
-# messages, memo bodies) and were silently NOT covered.
+# into the `%CMDCMDLINE%`-capture workaround; `cross-repo-memo` takes
+# multi-line arguments as a matter of course (memo bodies) and was silently
+# NOT covered.
+#
+# `scoped-git-commit` was enrolled alongside it and is gone from these tests
+# as of 2026-08-28: DR-344 killed the CLI, 47c78a3a5 deleted the file, and
+# `_installed_to_ondisk` -- which resolves through production's own
+# `_derive_agent_helper_target_map` -- stopped being able to answer for a
+# name the map no longer carries. Do NOT re-add it as a string literal to
+# make these green; the map is the point.
 #
 # These first two tests are platform-portable: they assert on the GENERATED
 # TEXT of the raw-cmdline capture block and the full `.cmd` body, not on
@@ -597,15 +604,8 @@ def _installed_to_ondisk(agent_bin: Path, installed_name: str) -> str:
     return _derive_agent_helper_target_map(agent_bin)[installed_name]
 
 
-def test_raw_cmdline_targets_cover_scoped_git_commit_and_cross_repo_memo():
+def test_raw_cmdline_targets_cover_cross_repo_memo():
     agent_bin = Path(__file__).resolve().parents[2] / "coordinator" / "bin"
-    # scoped-git-commit's installed and on-disk forms are IDENTICAL (no
-    # `.py` suffix on disk) -- that coincidence must not be what makes this
-    # assertion pass, so it is asserted against the resolved on-disk form,
-    # not a hardcoded literal that happens to match either form.
-    assert (
-        _installed_to_ondisk(agent_bin, "scoped-git-commit") in _RAW_CMDLINE_TARGETS
-    )
     # cross-repo-memo's installed and on-disk forms DIFFER
     # ("cross-repo-memo" vs "cross-repo-memo.py") -- this is the assertion
     # that actually distinguishes the two key forms and would have caught
@@ -619,7 +619,7 @@ def test_raw_cmdline_targets_cover_scoped_git_commit_and_cross_repo_memo():
     assert "coordinator-write-review-trail.py" in _RAW_CMDLINE_TARGETS
 
 
-@pytest.mark.parametrize("installed_name", ["scoped-git-commit", "cross-repo-memo"])
+@pytest.mark.parametrize("installed_name", ["cross-repo-memo"])
 def test_agent_cmd_raw_cmdline_block_emits_capture_for_newly_covered_targets(
     installed_name,
 ):
@@ -638,7 +638,7 @@ def test_agent_cmd_raw_cmdline_block_stays_empty_for_uncovered_target():
     assert _agent_cmd_raw_cmdline_block("some-other-cli") == ""
 
 
-@pytest.mark.parametrize("installed_name", ["scoped-git-commit", "cross-repo-memo"])
+@pytest.mark.parametrize("installed_name", ["cross-repo-memo"])
 def test_agent_cmd_forwarder_body_includes_raw_cmdline_capture_for_target(
     tmp_path, installed_name
 ):
@@ -686,7 +686,13 @@ def test_agent_cmd_forwarder_raw_cmdline_survives_embedded_newline(tmp_path):
     # exists to work around) surviving into that echoed text is direct
     # evidence the capture mechanism engages for a newly-covered target, not
     # just that the generated text contains the right tokens.
-    name = "scoped-git-commit"
+    #
+    # The name must be a LIVE member of `_RAW_CMDLINE_TARGETS`: the block only
+    # renders for an enrolled target, so a name retired from the set (as
+    # `scoped-git-commit` was on 2026-08-28) turns this proof into a test of
+    # nothing that still passes its `assert "CAPTURED:" in proc.stdout` by
+    # coincidence of the stub echoing an empty capture.
+    name = "cross-repo-memo.py"
     unix_half = tmp_path / name
     unix_half.write_text(
         "import os\n"
@@ -911,8 +917,12 @@ def _stub_run_dependencies(monkeypatch, tmp_path):
     settings = tmp_path / "settings-home"
 
     monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(plugin_root))
+    # Patched under the name substrate imports it as. `848072a10` renamed this
+    # from `coordinator_claude_klabauter_root_with_class` and did not carry the stub, so
+    # all four run_setup_only tests died in setup on AttributeError rather than
+    # on anything they assert.
     monkeypatch.setattr(
-        substrate, "coordinator_claude_klabauter_root_with_class", lambda: (str(claude_klabauter_root), "live-working-tree")
+        substrate, "coordinator_engine_root_with_class", lambda: (str(claude_klabauter_root), "live-working-tree")
     )
     monkeypatch.setattr(
         substrate, "_load_setup_template_manifest", lambda root: (["a"], [], [])

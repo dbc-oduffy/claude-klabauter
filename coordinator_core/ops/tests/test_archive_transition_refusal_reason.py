@@ -55,22 +55,21 @@ class ArchiveTransitionRefusalReasonTest(unittest.TestCase):
             encoding="utf-8",
         )
 
-        self._orig_guard = _op._handoff_has_live_children
+        # The live-children guard used to be stubbed here to a safe verdict so
+        # the call could reach the move. It was deleted from the op on
+        # 2026-08-28 (PM ruling — see the deletion note in
+        # handoff_archive_transition), so there is nothing left to stub and
+        # these tests reach the move on their own. Nothing about what they
+        # actually assert -- refusal-reason plumbing -- has changed.
         self._orig_move = _op.archive_and_commit
         self.addCleanup(self._restore)
-
-        async def _safe_guard(params, repo_root=None):
-            # exit_code 1 = no live children = safe to archive.
-            return {"exit_code": 1, "referenced": False, "children": []}
 
         async def _refusing_move(worktree, moves, subject):
             return [], [{"id": moves[0].candidate_id, "reason": _DRIFT_REASON}]
 
-        _op._handoff_has_live_children = _safe_guard
         _op.archive_and_commit = _refusing_move
 
     def _restore(self):
-        _op._handoff_has_live_children = self._orig_guard
         _op.archive_and_commit = self._orig_move
 
     def _run_chain(self) -> dict:

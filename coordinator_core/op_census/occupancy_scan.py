@@ -118,9 +118,18 @@ registry.
 Verified against AC1b's three known answers: `coverage.gate` is DEAD (no
 longer a registered method name — a plain `ipc._REGISTRY` grep confirms no
 `register_op("coverage.gate")` site remains under `coordinator_core/ops/`),
-`hooks.track_touched_files` is LIVE, `handoff.reconcile_open` is LIVE
-(`coordinator_core/ops/handoff_reconcile.py`'s own
-`@register_op("handoff.reconcile_open")`).
+`hooks.track_touched_files` is LIVE, and `handoff.reconcile_open` is DEAD as
+of the K-108 cut (2026-08-27, `d20d56893`).
+
+That third answer read LIVE here until 2026-08-28 and the correction is worth
+more than the fact. It is DEAD by an IMPORT-GRAPH ACCIDENT, not by a drain:
+`coordinator_core/ops/handoff_reconcile.py` still executes a module-level
+`register_op("handoff.reconcile_open", _handler)` at its last line, and the op
+is absent from the runtime registry only because nothing imports that module
+any more. So this oracle's answer is correct about the REGISTRY and must not be
+read as evidence the registration surface was drained — those are two different
+questions, and K-057's own status claimed the second on the strength of the
+first. Re-import the module and the op is live again with no edit to it.
 
 UNCLASSIFIABLE, not defaulted to live: if importing either package leaves
 ANY module poisoned (`coordinator_core.ops.get_poisoned_modules()` or

@@ -108,7 +108,7 @@ def test_unprocessed_row_live_files_never_named_for_removal(tmp_path, monkeypatc
         declared_payload=frozenset({"row_a/foo.txt"}),
         published_dest_dirs=frozenset({"row_a"}),
     )
-    pathspec = _mod._pathspec_from_manifest(manifest, str(repo_root))
+    pathspec = _mod._pathspec_from_manifest(manifest, str(repo_root))[0]
     assert not any("legacy.txt" in p for p in pathspec)
 
 
@@ -131,7 +131,7 @@ def test_binary_in_declared_directory_never_named_for_removal(tmp_path, monkeypa
         declared_payload=frozenset({"row_a/foo.txt", "row_a/binary.exe"}),
         published_dest_dirs=frozenset({"row_a"}),
     )
-    pathspec = _mod._pathspec_from_manifest(manifest, str(repo_root))
+    pathspec = _mod._pathspec_from_manifest(manifest, str(repo_root))[0]
     assert not any("binary.exe" in p for p in pathspec)
 
 
@@ -168,7 +168,7 @@ def test_genuinely_stale_path_inside_row_scope_is_named_for_removal(tmp_path, mo
         declared_payload=frozenset({"row_a/foo.txt"}),
         published_dest_dirs=frozenset({"row_a"}),
     )
-    pathspec = _mod._pathspec_from_manifest(manifest, str(repo_root))
+    pathspec = _mod._pathspec_from_manifest(manifest, str(repo_root))[0]
     assert any(p.endswith("stale.txt") for p in pathspec)
 
 
@@ -188,7 +188,7 @@ def test_empty_published_dest_dirs_yields_empty_removal_set(tmp_path, monkeypatc
         declared_payload=frozenset({"row_a/foo.txt"}),
         published_dest_dirs=frozenset(),
     )
-    pathspec = _mod._pathspec_from_manifest(manifest, str(repo_root))
+    pathspec = _mod._pathspec_from_manifest(manifest, str(repo_root))[0]
     assert pathspec == []
 
 
@@ -212,7 +212,7 @@ def test_removal_side_fires_at_the_shipped_flag_value(tmp_path):
         declared_payload=frozenset({"row_a/foo.txt"}),
         published_dest_dirs=frozenset({"row_a"}),
     )
-    pathspec = _mod._pathspec_from_manifest(manifest, str(repo_root))
+    pathspec = _mod._pathspec_from_manifest(manifest, str(repo_root))[0]
     assert any(p.endswith("stale.txt") for p in pathspec)
 
 
@@ -250,7 +250,7 @@ def test_broken_symlink_is_refused_not_reaped(tmp_path, monkeypatch):
         published_dest_dirs=frozenset({"row_a"}),
     )
     with pytest.raises(_mod.RemovalCandidateOnDiskError):
-        _mod._pathspec_from_manifest(manifest, str(repo_root))
+        _mod._pathspec_from_manifest(manifest, str(repo_root))[0]
 
 
 @pytest.mark.skipif(
@@ -288,5 +288,5 @@ def test_leg_a_does_not_reap_a_broken_symlink(tmp_path):
         published_dest_dirs=frozenset({"row_a"}),
         removed=frozenset({"row_b/link.txt"}),
     )
-    pathspec = _mod._pathspec_from_manifest(manifest, str(repo_root))
+    pathspec = _mod._pathspec_from_manifest(manifest, str(repo_root))[0]
     assert not any(p.endswith("link.txt") for p in pathspec)

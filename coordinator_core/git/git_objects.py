@@ -40,15 +40,117 @@ import hashlib
 import mmap
 import os
 import struct
+import time
 import zlib
 from collections import OrderedDict
 from pathlib import Path
-from typing import NamedTuple, Optional
+from typing import Callable, NamedTuple, Optional
 
 
 # ---------------------------------------------------------------------------
 # Write side: loose objects + tree spine.
 # ---------------------------------------------------------------------------
+
+#: Windows fails `os.replace` with `PermissionError` (WinError 5) when the
+#: DESTINATION is open in another process -- a reader, an indexer, a peer's
+#: `git status`. It is transient by construction: the other handle closes and
+#: the same call succeeds. POSIX does not have this failure mode at all.
+#:
+#: Measured on this tree at 21/200 failed commits under 12-way concurrency
+#: against one repo, scaling with concurrency, on a box specced for 50-70
+#: concurrent sessions. Two commits overlapping in wall clock is enough.
+#:
+#: The ladder is short on purpose. These are microsecond-scale handle
+#: collisions, so ~200ms of total patience covers them, and anything longer
+#: turns a transient into an occupancy cost the box cannot afford
+#: (CLAUDE.md § Load norm: the load is us).
+_REPLACE_RETRY_DELAYS_S = (0.002, 0.005, 0.01, 0.02, 0.05, 0.1)
+
+
+#: The index is REPLACED, never edited in place, so a failed read or stat is a
+#: handle collision against a file that is about to exist again -- a peer's
+#: `os.replace` landing between our open and our read. Shorter than the replace
+#: ladder because a read holds nothing and blocks nobody.
+_TRANSIENT_READ_RETRY_DELAYS_S = (0.002, 0.005, 0.01, 0.02, 0.05)
+
+
+def _retry_transient_read(op: "Callable[[], object]") -> object:
+    """Run `op`, retrying the Windows sharing transient. Re-raises the last
+    `OSError` if every attempt fails; `FileNotFoundError` is never retried.
+
+    LIVES HERE SO THERE IS EXACTLY ONE LADDER. `git_index` and `git_state` both
+    read `.git/index` and both hit this, but `git_index` imports `git_state`,
+    so neither can host a helper the other uses -- and the alternative is a
+    second ladder that drifts from this one. A monitor found the first version
+    of this fix covering `git_index`'s reader and leaving `git_state`'s bare,
+    which is exactly the shape a per-site copy produces.
+
+    Retrying needs no correctness argument at these call sites, which is what
+    separates them from the write side: a read takes no lock, moves no ref and
+    writes nothing, so it cannot duplicate work or lose a race.
+    `FileNotFoundError` is excluded because "no index yet" is a real settled
+    state, not a transient -- waiting on it waits for something nobody is about
+    to write.
+    """
+    last: Optional[OSError] = None
+    for delay in (None, *_TRANSIENT_READ_RETRY_DELAYS_S):
+        if delay is not None:
+            time.sleep(delay)
+        try:
+            return op()
+        except FileNotFoundError:
+            raise
+        except OSError as exc:
+            last = exc
+    assert last is not None
+    raise last
+
+
+def _replace_with_retry(
+    src: Path,
+    dst: Path,
+    *,
+    still_valid: Optional[Callable[[], bool]] = None,
+) -> bool:
+    """`os.replace(src, dst)` with a bounded retry on the Windows
+    destination-open transient. Returns True on success, False if every
+    attempt failed or `still_valid` went false.
+
+    NOT A BLANKET RETRY, and the callers are not interchangeable. This helper
+    retries the SYSCALL only; it takes no view on whether retrying is safe.
+    That question belongs to the caller and is answered differently at each
+    site -- `write_object` is content-addressed, so a lost race means a peer
+    wrote identical bytes and there is nothing to lose, while `cas_ref` holds
+    a lock whose premise can expire, so it passes `still_valid` to re-verify
+    rather than assuming its earlier read still holds.
+
+    `still_valid` is re-checked BEFORE each retry, never only once up front:
+    the whole reason a retry can be wrong is that the world moves during the
+    wait. It is not checked before the first attempt -- the caller has just
+    established the precondition itself.
+
+    Never forces. A destination that cannot be replaced is reported as a
+    failure to the caller, which is what lets `cas_ref` refuse a commit rather
+    than land a wrong one. Forcing here would convert a refused commit into a
+    silently orphaned one, which is the failure this module's CAS exists to
+    prevent.
+    """
+    for delay in (None, *_REPLACE_RETRY_DELAYS_S):
+        if delay is not None:
+            time.sleep(delay)
+            if still_valid is not None and not still_valid():
+                return False
+        try:
+            os.replace(src, dst)
+            return True
+        except PermissionError:  # Windows: destination open elsewhere.
+            continue
+        except OSError:
+            # Not the transient this ladder is for -- a missing source, a
+            # cross-device link, a read-only tree. Retrying cannot help and
+            # would only delay the report.
+            break
+    return False
 
 
 def _obj_path(gitdir: Path, sha: str) -> Path:
@@ -73,7 +175,22 @@ def write_object(gitdir: Path, kind: bytes, payload: bytes) -> str:
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_name(path.name + f".tmp{os.getpid()}")
         tmp.write_bytes(zlib.compress(body))
-        os.replace(tmp, path)
+        if not _replace_with_retry(tmp, path):
+            # CONTENT-ADDRESSED, so a lost race is not a lost write. `path` is
+            # keyed on the SHA-1 of exactly these bytes: if it exists now, a
+            # peer wrote byte-identical content and the object IS in the store.
+            # That is a success, not a fallback -- there is no version of this
+            # object that differs. No other site in this module may reason this
+            # way, which is why it is not folded into the helper.
+            if not path.exists():
+                raise OSError(
+                    f"write_object: could not place {sha} at {path} -- the "
+                    f"destination stayed locked and no peer wrote it"
+                )
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
     return sha
 
 
@@ -807,6 +924,21 @@ def cas_ref(
         fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
     except FileExistsError:
         return False
+    except PermissionError:
+        # WINDOWS SPELLS THE SAME LOSS DIFFERENTLY. `O_CREAT|O_EXCL` against a
+        # lock a peer is holding -- or one being unlinked in their `finally` as
+        # we open -- surfaces as `PermissionError`, not `FileExistsError`, and
+        # only the latter was caught. The raise then escaped `cas_ref`'s
+        # documented bool contract entirely and reached callers as a crash.
+        # Measured at 3/612 attempts under 12-way concurrency.
+        #
+        # Failing to TAKE the lock is a refusal, not an error: nothing has been
+        # written, no ref has moved, and the caller's own retry-or-refuse path
+        # is exactly right. This is deliberately NOT retried here -- the CAS
+        # contract is that a lost race returns False and lets the caller decide,
+        # and swallowing that decision inside the primitive is how a refused
+        # commit turns into a silently reattempted one.
+        return False
     try:
         os.close(fd)
         # Loose first, packed second -- git's own precedence. After a
@@ -832,8 +964,22 @@ def cas_ref(
                     append_reflog(
                         head_gitdir, "HEAD", expected, new, reflog_committer, reflog_message,
                     )
-        os.replace(lock_path, ref_path)
-        return True
+        # A LOST RACE HERE IS A LOST COMMIT, so this retry re-verifies rather
+        # than assuming the read above still holds. `still_valid` re-runs the
+        # same CAS predicate before every attempt: if the ref moved while we
+        # waited, we return False and the caller refuses the commit, exactly as
+        # it would have without a retry. Never forces -- forcing would convert
+        # a refused commit into a silently orphaned one, which is the failure
+        # this CAS exists to prevent.
+        def _expected_still_current() -> bool:
+            now = _read_ref_raw(ref_path)
+            if now is None:
+                now = read_packed_ref(gitdir, ref)
+            return now == expected
+
+        return _replace_with_retry(
+            lock_path, ref_path, still_valid=_expected_still_current
+        )
     finally:
         if lock_path.exists():
             try:

@@ -204,3 +204,97 @@ class TestResolveTargetRootAnchoredLiveResolution:
             f"resolve_target(repo-relative) expected {abs_liveanc!r}, got "
             f"{resolved_relative!r}"
         )
+
+
+# ---------------------------------------------------------------------------
+# (e) The premise that licensed deleting the archival live-children guard.
+#
+# 2026-08-28: the guard's last surviving arm kept a live `forked_from` child
+# (a spinoff) blocking archival, on the stated ground that archiving would
+# "strand that spinoff's own origin pointer (DR-224, AC4)". That citation does
+# not resolve — DR-224 contains no AC4, and its actual contract makes
+# has-children mean SUPERSEDE. The guard was deleted, but a guard whose stated
+# reason is false may still be load-bearing for an unstated one, so the
+# premise was MEASURED rather than argued. These tests pin that measurement so
+# a future reader can see what the deletion rests on instead of taking it on
+# the same trust the original claim asked for.
+# ---------------------------------------------------------------------------
+
+
+class TestSpinoffOriginSurvivesArchivalOfItsOrigin:
+    def test_forked_from_resolves_before_and_after_the_origin_is_archived(
+        self, tmp_path
+    ):
+        """A spinoff's `forked_from` pointer resolves to its origin whether the
+        origin sits in state/handoffs/ or archive/handoffs/.
+
+        This is the exact move the archival path makes (a git mv between those
+        two trees), so if archiving stranded the pointer it would fail here.
+        """
+        root = tmp_path
+        live_dir = root / "state" / "handoffs"
+        archive_month = root / "archive" / "handoffs" / "2026-08"
+
+        origin = live_dir / "origin.md"
+        _write_handoff(origin, slug="origin", predecessor="none")
+        # Schema rule A3a-3 forces a spinoff's `predecessor` to none; the
+        # forked_from edge is the ONLY way back, which is precisely why the
+        # stranding claim would have mattered had it been true.
+        _write_handoff(
+            live_dir / "spin.md", slug="spin", predecessor="none",
+            forked_from="origin.md",
+        )
+
+        before = dag.resolve_target(
+            "origin.md", str(live_dir), str(root), id_index={},
+            include_history_tier=False,
+        )
+        assert before and before != "git-history"
+        assert Path(before).name == "origin.md"
+        assert "state" in Path(before).parts
+
+        archive_month.mkdir(parents=True, exist_ok=True)
+        origin.rename(archive_month / "origin.md")
+        dag._FRONTMATTER_CACHE.clear()
+
+        after = dag.resolve_target(
+            "origin.md", str(live_dir), str(root), id_index={},
+            include_history_tier=False,
+        )
+        assert after and after != "git-history", (
+            "archiving the origin stranded the spinoff's forked_from pointer — "
+            "the premise the 2026-08-28 guard deletion rests on has broken; "
+            "re-open that decision before doing anything else"
+        )
+        assert Path(after).name == "origin.md"
+        assert "archive" in Path(after).parts
+
+    def test_the_resolver_still_needs_an_explicit_repo_root(self, tmp_path):
+        """The honest limit on the test above, pinned so it is not overread.
+
+        Resolution survives archival only for callers that pass `repo_root`
+        explicitly. A caller that self-infers it two-dirs-up from an archived
+        node's own directory gets `<root>/archive` and resolves nothing — case
+        (c) in this module is that bug, and it predates the guard deletion.
+
+        Deleting the guard did not create that hazard; it increases how many
+        records are archived and therefore how often the hazard is reachable.
+        Any consumer added here must pass repo_root explicitly.
+        """
+        root = tmp_path
+        archive_month = root / "archive" / "handoffs" / "2026-08"
+        _write_handoff(root / "state" / "handoffs" / "origin.md",
+                       slug="origin", predecessor="none")
+        archived_spin = archive_month / "spin.md"
+        _write_handoff(archived_spin, slug="spin", predecessor="none",
+                       forked_from="origin.md")
+
+        wrong_root = archived_spin.parent.parent  # the two-up self-inference
+        resolved = dag.resolve_target(
+            "origin.md", str(archived_spin.parent), str(wrong_root),
+            id_index={}, include_history_tier=False,
+        )
+        assert not resolved or resolved == "git-history", (
+            "self-inferred repo_root unexpectedly resolved — if this now works, "
+            "case (c) above is stale and this caveat can be dropped"
+        )

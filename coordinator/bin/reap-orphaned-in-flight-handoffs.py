@@ -74,10 +74,34 @@ def __getattr__(name: str):
     module global at import time. Only fires when the name is NOT already
     present in this module's `__dict__` -- once `_bootstrap_imports()` has
     run once (via this hook or via `main()`), the plain global wins on every
-    later lookup and this function is not called again for that name."""
+    later lookup and this function is not called again for that name.
+
+    NEGATIVE SPEC -- the forced re-run below is not belt-and-braces.
+    `_bootstrap_imports()` short-circuits on
+    `"resolve_checked_repo_root" in globals()`, so a name that leaves
+    `__dict__` AFTER the first bootstrap is never rebound by a plain call.
+    `mock.patch.object`/`monkeypatch.setattr` do exactly that: the value is
+    read through this hook (so it is absent from `__dict__` at enter), set to
+    a mock, and on exit `delattr`d rather than restored -- then probed via
+    `hasattr`, landing back here with the sentinel already satisfied. The
+    forced re-run defeats that sentinel; `_saved` preserves any OTHER
+    bootstrapped name a caller has separately monkeypatched across the
+    re-run, since the requested `name` was, by construction, absent and so
+    is never captured into `_saved`."""
     if name in _BOOTSTRAP_NAMES:
         _bootstrap_imports()
-        return globals()[name]
+        if name not in globals():
+            _saved = {k: globals().pop(k) for k in _BOOTSTRAP_NAMES if k in globals()}
+            try:
+                _bootstrap_imports()
+            finally:
+                globals().update(_saved)
+        try:
+            return globals()[name]
+        except KeyError:
+            raise AttributeError(
+                f"module {__name__!r} has no attribute {name!r}"
+            ) from None
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 

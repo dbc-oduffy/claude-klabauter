@@ -408,6 +408,11 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #   D2-5 (no remote route): DR-215 retired the UDS/HTTP transport outright;
     #     no HTTP route was ever added, negative-spec in archive_terminal_handoffs.py.
     "fleet.archive_completed_handoffs": OpClass.MUTATING,
+    # handoff.housekeeping — MUTATING: closes finished handoffs, git-mv files
+    # them into archive/handoffs/, and lands one commit for the set. The ONE
+    # job replacing the three suspended legs (handoff.reconcile_open,
+    # handoff.archive_transition, session.sweep_consumed_handoffs).
+    "handoff.housekeeping": OpClass.MUTATING,
     # fleet.aggregate_capability_index — MUTATING, same single-derived-feed-file shape
     # as strategic.emit: it reads every registered sibling's authored capability
     # manifest and writes ONE aggregated projection into the invoking repo's own tree.

@@ -111,7 +111,7 @@ def _count_spawns(manifest, repo_root: Path) -> list:
 
     setattr(_mod, "_run", _counting_run)
     try:
-        _mod._pathspec_from_manifest(manifest, str(repo_root))
+        _mod._pathspec_from_manifest(manifest, str(repo_root))[0]
     finally:
         setattr(_mod, "_run", real_run)
     return argvs

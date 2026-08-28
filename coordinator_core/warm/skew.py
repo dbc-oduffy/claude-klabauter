@@ -69,6 +69,7 @@ the primary signal -- no separate `engine.target` handling belongs here.
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import subprocess
 import time
@@ -89,6 +90,12 @@ __all__ = [
     "publish_lag",
     "publish_lag_message",
     "PUBLISH_LAG_THRESHOLD_MINUTES",
+    "CURRENCY_CACHE_DIRNAME",
+    "CURRENCY_CACHE_FILENAME",
+    "currency_cache_path",
+    "currency_cache_key",
+    "source_head_sha",
+    "write_currency_cache",
     "ServerVersionState",
     "build_skew_response",
     "evict_on_skew",
@@ -525,6 +532,148 @@ def publish_lag_message(lag: PublishLag, *, site: str = "fire") -> Optional[str]
         f"code are unpublished (oldest {age_hours:.1f}h). {scope} "
         "Publish: python coordinator/bin/percolate-round.py claude-klabauter"
     )
+
+
+# --- the currency cache: computed where git is already paid for, read where -
+#     it is not ---------------------------------------------------------------
+#
+# The forwarder door (`coordinator/lib/resolve-claude-klabauter/_resolve_claude_klabauter.py`)
+# diverts a session to the published mirror and, until now, said nothing about
+# that mirror's vintage. It cannot call `publish_lag` itself: it is on the
+# interpreter floor of every coordinator invocation on a box carrying 50-70
+# concurrent sessions, it is forbidden to import `coordinator_core` at all, and
+# `publish_lag` costs 15.6ms of process time / 99.3ms wall (measured here,
+# k=5, 2026-08-28). So the verdict is computed by a writer that ALREADY spawns
+# git, and the door only reads it.
+#
+# THE WRITER RUNS ON THE INVALIDATING EVENT. A commit is what changes the
+# answer, so the cache is refreshed by the post-commit path
+# (`hooks/auto_push.run_push_with_retry`, in its already-detached child) rather
+# than by a timeout. That is what answers C5's standing objection to a stored
+# ref: this one is never "a ref nothing compares against", because the thing
+# that would falsify it is the thing that rewrites it. Publish rounds are the
+# other invalidating event and should write here too when one is wired.
+#
+# NEGATIVE SPEC -- the key is the whole safety property. A verdict whose key
+# does not match what the reader observes is treated as ABSENT, never as a
+# lower-confidence answer: reporting a lag computed under a source HEAD that
+# has since moved is worse than silence, and silence is what this degrades to
+# everywhere else already.
+CURRENCY_CACHE_DIRNAME = "coordinator"
+CURRENCY_CACHE_FILENAME = "engine-currency.json"
+
+
+def currency_cache_path() -> Optional[Path]:
+    """Where the currency verdict lives, or `None` where `LOCALAPPDATA` is
+    unset (non-Windows / a stripped environment).
+
+    `%LOCALAPPDATA%/coordinator/` is the convention
+    `install/substrate.py::_dispatch_root_cache_path` already established for
+    exactly this shape -- a machine-local accelerator a later reader consults,
+    never authoritative state. Kept byte-compatible with the door's own
+    standalone twin (`_resolve_claude_klabauter.py::_currency_cache_path`), which cannot
+    import this module; the two are synchronised by hand and by
+    `test_resolve_claude_klabauter_currency_signal.py`, which asserts they agree.
+    """
+    local = os.environ.get("LOCALAPPDATA", "").strip()
+    if not local:
+        return None
+    return Path(local) / CURRENCY_CACHE_DIRNAME / CURRENCY_CACHE_FILENAME
+
+
+def source_head_sha(source_root: Path) -> Optional[str]:
+    """The source tree's HEAD commit sha, read straight off `.git` with no
+    subprocess -- the half of the cache key that moves on every commit.
+
+    Git-free because both ends need it and only one of them may spawn: the
+    writer could afford `git rev-parse`, but the door pays 0.078ms for this
+    whole key read (measured, k=200) and would pay ~25ms for one `git`
+    process. Resolves the symref by hand, then the loose ref, then
+    `packed-refs`; a detached HEAD is the raw sha and returns as-is.
+
+    `None` on anything unexpected -- an absent `.git`, a worktree's `gitdir:`
+    indirection, an unreadable ref. The caller treats that as "no key", which
+    means "no verdict", never an error.
+    """
+    try:
+        git_dir = Path(source_root) / ".git"
+        raw = (git_dir / "HEAD").read_text(encoding="utf-8").strip()
+        if not raw.startswith("ref: "):
+            return raw or None
+        ref = raw[5:].strip()
+        loose = git_dir / ref
+        try:
+            return loose.read_text(encoding="utf-8").strip() or None
+        except OSError:
+            pass
+        for line in (git_dir / "packed-refs").read_text(encoding="utf-8").splitlines():
+            if line.endswith(" " + ref):
+                return line.split()[0]
+        return None
+    except Exception:
+        return None
+
+
+def currency_cache_key(engine_root: Path, source_root: Path) -> Optional[dict]:
+    """The `(source HEAD, engine stamp bytes)` pair a verdict is only valid
+    under. `None` when either half is unavailable, which is the checkout-free
+    box's ordinary state -- see this section's header comment."""
+    head = source_head_sha(source_root)
+    if not head:
+        return None
+    try:
+        stamp = _engine_stamp_path(engine_root).read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    if not stamp:
+        return None
+    return {"source_head": head, "engine_stamp": stamp}
+
+
+def write_currency_cache(engine_root: Path, source_root: Path) -> Optional[Path]:
+    """Compute the publish lag once and persist it with the key it holds
+    under. Returns the path written, or `None` when nothing was written.
+
+    BEST-EFFORT IN BOTH DIRECTIONS, and the caller must treat it that way:
+    this never raises, and no caller may fail its own operation over a cache
+    write. A `publish_lag` of `None` (no stamp, stamp unresolvable in this
+    history, git unavailable) writes NOTHING and leaves any prior verdict in
+    place -- overwriting a good verdict with an empty one would convert a
+    transient git failure into a permanently silent door.
+
+    Written atomically via `os.replace`, matching
+    `substrate._write_native_forwarder_manifest`: a dozen sessions commit to
+    this branch concurrently and a torn read must be impossible rather than
+    merely unlikely.
+    """
+    path = currency_cache_path()
+    if path is None:
+        return None
+    key = currency_cache_key(engine_root, source_root)
+    if key is None:
+        return None
+    lag = publish_lag(Path(engine_root), Path(source_root))
+    if lag is None:
+        return None
+    tmp_path: Optional[Path] = None
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "engine_commits_behind": lag.engine_commits_behind,
+            "oldest_unpublished_iso": lag.oldest_unpublished_iso,
+            "key": key,
+        }
+        tmp_path = path.parent / f".{path.name}.{os.getpid()}.tmp"
+        tmp_path.write_text(json.dumps(payload), encoding="utf-8", newline="\n")
+        os.replace(tmp_path, path)
+        return path
+    except Exception:
+        if tmp_path is not None:
+            try:
+                tmp_path.unlink()
+            except OSError:
+                pass
+        return None
 
 
 def _source_pkg_dir() -> Path:

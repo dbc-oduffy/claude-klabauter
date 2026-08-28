@@ -104,7 +104,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
-from coordinator_core.archival import reverse_membership
 from coordinator_core.coverage import _get_handoff_consumed_by
 from coordinator_core.dag import _read_meta, build_reverse_edge_index
 from coordinator_core.ipc import register_op
@@ -158,17 +157,8 @@ _FAMILY = "handoff"
 # ticked on a mechanism that reported nothing.
 _SCAN_REASON_WORKTREE_DIRTY = "worktree-dirty: uncommitted changes, retained pending commit"
 _SCAN_REASON_NOT_TERMINAL = "not-terminal"
-_SCAN_REASON_MEMBERSHIP_ERROR = "reverse-membership-error: retained (fail-closed)"
-_SCAN_REASON_LIVE_CHILD = "live-child: a live successor/spinoff still points here"
 _SCAN_REASON_LIVE_CLAIM = "live-claim-holder: claim dir holds a live session"
 _SCAN_REASON_CONSUMED_BY_LIVE = "consumed-by-live-session: consumed_by names a live session"
-
-# Succession-only edge kinds — the DR-324 Check-3 narrowing applies this
-# subset (instead of the default all-three-kinds set) ONLY for a Branch-B-
-# qualified candidate, so a live SUCCESSION child no longer retains it while a
-# live forked_from spinoff still does. Branch A keeps the default (None ->
-# all three kinds) unchanged.
-_SUCCESSION_ONLY_EDGE_KINDS = {"forked_from"}
 
 # Recommended cap VALUE for a future caller of this op (session.boot_sweep,
 # a cron trigger, etc.) to pass — NOT consulted by this module as a fallback.
@@ -1145,44 +1135,48 @@ def _scan_terminal(
     if not remaining:
         return results
 
-    # Backfill (C4): a candidate reaching here means the reverse-edge index
-    # below must see EVERY live node's frontmatter, including one the
-    # pre-filter refused above (it may still be some OTHER node's live
-    # `predecessor`/`forked_from` child) — an empty `{}` placeholder for a
-    # refused-but-unread record would silently drop it from Check 3's
-    # reverse-edge view, which is the exact under-retention this chunk's
-    # negative-spec forbids. This is the SAME full-corpus `dag._read_meta`
-    # cost the pre-C4 code always paid in this branch — no regression here,
-    # only in the (`if not survivors`) short-circuit above.
-    for key in live_set_str:
-        if key not in metas:
-            metas[key] = _read_meta(key) or {}
-
-    # ONE reverse-edge index build over the metas backfilled above — no
-    # second per-node frontmatter scan. Deferred (lazy) until at least one
-    # candidate has survived classification + the dirty check: a pass with
-    # zero survivors never pays this build (or the backfill above) at all.
-    index = build_reverse_edge_index(live_set_str, handoff_dir=str(worktree_root / "state" / "handoffs"), metas=metas)
+    # The full-corpus metas backfill and the reverse-edge index build that
+    # stood here are GONE with Check 3 (2026-08-28). They existed solely to
+    # answer "does anything still point at this node?", and nothing asks any
+    # more.
+    #
+    # This is the part worth noticing rather than treating as tidy-up: the
+    # backfill was a `dag._read_meta` for EVERY live node not already read --
+    # a per-node frontmatter read over the whole live corpus -- and the index
+    # build was a second pass over the result. Deleting a guard removed a
+    # corpus walk from the sweep, which is the same shape this plan found at
+    # `handoff_reconcile`: the expensive thing was never the job, it was a
+    # question the job did not need to ask.
 
     # ONE resolve_live_session_ids() call, hoisted out of the per-candidate
     # loop (do NOT un-hoist — see this function's own docstring) and, like
     # the reverse-edge index above, deferred until a candidate survives.
     live_sids = resolve_live_session_ids()
 
-    for p, rel, meta, status_label, branch_b_qualified in remaining:
-        # Check 3: childlessness, DR-324-narrowed for a Branch-B-qualified
-        # candidate (succession-only edge kinds — a live succession child no
-        # longer retains; a live forked_from spinoff still does).
-        check3_edge_kinds = _SUCCESSION_ONLY_EDGE_KINDS if branch_b_qualified else None
-        try:
-            children = reverse_membership(str(p), live_set_str, index=index, edge_kinds=check3_edge_kinds)
-        except ValueError as exc:
-            _LOG.warning("_scan_terminal: reverse_membership error for %s — %s (fail-closed, retained)", p, exc)
-            _refuse(rel, f"{_SCAN_REASON_MEMBERSHIP_ERROR}: {exc}")
-            continue
-        if children:
-            _refuse(rel, _SCAN_REASON_LIVE_CHILD)
-            continue
+    for p, rel, meta, status_label, _branch_b_qualified in remaining:
+        # Check 3 (childlessness) was DELETED here on 2026-08-28, on the same
+        # PM ruling that removed the guard from `handoff_archive_transition`:
+        # "has a child means nothing to whether it should be archived or not...
+        # either a baton is used up or it's not." This sweep is archival on the
+        # ruling's own words, so the ruling reaches it.
+        #
+        # It had already been half-retired: DR-324 narrowed it so a live
+        # SUCCESSION child no longer retained a Branch-B candidate, leaving only
+        # a live `forked_from` spinoff blocking. That surviving half rested on
+        # the claim that archiving would strand the spinoff's origin pointer --
+        # a claim whose citation ("DR-224, AC4") does not resolve and whose
+        # premise is false: see the deletion note in handoff_archive_transition
+        # and the measurement pinned in
+        # coordinator_core/tests/test_coverage_dag_archived_repo_root.py
+        # (TestSpinoffOriginSurvivesArchivalOfItsOrigin).
+        #
+        # The fail-closed `reverse_membership` ValueError arm went with it: once
+        # children do not decide archival, an error computing children is not a
+        # reason to retain forever.
+        #
+        # Checks 1/2 (terminality, worktree-clean) and Check 4 (live claim
+        # holder) are untouched -- a live HOLDER is a different ground and still
+        # retains.
 
         # Check 4: no live claim — claim-dir primary key, consumed_by fallback.
         claim_dir = handoff_claim_dir(common_dir, p)

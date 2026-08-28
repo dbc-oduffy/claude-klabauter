@@ -100,7 +100,7 @@ def test_gitignored_path_dropped_from_pathspec(tmp_path, monkeypatch):
     monkeypatch.setattr(_mod, "_run", _fake_run)
     pathspec = _mod._filter_commit_pathspec(
         dest, str(dest), _seen_from_change_lines(str(dest), change_lines)
-    )
+    )[0]
     assert pathspec == []
 
 
@@ -122,7 +122,7 @@ def test_already_absent_deletion_intent_dropped_from_pathspec(tmp_path, monkeypa
     monkeypatch.setattr(_mod, "_run", _fake_run)
     pathspec = _mod._filter_commit_pathspec(
         dest, str(dest), _seen_from_change_lines(str(dest), change_lines)
-    )
+    )[0]
     assert pathspec == []
 
 
@@ -148,7 +148,7 @@ def test_real_add_update_delete_still_appears_in_pathspec(tmp_path, monkeypatch)
     monkeypatch.setattr(_mod, "_run", _fake_run)
     pathspec = _mod._filter_commit_pathspec(
         dest, str(dest), _seen_from_change_lines(str(dest), change_lines)
-    )
+    )[0]
     assert pathspec == [
         str(dest / "added.md"),
         str(dest / "changed.md"),
@@ -177,7 +177,7 @@ def test_filter_summary_printed_to_stderr(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(_mod, "_run", _fake_run)
     pathspec = _mod._filter_commit_pathspec(
         dest, str(dest), _seen_from_change_lines(str(dest), change_lines)
-    )
+    )[0]
     assert pathspec == [str(dest / "kept.md")]
     err = capsys.readouterr().err
     assert "filtered 2 path(s)" in err
@@ -205,7 +205,7 @@ def test_pathspec_filter_fails_open_on_undeterminable_dest_state(tmp_path, monke
     monkeypatch.setattr(_mod, "_run", _fake_run)
     pathspec = _mod._filter_commit_pathspec(
         dest, str(dest), _seen_from_change_lines(str(dest), change_lines)
-    )
+    )[0]
     assert pathspec == [str(dest / "maybe-gone.sh")]
 
 
@@ -248,7 +248,7 @@ def test_check_ignore_result_subset_of_rel_paths_does_not_raise(tmp_path, monkey
         raise AssertionError(f"unhandled: {cmd!r}")
 
     monkeypatch.setattr(_mod, "_run", _fake_run)
-    kept = _mod._filter_commit_pathspec(dest, str(dest), seen)
+    kept = _mod._filter_commit_pathspec(dest, str(dest), seen)[0]
     assert kept == [str(dest / "kept.md")]
 
 
@@ -301,7 +301,7 @@ def test_already_absent_deletion_intent_dropped_from_pathspec_real_repo_subdir(t
     change_lines = [("REMOVE", "ops/ceremony/tests/never_existed.py")]
     pathspec = _mod._filter_commit_pathspec(
         dest_subdir, str(dest_subdir), _seen_from_change_lines(str(dest_subdir), change_lines)
-    )
+    )[0]
     assert pathspec == []
 
 
@@ -346,7 +346,7 @@ def test_unstaged_worktree_deletion_kept_but_repo_root_relative(tmp_path):
         str(dest_subdir),
         _seen_from_change_lines(str(dest_subdir), change_lines),
         repo_root=str(repo_root),
-    )
+    )[0]
     assert pathspec == ["coordinator_core/ops/ceremony/tests/test_claim_cli_remedy_invocations.py"]
 
     # Reproduces the actual downstream classification `explicit_stage` runs
@@ -399,7 +399,7 @@ def test_repo_root_relative_pathspec_uses_forward_slashes(tmp_path):
         str(dest_subdir),
         _seen_from_change_lines(str(dest_subdir), change_lines),
         repo_root=str(repo_root),
-    )
+    )[0]
     assert pathspec == ["coordinator_core/ops/ceremony/tests/test_nested_deletion.py"]
     assert "\\" not in pathspec[0]
 
@@ -436,13 +436,13 @@ def test_sibling_row_subtree_resolves_without_dotdot(tmp_path):
         str(row_a_dest),
         _seen_from_change_lines(str(row_a_dest), row_a_changes),
         repo_root=str(repo_root),
-    )
+    )[0]
     pathspec_b = _mod._filter_commit_pathspec(
         row_b_dest,
         str(row_b_dest),
         _seen_from_change_lines(str(row_b_dest), row_b_changes),
         repo_root=str(repo_root),
-    )
+    )[0]
     combined = pathspec_a + pathspec_b
 
     assert combined == ["coordinator_core/new-file.py", "coordinator/bin/new-tool"]

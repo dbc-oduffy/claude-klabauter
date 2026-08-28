@@ -273,6 +273,18 @@ def _classify(elements: list[str], resolved: bool) -> str:
 
 
 def _is_git_commit_candidate(elements: list[str], callee: str) -> bool:
+    """Whether this argv is a git `commit` worth classifying.
+
+    NAMING DEPENDENCY, a coverage edge rather than a style note. The second disjunct reads the
+    CALLEE's name because the two calibration sites reach git through a cross-module helper
+    (`run_git`, `_git`) that supplies the binary itself, so `"git"` never appears in the argv
+    the call site writes. That holds only while such helpers keep `git` in their names:
+    renaming `run_git` to something git-free would drop its call sites out of candidacy
+    silently, with no test going red. Widening this to treat any unresolvable callee as a
+    candidate was rejected -- it makes every `run(...)` in the repo a candidate and buries the
+    inventory in noise -- so the dependency is recorded here. If a wrapper is renamed, this
+    predicate is the thing to fix.
+    """
     return "commit" in elements and ("git" in elements or "git" in callee.lower())
 
 
@@ -463,7 +475,9 @@ _KNOWN_BARE_COMMIT_SITES: frozenset[tuple[str, str, str]] = frozenset(
         # stage failure needs peers staging there, which is not this repo's shape. Residual
         # risk is two concurrent rounds against one mirror, or a human editing in it.
         #
-        # THE OBVIOUS FIX IS A TRAP, recorded so nobody spends a session rediscovering it.
+        # THE OBVIOUS FIX IS A TRAP. Full account, the 1,028-file incident and the
+        # severity rationale: state/bug-backlog/2026-08-27-percolate-round-bare-commit-
+        # absorbs-a-concurrent-round-or-a-hand-edit-in-the-mirror.yaml
         # `kept` is already the exact staged path list, so `commit -m msg -- *kept` looks
         # free. It is not: `kept` deliberately includes staged DELETIONS, and passing deleted
         # paths as pathspecs on Windows re-stages the worktree copies and undoes the removal
@@ -521,12 +535,45 @@ def _discover_scope_files(roots: tuple[str, ...]) -> list[tuple[str, pathlib.Pat
     return out
 
 
+#: Files whose source contains no quoted `commit` literal cannot hold a commit argv this
+#: collector could resolve, so they are skipped before `ast.parse` rather than parsed and
+#: discarded. EMPIRICAL PER-REPO, NOT A STRUCTURAL GUARANTEE -- an earlier
+#: revision of this comment called it "not a heuristic narrowing", which overclaimed. Measured
+#: both ways over this repo (1234 files -> 43, identical site set, 19 sites either way), and
+#: that equality holds today because of the COLLECTOR's blind spot rather than the prefilter's
+#: inclusiveness: a `Name` filling a single argv slot (`sub = "commit"; run_git([sub, ...])`)
+#: is never resolved to its value, so `find_commit_sites` misses it whether or not the
+#: prefilter admitted the file -- and it WOULD admit it, the literal being present in the text.
+#: Re-measure both branches after any change to argv resolution: the equality is a fact about
+#: this repo and this collector, not a property the prefilter supplies.
+#:
+#: THE RESIDUAL, named rather than left for a reader to discover: an argv whose subcommand is
+#: built dynamically (a variable, a concatenation) carries no quoted literal and is skipped.
+#: That costs the gate nothing, because such an argv is outside this collector's STATIC reach
+#: with or without the prefilter -- it resolves to no subcommand at all, prefiltered or not.
+#: A future collector that resolves dynamic subcommands -- a whole-list
+#: splat or a single-slot `Name`, one class of gap and not two -- must drop this prefilter in the same
+#: change, or it will silently keep the old blind spot while appearing to have closed it.
+#:
+#: WHY IT EXISTS: the unfiltered walk cost 3723ms, over this repo's own ">2s for any process
+#: is FORBIDDEN" load norm, in the fast tier, on a box running ~50 concurrent sessions. A
+#: standing gate is paid by every peer on every fast run; 3.7s of AST parsing to answer a
+#: question about 43 files is a cost this guard has no right to impose.
+_COMMIT_LITERALS = ('"commit"', "'commit'")
+
+
+def _may_hold_commit_argv(text: str) -> bool:
+    return any(lit in text for lit in _COMMIT_LITERALS)
+
+
 def _collect_all_sites() -> list[CommitSite]:
     sites: list[CommitSite] = []
     for relpath, file_path in _discover_scope_files(_GATE_SCOPE_ROOTS):
         try:
             text = file_path.read_text(encoding="utf-8")
         except OSError:
+            continue
+        if not _may_hold_commit_argv(text):
             continue
         try:
             sites.extend(find_commit_sites(text, relpath))

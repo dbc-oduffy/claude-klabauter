@@ -275,45 +275,60 @@ def test_brief_call_one_builds_no_review_scope_and_so_cannot_truncate_one(repo, 
 # ---------------------------------------------------------------------------
 
 
-def test_close_coverage_advisory_adds_no_git_spawn_on_the_ordinary_close(repo, monkeypatch):
-    """The ordinary single-close path (no prior review-trail record for this
-    session) has no already-resolved range to reuse -- `__init__.py::
-    build_directives` resolves `close_coverage_diff_base=None` at the call
-    site (the review-brightline-gate directive's own argv stays the plain
-    2-element `["--session-id", sid]` shape here), and `directives_review.
-    build_close_coverage_advisory_directive` takes the silent `diff_base is
-    None` leg WITHOUT EVER CALLING `_review_dimension_check` -- proven here
-    directly (not merely by an unchanged spawn count, which this fixture's
-    OWN `stage_paths`-triggered review-scale measurement would otherwise
-    make a wash): a `_review_dimension_check` that spawned anything would
-    raise through this monkeypatch before it got the chance.
-    `decisions["stage_paths"]` IS supplied here (a real changed-file set) so
-    a defect that let the advisory reach the dimension check anyway (and
-    therefore spawn `git log` to discover commits in a fabricated range)
-    would be caught -- an empty `stage_paths` would pass this assertion for
-    the wrong reason (nothing to check either way)."""
+def test_close_coverage_advisory_reaches_the_dimension_on_the_ordinary_close(repo, monkeypatch):
+    """AC1 over AC6, the conflict resolved 2026-08-28 mid-execution.
+
+    The ordinary single-close path has no prior review-trail record, so the
+    review-brightline-gate directive's argv carries no range to reuse. The
+    ORIGINAL C1 build treated that as "silent, zero spawns" -- which made the
+    advisory inert on precisely the path AC1 was funded for. This test pins
+    the opposite: given a `head_at_start` on disk, the advisory resolves its
+    own range and DOES reach `_review_dimension_check`.
+
+    The spawn budget survives as a ceiling, not as zero: range resolution
+    stays free (a disk read plus the literal `HEAD` token, never a
+    `rev-parse`), so the only added subprocess is the dimension's own
+    `git log`. Asserted as at most one call, never as none."""
     sid = "22222222-2222-2222-2222-222222222222"
     claim_dir = repo / ".git" / "coordinator-sessions" / sid
     claim_dir.mkdir(parents=True)
+    (claim_dir / "head_at_start").write_text("a" * 40, encoding="utf-8")
+    _patch_gate_with_sid(monkeypatch, sid)
+
+    calls = []
+
+    def _record(changed_files, diff_base, repo_root):
+        calls.append(diff_base)
+        raise RuntimeError("dimension unavailable -- D2 says degrade to silence")
+
+    monkeypatch.setattr(gate_dimension_review, "_review_dimension_check", _record)
+
+    envelope = wsc.brief(decisions={"stage_paths": ["own-file-1.txt"]}, repo_root=repo)
+
+    assert len(calls) <= 1, f"advisory must add at most one dimension call: {calls}"
+    assert calls == ["{}..HEAD".format("a" * 40)], (
+        "advisory must resolve its own range from head_at_start on the "
+        f"ordinary close path: {calls}"
+    )
+    advisory = [d for d in envelope["directives"] if d["id"] == "d-close-coverage-advisory"]
+    assert advisory, "the raising dimension must not remove the directive (D2)"
+
+
+def test_close_coverage_advisory_stays_silent_without_head_at_start(repo, monkeypatch):
+    """The fallback's own negative leg: no `head_at_start` on disk means no
+    resolvable range, and the advisory degrades to silence with no dimension
+    call at all -- never a fabricated range."""
+    sid = "22222222-2222-2222-2222-222222222222"
+    (repo / ".git" / "coordinator-sessions" / sid).mkdir(parents=True)
     _patch_gate_with_sid(monkeypatch, sid)
 
     def _fail_if_called(*args, **kwargs):
-        raise AssertionError(
-            "_review_dimension_check must not be called on the ordinary "
-            "close path (no prior review-trail record, no resolved range) "
-            "-- calling it here would add a git spawn AC6 forbids"
-        )
+        raise AssertionError("no range is resolvable; the dimension must not be reached")
 
     monkeypatch.setattr(gate_dimension_review, "_review_dimension_check", _fail_if_called)
 
     envelope = wsc.brief(decisions={"stage_paths": ["own-file-1.txt"]}, repo_root=repo)
-
-    directives = envelope["directives"]
-    advisory_ids = {d["id"] for d in directives if d["id"] == "d-close-coverage-advisory"}
-    assert advisory_ids == {"d-close-coverage-advisory"}, (
-        "expected the advisory directive to be emitted even on the ordinary "
-        f"close path: {[d['id'] for d in directives]}"
-    )
+    assert [d for d in envelope["directives"] if d["id"] == "d-close-coverage-advisory"]
 
 
 def test_close_coverage_advisory_directive_is_always_already_satisfied_and_ungated(repo, monkeypatch):

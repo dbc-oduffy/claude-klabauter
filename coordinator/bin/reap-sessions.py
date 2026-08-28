@@ -120,10 +120,32 @@ def __getattr__(name: str):
     time. Only fires when the name is NOT already present in this module's
     `__dict__` -- once `_bootstrap_imports()` has run once (via this hook or
     via `main()`), the plain global wins on every later lookup and this
-    function is not called again for that name."""
+    function is not called again for that name.
+
+    NEGATIVE SPEC -- the forced re-run is not belt-and-braces. The plain
+    `_bootstrap_imports()` call above short-circuits on its own
+    `"cc_invoke" in globals()` sentinel, so a name that leaves `__dict__`
+    AFTER the first bootstrap (e.g. `mock.patch.object` teardown, which
+    `delattr`s rather than restoring, then probes `hasattr` and lands back
+    here with the sentinel already satisfied) is never rebound by a plain
+    call and this hook raises `KeyError` instead of returning the name. The
+    forced re-run below defeats the sentinel; `_saved` snapshots and
+    restores every OTHER already-present bootstrapped name around it, so a
+    caller's live monkeypatch of a different name survives."""
     if name in _BOOTSTRAP_NAMES:
         _bootstrap_imports()
-        return globals()[name]
+        if name not in globals():
+            _saved = {k: globals().pop(k) for k in _BOOTSTRAP_NAMES if k in globals()}
+            try:
+                _bootstrap_imports()
+            finally:
+                globals().update(_saved)
+        try:
+            return globals()[name]
+        except KeyError:
+            raise AttributeError(
+                f"module {__name__!r} has no attribute {name!r}"
+            ) from None
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 

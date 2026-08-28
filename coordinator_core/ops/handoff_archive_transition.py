@@ -36,15 +36,19 @@ chain into ONE in-process op. Four modes, all operating on one handoff .md path:
                       archive/completed/) — see § Archived-predecessor
                       stamp-in-place below; every other mode stays live-only.
 
-Live-children guard (handoff.has_live_children) is UNCONDITIONAL across all
-four modes -- it runs exactly once per call, in the same structural position
-bash runs it (after any --stamp-shipped/--supersede pre-guard stamp AND the
-supersede status flip, before any --stamp-only post-guard mutation). Guard
-exit 1 (safe) is the ONLY outcome that proceeds to the archival move; guard
-exit 0 (has live children) or exit 2 (indeterminate/fail-closed) both retain
-the handoff on disk and return a graceful (exit_code:0) skip -- retention is
-NEVER an error, and (as of the fix below) never suppresses the supersede
-status flip either, only the archival git-mv.
+Live-children guard (handoff.has_live_children) is GONE as of 2026-08-28 --
+deleted, not narrowed, on a PM ruling that having a child says nothing about
+whether a baton should be archived. Retention on this path now has exactly ONE
+ground: a live claim HOLDER. See the deletion note at the guard's former
+position for the ruling, the unresolvable "DR-224, AC4" citation that had kept
+its last arm alive, and the measurement that retired it.
+
+Two consequences worth stating here rather than leaving to be rediscovered.
+The fail-closed exit-2 arm went with it: a branch that retained every candidate
+whenever the guard could not resolve is a silent permanent stall, not a safety,
+once there is nothing to be indeterminate about. And `_TERMINAL_DEPLOYMENT_
+STATES` already contains `continued` -- the has-a-child state -- so the guard
+had been contradicting the very contract it was defending.
 
 Status-flip-precedes-guard fix (2026-07-27, cross-repo DoE incident
 "handoff-archive-transition supersede silently no-ops"): the supersede
@@ -129,7 +133,6 @@ Reuse (no reimplementation of tested internals):
     still speaks the retired consumed+abandoned vocabulary for its other
     caller (the frontmatter-only `handoff.transition supersede` verb, called
     directly, not through this op).
-  - coordinator_core.ops.handoff_children._handoff_has_live_children (the guard)
   - coordinator_core.ops.fleet._common.handoff_archive_dest / archive_and_commit / Move
 
 Terminal-state precondition (DoE-claude, 2026-07-26, plan C7): the git-mv
@@ -318,7 +321,6 @@ from coordinator_core.ops.fleet._common import (
     handoff_archive_dest,
     main_worktree_root,
 )
-from coordinator_core.ops.handoff_children import _handoff_has_live_children
 from coordinator_core.ops.handoff_transition import _ship
 # Aliased: `rel_id` is also a local variable name in _handler below, and an
 # unaliased import would be shadowed by that binding (UnboundLocalError).
@@ -914,8 +916,15 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
                      check (--stamp-only combined with --stamp-shipped/--supersede
                      collapses to an invalid single-mode selection here, since
                      mode is a one-of-four enum rather than independent flags).
-        exclude      (list[str], optional) — paths dropped from the live-children
-                     guard's scan set before checking (mirrors --exclude).
+        exclude      ACCEPTED AND IGNORED. It fed the live-children guard,
+                     deleted from all four of its sites on 2026-08-28 per the
+                     PM ruling that having a child says nothing about whether a
+                     handoff should be archived ("either a baton is used up or
+                     it's not"). Still accepted rather than rejected because
+                     DoE's `archive-stamp-cli --exclude` is a live cross-repo
+                     surface this op does not own; a usage error here would
+                     break that CLI for a param that now decides nothing. The
+                     dead READ is gone — nothing in this module consumes it.
         continued_into (str, required when mode="supersede") — the successor
                      handoff's id-or-path (positive succession proof). Missing
                      or empty is a usage error (exit_code:2) — DR-084 retires
@@ -963,12 +972,7 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
                      already holds — that is what `sha`/`kind` are for
                      (mutually exclusive with both; supplying `successor_path`
                      alongside `sha` or `kind` is a usage error, since it is
-                     ambiguous which sha wins). Distinct from `exclude`
-                     (which drops paths from the live-children guard's live-
-                     child scan — a different concept; passing the same path
-                     to both `exclude` and `successor_path` is fine and
-                     expected, since the successor is usually excluded from
-                     its own predecessor's guard scan too).
+                     ambiguous which sha wins).
 
                      Resolution: `git log --format=%H -n1 -- <successor_path>`
                      against this call's worktree (the same primitive
@@ -1068,7 +1072,6 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
 
     handoff_path_raw: str = (params.get("handoff_path") or "").strip()
     mode: str = (params.get("mode") or "chain").strip()
-    exclude: List[str] = params.get("exclude") or []
     continued_into: str = (params.get("continued_into") or "").strip()
     stamp_sha: Optional[str] = params.get("sha") or None
     stamp_force: bool = bool(params.get("force", False))
@@ -1578,95 +1581,46 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             }
 
     # ------------------------------------------------------------------
-    # Live-children guard — UNCONDITIONAL (all modes, no flag), and governs
-    # ONLY the archival move from here on (see the supersede block directly
-    # above — the status flip is no longer subject to this guard). Tri-state:
-    # exit 1 = safe-to-archive -> proceed; exit 0 OR exit 2 = DO-NOT-move.
+    # The live-children guard that stood here is DELETED (2026-08-28).
     #
-    # Succession-child exemption (C3, docs/plans/2026-08-18-supersede-stamps-
-    # and-archives-atomically.md, AC1/AC9 — THE PRIMARY DEFECT fix): for
-    # mode="supersede" ONLY, the guard is called with
-    # edge_kinds={"forked_from"} instead of its default (all three lineage
-    # kinds). The successor this call just named via continued_into is a
-    # SUCCESSION child (a `predecessor`/`additional_predecessors` edge) — its
-    # existence is the entire justification for archiving the predecessor,
-    # not a reason to retain it, and treating it as a live child made this
-    # guard retain on essentially every real supersede call (see the module
-    # docstring's § Status-flip-precedes-guard fix for the incident this
-    # narrowly stops short of fully fixing). A live `forked_from` child (a
-    # spinoff) still retains — dropping it would strand that spinoff's own
-    # origin pointer (DR-224, AC4) — so the exemption is narrow, not
-    # wholesale: archive despite a SUCCESSION child, never an arbitrary one.
-    # Every other mode (chain, stamp_shipped, stamp_only) keeps the full
-    # default edge_kinds — this exemption is scoped to the supersede write
-    # path the plan's Problem section names, not a general loosening of the
-    # guard. This is the SAME edge_kinds={"forked_from"} shape C4 applies at
-    # `archival.reverse_membership`'s own Check-3 call site — the two guards
-    # have deliberately different archive-residency semantics and are not
-    # unified, but the succession/fork partition they express is identical
-    # by design; do not diverge on its shape between the two.
+    # PM ruling, in the PM's own words: "has a child means nothing to whether
+    # it should be archived or not... either a baton is used up or it's not."
+    # This site is archival on that ruling's own words, so the ruling reaches
+    # it; the scope test is the ruling's text, not its evident spirit, which
+    # is also why `handoff_close_origin_stub._try_close` is NOT touched (a
+    # different predicate, stamping in place with no git mv).
+    #
+    # What used to be here: a tri-state guard retaining on exit 0 (live
+    # children) and exit 2 (indeterminate, fail-closed), with a narrow
+    # exemption passing edge_kinds={"forked_from"} for mode="supersede" so a
+    # SUCCESSION child stopped retaining its own predecessor (that half was
+    # correctly sourced -- 2026-08-18-supersede-stamps-and-archives-
+    # atomically.md AC1/AC9 -- and the ruling now generalises it to every
+    # mode).
+    #
+    # The half that kept a live `forked_from` child (a spinoff) blocking was
+    # cited to "DR-224, AC4". THAT CITATION DOES NOT RESOLVE: DR-224 contains
+    # no AC4, and its actual contract runs the OTHER way -- has_live_children
+    # is a succession predicate whose exit 0 means SUPERSEDE, and it states
+    # that "an archived successor still counts" because succession is a
+    # historical fact. The stranding rationale existed only as three
+    # restatements of each other (this comment, a test docstring, and dag.py's
+    # ARCHIVAL_EDGE_KINDS block) -- n=1 wearing n=3.
+    #
+    # The citation was killed with the record; the guard was killed with a
+    # MEASUREMENT, because a guard whose stated reason is false may still be
+    # load-bearing for an unstated one. Probe: seed a spinoff whose
+    # forked_from names a predecessor, archive the predecessor exactly as this
+    # path does, ask dag.resolve_target. It resolves -- before archival to
+    # state/handoffs/, after archival to archive/handoffs/. It would: C1/C2 of
+    # 2fa01ffa9, the SAME commit that added this retain, exist precisely to
+    # make archived ancestors resolvable. The control was written against the
+    # pre-fix world by someone holding the fix.
+    #
+    # Do not re-add a children ground here without (a) a ruling reversing the
+    # one above and (b) a measurement showing something actually breaks. The
+    # live-HOLDER retain above is a different ground and is untouched.
     # ------------------------------------------------------------------
-    guard_edge_kinds = {"forked_from"} if mode == "supersede" else None
-    guard_result = await _handoff_has_live_children(
-        {"candidate": str(contained), "exclude": exclude, "edge_kinds": guard_edge_kinds},
-        repo_root,
-    )
-    guard_exit = guard_result.get("exit_code")
-
-    if guard_exit != 1:
-        if guard_exit == 0:
-            retain_kind = "live-parent"
-            retain_reason = (
-                "predecessor retained — still a live merge-parent of another "
-                "active handoff"
-            )
-            _LOG.info("handoff.archive_transition: %s (%s)", retain_reason, rel_id)
-        else:
-            retain_kind = "indeterminate"
-            retain_reason = (
-                f"guard indeterminate (exit_code {guard_exit}) — fail-closed; "
-                "predecessor retained to avoid data loss"
-            )
-            warnings.append(
-                "retained because guard could not determine liveness "
-                "(degraded state) — NOT a deliberate retain"
-            )
-            _LOG.warning("handoff.archive_transition: %s (%s)", retain_reason, rel_id)
-        # `superseded` reflects the mutation applied ABOVE, before this guard
-        # ran — a retained (not-yet-archived) supersede call still reports
-        # superseded:True when the status flip landed. This is the load-
-        # bearing change: retention now describes ONLY the archival move,
-        # never the status flip. C2: that flip must never be left
-        # uncommitted on a retain (AC5) — commit it now, scoped to this
-        # exact path, same as the holder-live retain ground above.
-        flip_status = None
-        if superseded:
-            flip_status = await asyncio.to_thread(
-                _commit_retained_supersede_flip,
-                worktree,
-                rel_id,
-                # Review: code-reviewer (P3, Finding 1) — plain subscript, see
-                # the identical annotation at the holder-live call site above.
-                supersede_res["written_text"],
-                warnings,
-            )
-        return {
-            "exit_code": 0,
-            "mode": mode,
-            "stamped": stamped,
-            "superseded": superseded,
-            "retained": True,
-            "retain_reason": retain_reason,
-            "retain_kind": retain_kind,
-            "moved": False,
-            "warnings": warnings,
-            "error": None,
-            "message": (
-                f"superseded {rel_id}; {retain_reason} ({flip_status})"
-                if superseded
-                else retain_reason
-            ),
-        }
 
     # ------------------------------------------------------------------
     # stamp_only: guard has cleared — stamp in place, NO git mv (async sweep

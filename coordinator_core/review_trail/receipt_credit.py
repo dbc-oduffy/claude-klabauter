@@ -84,7 +84,33 @@ brightline. `parse_frontmatter` (29.1ms to import) is imported lazily inside
 the lookup rather than at module scope, so a caller whose commits are all
 already credited by the store pays none of it.
 
+THE UNIT IS WEAKER THAN THE CRITERION IT SERVES, and this is a chosen limit
+rather than an oversight. Ruled by claude-klabauter-ba 2026-08-28, who owns the
+merge gate this feeds: land it, and write the gap down where the next reader
+will hit it.
+
+A receipt certifies a SESSION. The merge gate's own prime exit criterion asks
+for "a review record NAMING IT" — a commit. A session receipt names no commit.
+The ordering rule above closes the forward half of that gap (a review cannot
+have read a commit that did not yet exist) and leaves the backward half open:
+because credit requires only `commit_date <= stamped_at`, ONE receipt late in
+a session credits EVERY earlier commit in that session, however many there
+are and whatever they touched. Nothing here bounds that fan-out.
+
+So this reader answers "was this session reviewed, before or at the moment
+this commit existed?" and is being used to answer "was this commit reviewed?".
+Those coincide for a session that was reviewed once at its end with a handful
+of commits behind it, and diverge as the commit count between receipts grows.
+It is accepted as an interim because the alternative in place was a store
+that credited nothing at all, and moving from "refuses everything" to
+"discriminates" forecloses none of the eventual fix. It is NOT the end state.
+Closing it needs a receipt that carries a range — which is a change to what
+`provision_report._receipt_block` stamps, not a change to this reader.
+
 Negative-spec:
+    - Does NOT certify a commit; it certifies the session that authored one.
+      See the paragraph above for the backward fan-out this leaves open. Do
+      not read a credit from this module as "a reviewer read this commit".
     - Does NOT write anything. No store, no fold, no sidecar mutation. This
       is a read-side credit source; `reviewed_set.py` remains the only
       writer of the resident store, and nothing here folds into it.
@@ -254,9 +280,11 @@ def receipt_credited_shas(
         if not stamps:
             continue
 
-        # Newest stamp first: the most recent review is the one most likely
-        # to postdate the commit, so this short-circuits on the first check
-        # in the common case.
+        # `stamps` is sorted, so `stamps[-1]` is the newest receipt and the
+        # only one worth testing: "some receipt postdates this commit" is
+        # true exactly when the NEWEST one does. Not an early exit from a
+        # scan — there is no scan, and reordering `stamps` would not change
+        # the answer.
         if committed <= stamps[-1]:
             credited.add(sha)
 

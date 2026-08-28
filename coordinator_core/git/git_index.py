@@ -63,6 +63,7 @@ import struct
 from pathlib import Path
 from typing import Collection, Dict, NamedTuple, Optional, Sequence, Union
 
+from coordinator_core.git.git_objects import _retry_transient_read
 from coordinator_core.git.git_dir import resolve_git_dir
 from coordinator_core.git.git_state import head_blobs
 from coordinator_core.git.git_state import read_index as _read_full_index
@@ -214,14 +215,31 @@ def parse_index_identity(
     gitdir = resolve_git_dir(repo)
     index_path = gitdir / "index"
 
-    try:
-        raw = index_path.read_bytes()
-    except FileNotFoundError:
+    raw = _read_index_bytes_with_retry(index_path)
+    if raw is None:
         return {}
-    except OSError as exc:
-        raise IndexParseError(f"could not read {index_path}: {exc}") from exc
 
     return _parse_index_bytes(raw, index_path=index_path, wanted=wanted)
+
+
+def _read_index_bytes_with_retry(index_path: Path) -> Optional[bytes]:
+    """`.git/index` bytes, `None` when the index genuinely does not exist.
+
+    Delegates to `git_objects._retry_transient_read` -- ONE ladder for every
+    reader on this surface. A per-module copy is what left `git_state`'s
+    reader bare while this one was covered.
+
+    Before the retry, a single transient `OSError` became `IndexParseError`,
+    and `IndexParseError` is what `diverging_paths` collapses to `[]` -- so a
+    momentary read failure DISABLED the staged-content guard rather than
+    pausing it.
+    """
+    try:
+        return _retry_transient_read(index_path.read_bytes)
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        raise IndexParseError(f"could not read {index_path}: {exc}") from exc
 
 
 def _parse_index_bytes(

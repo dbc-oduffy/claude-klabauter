@@ -204,16 +204,61 @@ _RESOLVE_CLAUDE_KLABAUTER_DIR = os.path.join(_REPO_ROOT, "coordinator", "lib", "
 _DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
 
 
+_BOOTSTRAP_DONE = False
+
+_BOOTSTRAPPED_NAMES = ("_resolve_claude_klabauter",)
+
+
 def _ensure_repo_root_on_path() -> None:
     """Per-call sys.path setup for this file's own coordinator_core /
     _resolve_claude_klabauter / cli_shared imports -- called from each function that
     needs one of them, never at module scope (a per-call insert still
     mutates the sys.path ~50 concurrent sessions share, only later than a
-    module-scope insert would)."""
+    module-scope insert would). Also binds `_resolve_claude_klabauter` as a module
+    global -- `cmd_mis_channelled_box` reads it as a bare global (its own
+    `import _resolve_claude_klabauter` used to make it function-local only), and
+    `test_mis_channelled_box_probe.py` monkeypatches `_mod._resolve_claude_klabauter`
+    before calling the subcommand."""
+    global _BOOTSTRAP_DONE
     if _REPO_ROOT not in sys.path:
         sys.path.insert(0, _REPO_ROOT)
     if _RESOLVE_CLAUDE_KLABAUTER_DIR not in sys.path:
         sys.path.insert(0, _RESOLVE_CLAUDE_KLABAUTER_DIR)
+    if _BOOTSTRAP_DONE:
+        return
+    global _resolve_claude_klabauter
+    import _resolve_claude_klabauter
+    _BOOTSTRAP_DONE = True
+
+
+def __getattr__(name: str):
+    """PEP 562 hook so a caller reaching for `_resolve_claude_klabauter` before any
+    subcommand has run -- a test monkeypatching `_mod._resolve_claude_klabauter` --
+    triggers `_ensure_repo_root_on_path()` lazily instead of finding the
+    name absent.
+
+    NEGATIVE SPEC -- the forced re-run is not belt-and-braces. The bootstrap
+    short-circuits on `_BOOTSTRAP_DONE`, so a name that leaves `__dict__`
+    AFTER the bootstrap has run is never rebound by a plain call.
+    `mock.patch.object` does exactly that: it reads the name through this
+    hook (so the value is not in `__dict__` at enter), sets its mock, and on
+    exit `delattr`s rather than restoring -- then probes `hasattr`, which
+    lands here with the flag already set. Without the reset that probe
+    raises KeyError instead of returning the name.
+    """
+    if name in _BOOTSTRAPPED_NAMES:
+        _ensure_repo_root_on_path()
+        if name not in globals():
+            global _BOOTSTRAP_DONE
+            _BOOTSTRAP_DONE = False
+            _ensure_repo_root_on_path()
+        try:
+            return globals()[name]
+        except KeyError:
+            raise AttributeError(
+                f"module {__name__!r} has no attribute {name!r}"
+            ) from None
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 _WORKING_REPO_REGISTRY_KEY = "engine.working_repos.claude_klabauter"
 _SETUP_PY_PATH = os.path.join(_REPO_ROOT, "scripts", "setup.py")
@@ -406,7 +451,6 @@ def cmd_mis_channelled_box(argv: list[str]) -> int:
     del argv  # no flags accepted
     _ensure_repo_root_on_path()
     import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
-    import _resolve_claude_klabauter
     from cli_shared import resolve_python
 
     try:

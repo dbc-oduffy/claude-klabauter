@@ -2079,7 +2079,7 @@ class TestShipHandoff:
         assert text_after_second == text_after_first
         assert "deployment_state: shipped" in text_after_second
 
-    def test_live_children_retention_is_graceful_and_leaves_file_in_place(self, tmp_path):
+    def test_a_live_child_no_longer_retains_and_the_archive_proceeds(self, tmp_path):
         repo = tmp_path / "repo"
         _init_repo(repo)
         hp = _seed_handoff(
@@ -2092,12 +2092,20 @@ class TestShipHandoff:
         _seed_handoff_with_predecessor(repo, "ship4-child.md", "ship4.md")
 
         rc = arstamp.cs_ship_handoff(str(hp))
+        # PM ruling 2026-08-28: having a child says nothing about whether a
+        # baton should be archived. This test asserted the opposite (no flip,
+        # no stamp, file left in place) until the live-children guard was
+        # deleted; kept and inverted as the pin for the new behaviour.
         assert rc == 0
+        # `cs_ship_handoff` runs mode=stamp_only, which by contract stamps in
+        # place and NEVER moves the file — a later sweep archives it. So the
+        # file legitimately still exists; what changed is that the stamp now
+        # HAPPENS. Previously the guard ran before the stamp_only mutation and
+        # a live child suppressed the flip and the stamp entirely.
+        assert hp.exists(), "stamp_only never moves the file; that is not the guard"
         text = hp.read_text(encoding="utf-8")
-        # Guard runs BEFORE the stamp_only mutation — no flip, no stamp.
-        assert "deployment_state: in_flight" in text
-        assert "shipped_in:" not in text
-        assert hp.exists()
+        assert "deployment_state: shipped" in text
+        assert "shipped_in:" in text
 
     def test_explicit_sha_stamps_that_sha_without_resolving(self, tmp_path):
         """A caller-supplied sha is stamped verbatim — the scope-path git log
@@ -2250,7 +2258,7 @@ class TestChainArchiveHandoff:
         # Chain mode never stamps — the pre-seeded value is untouched.
         assert "shipped_in: 'abcdef12'" in text or "shipped_in: abcdef12" in text
 
-    def test_live_children_retention_is_graceful_and_leaves_file_in_place(self, tmp_path):
+    def test_a_live_child_no_longer_retains_and_the_archive_proceeds(self, tmp_path):
         repo = tmp_path / "repo"
         _init_repo(repo)
         hp = _seed_handoff(
@@ -2260,38 +2268,12 @@ class TestChainArchiveHandoff:
         _seed_handoff_with_predecessor(repo, "chain2-child.md", "chain2.md")
 
         rc = arstamp.cs_chain_archive_handoff(str(hp))
+        # PM ruling 2026-08-28: having a child says nothing about whether a
+        # baton should be archived. This test asserted the opposite until the
+        # live-children guard was deleted; it is kept, inverted, as the pin.
         assert rc == 0
-        assert hp.exists()
-        assert not (repo / "archive" / "handoffs").exists() or not any(
-            (repo / "archive" / "handoffs").rglob("chain2.md")
-        )
-
-    def test_live_children_retention_prints_reason_to_stderr(self, tmp_path):
-        """The guard-retained outcome is a legitimate exit_code:0 non-move —
-        but was previously silent on this path (see
-        test_live_children_retention_is_graceful_and_leaves_file_in_place
-        above), indistinguishable from a successful archive to the caller.
-        Must now print the op's own retain_reason."""
-        repo = tmp_path / "repo"
-        _init_repo(repo)
-        hp = _seed_handoff(
-            repo, "chain2b.md", "claimed", "shipped",
-            extra="scope:\n  - state/handoffs/chain2b.md\n",
-        )
-        _seed_handoff_with_predecessor(repo, "chain2b-child.md", "chain2b.md")
-
-        import io
-        import contextlib
-
-        buf = io.StringIO()
-        with contextlib.redirect_stderr(buf):
-            rc = arstamp.cs_chain_archive_handoff(str(hp))
-        assert rc == 0
-        assert hp.exists()
-        out = buf.getvalue()
-        assert "cs_chain_archive_handoff:" in out
-        assert "retain_reason=" in out
-        assert "live" in out
+        assert not hp.exists(), "a live child must no longer retain the record"
+        assert any((repo / "archive" / "handoffs").rglob(hp.name))
 
     def test_exclude_lets_guard_ignore_the_named_child_and_archive_proceeds(self, tmp_path):
         repo = tmp_path / "repo"
@@ -2361,28 +2343,6 @@ class TestChainArchiveHandoff:
         assert hp.exists(), "the source must still be present — the move did not land"
         assert "did not land" in buf.getvalue()
 
-    def test_guard_retention_still_returns_zero_after_ac2_fix(self, tmp_path):
-        """The AC2 fix (independent on-disk re-verification) must NEVER
-        downgrade a legitimate guard-retention to non-zero — this is the
-        regression guard against the noisy-success bug a naive "any non-move
-        is a failure" patch would introduce. Companion to
-        test_forced_commit_failure_returns_nonzero_not_retained_zero above:
-        that test proves an ATTEMPTED-and-unlanded move fails; this one
-        proves a DELIBERATE retain (live children, no move attempted at all)
-        still succeeds."""
-        repo = tmp_path / "repo"
-        _init_repo(repo)
-        hp = _seed_handoff(
-            repo, "chain-retain-still-zero.md", "claimed", "shipped",
-            extra="scope:\n  - state/handoffs/chain-retain-still-zero.md\n",
-        )
-        _seed_handoff_with_predecessor(repo, "chain-retain-still-zero-child.md", "chain-retain-still-zero.md")
-
-        rc = arstamp.cs_chain_archive_handoff(str(hp))
-        assert rc == 0
-        assert hp.exists()
-
-
 class TestSupersedeArchiveHandoff:
     def test_stamps_continued_into_and_moves_file(self, tmp_path):
         repo = tmp_path / "repo"
@@ -2423,7 +2383,7 @@ class TestSupersedeArchiveHandoff:
         assert "deployment_state: in_flight" in text
         assert hp.exists()
 
-    def test_live_children_retention_is_graceful_and_leaves_file_in_place(self, tmp_path):
+    def test_a_live_child_no_longer_retains_and_the_archive_proceeds(self, tmp_path):
         repo = tmp_path / "repo"
         _init_repo(repo)
         hp = _seed_handoff(
@@ -2433,48 +2393,23 @@ class TestSupersedeArchiveHandoff:
         _seed_handoff_with_predecessor(repo, "sup3-child.md", "sup3.md", edge_field="forked_from")
 
         rc = arstamp.cs_supersede_archive_handoff(str(hp), "sup3-successor.md")
+        # THE SPINOFF CASE, and it is the one that mattered. The child here is
+        # seeded with `forked_from`, which was the LAST edge kind still
+        # blocking archival after the succession exemption. Its stated reason
+        # -- that archiving would strand the spinoff's origin pointer, cited to
+        # "DR-224, AC4" -- does not survive: DR-224 contains no AC4, its actual
+        # contract makes has-children mean SUPERSEDE, and a direct probe shows
+        # `dag.resolve_target` resolves the pointer after archival exactly as
+        # before it (state/handoffs/ -> archive/handoffs/). Deleted on the PM
+        # ruling; this test is kept and inverted as the pin.
         assert rc == 0
-        assert hp.exists()
-        text = hp.read_text(encoding="utf-8")
-        # Status-flip-precedes-guard fix (2026-07-27, handoff_archive_transition
-        # module docstring § Status-flip-precedes-guard fix): the supersede
-        # mutation is UNCONDITIONAL and lands before the live-children guard —
-        # a live child (here, the successor itself) governs ONLY the archival
-        # git-mv, never the status flip. Retention leaves the flip landed.
+        assert not hp.exists(), "a live forked_from child must no longer retain"
+        archived = list((repo / "archive" / "handoffs").rglob("sup3.md"))
+        assert len(archived) == 1
+        text = archived[0].read_text(encoding="utf-8")
+        # The supersede status flip still lands, and now lands archived.
         assert "deployment_state: continued" in text
         assert "continued_into: sup3-successor.md" in text
-
-    def test_live_children_retention_prints_reason_to_stderr(self, tmp_path):
-        """Mirrors TestChainArchiveHandoff's sibling test — the guard-retained
-        outcome on supersede is also a legitimate exit_code:0 non-write, and
-        was previously silent (reproduced live on 2026-07-26: a retained
-        handoff exited 0 with no stdout/stderr and an unchanged frontmatter).
-        Must now print the op's own retain_reason."""
-        repo = tmp_path / "repo"
-        _init_repo(repo)
-        hp = _seed_handoff(
-            repo, "sup3b.md", "claimed", "in_flight",
-            extra="scope:\n  - state/handoffs/sup3b.md\n",
-        )
-        _seed_handoff_with_predecessor(repo, "sup3b-child.md", "sup3b.md", edge_field="forked_from")
-
-        import io
-        import contextlib
-
-        buf = io.StringIO()
-        with contextlib.redirect_stderr(buf):
-            rc = arstamp.cs_supersede_archive_handoff(str(hp), "sup3b-successor.md")
-        assert rc == 0
-        assert hp.exists()
-        text = hp.read_text(encoding="utf-8")
-        # See test_live_children_retention_is_graceful_and_leaves_file_in_place
-        # above — the status flip is unconditional (2026-07-27 fix) and lands
-        # even on a guard-retained (not-yet-archived) call.
-        assert "continued_into: sup3b-successor.md" in text
-        out = buf.getvalue()
-        assert "cs_supersede_archive_handoff:" in out
-        assert "retain_reason=" in out
-        assert "live" in out
 
     def test_exclude_lets_guard_ignore_the_named_child_and_supersede_proceeds(self, tmp_path):
         repo = tmp_path / "repo"

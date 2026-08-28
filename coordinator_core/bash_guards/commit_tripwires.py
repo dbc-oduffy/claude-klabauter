@@ -135,7 +135,27 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from coordinator_core.git.divergence import diverging_paths as _diverging_paths
+from coordinator_core.git.divergence import (
+    DivergenceCheckFailed,
+    diverging_paths as _diverging_paths,
+)
+
+#: Emitted when the divergence read is INDETERMINATE, never when it is clean.
+#: Register (docs/wiki/guard-messaging.md): one fact, once, plus a terse
+#: alternative. It names what could not be established rather than asserting a
+#: divergence that was never measured -- claiming one would be the mirror defect
+#: of the silence it replaces.
+_INDETERMINATE_DIVERGENCE_OFFER = (
+    "OFFER: this `git commit` has a trailing `--` pathspec covering {paths}, and "
+    "whether the STAGED content there differs from the WORKTREE content could NOT "
+    "be determined -- the index was unreadable, usually because a peer holds it. "
+    "This is not a clean result: a trailing pathspec reads the worktree, so if "
+    "those paths are staged the commit discards what you staged (SC-DR-015).\n\n"
+    "Re-run the command -- index contention is transient and the check settles on "
+    "a retry. If it keeps failing, make the worktree at {paths} match only your "
+    "change so staged and worktree agree, and the question stops mattering.\n\n"
+    "{override_note}"
+)
 from coordinator_core.git.run import run_git
 from coordinator_core.bash_guards._command_tokenizer import (
     exceeds_tokenizable_ceiling as _exceeds_tokenizable_ceiling,
@@ -914,7 +934,27 @@ def check_staged_pathspec_divergence(
     if not all_paths:
         return None
 
-    diverging = _diverging_paths(all_paths, cwd)
+    # `fail_loud=True`, NOT the default: this check's answer decides whether the
+    # operator is warned that their staged content is about to be discarded, and
+    # `[]` conflates "no divergence" with "could not tell". The two are not
+    # interchangeable HERE because the condition that makes the read fail --
+    # another session holding `.git/index` -- is the same contention that causes
+    # the discarding this check exists to catch. So the guard went silent exactly
+    # when it was most needed. Measured at `IndexParseError` 2/200 under 12-way
+    # concurrency on one repo, rising with concurrency, on a box specced for
+    # 50-70 sessions.
+    try:
+        diverging = _diverging_paths(all_paths, cwd, fail_loud=True)
+    except DivergenceCheckFailed:
+        # Say so rather than warn about paths we cannot name. This check is an
+        # advisory offer, so an indeterminate read must not become a block --
+        # but it must not become silence either.
+        return _INDETERMINATE_DIVERGENCE_OFFER.format(
+            paths=", ".join(all_paths),
+            override_note=operator_override_note(
+                "COORDINATOR_OVERRIDE_PATHSPEC_DIVERGENCE", payload=payload
+            ),
+        )
 
     if not diverging:
         return None

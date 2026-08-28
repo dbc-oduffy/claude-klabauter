@@ -312,8 +312,7 @@ def _review_dimension_check(
             repo_root_str,
             ((sha, *commit_provenance.get(sha, ("", ""))) for sha in uncovered),
         )
-        if credited:
-            uncovered = [sha for sha in uncovered if sha not in credited]
+        uncovered = [sha for sha in uncovered if sha not in credited]
 
     if uncovered:
         return DimensionResult(

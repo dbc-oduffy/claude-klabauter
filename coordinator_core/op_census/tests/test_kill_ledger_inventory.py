@@ -218,3 +218,64 @@ def test_the_real_ledger_has_no_contested_rows() -> None:
     entries, _ = kli.build(kli.KILL_LEDGER)
     contested = [f"{e.key}: {'; '.join(e.notes)}" for e in entries if e.population == "CONTESTED"]
     assert not contested, contested
+
+
+def test_withdrawn_is_its_own_population_and_the_op_must_survive() -> None:
+    """A nomination retracted with the op left standing is neither a landing
+    nor a rebuild: nothing was cut, so there is no dead predecessor and no
+    replacement. K-040 (`records.history`) is the worked case — nominated on a
+    requirement leg a repo-local consumer census could not establish, because
+    the caller was in another repo.
+
+    Before this population existed the entry matched no rule and fell to
+    CONTESTED, which is this module's own stated defect: a status vocabulary
+    the rules cannot place is the classifier's fault, not the ledger's.
+    """
+    text = _entry(
+        "WITHDRAWN 2026-08-28 — not a chop. The nomination was wrong and the "
+        "surface stays.",
+        title="`records.example_history`",
+    )
+    live = kli.parse_ledger(text)
+    kli.classify(live, live_ops=frozenset({"records.example_history"}), suspended_ops=frozenset())
+    assert live[0].population == "WITHDRAWN"
+
+    # The invariant runs the opposite way to REBUILT's: a withdrawn nomination
+    # asserts the op SURVIVED, so an absent op means something cut it anyway.
+    absent = kli.parse_ledger(text)
+    kli.classify(absent, live_ops=frozenset(), suspended_ops=frozenset())
+    assert absent[0].population == "CONTESTED"
+    assert "something cut it anyway" in " ".join(absent[0].notes)
+
+
+def test_withdrawn_is_not_reachable_by_prose_late_in_a_status() -> None:
+    """The marker is windowed to the status opening. A landed entry whose prose
+    mentions a withdrawn objection must stay LANDED — otherwise the population
+    is reachable by any entry that discusses one."""
+    entries = kli.parse_ledger(
+        _entry(
+            "**LANDED** (`abc1234`) — the objection raised at review was later "
+            "withdrawn, and the cut proceeded.",
+            title="`session.gone_op`",
+        )
+    )
+    kli.classify(entries, live_ops=frozenset(), suspended_ops=frozenset())
+    assert entries[0].population == "LANDED"
+
+
+def test_report_renders_every_population_the_classifier_produced() -> None:
+    """The section order is a preference list, not an allowlist. A population
+    missing from it used to be dropped from the report entirely, so an entry
+    that vanished read exactly like an entry that did not exist."""
+    text = _entry(
+        "WITHDRAWN — the nomination was wrong.", title="`records.example_history`"
+    ) + _entry("**LANDED**", key="K-901", title="`session.gone_op`")
+    entries = kli.parse_ledger(text)
+    kli.classify(
+        entries,
+        live_ops=frozenset({"records.example_history"}),
+        suspended_ops=frozenset(),
+    )
+    report = kli.render(entries, heading_count=len(entries))
+    assert "## WITHDRAWN (1)" in report
+    assert "## LANDED (1)" in report

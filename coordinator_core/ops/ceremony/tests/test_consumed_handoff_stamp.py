@@ -76,6 +76,7 @@ from coordinator_core.ops.ceremony.commit_pipeline import (
     PUSH_STATUS_DECLINED,
 )
 from .fixtures.real_git import make_diverged_path, real_git_repo
+from coordinator_core.op_budget_suspension import OpSuspendedError
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -553,8 +554,6 @@ def test_post_commit_happy_path_stamps_and_ships(repo):
         )
     )
     assert outcome.stamped == ["state/handoffs/2026-07-15_100000_pred.md"]
-    assert outcome.skipped_live_children == []
-    assert outcome.skipped_indeterminate == []
     assert outcome.errors == []
 
     on_disk = repo.read_handoff("state/handoffs/2026-07-15_100000_pred.md")
@@ -563,150 +562,6 @@ def test_post_commit_happy_path_stamps_and_ships(repo):
     # DR-096: the ceremony's post-commit stamp is the canonical ship-commit
     # case -- kind is routed through, not left untagged.
     assert "shipped_in_kind: ship-commit" in on_disk
-
-
-def test_post_commit_retains_on_live_children(monkeypatch, repo):
-    sid = "sess-ship-2"
-    repo.seed_handoff("2026-07-15_100000_pred.md", claimed_by=sid)
-
-    async def _fake_handler(params, repo_root):
-        return {"exit_code": 0, "referenced": True, "children": ["x"]}
-
-    monkeypatch.setattr(
-        m, "get_op_handler", lambda name: _fake_handler if name == "handoff.has_live_children" else None
-    )
-
-    outcome = _run(
-        m.post_commit_stamp_and_ship(
-            repo.root, repo.common_dir, sid, "deadbeef", chain_terminal=True
-        )
-    )
-    assert outcome.stamped == []
-    assert outcome.skipped_live_children == ["state/handoffs/2026-07-15_100000_pred.md"]
-    on_disk = repo.read_handoff("state/handoffs/2026-07-15_100000_pred.md")
-    assert "deployment_state: shipped" not in on_disk
-    assert "shipped_in" not in on_disk
-
-
-def test_post_commit_live_children_check_narrows_edge_kinds_so_a_live_spinoff_does_not_retain(
-    monkeypatch, repo
-):
-    """`_live_children_guard` must not inherit `handoff.has_live_children`'s
-    archival-shaped default edge set. `forked_from` is the spinoff edge — a
-    live spinoff is a niece, not a descendant, and must not retain this WSC
-    tail's writer from stamping/shipping (example-cockpit-repo-em, 2026-08-05,
-    cross-repo/inbox/2026-08-05-example-cockpit-repo-em-wsc-leg-b-counts-spinoffs-
-    as-live-children.md). Asserted on the params actually handed to the op —
-    one call covers both the pre-lock filter and the in-lock recheck, since
-    both route through this same `_live_children_guard`."""
-    sid = "sess-ship-edge-kinds"
-    repo.seed_handoff("2026-07-15_100000_pred.md", claimed_by=sid)
-
-    captured: list[dict] = []
-
-    async def _fake_handler(params, repo_root):
-        captured.append(dict(params))
-        return {"exit_code": 1, "referenced": False}
-
-    monkeypatch.setattr(
-        m, "get_op_handler", lambda name: _fake_handler if name == "handoff.has_live_children" else None
-    )
-
-    outcome = _run(
-        m.post_commit_stamp_and_ship(
-            repo.root, repo.common_dir, sid, "deadbeef", chain_terminal=True
-        )
-    )
-    assert outcome.stamped == ["state/handoffs/2026-07-15_100000_pred.md"]
-    assert captured, "handoff.has_live_children was never dispatched"
-    for params in captured:
-        assert "edge_kinds" in params
-        edge_kinds = {k.strip() for k in params["edge_kinds"].split(",")}
-        assert edge_kinds == {"predecessor", "additional_predecessors"}
-        assert "forked_from" not in edge_kinds
-
-
-def test_post_commit_retains_on_indeterminate_never_keys_off_referenced(monkeypatch, repo):
-    """R4(a): exit_code=2 retains even though `referenced` is entirely ABSENT
-    from the reply (mirrors handoff_children.py's _indeterminate() shape)."""
-    sid = "sess-ship-3"
-    repo.seed_handoff("2026-07-15_100000_pred.md", claimed_by=sid)
-
-    async def _fake_handler(params, repo_root):
-        return {"exit_code": 2, "error": "empty live set"}  # no 'referenced' key
-
-    monkeypatch.setattr(
-        m, "get_op_handler", lambda name: _fake_handler if name == "handoff.has_live_children" else None
-    )
-
-    outcome = _run(
-        m.post_commit_stamp_and_ship(
-            repo.root, repo.common_dir, sid, "deadbeef", chain_terminal=True
-        )
-    )
-    assert outcome.stamped == []
-    assert outcome.skipped_indeterminate == ["state/handoffs/2026-07-15_100000_pred.md"]
-
-
-def test_post_commit_live_children_handler_crash_is_indeterminate_not_batch_crash(monkeypatch, repo):
-    """An UNEXPECTED exception from the `handoff.has_live_children` handler
-    (not a clean exit-code return) must not crash the whole batch: it is
-    caught inside `_live_children_guard` and translated into the same
-    fail-closed exit_code=2 shape an ordinary indeterminate result takes --
-    the candidate is retained (never shipped) and lands in
-    `StampOutcome.skipped_indeterminate`, distinguishable from a genuine
-    exit-2 indeterminate via the `crashed`/`exception_type` reply keys."""
-    sid = "sess-crash-1"
-    hf_rel = "state/handoffs/2026-07-15_100000_pred.md"
-    repo.seed_handoff("2026-07-15_100000_pred.md", claimed_by=sid)
-
-    async def _crashing_handler(params, repo_root):
-        raise RuntimeError("boom: unexpected handler failure")
-
-    monkeypatch.setattr(
-        m, "get_op_handler",
-        lambda name: _crashing_handler if name == "handoff.has_live_children" else None,
-    )
-
-    outcome = _run(
-        m.post_commit_stamp_and_ship(
-            repo.root, repo.common_dir, sid, "deadbeef", chain_terminal=True
-        )
-    )
-
-    assert outcome.stamped == []
-    assert outcome.skipped_indeterminate == [hf_rel]
-    assert outcome.errors == []
-    on_disk = repo.read_handoff(hf_rel)
-    assert "shipped_in" not in on_disk
-    assert "deployment_state: shipped" not in on_disk
-
-
-def test_live_children_guard_crash_is_not_swallowed_bare(repo):
-    """Direct unit check on `_live_children_guard` itself: retain=True,
-    exit_code=2, and the exception detail is carried in the reply so an
-    operator can tell a crashed handler apart from a genuine indeterminate
-    exit code."""
-
-    async def _crashing_handler(params, repo_root):
-        raise ValueError("some unexpected failure")
-
-    async def _call():
-        return await m._live_children_guard(
-            "state/handoffs/whatever.md", repo_root=repo.common_dir
-        )
-
-    orig = m.get_op_handler
-    m.get_op_handler = lambda name: _crashing_handler if name == "handoff.has_live_children" else orig(name)
-    try:
-        retain, reply = _run(_call())
-    finally:
-        m.get_op_handler = orig
-
-    assert retain is True
-    assert reply["exit_code"] == 2
-    assert reply.get("crashed") is True
-    assert reply.get("exception_type") == "ValueError"
 
 
 def test_post_commit_empty_consumed_set_loud_report(repo):
@@ -745,27 +600,6 @@ def test_post_commit_future_dated_rejected(repo, monkeypatch):
     assert outcome.skipped_future_dated == [f"state/handoffs/{far_future_name}"]
     on_disk = repo.read_handoff(f"state/handoffs/{far_future_name}")
     assert "shipped_in" not in on_disk
-
-
-def test_post_commit_live_children_retain_exit_2(repo, monkeypatch):
-    sid = "sess-indet-1"
-    repo.seed_handoff("2026-07-15_100000_pred.md", claimed_by=sid)
-
-    async def _fake_handler(params, repo_root):
-        return {"exit_code": 2, "error": "empty live set"}
-
-    monkeypatch.setattr(
-        m, "get_op_handler",
-        lambda name: _fake_handler if name == "handoff.has_live_children" else None,
-    )
-
-    outcome = _run(
-        m.post_commit_stamp_and_ship(
-            repo.root, repo.common_dir, sid, "deadbeef", chain_terminal=True
-        )
-    )
-    assert outcome.stamped == []
-    assert outcome.skipped_indeterminate == ["state/handoffs/2026-07-15_100000_pred.md"]
 
 
 def test_post_commit_already_shipped_and_archived_is_noop(repo):
@@ -980,80 +814,6 @@ def test_post_commit_archived_shipped_without_sha_still_fails_containment(repo):
 # ---------------------------------------------------------------------------
 
 
-def test_row7_recheck_catches_successor_authored_after_prelock_guard(repo, monkeypatch):
-    """Row 7 regression: the pre-lock guard call (call #1) sees no live
-    children; a successor is "authored" in the gap before the stamp write
-    lands. The in-lock recheck (call #2, inside the stamp's own locked_rmw
-    hold) sees the live child and aborts the write via MutateAbort -- the
-    handoff is NOT shipped, and the skip is reported through
-    StampOutcome.skipped_live_children, the same bucket the pre-lock retain
-    path already uses."""
-    sid = "sess-row7-1"
-    hf_rel = "state/handoffs/2026-07-15_100000_pred.md"
-    repo.seed_handoff("2026-07-15_100000_pred.md", claimed_by=sid)
-
-    calls = {"n": 0}
-
-    async def _fake_handler(params, repo_root):
-        calls["n"] += 1
-        if calls["n"] == 1:
-            return {"exit_code": 1, "referenced": False, "children": []}
-        return {"exit_code": 0, "referenced": True, "children": ["successor.md"]}
-
-    monkeypatch.setattr(
-        m, "get_op_handler",
-        lambda name: _fake_handler if name == "handoff.has_live_children" else None,
-    )
-
-    outcome = _run(
-        m.post_commit_stamp_and_ship(
-            repo.root, repo.common_dir, sid, "deadbeef", chain_terminal=True
-        )
-    )
-
-    # Exactly one live-children implementation, called twice.
-    assert calls["n"] == 2
-    assert outcome.stamped == []
-    assert outcome.skipped_live_children == [hf_rel]
-    on_disk = repo.read_handoff(hf_rel)
-    assert "shipped_in" not in on_disk
-    assert "deployment_state: shipped" not in on_disk
-
-
-def test_row7_recheck_indeterminate_still_fails_closed(repo, monkeypatch):
-    """Row 7: fail-closed is preserved on the SECOND (in-lock) call too --
-    an exit_code=2 (indeterminate) on the recheck retains, never keying off
-    `referenced` (deliberately absent on exit_code=2)."""
-    sid = "sess-row7-2"
-    hf_rel = "state/handoffs/2026-07-15_100000_pred.md"
-    repo.seed_handoff("2026-07-15_100000_pred.md", claimed_by=sid)
-
-    calls = {"n": 0}
-
-    async def _fake_handler(params, repo_root):
-        calls["n"] += 1
-        if calls["n"] == 1:
-            return {"exit_code": 1, "referenced": False, "children": []}
-        return {"exit_code": 2, "error": "empty live set"}  # no 'referenced' key
-
-    monkeypatch.setattr(
-        m, "get_op_handler",
-        lambda name: _fake_handler if name == "handoff.has_live_children" else None,
-    )
-
-    outcome = _run(
-        m.post_commit_stamp_and_ship(
-            repo.root, repo.common_dir, sid, "deadbeef", chain_terminal=True
-        )
-    )
-
-    assert calls["n"] == 2
-    assert outcome.stamped == []
-    assert outcome.skipped_indeterminate == [hf_rel]
-    on_disk = repo.read_handoff(hf_rel)
-    assert "shipped_in" not in on_disk
-
-
 def test_row6_peer_write_between_stamp_and_ship_aborts_not_lost(repo, monkeypatch):
     """Row 6 regression: a peer session writes this handoff in the window
     between the stamp write's lock release and the ship attempt's lock
@@ -1069,7 +829,7 @@ def test_row6_peer_write_between_stamp_and_ship_aborts_not_lost(repo, monkeypatc
     hf_rel = "state/handoffs/2026-07-15_100000_pred.md"
     repo.seed_handoff("2026-07-15_100000_pred.md", claimed_by=sid)
 
-    real_stamp_fn = m._stamp_with_live_children_recheck
+    real_stamp_fn = m._stamp_locked
 
     async def _stamp_then_peer_write(*args, **kwargs):
         attempt = await real_stamp_fn(*args, **kwargs)
@@ -1083,7 +843,7 @@ def test_row6_peer_write_between_stamp_and_ship_aborts_not_lost(repo, monkeypatc
         )
         return attempt
 
-    monkeypatch.setattr(m, "_stamp_with_live_children_recheck", _stamp_then_peer_write)
+    monkeypatch.setattr(m, "_stamp_locked", _stamp_then_peer_write)
 
     outcome = _run(
         m.post_commit_stamp_and_ship(

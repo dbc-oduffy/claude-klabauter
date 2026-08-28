@@ -36,6 +36,7 @@ import io
 import json
 import os
 import sys
+import types
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
@@ -81,17 +82,45 @@ class QueryRecordHistoryTests(unittest.TestCase):
             return self._route_result
 
         self._route_result: dict = {"records": []}
-        self._orig_route = qrh.cc_invoke.route
-        self._orig_resolve_repo_root = qrh._resolve_repo_root
+
+        # `main()` binds everything through FUNCTION-LOCAL imports:
+        # `import cc_invoke`, and `from records_query import
+        # _resolve_repo_root`. Neither name is ever an attribute of the CLI
+        # module, so `qrh.cc_invoke` / `qrh._resolve_repo_root` raise
+        # AttributeError -- which is how all ten tests in this file died in
+        # setUp, before reaching an assertion, from the import refactor until
+        # 2026-08-28. A function-local import resolves through sys.modules at
+        # call time, so that is where a stub has to be installed.
+        cc_invoke_stub = types.ModuleType("cc_invoke")
+        cc_invoke_stub.route = _fake_route
+        cc_invoke_stub.require_dispatch_engine_on_path = lambda: None
+
+        records_query_stub = types.ModuleType("records_query")
+        records_query_stub._resolve_repo_root = lambda: "/fake/repo/root"
+
+        self._stubbed = {
+            "cc_invoke": cc_invoke_stub,
+            "records_query": records_query_stub,
+            "lib": types.ModuleType("lib"),
+            "coordinator_core": types.ModuleType("coordinator_core"),
+        }
+        self._prev_modules = {
+            name: sys.modules.get(name) for name in self._stubbed
+        }
+        for name, module in self._stubbed.items():
+            sys.modules[name] = module
+
+        # Genuinely a module-level function, so this one is patched in place.
         self._orig_hint = qrh._supported_types_hint
-        qrh.cc_invoke.route = _fake_route
-        qrh._resolve_repo_root = lambda: "/fake/repo/root"
         qrh._supported_types_hint = lambda: "decision, sizing-object"
         self.addCleanup(self._restore)
 
     def _restore(self) -> None:
-        qrh.cc_invoke.route = self._orig_route
-        qrh._resolve_repo_root = self._orig_resolve_repo_root
+        for name, prev in self._prev_modules.items():
+            if prev is None:
+                sys.modules.pop(name, None)
+            else:
+                sys.modules[name] = prev
         qrh._supported_types_hint = self._orig_hint
 
     def _run(self, argv: list[str]) -> tuple[int, str, str]:
@@ -132,14 +161,45 @@ class QueryRecordHistoryTests(unittest.TestCase):
         self.assertEqual(parsed, _SAMPLE_RECORDS)
         self.assertIsInstance(parsed, list)
 
-    def test_op_failure_returns_exit_2_and_prints_stderr(self) -> None:
+    def test_unsupported_type_is_a_usage_error_exit_2(self) -> None:
+        """An unknown `--type` is a permanent operator error: fix the call.
+
+        Renamed from `test_op_failure_returns_exit_2...`, which described the
+        wrong arm -- `bogus` is absent from the supported-types hint, so this
+        was always the USAGE path and 2 was always right for it. The op-failure
+        arm is the test below, and it did not exist.
+        """
         def _raising_route(op, params, repo_root, legacy_fn):
             raise RuntimeError("unsupported record type 'bogus'; supported: decision, ...")
 
-        qrh.cc_invoke.route = _raising_route
+        self._stubbed["cc_invoke"].route = _raising_route
         code, out, err = self._run(["--type", "bogus", "--root", "/repo"])
         self.assertEqual(code, 2)
         self.assertIn("unsupported record type", err)
+        self.assertIn("is not a supported type", err)
+        self.assertEqual(out, "")
+
+    def test_op_failure_on_a_supported_type_is_exit_1_not_2(self) -> None:
+        """A SUPPORTED type whose invocation fails is an op failure, which may
+        be transient -- exit 1, distinct from the usage error above.
+
+        Both arms returned 2 until 2026-08-28. Example-cockpit-repo's cache
+        classifies an unknown type as `not-configured` and an op failure as
+        `upstream`, and a single 2 forced it to parse stderr prose to tell them
+        apart (cross-repo/inbox/2026-08-20-example-cockpit-repo-em-record-history-
+        four-consumer-asks.md, ask 3). This is the test that would have caught
+        a regression of that fix, and there was none.
+        """
+        def _raising_route(op, params, repo_root, legacy_fn):
+            raise RuntimeError("transport blew up mid-call")
+
+        self._stubbed["cc_invoke"].route = _raising_route
+        code, out, err = self._run(["--type", "decision", "--root", "/repo"])
+        self.assertEqual(code, 1)
+        self.assertIn("invocation failed", err)
+        # The usage-only hint must NOT appear: `decision` IS supported, and
+        # naming it as unsupported is how the two arms got conflated.
+        self.assertNotIn("is not a supported type", err)
         self.assertEqual(out, "")
 
     def test_limit_slices_records_client_side(self) -> None:

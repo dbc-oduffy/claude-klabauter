@@ -3171,6 +3171,61 @@ def compute_aging_verdict(handoff_path: Path) -> str:
     return "stale" if stdout_line else "ok"
 
 
+def _claim_holder_live_or_elsewhere(
+    claims_dir: Path, cwd: str, holder_sid: Optional[str]
+) -> bool:
+    """`claim_holder_live`, plus the cross-repo holder it structurally cannot
+    see (bug-backlog 2026-08-13-session-live-s-repo-scoping-makes-a-live-...).
+
+    `claim_holder_live` resolves the claim dir's `session_id` and hands it to
+    `session_live`, which is REPO-SCOPED — so a holder the harness registry
+    confirms is live with its cwd in a sibling repo answers not-live, the claim
+    reads takeable, and `compute_claim_grant` proceeds to hand it over. That is
+    the same defect `compute_liveness_signal` carried, on the MUTATING path
+    rather than the advisory one: there the cost was a misleading brief, here it
+    is a live peer's claim taken out from under them.
+
+    EXTENDED AT THE CALLER, NOT IN THE PRIMITIVE, and deliberately so.
+    `claim_holder_live`'s own docstring declares it "THE single liveness
+    decision for the claim layer's stale/takeable/reapable question, shared by
+    claim takeover, the reaper, and the memo sweep so all provably agree" —
+    widening it would silently re-answer the reaper and the memo sweep, which
+    were never part of this finding and whose failure directions have not been
+    measured. Pickup's two holder reads are the sites the finding names.
+
+    Strictly additive, same shape as `compute_liveness_signal`'s arm: the
+    primitive is consulted FIRST and unchanged, and only its not-live answer
+    reaches the `harness-registry-elsewhere` basis. Gated on that basis string
+    rather than any truthy verdict, because `session_live` and
+    `_verdict_for_sdir` disagree in-repo by design (the
+    `COORDINATOR_SESSION_LAYER1_DISABLE` lever) and accepting slot 0 alone would
+    re-answer the in-repo case too.
+
+    A registry record is a CANDIDATE, not proof of reachability. That asymmetry
+    is the right way round here: treating a candidate-live holder as live costs
+    a deferred takeover the holder can release, while treating a live holder as
+    dead costs them their claim mid-work.
+    """
+    try:
+        if _liveness.claim_holder_live(str(claims_dir), cwd):
+            return True
+    except (OSError, ValueError):
+        pass
+    if not holder_sid:
+        return False
+    try:
+        verdict = _liveness.session_verdict(holder_sid, cwd=cwd)
+    except (OSError, ValueError):
+        verdict = None
+    except Exception:
+        verdict = None
+    return bool(
+        verdict is not None
+        and verdict[0]
+        and verdict[1] == "harness-registry-elsewhere"
+    )
+
+
 def compute_claim_gate(repo_root: Path, class_: str, basename: str) -> dict[str, Any]:
     """Pre-mutation gates 1+2 (Step 5) — read-only dual-read of the claim dir.
 
@@ -3189,10 +3244,9 @@ def compute_claim_gate(repo_root: Path, class_: str, basename: str) -> dict[str,
         # producer per the contract's illustrative example (DoE-claude
         # commit c12825a5).
         return {"fetch_state": "not_performed", "holder": None}
-    try:
-        holder_live = _liveness.claim_holder_live(str(claims_dir), str(repo_root))
-    except (OSError, ValueError):
-        holder_live = False
+    # `holder_sid` is resolved BEFORE the liveness read now — the cross-repo
+    # arm needs the id to consult the registry, and reading it after would make
+    # the elsewhere check unreachable on the one path it exists for.
     holder_sid = None
     sid_file = claims_dir / "session_id"
     if sid_file.is_file():
@@ -3200,6 +3254,9 @@ def compute_claim_gate(repo_root: Path, class_: str, basename: str) -> dict[str,
             holder_sid = sid_file.read_text(encoding="utf-8").strip() or None
         except OSError:
             holder_sid = None
+    holder_live = _claim_holder_live_or_elsewhere(
+        claims_dir, str(repo_root), holder_sid
+    )
     return {
         "fetch_state": "not_performed",
         "holder": holder_sid if holder_live else None,
@@ -3454,10 +3511,7 @@ def compute_claim_grant(
             "unclean_prior_holder": False,
         }
 
-    try:
-        holder_live = _liveness.claim_holder_live(str(claims_dir), cwd_str)
-    except (OSError, ValueError):
-        holder_live = False
+    holder_live = _claim_holder_live_or_elsewhere(claims_dir, cwd_str, holder_sid)
 
     if holder_live:
         related_sessions = _lineage_related_sessions(repo_root, fm)
@@ -4112,11 +4166,58 @@ def compute_liveness_signal(
                 break
 
     if stamped_sid and stamped_sid not in related_sessions:
+        # Cross-repo holder (bug-backlog 2026-08-13-session-live-s-repo-
+        # scoping-makes-a-live-...): `session_live` is REPO-SCOPED — it
+        # resolves the session dir under THIS repo and returns False for a
+        # holder the harness registry positively confirms is live with its
+        # cwd in a sibling repo. Read through this reaper that rendered as
+        # "no live holder", so `j1` never fired and the brief nudged the EM
+        # to take over a claim whose holder was alive and reachable. The
+        # failure direction is takeover-bait, which is why it is fixed here
+        # rather than left to the boolean.
+        #
+        # Caller-side migration, deliberately NOT a widening of
+        # `session_live`'s bool: that boolean has live callers on the commit
+        # path which mean the repo-scoped question, and it also honours the
+        # `COORDINATOR_SESSION_LAYER1_DISABLE` rollback lever that
+        # `_verdict_for_sdir` does not. `session_verdict` supplies the third
+        # basis this check actually needs — `harness-registry-elsewhere`,
+        # a registry-confirmed live session working in another repo — while
+        # its in-repo arms stay the same derivation as before.
+        #
+        # STRICTLY ADDITIVE, and the ordering is the whole point.
+        # `session_live` stays the authority for the in-repo answer and is
+        # consulted FIRST, unchanged. The two functions are NOT the same
+        # computation even in-repo — `session_live` honours the
+        # `COORDINATOR_SESSION_LAYER1_DISABLE` rollback lever and
+        # `_verdict_for_sdir` deliberately does not (its own docstring), so
+        # swapping one for the other silently re-answers the in-repo case.
+        # An earlier revision of this fix did exactly that and inverted two
+        # `unclean_prior_holder` lease outcomes; the suite caught it. The
+        # elsewhere arm is added BELOW the boolean, never in place of it.
         try:
             if _liveness.session_live(stamped_sid, str(repo_root)):
                 return True
         except (OSError, ValueError):
             pass
+
+        # Only now — in-repo says not-live, which is precisely where the
+        # repo-scoping defect lived. Gate on the basis string, not on slot 0
+        # alone: `harness-registry-elsewhere` is the ONE arm being added
+        # here, and accepting any truthy verdict would re-introduce the
+        # in-repo divergence the ordering above exists to avoid.
+        try:
+            verdict = _liveness.session_verdict(stamped_sid, cwd=str(repo_root))
+        except (OSError, ValueError):
+            verdict = None
+        except Exception:
+            verdict = None
+        if (
+            verdict is not None
+            and verdict[0]
+            and verdict[1] == "harness-registry-elsewhere"
+        ):
+            return True
 
     return False
 

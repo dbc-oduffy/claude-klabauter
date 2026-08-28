@@ -106,11 +106,37 @@ EDGE_KIND_META: Dict[str, Dict[str, Any]] = {
 # Two default edge sets answer two DIFFERENT questions, and conflating them is
 # the defect 723aadac4b1d fixed at five call sites:
 #
-#   ARCHIVAL_EDGE_KINDS asks "is it SAFE TO MOVE this node?" — all three
-#   lineage kinds legitimately block, INCLUDING `forked_from`: archiving a
-#   node a live spinoff `forked_from` would strand that spinoff's own origin
-#   pointer. This is `referenced_by`'s own default (below) and the set
-#   `archival.reverse_membership`'s callers depend on.
+#   ARCHIVAL_EDGE_KINDS asks "WHAT POINTS AT this node?" — all three lineage
+#   kinds, INCLUDING `forked_from`. This is `referenced_by`'s own default
+#   (below) and the set `archival.reverse_membership`'s callers depend on.
+#
+#   **The rationale printed here until 2026-08-28 was false, and it is worth
+#   knowing why rather than just that.** It read: "archiving a node a live
+#   spinoff `forked_from` would strand that spinoff's own origin pointer."
+#   That claim was cited elsewhere to "DR-224, AC4" — a citation that does not
+#   resolve (DR-224 contains no AC4, and its actual contract makes
+#   has-children mean SUPERSEDE, stating outright that an archived successor
+#   still counts because succession is a historical fact). It existed as three
+#   restatements of each other — this comment, a code comment in
+#   handoff_archive_transition, and a test docstring — which reads as
+#   corroboration and is not: n=1 wearing n=3.
+#
+#   It is also measurably false. `resolve_target` resolves a `forked_from`
+#   pointer to its origin whether the origin sits in state/handoffs/ or
+#   archive/handoffs/; pinned in
+#   coordinator_core/tests/test_coverage_dag_archived_repo_root.py
+#   (TestSpinoffOriginSurvivesArchivalOfItsOrigin), which also pins the one
+#   real limit — a caller that self-infers repo_root from an archived node's
+#   directory resolves nothing.
+#
+#   The SET IS UNCHANGED and the name is kept: it is a vocabulary primitive
+#   answering what-points-here, and every member genuinely does point here.
+#   What changed is that it no longer BLOCKS archival anywhere — the PM ruling
+#   of 2026-08-28 ("has a child means nothing to whether it should be archived
+#   ... either a baton is used up or it's not") removed the children ground
+#   from all four archival sites. Do not read this set's name as a policy that
+#   a `forked_from` edge should stop a move; it does not, and nothing here
+#   enforces that any more.
 #
 #   CONTINUATION_EDGE_KINDS asks "MAY THIS WORKSTREAM CONCLUDE?" / "does a
 #   review obligation propagate to this node?" — `forked_from` is deliberately
@@ -136,9 +162,10 @@ EDGE_KIND_META: Dict[str, Dict[str, Any]] = {
 # as-live-children.md.
 # ---------------------------------------------------------------------------
 
-#: The ARCHIVAL default — "is it safe to move this node?" All three lineage
-#: edge kinds; `forked_from` legitimately blocks here. See module comment
-#: block above.
+#: The ARCHIVAL default — "what points at this node?" All three lineage edge
+#: kinds. NOT a policy that a `forked_from` edge blocks a move: since
+#: 2026-08-28 no archival site gates on children at all. See the module
+#: comment block above for the false rationale this line used to carry.
 ARCHIVAL_EDGE_KINDS: FrozenSet[str] = frozenset(
     {'predecessor', 'additional_predecessors', 'forked_from'}
 )

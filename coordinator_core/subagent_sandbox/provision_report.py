@@ -362,6 +362,45 @@ def _splice_review_receipt(doc_text: str, session_id: str, agent_id: str, agent_
 _INTEGRATOR_AGENT_TYPE = "review-integrator"
 
 
+def _receipt_agent_type(agent_type: str, subagent_type: str, vocabulary) -> str:
+    """The label to STAMP into a receipt: whichever of the two resolves to a
+    member of `vocabulary`, preferring `agent_type` when both do.
+
+    WHY THIS EXISTS. `_is_delegate_reviewer`/`_is_review_integrator` check
+    BOTH labels because which one carries the persona is not fixed across
+    callers -- but the stamp beneath them wrote raw `agent_type`, so a
+    dispatch detected via `subagent_type` was stamped with whatever
+    `agent_type` happened to hold. For a NAMED (Agent-teams teammate)
+    dispatch that is the teammate's own `name` string, not a
+    `coordinator:*` type -- documented at
+    `bash_guards/block_reviewer_bash_outside_allowlist.py`'s Divergence 16,
+    which fixed the identical one-leg/two-leg asymmetry in its own
+    `effective_type` selection.
+
+    The consequence was a receipt that could never be credited:
+    `receipt_credit._counting_receipt_stamps` requires the stamped
+    `agent_type`'s bare form to be a `DELEGATE_REVIEWERS` member, and a
+    teammate name is not one. Measured 2026-08-28 over 2899 sidecars, this
+    was the only receipt failing any condition -- a genuine `coordinator:
+    staff-eng` plan review dispatched as `the Staff Engineer-gate`, whose own filename
+    (`coordinatorstaff-eng.the Staff Engineer-gate@session-...`) still recorded the real
+    type while the receipt did not. One in 2899 today because most dispatches
+    are unnamed; it scales with the habit of naming agents, not with anything
+    that stays constant.
+
+    Negative spec: this NEVER invents a type. Both labels failing the
+    vocabulary returns `agent_type` unchanged, so the pre-existing bytes are
+    reproduced exactly for every dispatch the gates above would not have
+    admitted anyway -- and the vocabulary is never widened to admit a label
+    (adding `the Staff Engineer-gate` would ratify the mislabel and grow the closed set
+    by one for every name anyone ever picks).
+    """
+    for candidate in (agent_type, subagent_type):
+        if candidate and _bare_agent_type(candidate) in vocabulary:
+            return candidate
+    return agent_type
+
+
 def _is_review_integrator(agent_type: str, subagent_type: str) -> bool:
     """True iff either resolved label's bare form is the review-integrator
     persona -- checked against BOTH labels, mirroring
@@ -919,7 +958,16 @@ def assemble_contract_blocks_for_payload(
     if not git_root:
         return None
 
-    plugin_root = resolve_plugin_root()
+    # `payload["plugin_root"]` is the FIRST rung (C1, hook_http.payload_from_event's
+    # computed body field, carried per-call from the forwarder). `resolve_plugin_root()`'s
+    # own ambient probe (env var -> plugin dir -> `.doe-root` pointer) is the FALLBACK,
+    # reached only when the payload is silent -- e.g. a direct in-process caller
+    # (`cater_subagent_start.py`, `fan-out-dispatch.py`) that never went through the HTTP
+    # hook seam at all. Never the other way around: see this module's docstring for the
+    # resident-server env-freeze hazard the payload-first rung exists to avoid.
+    plugin_root = payload.get("plugin_root")
+    if not isinstance(plugin_root, str) or not plugin_root:
+        plugin_root = resolve_plugin_root()
     if not plugin_root:
         return None
 
@@ -1109,10 +1157,21 @@ def _provision(payload: Dict[str, Any], policy_path: Optional[str], cwd: Optiona
     # exclusive with the branch above by construction (_INTEGRATOR_AGENT_TYPE
     # is not a member of _DELEGATE_REVIEWERS), so an elif costs nothing over
     # a second independent `if` while making that exclusivity explicit.
+    # The stamped type is RESOLVED (`_receipt_agent_type`), not raw: the two
+    # eligibility checks read both labels, so the stamp has to as well or a
+    # dispatch admitted via `subagent_type` gets stamped with `agent_type`'s
+    # unrelated value -- for a named dispatch, the teammate's own name, which
+    # no reader can credit. See `_receipt_agent_type`'s docstring.
     if _is_delegate_reviewer(agent_type, subagent_type):
-        doc_text = _splice_review_receipt(doc_text, str(session_id), agent_id or "", agent_type or "", spawned_at)
+        from coordinator_core.reviewer_vocabulary import DELEGATE_REVIEWERS
+
+        stamped_type = _receipt_agent_type(agent_type or "", subagent_type or "", DELEGATE_REVIEWERS)
+        doc_text = _splice_review_receipt(doc_text, str(session_id), agent_id or "", stamped_type, spawned_at)
     elif _is_review_integrator(agent_type, subagent_type):
-        doc_text = _splice_integrator_receipt(doc_text, str(session_id), agent_id or "", agent_type or "", spawned_at)
+        stamped_type = _receipt_agent_type(
+            agent_type or "", subagent_type or "", {_INTEGRATOR_AGENT_TYPE}
+        )
+        doc_text = _splice_integrator_receipt(doc_text, str(session_id), agent_id or "", stamped_type, spawned_at)
 
     if sanitized_provision_key is not None:
         # SUBSUME: deterministic + idempotent path mode (provision_key present).
