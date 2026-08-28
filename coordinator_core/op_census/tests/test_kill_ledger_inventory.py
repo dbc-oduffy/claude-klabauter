@@ -11,6 +11,7 @@ from __future__ import annotations
 import pytest
 
 from coordinator_core.op_census import kill_ledger_inventory as kli
+from coordinator_core.op_census.cross_repo_consumers import ConsumerHit
 
 
 def _entry(status: str, *, key: str = "K-900", title: str = "a thing") -> str:
@@ -279,3 +280,138 @@ def test_report_renders_every_population_the_classifier_produced() -> None:
     report = kli.render(entries, heading_count=len(entries))
     assert "## WITHDRAWN (1)" in report
     assert "## LANDED (1)" in report
+
+
+def _make_entry(*, population: str, op_name, status: str = "", key: str = "K-900") -> kli.LedgerEntry:
+    return kli.LedgerEntry(
+        number=int(key.split("-")[1]),
+        key=key,
+        title="a thing",
+        status_text=status,
+        op_name=op_name,
+        cost_text="",
+        breaks_text="",
+        returns_when_text="",
+        body_chars=0,
+        population=population,
+    )
+
+
+def test_join_scans_nomination_shaped_populations_only(monkeypatch) -> None:
+    """AC4: CANDIDATE/CONVICTED are joined; a LANDED entry never even reaches
+    the scan — the positive/negative control the plan's test surface names."""
+    candidate = _make_entry(population="CANDIDATE", op_name="fleet.candidate_op")
+    convicted = _make_entry(population="CONVICTED", op_name="fleet.convicted_op", key="K-901")
+    landed = _make_entry(population="LANDED", op_name="fleet.candidate_op", key="K-902")
+
+    hit = ConsumerHit(memo_path="cross-repo/inbox/example.md", box="inbox", shape="op_name")
+    scanned_names = []
+
+    def fake_scan(op_names, **_kwargs):
+        names = set(op_names)
+        scanned_names.append(names)
+        return {name: ([hit] if name == "fleet.candidate_op" else []) for name in names}
+
+    monkeypatch.setattr(kli, "scan_cross_repo_consumers", fake_scan)
+    kli._join_cross_repo_evidence([candidate, convicted, landed])
+
+    assert scanned_names == [{"fleet.candidate_op", "fleet.convicted_op"}]
+    assert candidate.cross_repo_hits == [hit]
+    assert convicted.cross_repo_hits == []
+    assert landed.cross_repo_hits == []  # never populated — LANDED is terminal
+
+
+def test_join_skips_entries_with_no_op_name(monkeypatch) -> None:
+    entry = _make_entry(population="CANDIDATE", op_name=None)
+    called = []
+
+    def fake_scan(op_names, **_kwargs):
+        called.append(set(op_names))
+        return {}
+
+    monkeypatch.setattr(kli, "scan_cross_repo_consumers", fake_scan)
+    kli._join_cross_repo_evidence([entry])
+
+    assert called == []
+    assert entry.cross_repo_hits == []
+
+
+def test_render_reports_cross_repo_hits_for_nomination_shaped_entries() -> None:
+    """AC5, positive control: a hit on a CANDIDATE entry is rendered by K-key,
+    op name, and memo path."""
+    candidate = _make_entry(population="CANDIDATE", op_name="fleet.candidate_op")
+    candidate.cross_repo_hits = [
+        ConsumerHit(memo_path="cross-repo/inbox/example.md", box="inbox", shape="op_name")
+    ]
+    report = kli.render([candidate], heading_count=1)
+    assert "## CROSS-REPO EVIDENCE" in report
+    assert "K-900" in report
+    assert "fleet.candidate_op" in report
+    assert "cross-repo/inbox/example.md" in report
+
+
+def test_render_section_prints_scanned_none_found_when_clean() -> None:
+    """AC5: the section is never silently absent — a clean scan still prints
+    an explicit line, so its absence can never be mistaken for a scan that
+    never ran."""
+    landed = _make_entry(population="LANDED", op_name="fleet.landed_op")
+    report = kli.render([landed], heading_count=1)
+    assert "## CROSS-REPO EVIDENCE" in report
+    assert "scanned — none found" in report
+
+
+def test_fail_on_cross_repo_evidence_exits_1_and_names_the_memo(monkeypatch, capsys) -> None:
+    entry = _make_entry(population="CANDIDATE", op_name="fleet.candidate_op")
+    entry.cross_repo_hits = [
+        ConsumerHit(memo_path="cross-repo/inbox/example.md", box="inbox", shape="op_name")
+    ]
+    monkeypatch.setattr(kli, "build", lambda ledger: ([entry], 1))
+
+    code = kli.main(["--fail-on-cross-repo-evidence"])
+
+    assert code == 1
+    err = capsys.readouterr().err
+    assert "CROSS-REPO-EVIDENCE K-900" in err
+    assert "cross-repo/inbox/example.md" in err
+
+
+def test_fail_on_cross_repo_evidence_absent_leaves_exit_unchanged(monkeypatch) -> None:
+    entry = _make_entry(population="CANDIDATE", op_name="fleet.candidate_op")
+    entry.cross_repo_hits = [
+        ConsumerHit(memo_path="cross-repo/inbox/example.md", box="inbox", shape="op_name")
+    ]
+    monkeypatch.setattr(kli, "build", lambda ledger: ([entry], 1))
+
+    assert kli.main([]) == 0
+
+
+def test_fail_on_contested_stays_byte_identical(monkeypatch, capsys) -> None:
+    """AC6: `--fail-on-contested` is a live sibling plan's exit-criterion
+    oracle and must not gain the new failure mode or change its stderr shape."""
+    entry = _make_entry(population="CONTESTED", op_name="fleet.contested_op")
+    entry.notes = ["status line matched no population rule"]
+    monkeypatch.setattr(kli, "build", lambda ledger: ([entry], 1))
+
+    code = kli.main(["--fail-on-contested"])
+
+    assert code == 1
+    assert capsys.readouterr().err == "CONTESTED K-900: status line matched no population rule\n"
+
+
+def test_both_fail_flags_together_exit_1_if_either_fires(monkeypatch, capsys) -> None:
+    contested = _make_entry(population="CONTESTED", op_name="fleet.contested_op")
+    contested.notes = ["status line matched no population rule"]
+    hit_entry = _make_entry(
+        population="CANDIDATE", op_name="fleet.candidate_op", key="K-901"
+    )
+    hit_entry.cross_repo_hits = [
+        ConsumerHit(memo_path="cross-repo/inbox/example.md", box="inbox", shape="op_name")
+    ]
+    monkeypatch.setattr(kli, "build", lambda ledger: ([contested, hit_entry], 2))
+
+    code = kli.main(["--fail-on-contested", "--fail-on-cross-repo-evidence"])
+
+    assert code == 1
+    err = capsys.readouterr().err
+    assert "CONTESTED K-900" in err
+    assert "CROSS-REPO-EVIDENCE K-901" in err

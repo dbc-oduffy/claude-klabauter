@@ -79,8 +79,16 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
+from coordinator_core.op_census.cross_repo_consumers import ConsumerHit, scan_cross_repo_consumers
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 KILL_LEDGER = REPO_ROOT / "state" / "kill-ledger.md"
+
+#: Populations where "nothing needs this" is still an open assertion — the
+#: only ones a memo hit is joined against. A terminal population (LANDED,
+#: NON_CUT, CUT_ELSEWHERE, REBUILT, WITHDRAWN) restates or contradicts a
+#: decision already recorded; scanning it is noise, not evidence.
+NOMINATION_SHAPED_POPULATIONS = frozenset({"CANDIDATE", "CONVICTED"})
 
 _ENTRY_SPLIT = re.compile(r"^## (?=K-\d)", re.M)
 _HEADING = re.compile(r"^K-(\d+)\s*[—-]\s*(.*)$")
@@ -162,6 +170,10 @@ class LedgerEntry:
     op_live: Optional[bool] = None
     op_suspended: bool = False
     notes: List[str] = field(default_factory=list)
+    #: Cross-repo memo evidence, joined in `build()` for nomination-shaped
+    #: populations only. Never populated by `classify()` — see
+    #: `NOMINATION_SHAPED_POPULATIONS` and `_join_cross_repo_evidence`.
+    cross_repo_hits: List[ConsumerHit] = field(default_factory=list)
 
 
 def _field(body: str, *labels: str, limit: int = 400) -> str:
@@ -379,6 +391,27 @@ def classify(
             entry.notes.append("still listed in SUSPENDED_OPS — refusing at dispatch")
 
 
+def _join_cross_repo_evidence(entries: Sequence[LedgerEntry]) -> None:
+    """Populate `cross_repo_hits` in place for nomination-shaped entries only
+    (`NOMINATION_SHAPED_POPULATIONS`). An entry whose `op_name` is None is
+    skipped — there is nothing to match on. Called from `build()`, after
+    `classify()` has run, never from inside `classify()` itself: that
+    function's contract is population assignment from the ledger and the
+    live registry, and is called directly by tests with injected sets that
+    carry no memo corpus."""
+    candidates = [
+        e
+        for e in entries
+        if e.population in NOMINATION_SHAPED_POPULATIONS and e.op_name is not None
+    ]
+    if not candidates:
+        return
+    op_names = {e.op_name for e in candidates}
+    hits_by_name = scan_cross_repo_consumers(op_names)
+    for entry in candidates:
+        entry.cross_repo_hits = hits_by_name.get(entry.op_name, [])
+
+
 def _counts(entries: Sequence[LedgerEntry]) -> Dict[str, int]:
     counts: Dict[str, int] = {}
     for entry in entries:
@@ -413,6 +446,27 @@ def render(entries: Sequence[LedgerEntry], *, heading_count: int) -> str:
     else:
         lines.append("No CONTESTED rows: every entry's status agrees with the live registry.")
         lines.append("")
+
+    # This section prints unconditionally, hits or not — an absent section is
+    # this module's own defect in miniature (AC5): indistinguishable from a
+    # scan that never ran. The explicit "scanned — none found" line is what
+    # makes a clean scan legible as a scan, not a gap.
+    lines.append("## CROSS-REPO EVIDENCE — memos naming a nomination-shaped op")
+    lines.append("")
+    hit_rows = [
+        (entry, hit)
+        for entry in entries
+        if entry.population in NOMINATION_SHAPED_POPULATIONS
+        for hit in entry.cross_repo_hits
+    ]
+    if hit_rows:
+        for entry, hit in hit_rows:
+            lines.append(
+                f"- **{entry.key}** `{entry.op_name}` — {hit.memo_path} ({hit.box}, {hit.shape})"
+            )
+    else:
+        lines.append("scanned — none found")
+    lines.append("")
 
     # Preference ORDER, not the set of populations that may be rendered. The
     # set is whatever the classifier actually produced: a population absent
@@ -492,6 +546,7 @@ def build(ledger_path: Path = KILL_LEDGER) -> Tuple[List[LedgerEntry], int]:
             "the parser dropped a section"
         )
     classify(entries, live_ops=_live_op_names(), suspended_ops=_suspended_op_names())
+    _join_cross_repo_evidence(entries)
     return entries, heading_count
 
 
@@ -503,17 +558,36 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         action="store_true",
         help="exit 1 if any entry's status disagrees with the live registry",
     )
+    parser.add_argument(
+        "--fail-on-cross-repo-evidence",
+        action="store_true",
+        help="exit 1 if any nomination-shaped entry is named by a cross-repo memo",
+    )
     args = parser.parse_args(argv)
 
     entries, heading_count = build(args.ledger)
     sys.stdout.write(render(entries, heading_count=heading_count) + "\n")
 
+    failed = False
+
     contested = [e for e in entries if e.population == "CONTESTED"]
     if contested and args.fail_on_contested:
         for entry in contested:
             sys.stderr.write(f"CONTESTED {entry.key}: {'; '.join(entry.notes)}\n")
-        return 1
-    return 0
+        failed = True
+
+    cross_repo_hit_entries = [
+        e for e in entries if e.population in NOMINATION_SHAPED_POPULATIONS and e.cross_repo_hits
+    ]
+    if cross_repo_hit_entries and args.fail_on_cross_repo_evidence:
+        for entry in cross_repo_hit_entries:
+            for hit in entry.cross_repo_hits:
+                sys.stderr.write(
+                    f"CROSS-REPO-EVIDENCE {entry.key} `{entry.op_name}`: {hit.memo_path}\n"
+                )
+        failed = True
+
+    return 1 if failed else 0
 
 
 if __name__ == "__main__":

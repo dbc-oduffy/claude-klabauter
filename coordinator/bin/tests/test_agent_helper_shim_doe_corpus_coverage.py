@@ -363,7 +363,14 @@ def _install_shims_to_scratch(doe_root: Path, tmp_path: Path) -> Path:
     bin_dst = tmp_path / "settings-home-bin"
     bin_dst.mkdir(parents=True)
 
-    prior = os.environ.get("CLAUDE_KLABAUTER_ROOT")
+    # Save and restore the variable this actually SETS. It used to read
+    # CLAUDE_KLABAUTER_ROOT's prior value and, on cleanup, either pop CLAUDE_KLABAUTER_ROOT or write
+    # that value into COORDINATOR_ENGINE_ROOT -- so COORDINATOR_ENGINE_ROOT was
+    # never cleared, and this module-scoped fixture leaked the claude-klabauter root into
+    # every later test in the process. test_doctor_probe_ladder_parity then read
+    # it off the environment and its ladder resolved a root from an unmarked
+    # directory, failing only in a full-directory serial run.
+    prior = os.environ.get("COORDINATOR_ENGINE_ROOT")
     os.environ["COORDINATOR_ENGINE_ROOT"] = str(_CLAUDE_KLABAUTER_ROOT)
     try:
         _install_bin_resolvers(
@@ -372,7 +379,7 @@ def _install_shims_to_scratch(doe_root: Path, tmp_path: Path) -> Path:
         )
     finally:
         if prior is None:
-            os.environ.pop("CLAUDE_KLABAUTER_ROOT", None)
+            os.environ.pop("COORDINATOR_ENGINE_ROOT", None)
         else:
             os.environ["COORDINATOR_ENGINE_ROOT"] = prior
 

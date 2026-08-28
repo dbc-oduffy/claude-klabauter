@@ -117,6 +117,12 @@ _ERROR_TAIL_RE = re.compile(r"\berror(?:s)?\b", re.IGNORECASE)
 _INTERRUPTED_RE = re.compile(r"\binterrupted\b", re.IGNORECASE)
 _NO_TESTS_RE = re.compile(r"\bno tests (?:ran|collected)\b", re.IGNORECASE)
 
+_SUMMARY_ERROR_CLAUSE_RE = re.compile(r",\s*\d+\s+errors?\b", re.IGNORECASE)
+"""The `, N errors` clause pytest appends to its own collection summary line.
+Anchored on the comma-and-count shape, never a bare `error` substring: that
+line's tally is pytest's own verdict on the collection, and a gate that reads
+it as prose reports the tree it just refused as clean."""
+
 
 @dataclass(frozen=True)
 class MirrorCollectionResult:
@@ -133,6 +139,14 @@ class MirrorCollectionResult:
     before it could report a count at all) — both are `passed == False`
     (any non-zero exit refuses, per the parent plan body), but a refusal
     message built from this result can and must say which happened.
+
+    `errored == True` does NOT imply `collected_count == 0`. pytest's
+    partial-collection summary carries both a count and an error tally on
+    one line ("22938/39613 tests collected (16675 deselected), 5 errors"):
+    22938 files did collect and 5 did not, and the count is the honest
+    denominator for the errors rather than evidence against them. Reading
+    that shape as a clean collection is the defect
+    `_SUMMARY_ERROR_CLAUSE_RE` exists to close.
     """
 
     passed: bool
@@ -172,9 +186,21 @@ def _parse_collection_summary(stdout: str) -> "tuple[int, bool]":
 
     m = _COLLECTED_COUNT_RE.search(stdout)
     if m:
-        # A recognised "N (of M) tests collected" summary line always wins,
-        # even if an earlier line in the body happens to contain the word
-        # "error" (e.g. a deselected test's id containing "error_handling").
+        # A recognised "N (of M) tests collected" summary line wins over the
+        # word "error" appearing anywhere ELSE in the body (e.g. a deselected
+        # test's id containing "error_handling") -- but never over an error
+        # clause pytest wrote into that same summary line. pytest reports a
+        # partial collection as "22938/39613 tests collected (16675
+        # deselected), 5 errors in 11.20s": a count AND an error tally, on one
+        # line. Reading that as a clean collection made this gate refuse a
+        # publish while printing "collection completed cleanly" -- the exact
+        # collapse `MirrorCollectionResult` forbids, with the operator told
+        # the tree collects by the same sentence that refused it.
+        line_start = stdout.rfind("\n", 0, m.start()) + 1
+        line_end = stdout.find("\n", m.start())
+        summary_line = stdout[line_start:] if line_end == -1 else stdout[line_start:line_end]
+        if _SUMMARY_ERROR_CLAUSE_RE.search(summary_line) or _INTERRUPTED_RE.search(stdout):
+            return int(m.group(1)), True
         return int(m.group(1)), False
 
     if _INTERRUPTED_RE.search(tail_line) or _ERROR_TAIL_RE.search(tail_line):
@@ -406,9 +432,15 @@ def format_refusal(result: MirrorCollectionResult) -> str:
     if result.timed_out:
         shape = f"TIMED OUT after {result.elapsed_s:.1f}s (budget {DEFAULT_TIMEOUT_S:.0f}s)"
     elif result.errored:
-        shape = f"collection ERRORED (exit={result.exit_code}), 0 tests collected"
+        shape = (
+            f"collection ERRORED (exit={result.exit_code}), "
+            f"{result.collected_count} test(s) collected before the errors"
+        )
     else:
-        shape = f"collection completed cleanly but found {result.collected_count} test(s)"
+        shape = (
+            f"collection completed cleanly (exit={result.exit_code}) but found "
+            f"{result.collected_count} test(s)"
+        )
     return (
         "assembled-mirror-gate: REFUSED — "
         f"{shape} — tree_root={result.tree_root} "

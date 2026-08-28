@@ -852,6 +852,71 @@ def resolve_plugin_root_loud(
     return plugin_root
 
 
+_GOVERNED_AUTHORING_SURFACES_MANIFEST_NAME = "governed-authoring-surfaces.json"
+"""Filename (never a path) of the flat-list-of-strings manifest DoE-side pins
+to their own ``GOVERNED_AUTHORING_SURFACES`` tuple (`coordinator/hooks/scripts/
+_claude_md_ledger.py`), with a drift test on their side so staleness fails in
+their CI, never inside this deny path (spec: state/dispatch-briefs/2026-08-28-
+the-four-folded-bash-guards-get-registered-not-folded/C3.md). Joined onto a
+per-call ``plugin_root`` by ``resolve_governed_authoring_surfaces`` below --
+never hardcoded as a full path here, since ``plugin_root`` itself is only
+known per call (``resolve_plugin_root_loud``)."""
+
+
+def resolve_governed_authoring_surfaces(
+    plugin_root: Optional[str],
+) -> Optional[List[str]]:
+    """Read the flat list of governed-authoring-surface path strings from
+    ``<plugin_root>/governed-authoring-surfaces.json``, FRESH ON EVERY CALL.
+
+    NEGATIVE SPEC -- this function does not import DoE's ``_claude_md_ledger``
+    module (a non-package module reachable only by ``sys.path.insert``) and
+    does not hardcode a copy of ``GOVERNED_AUTHORING_SURFACES`` the way
+    ``_RESOLUTION_CLASS_PHRASES`` hardcodes its own copy of DoE's opaque
+    strings -- see this function's own spec backlink above for why those two
+    axes (import-vs-data, our-copy-vs-read-their-file) are different and why
+    this one lands on the read-their-file side of the second axis. It reads
+    a JSON manifest DoE pins to their own tuple with a drift test on their
+    side, so staleness fails in their CI, never inside this deny path.
+
+    NEVER MEMOIZED -- no module-level cache, unlike ``_ANY_DECLARED_MATCHERS_
+    CACHE`` below (which is process-lifetime-stable because it is a union of
+    each guard's own hardcoded ``MATCHERS`` tuple, not something read off
+    disk per install). A cached manifest here would freeze to whichever
+    plugin install happened to be resolved on the call that filled the
+    cache -- the exact per-call-vs-resident-process hazard this plan's own
+    Anti-scope names ("Do not memoize the governed-authoring-surfaces
+    manifest in the resident server. A cached manifest freezes to whichever
+    session booted the engine."). Read fresh, every call, no exceptions.
+
+    Returns ``None`` on ANY miss -- ``plugin_root`` itself unresolved (see
+    ``resolve_plugin_root_loud``, already LOUD about that miss on its own;
+    this function does not duplicate that stderr/counter emission), the
+    manifest file absent, unreadable, not valid JSON, or valid JSON that is
+    not a flat list of strings. Every one of those is fail-open by design:
+    this function has no consumer yet (this chunk lands the reader only; a
+    future consuming guard -- C4 -- owns deciding what "no manifest" means
+    for ITS OWN detection, same no-caller-wiring-yet shape as
+    ``resolve_plugin_root_loud``'s own "No consumer yet" note above). Never
+    raises.
+    """
+    if not plugin_root:
+        return None
+    import os
+
+    manifest_path = os.path.join(plugin_root, _GOVERNED_AUTHORING_SURFACES_MANIFEST_NAME)
+    try:
+        with open(manifest_path, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+    except Exception:  # noqa: BLE001 -- any read/parse failure is a fail-open miss, never a crash
+        return None
+    if not isinstance(data, list):
+        return None
+    if not all(isinstance(entry, str) for entry in data):
+        return None
+    return data
+
+
 _ANY_DECLARED_MATCHERS_CACHE: Optional["frozenset[str]"] = None
 
 

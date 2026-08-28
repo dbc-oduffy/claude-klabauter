@@ -179,7 +179,7 @@ def _parse_args(argv: List[str]) -> "tuple[Optional[dict], Optional[int]]":
     return cfg, None
 
 
-def _resolve_repo_root(explicit_root: Optional[str]) -> Optional[str]:
+def _checked_repo_root(explicit_root: Optional[str]) -> Optional[str]:
     """The checked resolver (repo_identity) — a MISMATCH is advisory only
     (warn to stderr, proceed with the resolved root); UNRESOLVED never
     refuses. An explicit --repo-root bypasses the resolver/gate entirely
@@ -208,7 +208,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     if terminal_rc is not None:
         return terminal_rc
 
-    repo_root = _resolve_repo_root(cfg["repo_root"])
+    repo_root = _checked_repo_root(cfg["repo_root"])
     if not repo_root:
         sys.stderr.write(
             f"{SELF_NAME}: cannot resolve git repo root from {os.getcwd()}\n"

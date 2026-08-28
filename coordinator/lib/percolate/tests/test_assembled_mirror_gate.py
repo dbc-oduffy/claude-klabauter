@@ -150,7 +150,8 @@ def test_format_refusal_names_the_collected_count_and_shape():
     )
     msg = format_refusal(errored)
     assert "ERRORED" in msg
-    assert "0 tests collected" in msg
+    assert "0 test(s) collected" in msg
+    assert "exit=2" in msg
 
     clean_zero = MirrorCollectionResult(
         passed=False,
@@ -217,6 +218,19 @@ def test_command_uses_the_trees_own_documented_marker_expression():
     [
         ("test_a.py::test_one\ntest_a.py::test_two\n\n2 tests collected in 0.02s\n", 2, False),
         ("3/12 tests collected (9 deselected) in 0.04s\n", 3, False),
+        # A partial collection: pytest reports the count it DID reach and its
+        # own error tally on the same line. The count is the denominator for
+        # those errors, never evidence against them -- read as a clean
+        # collection, this shape made the gate refuse a publish in the same
+        # sentence that called the tree clean.
+        (
+            "22938/39613 tests collected (16675 deselected), 5 errors in 11.20s\n",
+            22938,
+            True,
+        ),
+        ("7 tests collected, 1 error in 0.30s\n", 7, True),
+        # "error" inside a collected test id is prose, not a tally.
+        ("test_a.py::test_error_handling\n\n1 test collected in 0.02s\n", 1, False),
         ("no tests ran in 0.01s\n", 0, False),
         ("no tests collected in 0.01s\n", 0, False),
         (

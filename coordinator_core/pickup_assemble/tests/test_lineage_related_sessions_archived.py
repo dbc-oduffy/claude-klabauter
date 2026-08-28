@@ -114,11 +114,24 @@ class TestCompetingClaimArchivedPredecessorHandover:
         )
 
         self_fm = {"predecessor": "state/handoffs/pred.md"}
-        result = pa.compute_competing_claim(repo, self_fm, "state/handoffs/self.md")
 
-        assert result["verdict"] == "handover"
-        assert len(result["candidates"]) == 1
-        assert result["candidates"][0]["disposition"] == "handover"
+        # REPOINTED 2026-08-28. This asserted through `compute_competing_claim`,
+        # which was removed in `aadef0e23` (ceremony-assembler rebuild wave 1) —
+        # the test had been permanently red ever since, failing on
+        # `AttributeError` rather than on the invariant it exists for. The
+        # `gates.competing_claim` surface is retired; `gates.liveness_signal`
+        # is the one that survived.
+        #
+        # The invariant is NOT retired and is what this test is actually for:
+        # an archived predecessor's session must stay in the lineage set, so a
+        # still-live sibling it claimed reads as handover rather than
+        # contention. Asserted directly against `_lineage_related_sessions`,
+        # which is where the archive-aware fix lives and which both surviving
+        # consumers share. `TestLivenessSignalArchivedPredecessorHandover`
+        # below covers the same fix through `compute_liveness_signal`.
+        related = pa._lineage_related_sessions(repo, self_fm)
+
+        assert "predecessor-sid" in related
 
 
 class TestLivenessSignalArchivedPredecessorHandover:

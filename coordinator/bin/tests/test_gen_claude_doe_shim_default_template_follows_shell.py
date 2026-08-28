@@ -76,12 +76,27 @@ class TestShellFamilyFromArgv(unittest.TestCase):
             "powershell",
         )
 
-    def test_defaults_to_bash_when_absent(self):
-        self.assertEqual(self.cli._shell_family_from_argv(["--check-only"]), "bash")
+    def test_defaults_to_the_engines_family_when_absent(self):
+        """NOT a literal. Both sides of this decision must read the SAME default:
+        the trampoline picks the template while the engine independently picks the
+        shim filename and rc target. A local `"bash"` fallback here — which is what
+        this test used to assert — made them disagree on Windows, writing a POSIX
+        shim body to the `.ps1` shim path the engine had selected."""
+        from coordinator_core.ops.gen_claude_doe_shim import _default_shell_family
 
-    def test_trailing_flag_without_a_value_defaults_to_bash(self):
+        self.assertEqual(
+            self.cli._shell_family_from_argv(["--check-only"]),
+            _default_shell_family(),
+        )
+
+    def test_trailing_flag_without_a_value_defaults_to_the_engines_family(self):
         """A dangling `--shell` is the engine's error to report, not a crash here."""
-        self.assertEqual(self.cli._shell_family_from_argv(["--shell"]), "bash")
+        from coordinator_core.ops.gen_claude_doe_shim import _default_shell_family
+
+        self.assertEqual(
+            self.cli._shell_family_from_argv(["--shell"]),
+            _default_shell_family(),
+        )
 
 
 class TestBothTemplatesExistOnDisk(unittest.TestCase):
