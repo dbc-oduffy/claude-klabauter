@@ -60,6 +60,7 @@ from pathlib import Path
 from typing import Iterable, Iterator, List, Optional, Sequence
 
 from coordinator_core.git.repo_root import show_toplevel
+from coordinator_core.path_identity import dir_identity
 from coordinator_core.machine_resolver import (
     merged_flat_registry as _merged_flat_registry,
     registry_value as _registry_value,
@@ -277,6 +278,22 @@ def _publish_mirror_keys() -> set:
     return mirrors
 
 
+def _identities(keys: Iterable[str]) -> set:
+    """Filesystem identities for `keys`, which are `_to_posix_key` forms.
+
+    Used to widen the publish-mirror exclusion past string equality: a
+    mirror reachable under a second spelling (a case variant on a
+    case-insensitive filesystem, the same shape as klabauter#2) is still
+    the mirror, and registering a publish target as a working repo is the
+    failure this exclusion exists to prevent. A key that cannot be stat'd
+    contributes its own string, which is exactly the pre-existing
+    comparison for that entry -- registry paths routinely name trees that
+    do not exist on this box, and that is not an error here (see
+    `_publish_mirror_keys`' best-effort contract).
+    """
+    return {dir_identity(_fs_probe_path(k), fallback=k) for k in keys}
+
+
 def _gate_and_dedup(lines: Iterable[str], mirror_keys: Optional[set] = None) -> Iterator[str]:
     """Filter stdin-equivalent lines to real git roots, deduped by normalized
     POSIX key, emitting each surviving repo in `_emit_form` (forward slashes).
@@ -286,13 +303,23 @@ def _gate_and_dedup(lines: Iterable[str], mirror_keys: Optional[set] = None) -> 
     Three filters in one pass:
       (1) `.git` gate — drops bare parent dirs / scratch paths that pass a
           plain existence test but are not repos (the Tier-A leak).
-      (2) cross-tier form dedup — collapses native vs POSIX duplicates of one
-          repo.
+      (2) cross-tier identity dedup — collapses native vs POSIX duplicates of
+          one repo, AND the case-variant spellings a case-insensitive
+          filesystem hands back as two strings for one directory. Identity is
+          the filesystem's own (`path_identity.dir_identity`), not the
+          normalized string: `_to_posix_key` deliberately does not fold case
+          (it cannot — see its docstring), so on macOS/Windows `~/code/repo`
+          and `~/Code/repo` produced two keys for one directory and discovery
+          emitted the repo twice (klabauter#2). The stat is taken only after
+          the `.git` gate has already established the path is a real repo
+          root, so it costs one `os.stat` on a path this loop has stat'd
+          before and adds no spawn.
       (3) publish-mirror exclusion — a `publish.mirrors.*.path` tree is a
           publish target, never a working repo (see module docstring).
     """
     if mirror_keys is None:
         mirror_keys = _publish_mirror_keys()
+    mirror_ids = _identities(mirror_keys)
     seen: set = set()
     for line in lines:
         if not line:
@@ -300,11 +327,15 @@ def _gate_and_dedup(lines: Iterable[str], mirror_keys: Optional[set] = None) -> 
         key = _to_posix_key(line)
         if key in mirror_keys:
             continue
-        if not _is_git_root(_fs_probe_path(key)):
+        probe = _fs_probe_path(key)
+        if not _is_git_root(probe):
             continue
-        if key in seen:
+        identity = dir_identity(probe, fallback=key)
+        if identity in mirror_ids:
             continue
-        seen.add(key)
+        if identity in seen:
+            continue
+        seen.add(identity)
         yield _emit_form(line)
 
 

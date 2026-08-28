@@ -342,8 +342,8 @@ def test_parent_child_split_remediation_names_offset_shape_not_deletion(home, mo
     child = parent + "/coordinator/extra"
 
     fake_trees = sut._TreeSet()
-    fake_trees._seen[parent] = 1
-    fake_trees._seen[child] = 1
+    fake_trees._seen[parent] = parent
+    fake_trees._seen[child] = child
 
     monkeypatch.setattr(
         sut, "_check4_tree_enumeration", lambda *a, **k: (fake_trees, "")
@@ -362,8 +362,8 @@ def test_no_offset_note_for_genuinely_distinct_trees(home, monkeypatch):
     tree_b = str(home["fake_home"].parent / "unrelated" / "coordinator-claude")
 
     fake_trees = sut._TreeSet()
-    fake_trees._seen[tree_a] = 1
-    fake_trees._seen[tree_b] = 1
+    fake_trees._seen[tree_a] = tree_a
+    fake_trees._seen[tree_b] = tree_b
 
     monkeypatch.setattr(
         sut, "_check4_tree_enumeration", lambda *a, **k: (fake_trees, "")

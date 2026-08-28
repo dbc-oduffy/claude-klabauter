@@ -105,6 +105,50 @@ WRITE_SURFACE = WriteSurfaceDeclaration(
 )
 
 
+def installed_plugin_paths(claude_home: Path) -> dict[str, str]:
+    """Every plugin the platform records as installed, as
+    ``{plugin-name: installPath}``.
+
+    THE PLATFORM'S OWN RECORD of where a plugin lives, exposed for readers
+    that need to check whether some other resolver agrees with it. Keys are
+    the bare plugin name -- the manifest keys it as ``<name>@<marketplace>``,
+    and the marketplace half is not what a caller matching on a repo
+    identity has to hand.
+
+    Best-effort by contract: an absent, unreadable, or malformed manifest
+    yields ``{}``. Every caller so far is advisory (a warning, or a
+    preference between candidates it already had), so a missing record must
+    degrade to "no opinion" rather than to an error -- a box with no plugins
+    installed yet is the normal fresh-machine state, not a fault.
+
+    Later records for one name win, matching how the platform itself reads a
+    list whose last entry is the live one.
+    """
+    record_path = claude_home.joinpath(*_INSTALLED_PLUGINS_REL)
+    try:
+        with open(record_path, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError):
+        return {}
+    plugins = data.get("plugins") if isinstance(data, dict) else None
+    if not isinstance(plugins, dict):
+        return {}
+    found: dict[str, str] = {}
+    for key, records in plugins.items():
+        if not isinstance(key, str) or not isinstance(records, list):
+            continue
+        name = key.split("@", 1)[0]
+        if not name:
+            continue
+        for record in records:
+            if not isinstance(record, dict):
+                continue
+            path = record.get("installPath")
+            if isinstance(path, str) and path:
+                found[name] = path
+    return found
+
+
 def read_plugin_name(live_plugin_root: Path) -> Optional[str]:
     """The plugin's own declared name, read from the clone it lives in.
 

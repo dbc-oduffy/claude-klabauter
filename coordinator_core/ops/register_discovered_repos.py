@@ -76,7 +76,9 @@ from coordinator_core.install.write_surface import (
     WriteSurfaceDeclaration,
     WriteSurfaceEntry,
 )
+from coordinator_core.install.live_plugin_registration import installed_plugin_paths
 from coordinator_core.ops.discover_working_repos import main as _discover_working_repos_main
+from coordinator_core.path_identity import same_dir
 from coordinator_core.win_portability import no_console_creationflags, no_console_passthrough_kwargs
 
 _PROG = "register-discovered-repos.sh"  # literal program-name prefix — see negative-spec
@@ -133,6 +135,65 @@ def _derive_key(basename: str) -> str:
     lowered = basename.lower()
     collapsed = re.sub(r"[^a-z0-9]+", "_", lowered)
     return collapsed.strip("_")
+
+
+def _prefer_platform_install_paths(
+    pending: List[Tuple[str, str]],
+) -> List[Tuple[str, str]]:
+    """Re-point any pending registration whose key belongs to an installed
+    plugin at the path the PLATFORM records for that plugin.
+
+    WHY. `repos.<key>` is how the fleet addresses a repo by name. When the
+    key names a repo that is also an installed plugin, there is an
+    authority on where that plugin lives -- Claude Code's own
+    `installed_plugins.json` -- and discovery is not it: discovery finds
+    every clone on the box and cannot tell the live one from a bystander.
+    On the box that produced klabauter#2 there were two `coordinator-claude`
+    clones, the plugin ran from a third path named in the manifest, and
+    registration wrote a clone the platform was not loading. Nothing failed
+    loudly, because a registry value that resolves to a real directory looks
+    correct from every angle except the platform's.
+
+    Negative spec: this does NOT widen the module's source set. Repos still
+    come only from `discover_working_repos`' tiers (see the module
+    docstring's tier-gated contract) -- this corrects the VALUE of a key
+    that was already going to be written, and never introduces a key for a
+    plugin that discovery did not surface. A manifest that names no
+    installPath for a pending key leaves that entry exactly as discovery
+    produced it.
+    """
+    try:
+        installed = installed_plugin_paths(Path(home_dir()) / ".claude")
+    except Exception as exc:  # noqa: BLE001 — never-block contract
+        print(f"{_PROG}: could not read installed_plugins.json: {exc}", file=sys.stderr)
+        return pending
+    if not installed:
+        return pending
+    # Keyed off the installPath's BASENAME, not the plugin name: `repos.*`
+    # keys are derived from repo basenames, and a plugin's declared name is
+    # routinely not its clone's directory name (the `coordinator` plugin
+    # lives in a `coordinator-claude` clone -- exactly the pair that broke
+    # on the reporting box). Matching on the name would have missed the only
+    # case this exists for.
+    by_key = {}
+    for path in installed.values():
+        k = _derive_key(os.path.basename(path.replace("\\", "/").rstrip("/")))
+        if k:
+            by_key[k] = path
+
+    corrected: List[Tuple[str, str]] = []
+    for key, path in pending:
+        live = by_key.get(key)
+        if not live or same_dir(live, path):
+            corrected.append((key, path))
+            continue
+        print(
+            f"{_PROG}: {key!r} — discovery found {path}, but the platform loads "
+            f"this plugin from {live}. Registering the platform's path.",
+            file=sys.stderr,
+        )
+        corrected.append((key, live))
+    return corrected
 
 
 def _resolve_machine_local(self_dir: Path) -> Optional[str]:
@@ -264,6 +325,7 @@ def main(argv: Sequence[str], self_dir: Optional[Path] = None) -> int:
     snapshot = _registry_snapshot(ml_argv)
 
     to_register: List[Tuple[str, str]] = []
+    claimed_by: Dict[str, str] = {}
     for repo_path in candidates:
         key = _derive_key(os.path.basename(repo_path.rstrip("/")))
         if not key:
@@ -288,7 +350,26 @@ def main(argv: Sequence[str], self_dir: Optional[Path] = None) -> int:
             already_registered = has_rc == 0
         if already_registered:
             continue
+        claimed = claimed_by.get(key)
+        if claimed is not None:
+            if same_dir(claimed, repo_path):
+                # Two spellings of one directory (klabauter#2). Discovery
+                # dedups these now, so reaching here means a caller fed us
+                # its own un-deduped list; keep the first spelling rather
+                # than letting the later one overwrite it.
+                continue
+            print(
+                f"{_PROG}: WARNING: {key!r} names two different directories "
+                f"— keeping {claimed}, ignoring {repo_path}. "
+                f"Register the other explicitly under a distinct key: "
+                f"machine-local set repos.<name> {repo_path}",
+                file=sys.stderr,
+            )
+            continue
+        claimed_by[key] = repo_path
         to_register.append((key, repo_path))
+
+    to_register = _prefer_platform_install_paths(to_register)
 
     if not to_register:
         # Every discovered repo is already registered — a definitive

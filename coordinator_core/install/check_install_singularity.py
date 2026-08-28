@@ -98,6 +98,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 from coordinator_core import machine_resolver
+from coordinator_core.path_identity import dir_identity
 
 # ---------------------------------------------------------------------------
 # Unit 1 — bootstrap + path helpers
@@ -335,12 +336,24 @@ def _has_parent_child_pair(paths: List[str]) -> bool:
 
 
 class _TreeSet:
-    """Ordered canonical-path accumulator — mirrors the bash oracle's
+    """Ordered canonical-path accumulator -- mirrors the bash oracle's
     `declare -A _seen_trees` + `_tree_count`, but with deterministic
-    insertion-ordered iteration (see module docstring divergence note)."""
+    insertion-ordered iteration (see module docstring divergence note).
+
+    Identity is the filesystem's, not the canonical string. `Path.resolve()`
+    resolves symlinks but does NOT normalize case, and macOS/Windows are
+    case-insensitive by default -- so a box where two enumerated sources
+    spell one tree differently (registry `live_path` as `~/Code/...`,
+    `CLAUDE_PLUGIN_ROOT` as `~/code/...`) counted two trees and CHECK 4
+    failed a correct install as an "accidental split". Same root cause as
+    the discovery double-count in klabauter#2, failing in the louder
+    direction: a false FAIL that blocks install, rather than a silent
+    duplicate. The canonical string is still what gets REPORTED -- only the
+    dedup identity changed.
+    """
 
     def __init__(self) -> None:
-        self._seen: "Dict[str, int]" = {}
+        self._seen: "Dict[object, str]" = {}
 
     def add(self, raw: str) -> None:
         if not raw:
@@ -355,8 +368,9 @@ class _TreeSet:
         canon = _canonical_dir(norm)
         if not canon:
             return
-        if canon not in self._seen:
-            self._seen[canon] = 1
+        identity = dir_identity(canon, fallback=canon)
+        if identity not in self._seen:
+            self._seen[identity] = canon
 
     @property
     def count(self) -> int:
@@ -364,7 +378,7 @@ class _TreeSet:
 
     @property
     def paths(self) -> List[str]:
-        return list(self._seen.keys())
+        return list(self._seen.values())
 
 
 def _check1_claude_home_suffix_guard(claude_home: Optional[str]) -> Optional[Tuple[str, str]]:
