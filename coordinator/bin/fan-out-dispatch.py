@@ -378,7 +378,12 @@ def _memory_probe() -> str:
     if not os.path.isfile(probe):
         return ""
     try:
-        from cc_invoke import child_env  # noqa: E402 (path injected at module top)
+        # `lib` is injected by `_resolve_claude_klabauter_root_silent`, which this path
+        # does not call -- so inject here too rather than depend on call order.
+        _lib = os.path.join(SCRIPT_DIR, "lib")
+        if _lib not in sys.path:
+            sys.path.insert(0, _lib)
+        from cc_invoke import child_env  # noqa: E402
 
         proc = subprocess.run(
             [sys.executable, probe],

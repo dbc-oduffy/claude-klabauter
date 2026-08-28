@@ -150,6 +150,24 @@ def test_interrupted_fold_self_heals_on_next_fold(tmp_path: Path) -> None:
     assert rs.read_reviewed_set(str(repo)) == frozenset({sha})
 
 
+def test_fold_in_accepts_non_ascii_record_id(tmp_path: Path) -> None:
+    """Record ids are caller-supplied strings (a trail file path or
+    path#index), not a fixed ASCII shape like a SHA — a non-ASCII path
+    segment must fold cleanly, not raise `UnicodeEncodeError`."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_repo(repo)
+    _make_commit(repo, "C0")
+    sha = _make_commit(repo, "C1")
+    record_id = "state/review-trail/Motörhead.md#3"
+
+    result = rs.fold_in(str(repo), [(record_id, f"{sha}^..{sha}")])
+    assert result.folded_record_ids == [record_id]
+    assert result.unresolved_record_ids == []
+    assert sha in rs.read_reviewed_set(str(repo))
+    assert record_id in rs.read_folded_record_ids(str(repo))
+
+
 def test_never_folds_record_id_before_its_shas_are_durable(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Directly pins the ordering invariant: `_append_shas` is called (and
     therefore observable on disk) before `_append_folded_ids` is called,
@@ -259,6 +277,27 @@ def test_resolvable_record_alongside_unresolvable_one_only_folds_the_good_one(tm
     assert result.unresolved_record_ids == ["rec-bad"]
     assert sha in rs.read_reviewed_set(str(repo))
     assert "rec-bad" not in rs.read_folded_record_ids(str(repo))
+
+
+def test_reach_set_build_failure_leaves_every_record_unresolved(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When `git rev-list --all --parents` fails, `_build_reach_set` returns
+    None and `fold_in` must leave every record in the batch unresolved —
+    never fold a wrong empty-set answer."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_repo(repo)
+    _make_commit(repo, "C0")
+    sha = _make_commit(repo, "C1")
+
+    monkeypatch.setattr(rs, "_build_reach_set", lambda repo_root: None)
+    result = rs.fold_in(str(repo), [("rec-1", f"{sha}^..{sha}")])
+    assert result.folded_record_ids == []
+    assert result.unresolved_record_ids == ["rec-1"]
+    assert result.new_shas == frozenset()
+    assert "rec-1" not in rs.read_folded_record_ids(str(repo))
+    assert rs.read_reviewed_set(str(repo)) == frozenset()
 
 
 # ---------------------------------------------------------------------------

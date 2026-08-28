@@ -88,6 +88,7 @@ import uuid
 from pathlib import Path
 from typing import Iterator, List, Optional
 
+from coordinator_core.benchmarks import declare_benchmark_origin
 from coordinator_core.benchmarks.process_time import batched_process_time_ms
 from coordinator_core.git.run import GitResult, run_git
 from coordinator_core.benchmarks.timer import SUBPROCESS_CREATIONFLAGS
@@ -632,6 +633,7 @@ def run_real_round_ab(
 
 
 def main(argv: Optional[List[str]] = None) -> int:
+    declare_benchmark_origin()
     parser = argparse.ArgumentParser(
         description=(
             "Round-level A/B harness: process time + spawn count for a full "

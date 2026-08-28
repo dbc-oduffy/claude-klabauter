@@ -27,6 +27,7 @@ Spec backlink: pln-qsub-01-per-op-end-to-end-late-53ff10 § C0
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import time
@@ -60,6 +61,29 @@ class BenchmarkSampleInvalid(RuntimeError):
             f"benchmark sample invalid for op={op!r}: "
             f"returncode={returncode}, stdout_excerpt={stdout_excerpt!r}"
         )
+
+
+def _child_env_with_benchmark_origin() -> dict:
+    """Builds a copy of this process's environment with the benchmark
+    origin declared for the SPAWNED CHILD only.
+
+    C1d: `declare_benchmark_origin()` mutates the interpreter-global
+    `os.environ`, which is correct at a driver's own entry but wrong here
+    -- this is a library spawn helper any caller may invoke mid-process,
+    and a global write would stamp the caller's whole process (and every
+    later subprocess it spawns) as benchmark traffic. Narrowing the write
+    to a child-scoped env dict keeps the tag on exactly the process that
+    is about to produce benchmark traffic and stops there.
+
+    Precedence preserved: `setdefault` means an ORIGIN_ENV already present
+    in this process's own environment (inherited from ITS parent) wins,
+    matching `declare_benchmark_origin`'s own non-overwriting contract.
+    """
+    from coordinator_core.telemetry import op_latency
+
+    env = dict(os.environ)
+    env.setdefault(op_latency.ORIGIN_ENV, op_latency.BENCHMARK)
+    return env
 
 
 def _build_argv(op: str, params_json: str, repo: Optional[str]) -> list[str]:
@@ -99,6 +123,8 @@ def time_invocation(op: str, params_json: str, repo: Optional[str]) -> float:
     """
     argv = _build_argv(op, params_json, repo)
 
+    child_env = _child_env_with_benchmark_origin()
+
     start = time.perf_counter()
     try:
         completed = subprocess.run(
@@ -107,6 +133,7 @@ def time_invocation(op: str, params_json: str, repo: Optional[str]) -> float:
             text=True,
             timeout=SUBPROCESS_TIMEOUT_S,
             creationflags=SUBPROCESS_CREATIONFLAGS,
+            env=child_env,
         )
     except subprocess.TimeoutExpired as exc:
         # Review: code-reviewer (Slice B F3, P2) — a hung child process must

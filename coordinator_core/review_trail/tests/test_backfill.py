@@ -269,3 +269,19 @@ class TestRunBackfill:
         assert result.folded == []
         assert result.excluded == []
         assert result.unresolved == []
+
+    def test_unparseable_file_is_reported_not_dropped(self, tmp_path):
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _init_repo(repo)
+        trail_dir = repo / "state" / "review-trail"
+        trail_dir.mkdir(parents=True)
+        bad_path = trail_dir / "2026-08-28-000000-deadbeef.json"
+        bad_path.write_text("not json at all {{{", encoding="utf-8")
+
+        result = backfill.run_backfill(str(repo))
+
+        assert result.parse_failures == ["state/review-trail/2026-08-28-000000-deadbeef.json"]
+        assert result.folded == []
+        assert result.excluded == []
+        assert result.unresolved == []

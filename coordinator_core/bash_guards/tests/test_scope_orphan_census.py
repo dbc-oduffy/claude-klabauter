@@ -140,7 +140,7 @@ def test_classify_archival_sink(repo: Path):
     assert census_mod.classify_cause(str(repo), event) == "archival-sink"
 
 
-def test_classify_deletion_when_untracked_and_absent(repo: Path):
+def test_classify_deletion_unattributable_when_no_touch_claim(repo: Path):
     event = census_mod.OrphanEvent(
         timestamp="2026-08-27T09:00:00Z",
         day="2026-08-27",
@@ -149,7 +149,51 @@ def test_classify_deletion_when_untracked_and_absent(repo: Path):
         path="never/existed.py",
         log_path="",
     )
-    assert census_mod.classify_cause(str(repo), event) == "deletion"
+    assert census_mod.classify_cause(str(repo), event) == "deletion-unattributable"
+
+
+def _write_touch_record(repo: Path, session_id: str, path: str, verb: str = "T") -> None:
+    from coordinator_core.session import touch_record as _touch_record
+
+    session_dir = repo / ".git" / "coordinator-sessions" / session_id
+    session_dir.mkdir(parents=True, exist_ok=True)
+    sink = _touch_record.sink_path(session_dir)
+    line = _touch_record.encode_line(
+        verb=verb,
+        timestamp=0.0,
+        session_id=session_id,
+        agent_id=None,
+        path=path,
+        content_hash=None,
+    )
+    with open(sink, "ab") as fh:
+        fh.write(line)
+
+
+def test_classify_deletion_attributable_when_deleting_session_has_own_touch_claim(repo: Path):
+    _write_touch_record(repo, "sess-1", "removed/by-me.py")
+    event = census_mod.OrphanEvent(
+        timestamp="2026-08-27T09:00:00Z",
+        day="2026-08-27",
+        session_id="sess-1",
+        event_type="foreign-staged",
+        path="removed/by-me.py",
+        log_path="",
+    )
+    assert census_mod.classify_cause(str(repo), event) == "deletion-attributable"
+
+
+def test_classify_deletion_unattributable_when_claim_belongs_to_a_different_session(repo: Path):
+    _write_touch_record(repo, "sess-2", "removed/by-someone-else.py")
+    event = census_mod.OrphanEvent(
+        timestamp="2026-08-27T09:00:00Z",
+        day="2026-08-27",
+        session_id="sess-1",
+        event_type="foreign-staged",
+        path="removed/by-someone-else.py",
+        log_path="",
+    )
+    assert census_mod.classify_cause(str(repo), event) == "deletion-unattributable"
 
 
 def test_classify_unrecorded_write_when_file_exists_on_disk(repo: Path):
@@ -177,13 +221,45 @@ def test_classify_unrecorded_write_when_tracked_at_head(repo: Path):
     assert census_mod.classify_cause(str(repo), event) == "unrecorded-write"
 
 
-def test_classify_undeclared_op_output_derived_from_op_source(repo: Path, monkeypatch):
+def test_classify_prefix_match_alone_falls_through_to_unrecorded_write(repo: Path, monkeypatch):
+    # C7b: prefix membership alone is no longer sufficient. This mirrors the
+    # first-run misfiling -- 13 of 15 `undeclared-op-output` members were
+    # `state/sizings/*.yaml` files a heredoc wrote directly, with no exact
+    # literal and no touch-record claim, merely living under a directory
+    # some op also names.
     ops_dir = repo / "coordinator_core" / "ops"
     ops_dir.mkdir(parents=True)
     (ops_dir / "some_op.py").write_text(
         'OUTPUT_DIR = "state/sizings"\n', encoding="utf-8"
     )
     census_mod._op_output_prefix_cache = None
+    census_mod._any_touch_claim_cache = None
+    (repo / "state").mkdir()
+    (repo / "state" / "sizings").mkdir()
+    (repo / "state" / "sizings" / "example.yaml").write_text("x: 1\n", encoding="utf-8")
+    event = census_mod.OrphanEvent(
+        timestamp="2026-08-27T09:00:00Z",
+        day="2026-08-27",
+        session_id="sess-1",
+        event_type="foreign-staged",
+        path="state/sizings/example.yaml",
+        log_path="",
+    )
+    assert census_mod.classify_cause(str(repo), event) == "unrecorded-write"
+    census_mod._op_output_prefix_cache = None
+    census_mod._any_touch_claim_cache = None
+
+
+def test_classify_undeclared_op_output_when_prefix_corroborated_by_exact_literal(repo: Path):
+    ops_dir = repo / "coordinator_core" / "ops"
+    ops_dir.mkdir(parents=True)
+    (ops_dir / "some_op.py").write_text(
+        'OUTPUT_DIR = "state/sizings"\n'
+        'FIXED_PATH = "state/sizings/example.yaml"\n',
+        encoding="utf-8",
+    )
+    census_mod._op_output_prefix_cache = None
+    census_mod._any_touch_claim_cache = None
     (repo / "state").mkdir()
     (repo / "state" / "sizings").mkdir()
     (repo / "state" / "sizings" / "example.yaml").write_text("x: 1\n", encoding="utf-8")
@@ -197,6 +273,32 @@ def test_classify_undeclared_op_output_derived_from_op_source(repo: Path, monkey
     )
     assert census_mod.classify_cause(str(repo), event) == "undeclared-op-output"
     census_mod._op_output_prefix_cache = None
+    census_mod._any_touch_claim_cache = None
+
+
+def test_classify_undeclared_op_output_when_prefix_corroborated_by_touch_claim(repo: Path):
+    ops_dir = repo / "coordinator_core" / "ops"
+    ops_dir.mkdir(parents=True)
+    (ops_dir / "some_op.py").write_text(
+        'OUTPUT_DIR = "state/sizings"\n', encoding="utf-8"
+    )
+    census_mod._op_output_prefix_cache = None
+    census_mod._any_touch_claim_cache = None
+    (repo / "state").mkdir()
+    (repo / "state" / "sizings").mkdir()
+    (repo / "state" / "sizings" / "example.yaml").write_text("x: 1\n", encoding="utf-8")
+    _write_touch_record(repo, "sess-2", "state/sizings/example.yaml")
+    event = census_mod.OrphanEvent(
+        timestamp="2026-08-27T09:00:00Z",
+        day="2026-08-27",
+        session_id="sess-1",
+        event_type="foreign-staged",
+        path="state/sizings/example.yaml",
+        log_path="",
+    )
+    assert census_mod.classify_cause(str(repo), event) == "undeclared-op-output"
+    census_mod._op_output_prefix_cache = None
+    census_mod._any_touch_claim_cache = None
 
 
 def test_op_output_prefix_cache_is_populated_after_first_call(repo: Path):
@@ -229,7 +331,8 @@ def test_run_census_buckets_counts_by_cause_path_session(repo: Path):
 
     assert result.total_events == 3
     assert result.by_cause["archival-sink"] == 1
-    assert result.by_cause["deletion"] == 1
+    assert result.by_cause["deletion-unattributable"] == 1
+    assert result.by_cause["deletion-attributable"] == 0
     assert result.by_cause["unrecorded-write"] == 1
     assert result.by_cause["genuinely-unowned"] == 0
     assert result.by_path["archive/handoffs/a.md"] == 1
@@ -243,7 +346,8 @@ def test_run_census_every_cause_key_present_even_when_zero(repo: Path):
     result = census_mod.run_census(str(repo))
     for cause in (
         "archival-sink",
-        "deletion",
+        "deletion-attributable",
+        "deletion-unattributable",
         "undeclared-op-output",
         "unrecorded-write",
         "genuinely-unowned",
@@ -301,3 +405,76 @@ def test_main_prints_json_for_day(repo: Path, capsys):
     assert rc == 0
     out = capsys.readouterr().out
     assert '"archival-sink": 1' in out
+
+
+# --- --since ---------------------------------------------------------------
+
+
+def test_since_excludes_events_before_the_instant(repo: Path):
+    _write_log(
+        repo,
+        "sess-1",
+        [
+            _orphan_line("2026-08-27T09:00:00Z", "sess-1", "archive/handoffs/before.md"),
+            _orphan_line("2026-08-27T10:00:00Z", "sess-1", "archive/handoffs/after.md"),
+        ],
+    )
+    events = list(
+        census_mod.iter_orphan_events(str(repo), since="2026-08-27T09:30:00Z")
+    )
+    assert [e.path for e in events] == ["archive/handoffs/after.md"]
+
+
+def test_since_includes_the_boundary_instant(repo: Path):
+    _write_log(
+        repo,
+        "sess-1",
+        [_orphan_line("2026-08-27T09:30:00Z", "sess-1", "archive/handoffs/boundary.md")],
+    )
+    events = list(
+        census_mod.iter_orphan_events(str(repo), since="2026-08-27T09:30:00Z")
+    )
+    assert [e.path for e in events] == ["archive/handoffs/boundary.md"]
+
+
+def test_since_unparseable_timestamp_does_not_filter_out_the_event(repo: Path):
+    _write_log(
+        repo,
+        "sess-1",
+        [_orphan_line("not-a-timestamp", "sess-1", "archive/handoffs/keep.md")],
+    )
+    events = list(
+        census_mod.iter_orphan_events(str(repo), since="2026-08-27T09:30:00Z")
+    )
+    assert [e.path for e in events] == ["archive/handoffs/keep.md"]
+
+
+def test_run_census_accepts_since(repo: Path):
+    _write_log(
+        repo,
+        "sess-1",
+        [
+            _orphan_line("2026-08-27T09:00:00Z", "sess-1", "archive/handoffs/before.md"),
+            _orphan_line("2026-08-27T10:00:00Z", "sess-1", "archive/handoffs/after.md"),
+        ],
+    )
+    result = census_mod.run_census(str(repo), since="2026-08-27T09:30:00Z")
+    assert result.total_events == 1
+    assert result.by_path["archive/handoffs/after.md"] == 1
+
+
+def test_main_accepts_since_flag(repo: Path, capsys):
+    _write_log(
+        repo,
+        "sess-1",
+        [
+            _orphan_line("2026-08-27T09:00:00Z", "sess-1", "archive/handoffs/before.md"),
+            _orphan_line("2026-08-27T10:00:00Z", "sess-1", "archive/handoffs/after.md"),
+        ],
+    )
+    rc = census_mod.main(
+        ["--git-root", str(repo), "--since", "2026-08-27T09:30:00Z"]
+    )
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert '"total_events": 1' in out

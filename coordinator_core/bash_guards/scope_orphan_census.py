@@ -20,17 +20,37 @@ Cause taxonomy (checked in this order -- first match wins):
   - ``archival-sink``: path lives under an ``archive/`` prefix. Files moved
     there by a mover exempted from `relocate_touched_path` (see that
     function's exemption list) are COUNTED here, never fixed by this module.
-  - ``deletion``: the path is not currently tracked at HEAD and does not
-    exist on disk -- a removed file can never carry a touch claim from any
-    writer, so it can only ever render orphan.
+  - ``deletion-attributable`` / ``deletion-unattributable`` (C7a): the path
+    is not currently tracked at HEAD and does not exist on disk -- a removed
+    file can never carry a touch claim from ANY writer merely by existing,
+    but the touch-record sink (`coordinator_core.session.touch_record`) for
+    the event's OWN `session_id` is checked for a raw (liveness-unfiltered)
+    TOUCH claim on the exact path. C9 is what makes an in-session `rm`/
+    `git rm` write that claim; until C9 lands this arm reads empty and every
+    deletion renders `deletion-unattributable`, which is the correct
+    reading, not a bug in this module -- see that cause's own paragraph.
+    A claim from the deleting session's own sink is ``deletion-attributable``
+    (a legitimate own-deletion; belongs in the C6 gate, must reach zero). No
+    such claim is ``deletion-unattributable`` -- the sweep shape itself
+    (a peer's file removed with no claim from anyone), evidenced live at
+    DoE-claude `ffd4372b8` (see the plan chunk body for the full incident).
+    This bucket is REPORTED but must NEVER gate the C6 flip: counting it
+    would hold the flip closed with evidence of the exact harm the flip
+    exists to deny.
   - ``undeclared-op-output``: the path falls under a repo-relative directory
     prefix that this module found, by scanning `coordinator_core/ops/*.py`
     source for path-prefix string literals, to be an op's own declared
-    output directory -- i.e. some op writes there, but `ipc.py`'s
-    `_SCOPE_TOUCH_PATHS_KEY` contract was not honoured for this particular
-    write. Derived by source scan, not hand-maintained: a new op adding a new
-    output directory is picked up automatically the next time this module
-    runs, with no edit here.
+    output directory -- AND (C7b) that prefix match is corroborated by
+    either (a) the exact path appearing as its own string literal in op
+    source (not just its prefix), or (b) a raw touch-record TOUCH claim
+    existing for the exact path from ANY session, live or not -- evidence a
+    write actually went through the `ipc.py :: _SCOPE_TOUCH_PATHS_KEY` /
+    `session.scope.touch()` seam at some point, as opposed to a heredoc
+    writing directly into a directory some op also happens to own. Prefix
+    membership ALONE is no longer sufficient (C7b) -- 13 of 15 first-run
+    members were `state/sizings/*.yaml` a plan-authoring session wrote by
+    heredoc, misfiled here only because some op also names that directory;
+    those are C2's `unrecorded-write` bucket and now fall through to it.
   - ``unrecorded-write``: none of the above, and the path currently exists
     (tracked or on disk) -- a real staged file with no touch record naming
     it. Today's dominant bucket per the retired code-comment census.
@@ -41,11 +61,17 @@ Cause taxonomy (checked in this order -- first match wins):
 Negative-spec (RAG-bait): this module never hand-maintains a list of known
 orphan paths or filenames. The `undeclared-op-output` bucket is derived by
 scanning live op source at call time; every other bucket is derived from git
-state or filesystem existence. A cause this module cannot explain lands in
-`genuinely-unowned` and is visible in the census output, rather than being
-silently folded into `unrecorded-write` or dropped.
+state, the touch-record sink, or filesystem existence. A cause this module
+cannot explain lands in `genuinely-unowned` and is visible in the census
+output, rather than being silently folded into `unrecorded-write` or
+dropped. `deletion-attributable` and `deletion-unattributable` are never
+folded into `genuinely-unowned` either -- the residue bucket is where a
+cause this module cannot explain lands, not a drain for a cause it has
+decided not to count.
 
-Spec backlink: docs/plans/2026-08-27-a-pathspec-is-not-a-scope.md, chunk C1.
+Spec backlink: docs/plans/2026-08-27-a-pathspec-is-not-a-scope.md, chunk C1
+(taxonomy), chunk C7 (attributability split, corroboration requirement,
+`--since`).
 """
 
 from __future__ import annotations
@@ -71,7 +97,8 @@ _ORPHAN_OWNER_TOKEN = "owner:orphan"
 _ARCHIVE_PREFIX = "archive/"
 _CAUSES = (
     "archival-sink",
-    "deletion",
+    "deletion-attributable",
+    "deletion-unattributable",
     "undeclared-op-output",
     "unrecorded-write",
     "genuinely-unowned",
@@ -155,12 +182,42 @@ def _parse_log_line(line: str, log_path: str) -> Optional[OrphanEvent]:
     )
 
 
-def iter_orphan_events(git_root: str, day: Optional[str] = None) -> Iterator[OrphanEvent]:
+def _parse_iso8601(value: str):
+    """Parse an ISO-8601 timestamp (``Z``-suffixed or offset-bearing) into a
+    timezone-aware `datetime`, or `None` if unparseable.
+
+    Never raises -- an unparseable `--since` value or log timestamp must
+    fail toward "cannot compare" (event NOT filtered out) rather than
+    crashing the census or silently excluding it.
+    """
+    if not value:
+        return None
+    text = value.strip()
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        from datetime import datetime as _datetime
+
+        return _datetime.fromisoformat(text)
+    except ValueError:
+        return None
+
+
+def iter_orphan_events(
+    git_root: str, day: Optional[str] = None, since: Optional[str] = None
+) -> Iterator[OrphanEvent]:
     """Yield every `owner:orphan` event under `git_root`'s session logs.
 
     `day` (``YYYY-MM-DD``), when given, filters to events whose timestamp
-    falls on that day. No filtering when `day` is None.
+    falls on that day. `since` (an ISO-8601 timestamp), when given, filters
+    to events at or after that instant -- this is what makes the census a
+    re-runnable GATE rather than a whole-day snapshot: a fix landing mid-day
+    is otherwise invisible until the next calendar day's window opens (C7c).
+    An event whose timestamp does not parse is never dropped by the `since`
+    filter (fail toward inclusion, not toward a falsely-clean window). Both
+    filters may be combined; either, neither, or both may be None.
     """
+    since_dt = _parse_iso8601(since) if since is not None else None
     for log_path in _iter_scope_warning_logs(git_root):
         try:
             with open(log_path, encoding="utf-8", errors="replace") as fh:
@@ -176,6 +233,10 @@ def iter_orphan_events(git_root: str, day: Optional[str] = None) -> Iterator[Orp
                 continue
             if day is not None and event.day != day:
                 continue
+            if since_dt is not None:
+                event_dt = _parse_iso8601(event.timestamp)
+                if event_dt is not None and event_dt < since_dt:
+                    continue
             yield event
 
 
@@ -249,12 +310,126 @@ def _exists_on_disk_or_tracked(git_root: str, path: str) -> bool:
     return _git_tracked_at_head(git_root, path)
 
 
+def _session_dir_for(git_root: str, session_id: str) -> str:
+    return os.path.join(git_root, ".git", "coordinator-sessions", session_id)
+
+
+def _read_sink_claims(sink) -> Dict[str, object]:
+    """Read one touch-record sink's raw (liveness-UNFILTERED) claim map.
+
+    Never raises: an ImportError of `coordinator_core.session.touch_record`
+    or any read failure inside it must not crash the census -- degrades to
+    "no claim found" (the same fail-toward-inclusion posture C9's own
+    docstring calls out for a deletion this arm cannot yet corroborate).
+    """
+    try:
+        from coordinator_core.session import touch_record as _touch_record
+    except ImportError:
+        return {}
+    try:
+        claims, _degraded, _reasons = _touch_record._read_stream_claims(sink)
+    except Exception:
+        return {}
+    return claims
+
+
+def _deletion_is_attributable(git_root: str, event: OrphanEvent) -> bool:
+    """True only if the DELETING session's own touch-record sink carries a
+    raw TOUCH claim on this exact path -- evidence this session itself
+    ran the `rm`/`git rm` (C9 makes that recordable; see this module's
+    docstring). Deliberately liveness-UNFILTERED: the session that deleted
+    the path may well have ended by the time the census runs, and a dead
+    session's own legitimate self-deletion must still count as attributable,
+    never get relegated to the sweep-shape bucket merely because it is no
+    longer live.
+    """
+    try:
+        from coordinator_core.session import touch_record as _touch_record
+    except ImportError:
+        return False
+    sink = _touch_record.sink_path(_session_dir_for(git_root, event.session_id))
+    claims = _read_sink_claims(sink)
+    winning = claims.get(event.path)
+    return winning is not None and getattr(winning, "verb", None) == _touch_record.VERB_TOUCH
+
+
+_any_touch_claim_cache: Optional[Dict[str, bool]] = None
+
+
+def _has_any_touch_claim(git_root: str, path: str) -> bool:
+    """True if ANY session's touch-record sink, anywhere under
+    `.git/coordinator-sessions/`, carries a raw (liveness-UNFILTERED) TOUCH
+    claim for the exact `path` -- evidence the write went through the
+    `session.scope.touch()` / `ipc.py :: _SCOPE_TOUCH_PATHS_KEY` seam at
+    some point, as distinct from a write that never touched that seam at
+    all (a heredoc writing directly into a directory some op also owns).
+    Cached per `run_census` call the same way `_derive_op_output_prefixes`
+    is -- the sessions-root scan is repo-wide and independent of any one
+    event, so it is computed once and reused.
+    """
+    global _any_touch_claim_cache
+    if _any_touch_claim_cache is None:
+        touched: Dict[str, bool] = {}
+        sessions_root = os.path.join(git_root, ".git", "coordinator-sessions")
+        if os.path.isdir(sessions_root):
+            try:
+                from coordinator_core.session import touch_record as _touch_record
+            except ImportError:
+                _touch_record = None
+            if _touch_record is not None:
+                for entry in os.listdir(sessions_root):
+                    session_dir = os.path.join(sessions_root, entry)
+                    if not os.path.isdir(session_dir):
+                        continue
+                    sink = _touch_record.sink_path(session_dir)
+                    for claimed_path, claimed_event in _read_sink_claims(sink).items():
+                        if getattr(claimed_event, "verb", None) == _touch_record.VERB_TOUCH:
+                            touched[claimed_path] = True
+        _any_touch_claim_cache = touched
+    return path in _any_touch_claim_cache
+
+
+def _is_declared_output_literal(git_root: str, path: str) -> bool:
+    """True if `path` itself (not merely its directory prefix) appears as a
+    quoted string literal in `coordinator_core/ops/*.py` source -- a
+    stronger corroboration than prefix membership for an op that writes a
+    fixed (non-dynamic) filename.
+    """
+    ops_dir = os.path.join(git_root, "coordinator_core", "ops")
+    if not os.path.isdir(ops_dir):
+        return False
+    needle_variants = (f'"{path}"', f"'{path}'")
+    for dirpath, _dirnames, filenames in os.walk(ops_dir):
+        for filename in filenames:
+            if not filename.endswith(".py"):
+                continue
+            file_path = os.path.join(dirpath, filename)
+            try:
+                with open(file_path, encoding="utf-8", errors="replace") as fh:
+                    text = fh.read()
+            except OSError:
+                continue
+            if any(needle in text for needle in needle_variants):
+                return True
+    return False
+
+
+def _op_output_is_corroborated(git_root: str, path: str) -> bool:
+    """C7b: prefix membership alone no longer suffices for
+    `undeclared-op-output` -- require the exact path to show up as either
+    its own literal in op source, or a raw touch-record TOUCH claim from
+    any session. See this module's docstring for why prefix-only matching
+    misfiled 13 of 15 first-run members.
+    """
+    return _is_declared_output_literal(git_root, path) or _has_any_touch_claim(git_root, path)
+
+
 def classify_cause(git_root: str, event: OrphanEvent) -> str:
     """Classify one `OrphanEvent` into exactly one of `_CAUSES`.
 
     Checked in fixed order -- see the module docstring's taxonomy. Every
-    check is derived from live git/filesystem/source state, never a
-    hand-maintained list of specific paths.
+    check is derived from live git/filesystem/source/touch-record state,
+    never a hand-maintained list of specific paths.
     """
     path = event.path
 
@@ -264,9 +439,11 @@ def classify_cause(git_root: str, event: OrphanEvent) -> str:
     if not _git_tracked_at_head(git_root, path) and not os.path.exists(
         os.path.join(git_root, path)
     ):
-        return "deletion"
+        if _deletion_is_attributable(git_root, event):
+            return "deletion-attributable"
+        return "deletion-unattributable"
 
-    if _looks_like_op_output(git_root, path):
+    if _looks_like_op_output(git_root, path) and _op_output_is_corroborated(git_root, path):
         return "undeclared-op-output"
 
     if _exists_on_disk_or_tracked(git_root, path):
@@ -275,16 +452,29 @@ def classify_cause(git_root: str, event: OrphanEvent) -> str:
     return "genuinely-unowned"
 
 
-def run_census(git_root: str, day: Optional[str] = None) -> CensusResult:
+def run_census(
+    git_root: str, day: Optional[str] = None, since: Optional[str] = None
+) -> CensusResult:
     """Read every `owner:orphan` event under `git_root`, classify it, and
     return the resulting `CensusResult` for `day` (or all days if None).
+
+    `since` (C7c), when given, narrows to events at or after that ISO-8601
+    instant -- what makes a fix landed mid-day measurable without waiting
+    for the next calendar day's window (see `iter_orphan_events`'s
+    docstring). Resets the per-run op-output-prefix / touch-claim caches
+    first, so a fix that changed op source or the touch record between two
+    calls is reflected, not served stale from the previous call.
     """
+    global _op_output_prefix_cache, _any_touch_claim_cache
+    _op_output_prefix_cache = None
+    _any_touch_claim_cache = None
+
     result = CensusResult(day=day)
     for cause in _CAUSES:
         result.by_cause[cause] = 0
         result.members[cause] = []
 
-    for event in iter_orphan_events(git_root, day=day):
+    for event in iter_orphan_events(git_root, day=day, since=since):
         cause = classify_cause(git_root, event)
         result.total_events += 1
         result.by_cause[cause] = result.by_cause.get(cause, 0) + 1
@@ -318,6 +508,16 @@ def main(argv: Optional[List[str]] = None) -> int:
         help="Filter to events on this day (YYYY-MM-DD). Default: all days.",
     )
     parser.add_argument(
+        "--since",
+        default=None,
+        help=(
+            "Filter to events at or after this ISO-8601 instant (e.g. "
+            "2026-08-27T14:30:00Z). Default: no lower bound. Combine with "
+            "--day, or use alone to measure a fix landed mid-day without "
+            "waiting for the next day's window."
+        ),
+    )
+    parser.add_argument(
         "--git-root",
         default=None,
         help="Repo root to scan. Default: `git rev-parse --show-toplevel`.",
@@ -325,7 +525,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     args = parser.parse_args(argv)
 
     git_root = args.git_root or _default_git_root()
-    result = run_census(git_root, day=args.day)
+    result = run_census(git_root, day=args.day, since=args.since)
     print(json.dumps(result.to_dict(), indent=2, sort_keys=True))
     return 0
 

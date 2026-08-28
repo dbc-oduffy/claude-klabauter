@@ -43,27 +43,27 @@ _LIB_DIR = os.path.join(_BIN_DIR, "lib")
 # import below raises ModuleNotFoundError every time this CLI runs as a
 # subprocess (which is how every real caller invokes it).
 _REPO_ROOT = os.path.dirname(os.path.dirname(_BIN_DIR))
-if _REPO_ROOT not in sys.path:
-    sys.path.insert(0, _REPO_ROOT)
 
-import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
-from cc_invoke import require_dispatch_engine_on_path  # noqa: E402
+_BOOTSTRAP_DONE = False
 
-require_dispatch_engine_on_path()
-# LOAD-BEARING, NOT DEAD. Do not delete on an unused-import sweep: this line is
-# what BINDS coordinator_core, and binding it HERE is the whole fix.
-# require_dispatch_engine_on_path() above only mutates sys.path -- it imports
-# nothing. Without this line the next module-level import below (a binder module
-# that resolves on the LOCATOR axis) wins the race and binds coordinator_core off
-# the working tree instead of the dispatch root, and no later sys.path insert can
-# rebind an already-imported package. Removing it restores a silent wrong-tree
-# divergence that require_dispatch_engine_on_path now raises on.
-# Why: docs/plans/2026-08-26-the-seam-reports-what-it-got.md C9,
-# docs/research/engine-provenance-carrier-dependence.md
-import coordinator_core  # noqa: E402,F401
 
-from coordinator_data_root import data_root  # noqa: E402
-from machine_local_resolve import resolve_machine_local_bin  # noqa: E402
+def _bootstrap_engine() -> None:
+    """Put `_REPO_ROOT` on `sys.path` so `machine_local_resolve.py`'s own
+    module-level `coordinator_core.win_portability` import resolves.
+    Idempotent.
+
+    What moved, and what did NOT: this single-line mutation used to run at
+    MODULE scope, which made every import of this file mutate the `sys.path`
+    of a warm server ~50 sessions share. The line is preserved exactly; only
+    the trigger moved. No name is bound as a global here, so there is
+    nothing to publish and no `__getattr__` hook is needed.
+    """
+    global _BOOTSTRAP_DONE
+    if _BOOTSTRAP_DONE:
+        return
+    if _REPO_ROOT not in sys.path:
+        sys.path.insert(0, _REPO_ROOT)
+    _BOOTSTRAP_DONE = True
 
 
 def _resolve_plugin_root() -> Path:
@@ -73,6 +73,9 @@ def _resolve_plugin_root() -> Path:
     `coordinator_data_root.data_root()`), since that parent IS the coordinator
     root under either layout.
     """
+    _bootstrap_engine()
+    from coordinator_data_root import data_root
+
     env = os.environ.get("CLAUDE_PLUGIN_ROOT")
     if env:
         return Path(env)
@@ -80,6 +83,25 @@ def _resolve_plugin_root() -> Path:
 
 
 def main(argv: "list[str] | None" = None) -> int:
+    _bootstrap_engine()
+    import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
+    from cc_invoke import require_dispatch_engine_on_path
+
+    require_dispatch_engine_on_path()
+    # LOAD-BEARING, NOT DEAD. Do not delete on an unused-import sweep: this line is
+    # what BINDS coordinator_core, and binding it HERE is the whole fix.
+    # require_dispatch_engine_on_path() above only mutates sys.path -- it imports
+    # nothing. Without this line the next import below (a binder module
+    # that resolves on the LOCATOR axis) wins the race and binds coordinator_core off
+    # the working tree instead of the dispatch root, and no later sys.path insert can
+    # rebind an already-imported package. Removing it restores a silent wrong-tree
+    # divergence that require_dispatch_engine_on_path now raises on.
+    # Why: docs/plans/2026-08-26-the-seam-reports-what-it-got.md C9,
+    # docs/research/engine-provenance-carrier-dependence.md
+    import coordinator_core  # noqa: F401
+
+    from machine_local_resolve import resolve_machine_local_bin
+
     args = (sys.argv[1:] if argv is None else argv)
     subcommand = args[0] if args else ""
 

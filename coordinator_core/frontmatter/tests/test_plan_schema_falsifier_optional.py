@@ -133,6 +133,85 @@ class TestFalsifierRequiredFields:
         assert errors != []
 
 
+class TestPromotionFieldsFrom290:
+    """The 2.9.0 bump's three falsifier fields, and the `dependentRequired`
+    rule that had no validator behind it until this vendoring.
+
+    The schema encodes `dependentRequired: {"promotion": ["promotion_reason"]}`
+    -- PRESENT `promotion` REQUIRES `promotion_reason`. Read the direction off
+    the schema, not off the prose: "promotion_reason is dependentRequired on
+    promotion" reads naturally as the reverse, and the first version of these
+    tests asserted it that way and failed. Recording a non-promotion obliges
+    you to say why; a bare reason obliges nothing.
+
+    The keyword was unimplemented in `_validate_json_schema_node`, so vendoring
+    2.9.0 without implementing it would have accepted the rule and enforced
+    nothing -- `test_schema_keyword_coverage` caught exactly that, and these are
+    the behaviour tests behind the implementation.
+
+    Negative-spec: `promoted_to` and `promotion` are mutually exclusive via the
+    schema's `not`/`required` pair; that is a separate rule from the dependency
+    here.
+    """
+
+    def test_falsifier_with_promoted_to_is_valid(self):
+        fm = _valid_plan(
+            prime_exit_criterion={
+                "statement": "The engine warms in under 50ms.",
+                "derived_from": "state/goals/example-goal.yaml#kr-latency",
+                "falsifier": _valid_falsifier(
+                    promoted_to="coordinator_core/warm/tests/test_warm_floor.py"
+                ),
+            }
+        )
+        assert validate_frontmatter(fm, _PLAN_SCHEMA) == []
+
+    def test_promotion_with_its_reason_is_valid(self):
+        fm = _valid_plan(
+            prime_exit_criterion={
+                "statement": "The engine warms in under 50ms.",
+                "derived_from": "state/goals/example-goal.yaml#kr-latency",
+                "falsifier": _valid_falsifier(
+                    promotion="not-applicable",
+                    promotion_reason="the criterion is a one-shot migration check",
+                ),
+            }
+        )
+        assert validate_frontmatter(fm, _PLAN_SCHEMA) == []
+
+    def test_promotion_without_its_reason_is_refused(self):
+        """The dependentRequired rule, in the direction that must fail.
+
+        Without the keyword implemented this record validates clean, which is
+        the silent no-op this test exists to keep from returning.
+        """
+        fm = _valid_plan(
+            prime_exit_criterion={
+                "statement": "The engine warms in under 50ms.",
+                "derived_from": "state/goals/example-goal.yaml#kr-latency",
+                "falsifier": _valid_falsifier(promotion="not-applicable"),
+            }
+        )
+        errors = validate_frontmatter(fm, _PLAN_SCHEMA)
+        assert errors, "promotion without promotion_reason must not validate"
+        assert any(e["field"].endswith("promotion_reason") for e in errors), errors
+
+    def test_reason_alone_is_valid_so_the_dependency_is_one_directional(self):
+        """`promotion_reason` does not require `promotion` -- only the reverse.
+
+        Asserting the unconstrained direction keeps a future 'tighten it until
+        the test passes' from quietly making both fields co-required.
+        """
+        fm = _valid_plan(
+            prime_exit_criterion={
+                "statement": "The engine warms in under 50ms.",
+                "derived_from": "state/goals/example-goal.yaml#kr-latency",
+                "falsifier": _valid_falsifier(promotion_reason="unpromoted, deliberately"),
+            }
+        )
+        assert validate_frontmatter(fm, _PLAN_SCHEMA) == []
+
+
 class TestExitCriterionMet:
     def test_asserted_true_alone_is_valid(self):
         fm = _valid_plan(exit_criterion_met={"asserted": True})

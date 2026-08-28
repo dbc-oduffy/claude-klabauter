@@ -56,8 +56,6 @@ import os
 import shutil
 import sys
 
-import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
-from cc_invoke import require_dispatch_engine_on_path  # noqa: E402
 from pathlib import Path
 
 _EXIT_OK = 0
@@ -111,6 +109,9 @@ def _names_a_live_server(record: dict | None) -> bool:
 
     stored_epoch = record.get("stable_pid_start_epoch")
     stored_epoch_str = str(stored_epoch) if stored_epoch is not None else ""
+
+    import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
+    from cc_invoke import require_dispatch_engine_on_path
 
     try:
         require_dispatch_engine_on_path()

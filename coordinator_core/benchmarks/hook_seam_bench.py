@@ -41,6 +41,8 @@ import statistics
 import time
 from typing import Callable, Dict, List, Optional
 
+from coordinator_core.benchmarks import declare_benchmark_origin
+
 
 def _percentile(sorted_xs: List[float], q: float) -> float:
     """Nearest-rank percentile. Explicit rather than `statistics.quantiles` so a small n
@@ -407,6 +409,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     Prints the wall table, the process-time rows, and `p(listener up)` --
     this is what reproduces the four-arm-turned-three-arm breakdown AC1
     asks for, rather than the manifest's hand-taken rows."""
+    declare_benchmark_origin()
     import argparse
 
     parser = argparse.ArgumentParser(description=__doc__)

@@ -3960,14 +3960,35 @@ def commit_scoped(
 
     # C3 (docs/plans/2026-08-14-the-tool-stages-what-it-commits.md):
     # `supplied_blobs` never reaches the agree branch, regardless of what
-    # `diverged` says. The agree branch's own `git add -- path_list` reads
-    # the SHARED worktree and would silently overwrite a supplied path's
-    # provenanced blob with whatever a peer's ordinary edit left on disk --
-    # exactly the incident class this plan closes. A supplied path is
-    # therefore always routed to `_commit_scoped_private_index`, which
-    # resolves it to `_SOURCE_SUPPLIED` via `_resolve_content_sources`
-    # (supplied wins over both `diverged`/`non_diverged` membership) and
-    # commits its cacheinfo blob verbatim, never re-reading the worktree.
+    # `diverged` says. A supplied path is always routed to
+    # `_commit_scoped_private_index`, which resolves it to `_SOURCE_SUPPLIED`
+    # via `_resolve_content_sources` (supplied wins over both `diverged`/
+    # `non_diverged` membership) and commits its cacheinfo blob verbatim,
+    # never re-reading the worktree.
+    #
+    # C3's ORIGINAL rationale named "the agree branch's own `git add --
+    # path_list`, which reads the SHARED worktree and would silently
+    # overwrite a supplied path's provenanced blob". That `git add` no
+    # longer exists: the zero-spawn rewrite (verdicts/2026-08-25-the-zero-
+    # spawn-git-object-write.md, and the block inside the branch below)
+    # retired the agree branch's `git add`/`git commit` pair in favour of
+    # the SAME `_commit_scoped_private_index` landing the diverged branch
+    # uses. Both branches now build under a private index and land via
+    # `cas_ref`; neither stages onto the shared index. The routing above
+    # stands on `_resolve_content_sources`'s precedence, not on avoiding a
+    # `git add` that is gone.
+    #
+    # Corrected 2026-08-27 (claude-klabauter-b8) because the stale wording is
+    # load-bearing for readers: "the agree branch stages" is what a peer
+    # reasoning about absorption risk concludes from, and it is no longer
+    # true in either direction -- it does not sweep a peer's staged work,
+    # and it does not leave the shared index holding an entry for a path it
+    # just committed. That second consequence is the defect in
+    # state/bug-backlog/2026-08-27-a-bare-commit-after-memo-send-reverts-
+    # the-whole-receipt.yaml: a brand-new file committed through either
+    # branch is never added to the shared index, so `git status` reports it
+    # `D ` and `??` at once and the next bare commit by any session lands
+    # its deletion.
     supplied_blobs = supplied_blobs or {}
     if not diverged and not supplied_blobs:
         # Layer-1 CAS check (see the snapshot comment above `diverging_

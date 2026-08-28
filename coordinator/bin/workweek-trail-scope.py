@@ -56,10 +56,6 @@ so concurrent weekly gates never clobber each other's scope.
 import os
 import sys
 
-import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
-from cc_invoke import require_dispatch_engine_on_path  # noqa: E402
-
-
 def _import_runner():
     """Resolve the engine root, put it on sys.path, and import the run-op runner.
 
@@ -74,6 +70,9 @@ def _import_runner():
     become a session scope-touch claim. Without that, the session-keyed
     scope shard this CLI writes is an orphan at the `scoped_git_commit` sink.
     """
+    import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
+    from cc_invoke import require_dispatch_engine_on_path
+
     claude_klabauter_root = require_dispatch_engine_on_path()
     from coordinator_core.cli_entry import run_op_main
     return run_op_main

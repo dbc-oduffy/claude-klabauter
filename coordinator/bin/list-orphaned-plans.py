@@ -54,8 +54,24 @@ import sys
 from pathlib import Path
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
-if str(_REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(_REPO_ROOT))
+
+_BOOTSTRAP_DONE = False
+
+
+def _bootstrap_engine() -> None:
+    """Put the repo root on sys.path so `coordinator_core` imports resolve.
+
+    Moved out of module scope: this used to mutate sys.path on every import
+    of this file, a process global ~50 warm-server sessions share. Only the
+    trigger moved.
+    """
+    global _BOOTSTRAP_DONE
+    if _BOOTSTRAP_DONE:
+        return
+    if str(_REPO_ROOT) not in sys.path:
+        sys.path.insert(0, str(_REPO_ROOT))
+    _BOOTSTRAP_DONE = True
+
 
 _USAGE_FAIL = 2
 
@@ -73,6 +89,7 @@ def _resolve_repo_root(positional: str | None) -> str | None:
     CLI (see module docstring); the registered op and the orient-assemble
     reader both keep the explicit-repo_root discipline instead.
     """
+    _bootstrap_engine()
     from coordinator_core.git.repo_root import show_toplevel
 
     if positional:
@@ -89,6 +106,7 @@ def _usage(prog: str) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    _bootstrap_engine()
     from coordinator_core.ops.draft_plan_aging import AGING_THRESHOLD_DAYS, list_orphaned
     from coordinator_core.orient_assemble.reader_result import truncate_external_text
 

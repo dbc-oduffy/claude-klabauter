@@ -44,6 +44,7 @@ import os
 import sys
 import tempfile
 
+from coordinator_core.benchmarks import declare_benchmark_origin
 from coordinator_core.benchmarks.interleave import Primitive, _time_subprocess, run_interleaved
 from coordinator_core.benchmarks.shim_decision_rule import (
     N_ROUNDS,
@@ -95,6 +96,7 @@ def run_and_record() -> ShimDecisionRecord:
 
 
 if __name__ == "__main__":  # pragma: no cover
+    declare_benchmark_origin()
     _record = run_and_record()
     print(f"baseline={_record.baseline_name} p90={_record.baseline_stat_ms:.2f}ms n={_record.baseline_sample_count}")
     print(f"shim={_record.shim_name} p90={_record.shim_stat_ms:.2f}ms n={_record.shim_sample_count}")

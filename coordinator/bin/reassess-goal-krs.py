@@ -44,8 +44,6 @@ import subprocess
 import sys
 
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
-from cc_invoke import cc_invoke  # noqa: E402
 
 
 def _find_repo_root(start: str) -> str:
@@ -70,6 +68,9 @@ def _print_help() -> None:
 
 
 def main(argv: "list[str] | None" = None) -> int:
+    import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
+    from cc_invoke import cc_invoke
+
     argv = (sys.argv[1:] if argv is None else argv)
 
     goals_dir = ""

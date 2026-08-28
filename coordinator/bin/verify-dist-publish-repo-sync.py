@@ -83,11 +83,6 @@ there is no --fix mode, since the correct fix is always
 import os
 import sys
 
-import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
-from cc_invoke import require_dispatch_engine_on_path  # noqa: E402
-from coordinator_registry import _DoeUnresolvable, doe_root  # noqa: E402
-
-
 def _plugin_root() -> str:
     """Resolve the plugin root (coordinator/) that owns dist/publish-repo-{toplevel,docs}/.
 
@@ -118,6 +113,9 @@ def _plugin_root() -> str:
     distinct from the op's own 0/1/2 business codes, matching this
     trampoline's existing engine-root-resolution-failure convention below.
     """
+    import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
+    from coordinator_registry import _DoeUnresolvable, doe_root
+
     env_val = os.environ.get("CLAUDE_PLUGIN_ROOT")
     if env_val:
         return env_val
@@ -142,6 +140,9 @@ def _import_run_op_main():
     `declare_write` becomes a session scope-touch claim instead of an
     unclaimed orphan at the `scoped_git_commit` sink.
     """
+    import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
+    from cc_invoke import require_dispatch_engine_on_path
+
     claude_klabauter_root = require_dispatch_engine_on_path()
     from coordinator_core.cli_entry import run_op_main
 

@@ -10,8 +10,14 @@ Probes under test:
   claude-klabauter.root.pointer   — claude-klabauter-live-root pointer file present at
                           <settings-home>/machine-local/.claude-klabauter-live-root and matches the
                           resolved CLAUDE_KLABAUTER_ROOT; DEGRADED (not hard FAIL) on absence/mismatch.
-  claude-klabauter.invoke.latency — measures a single coordinator_core.invoke round-trip against a
-                          2000 ms budget; DEGRADED (not BROKEN) over budget or on timeout.
+  claude-klabauter.invoke.latency — measures a single coordinator_core.invoke round-trip as PROCESS
+                          TIME (never wall clock) against a 500 ms brightline budget;
+                          DEGRADED (not BROKEN) over budget or on timeout.
+
+Also covers the C4 "Question the sink cannot answer:" sentinel — every retained probe
+in _IMPLEMENTED_IDS must carry the literal heading in its own docstring, so Clause B of
+pln-2026-08-27-the-undeclared-harness-and-the-redundant-probes's exit criterion is
+machine-checkable rather than a grep-for-a-phrase-nobody-commits-to.
 
 Probe-authoring invariant (per state/lessons/2026-07-04-a-diagnostic-must-always-emit-a-parseabl.yaml):
   Every probe must emit a parseable _ProbeResult on ALL paths — including its own
@@ -226,7 +232,14 @@ class TestInvokeLatencyProbe:
     """_run_probe_invoke_latency() — under-budget / over-budget / timeout / None-root paths.
 
     Key invariant: over-budget and timeout are DEGRADED (WARN), never BROKEN, and the
-    subprocess call is timeout-guarded so this probe can never hang the doctor.
+    measurement is bounded (daemon thread + Thread.join(timeout=...)) so this probe
+    can never hang the doctor.
+
+    The probe measures via `coordinator_core.benchmarks.process_time
+    .single_invocation_tree_process_time`, imported locally inside the probe function
+    per call — so these tests monkeypatch that name on the real
+    `coordinator_core.benchmarks.process_time` module (not `mod.subprocess`), which is
+    picked up fresh by the probe's own local import each invocation.
     """
 
     @pytest.fixture
@@ -244,18 +257,32 @@ class TestInvokeLatencyProbe:
         stamp.write_text("sha-published")
         return tmp_path
 
+    @pytest.fixture
+    def process_time_mod(self):
+        from coordinator_core.benchmarks import process_time as ptm
+
+        return ptm
+
     def test_latency_under_budget_is_pass(
-        self, monkeypatch: pytest.MonkeyPatch, stamped_root: Path
+        self, monkeypatch: pytest.MonkeyPatch, stamped_root: Path, process_time_mod
     ) -> None:
-        """PASS when the (mocked) round-trip completes well under budget."""
+        """PASS when the (mocked) round-trip completes well under the process-time budget."""
         mod = _require_module()
 
-        class _FakeResult:
-            returncode = 0
-            stdout = '{"result": {"ok": true}}'
-            stderr = ""
+        def _fake_measure(*a, **kw):
+            return {
+                "process_time_ms": 50.0,
+                "wall_ms": 60.0,
+                "procs": 1,
+                "rc": 0,
+                "k": 1,
+                "stdout_path": kw.get("stdout_path"),
+                "stderr_path": kw.get("stderr_path"),
+            }
 
-        monkeypatch.setattr(mod.subprocess, "run", lambda *a, **kw: _FakeResult())
+        monkeypatch.setattr(
+            process_time_mod, "single_invocation_tree_process_time", _fake_measure
+        )
 
         result = mod._run_probe_invoke_latency(stamped_root)
 
@@ -268,26 +295,35 @@ class TestInvokeLatencyProbe:
         assert result.data is not None
         assert result.data["timed_out"] is False
         assert result.data["budget_ms"] == mod._INVOKE_LATENCY_BUDGET_MS
+        assert result.data["budget_ms"] == 500, (
+            "claude-klabauter.invoke.latency must gate against the 500 ms brightline, not 2000 ms"
+        )
+        assert result.data["process_time_ms"] == 50.0
+        assert "wall_ms" not in result.data, (
+            "the gated data must not smuggle a wall-clock figure back in under a "
+            "different key"
+        )
 
     def test_latency_over_budget_is_degraded(
-        self, monkeypatch: pytest.MonkeyPatch, stamped_root: Path
+        self, monkeypatch: pytest.MonkeyPatch, stamped_root: Path, process_time_mod
     ) -> None:
-        """DEGRADED (not BROKEN) when the measured elapsed time exceeds the budget.
-
-        Monkeypatches time.perf_counter to fabricate an elapsed time comfortably
-        over _INVOKE_LATENCY_BUDGET_MS without an actual slow subprocess.
-        """
+        """DEGRADED (not BROKEN) when the measured process time exceeds the budget."""
         mod = _require_module()
 
-        class _FakeResult:
-            returncode = 0
-            stdout = '{"result": {"ok": true}}'
-            stderr = ""
+        def _fake_measure(*a, **kw):
+            return {
+                "process_time_ms": mod._INVOKE_LATENCY_BUDGET_MS + 100.0,
+                "wall_ms": mod._INVOKE_LATENCY_BUDGET_MS + 120.0,
+                "procs": 1,
+                "rc": 0,
+                "k": 1,
+                "stdout_path": None,
+                "stderr_path": None,
+            }
 
-        monkeypatch.setattr(mod.subprocess, "run", lambda *a, **kw: _FakeResult())
-
-        _times = iter([0.0, (mod._INVOKE_LATENCY_BUDGET_MS / 1000.0) + 1.0])
-        monkeypatch.setattr(mod.time, "perf_counter", lambda: next(_times))
+        monkeypatch.setattr(
+            process_time_mod, "single_invocation_tree_process_time", _fake_measure
+        )
 
         result = mod._run_probe_invoke_latency(stamped_root)
 
@@ -305,24 +341,33 @@ class TestInvokeLatencyProbe:
         assert "claude-klabauter-live-root pointer" in result.remediation
 
     def test_latency_timeout_is_degraded_not_broken(
-        self, monkeypatch: pytest.MonkeyPatch, stamped_root: Path
+        self, monkeypatch: pytest.MonkeyPatch, stamped_root: Path, process_time_mod
     ) -> None:
-        """DEGRADED (not BROKEN, not a hang) when the bounded subprocess call times out.
+        """DEGRADED (not BROKEN, not a hang) when the bounded measurement window elapses.
 
         A timeout IS the failure being detected — the probe must survive it and
         emit a DEGRADED verdict, never propagate the exception or hang itself.
+        The bound is shrunk to keep the test fast; the fake measurement sleeps
+        past it.
         """
         mod = _require_module()
 
-        def _raise_timeout(*args, **kwargs):
-            raise _subprocess.TimeoutExpired(cmd=args[0] if args else "cmd", timeout=5)
+        monkeypatch.setattr(mod, "_INVOKE_LATENCY_TIMEOUT_SECONDS", 0.1)
 
-        monkeypatch.setattr(mod.subprocess, "run", _raise_timeout)
+        def _hang_forever(*a, **kw):
+            import time as _time
+
+            _time.sleep(2.0)
+            return {"process_time_ms": 1.0, "wall_ms": 1.0, "procs": 1, "rc": 0, "k": 1}
+
+        monkeypatch.setattr(
+            process_time_mod, "single_invocation_tree_process_time", _hang_forever
+        )
 
         result = mod._run_probe_invoke_latency(stamped_root)
 
         assert _is_parseable_probe_result(result), (
-            "TimeoutExpired must produce a parseable _ProbeResult, not a crash"
+            "a bounded-window timeout must produce a parseable _ProbeResult, not a crash"
         )
         assert result.probe == "claude-klabauter.invoke.latency"
         assert result.status == mod._DEGRADED, (
@@ -334,21 +379,47 @@ class TestInvokeLatencyProbe:
         assert result.data["timed_out"] is True
 
     def test_latency_spawn_failure_emits_skip_not_crash(
-        self, monkeypatch: pytest.MonkeyPatch, stamped_root: Path
+        self, monkeypatch: pytest.MonkeyPatch, stamped_root: Path, process_time_mod
     ) -> None:
-        """SKIP (not a crash) when subprocess.run raises FileNotFoundError (interpreter absent)."""
+        """SKIP (not a crash) when the measurement primitive raises FileNotFoundError
+        (interpreter absent)."""
         mod = _require_module()
 
         def _raise_fnf(*args, **kwargs):
             raise FileNotFoundError("no such interpreter")
 
-        monkeypatch.setattr(mod.subprocess, "run", _raise_fnf)
+        monkeypatch.setattr(
+            process_time_mod, "single_invocation_tree_process_time", _raise_fnf
+        )
 
         result = mod._run_probe_invoke_latency(stamped_root)
 
         assert _is_parseable_probe_result(result), (
             "spawn FileNotFoundError must produce a parseable _ProbeResult, not a crash"
         )
+        assert result.probe == "claude-klabauter.invoke.latency"
+        assert result.skipped is True
+        assert result.required is False
+        assert result.status == mod._INFO
+
+    def test_latency_unsupported_platform_emits_skip_not_crash(
+        self, monkeypatch: pytest.MonkeyPatch, stamped_root: Path, process_time_mod
+    ) -> None:
+        """SKIP (not BROKEN, not DEGRADED) when process time measurement itself is
+        unavailable on this platform (`NotImplementedError`) — an unmeasurable
+        platform is not the same fact as a slow round-trip."""
+        mod = _require_module()
+
+        def _raise_ni(*args, **kwargs):
+            raise NotImplementedError("no process-time primitive on this platform")
+
+        monkeypatch.setattr(
+            process_time_mod, "single_invocation_tree_process_time", _raise_ni
+        )
+
+        result = mod._run_probe_invoke_latency(stamped_root)
+
+        assert _is_parseable_probe_result(result)
         assert result.probe == "claude-klabauter.invoke.latency"
         assert result.skipped is True
         assert result.required is False
@@ -407,18 +478,25 @@ class TestInvokeLatencyDispatchRoot:
             engine_root_mod, "published_engine_mirror_path", lambda: str(mirror)
         )
 
-        cwds: list[object] = []
+        from coordinator_core.benchmarks import process_time as process_time_mod
 
-        class _FakeResult:
-            returncode = 0
-            stdout = '{"result": {"ok": true}}'
-            stderr = ""
+        cwds: list[object] = []
 
         def _capture(*a, **kw):
             cwds.append(kw.get("cwd"))
-            return _FakeResult()
+            return {
+                "process_time_ms": 50.0,
+                "wall_ms": 60.0,
+                "procs": 1,
+                "rc": 0,
+                "k": 1,
+                "stdout_path": kw.get("stdout_path"),
+                "stderr_path": kw.get("stderr_path"),
+            }
 
-        monkeypatch.setattr(mod.subprocess, "run", _capture)
+        monkeypatch.setattr(
+            process_time_mod, "single_invocation_tree_process_time", _capture
+        )
 
         result = mod._run_probe_invoke_latency(clone)
 
@@ -448,3 +526,54 @@ class TestInvokeLatencyDispatchRoot:
         assert result.required is False
         assert result.data["dispatch_root"] is None
         assert spawned == []
+
+
+# ---------------------------------------------------------------------------
+# C4 sentinel — "Question the sink cannot answer:" per retained probe
+# ---------------------------------------------------------------------------
+
+# The three probes RETAINED by pln-2026-08-27-the-undeclared-harness-and-the-
+# redundant-probes § C4 — each MUST carry the literal heading
+# "Question the sink cannot answer:" in its own docstring. This is the
+# constant the plan's Clause B falsifies on: any id here without a matching
+# docstring block fails the assertion below.
+_IMPLEMENTED_IDS = {
+    "claude-klabauter.invoke.smoke": "_run_probe_invoke_smoke",
+    "claude-klabauter.invoke.latency": "_run_probe_invoke_latency",
+    "claude-klabauter.warm.roundtrip": "_run_probe_warm_roundtrip",
+}
+
+_SENTINEL_HEADING = "Question the sink cannot answer:"
+
+
+class TestQuestionTheSinkCannotAnswerSentinel:
+    """Every retained probe in _IMPLEMENTED_IDS states, in its own docstring, the
+    question it asks that the op-census sink cannot answer -- making disposition
+    (RETAINED, and why) machine-checkable rather than a claim nobody has to prove."""
+
+    @pytest.mark.parametrize("probe_id,fn_name", sorted(_IMPLEMENTED_IDS.items()))
+    def test_retained_probe_carries_sentinel_heading(
+        self, probe_id: str, fn_name: str
+    ) -> None:
+        mod = _require_module()
+
+        fn = getattr(mod, fn_name)
+        doc = fn.__doc__ or ""
+
+        assert probe_id in doc, (
+            f"{fn_name}'s docstring must reference its own probe id {probe_id!r}"
+        )
+        assert _SENTINEL_HEADING in doc, (
+            f"{fn_name} ({probe_id}) is RETAINED but its docstring is missing the "
+            f"literal heading {_SENTINEL_HEADING!r} — every retained probe must "
+            "state, in its own body, the question it asks that the dispatch sink "
+            "cannot answer (pln-2026-08-27-the-undeclared-harness-and-the-"
+            "redundant-probes § C4)."
+        )
+
+        # The prose following the heading must be non-trivial, not a bare label.
+        after = doc.split(_SENTINEL_HEADING, 1)[1]
+        assert len(after.strip()) > 40, (
+            f"{fn_name} ({probe_id}): the sentinel heading must be followed by an "
+            "actual question-and-why statement, not left empty"
+        )

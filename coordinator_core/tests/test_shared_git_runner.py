@@ -191,7 +191,7 @@ def _resolved_git_names(tree: ast.Module) -> "frozenset[str]":
     carries no literal `"git"` head, so the head-matching below saw nothing
     and the module spawned git entirely outside this gate's inventory. Five
     modules were in that state when it was found (`git/ls_files.py`,
-    `git/ls_files_bytes.py`, `ops/eol/census.py`, `ops/eol/repair.py`,
+    `git/ls_files_bytes.py`,
     `ops/normalize_env.py`), all since migrated onto `run_git` -- which is
     why no register row was needed for any of them, and why this detector
     must stay: nothing else would have said so.

@@ -66,12 +66,12 @@ from pathlib import Path
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 _CLAUDE_KLABAUTER_REPO_ROOT = Path(_SCRIPT_DIR).resolve().parents[1]
-if str(_CLAUDE_KLABAUTER_REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(_CLAUDE_KLABAUTER_REPO_ROOT))
 
-from coordinator_core.win_portability import no_console_creationflags  # noqa: E402
-import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
-from raw_cmdline_recovery import UnsoundRawCmdlineTransport, recover_windows_argv  # noqa: E402
+
+def _ensure_repo_root_on_path() -> None:
+    if str(_CLAUDE_KLABAUTER_REPO_ROOT) not in sys.path:
+        sys.path.insert(0, str(_CLAUDE_KLABAUTER_REPO_ROOT))
+
 
 #: The .cmd launcher's own basename — used by `recover_windows_argv` to locate
 #: where this invocation's own arguments begin within the raw `%CMDCMDLINE%`
@@ -94,6 +94,9 @@ def _run_session_claim_cli(slug: str) -> tuple[int, str]:
     """Invoke the sibling session-claim-cli's claim-plan subcommand and return
     (returncode, combined_stdout_and_stderr) — combined the same way the ported
     bash captured `claim_out=$(... 2>&1)`. Isolated for test monkeypatching."""
+    _ensure_repo_root_on_path()
+    from coordinator_core.win_portability import no_console_creationflags
+
     cmd = [sys.executable, os.path.join(_SCRIPT_DIR, "session-claim-cli.py"), "claim-plan", slug]
     proc = subprocess.run(
         cmd,
@@ -169,6 +172,10 @@ def main(argv: list[str]) -> int:
 
 
 if __name__ == "__main__":
+    _ensure_repo_root_on_path()
+    import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
+    from raw_cmdline_recovery import UnsoundRawCmdlineTransport, recover_windows_argv
+
     try:
         _argv = recover_windows_argv(sys.argv[1:], _LAUNCHER_CMD_NAME)
     except UnsoundRawCmdlineTransport:

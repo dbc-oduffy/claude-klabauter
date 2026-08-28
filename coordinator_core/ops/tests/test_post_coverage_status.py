@@ -16,6 +16,13 @@ Covers, per the C3 dispatch brief:
     range (no changed files).
   - a FAIL verdict posts `state=failure`.
 
+Also covers `resolve_token()`'s full ladder, which shipped with C1 untested
+-- the gap that let a fail-closed-on-a-present-credential defect through 15
+green tests. In particular: a `hosts.yml` in SECURE-STORAGE shape (host
+entry present, no `oauth_token` key) must fall THROUGH leg 3 rather than
+resolve to None, because that is the shape every keyring-backed `gh auth
+login` writes.
+
 Does NOT re-test the coverage engine itself (`gate.validate_invocable` /
 `_run_gate_validate_invocable`) -- that has its own suite
 (`coordinator/bin/tests/test_merge_gate_and_pr.py` and
@@ -160,3 +167,132 @@ def test_changed_files_genuine_empty_range_is_distinguished_from_git_failure(mon
     assert "no changed files" in description
     assert "git diff failed" not in description
     assert gate_calls == [], "an empty range must also short-circuit before consulting the gate's verdict engine"
+
+
+# ---------------------------------------------------------------------------
+# Token ladder: env -> hosts.yml -> Windows Credential Manager, fail closed.
+# ---------------------------------------------------------------------------
+
+
+def _isolate_ladder(monkeypatch, *, hosts_entry=None, cred_token=None):
+    """Cut `resolve_token`'s three lower legs off the live machine.
+
+    Every token test runs against injected state -- never this box's real
+    environment, real `hosts.yml`, or real credential store.
+    """
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    monkeypatch.delenv("GH_TOKEN", raising=False)
+    monkeypatch.setattr(pcs_mod, "_gh_github_host_entry", lambda: hosts_entry)
+    monkeypatch.setattr(
+        pcs_mod, "_token_from_windows_credential_manager", lambda: cred_token
+    )
+
+
+@pytest.mark.parametrize("env_name", ["GITHUB_TOKEN", "GH_TOKEN"])
+def test_env_token_wins_over_every_lower_leg(monkeypatch, env_name):
+    _isolate_ladder(
+        monkeypatch, hosts_entry={"oauth_token": "from-hosts"}, cred_token="from-cred"
+    )
+    monkeypatch.setenv(env_name, "from-env")
+
+    assert pcs_mod.resolve_token() == "from-env"
+
+
+def test_github_token_outranks_gh_token(monkeypatch):
+    _isolate_ladder(monkeypatch)
+    monkeypatch.setenv("GITHUB_TOKEN", "primary")
+    monkeypatch.setenv("GH_TOKEN", "secondary")
+
+    assert pcs_mod.resolve_token() == "primary"
+
+
+def test_hosts_file_oauth_token_resolves_without_reaching_the_credential_store(
+    monkeypatch,
+):
+    calls = []
+    _isolate_ladder(monkeypatch, hosts_entry={"oauth_token": "from-hosts"})
+    monkeypatch.setattr(
+        pcs_mod,
+        "_token_from_windows_credential_manager",
+        lambda: calls.append(1) or "from-cred",
+    )
+
+    assert pcs_mod.resolve_token() == "from-hosts"
+    assert calls == [], "leg 4 must not be consulted once leg 3 has produced a token"
+
+
+def test_secure_storage_hosts_shape_falls_through_to_the_credential_store(monkeypatch):
+    """THE REGRESSION THIS SUITE EXISTS FOR.
+
+    A keyring-backed `gh auth login` writes a `github.com` entry carrying
+    `users:`/`user:` and NO `oauth_token`. Leg 3 must report "no token here",
+    not "no token anywhere" -- the file parses fine, so a `return None` at
+    that point is a fail-closed on a credential that IS present, and once
+    the ruleset is live that refuses every push to `main`.
+    """
+    _isolate_ladder(
+        monkeypatch,
+        hosts_entry={"users": {"dbc-example-operator": None}, "user": "dbc-example-operator"},
+        cred_token="from-cred",
+    )
+
+    assert pcs_mod._token_from_gh_hosts_file() is None
+    assert pcs_mod.resolve_token() == "from-cred"
+
+
+def test_no_token_anywhere_resolves_none(monkeypatch):
+    _isolate_ladder(monkeypatch)
+
+    assert pcs_mod.resolve_token() is None
+
+
+def test_no_token_posts_nothing_rather_than_assuming_covered(monkeypatch):
+    _isolate_ladder(monkeypatch)
+    computed = []
+    monkeypatch.setattr(
+        pcs_mod, "compute_status", lambda *a, **kw: computed.append(1) or ("success", "")
+    )
+
+    result = pcs_mod.post_coverage_status("o", "r", "sha", "main..HEAD")
+
+    assert result.posted is False
+    assert result.state is None
+    assert "no GitHub token" in result.reason
+    assert computed == [], "an unpostable run must not spend the verdict computation"
+
+
+def test_credential_manager_leg_is_inert_off_windows(monkeypatch):
+    monkeypatch.setattr(pcs_mod.sys, "platform", "linux")
+
+    assert pcs_mod._token_from_windows_credential_manager() is None
+
+
+@pytest.mark.parametrize(
+    "blob,expected",
+    [
+        (b"gho_abc123", "gho_abc123"),
+        ("gho_abc123".encode("utf-16-le"), "gho_abc123"),
+        (b"  gho_abc123  ", "gho_abc123"),
+        (b"", None),
+        (b"\x00\x01\x02", None),
+    ],
+)
+def test_credential_blob_decodes_both_encodings_and_fails_closed_on_junk(blob, expected):
+    assert pcs_mod._decode_credential_blob(blob) == expected
+
+
+def test_active_account_prefers_the_user_key_then_falls_back_to_users(monkeypatch):
+    monkeypatch.setattr(
+        pcs_mod,
+        "_gh_github_host_entry",
+        lambda: {"user": "chosen", "users": {"other": None}},
+    )
+    assert pcs_mod._gh_active_account() == "chosen"
+
+    monkeypatch.setattr(
+        pcs_mod, "_gh_github_host_entry", lambda: {"users": {"only": None}}
+    )
+    assert pcs_mod._gh_active_account() == "only"
+
+    monkeypatch.setattr(pcs_mod, "_gh_github_host_entry", lambda: None)
+    assert pcs_mod._gh_active_account() is None

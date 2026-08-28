@@ -430,7 +430,17 @@ SUSPENDED_OPS: Dict[str, Dict[str, object]] = {
             "fallback rather than the zero-spawn path, and the 2 procs on the "
             "new-file arm are explicit_stage's `git check-ignore -v`, deliberately "
             "retained because a wrong gitignore match fails SILENTLY and commits a "
-            "file the operator deliberately ignored."
+            "file the operator deliberately ignored. NOR A SEMANTIC DROP-IN, and "
+            "this row's readers are the exact affected audience: when a path named "
+            "in the pathspec is ALSO staged, commit_v2 commits the WORKTREE bytes "
+            "while the route it replaces committed the STAGED blob. Measured both "
+            "arms, same pathspec, opposite content in HEAD. A caller preserving a "
+            "deliberate partial hunk must name those paths in `prefer_staged` "
+            "(threaded through commit_v2's params) — nothing infers it, and "
+            "index-differs-from-worktree is explicitly NOT the discriminator "
+            "(git/commit.py invariant 1: equally true of an ordinary unstaged edit). "
+            "state/bug-backlog/2026-08-27-commit-v2-cutover-silently-flips-whose-c-"
+            "09cf57f3b909.yaml."
         ),
         "spinoff": None,
     },
@@ -443,7 +453,7 @@ SUSPENDED_OPS: Dict[str, Dict[str, object]] = {
     # convictions. A row here with a 0ms "breach" is a dial in disguise — the
     # ratchet's own evidence guard says so, and it is right.
     "eol.census": {
-        "measured": {"max_ms": 30007.0, "p50_ms": 30007.0, "n": 0, "unit": "wall_ms"},
+        "measured": {"max_ms": 30007.0, "p50_ms": 30007.0, "n": 0, "unit": "WALL_CLOCK"},
         "note": (
             "p95 30,007ms -- CEILING-DOMINATED, i.e. hitting the invocation "
             "timeout rather than completing "

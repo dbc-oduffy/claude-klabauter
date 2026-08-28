@@ -40,9 +40,6 @@ from __future__ import annotations
 import os
 import sys
 
-import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
-from cc_invoke import require_dispatch_engine_on_path  # noqa: E402
-
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
@@ -62,6 +59,9 @@ def _import_runner():
     docstring), so it declares nothing and this conversion changes no
     observable behavior on either macOS/Linux or Windows.
     """
+    import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
+    from cc_invoke import require_dispatch_engine_on_path
+
     claude_klabauter_root = require_dispatch_engine_on_path()
     from coordinator_core.cli_entry import run_op_main
 

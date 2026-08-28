@@ -12,6 +12,10 @@ Spec backlink: docs/plans/2026-07-20-merge-gate-dod-engine-enforced.md § C5
 
 from __future__ import annotations
 
+import subprocess
+from pathlib import Path
+from typing import List
+
 import pytest
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
@@ -50,10 +54,14 @@ _SHA_A = "a" * 40
 _SHA_B = "b" * 40
 
 
+_HDR = gate_dimension_review._SHA_HEADER_PREFIX
+
+
 def _log_z(*records: "tuple[str, str]") -> "tuple[int, str, str]":
-    """`git log --pretty=format:%H --name-only -z` output: NUL-separated
-    records, each a sha newline-joined to a path it touched."""
-    return 0, "".join(f"{sha}\n{path}\0" for sha, path in records), ""
+    """`git log --pretty=format:{prefix}%H --name-only -z` output:
+    NUL-separated records, each a `\\x01`-prefixed sha newline-joined to a
+    path it touched."""
+    return 0, "".join(f"{_HDR}{sha}\n{path}\0" for sha, path in records), ""
 
 
 def test_review_covered_when_no_changed_files() -> None:
@@ -120,11 +128,16 @@ def test_review_uncovered_when_a_commit_is_unreviewed(monkeypatch) -> None:
     assert "uncovered" in result.detail
 
 
-def test_review_reads_reviewed_set_with_no_added_spawn(monkeypatch) -> None:
-    """The reviewed-set membership check must be a pure read — no
-    `list_paths`/`build_reviewed_set` git fan-out survives the C3
-    re-pointing (docs/plans/2026-08-27-the-reviewed-set-is-a-file-not-a-
-    computation.md § C3)."""
+def test_review_calls_read_reviewed_set_once_with_no_legacy_fan_out(
+    monkeypatch,
+) -> None:
+    """Pins this module's own call shape only, not `read_reviewed_set`'s
+    internal subprocess cost (that's `review_trail.reviewed_set`'s own
+    contract, out of this slice): `_review_dimension_check` calls
+    `read_reviewed_set` exactly once, and neither retiring symbol
+    (`list_paths`/`build_reviewed_set`, the pre-C3 git fan-out) survives
+    the C3 re-pointing (docs/plans/2026-08-27-the-reviewed-set-is-a-file-
+    not-a-computation.md § C3)."""
     monkeypatch.setattr(
         gate_dimension_review, "_run_git", lambda args, cwd: _log_z((_SHA_A, "a.py"))
     )
@@ -295,6 +308,148 @@ def test_reap_findings_scope_excludes_json_trail_records() -> None:
         )
 
 
+def test_review_drops_blank_changed_files_entries_no_dot_slash_normalization(
+    monkeypatch,
+) -> None:
+    """The reverse direction of the windows-spelling test above: exercises
+    `wanted`'s own construction rather than the git-side lines. Blank/
+    whitespace-only entries are silently dropped by the `if p.strip()`
+    guard; a `./`-prefixed entry is a distinct literal from its bare form
+    (no directory normalization on the changed_files side), so only the
+    exact spelling git prints can match it."""
+    monkeypatch.setattr(
+        gate_dimension_review, "_run_git", lambda args, cwd: _log_z((_SHA_A, "foo.py"))
+    )
+    monkeypatch.setattr(
+        gate_dimension_review, "read_reviewed_set", lambda repo_root: set()
+    )
+    result = gate_dimension_review._review_dimension_check(
+        ["", "   ", "./foo.py", "foo.py"], "abc..HEAD", "/repo"
+    )
+    assert result.verdict is Verdict.FAIL, (
+        "the exact 'foo.py' entry matches and is unreviewed; blanks and the "
+        "'./foo.py' literal must not crash or spuriously widen the match"
+    )
+
+
+def test_review_handles_commit_with_empty_diff(monkeypatch) -> None:
+    """`git commit --allow-empty` (or any commit touching nothing) prints a
+    sha header with zero following path lines — the parser must not choke
+    on it, and it must never enter commit_shas since no `elif` branch
+    fires for it."""
+    out = f"{_HDR}{_SHA_A}\0{_HDR}{_SHA_B}\nfoo.py\0"
+    monkeypatch.setattr(
+        gate_dimension_review, "_run_git", lambda args, cwd: (0, out, "")
+    )
+    monkeypatch.setattr(
+        gate_dimension_review, "read_reviewed_set", lambda repo_root: set()
+    )
+    result = gate_dimension_review._review_dimension_check(
+        ["foo.py"], "abc..HEAD", "/repo"
+    )
+    assert result.verdict is Verdict.FAIL
+    assert "1/1" in result.detail, (
+        "only _SHA_B (the one with a matching path line) is uncovered; the "
+        "empty-diff _SHA_A must never enter commit_shas at all"
+    )
+
+
+def _git(args: "List[str]", cwd: Path) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        ["git", *args],
+        cwd=str(cwd),
+        capture_output=True,
+        encoding="utf-8",
+        check=True,
+        **gate_dimension_review._CREATIONFLAGS,
+    )
+
+
+def _init_repo(path: Path) -> None:
+    _git(["init", "-b", "main"], path)
+    _git(["config", "user.email", "test@example.com"], path)
+    _git(["config", "user.name", "Test"], path)
+
+
+def _commit_file(repo: Path, rel_path: str, message: str) -> str:
+    p = repo / rel_path
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(message, encoding="utf-8")
+    _git(["add", rel_path], repo)
+    _git(["commit", "-m", message], repo)
+    return _git(["rev-parse", "HEAD"], repo).stdout.strip()
+
+
+def test_review_against_real_git_covers_merge_and_hex_named_path(tmp_path) -> None:
+    """No fixture in this file exercises real git's own `-z` /
+    `--pretty=format:` / `--name-only` record framing — every other test
+    shares the `_log_z` fixture's assumption about that shape with the
+    implementation, which is exactly how both P1s this test pins survived.
+    Runs a real throwaway repo covering, in one pass: a normal commit, a
+    merge commit (must be credited via --diff-merges=first-parent), and a
+    changed file whose basename is exactly 40 hex characters (must not be
+    misread as a commit header)."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_repo(repo)
+
+    normal_sha = _commit_file(repo, "normal_file.py", "c1")
+
+    _git(["checkout", "-b", "feature"], repo)
+    feature_sha = _commit_file(repo, "feature.py", "on feature")
+    _git(["checkout", "main"], repo)
+    _commit_file(repo, "main_side.py", "on main")
+    _git(["merge", "--no-ff", "-m", "merge feature", "feature"], repo)
+    merge_sha = _git(["rev-parse", "HEAD"], repo).stdout.strip()
+
+    hex_name = "a1b2c3d4e5" * 4
+    assert len(hex_name) == 40
+    (repo / hex_name).write_text("hex-named content", encoding="utf-8")
+    (repo / "other.py").write_text("other", encoding="utf-8")
+    _git(["add", hex_name, "other.py"], repo)
+    _git(["commit", "-m", "hex-named path commit"], repo)
+    hex_commit_sha = _git(["rev-parse", "HEAD"], repo).stdout.strip()
+
+    changed_files = ["normal_file.py", "feature.py", hex_name, "other.py"]
+    # normal_sha itself is the range's lower bound and excluded by `git log
+    # <base>..HEAD`'s own exclusivity. `feature_sha` reaches the log both
+    # directly (plain `git log` traverses all ancestors, not just
+    # first-parent) and via merge_sha's own first-parent diff crediting
+    # feature.py -- either way it, merge_sha, and hex_commit_sha are the
+    # three in-range commits touching changed_files.
+    all_covered = {feature_sha, merge_sha, hex_commit_sha}
+
+    orig_read_reviewed_set = gate_dimension_review.read_reviewed_set
+    gate_dimension_review.read_reviewed_set = lambda repo_root: all_covered
+    try:
+        covered_result = gate_dimension_review._review_dimension_check(
+            changed_files, f"{normal_sha}..HEAD", repo,
+        )
+    finally:
+        gate_dimension_review.read_reviewed_set = orig_read_reviewed_set
+
+    assert covered_result.verdict is Verdict.PASS, covered_result.detail
+
+    gate_dimension_review.read_reviewed_set = lambda repo_root: {
+        feature_sha,
+        hex_commit_sha,
+    }
+    try:
+        uncovered_result = gate_dimension_review._review_dimension_check(
+            changed_files, f"{normal_sha}..HEAD", repo
+        )
+    finally:
+        gate_dimension_review.read_reviewed_set = orig_read_reviewed_set
+
+    assert uncovered_result.verdict is Verdict.FAIL
+    assert "1/3" in uncovered_result.detail, (
+        "merge_sha alone dropped from the reviewed set must leave exactly "
+        "1 of the 3 recognised commits uncovered -- proving the merge "
+        "commit was itself credited via --diff-merges=first-parent, not "
+        "merely riding along on feature_sha's plain traversal"
+    )
+
+
 def test_seam_run_dimension_uses_registered_review_check(monkeypatch) -> None:
     """End-to-end through gate_validate_invocable's own dispatch, proving the
     self-registration actually plugs into the seam's _run_dimension path."""
@@ -306,3 +461,172 @@ def test_seam_run_dimension_uses_registered_review_check(monkeypatch) -> None:
     )
     assert result.dimension == "review"
     assert result.verdict is Verdict.PASS
+
+
+# ---------------------------------------------------------------------------
+# Second credit source: the reviewer sidecar receipt.
+#
+# These tests exist because the FIRST source went stale silently. The
+# reviewed-set store is fed only by `state/review-trail/*.json` folded at
+# write time, and that corpus froze when `review_trail.write` lost its last
+# production call site (DR-372, DR-374). Measured in this clone 2026-08-28:
+# the store's newest covered commit sat 486 commits behind HEAD and none of
+# the last 400 commits were members, so this dimension returned FAIL for
+# every recent chain whether or not review had happened.
+#
+# The failure being repaired is a STUCK NEGATIVE, which is why both
+# directions are pinned below. A suite asserting only that unreviewed work
+# still FAILs would pass identically against a credit source that reads
+# nothing at all -- i.e. against the bug.
+# ---------------------------------------------------------------------------
+
+_SESSION = "11112222-3333-4444-5555-666677778888"
+_FSEP = gate_dimension_review._HEADER_FIELD_SEP
+
+
+def _log_z_full(*records: "tuple[str, str, str, str]") -> "tuple[int, str, str]":
+    """`git log` output with the FULL three-field commit header this module
+    now requests: sha, committer date, and the `Session-Id` trailer, joined
+    by `\x1f` on the one `\x01`-prefixed line, paths on the lines after."""
+    return (
+        0,
+        "".join(
+            f"{_HDR}{sha}{_FSEP}{when}{_FSEP}{sid}\n{path}\0"
+            for sha, when, sid, path in records
+        ),
+        "",
+    )
+
+
+def test_receipt_credits_a_commit_the_stale_store_missed(monkeypatch) -> None:
+    """THE POSITIVE, and the one that fails if the repoint reads nothing.
+    Empty store (the real, frozen state) + a session receipt stamped after
+    the commit -> PASS."""
+    monkeypatch.setattr(
+        gate_dimension_review,
+        "_run_git",
+        lambda args, cwd: _log_z_full(
+            (_SHA_A, "2026-08-28T11:00:00+00:00", _SESSION, "a.py")
+        ),
+    )
+    monkeypatch.setattr(gate_dimension_review, "read_reviewed_set", lambda repo_root: set())
+    monkeypatch.setattr(
+        gate_dimension_review, "receipt_credited_shas", lambda root, rows: {_SHA_A}
+    )
+    result = gate_dimension_review._review_dimension_check(["a.py"], "abc..HEAD", "/repo")
+    assert result.verdict is Verdict.PASS
+    assert "sidecar receipt" in result.detail
+
+
+def test_still_fails_when_neither_source_credits(monkeypatch) -> None:
+    """THE NEGATIVE. The gate must keep its ability to say no, or the repoint
+    has replaced a useless FAIL with a useless PASS."""
+    monkeypatch.setattr(
+        gate_dimension_review,
+        "_run_git",
+        lambda args, cwd: _log_z_full(
+            (_SHA_A, "2026-08-28T11:00:00+00:00", _SESSION, "a.py")
+        ),
+    )
+    monkeypatch.setattr(gate_dimension_review, "read_reviewed_set", lambda repo_root: set())
+    monkeypatch.setattr(
+        gate_dimension_review, "receipt_credited_shas", lambda root, rows: set()
+    )
+    result = gate_dimension_review._review_dimension_check(["a.py"], "abc..HEAD", "/repo")
+    assert result.verdict is Verdict.FAIL
+    assert "1/1" in result.detail
+
+
+def test_partial_receipt_credit_still_fails_on_the_remainder(monkeypatch) -> None:
+    """Crediting some commits must not credit the rest -- the arithmetic in
+    the detail line is the thing an operator acts on."""
+    monkeypatch.setattr(
+        gate_dimension_review,
+        "_run_git",
+        lambda args, cwd: _log_z_full(
+            (_SHA_A, "2026-08-28T11:00:00+00:00", _SESSION, "a.py"),
+            (_SHA_B, "2026-08-28T12:00:00+00:00", _SESSION, "a.py"),
+        ),
+    )
+    monkeypatch.setattr(gate_dimension_review, "read_reviewed_set", lambda repo_root: set())
+    monkeypatch.setattr(
+        gate_dimension_review, "receipt_credited_shas", lambda root, rows: {_SHA_A}
+    )
+    result = gate_dimension_review._review_dimension_check(["a.py"], "abc..HEAD", "/repo")
+    assert result.verdict is Verdict.FAIL
+    assert "1/2" in result.detail
+
+
+def test_receipt_source_is_not_consulted_when_the_store_covers_everything(
+    monkeypatch,
+) -> None:
+    """The store is the cheap path (one `os.stat`). A fully-covered range must
+    not pay for the sidecar walk or `parse_frontmatter`'s 29ms import."""
+    monkeypatch.setattr(
+        gate_dimension_review,
+        "_run_git",
+        lambda args, cwd: _log_z_full(
+            (_SHA_A, "2026-08-28T11:00:00+00:00", _SESSION, "a.py")
+        ),
+    )
+    monkeypatch.setattr(gate_dimension_review, "read_reviewed_set", lambda repo_root: {_SHA_A})
+
+    def explode(root, rows):
+        raise AssertionError("receipt credit consulted on a fully-covered range")
+
+    monkeypatch.setattr(gate_dimension_review, "receipt_credited_shas", explode)
+    result = gate_dimension_review._review_dimension_check(["a.py"], "abc..HEAD", "/repo")
+    assert result.verdict is Verdict.PASS
+
+
+def test_receipt_source_receives_date_and_session_from_the_same_git_log(
+    monkeypatch,
+) -> None:
+    """The whole cost claim rests on this: no second spawn. The date and
+    trailer must arrive parsed out of the header the dimension already
+    requested, and ONLY for the commits the store left uncovered."""
+    monkeypatch.setattr(
+        gate_dimension_review,
+        "_run_git",
+        lambda args, cwd: _log_z_full(
+            (_SHA_A, "2026-08-28T11:00:00+00:00", _SESSION, "a.py"),
+            (_SHA_B, "2026-08-28T12:00:00+00:00", "", "a.py"),
+        ),
+    )
+    monkeypatch.setattr(gate_dimension_review, "read_reviewed_set", lambda repo_root: {_SHA_B})
+
+    seen: "list[tuple[str, str, str]]" = []
+
+    def capture(root, rows):
+        seen.extend(rows)
+        return set()
+
+    monkeypatch.setattr(gate_dimension_review, "receipt_credited_shas", capture)
+    gate_dimension_review._review_dimension_check(["a.py"], "abc..HEAD", "/repo")
+    assert seen == [(_SHA_A, "2026-08-28T11:00:00+00:00", _SESSION)]
+
+
+def test_trailerless_header_still_parses_as_a_commit(monkeypatch) -> None:
+    """A commit with no `Session-Id` trailer yields an empty third field. It
+    must still be recognised as a commit and still be REQUIRED to carry
+    review evidence -- a missing trailer is not a free pass."""
+    monkeypatch.setattr(
+        gate_dimension_review,
+        "_run_git",
+        lambda args, cwd: _log_z_full((_SHA_A, "2026-08-28T11:00:00+00:00", "", "a.py")),
+    )
+    monkeypatch.setattr(gate_dimension_review, "read_reviewed_set", lambda repo_root: set())
+    result = gate_dimension_review._review_dimension_check(["a.py"], "abc..HEAD", "/repo")
+    assert result.verdict is Verdict.FAIL
+    assert "1/1" in result.detail
+
+
+def test_git_log_format_requests_date_and_session_trailer() -> None:
+    """Pins the format string itself. `separator=%x20` is load-bearing:
+    without it git terminates each trailer with a newline, the value lands on
+    its own line, and the path loop reads it as a touched path."""
+    fmt = gate_dimension_review._COMMIT_HEADER_FORMAT
+    assert fmt.startswith(gate_dimension_review._SHA_HEADER_PREFIX + "%H")
+    assert "%cI" in fmt
+    assert "key=Session-Id" in fmt
+    assert "separator=%x20" in fmt

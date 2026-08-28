@@ -79,9 +79,21 @@ NEGATIVE-SPEC
     "a sibling of `op_census.report`, not an extension"; conflating them is how
     the restated-rather-than-imported duplication happened the first time. This
     module IMPORTS its sink reader rather than restating it.
-  - Spawn counts are a FLOOR, not a total — `telemetry.spawn_counter` sees the
-    git chokepoint only, so a private `subprocess.run` is invisible to it. Said
-    on the row, said here, and said in the rendered output.
+  - Spawn counts are a FLOOR, not a total, and the floor MOVED — but NOT on a
+    date, which is how an earlier revision of this paragraph got it wrong. It
+    moves per ENGINE TREE. `telemetry.spawn_counter` gained a `sys.addaudithook`
+    seam in claude-klabauter at `4dc8e6633`, counting every `subprocess.Popen`/`os.system`
+    the process raised; before it the counter saw the git chokepoint only, so a
+    private `subprocess.run` was invisible. A row carries the new meaning only if
+    the engine that WROTE it had that commit. The published klabauter mirror
+    (whose path `coordinator-invoke.exe` pins as its `engine_root`; resolve it
+    with `machine-local get repos.klabauter`, never a literal drive letter) is a
+    separate tree on its own publish cadence, so rows written
+    through the installed exe keep the git-only meaning until the fix percolates
+    there — a date filter will misread every one of them. Both meanings remain a
+    floor against job accounting. A population spanning the move mixes them in
+    one column and the git-only half reads low. Said on the row, said here, and
+    said in the rendered output.
 
 Spec backlink: state/handoffs/2026-08-25_roadmap-the-meter-02.md
 """
@@ -113,9 +125,14 @@ KIND_COMPLETE = "complete"
 
 #: `measurement_scope` values, quoted from `ipc`'s own discriminator rather than
 #: re-derived. A `process_time` row is meaningless without one: `per_op_handler`
-#: is handler-only CPU, `per_op_process` is a whole one-shot process (interpreter
-#: start and all), `process_wide` may carry a concurrent sibling's CPU. Averaging
-#: across them produces a number in no unit at all.
+#: is handler-only CPU, `per_op_process` is a one-shot process's CPU from AFTER
+#: the interpreter has booted and this module has been imported — its writers
+#: (`ipc.dispatch_from_hook`, source_path "one_shot_cli", and `warm/server.py`'s
+#: pool worker) both take `process_start = time.process_time()` post-import, so
+#: no scope in this sink carries interpreter startup or import cost
+#: (docs/research/spike-verdicts/2026-08-27-seam-process-time-excludes-interpreter-startup.md).
+#: `process_wide` may carry a concurrent sibling's CPU. Averaging across them
+#: produces a number in no unit at all.
 SCOPE_PER_OP_HANDLER = "per_op_handler"
 SCOPE_PER_OP_PROCESS = "per_op_process"
 SCOPE_PROCESS_WIDE = "process_wide"
@@ -211,7 +228,11 @@ class OpMeasurement:
         """
         out: Dict[str, object] = {
             "op": self.op,
-            "counts_by_origin": dict(self.counts_by_origin),
+            # All four ORIGINS buckets stated by name, defaulting to 0 for a
+            # bucket with no rows — the same readable-absence shape as
+            # `process_time_samples: 0` below, rather than omitting a key a
+            # reader could mistake for "not measured" instead of "zero".
+            "counts_by_origin": {o: self.counts_by_origin.get(o, 0) for o in ORIGINS},
             "production_count": self.production_count,
             "process_time_samples": len(self.process_ms),
             "spawn_samples": len(self.spawns),
@@ -456,9 +477,13 @@ def render(
         "ops": [m.summary() for m in shown],
         "spawn_count_caveat": (
             "Spawn counts are a FLOOR for two reasons, both of which understate. "
-            "(a) telemetry.spawn_counter observes the git chokepoint "
-            "(coordinator_core.git.run.run_git) only, so any private "
-            "subprocess.run is invisible to it. (b) a Python-keyed count is low "
+            "(a) the seam MOVED on 2026-08-27. Rows before it were counted at "
+            "the git chokepoint (coordinator_core.git.run.run_git) only, so any "
+            "private subprocess.run is invisible in them; rows after it are "
+            "counted at telemetry.spawn_counter's sys.addaudithook seam and see "
+            "every subprocess.Popen/os.system the process raised. A population "
+            "spanning that date mixes both meanings in one column and its older "
+            "half reads low. (b) a Python-keyed count is low "
             "against job accounting regardless: a CreateProcess-keyed census of "
             "the close ceremony's gate path found 8 Python-created processes "
             "against 16 counted by the job object, cause unresolved "
@@ -466,8 +491,11 @@ def render(
             "Never compare a count from this field against a job-accounted count."
         ),
         "origin_caveat": (
-            "Origin 'unknown' means the row predates sink-side origin tagging. It "
-            "is NOT production and must never be added to a production count."
+            "counts_by_origin always states all four buckets by name: "
+            "'production', 'test', 'benchmark', 'unknown'. 'unknown' means the "
+            "row predates sink-side origin tagging — it is not a misclassified "
+            "row and is NEVER folded into another bucket. It is NOT production "
+            "and must never be added to a production count."
         ),
     }
     if top is not None and len(ordered) > len(shown):

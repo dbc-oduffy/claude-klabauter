@@ -2,9 +2,9 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://coordinator.local/schemas/plan.schema.json",
   "x-schema-name": "plan",
-  "x-schema-version": "2.8.0",
-  "x-bump-class": "nested-field-additive",
-  "x-bump-note": "2.7.0 -> 2.8.0 replaces the delta rule with a verdict rule: `prime_exit_criterion.falsifier` gains a required `expected_when_true` field stating what the observation yields when the criterion is TRUE, and `exit_criterion_met` gains an optional `falsifier_verdict` (pass|fail) recording whether the re-run matched it. `baseline_output` and the baseline-must-be-RED requirement are unchanged. A delta-only comparison (refuse only when `falsifier_output` equals `baseline_output`) cannot distinguish 'fixed' from 'differently wrong' — replayed against `pln-route-c-resolves-the-imported-fa0c5d`, a non-null delta (five wrong candidates pruned to none) passed the old rule while the stated criterion (resolve to the true target) remained unmet; see `state/plan-falsifiers/2026-08-27-plan-goal-as-a-first-class-exit-criterion.md`. The unchanged-output case needs no separate rule under the verdict test — an inert change also fails to match `expected_when_true`. Neither `prime_exit_criterion` nor `exit_criterion_met` enters top-level `required` (grandfathering holds); `falsifier_exemption` is unchanged. Spec backlink: pln-plan-goal-as-a-first-class-exit-criterion. 2.6.0 -> 2.7.0 adds a `pattern` to `prime_exit_criterion.derived_from`, narrowing it from an unconstrained string to the two shapes its description always named: a `state/sizings/<id>.yaml` path or a `<goal_id>#kr-<kr-id>` key-result reference into the existing per-repo goal plane (goal.schema.json), wiring the field onto that plane instead of leaving it a same-repo-only convention beside it. Every plan on disk before this bump used only the sizing-path form (grep-verified against docs/plans/*.md at bump time), so no live document is invalidated. This does NOT add an `evidence_source`-shaped field to `key_results[]`, does NOT retrofit a falsifier onto any existing KR, and does NOT gate `/goal-setting` — the link stays optional and KR-pointing is never mandatory, since most plans serve no named KR. Spec backlink: pln-plan-goal-as-a-first-class-exit-criterion § C16. 2.5.0 -> 2.6.0 declares `prime_exit_criterion` and `exit_criterion_met`, both optional top-level objects, neither in `required` — a plan on disk before this bump validates unchanged (grandfathered, never backfilled). `prime_exit_criterion` carries `statement`+`derived_from` always, plus a `falsifier` (how/baseline_output/baseline_ref) required only for plans whose `sizing_object`-linked `estimate.tshirt` is M/L/XL, enforced READ-SIDE since t-shirt size lives in the external sizing-object document and this schema cannot condition on a sibling document's content. `falsifier_exemption` is the narrow, NAMED escape hatch for a genuinely un-falsifiable-by-observation M+ criterion (doctrine/schema edits with no runtime behaviour to observe) — mutually exclusive with `falsifier`, distinct from and never merged with the size carve-out, and never `falsifier: optional`. `exit_criterion_met` carries `asserted` (required within the object; `false` is legitimate and then requires `reason`) plus `falsifier_output`/`prose`. Neither field is the retired acceptance oracle — PM ruling, 2026-08-27, five distinguishing axes (cardinality, typing, chooser, judge, target artifact); see `docs/wiki/coordinator-tripwires/tripwire-registry/acceptance-oracle-gate-retired.md`. Spec backlink: pln-plan-goal-as-a-first-class-exit-criterion § C1. 2.4.0 -> 2.5.0 declares the three-field code-review attest stamp — `review_verified_by`, `review_verified_at`, `review_verified_findings`, all optional top-level scalars, written together in one locked_rmw mutate closure alongside a terminal `status: implemented`. Rides the `status_override_{by,reason,at}` precedent this schema declared at 2.2.0 verbatim in shape and in write discipline; the writer is claude-klabauter's `plan-status-transition`, never a ceremony's frontmatter edit. `review_verified_findings` carries the `state/review-trail/findings/...` path rather than a bare count, because a count is a lossy copy of a record that already exists on disk and drifts from it — and because the path IS the idempotence key: a re-run of the same wrap with an unchanged path is a no-op, while a genuine second review after fixes produces a new path and writes. NEGATIVE SPEC: this is deliberately NOT a new `status` enum value. The review fact is a quality signal, not a liveness signal, and an enum widen would force reconciliation across five deliberately-disagreeing plan-status partitions (`PLAN_ARCHIVABLE_STATUS`, `PLAN_ORPHAN_TERMINAL_STATUS`, `PLAN_TERMINAL_STATUS`, `_FROZEN_STATUSES`, `records_query.liveness()`) across four repos' plan corpora; the ordering the fact needs is served by a derived `plan_review_verified(plan)` predicate in the emit/cockpit layer, which touches no partition. Absence means \"no code review recorded\", never \"review failed\" — nothing gates a close-out on these fields. Classified nested-field-additive: three new optional top-level scalars, nothing removed, no domain narrowed, every document valid under 2.4.0 still validates — but a mirrored consumer enumerating plan frontmatter keys exhaustively could silently ignore them until updated. Canonical-side declaration answering claude-klabauter's ask (cross-repo/inbox/2026-08-20-claude-klabauter-em-review-verified-schema-fields-ask.md); they re-vendor via bin/claude-klabauter-revendor-schema.py. The pre-existing `review_signals` mirror drift is NOT closed by this bump and needs its own hand reconciliation (claude-klabauter:state/bug-backlog/2026-08-12-three-vendored-schemas-diverge-from-doe-ffd893950268.yaml). Spec backlink: pln-a-plan-s-status-advances-itsel-fb8bf2 § C1(c). Full prior-version history: coordinator/schemas/SCHEMA-BUMP-HISTORY.md § plan.schema.json.",
+  "x-schema-version": "2.10.0",
+  "x-bump-class": "field-additive",
+  "x-bump-note": "2.9.0 -> 2.10.0 adds top-level `gated_exit_criteria`: the fleet brightlines as a machine-readable, enum-constrained list on the plan artifact, replacing their prior sole existence as prose in `coordinator/skills/workstream-complete/SKILL.md`. `met` is flipped on the existing `exit_criterion_met` close-out path -- deliberately no second enforcement path. field-additive: a plan omitting the key still validates, so no existing plan is invalidated; what changes is that a plan CARRYING the key is now validated rather than free-text. HOLDING, and stacked on 2.9.0's unreleased hold: the x-schema-version axis holds unconditionally (docs/wiki/schema-version-gate.md) -- merge-to-main and production emit are held until claude-klabauter re-vendors or confirms plan.schema.json is not in their mirrored set. 2.9.0's notification (cross-repo/inbox/2026-08-27-doe-claude-em-plan-schema-2-9-0-nested-field-additive) is unanswered; 2.10.0 owes its own. PRIOR: 2.8.0 -> 2.9.0 defines the falsifier promotion fields execute-plan \u00a7 Phase 4 already instructs an EM to write: `promoted_to` (the test path a graduated falsifier becomes a regression pin at), or `promotion: not-applicable` with a `promotion_reason`. The falsifier object is `additionalProperties: false`, so a plan recording either shape failed validation against 2.8.0. The two branches are mutually exclusive and `promotion_reason` is dependent-required on `promotion`; promotability stays a record, never a gate on the stamp. HOLDING: nested-field-additive is unconditionally holding on the x-schema-version axis (docs/wiki/schema-version-gate.md) -- merge-to-main and production emit are held until claude-klabauter re-vendors or confirms plan.schema.json is not in their mirrored set. Notified 2026-08-27: cross-repo/inbox/2026-08-27-doe-claude-em-plan-schema-2-9-0-nested-field-additive.md.",
   "applies_to": "docs/plans/*.md",
   "description": "Plan frontmatter schema. The active-execution value is 'executing', NOT the intuitive 'execution'. 'implemented' means work is done on the working branch — whether it merged to main is tracked in completion log + handoff deployment_state, NOT here.",
   "type": "object",
@@ -201,6 +201,10 @@
           "type": "object",
           "additionalProperties": false,
           "required": ["how", "baseline_output", "baseline_ref", "expected_when_true"],
+          "dependentRequired": {
+            "promotion": ["promotion_reason"]
+          },
+          "not": {"required": ["promoted_to", "promotion"]},
           "description": "The plan-time-authored observation distinguishing the prime exit criterion being true from false, with its baseline captured BEFORE any work — authored by someone with no stake yet in the answer. This is NOT a typed cell and is NOT bound to the AC table: it is one observation per plan, EM-chosen free form (a command, a query, a measurement, a named manual observation), judged by a human reading the re-run against a stated pass condition, never a script's exit code or a `grep:`/`pytest:`/`sh:` typed cell. It is NOT the retired acceptance oracle — PM ruling, 2026-08-27: 'it is categorically different' on five axes (cardinality, typing, chooser, judge, target artifact); see `docs/wiki/coordinator-tripwires/tripwire-registry/acceptance-oracle-gate-retired.md` for the retired mechanism this must not be reshaped back into, and do not 'improve' this field into a typed cell or delete it as a revival of that retirement. Mutually exclusive with `falsifier_exemption` — a prime exit criterion carries at most one of the two.",
           "properties": {
             "how": {
@@ -212,6 +216,19 @@
               "type": "string",
               "description": "The raw output of `how`, run against HEAD before any work. Must show the prime exit criterion is currently FALSE — a baseline that already passes means the criterion is mis-stated, the work is already done, or the falsifier does not measure the criterion, all of which are worth catching at plan time. Bounded at 4096 chars: this lands raw in the plan's YAML frontmatter, where an unbounded payload is a corpus hazard and the frontmatter validator is lenient about coercions. Output over the bound means the falsifier is too wide, never that the record should be truncated — narrow the observation (a count, a filtered line set).",
               "maxLength": 4096
+            },
+            "promoted_to": {
+              "type": "string",
+              "description": "The test path this falsifier graduated into when it was executable and deterministic enough to become a standing regression pin. Promotion is REAL but never a gate: an unpromotable falsifier (a manual observation, a measurement against a live index) is not a lesser falsifier, and making promotability a precondition for the stamp would push EMs to choose falsifiers for their promotability rather than their discrimination. Mutually exclusive with `promotion`."
+            },
+            "promotion": {
+              "type": "string",
+              "const": "not-applicable",
+              "description": "The recorded NON-promotion, for a falsifier that cannot graduate into the suite. Held to a single spelling so the field cannot become a free-text status. Requires `promotion_reason`. Mutually exclusive with `promoted_to`."
+            },
+            "promotion_reason": {
+              "type": "string",
+              "description": "Why this falsifier does not promote — a manual observation, a measurement against a live index, a one-shot migration check. Close-out accepts this and stamps; the reason is for a later reader deciding whether promotion became possible since."
             },
             "baseline_ref": {
               "type": "string",
@@ -244,6 +261,37 @@
       },
       "not": {
         "required": ["falsifier", "falsifier_exemption"]
+      }
+    },
+    "gated_exit_criteria": {
+      "type": "array",
+      "description": "The fleet brightlines, discharged as a machine-readable field on the plan artifact the executor holds rather than remembered from a doctrine page. Scaffolded in full by `coordinator/templates/plans/plan.md.tmpl`; a row is never deleted because it seems inapplicable, its `statement` is narrowed instead. Deliberately NOT a repeated `prime_exit_criterion`-shaped object: a full falsifier per brightline is per-item spawn amplification for a check that is almost always a direct read, so this stays a light three-field row and `prime_exit_criterion.falsifier` stays the one-per-plan heavy instrument. Deliberately NOT an `## Acceptance Criteria` table row either — that table is optional, reviewer-facing prose and is never mechanically gated, so a brightline landed there would be present but not gated, which is the exact failure this field exists to close.",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["brightline", "statement", "met"],
+        "properties": {
+          "brightline": {
+            "type": "string",
+            "enum": [
+              "work-proportionate-to-question",
+              "multi-os-first-class",
+              "no-single-machine-assumptions",
+              "work-vs-question-ratio"
+            ],
+            "description": "A fixed slug. The enum is the mechanism: an ad-hoc slug is how a brightline becomes a freehand row nothing gates. A new brightline is a plan chunk that extends this enum and the template together, never a plan-local addition."
+          },
+          "statement": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Authored at plan-write time: what evidence at close-out would show this brightline held for THIS plan's delivered work. Same falsifiable-sentence discipline as `prime_exit_criterion.statement`, scoped to one brightline. `work-vs-question-ratio` is discharged by naming, per function or corpus-scale value the plan introduces, the bounded question it answers — an act, never the bare disposition \"proportionate\"."
+          },
+          "met": {
+            "type": "boolean",
+            "description": "Starts `false` and is flipped only by the session writing `exit_criterion_met` — never pre-set `true` at authoring time. An unmet brightline blocks `implemented` the same way an unresolved prime exit criterion does, on that same close-out path; there is deliberately no second enforcement path."
+          }
+        }
       }
     },
     "exit_criterion_met": {

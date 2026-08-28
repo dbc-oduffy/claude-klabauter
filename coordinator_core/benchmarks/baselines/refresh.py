@@ -61,6 +61,7 @@ import sys
 from typing import List, Optional
 
 from coordinator_core.benchmarks import baseline_store
+from coordinator_core.benchmarks import declare_benchmark_origin
 from coordinator_core.benchmarks import harness
 from coordinator_core.benchmarks import op_fixtures
 from coordinator_core.benchmarks.record import ConformanceRecord, compose_machine_id
@@ -120,6 +121,7 @@ def refresh(
 
 def main(argv: Optional[List[str]] = None) -> int:
     """CLI entrypoint: `python -m coordinator_core.benchmarks.baselines.refresh`."""
+    declare_benchmark_origin()
     stamped = refresh()
     print(f"refreshed {len(stamped)} op(s) for machine={compose_machine_id()!r}")
     for record in sorted(stamped, key=lambda r: r.op):

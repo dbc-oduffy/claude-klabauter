@@ -3623,7 +3623,23 @@ _QUEUE_SCHEMA_PINS = {
     #   the sweep. Discharges the hold recorded in cross-repo memo
     #   2026-08-17-claude-klabauter-em-adopt-stable-id-spec-backlinks-or-tell-
     #   us-to-stop.md
-    'bug-backlog': "2d81501bfaed77ed433a2a160e69f4e51684d992",
+    # Pin moved 2026-08-27 to 86f2c47f88880b08d383da467e1a193a1da55f42 (DoE
+    # HEAD) by bin/claude-klabauter-revendor-schema.py bug-backlog.
+    #   DoE 3b4860e36 adds four optional deferral-grant fields (pm_approved,
+    #   deferred_by, deferred_until, why_blocked) so a parked backlog record
+    #   carries its own expiry; purely field-additive, no required/enum
+    #   change, corpus validation identical before and after (41 pre-existing
+    #   failures, 0 introduced)
+    # Pin moved 2026-08-27 to d4dff494b6d639a9c6fa6fd9d9a876c91c102d11 (DoE
+    # HEAD) by bin/claude-klabauter-revendor-schema.py bug-backlog.
+    #   DoE d4dff494b corrects pm_approved's description: the park is /debt-
+    #   triage Step 6b class 4, not Step 5, and no ceremony parks bug rows
+    #   today (/bug-blitz has no park step), so a deferred bug row is hand-
+    #   authored and the grant is the author's to state. Prose-only --
+    #   shape_hash and x-schema-version unmoved, zero validation delta. Taken
+    #   because our copy otherwise carries a delegation statement both planes
+    #   have now measured to be false.
+    'bug-backlog': "d4dff494b6d639a9c6fa6fd9d9a876c91c102d11",
     # Pin moved 2026-08-17 to cd70f651f95503ac2d8979b6900ba905c910a75a (DoE
     # HEAD) by bin/claude-klabauter-revendor-schema.py cross-repo-commitment.
     #   scheduled re-vendor pass: sync non-major drifted schemas from DoE HEAD
@@ -3651,7 +3667,23 @@ _QUEUE_SCHEMA_PINS = {
     #   the sweep. Discharges the hold recorded in cross-repo memo
     #   2026-08-17-claude-klabauter-em-adopt-stable-id-spec-backlinks-or-tell-
     #   us-to-stop.md
-    'debt-backlog': "2d81501bfaed77ed433a2a160e69f4e51684d992",
+    # Pin moved 2026-08-27 to 86f2c47f88880b08d383da467e1a193a1da55f42 (DoE
+    # HEAD) by bin/claude-klabauter-revendor-schema.py debt-backlog.
+    #   DoE 3b4860e36 adds four optional deferral-grant fields (pm_approved,
+    #   deferred_by, deferred_until, why_blocked) so a parked backlog record
+    #   carries its own expiry; purely field-additive, no required/enum
+    #   change, corpus validation identical before and after (41 pre-existing
+    #   failures, 0 introduced)
+    # Pin moved 2026-08-27 to d4dff494b6d639a9c6fa6fd9d9a876c91c102d11 (DoE
+    # HEAD) by bin/claude-klabauter-revendor-schema.py debt-backlog.
+    #   DoE d4dff494b corrects pm_approved's description: the park is /debt-
+    #   triage Step 6b class 4, not Step 5, and no ceremony parks bug rows
+    #   today (/bug-blitz has no park step), so a deferred bug row is hand-
+    #   authored and the grant is the author's to state. Prose-only --
+    #   shape_hash and x-schema-version unmoved, zero validation delta. Taken
+    #   because our copy otherwise carries a delegation statement both planes
+    #   have now measured to be false.
+    'debt-backlog': "d4dff494b6d639a9c6fa6fd9d9a876c91c102d11",
     # Pin moved 2026-07-29 to 9f6ee8540e7b09da9ce6b81509402a4f118aefd8 (DoE
     # HEAD) by bin/claude-klabauter-revendor-schema.py improvement-queue.
     #   DoE 1239761c1 added the 'verification' member; b142e8dc re-vendored
@@ -3712,7 +3744,23 @@ _QUEUE_SCHEMA_PINS = {
     #   the sweep. Discharges the hold recorded in cross-repo memo
     #   2026-08-17-claude-klabauter-em-adopt-stable-id-spec-backlinks-or-tell-
     #   us-to-stop.md
-    'improvement-queue': "2d81501bfaed77ed433a2a160e69f4e51684d992",
+    # Pin moved 2026-08-27 to 86f2c47f88880b08d383da467e1a193a1da55f42 (DoE
+    # HEAD) by bin/claude-klabauter-revendor-schema.py improvement-queue.
+    #   DoE 3b4860e36 adds four optional deferral-grant fields (pm_approved,
+    #   deferred_by, deferred_until, why_blocked) so a parked backlog record
+    #   carries its own expiry; purely field-additive, no required/enum
+    #   change, corpus validation identical before and after (41 pre-existing
+    #   failures, 0 introduced)
+    # Pin moved 2026-08-27 to d4dff494b6d639a9c6fa6fd9d9a876c91c102d11 (DoE
+    # HEAD) by bin/claude-klabauter-revendor-schema.py improvement-queue.
+    #   DoE d4dff494b corrects pm_approved's description: the park is /debt-
+    #   triage Step 6b class 4, not Step 5, and no ceremony parks bug rows
+    #   today (/bug-blitz has no park step), so a deferred bug row is hand-
+    #   authored and the grant is the author's to state. Prose-only --
+    #   shape_hash and x-schema-version unmoved, zero validation delta. Taken
+    #   because our copy otherwise carries a delegation statement both planes
+    #   have now measured to be false.
+    'improvement-queue': "d4dff494b6d639a9c6fa6fd9d9a876c91c102d11",
     # Pin moved 2026-08-17 to cd70f651f95503ac2d8979b6900ba905c910a75a (DoE
     # HEAD) by bin/claude-klabauter-revendor-schema.py lesson-entry.
     #   scheduled re-vendor pass: sync non-major drifted schemas from DoE HEAD

@@ -2,13 +2,21 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://coordinator.local/schemas/debt-backlog.schema.json",
   "x-schema-name": "debt-backlog",
-  "x-schema-version": "1.0.0",
+  "x-schema-version": "1.1.0",
   "applies_to": "state/debt-backlog/*.yaml",
   "match_mode": "whole-document-yaml",
   "description": "Debt-backlog record — a queued structural/technical-debt entry, one YAML file per entry under state/debt-backlog/<date>-<slug>.yaml (whole-document YAML; no prose markdown body). additionalProperties-posture: open — unknown fields in debt-backlog records are tolerated (not rejected). This preserves forward-compatibility as new optional fields are added without invalidating existing records. Decision: keep open; tighten only if strict-mode corpus conformance enforcement is required at a future governance stage.",
   "type": "object",
   "_additionalProperties_note": "Permissive by design — additionalProperties is not set to false here, consistent with the handoff/goal schemas. A misspelled field will silently pass. This is intentional for forward-compatibility and matches the existing permissive pattern in other coordinator schemas.",
-  "required": ["created", "title", "body", "status", "source", "risk", "proposed_action"],
+  "required": [
+    "created",
+    "title",
+    "body",
+    "status",
+    "source",
+    "risk",
+    "proposed_action"
+  ],
   "properties": {
     "created": {
       "type": "string",
@@ -25,7 +33,11 @@
     },
     "status": {
       "type": "string",
-      "enum": ["open", "closed", "deferred"],
+      "enum": [
+        "open",
+        "closed",
+        "deferred"
+      ],
       "description": "Lifecycle status. open=unresolved; closed=resolved (git mv to archive/debt-backlog/<YYYY-MM>/ on closure); deferred=explicitly deprioritized."
     },
     "source": {
@@ -59,7 +71,9 @@
     },
     "tags": {
       "type": "array",
-      "items": {"type": "string"},
+      "items": {
+        "type": "string"
+      },
       "description": "Free-form classification tags for filtering/triage."
     },
     "evidence": {
@@ -68,11 +82,23 @@
     },
     "severity": {
       "type": "string",
-      "enum": ["P0", "P1", "P2", "P3"],
+      "enum": [
+        "P0",
+        "P1",
+        "P2",
+        "P3"
+      ],
       "description": "Priority severity of the debt entry, P0 highest."
     },
     "initiative": {
-      "anyOf": [{"type": "string"}, {"type": "null"}],
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
       "description": "FK to state/initiatives/<id>.yaml; nullable — absent≡null. Spec backlink: pln-initiative-govern-sweep-priori-6cf808 § C0"
     },
     "system": {
@@ -89,20 +115,43 @@
         },
         "linked_sessions": {
           "type": "array",
-          "items": {"type": "string"},
+          "items": {
+            "type": "string"
+          },
           "description": "Session identifiers linked to this entry's history."
         },
         "linked_commits": {
           "type": "array",
-          "items": {"type": "string"},
+          "items": {
+            "type": "string"
+          },
           "description": "Commit SHAs linked to this entry's history."
         },
         "provenance_completeness": {
           "type": "string",
-          "enum": ["complete", "unknown"],
+          "enum": [
+            "complete",
+            "unknown"
+          ],
           "description": "Whether the provenance chain (session/agent/commits) is fully recorded or unknown."
         }
       }
+    },
+    "pm_approved": {
+      "type": "boolean",
+      "description": "Records that the PM gate authorising this deferral fired. For a ceremony park (/debt-triage Step 6b class 4) the ceremony asserts its own gate; it is not a second approval act by the PM. No ceremony parks bug rows today -- /bug-blitz has no park step -- so a deferred bug row is hand-authored and the grant is the author's to state. Same field name as plan-tasks.schema.json's shipped gate -- one vocabulary across surfaces, deliberately."
+    },
+    "deferred_by": {
+      "type": "string",
+      "description": "Who granted the deferral: for a ceremony park, the ceremony identifier plus the session that ran it. Mirrors closed_by."
+    },
+    "deferred_until": {
+      "type": "string",
+      "description": "ISO date the deferral expires. Its presence is what makes a due-list a read of grants rather than a corpus scan; its absence is how a parked record drifts unnoticed."
+    },
+    "why_blocked": {
+      "type": "string",
+      "description": "Why this entry is deferred. Required in doctrine whenever status=deferred."
     }
   }
 }

@@ -31,10 +31,6 @@ import json
 import os
 import sys
 
-import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
-from coordinator_data_root import data_root  # noqa: E402
-
-
 def _default_canonical() -> str | None:
     """Resolve the canonical cockpit-contract schema path via
     `coordinator_data_root.data_root()`'s co-located/DoE-resident two-rung
@@ -49,6 +45,9 @@ def _default_canonical() -> str | None:
     "canonical schema not found" error, not an import-time crash.
     """
     try:
+        import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
+        from coordinator_data_root import data_root
+
         return os.path.join(
             str(data_root("cockpit-contract")), "schema", "cockpit-contract.schema.json"
         )

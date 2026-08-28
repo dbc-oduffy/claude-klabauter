@@ -480,8 +480,7 @@ def git_exe() -> str | None:
 
     Adjacent, unfixed, and NOT this function's to fix: five modules already
     spawn a `shutil.which("git")`-resolved binary from argv[0]
-    (`git/ls_files.py`, `git/ls_files_bytes.py`, `ops/eol/census.py`,
-    `ops/eol/repair.py`, `ops/normalize_env.py`) and are invisible to that
+    (`git/ls_files.py`, `git/ls_files_bytes.py`, `ops/normalize_env.py`) and are invisible to that
     same gate today. Widening its detector surfaces all five at once against
     a register that cannot take a row, so the remedy is migrating them onto
     `coordinator_core.git.run`, which is its own change.

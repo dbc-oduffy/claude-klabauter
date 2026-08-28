@@ -77,17 +77,33 @@ _LIB_DIR = _BIN_DIR / "lib"
 _REPO_ROOT = _BIN_DIR.parent.parent
 _RESOLVE_CLAUDE_KLABAUTER_DIR = _REPO_ROOT / "coordinator" / "lib" / "resolve-claude-klabauter"
 
-for _p in (str(_LIB_DIR), str(_RESOLVE_CLAUDE_KLABAUTER_DIR), str(_BIN_DIR)):
-    if _p not in sys.path:
-        sys.path.insert(0, _p)
+_BOOTSTRAP_DONE = False
 
-# Review: staff-eng 2026-08-16 C8 Finding 7 — `coordinator_core` is only importable
-# below because it happens to be reachable from an ambient site entry on
-# this box -- verified false in general (a foreign cwd, or an exec through
-# `_resolve_claude_klabauter.exec_cli` into a published mirror, would not carry it).
-# `publish.py` already inserts `_REPO_ROOT` for the same reason; mirror it.
-if str(_REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(_REPO_ROOT))
+
+def _bootstrap_engine() -> None:
+    """Put lib/, resolve-claude-klabauter/, this dir, and the repo root on sys.path.
+
+    Moved out of module scope: this used to mutate sys.path on every import
+    of this file, a process global ~50 warm-server sessions share. Only the
+    trigger moved -- the sequence and order are byte-for-byte the same.
+
+    Review: staff-eng 2026-08-16 C8 Finding 7 — `coordinator_core` is only
+    importable below because it happens to be reachable from an ambient site
+    entry on this box -- verified false in general (a foreign cwd, or an exec
+    through `_resolve_claude_klabauter.exec_cli` into a published mirror, would not
+    carry it). `publish.py` already inserts `_REPO_ROOT` for the same reason;
+    mirror it.
+    """
+    global _BOOTSTRAP_DONE
+    if _BOOTSTRAP_DONE:
+        return
+    for _p in (str(_LIB_DIR), str(_RESOLVE_CLAUDE_KLABAUTER_DIR), str(_BIN_DIR)):
+        if _p not in sys.path:
+            sys.path.insert(0, _p)
+    if str(_REPO_ROOT) not in sys.path:
+        sys.path.insert(0, str(_REPO_ROOT))
+    _BOOTSTRAP_DONE = True
+
 
 _EXIT_OK = 0
 _EXIT_GIT_OP_FAILED = 1
@@ -110,6 +126,7 @@ def _run(cmd, **kwargs) -> subprocess.CompletedProcess:
 
 def _resolve_tree() -> Optional[str]:
     """`repos.claude_klabauter`, or `None` if unset."""
+    _bootstrap_engine()
     import cli_shared
 
     return cli_shared.machine_local_get(_REPOS_KEY)
@@ -164,6 +181,7 @@ def _is_publish_mirror(tree: str) -> bool:
     # coordinator_core importable, so the CLI shell-out this replaced was
     # an added process spawn for no reason (machine load norm:
     # docs/wiki/machine-load-norm.md).
+    _bootstrap_engine()
     from coordinator_core.machine_resolver import registry_get
     from coordinator_core.win_portability import same_path
 
@@ -176,6 +194,7 @@ def _is_publish_mirror(tree: str) -> bool:
 def _declared_track_ref_branch() -> Optional[str]:
     """The local branch `_expected_local_branch` derives from the declared
     `publish.mirrors.claude_klabauter.track_ref`, or `None` if undeclared."""
+    _bootstrap_engine()
     from publish import _expected_local_branch  # noqa: PLC0415 -- see Finding 3 below
     from coordinator_core.machine_resolver import registry_get
 
@@ -186,6 +205,7 @@ def _declared_track_ref_branch() -> Optional[str]:
 
 
 def _cmd_report(args: argparse.Namespace) -> int:
+    _bootstrap_engine()
     import _resolve_claude_klabauter
 
     tree = _resolve_tree()
@@ -316,6 +336,7 @@ def _cmd_set(args: argparse.Namespace) -> int:
 
 
 def _build_parser() -> argparse.ArgumentParser:
+    _bootstrap_engine()
     import _resolve_claude_klabauter
 
     parser = argparse.ArgumentParser(
@@ -335,6 +356,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Optional[list] = None) -> int:
+    _bootstrap_engine()
     parser = _build_parser()
     args = parser.parse_args(argv)
     if args.set:

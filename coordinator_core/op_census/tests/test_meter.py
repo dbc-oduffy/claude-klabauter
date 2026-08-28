@@ -178,6 +178,52 @@ def test_untagged_rows_are_unknown_not_production(tmp_path, monkeypatch):
     assert measurements["legacy.op"].production_count == 0
 
 
+def test_summary_states_all_four_origin_buckets_by_name(tmp_path, monkeypatch):
+    """The rendered origin split names all four buckets, zero-filling absent ones.
+
+    `OpMeasurement.counts_by_origin` (the raw attribute, pinned above) only
+    holds origins actually seen on the wire. `summary()` — what a reader of the
+    rendered output actually sees — must state the full population shape:
+    production/test/benchmark/unknown, in that order, even when some are zero.
+    A missing key would read as "not measured"; the same readable-absence shape
+    as `process_time_samples: 0` requires a stated zero instead.
+    """
+    _write_sink(tmp_path, [_complete("legacy.op"), _complete("legacy.op")])
+    monkeypatch.setattr(
+        meter, "generation_paths", lambda root, window: [tmp_path / "op-latency.jsonl"]
+    )
+
+    measurements, _ = meter.measure(tmp_path)
+    summary = measurements["legacy.op"].summary()
+    assert summary["counts_by_origin"] == {
+        PRODUCTION: 0,
+        TEST: 0,
+        BENCHMARK: 0,
+        meter.UNKNOWN: 2,
+    }
+
+
+def test_render_origin_caveat_names_unknown_as_not_misclassified(tmp_path, monkeypatch):
+    """The rendered origin caveat states what `unknown` is, not just what it isn't.
+
+    `unknown` is rows predating the origin field — never a misclassified row —
+    and must never be silently folded into another bucket. The caveat text is
+    what a reader sees; it must say so, not just warn against production use.
+    """
+    _write_sink(tmp_path, [_complete("legacy.op", origin=None)])
+    monkeypatch.setattr(
+        meter, "generation_paths", lambda root, window: [tmp_path / "op-latency.jsonl"]
+    )
+
+    measurements, population = meter.measure(tmp_path)
+    doc = meter.render(measurements, population)
+    caveat = doc["origin_caveat"]
+    assert "production" in caveat and "test" in caveat and "benchmark" in caveat
+    assert "unknown" in caveat
+    assert "predates" in caveat
+    assert "NEVER" in caveat
+
+
 # ---------------------------------------------------------------------------
 # AC1 — both axes of the brightline, from the ledger.
 # ---------------------------------------------------------------------------

@@ -96,10 +96,6 @@ import sys
 from pathlib import Path
 
 _LIB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib")
-import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
-import cc_invoke  # noqa: E402  # pyright: ignore[reportMissingImports] — added to sys.path at runtime by the _LIB_DIR injection above, not statically resolvable
-from repo_identity import resolve_checked_repo_root  # noqa: E402  # pyright: ignore[reportMissingImports] — same runtime _LIB_DIR sys.path injection as cc_invoke above
-from sweep_argv import parse_repo_root_argv  # noqa: E402  # pyright: ignore[reportMissingImports] — same runtime _LIB_DIR sys.path injection as cc_invoke above
 
 _USAGE = "usage: python sweep-terminal-handoffs.py [-h] [--dry-run]"
 _DRY_RUN_FLAG = "--dry-run"
@@ -116,6 +112,9 @@ def _ensure_claude_klabauter_on_path() -> str:
     The file's ONE claude-klabauter-live-root path-resolution site, mirroring the retired
     predecessor's own `_ensure_claude_klabauter_on_path` helper.
     """
+    import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
+    import cc_invoke  # pyright: ignore[reportMissingImports] — added to sys.path at runtime by the _LIB_DIR injection above, not statically resolvable
+
     return cc_invoke.require_engine_on_path(__file__)
 
 
@@ -206,6 +205,10 @@ def main(argv: "list[str] | None" = None) -> int:
     sweep-script test harnesses call `mod.main(argv if argv is not None else
     [])` uniformly, so the default must stay `None`-meaning-`sys.argv[1:]`.
     """
+    import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
+    from repo_identity import resolve_checked_repo_root  # pyright: ignore[reportMissingImports] — same runtime lib-bootstrap sys.path injection as above
+    from sweep_argv import parse_repo_root_argv  # pyright: ignore[reportMissingImports] — same runtime lib-bootstrap sys.path injection as above
+
     argv = sys.argv[1:] if argv is None else argv
     _positional, flags, early_exit = parse_repo_root_argv(
         argv,

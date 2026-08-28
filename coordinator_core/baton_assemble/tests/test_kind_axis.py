@@ -41,11 +41,13 @@ from __future__ import annotations
 
 import importlib.machinery
 import importlib.util
+import sys
 from pathlib import Path
 
 import pytest
 
 import coordinator_core.pickup_assemble as pa
+from coordinator_core.baton_assemble.apply import exec_module_with_own_dir_on_path
 from coordinator_core.ops.handoff_normalize import _normalize_one_text
 from coordinator_core.pickup_assemble import _role_axis_is_unknown
 
@@ -53,12 +55,24 @@ _BIN_DIR = Path(__file__).resolve().parents[3] / "coordinator" / "bin"
 
 
 def _load_doc_new_module():
+    """Loads `coordinator-doc-new.py` by path, through the engine's own
+    `exec_module_with_own_dir_on_path` rather than a second copy of its
+    sys.path dance.
+
+    That function is the single home for the reason: a by-path load leaves the
+    script's directory off `sys.path`, so its bare `import lib` bound CPython's
+    own `<prefix>/lib` as a namespace package, the bin bootstrap never ran, and
+    this module died at COLLECTION time on `ModuleNotFoundError: No module
+    named 'memo_compose'`. Composing rather than restating is deliberate: the
+    duplicate this replaced had no structural pressure to receive the lock that
+    landed on the production copy.
+    """
     loader = importlib.machinery.SourceFileLoader(
         "coordinator_doc_new_kind_axis_test", str(_BIN_DIR / "coordinator-doc-new.py")
     )
     spec = importlib.util.spec_from_loader("coordinator_doc_new_kind_axis_test", loader)
     mod = importlib.util.module_from_spec(spec)  # type: ignore[arg-type]
-    loader.exec_module(mod)
+    exec_module_with_own_dir_on_path(loader, mod, str(_BIN_DIR))
     return mod
 
 

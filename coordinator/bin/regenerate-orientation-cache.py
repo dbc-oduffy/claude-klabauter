@@ -59,9 +59,6 @@ import os
 import sys
 from pathlib import Path
 
-import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
-from cc_invoke import require_dispatch_engine_on_path  # noqa: E402
-
 _VALID_INVOKERS = (
     "workday-start", "update-docs", "workstream-complete", "handoff", "quick-wrap", "sweep-boot",
 )
@@ -76,6 +73,9 @@ def _import_orientation_module():
     transport (cc_invoke()/route()) is deliberately NOT used here (same shape
     as `normalize-snippet`, per the recipe's explicit disposition for this script).
     """
+    import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
+    from cc_invoke import require_dispatch_engine_on_path
+
     claude_klabauter_root = require_dispatch_engine_on_path()
     from coordinator_core.orientation import regenerate_cache as mod
 

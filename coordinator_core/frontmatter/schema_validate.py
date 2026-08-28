@@ -766,6 +766,37 @@ def _validate_json_schema_node(
                         'hint': f'Add "{req}:" to the record',
                     })
 
+        # dependentRequired — {"a": ["b", "c"]}: if key `a` is present, `b` and
+        # `c` must be too. Presence-conditioned, never value-conditioned, so a
+        # null `a` still triggers it (JSON Schema draft 2019-09 semantics), and
+        # an absent `a` imposes nothing.
+        #
+        # Added when plan.schema.json 2.9.0 was vendored: it makes
+        # `prime_exit_criterion.falsifier.promotion_reason` depend on
+        # `promotion`. Vendoring without this would have shipped that
+        # constraint as a silent no-op -- the `pattern`-as-unenforced-MAJOR
+        # failure class test_schema_keyword_coverage exists to catch, and did.
+        #
+        # Widens what this validator REJECTS, so it is deliberately the
+        # narrowest reading: a record is newly invalid only if it carries the
+        # dependent key and omits one of its requirements. Nothing in the
+        # corpus at 2.8.0 carries `promotion_reason` at all, so no live record
+        # changes verdict (`_coerce_dates_to_strings`' leniency contract is
+        # untouched -- this adds a key-presence rule, never a type coercion).
+        deps = schema.get('dependentRequired')
+        if isinstance(deps, dict):
+            for dep_key, dep_reqs in deps.items():
+                if dep_key not in value or not isinstance(dep_reqs, list):
+                    continue
+                for req in dep_reqs:
+                    if req not in value:
+                        req_path = f'{path}.{req}' if path else req
+                        errors.append({
+                            'field': req_path,
+                            'error': f'required when "{dep_key}" is present',
+                            'hint': f'Add "{req}:" alongside "{dep_key}", or remove "{dep_key}"',
+                        })
+
         # properties — validate each declared property that is present.
         # Review: code-reviewer — F4: removed `is not None` guard so null values are validated
         # by _validate_json_schema_node (which correctly fails type/enum checks on None).

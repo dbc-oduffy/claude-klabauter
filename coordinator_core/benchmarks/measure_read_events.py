@@ -58,6 +58,7 @@ from pathlib import Path
 from typing import List, Optional, Union
 
 from coordinator_core.benchmarks import budget as budget_mod
+from coordinator_core.benchmarks import declare_benchmark_origin
 from coordinator_core.benchmarks.timer import SUBPROCESS_CREATIONFLAGS, SUBPROCESS_TIMEOUT_S
 from coordinator_core.tracker_store import EVENTS_DIR_RELPATH
 
@@ -301,5 +302,6 @@ def run_ac3_measurement(*, n: int = DEFAULT_N, warmup: int = DEFAULT_WARMUP) -> 
 
 
 if __name__ == "__main__":  # pragma: no cover
+    declare_benchmark_origin()
     result = run_ac3_measurement()
     print(json.dumps(result, indent=2, default=str))

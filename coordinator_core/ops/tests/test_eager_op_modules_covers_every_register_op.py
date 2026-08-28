@@ -62,7 +62,7 @@ Scope and exclusions:
   - `coordinator_core/hooks/` is excluded entirely: it has its own sibling
     guard at package-file granularity (one entry per hooks/*.py module), a
     different shape than the ops package's mix of flat modules, per-op
-    submodules under nested packages (e.g. `ops.tracker.*`, `ops.eol.*`,
+    submodules under nested packages (e.g. `ops.tracker.*`, `ops.session.*`,
     `ops.session.*`), and the handful of non-`ops.*` top-level packages that
     also participate in `_EAGER_OP_MODULES` (`frontmatter`, `orientation`,
     `plugin_health`, `probes`, `goals`, `install`, `session_ledger`). Folding

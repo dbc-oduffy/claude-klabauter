@@ -1336,15 +1336,38 @@ def build_directives(
     # no gate at all.
     floor_kwargs = _resolve_review_brightline_floor_kwargs(repo_root, gate.sid, session_start_time)
     if floor_kwargs is not None:
-        directives.append(
-            directives_review.build_review_brightline_gate_directive(
-                gate.sid, repo_root=repo_root, **floor_kwargs
-            )
+        review_brightline_gate_directive = directives_review.build_review_brightline_gate_directive(
+            gate.sid, repo_root=repo_root, **floor_kwargs
         )
     else:
-        directives.append(
-            directives_review.build_review_brightline_gate_directive(gate.sid, repo_root=repo_root)
+        review_brightline_gate_directive = directives_review.build_review_brightline_gate_directive(
+            gate.sid, repo_root=repo_root
         )
+    directives.append(review_brightline_gate_directive)
+
+    # -- The close coverage advisory (docs/plans/2026-08-27-the-close-
+    # tells-the-author-what-is-uncovered.md, C1): warn-only, structurally
+    # incapable of gating (D3 -- see directives_review.py's own docstring
+    # for the full contract). AC6's zero-added-spawn ratchet: the range
+    # this call site resolves is the review-brightline-gate directive's
+    # OWN already-resolved trailing `<floor>..<tip>` argv element (present
+    # only when `floor_kwargs` was resolved above, i.e. this session
+    # already has a prior review-trail record) -- never a fresh git call.
+    # On the ordinary single-close path (no prior record, the 2-element
+    # `["--session-id", sid]` argv), there is no range to reuse and the
+    # advisory resolves `diff_base=None`, taking `directives_review.
+    # build_close_coverage_advisory_directive`'s own silent-UNAVAILABLE
+    # leg rather than manufacturing a new spawn to obtain one (Anti-scope:
+    # do not widen `_review_dimension_check`'s signature to accommodate
+    # this close).
+    _brightline_args = review_brightline_gate_directive.get("args") or []
+    close_coverage_diff_base = _brightline_args[2] if len(_brightline_args) == 3 else None
+    close_coverage_changed_files = list(decisions.get("stage_paths") or [])
+    directives.append(
+        directives_review.build_close_coverage_advisory_directive(
+            close_coverage_changed_files, close_coverage_diff_base, repo_root
+        )
+    )
     review_partition = decisions.get("review_partition") or {}
     if review_partition.get("range") and review_partition.get("slices"):
         slices = [

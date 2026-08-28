@@ -192,6 +192,7 @@ countable and bounded, never silent.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -316,7 +317,24 @@ class OutOfWorktreePath(ValueError):
 class TouchEvent:
     """One decoded record line. ``agent_id`` is ``None`` for a session-keyed
     (not agent-keyed) event -- carried explicitly, never inferred from the
-    file's directory (AC1)."""
+    file's directory (AC1).
+
+    ``content_hash`` (C10, plan ``2026-08-27-a-pathspec-is-not-a-scope``) is
+    the whole-file ``sha256`` hex digest this session's own write produced,
+    recorded alongside a TOUCH so a later commit-time check can compare it
+    against disk-now to detect a foreign edit landing inside an owned file
+    -- see ``docs/research/2026-08-27-hunk-level-ownership-spike.md`` for why
+    a content hash (not ``size+mtime``, rejected there as empirically
+    false-negative on same-tick interleaved writes) is the mechanism, and
+    why it is spawn-free and well under the brightline. ``None`` for any
+    event that never had a hash computed for it (a RELEASE, a pre-C10
+    historical line, or a hash the caller could not compute) -- a missing
+    hash is never itself a degrade signal at the record layer; a commit-time
+    consumer (C11) that needs one and finds ``None`` is the one that must
+    treat that as "could not confirm ownership", per this module's existing
+    degrade posture (see module docstring's Failure posture section) -- this
+    module only carries the field, it does not decide how an absent hash is
+    used."""
 
     schema_version: int
     verb: str
@@ -324,6 +342,7 @@ class TouchEvent:
     session_id: str
     agent_id: Optional[str]
     path: str
+    content_hash: Optional[str] = None
 
 
 def record_carries_content(record_path: "Path | str") -> bool:
@@ -375,6 +394,33 @@ def sink_path(claimant_dir: "Path | str") -> Path:
     return Path(claimant_dir) / RECORD_FILENAME
 
 
+def compute_content_hash(file_path: "Path | str") -> Optional[str]:
+    """The C10 fingerprint: a whole-file ``sha256`` hex digest, read and
+    hashed in-process -- ~0.148ms/call measured against a 267KB file
+    (``docs/research/2026-08-27-hunk-level-ownership-spike.md``), zero
+    subprocess spawns. NOT ``size+mtime``: that candidate was tested and
+    rejected in the same spike -- two same-size writes issued back to back
+    land on the same ``st_mtime_ns`` on this filesystem, reporting no change
+    on exactly the interleaved-writers shape this workstream exists to
+    close.
+
+    Returns ``None`` (never raises) if ``file_path`` cannot be read --
+    deleted between the caller's write and this call, a permission denial,
+    a race. This mirrors this module's own existing degrade posture
+    (module docstring's Failure posture section): an unreadable file is
+    "could not confirm", not "no content" -- a caller MUST NOT treat a
+    ``None`` return as license to skip recording a TOUCH or to treat the
+    path as unowned; it is the caller's job (C11) to propagate this as a
+    degrade signal, the same way ``TouchProjection.degraded`` already does
+    for a read-side failure, never as silence.
+    """
+    try:
+        data = Path(file_path).read_bytes()
+    except OSError:
+        return None
+    return hashlib.sha256(data).hexdigest()
+
+
 def encode_line(
     *,
     session_id: str,
@@ -382,12 +428,19 @@ def encode_line(
     verb: str,
     path: str,
     timestamp: Optional[float] = None,
+    content_hash: Optional[str] = None,
 ) -> bytes:
     """Encode one event as a self-describing, newline-terminated line.
 
     Path normalization happens here, once, via
     ``path_dialect.canonicalize_relative_path`` -- the decoder trusts the
     stored form and re-derives nothing (AC4).
+
+    ``content_hash`` (C10) is carried straight through into the encoded
+    record's ``"hash"`` field when given, and OMITTED (not written as
+    ``null``) when ``None`` -- keeps a pre-C10 line and a hash-less RELEASE
+    byte-identical to what this module already wrote, rather than growing
+    every line's minimum size on a field most events do not carry.
 
     Raises ``ValueError`` for an invalid verb, ``LineTooLong`` if the
     encoded form would meet or exceed ``MAX_ENCODED_LINE_LEN`` -- rejected
@@ -417,6 +470,8 @@ def encode_line(
         "agent": agent_id,
         "path": normalized_path,
     }
+    if content_hash is not None:
+        record["hash"] = content_hash
     encoded = (json.dumps(record, separators=(",", ":")) + "\n").encode("utf-8")
     if len(encoded) >= MAX_ENCODED_LINE_LEN:
         raise LineTooLong(
@@ -463,6 +518,14 @@ def decode_line(line: "bytes | str") -> TouchEvent:
     except (KeyError, TypeError, ValueError) as exc:
         raise MalformedRecordLine(f"missing or malformed field: {exc}") from exc
 
+    # C10: optional, absent on any pre-C10 line, a RELEASE, or a hash the
+    # writer could not compute -- absence is never malformed here (see
+    # ``TouchEvent.content_hash``'s docstring for who decides what an
+    # absent hash means downstream).
+    content_hash = record.get("hash")
+    if content_hash is not None and not isinstance(content_hash, str):
+        raise MalformedRecordLine(f"invalid content hash {content_hash!r}")
+
     if verb not in _VALID_VERBS:
         raise MalformedRecordLine(f"invalid verb {verb!r}")
     if not isinstance(session_id, str) or not session_id:
@@ -479,6 +542,7 @@ def decode_line(line: "bytes | str") -> TouchEvent:
         session_id=session_id,
         agent_id=agent_id,
         path=path,
+        content_hash=content_hash,
     )
 
 
@@ -554,6 +618,7 @@ def compact_record(sink: "Path | str") -> None:
             verb=event.verb,
             path=event.path,
             timestamp=event.timestamp,
+            content_hash=event.content_hash,
         )
         for event in compacted
     )
@@ -612,17 +677,30 @@ def append_event(
     verb: str,
     path: str,
     timestamp: Optional[float] = None,
+    content_hash: Optional[str] = None,
 ) -> None:
     """Encode one event and append it to ``sink`` through
     ``atomic_append.append_line`` -- the only append mechanism this module
     uses (AC3). Creates ``sink``'s parent directory first, per
     ``append_line``'s own contract that callers do so (not dead ceremony).
 
+    ``content_hash`` (C10) threads straight through to ``encode_line`` --
+    this function does not compute it itself; a caller wanting the on-disk
+    fingerprint for a TOUCH computes it via ``compute_content_hash`` (or its
+    own equivalent) and passes the digest in. Recording only -- this chunk
+    does not wire a caller (C11's job); ``touch()`` continuing to call this
+    without ``content_hash`` is unchanged behavior, not a regression.
+
     Encoding happens before the growth check so a rejected (too-long) line
     never triggers a rotation for a write that will not land.
     """
     encoded = encode_line(
-        session_id=session_id, agent_id=agent_id, verb=verb, path=path, timestamp=timestamp
+        session_id=session_id,
+        agent_id=agent_id,
+        verb=verb,
+        path=path,
+        timestamp=timestamp,
+        content_hash=content_hash,
     )
     sink_path = Path(sink)
     # Judged, not overlooked: ``sink`` is caller-supplied and serves BOTH
@@ -918,6 +996,18 @@ def reconcile_untouched_bash_writes(
             continue
         if mtime < started_at:
             continue
+        # C12 (plan 2026-08-27-a-pathspec-is-not-a-scope): fingerprint the
+        # path being attributed here, same as the C10 field this reconciler
+        # was already stamping a TOUCH for -- without this, a Bash-written
+        # file the session genuinely owns would carry a claim with no hash,
+        # and C11's comparator treats "no hash" as "not demonstrable",
+        # silently reopening the third granularity for every Bash write.
+        # Computed from the SAME resolved `target` the mtime check above
+        # already stat'd (no second path-join dialect); `None` (deleted
+        # between the mtime check and this read) passes straight through to
+        # `append_event`, same fail-open posture as `compute_content_hash`'s
+        # own contract.
+        content_hash = compute_content_hash(target)
         append_event(
             sink,
             session_id=session_id,
@@ -925,6 +1015,7 @@ def reconcile_untouched_bash_writes(
             verb=VERB_TOUCH,
             path=candidate,
             timestamp=timestamp,
+            content_hash=content_hash,
         )
         attributed.append(candidate)
     return attributed

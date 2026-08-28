@@ -505,3 +505,65 @@ def test_classify_population_is_over_a_named_list_not_a_glob():
     verdicts = sc.classify_population(["definitely-not-a-real-entrypoint-name"])
     assert len(verdicts) == 1
     assert verdicts[0].script_exists is False
+
+def test_predicate_passes_stdlib_def_time_decorators():
+    """`@property` and `@contextlib.contextmanager` are pure.
+
+    Both were absent from `_PURE_CALL_TARGETS`, so the classifier reported
+    `wsc-session-disposition` (four `@property`) and `publish` (two
+    `@contextlib.contextmanager`, two `@property`) as impure. A false positive
+    in this predicate is worse than the miscount it exists to correct: the
+    whole plan rests on the claim that a name it flags is genuinely unservable.
+    """
+    source = (
+        chr(39) * 3 + "A CLI using stdlib def-time wrappers at module scope." + chr(39) * 3 + chr(10)
+        + "import contextlib" + chr(10) * 2
+        + "class C:" + chr(10)
+        + "    @property" + chr(10)
+        + "    def x(self):" + chr(10)
+        + "        return 1" + chr(10) * 2
+        + "@contextlib.contextmanager" + chr(10)
+        + "def scope():" + chr(10)
+        + "    yield" + chr(10) * 2
+        + "def main(argv):" + chr(10)
+        + "    return 0" + chr(10)
+    )
+    findings = sc.find_module_body_violations(source, "fixture/pure_decorators.py")
+    assert [f for f in findings if f.reason == "impure decorator"] == []
+
+
+def test_predicate_passes_method_call_on_a_string_literal():
+    """A method invoked on a LITERAL cannot touch process state.
+
+    Six module-scope prompt constants in `workday-start-inbox-blitz-assemble.py`
+    are a triple-quoted literal followed by `.strip()`. `_expr_target_key`
+    yields the bare attribute name for a Constant receiver, `strip` was not
+    whitelisted, and all six were reported as module-scope process mutation.
+    The fix keys on the RECEIVER rather than the method name -- whitelisting
+    `strip` would also bless `arbitrary_object.strip()`.
+    """
+    q = chr(39) * 3
+    source = (
+        q + "A CLI with a stripped literal constant at module scope." + q + chr(10)
+        + "CLAUSE = " + q + chr(10) + "  some prompt text" + chr(10) + q + ".strip()" + chr(10)
+        + "PARTS = " + chr(34) + "a,b" + chr(34) + ".split(" + chr(34) + "," + chr(34) + ")" + chr(10) * 2
+        + "def main(argv):" + chr(10)
+        + "    return 0" + chr(10)
+    )
+    findings = sc.find_module_body_violations(source, "fixture/literal_method.py")
+    assert [f for f in findings if f.reason == "module-scope process mutation"] == []
+
+
+def test_predicate_still_fails_on_method_call_on_a_non_literal():
+    """The literal carve-out is receiver-keyed, so an identical method name on
+    a NON-literal receiver stays flagged. Without this the fix would launder
+    every `.strip()`-shaped call, including one on a module object."""
+    source = (
+        chr(39) * 3 + "A CLI calling a method on a module, not a literal." + chr(39) * 3 + chr(10)
+        + "import os" + chr(10) * 2
+        + "X = os.getcwd().strip()" + chr(10) * 2
+        + "def main(argv):" + chr(10)
+        + "    return 0" + chr(10)
+    )
+    findings = sc.find_module_body_violations(source, "fixture/nonliteral_method.py")
+    assert [f for f in findings if f.reason == "module-scope process mutation"] != []

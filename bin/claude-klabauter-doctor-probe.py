@@ -39,9 +39,10 @@ prerequisites before any selection is applied — see `_ensure_core_importable`)
                          per-invoke resolution falls back to a bash subprocess with a 5 s
                          timeout on Windows).
   claude-klabauter.invoke.latency  OPTIONAL — measures a single coordinator_core.invoke round-trip
-                         against a 2000 ms per-invoke budget (hooks share a ~3-5 s total
-                         budget across multiple invokes); DEGRADED (not BROKEN) over budget
-                         or on timeout; SKIP on an unstamped engine root (DR-331).
+                         as PROCESS TIME (never wall clock) against a 500 ms brightline
+                         budget (hooks share a ~3-5 s total budget across multiple
+                         invokes); DEGRADED (not BROKEN) over budget or on timeout;
+                         SKIP on an unstamped engine root (DR-331).
   claude-klabauter.commitments.recheck  OPTIONAL — re-resolves state/cross-repo-commitments/ evidence:
                          strings live against each record's committing sibling (DEGRADED when
                          any record's evidence resolves truthy while status: is still open;
@@ -1609,6 +1610,20 @@ def _run_probe_invoke_smoke(claude_klabauter_root: Path | None) -> _ProbeResult:
     Probe-authoring invariant: wraps all logic so unexpected exceptions become
     a SKIP verdict (not a crash), per the always-emit-parseable-verdict contract
     for optional probes.
+
+    Question the sink cannot answer:
+      Does the cold spawn-per-call dispatch path work RIGHT NOW, on THIS box?
+      A recent `complete` row in the op census answers "did dispatch ever work",
+      not "does it work at this instant" — a sink that has gone quiet (no
+      recent traffic, e.g. between sessions or on a fresh clone) is
+      indistinguishable in the census from a dispatch path that has broken,
+      because passive telemetry has no signal for its own silence. This probe
+      supplies that signal by actually spawning the path and reading its
+      result, rather than reading a historical record of some other spawn.
+      RETAINED (disposition: pln-2026-08-27-the-undeclared-harness-and-the-
+      redundant-probes § C4) — this REVERSES the origin baton's expectation
+      ("likely none") on evidence it did not have: the baton did not draw the
+      distinction between "did it ever work" and "does it work now."
 
     Spec backlink: pln-rebuild-claude-klabauter-doctor-as-a-pro-f6bd22 § C1b
     """
@@ -3404,46 +3419,85 @@ def _run_probe_publish_provenance(claude_klabauter_root: Path | None) -> _ProbeR
 # ---------------------------------------------------------------------------
 
 
-# Hooks share a ~3-5 s total end-to-end budget across potentially multiple invokes
-# (UserPromptSubmit / PreToolUse fan-out). A single invoke must stay well under that
-# shared budget, hence 2000 ms (2 s) rather than the full 3-5 s window.
-_INVOKE_LATENCY_BUDGET_MS = 2000
+# CLAUDE.md's brightline ("Process time and spawn count, never wall clock", "One
+# bar: 500ms") is the gate this probe grades against — process time (user+kernel CPU
+# across the spawned tree, via coordinator_core.benchmarks.process_time), never wall
+# clock, and the same 500ms bar as every other process-time gate in this repo, not a
+# bespoke hooks-budget number. Prior to the 2026-08-27 fix this gated wall-clock
+# elapsed time against 2000ms — a unit and a bar CLAUDE.md both name as wrong, and a
+# gate that measured peer-load noise (wall clock) against a bar loose enough
+# (2000ms, four times the brightline) that it could not fail when it should.
+_INVOKE_LATENCY_BUDGET_MS = 500
 
 
 _INVOKE_LATENCY_PROBE = "claude-klabauter.invoke.latency"
+
+# Bounded measurement window: `single_invocation_tree_process_time` has no timeout
+# knob of its own (module docstring), so this probe brackets it in a daemon thread
+# with `Thread.join(timeout=...)` — the same hand-rolled pattern
+# `_WARM_ROUNDTRIP_CONNECT_TIMEOUT_SECONDS` uses in this file for the identical
+# problem (a primitive with no cancellation surface). A timeout IS the failure being
+# detected; the thread is left running (it cannot be forcibly killed from here) but
+# the probe itself always returns within this window.
+_INVOKE_LATENCY_TIMEOUT_SECONDS = 5.0
 
 
 def _run_probe_invoke_latency(claude_klabauter_root: Path | None) -> _ProbeResult:
     """Probe claude-klabauter.invoke.latency — OPTIONAL (required=False); WARN over budget.
 
-    Measures a single cold-ish `python -m coordinator_core.invoke ping '{}'` round-trip
-    and compares the elapsed wall-clock time against _INVOKE_LATENCY_BUDGET_MS (2000 ms).
+    Measures a single cold `python -m coordinator_core.invoke ping '{}'` round-trip
+    as PROCESS TIME (user+kernel CPU across the spawned tree, via
+    `coordinator_core.benchmarks.process_time.single_invocation_tree_process_time`)
+    and compares it against _INVOKE_LATENCY_BUDGET_MS (500 ms) — CLAUDE.md's own
+    brightline bar, never wall clock (CLAUDE.md § "The brightline": "Process time
+    and spawn count, never wall clock").
 
-    Rationale (F17): hooks have a ~3-5 s total budget shared across multiple invokes on
-    a single hook firing; a single invoke exceeding ~2 s risks blowing that shared budget
-    on its own, before accounting for fan-out. This is the same failure mode as the
-    per-invoke bash-fallback hang (claude-klabauter.root.pointer) surfaced as a latency measurement
-    rather than a static presence check.
+    Question the sink cannot answer:
+      What does a cold spawn-to-exit invoke round-trip cost RIGHT NOW, including
+      interpreter start and import? The op census's seam-recorded process_time
+      starts its clock inside an already-booted interpreter — it excludes the
+      ~99ms of interpreter start and import this probe's own cold measurement
+      includes (measured 2026-08-27: 149.6ms wall / 98.96ms process on a healthy
+      box). No measurement_scope in the sink contains that cost, so there is no
+      row to read it back from; this probe has to spawn the cold path itself.
+      RETAINED (disposition: pln-2026-08-27-the-undeclared-harness-and-the-
+      redundant-probes § C4) on this measurement gap, not on liveness — see
+      claude-klabauter.invoke.smoke for the liveness question.
+
+    Rationale (F17): hooks have a ~3-5 s total budget shared across multiple invokes
+    on a single hook firing; a single invoke costing meaningfully more than the
+    500ms brightline risks blowing that shared budget on its own, before accounting
+    for fan-out. This is the same failure mode as the per-invoke bash-fallback hang
+    (claude-klabauter.root.pointer) surfaced as a latency measurement rather than a static
+    presence check.
 
     Pre-flight, `_engine_root_is_stamped`: an UNSTAMPED root skips rather than
     measures — a dispatch refused at the stamp gate times the refusal, not the
     round-trip this budget is about (DR-331).
 
-    Bounded-measurement invariant: the subprocess call is timeout-guarded (5 s) so this
-    probe itself can never hang the doctor — a timeout IS the failure being detected and
-    is reported as the over-budget (DEGRADED) case, not re-raised.
+    Bounded-measurement invariant: the measurement runs in a daemon thread bounded
+    by `_INVOKE_LATENCY_TIMEOUT_SECONDS` via `Thread.join(timeout=...)`, so this
+    probe itself can never hang the doctor — a timeout IS the failure being detected
+    and is reported as the over-budget (DEGRADED) case, not re-raised.
 
     Negative-spec:
       - Does NOT retry or average multiple invocations — a single measurement, kept
-        cheap and bounded per the spec.
+        cheap and bounded per the spec (a repeatable-proxy batched measurement is
+        `batched_process_time_ms`'s job, not this one-shot cold probe's).
       - Does NOT emit BROKEN on over-budget or timeout — this is a WARN-class latency
         advisory (required=False, DEGRADED), not a correctness failure; the invoke
         still dispatched (or the timeout itself proves the latency problem).
+      - Does NOT gate on wall clock — wall clock on this box measures peer load
+        (50-70 concurrent sessions is the design condition), not cost.
+      - SKIP (not BROKEN, not DEGRADED) when process-time measurement itself is
+        unavailable on this platform (`NotImplementedError` off Windows/Darwin) —
+        an unmeasurable platform is not the same fact as a slow round-trip.
 
     Probe-authoring invariant: wraps all logic so unexpected exceptions become
     a BROKEN verdict, never an unhandled crash.
 
-    Spec backlink: pln-claude-klabauter-windows-portability-a48fac § C14
+    Spec backlink: pln-claude-klabauter-windows-portability-a48fac § C14;
+    pln-2026-08-27-the-undeclared-harness-and-the-redundant-probes § C4 (unit/bar fix).
     """
     try:
         if claude_klabauter_root is None:
@@ -3468,20 +3522,67 @@ def _run_probe_invoke_latency(claude_klabauter_root: Path | None) -> _ProbeResul
                 data={"engine_root": str(claude_klabauter_root), "dispatch_root": None},
             )
 
-        # Bounded timeout (5 s) so a hang IS the failure being measured, never a hang
-        # of this probe itself.
-        _TIMEOUT_SECONDS = 5
-        start = time.perf_counter()
         try:
-            result = subprocess.run(
-                [sys.executable, "-m", "coordinator_core.invoke", "ping", "{}"],
-                capture_output=True,
-                text=True,
-                timeout=_TIMEOUT_SECONDS,
-                cwd=str(dispatch_root),
-                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            from coordinator_core.benchmarks.process_time import (
+                single_invocation_tree_process_time,
             )
-        except FileNotFoundError:
+        except ImportError as exc:
+            return _ProbeResult(
+                probe=_INVOKE_LATENCY_PROBE,
+                status=_INFO,
+                detail=(
+                    f"coordinator_core.benchmarks.process_time not importable: {exc}; "
+                    "invoke latency probe skipped."
+                ),
+                remediation="Verify coordinator_core/benchmarks/process_time.py is present.",
+                required=False,
+                skipped=True,
+            )
+
+        result_box: dict[str, Any] = {}
+
+        def _measure() -> None:
+            try:
+                result_box["measurement"] = single_invocation_tree_process_time(
+                    [sys.executable, "-m", "coordinator_core.invoke", "ping", "{}"],
+                    cwd=str(dispatch_root),
+                    stdout_path=os.devnull,
+                    stderr_path=os.devnull,
+                )
+            except FileNotFoundError:
+                result_box["file_not_found"] = True
+            except NotImplementedError as exc:
+                result_box["not_implemented"] = str(exc)
+            except Exception as exc:  # belt-and-braces; surfaced as a SKIP below.
+                result_box["error"] = f"{type(exc).__name__}: {exc}"
+
+        thread = threading.Thread(target=_measure, daemon=True)
+        thread.start()
+        thread.join(_INVOKE_LATENCY_TIMEOUT_SECONDS)
+
+        if thread.is_alive():
+            timeout_ms = _INVOKE_LATENCY_TIMEOUT_SECONDS * 1000
+            return _ProbeResult(
+                probe=_INVOKE_LATENCY_PROBE,
+                status=_DEGRADED,
+                detail=(
+                    f"invoke round-trip did not complete within {timeout_ms:.0f} ms — "
+                    f"exceeds the {_INVOKE_LATENCY_BUDGET_MS} ms process-time budget. A "
+                    "timeout on this bounded measurement IS the failure being detected "
+                    "(the invoke path is hanging, e.g. a bash-fallback subprocess with "
+                    "its own 5 s timeout)."
+                ),
+                remediation=(
+                    "Ensure the claude-klabauter-live-root pointer is present (see claude-klabauter.root.pointer "
+                    "probe) so per-invoke resolution avoids the bash-fallback subprocess. "
+                    "See the Windows-portability workstream: "
+                    "docs/plans/2026-07-14-claude-klabauter-windows-portability.md"
+                ),
+                required=False,
+                data={"budget_ms": _INVOKE_LATENCY_BUDGET_MS, "timed_out": True},
+            )
+
+        if result_box.get("file_not_found"):
             return _ProbeResult(
                 probe=_INVOKE_LATENCY_PROBE,
                 status=_INFO,
@@ -3490,36 +3591,46 @@ def _run_probe_invoke_latency(claude_klabauter_root: Path | None) -> _ProbeResul
                 required=False,
                 skipped=True,
             )
-        except subprocess.TimeoutExpired:
-            elapsed_ms = _TIMEOUT_SECONDS * 1000
+
+        if "not_implemented" in result_box:
             return _ProbeResult(
                 probe=_INVOKE_LATENCY_PROBE,
-                status=_DEGRADED,
+                status=_INFO,
                 detail=(
-                    f"invoke round-trip timed out after {_TIMEOUT_SECONDS * 1000} ms — "
-                    f"exceeds the {_INVOKE_LATENCY_BUDGET_MS} ms budget. A timeout on this "
-                    "bounded measurement IS the failure being detected (the invoke path is "
-                    "hanging, e.g. a bash-fallback subprocess with its own 5 s timeout)."
+                    "process-time measurement unavailable on this platform: "
+                    f"{result_box['not_implemented']}"
                 ),
                 remediation=(
-                    "Ensure the claude-klabauter-live-root pointer is present (see claude-klabauter.root.pointer "
-                    "probe) so per-invoke resolution avoids the bash-fallback subprocess. "
-                    "See the Windows-portability workstream: "
-                    "docs/plans/2026-07-14-claude-klabauter-windows-portability.md"
+                    "Process-time measurement is Windows/Darwin-only "
+                    "(coordinator_core.benchmarks.process_time); no primitive on "
+                    "this platform yet — see that module's docstring."
                 ),
                 required=False,
-                data={"elapsed_ms": elapsed_ms, "budget_ms": _INVOKE_LATENCY_BUDGET_MS, "timed_out": True},
+                skipped=True,
             )
-        elapsed_ms = (time.perf_counter() - start) * 1000.0
 
-        if result.returncode != 0:
+        if "error" in result_box:
+            return _ProbeResult(
+                probe=_INVOKE_LATENCY_PROBE,
+                status=_INFO,
+                detail=f"Unexpected error in invoke latency probe: {result_box['error']}",
+                remediation="Re-run the probe after investigating the error.",
+                required=False,
+                skipped=True,
+            )
+
+        measurement = result_box["measurement"]
+        process_time_ms = measurement["process_time_ms"]
+        rc = measurement["rc"]
+
+        if rc != 0:
             return _ProbeResult(
                 probe=_INVOKE_LATENCY_PROBE,
                 status=_DEGRADED,
                 detail=(
-                    f"invoke round-trip completed in {elapsed_ms:.0f} ms but exited "
-                    f"{result.returncode} (stderr: {result.stderr.strip()!r}); latency "
-                    "measured but dispatch itself failed — see claude-klabauter.invoke.smoke."
+                    f"invoke round-trip cost {process_time_ms:.1f} ms process time but "
+                    f"exited {rc}; latency measured but dispatch itself failed — see "
+                    "claude-klabauter.invoke.smoke."
                 ),
                 remediation=(
                     "Run manually: python3 -m coordinator_core.invoke ping '{}'. "
@@ -3527,22 +3638,22 @@ def _run_probe_invoke_latency(claude_klabauter_root: Path | None) -> _ProbeResul
                 ),
                 required=False,
                 data={
-                    "elapsed_ms": elapsed_ms,
+                    "process_time_ms": process_time_ms,
                     "budget_ms": _INVOKE_LATENCY_BUDGET_MS,
                     "timed_out": False,
                     "dispatch_root": str(dispatch_root),
                 },
             )
 
-        if elapsed_ms > _INVOKE_LATENCY_BUDGET_MS:
+        if process_time_ms > _INVOKE_LATENCY_BUDGET_MS:
             return _ProbeResult(
                 probe=_INVOKE_LATENCY_PROBE,
                 status=_DEGRADED,
                 detail=(
-                    f"invoke round-trip took {elapsed_ms:.0f} ms — exceeds the "
-                    f"{_INVOKE_LATENCY_BUDGET_MS} ms per-invoke budget (hooks share a "
+                    f"invoke round-trip cost {process_time_ms:.1f} ms process time — "
+                    f"exceeds the {_INVOKE_LATENCY_BUDGET_MS} ms brightline (hooks share a "
                     "~3-5 s total budget across multiple invokes; a single invoke this "
-                    "slow risks blowing the shared budget)."
+                    "costly risks blowing the shared budget)."
                 ),
                 remediation=(
                     "Ensure the claude-klabauter-live-root pointer is present (see claude-klabauter.root.pointer "
@@ -3552,7 +3663,7 @@ def _run_probe_invoke_latency(claude_klabauter_root: Path | None) -> _ProbeResul
                 ),
                 required=False,
                 data={
-                    "elapsed_ms": elapsed_ms,
+                    "process_time_ms": process_time_ms,
                     "budget_ms": _INVOKE_LATENCY_BUDGET_MS,
                     "timed_out": False,
                     "dispatch_root": str(dispatch_root),
@@ -3563,13 +3674,13 @@ def _run_probe_invoke_latency(claude_klabauter_root: Path | None) -> _ProbeResul
             probe=_INVOKE_LATENCY_PROBE,
             status=_PASS,
             detail=(
-                f"invoke round-trip took {elapsed_ms:.0f} ms — within the "
-                f"{_INVOKE_LATENCY_BUDGET_MS} ms per-invoke budget."
+                f"invoke round-trip cost {process_time_ms:.1f} ms process time — within "
+                f"the {_INVOKE_LATENCY_BUDGET_MS} ms brightline."
             ),
             remediation="—",
             required=False,
             data={
-                "elapsed_ms": elapsed_ms,
+                "process_time_ms": process_time_ms,
                 "budget_ms": _INVOKE_LATENCY_BUDGET_MS,
                 "timed_out": False,
                 "dispatch_root": str(dispatch_root),
@@ -4777,6 +4888,18 @@ def _run_probe_warm_roundtrip(
 
     `required=False` throughout: a live warm-server reachability check is
     never allowed to gate an otherwise-healthy install.
+
+    Question the sink cannot answer:
+      Does the resident WARM path serve a round-trip right now, as opposed to
+      whether dispatch works at all (that is claude-klabauter.invoke.smoke's question,
+      over the spawn-per-call path — a different mechanism entirely)? The op
+      census records what an op cost once it dispatched; it has no row for
+      "was the warm server reachable and did it answer" because a cold
+      dispatch that never touches warmth leaves no warm-specific trace to
+      read back. RETAINED (disposition: pln-2026-08-27-the-undeclared-
+      harness-and-the-redundant-probes § C4) — cheapest of the three retained
+      probes to justify: default-OFF behind --include-live-roundtrip, so it
+      costs nothing on a default run.
 
     Spec backlink: docs/plans/2026-08-19-warm-engine-gets-an-honest-instrument.md § C9.
     """

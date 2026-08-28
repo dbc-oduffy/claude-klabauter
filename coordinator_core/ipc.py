@@ -2721,7 +2721,11 @@ async def dispatch_message(msg: dict, *, caller: Optional[str] = None) -> dict:
 #: uncontaminated by any peer op. True of the pool-worker path
 #: (`warm.server._pool_dispatch_worker`, one `ProcessPoolExecutor` task at a
 #: time per worker process) and the one-shot CLI path (`dispatch_from_hook`,
-#: `coordinator_core.invoke.__main__`'s cold path -- a whole process per op).
+#: source_path "one_shot_cli"). Both writers take `process_start =
+#: time.process_time()` AFTER the interpreter has booted and this module has
+#: been imported, so this scope does NOT carry interpreter start -- a reader
+#: quoting this scope as a cold-start figure holds a number it does not hold
+#: (docs/research/spike-verdicts/2026-08-27-seam-process-time-excludes-interpreter-startup.md).
 #:
 #: PROCESS_WIDE: `time.process_time()` delta taken on an accept-process
 #: connection thread (`warm.server._run_dispatch`), where `WORKER_POOL_SIZE`
@@ -2735,13 +2739,15 @@ async def dispatch_message(msg: dict, *, caller: Optional[str] = None) -> dict:
 #: PER_OP_HANDLER: `time.process_time()` delta taken at the `dispatch_message`
 #: chokepoint, with the CPU of any NESTED dispatch subtracted out, while this
 #: dispatch was the only one in flight in the process. It is this op's own
-#: handler CPU and nothing else -- narrower than PER_OP_PROCESS, which is a
-#: whole one-shot process and therefore also carries interpreter start, envelope
-#: parse and response serialization.
+#: handler CPU and nothing else -- narrower than PER_OP_PROCESS, which also
+#: carries envelope parse and response serialization (but, like PER_OP_HANDLER,
+#: not interpreter start -- see PER_OP_PROCESS above).
 #:
-#: Why it exists (the-meter-02 AC-6, 2026-08-27): the other three scopes are
-#: recorded at four OUTER entry points (`invoke.__main__`, `dispatch_from_hook`,
-#: `dispatch_ops_from_hook`, `warm.server`), so an op reaching `dispatch_message`
+#: Why it exists (the-meter-02 AC-6, 2026-08-27): the other two scopes are
+#: recorded at three OUTER entry points (`dispatch_from_hook`,
+#: `dispatch_ops_from_hook`, `warm.server` -- `coordinator_core.invoke.__main__`'s
+#: cold path records PROCESS_WIDE via `_record_dispatch_process_time`, not
+#: PER_OP_PROCESS), so an op reaching `dispatch_message`
 #: by any other path -- one op composing another, a module `_main`, an in-process
 #: caller -- recorded `started`/`complete` and NO process time at all. Measured
 #: 2026-08-27: 17 of 64 observed ops had zero `process_time` rows, among them

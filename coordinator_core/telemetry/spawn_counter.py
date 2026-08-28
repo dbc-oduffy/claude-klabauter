@@ -9,15 +9,31 @@ row says how many processes an op created. Every spawn figure quoted in the
 investigation, and none of them are joinable against the op ledger.
 
 This module is the counter those figures should have come from: a bare integer,
-incremented at the sanctioned spawn chokepoint, read as a delta around one op's
+incremented at the interpreter's own spawn seam, read as a delta around one op's
 dispatch. That delta is then a field on the op's own row.
+
+WHERE THE COUNT COMES FROM
+
+`sys.addaudithook` (PEP 578), filtered to the two events CPython raises exactly
+once per child process it creates from Python: `subprocess.Popen` and
+`os.system`. Every `subprocess.run` / `.call` / `.check_call` / `.check_output`
+/ `Popen(...)` in the engine constructs a `Popen`, so ONE hook sees all of them
+without a call-site migration.
+
+That seam replaces an earlier one. The counter used to be bumped by hand at
+`coordinator_core.git.run.run_git` and nowhere else, which made it a GIT-spawn
+count that `ipc.py` and `warm/server.py` then attached to an op's row as that
+op's spawn figure — 934 direct `subprocess.*` call sites across 346 non-test
+modules were invisible to it, and `ceremony.scoped_git_commit` reported 0 against
+a documented 31 processes. The hand bump survives only as the fallback below.
 
 Why a module-level counter and not a context manager or a thread-local:
 
-  - The engine's spawn chokepoint (`coordinator_core.git.run.run_git`) is called
-    from deep inside op handlers, many frames below any dispatch site that could
-    hold a context. A counter is the only shape that reaches both ends without
-    threading a parameter through every intermediate signature.
+  - An audit hook is a process-global callback with no place to hold a caller's
+    context, and the spawn sites it fires for sit deep inside op handlers, many
+    frames below any dispatch site that could hold one. A counter is the only
+    shape that reaches both ends without threading a parameter through every
+    intermediate signature.
   - It is deliberately PROCESS-wide, not thread-local. The pool-worker path runs
     `WORKER_POOL_SIZE` threads against one clock and already records its samples
     as `MEASUREMENT_SCOPE_PROCESS_WIDE` for exactly that reason — a thread-local
@@ -29,22 +45,41 @@ Why a module-level counter and not a context manager or a thread-local:
 
 Negative-spec:
 
-  - Never raises, never allocates, never imports. `bump()` is one integer add on
-    the git hot path; anything heavier than that belongs in the reader, not here.
+  - The hook is installed at import and NEVER raises past its own `try`. A
+    broken counter must not break the op it is instrumenting.
+  - Hook cost is not on the spawn path only — a CPython audit hook is called for
+    every audited event the interpreter raises, `open` included. Measured on the
+    normal-tier box (`X:` 285K, 100k iterations, 3 pairs): 26.5µs per `open`
+    with the hook against 26.5µs without, the difference inside run-to-run
+    noise. Against a 500ms brightline that is unmeasurable, and it is why the
+    filter below is an identity compare against a frozenset and nothing else —
+    anything heavier than that belongs in the reader, not here.
+  - `os.exec*` / `os.posix_spawn` are deliberately NOT counted. On POSIX
+    `subprocess` reaches the child through `os.posix_spawn`, so counting both
+    would double every subprocess spawn on one platform and not the other,
+    producing a figure that is not comparable across the fleet. The only bare
+    `os.exec` in the engine is `coordinator_core.bare_forwarder`, which REPLACES
+    this process rather than adding one — nothing survives to read the counter.
+  - `multiprocessing` / `ProcessPoolExecutor` workers are likewise uncounted:
+    `warm.server`'s pool is spawned once at pool init as infrastructure, not as
+    a cost any single op incurred, and charging it to whichever op happened to
+    be in flight would be a worse reading than omitting it.
   - Not reset between ops, ever. A reader takes a DELTA around the window it
     cares about; a counter that resets cannot be read concurrently by two
     overlapping measurements without one of them silently zeroing the other's
     baseline.
-  - Counts SPAWN ATTEMPTS, not successes. A `git` invocation that fails still
-    paid process-creation cost — which is the cost being measured (CLAUDE.md:
-    "process creation is the cost, not the query"), so excluding failures would
-    understate exactly the case worth finding.
+  - Counts SPAWN ATTEMPTS, not successes. A child that fails to start, or is
+    killed on timeout, still paid process-creation cost — which is the cost
+    being measured (CLAUDE.md: "process creation is the cost, not the query"),
+    so excluding failures would understate exactly the case worth finding. The
+    audit event fires before the child exists, which is what makes this true by
+    construction rather than by remembering to bump on the error path.
   - Undercounts for TWO independent reasons, and a reader must hold both.
 
-    (a) It sees the chokepoint only. A private `subprocess.run` bypasses it and
-    is invisible here. That is a defect in the caller
-    (`coordinator_core.git.git_state`'s docstring already rules that every git
-    call goes through `run_git`, "never a private `subprocess.run`").
+    (a) It sees Python-created processes only. A child created by a NON-Python
+    parent in the chain — notably `cmd.exe` in a Windows `.cmd` launcher — never
+    raises a Python audit event and is invisible here, as is anything a C
+    extension spawns below the audited Python APIs.
 
     (b) **Even a complete Python-keyed count is low against job accounting.**
     `claude-klabauter-37`'s caller census of the close ceremony's gate path
@@ -66,23 +101,40 @@ Negative-spec:
 
 Spec backlink: state/handoffs/2026-08-25_roadmap-the-meter-02.md
                state/audits/2026-08-25-the-meter-corpus-shape-spike.md
+               state/audits/2026-08-27-kill-ledger-cost-lines-without-a-measurement-scope.md
+               § "The second axis"
 """
 
 from __future__ import annotations
 
+import sys
+
 _spawns = 0
+
+#: CPython raises exactly one of these per child process this interpreter
+#: creates from Python. See the negative-spec above for what is excluded and
+#: why — the omissions are load-bearing, not an oversight to be widened.
+_COUNTED_EVENTS = frozenset({"subprocess.Popen", "os.system"})
+
+_hook_installed = False
 
 
 def bump(n: int = 1) -> None:
     """Record ``n`` child-process spawn attempts by this process.
 
-    Called at the spawn chokepoint. One integer add — no lock (CPython's
-    bytecode for an in-place int add on a module global is not atomic across
-    threads, and that is accepted: a lost increment is bounded at 1 PER RACE,
-    but on the pool-worker path (`WORKER_POOL_SIZE` threads bumping
-    concurrently) races recur across the whole measurement window, so the
-    AGGREGATE loss is proportional to contention, not a fixed single-digit
-    constant -- while a lock on the git hot path costs every op that spawns).
+    One integer add — no lock (CPython's bytecode for an in-place int add on a
+    module global is not atomic across threads, and that is accepted: a lost
+    increment is bounded at 1 PER RACE, but on the pool-worker path
+    (`WORKER_POOL_SIZE` threads bumping concurrently) races recur across the
+    whole measurement window, so the AGGREGATE loss is proportional to
+    contention, not a fixed single-digit constant -- while a lock on the audit
+    hook would cost every audited event in the process, `open` included).
+
+    Public because `coordinator_core.git.run.run_git` still calls it when
+    `audit_hook_installed()` is false, so a machine that refuses the hook keeps
+    the git-spawn count it had before this seam existed rather than dropping to
+    silence. Nothing else should call it: a second hand-bumped site is
+    double-counted the moment the hook is up.
     """
     global _spawns
     _spawns += n
@@ -96,3 +148,50 @@ def spawn_count() -> int:
     by every op this process served before the one being measured.
     """
     return _spawns
+
+
+def audit_hook_installed() -> bool:
+    """Whether the audit hook is counting, i.e. whether `bump()` is redundant.
+
+    False means this interpreter refused `sys.addaudithook` (an already-resident
+    hook may veto additions) and the counter has fallen back to the pre-existing
+    hand-bumped git seam — which is a GIT-spawn count, not a spawn count. A
+    reader that cares about the difference must consult this, not the delta.
+    """
+    return _hook_installed
+
+
+def _count_spawn_event(event: str, _args: tuple) -> None:
+    """`sys.addaudithook` callback. Hot for EVERY audited event in the process.
+
+    Deliberately branch-then-return with no `try`: a frozenset membership test
+    on a str cannot raise, and an in-place int add on a global cannot raise, so
+    there is nothing here for a `try` to catch — while the `try` itself would be
+    paid on every `open` in the process. `_args` is unread; the counter needs the
+    fact of the spawn, never the argv.
+    """
+    global _spawns
+    if event in _COUNTED_EVENTS:
+        _spawns += 1
+
+
+def _install() -> None:
+    """Install the counting hook once. Idempotent, and never raises.
+
+    Import-time, not first-read: a spawn that happens before the first reader
+    calls `spawn_count()` is exactly the spawn a lazy install would miss, and
+    the op-latency reader takes its baseline AFTER the process is already warm.
+    Audit hooks cannot be removed once added (CPython, deliberate) — which is
+    why this is guarded rather than merely called.
+    """
+    global _hook_installed
+    if _hook_installed:
+        return
+    try:
+        sys.addaudithook(_count_spawn_event)
+    except Exception:
+        return
+    _hook_installed = True
+
+
+_install()

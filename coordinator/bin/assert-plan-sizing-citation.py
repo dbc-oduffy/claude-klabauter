@@ -27,11 +27,15 @@ Spec backlink: pln-plan-sizing-citation-gate-scaf-45eaed § C3 / AC4 / AC6
 # --- routing half: this file is now a thin shim over entry_point_shim.run_gate_target ---
 from __future__ import annotations
 
-import os
 import sys
 
-import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
-from entry_point_shim import run_gate_target  # noqa: E402
+
+def main(argv: list[str]) -> int:
+    import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
+    from entry_point_shim import run_gate_target
+
+    return run_gate_target("assert-plan-sizing-citation", argv[1:])
+
 
 if __name__ == "__main__":
-    sys.exit(run_gate_target("assert-plan-sizing-citation", sys.argv[1:]))
+    sys.exit(main(sys.argv))

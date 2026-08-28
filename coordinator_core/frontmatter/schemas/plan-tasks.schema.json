@@ -129,7 +129,7 @@
           "condition": {
             "type": "string",
             "minLength": 1,
-            "description": "What must become true in owner_repo before this row executes (or, if blocks is ac-closure, before the gated acceptance criterion can close). Reader-facing prose, not a machine-evaluated predicate — no consumer parses this for truth, only a human deciding whether the gate has cleared."
+            "description": "What must become true in owner_repo before this row executes (or, if blocks is ac-closure, before the gated criterion can close). Reader-facing prose, not a machine-evaluated predicate — no consumer parses this for truth, only a human deciding whether the gate has cleared."
           },
           "closure_evidence": {
             "type": "string",
@@ -161,7 +161,7 @@
             "type": "string",
             "enum": ["execution", "ac-closure"],
             "default": "execution",
-            "description": "OPTIONAL, defaults to execution. `execution`: this row cannot run until the gate clears — the wave-builder must not schedule it. `ac-closure`: the row executes normally; only a named acceptance criterion's closure is gated. This distinction is load-bearing — conflating the two stalls an executable chunk on a gate that only blocks its AC, not its execution."
+            "description": "OPTIONAL, defaults to execution. `execution`: this row cannot run until the gate clears — the wave-builder must not schedule it. `ac-closure`: the row executes normally; only the gated criterion's closure is blocked — the plan's prime exit criterion (docs/wiki/writing-plans.md), not a cell in the now-collapsed AC checkbox table; the table is gone, but a gate that holds up closure without blocking execution is still a distinct thing this value names and nothing else does. This distinction is load-bearing — conflating the two stalls an executable chunk on a gate that only blocks its criterion's closure, not its execution. Any future removal of this value (should the concept itself ever genuinely die) is joint DoE+engine work tracked on claude-klabauter's re-vendor of this schema, not folded into any plan narrowing depends_on/gate-kind clearing semantics — that is a different, unrelated hazard."
           }
         },
         "additionalProperties": false

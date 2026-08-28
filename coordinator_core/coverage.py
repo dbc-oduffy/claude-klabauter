@@ -199,6 +199,13 @@ _DELIVERABLE_ID_RE = re.compile(r"^dlv-(?!placeholder-replace-with)[0-9a-zA-Z][0
 _FULL_SHA = re.compile(r"^[0-9a-fA-F]{40}$")
 _GIT_OBJECT_TYPES = frozenset({"commit", "tree", "blob", "tag"})
 
+# `_GIT_TIMEOUT` (the per-spawn `git rev-list` timeout convention shared with
+# machine_resolver.py / person_resolver.py) was dropped in the same hunk as
+# the above restoration, but deliberately, not as a second miss: `_run`'s
+# actual timeout is always caller-supplied via its `timeout=` parameter, and
+# grep confirms `_GIT_TIMEOUT` had no reader anywhere in this module — only
+# its own now-removed docstring referenced it.
+
 # `_BULK_SWEEP_ADD_COMMIT_FILE_THRESHOLD` and `_add_commit_touched_file_count`
 # (the leg-(b) bulk-sweep guard for the DAG-mode fixpoint's deliverable
 # attribution) were removed 2026-08-19 along with `_derive_dag_chain_set`,
@@ -830,9 +837,16 @@ def _credit_from_kind_partition(
 ) -> Set[str]:
     """Collapse a per-kind reviewed partition into ONE credited set — the
     kind-aware crediting rule (C5, docs/plans/2026-08-05-coverage-gate-
-    planning-artifact-class.md § C5), applied identically regardless of which
-    Phase 2 strategy (single-graph-walk or per-range fan-out) produced the
-    partition.
+    planning-artifact-class.md § C5).
+
+    No production call site reaches this function today: its former callers
+    (`build_reviewed_set` / `_reviewed_via_graph_walk`) were deleted, and the
+    surviving reviewed-set writer, `review_trail.backfill._resolve_special`,
+    reimplements this same rule inline (its own `_classify_bookkeeping_shas`
+    pass over the plan-kind bucket) rather than calling this function. Kept
+    live for its direct test coverage in
+    `tests/test_coverage_reviewed_set.py` and as the reference statement of
+    the rule other call sites' comments point back to.
 
     "diff" (and any future unrestricted kind, see _UNRESTRICTED_CREDIT_KINDS)
     credits its resolved SHAs unconditionally, exactly as before this chunk.

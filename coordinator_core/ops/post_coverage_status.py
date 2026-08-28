@@ -37,6 +37,27 @@ barred subprocess):
        env var is set, else `%APPDATA%/GitHub CLI/hosts.yml` on Windows or
        `$XDG_CONFIG_HOME/gh/hosts.yml` (default `~/.config/gh/hosts.yml`)
        elsewhere, reading the `oauth_token` under the `github.com` host entry.
+    4. Windows Credential Manager, via `advapi32!CredReadW` through `ctypes`
+       -- an in-process DLL call, not a subprocess.
+
+Leg 4 is not belt-and-braces; without it the ladder does not reach this
+fleet's actual credential. A `gh auth login` that chose SECURE STORAGE --
+the default on Windows, and what this box has -- writes NO `oauth_token`
+into `hosts.yml` at all. The file still exists and still parses, so leg 3
+returns cleanly and wrongly: the host entry is present, the token key simply
+is not there. Observed on this box 2026-08-28: `gh auth status` reports
+`Logged in to github.com account dbc-example-operator (keyring)`, `hosts.yml` carries
+only `users:`/`user:`, and legs 1-3 all miss while a valid `gho_` token sits
+in the credential store under `gh:github.com:<user>`. That is the whole
+fail-closed path firing on a credential that IS present -- which, once the
+ruleset is live, refuses every push to `main` with no route through.
+
+POSIX secure storage is the SAME hole, unpatched here: gh on Linux/macOS
+also keyrings its token by default (Secret Service / Keychain), and reaching
+either without a subprocess is a separate mechanism, not a line of code.
+On those hosts the operator must export `GITHUB_TOKEN` or `GH_TOKEN`.
+Leg 4 is Windows-only by construction and returns None everywhere else.
+
 No token resolving is FAIL CLOSED: `post_coverage_status()` posts nothing and
 returns a result recording that fact -- never "assume covered".
 
@@ -87,6 +108,9 @@ from typing import Optional
 
 STATUS_CONTEXT = "coverage-gate"
 
+_GH_KEYRING_SERVICE = "gh:github.com"
+_CRED_TYPE_GENERIC = 1
+
 _BIN_DIR = Path(__file__).resolve().parents[2] / "coordinator" / "bin"
 _MERGE_GATE_MODULE_NAME = "merge_gate_and_pr_for_post_coverage_status"
 
@@ -136,7 +160,13 @@ def _gh_hosts_path() -> Path:
     return Path.home() / ".config" / "gh" / "hosts.yml"
 
 
-def _token_from_gh_hosts_file() -> Optional[str]:
+def _gh_github_host_entry() -> Optional[dict]:
+    """Parse gh's `hosts.yml` and return its `github.com` mapping, or None.
+
+    Returns None -- never raises -- for every way the file can fail to yield
+    one: absent, unreadable, invalid YAML, not a mapping, or carrying no
+    `github.com` host entry.
+    """
     path = _gh_hosts_path()
     if not path.is_file():
         return None
@@ -152,9 +182,129 @@ def _token_from_gh_hosts_file() -> Optional[str]:
     host_entry = data.get("github.com")
     if not isinstance(host_entry, dict):
         return None
+    return host_entry
+
+
+def _token_from_gh_hosts_file() -> Optional[str]:
+    host_entry = _gh_github_host_entry()
+    if host_entry is None:
+        return None
     token = host_entry.get("oauth_token")
     if isinstance(token, str) and token:
         return token
+    return None
+
+
+def _gh_active_account() -> Optional[str]:
+    """The account name gh records as active for `github.com`, or None.
+
+    Names the Credential Manager target leg 4 reads. `user:` is gh's own
+    active-account key; the first key under `users:` is the fallback for a
+    hosts.yml written before that key existed.
+    """
+    host_entry = _gh_github_host_entry()
+    if host_entry is None:
+        return None
+    user = host_entry.get("user")
+    if isinstance(user, str) and user:
+        return user
+    users = host_entry.get("users")
+    if isinstance(users, dict):
+        for name in users:
+            if isinstance(name, str) and name:
+                return name
+    return None
+
+
+def _decode_credential_blob(blob: bytes) -> Optional[str]:
+    """Decode a Credential Manager blob to a token, or None.
+
+    Two writers, two encodings, and the wrong guess is silent: gh's own Go
+    keyring writes the token as raw UTF-8, while several Windows credential
+    writers store UTF-16LE. Try UTF-8 first and fall back on the NUL bytes
+    that give UTF-16 away, then require the result to be printable -- a
+    mis-decoded blob must fail closed, never travel to an Authorization
+    header as mojibake.
+    """
+    for encoding in ("utf-8", "utf-16-le"):
+        try:
+            text = blob.decode(encoding).strip()
+        except (UnicodeDecodeError, ValueError):
+            continue
+        if text and text.isprintable():
+            return text
+    return None
+
+
+def _token_from_windows_credential_manager() -> Optional[str]:
+    """Read gh's keyring-stored token via `advapi32!CredReadW`, or None.
+
+    An in-process DLL call through `ctypes` -- no subprocess, so nothing here
+    needs a shell-out carve-out. Returns None on every non-Windows host and
+    on every failure mode (DLL unavailable, target absent, blob undecodable),
+    so the caller's fail-closed contract is unchanged.
+    """
+    if sys.platform != "win32":
+        return None
+
+    import ctypes
+    import ctypes.wintypes as wintypes
+
+    class _Credential(ctypes.Structure):
+        _fields_ = [
+            ("Flags", wintypes.DWORD),
+            ("Type", wintypes.DWORD),
+            ("TargetName", wintypes.LPWSTR),
+            ("Comment", wintypes.LPWSTR),
+            ("LastWritten", wintypes.FILETIME),
+            ("CredentialBlobSize", wintypes.DWORD),
+            ("CredentialBlob", ctypes.POINTER(ctypes.c_char)),
+            ("Persist", wintypes.DWORD),
+            ("AttributeCount", wintypes.DWORD),
+            ("Attributes", ctypes.c_void_p),
+            ("TargetAlias", wintypes.LPWSTR),
+            ("UserName", wintypes.LPWSTR),
+        ]
+
+    try:
+        advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
+        advapi32.CredReadW.argtypes = [
+            wintypes.LPCWSTR,
+            wintypes.DWORD,
+            wintypes.DWORD,
+            ctypes.POINTER(ctypes.POINTER(_Credential)),
+        ]
+        advapi32.CredReadW.restype = wintypes.BOOL
+        advapi32.CredFree.argtypes = [ctypes.c_void_p]
+        advapi32.CredFree.restype = None
+    except (OSError, AttributeError):
+        return None
+
+    account = _gh_active_account()
+    targets = [f"{_GH_KEYRING_SERVICE}:{account}"] if account else []
+    targets.append(f"{_GH_KEYRING_SERVICE}:")
+
+    for target in targets:
+        pointer = ctypes.POINTER(_Credential)()
+        try:
+            ok = advapi32.CredReadW(
+                target, _CRED_TYPE_GENERIC, 0, ctypes.byref(pointer)
+            )
+        except OSError:
+            continue
+        if not ok or not pointer:
+            continue
+        try:
+            credential = pointer.contents
+            size = int(credential.CredentialBlobSize)
+            if size <= 0:
+                continue
+            blob = ctypes.string_at(credential.CredentialBlob, size)
+        finally:
+            advapi32.CredFree(pointer)
+        token = _decode_credential_blob(blob)
+        if token:
+            return token
     return None
 
 
@@ -168,7 +318,7 @@ def resolve_token() -> Optional[str]:
         value = os.environ.get(env_name)
         if value:
             return value
-    return _token_from_gh_hosts_file()
+    return _token_from_gh_hosts_file() or _token_from_windows_credential_manager()
 
 
 # ---------------------------------------------------------------------------

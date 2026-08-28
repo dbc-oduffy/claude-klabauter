@@ -34,8 +34,6 @@ Spec backlink: pln-qsub-01-per-op-end-to-end-late-53ff10 § C5
 
 from __future__ import annotations
 
-from coordinator_core.benchmarks import declare_benchmark_origin
-
 import statistics
 
 from coordinator_core.benchmarks.timer import time_invocation
@@ -58,7 +56,6 @@ def measure_floor(n: int) -> dict[str, float]:
     invalid sample -- a floor draw containing an erroring/non-zero-exit ping
     invocation is not silently dropped or substituted.
     """
-    declare_benchmark_origin()
     samples_ms = [time_invocation("ping", PING_PARAMS_JSON, None) for _ in range(n)]
 
     cold_start_floor_ms = min(samples_ms)

@@ -69,14 +69,14 @@ import sys
 
 _BIN_DIR = os.path.dirname(os.path.abspath(__file__))
 
-import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
-from cc_invoke import require_dispatch_engine_on_path  # noqa: E402
-from sweep_argv import parse_repo_root_argv  # noqa: E402
-
 _USAGE = "usage: python sweep-boot.py [-h] [<repo_root>] [<state_common_dir>]"
 
 
 def main(argv: list[str] | None = None) -> int:
+    import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
+    from cc_invoke import require_dispatch_engine_on_path
+    from sweep_argv import parse_repo_root_argv
+
     argv = sys.argv[1:] if argv is None else argv
     _positional, _flags, early_exit = parse_repo_root_argv(
         argv, prog="sweep-boot.py", usage=_USAGE, max_positional=2

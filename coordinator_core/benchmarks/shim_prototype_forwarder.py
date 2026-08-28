@@ -22,6 +22,7 @@ import os
 import subprocess
 import sys
 
+from coordinator_core.benchmarks import declare_benchmark_origin
 from coordinator_core.win_portability import no_console_passthrough_kwargs
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -29,6 +30,7 @@ _DISPATCHER_PATH = os.path.join(_HERE, "shim_prototype_dispatcher.py")
 
 
 def main() -> int:
+    declare_benchmark_origin()
     completed = subprocess.run(
         [sys.executable, _DISPATCHER_PATH],
         # A forwarder's entire job is passthrough, so the hand-rolled

@@ -176,6 +176,7 @@ from coordinator_core.bash_guards.block_subagent_destructive_action import (
 from coordinator_core.bash_guards._command_tokenizer import (
     _extract_command_substitutions as _bt_extract_command_substitutions,
     _skip_wrapper_own_argv,
+    _strip_heredocs as _bt_strip_heredocs,
     exceeds_tokenizable_ceiling as _bt_exceeds_tokenizable_ceiling,
     segments_from_tokens_simple as _bt_segments_from_tokens_simple,
     segments_from_tokens_with_pipe_flag as _bt_segments_from_tokens_with_pipe_flag,
@@ -2796,6 +2797,71 @@ def _attribute_porcelain(
     return table
 
 
+def _rm_flush_touch(paths: List[str], session_id: str, root: Optional[str]) -> None:
+    """C9 (2026-08-27, docs/plans/2026-08-27-a-pathspec-is-not-a-scope.md):
+    best-effort recording of a plain TOUCH event for every ``paths`` entry
+    THIS session's own allowed ``rm``/``git rm`` is about to remove.
+
+    Closes the residue filed at ``state/bug-backlog/2026-08-27-git-rm-
+    through-bash-leaves-no-touch-clai-d0a400871a9f.yaml``: `rm`/`git rm`
+    run through Bash fired no Write/Edit hook, so the deleting session left
+    no claim behind and its own legitimate deletion rendered
+    `owner:orphan`. A plain TOUCH (never a delete-flavored verb -- none
+    exists in this record's schema, see ``touch_record.VERB_TOUCH``/
+    ``VERB_RELEASE``) is exactly what closes it: `compute_scope` Step 1
+    (`session/scope.py`) already admits a touched-then-deleted path to
+    `my_scope` with NO existence check, so a TOUCH recorded here is
+    sufficient -- this function does not need to, and must not, invent a
+    second verb or touch `compute_scope` itself.
+
+    Deliberately does NOT record a delete for a path this session did NOT
+    itself remove -- callers pass only targets THIS `rm`/`git rm` command
+    resolved and is about to act on, never a peer's or an unrelated path.
+    An unattributable staged deletion (no claim from anyone) is untouched
+    by this function on purpose -- that is the signal C7's flip acts on,
+    and widening it here would be exactly the forgiveness-rule widening
+    this plan's Anti-scope forbids.
+
+    Fails toward recording NOTHING, never toward raising: this sits on the
+    `rm` hot path (``check_destructive_rm``'s own budget: one record-
+    append, no spawn, no filesystem walk beyond what its caller already
+    resolved), and a recording failure here must never turn an otherwise-
+    ALLOWED `rm` into a denied one, nor add a spawn/directory-walk of its
+    own -- ``session_id``/``root`` are the caller's own already-resolved
+    values (``session_id`` is this check's own parameter; ``root`` is
+    ``cur_repo``, the one `rev-parse --show-toplevel` this function's
+    caller already spawned for its own purposes), not re-derived here.
+    """
+    if not paths or not session_id or not root:
+        return
+    try:
+        from coordinator_core.session.touch_record import (
+            VERB_TOUCH,
+            append_event,
+            sink_path,
+        )
+
+        sid_dir = os.path.join(root, ".git", "coordinator-sessions", session_id)
+        sink = sink_path(sid_dir)
+        for tgt_abs in paths:
+            try:
+                rel = os.path.relpath(tgt_abs, root).replace(os.sep, "/")
+            except ValueError:
+                continue
+            try:
+                append_event(
+                    sink,
+                    session_id=session_id,
+                    agent_id=None,
+                    verb=VERB_TOUCH,
+                    path=rel,
+                )
+            except Exception:
+                continue
+    except Exception:
+        return
+
+
 def check_destructive_rm(
     cmd: str,
     session_id: str = "",
@@ -2899,6 +2965,17 @@ def check_destructive_rm(
     if rc == 0:
         cur_repo = out.strip()
 
+    # C9 (2026-08-27, docs/plans/2026-08-27-a-pathspec-is-not-a-scope.md):
+    # every real target this call ends up letting through -- bash `rm` or
+    # `git rm` alike -- is collected here (as `tgt_abs`) and flushed as a
+    # TOUCH record ONLY at this function's final `return None`, never
+    # inline where a target is found. That ordering is load-bearing: any
+    # earlier `return _deny(...)` anywhere below means the whole command
+    # never executes, so nothing in this list may have been recorded yet.
+    # See `_rm_flush_touch`'s own docstring for why this is a plain TOUCH
+    # (not a delete-flavored verb) and what it closes.
+    _pending_rm_touch_paths: List[str] = []
+
     _rm_segments = list(_split_segments(cmd))
     if _has_ps_remove_word:
         # AC3: alias/flag resolution is TABLE-DRIVEN AND SHARED, reusing
@@ -2953,9 +3030,18 @@ def check_destructive_rm(
     for seg in _rm_segments:
         if not seg.strip():
             continue
-        if not _rm_is_rm_segment(seg):
-            continue
-        # Skip `git ... rm` (staged removal, git-recoverable).
+
+        # `git ... rm` (staged removal, git-recoverable) never matches
+        # `_rm_is_rm_segment` below -- that gate requires the segment's OWN
+        # head word (past wrappers/env) to be `rm`, and `git` is not in
+        # `_RM_WRAPPER_WORDS` -- so this detection must run BEFORE that
+        # gate, not after it (a `git rm` segment would otherwise `continue`
+        # past this whole block, silently, on the very next line). The deny
+        # ladder below still never runs for it (staged removal is
+        # git-recoverable, unlike a bare `rm`), but (C9) it still needs its
+        # own TOUCH: `git rm` (without `--cached`) deletes the working-tree
+        # file too, not just the index entry, and previously left no touch
+        # claim behind at all.
         if re.search(
             r"\bgit(\s+(-C\s+\S+|-c\s+\S+|--(git-dir|work-tree|namespace)(=\S+|\s+\S+)|"
             r"--exec-path(=\S+|\s+\S+)?|-p|--paginate|--no-pager|--bare|"
@@ -2963,8 +3049,26 @@ def check_destructive_rm(
             r"--noglob-pathspecs|--icase-pathspecs|--no-optional-locks))*\s+rm\b",
             seg,
         ):
+            _gr_after = re.sub(r".*\bgit\b.*?\brm(\s|$)", " ", seg, count=1)
+            if "--cached" not in _gr_after.split():
+                for _gr_tok in _gr_after.split():
+                    if _gr_tok == "--" or _gr_tok.startswith("-"):
+                        continue
+                    if "$" in _gr_tok or any(c in _gr_tok for c in ("*", "?", "[")):
+                        continue
+                    _gr_t = _strip_q(_gr_tok)
+                    if _gr_t.endswith(")"):
+                        _gr_t = _gr_t[:-1]
+                    if _gr_t.endswith("}"):
+                        _gr_t = _gr_t[:-1]
+                    _gr_resolved = os.path.expanduser(_gr_t) if _gr_t.startswith("~") else _gr_t
+                    if not _gr_resolved or not os.path.exists(_gr_resolved):
+                        continue
+                    _pending_rm_touch_paths.append(_abs_path(_gr_resolved))
             continue
 
+        if not _rm_is_rm_segment(seg):
+            continue
         after = re.sub(r".*(^|\s)rm(\s|$)", " ", seg, count=1)
         recursive = bool(re.search(r"(^|\s)-[a-zA-Z]*[rR][a-zA-Z]*(\s|$)|--recursive", after))
 
@@ -3039,6 +3143,11 @@ def check_destructive_rm(
             if not tgt or not os.path.exists(tgt_resolved):
                 continue
             tgt_abs = _abs_path(tgt_resolved)
+            # C9: collected now, flushed only at this function's final
+            # `return None` -- see the list's own comment at this
+            # function's top for why an early `return _deny(...)` below
+            # must never let this target reach the touch record.
+            _pending_rm_touch_paths.append(tgt_abs)
 
             norm = tgt_abs.replace("\\", "/")
             if (
@@ -3354,6 +3463,14 @@ def check_destructive_rm(
         result = check_destructive_rm(unwrapped_cmd, session_id, payload=payload)
         if result is not None:
             return result
+
+    # C9: reached only once every target above (bash `rm` AND `git rm`
+    # alike) AND every unwrapped `sh -c`/`bash -c` sub-command cleared the
+    # deny ladder with no `return _deny(...)` anywhere -- i.e. only when
+    # this call is actually about to ALLOW the removal through. Flushing
+    # here, and nowhere earlier, is what keeps a denied `rm` from ever
+    # recording a touch for work that never actually happened.
+    _rm_flush_touch(_pending_rm_touch_paths, session_id, cur_repo)
     return None
 
 
@@ -5850,24 +5967,28 @@ def check_validate_commit(
     # premise that tool cannot satisfy.
     #
     # THE ONE REMAINING GATE IS THE ORPHAN ARM, measured on production
-    # traffic rather than argued. `scope-warnings.log` across this repo's live
-    # sessions holds 46 warn events for 2026-08-27, 4 sessions -- each one a
-    # DENY under the flip. 29 of the 46 name a real peer owner and are TRUE
-    # positives (the sweep class the flip exists to stop; cf. `52c66b212`).
-    # The other 17, over 10 distinct paths, render `owner:orphan`: nothing
-    # claims the path at all. Under warn-only that is a spurious SCOPE line;
-    # under the flip it denies a commit the session is entitled to make, which
-    # is the false-positive outage the 2026-08-03 ruling below feared.
+    # traffic rather than argued -- for the current count, run
+    # `scope_orphan_census.py` rather than trusting any number hand-copied
+    # into this comment; every figure below is a snapshot, already stale by
+    # the time the section below this one re-measured it. Under warn-only an
+    # orphan is a spurious SCOPE line; under the flip it denies a commit the
+    # session is entitled to make, which is the false-positive outage the
+    # 2026-08-03 ruling below feared.
     #
-    # The 17 orphans are THREE causes, not one, and the dominant one is not
-    # what it first looks like:
+    # The orphan arm was originally attributed to THREE causes, not one, and
+    # the dominant one was not what it first looked like:
     #
-    #   - DELETIONS (6): `ops/session/tests/test_boot_backstop.py`,
-    #     `state/audits/data/.../measure.py`. A removed file gets no touch
-    #     claim from any writer, so it can only ever render orphan. Check 5
-    #     already folds deleted paths into `_scope_set` for the commit-scope
-    #     set (see the `--diff-filter=D` block above) -- the WARN loop does
-    #     not, and that asymmetry is the first thing to close.
+    #   - DELETIONS: `compute_scope` Step 1 (`session/scope.py`) admits a
+    #     touched-then-deleted path to `my_scope` with NO existence check,
+    #     so the deletions that render `owner:orphan` are only the ones
+    #     carrying no touch claim from anyone -- pinned to warn by ratified
+    #     AC10 (`test_tracked_then_deleted_file_hits_mtime_epoch_zero_in_
+    #     forgiveness_loop`), and split by C7 into attributable (`rm`/`git
+    #     rm` run through Bash -- C9 now records a TOUCH for those, closing
+    #     that half) and unattributable (a staged deletion no session ever
+    #     claimed at all -- the sweep shape the flip must deny, never
+    #     forgive; widening `my_scope` to cover it would defeat the flip's
+    #     own purpose).
     #   - ARCHIVAL MOVES (5): `archive/handoffs/**`, `state/handoffs/**`.
     #     `archive_terminal_handoffs`/`archive_actioned_memos` are exempted
     #     from `relocate_touched_path` on the reasoned allow-list in
@@ -6151,6 +6272,47 @@ def check_validate_commit(
                         pass
                 _warned_paths: List[str] = []
 
+                # C11 (plan 2026-08-27-a-pathspec-is-not-a-scope): the third
+                # granularity -- a foreign hunk landed inside a file THIS
+                # session genuinely owns (the `bf6099f85` shape). C10 records
+                # a whole-file sha256 alongside a TOUCH; this reads THIS
+                # session's own live claims back (its own sink only -- an
+                # agent-touched or mtime-forgiven path never had a fingerprint
+                # recorded for it by this mechanism, so it is deliberately
+                # left out of this map rather than guessed at) and compares
+                # the recorded hash against disk-now for every path already
+                # in `my_scope`.
+                #
+                # FAILURE DIRECTION (pinned, see this chunk's own brief): a
+                # RECORDED hash that disagrees with disk is demonstrable --
+                # refuse, naming the path. NO recorded hash (pre-C10 line,
+                # a RELEASE, or -- today -- every write channel, since no
+                # caller passes `content_hash` into `append_event` yet; C10's
+                # own docstring: "this chunk records only") is NOT
+                # demonstrable and must NEVER be read as foreignness -- it
+                # falls through to the existing my_scope/orphan rendering
+                # unchanged. Fail-open on any read failure (unreadable
+                # record, import error): an unprovable state stays
+                # unprovable, never promoted to a refusal.
+                _own_content_hashes: Dict[str, str] = {}
+                if my_scope is not None:
+                    try:
+                        from coordinator_core.session import touch_record as _touch_record_mod
+                        _own_sink = os.path.join(
+                            session_dir, _touch_record_mod.RECORD_FILENAME
+                        )
+                        _own_projection = _touch_record_mod.project_live_claims(
+                            _own_sink, cwd=_cwd
+                        )
+                        _own_content_hashes = {
+                            _path: _event.content_hash
+                            for _path, _event in _own_projection.claims.items()
+                            if _event.session_id == session_id
+                            and _event.content_hash is not None
+                        }
+                    except Exception:
+                        _own_content_hashes = {}
+
                 def _record_scope_event(_verdict: str, _warned: List[str]) -> None:
                     try:
                         from coordinator_core.session.commit_scope_events import (
@@ -6176,6 +6338,38 @@ def check_validate_commit(
 
                 for staged_file in commit_scope:
                     if my_scope is not None and staged_file in my_scope:
+                        _own_hash = _own_content_hashes.get(staged_file)
+                        if _own_hash is not None:
+                            try:
+                                from coordinator_core.session.touch_record import (
+                                    compute_content_hash as _compute_content_hash,
+                                )
+                                _abs_staged = (
+                                    os.path.join(git_root, staged_file)
+                                    if git_root
+                                    else staged_file
+                                )
+                                _current_hash = _compute_content_hash(_abs_staged)
+                            except Exception:
+                                _current_hash = None
+                            # `_current_hash is None` means unreadable (deleted
+                            # between stage and this check, a race, an import
+                            # failure) -- NOT demonstrable, so this never
+                            # denies on a `None` read (same fail-open posture
+                            # as `compute_content_hash`'s own contract).
+                            if _current_hash is not None and _current_hash != _own_hash:
+                                return _deny(
+                                    "BLOCKED (foreign hunk): %s is staged and this "
+                                    "session owns it, but its on-disk content no "
+                                    "longer matches the content this session last "
+                                    "recorded for it -- a foreign edit landed "
+                                    "inside a file this session owns.\n\n"
+                                    "Confirm the staged content is genuinely this "
+                                    "session's own work (git diff --cached -- %s) "
+                                    "before committing, or coordinate with "
+                                    "whoever else touched it."
+                                    % (staged_file, staged_file)
+                                )
                         continue
 
                     owner_fact = (
@@ -7817,6 +8011,38 @@ _BUNDLED_SHORT_M_RE = re.compile(r"^-[a-zA-Z]*m$")
 _COMMIT_ONLY_SHORT_RE = re.compile(r"^-[a-zA-Z]*o[a-zA-Z]*$")
 
 
+def _bt_is_shattered_operand(tok: str) -> bool:
+    """True iff `tok` is a fragment of a shattered quoted message rather than
+    a pathspec -- it carries a newline.
+
+    Same defect class as the surviving-redirection fix above, at the same
+    polarity: shell syntax the tokenizer failed to consume, counted as an
+    operand, makes an UNSCOPED `git commit` read as explicitly scoped and
+    silences the checks that exist to catch it.
+
+    The residue here is a quoted message rather than a redirection. A
+    heredoc-and-command-substitution message (`-m "$(cat <<'EOF' ... EOF
+)"`)
+    whose BODY contains a double quote closes the outer quote early, so
+    `shlex.split` shatters the message into several bare tokens -- and the
+    tail fragment carries the heredoc terminator and its newlines. A
+    command-line pathspec never does: git receives argv from the shell, and
+    a newline inside an operand means the operand is not what the caller
+    wrote. Verified live against the shape a peer hit
+    (`state/bug-backlog/2026-08-27-bare-git-commit-inside-engine-python-has-
+    no-guard-4b1e77c9d3a2.yaml`): a genuinely BARE `git commit -m "<message
+    with an inner quoted phrase>"` scanned as carrying two positional
+    pathspecs and suppressed the bare-commit deny entirely.
+
+    A path CAN legally contain a newline on disk. It is still right to
+    refuse to read one here: this walk cannot distinguish that path from a
+    shattered message, and per SC-DR-020 bound 4 an unprovable operand list
+    must render the parse ambiguous, which fails OPEN to the advisory. The
+    cost of guessing wrong in the other direction is a peer's swept work.
+    """
+    return chr(10) in tok or chr(13) in tok
+
+
 def _bt_commit_operand_scan(
     seg_tokens: List[str],
 ) -> Tuple[List[str], bool, bool, bool]:
@@ -7898,6 +8124,16 @@ def _bt_commit_operand_scan(
                     else:
                         j += 1
                     continue
+                if _bt_is_shattered_operand(t):
+                    # After a standalone `--` the parse is NOT in doubt:
+                    # everything here is a pathspec by git's own grammar, so
+                    # a shattered fragment is dropped without rendering the
+                    # walk ambiguous. Only the BARE-positional inference
+                    # below has to fail open, because there the fragment is
+                    # indistinguishable from the operand it is pretending
+                    # to be.
+                    j += 1
+                    continue
                 operands.append(t)
                 j += 1
             break
@@ -7939,6 +8175,18 @@ def _bt_commit_operand_scan(
                 i += 2
             else:
                 i += 1
+            continue
+        if _bt_is_shattered_operand(tok):
+            # A shattered fragment sitting BEFORE a standalone `--` is
+            # pre-separator residue: the tail branch above supplies the real
+            # pathspec, so dropping it silently is right and marking the walk
+            # ambiguous would deny a correctly-scoped command. With no
+            # separator anywhere in the segment there is nothing to fall back
+            # on and the operand list is unprovable -- fail OPEN (SC-DR-020
+            # bound 4), which is what makes the genuinely-bare shape deny.
+            if "--" not in seg_tokens:
+                ambiguous = True
+            i += 1
             continue
         operands.append(tok)
         i += 1
@@ -8720,7 +8968,32 @@ def check_git_commit_safe_commit_advise(
         )
         if _gcsa_ps_tokens is not None:
             cmd = " ".join(expand_start_process_invocations(_gcsa_ps_tokens))
-    tokens = _bt_tokenize_full_command(cmd)
+    # Heredoc BODIES are stripped before segmenting, joining the per-path
+    # precedent `resolve_command_positions` and `block_illegal_filename`
+    # already set -- NOT a change to the shared tokenizer, which stays
+    # `$(...)`-unaware for its other consumers (see the boundary named in
+    # `_shell_c_unwrap_payloads`' own comment).
+    #
+    # Without this, a `"` inside a heredoc body closes the OUTER double quote
+    # opened at `-m "$(`, the rest of the body lexes UNQUOTED, and a `;` in the
+    # message subject is read as a real segment separator. The command splits:
+    # `git commit` heads one segment and its `-- <paths>` lands in the next, so
+    # `_bt_commit_has_explicit_pathspec` correctly answers "no scope" about a
+    # segment that genuinely has none -- and this check DENIES the ratified
+    # both-halves scoped form, violating the first property named in its own
+    # docstring above. Bug row: `state/bug-backlog/2026-08-27-commit-scope-
+    # guard-denies-a-correct-pathspec-when-the-message-quotes-a-phrase-
+    # 8f31c0a4e7b2.yaml`; both directions pinned in `bash_guards/tests/
+    # test_commit_scope_survives_a_quoted_phrase_in_the_message.py`.
+    #
+    # No bypass is created HERE, and the reason is specific to this check
+    # rather than general: the question asked is "does this command line carry
+    # a pathspec", and a `git commit` appearing inside a heredoc BODY is stdin
+    # data that this command never executes. That reasoning does NOT transfer
+    # to a guard which must see commands inside a body (`bash <<'EOF'`), which
+    # is exactly why the strip is applied at this seam and not in
+    # `tokenize_full_command` itself.
+    tokens = _bt_tokenize_full_command(_bt_strip_heredocs(cmd))
     if tokens is None:
         return None
     segments = _bt_segments_from_tokens_with_pipe_flag(tokens)

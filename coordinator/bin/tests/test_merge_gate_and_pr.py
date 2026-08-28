@@ -192,7 +192,15 @@ def test_coverage_gate_uncovered_refuses(monkeypatch, capsys):
     assert rc == 1
     err = capsys.readouterr().err
     assert "deadbeef1234" in err
-    assert "not enforced at the git-push layer" in err
+    # C4: the note flipped when C6 applied the ruleset. Assert what a refused
+    # pusher now needs -- that the refusal is server-side and what to do about
+    # it -- plus the residual hole, which is the half most likely to be quietly
+    # dropped in a future rewording.
+    assert "enforced server-side" in err
+    assert "GH013" in err
+    assert "branch and a review record" in err
+    assert "deletable by any holder of the repo PAT" in err
+    assert "not enforced at the git-push layer" not in err
 
 
 def test_coverage_gate_dimension_unavailable_passes(monkeypatch, capsys):

@@ -62,10 +62,6 @@ from __future__ import annotations
 import os
 import sys
 
-import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
-from cc_invoke import require_dispatch_engine_on_path  # noqa: E402
-from coordinator_registry import _DoeUnresolvable, doe_root  # noqa: E402
-
 
 def _resolve_plugin_root() -> str:
     """Resolve the plugin root (coordinator/) that owns templates/bin/.
@@ -90,6 +86,8 @@ def _resolve_plugin_root() -> str:
     script, not a never-block hook, so an unresolvable DoE root must not
     degrade to an exit-0 no-op.
     """
+    from coordinator_registry import _DoeUnresolvable, doe_root
+
     env_root = os.environ.get("CLAUDE_PLUGIN_ROOT")
     if env_root:
         return env_root
@@ -116,6 +114,9 @@ def _import_runner():
     writes (the --fix template->live copy) is an orphan at the
     `scoped_git_commit` sink.
     """
+    import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
+    from cc_invoke import require_dispatch_engine_on_path
+
     claude_klabauter_root = require_dispatch_engine_on_path()
     from coordinator_core.cli_entry import run_op_main
 

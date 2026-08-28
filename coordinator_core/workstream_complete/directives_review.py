@@ -1715,3 +1715,124 @@ def build_classify_dispatch_shape_directive(plan_file: Optional[str]) -> Optiona
     if not plan_file:
         return None
     return _directive("d-classify-dispatch-shape", _CLASSIFY_DISPATCH_SHAPE_CLI, ["--plan-file", plan_file])
+
+
+# ---------------------------------------------------------------------------
+# d-close-coverage-advisory — docs/plans/2026-08-27-the-close-tells-the-
+# author-what-is-uncovered.md, C1. A warn-only advisory that tells the
+# closing author which of their own commits carry no review-trail stamp.
+# Structurally incapable of gating (D3): no `depends_on` edge in either
+# direction, never added to `_LIVE_GATE_MEMO_DIRECTIVE_IDS`, and always
+# `already_satisfied=True` -- it is computed and (on a real gap) printed
+# entirely at BUILD time, in-process, and never dispatches any CLI at all.
+#
+# D1 -- in-process, never a shell-out: this reaches `gate_dimension_review.
+# _review_dimension_check` directly (the same dimension function
+# `merge-gate-and-pr.py::cmd_coverage_gate` reaches), never re-implementing
+# the reviewed-set walk and never shelling out to `merge-gate-and-pr.py`.
+#
+# D2 -- failure is silence, not a message: `UNAVAILABLE`, an exception, or
+# an unresolvable range/changed-file set all take the same path -- print
+# nothing, emit the directive unchanged. An advisory that reports its own
+# unavailability turns a dependency outage into fleet-wide noise at every
+# close.
+#
+# AC6 (zero added spawn, pinned in test_gate_path_spawn_budget.py): this
+# builder NEVER resolves `changed_files`/`diff_base` itself and never
+# spawns anything on its own -- both are resolved by the CALLER
+# (`__init__.py::build_directives`) from facts ALREADY paid for elsewhere
+# in the close (the caller-supplied `decisions["stage_paths"]`, and the
+# review-brightline-gate directive's own already-resolved range floor/tip,
+# per that builder's docstring). When the caller cannot supply a real range
+# without a NEW spawn (the ordinary single-close path, no prior review-
+# trail record), it passes `diff_base=None` here, which resolves to
+# `_review_dimension_check`'s own `UNAVAILABLE` leg before any subprocess
+# runs -- silence, per D2, never a manufactured spawn to obtain a message.
+# Anti-scope: do not widen `_review_dimension_check`'s signature to
+# accommodate the close -- the range is resolved at the call site instead.
+# ---------------------------------------------------------------------------
+
+_CLOSE_COVERAGE_ADVISORY_ID = "d-close-coverage-advisory"
+
+#: This directive is ALWAYS `already_satisfied=True` (see module-level
+#: docstring above) and therefore never resolves its own `cli` through
+#: `apply.py::_resolve_cli`/`_load_cli_module` -- `_execute_directives`
+#: skips already-satisfied directives before either check runs. A
+#: genuinely new `CONSUMES_MANIFEST` member would need a real
+#: `coordinator/bin/` script, which is outside this chunk's file scope;
+#: reusing an existing, already-real manifest member here costs nothing
+#: because this id never actually dispatches it.
+_CLOSE_COVERAGE_ADVISORY_INERT_CLI = _REVIEW_BRIGHTLINE_CLI
+
+_CLOSE_COVERAGE_ADVISORY_PREFIX = "review coverage: "
+
+
+def _render_close_coverage_advisory_message(detail: str) -> Optional[str]:
+    """D4: reuses `_message_size.MESSAGE_PROSE_CAP_BYTES` (220 bytes) as the
+    byte cap for this advisory's rendered string -- one register, one cap,
+    never a second measurement path. Register (docs/wiki/guard-messaging.md
+    § Register): one fact, stated once, declaratively; no B1-B6 move, no
+    override key, no unlock pointer -- `detail` is `_review_dimension_
+    check`'s own plain uncovered-count/example-sha prose, carrying none of
+    those. Returns `None` (never a truncated/lossy render) when the
+    composed string would exceed the cap -- an over-cap render is treated
+    exactly like D2's other unavailable arms: silence, not a degraded
+    message."""
+    from coordinator_core.bash_guards._message_size import MESSAGE_PROSE_CAP_BYTES
+
+    message = f"{_CLOSE_COVERAGE_ADVISORY_PREFIX}{detail}"
+    if len(message.encode("utf-8")) > MESSAGE_PROSE_CAP_BYTES:
+        return None
+    return message
+
+
+def _emit_close_coverage_advisory(
+    changed_files: list[str], diff_base: Optional[str], repo_root: Optional[Path]
+) -> None:
+    """Computes and (on a real gap) prints the advisory. Never raises --
+    every arm of D2 (UNAVAILABLE, an exception, a missing store) degrades
+    to silence, not a message, matching the dimension's own fail-closed-to-
+    UNAVAILABLE contract plus this advisory's own additional never-raise
+    guarantee (D2 names "an exception" as its own arm, distinct from the
+    dimension's internal UNAVAILABLE verdict)."""
+    from coordinator_core.ops.gate_dimension_review import _review_dimension_check
+    from coordinator_core.ops.gate_validate_invocable import Verdict
+
+    if not changed_files or not diff_base or repo_root is None:
+        return
+    try:
+        result = _review_dimension_check(list(changed_files), diff_base, repo_root)
+    except Exception:
+        return
+    if result.verdict != Verdict.FAIL:
+        return
+    message = _render_close_coverage_advisory_message(result.detail)
+    if message is None:
+        return
+    print(message)
+
+
+def build_close_coverage_advisory_directive(
+    changed_files: list[str], diff_base: Optional[str], repo_root: Optional[Path]
+) -> dict[str, Any]:
+    """Builds (and, on a real coverage gap, prints) the warn-only close
+    coverage advisory -- see this section's module-level docstring for the
+    full D1-D4 contract. `changed_files`/`diff_base` are resolved by the
+    CALLER (never here, never widening `_review_dimension_check`'s own
+    signature) from facts already paid for elsewhere in the close; `None`/
+    empty inputs take the silent UNAVAILABLE path with no subprocess spawn
+    at all.
+
+    Always returns an `already_satisfied=True` directive with no
+    `depends_on` edge -- `apply.py::_execute_directives` lands it in
+    `report["landed"]` immediately, on every pass, never dispatching its
+    (inert, reused) `cli` and never able to block, fail, or gate the run
+    (D3, AC2)."""
+    _emit_close_coverage_advisory(changed_files, diff_base, repo_root)
+    return _directive(
+        _CLOSE_COVERAGE_ADVISORY_ID,
+        _CLOSE_COVERAGE_ADVISORY_INERT_CLI,
+        [],
+        depends_on=None,
+        already_satisfied=True,
+    )

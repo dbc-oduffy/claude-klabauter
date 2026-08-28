@@ -54,14 +54,14 @@ convention as archive-stamp-cli / session-claim-cli)."""
 import os
 import sys
 
-import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
-from cc_invoke import require_dispatch_engine_on_path  # noqa: E402
-
 _TRANSPORT_FAIL = 3
 _EXIT_LIVE_ELSEWHERE = 4
 
 
 def _import_module():
+    import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
+    from cc_invoke import require_dispatch_engine_on_path
+
     claude_klabauter_root = require_dispatch_engine_on_path()
     import coordinator_core.session.liveness as _mod
 

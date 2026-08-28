@@ -53,6 +53,7 @@ from pathlib import Path
 import pytest
 
 import coordinator_core.workstream_complete as wsc
+import coordinator_core.ops.gate_dimension_review as gate_dimension_review
 
 # Declared, not excused: this file spawns real `git` processes because the
 # property under test IS process count -- no fixture stands in for it. Same
@@ -265,3 +266,71 @@ def test_brief_call_one_builds_no_review_scope_and_so_cannot_truncate_one(repo, 
         "an empty list reads as 'this session owns zero commits', which is an "
         f"answer, and the wrong one: {review_scale}"
     )
+
+
+# ---------------------------------------------------------------------------
+# AC6 (docs/plans/2026-08-27-the-close-tells-the-author-what-is-uncovered.md,
+# C1): the close coverage advisory adds ZERO git spawns to `brief()`, pinned
+# HERE rather than retrofitted in a later chunk (K-001's binding clause).
+# ---------------------------------------------------------------------------
+
+
+def test_close_coverage_advisory_adds_no_git_spawn_on_the_ordinary_close(repo, monkeypatch):
+    """The ordinary single-close path (no prior review-trail record for this
+    session) has no already-resolved range to reuse -- `__init__.py::
+    build_directives` resolves `close_coverage_diff_base=None` at the call
+    site (the review-brightline-gate directive's own argv stays the plain
+    2-element `["--session-id", sid]` shape here), and `directives_review.
+    build_close_coverage_advisory_directive` takes the silent `diff_base is
+    None` leg WITHOUT EVER CALLING `_review_dimension_check` -- proven here
+    directly (not merely by an unchanged spawn count, which this fixture's
+    OWN `stage_paths`-triggered review-scale measurement would otherwise
+    make a wash): a `_review_dimension_check` that spawned anything would
+    raise through this monkeypatch before it got the chance.
+    `decisions["stage_paths"]` IS supplied here (a real changed-file set) so
+    a defect that let the advisory reach the dimension check anyway (and
+    therefore spawn `git log` to discover commits in a fabricated range)
+    would be caught -- an empty `stage_paths` would pass this assertion for
+    the wrong reason (nothing to check either way)."""
+    sid = "22222222-2222-2222-2222-222222222222"
+    claim_dir = repo / ".git" / "coordinator-sessions" / sid
+    claim_dir.mkdir(parents=True)
+    _patch_gate_with_sid(monkeypatch, sid)
+
+    def _fail_if_called(*args, **kwargs):
+        raise AssertionError(
+            "_review_dimension_check must not be called on the ordinary "
+            "close path (no prior review-trail record, no resolved range) "
+            "-- calling it here would add a git spawn AC6 forbids"
+        )
+
+    monkeypatch.setattr(gate_dimension_review, "_review_dimension_check", _fail_if_called)
+
+    envelope = wsc.brief(decisions={"stage_paths": ["own-file-1.txt"]}, repo_root=repo)
+
+    directives = envelope["directives"]
+    advisory_ids = {d["id"] for d in directives if d["id"] == "d-close-coverage-advisory"}
+    assert advisory_ids == {"d-close-coverage-advisory"}, (
+        "expected the advisory directive to be emitted even on the ordinary "
+        f"close path: {[d['id'] for d in directives]}"
+    )
+
+
+def test_close_coverage_advisory_directive_is_always_already_satisfied_and_ungated(repo, monkeypatch):
+    """D3: the advisory can never gate. Proven at the directive-shape level
+    (independent of `apply.py`'s dispatch, which `test_apply.py` already
+    covers for the `d-coverage-gate` precedent this mirrors) -- it always
+    carries `already_satisfied=True` and no `depends_on` edge, regardless of
+    whether a real coverage gap was found."""
+    sid = "22222222-2222-2222-2222-222222222222"
+    claim_dir = repo / ".git" / "coordinator-sessions" / sid
+    claim_dir.mkdir(parents=True)
+    _patch_gate_with_sid(monkeypatch, sid)
+
+    envelope = wsc.brief(decisions={"stage_paths": ["own-file-1.txt"]}, repo_root=repo)
+    directives = envelope["directives"]
+    advisory = next(d for d in directives if d["id"] == "d-close-coverage-advisory")
+
+    assert advisory["already_satisfied"] is True
+    assert advisory["depends_on"] is None
+    assert not any(d.get("depends_on") == "d-close-coverage-advisory" for d in directives)

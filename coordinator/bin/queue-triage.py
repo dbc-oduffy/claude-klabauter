@@ -58,27 +58,89 @@ from typing import Any
 
 _BIN_DIR = Path(__file__).resolve().parent
 
-import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
-from cc_invoke import (  # noqa: E402
-    RouteMutationError,
-    require_engine_on_path,
-    route,
-    route_mutation,
+_BOOTSTRAPPED_NAMES = (
+    "RouteMutationError",
+    "require_engine_on_path",
+    "route",
+    "route_mutation",
+    "_ENGINE_ROOT",
+    "ArgvFidelityError",
+    "refuse_newline_argv",
+    "resolve_body",
+    "show_toplevel",
 )
 
-# The engine root must be on sys.path before any `coordinator_core` import: this
-# file is also published into the claude-klabauter mirror, where coordinator_core
-# is NOT pip-installed, so a bare import resolves nothing and the CLI dies at
-# import time. Same bootstrap as coordinator/bin/lib/workday_ceremony_lib.py
-# (landed in d2d4ec545 for the identical failure on /workday-start Step 0).
-_ENGINE_ROOT = str(require_engine_on_path(__file__))
 
-from coordinator_core.argv_fidelity import (  # noqa: E402
-    ArgvFidelityError,
-    refuse_newline_argv,
-    resolve_body,
-)
-from coordinator_core.git.repo_root import show_toplevel  # noqa: E402
+_BOOTSTRAP_DONE = False
+
+
+def _bootstrap_engine() -> None:
+    """Bind the engine on the LOCATOR axis, then everything that depends on it.
+
+    Idempotent. THE ORDER INSIDE THIS FUNCTION IS THE POINT -- it is one function
+    rather than per-use-site deferred imports precisely so the sequence cannot be
+    reordered by a later edit. The original comments are preserved verbatim below.
+
+    What moved and what did not: this sequence ran at MODULE scope until now, so
+    every import of this file mutated the `sys.path` of a warm server ~50 sessions
+    share. Only the trigger moved; the order is byte-for-byte the same.
+    """
+    global _BOOTSTRAP_DONE
+    if _BOOTSTRAP_DONE:
+        return
+    try:
+        import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
+        from cc_invoke import (  # noqa: E402
+            RouteMutationError,
+            require_engine_on_path,
+            route,
+            route_mutation,
+        )
+
+        # The engine root must be on sys.path before any `coordinator_core` import: this
+        # file is also published into the claude-klabauter mirror, where coordinator_core
+        # is NOT pip-installed, so a bare import resolves nothing and the CLI dies at
+        # import time. Same bootstrap as coordinator/bin/lib/workday_ceremony_lib.py
+        # (landed in d2d4ec545 for the identical failure on /workday-start Step 0).
+        _ENGINE_ROOT = str(require_engine_on_path(__file__))
+
+        from coordinator_core.argv_fidelity import (  # noqa: E402
+            ArgvFidelityError,
+            refuse_newline_argv,
+            resolve_body,
+        )
+        from coordinator_core.git.repo_root import show_toplevel  # noqa: E402
+    finally:
+        # Publish whatever bound, EVEN IF a later import raised, and NEVER
+        # overwrite a name a caller already installed (e.g. a monkeypatch).
+        _resolved = locals()
+        for _name in _BOOTSTRAPPED_NAMES:
+            if _name not in globals() and _name in _resolved:
+                globals()[_name] = _resolved[_name]
+
+    # Only on a clean run: a partial bootstrap must stay retryable.
+    _BOOTSTRAP_DONE = True
+
+
+def __getattr__(name: str):
+    """PEP 562 hook: a consumer that imports this module rather than executing it
+    reaches these names before `main()` runs. Without this, deferring the
+    bootstrap leaves them simply absent. Only fires for names not already in
+    `__dict__`, so once bootstrapped the plain global wins.
+    """
+    if name in _BOOTSTRAPPED_NAMES:
+        _bootstrap_engine()
+        if name not in globals():
+            global _BOOTSTRAP_DONE
+            _BOOTSTRAP_DONE = False
+            _bootstrap_engine()
+        try:
+            return globals()[name]
+        except KeyError:
+            raise AttributeError(
+                f"module {__name__!r} has no attribute {name!r} after bootstrap"
+            ) from None
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 _OP_CLUSTER = "queue.cluster"
 _OP_SCAFFOLD = "handoff.scaffold_from_queue"
@@ -112,6 +174,7 @@ def _legacy_fn(op: str):
 
 def _resolve_repo_root(explicit: str | None) -> str | None:
     """Resolve repo_root — `--repo-root` wins; else `git rev-parse --show-toplevel`."""
+    _bootstrap_engine()
     if explicit:
         return explicit
     return show_toplevel()
@@ -124,6 +187,7 @@ def _dispatch_read(op: str, params: dict, repo_root: str) -> tuple[Any, int]:
     possible here — route() never interprets an in-envelope exit_code/error
     the way route_mutation() does, by design (AC10).
     """
+    _bootstrap_engine()
     try:
         result = route(op, params, repo_root, _legacy_fn(op))
     except RuntimeError as exc:
@@ -134,6 +198,7 @@ def _dispatch_read(op: str, params: dict, repo_root: str) -> tuple[Any, int]:
 
 def _dispatch_mutation(op: str, params: dict, repo_root: str) -> tuple[Any, int]:
     """scaffold-baton dispatch — route_mutation() honors the op's in-envelope refusal shape."""
+    _bootstrap_engine()
     try:
         result = route_mutation(op, params, repo_root, _legacy_fn(op))
     except RouteMutationError as exc:
@@ -322,6 +387,7 @@ def _build_scaffold_params(args: argparse.Namespace) -> dict:
 
 
 def main(argv: list[str] | None = None) -> int:
+    _bootstrap_engine()
     argv = sys.argv[1:] if argv is None else argv
     parser = _build_parser()
     args = parser.parse_args(argv)

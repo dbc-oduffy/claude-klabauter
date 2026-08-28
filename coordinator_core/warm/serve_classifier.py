@@ -226,6 +226,22 @@ _PURE_CALL_TARGETS = frozenset(
         "dataclass",
         "field",
         "object",
+        # `@property`, `@x.setter`, `@staticmethod`, `@classmethod` and
+        # `@contextlib.contextmanager` are stdlib def-time wrappers: each
+        # returns a descriptor or a wrapped function and touches nothing
+        # outside the class or function being defined. Their absence made the
+        # classifier report `wsc-session-disposition` and `publish` as impure
+        # for using `@property` -- a false positive in the instrument this
+        # plan exists to make trustworthy, which is worse than the count it
+        # was built to correct.
+        "property",
+        "staticmethod",
+        "classmethod",
+        "setter",
+        "getter",
+        "deleter",
+        "contextlib.contextmanager",
+        "contextmanager",
         "functools.lru_cache",
         "pytest.fixture",
         "parametrize",  # pytest.mark.parametrize
@@ -259,6 +275,25 @@ def _expr_target_key(node: ast.expr) -> str | None:
     return None
 
 
+def _is_literal_method_call(call: ast.Call) -> bool:
+    """True for a method invoked directly on a LITERAL -- a triple-quoted
+    constant followed by `.strip()`, or `"a,b".split(",")`.
+
+    The receiver is a `Constant`, so the call cannot reach process state
+    whatever the method is named, and no name-based whitelist entry is needed.
+    Adding `strip` to `_PURE_CALL_TARGETS` would also bless `anything.strip()`
+    on an arbitrary object; this does not.
+
+    Why this exists: six module-scope prompt constants in
+    `workday-start-inbox-blitz-assemble.py` are a triple-quoted literal
+    followed by `.strip()`, and the classifier reported all six as
+    "module-scope process mutation". A false positive here is not a cosmetic
+    miscount -- it is the instrument this plan was written to make trustworthy
+    reporting a clean file as dirty.
+    """
+    return isinstance(call.func, ast.Attribute) and isinstance(call.func.value, ast.Constant)
+
+
 def _is_pure_expr(node: ast.expr) -> bool:
     """True iff every Call anywhere inside `node` targets a whitelisted pure
     callable. Fails CLOSED on a Call whose own `func` is not itself a Name
@@ -267,6 +302,8 @@ def _is_pure_expr(node: ast.expr) -> bool:
         if isinstance(sub, ast.Call):
             if not isinstance(sub.func, (ast.Name, ast.Attribute)):
                 return False
+            if _is_literal_method_call(sub):
+                continue
             if _expr_target_key(sub) not in _PURE_CALL_TARGETS:
                 return False
     return True

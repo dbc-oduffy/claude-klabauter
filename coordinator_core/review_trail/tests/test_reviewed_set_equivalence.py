@@ -20,6 +20,12 @@ file:
       each fixture is small, hand-built, and its expected credited set is
       derived directly from `git rev-list` plus the rule's own documented
       effect, never from calling `build_reviewed_set` and trusting it.
+      AC6c is the narrow exception worth naming: it derives its planning-
+      vs-code oracle from raw `git diff-tree` touched paths against a
+      literal "docs/plans/" prefix check, not from
+      `coverage._classify_bookkeeping_shas` — but that hand-derivation only
+      covers this fixture's single-path, non-bookkeeping commits, not the
+      classifier's full EXHAUST/PLANNING/CODE partition rule.
   (b) Runs a ONE-SHOT whole-corpus new-vs-retiring DIFFERENTIAL against the
       real `state/review-trail/` corpus of this repo, and records the
       divergence set (required empty) as a ratchet artifact on disk. This
@@ -58,7 +64,6 @@ import pytest
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
-from coordinator_core import coverage
 from coordinator_core.review_trail import backfill
 from coordinator_core.review_trail import reviewed_set as rs
 
@@ -117,6 +122,17 @@ def _make_file_commit(repo: Path, rel_path: str, message: str) -> str:
         ["git", "rev-parse", "HEAD"], cwd=str(repo),
         capture_output=True, encoding="utf-8", check=True,
     ).stdout.strip()
+
+
+def _touched_paths(sha: str, repo: Path) -> set:
+    """Independent of `coverage._classify_bookkeeping_shas` — reads git's own
+    diff-tree output directly, so AC6c's oracle does not share a classifier
+    bug with the implementation under test."""
+    out = subprocess.run(
+        ["git", "diff-tree", "--no-commit-id", "--name-only", "-r", sha],
+        cwd=str(repo), capture_output=True, encoding="utf-8", check=True,
+    ).stdout
+    return {p.strip() for p in out.splitlines() if p.strip()}
 
 
 def _rev_list(sha_range: str, repo: Path) -> set:
@@ -213,7 +229,7 @@ class TestAC6bStoredHeadExclusion:
 
         records = [
             ("r-head", _base_record(f"{base}..HEAD")),
-            ("r-plain", _base_record(f"{base}..{tip}", session_id="other-session")),
+            ("r-plain", _base_record(f"{base}..{tip}")),
         ]
         reviewed = _fold_and_read(repo, records)
 
@@ -255,11 +271,17 @@ class TestAC6cKindPartition:
         assert plan_commit in full_range
 
         # Plan credit is restricted to the planning-artifact subset of the
-        # range — computed here via the SAME preserved classifier
-        # (`_classify_bookkeeping_shas`), never re-derived by this test.
-        _exhaust, planning_set, _note = coverage._classify_bookkeeping_shas(
-            list(full_range), str(repo), {},
-        )
+        # range — computed here via `git diff-tree` directly on each sha's
+        # touched paths (`_touched_paths`), independent of the classifier
+        # under test (`coverage._classify_bookkeeping_shas`). This fixture's
+        # two commits are each single-path and non-bookkeeping, so a raw
+        # "docs/plans/" prefix check is a faithful independent oracle here;
+        # it does not attempt to reproduce the classifier's full three-way
+        # EXHAUST/PLANNING/CODE rule for mixed or bookkeeping-only commits.
+        planning_set = {
+            sha for sha in full_range
+            if any(p.startswith("docs/plans/") for p in _touched_paths(sha, repo))
+        }
         oracle = full_range & planning_set
         assert plan_commit in oracle
         assert code_commit not in oracle  # code commit must NOT be creditable via plan
@@ -392,8 +414,8 @@ class TestAC9DerivedNeverAuthoritative:
 
         assert first.folded == second.folded
         assert rebuilt == pre_deletion, (
-            "the store is derived and must be reproducible byte for byte after "
-            "deletion + rebuild"
+            "the store is derived and must rebuild to the same credited-SHA "
+            "set after deletion + rebuild"
         )
 
 
@@ -404,7 +426,7 @@ class TestAC9DerivedNeverAuthoritative:
 # ---------------------------------------------------------------------------
 
 
-class TestWholeCorpusDifferentialRatchet:
+class TestFrozenWholeCorpusDifferential:
     """The differential was a ONE-SHOT gate, and it has fired.
 
     It ran live against both implementations while both existed, over this
@@ -422,9 +444,19 @@ class TestWholeCorpusDifferentialRatchet:
 
     def test_recorded_whole_corpus_differential_was_empty(self):
         if not _RATCHET_PATH.exists():
+            corpus_dir = _REPO_ROOT / "state" / "review-trail"
+            has_corpus = corpus_dir.is_dir() and any(corpus_dir.glob("*.json"))
+            if has_corpus:
+                pytest.fail(
+                    "ratchet artifact missing but the review-trail corpus is "
+                    f"present at {corpus_dir} — this checkout should carry the "
+                    f"frozen differential at {_RATCHET_PATH}; a silent skip "
+                    "here would let the deletion's evidence evaporate"
+                )
             pytest.skip(
-                "no ratchet artifact in this checkout — the one-shot "
-                "differential is recorded, not re-runnable"
+                "no review-trail corpus in this checkout — the one-shot "
+                "differential is recorded, not re-runnable, and has nothing "
+                "to be recorded against here"
             )
         recorded = json.loads(_RATCHET_PATH.read_text(encoding="utf-8"))
 

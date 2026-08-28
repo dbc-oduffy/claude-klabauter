@@ -52,23 +52,28 @@ import os
 import sys
 
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
-from cc_invoke import require_dispatch_engine_on_path  # noqa: E402
 
-require_dispatch_engine_on_path()
-# LOAD-BEARING, NOT DEAD. Do not delete on an unused-import sweep: this line is
-# what BINDS coordinator_core, and binding it HERE is the whole fix.
-# require_dispatch_engine_on_path() above only mutates sys.path -- it imports
-# nothing. Without this line the next module-level import below (a binder module
-# that resolves on the LOCATOR axis) wins the race and binds coordinator_core off
-# the working tree instead of the dispatch root, and no later sys.path insert can
-# rebind an already-imported package. Removing it restores a silent wrong-tree
-# divergence that require_dispatch_engine_on_path now raises on.
-# Why: docs/plans/2026-08-26-the-seam-reports-what-it-got.md C9,
-# docs/research/engine-provenance-carrier-dependence.md
-import coordinator_core  # noqa: E402,F401
 
-from repo_identity import resolve_checked_repo_root  # noqa: E402
+def _ensure_engine_bound() -> None:
+    """Resolve the engine root and BIND `coordinator_core` to it, in that order.
+
+    LOAD-BEARING, NOT DEAD -- called first thing in `main()`, before any other
+    coordinator_core-touching helper below. `require_dispatch_engine_on_path()`
+    only mutates sys.path -- it imports nothing. Without the `import
+    coordinator_core` call immediately after, the next coordinator_core import
+    anywhere in this process (a binder module that resolves on the LOCATOR
+    axis) wins the race and binds coordinator_core off the working tree
+    instead of the dispatch root, and no later sys.path insert can rebind an
+    already-imported package. Removing this restores a silent wrong-tree
+    divergence that require_dispatch_engine_on_path now raises on.
+    Why: docs/plans/2026-08-26-the-seam-reports-what-it-got.md C9,
+    docs/research/engine-provenance-carrier-dependence.md
+    """
+    import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
+    from cc_invoke import require_dispatch_engine_on_path
+
+    require_dispatch_engine_on_path()
+    import coordinator_core  # noqa: F401
 
 
 def _resolve_repo_root() -> str:
@@ -81,6 +86,8 @@ def _resolve_repo_root() -> str:
     exists to prevent a write into a foreign tree, and there is no write here
     to protect. UNRESOLVED never refuses either (DR-277, AC4).
     """
+    from repo_identity import resolve_checked_repo_root
+
     root, verdict = resolve_checked_repo_root(explicit_root=None)
     if verdict["verdict"] == "MISMATCH":
         print(verdict["message"], file=sys.stderr)
@@ -97,6 +104,8 @@ def _resolve_state_root() -> str:
     transport failure (engine root unresolvable, module not importable, or
     the seam's own StateRootError/CrossCuttingStateRoot).
     """
+    from cc_invoke import require_dispatch_engine_on_path
+
     claude_klabauter_root = require_dispatch_engine_on_path()
     try:
         from coordinator_core.state_root import coordinator_state_root as _native_state_root
@@ -109,6 +118,8 @@ def _resolve_state_root() -> str:
 
 
 def _import_op_main():
+    from cc_invoke import require_dispatch_engine_on_path
+
     claude_klabauter_root = require_dispatch_engine_on_path()
     from coordinator_core.ops.verify_orientation_cache_sync import main as _op_main
 
@@ -117,6 +128,12 @@ def _import_op_main():
 
 def main(argv: "list[str] | None" = None) -> int:
     argv = (sys.argv[1:] if argv is None else argv)
+
+    try:
+        _ensure_engine_bound()
+    except RuntimeError as exc:
+        print(f"verify-orientation-cache-sync: engine-root resolution failed: {exc}", file=sys.stderr)
+        return 2
 
     try:
         state_root = _resolve_state_root()

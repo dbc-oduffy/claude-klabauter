@@ -53,6 +53,8 @@ import sys
 import tempfile
 from pathlib import Path
 
+from coordinator_core.benchmarks import declare_benchmark_origin
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
@@ -198,6 +200,7 @@ def measure(n: int, out_dir: Path) -> dict:
 
 
 def main(argv: list[str]) -> int:
+    declare_benchmark_origin()
     n = int(argv[1]) if len(argv) > 1 else 15
     out_dir = Path(tempfile.mkdtemp(prefix="handoff-baseline-out-"))
     try:

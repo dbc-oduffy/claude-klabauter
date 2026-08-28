@@ -14,6 +14,7 @@ import os, shutil, subprocess, sys, tempfile, time
 from pathlib import Path
 
 sys.path.insert(0, r"X:\claude-klabauter")
+from coordinator_core.benchmarks import declare_benchmark_origin
 from coordinator_core.benchmarks.process_time import LiveTreeAccountant
 from coordinator_core.ops.ceremony.commit_pipeline import run_commit_pipeline
 
@@ -55,6 +56,7 @@ def main(n=40, reps=3):
     -- in this repo's own audit before it was caught. Bracketing N calls in
     ONE window divides the quantisation error by N.
     """
+    declare_benchmark_origin()
     for label, tracked in (("edit of a tracked file", True),
                            ("new file, new directory", False)):
         rows = []

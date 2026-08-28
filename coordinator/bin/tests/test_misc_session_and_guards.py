@@ -20,6 +20,9 @@ import importlib.util
 import io
 import json
 import sys
+import pathlib
+import subprocess
+import sys
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
@@ -296,6 +299,52 @@ class MainDispatchTests(unittest.TestCase):
             rc = _cli.main(["--help"])
         self.assertEqual(rc, 0)
         self.assertIn("usage:", stdout.getvalue())
+
+
+_CLI_PATH = pathlib.Path(__file__).resolve().parent.parent / "misc-session-and-guards.py"
+
+
+class TestCcInvokeBootstrapReachesTheRealDoor(unittest.TestCase):
+    """`cc_invoke` must be importable when this script runs as a SUBPROCESS.
+
+    The defect this pins: every `from cc_invoke import ...` in the module
+    carried the comment "(path injected at module top)" and no such injection
+    existed -- module scope imports stdlib only. So `autonomous-sentinel`
+    raised ModuleNotFoundError, returned _TRANSPORT_FAIL (3), and `/autonomous`
+    silently declined to enable itself on every session that ran it.
+
+    Why a subprocess and not `_cli.main([...])`: importing the module from
+    inside this test suite puts `coordinator/bin` on `sys.path` as a side
+    effect of the import machinery, so an in-process call finds `cc_invoke`
+    whether or not the bootstrap exists. The 26 pre-existing tests all passed
+    against the broken door for exactly that reason -- the fixture supplied the
+    path the product was missing. Only a fresh interpreter reproduces the real
+    invocation.
+    """
+
+    def _run(self, *args):
+        return subprocess.run(
+            [sys.executable, str(_CLI_PATH), *args],
+            capture_output=True,
+            text=True,
+            cwd=str(_CLI_PATH.parent),
+        )
+
+    def test_autonomous_sentinel_enable_does_not_report_transport_failure(self):
+        proc = self._run("autonomous-sentinel", "enable", "--mode", "autonomous")
+        self.assertNotEqual(
+            proc.returncode,
+            3,
+            f"autonomous-sentinel returned _TRANSPORT_FAIL: {proc.stderr!r}",
+        )
+        self.assertNotIn("not importable", proc.stderr)
+        self.assertNotIn("No module named 'cc_invoke'", proc.stderr)
+
+    def test_disable_is_idempotent_through_the_subprocess_door(self):
+        self._run("autonomous-sentinel", "disable")
+        proc = self._run("autonomous-sentinel", "disable")
+        self.assertNotEqual(proc.returncode, 3, proc.stderr)
+        self.assertNotIn("not importable", proc.stderr)
 
 
 if __name__ == "__main__":

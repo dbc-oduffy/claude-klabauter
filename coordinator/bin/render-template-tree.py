@@ -51,10 +51,6 @@ from __future__ import annotations
 import os
 import sys
 
-import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
-from cc_invoke import require_dispatch_engine_on_path  # noqa: E402
-
-
 def _import_runner():
     """In-process import, not an RPC invoke — this is a plain local file
     mutation, same rationale as edit-live-hook.py's own trampoline.
@@ -64,6 +60,9 @@ def _import_runner():
     a session scope-touch claim. Without that, everything this CLI writes is an
     orphan at the `scoped_git_commit` sink.
     """
+    import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
+    from cc_invoke import require_dispatch_engine_on_path
+
     claude_klabauter_root = require_dispatch_engine_on_path()
     from coordinator_core.cli_entry import run_op_main
 

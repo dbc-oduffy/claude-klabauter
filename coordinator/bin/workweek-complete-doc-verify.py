@@ -40,18 +40,6 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
-from cc_invoke import require_colocated_engine_on_path  # noqa: E402
-
-try:
-    require_colocated_engine_on_path(__file__)
-except RuntimeError as _exc:
-    print(f"{Path(__file__).name}: engine-root resolution failed: {_exc}", file=sys.stderr)
-    sys.exit(3)
-
-from coordinator_core.cli_entry import run_op_main  # noqa: E402
-
-
 def main(argv: "list[str] | None" = None) -> int:
     """Zero-arg trampoline: reads `sys.argv` itself and forwards args-only
     (no `argv[0]` program-name placeholder) to `doc_content_verify.main` via
@@ -67,6 +55,17 @@ def main(argv: "list[str] | None" = None) -> int:
     parity with every other operator-CLI trampoline, though
     `doc_content_verify` is read-only and declares nothing — this is a
     consistency conversion, not a behavior change (see module docstring)."""
+    import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
+    from cc_invoke import require_colocated_engine_on_path
+
+    try:
+        require_colocated_engine_on_path(__file__)
+    except RuntimeError as exc:
+        print(f"{Path(__file__).name}: engine-root resolution failed: {exc}", file=sys.stderr)
+        return 3
+
+    from coordinator_core.cli_entry import run_op_main
+
     return run_op_main("coordinator_core.ops.doc_content_verify", (sys.argv[1:] if argv is None else argv))
 
 

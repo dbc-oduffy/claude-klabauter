@@ -33,16 +33,15 @@ from __future__ import annotations
 import os
 import sys
 
-import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
-from cc_invoke import require_dispatch_engine_on_path  # noqa: E402
-
-
 def _import_runner():
     """DR-276: the op is run through `coordinator_core.cli_entry.run_op_main`
     rather than by calling its `main` directly, so the marker path it
     declares becomes a session scope-touch claim. Without that, the marker
     write is an orphan at the `scoped_git_commit` sink.
     """
+    import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
+    from cc_invoke import require_dispatch_engine_on_path
+
     claude_klabauter_root = require_dispatch_engine_on_path()
     from coordinator_core.cli_entry import run_op_main
 

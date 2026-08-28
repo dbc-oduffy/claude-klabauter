@@ -54,27 +54,26 @@ _LIB_DIR = os.path.join(_BIN_DIR, "lib")
 # import below raises ModuleNotFoundError every time this CLI runs as a
 # subprocess (which is how every real caller invokes it).
 _REPO_ROOT = os.path.dirname(os.path.dirname(_BIN_DIR))
-if _REPO_ROOT not in sys.path:
-    sys.path.insert(0, _REPO_ROOT)
 
-import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
-from cc_invoke import require_dispatch_engine_on_path  # noqa: E402
 
-require_dispatch_engine_on_path()
-# LOAD-BEARING, NOT DEAD. Do not delete on an unused-import sweep: this line is
-# what BINDS coordinator_core, and binding it HERE is the whole fix.
-# require_dispatch_engine_on_path() above only mutates sys.path -- it imports
-# nothing. Without this line the next module-level import below (a binder module
-# that resolves on the LOCATOR axis) wins the race and binds coordinator_core off
-# the working tree instead of the dispatch root, and no later sys.path insert can
-# rebind an already-imported package. Removing it restores a silent wrong-tree
-# divergence that require_dispatch_engine_on_path now raises on.
-# Why: docs/plans/2026-08-26-the-seam-reports-what-it-got.md C9,
-# docs/research/engine-provenance-carrier-dependence.md
-import coordinator_core  # noqa: E402,F401
+_BOOTSTRAP_DONE = False
 
-from coordinator_registry import _DoeUnresolvable, doe_root  # noqa: E402
-from machine_local_resolve import resolve_machine_local_bin  # noqa: E402
+
+def _bootstrap_engine() -> None:
+    """Put `_REPO_ROOT` on `sys.path` -- idempotent, safe to call more than
+    once.
+
+    What moved and what did not: this mutation used to run at MODULE scope,
+    which made every import of this file mutate the `sys.path` of a warm
+    server ~50 sessions share. Only the trigger moved; the value inserted is
+    byte-for-byte the same.
+    """
+    global _BOOTSTRAP_DONE
+    if _BOOTSTRAP_DONE:
+        return
+    if _REPO_ROOT not in sys.path:
+        sys.path.insert(0, _REPO_ROOT)
+    _BOOTSTRAP_DONE = True
 
 
 def _resolve_plugin_root() -> Path:
@@ -98,6 +97,9 @@ def _resolve_plugin_root() -> Path:
     script, not a never-block hook, so an unresolvable DoE root must not
     degrade to a silent scan of the wrong tree.
     """
+    _bootstrap_engine()
+    from coordinator_registry import _DoeUnresolvable, doe_root
+
     env = os.environ.get("CLAUDE_PLUGIN_ROOT")
     if env:
         return Path(env)
@@ -144,6 +146,7 @@ def _resolve_cs_lib(plugin_root: Path) -> "Path | None":
 
 
 def main(argv: "list[str] | None" = None) -> int:
+    _bootstrap_engine()
     args = (sys.argv[1:] if argv is None else argv)
     if "--help" in args or "-h" in args:
         sys.stdout.write(__doc__ or "")
@@ -158,11 +161,25 @@ def main(argv: "list[str] | None" = None) -> int:
     name = args[0]
     mode = args[1] if len(args) > 1 else "verify"
 
+    import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
+    from cc_invoke import require_dispatch_engine_on_path
+
     try:
         claude_klabauter_root = require_dispatch_engine_on_path()
     except RuntimeError as exc:
         print(f"verify-snippet-sync: engine-root resolution failed: {exc}", file=sys.stderr)
         return 1
+    # LOAD-BEARING, NOT DEAD. Do not delete on an unused-import sweep: this line is
+    # what BINDS coordinator_core, and binding it HERE is the whole fix.
+    # require_dispatch_engine_on_path() above only mutates sys.path -- it imports
+    # nothing. Without this line the next import below (a binder module
+    # that resolves on the LOCATOR axis) wins the race and binds coordinator_core off
+    # the working tree instead of the dispatch root, and no later sys.path insert can
+    # rebind an already-imported package. Removing it restores a silent wrong-tree
+    # divergence that require_dispatch_engine_on_path now raises on.
+    # Why: docs/plans/2026-08-26-the-seam-reports-what-it-got.md C9,
+    # docs/research/engine-provenance-carrier-dependence.md
+    import coordinator_core  # noqa: F401
     try:
         from coordinator_core.snippet_sync.verify import run
     except ImportError as exc:
@@ -171,6 +188,8 @@ def main(argv: "list[str] | None" = None) -> int:
             file=sys.stderr,
         )
         return 1
+
+    from machine_local_resolve import resolve_machine_local_bin
 
     script_dir = Path(os.path.dirname(os.path.abspath(__file__)))
     plugin_root = _resolve_plugin_root()

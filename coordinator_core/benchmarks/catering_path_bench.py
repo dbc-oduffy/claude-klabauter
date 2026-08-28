@@ -98,6 +98,8 @@ import sys
 import time
 import traceback
 import uuid
+
+from coordinator_core.benchmarks import declare_benchmark_origin
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -700,5 +702,6 @@ def record_baseline(n: int = 30, cwd: Optional[str] = None) -> Dict[str, Any]:
 
 
 if __name__ == "__main__":  # pragma: no cover
+    declare_benchmark_origin()
     result = record_baseline(n=30)
     print(json.dumps(result, indent=2))

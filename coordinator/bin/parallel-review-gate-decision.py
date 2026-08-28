@@ -123,8 +123,23 @@ from pathlib import Path
 
 _BIN_DIR = Path(__file__).resolve().parent
 _REPO_ROOT = _BIN_DIR.parent.parent
-if str(_REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(_REPO_ROOT))
+
+_BOOTSTRAP_DONE = False
+
+
+def _bootstrap_engine() -> None:
+    """Put the repo root on sys.path so `coordinator_core` imports resolve.
+
+    Moved out of module scope: this used to mutate sys.path on every import
+    of this file, a process global ~50 warm-server sessions share. Only the
+    trigger moved.
+    """
+    global _BOOTSTRAP_DONE
+    if _BOOTSTRAP_DONE:
+        return
+    if str(_REPO_ROOT) not in sys.path:
+        sys.path.insert(0, str(_REPO_ROOT))
+    _BOOTSTRAP_DONE = True
 
 #: The .cmd launcher's own basename — used by `recover_windows_argv` to locate
 #: where this invocation's own arguments begin within the raw `%CMDCMDLINE%`
@@ -155,6 +170,7 @@ _PLAN_ONLY_RE = r"^docs/plans/"
 
 
 def _run_git(args: list[str], repo_root: Path | None = None, timeout: int = _GIT_TIMEOUT_SECS):
+    _bootstrap_engine()
     from coordinator_core.win_portability import no_console_creationflags
 
     argv = ["git"]
@@ -244,6 +260,7 @@ def compute_gate_decision(changed_files: list[str], changed_lines: int, force: b
 
 
 def _cmd_gate(args: argparse.Namespace) -> int:
+    _bootstrap_engine()
     from coordinator_core.contract.decision_object import build_envelope, emit
 
     if not args.range_:
@@ -319,6 +336,7 @@ def compute_rule5_inputs(
 
 
 def _cmd_rule5_inputs(args: argparse.Namespace) -> int:
+    _bootstrap_engine()
     from coordinator_core.contract.decision_object import build_envelope, build_untrusted_gate_judgment_point, emit
     from coordinator_core.contract.decision_object.judgment import build_disposition
 
@@ -439,6 +457,7 @@ def _write_manifest_tsv(chunks: dict[str, list[str]], out_path: Path) -> None:
 
 
 def _cmd_chunk(args: argparse.Namespace) -> int:
+    _bootstrap_engine()
     from coordinator_core.contract.decision_object import build_envelope, emit
 
     scope_path = Path(args.scope_files_file)
@@ -492,6 +511,7 @@ _RESOLVER_BRANCH_TABLE = {
 
 
 def _cmd_resolver_branch(args: argparse.Namespace) -> int:
+    _bootstrap_engine()
     from coordinator_core.contract.decision_object import build_envelope, emit
 
     entry = _RESOLVER_BRANCH_TABLE.get(args.resolver_exit)

@@ -83,6 +83,8 @@ import os
 import statistics
 import subprocess
 import sys
+
+from coordinator_core.benchmarks import declare_benchmark_origin
 from typing import Dict, List, NamedTuple, Optional, Sequence
 
 from coordinator_core.benchmarks.process_time import batched_process_time_ms
@@ -355,6 +357,7 @@ def _main() -> None:
     bare-interpreter reference-floor reproduction and, if a module path is
     given, its reconciled import-set readings. Not a test; a human-facing
     sanity check the plan body asks be run "before trusting the harness"."""
+    declare_benchmark_origin()
     bare = measure_cold_process_time_n([sys.executable, "-c", "pass"], n=12)
     print(
         f"bare interpreter: best={bare.best_ms:.1f}ms worst={bare.worst_ms:.1f}ms "

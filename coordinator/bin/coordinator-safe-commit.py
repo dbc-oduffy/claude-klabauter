@@ -127,6 +127,12 @@ current wiring. Incompatible with `--blanket`, `--scope-from`,
 has no body/orphan-claim/handoff-scope support of its own).
 
 Negative-spec: `--dry-run` must NEVER reach `git add`/`git commit` and must
+be gated in EVERY mode branch, the `-- <paths>` pathspec form included --
+that form was the third incident (2026-08-28) and it failed the same way
+both earlier ones did: a new branch was added to `main()` and nobody
+carried the flag into it. A mode that delegates its staging elsewhere has
+no internal chokepoint to add the gate to later, so the gate goes in
+`main()` ahead of the dispatch, never inside the handler.
 NEVER mutate the staged index or refs, in EVERY mode and EVERY combination —
 including `COORDINATOR_OVERRIDE_SCOPE=1` (do_override), which intercepts
 default mode in main() BEFORE mode dispatch and therefore needs its own
@@ -177,8 +183,58 @@ from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence, Set
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
-from cc_invoke import require_engine_on_path  # noqa: E402
+
+_BOOTSTRAPPED_NAMES = ("require_engine_on_path",)
+
+
+_BOOTSTRAP_DONE = False
+
+
+def _bootstrap_engine() -> None:
+    """Bind `coordinator/bin/lib` onto sys.path, then the engine-root resolver
+    that depends on it. Idempotent; safe to call more than once.
+
+    What moved and what did not: this sequence ran at MODULE scope until now, so
+    every import of this file mutated the `sys.path` of a warm server ~50 sessions
+    share. Only the trigger moved; the order is byte-for-byte the same.
+    """
+    global _BOOTSTRAP_DONE
+    if _BOOTSTRAP_DONE:
+        return
+    try:
+        import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
+        from cc_invoke import require_engine_on_path  # noqa: E402
+    finally:
+        # Publish whatever bound, EVEN IF a later import raised, and NEVER
+        # overwrite a name a caller already installed (e.g. a monkeypatch).
+        _resolved = locals()
+        for _name in _BOOTSTRAPPED_NAMES:
+            if _name not in globals() and _name in _resolved:
+                globals()[_name] = _resolved[_name]
+
+    # Only on a clean run: a partial bootstrap must stay retryable.
+    _BOOTSTRAP_DONE = True
+
+
+def __getattr__(name: str):
+    """PEP 562 hook: a consumer that imports this module rather than executing it
+    reaches these names before `main()` runs. Without this, deferring the
+    bootstrap leaves them simply absent. Only fires for names not already in
+    `__dict__`, so once bootstrapped the plain global wins.
+    """
+    if name in _BOOTSTRAPPED_NAMES:
+        _bootstrap_engine()
+        if name not in globals():
+            global _BOOTSTRAP_DONE
+            _BOOTSTRAP_DONE = False
+            _bootstrap_engine()
+        try:
+            return globals()[name]
+        except KeyError:
+            raise AttributeError(
+                f"module {__name__!r} has no attribute {name!r} after bootstrap"
+            ) from None
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 BLANKET_ALLOWED_COMMANDS = frozenset(
@@ -221,6 +277,7 @@ def _import_session():
     resolve_engine_root's ladder, DR-047) and import the four
     coordinator_core.session submodules this port needs.
     Mirrors the refresh-queries.py in-process-import precedent."""
+    _bootstrap_engine()
     try:
         require_engine_on_path(__file__)
     except RuntimeError as exc:
@@ -474,6 +531,7 @@ def do_pathspec(args: "Args") -> None:
     and say the retry is safe. This is detect-and-report, never
     detect-and-redo: no retry is issued from here (Anti-scope, this plan —
     a commit is not idempotent)."""
+    _bootstrap_engine()
     from cc_invoke import cc_invoke
 
     # Puts coordinator_core on sys.path so cc_invoke()'s in-process warm-reach
@@ -638,6 +696,7 @@ def _reconcile_after_indeterminate(
     failure); exits 1 naming the original exception plus "reconcile found
     nothing, retry is safe" on ABSENT. Never retries a mutation itself
     (Anti-scope, this plan)."""
+    _bootstrap_engine()
     common_dir = subprocess.run(
         ["git", "rev-parse", "--git-common-dir"],
         cwd=worktree_root,
@@ -2490,6 +2549,7 @@ def do_scope_from(args: "Args", session_id: str, cs_core, cs_liveness, cs_scope,
 # ---------------------------------------------------------------------------
 
 def main(argv: Sequence[str]) -> None:
+    _bootstrap_engine()
     if argv[:1] and argv[0] in ("--help", "-h"):
         usage()
         sys.exit(0)
@@ -2505,6 +2565,32 @@ def main(argv: Sequence[str]) -> None:
         # Pathspec-passthrough (Defect 1): the delegate (`scoped-git-commit`)
         # does its own session/ownership gating — no need to resolve THIS
         # wrapper's session id or run the self-heal lock reap first.
+        #
+        # 2026-08-28, real incident #3 of the same class as the two this
+        # file's module docstring already records: this branch dispatched
+        # without ever reading `args.dry_run`, and `do_pathspec` does not
+        # read it either, so `--dry-run "<subject>" -- <paths>` executed a
+        # REAL commit. Observed as a commit landing on a shared branch with
+        # a throwaway probe subject, unamendable by the time it was seen
+        # because a peer had already committed on top. The gate belongs
+        # HERE, ahead of the dispatch, for the same reason the override-env
+        # branch grew its own: `do_pathspec` delegates staging to
+        # `ceremony.commit_v2`, so there is no later chokepoint inside it
+        # where a preview could still intercept.
+        if args.dry_run:
+            present, deleted = _split_paths_for_commit_v2(
+                os.getcwd(), args.paths
+            )
+            print(
+                f"DRY RUN — pathspec: would commit {len(present)} path(s) "
+                f"and {len(deleted)} deletion(s) via ceremony.commit_v2:",
+                file=sys.stderr,
+            )
+            for path in present:
+                print(f"  {path}", file=sys.stderr)
+            for path in deleted:
+                print(f"  {path} [deleted]", file=sys.stderr)
+            return
         do_pathspec(args)
         return
 

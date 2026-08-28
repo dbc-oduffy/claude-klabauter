@@ -94,6 +94,7 @@ from typing import Dict, FrozenSet, List, Optional, Set, Tuple
 
 from coordinator_core.win_portability import no_console_creationflags
 from coordinator_core.locked_write import held_lock
+from coordinator_core.lifecycle import git_common_dir
 
 #: 40 lowercase-hex-char commit SHA — the only line shape the reader trusts.
 _SHA_RE = re.compile(r"^[0-9a-f]{40}$")
@@ -128,8 +129,12 @@ def _run(cmd: List[str], cwd: str) -> Tuple[int, str, str]:
 
 
 def store_dir(repo_root: str) -> Path:
-    """The per-clone store directory — under `.git/`, never tracked."""
-    return Path(repo_root).joinpath(".git", *_STORE_SUBDIR)
+    """The per-clone store directory — under the git common dir, never
+    tracked. Uses `git_common_dir` (same seam `held_lock`'s own lock sidecar
+    resolves through, zero-spawn) rather than a literal `.git` join: in a
+    linked worktree `<repo_root>/.git` is a FILE (a gitdir: pointer), not a
+    directory, and joining onto it directly raises on the first mkdir."""
+    return git_common_dir(Path(repo_root)).joinpath(*_STORE_SUBDIR)
 
 
 def _shas_path(repo_root: str) -> Path:
@@ -241,7 +246,13 @@ def _append_lines(path: Path, lines: List[str]) -> None:
     if not lines:
         return
     path.parent.mkdir(parents=True, exist_ok=True)
-    data = "".join(lines).encode("ascii", errors="strict")
+    # UTF-8, matching `_parse_id_lines`' decode side: record ids are
+    # caller-supplied strings (a trail file path or path#index), not a
+    # fixed ASCII shape like a SHA, so a non-ASCII path segment must not
+    # crash here — the rest of this module is fail-closed-and-retryable on
+    # every other malformed-input shape, and this write is the one place
+    # that was not.
+    data = "".join(lines).encode("utf-8")
     flags = os.O_APPEND | os.O_CREAT | os.O_WRONLY
     flags |= getattr(os, "O_BINARY", 0)
     fd = os.open(str(path), flags, 0o644)
@@ -256,6 +267,10 @@ def _append_shas(repo_root: str, shas: Set[str]) -> None:
     lines = [sha + "\n" for sha in sorted(shas) if _SHA_RE.match(sha)]
     if not lines:
         return
+    assert all(len(line) == _SHA_RECORD_WIDTH for line in lines), (
+        "reviewed-shas record width drifted from the fixed 40-hex+\\n shape "
+        "the reader's torn-line defence assumes"
+    )
     # Cross-process serialization (finding 9): Windows' O_APPEND is NOT a
     # kernel-atomic append the way POSIX below-PIPE_BUF appends are — two
     # concurrent writers can compute the same end-of-file offset and one
@@ -417,6 +432,16 @@ class FoldResult:
     `new_shas`             — the SHAs newly appended to the store by this
                              call (may be empty even when records folded,
                              if every resolved SHA was already present).
+                             Best-effort under concurrency, not authoritative
+                             telemetry: `existing` is read before
+                             `_append_shas` takes its lock, so a concurrent
+                             `fold_in` in another process can durably append
+                             one of these SHAs between the read and this
+                             call's own write, and it is still reported here
+                             as "new". The store's own durability is
+                             unaffected (a duplicate line dedupes on read
+                             into a frozenset) — only this return value can
+                             over-report.
     """
 
     folded_record_ids: List[str] = field(default_factory=list)

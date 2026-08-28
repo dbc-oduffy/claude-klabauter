@@ -265,10 +265,20 @@ def _resolve_subagent_identity(agent_id: str, session_id: str) -> str:
 
 
 def _append_touch_record(
-    sink: str, session_id: str, agent_id: "str | None", path: str
+    sink: str,
+    session_id: str,
+    agent_id: "str | None",
+    path: str,
+    content_hash: "str | None" = None,
 ) -> None:
     """Encode and append one ``T`` event to ``sink`` (blocking) via
     ``touch_record.append_event``.
+
+    ``content_hash`` (C12, plan ``2026-08-27-a-pathspec-is-not-a-scope``) is
+    the whole-file sha256 this hook computed against the just-written file,
+    threaded straight through to ``append_event`` — see the call site in
+    ``_handler`` for where it is computed and why a ``None`` (unreadable
+    file) is passed through unchanged rather than retried or guessed at.
 
     Caller MUST hold the per-file asyncio.Lock (D6) before dispatching this
     via ``asyncio.to_thread()`` — the lock still serialises concurrent
@@ -290,6 +300,7 @@ def _append_touch_record(
             agent_id=agent_id,
             verb=touch_record.VERB_TOUCH,
             path=path,
+            content_hash=content_hash,
         )
     except (touch_record.LineTooLong, touch_record.OutOfWorktreePath):
         pass
@@ -524,6 +535,24 @@ async def _handler(params: dict, repo_root=None) -> dict:
     if not file_path_norm:
         return no_advisory()
 
+    # --- C12 (plan 2026-08-27-a-pathspec-is-not-a-scope): fingerprint the
+    # file this tool call just wrote, so a later commit-time comparator (C11)
+    # has a recorded hash to check disk-now against. The hook already stats
+    # the file it is recording (normalize_touch_path's own resolution above);
+    # this adds one read, not a walk -- ~0.148ms/file, in-process, zero
+    # spawns (touch_record.compute_content_hash's own docstring). Computed
+    # against the ABSOLUTE path (worktree root + repo-relative norm form):
+    # compute_content_hash takes whatever path it is given literally and
+    # never resolves against a cwd of its own. A ``None`` result (file
+    # deleted between the tool's write and this read, a permission race) is
+    # passed straight through to ``append_event`` unchanged -- omitted from
+    # the encoded line, never guessed at (see ``compute_content_hash``'s own
+    # degrade contract).
+    _content_hash = await asyncio.to_thread(
+        touch_record.compute_content_hash,
+        os.path.join(_worktree_root, file_path_norm),
+    )
+
     # --- Session-keyed append (D6: asyncio.Lock; C7: touch_record.append_event,
     # no locked_rmw -- see the block comment above _ensure_session_record_sync
     # for why the cross-process serialisation moved to atomic_append itself) ---
@@ -535,6 +564,7 @@ async def _handler(params: dict, repo_root=None) -> dict:
             session_id,
             None,
             file_path_norm,
+            _content_hash,
         )
 
     # --- Agent-keyed append (only for subagent fires — mirrors sh:200-223) ---
@@ -671,6 +701,7 @@ async def _handler(params: dict, repo_root=None) -> dict:
                     session_id,
                     canonical_agent_id,
                     file_path_norm,
+                    _content_hash,
                 )
 
     # Note: meta.json last_activity is NOT updated here (costs ~36ms on Windows;

@@ -71,6 +71,12 @@ _SUPPORTED_KEYWORDS = frozenset({
     # allowlisted-away, since a tolerated keyword is a silent no-op.
     "uniqueItems",
     "items",
+    # Implemented in _validate_json_schema_node's object-level block. Arrived
+    # with plan.schema.json 2.9.0, which makes `prime_exit_criterion.falsifier.
+    # promotion_reason` depend on `promotion`. Implemented rather than
+    # allowlisted-away for the reason this test exists: vendoring the bump
+    # without it would have shipped that constraint as a silent no-op.
+    "dependentRequired",
 })
 
 # Non-keyword structural/metadata keys that may appear on a schema node but

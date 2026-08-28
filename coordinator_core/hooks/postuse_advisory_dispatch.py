@@ -493,21 +493,29 @@ def _check_context_pressure_sync(session_id: str, transcript_path: str) -> str:
     if display_pct >= 47 and transcript_hash not in cp_state.get("critical_fired", []):
         _mark_advisory_fired(cp_state, transcript_hash, critical=True)
         _save_advisory_state(tmpdir, session_id, cp_state)
-        base = (
+        # The autonomous variant REPLACES the recommendation rather than
+        # appending to it. Under the sentinel these messages are
+        # informational-only and carry no `/handoff` recommendation — the mode
+        # exists so a session rides through compaction instead of stopping, so
+        # appending a checkpoint clause to text that still says "run /handoff"
+        # delivers the exact nudge the PM switched the mode on to remove, at
+        # the moment a long run is most likely to take it.
+        # (Reported by doe-claude-41, observed firing twice in one session.)
+        if autonomous_run:
+            return (
+                f"CONTEXT PRESSURE — INFORMATIONAL: ~{display_pct}% of window"
+                f" used{age_note}, measured from the harness's own context_window"
+                f" block. Autonomous run: compaction from here is involuntary and"
+                f" lossy, so state that is not on disk is state that is lost."
+                f" Commit and checkpoint now; continue the run."
+            )
+        return (
             f"CONTEXT PRESSURE — HANDOFF NOW: ~{display_pct}% of window used{age_note},"
             f" measured from the harness's own context_window block."
             f" This is the point to run /handoff, not to finish one more thing first —"
             f" the handoff itself consumes context, and compaction from here is"
             f" involuntary and lossy."
         )
-        if autonomous_run:
-            return (
-                base
-                + " Autonomous run active — continuing per PM instruction."
-                " Verify all progress is in TaskList and committed to disk."
-                " Compaction will compress context but tasks persist."
-            )
-        return base
 
     if display_pct >= 40 and transcript_hash not in cp_state.get("advisory_fired", []):
         _mark_advisory_fired(cp_state, transcript_hash, critical=False)
@@ -521,9 +529,10 @@ def _check_context_pressure_sync(session_id: str, transcript_path: str) -> str:
         )
         if autonomous_run:
             return (
-                base
-                + " Autonomous run: checkpoint state to disk at the next natural"
-                " boundary so the run is resumable."
+                f"CONTEXT PRESSURE — INFORMATIONAL: ~{display_pct}% of window"
+                f" used{age_note}, measured from the harness's own context_window"
+                f" block. Autonomous run: checkpoint state to disk at the next"
+                f" natural boundary so the run is resumable."
             )
         return base
 

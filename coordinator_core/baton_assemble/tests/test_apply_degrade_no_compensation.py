@@ -234,17 +234,34 @@ class TestTheReportDistinguishesTheTwoCases:
 
         Uses a conforming predecessor id (not the shared `_PREDECESSOR_FM`'s
         `HID-PRED`, which does not match handoff.schema.json's `handoff_id`
-        pattern) -- this is the only test in this module whose run reaches
+        pattern) -- this was the only test in this module whose run reached
         d6's real `handoff.archive_transition` compose, which validates the
         predecessor's frontmatter against the live schema. Every sibling test
         here declines before d6 composes, so the shared fixture's
-        non-conforming id never gets validated there."""
+        non-conforming id never gets validated there.
+
+        2026-08-28: that real compose is GONE and does not come back --
+        `handoff.archive_transition` is killed on the 200ms bar
+        (`op_budget_suspension.SUSPENDED_OPS`), so this run now degrades like
+        every other and the schema-validation coverage this docstring claimed
+        is no longer here. The supersede return is faked to what the op
+        produced before it was killed, because the subject under test is the
+        REPORT contract (present-as-`[]`), not the op. Only d6's own op is
+        faked -- every other in-process op still composes for real."""
         conforming_predecessor_fm = [
             line.replace("HID-PRED", "hnd-pred-a1b2c3") for line in _PREDECESSOR_FM
         ]
         harness = _ReplayHarness(
             tmp_path, monkeypatch, predecessor_fm=conforming_predecessor_fm
         )
+        _real_invoke = ba_apply._invoke_op_in_process
+
+        def _invoke(op_name, params, repo_root):
+            if op_name != "handoff.archive_transition":
+                return _real_invoke(op_name, params, repo_root)
+            return {"exit_code": 0, "superseded": True, "moved": True}
+
+        monkeypatch.setattr(ba_apply, "_invoke_op_in_process", _invoke)
         exit_code, report = harness.run()
 
         assert exit_code == ba_apply.APPLY_EXIT_OK, report
@@ -335,6 +352,103 @@ class TestTheDeclineIsVisibleAtTheHandlerSeam:
             "reason": "predecessor-not-claimed-or-shipped",
             "predecessor": _PRED_REL,
         }
+
+
+class TestAKilledArchiveTransitionDegradesToo:
+    """Guard 4 of 4 (2026-08-28) -- the SECOND door onto the 2026-08-03 defect
+    this module was written for, reached without touching the DR-242 gate.
+
+    `handoff.archive_transition` was killed on the 200ms bar
+    (`op_budget_suspension.SUSPENDED_OPS`, p50 250ms), so `get_op_handler`
+    raises `OpSuspendedError` from inside d6's `try:` block. That landed in the
+    generic `except Exception: _cleanup_successor(); raise`, which is exactly
+    the deterministic mint-then-delete loop the module docstring records --
+    only now it fired for EVERY `/handoff` in the repo, not just an unclaimed
+    predecessor. Live repro, claude-klabauter 2026-08-28: three consecutive
+    `baton-assemble apply handoff` runs, each `status: partial`,
+    `failed_directive: d6`, `compensation: [d5, d1] succeeded: true`, successor
+    gone every time.
+
+    A suspension refusal fires BEFORE the op is composed, so the predecessor is
+    byte-identical and nothing is half-applied -- the same not-applicable shape
+    the DR-242 gate degrades on, which is why it degrades rather than raises.
+
+    THE TRAP, stated here because the cheap fix is the wrong one: widening d6's
+    tolerance until the symptom stops (catching `Exception`, or keying on the
+    message text) also swallows a genuine `superseded is False` return, which is
+    the half-applied succession this directive exists to eliminate. The negative
+    case is in this same class, one test below, for that reason.
+    """
+
+    def _seam_args(self, tmp_path):
+        from coordinator_core.test_baton_assemble import (
+            _render_real_scaffold,
+            _write_artifact,
+        )
+
+        successor_rel = "state/handoffs/2026-08-28-successor-suspended.md"
+        successor_abs = _render_real_scaffold(tmp_path / successor_rel)
+        # CLAIMED, unlike `_declining_harness` above: the DR-242 gate must pass
+        # so the handler reaches the op-composition seam under test.
+        _write_artifact(tmp_path / _PRED_REL, list(_PREDECESSOR_FM))
+        return successor_rel, successor_abs
+
+    def test_a_killed_archive_transition_degrades_and_keeps_the_successor(
+        self, tmp_path, monkeypatch
+    ):
+        from coordinator_core.op_budget_suspension import OpSuspendedError
+
+        successor_rel, successor_abs = self._seam_args(tmp_path)
+
+        def _suspended(op_name, params, repo_root):
+            raise OpSuspendedError(f"{op_name} is off: p50 250ms against a 200ms bar")
+
+        monkeypatch.setattr(ba_apply, "_invoke_op_in_process", _suspended)
+
+        result = ba_apply._dispatch_handoff_supersede_predecessor(
+            [_PRED_REL, successor_rel, successor_rel], tmp_path
+        )
+
+        assert successor_abs.exists(), (
+            "a suspension refusal composes nothing, so the successor d1 minted "
+            "must survive -- deleting it is the mint-then-delete loop this "
+            "module exists to prevent"
+        )
+        assert result["result"] is None
+        assert result["degraded"]["reason"] == "archive-transition-off"
+        assert result["degraded"]["predecessor"] == _PRED_REL
+        assert result["degraded"]["continued_into"] == successor_rel
+
+    def test_a_half_applied_succession_still_raises_and_still_cleans_up(
+        self, tmp_path, monkeypatch
+    ):
+        """The negative half, co-located deliberately. `superseded is False` is
+        reached only AFTER the op has run, where the predecessor may be
+        half-stamped -- it must keep raising. A fix that made the suspension
+        case degrade by broadening the `except` would turn this green while
+        silently restoring the stranding defect."""
+        successor_rel, successor_abs = self._seam_args(tmp_path)
+
+        monkeypatch.setattr(
+            ba_apply,
+            "_invoke_op_in_process",
+            lambda op_name, params, repo_root: {
+                "exit_code": 0,
+                "superseded": False,
+                "retained": True,
+                "retain_reason": "live-child",
+            },
+        )
+
+        with pytest.raises(RuntimeError, match="did not supersede"):
+            ba_apply._dispatch_handoff_supersede_predecessor(
+                [_PRED_REL, successor_rel, successor_rel], tmp_path
+            )
+
+        assert not successor_abs.exists(), (
+            "a genuine half-applied succession still aborts the mint -- the "
+            "pristine scaffold is removed exactly as it was before this fix"
+        )
 
 
 def test_the_module_under_test_is_importable_without_a_repo():

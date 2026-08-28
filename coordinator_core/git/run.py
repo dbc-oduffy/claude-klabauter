@@ -359,7 +359,7 @@ def run_git(
     same one that makes `input` bytes-only, pointed the other way: `stdout`
     decodes with `errors="replace"`, so a path byte git cannot decode comes
     back as U+FFFD. For a caller whose entire predicate is "are these bytes
-    what the declaration says they are" (`ops/eol/census.py`), that
+    what the declaration says they are" (`ops/eol/census.py`, deleted with the eol family at K-064 — kept as the clearest worked example of the shape, not as a file to open), that
     substitution IS the bug it is looking for, and for
     `git/ls_files_bytes.py` it is the reason that module exists at all. Text
     mode would also universal-newline-translate a `
@@ -408,13 +408,17 @@ def run_git(
             "stdin": subprocess.DEVNULL,
         }
 
-    # The brightline's second axis. Counted here rather than at the call sites
-    # because this is the chokepoint every git call is already required to pass
-    # through (see `coordinator_core.git.git_state`'s docstring). Bumped BEFORE
-    # the spawn, not after: process creation is the cost being counted, and a
-    # `git` that raises still paid it — counting only on the success path would
-    # hide exactly the timeouts worth finding.
-    spawn_counter.bump()
+    # The brightline's second axis, FALLBACK ONLY. `spawn_counter`'s audit hook
+    # counts the `subprocess.run` below along with every other spawn in the
+    # process, so bumping here unconditionally would double every git call. This
+    # site survives for the interpreter that refused the hook: it keeps the
+    # git-spawn count that was the counter's whole coverage before the hook
+    # existed, rather than dropping to silence. Bumped BEFORE the spawn, not
+    # after: process creation is the cost being counted, and a `git` that raises
+    # still paid it — counting only on the success path would hide exactly the
+    # timeouts worth finding.
+    if not spawn_counter.audit_hook_installed():
+        spawn_counter.bump()
 
     try:
         # NOT hand-rolled over `Popen`, deliberately. `subprocess.run`'s own

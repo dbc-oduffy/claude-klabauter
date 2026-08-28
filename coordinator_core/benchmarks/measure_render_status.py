@@ -69,6 +69,7 @@ from pathlib import Path
 from typing import List, Optional, Union
 
 from coordinator_core.benchmarks import budget as budget_mod
+from coordinator_core.benchmarks import declare_benchmark_origin
 from coordinator_core.benchmarks.measure_read_events import (
     _band_ms,
     _extrapolate_breach_total_events,
@@ -461,6 +462,7 @@ def run_c10_measurement(*, n: int = DEFAULT_N, warmup: int = DEFAULT_WARMUP) -> 
 
 
 if __name__ == "__main__":  # pragma: no cover
+    declare_benchmark_origin()
     result = run_c10_measurement()
     result["import_isolation"] = run_import_isolation_measurement()
     print(json.dumps(result, indent=2, default=str))

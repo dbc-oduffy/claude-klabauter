@@ -34,10 +34,6 @@ from __future__ import annotations
 import os
 import sys
 
-import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
-from cc_invoke import require_dispatch_engine_on_path  # noqa: E402
-from coordinator_registry import _DoeUnresolvable, doe_root  # noqa: E402
-
 _TRANSPORT_FAILURE_EXIT = 4
 
 
@@ -62,6 +58,8 @@ def _resolve_plugin_root() -> str:
     resolve, via the same transport-failure path as engine-root resolution
     below — this is a gate script, not a never-block hook.
     """
+    from coordinator_registry import _DoeUnresolvable, doe_root
+
     env_root = os.environ.get("CLAUDE_PLUGIN_ROOT")
     if env_root:
         return env_root
@@ -79,6 +77,9 @@ def _resolve_plugin_root() -> str:
 
 
 def _import_main():
+    import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
+    from cc_invoke import require_dispatch_engine_on_path
+
     claude_klabauter_root = require_dispatch_engine_on_path()
     from coordinator_core.snippet_sync.verify_registry_consistency import main as _op_main
     return _op_main

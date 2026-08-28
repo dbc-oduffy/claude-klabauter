@@ -58,10 +58,26 @@ import os
 import sys
 
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-
 _REPO_ROOT = os.path.dirname(os.path.dirname(_SCRIPT_DIR))
-if _REPO_ROOT not in sys.path:
-    sys.path.insert(0, _REPO_ROOT)
+
+_BOOTSTRAP_DONE = False
+
+
+def _bootstrap_engine() -> None:
+    """Put the repo root on ``sys.path`` before ``records_query`` is imported.
+
+    Idempotent; safe to call more than once. Moved out of module scope
+    (2026-08-28) -- unconditionally mutating `sys.path` at import time made
+    every import of this file mutate the `sys.path` of a warm server ~50
+    sessions share. Only the trigger moved; the effect is byte-for-byte the
+    same.
+    """
+    global _BOOTSTRAP_DONE
+    if _BOOTSTRAP_DONE:
+        return
+    if _REPO_ROOT not in sys.path:
+        sys.path.insert(0, _REPO_ROOT)
+    _BOOTSTRAP_DONE = True
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -134,6 +150,7 @@ def _query_unattached_all(root: str | None) -> list[dict]:
 
     Spec backlink: docs/plans/2026-07-04-initiative-govern-sweep-prioritize-doe-d.md § C3 (AC4)
     """
+    _bootstrap_engine()
     from records_query import query_records  # noqa: E402  (sys.path-dependent)
 
     prior_cwd = os.getcwd()
@@ -213,6 +230,7 @@ def _render_text(candidates: list[dict]) -> str:
 
 
 def _emit(records: list[dict], format_: str) -> None:
+    _bootstrap_engine()
     from coordinator_core.clustering.candidates import detect_candidates
 
     candidates = detect_candidates(records)
@@ -226,6 +244,7 @@ def main(argv: "list[str] | None" = None) -> int:
     # argv threading: this CLI reads sys.argv at depth (argparse and helpers),
     # so the warm-call path swaps it for the duration rather than rewriting every read.
     # NOT re-entrant: a threaded server must serialise calls into this entrypoint.
+    _bootstrap_engine()
     _prev_argv = sys.argv
     if argv is not None:
         sys.argv = [sys.argv[0], *argv]

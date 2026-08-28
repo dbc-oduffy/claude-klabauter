@@ -2811,6 +2811,12 @@ def write_review_trail_entry(
             # the write itself — it leaves the record UNRESOLVED, which the
             # backfill path (coordinator_core.review_trail.backfill) heals
             # on its next run, exactly like a crash between the two writes.
+            # Assumes `caller_worktree` here is the SAME path `run_backfill`
+            # is later invoked with for this file — both derive record_id as
+            # the file's path relative to that root, POSIX-separated. Unstated
+            # by either module; if a future backfill invocation runs against a
+            # different root (e.g. a superproject) than writes used, ids
+            # diverge and a record can double-credit.
             record_id = str(rel_out_path).replace(os.sep, "/")
             try:
                 review_trail_backfill.resolve_and_fold(

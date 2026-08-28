@@ -161,6 +161,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Callable, List, Optional
 
+from coordinator_core.benchmarks import declare_benchmark_origin
 from coordinator_core.benchmarks.interleave import (
     Primitive,
     PrimitiveStats,
@@ -540,6 +541,7 @@ if __name__ == "__main__":  # pragma: no cover
             f"usage: python -m {__name__} --calibrate", file=sys.stderr
         )
         sys.exit(2)
+    declare_benchmark_origin()
     _baseline = build_baseline_primitive()
     _reductions = calibrate_aa_noise_floor(
         _baseline.invoke,

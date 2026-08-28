@@ -112,9 +112,6 @@ def _bootstrap_engine() -> None:
         # the first-bootstrapped `_round`. Idempotent by construction.
         return
 
-    cc_invoke_dir = str(_BIN_DIR / "lib")
-    if cc_invoke_dir not in sys.path:
-        sys.path.insert(0, cc_invoke_dir)
     import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
     from cc_invoke import require_dispatch_engine_on_path
 

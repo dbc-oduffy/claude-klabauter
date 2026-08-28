@@ -266,20 +266,24 @@ def _classify_shape(
     VERDICT-BLIND by construction — the verdict filter lives in `_classify`,
     which is the only coverage-crediting entry point.
 
-    `kind` mirrors `coordinator_core.coverage.build_reviewed_set`'s Phase 1
-    (C5, docs/plans/2026-08-05-coverage-gate-planning-artifact-class.md § C5):
-    "diff" for a legacy/no-scope_kind record or an explicit scope_kind="diff"
-    (or future value); "plan" for scope_kind="plan" — now RESOLVED like a diff
-    record instead of skipped, so `_classify`'s caller can credit it, but ONLY
-    against planning-artifact commits (see `_credit_from_kind_partition` — the
-    filtering happens in `build_reviewed_set`, not here, since Phase-1 shape
-    classification does no git calls). `scope_kind="integration"` remains
-    skipped entirely — NOT reopened by this chunk (plan's Anti-scope): only
-    "plan" becomes creditable, matching coverage.py's `build_reviewed_set`
-    exactly, so this CLI-facing entry point and that one answer AC6 the same
-    way (C6, docs/plans/2026-08-05-coverage-gate-planning-artifact-class.md
-    § C6 — "a plan gate that answers differently by entry point is the defect
-    this chunk exists to prevent").
+    `kind` mirrors the kind-aware crediting rule (C5, docs/plans/2026-08-05-
+    coverage-gate-planning-artifact-class.md § C5, reference implementation
+    `coordinator_core.coverage._credit_from_kind_partition`): "diff" for a
+    legacy/no-scope_kind record or an explicit scope_kind="diff" (or future
+    value); "plan" for scope_kind="plan" — RESOLVED like a diff record
+    instead of skipped, so `_classify`'s caller can credit it, but ONLY
+    against planning-artifact commits. That filtering happens at
+    write-time now, in `review_trail.backfill.resolve_and_fold` /
+    `_resolve_special` (its own `_classify_bookkeeping_shas` pass over the
+    plan-kind bucket) — this module's `build_reviewed_set` below is a pure
+    read of the already-credited resident store, not a filtering site.
+    `scope_kind="integration"` remains skipped entirely — NOT reopened by
+    this chunk (plan's Anti-scope): only "plan" becomes creditable, matching
+    the write-time rule exactly, so this CLI-facing entry point and the
+    write path answer AC6 the same way (C6, docs/plans/2026-08-05-coverage-
+    gate-planning-artifact-class.md § C6 — "a plan gate that answers
+    differently by entry point is the defect this chunk exists to
+    prevent").
 
     `warn=False` runs the identical checks silently, for a second, diagnostic-only
     read of the same records (`classify_pending_records`) that must not duplicate
@@ -288,10 +292,11 @@ def _classify_shape(
     `unrecognized_sink`, when given, accumulates unrecognized-`scope_kind`
     counts (keyed by the kind string) instead of printing a WARN per record —
     the per-record flood buried the real trailing error on a legacy corpus
-    (2026-08-15 example-retrieval-repo-em memo). The caller (`build_reviewed_set`,
-    `build_segments`) owns the dict and emits ONE aggregated WARN after its
-    walk. `None` (the default) preserves the old per-call print, for any
-    direct caller of this function that has no walk to aggregate over.
+    (2026-08-15 example-retrieval-repo-em memo). The caller (`build_segments`, and the
+    write-time record classification this mirrors) owns the dict and emits
+    ONE aggregated WARN after its walk. `None` (the default) preserves the
+    old per-call print, for any direct caller of this function that has no
+    walk to aggregate over.
 
     Spec backlink: pln-open-review-loops-are-a-named--6e8fea § C2
     Spec backlink (kind): pln-planning-artifacts-are-a-third-77111f § C6
@@ -311,10 +316,9 @@ def _classify_shape(
             # (e.g. "inline-dispatch"): this `return None` precedes the
             # unrecognized-kind accumulation branch below, so an unrecognized
             # kind with no sha_range is never counted there either, in
-            # addition to producing no WARN. This mirrors coverage.py's
-            # build_reviewed_set, which `continue`s here with no print
-            # regardless of kind (see its "skip silently" comment on the
-            # identical branch).
+            # addition to producing no WARN. This mirrors the write-time
+            # record classification (`review_trail.backfill`), which skips
+            # the same shape silently, regardless of kind.
             if scope_kind == "diff" and warn:
                 print(
                     f"WARN: diff-typed trail record has empty sha_range: {artifact}",
@@ -328,9 +332,9 @@ def _classify_shape(
             # VERDICT — see cross-repo/inbox/2026-08-10-example-retrieval-repo-ue-addon-
             # em-coverage-gate-crashes-on-chunk-and-inline-dispatch-kinds.md).
             # The record still flows through and resolves like any other, but
-            # `_credit_from_kind_partition` never reads an unrecognized kind's
-            # bucket, so it earns zero credit — fail-closed, unchanged safety
-            # direction.
+            # the write-time crediting rule never reads an unrecognized
+            # kind's bucket, so it earns zero credit — fail-closed, unchanged
+            # safety direction.
             if unrecognized_sink is not None:
                 unrecognized_sink[scope_kind] = unrecognized_sink.get(scope_kind, 0) + 1
             else:
@@ -340,8 +344,10 @@ def _classify_shape(
                     file=sys.stderr,
                 )
         # scope_kind == "diff" credits unconditionally (fall through);
-        # scope_kind == "plan" (or future value) is resolved here and filtered
-        # to planning-artifact commits downstream in build_reviewed_set.
+        # scope_kind == "plan" (or future value) is resolved here; filtering
+        # to planning-artifact commits already happened at write-time
+        # (review_trail.backfill), before this module's build_reviewed_set
+        # ever reads the resident store.
         kind = scope_kind
     else:
         # Legacy record — no scope_kind. Use ".." inference. Always "diff".

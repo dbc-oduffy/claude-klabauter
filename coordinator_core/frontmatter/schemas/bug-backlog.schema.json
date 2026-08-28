@@ -2,13 +2,20 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://coordinator.local/schemas/bug-backlog.schema.json",
   "x-schema-name": "bug-backlog",
-  "x-schema-version": "1.0.0",
+  "x-schema-version": "1.1.0",
   "applies_to": "state/bug-backlog/*.yaml",
   "match_mode": "whole-document-yaml",
   "description": "Bug-backlog record — one file per bug under state/bug-backlog/<date>-<slug>.yaml. additionalProperties-posture: open — unknown fields in bug-backlog records are tolerated (not rejected). This preserves forward-compatibility as new optional fields are added without invalidating existing records. Decision: keep open; tighten only if strict-mode corpus conformance enforcement is required at a future governance stage.",
   "type": "object",
   "_additionalProperties_note": "Permissive by design — additionalProperties is not set to false here. Unknown fields in bug-backlog records are tolerated (not rejected), preserving forward-compatibility as new optional fields are added without invalidating existing records. Decision: keep open; tighten only if strict-mode corpus conformance enforcement is required at a future governance stage.",
-  "required": ["created", "title", "body", "status", "surface", "severity"],
+  "required": [
+    "created",
+    "title",
+    "body",
+    "status",
+    "surface",
+    "severity"
+  ],
   "properties": {
     "created": {
       "type": "string",
@@ -25,7 +32,12 @@
     },
     "status": {
       "type": "string",
-      "enum": ["open", "closed", "deferred", "wontfix"],
+      "enum": [
+        "open",
+        "closed",
+        "deferred",
+        "wontfix"
+      ],
       "description": "Bug lifecycle status."
     },
     "surface": {
@@ -34,7 +46,12 @@
     },
     "severity": {
       "type": "string",
-      "enum": ["P0", "P1", "P2", "P3"],
+      "enum": [
+        "P0",
+        "P1",
+        "P2",
+        "P3"
+      ],
       "description": "Priority/severity tier."
     },
     "from_repo": {
@@ -56,7 +73,9 @@
     },
     "tags": {
       "type": "array",
-      "items": {"type": "string"},
+      "items": {
+        "type": "string"
+      },
       "description": "Free-form tags for categorization."
     },
     "evidence": {
@@ -76,7 +95,14 @@
       "description": "Explanation of why this bug is currently blocked, when status=deferred."
     },
     "initiative": {
-      "anyOf": [{"type": "string"}, {"type": "null"}],
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
       "description": "FK to state/initiatives/<id>.yaml; nullable — absent equiv null. Spec backlink: pln-initiative-govern-sweep-priori-6cf808 § C0"
     },
     "system": {
@@ -93,20 +119,39 @@
         },
         "linked_sessions": {
           "type": "array",
-          "items": {"type": "string"},
+          "items": {
+            "type": "string"
+          },
           "description": "Session identifiers linked to this bug's history."
         },
         "linked_commits": {
           "type": "array",
-          "items": {"type": "string"},
+          "items": {
+            "type": "string"
+          },
           "description": "Commit SHAs linked to this bug's history."
         },
         "provenance_completeness": {
           "type": "string",
-          "enum": ["complete", "unknown"],
+          "enum": [
+            "complete",
+            "unknown"
+          ],
           "description": "Whether the provenance metadata for this record is known-complete or unknown."
         }
       }
+    },
+    "pm_approved": {
+      "type": "boolean",
+      "description": "Records that the PM gate authorising this deferral fired. For a ceremony park (/debt-triage Step 6b class 4) the ceremony asserts its own gate; it is not a second approval act by the PM. No ceremony parks bug rows today -- /bug-blitz has no park step -- so a deferred bug row is hand-authored and the grant is the author's to state. Same field name as plan-tasks.schema.json's shipped gate -- one vocabulary across surfaces, deliberately."
+    },
+    "deferred_by": {
+      "type": "string",
+      "description": "Who granted the deferral: for a ceremony park, the ceremony identifier plus the session that ran it. Mirrors closed_by."
+    },
+    "deferred_until": {
+      "type": "string",
+      "description": "ISO date the deferral expires. Its presence is what makes a due-list a read of grants rather than a corpus scan; its absence is how a parked record drifts unnoticed."
     }
   }
 }

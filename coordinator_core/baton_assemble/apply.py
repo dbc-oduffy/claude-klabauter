@@ -79,6 +79,7 @@ import asyncio
 import json
 import subprocess
 import sys
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Optional
@@ -911,6 +912,8 @@ def _dispatch_handoff_supersede_predecessor(args: list[str], repo_root: Path) ->
     # an exception here leaves the already-scaffolded successor stranded on
     # disk, contradicting this handler's own docstring claim ("Also removes
     # the successor artifact ... before raising").
+    from coordinator_core.op_budget_suspension import OpSuspendedError
+
     try:
         result = _invoke_op_in_process(
             "handoff.archive_transition",
@@ -938,6 +941,35 @@ def _dispatch_handoff_supersede_predecessor(args: list[str], repo_root: Path) ->
             },
             repo_root,
         )
+    except OpSuspendedError as exc:
+        # `get_op_handler` refuses BEFORE the op is composed, so the predecessor
+        # is byte-identical and nothing is half-applied -- the same
+        # not-applicable shape the DR-242 gate above degrades on, reached by a
+        # different door. Raising here would re-open the 2026-08-03 live repro
+        # this handler's own docstring records: a DETERMINISTIC pre-composition
+        # refusal that deletes the successor d1 just minted, so the sanctioned
+        # resume path (re-run the identical command) can never converge and
+        # every `/handoff` in the repo loses its one irreversible artifact.
+        print(
+            "baton-assemble apply: handoff.supersede_predecessor degraded -- "
+            f"handoff.archive_transition is off ({exc}). The successor was "
+            "minted and every other directive in this run proceeded normally; "
+            f"{predecessor_path!r} was left exactly as it was. Stamp it "
+            f"deployment_state: continued with continued_into: {continued_into!r} "
+            "and archive it by hand.",
+            file=sys.stderr,
+        )
+        return {
+            "cli": "handoff.supersede_predecessor",
+            "args": args,
+            "result": None,
+            "degraded": {
+                "reason": "archive-transition-off",
+                "predecessor": predecessor_path,
+                "continued_into": continued_into,
+                "error": str(exc),
+            },
+        }
     except Exception:
         _cleanup_successor()
         raise
@@ -1314,6 +1346,47 @@ def _resolve_claude_klabauter_bin() -> Path:
     return Path(resolve_operator_config()["claude_klabauter_bin"])
 
 
+_BY_PATH_LOAD_LOCK = threading.Lock()
+
+
+def exec_module_with_own_dir_on_path(loader: Any, module: Any, script_dir: str) -> None:
+    """Runs `loader.exec_module(module)` with *script_dir* on `sys.path`, then
+    restores `sys.path` to what it was.
+
+    Exists because a bin CLI loaded BY PATH does not get the one thing a
+    direct-script invocation gives it for free. `coordinator/bin/lib/
+    __init__.py` is the single sys.path bootstrap for that tree and its own
+    negative-spec names the contract: "the CLI path resolves `lib` because a
+    script's own directory is `sys.path[0]`". `exec_module` on a file path
+    contributes NOTHING to sys.path, so a bare `import lib` in the loaded
+    script instead bound CPython's own `<prefix>/lib` directory as a NAMESPACE
+    package (`lib.__file__ is None`) -- the import SUCCEEDED, the bootstrap
+    never ran, and the next line died on `ModuleNotFoundError: No module named
+    'memo_compose'`.
+
+    Removal is BY VALUE under a module-level lock, never `pop(0)`. This engine
+    runs warm inside a server shared by ~50 concurrent sessions, where
+    mutating interpreter global state is a named hazard: an unrelated
+    `sys.path` insert landing between this function's own insert and its
+    restore makes an index-based pop remove someone else's entry and leak this
+    one for the life of the process. The lock also collapses the
+    check-then-act window two concurrent first-callers would otherwise share.
+
+    Negative-spec: does NOT populate any module cache and does NOT swallow the
+    loader's exceptions -- both belong to the caller, which knows what it is
+    loading and what a failed load means for it.
+    """
+    with _BY_PATH_LOAD_LOCK:
+        added = script_dir not in sys.path
+        if added:
+            sys.path.insert(0, script_dir)
+        try:
+            loader.exec_module(module)
+        finally:
+            if added and script_dir in sys.path:
+                sys.path.remove(script_dir)
+
+
 def _load_doc_new_module() -> Any:
     """Loads `coordinator-doc-new` as a module (cached for this process) so its
     scaffolder functions can be CALLED rather than re-implemented.
@@ -1327,6 +1400,11 @@ def _load_doc_new_module() -> Any:
     `workstream_complete.apply._load_cli_module` carries; the module is
     registered in `sys.modules` before `exec_module` for the same
     dataclass-forward-ref reason documented there).
+
+    The exec goes through `exec_module_with_own_dir_on_path` because the loaded
+    script opens with a bare `import lib` that only resolves when its own
+    directory is on `sys.path` -- see that function's docstring for the silent
+    failure this repaired.
 
     Negative-spec: does NOT spawn a subprocess, does NOT call the generator's
     `main()`, and does NOT write anything -- only the pure scaffolder functions
@@ -1348,7 +1426,7 @@ def _load_doc_new_module() -> Any:
     module = importlib.util.module_from_spec(spec)
     sys.modules[module_name] = module
     try:
-        spec.loader.exec_module(module)
+        exec_module_with_own_dir_on_path(spec.loader, module, str(script_path.parent))
     except BaseException:
         sys.modules.pop(module_name, None)
         raise

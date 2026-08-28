@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://coordinator.local/schemas/improvement-queue.schema.json",
   "x-schema-name": "improvement-queue",
-  "x-schema-version": "1.2.0",
+  "x-schema-version": "1.3.0",
   "x-bump-class": "nested-field-additive",
   "x-bump-note": "1.1.0 -> 1.2.0 (plan pln-deferrals-carry-both-sides-and-7d1c7e) adds the optional `case_against` string — the argument that lost, carried through when a plan deferral is harvested into this queue, so a triager sees both sides rather than only the surviving `proposed_action`. Additive: every record valid under 1.1.0 remains valid under 1.2.0. The claude-klabauter-side harvest CLI cannot populate this field yet (see the plan's C8 memo); it is therefore OPTIONAL, not required — a required field here would reject every entry the current CLI writes.\n\n1.0.0 -> 1.1.0 widened the `change_kind` enum by two members — `verification` (a ratified deferral whose deliverable is evidence rather than a diff) and `config-edit` — and expanded that field's description to name docs/wiki/lessons-outbox-schema.md § Change-kind enum as the enum's SSOT. Additive to the value domain of an existing field: every record valid under 1.0.0 remains valid under 1.1.0. No closed-vocabulary term exists specifically for an enum-value widen; classified `nested-field-additive` on the same reasoning plan.schema.json's 1.3.0 -> 1.4.0 note records — it carries the identical holding/bilateral-sequencing risk shape, because a consumer holding a stale vendored copy REJECTS a record carrying a new value (the b6baf9e1 failure class this file's version gate exists to close). Claude-klabauter vendors this schema and already carries both enum members in its vendored copy; what its copy still lacks after this bump is the version string itself.",
   "applies_to": "state/improvement-queue/*.yaml",
@@ -10,7 +10,16 @@
   "description": "Improvement-queue record — a captured universal or project-scoped improvement pattern awaiting triage. Unknown fields are tolerated (not rejected): this preserves forward-compatibility as new optional fields are added without invalidating existing records. Decision: keep open; tighten only if strict-mode corpus conformance enforcement is required at a future governance stage.",
   "type": "object",
   "_additionalProperties_note": "Permissive by design — additionalProperties is not set to false here. Unknown fields in improvement-queue records are tolerated (not rejected), consistent with the additionalProperties-posture: open header on the legacy YAML DSL source. A misspelled field will silently pass. This is intentional for forward-compatibility and matches the existing permissive pattern in other coordinator schemas.",
-  "required": ["created", "title", "body", "status", "surface", "proposed_action", "from_repo", "change_kind"],
+  "required": [
+    "created",
+    "title",
+    "body",
+    "status",
+    "surface",
+    "proposed_action",
+    "from_repo",
+    "change_kind"
+  ],
   "properties": {
     "created": {
       "type": "string",
@@ -27,7 +36,11 @@
     },
     "status": {
       "type": "string",
-      "enum": ["open", "closed", "deferred"],
+      "enum": [
+        "open",
+        "closed",
+        "deferred"
+      ],
       "description": "Lifecycle status. open=awaiting triage; closed=resolved (closure is git mv to archive/improvement-queue/<YYYY-MM>/, never marked resolved in place); deferred=explicitly deprioritized with an architectural reason."
     },
     "surface": {
@@ -44,7 +57,19 @@
     },
     "change_kind": {
       "type": "string",
-      "enum": ["script-edit", "skill-edit", "wiki-append", "wiki-new", "hook-edit", "agent-prompt-edit", "doc-edit", "test-edit", "code-edit", "config-edit", "verification"],
+      "enum": [
+        "script-edit",
+        "skill-edit",
+        "wiki-append",
+        "wiki-new",
+        "hook-edit",
+        "agent-prompt-edit",
+        "doc-edit",
+        "test-edit",
+        "code-edit",
+        "config-edit",
+        "verification"
+      ],
       "description": "Category of change the proposed_action implies — routes triage to the appropriate handling. SSOT for the enum: docs/wiki/lessons-outbox-schema.md § Change-kind enum. 'verification' is the one member whose deliverable is evidence rather than a diff (a hardware- or environment-gated re-run); a defect it finds gets its own entry with a change-shaped kind."
     },
     "closed_at": {
@@ -58,7 +83,9 @@
     },
     "tags": {
       "type": "array",
-      "items": {"type": "string"},
+      "items": {
+        "type": "string"
+      },
       "description": "Free-form classification tags for triage and search."
     },
     "evidence": {
@@ -71,11 +98,21 @@
     },
     "queue_scope": {
       "type": "string",
-      "enum": ["central", "project"],
+      "enum": [
+        "central",
+        "project"
+      ],
       "description": "central=universal pattern routed to the central improvement queue (claude-klabauter-resident); project=project-scoped entry local to this repo's state/improvement-queue/."
     },
     "initiative": {
-      "anyOf": [{"type": "string"}, {"type": "null"}],
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
       "description": "FK to state/initiatives/<id>.yaml; nullable — absent is equivalent to null. Spec backlink: pln-initiative-govern-sweep-priori-6cf808 § C0"
     },
     "system": {
@@ -92,20 +129,43 @@
         },
         "linked_sessions": {
           "type": "array",
-          "items": {"type": "string"},
+          "items": {
+            "type": "string"
+          },
           "description": "Session identifiers linked to this entry's history."
         },
         "linked_commits": {
           "type": "array",
-          "items": {"type": "string"},
+          "items": {
+            "type": "string"
+          },
           "description": "Commit SHAs linked to this entry's history."
         },
         "provenance_completeness": {
           "type": "string",
-          "enum": ["complete", "unknown"],
+          "enum": [
+            "complete",
+            "unknown"
+          ],
           "description": "Whether the provenance chain (session/agent/commits) for this entry is fully known."
         }
       }
+    },
+    "pm_approved": {
+      "type": "boolean",
+      "description": "Records that the PM gate authorising this deferral fired. For a ceremony park (/debt-triage Step 6b class 4) the ceremony asserts its own gate; it is not a second approval act by the PM. No ceremony parks bug rows today -- /bug-blitz has no park step -- so a deferred bug row is hand-authored and the grant is the author's to state. Same field name as plan-tasks.schema.json's shipped gate -- one vocabulary across surfaces, deliberately."
+    },
+    "deferred_by": {
+      "type": "string",
+      "description": "Who granted the deferral: for a ceremony park, the ceremony identifier plus the session that ran it. Mirrors closed_by."
+    },
+    "deferred_until": {
+      "type": "string",
+      "description": "ISO date the deferral expires. Its presence is what makes a due-list a read of grants rather than a corpus scan; its absence is how a parked record drifts unnoticed."
+    },
+    "why_blocked": {
+      "type": "string",
+      "description": "Why this entry is deferred. Required in doctrine whenever status=deferred."
     }
   }
 }

@@ -34,6 +34,7 @@ from pathlib import Path
 from typing import List, Optional
 
 from coordinator_core.benchmarks import baseline_store
+from coordinator_core.benchmarks import declare_benchmark_origin
 from coordinator_core.benchmarks import harness
 from coordinator_core.benchmarks import op_fixtures
 from coordinator_core.benchmarks.record import ConformanceRecord
@@ -118,6 +119,7 @@ def _build_summary(records: List[ConformanceRecord], store_path: Path) -> dict:
 
 def main(argv: Optional[List[str]] = None) -> int:
     """CLI entrypoint. Returns the process exit code (0 on success)."""
+    declare_benchmark_origin()
     parser = _build_arg_parser()
     args = parser.parse_args(argv)
 

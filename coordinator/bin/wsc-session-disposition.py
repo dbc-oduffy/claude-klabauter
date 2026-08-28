@@ -113,17 +113,36 @@ from typing import Any, Iterable, NamedTuple
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 _LIB_DIR = os.path.join(_SCRIPT_DIR, "lib")
 
-import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
-import cc_invoke  # noqa: E402  # pyright: ignore[reportMissingImports] — added to sys.path at runtime by the _LIB_DIR injection above, not statically resolvable
+# Bound by `_bootstrap_engine_imports()`, called from `main()` before any
+# other function in this file that reads these names can run -- keeps this
+# module's own body import-purity clean (module-scope non-stdlib import) the
+# same way every other allowlisted coordinator/bin/ CLI now does.
+resolve_claim_state = None
+show_toplevel = None
+rel_id = None
+session_deliverable_ids = None
 
-cc_invoke.ensure_engine_on_path(__file__)
 
-from coordinator_core.claim_state import resolve_claim_state  # noqa: E402
-from coordinator_core.git.repo_root import show_toplevel  # noqa: E402
-from coordinator_core.wire_paths import rel_id  # noqa: E402
-from coordinator_core.workstream_complete.session_identity import (  # noqa: E402
-    session_deliverable_ids,
-)
+def _bootstrap_engine_imports() -> None:
+    global resolve_claim_state, show_toplevel, rel_id, session_deliverable_ids
+
+    import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
+    import cc_invoke
+
+    cc_invoke.ensure_engine_on_path(__file__)
+
+    from coordinator_core.claim_state import resolve_claim_state as _resolve_claim_state
+    from coordinator_core.git.repo_root import show_toplevel as _show_toplevel
+    from coordinator_core.wire_paths import rel_id as _rel_id
+    from coordinator_core.workstream_complete.session_identity import (
+        session_deliverable_ids as _session_deliverable_ids,
+    )
+
+    resolve_claim_state = _resolve_claim_state
+    show_toplevel = _show_toplevel
+    rel_id = _rel_id
+    session_deliverable_ids = _session_deliverable_ids
+
 
 _TRANSPORT_FAIL = 3
 _SESSION_ID_UNRESOLVED = 4
@@ -1886,6 +1905,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str]) -> int:
+    _bootstrap_engine_imports()
     parser = build_parser()
     args = parser.parse_args(argv)
     return args.func(args)

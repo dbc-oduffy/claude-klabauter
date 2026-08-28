@@ -346,12 +346,19 @@ class BackfillResult:
     parse_failures: List[str] = field(default_factory=list)
 
 
-def _iter_trail_records(repo_root: str) -> List[Tuple[str, dict]]:
+def _iter_trail_records(
+    repo_root: str,
+) -> Tuple[List[Tuple[str, dict]], List[str]]:
     """Every `(record_id, record)` pair under `{repo_root}/state/review-trail/`
-    AND `{repo_root}/archive/review-trail/` (`*.json`, path order). `record_id`
+    AND `{repo_root}/archive/review-trail/` (`*.json`, sorted within each
+    directory — every `state/` record precedes every `archive/` record;
+    nothing depends on a single global sort across the two). `record_id`
     is the file's path relative to `repo_root`, POSIX-separated — matching
     what the write-time caller (`ops.review_trail_write`) uses for the
     SAME file, so a record folded at write time is never re-folded here.
+    This equivalence assumes `repo_root` here and `caller_worktree` there
+    are the SAME path for a given file; neither module enforces it — see
+    `ops.review_trail_write`'s record_id comment.
     A multi-record (JSONL) file gets one id per line, suffixed `#<index>`.
 
     Both directories are scanned, RECURSIVELY, because the `state/` ->
@@ -363,9 +370,16 @@ def _iter_trail_records(repo_root: str) -> List[Tuple[str, dict]]:
     non-recursive `glob` sees none of the 3351 archived ones and misses 92
     nested live ones besides. Both defects were caught by C2's whole-corpus
     differential, which read 3550 SHAs against this store's 1138.
+
+    Returns `(records, parse_failures)` — `parse_failures` is the relative
+    path of every file `coverage._parse_trail_file` could not parse at all
+    (neither JSON nor JSONL), reported rather than silently dropped so
+    `BackfillResult.parse_failures` (and the `_main` CLI's printed count)
+    reflect real skips instead of always reading zero.
     """
     root = Path(repo_root)
     out: List[Tuple[str, dict]] = []
+    parse_failures: List[str] = []
     for trail_dir in (root / "state" / "review-trail", root / "archive" / "review-trail"):
         if not trail_dir.is_dir():
             continue
@@ -374,13 +388,14 @@ def _iter_trail_records(repo_root: str) -> List[Tuple[str, dict]]:
             try:
                 records = coverage._parse_trail_file(str(path))
             except coverage._TrailParseError:
+                parse_failures.append(rel)
                 continue
             if len(records) == 1:
                 out.append((rel, records[0]))
             else:
                 for idx, rec in enumerate(records):
                     out.append((f"{rel}#{idx}", rec))
-    return out
+    return out, parse_failures
 
 
 def run_backfill(repo_root: str) -> BackfillResult:
@@ -400,7 +415,7 @@ def run_backfill(repo_root: str) -> BackfillResult:
     gate-path cost: nothing calls this implicitly.
     """
     already_folded = _store.read_folded_record_ids(repo_root)
-    all_records = _iter_trail_records(repo_root)
+    all_records, parse_failures = _iter_trail_records(repo_root)
     pending = [
         (record_id, record)
         for record_id, record in all_records
@@ -408,6 +423,7 @@ def run_backfill(repo_root: str) -> BackfillResult:
     ]
 
     result = BackfillResult()
+    result.parse_failures = parse_failures
     if not pending:
         return result
 

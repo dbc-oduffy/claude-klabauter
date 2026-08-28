@@ -228,6 +228,32 @@ if IS_DARWIN:
     _libc.proc_listchildpids.restype = ctypes.c_int
 
 
+def _env_with_benchmark_origin(base_env: Optional[dict]) -> dict:
+    """Builds an env dict for the SPAWNED CHILD with the benchmark origin
+    declared -- never mutates `os.environ` (the caller's own process).
+
+    C1d: `declare_benchmark_origin()` writes ORIGIN_ENV into the
+    interpreter-global `os.environ`, correct at a driver's own entry but
+    wrong here -- `batched_process_time_ms` and
+    `single_invocation_tree_process_time` are library spawn helpers any
+    caller may invoke mid-process, and a global write would stamp the
+    caller's whole process (and every later subprocess it spawns) as
+    benchmark traffic. This builds a child-scoped copy instead: of
+    `base_env` if the caller supplied one, else of this process's own
+    `os.environ` (the previous implicit-inherit behaviour when `env` was
+    passed through as `None`), with the origin layered on top.
+
+    Precedence preserved: `setdefault` means an ORIGIN_ENV already present
+    in the base env wins, matching `declare_benchmark_origin`'s own
+    non-overwriting contract.
+    """
+    from coordinator_core.telemetry import op_latency
+
+    env = dict(os.environ) if base_env is None else dict(base_env)
+    env.setdefault(op_latency.ORIGIN_ENV, op_latency.BENCHMARK)
+    return env
+
+
 def _resume_all_threads(pid: int) -> None:
     """Resumes every thread of `pid` -- the child is spawned
     `CREATE_SUSPENDED` so it can be assigned to the job object BEFORE it
@@ -776,10 +802,12 @@ def batched_process_time_ms(
     if k < 1:
         raise ValueError(f"batched_process_time_ms: k must be >= 1, got {k!r}")
 
+    child_env = _env_with_benchmark_origin(env)
+
     if IS_WINDOWS:
-        return _windows_batched_process_time_ms(cmd, k, env, cwd)
+        return _windows_batched_process_time_ms(cmd, k, child_env, cwd)
     if IS_DARWIN:
-        return _darwin_batched_process_time_ms(cmd, k, env, cwd)
+        return _darwin_batched_process_time_ms(cmd, k, child_env, cwd)
 
     raise NotImplementedError(
         "batched_process_time_ms: no spawn-count primitive for this platform. "
@@ -942,6 +970,8 @@ def single_invocation_tree_process_time(
     off Windows/Darwin, `OSError`/`ctypes.WinError`/`RuntimeError` on a
     measurement-mechanism failure. Never silently degrades to a wrong unit.
     """
+    child_env = _env_with_benchmark_origin(env)
+
     if IS_WINDOWS:
         out_f = open(stdout_path, "wb") if stdout_path else None
         err_f = open(stderr_path, "wb") if stderr_path else None
@@ -954,7 +984,7 @@ def single_invocation_tree_process_time(
                 rc = _windows_spawn_into_job(
                     job,
                     cmd,
-                    env,
+                    child_env,
                     cwd,
                     stdout=out_f if out_f is not None else None,
                     stderr=err_f if err_f is not None else None,
@@ -1004,7 +1034,7 @@ def single_invocation_tree_process_time(
                 saved.append((2, os.dup(2)))
                 os.dup2(err_f.fileno(), 2)
             t0 = time.perf_counter()
-            process_time_ms, procs, attach_failed, rc = _darwin_one_invocation(cmd, env, cwd)
+            process_time_ms, procs, attach_failed, rc = _darwin_one_invocation(cmd, child_env, cwd)
             wall_ms = (time.perf_counter() - t0) * 1000.0
         finally:
             for fd, backup in saved:

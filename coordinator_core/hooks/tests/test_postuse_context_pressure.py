@@ -278,20 +278,63 @@ def test_stale_reading_is_reported_with_its_age_not_discarded():
     assert "measured 9" in text and "s ago" in text
 
 
-def test_autonomous_run_gets_the_checkpoint_variant(tmp_path, monkeypatch):
+def _under_sentinel(tmp_path, monkeypatch, session_id: str) -> None:
     from coordinator_core.session import autonomous_sentinel
 
-    session_id = "session-autonomous"
     sentinel = tmp_path / f"autonomous-{session_id}"
     sentinel.write_text("1", encoding="utf-8")
     monkeypatch.setattr(autonomous_sentinel, "sentinel_path", lambda sid: sentinel)
     monkeypatch.setattr(pad, "sentinel_path", lambda sid: sentinel)
 
-    _write_sidecar(session_id, 41)
-    text = _check(session_id)
-    assert "ADVISORY" in text
-    assert "Autonomous run" in text
-    assert "checkpoint state to disk" in text
+
+class TestAutonomousSentinelSuppressesTheRecommendation:
+    """The sentinel's contract (`coordinator/commands/autonomous.md`): context
+    pressure messages become informational-only, with NO `/handoff`
+    recommendation.
+
+    The defect these pin: the composer read the sentinel to APPEND a checkpoint
+    clause while leaving the handoff recommendation in the text it appended to.
+    One condition, two consumers, only one wired -- so the mode delivered the
+    exact nudge it exists to remove, at the point in a long run where a session
+    is most likely to take it. Asserting the absence of the recommendation is
+    the whole point; a test that only checks the appended clause is present
+    passes against the defect.
+    """
+
+    def test_advisory_band_carries_no_handoff_recommendation(self, tmp_path, monkeypatch):
+        session_id = "session-autonomous"
+        _under_sentinel(tmp_path, monkeypatch, session_id)
+        _write_sidecar(session_id, 41)
+        text = _check(session_id)
+        assert "INFORMATIONAL" in text
+        assert "Autonomous run" in text
+        assert "checkpoint state to disk" in text
+        assert "/handoff" not in text
+        assert "ADVISORY" not in text
+
+    def test_critical_band_carries_no_handoff_recommendation(self, tmp_path, monkeypatch):
+        session_id = "session-autonomous-red"
+        _under_sentinel(tmp_path, monkeypatch, session_id)
+        _write_sidecar(session_id, 60)
+        text = _check(session_id)
+        assert "INFORMATIONAL" in text
+        assert "/handoff" not in text
+        assert "HANDOFF NOW" not in text
+
+    def test_the_reading_itself_still_reaches_the_session(self, tmp_path, monkeypatch):
+        """Informational-only is not silent -- suppressing the reading would
+        strip the one fact the session needs to decide when to checkpoint."""
+        session_id = "session-autonomous-pct"
+        _under_sentinel(tmp_path, monkeypatch, session_id)
+        _write_sidecar(session_id, 58)
+        assert "~58% of window used" in _check(session_id)
+
+    def test_without_the_sentinel_both_bands_still_recommend_handoff(self):
+        """The other half of the branch: no sentinel, no suppression."""
+        _write_sidecar("session-no-sentinel-orange", 41)
+        assert "/handoff" in _check("session-no-sentinel-orange")
+        _write_sidecar("session-no-sentinel-red", 60)
+        assert "HANDOFF NOW" in _check("session-no-sentinel-red")
 
 
 def test_throttle_holds_between_checks():
