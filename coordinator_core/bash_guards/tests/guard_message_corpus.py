@@ -155,7 +155,19 @@ _CWD_OVERRIDE_KEY = "__cwd__"
 #: an earlier revision of this constant nested the scratch parent inside
 #: this repo's own checkout, which put a REAL `.git` back above every
 #: scratch dir (this repo's own) and silenced every one of those rows.
-_NEUTRAL_SCRATCH_PARENT = Path(__file__).resolve().parents[3].parent / "coordinator-guard-corpus-scratch"
+#:
+#: NOT the drive root, and never again a bare sibling of the repo root.
+#: `parents[3].parent` resolved to the top of whatever drive the checkout
+#: lives on, so running this suite MINTED a permanent
+#: `<drive>:/coordinator-guard-corpus-scratch` directory there -- the
+#: `TemporaryDirectory` children self-clean, the parent does not. PM
+#: ruling 2026-08-28: nothing writes to a drive root; every repo has its
+#: own scratch folder. The system temp root satisfies the two properties
+#: this constant actually needs -- no `.git` ancestor, and already an
+#: exempt member of `FIXTURE_SCRATCH_ROOTS` below, so a fixture path
+#: rendered into a guard message is still recognized as an echo and not
+#: reported as a redaction leak.
+_NEUTRAL_SCRATCH_PARENT = Path(tempfile.gettempdir()) / "coordinator-guard-corpus-scratch"
 
 
 #: The roots every fixture tempdir in this module is minted under -- the

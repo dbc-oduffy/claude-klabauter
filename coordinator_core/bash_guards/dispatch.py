@@ -291,6 +291,10 @@ from coordinator_core.bash_guards.guard_host_subagent_bash_ban import (
     check as _check_host_subagent_bash_ban,
     MATCHERS as _matchers_host_subagent_bash_ban,
 )
+from coordinator_core.bash_guards.guard_host_subagent_bash_spawn_shapes import (
+    check as _check_host_subagent_bash_spawn_shapes,
+    MATCHERS as _matchers_host_subagent_bash_spawn_shapes,
+)
 from coordinator_core.bash_guards.check_raw_pid_liveness import (
     check as _check_raw_pid_liveness,
     MATCHERS as _matchers_raw_pid_liveness,
@@ -2038,6 +2042,33 @@ def _build_guard_chain(
         # that module's own docstring "SCOPED TO `Bash`" section; do not
         # widen this one onto COMMAND_TOOL_NAMES alongside its siblings.
         GuardEntry("guard-host-subagent-bash-ban", lambda: _check_host_subagent_bash_ban(payload), True, GuardBand.CONFINEMENT_DENY, AdvisoryValue.NOT_COST_ARGUED, matchers=tuple(_matchers_host_subagent_bash_ban)),
+        # guard-host-subagent-bash-spawn-shapes -- registered port of DoE's
+        # folded `_run_folded_bash_guards` entry (C7, state/dispatch-briefs/
+        # 2026-08-28-the-four-folded-bash-guards-get-registered-not-folded/
+        # C7.md). Same cohort/CONFINEMENT_DENY posture as the sibling
+        # guard-host-subagent-bash-ban above -- registered directly adjacent
+        # to it, ahead of `offer-git-c`. Unlike that guard, this one is NOT
+        # Bash-only -- it denies a SHAPE (fan-out spawn), not the shell
+        # itself, and the fan-out harm exists identically in PowerShell; see
+        # that module's own docstring "BOTH DIALECTS" section.
+        #
+        # COLLISION 1 (staff-eng review, findings 1/7): this guard's own
+        # `check()` DECLINES (returns None) on a command whose primary
+        # shape is GREP_VIA_BASH -- `inprocess-search` (registered below,
+        # ADVISORY_REWRITE) already answers that family in-process at zero
+        # spawn cost, so a CONFINEMENT_DENY entry here would deny toward an
+        # outcome the chain already achieves for free. This is guard-level
+        # logic (`_declines_for_inprocess_answer`), not a chain-order
+        # dependency -- see that module's own "DECLINE PREDICATE" section.
+        #
+        # COLLISION 2: this guard SHADOWS `plumbing-and-loops`'s advisory
+        # (registered far below, PLATFORM_CONDITIONED_DENY) for the opt-in
+        # subagent cohort on HEAD_TAIL_PLUMBING/FOR_LOOP/WHILE_READ_LOOP --
+        # DECIDED as advisory-subsumed-by-design, not preserved: this
+        # guard's own deny message already names the tripped shape and
+        # offers the identical in-process alternative. See that module's
+        # own "SECOND COLLISION" section for the full reasoning.
+        GuardEntry("guard-host-subagent-bash-spawn-shapes", lambda: _check_host_subagent_bash_spawn_shapes(payload), True, GuardBand.CONFINEMENT_DENY, AdvisoryValue.NOT_COST_ARGUED, matchers=tuple(_matchers_host_subagent_bash_spawn_shapes)),
         # This one is a hard-deny (fail_closed) and belongs on this side of every
         # rewriting guard for the same reason as the three above. It previously sat
         # further down the chain, behind `offer-git-c`. No bypass was demonstrated for
