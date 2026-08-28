@@ -338,6 +338,10 @@ from coordinator_core.bash_guards.guard_repo_setup_claude_home_refusal import (
     check as _check_repo_setup_claude_home_refusal,
     MATCHERS as _matchers_repo_setup_claude_home_refusal,
 )
+from coordinator_core.bash_guards.guard_doctrine_surface_bash_write import (
+    check as _check_doctrine_surface_bash_write,
+    MATCHERS as _matchers_doctrine_surface_bash_write,
+)
 from coordinator_core.bash_guards.block_noncanonical_branch_creation import (
     check as _check_block_noncanonical_branch_creation,
     MATCHERS as _matchers_noncanonical_branch_creation,
@@ -2078,6 +2082,44 @@ def _build_guard_chain(
         # `offer-git-c` short-circuit ordering requirement as every entry in
         # this CONFINEMENT_DENY run.
         GuardEntry("guard-repo-setup-claude-home-refusal", lambda: _check_repo_setup_claude_home_refusal(payload), True, GuardBand.CONFINEMENT_DENY, AdvisoryValue.NOT_COST_ARGUED, matchers=tuple(_matchers_repo_setup_claude_home_refusal)),
+        # guard-doctrine-surface-bash-write -- ported from DoE-claude's
+        # in-process fold (docs/plans/2026-08-28-the-four-folded-bash-
+        # guards-get-registered-not-folded.md, C4). Hard-deny, NOT identity-
+        # gated (fires for every caller, EM included): closes the Bash/
+        # PowerShell escape from the C7 doctrine admission gate
+        # (Write|Edit|MultiEdit only) -- a shell redirect, sed -i, a
+        # heredoc, or a python3 -c write reaches a governed doctrine
+        # surface with that gate never firing. Band/advisory class decided
+        # in-plan (CONFINEMENT_DENY / NOT_COST_ARGUED, per DR-277): a
+        # doctrine-surface write is git-recoverable, but an advisory verdict
+        # would leave the admission gate closable by construction on every
+        # Bash dialect, which is the exact escape this guard exists to
+        # close -- so a hard deny, not an advisory, is correct.
+        # `governed_surfaces` is resolved HERE, per call, never memoized
+        # (plan Anti-scope) -- `resolve_plugin_root_loud` then
+        # `resolve_governed_authoring_surfaces` (C1-C3), both already
+        # defined above in this module; the guard module itself imports
+        # neither, to avoid a circular import back into this file. Its
+        # predicate keys on command text mentioning a governed identifier
+        # plus a write/indirection marker in the same segment, structurally
+        # disjoint from every guard above and below it, so its position
+        # among the CONFINEMENT_DENY entries is a convenience, not a
+        # behaviour dependency -- registered at the tail of the hard-deny
+        # run, same `offer-git-c` short-circuit ordering requirement as
+        # every entry in this CONFINEMENT_DENY run.
+        GuardEntry(
+            "guard-doctrine-surface-bash-write",
+            lambda: _check_doctrine_surface_bash_write(
+                payload,
+                resolve_governed_authoring_surfaces(
+                    resolve_plugin_root_loud(payload, session_id, cwd)
+                ),
+            ),
+            True,
+            GuardBand.CONFINEMENT_DENY,
+            AdvisoryValue.NOT_COST_ARGUED,
+            matchers=tuple(_matchers_doctrine_surface_bash_write),
+        ),
         # Advisory (never a deny) sibling of `destructive-git-revert` above
         # (Review: staff-eng, Finding 0). Registered here -- after EVERY
         # CONFINEMENT_DENY hard-deny guard, and ahead of `offer-git-c`'s

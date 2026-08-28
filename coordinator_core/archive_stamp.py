@@ -1337,19 +1337,70 @@ cs_unconsume_handoff = cs_unclaim_handoff
 # handoff.archive_transition verb wrapper — cs_ship_handoff
 # ---------------------------------------------------------------------------
 
+#: Move cap for the sweep this module's verbs now carry. Mirrors
+#: `coordinator/bin/sweep-terminal-handoffs.py`'s own `_CAP` rather than
+#: re-deriving a second recommended value; `handoff.housekeeping` itself refuses
+#: an absent or non-positive cap, so this is a choice, never a fallback.
+_SWEEP_CAP = 150
+
+
 def _call_handoff_archive_transition(handoff_path: str, params: dict) -> dict:
-    """Composes the handoff.archive_transition op (NOT handoff.transition) — the
-    4-mode op that pairs stamp_shipped_in with the unconditional live-children
-    guard, per coordinator_core.ops.handoff_archive_transition's own docstring.
-    Mirrors _call_handoff_transition's repo-root resolution shape."""
+    """Composes the 4-mode archive-transition compute, THROUGH
+    `handoff.housekeeping` since 2026-08-28.
+
+    Routed, not rewritten. This used to import
+    `handoff_archive_transition._handler` by name and `asyncio.run` it directly,
+    which bypassed `get_op_handler`, the suspension table, and anything the
+    housekeeping job composes or its timing gates measure — so the one job had
+    three doors and this was the third. It is now the same door as d6's, which
+    is what makes "one job" true rather than merely stated. Governing plan:
+    `docs/plans/2026-08-27-one-corpus-read-or-the-housekeeping-job-dies-a-fourth-
+    time.md`, chunk C4.
+
+    THE RETURN SHAPE IS UNCHANGED, and that is load-bearing rather than
+    incidental. Every caller here — `cs_ship_handoff`, `cs_chain_archive_handoff`,
+    `cs_supersede_archive_handoff`, and DoE's `archive-stamp-cli` behind them —
+    keys on the transition op's own `exit_code`/`retained`/`moved`/`message`/
+    `retain_reason`/`warnings`. `handoff.housekeeping` returns that dict verbatim
+    under `transition`, and this function unwraps it, so not one of those
+    predicates moves. A re-shaped envelope here would break all of them at once
+    and none of them loudly.
+
+    WHAT DOES CHANGE: the sweep now runs on the same call. That is the point —
+    `cs_ship_handoff(archive=False)`'s own docstring says the file "stays in
+    state/handoffs/ for the async sweep", and the async sweep is what died. It is
+    no longer async and no longer elsewhere; the handoff this verb just made
+    terminal gets filed by the same invocation. `close=False` because these verbs
+    stamp one named handoff and have no business running a fleet-wide reconcile
+    pass on their caller's behalf.
+
+    A housekeeping refusal that happens BEFORE the transition is composed (an
+    unresolvable worktree, a bad cap) comes back with `transition: None`. That is
+    relayed as housekeeping's own error dict rather than an empty one, because
+    every caller prints `result["error"]` and a bare `{}` would have them report
+    "unknown error" for a cause this function was told.
+    """
     hpath = Path(handoff_path)
     worktree, repo_root = _resolve_repo_root_for(hpath)
     if worktree is None or repo_root is None:
         return {"exit_code": 1, "error": f"could not resolve git worktree for {handoff_path}"}
-    from coordinator_core.ops.handoff_archive_transition import _handler as _archive_transition_handler
+    from coordinator_core.ops.handoff_housekeeping import _handler as _housekeeping_handler
 
-    full_params = {"handoff_path": handoff_path, **params}
-    return asyncio.run(_archive_transition_handler(full_params, repo_root=repo_root))
+    housekeeping = _housekeeping_handler(
+        {
+            "close": False,
+            "cap": _SWEEP_CAP,
+            "transition": {"handoff_path": handoff_path, **params},
+        },
+        repo_root=repo_root,
+    )
+    transition = housekeeping.get("transition")
+    if transition is None:
+        return {
+            "exit_code": housekeeping.get("exit_code", 1),
+            "error": housekeeping.get("error", "handoff.housekeeping returned no transition"),
+        }
+    return transition
 
 
 def cs_ship_handoff(

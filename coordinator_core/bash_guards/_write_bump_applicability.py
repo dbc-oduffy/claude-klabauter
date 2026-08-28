@@ -165,6 +165,7 @@ from coordinator_core.bash_guards._write_bump_session_start import (
     read_session_start_record,
 )
 from coordinator_core.bash_guards._write_bump_sink_shapes import (
+    _host_is_windows,
     nearest_existing_ancestor,
 )
 from coordinator_core.machine_resolver import _flatten, _load_toml, registry_dir
@@ -280,7 +281,7 @@ def _is_under(candidate_cf: str, parent_cf: str) -> bool:
 is_under = _is_under
 
 
-def _posix_tmp_literal() -> str:
+def _posix_tmp_literal() -> Optional[str]:
     """The `/tmp` literal `_all_temp_roots` resolves on POSIX -- broken out
     as its own one-line function, rather than inlined, purely so a test can
     monkeypatch THIS ONE SEAM to point somewhere other than the real `/tmp`
@@ -291,8 +292,27 @@ def _posix_tmp_literal() -> str:
     `tempfile.gettempdir()` is `/tmp` by default with no `TMPDIR` set), a
     test built entirely from `tmp_path` subdirectories would otherwise
     always resolve under this literal, regardless of any `gettempdir()`
-    patch -- this seam is what lets such a test isolate itself. Production
-    callers never patch this; it always returns the literal `"/tmp"`."""
+    patch -- this seam is what lets such a test isolate itself.
+
+    NEGATIVE SPEC -- returns `None` on Windows, and the platform check lives
+    HERE rather than at the `_all_temp_roots` append site on purpose. A test
+    that repoints this seam at its own `tmp_path` must keep working on every
+    platform; moving the check to the caller would discard the PATCHED value
+    on Windows too and break that isolation. Patch the seam, get the patched
+    value; leave it alone on Windows, get nothing.
+
+    Why `None` and not `"/tmp"` on Windows: `/tmp` is a drive-RELATIVE
+    absolute path there, so `os.path.realpath("/tmp")` resolves it against
+    the current drive -- a session cwd'd on a given drive blessed that
+    drive's own top-level `\\tmp` as a temp root, and it became a
+    silent write-confinement hole that the guard then declined to deny. This
+    module's prior docstring asserted the opposite ("on Windows `/tmp`
+    simply will not resolve to anything meaningful"); that assertion was
+    never executed on Windows, because every test in the suite monkeypatches
+    this seam away. `test_posix_tmp_literal_is_dropped_on_windows` is the
+    one that does not."""
+    if _host_is_windows():
+        return None
     return "/tmp"
 
 
@@ -304,9 +324,10 @@ def _all_temp_roots(env: Optional[dict] = None) -> list:
     `/var/folders/...`, but the harness-designated per-session scratchpad
     lives under `/private/tmp` -- a path `gettempdir()` alone never covers.
     `os.path.realpath("/tmp")` closes that gap on POSIX (`/tmp` ->
-    `/private/tmp` via the macOS symlink); on Windows `/tmp` simply will not
-    resolve to anything meaningful and is harmlessly deduplicated away or
-    left unmatched -- not special-cased out, per this fix's own design note.
+    `/private/tmp` via the macOS symlink); on Windows `_posix_tmp_literal`
+    returns `None` and contributes nothing -- read its NEGATIVE SPEC before
+    restoring the unconditional literal, which opened a per-drive
+    write-confinement hole.
     `TMPDIR`/`TEMP`/`TMP` are also consulted directly (not merely via
     `gettempdir()`) since a caller may have set one without it being the
     value `tempfile` itself would report.
@@ -317,7 +338,9 @@ def _all_temp_roots(env: Optional[dict] = None) -> list:
         raw_candidates.append(tempfile.gettempdir())
     except OSError:
         pass
-    raw_candidates.append(_posix_tmp_literal())
+    posix_tmp = _posix_tmp_literal()
+    if posix_tmp:
+        raw_candidates.append(posix_tmp)
     for var in ("TMPDIR", "TEMP", "TMP"):
         val = env.get(var)
         if val:

@@ -63,9 +63,12 @@ def _needles_for(op_name: str) -> List[Tuple[str, str]]:
     """The (shape, needle) pairs to test for `op_name` — always the dotted
     name, plus the module-path shape when `OP_MODULE_MAP` has a non-None
     value for it. Imported locally so this module carries no import-time
-    dependency on the registry map, matching the reference implementation's
-    house style of confining registry imports to the call site that needs
-    them (`kill_ledger_inventory._live_op_names`)."""
+    dependency on the registry map, following the same house style as
+    `kill_ledger_inventory._live_op_names` — a local import confining
+    registry coupling to the call site — though that function imports
+    `live_registry_op_names` from the sibling `occupancy_scan` module,
+    not `OP_MODULE_MAP` from `coordinator_core.ops._registry_map` as here;
+    the pattern matches, the source does not."""
     from coordinator_core.ops._registry_map import OP_MODULE_MAP
 
     needles = [(SHAPE_OP_NAME, op_name)]

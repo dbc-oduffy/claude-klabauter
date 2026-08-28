@@ -110,3 +110,35 @@ def test_one_pass_tests_every_name_against_each_memo(tmp_path: Path) -> None:
     assert len(hits["records.history"]) == 1
     assert len(hits["ping"]) == 1
     assert hits["cutover.gate"] == []
+
+
+def test_read_count_equals_memo_count_not_memo_times_name_count(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression guard for the one-pass shape itself, not just its outcome:
+    `test_one_pass_tests_every_name_against_each_memo` verifies correct hits,
+    but a per-name-outer loop that reads each memo once per requested name
+    (O(memos x names) reads) would produce the same hits and still pass it.
+    This test counts actual `Path.read_text` calls against the corpus and
+    asserts that count equals the number of memos, independent of how many
+    op names are requested — it goes red the moment the loop nesting is
+    inverted, even though the hit outcome would stay correct."""
+    _write(tmp_path, "inbox", "one.md", "This memo names `records.history`.")
+    _write(tmp_path, "inbox", "two.md", "This memo names `ping` and `records.history`.")
+    _write(tmp_path, "inbox", "three.md", "Nothing here names any op.")
+
+    read_calls: list[Path] = []
+    original_read_text = Path.read_text
+
+    def counting_read_text(self: Path, *args, **kwargs):
+        if self.suffix == ".md" and "cross-repo" in self.parts:
+            read_calls.append(self)
+        return original_read_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", counting_read_text)
+
+    crc.scan_cross_repo_consumers(
+        ["records.history", "ping", "cutover.gate"], repo_root=tmp_path
+    )
+
+    assert len(read_calls) == 3
