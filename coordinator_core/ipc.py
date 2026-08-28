@@ -2720,11 +2720,12 @@ async def dispatch_message(msg: dict, *, caller: Optional[str] = None) -> dict:
 #: process running exactly one op at a time for the delta's duration --
 #: uncontaminated by any peer op. True of the pool-worker path
 #: (`warm.server._pool_dispatch_worker`, one `ProcessPoolExecutor` task at a
-#: time per worker process) and the one-shot CLI path (`dispatch_from_hook`,
-#: source_path "one_shot_cli"). Both writers take `process_start =
-#: time.process_time()` AFTER the interpreter has booted and this module has
-#: been imported, so this scope does NOT carry interpreter start -- a reader
-#: quoting this scope as a cold-start figure holds a number it does not hold
+#: time per worker process, source_path "pool_worker"), the one-shot CLI path
+#: (`dispatch_from_hook`, source_path "one_shot_cli"), and the hook-batch path
+#: (`dispatch_ops_from_hook`, source_path "hook_batch"). All three writers take
+#: `process_start = time.process_time()` AFTER the interpreter has booted and
+#: this module has been imported, so this scope does NOT carry interpreter start
+#: -- a reader quoting this scope as a cold-start figure holds a number it does not hold
 #: (docs/research/spike-verdicts/2026-08-27-seam-process-time-excludes-interpreter-startup.md).
 #:
 #: PROCESS_WIDE: `time.process_time()` delta taken on an accept-process

@@ -1123,10 +1123,19 @@ def provision_deps(claude_klabauter_root: Path, py: str, allow_venv_fallback: bo
             file=sys.stderr,
         )
         print(
+            # DO NOT NAME uv HERE. Current uv ships an EXTERNALLY-MANAGED marker inside
+            # its own managed CPython builds, so an operator following this advice
+            # literally installs a uv Python and hits this identical refusal
+            # (klabauter#1, macOS 15.5; marker confirmed at
+            # ~/.local/share/uv/python/cpython-3.13.*/lib/python3.13/EXTERNALLY-MANAGED).
+            # pyenv is named first deliberately: unlike the python.org .pkg it needs no
+            # admin rights, which is the reporter's point and the better default.
             "  Remediation: install a supported (non-externally-managed) interpreter for the "
-            "consumer(s) named above — a python.org release or a uv-managed Python — then re-run "
-            "this installer. On stock Linux, distro python3 is externally-managed by policy; this "
-            "is the expected default there too, not an edge case.",
+            "consumer(s) named above — pyenv (builds from source, no admin rights) or a "
+            "python.org release — then re-run this installer. NOT a uv-managed Python: "
+            "current uv ships its CPython builds with an EXTERNALLY-MANAGED marker, so it "
+            "lands back here. On stock Linux, distro python3 is externally-managed by "
+            "policy; this is the expected default there too, not an edge case.",
             file=sys.stderr,
         )
         if removed_any:
@@ -1335,9 +1344,11 @@ def _install_test_deps(engine_py: str, specs: list[str]) -> None:
         print("FAIL [test-deps] test-extra install failed — see output above.", file=sys.stderr)
         if is_pep668:
             print(
+                # Same uv correction as the primary remediation above; see that comment.
                 "  Machine Python is externally-managed (PEP 668). No override flag is ever "
                 "passed — provision under a supported (non-externally-managed) interpreter "
-                "instead (a python.org release or a uv-managed Python), then re-run with "
+                "instead (pyenv, no admin rights, or a python.org release — NOT a uv-managed "
+                "Python, which ships the same EXTERNALLY-MANAGED marker), then re-run with "
                 "--with-test-deps.",
                 file=sys.stderr,
             )

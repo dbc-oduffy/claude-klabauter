@@ -96,6 +96,59 @@ def _patch_gate(monkeypatch: pytest.MonkeyPatch, gate: wsc.SessionShapeGate) -> 
 
 
 # ---------------------------------------------------------------------------
+# Bootstrap regression -- library entry path binds its engine-side names
+# ---------------------------------------------------------------------------
+
+
+def test_library_entry_path_binds_engine_imports_without_main(tmp_path, monkeypatch):
+    """Reproduces the incident this fix closes: `compute_session_shape_gate`
+    loads `wsc-session-disposition.py` by path and calls `resolve_disposition`
+    directly, never touching `main()`. Before the fix, only `main()`
+    bootstrapped the module's four engine-side names
+    (`resolve_claim_state`/`show_toplevel`/`rel_id`/`session_deliverable_ids`),
+    so this exact path left them at `None` and every `/workstream-complete`
+    invocation died with an unnamed `'NoneType' object is not callable`.
+
+    Deliberately a FRESH `spec_from_file_location`-loaded module instance,
+    not the module-level `_session_disposition` shared by this file's other
+    tests -- a fresh load reproduces the bug's actual precondition (a
+    never-bootstrapped module), which a shared, possibly-already-bootstrapped
+    instance would mask.
+
+    `monkeypatch.syspath_prepend(bin_dir)` mirrors what a real CLI invocation
+    gets for free (its own script directory is `sys.path[0]`) and what the
+    warm path gets from `coordinator_core.ops.invoke_from_argv` priming
+    `sys.path` before loading any entrypoint (see `coordinator/bin/lib/
+    __init__.py`'s module docstring) -- neither primes `sys.path` when this
+    file is loaded by `spec_from_file_location` from a test under
+    `coordinator_core/`, which has no such priming step of its own. Without
+    it, `import lib` inside `_bootstrap_engine_imports` resolves to an
+    unrelated Windows-case-insensitive namespace-package collision with the
+    stdlib `Lib` directory rather than `coordinator/bin/lib`, and `import
+    cc_invoke` then fails on a module name unrelated to this fix -- a
+    test-harness gap, not evidence against the fix itself."""
+    bin_dir = Path(__file__).resolve().parents[2] / "coordinator" / "bin"
+    monkeypatch.syspath_prepend(str(bin_dir))
+    spec = importlib.util.spec_from_file_location(
+        "wsc_session_disposition_bootstrap_regression",
+        str(bin_dir / "wsc-session-disposition.py"),
+    )
+    mod = importlib.util.module_from_spec(spec)  # type: ignore[arg-type]
+    spec.loader.exec_module(mod)  # type: ignore[union-attr]
+
+    assert mod.resolve_claim_state is None  # precondition: not yet bootstrapped
+
+    # Must not raise TypeError / "'NoneType' object is not callable" -- the
+    # exact failure this module's fix closes.
+    mod.resolve_disposition(tmp_path, "testsid123")
+
+    assert mod.resolve_claim_state is not None
+    assert mod.show_toplevel is not None
+    assert mod.rel_id is not None
+    assert mod.session_deliverable_ids is not None
+
+
+# ---------------------------------------------------------------------------
 # Envelope conformance
 # ---------------------------------------------------------------------------
 

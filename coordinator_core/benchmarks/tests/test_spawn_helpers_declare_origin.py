@@ -209,6 +209,105 @@ class TestSpawnHelpersDoNotLeakOriginIntoCallerEnviron:
         )
 
 
+class TestSpawnHelpersTagTheChildEnv:
+    """Review: code-reviewer (Slice B, P2, item 5) -- legs 1-2 above are
+    source-text/AST assertions and leg 3 (no-leak) only proves the CALLING
+    process's os.environ is untouched. Neither proves the CHILD actually
+    receives ORIGIN_ENV=BENCHMARK -- a rewrite that keeps the right-named
+    helper call but silently drops the `env=` kwarg at the real
+    subprocess.run/Popen spawn site would still pass every one of those.
+
+    Chosen mechanism: wrap the module's own `subprocess.run`/`subprocess.Popen`
+    to capture the `env=` kwarg actually handed to the real spawn call, while
+    still delegating to the real implementation so the child genuinely spawns
+    (this is not a mock that replaces spawning -- it observes it). This was
+    chosen over asserting against the on-disk op-latency sink because a bare
+    `python -m coordinator_core.invoke` child on this clone refuses to
+    dispatch without a build stamp (DR-315) -- `--allow-unstamped-dispatch` is
+    the documented opt-out and `timer.py::_build_argv` already carries it, but
+    routing through the durable sink would make this test depend on sink
+    location/rotation as well as the origin tag, which is more than this
+    property needs. Capturing the real `env=` kwarg is still fully
+    behavioral -- it fails exactly when the leak this class exists to catch
+    (right-named call, dropped kwarg) happens -- without that extra coupling.
+    """
+
+    def test_time_invocation_env_reaches_subprocess_run(self, monkeypatch):
+        monkeypatch.delenv(op_latency.ORIGIN_ENV, raising=False)
+        captured = {}
+        real_run = timer.subprocess.run
+
+        def capturing_run(*args, **kwargs):
+            captured["env"] = kwargs.get("env")
+            return real_run(*args, **kwargs)
+
+        monkeypatch.setattr(timer.subprocess, "run", capturing_run)
+
+        timer.time_invocation("ping", "{}", repo=None)
+
+        assert captured.get("env") is not None, (
+            "time_invocation must pass env= to subprocess.run"
+        )
+        assert captured["env"].get(op_latency.ORIGIN_ENV) == op_latency.BENCHMARK, (
+            "the child's env must actually carry ORIGIN_ENV=BENCHMARK at the "
+            "real subprocess.run call, not merely via a correctly-named "
+            "builder function"
+        )
+
+    @pytest.mark.skipif(
+        not process_time.IS_WINDOWS, reason="Windows-only spawn primitive"
+    )
+    def test_batched_process_time_ms_env_reaches_popen(self, monkeypatch):
+        monkeypatch.delenv(op_latency.ORIGIN_ENV, raising=False)
+        captured = {}
+        real_popen = process_time.subprocess.Popen
+
+        def capturing_popen(*args, **kwargs):
+            captured["env"] = kwargs.get("env")
+            return real_popen(*args, **kwargs)
+
+        monkeypatch.setattr(process_time.subprocess, "Popen", capturing_popen)
+
+        process_time.batched_process_time_ms([sys.executable, "-c", "pass"], k=1)
+
+        assert captured.get("env") is not None, (
+            "batched_process_time_ms must pass env= to the real Popen call"
+        )
+        assert captured["env"].get(op_latency.ORIGIN_ENV) == op_latency.BENCHMARK, (
+            "the child's env must actually carry ORIGIN_ENV=BENCHMARK at the "
+            "real Popen call, not merely via a correctly-named builder "
+            "function"
+        )
+
+    @pytest.mark.skipif(
+        not process_time.IS_WINDOWS, reason="Windows-only spawn primitive"
+    )
+    def test_single_invocation_tree_process_time_env_reaches_popen(self, monkeypatch):
+        monkeypatch.delenv(op_latency.ORIGIN_ENV, raising=False)
+        captured = {}
+        real_popen = process_time.subprocess.Popen
+
+        def capturing_popen(*args, **kwargs):
+            captured["env"] = kwargs.get("env")
+            return real_popen(*args, **kwargs)
+
+        monkeypatch.setattr(process_time.subprocess, "Popen", capturing_popen)
+
+        process_time.single_invocation_tree_process_time(
+            [sys.executable, "-c", "pass"]
+        )
+
+        assert captured.get("env") is not None, (
+            "single_invocation_tree_process_time must pass env= to the real "
+            "Popen call"
+        )
+        assert captured["env"].get(op_latency.ORIGIN_ENV) == op_latency.BENCHMARK, (
+            "the child's env must actually carry ORIGIN_ENV=BENCHMARK at the "
+            "real Popen call, not merely via a correctly-named builder "
+            "function"
+        )
+
+
 class TestNoModuleLevelDeclare:
     """Negative-spec: declare must never be an import-time side effect."""
 

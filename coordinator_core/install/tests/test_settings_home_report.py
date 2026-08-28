@@ -62,14 +62,50 @@ def test_fully_populated_fixed_members_report_present(tmp_path: Path, claude_kla
 
 
 def test_missing_fixed_member_is_detected(tmp_path: Path, claude_klabauter_root: Path) -> None:
+    """A REQUIRED fixed member's absence is reported.
+
+    Exercised against `settings-manifest.md` rather than `coordinator-whoami/`,
+    which this test used until 2026-08-28. That package is retired and nothing
+    in the install chain provisions it, so requiring it made every clean
+    install end on a FAIL for a directory removed on purpose (klabauter#1); it
+    is now carried as optional. A test whose subject is a member no install
+    creates cannot distinguish a broken settings-home from a healthy one --
+    it would have passed on every box, forever, for the wrong reason.
+    """
     sh = _populate_full_settings_home(tmp_path)
-    (sh / "coordinator-whoami").rmdir()
+    (sh / "settings-manifest.md").unlink()
 
     report = check_settings_home(sh, claude_klabauter_root)
 
     assert not report.complete
     labels = [m.label for m in report.fixed_missing]
-    assert any("coordinator-whoami" in label for label in labels)
+    assert any("settings-manifest.md" in label for label in labels)
+
+
+def test_retired_whoami_absence_is_not_a_failure(tmp_path: Path, claude_klabauter_root: Path) -> None:
+    """`coordinator-whoami/` absent must NOT make the report incomplete.
+
+    The install chain has no provisioning step for it and says so
+    (`scripts/setup.py`'s module docstring: "deliberately absent, not lost").
+    Pinning this because the mixed signal it produced -- a FAIL printed
+    directly above "setup: complete" -- is what left a first-time installer
+    unable to tell whether the install had worked.
+    """
+    sh = _populate_full_settings_home(tmp_path)
+    (sh / "coordinator-whoami").rmdir()
+
+    report = check_settings_home(sh, claude_klabauter_root)
+
+    # Asserted against `fixed_missing` rather than `report.complete`:
+    # completeness also folds in forwarder coverage, which this fixture does
+    # not fully populate, so a `complete` assertion would be answering a
+    # broader question than the one at issue. This is the exact contract --
+    # and it is falsifiable: before the retirement this same call put
+    # coordinator-whoami in the list, which is what the old test asserted.
+    labels = [m.label for m in report.fixed_missing]
+    assert not any("coordinator-whoami" in label for label in labels), (
+        f"a retired member must not be reported missing: {labels}"
+    )
 
 
 def test_missing_forwarder_is_detected(tmp_path: Path, claude_klabauter_root: Path) -> None:

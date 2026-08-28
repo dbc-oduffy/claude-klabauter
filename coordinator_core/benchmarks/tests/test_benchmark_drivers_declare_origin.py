@@ -161,6 +161,19 @@ _SPAWN_BARE_NAMES = frozenset(
     }
 )
 
+# Review: coordinatorcode-reviewer.a9ee6eb5c87c4b7d7 Finding 2 -- a bare-name
+# import (`from subprocess import run`) then a bare `run(...)` call evaded
+# both branches above (no qualifying `.id` in _SPAWN_BARE_NAMES, no
+# `subprocess.` attribute access), letting an allowlisted module grow live
+# spawn traffic while staying exempt forever. Fix flags the IMPORT BINDING
+# itself, not a bare call-site name -- keeps the false-positive reasoning
+# above (`platform.system()`) intact, since this never inspects call sites
+# for these names at all.
+_SPAWN_IMPORTABLE_NAMES: dict[str, frozenset[str]] = {
+    "subprocess": frozenset({"run", "Popen", "call", "check_call", "check_output"}),
+    "os": frozenset({"system", "posix_spawn", "posix_spawnp"}),
+}
+
 
 def _iter_benchmark_module_paths() -> list[pathlib.Path]:
     """All .py modules under coordinator_core/benchmarks/, excluding tests/."""
@@ -182,34 +195,68 @@ def _parse(path: pathlib.Path) -> ast.Module:
 
 
 def module_has_main_entry(tree: ast.Module) -> bool:
-    """True if `tree` carries a module-level `if __name__ == "__main__":`."""
+    """True if `tree` carries a module-level `if __name__ == "__main__":`,
+    in either comparison order (`__name__ == "__main__"` or the reversed
+    `"__main__" == __name__`; Review: coordinatorcode-reviewer.a9ee6eb5c87c4b7d7
+    Finding 4 -- only the canonical ordering was recognized before)."""
     for node in tree.body:
         if not isinstance(node, ast.If):
             continue
         test = node.test
-        if (
+        if not (
             isinstance(test, ast.Compare)
-            and isinstance(test.left, ast.Name)
-            and test.left.id == "__name__"
             and len(test.ops) == 1
             and isinstance(test.ops[0], ast.Eq)
             and len(test.comparators) == 1
-            and isinstance(test.comparators[0], ast.Constant)
-            and test.comparators[0].value == "__main__"
         ):
+            continue
+        left, right = test.left, test.comparators[0]
+        canonical = (
+            isinstance(left, ast.Name)
+            and left.id == "__name__"
+            and isinstance(right, ast.Constant)
+            and right.value == "__main__"
+        )
+        reversed_order = (
+            isinstance(left, ast.Constant)
+            and left.value == "__main__"
+            and isinstance(right, ast.Name)
+            and right.id == "__name__"
+        )
+        if canonical or reversed_order:
             return True
     return False
+
+
+# Review: coordinatorcode-reviewer.a9ee6eb5c87c4b7d7 Finding 3 -- matching the
+# literal string "declare_benchmark_origin" let an aliased import
+# (`from ... import declare_benchmark_origin as d` then `d()`) evade both the
+# forward and inverse call-site checks. Resolve the local bound name(s) per
+# module first and match calls against those, not the literal import name.
+# getattr(...)-indirection is deliberate evasion and stays outside this
+# fix's ceiling -- see module docstring note near DECLARE_ORIGIN_NAME.
+def _declare_origin_local_names(tree: ast.Module) -> frozenset[str]:
+    names = {DECLARE_ORIGIN_NAME}
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.ImportFrom):
+            continue
+        for alias in node.names:
+            if alias.name == DECLARE_ORIGIN_NAME:
+                names.add(alias.asname or alias.name)
+    return frozenset(names)
 
 
 def module_calls_declare_origin(tree: ast.Module) -> bool:
     """True if `declare_benchmark_origin()` is called anywhere in `tree` --
     module level or inside any function body (see module docstring's inverse
-    rule: omission-only checking blesses the shape the contract prohibits)."""
+    rule: omission-only checking blesses the shape the contract prohibits),
+    under its bound local name (see _declare_origin_local_names)."""
+    local_names = _declare_origin_local_names(tree)
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
         func = node.func
-        if isinstance(func, ast.Name) and func.id == DECLARE_ORIGIN_NAME:
+        if isinstance(func, ast.Name) and func.id in local_names:
             return True
         if isinstance(func, ast.Attribute) and func.attr == DECLARE_ORIGIN_NAME:
             return True
@@ -222,8 +269,9 @@ class _DeclareOriginCallSites(ast.NodeVisitor):
     module-level call) -- what INVERSE_RULE_FUNCTION_CARVEOUT is checked
     against, since the carve-out is by function name, never by module."""
 
-    def __init__(self) -> None:
+    def __init__(self, local_names: frozenset[str]) -> None:
         self._stack: list[str] = []
+        self._local_names = local_names
         self.sites: list[str | None] = []
 
     def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
@@ -235,7 +283,7 @@ class _DeclareOriginCallSites(ast.NodeVisitor):
 
     def visit_Call(self, node: ast.Call) -> None:
         func = node.func
-        is_declare = (isinstance(func, ast.Name) and func.id == DECLARE_ORIGIN_NAME) or (
+        is_declare = (isinstance(func, ast.Name) and func.id in self._local_names) or (
             isinstance(func, ast.Attribute) and func.attr == DECLARE_ORIGIN_NAME
         )
         if is_declare:
@@ -244,7 +292,7 @@ class _DeclareOriginCallSites(ast.NodeVisitor):
 
 
 def _declare_origin_call_sites(tree: ast.Module) -> list:
-    visitor = _DeclareOriginCallSites()
+    visitor = _DeclareOriginCallSites(_declare_origin_local_names(tree))
     visitor.visit(tree)
     return visitor.sites
 
@@ -257,6 +305,11 @@ def _module_has_spawn_shape(tree: ast.Module) -> bool:
     module that later grows a spawn-shaped call must turn this guard red
     instead of sitting exempt forever."""
     for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module in _SPAWN_IMPORTABLE_NAMES:
+            wanted = _SPAWN_IMPORTABLE_NAMES[node.module]
+            if any(alias.name in wanted for alias in node.names):
+                return True
+            continue
         if not isinstance(node, ast.Call):
             continue
         func = node.func

@@ -127,8 +127,9 @@ KIND_COMPLETE = "complete"
 #: re-derived. A `process_time` row is meaningless without one: `per_op_handler`
 #: is handler-only CPU, `per_op_process` is a one-shot process's CPU from AFTER
 #: the interpreter has booted and this module has been imported — its writers
-#: (`ipc.dispatch_from_hook`, source_path "one_shot_cli", and `warm/server.py`'s
-#: pool worker) both take `process_start = time.process_time()` post-import, so
+#: (`ipc.dispatch_from_hook`, source_path "one_shot_cli"; `ipc.dispatch_ops_from_hook`,
+#: source_path "hook_batch"; and `warm/server.py`'s pool worker, source_path
+#: "pool_worker") all take `process_start = time.process_time()` post-import, so
 #: no scope in this sink carries interpreter startup or import cost
 #: (docs/research/spike-verdicts/2026-08-27-seam-process-time-excludes-interpreter-startup.md).
 #: `process_wide` may carry a concurrent sibling's CPU. Averaging across them
@@ -477,13 +478,18 @@ def render(
         "ops": [m.summary() for m in shown],
         "spawn_count_caveat": (
             "Spawn counts are a FLOOR for two reasons, both of which understate. "
-            "(a) the seam MOVED on 2026-08-27. Rows before it were counted at "
-            "the git chokepoint (coordinator_core.git.run.run_git) only, so any "
-            "private subprocess.run is invisible in them; rows after it are "
-            "counted at telemetry.spawn_counter's sys.addaudithook seam and see "
-            "every subprocess.Popen/os.system the process raised. A population "
-            "spanning that date mixes both meanings in one column and its older "
-            "half reads low. (b) a Python-keyed count is low "
+            "(a) the seam MOVED, but NOT on a date -- it moves per ENGINE TREE. "
+            "telemetry.spawn_counter gained a sys.addaudithook seam in claude-klabauter at "
+            "4dc8e6633, counting every subprocess.Popen/os.system the process "
+            "raised; before it the counter saw the git chokepoint "
+            "(coordinator_core.git.run.run_git) only, so a private subprocess.run "
+            "was invisible. A row carries the new meaning only if the engine that "
+            "WROTE it had that commit, and the published klabauter mirror is a "
+            "separate tree on its own publish cadence -- so rows written through "
+            "the installed exe keep the git-only meaning until the fix percolates "
+            "there. DO NOT filter this population by date: it will misread every "
+            "such row. A population spanning both meanings mixes them in one "
+            "column and the git-only half reads low. (b) a Python-keyed count is low "
             "against job accounting regardless: a CreateProcess-keyed census of "
             "the close ceremony's gate path found 8 Python-created processes "
             "against 16 counted by the job object, cause unresolved "

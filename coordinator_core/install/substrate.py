@@ -3054,6 +3054,30 @@ def run(setup_only: bool = False, check_only: bool = False, allow_venv_fallback:
             )
         print(f"[install-substrate] check: tracked machine-local files present in {ml_dst} (no-op)")
     else:
+        # THE SOURCE READ IS GUARDED BEFORE ANY WRITE, and the diagnostic is
+        # the one `check_only` above already emits. Neither `shutil.copyfile`
+        # nor `filecmp.cmp` tolerates an absent SOURCE, so a template the
+        # plugin does not track raised a bare `FileNotFoundError` naming one
+        # path with no statement of what the installer wanted -- and it raised
+        # it PART-WAY THROUGH the seed loop, after earlier templates had
+        # already been written. The check-only path had the good diagnostic
+        # and only the mutating path crashed, which is the asymmetry reported
+        # from a clean macOS install (klabauter#1).
+        #
+        # Pre-flighting the whole set matters more than the message: the seed
+        # loop is upstream of `_install_bin_resolvers` (Step 3, ~80 lines
+        # below), so failing mid-loop leaves a settings-home that has been
+        # written to and has no `machine-local` resolver in it. Failing before
+        # the first write leaves it untouched instead, which is a state the
+        # operator can retry from.
+        absent_templates = [f for f in _TRACKED_ML_FILES if not (ml_templates / f).is_file()]
+        if absent_templates:
+            raise SubstrateFatalError(
+                f"install-substrate: tracked machine-local template(s) absent in "
+                f"{ml_templates}: {', '.join(absent_templates)} — the plugin checkout "
+                f"does not ship them, so {ml_dst} cannot be seeded. Nothing was written; "
+                f"re-run once the plugin provides these templates."
+            )
         for f in _TRACKED_ML_FILES:
             src = ml_templates / f
             dst = ml_dst / f
@@ -3063,14 +3087,27 @@ def run(setup_only: bool = False, check_only: bool = False, allow_venv_fallback:
                 print(f"[machine-local] operator-customized {f} preserved; template at {src} for diff reference")
 
     # --- Step 2b: concern baseline files ---
+    # Same guard, same reason, stated once here for 2b and 2c: these seed from
+    # `<name>.example` sources that are NOT in `_TRACKED_ML_FILES`, so the
+    # pre-flight above does not cover them. A missing example is reported, not
+    # crashed on, and is not fatal -- unlike the tracked set, a concern
+    # baseline is optional substrate and the install can complete without it.
     if not check_only and not (ml_dst / _ML_UNREAL_TOML_NAME).is_file():
-        shutil.copyfile(ml_templates / f"{_ML_UNREAL_TOML_NAME}.example", ml_dst / _ML_UNREAL_TOML_NAME)
-        print("[machine-local] installed unreal.toml baseline (schema-only; add values to unreal.local.toml)")
+        _unreal_example = ml_templates / f"{_ML_UNREAL_TOML_NAME}.example"
+        if _unreal_example.is_file():
+            shutil.copyfile(_unreal_example, ml_dst / _ML_UNREAL_TOML_NAME)
+            print("[machine-local] installed unreal.toml baseline (schema-only; add values to unreal.local.toml)")
+        else:
+            print(f"[machine-local] NOTICE: {_unreal_example} absent — unreal.toml baseline not seeded")
 
     # --- Step 2c: seed live registry.toml on first install ---
     if not check_only and not (ml_dst / _ML_REGISTRY_TOML_NAME).is_file():
-        shutil.copyfile(ml_templates / f"{_ML_REGISTRY_TOML_NAME}.example", ml_dst / _ML_REGISTRY_TOML_NAME)
-        print("[machine-local] seeded live registry.toml from example")
+        _registry_example = ml_templates / f"{_ML_REGISTRY_TOML_NAME}.example"
+        if _registry_example.is_file():
+            shutil.copyfile(_registry_example, ml_dst / _ML_REGISTRY_TOML_NAME)
+            print("[machine-local] seeded live registry.toml from example")
+        else:
+            print(f"[machine-local] NOTICE: {_registry_example} absent — live registry.toml not seeded")
 
     # --- Step 2c-notice: cockpit emit identity keys ---
     if (ml_dst / _ML_REGISTRY_TOML_NAME).is_file():

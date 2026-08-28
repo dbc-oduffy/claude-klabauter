@@ -862,6 +862,62 @@ def require_colocated_engine_on_path(script_file: str) -> str:
     return root
 
 
+_ENGINE_SPLIT_ANNOUNCED = False
+
+
+def _announce_engine_cli_split(dispatch_root: str) -> None:
+    """Say once, on stderr, when the engine that will execute is not the tree
+    the CLI was read from.
+
+    This divergence is ORDINARY and this function does not treat it as a
+    defect: `require_dispatch_engine_on_path`'s own docstring records that on a
+    conformant box with both env vars unset the two ladders return different
+    roots by design -- dispatch reaches the published mirror, the locator axis
+    reaches the live working tree. Nothing here refuses, retries, or repoints.
+
+    It exists because the SILENCE is expensive in one specific way. When the
+    mirror lags, a fix committed to the live tree is inert through every
+    `coordinator/bin` CLI, and the failure that produces is indistinguishable
+    from the fix being wrong. Worse, the obvious diagnostic confirms the wrong
+    answer: the CLI-root resolvers all report the live working tree, truthfully,
+    about the CLI -- so an operator asking "which tree am I running" is told the
+    one that is not deciding. Measured cost, 2026-08-28: `/handoff` stayed
+    broken through this seam after its repair had landed, three runs, and two
+    sessions read it as a bad fix before anyone looked at which `apply.py` was
+    actually loaded.
+
+    Negative-spec: not a warning, not a gate, never raised -- the
+    `ProvenanceDivergenceError` below is a DIFFERENT divergence (coordinator_core
+    already bound from somewhere else, which IS a defect). Emitted at most once
+    per process, and never when the two roots agree, so a single-tree box sees
+    nothing. Any failure to emit is swallowed: a broken stderr must not take a
+    dispatch down.
+    """
+    global _ENGINE_SPLIT_ANNOUNCED
+    if _ENGINE_SPLIT_ANNOUNCED:
+        return
+    _ENGINE_SPLIT_ANNOUNCED = True
+    try:
+        cli_root = resolve_engine_root(__file__)
+        if not cli_root or not dispatch_root:
+            return
+        same = os.path.normcase(os.path.abspath(cli_root)) == os.path.normcase(
+            os.path.abspath(dispatch_root)
+        )
+        if same:
+            return
+        # Plain-quoted, never `!r`, for the same reason the divergence error
+        # below gives: on Windows `repr()` doubles every backslash, so the path
+        # an operator would paste back is not the path they were shown.
+        sys.stderr.write(
+            "engine split: CLI from '" + cli_root + "', engine from '"
+            + dispatch_root + "' -- a fix in the CLI tree does not run "
+            "until it is published\n"
+        )
+    except Exception:
+        return
+
+
 def require_dispatch_engine_on_path() -> str:
     """Resolve the DISPATCH engine root and put it on ``sys.path``, fail-loud.
 
@@ -953,6 +1009,7 @@ def require_dispatch_engine_on_path() -> str:
             f"'{report.engine_root}'. Fix: call this before any earlier "
             "module-level coordinator_core-binding import."
         )
+    _announce_engine_cli_split(root)
     return root
 
 

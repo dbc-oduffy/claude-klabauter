@@ -3568,9 +3568,13 @@ def _run_probe_invoke_latency(claude_klabauter_root: Path | None) -> _ProbeResul
                 detail=(
                     f"invoke round-trip did not complete within {timeout_ms:.0f} ms — "
                     f"exceeds the {_INVOKE_LATENCY_BUDGET_MS} ms process-time budget. A "
-                    "timeout on this bounded measurement IS the failure being detected "
-                    "(the invoke path is hanging, e.g. a bash-fallback subprocess with "
-                    "its own 5 s timeout)."
+                    "timeout on this bounded measurement IS the failure being detected, "
+                    "but this probe cannot tell from here whether the hang is in the "
+                    "measured invoke round-trip itself (e.g. a bash-fallback subprocess "
+                    "with its own 5 s timeout) or in the measurement primitive before it "
+                    "ever spawned a process (e.g. blocked acquiring the Windows job-object "
+                    "handle) — result_box carries no partial state to distinguish the two, "
+                    "so both are reported identically as DEGRADED."
                 ),
                 remediation=(
                     "Ensure the claude-klabauter-live-root pointer is present (see claude-klabauter.root.pointer "

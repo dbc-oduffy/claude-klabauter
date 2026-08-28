@@ -551,6 +551,29 @@ class TestQuestionTheSinkCannotAnswerSentinel:
     question it asks that the op-census sink cannot answer -- making disposition
     (RETAINED, and why) machine-checkable rather than a claim nobody has to prove."""
 
+    def test_implemented_ids_are_a_subset_of_actual_probe_functions(self) -> None:
+        """_IMPLEMENTED_IDS's function names must all exist as real `_run_probe_*`
+        functions on the loaded module.
+
+        This does not (and cannot, without inventing a derivable "retained"
+        category — see state/debt-backlog/2026-08-28-the-origin-guard-stops-at-
+        the-benchmarks-e72083a938e5.yaml) assert the dict is exhaustive over the
+        probe population. It only catches the cheap, mechanical failure: a
+        function named in the dict gets renamed or deleted and the parametrized
+        test below silently stops covering anything (an AttributeError inside a
+        fixture setup, not a red assertion on the sentinel itself).
+        """
+        mod = _require_module()
+
+        actual_probe_fns = {
+            name for name in dir(mod) if name.startswith("_run_probe_")
+        }
+        missing = set(_IMPLEMENTED_IDS.values()) - actual_probe_fns
+        assert not missing, (
+            f"_IMPLEMENTED_IDS names function(s) no longer present on the module: "
+            f"{sorted(missing)!r} — renamed or deleted without updating the dict"
+        )
+
     @pytest.mark.parametrize("probe_id,fn_name", sorted(_IMPLEMENTED_IDS.items()))
     def test_retained_probe_carries_sentinel_heading(
         self, probe_id: str, fn_name: str
@@ -572,6 +595,17 @@ class TestQuestionTheSinkCannotAnswerSentinel:
         )
 
         # The prose following the heading must be non-trivial, not a bare label.
+        #
+        # Ceiling, stated honestly: this is a length floor only (> 40 chars),
+        # not semantic enforcement. It blocks a bare label following the
+        # heading, but does not check the prose is actually phrased as a
+        # question, names a concrete reason the sink cannot answer it, or
+        # differs from the probe's own one-line summary — a future edit could
+        # satisfy this assertion with restated-behavior filler padded past the
+        # floor. Reviewed 2026-08-28 (coordinator:code-reviewer,
+        # coordinatorcode-reviewer.a293fb187d8013989): all three current
+        # probes' prose is genuine, but that was confirmed by reading, not by
+        # this test.
         after = doc.split(_SENTINEL_HEADING, 1)[1]
         assert len(after.strip()) > 40, (
             f"{fn_name} ({probe_id}): the sentinel heading must be followed by an "

@@ -3442,14 +3442,13 @@ def check_destructive_rm(
                         "Before overriding, re-derive what would actually be "
                         "lost (do not trust a remembered or narrated state):\n"
                         '  git -C "%s" status --porcelain -- "%s"\n\n'
-                        "To preserve the work first, stash it (includes "
-                        "untracked; restore later with stash pop):\n"
-                        '  git -C "%s" stash push -u -- "%s"   '
-                        '# -u includes untracked; restore later: git -C '
-                        '"%s" stash pop\n\n'
+                        "To preserve the work first, COPY it aside — never "
+                        "stash on this tree, which a dozen sessions share "
+                        "(`stash@{0}` is whoever stashed last, not you):\n"
+                        '  cp -r -- "%s" "$TMPDIR/preserved-$(basename "%s")"\n\n'
                         "Reserve irreversible deletion for genuinely "
                         "disposable, self-authored, uncontested paths."
-                        % (tgt, disp, more, root, tgt_abs, root, tgt_abs, root)
+                        % (tgt, disp, more, root, tgt_abs, tgt_abs, tgt_abs)
                     )
 
     # BX-13: a `sh -c '...'`/`bash -c "..."` (etc.) wrapper's quoted argument

@@ -124,11 +124,26 @@ _FIXED_MEMBERS: tuple[tuple[str, str, str, str, bool], ...] = (
         True,
     ),
     (
-        "coordinator-whoami/",
+        # NOT REQUIRED: the package is RETIRED and nothing in the install chain
+        # creates it. `scripts/setup.py`'s own module docstring states there is
+        # no `coordinator_whoami` provisioning step and that its absence is
+        # "deliberately absent, not lost". Requiring it made every clean install
+        # end on a FAIL for a directory we removed on purpose, printed directly
+        # above "setup: complete" — a mixed signal that left a first-time
+        # installer unable to tell whether the install had worked
+        # (klabauter#1, macOS 15.5).
+        #
+        # Demoted rather than deleted: the citation below is DoE's inventory
+        # spec, and if §4e still names this member then their spec and our
+        # retirement disagree. Deleting the row here would hide that
+        # disagreement instead of surfacing it. Memo'd to DoE; delete the row
+        # once §4e drops it.
+        "coordinator-whoami/ (RETIRED — no provisioning step creates it)",
         "coordinator-whoami",
         "dir",
-        "DoE machine-local-registry.md §4e settings-home inventory",
-        True,
+        "DoE machine-local-registry.md §4e settings-home inventory "
+        "(retired claude-klabauter-side; see scripts/setup.py module docstring)",
+        False,
     ),
     (
         ".coordinator-venv/ (required only while an interpreter pin names it)",

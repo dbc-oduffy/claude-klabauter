@@ -1,8 +1,10 @@
 """
 bin/shell-init-guard.py — pure stdout emitter for the interactive-shell resource-cap guard.
 
-Purpose: Prints two bash guard lines (`ulimit -S -f <blocks>` + `shopt -s failglob`) that
-the calling shell evaluates directly. Invoked from the ~/.bashrc eval seam (DoE-owned):
+Purpose: Prints two POSIX-sh guard lines (`ulimit -S -f <blocks>` + a `command -v`-guarded
+`shopt -s failglob`) that the calling shell evaluates directly. SHELL-AGNOSTIC, not bash-only:
+the seam wires this eval into zsh rc files too, and `shopt` is a bash builtin — see
+`_FAILGLOB_LINE`. Invoked from the rc eval seam (DoE-owned):
 
     eval "$(python3 <path>/bin/shell-init-guard.py 2>/dev/null)"
 
@@ -44,6 +46,33 @@ import sys
 _DEFAULT_CAP_GIB = 8
 _BLOCKS_PER_GIB = 1048576
 _DEFAULT_CAP_BLOCKS = _DEFAULT_CAP_GIB * _BLOCKS_PER_GIB
+
+_FAILGLOB_LINE = "if command -v shopt >/dev/null 2>&1; then shopt -s failglob; fi"
+"""The failglob guard line, emitted for EVERY shell and therefore guarded.
+
+`shopt` is a bash builtin. This script's output is eval'd by whichever rc file
+the install seam wired it into, and on macOS that is `~/.zshrc` by default --
+where a bare `shopt -s failglob` printed `(eval):2: command not found: shopt`
+on every single new interactive shell (klabauter#1, reported from a clean
+macOS 15.5 install). Noise on every shell start, on the fleet's most common
+desktop platform.
+
+Guarded rather than shell-branched because this script does not know its
+target shell: `install-shell-init-guard-seam` wires the same `eval` into
+several rc files, so the emitter has no reliable signal to branch on and a
+guess would be wrong for whichever file it guessed against. `command -v` is
+POSIX and works in both shells.
+
+Emitting NOTHING for zsh would also have been correct on intent -- zsh errors
+on a failed glob by default, so the behaviour this line buys in bash is
+already zsh's default (the reporter's own observation). The guard form is
+preferred anyway: it states the intent in one place for every shell, rather
+than encoding "zsh already does this" as an absence that a later reader has
+to rediscover.
+
+Defined once because the same line is emitted from three sites (main()'s
+normal path, its inner except, and __main__'s last-resort fallback); a
+literal at each was three chances to fix two of them."""
 _ENV_VAR = "COORDINATOR_OVERRIDE_FSIZE_CAP"
 
 
@@ -98,7 +127,7 @@ def main() -> int:
 
     try:
         print(ulimit_line)
-        print("shopt -s failglob")
+        print(_FAILGLOB_LINE)
         if stderr_comment:
             print(stderr_comment, file=sys.stderr)
     except Exception:
@@ -118,7 +147,7 @@ if __name__ == "__main__":
     except Exception:
         try:
             print(f"ulimit -S -f {_DEFAULT_CAP_BLOCKS}")
-            print("shopt -s failglob")
+            print(_FAILGLOB_LINE)
         except Exception:
             # Same last-resort case as main()'s inner guard: if even this
             # fallback print() fails, there is nowhere left to report it --
