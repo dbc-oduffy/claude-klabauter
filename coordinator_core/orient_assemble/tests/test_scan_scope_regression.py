@@ -38,6 +38,7 @@ Negative-spec:
 from __future__ import annotations
 
 import inspect
+import sys
 from pathlib import Path
 from unittest import mock
 
@@ -254,6 +255,109 @@ def test_collect_day_cadence_threads_repo_root_into_reaper(foreign_repo):
         rhr.collect("day", repo_root=str(foreign_repo))
 
     survey_mock.assert_called_once_with(str(foreign_repo))
+
+
+# ---------------------------------------------------------------------------
+# _read_ready / _read_awaiting_gate (readers_handoff_triage) — C7 correction
+# (2026-08-29): the `ready`/`awaiting-gate` LISTING QUERIES themselves must
+# resolve against the passed `repo_root`, not just the post-hoc live-ledger
+# filtering layered over `_read_ready`'s output.
+#
+# `_cmd_ready`/`_cmd_awaiting_gate` (not `records_query.query_records`) are
+# stubbed here, matching `test_collect_threads_repo_root_into_orphaned_
+# plans`'s own established pattern above and its documented reason: bare
+# `import records_query` inside those two `_cmd_*` functions is a
+# pre-existing environment gap in THIS suite's own sys.path (unrelated to
+# this correction's scan-scope surface — reproduced by running
+# `test_narration_and_constructor_discipline.py` in isolation), so this
+# suite asserts at the `_cmd_*`-Namespace seam: that `repo_root` actually
+# reaches the Namespace `_cmd_ready`/`_cmd_awaiting_gate` read `args.
+# repo_root` off (workday-start-handoff-triage.py's own convention), the
+# exact echo-field gap this correction closes (C7 gave `query_records` an
+# `explicit_root` parameter nobody forwarded into).
+# ---------------------------------------------------------------------------
+
+
+def test_read_ready_forwards_repo_root_onto_the_cmd_namespace(foreign_repo):
+    with mock.patch.object(rht, "_cmd_ready", return_value=0) as cmd_mock:
+        rht._read_ready(repo_root=foreign_repo)
+
+    called_args = cmd_mock.call_args.args[0]
+    assert called_args.repo_root == str(foreign_repo)
+
+
+def test_read_ready_namespace_repo_root_is_none_when_none_given():
+    with mock.patch.object(rht, "_cmd_ready", return_value=0) as cmd_mock:
+        rht._read_ready()
+
+    called_args = cmd_mock.call_args.args[0]
+    assert called_args.repo_root is None
+
+
+def test_read_awaiting_gate_forwards_repo_root_onto_the_cmd_namespace(foreign_repo):
+    with mock.patch.object(rht, "_cmd_awaiting_gate", return_value=0) as cmd_mock:
+        rht._read_awaiting_gate(repo_root=foreign_repo)
+
+    called_args = cmd_mock.call_args.args[0]
+    assert called_args.repo_root == str(foreign_repo)
+
+
+def test_read_awaiting_gate_namespace_repo_root_is_none_when_none_given():
+    with mock.patch.object(rht, "_cmd_awaiting_gate", return_value=0) as cmd_mock:
+        rht._read_awaiting_gate()
+
+    called_args = cmd_mock.call_args.args[0]
+    assert called_args.repo_root is None
+
+
+def test_collect_threads_repo_root_into_ready_and_awaiting_gate(foreign_repo):
+    """The `collect()` seam the assembler actually calls: proves
+    `repo_root` survives the `collect()` -> `_read_ready`/`_read_awaiting_
+    gate` handoff — the exact echo-field gap this correction closes."""
+    with mock.patch.object(rht, "_cmd_ready", return_value=0) as ready_mock, mock.patch.object(
+        rht, "_cmd_awaiting_gate", return_value=0
+    ) as gate_mock:
+        rht.collect("day", repo_root=str(foreign_repo))
+
+    assert ready_mock.call_args.args[0].repo_root == str(foreign_repo)
+    assert gate_mock.call_args.args[0].repo_root == str(foreign_repo)
+
+
+def test_cmd_ready_forwards_namespace_repo_root_to_query_records_as_explicit_root(foreign_repo):
+    """One level lower than the Namespace-seam tests above: proves
+    `_cmd_ready` itself (workday-start-handoff-triage.py) reads `args.
+    repo_root` and forwards it to `query_records(..., explicit_root=...)` —
+    the other half of the echo-field gap. `_cmd_ready` imports `query_
+    records` via a DEFERRED `from records_query import query_records`
+    inside its own body (not a module-level attribute on the loaded
+    `_handoff_triage` module), so a fake `records_query` module is injected
+    into `sys.modules` for the duration of the call — the only seam that
+    reaches a deferred same-call import — rather than patching an attribute
+    that does not exist until the function actually runs. Sidesteps this
+    environment's bare `import records_query` gap (see this section's own
+    header note) entirely, since the deferred import consults `sys.modules`
+    first."""
+    import argparse
+
+    fake_module = mock.MagicMock()
+    fake_module.query_records = mock.MagicMock(return_value="")
+    with mock.patch.dict(sys.modules, {"records_query": fake_module}):
+        rht._cmd_ready(argparse.Namespace(repo_root=str(foreign_repo)))
+
+    assert fake_module.query_records.call_args.kwargs.get("explicit_root") == str(foreign_repo)
+
+
+def test_cmd_awaiting_gate_forwards_namespace_repo_root_to_query_records_as_explicit_root(foreign_repo):
+    import argparse
+
+    fake_module = mock.MagicMock()
+    fake_module.query_records = mock.MagicMock(return_value="")
+    with mock.patch.dict(sys.modules, {"records_query": fake_module}):
+        rht._cmd_awaiting_gate(argparse.Namespace(repo_root=str(foreign_repo)))
+
+    assert fake_module.query_records.call_count == 2
+    for call in fake_module.query_records.call_args_list:
+        assert call.kwargs.get("explicit_root") == str(foreign_repo)
 
 
 # ---------------------------------------------------------------------------

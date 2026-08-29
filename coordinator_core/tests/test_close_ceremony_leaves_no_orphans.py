@@ -3,17 +3,28 @@ coordinator_core.tests.test_close_ceremony_leaves_no_orphans — C6.
 
 Purpose: prove the composed AC7 claim end to end for the one reachable close
 ceremony (`/quick-wrap`, delivered by C5): a session that produced artifacts
-through the two now-declaring producers -- `receipt_emit.py` (C2) and
-`review_trail_write.py` (C3) -- leaves ZERO untracked paths under its own
-artifact directories after `quick_wrap_assemble.brief()` runs.
+through the declaring producer -- `receipt_emit.py` (C2) -- leaves ZERO
+untracked paths under its own artifact directories after
+`quick_wrap_assemble.brief()` runs.
+
+NARROWED 2026-08-29 (DR-374 follow-on, C3 of
+`2026-08-29-the-gravestoned-review-trail-surface-is-deleted.md`): this test
+previously exercised a second producer, `review_trail_write.py` (C3 of the
+2026-08-20 close-ceremony plan), writing a review-trail entry alongside the
+receipt. That writer is gravestoned and deleted; DR-372 replaced the
+per-commit review trail it fed with a binary review receipt, and the
+reviewed-set store's two live credit sources
+(`coordinator_core/ops/gate_dimension_review.py::_review_dimension_check`,
+`coordinator_core/ops/review_coverage_core.py:126`) do not depend on this
+producer. The composed AC7 claim now covers the one producer that remains
+reachable through this close ceremony.
 
 No earlier chunk's test surface proves this composed claim. C5's own suite
 proves quick-wrap invokes the commit op, non-blocking on failure (AC5); C4's
 proves peer isolation and the degraded/empty/failure cases (AC6). Neither
-mints a real session, writes real declared artifacts through the two C2/C3
-producers, and then runs the real close ceremony end to end. This module is
-that composition -- the only one in the plan that exercises C2 through C5
-together.
+mints a real session, writes a real declared artifact through the C2
+producer, and then runs the real close ceremony end to end. This module is
+that composition.
 
 NARROWED 2026-08-20 (see the C6 dispatch brief): AC7 originally named "the two
 reachable close ceremonies" (quick-wrap + workstream-complete). Only
@@ -27,8 +38,7 @@ This is a git-spawning integration test: `compute_offer` (reached via
 `quick_wrap_assemble.brief()` -> `commit_session_offer_async` ->
 `safe_commit_offer.compute_offer`) shells out to `git diff`/`git ls-files` for
 its dirty scan, and the fixture itself needs a real `git init` repo (mirrors
-`coordinator_core/ops/test_research_dir_restructure.py` and
-`coordinator_core/ops/tests/test_review_trail_write_declares.py`'s identical
+`coordinator_core/ops/test_research_dir_restructure.py`'s identical
 git-repo fixture shape). Marked `spawns_process` + `cadence` per the repo's
 two-file marker-registration requirement (both markers are already registered
 in `pyproject.toml` and `coordinator_core/pytest.ini`) -- an unmarked
@@ -55,7 +65,6 @@ import pytest
 from coordinator_core import quick_wrap_assemble as qwa
 from coordinator_core.ops.ceremony import receipt_emit
 from coordinator_core.ops.ceremony.pipeline_context import PipelineContext
-from coordinator_core.ops.review_trail_write import write_review_trail_entry
 from coordinator_core.session import core as session_core
 
 # Real `git init` fixture + real `git diff`/`git status` scans reached through
@@ -65,9 +74,8 @@ pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 
 def _make_repo(tmp_path: Path) -> Path:
-    """A real, empty git repo with one initial commit (mirrors
-    test_review_trail_write_declares.py's `git_repo` fixture, plus the
-    initial commit `test_safe_commit_offer.py::_make_repo` also carries --
+    """A real, empty git repo with one initial commit (plus the initial
+    commit `test_safe_commit_offer.py::_make_repo` also carries --
     `commit_session_offer_async`'s own commit path needs a resolvable HEAD)."""
     subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
     subprocess.run(
@@ -110,26 +118,9 @@ def test_quick_wrap_close_commits_declared_artifacts_leaving_no_orphans(
     )
     assert receipt_path.is_file()
 
-    # --- C3 producer: write a review-trail entry; self-declares via the same
-    # mechanism (review_trail_write.py's own contract). ---
-    trail_result = write_review_trail_entry(
-        sha_range="abc1234",
-        reviewer="waived",
-        scope="chain",
-        verdict="waived",
-        diff_loc=0,
-        scope_kind="plan",
-        session_id=sid,
-        caller_worktree=repo,
-    )
-    trail_path = Path(trail_result["out_path"])
-    assert trail_path.is_file()
-
-    # Sanity check on the fixture itself: before the ceremony runs, both
-    # artifact directories are genuinely dirty (untracked).
-    before = _untracked_under(repo, "state/ceremony") + _untracked_under(
-        repo, "state/review-trail"
-    )
+    # Sanity check on the fixture itself: before the ceremony runs, the
+    # artifact directory is genuinely dirty (untracked).
+    before = _untracked_under(repo, "state/ceremony")
     assert before, "fixture setup did not actually leave dirty declared artifacts"
 
     # --- Run the one reachable close ceremony (C5): /quick-wrap. ---
@@ -141,16 +132,13 @@ def test_quick_wrap_close_commits_declared_artifacts_leaving_no_orphans(
     ), envelope["gates"]["commit_outcome"]
 
     # --- AC7: zero untracked paths remain under this session's OWN artifact
-    # directories after the close ceremony ran. ---
-    after = _untracked_under(repo, "state/ceremony") + _untracked_under(
-        repo, "state/review-trail"
-    )
+    # directory after the close ceremony ran. ---
+    after = _untracked_under(repo, "state/ceremony")
     assert after == [], f"orphaned paths survived the close ceremony: {after!r}"
 
-    # The receipt and trail entry are genuinely committed, not merely absent
-    # from `git status` because they were deleted.
+    # The receipt is genuinely committed, not merely absent from `git status`
+    # because it was deleted.
     assert receipt_path.is_file()
-    assert trail_path.is_file()
     log = subprocess.run(
         ["git", "log", "--name-only", "--pretty=format:"],
         cwd=str(repo),
@@ -159,6 +147,4 @@ def test_quick_wrap_close_commits_declared_artifacts_leaving_no_orphans(
         check=True,
     ).stdout
     receipt_rel = str(receipt_path.relative_to(repo)).replace("\\", "/")
-    trail_rel = str(trail_path.relative_to(repo)).replace("\\", "/")
     assert receipt_rel in log, f"{receipt_rel!r} was never committed"
-    assert trail_rel in log, f"{trail_rel!r} was never committed"

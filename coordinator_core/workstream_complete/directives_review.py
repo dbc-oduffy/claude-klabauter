@@ -44,8 +44,6 @@ Consumes (orchestrates, reimplements none):
     coordinator/bin/fan-out-integrator.py
         -> d-freeze-and-dispatch-review-partition's post-reviewer
         integrator directives[].cli.
-    coordinator_core/ops/scan_unresolved_ubt_records.py
-        -> d-run-ubt-pending-check's directives[].cli.
     coordinator/bin/classify-dispatch-shape.py
         -> d-classify-dispatch-shape's directives[].cli.
 
@@ -166,7 +164,7 @@ def _directive(
 #: mapping directly — each takes its inputs as explicit typed parameters
 #: (`session_id`, `range_`, `slices`, `plan_file`, ...), resolved by the
 #: caller (`__init__.py`'s `build_directives`) from ITS OWN `decisions`
-#: keys (`review_partition`, `ubt_check`, `classify_dispatch_plan_file`).
+#: keys (`review_partition`, `classify_dispatch_plan_file`).
 #: Declared empty here — rather than omitted — so every `directives_*.py`
 #: sibling carries the same `FREE_VALUE_KEYS` contract point per AC3
 #: (docs/plans/2026-07-29-workstream-complete-the-envelope-names-t.md),
@@ -1672,28 +1670,6 @@ def _record_membership_shas(
             return None
         return raw & chain_planning_sha_set
     return raw & chain_code_sha_set
-
-
-# ---------------------------------------------------------------------------
-# d-run-ubt-pending-check (SKILL.md:564-566) — predicate + single CLI
-# call, applies-to-cwd shape.
-# ---------------------------------------------------------------------------
-
-_UBT_PENDING_CHECK_CLI = "scan_unresolved_ubt_records"
-
-
-def build_ubt_pending_check_directive(applies: bool, since_sha: str) -> Optional[dict[str, Any]]:
-    """No-op for non-UE repos — `applies` is the caller-resolved
-    applies-to-cwd predicate (whether
-    `coordinator_core/ops/scan_unresolved_ubt_records.py` is reachable
-    for this repo), mirroring every other applies-to-cwd conditional in
-    this module family (`build_ubt_pending_check_directive` does not
-    probe the filesystem itself). `since_sha` is the already-resolved
-    `git merge-base origin/main HEAD` (or `HEAD~1` fallback) SHA — this
-    function performs no git resolution of its own."""
-    if not applies:
-        return None
-    return _directive("d-run-ubt-pending-check", _UBT_PENDING_CHECK_CLI, ["--mode", "pending", "--since", since_sha])
 
 
 # ---------------------------------------------------------------------------

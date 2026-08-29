@@ -75,6 +75,45 @@ log = logging.getLogger(__name__)
 GitRunner = Callable[[List[str], Optional[str]], Tuple[int, str, str]]
 
 
+def default_git_runner(args: List[str], cwd: Optional[str]) -> Tuple[int, str, str]:
+    """Never-raises git-invocation helper conforming to `GitRunner`.
+
+    Moved verbatim (C2b, state/dispatch-briefs/2026-08-29-the-gravestoned-
+    review-trail-surface-is-deleted/C2b.md) from
+    `coordinator_core.ops.review_trail_write._git_runner` — that module is
+    gravestoned per DR-374, but this module already DEFINES the `GitRunner`
+    type this helper conforms to, so its true home was here, not a new
+    single-function module.
+
+    ``args`` already includes the leading ``"git"`` token (the contract this
+    module's own callers invoke their injected ``run`` with) — this helper
+    does not prepend it again.
+
+    Windows-safe: suppresses the console window a bare subprocess.run would
+    otherwise flash on Windows (CREATE_NO_WINDOW) AND pins stdin=DEVNULL —
+    CREATE_NO_WINDOW alone hangs on Windows when stdin is inherited/invalid
+    (see coverage.py._run's pairing), matching this module's other subprocess
+    call sites.
+    """
+    try:
+        proc = subprocess.run(
+            args,
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            # stdin=DEVNULL paired with CREATE_NO_WINDOW, matching this
+            # module's other subprocess call sites (`_git_run`) — CREATE_NO_WINDOW
+            # alone hangs on Windows when stdin is inherited/invalid; this is a
+            # LIVE git-invocation path, so it must not be left half-fixed.
+            stdin=subprocess.DEVNULL,
+            **no_console_creationflags(),
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return 2, "", str(exc)
+    return proc.returncode, proc.stdout, proc.stderr
+
+
 class GitLogFailed(RuntimeError):
     """Raised by `trailer_foreign_shas` when its backing `git log` subprocess
     fails (non-zero returncode).

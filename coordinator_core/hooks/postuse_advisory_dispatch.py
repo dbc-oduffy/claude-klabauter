@@ -443,9 +443,10 @@ def _check_context_pressure_sync(session_id: str, transcript_path: str) -> str:
     # --- compaction_warnings variant selector (fleet-wins key via resolve_mode).
     # SELECTOR ONLY — never an off switch. No value of this key returns "" here
     # where the function would otherwise return advisory text; it only picks
-    # which non-empty variant fires (see mode_resolution module docstring and
-    # this function's own autonomous_run branches below, which already
-    # implement the two variants this key selects between).
+    # which non-empty variant fires (see mode_resolution module docstring).
+    # Scope, since PM ruling 2026-08-29: this key governs the 47 band ONLY. The
+    # 40 band is informational for every session regardless, so there is no
+    # variant left there to select — see that branch's own comment.
     compaction_warnings_variant = resolve_mode("compaction_warnings", session_id)
 
     reading = read_usage(session_id, now=time.time())
@@ -523,10 +524,19 @@ def _check_context_pressure_sync(session_id: str, transcript_path: str) -> str:
         # the moment a long run is most likely to take it.
         # (Reported by doe-claude-41, observed firing twice in one session.)
         if autonomous_run or compaction_warnings_variant == "informational":
+            # The mode clause is chosen by WHICH side selected this variant, not
+            # by the variant itself. `autonomous_run` is the session's own
+            # sentinel, so naming it is a fact about this session. The fleet key
+            # is fleet-wins with no session pair, so it selects this text for
+            # sessions that are NOT autonomous -- opening those with "Autonomous
+            # run:" would assert something about the reader that is not true.
+            mode_clause = (
+                "Autonomous run:" if autonomous_run else "Informational mode:"
+            )
             return (
                 f"CONTEXT PRESSURE — INFORMATIONAL: ~{display_pct}% of window"
                 f" used{age_note}, measured from the harness's own context_window"
-                f" block. Autonomous run: compaction from here is involuntary and"
+                f" block. {mode_clause} compaction from here is involuntary and"
                 f" lossy, so state that is not on disk is state that is lost."
                 f" Commit and checkpoint now; continue the run."
             )
@@ -541,21 +551,24 @@ def _check_context_pressure_sync(session_id: str, transcript_path: str) -> str:
     if display_pct >= 40 and transcript_hash not in cp_state.get("advisory_fired", []):
         _mark_advisory_fired(cp_state, transcript_hash, critical=False)
         _save_advisory_state(tmpdir, session_id, cp_state)
-        base = (
-            f"CONTEXT PRESSURE — ADVISORY: ~{display_pct}% of window used{age_note},"
-            f" measured from the harness's own context_window block."
-            f" If the current work cannot close within about another 5% of window,"
-            f" start moving toward /handoff. If it can, carry on — the hard call"
-            f" comes at 47%."
+        # PM ruling 2026-08-29: 40 is INFORMATIONAL, 47 is STANDARD. The two
+        # bands were never the same kind of signal, and the mode key was doing
+        # the wrong job by flipping both together. 40 is an orientation reading
+        # -- "you are here, checkpoint so this is resumable" -- and there is no
+        # posture, autonomous or not, in which the right response to it is to
+        # stop and hand off; the earlier wording recommended exactly that. 47
+        # keeps the hard call above, because that is the last band with runway
+        # to compose a handoff.
+        #
+        # `compaction_warnings` and `autonomous_run` are deliberately NOT read
+        # in this branch: with 40 informational for everyone there is nothing
+        # left here for either to select between. The key still governs 47.
+        return (
+            f"CONTEXT PRESSURE — INFORMATIONAL: ~{display_pct}% of window"
+            f" used{age_note}, measured from the harness's own context_window"
+            f" block. Checkpoint state to disk at the next natural boundary so"
+            f" the run is resumable. The hard call comes at 47%."
         )
-        if autonomous_run or compaction_warnings_variant == "informational":
-            return (
-                f"CONTEXT PRESSURE — INFORMATIONAL: ~{display_pct}% of window"
-                f" used{age_note}, measured from the harness's own context_window"
-                f" block. Autonomous run: checkpoint state to disk at the next"
-                f" natural boundary so the run is resumable."
-            )
-        return base
 
     _save_advisory_state(tmpdir, session_id, cp_state)
     return ""

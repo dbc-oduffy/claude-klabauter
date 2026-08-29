@@ -108,7 +108,6 @@ ASSEMBLER_DISPATCHABLE: "types.MappingProxyType[str, frozenset[str]]" = types.Ma
         "review-brightline-gate",
         "freeze-review-diff",
         "fan-out-integrator",
-        "scan_unresolved_ubt_records",
         "classify-dispatch-shape",
     }),
     "workweek_complete": frozenset({

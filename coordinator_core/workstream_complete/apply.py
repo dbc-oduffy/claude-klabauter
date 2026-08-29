@@ -186,24 +186,6 @@ own location (`Path(__file__)`), and invoked IN-PROCESS via its own
 unrecognized `cli` raises before that directive dispatches (the other
 ready directives this pass are unaffected — see `_execute_directives`).
 
-Known dispatch-table gap (documented, not a defect this chunk introduces):
-`scan_unresolved_ubt_records.py` (`d-run-ubt-pending-check`'s cli, per
-`directives_review.py`) has no `coordinator/bin/` CLI wrapper on disk —
-the only real module is `coordinator_core/ops/scan_unresolved_ubt_records.
-py`, which exposes a bare `scan_unresolved_ubt_records(caller_worktree:
-Path) -> list[str]` function, not an argv-taking `main`. `__init__.py`'s
-own module docstring already names this exact class of gap as legitimate,
-expected residual (several `CONSUMES_MANIFEST` members "genuinely cannot
-fire under the sweep"). This module does not special-case it: the entry
-still occupies `_CLI_DISPATCH` (so an unrecognized-cli check never fires
-for it) and resolves to a literal, non-existent `coordinator/bin/
-scan_unresolved_ubt_records.py` path; if `d-run-ubt-pending-check` is ever
- ready and dispatched, `_load_cli_module` raises `FileNotFoundError`,
-which `_execute_directives` catches and records in `report["failed"]` —
-the same per-directive-halt path any other dispatch failure takes, never a
-whole-run crash. Building a real `coordinator/bin/` wrapper for this
-script is out of this chunk's file scope (apply.py only).
-
 Negative-spec:
     - Do NOT add a dispatch entry resolved via `getattr`/`importlib.
       import_module`/any brief-derived string — every `_CLI_DISPATCH` key
@@ -378,9 +360,10 @@ def _load_cli_module(cli_name: str) -> ModuleType:
     """Loads (once, cached) the script named by `cli_name` via a fixed
     literal path — never a brief-derived import target. Never spawns a
     subprocess. Raises whatever `importlib`/the filesystem raises (e.g.
-    `FileNotFoundError` for the documented `scan_unresolved_ubt_records.py`
-    gap) — the caller (`_dispatch_directive`, via `_execute_directives`)
-    catches that as an ordinary per-directive dispatch failure.
+    `FileNotFoundError` for a `CONSUMES_MANIFEST` member with no real
+    `coordinator/bin/` wrapper on disk) — the caller (`_dispatch_directive`,
+    via `_execute_directives`) catches that as an ordinary per-directive
+    dispatch failure.
     `_resolve_cli` (admission) runs BEFORE the cache check (F6, cold
     review 2026-08-19) so the control is a per-dispatch check, never
     merely a first-load one.
@@ -846,7 +829,8 @@ def _execute_directives(
     disposition values whose OWN `resolves` list names that directive —
     see `_build_blocked_remedy_entry`. `report["failed"]`
     names directive ids whose dispatch either raised (including the
-    documented `scan_unresolved_ubt_records.py` `FileNotFoundError` gap) OR
+    documented `FileNotFoundError` gap for a `CONSUMES_MANIFEST` member
+    with no real `coordinator/bin/` wrapper on disk) OR
     returned a non-zero `exit_code` — a directive never joins `landed`
     merely because dispatch didn't raise. `report["degraded"]` is `failed`'s
     best-effort sibling (docs/plans/2026-08-08-a-best-effort-directive-

@@ -906,7 +906,16 @@ class TestAutoCommitSession:
         ).stdout
         for p in paths:
             assert p in full_message  # every rescued path IS in the body
-        assert "safety net" in full_message.lower()
+        # STALE ASSERTION CORRECTED 2026-08-29. This asserted the body carried
+        # "safety net" framing. That framing was deliberately retired -- the
+        # module docstring records it as "describing a shape nothing
+        # implements", and `TestDefaultGroupsFraming` below now asserts the
+        # opposite property (the body says HOW it was grouped and explicitly
+        # disclaims WHY). The test was left asserting the retired wording, so
+        # it has been failing at HEAD independently of any change here; it is
+        # repointed at the framing that actually ships rather than deleted,
+        # because "the body carries framing at all" is still worth guarding.
+        assert "mechanically grouped" in full_message.lower()
 
     def test_nothing_to_commit_is_a_valid_noop(self, tmp_path):
         repo = _make_repo(tmp_path)
@@ -2218,3 +2227,124 @@ class TestFullOwnershipMap:
             "liveness resolved %d times for %d peer paths -- it must be "
             "resolved once and answered from the set" % (len(calls), len(peer_map))
         )
+
+
+class TestReconciliation:
+    """C1/C2/C3 (docs/plans/2026-08-29-the-ledger-stops-asserting-what-it-did-
+    not-check.md) — the write-only ledger stops asserting what it did not
+    check.
+
+    The three cases are the two drift directions plus the honesty flag, and
+    they are separate tests deliberately: the drifts have different causes
+    (an unrecorded write vs an unobserved deletion) and a single fixture
+    exercising both would let one regress while the other kept the test
+    green.
+
+    Fixture shape is the one the 2026-08-29 spike used live
+    (docs/research/spike-verdicts/2026-08-29-bash-writes-reach-the-touch-
+    ledger.md): a claimed path, a claimed-then-deleted path, and a dirty path
+    nothing ever claimed. The spike's own probe scripts were throwaway and
+    were deleted — this class is the durable guard, which is the plan's job
+    and never the spike's.
+    """
+
+    def test_a_path_nothing_claims_is_enumerated_not_merely_counted(self, tmp_path):
+        """The load-bearing property is ENUMERATION, not rendering.
+
+        doe-claude-em's SC-DR-022 half 1 permits an operator to adopt an
+        unclaimed path with `--include-orphans`, and the property that makes
+        that remedy safe is that the candidate paths are named BY THE ENGINE,
+        never assembled by the adopter. An aggregate count supplies no
+        candidate list, so the remedy would have no input. This is the
+        regression guard for that: the path must be a member, not a number.
+        """
+        repo = _make_repo(tmp_path)
+        core.init("mine", cwd=str(repo))
+        scope.touch("mine", "claimed.py", cwd=str(repo))
+        (repo / "claimed.py").write_text("mine")
+        # Written the way a shell heredoc writes: no claim is ever recorded.
+        (repo / "shell_written.py").write_text("nobody claimed me")
+
+        _residue, rec = safe_commit_offer._compute_residue("mine", [], str(repo))
+
+        assert rec["reconciled"] is True
+        assert "shell_written.py" in rec["unclaimed"]
+        # This session's OWN claimed-and-uncommitted work is not an adoption
+        # candidate — folding the two together is what would make the
+        # enumeration unsafe to hand to `--include-orphans`.
+        assert "claimed.py" not in rec["unclaimed"]
+
+    def test_a_claimed_path_deleted_from_disk_is_named_not_silently_counted(
+        self, tmp_path
+    ):
+        """The over-record direction, and the shape that produced the P1 row.
+
+        Observed live 2026-08-26: `ownership.mine: 1, degraded: false` for a
+        file that did not exist — a subagent wrote it (ledger recorded the
+        claim), then a later step consumed and deleted it (the ledger, being
+        write-only, never saw that). Reproduced here without the subagent.
+        """
+        repo = _make_repo(tmp_path)
+        core.init("mine", cwd=str(repo))
+        (repo / "transient.py").write_text("here for now")
+        scope.touch("mine", "transient.py", cwd=str(repo))
+        (repo / "transient.py").unlink()
+
+        _residue, rec = safe_commit_offer._compute_residue("mine", [], str(repo))
+
+        assert "transient.py" in rec["claimed_absent"]
+
+    def test_reconciled_is_a_did_the_check_run_flag_never_a_health_flag(
+        self, tmp_path
+    ):
+        """`reconciled` must stay orthogonal to whether anything was found.
+
+        A repo that closes queue entries by `git mv` leaves an unclaimed
+        dirty deletion at the source forever (doe-claude-em, 2026-08-29,
+        citing their SC-DR-021 d1), so a `reconciled` that meant "ledger and
+        tree agree" would read red in steady state — and a signal that is
+        always red is a signal nobody reads. It means only that the check
+        ran.
+
+        The negative half matters as much: with no worktree root there is
+        nothing to check against, and the answer must say UNCHECKED rather
+        than returning empty buckets that read as "nothing found".
+        """
+        repo = _make_repo(tmp_path)
+        core.init("mine", cwd=str(repo))
+        (repo / "transient.py").write_text("x")
+        scope.touch("mine", "transient.py", cwd=str(repo))
+        (repo / "transient.py").unlink()
+
+        _residue, found = safe_commit_offer._compute_residue("mine", [], str(repo))
+        assert found["reconciled"] is True
+        assert found["claimed_absent"]  # a finding does NOT flip the flag
+
+        _residue, unchecked = safe_commit_offer._compute_residue("mine", [], None)
+        assert unchecked["reconciled"] is False
+        assert unchecked["claimed_absent"] == []
+        assert unchecked["unclaimed"] == []
+
+    def test_degraded_and_reconciled_are_independent_signals(self, tmp_path):
+        """Guards the Anti-scope rule that these must not be fused.
+
+        `degraded` is `not CommitSet.complete` — a statement about the claim
+        ledger's own readability. It carries a second, load-bearing
+        consequence (when set, `ownership.peer` is emptied and every non-mine
+        path folds into `unattributed`, AC7), which is exactly why
+        reconciliation must not be folded into it: a stale-but-readable
+        ledger would then silently trigger that fold on a healthy walk.
+        """
+        repo = _make_repo(tmp_path)
+        core.init("mine", cwd=str(repo))
+        (repo / "transient.py").write_text("x")
+        scope.touch("mine", "transient.py", cwd=str(repo))
+        (repo / "transient.py").unlink()
+
+        offer = safe_commit_offer.compute_offer("mine", cwd=str(repo))
+        _residue, rec = safe_commit_offer._compute_residue("mine", [], str(repo))
+
+        # A complete walk over a ledger that disagrees with the tree.
+        assert offer["ownership"]["degraded"] is False
+        assert rec["reconciled"] is True
+        assert rec["claimed_absent"] == ["transient.py"]

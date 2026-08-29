@@ -563,3 +563,80 @@ class TestGateIsReachable:
         error = check_plan_tasks_grouping_approval(source)
         assert error is not None
         assert error['field'] == 'grouping_approvals.defer'
+
+
+
+class TestSpunOffGateIsBlockedOnTheFourthGroupingKey:
+    """DR-183 (2026-08-29) re-gates `spun_off`, reversing the 2026-08-05
+    five-exits relaxation. It cannot be enforced from this repo yet, and the
+    reason is structural rather than a matter of anyone getting round to it.
+
+    `spun_off` derives its own grouping (`_PLAN_TASKS_GROUPING_BY_DISPOSITION`),
+    but `grouping_approvals` declares only `do`/`defer`/`ruled_out` under
+    `additionalProperties: false`. Widening
+    `_PLAN_TASKS_PM_APPROVAL_GATED_DISPOSITIONS` today would reject every
+    governed plan carrying a `spun_off` row with NO author-side remedy:
+    approving the grouping is impossible, and authoring the block is itself a
+    schema violation.
+
+    The fix is a fourth key, and it cannot originate here. plan.schema.json is
+    vendored byte-for-byte from DoE-claude and
+    `TestDriftCheck::test_plan_schema_matches_doe_head_and_homes_grouping_approvals`
+    enforces that parity with no pin or tolerance escape. DoE authors the key
+    and bumps; claude-klabauter re-vendors via `bin/claude-klabauter-revendor-schema.py`; only then
+    does the GOVERNED gate widen.
+
+    SCOPE OF THAT WIDEN, decided 2026-08-29: governed only. The legacy per-row
+    leg (`_PLAN_TASKS_PM_APPROVAL_GATED_DISPOSITIONS`, read by
+    `_cf_plan_tasks_disposition_shape`) stays `{'backlogged', 'wont_do'}`,
+    though DoE's ask included it. Widening it retroactively invalidates 16
+    `spun_off` rows across 10 legacy plans, 7 of them live, written correctly
+    under the 2026-08-05 relaxation; the only repair is forging `pm_approved:
+    true` on rows nobody approved. The contract's own migration model already
+    settles this — a plan joins by acquiring the block, and "authoring the
+    block IS the migration event" — so every affected plan is pre-contract by
+    construction and DR-183 binds forward.
+
+    These two tests are the tripwire for that sequence. The first fails the
+    moment the key arrives, which is the signal to do the claude-klabauter half; the
+    second is the assertion that must be INVERTED, not deleted, when it does.
+    """
+
+    def test_the_fourth_grouping_key_has_not_arrived_yet(self):
+        """Fails (deliberately, loudly) once DoE lands the key and claude-klabauter
+        re-vendors — at which point DR-183's claude-klabauter half is unblocked and this
+        test's job is done. A green here means the widen is still blocked."""
+        import json
+        from pathlib import Path
+
+        schema_path = (
+            Path(__file__).resolve().parents[1] / 'schemas' / 'plan.schema.json'
+        )
+        blocks = json.loads(schema_path.read_text(encoding='utf-8'))[
+            'properties'
+        ]['grouping_approvals']
+
+        assert 'spun_off' not in blocks['properties'], (
+            "plan.schema.json now declares a spun_off grouping_approvals key -- "
+            "DR-183's claude-klabauter half is UNBLOCKED. Widen "
+            "_PLAN_TASKS_PM_APPROVAL_GATED_DISPOSITIONS to include 'spun_off', "
+            'invert the companion test below, and delete this one. Widen the '
+            'GOVERNED gate ONLY: _PLAN_TASKS_PM_APPROVAL_GATED_DISPOSITIONS '
+            "stays {'backlogged', 'wont_do'} so the 16 legacy spun_off rows "
+            'under docs/plans/ are not retroactively invalidated -- see this '
+            "class's docstring for why that is the contract's own migration "
+            'model rather than a carve-out.'
+        )
+
+    def test_a_governed_plan_with_a_spun_off_row_passes_ungated_today(self):
+        """Current, correct behaviour: `spun_off` is not PM-gated, so a governed
+        plan whose only closed row is `spun_off` passes with no spun_off
+        approval block. INVERT this when the widen lands; do not delete it."""
+        tasks = (
+            "- id: C1\n"
+            "  disposition: spun_off\n"
+            "  disposition_ref: docs/plans/2026-08-29-successor.md\n"
+            "  disposition_detail: 'moved to its own plan'\n"
+        )
+        source = _plan(tasks, frontmatter=_governed_fm())
+        assert check_plan_tasks_grouping_approval(source) is None

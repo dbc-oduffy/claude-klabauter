@@ -269,7 +269,6 @@ OP_MODULE_MAP: Dict[str, str] = {
     "ci.run_pip_audit":                       "coordinator_core.ops.run_pip_audit",
     "ci.run_semgrep_scan":                    "coordinator_core.ops.run_semgrep_scan",
     "ci.run_shellcheck_sweep":                "coordinator_core.ops.run_shellcheck_sweep",
-    "review_trail.scan_unresolved_ubt":       "coordinator_core.ops.scan_unresolved_ubt_records",
     "findings.self_persist_fallback":         "coordinator_core.ops.self_persist_findings",
     "review.snapshot_diff_and_head":          "coordinator_core.ops.ceremony.snapshot_diff_and_head",
     "review.freeze_diff":                     "coordinator_core.ops.review_freeze_diff",

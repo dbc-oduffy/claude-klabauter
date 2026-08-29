@@ -91,6 +91,56 @@ class _Guard:
         self.check = check
 
 
+def _parse_guard_literals(source: str) -> Optional[Dict[str, Any]]:
+    """Shared source-string core, extracted so `_cheap_guard_metadata` (below)
+    and `guard_class_relay.py` (docs/plans/2026-08-29-a-guard-class-flip-
+    announces-itself.md chunk C1) read the SAME literal values off a guard
+    module's source without a second parser.
+
+    EXTRACTION BOUNDARY: this function parses a source string and returns the
+    RAW literal values for `CLASS` / `MATCHERS` / `PRIORITY` (or `None` on
+    unparseable or non-literal source) — it does no validation whatsoever.
+    `_VALID_CLASSES` / `_VALID_MATCHERS` membership, the matchers-non-empty
+    check, the int-`PRIORITY` check, and the both-`CLASS`-and-`MATCHERS`-found
+    requirement all stay in `_cheap_guard_metadata`, which must keep returning
+    `None` under exactly the same conditions it did before this extraction.
+
+    Returns a dict with keys `cls`, `found_cls`, `matchers`, `found_matchers`,
+    `priority` (default `100` when absent) — never `None` unless the source
+    itself fails to parse or one of the three names is assigned a non-literal
+    expression, matching the strictness `_cheap_guard_metadata` already had.
+    """
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return None
+    result: Dict[str, Any] = {
+        "cls": None,
+        "found_cls": False,
+        "matchers": None,
+        "found_matchers": False,
+        "priority": 100,
+    }
+    for node in tree.body:
+        if not (isinstance(node, ast.Assign) and len(node.targets) == 1
+                and isinstance(node.targets[0], ast.Name)):
+            continue
+        target = node.targets[0].id
+        if target not in ("CLASS", "MATCHERS", "PRIORITY"):
+            continue
+        try:
+            value = ast.literal_eval(node.value)
+        except Exception:
+            return None
+        if target == "CLASS":
+            result["cls"], result["found_cls"] = value, True
+        elif target == "MATCHERS":
+            result["matchers"], result["found_matchers"] = value, True
+        elif target == "PRIORITY":
+            result["priority"] = value
+    return result
+
+
 def _cheap_guard_metadata(name: str) -> Optional[Tuple[str, List[str], int]]:
     """Stage ONE of the two-stage lazy import (reusing the shape already shipped
     by the DoE-side registry, 9 guards, and the Stop-family registry, 4 guards
@@ -109,33 +159,17 @@ def _cheap_guard_metadata(name: str) -> Optional[Tuple[str, List[str], int]]:
     """
     path = Path(_PKG_DIR) / f"{name}.py"
     try:
-        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-    except (OSError, SyntaxError, UnicodeDecodeError):
+        source = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
         return None
-    cls_val: Any = None
-    matchers_val: Any = None
-    priority_val: Any = 100
-    found_cls = False
-    found_matchers = False
-    for node in tree.body:
-        if not (isinstance(node, ast.Assign) and len(node.targets) == 1
-                and isinstance(node.targets[0], ast.Name)):
-            continue
-        target = node.targets[0].id
-        if target not in ("CLASS", "MATCHERS", "PRIORITY"):
-            continue
-        try:
-            value = ast.literal_eval(node.value)
-        except Exception:
-            return None
-        if target == "CLASS":
-            cls_val, found_cls = value, True
-        elif target == "MATCHERS":
-            matchers_val, found_matchers = value, True
-        elif target == "PRIORITY":
-            priority_val = value
-    if not (found_cls and found_matchers):
+    parsed = _parse_guard_literals(source)
+    if parsed is None:
         return None
+    if not (parsed["found_cls"] and parsed["found_matchers"]):
+        return None
+    cls_val = parsed["cls"]
+    matchers_val = parsed["matchers"]
+    priority_val = parsed["priority"]
     if cls_val not in _VALID_CLASSES:
         return None
     if not isinstance(matchers_val, (list, tuple)):

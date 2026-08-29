@@ -3323,11 +3323,47 @@ def check_plan_tasks_grouping_approval(source: str) -> ErrorDict | None:
       2. that block's recorded `digest` equals a FRESH recomputation over
          the plan's current spine membership for that grouping.
 
-    `spun_off` is NOT gated here (2026-08-05 ruling: "the EM self-issues it
-    now", no governed-plan carve-out) and never enters this check — it
-    occupies its own grouping (C3), which has no corresponding
-    `grouping_approvals` schema key, so gating it would make it
-    permanently unsatisfiable rather than merely PM-gated.
+    `spun_off` is NOT gated here, and as of 2026-08-29 that is no longer a
+    policy choice. DR-183 reverses the 2026-08-05 ruling ("the EM self-issues
+    it now") and re-gates `spun_off`. The gate cannot be built from this repo:
+    `spun_off` occupies its own grouping (C3), and `grouping_approvals`
+    declares only `do`/`defer`/`ruled_out` under `additionalProperties: false`,
+    so widening `_PLAN_TASKS_PM_APPROVAL_GATED_DISPOSITIONS` today rejects
+    every governed plan with a `spun_off` row and offers its author no remedy —
+    approving the grouping is impossible, authoring the block is a schema
+    violation. The fourth key cannot originate here either: plan.schema.json is
+    vendored byte-for-byte and `check_schema_drift` enforces that parity with
+    no pin or tolerance escape, so DoE-claude authors and bumps it and claude-klabauter
+    re-vendors.
+
+    Sequence, once the key lands: re-vendor, then widen the GOVERNED gate
+    only — `spun_off` joins the set this check scans, and
+    `_PLAN_TASKS_PM_APPROVAL_GATED_DISPOSITIONS` (the LEGACY per-row
+    `pm_approved` leg in `_cf_plan_tasks_disposition_shape`) stays
+    `{'backlogged', 'wont_do'}`. That is deliberately not one set widened in
+    one place; see the note on the two sets below.
+
+    WHY THE LEGACY LEG DOES NOT WIDEN. DoE's DR-183 ask included the legacy
+    branch (plan-tasks.schema.json `allOf[5]`), and taking it would
+    retroactively invalidate 16 `spun_off` rows across 10 legacy plans under
+    docs/plans/ — 7 of them still live. Those rows were written correctly
+    under the rules then in force (DoE's own 2026-08-05 five-exits
+    relaxation). The only way to make them valid again is to write
+    `pm_approved: true` onto rows no PM ever approved, which forges assent in
+    the exact field DR-183 exists to make meaningful; the alternative is
+    leaving live plans red for a rule they could not have followed. Neither
+    is a migration, so neither is taken.
+
+    This is not a carve-out invented for the occasion — it is the
+    grouping-approval contract's own migration model, stated three paragraphs
+    down and enforced at the `is_governed_plan` boundary: a plan enters this
+    contract by ACQUIRING the block, and "authoring the block IS the
+    migration event". Every affected plan is legacy, i.e. pre-contract by
+    construction. DR-183 binds forward, at the boundary where the contract
+    already says governance begins.
+
+    Tripwire: test_plan_tasks_grouping_approval.py ::
+    TestSpunOffGateIsBlockedOnTheFourthGroupingKey.
 
     On a governed plan there is NO partial legacy tolerance for any row,
     including rows that predate the block — authoring the block IS the

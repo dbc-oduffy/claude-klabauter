@@ -119,6 +119,8 @@ from coordinator_core.bash_guards._helpers import operator_override_note
 from coordinator_core.write_guards.nudge_improvement_queue_write import _ENTRY_LINE_RE
 
 CLASS = "advisory"  # DR-277 -- was "hard-deny" at PRIORITY 119; slot unchanged, not re-slotted.
+# Historical record of this flip -- future CLASS flips relay via
+# docs/reference/guard-class-relay.md, not a hand-written comment.
 MATCHERS = ["Write"]
 PRIORITY = 119  # one slot below nudge_improvement_queue_write (120) -- see module docstring
 

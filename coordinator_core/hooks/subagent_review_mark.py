@@ -153,19 +153,21 @@ def _bare_type(value: str) -> str:
 
 
 def _is_reviewer(agent_type: str) -> bool:
-    """True iff ``agent_type``'s bare form is a DELEGATE reviewer per
-    ``review_trail_write``'s own closed vocabulary — reused, not re-derived
-    (see module docstring step 1). Local import: avoids a module-init-order
-    cycle with ``coordinator_core.ops`` (which imports ``coordinator_core.hooks``
-    as one of its own eager modules), mirroring
-    ``commit_ledger.resolve_owner``'s existing local-import convention for
-    the identical reason.
+    """True iff ``agent_type``'s bare form is a DELEGATE reviewer per the
+    closed reviewer vocabulary (see module docstring step 1).
+
+    Repointed (C2b, state/dispatch-briefs/2026-08-29-the-gravestoned-review-
+    trail-surface-is-deleted/C2b.md) straight at
+    ``coordinator_core.reviewer_vocabulary.DELEGATE_REVIEWERS`` — the true
+    source ``review_trail_write._DELEGATE_REVIEWERS`` was itself only a
+    re-export of. That module is gravestoned per DR-374; this reads the
+    shared vocabulary directly rather than through a doomed re-export.
     """
     if not agent_type:
         return False
-    from coordinator_core.ops.review_trail_write import _DELEGATE_REVIEWERS
+    from coordinator_core.reviewer_vocabulary import DELEGATE_REVIEWERS
 
-    return _bare_type(agent_type) in _DELEGATE_REVIEWERS
+    return _bare_type(agent_type) in DELEGATE_REVIEWERS
 
 
 #: The injected marker `enforce-agent-dispatch-mode.py::_compose_sidecar_offer_text`
@@ -259,14 +261,16 @@ def _read_reviewed_range(sidecar_abs_path: Path) -> Optional[List[str]]:
 
 def _git_rev_list(args: List[str], cwd: str) -> Optional[List[str]]:
     """``git rev-list <args>`` -> resolved SHA list, or ``None`` on any
-    resolution failure. Reuses ``review_trail_write._git_runner`` for the
-    Windows-safe (CREATE_NO_WINDOW + stdin=DEVNULL) subprocess invocation
-    shape rather than re-deriving it — local import for the same
-    module-init-order reason as ``_is_reviewer``.
+    resolution failure. Reuses ``session_attribution.default_git_runner``
+    for the Windows-safe (CREATE_NO_WINDOW + stdin=DEVNULL) subprocess
+    invocation shape rather than re-deriving it — repointed off the
+    gravestoned ``review_trail_write._git_runner`` (C2b,
+    state/dispatch-briefs/2026-08-29-the-gravestoned-review-trail-surface-is-
+    deleted/C2b.md), which this helper was moved verbatim from.
     """
-    from coordinator_core.ops.review_trail_write import _git_runner
+    from coordinator_core.session_attribution import default_git_runner
 
-    rc, out, _err = _git_runner(["git", "rev-list", *args], cwd)
+    rc, out, _err = default_git_runner(["git", "rev-list", *args], cwd)
     if rc != 0:
         return None
     return [line.strip() for line in out.splitlines() if line.strip()]

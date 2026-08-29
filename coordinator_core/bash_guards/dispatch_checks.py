@@ -2615,6 +2615,26 @@ _RM_WRAPPER_WORDS = {
 }
 
 
+def _word_present(pattern: str, cmd: str) -> bool:
+    """`pattern` found in `cmd` OR in `cmd` with quote characters removed.
+
+    Every guard in this file gates on a cheap raw-text word scan before doing
+    real work. The shell resolves `'g''it' stash` to `git stash`, so those
+    scans matched nothing and the guards returned before their own (correct,
+    quote-aware) analysis ran: measured 2026-08-29, `git stash` refused while
+    `'g''it' stash` was ALLOWED, same for git clean/checkout/reset and rm.
+
+    WIDENING ONLY. These gates decide solely whether to LOOK; every guard's
+    downstream analysis still resolves segments, verbs and targets for itself,
+    so a word that appears only after quote-stripping cannot produce a refusal
+    on its own. `_rm_is_rm_segment` already read segments this way -- the gates
+    in front of the guards did not."""
+    if re.search(pattern, cmd):
+        return True
+    unquoted = cmd.replace("'", "").replace('"', "")
+    return unquoted != cmd and bool(re.search(pattern, unquoted))
+
+
 def _rm_is_rm_segment(seg: str) -> bool:
     prev = None
     s = seg
@@ -2933,14 +2953,8 @@ def check_destructive_rm(
     # and uncommitted work under it, so a spurious word here cannot produce a
     # deny on its own. `_rm_is_rm_segment` already reads segments this way; the
     # gate in front of it did not.
-    _cmd_unquoted = cmd.replace("'", "").replace('"', "")
-    _has_bash_rm_word = bool(
-        re.search(r"\brm\b", cmd) or re.search(r"\brm\b", _cmd_unquoted)
-    )
-    _has_ps_remove_word = bool(
-        re.search(r"(?i)\b(remove-item|ri|rd|del|erase)\b", cmd)
-        or re.search(r"(?i)\b(remove-item|ri|rd|del|erase)\b", _cmd_unquoted)
-    )
+    _has_bash_rm_word = _word_present(r"\brm\b", cmd)
+    _has_ps_remove_word = _word_present(r"(?i)\b(remove-item|ri|rd|del|erase)\b", cmd)
     if not _has_bash_rm_word and not _has_ps_remove_word:
         return None
 
@@ -3792,7 +3806,10 @@ def check_destructive_git_clean(
         cmd, "destructive-git-clean", payload
     ) or []
 
-    if (not re.search(r"\bgit\b", cmd) or not re.search(r"\bclean\b", cmd)) and not _gc_ps_segments:
+    if (
+        not _word_present(r"\bgit\b", cmd)
+        or not _word_present(r"\bclean\b", cmd)
+    ) and not _gc_ps_segments:
         return None
     if _override("COORDINATOR_OVERRIDE_GIT_CLEAN", payload=payload):
         return None
@@ -4217,9 +4234,9 @@ def _check_destructive_git_revert_full(
     # (and not closed by) the `_command_really_invokes` corroboration below.
     cmd = _normalize_git_exe_head_to_bare(cmd)
 
-    if not re.search(r"\bgit\b", cmd):
+    if not _word_present(r"\bgit\b", cmd):
         return None, None
-    if not re.search(r"\bcheckout\b|\brestore\b|\breset\b|\bstash\b", cmd):
+    if not _word_present(r"\bcheckout\b|\brestore\b|\breset\b|\bstash\b", cmd):
         return None, None
     if _override("COORDINATOR_OVERRIDE_GIT_REVERT", payload=hook_payload):
         return None, None
@@ -5399,7 +5416,7 @@ def check_runaway_find(
     cmd = _crlf_strip(cmd)
     cmd = _join_backslash_newlines(cmd)
 
-    if not re.search(r"\bfind\b", cmd):
+    if not _word_present(r"\bfind\b", cmd):
         return None
 
     find_override = _override("COORDINATOR_ALLOW_FIND_ROOT", payload=payload)
@@ -7720,7 +7737,7 @@ def check_cat_heredoc_write_advise(
     cmd = _crlf_strip(cmd)
     if _override("COORDINATOR_ALLOW_CAT_HEREDOC", payload=payload):
         return None
-    if "<<" not in cmd or not re.search(r"\bcat\b", cmd):
+    if "<<" not in cmd or not _word_present(r"\bcat\b", cmd):
         return None
     intro, _, _ = cmd.partition("<<")
     tokens = _bt_tokenize_full_command(intro)

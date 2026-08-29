@@ -70,8 +70,174 @@ from coordinator_core.git.commit import (
     hash_worktree_blobs_via_spawn,
 )
 from functools import partial
+from coordinator_core.git.git_dir import resolve_git_common_dir
+from coordinator_core.git.git_objects import _read_object
+from coordinator_core.git.git_state import read_tree_spine
 from coordinator_core.ipc import register_op
 from coordinator_core.ops.fleet._common import check_repo_root, main_worktree_root
+from coordinator_core.write_guards.guard_class_relay import (
+    detect_class_transition,
+    stage_class_transition_memo,
+)
+
+#: Prefix filter for the guard-class-relay step below (C2 of
+#: docs/plans/2026-08-29-a-guard-class-flip-announces-itself.md). ONLY paths
+#: under this directory can carry a `write_guards` CLASS constant -- this
+#: string compare is the zero-cost gate the whole step's budget rests on
+#: (0.156 us / 0 spawns measured, docs/research/spike-verdicts/2026-08-29-
+#: guard-class-relay-commit-seam.md Q4): no path under it means the step
+#: below returns having done no work -- no git call, no object read, no AST
+#: parse, no import beyond what module load already paid.
+_GUARD_MODULE_DIR = "coordinator_core/write_guards/"
+
+
+def _guard_module_paths(paths: list, deleted_paths: list) -> list:
+    """Guard-module `.py` paths present in either `paths` or `deleted_paths`,
+    de-duplicated, order-preserving. A path under `_GUARD_MODULE_DIR` that is
+    not `.py` (e.g. a stray non-source file) is not a guard module and is
+    excluded -- `detect_class_transition` only has an opinion about source.
+    """
+    seen: dict = {}
+    for p in list(paths) + list(deleted_paths):
+        if p.startswith(_GUARD_MODULE_DIR) and p.endswith(".py"):
+            seen.setdefault(p, None)
+    return list(seen)
+
+
+def _blob_source(
+    spine: Optional[dict], common_dir: Path, path: str
+) -> Optional[str]:
+    """The decoded text of `path`'s blob per `spine` (a `read_tree_spine`
+    result), or `None` when the path is absent from the spine (added/
+    deleted wholesale), the blob is unreadable, or it is not valid UTF-8 --
+    all three read as "no source to compare", matching
+    `detect_class_transition`'s own "missing source is not a transition"
+    posture. Never raises.
+    """
+    if spine is None:
+        return None
+    head_dir, _, head_name = path.rpartition("/")
+    entry = spine.get(head_dir, {}).get(head_name)
+    if entry is None:
+        return None
+    result = _read_object(common_dir, entry[1])
+    if result is None:
+        return None
+    _otype, payload = result
+    try:
+        return payload.decode("utf-8")
+    except UnicodeDecodeError:
+        return None
+
+
+def _pre_commit_guard_sources(worktree_root: Path, guard_paths: list) -> dict:
+    """`{path: source_or_None}` for `guard_paths` as they stand at HEAD
+    BEFORE `commit_paths` runs -- called from `_handler` prior to the
+    `commit_paths` call, while HEAD still points at the pre-commit tree.
+    Once `commit_paths` lands the commit, HEAD moves and `read_tree_spine`
+    (HEAD-relative, no explicit-root parameter) can no longer see this
+    state -- capturing it here is the only in-process route, and it is the
+    SAME `read_tree_spine` call `commit_paths` itself makes at
+    `commit.py:448` over (a superset of) these same paths, so the tree
+    objects along this spine are already warm in `git_objects._OBJECT_CACHE`
+    by the time `commit_paths` re-walks them a moment later (docs/research/
+    spike-verdicts/2026-08-29-guard-class-relay-commit-seam.md Q4).
+
+    Returns `{}` when `guard_paths` is empty (no read at all) or when
+    `read_tree_spine` itself returns `None` (unreadable/corrupt HEAD tree --
+    every path then reads as "no pre-commit source", never raises).
+    """
+    if not guard_paths:
+        return {}
+    common_dir = resolve_git_common_dir(worktree_root)
+    spine = read_tree_spine(worktree_root, guard_paths)
+    return {path: _blob_source(spine, common_dir, path) for path in guard_paths}
+
+
+def _guard_class_relay_step(
+    worktree_root: Path,
+    guard_paths: list,
+    pre_commit_sources: dict,
+    committed_sha: str,
+    repo_root: Optional[Path] = None,
+) -> dict:
+    """Runs AFTER `commit_paths` has already landed the commit -- this step
+    cannot refuse, delay, or fail it (NEGATIVE SPEC, C2 body). Detects a
+    `write_guards` module CLASS transition (hard-deny <-> advisory) across
+    the commit just made, via C1's `detect_class_transition`
+    (`write_guards/guard_class_relay.py`), and stages a memo for each
+    detected transition via C3's `stage_class_transition_memo` (same
+    module) -- an in-process `memo.draft`/`memo.compose` op call, never a
+    subprocess.
+
+    `pre_commit_sources` is `_pre_commit_guard_sources`'s result, captured
+    BEFORE `commit_paths` ran (see that function's docstring for why it
+    cannot be captured here). The "new" side needs no git read at all: the
+    worktree at THIS path, right now, holds exactly what was just
+    committed (the ordinary case -- `commit_paths` writes from worktree
+    bytes) or the staged-preferred bytes, close enough for a CLASS-literal
+    comparison; a path deleted by this commit simply has no file to read.
+
+    Returns `{"transitions": [...], "skips": [...]}`, both possibly empty.
+    A `transitions` entry is `{"module", "old_class", "new_class", "sha",
+    "memo_staged", "memo_topic"}` -- the last two report
+    `stage_class_transition_memo`'s outcome for that entry (memo_staged is
+    True on a fresh stage OR an idempotent no-op re-stage; memo_topic is the
+    composed topic slug). A per-transition emission failure never drops the
+    detected transition itself -- it is recorded as a NAMED `skips` entry
+    alongside it (C3 negative spec: "never raise" must not become "silently
+    do nothing"). Any exception anywhere in this step (detection itself, not
+    a single emission) is caught and degrades to one `skips` string -- this
+    step never raises and never touches `committed`/`sha` in the caller's
+    own result.
+    """
+    if not guard_paths:
+        return {"transitions": [], "skips": []}
+
+    transitions: list = []
+    skips: list = []
+    try:
+        for path in guard_paths:
+            old_source = pre_commit_sources.get(path)
+            file_path = worktree_root / path
+            try:
+                new_source: Optional[str] = file_path.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError):
+                new_source = None
+            transition = detect_class_transition(old_source, new_source)
+            if transition is not None:
+                old_class, new_class = transition
+                entry = {
+                    "module": path,
+                    "old_class": old_class,
+                    "new_class": new_class,
+                    "sha": committed_sha,
+                }
+                transitions.append(entry)
+                # Emission failure is NAMED, never swallowed (C3 negative
+                # spec) -- but scoped to THIS transition's own try/except so
+                # one bad emission does not stop the loop from detecting/
+                # staging the rest.
+                try:
+                    emission = stage_class_transition_memo(
+                        entry, repo_root=repo_root
+                    )
+                except Exception as exc:  # noqa: BLE001 -- never raise
+                    emission = {
+                        "staged": False, "topic": None,
+                        "reason": f"stage_class_transition_memo raised: {exc!r}",
+                    }
+                entry["memo_staged"] = emission.get("staged")
+                entry["memo_topic"] = emission.get("topic")
+                if not emission.get("staged"):
+                    skips.append(
+                        f"skip: guard_class_relay memo emission for "
+                        f"{path!r}: {emission.get('reason')}"
+                    )
+    except Exception as exc:  # noqa: BLE001 -- never raise, C2 negative spec
+        skips.append(f"skip: guard_class_relay step: {exc!r}")
+
+    return {"transitions": transitions, "skips": skips}
 
 
 def _error(message: str, **extra: object) -> dict:
@@ -113,10 +279,16 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
 
     Returns:
         {"committed": True, "sha": str, "staged_preferred": [str, ...],
-         "worktree_over_staged": [str, ...], "warnings": [str, ...]} on
+         "worktree_over_staged": [str, ...], "warnings": [str, ...],
+         "guard_class_relay": {"transitions": [...], "skips": [...]}} on
         success -- `warnings` is non-empty exactly when
         `worktree_over_staged` is, and says the same thing in the register
-        an operator reads. Or
+        an operator reads. `guard_class_relay` is the C2 step (docs/plans/
+        2026-08-29-a-guard-class-flip-announces-itself.md): a detected
+        `write_guards` module CLASS transition in this commit, per path
+        under `coordinator_core/write_guards/`. It never gates or delays
+        the commit above -- a step failure degrades to a `skips` entry.
+        Or
         {"committed": False, "sha": None, "error": str} on any
         structured refusal (an empty pathspec, a directory in `paths`, an
         unresolvable CAS ref, a lost CAS race, or a path needing a checkin
@@ -156,6 +328,15 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
 
     worktree_root = main_worktree_root(repo_root)
 
+    # Filter FIRST, before anything else touching the guard-class-relay step
+    # -- no path under `_GUARD_MODULE_DIR` means zero work below: no git
+    # call, no object read, no AST parse (0.156 us / 0 spawns measured,
+    # spike-verdicts/2026-08-29-guard-class-relay-commit-seam.md Q4).
+    guard_paths = _guard_module_paths(raw_paths, raw_deleted)
+    pre_commit_guard_sources = (
+        _pre_commit_guard_sources(worktree_root, guard_paths) if guard_paths else {}
+    )
+
     try:
         outcome = commit_paths(
             worktree_root,
@@ -191,10 +372,19 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             "Pass prefer_staged to commit the staged content instead."
         )
 
+    # Step runs AFTER the commit has landed -- it cannot refuse, delay, or
+    # fail it (NEGATIVE SPEC). `guard_class_relay` is additive; existing
+    # consumers reading `committed`/`sha`/`warnings` see no change.
+    guard_class_relay = _guard_class_relay_step(
+        worktree_root, guard_paths, pre_commit_guard_sources, outcome.sha,
+        repo_root=repo_root,
+    )
+
     return {
         "committed": True,
         "sha": outcome.sha,
         "staged_preferred": list(outcome.staged_preferred),
         "worktree_over_staged": list(outcome.worktree_over_staged),
         "warnings": warnings,
+        "guard_class_relay": guard_class_relay,
     }

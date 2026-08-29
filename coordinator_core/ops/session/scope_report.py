@@ -216,20 +216,44 @@ def assert_paths_in_session_scope(
     """Allow-list ownership check over a candidate commit pathspec.
 
     Returns (True, "") ONLY when session_id resolves, the scope is readable,
-    `paths` is non-empty, and EVERY element of `paths` is a member of this
-    session's own safe scope as computed by
-    coordinator_core.ops.session.safe_commit_offer.compute_offer(session_id, cwd)
-    ["safe_paths"] — OR, when `allow_orphans` is True AND the caller clears
-    the positive-evidence check below, a member of that same call's
-    ``["orphans"]`` (dirty, claimed by no session at all — DoE doctrine,
-    scoped-safety-commits.md:131, already rules that unclaimed dirt joins the
-    calling session). `allow_orphans` never relaxes the peer-claimed case: a
-    path claimed by a LIVE peer session still denies regardless of this flag
-    (incident 62e9a1f73) — `compute_offer`'s own docstring records that
-    `orphans` is now `result.orphans` minus every withheld candidate
-    (Review: staff-eng F1), which is what keeps orphan and peer-claimed
-    disjoint here; a raw/unfixed `orphans` field would NOT have this
-    property.
+    `paths` is non-empty, and EVERY element of `paths` classifies
+    ``OWNERSHIP_MINE`` under ``claim_index.classify_paths`` — OR, when
+    `allow_orphans` is True AND the caller clears the positive-evidence check
+    below, classifies ``OWNERSHIP_UNCLAIMED``.
+
+    DOCSTRING CORRECTED 2026-08-29 (flagged by doe-claude-em while answering
+    the SC-DR-001 read-time-backstop memo). This paragraph described the
+    membership test as ``compute_offer(...)["safe_paths"]`` / ``["orphans"]``
+    with a citation to DoE's ``scoped-safety-commits.md:131``. That was the
+    PRE-2026-08-21 shape. The runtime leg below has been
+    ``claim_index.classify_paths`` since the rebuild that removed the
+    73-process / 5,609ms composition, and ``compute_offer``'s ``orphans`` key
+    is now ALWAYS EMPTY by its own contract — so a reader auditing this gate
+    against the old description would conclude the orphan arm is inert. It is
+    not: ``_ORPHAN_ADOPTION_ENABLED`` is ``True`` and the arm is live. Only
+    the ENUMERATION was lost with dirtiness, not the adoption; the
+    enumeration is restored at the report seam as
+    ``safe_commit_offer.Reconciliation.unclaimed``, which is the candidate
+    list an operator's ``--include-orphans`` remedy is meant to be handed
+    (DoE SC-DR-022 half 1: the named paths are named by the ENGINE, never
+    assembled by the adopter).
+
+    `allow_orphans` never relaxes the peer-claimed case: a path claimed by a
+    LIVE peer session still denies regardless of this flag (incident
+    62e9a1f73). What keeps orphan and peer-claimed disjoint is no longer a
+    fixed-up `orphans` field but `classify_paths` itself, which is fail-closed
+    in both directions — an aborted walk yields neither `mine` nor
+    `unclaimed`, and a peer claim denies whether or not the holder is live.
+
+    KNOWN DIVERGENCE, named rather than left drifting (doe-claude-em,
+    2026-08-29). Doctrine defines an orphan as **dirty AND claimed by
+    nobody**. ``OWNERSHIP_UNCLAIMED`` is a pure claim-ledger verdict with no
+    dirtiness component, so this gate currently admits **claimed by nobody**
+    full stop — a clean, never-touched file named in an operator's pathspec is
+    adoptable where the definition says it should not be. Tracked at
+    ``state/bug-backlog/2026-08-29-orphan-adoption-admits-a-clean-path.yaml``;
+    the resolution is to narrow the arm to the dirty set, NOT to widen the
+    definition (see that row for the reasoning and the cost).
 
     Review: staff-eng F2/F3 (2026-08-03) — `allow_orphans` additionally
     requires POSITIVE EVIDENCE that `session_id` names a session directory

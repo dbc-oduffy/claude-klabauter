@@ -163,7 +163,7 @@ import uuid
 from collections import OrderedDict
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import List, Literal, Optional, Sequence, TypedDict
+from typing import List, Literal, Optional, Sequence, Tuple, TypedDict
 
 from coordinator_core.ipc import register_op
 from coordinator_core.ops.ceremony.commit_pipeline import run_commit_pipeline
@@ -414,6 +414,63 @@ class CommitOutcome(TypedDict):
     conflicted_paths: List[str]
 
 
+class Reconciliation(TypedDict):
+    """What this call actually CHECKED the write ledger against, and what the
+    check found — the answer to "is this offer's confidence earned".
+
+    Exists because the ledger is append-only and write-only: `hooks.
+    track_touched_files` records a path on the Write/Edit route and observes
+    nothing else, so it drifts in BOTH directions. It under-records (a path
+    written through a shell carries no claim — DR-258, a named permanent
+    limit) and it over-records (a path claimed and later deleted keeps its
+    claim, because the recording path requires an existing regular file and
+    so can never self-report a deletion).
+
+    ``reconciled`` IS NOT A HEALTH FLAG, and this is the whole point of
+    having it. It answers ONLY "did the ledger-versus-tree check run on this
+    call" — never "did the ledger and the tree agree". A permanently
+    non-empty ``claimed_absent`` is expected on a repo that closes queue
+    entries by ``git mv`` (doe-claude-em, 2026-08-29, citing their SC-DR-021
+    d1: the deletion side of an archival move can never be self-reported, so
+    the population is by construction and forever). Had this been a health
+    flag it would read red in steady state, and a signal that is always red
+    is a signal nobody reads.
+
+    DELIBERATELY DISTINCT FROM ``OwnershipReadout.degraded``, which is
+    ``not CommitSet.complete`` — "the index WALK finished", a statement about
+    the claim ledger's own readability and nothing at all about the tree.
+    The two are independent: a complete walk over a stale ledger is
+    ``degraded: False`` with ``reconciled: True`` and a non-empty
+    ``claimed_absent``. Do NOT fold this into ``degraded`` however tempting
+    the shorter shape looks — ``degraded`` carries a second, load-bearing
+    consequence (when set, ``ownership.peer`` is emptied outright and every
+    non-mine path folds into ``unattributed``, AC7), so overloading it would
+    silently trigger that fold on a healthy walk.
+    """
+
+    reconciled: bool  # did the check run at all — False when there was no
+    # worktree root to check against, or the call short-circuited before
+    # reaching the check (a degraded/indeterminate skip). NEVER an assertion
+    # that the ledger and the tree agree.
+    claimed_absent: List[str]  # paths this session claims that have no file
+    # on disk. NOT automatically wrong: a deletion this session made is a
+    # legitimate thing to commit, and `run_commit_pipeline` handles deletions
+    # and reports `empty-commit-set` on a no-op. Named, never adjudicated.
+    unclaimed: List[str]  # every dirty path this call saw that NO session
+    # claims — the adoption CANDIDATE set, enumerated in full here while
+    # `_render_report` samples it. Enumeration is the load-bearing property,
+    # not the rendering: doe-claude-em's SC-DR-022 half 1 permits an operator
+    # to adopt an unclaimed path with `--include-orphans`, and the verified
+    # property that makes that remedy safe is that "the named paths half 1
+    # permits are named by the ENGINE, not assembled by the adopter". An
+    # aggregate count supplies no candidate list, so the remedy has no input.
+    # NAMED, NEVER ADOPTED: nothing here is committed, and nothing here is
+    # attributed to this session. Most entries on a shared worktree belong to
+    # nobody in particular and some belong to peers who have not claimed
+    # them yet — see this module's own DR-258 note on why chasing this bucket
+    # toward zero is not a goal.
+
+
 class CommitOfferReport(TypedDict):
     session_id: str
     groups: List[GroupResult]
@@ -447,6 +504,12 @@ class CommitOfferReport(TypedDict):
     # what any ceremony commits"). Empty is the common case and is not an
     # error -- an empty `residue` after a healthy commit is exactly what a
     # correctly-scoped ceremony should leave behind.
+    reconciliation: Reconciliation  # 2026-08-29 — what this call checked the
+    # write ledger against, and what it found. REPORT-ONLY, never a gate:
+    # nothing here feeds back into `safe_set`/`resolved_groups`, so it cannot
+    # widen the commit boundary, exactly like `residue`/`excluded` above.
+    # See `Reconciliation`'s own docstring for why `reconciled` is a
+    # did-the-check-run flag and NOT a health flag.
     outcome: CommitOutcome  # C4 (2026-08-20 the-close-ceremony-commits-what-
     # the-session-wrote plan, AC9) -- the structured, caller-renderable
     # verdict for this call (committed / degraded-or-indeterminate skip /
@@ -1214,9 +1277,14 @@ def _compute_residue(
     session_id: str,
     group_results: List[GroupResult],
     worktree_root: Optional[str],
-) -> "OrderedDict[str, List[str]]":
+) -> "Tuple[OrderedDict[str, List[str]], Reconciliation]":
     """What the ceremony left dirty, grouped by `_residue_class` -- the
-    diagnostic AC3 exists to add. REPORT-ONLY (AC4): read-only throughout,
+    diagnostic AC3 exists to add -- PLUS this call's `Reconciliation`
+    (2026-08-29), returned as a pair rather than computed by a second
+    function so that BOTH products come off the single sanctioned
+    `_current_dirty_paths` read. See the comment at that read for why the
+    pair is deliberate; `Reconciliation`'s own docstring carries the
+    contract for the second element. REPORT-ONLY (AC4): read-only throughout,
     computed strictly AFTER `group_results` already landed, and never fed
     back into any pathspec -- the caller (`commit_session_offer_async`) only
     attaches this dict to the returned report, it never reads it back into
@@ -1252,8 +1320,13 @@ def _compute_residue(
     is unavailable or nothing is left dirty; never raises.
     """
     empty: "OrderedDict[str, List[str]]" = OrderedDict()
+    unchecked: Reconciliation = {
+        "reconciled": False,
+        "claimed_absent": [],
+        "unclaimed": [],
+    }
     if not worktree_root:
-        return empty
+        return empty, unchecked
 
     committed_paths: set = set()
     for g in group_results:
@@ -1284,14 +1357,52 @@ def _compute_residue(
     # question is only ever asked about paths that are actually dirty.
     peer_claimed = claim_index.commit_set(session_id, cwd=worktree_root).peers
 
+    # The ONE dirty read this module is allowed (see `_current_dirty_paths`)
+    # is taken here and reused for BOTH products below -- residue buckets and
+    # the reconciliation answer. Do not add a second read for the second
+    # product: `_compute_residue` returning a pair is deliberately uglier
+    # than two tidy functions, because two tidy functions would each want
+    # their own `git status` and the second spawn is the thing that is
+    # actually forbidden.
+    dirty = _current_dirty_paths(worktree_root)
+
     buckets: "OrderedDict[str, List[str]]" = OrderedDict()
-    for path in _current_dirty_paths(worktree_root):
+    for path in dirty:
         if path in committed_paths or path in owned_paths:
             continue
         if path in peer_claimed:
             continue
         buckets.setdefault(_residue_class(path), []).append(path)
-    return buckets
+
+    # UNCLAIMED = dirty, and claimed by NO session -- this session included.
+    # `fresh_offer["safe_paths"]` is subtracted because a residue path this
+    # session DOES claim (its commit group failed, or the caller's own
+    # `groups` override dropped it) is this session's own uncommitted work,
+    # not an adoption candidate; folding the two together is what would make
+    # the enumeration unsafe to hand `--include-orphans`.
+    mine_now = set(fresh_offer.get("safe_paths") or [])
+    unclaimed = sorted(
+        path
+        for path in dirty
+        if path not in committed_paths
+        and path not in owned_paths
+        and path not in peer_claimed
+        and path not in mine_now
+    )
+
+    # CLAIMED-BUT-ABSENT -- stat-only, one `os.path.exists` per claimed path,
+    # never a walk and never a git call. Bounded by the claim count (small by
+    # construction), not by the tree.
+    claimed_absent = sorted(
+        path for path in mine_now if not (Path(worktree_root) / path).exists()
+    )
+
+    reconciliation: Reconciliation = {
+        "reconciled": True,
+        "claimed_absent": claimed_absent,
+        "unclaimed": unclaimed,
+    }
+    return buckets, reconciliation
 
 
 # ---------------------------------------------------------------------------
@@ -1465,6 +1576,16 @@ async def commit_session_offer_async(
             "failed_groups": [],
             "dropped_groups": [],
             "residue": OrderedDict(),
+            # This call short-circuited before any commit and before the
+            # residue pass, so no ledger-versus-tree check ran. `reconciled:
+            # False` says exactly that, and is the shape a caller must not
+            # read as "the ledger agrees" -- the whole reason it is a
+            # did-the-check-run flag.
+            "reconciliation": {
+                "reconciled": False,
+                "claimed_absent": [],
+                "unclaimed": [],
+            },
             "outcome": {
                 "status": status,
                 "detail": detail,
@@ -1531,7 +1652,9 @@ async def commit_session_offer_async(
         await _commit_group(worktree_root, g, session_id) for g in resolved_groups
     ]
     failed_groups = [g for g in group_results if g.get("commit_failed")]
-    residue = _compute_residue(session_id, group_results, worktree_root)
+    residue, reconciliation = _compute_residue(
+        session_id, group_results, worktree_root
+    )
 
     committed_paths: List[str] = []
     for g in group_results:
@@ -1575,6 +1698,7 @@ async def commit_session_offer_async(
         "failed_groups": failed_groups,
         "dropped_groups": dropped_groups,
         "residue": residue,
+        "reconciliation": reconciliation,
         "outcome": outcome,
     }
 
@@ -1981,6 +2105,49 @@ def _render_report(report: CommitOfferReport, worktree_root: Optional[str] = Non
                 "dry_run=true` or `git status` for the full list)"
                 % remaining_classes
             )
+
+    # RECONCILIATION (2026-08-29). Rendered SAMPLE-BOUNDED, exactly like
+    # `residue` and `excluded` above -- the enumeration lives in the report
+    # object's own `reconciliation` key, which is what an adopting caller
+    # reads; this block is the operator's pointer at it, never the list
+    # itself. A 501-path unclaimed set is a real observed size on this
+    # worktree, and one line per path is the unbounded shape this function's
+    # own docstring forbids.
+    reconciliation = report.get("reconciliation") or {}
+    claimed_absent = reconciliation.get("claimed_absent") or []
+    unclaimed = reconciliation.get("unclaimed") or []
+    if claimed_absent:
+        sample = claimed_absent[:_RESIDUE_CLASS_SAMPLE_COUNT]
+        tail = ""
+        remaining = len(claimed_absent) - len(sample)
+        if remaining > 0:
+            tail = " (+%d more)" % remaining
+        lines.append(
+            "Claimed but absent from disk: %d path(s) this session claims "
+            "have no file on disk — e.g. %s%s. Not an error on its own: a "
+            "deletion this session made is a legitimate thing to commit, and "
+            "an archival `git mv` leaves one at the source by construction."
+            % (len(claimed_absent), ", ".join(sample), tail)
+        )
+    if unclaimed:
+        sample = unclaimed[:_RESIDUE_CLASS_SAMPLE_COUNT]
+        tail = ""
+        remaining = len(unclaimed) - len(sample)
+        if remaining > 0:
+            tail = " (+%d more)" % remaining
+        lines.append(
+            "Unclaimed and dirty: %d path(s) no session claims — e.g. %s%s. "
+            "NAMED, NOT ADOPTED: nothing here was committed and nothing here "
+            "is attributed to this session. The full list is enumerated on "
+            "the report's `reconciliation.unclaimed`; a shell-written file of "
+            "your own lands here, and so do paths that are nobody's."
+            % (len(unclaimed), ", ".join(sample), tail)
+        )
+    if not reconciliation.get("reconciled", False):
+        lines.append(
+            "Ledger not reconciled against the tree this call — the two "
+            "buckets above are unchecked, not empty."
+        )
 
     if not groups:
         # "I could not look" must never render as "there is nothing". An empty

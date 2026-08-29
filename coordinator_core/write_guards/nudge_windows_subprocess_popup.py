@@ -175,6 +175,8 @@ from typing import Any, Dict, List, Optional, Tuple
 from coordinator_core.spawn_policy.spawn_names import SPAWN_NAMES_BY_MODULE
 
 CLASS = "advisory"  # DR-077 part 2 — was "hard-deny"; the class no longer blocks.
+# Historical record of this flip -- future CLASS flips relay via
+# docs/reference/guard-class-relay.md, not a hand-written comment.
 MATCHERS = ["Write", "Edit", "MultiEdit"]
 PRIORITY = 110  # deny-offer: runs after the structural block_* guards (≤90)
 

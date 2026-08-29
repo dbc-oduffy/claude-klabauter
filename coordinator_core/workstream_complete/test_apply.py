@@ -536,7 +536,12 @@ def test_execute_directives_raising_dispatch_is_failed_not_landed(
         raise FileNotFoundError("no such script")
 
     monkeypatch.setattr(ws_apply, "_load_cli_module", raising_load)
-    directives = [_directive("d_missing", "scan_unresolved_ubt_records")]
+    # Any live `_CLI_DISPATCH` member works here: the fixture exercises the
+    # LOADER raising (monkeypatched above), which is reachable only once
+    # `_resolve_cli` admission has passed. A name absent from the manifest
+    # raises `UnrecognizedDirective` at admission instead and never reaches
+    # the loader at all — a different path than this test is pinning.
+    directives = [_directive("d_missing", "freeze-review-diff")]
     exit_code, report = ws_apply._execute_directives(directives, [], {})
 
     assert report["landed"] == []
@@ -1645,7 +1650,9 @@ def test_idempotence_table_directive_ids_are_still_emitted_by_their_builders() -
             ("d-freeze-and-dispatch-review-partition-", True),
             ("d-freeze-and-dispatch-review-partition-integrator", False),
             ("d-write-review-trail", False),
-            ("d-run-ubt-pending-check", False),
+            # d-run-ubt-pending-check removed with review_trail.scan_unresolved_ubt
+            # (DR-374 follow-on deletion): its builder is gone from
+            # directives_review.py, so the table must stop naming it.
             ("d-classify-dispatch-shape", False),
         ],
     }

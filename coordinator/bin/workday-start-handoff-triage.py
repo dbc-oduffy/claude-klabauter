@@ -339,8 +339,12 @@ _AWAITING_GATE_WHERE = "deployment_state=awaiting_gate AND status=open"
 def _cmd_ready(args: argparse.Namespace) -> int:
     from records_query import query_records  # noqa: PLC0415 (deliberate: avoid import cost on unrelated subcommands)
 
+    explicit_root = getattr(args, "repo_root", None)
     try:
-        out = query_records(_HANDOFF_TYPE, _READY_WHERE, "markdown-list", 0, sort="-created")
+        out = query_records(
+            _HANDOFF_TYPE, _READY_WHERE, "markdown-list", 0, sort="-created",
+            explicit_root=explicit_root,
+        )
     except RuntimeError as exc:
         print(f"workday-start-handoff-triage.py: ready: {exc}", file=sys.stderr)
         return _SETUP_ERROR
@@ -351,12 +355,15 @@ def _cmd_ready(args: argparse.Namespace) -> int:
 def _cmd_awaiting_gate(args: argparse.Namespace) -> int:
     from records_query import query_records  # noqa: PLC0415
 
+    explicit_root = getattr(args, "repo_root", None)
     try:
         full_listing = query_records(
-            _HANDOFF_TYPE, _AWAITING_GATE_WHERE, "markdown-list", 0, sort="-created"
+            _HANDOFF_TYPE, _AWAITING_GATE_WHERE, "markdown-list", 0, sort="-created",
+            explicit_root=explicit_root,
         )
         stale_listing = query_records(
-            _HANDOFF_TYPE, _AWAITING_GATE_WHERE, "markdown-list", 0, older_than="6d"
+            _HANDOFF_TYPE, _AWAITING_GATE_WHERE, "markdown-list", 0, older_than="6d",
+            explicit_root=explicit_root,
         )
     except RuntimeError as exc:
         print(f"workday-start-handoff-triage.py: awaiting-gate: {exc}", file=sys.stderr)
@@ -401,10 +408,22 @@ def _build_parser() -> argparse.ArgumentParser:
     trim_notes.set_defaults(func=_cmd_trim_notes)
 
     ready = subparsers.add_parser("ready", help="List actionable-now (ready_to_fire) handoffs.")
+    ready.add_argument(
+        "--repo-root", dest="repo_root", default=None,
+        help="Explicit repo root forwarded to records_query.query_records "
+        "(explicit_root=...); omitted preserves the prior cwd-relative "
+        "resolution unchanged.",
+    )
     ready.set_defaults(func=_cmd_ready)
 
     awaiting_gate = subparsers.add_parser(
         "awaiting-gate", help="List awaiting_gate handoffs + the >6d stale subset."
+    )
+    awaiting_gate.add_argument(
+        "--repo-root", dest="repo_root", default=None,
+        help="Explicit repo root forwarded to records_query.query_records "
+        "(explicit_root=...); omitted preserves the prior cwd-relative "
+        "resolution unchanged.",
     )
     awaiting_gate.set_defaults(func=_cmd_awaiting_gate)
 

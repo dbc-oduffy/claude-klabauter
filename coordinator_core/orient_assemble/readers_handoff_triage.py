@@ -357,8 +357,17 @@ def _read_ready(repo_root: Optional[Path] = None) -> ReaderResult:
 
     `repo_root`: threaded into both `_ready_common_dir` and
     `_suppress_live_ledger_claims` (site (c), C4) — `None` preserves prior
-    (claude-klabauter-pinned) behaviour."""
-    text, _exit_code = _capture_stdout(_cmd_ready, argparse.Namespace())
+    (claude-klabauter-pinned) behaviour. Also carried onto the `_cmd_ready` Namespace
+    as `repo_root`, matching the source CLI's own `--repo-root` arg (C7
+    correction, 2026-08-29): `_cmd_ready` forwards it to `query_records(...,
+    explicit_root=...)`, so the LISTING QUERY ITSELF now resolves against the
+    caller's root, not just the post-hoc ledger-claim filtering above it —
+    the query previously stayed cwd-relative regardless of what root the
+    caller named, an echo-field parameter with no effect on the CLI's own
+    scan scope."""
+    text, _exit_code = _capture_stdout(
+        _cmd_ready, argparse.Namespace(repo_root=str(repo_root) if repo_root is not None else None)
+    )
     if not text.strip():
         return ReaderResult()
     text = _suppress_live_ledger_claims(
@@ -381,14 +390,25 @@ def _read_ready(repo_root: Optional[Path] = None) -> ReaderResult:
     )
 
 
-def _read_awaiting_gate() -> ReaderResult:
+def _read_awaiting_gate(repo_root: Optional[Path] = None) -> ReaderResult:
     """Gated handoffs (`deployment_state=awaiting_gate AND status=open`)
     plus the coarse `--older-than 6d` stale subset — a directive naming the
     query subcommand, carrying the captured listing as-is. (The
     load-bearing 14d/7d force-recheck predicate is the separate
     `handoff-gate-aging` mechanized tool, not reproduced here — matches the
-    source CLI's own documented scope.)"""
-    text, _exit_code = _capture_stdout(_cmd_awaiting_gate, argparse.Namespace())
+    source CLI's own documented scope.)
+
+    `repo_root` (C7 correction, 2026-08-29): carried onto the `_cmd_awaiting_
+    gate` Namespace as `repo_root`, matching `_read_ready`'s shape and the
+    source CLI's own `--repo-root` arg — `_cmd_awaiting_gate` forwards it to
+    both `query_records(..., explicit_root=...)` calls. `None` preserves the
+    prior cwd-relative resolution unchanged. Previously accepted no root at
+    all, unlike `_read_ready`'s sibling shape — an asymmetry `collect()` now
+    closes."""
+    text, _exit_code = _capture_stdout(
+        _cmd_awaiting_gate,
+        argparse.Namespace(repo_root=str(repo_root) if repo_root is not None else None),
+    )
     if not text.strip():
         return ReaderResult()
     text = _cap_awaiting_gate_listing(
@@ -486,14 +506,15 @@ def collect(cadence: str, *, repo_root: str | None = None) -> ReaderResult:
     (`readers_clean_ops.collect`) but unused here — this reader's severity
     does not vary by cadence; all four sources run for every cadence.
 
-    `repo_root` is keyword-only, threaded (C4, sites (a)/(b)/(c)) into
-    `_read_stale_plans`/`_read_ready`/`_read_orphaned_plans` only when
-    explicitly given — `None` (the default; every existing caller passes
-    this) calls each with zero arguments, preserving the exact prior
-    call shape and behaviour byte-for-byte. `_read_awaiting_gate` is
-    untouched here; its cwd-relative reach (`_git_last_commit_epoch`,
-    `records_query.query_records`) is C7's, not this chunk's (module
-    docstring, "Reaches outside the module").
+    `repo_root` is keyword-only, threaded (C4, sites (a)/(b)/(c); C7
+    correction, 2026-08-29, site (d)) into `_read_stale_plans`/`_read_ready`/
+    `_read_awaiting_gate`/`_read_orphaned_plans` only when explicitly given —
+    `None` (the default; every existing caller passes this) calls each with
+    zero arguments, preserving the exact prior call shape and behaviour
+    byte-for-byte. `_read_awaiting_gate` now takes the same `repo_root`
+    keyword as its `_read_ready` sibling (previously accepted none at all —
+    the C7 gap this correction closes: its `records_query.query_records`
+    reach resolved off cwd regardless of the root a caller named).
     """
     root = Path(repo_root) if repo_root is not None else None
     kwargs: dict[str, Any] = {"repo_root": root} if root is not None else {}
@@ -502,7 +523,7 @@ def collect(cadence: str, *, repo_root: str | None = None) -> ReaderResult:
     for result in (
         _read_stale_plans(**kwargs),
         _read_ready(**kwargs),
-        _read_awaiting_gate(),
+        _read_awaiting_gate(**kwargs),
         _read_orphaned_plans(**kwargs),
     ):
         directives.extend(result.directives)

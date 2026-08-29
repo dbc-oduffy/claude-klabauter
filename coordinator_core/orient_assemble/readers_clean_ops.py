@@ -162,7 +162,16 @@ def _memo_cap_sort_key(line: str) -> tuple[str, str]:
 
 def _read_em_environment() -> ReaderResult:
     """EM effort/model drift — a human branch (pin effort / switch model),
-    never a mutation this module performs itself."""
+    never a mutation this module performs itself.
+
+    Carve-out: takes no `repo_root` parameter, unlike its sibling readers in
+    this module — deliberately, not an oversight. It reads the EM's harness
+    environment (`HOME`/`.claude`, `CLAUDE_PROJECT_DIR`/`PWD`), not repo
+    work-state: session config that lives outside any repo the caller might
+    name a root for. Threading a `repo_root` through here would mean
+    resolving a settings-home path against a work-state root, which is not
+    what this reader answers. See `collect()`'s own docstring for the same
+    note against its sibling readers."""
     judgment_points: list[dict[str, Any]] = []
 
     home = os.environ.get("HOME") or os.environ.get("USERPROFILE") or ""

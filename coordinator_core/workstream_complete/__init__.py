@@ -72,7 +72,7 @@ for the literal tuple; grouped here by which submodule names each CLI:
         module's own Design note) and is surfaced as `gates.completeness_
         checklist`, never a `directives[]` entry.
     review-brightline-gate.py, freeze-review-diff.py, fan-out-integrator.py,
-        scan_unresolved_ubt_records.py, classify-dispatch-shape.py ->
+        classify-dispatch-shape.py ->
         `directives_review.py` (C2d). `wsc-coverage-gate-runner.py`'s
         `coverage-gate` subcommand was already removed (K-001) and its
         `write-trail` subcommand was DROPPED here (C12) rather than wired a
@@ -207,10 +207,9 @@ Negative-spec:
       need a real `archive/` or `docs/project-tracker.md` (or a real
       `state/subagent-share/` sidecar dir); `regenerate-orientation-cache`
       needs a caller-decided pinboard note; `freeze-review-diff.py`/
-      `fan-out-integrator.py`/`scan_unresolved_ubt_records.py`/
-      `classify-dispatch-shape.py` need caller-resolved review-partition/
-      UBT/plan-file facts the sweep's fixed `_rich_decisions` payload does
-      not carry. C1's own module docstring (its "Coverage caveat" section)
+      `fan-out-integrator.py`/`classify-dispatch-shape.py` need
+      caller-resolved review-partition/plan-file facts the sweep's fixed
+      `_rich_decisions` payload does not carry. C1's own module docstring (its "Coverage caveat" section)
       names this exact class of gap as legitimate, expected residual red —
       "either widen the sweep... or add a named dispatched-worker-only
       exception" — neither of which is this chunk's file scope. This module
@@ -352,7 +351,6 @@ CONSUMES_MANIFEST: tuple[str, ...] = (
     "review-brightline-gate",
     "freeze-review-diff",
     "fan-out-integrator",
-    "scan_unresolved_ubt_records",
     "classify-dispatch-shape",
 )
 
@@ -410,7 +408,6 @@ FREE_VALUE_KEYS: tuple[str, ...] = (
     "scratch_candidates",
     "shared_schema_touched",
     "surface_count",
-    "ubt_check",
     "unattributable_files",
 )
 
@@ -1391,11 +1388,6 @@ def build_directives(
             directives.append(
                 directives_review.build_review_partition_integrator_directive(str(review_partition["integrator_spec_tsv"]))
             )
-    ubt_check = decisions.get("ubt_check") or {}
-    if ubt_check.get("applies"):
-        ubt_directive = directives_review.build_ubt_pending_check_directive(True, str(ubt_check.get("since_sha", "")))
-        if ubt_directive is not None:
-            directives.append(ubt_directive)
     classify_directive = directives_review.build_classify_dispatch_shape_directive(decisions.get("classify_dispatch_plan_file"))
     if classify_directive is not None:
         directives.append(classify_directive)

@@ -3592,8 +3592,6 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #   research.verify_scout_inventory_completeness —
     #     ops/verify_scout_inventory_completeness.py: read-only inventory
     #     completeness check, no write.
-    #   review_trail.scan_unresolved_ubt — ops/scan_unresolved_ubt_records.py:
-    #     read-only record scan, no write.
     #   schema.drift_gate — ops/schema_drift_gate.py: read-only schema-drift
     #     comparison, no write.
     #   session.resolve_chain_terminal_disposition —
@@ -3640,7 +3638,6 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     "plan.list_stale_executing": OpClass.COMPUTE_ONLY,
     "repo_setup.validate_target_root": OpClass.COMPUTE_ONLY,
     "research.verify_scout_inventory_completeness": OpClass.COMPUTE_ONLY,
-    "review_trail.scan_unresolved_ubt": OpClass.COMPUTE_ONLY,
     "schema.drift_gate": OpClass.COMPUTE_ONLY,
     "session.resolve_chain_terminal_disposition": OpClass.COMPUTE_ONLY,
     "update_docs.probe_fresh_repo_noop": OpClass.COMPUTE_ONLY,

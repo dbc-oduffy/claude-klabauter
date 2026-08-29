@@ -152,7 +152,7 @@ from coordinator_core.ops.draft_plan_aging import (
     _is_sidecar_file,
 )
 from coordinator_core.ops.fleet._common import main_worktree_root
-from coordinator_core.ops.list_review_trail_records import _collect as _collect_review_trail_jsons
+from coordinator_core.review_trail.records import _collect as _collect_review_trail_jsons
 from coordinator_core.win_portability import no_console_creationflags
 
 _CREATIONFLAGS = no_console_creationflags()

@@ -1,68 +1,38 @@
 """
-coordinator_core.ops.list_review_trail_records — union reader for live and
-archived review-trail records.
+coordinator_core.review_trail.records — live+archive review-trail corpus reader.
 
-Purpose: canonical reader for ``state/review-trail/**/*.json`` AND
-``archive/review-trail/**/*.json``, sorted by basename (ascending =
-chronological, since basenames are ``YYYY-MM-DD-HHMMSS-{sid}.json`` prefixed).
-Absent directories are silently skipped (fresh-install case).
+Purpose: read-side access to ``state/review-trail/**/*.json`` and
+``archive/review-trail/**/*.json`` — the 3,662-record corpus DR-372 rules
+stays on disk after the writer is retired. Moved here, verbatim, from
+``coordinator_core.ops.list_review_trail_records`` (C2b,
+state/dispatch-briefs/2026-08-29-the-gravestoned-review-trail-surface-is-
+deleted/C2b.md): that module's op handler and ``main(argv)`` CLI entry are
+gravestoned per DR-374 and deleted by a follow-up chunk, but ``_collect``,
+``list_paths``, and the state-root resolution they need are live readers of
+live data — three module-scope importers (``ops/changelog_ops.py``,
+``ops/emit/sections/review_trail.py``, ``ops/plan_suggest_completion_steps.py``)
+depend on them at IMPORT time, so they needed a surviving home before the
+doomed module could be deleted.
 
-CLI usage:
-    list-review-trail-records.sh [--date-prefix YYYY-MM-DD] [--print0]
+This package (``coordinator_core.review_trail``) already holds the
+reviewed-set STORE read live by the close gate — this is read-side code over
+the same corpus in the same domain, per this row's own citation of that
+overlap. AMENDS ``coordinator_core.review_trail``'s own ``__init__.py``
+docstring, which previously stated the reader "stays in `ops/`" — superseded
+here, not by unexamined drift.
 
-Options:
-    --date-prefix YYYY-MM-DD   Only emit records whose basename starts with
-                               this prefix.
-    --print0                   Separate records with NUL instead of newlines
-                               (safe for downstream ``xargs -0`` / ``read -d ''``
-                               pipelines).
-
-Exit codes:
-    0  — success (including empty result — absent dirs are not errors)
-    1  — tool failure (state-root unresolvable, bad --date-prefix, unknown
-         option, or a directory-scan OSError)
-
-Sort mechanism: sort by basename, NOT by full path.
-    ``archive/review-trail/week-2026-05-25/2026-05-19-foo.json`` has an
-    earlier basename than ``archive/review-trail/week-2026-05-18/2026-05-20-
-    bar.json``, but its full-path sort-order would be reversed across the
-    week-subdir boundary. Basename is extracted as the primary sort key,
-    mirroring the oracle's ``awk -F'/'`` extraction.
-
-State-root resolution: self-contains the DR-047/stop-the-rot Rule-5
-default-branch resolution (bare ``coordinator_state_root()``, no
-``--central``/``--subject``/``--artifact``): meta-repo cwd (git root ==
-CLAUDE_HOME) routes to the engine root/state; any other (sibling-repo) cwd uses
-``<git-root>/state`` directly. Mirrors the sibling pattern in
-``ops/check_weekly_staleness.py::_resolve_state_root`` /
-``ops/check_arch_audit_staleness.py::_resolve_state_root`` (same shape,
-independently duplicated per those modules' own documented rationale — no
-shared helper exists yet).
-
-``COORDINATOR_ROOT`` env var is an explicit override (test/caller use):
-interpreted as a state root verbatim when it ends in ``/state``, or as a
-repo root (``+"/state"`` appended) otherwise — mirrors the oracle's exact
-branching, backward-compat with existing callers.
-
-Port of: list-review-trail-records.sh (DoE b5a4192c, 2026-07-20)
-Spec backlink: docs/plans/2026-05-28-archive-aware-review-oracle-and-audit-skill.md § Chunk C0
-               docs/plans/2026-07-16-bash-clean-slate-residual-migration.md
+Spec backlink: state/dispatch-briefs/2026-08-29-the-gravestoned-review-trail-
+surface-is-deleted/C2b.md
+DR authority: docs/decisions/DR-374 (gravestone, not narrowing)
 
 Negative-spec:
-    - Does NOT write any file — pure reader, stdout-only.
-    - Does NOT sort by full path — basename only (see rationale above).
+    - Does NOT write any file — pure reader, stdout-only (CLI stays behind in
+      the doomed ``ops.list_review_trail_records`` module, deleted by C3).
+    - Does NOT sort by full path — basename only, mirroring the oracle this
+      was ported from (``ops.list_review_trail_records``'s own module
+      docstring carries the full rationale, not re-derived here).
     - Does NOT treat an absent live or archive directory as an error —
-      silently skipped (fresh-install case), reproduced faithfully from the
-      oracle's ``[[ -d "${dir}" ]] || return 0`` guard.
-    - Does NOT escalate --date-prefix "no records match" to an error — that
-      is grep's exit-1-no-match case in the oracle, a valid empty result.
-    - On ANY state-root resolution failure (not-a-git-repo, meta-repo-but-
-      claude-klabauter-unresolvable, or any other coordinator_state_root failure mode)
-      emits the SAME generic stderr message and exit 1 — the oracle's
-      ``coordinator_state_root 2>/dev/null || true`` swallows the specific
-      failure reason before the wrapping script's own generic check fires;
-      reproduced faithfully rather than "improved" with a more specific
-      message.
+      silently skipped (fresh-install case).
 """
 
 from __future__ import annotations
@@ -72,7 +42,6 @@ import re
 import subprocess
 from coordinator_core.win_portability import no_console_creationflags, same_path
 import sys
-from pathlib import Path
 from typing import List, Optional, Tuple
 
 from coordinator_core._settings_home import settings_home
@@ -247,10 +216,11 @@ class ReviewTrailListError(RuntimeError):
 def list_paths(date_prefix: str = "", state_root_override: Optional[str] = None) -> List[str]:
     """Programmatic (in-process) API: sorted live+archive review-trail file paths.
 
-    Mirrors ``main()``'s non-``--print0`` success path — added so in-process callers
-    (``coordinator_core.ops.emit.sections.review_trail`` / ``rollups``) invoke this
-    module directly instead of spawning a subprocess against the CLI, retiring the
-    ``bash <script>`` bridge those callers used pre-migration.
+    Mirrors the retiring CLI's non-``--print0`` success path — in-process
+    callers (``coordinator_core.ops.changelog_ops`` /
+    ``coordinator_core.ops.emit.sections.review_trail`` /
+    ``coordinator_core.ops.plan_suggest_completion_steps``) invoke this
+    module directly instead of spawning a subprocess.
 
     ``state_root_override``, when given, takes ``_resolve_state_root``'s explicit-
     override precedence rung directly — the caller-scoped alternative to staging
@@ -293,95 +263,3 @@ def list_paths(date_prefix: str = "", state_root_override: Optional[str] = None)
 
     records.sort(key=lambda r: r[0])
     return [os.path.normpath(fullpath) for _basename, fullpath in records]
-
-
-# ---------------------------------------------------------------------------
-# CLI
-# ---------------------------------------------------------------------------
-
-
-def main(argv: List[str]) -> int:
-    date_prefix = ""
-    print0 = False
-
-    args = list(argv)
-    i = 0
-    while i < len(args):
-        arg = args[i]
-        if arg == "--date-prefix":
-            date_prefix = args[i + 1] if i + 1 < len(args) else ""
-            i += 2
-            continue
-        if arg == "--print0":
-            print0 = True
-            i += 1
-            continue
-        if arg == "--":
-            i += 1
-            break
-        if arg.startswith("-"):
-            print(f"{_PROG}: unknown option: {arg}", file=sys.stderr)
-            return 1
-        break
-
-    state_root = _resolve_state_root()
-    if not state_root:
-        print(
-            f"{_PROG}: cwd is not a git repo and COORDINATOR_ROOT is not set — "
-            "cannot resolve state/review-trail/",
-            file=sys.stderr,
-        )
-        return 1
-
-    live_dir = os.path.join(state_root, "review-trail")
-    # Same basename-not-suffix check as _resolve_state_root() above — see
-    # that function's comment for why a literal "/state" suffix check
-    # misses a native-backslash state_root on Windows.
-    if os.path.basename(state_root.rstrip("/\\")) == "state":
-        archive_base = os.path.dirname(state_root.rstrip("/\\"))
-    else:
-        archive_base = state_root
-    archive_dir = os.path.join(archive_base, "archive", "review-trail")
-
-    try:
-        records = _collect(live_dir) + _collect(archive_dir)
-    except OSError as exc:
-        print(f"{_PROG}: directory scan failed: {exc}", file=sys.stderr)
-        return 1
-
-    if date_prefix:
-        if not _DATE_PREFIX_RE.match(date_prefix):
-            print(
-                f"{_PROG}: --date-prefix must be YYYY-MM-DD, got: {date_prefix}",
-                file=sys.stderr,
-            )
-            return 1
-        records = [r for r in records if r[0].startswith(date_prefix)]
-
-    records.sort(key=lambda r: r[0])
-
-    if not records:
-        return 0
-
-    # normpath() at the print boundary: state_root may itself carry a mixed
-    # separator form (a computed "<override>/state" append literal-joins
-    # with "/" onto a native-backslash override on Windows, while a
-    # caller-supplied override that already ends in "state" is returned
-    # verbatim) — two COORDINATOR_ROOT spellings for the same directory
-    # must still print the identical string. Normalizing once, here, at
-    # the point the path leaves the process is the single wire boundary
-    # for this module (C5 root-cause: os.sep-in-wire-id class).
-    if print0:
-        for _basename, fullpath in records:
-            sys.stdout.write(os.path.normpath(fullpath))
-            sys.stdout.write("\0")
-    else:
-        for _basename, fullpath in records:
-            sys.stdout.write(os.path.normpath(fullpath))
-            sys.stdout.write("\n")
-
-    return 0
-
-
-if __name__ == "__main__":
-    sys.exit(main(sys.argv[1:]))

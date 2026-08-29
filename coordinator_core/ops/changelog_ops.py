@@ -71,7 +71,7 @@ from coordinator_core.machine_resolver import compute_machine
 from coordinator_core.ops._path_guard import safe_id
 from coordinator_core.session.declared_writes import declare_write
 from coordinator_core.ops.fleet._common import main_worktree_root, parse_frontmatter_status
-from coordinator_core.ops.list_review_trail_records import _collect as _collect_review_trail_files
+from coordinator_core.review_trail.records import _collect as _collect_review_trail_files
 from coordinator_core.ops.records_query import (
     _RecordsCollectError,
     _collect_type_records,

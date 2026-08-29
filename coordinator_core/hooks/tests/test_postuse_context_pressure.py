@@ -16,7 +16,8 @@ as amended by the 2026-08-18 PM ruling on bands and silence.
 The model under test, in full:
 
     < 40%   nothing
-    >= 40%  ADVISORY  — consider a handoff if the work cannot close in ~5% more
+    >= 40%  INFORMATIONAL — checkpoint so the run is resumable; no handoff
+                            recommendation (PM ruling 2026-08-29)
     >= 47%  HANDOFF NOW — ahead of the fixed ~500K auto-compaction ceiling
     no usable reading  — silence, on every fire, for the whole session
 
@@ -182,7 +183,7 @@ def test_thirty_nine_is_silent_and_forty_is_not():
     _write_sidecar("session-39", 39)
     assert _check("session-39") == ""
     _write_sidecar("session-40", 40)
-    assert "ADVISORY" in _check("session-40")
+    assert "INFORMATIONAL" in _check("session-40")
 
 
 # ---------------------------------------------------------------------------
@@ -190,14 +191,23 @@ def test_thirty_nine_is_silent_and_forty_is_not():
 # ---------------------------------------------------------------------------
 
 
-def test_forty_percent_fires_the_advisory():
+def test_forty_percent_fires_informational_and_never_recommends_handoff():
+    """PM ruling 2026-08-29: 40 is an orientation reading, not a call to stop.
+
+    The `/handoff` assertion is the load-bearing one. The band previously read
+    "start moving toward /handoff", and the whole point of the ruling is that
+    there is no posture in which that is the right response at 40 -- so a test
+    that only checked for the new INFORMATIONAL header would pass against a
+    composer that still appended the recommendation underneath it.
+    """
     session_id = "session-orange"
     _write_sidecar(session_id, 42)
     text = _check(session_id)
-    assert "CONTEXT PRESSURE — ADVISORY" in text
+    assert "CONTEXT PRESSURE — INFORMATIONAL" in text
     assert "~42% of window used" in text
-    assert "5% of window" in text
     assert "47%" in text
+    assert "/handoff" not in text
+    assert "ADVISORY" not in text
 
 
 @pytest.mark.parametrize("pct", [40, 43, 46])
@@ -205,14 +215,15 @@ def test_orange_band_spans_forty_to_fortysix(pct):
     session_id = f"session-orange-{pct}"
     _write_sidecar(session_id, pct)
     text = _check(session_id)
-    assert "ADVISORY" in text
+    assert "INFORMATIONAL" in text
     assert "HANDOFF NOW" not in text
+    assert "/handoff" not in text
 
 
 def test_advisory_barks_once():
     session_id = "session-orange-once"
     _write_sidecar(session_id, 41)
-    assert "ADVISORY" in _check(session_id)
+    assert "INFORMATIONAL" in _check(session_id)
     _bypass_throttle(session_id)
     assert _check(session_id) == ""
 
@@ -307,10 +318,14 @@ class TestAutonomousSentinelSuppressesTheRecommendation:
         _write_sidecar(session_id, 41)
         text = _check(session_id)
         assert "INFORMATIONAL" in text
-        assert "Autonomous run" in text
-        assert "checkpoint state to disk" in text
+        assert "heckpoint state to disk" in text
         assert "/handoff" not in text
         assert "ADVISORY" not in text
+        # No "Autonomous run" assertion here any more: since the 2026-08-29
+        # ruling this band is informational for EVERY session, so its text is
+        # mode-neutral by design and naming the sentinel would be a claim the
+        # band does not make. The mode clause is asserted at 47, where it is
+        # actually selected -- see TestModeClauseNamesOnlyWhatIsTrue.
 
     def test_critical_band_carries_no_handoff_recommendation(self, tmp_path, monkeypatch):
         session_id = "session-autonomous-red"
@@ -329,10 +344,16 @@ class TestAutonomousSentinelSuppressesTheRecommendation:
         _write_sidecar(session_id, 58)
         assert "~58% of window used" in _check(session_id)
 
-    def test_without_the_sentinel_both_bands_still_recommend_handoff(self):
-        """The other half of the branch: no sentinel, no suppression."""
+    def test_without_the_sentinel_only_the_critical_band_recommends_handoff(self):
+        """The other half of the branch, as the 2026-08-29 ruling leaves it.
+
+        47 without a sentinel still says HANDOFF NOW -- that is the band the
+        mode key governs and the suppression this class is about. 40 no longer
+        recommends anything to anyone, sentinel or not, so asserting a
+        recommendation there would re-pin the behaviour the ruling removed.
+        """
         _write_sidecar("session-no-sentinel-orange", 41)
-        assert "/handoff" in _check("session-no-sentinel-orange")
+        assert "/handoff" not in _check("session-no-sentinel-orange")
         _write_sidecar("session-no-sentinel-red", 60)
         assert "HANDOFF NOW" in _check("session-no-sentinel-red")
 
@@ -355,7 +376,7 @@ def test_fractional_percentage_rounds_to_match_the_status_line():
     it. Review: code-reviewer (P2).
     """
     _write_sidecar("session-round-up", 39.6)
-    assert "ADVISORY" in _check("session-round-up")
+    assert "INFORMATIONAL" in _check("session-round-up")
 
     _write_sidecar("session-round-down", 39.4)
     assert _check("session-round-down") == ""
@@ -389,3 +410,55 @@ def test_unmeasured_path_writes_state_once_not_twice(monkeypatch):
     )
     assert _check("session-single-write") == ""
     assert saves.count("session-single-write") == 1
+
+
+def _under_fleet_informational(monkeypatch) -> None:
+    """Select the informational variant the way the FLEET key does — with no
+    session sentinel anywhere. Patches the record read rather than writing a
+    real settings-home file so the test never touches machine-wide state that
+    ~50 concurrent peers resolve against."""
+    from coordinator_core.session import mode_resolution
+
+    monkeypatch.setattr(
+        mode_resolution, "read_fleet_mode", lambda: {"compaction_warnings": "informational"}
+    )
+
+
+class TestModeClauseNamesOnlyWhatIsTrue:
+    """The 47 band's informational text opens with a mode clause, and which
+    clause it opens with is decided by WHICH side selected the variant.
+
+    The defect this pins: the text was written for the session-scoped sentinel
+    and hardcoded "Autonomous run:". `compaction_warnings` is fleet-wins with
+    `session_pair=None`, so it selects the same text for sessions that are not
+    autonomous — every one of which would have been told it was an autonomous
+    run. A message that asserts something untrue about its own reader is a
+    register defect (docs/wiki/guard-messaging.md), and it is invisible to any
+    test that only checks the INFORMATIONAL header is present.
+    """
+
+    def test_the_sentinel_path_still_names_the_autonomous_run(self, tmp_path, monkeypatch):
+        session_id = "session-clause-sentinel"
+        _under_sentinel(tmp_path, monkeypatch, session_id)
+        _write_sidecar(session_id, 60)
+        text = _check(session_id)
+        assert "INFORMATIONAL" in text
+        assert "Autonomous run:" in text
+
+    def test_the_fleet_path_never_claims_the_session_is_autonomous(self, monkeypatch):
+        session_id = "session-clause-fleet"
+        _under_fleet_informational(monkeypatch)
+        _write_sidecar(session_id, 60)
+        text = _check(session_id)
+        assert "INFORMATIONAL" in text
+        assert "Autonomous run" not in text
+        assert "Informational mode:" in text
+
+    def test_the_fleet_path_still_suppresses_the_recommendation(self, monkeypatch):
+        """The clause fix must not cost the key its actual job."""
+        session_id = "session-clause-fleet-handoff"
+        _under_fleet_informational(monkeypatch)
+        _write_sidecar(session_id, 60)
+        text = _check(session_id)
+        assert "/handoff" not in text
+        assert "HANDOFF NOW" not in text

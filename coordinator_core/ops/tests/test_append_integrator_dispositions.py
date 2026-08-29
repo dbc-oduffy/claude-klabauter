@@ -406,6 +406,8 @@ class TestReviewerAgentTypeSet:
                 "coordinator:staff-ux",
                 "coordinator:vp-product",
                 "coordinator:eng-director",
+                "coordinator:overengineering-reviewer",
+                "coordinator:apm",
             }
         )
 
@@ -424,8 +426,10 @@ class TestReviewerAgentTypeSet:
             "coordinator:staff-ux",
             "coordinator:vp-product",
             "coordinator:eng-director",
+            "coordinator:overengineering-reviewer",
+            "coordinator:apm",
         }
-        # Strict superset of the guard's single literal, and the six Opus
+        # Strict superset of the guard's single literal, and the Opus
         # personas must all be present as a group — not just "bigger than 1",
         # which a narrowed-but-still-two-member set would also satisfy.
         assert mod._REVIEWER_AGENT_TYPES > {guard._REVIEWER_AGENT_TYPE}

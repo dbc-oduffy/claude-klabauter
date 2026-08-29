@@ -393,7 +393,6 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ("coordinator_core.ops.run_pip_audit", 'registers "ci.run_pip_audit"'),
     ("coordinator_core.ops.run_semgrep_scan", 'registers "ci.run_semgrep_scan"'),
     ("coordinator_core.ops.run_shellcheck_sweep", 'registers "ci.run_shellcheck_sweep"'),
-    ("coordinator_core.ops.scan_unresolved_ubt_records", 'registers "review_trail.scan_unresolved_ubt"'),
     (
         "coordinator_core.ops.verify_scout_inventory_completeness",
         'registers "research.verify_scout_inventory_completeness"',

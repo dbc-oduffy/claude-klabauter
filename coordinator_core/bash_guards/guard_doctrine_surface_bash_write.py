@@ -286,6 +286,13 @@ def _redirect_target_token(segment: str) -> Optional[str]:
 def _has_write_marker(text: str) -> bool:
     if _has_redirect_marker(text):
         return True
+    # Marker patterns are scanned on the literal-join fold as well as the raw
+    # text: `'t''ee' <governed>` is `tee` to the shell, but `\btee\b` matched
+    # neither, so a split write verb carried no marker and the segment read as
+    # a plain mention (measured 2026-08-29). Widening only -- a marker found
+    # only after folding still has to co-occur with a governed mention in the
+    # same segment before anything denies.
+    folded = _fold_literal_joins(text)
     for pattern in (
         _TEE_RE,
         _SED_INPLACE_RE,
@@ -299,7 +306,7 @@ def _has_write_marker(text: str) -> bool:
         _WGET_OUTPUT_RE,
         _SED_WRITE_SCRIPT_RE,
     ):
-        if pattern.search(text):
+        if pattern.search(text) or pattern.search(folded):
             return True
     return False
 
@@ -616,7 +623,18 @@ _ASSIGN_RE = re.compile(r"^\s*[A-Za-z_][A-Za-z0-9_]*=")
 
 
 def _git_subcommand(segment: str) -> Optional[str]:
-    tokens = segment.split()
+    # Folded before tokenizing: `'g''it' checkout HEAD~5 -- <governed>` is a
+    # git content mutation to the shell, but the raw first token was never the
+    # literal `git`, so point 8 never classified it and the segment fell
+    # through to the read-shape carve-out (measured 2026-08-29). This reads
+    # the segment for verb IDENTITY only, never to reconstruct arguments --
+    # which is also why the quote characters come off each token: folding
+    # `'g''it'` leaves `'git'`, still not the literal `git` the walk below
+    # compares against.
+    tokens = [
+        token.replace("'", "").replace('"', "")
+        for token in _fold_literal_joins(segment).split()
+    ]
     idx = 0
     while idx < len(tokens) and tokens[idx] != "git":
         if not _ASSIGN_RE.match(tokens[idx]):

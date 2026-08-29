@@ -148,7 +148,7 @@ _BUCKET_YAML_KEY = {
 
 #: The agent types whose DELIVERABLE is a finding set, and which may therefore
 #: receive an `## Integrator Dispositions` block: the code-reviewer family plus
-#: the six Opus reviewer personas. Membership mirrors exactly the types
+#: the eight Opus reviewer personas. Membership mirrors exactly the types
 #: DoE-claude's `report_type_map:` routes to the `review-findings` or
 #: `staff-eng-review` provisioning templates — that map is the REASON for this
 #: membership, never a runtime input. This module must not read a peer repo's
@@ -164,10 +164,14 @@ _BUCKET_YAML_KEY = {
 #: set decides which sidecars can RECEIVE a disposition block. Widening the
 #: guard to match would start blocking EM edits on every persona review, which
 #: nothing asks for. The divergence is intentional; it is not drift.
-# Membership verified 2026-08-10 against DoE-claude's live
+# Membership verified 2026-08-29 against DoE-claude's live
 # `coordinator/subagent-sandbox-policy.yaml` `report_type_map:` block — the
-# six `staff-eng-review`-mapped personas below match that file's rows
-# verbatim. Re-check against that file if either side drifts; this repo has
+# eight `staff-eng-review`-mapped personas below match that file's rows
+# verbatim. The 2026-08-10 verification recorded six; `overengineering-reviewer`
+# (Kaya) and `apm` (Angelique) were added on the peer side after it, and both
+# arrived here in one re-check rather than one memo each — the drift this
+# comment warns about is cumulative, not single-row.
+# Re-check against that file if either side drifts; this repo has
 # no automated way to catch a mismatch at authorship time, only the pin
 # test below catching FUTURE accidental drift.
 _REVIEWER_AGENT_TYPES = frozenset(
@@ -180,6 +184,8 @@ _REVIEWER_AGENT_TYPES = frozenset(
         "coordinator:staff-ux",
         "coordinator:vp-product",
         "coordinator:eng-director",
+        "coordinator:overengineering-reviewer",
+        "coordinator:apm",
     }
 )
 
@@ -214,7 +220,7 @@ _EXIT_INTERVIEW_HEADING = "## Exit interview"
 #: Named findings-bearing shapes this module can extract from. Two, not one:
 #: `review-findings` (the `## Findings` heading scaffold, DR-091) and
 #: `staff-eng-review` -- what every Opus reviewer persona
-#: (`_REVIEWER_AGENT_TYPES`'s six-persona subset) ACTUALLY writes when
+#: (`_REVIEWER_AGENT_TYPES`'s persona subset) ACTUALLY writes when
 #: dispatched, which is NOT the `## Findings`-headed scaffold
 #: `provision_report._build_staff_eng_review_doc_text` provisions at spawn
 #: time. Personas write their own free-form document over that scaffold, and

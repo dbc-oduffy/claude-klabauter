@@ -563,14 +563,6 @@
       "undeclared_required": []
     },
     {
-      "module": "coordinator_core/workstream_complete/directives_review.py",
-      "directive_id": "d-run-ubt-pending-check",
-      "cli": "scan_unresolved_ubt_records",
-      "unresolved": true,
-      "unaccepted": [],
-      "undeclared_required": []
-    },
-    {
       "module": "coordinator_core/workstream_complete/directives_session_hygiene.py",
       "directive_id": "d-check-machine-local-regeneratability",
       "cli": "check-machine-local-regeneratability",

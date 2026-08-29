@@ -26,7 +26,7 @@ from pathlib import Path
 
 from coordinator_core.ops.emit.context import EmitContext
 from coordinator_core.ops.emit.sections._shared import _validate_review_trail_file
-from coordinator_core.ops.list_review_trail_records import (
+from coordinator_core.review_trail.records import (
     ReviewTrailListError,
     list_paths as _native_list_paths,
 )

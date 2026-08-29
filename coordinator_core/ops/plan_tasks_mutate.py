@@ -70,12 +70,23 @@ Verb contracts:
     of DoE's 2026-08-05 ruling ("the EM self-issues it now" — no
     governed-plan carve-out in the ruling's text): moving a row to another
     plan drops no work, so there is no scope cut for the PM to ratify
-    (AC2). It also occupies its own grouping as of C3 (split out of
-    `defer` — see `_PLAN_TASKS_GROUPING_BY_DISPOSITION`'s docstring), which
-    has no corresponding `grouping_approvals` schema key; gating it here
-    would make a governed-plan spun_off resolve permanently
-    unsatisfiable rather than merely PM-gated, which is a stronger and
-    unintended block than the ruling asks for.
+    (AC2). It also occupied its own grouping as of C3 (split out of
+    `defer` — see `_PLAN_TASKS_GROUPING_BY_DISPOSITION`'s docstring) with no
+    corresponding `grouping_approvals` schema key, so gating it here would
+    have made a governed-plan spun_off resolve permanently unsatisfiable
+    rather than merely PM-gated — a stronger and unintended block than the
+    ruling asked for.
+
+    The first half is now stale: DR-183 (2026-08-29) reverses the ruling and
+    re-gates `spun_off`. The second half still holds and is what blocks the
+    widen — `grouping_approvals` has gained no `spun_off` key, and it cannot
+    gain one here, since plan.schema.json is vendored byte-for-byte from
+    DoE-claude under `check_schema_drift`.
+
+    This gate needs no edit of its own when that resolves: it keys on
+    `_PLAN_TASKS_PM_APPROVAL_GATED_DISPOSITIONS`, so widening that frozenset
+    is what re-gates `spun_off` here. See `check_plan_tasks_grouping_approval`
+    for the full sequence and the legacy-row migration it carries.
 
     Which signal clears the two PM-gated dispositions depends on the plan
     (2026-07-29 grouping-approval contract; see `is_governed_plan`):

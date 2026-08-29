@@ -1,0 +1,317 @@
+"""Tests for `coordinator_core.write_guards.guard_class_relay` (C4 of
+docs/plans/2026-08-29-a-guard-class-flip-announces-itself.md).
+
+Covers the detector (`detect_class_transition`, C1) across every named
+shape -- hard-deny -> advisory, advisory -> hard-deny, no change,
+unparseable source, absent CLASS, non-literal CLASS expression, file added,
+file deleted -- plus a HOT-PATH REGRESSION GUARD pinning
+`engine._cheap_guard_metadata` byte-identical against a checked-in golden
+snapshot captured at the pre-extraction sha (13c5b2da99, the commit
+immediately before 39aeb9d675 "C1: Extract guard AST literals and detect
+class transitions"), and the three C6 demonstration tests that make the
+relay's "what it cannot see" claim executable rather than asserted.
+
+NEGATIVE SPEC: this file tests the detector and its shared AST-literal
+core only. Memo composition/staging (C3) is a live, one-off op invocation
+this session, not a reusable function -- there is no in-repo callable to
+unit-test for memo emission, so no such test is authored here (see this
+chunk's completion report for the gap this leaves).
+"""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import pytest
+
+from coordinator_core.win_portability import no_console_creationflags
+from coordinator_core.write_guards import engine as _engine
+from coordinator_core.write_guards.guard_class_relay import (
+    UNCOVERED_SHAPE,
+    detect_class_transition,
+)
+
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+
+_NO_CONSOLE = no_console_creationflags()
+
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+_GUARD_MODULE = (
+    _REPO_ROOT / "coordinator_core" / "write_guards"
+    / "validate_frontmatter_schema_deny.py"
+)
+_REFERENCE_DOC = _REPO_ROOT / "docs" / "reference" / "guard-class-relay.md"
+
+# C15 apply commit (docs/plans/2026-08-06-apply-guard-class-census.md C15):
+# retired the COORDINATOR_SCHEMA_STRICT deny-upgrade inside
+# validate_frontmatter_schema_deny.py WITHOUT moving its module-level CLASS
+# literal -- the exact "intra-module branch-contract change" shape this
+# relay is scoped to miss. Verified this session: CLASS == "hard-deny" on
+# both sides of this commit.
+_C15_APPLY_SHA = "f0994eabc647d3b3adde861d914f158cce9955c9"
+_C15_PARENT_SHA = "f0994eabc647d3b3adde861d914f158cce9955c9~1"
+
+
+def _git_show(ref: str, path: str) -> str:
+    import subprocess
+
+    out = subprocess.run(
+        ["git", "show", f"{ref}:{path}"],
+        cwd=_REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+        encoding="utf-8",
+        **_NO_CONSOLE,
+    )
+    return out.stdout
+
+
+# ---------------------------------------------------------------------------
+# detect_class_transition -- every named shape
+# ---------------------------------------------------------------------------
+
+
+def _src(cls_line: str, extra: str = "") -> str:
+    return f'CLASS = {cls_line}\nMATCHERS = ["Write"]\nPRIORITY = 100\n{extra}'
+
+
+def test_hard_deny_to_advisory_is_a_transition():
+    old = _src('"hard-deny"')
+    new = _src('"advisory"')
+    assert detect_class_transition(old, new) == ("hard-deny", "advisory")
+
+
+def test_advisory_to_hard_deny_is_a_transition():
+    old = _src('"advisory"')
+    new = _src('"hard-deny"')
+    assert detect_class_transition(old, new) == ("advisory", "hard-deny")
+
+
+def test_no_change_is_not_a_transition():
+    old = _src('"hard-deny"')
+    new = _src('"hard-deny"')
+    assert detect_class_transition(old, new) is None
+
+
+def test_unparseable_source_is_not_a_transition():
+    old = _src('"hard-deny"')
+    new = "def broken(:\n    pass\n"
+    assert detect_class_transition(old, new) is None
+    assert detect_class_transition(new, old) is None
+
+
+def test_absent_class_is_not_a_transition():
+    old = _src('"hard-deny"')
+    new = 'MATCHERS = ["Write"]\nPRIORITY = 100\n'  # no CLASS at all
+    assert detect_class_transition(old, new) is None
+
+
+def test_non_literal_class_expression_is_not_a_transition():
+    old = _src('"hard-deny"')
+    new = 'CLASS = "hard-" + "deny"\nMATCHERS = ["Write"]\nPRIORITY = 100\n'
+    assert detect_class_transition(old, new) is None
+
+
+def test_file_added_is_not_a_transition():
+    # Old side missing entirely -- a wholesale add, never a flip.
+    assert detect_class_transition(None, _src('"hard-deny"')) is None
+
+
+def test_file_deleted_is_not_a_transition():
+    # New side missing entirely -- a wholesale delete, never a flip.
+    assert detect_class_transition(_src('"hard-deny"'), None) is None
+
+
+def test_invalid_class_value_is_not_a_transition():
+    old = _src('"hard-deny"')
+    new = _src('"soft-deny"')  # not in _VALID_CLASSES
+    assert detect_class_transition(old, new) is None
+
+
+# ---------------------------------------------------------------------------
+# HOT-PATH REGRESSION GUARD: _cheap_guard_metadata byte-identical against a
+# golden snapshot captured at the pre-extraction sha (13c5b2da99).
+#
+# The snapshot below was generated by executing the PRE-EXTRACTION
+# `_cheap_guard_metadata` (as it stood at 13c5b2da99, before the C1
+# extraction split it into `_parse_guard_literals` + validation) against
+# every guard module file present in this tree today. Because none of C1's
+# two touched files (engine.py, guard_class_relay.py) is itself a guard
+# module read by this scan, and no guard module's own source changed as
+# part of C1, this snapshot is valid as a pre/post comparison baseline.
+# ---------------------------------------------------------------------------
+
+_GOLDEN_SNAPSHOT = json.loads(
+    """
+{
+"block_completion_monolith_write": ["advisory", ["Write", "Edit", "MultiEdit", "NotebookEdit"], 171],
+"block_confined_agent_write": ["hard-deny", ["Write", "Edit", "MultiEdit", "NotebookEdit"], 48],
+"block_consumed_handoff_edit": ["hard-deny", ["Write", "Edit", "MultiEdit", "NotebookEdit"], 50],
+"block_cutover_phase_hand_edit": ["advisory", ["Write", "Edit", "MultiEdit"], 112],
+"block_derived_global_doctrine_write": ["hard-deny", ["Write", "Edit", "MultiEdit", "NotebookEdit"], 10],
+"block_dev_repo_sentinel_write": ["advisory", ["Write", "Edit", "MultiEdit", "NotebookEdit"], 122],
+"block_dev_side_mirror_wiki": ["advisory", ["Write", "Edit", "NotebookEdit"], 172],
+"block_disarm_marker_sentinel_write": ["hard-deny", ["Write", "Edit", "MultiEdit", "NotebookEdit"], 130],
+"block_duplicate_decision_record_id": ["hard-deny", ["Write", "Edit", "MultiEdit"], 137],
+"block_em_hand_edit_pending_review_integration": ["advisory", ["Write", "Edit", "MultiEdit", "NotebookEdit"], 115],
+"block_fleet_delegation_write": ["hard-deny", ["Write", "Edit", "MultiEdit", "NotebookEdit"], 49],
+"block_goals_log_hand_write": ["hard-deny", ["Write", "Edit", "MultiEdit", "NotebookEdit"], 65],
+"block_home_dir_memo_delivery": ["hard-deny", ["Write", "Edit", "MultiEdit", "NotebookEdit"], 125],
+"block_illegal_filename": ["hard-deny", ["Write", "Edit", "NotebookEdit"], 20],
+"block_memo_status_hand_edit": ["hard-deny", ["Write", "Edit", "MultiEdit"], 56],
+"block_oss_mirror_memo_delivery": ["hard-deny", ["Write", "Edit", "MultiEdit", "NotebookEdit"], 132],
+"block_priority_ledger_edit": ["advisory", ["Write", "Edit", "MultiEdit", "NotebookEdit"], 114],
+"block_subagent_archive_write": ["hard-deny", ["Write", "Edit", "MultiEdit", "NotebookEdit"], 30],
+"block_subagent_grant_record_write": ["hard-deny", ["Write", "Edit", "MultiEdit", "NotebookEdit"], 46],
+"block_subagent_guard_grant_write": ["hard-deny", ["Write", "Edit", "MultiEdit", "NotebookEdit"], 47],
+"block_subagent_plan_body_write": ["hard-deny", ["Write", "Edit", "MultiEdit", "NotebookEdit"], 40],
+"block_unauthorized_claude_md_write": ["hard-deny", ["Write", "Edit", "MultiEdit", "NotebookEdit"], 45],
+"block_worktree_sentinel_write": ["hard-deny", ["Write", "Edit", "MultiEdit", "NotebookEdit"], 129],
+"bump_out_of_repo_tool_write": ["hard-deny", ["Write", "Edit", "MultiEdit", "NotebookEdit"], 135],
+"check_claude_md_size": ["advisory", ["Write", "Edit", "MultiEdit"], 106],
+"guard_class_relay": null,
+"guard_concrete_path_citations": ["advisory", ["Write", "Edit", "MultiEdit", "NotebookEdit"], 111],
+"guard_doctrine_surface_edits": ["hard-deny", ["Write", "Edit", "MultiEdit", "NotebookEdit"], 127],
+"guard_memory_store_cap": ["hard-deny", ["Write", "Edit", "MultiEdit"], 136],
+"guard_settings_json_write": ["hard-deny", ["Write", "Edit", "MultiEdit", "NotebookEdit"], 131],
+"nudge_baton_body_bar": ["advisory", ["Write", "Edit", "MultiEdit"], 130],
+"nudge_em_code_dispatch": ["advisory", ["Write", "Edit", "MultiEdit"], 105],
+"nudge_handoff_ac_shape": ["advisory", ["Write", "Edit", "MultiEdit"], 220],
+"nudge_improvement_queue_write": ["advisory", ["Write", "Edit", "MultiEdit"], 120],
+"nudge_new_sh_file_naked_python": ["advisory", ["Write"], 160],
+"nudge_outbox_draft_frontmatter_shape": ["advisory", ["Write", "Edit", "MultiEdit"], 210],
+"nudge_peer_notice_unread": ["advisory", ["Write", "Edit", "MultiEdit", "NotebookEdit"], 101],
+"nudge_plan_sidecar_family_split": ["advisory", ["Write", "Edit", "MultiEdit", "NotebookEdit"], 141],
+"nudge_private_git_fact_resolver": ["advisory", ["Write", "Edit", "MultiEdit"], 200],
+"nudge_prose_queue_append": ["advisory", ["Write", "Edit", "MultiEdit"], 170],
+"nudge_prose_queue_creation": ["advisory", ["Write"], 119],
+"nudge_sentinel_retained_review_sidecar": ["advisory", ["Write", "Edit", "MultiEdit", "NotebookEdit"], 76],
+"nudge_shell_shaped_spawn": ["advisory", ["Write", "Edit", "MultiEdit"], 190],
+"nudge_tasks_state_folder_split": ["advisory", ["Write", "Edit", "MultiEdit", "NotebookEdit"], 140],
+"nudge_terminal_artifact_edit": ["advisory", ["Write", "Edit", "MultiEdit", "NotebookEdit"], 150],
+"nudge_unmarked_spawning_test": ["advisory", ["Write", "Edit", "MultiEdit"], 191],
+"nudge_windows_subprocess_popup": ["advisory", ["Write", "Edit", "MultiEdit"], 110],
+"tests": null,
+"validate_frontmatter_schema_advisory": ["advisory", ["Write", "Edit", "MultiEdit"], 100],
+"validate_frontmatter_schema_deny": ["hard-deny", ["Write", "Edit", "MultiEdit"], 5]
+}
+"""
+)
+
+
+def test_cheap_guard_metadata_matches_golden_snapshot():
+    """Byte-identical (as a JSON-comparable value) regression pin: every
+    module name the golden snapshot recorded, read by TODAY's
+    `_cheap_guard_metadata`, must produce the exact same `(cls, matchers,
+    priority)` triple or `None`. A mismatch here means the C1 extraction
+    changed hot-path behaviour -- the exact regression this guard exists to
+    catch.
+    """
+    for name, expected in _GOLDEN_SNAPSHOT.items():
+        actual = _engine._cheap_guard_metadata(name)
+        actual_json = list(actual) if actual is not None else None
+        assert actual_json == expected, f"{name}: expected {expected}, got {actual_json}"
+
+
+def test_golden_snapshot_covers_every_module_in_pkg_dir():
+    """The snapshot's module set must match `_PKG_DIR` today (modulo a
+    module added/removed since capture, which would need re-snapshotting --
+    caught here rather than silently validating a stale subset).
+    """
+    import pkgutil
+
+    live_names = {
+        m.name
+        for m in pkgutil.iter_modules([_engine._PKG_DIR])
+        if m.name not in ("engine", "__main__") and not m.name.startswith("_")
+    }
+    assert live_names == set(_GOLDEN_SNAPSHOT.keys())
+
+
+# ---------------------------------------------------------------------------
+# C6 explicit fixtures for every None-returning shape, routed through
+# `_discover_guards()`'s eager-import fallback and recorded into
+# `import_failed`.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "name,source",
+    [
+        ("missing_matchers", 'CLASS = "hard-deny"\nPRIORITY = 100\n'),
+        ("non_literal_class", 'CLASS = "hard-" + "deny"\nMATCHERS = ["Write"]\n'),
+        ("empty_matchers_after_filter", 'CLASS = "hard-deny"\nMATCHERS = ["NotARealTool"]\n'),
+        ("non_int_priority", 'CLASS = "hard-deny"\nMATCHERS = ["Write"]\nPRIORITY = "high"\n'),
+    ],
+)
+def test_none_returning_shapes_fall_back_to_eager_import(tmp_path, monkeypatch, name, source):
+    """Each None-returning shape from `_cheap_guard_metadata` must still
+    route through `_discover_guards()`'s eager-import fallback for that one
+    module, and a subsequent import failure (these fixtures are not
+    importable as real guard modules -- they have no `check()`) must land
+    in `import_failed`.
+    """
+    pkg_dir = tmp_path / "fake_write_guards"
+    pkg_dir.mkdir()
+    (pkg_dir / f"{name}.py").write_text(source, encoding="utf-8")
+
+    monkeypatch.setattr(_engine, "_PKG_DIR", str(pkg_dir))
+    monkeypatch.setattr(_engine, "_PKG_NAME", "coordinator_core.write_guards.tests._fixtures_do_not_import")
+
+    # _cheap_guard_metadata must return None for every one of these shapes.
+    assert _engine._cheap_guard_metadata(name) is None
+
+    guards, import_failed = _engine._discover_guards()
+    # No fixture here defines a real check()/CLASS at module scope importable
+    # under the monkeypatched package name, so the eager-import fallback
+    # raises and the module lands in import_failed -- never silently guarded.
+    assert name in import_failed
+    assert all(g.name != name for g in guards)
+
+
+# ---------------------------------------------------------------------------
+# C6: three named demonstration tests
+# ---------------------------------------------------------------------------
+
+
+def test_c15_shape_is_provably_uncovered():
+    """Demonstration 1 (C6): the real pre-C15 and post-C15 source of
+    `validate_frontmatter_schema_deny.py`, fed to the detector, must return
+    None. Its failure means the uncovered shape stopped being uncovered.
+    """
+    old_source = _git_show(_C15_PARENT_SHA, "coordinator_core/write_guards/validate_frontmatter_schema_deny.py")
+    new_source = _git_show(_C15_APPLY_SHA, "coordinator_core/write_guards/validate_frontmatter_schema_deny.py")
+    assert detect_class_transition(old_source, new_source) is None
+
+
+def test_dr277_shaped_flip_is_detected():
+    """Demonstration 2 (C6): a DR-277-shaped flip (a module's CLASS literal
+    changed between two source strings) must return a transition.
+    """
+    old_source = 'CLASS = "hard-deny"\nMATCHERS = ["Write"]\nPRIORITY = 119\n'
+    new_source = 'CLASS = "advisory"\nMATCHERS = ["Write"]\nPRIORITY = 119\n'
+    assert detect_class_transition(old_source, new_source) == ("hard-deny", "advisory")
+
+
+def test_uncovered_shape_constant_appears_verbatim_in_reference_doc():
+    """Demonstration 3a (C6), doc half of the anti-drift pair. `UNCOVERED_SHAPE`
+    must appear VERBATIM in the reference doc: a Python constant does not bind a
+    Markdown file, so nothing but an assertion keeps the two from drifting into
+    announcing different coverage.
+
+    The memo half lives in
+    `ops/ceremony/tests/test_commit_v2_guard_class_relay.py`, against a draft the
+    mechanism actually stages. It is deliberately NOT asserted against a file in
+    the working repo's `state/memo-outbox/` -- an earlier version of this test was,
+    and passed on the strength of an artifact a person had placed there by hand.
+    A file's presence in an outbox proves a file exists, never that this code
+    staged it.
+    """
+    assert _REFERENCE_DOC.exists(), f"missing {_REFERENCE_DOC}"
+    doc_text = _REFERENCE_DOC.read_text(encoding="utf-8")
+    assert UNCOVERED_SHAPE in doc_text, (
+        "the reference doc no longer carries UNCOVERED_SHAPE verbatim -- doc and "
+        "memo have drifted into announcing different coverage"
+    )
