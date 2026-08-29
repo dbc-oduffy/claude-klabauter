@@ -33,6 +33,7 @@ from typing import List, Tuple
 import pytest
 
 from coordinator_core.ops.ceremony import commit_pipeline
+import coordinator_core.git.commit as _commit_mod
 
 # Declares a real external-process spawn (spawn ratchet Rule 2). Tiering onto the
 # cadence suite is the separate threshold ruling, not this declaration.
@@ -1353,27 +1354,33 @@ def test_fully_failed_real_run_keeps_existing_exit_code(tmp_path, monkeypatch):
 
 
 def test_generic_commit_failure_returns_fail(tmp_path, monkeypatch):
-    """A `commit_failed` pipeline result -- a gate failure or the `git
-    commit` step itself returning non-zero, `run_commit_pipeline`'s own
-    generic failure signal -- surfaces as `_EXIT_FAIL`, whatever the
-    specific diagnostics/reason text names."""
-    fake_result = _default_commit_pipeline_result(
-        stage=commit_pipeline.StageOutcome(exit_code=1, failed=["commit exploded"]),
-        committed_sha=None,
-        commit_failed=True,
-        diagnostics=["commit exploded"],
-        reason="commit_failed",
-    )
-    calls = _install_commit_pipeline_stub(monkeypatch, result=fake_result)
+    """RETIRED BY C3 (docs/plans/2026-08-29-the-push-subsystem-leaves-and-
+    then-the-pipeline-can-go.md): the commit leg used to run through
+    `commit_pipeline.run_commit_pipeline`, whose own `commit_failed=True`
+    result was this generic-failure signal. C3 repointed the commit leg
+    onto `coordinator_core.git.commit.commit_paths`, which has no
+    `commit_failed` result at all -- a failed commit RAISES `CommitRefused`/
+    `FilterUnsupported` instead. What this test now pins is the equivalent
+    outcome on the repointed target: a raised `CommitRefused` surfaces as
+    `_EXIT_FAIL`, whatever the exception's own message names."""
+    def _raise_commit_refused(*a, **k):
+        raise _commit_mod.CommitRefused("commit exploded")
+
+    monkeypatch.setattr(_commit_mod, "commit_paths", _raise_commit_refused)
+
+    # `commit_paths` is only reached when at least one pathspec entry exists
+    # on disk at `dest` (percolate-round.py's own pre-stage existence check
+    # runs first) -- `_run_round` creates `dest` itself, so the fixture
+    # paths cannot be pre-populated on disk before it runs. Patch
+    # `Path.exists` to answer True instead, so both fixture paths
+    # (`added-file.md`/`changed-file.md`) are treated as present and
+    # `commit_paths` is actually reached -- this test exercises ITS raise,
+    # not the unrelated declined-paths pre-check.
+    monkeypatch.setattr(Path, "exists", lambda self: True)
 
     rc, out, spy, dest = _run_round(tmp_path, monkeypatch)
 
     assert rc == _mod._EXIT_FAIL
-    assert len(calls) == 1
-    # A `push_mode` regression here is silent and external-facing (this
-    # round owns its own commit -> CI-smoke -> push sequence, DR-301, and
-    # must never let `run_commit_pipeline` push on its own behalf).
-    assert calls[0][1].get("push_mode") is commit_pipeline.PUSH_MODE_NEVER
 
 
 # ---------------------------------------------------------------------------
@@ -1749,21 +1756,34 @@ def test_declined_paths_refuses_with_reason_and_no_push(tmp_path, monkeypatch):
     path buckets, never a reason string, so the assertion below reuses the
     REAL reason `_declined_paths_from_stage` produces rather than an
     invented one `_partition_gitignored_declines` would never actually see."""
-    fake_result = _default_commit_pipeline_result(
-        stage=commit_pipeline.StageOutcome(
-            exit_code=2,
-            missing_caller_paths=["some/declined.md"],
-            ignored_caller_paths=["cache/ignored.pyc"],
-        ),
-        committed_sha="abc123def456",
+    # RETIRED BY C3 (docs/plans/2026-08-29-the-push-subsystem-leaves-and-
+    # then-the-pipeline-can-go.md): the missing/ignored-path decline used to
+    # be reported by `commit_pipeline.run_commit_pipeline`'s own
+    # `StageOutcome`. C3 repointed the commit leg onto `coordinator_core.
+    # git.commit.commit_paths`, and moved the declined-paths computation
+    # INTO `percolate-round.py` itself (a real filesystem/`.gitignore`
+    # pre-check ahead of the commit call, not a stage result the commit
+    # function reports back) -- see `_cmd_round`'s own comment "commit_paths
+    # has no tolerant pre-stage". This test now drives that same real
+    # pre-check: `added-file.md` reads as present (committed for real via a
+    # stubbed `commit_paths`), `changed-file.md` reads as absent (material
+    # decline) -- the same two-fixture-path split the retired stub used to
+    # fabricate via `missing_caller_paths`.
+    from types import SimpleNamespace
+
+    def _fake_exists(self):
+        return self.name != "changed-file.md"
+
+    monkeypatch.setattr(Path, "exists", _fake_exists)
+    monkeypatch.setattr(
+        _commit_mod,
+        "commit_paths",
+        lambda *a, **k: SimpleNamespace(sha="abc123def456"),
     )
-    calls = _install_commit_pipeline_stub(monkeypatch, result=fake_result)
 
     rc, out, spy, dest = _run_round(tmp_path, monkeypatch)
 
     assert rc == _mod._EXIT_FAIL
-    assert len(calls) == 1
-    assert calls[0][1].get("push_mode") is commit_pipeline.PUSH_MODE_NEVER
 
     material_reason = (
         "not found in the worktree or index, and not attributable "

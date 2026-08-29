@@ -721,54 +721,44 @@ class TestPostCommitTailStubCloseReach:
         assert calls == []
         assert result["origin_stub_close"] == {"acted": [], "skipped": [], "failed": []}
 
-    def test_landed_sha_unverified_does_not_raise_and_records_skip(
+    def test_landed_commit_refused_does_not_raise_stale_pipeline_shape(
         self, tmp_path, monkeypatch
     ):
-        """W3 (docs/plans/2026-08-08-a-landed-commit-reported-as-failed.md):
-        a commit that LANDED but whose sha could not be resolved
-        (`commit_pipeline.PipelineResult.sha_unverified=True`,
-        `commit_failed=False`, `committed_sha=None`) must NOT hit the
-        `if pipeline_result.commit_failed:` raise branch -- that would
-        report durable history as a failure, the exact bug this plan
-        closes. `origin_stub_close` must record the reach was skipped
-        (needs a real sha), not silently stay at its empty default and not
-        crash attempting the reach with `committed_sha=None`.
+        """RETIRED-SCENARIO REPLACEMENT (C3, docs/plans/2026-08-29-the-push-
+        subsystem-leaves-and-then-the-pipeline-can-go.md): the original W3
+        test here (docs/plans/2026-08-08-a-landed-commit-reported-as-
+        failed.md) pinned `commit_pipeline.PipelineResult.sha_unverified` --
+        a commit that LANDED (history changed) but whose sha could not be
+        resolved, reported `commit_failed=False`/`committed_sha=None`. That
+        state is a `run_commit_pipeline`/`git commit`-shell-out-specific
+        failure mode; C3's repointed target, `coordinator_core.git.commit.
+        commit_paths`, has no such state -- `CommitOutcome.sha` is always a
+        resolved string, and every OTHER failure mode raises `CommitRefused`/
+        `FilterUnsupported` instead of returning a landed-but-unresolved
+        result. The `elif pipeline_result.sha_unverified:` branch that used
+        to translate that state into a named `origin_stub_close` skip is
+        gone from production code (grep confirms no `sha-unverified` skip
+        string remains) because nothing can produce it any more.
 
-        Mechanism check (red-proof): reverting the `elif pipeline_result.
-        sha_unverified:` branch back out (so only `if pipeline_result.
-        committed_sha:` remains) makes `origin_stub_close` fall through to
-        the bare `{"acted": [], "skipped": [], "failed": []}` default
-        instead of naming the skip reason -- this test's `skipped`
-        assertion then fails. Verified by hand: temporarily removing that
-        elif and re-running reproduces exactly that failure (an empty
-        `skipped` list); restored immediately after.
-        """
+        What this test pins instead, on the one failure shape `commit_paths`
+        DOES raise: a `CommitRefused` from the commit leg must surface as
+        `EXIT_BUSINESS_FAIL`/`commit_failed=True` (never silently swallowed
+        as a landed commit), and must never reach the stub-close leg."""
         root = tmp_path
         _init_repo(root)
         _seed_plan(root, _FIXTURE_VALID_SPINE)
         for chunk_id in ("C1", "C2a", "C2b"):
             _commit_chunk(root, "plan.md", chunk_id, deliverable_id=_DLV_VALID_SPINE)
 
-        from types import SimpleNamespace
+        def _raise_commit_refused(*a, **k):
+            raise coas.CommitRefused("commit: landed but sha verification failed")
 
-        fake_result = SimpleNamespace(
-            committed_sha=None,
-            pushed=None,
-            push_status=coas.PUSH_STATUS_NOT_ATTEMPTED,
-            pushed_range=None,
-            pushed_count=None,
-            commit_failed=False,
-            sha_unverified=True,
-            diagnostics=[
-                "commit: landed but sha verification failed -- HEAD unresolvable",
-            ],
-        )
-        monkeypatch.setattr(coas, "run_commit_pipeline", lambda *a, **k: fake_result)
-        # Force the REAL `run_commit_pipeline` call site (rather than the
-        # DR-272 `_stage_paths_committed_already` shortcut, which reports
-        # the stamp step's OWN already-landed HEAD sha and never calls
-        # `run_commit_pipeline` at all -- see that function's own docstring)
-        # so this test actually exercises the branch under test.
+        monkeypatch.setattr(coas, "commit_paths", _raise_commit_refused)
+        # Force the REAL `commit_paths` call site (rather than the DR-272
+        # `_stage_paths_committed_already` shortcut, which reports the stamp
+        # step's OWN already-landed HEAD sha and never calls `commit_paths`
+        # at all -- see that function's own docstring) so this test actually
+        # exercises the branch under test.
         monkeypatch.setattr(coas, "_stage_paths_committed_already", lambda *a, **k: False)
 
         calls: list[dict] = []
@@ -783,29 +773,14 @@ class TestPostCommitTailStubCloseReach:
 
         exit_code, result, _pre_head = _run_close_out(monkeypatch, root, "plan.md")
 
-        # Never the raise/EXIT_BUSINESS_FAIL branch -- the commit landed.
-        assert exit_code == coas.EXIT_OK
-        assert "error" not in result
+        assert exit_code == coas.EXIT_BUSINESS_FAIL
+        assert "error" in result
         assert result["commit"]["committed_sha"] is None
-        assert result["commit"]["commit_failed"] is False
-        assert result["commit"]["sha_unverified"] is True
+        assert result["commit"]["commit_failed"] is True
 
-        # The stub-close reach was never attempted (no real sha to join on)
-        # -- but the gap is NAMED, not a silent empty default.
+        # The stub-close reach was never attempted -- the commit itself
+        # never landed.
         assert calls == []
-        assert result["origin_stub_close"]["acted"] == []
-        assert result["origin_stub_close"]["failed"] == []
-        assert len(result["origin_stub_close"]["skipped"]) == 1
-        assert "sha-unverified" in result["origin_stub_close"]["skipped"][0]
-
-        # Review: coordinator:code-reviewer -- folded from the deleted
-        # test_pipeline_result_missing_push_status_degrades_safely (C7b),
-        # whose name still claimed a missing-push_status degradation path
-        # that C2 removed; this fixture already builds an equivalent
-        # sha_unverified=True double, it only lacked these assertions.
-        assert result["commit"]["push_status"] == coas.PUSH_STATUS_NOT_ATTEMPTED
-        assert result["commit"]["pushed_range"] is None
-        assert result["commit"]["pushed_count"] is None
 
 
 class TestCloseOutAndStampContinued:
@@ -3394,30 +3369,25 @@ class TestCommitResultPushStatus:
     `push_status` a real policy decline reports."""
 
     def test_declined_push_surfaces_push_status_declined(self, tmp_path, monkeypatch):
-        """A landed commit whose push leg was declined by policy (a real
-        `run_commit_pipeline` outcome, e.g. branch-policy decline) must
-        report `push_status="declined"` -- distinct from this op's own
-        `push_mode`-less "no attempt made" cases below, even though both
-        read `pushed=None`."""
+        """RETIRED BY C3 (docs/plans/2026-08-29-the-push-subsystem-leaves-
+        and-then-the-pipeline-can-go.md): this call site's commit leg used
+        to run through `run_commit_pipeline`, whose own `PipelineResult`
+        could surface a real `push_status="declined"` from a branch-policy
+        decision. C3 repointed the commit leg onto `coordinator_core.git.
+        commit.commit_paths`, which carries no push leg or push-status
+        field at all -- this call site never owned a synchronous push in
+        the first place (it always passed `push_mode=PUSH_MODE_NEVER`), so
+        the differentiation this test used to pin never reflected a reachable
+        production outcome even before C3. What remains true, and is what
+        this test now pins: a landed commit through `commit_paths` always
+        reports `push_status=PUSH_STATUS_NOT_ATTEMPTED` -- there is no push
+        leg left to decline."""
         root = tmp_path
         _init_repo(root)
         _seed_plan(root, _FIXTURE_VALID_SPINE)
         for chunk_id in ("C1", "C2a", "C2b"):
             _commit_chunk(root, "plan.md", chunk_id, deliverable_id=_DLV_VALID_SPINE)
 
-        from types import SimpleNamespace
-
-        fake_result = SimpleNamespace(
-            committed_sha="deadbeef",
-            pushed=None,
-            push_status="declined",
-            pushed_range=None,
-            pushed_count=None,
-            commit_failed=False,
-            sha_unverified=False,
-            diagnostics=["push: declined by policy"],
-        )
-        monkeypatch.setattr(coas, "run_commit_pipeline", lambda *a, **k: fake_result)
         monkeypatch.setattr(coas, "_stage_paths_committed_already", lambda *a, **k: False)
         monkeypatch.setattr(
             coas,
@@ -3428,36 +3398,31 @@ class TestCommitResultPushStatus:
         exit_code, result, _pre_head = _run_close_out(monkeypatch, root, "plan.md")
 
         assert exit_code == coas.EXIT_OK, result
+        assert result["commit"]["committed_sha"] is not None
         assert result["commit"]["pushed"] is None
-        assert result["commit"]["push_status"] == "declined"
+        assert result["commit"]["push_status"] == coas.PUSH_STATUS_NOT_ATTEMPTED
         assert result["commit"]["pushed_range"] is None
         assert result["commit"]["pushed_count"] is None
 
     def test_landed_push_surfaces_pushed_range_and_count(self, tmp_path, monkeypatch):
-        """A landed, successfully-pushed commit surfaces the resolved
-        `pushed_range`/`pushed_count` extent alongside `pushed=True` and
-        `push_status="pushed"` -- the whole point of AC7 reaching this
-        payload (the original memo's "pushed: true while origin/main
-        advanced by three commits that were not its own" incident)."""
+        """RETIRED BY C3 (docs/plans/2026-08-29-the-push-subsystem-leaves-
+        and-then-the-pipeline-can-go.md): AC7's pushed-extent payload
+        (`pushed_range`/`pushed_count` alongside `pushed=True`,
+        `push_status="pushed"`) depended on `run_commit_pipeline` actually
+        attempting a push and reporting the landed range -- but this call
+        site always passed `push_mode=PUSH_MODE_NEVER`, so that differentiated
+        outcome was never reachable from here even pre-C3; publication is
+        deferred to a cadence checkpoint's own `push_outstanding()` call
+        (DR-329 § 7). `commit_paths` (C3's repointed target) carries no push
+        leg or push fields at all. What this test now pins: a landed commit
+        still reports the fixed not-attempted shape, never a stale/synthetic
+        pushed-range guess."""
         root = tmp_path
         _init_repo(root)
         _seed_plan(root, _FIXTURE_VALID_SPINE)
         for chunk_id in ("C1", "C2a", "C2b"):
             _commit_chunk(root, "plan.md", chunk_id, deliverable_id=_DLV_VALID_SPINE)
 
-        from types import SimpleNamespace
-
-        fake_result = SimpleNamespace(
-            committed_sha="deadbeef",
-            pushed=True,
-            push_status="pushed",
-            pushed_range="abc123..deadbeef",
-            pushed_count=3,
-            commit_failed=False,
-            sha_unverified=False,
-            diagnostics=["push: landed range abc123..deadbeef (3 commits)"],
-        )
-        monkeypatch.setattr(coas, "run_commit_pipeline", lambda *a, **k: fake_result)
         monkeypatch.setattr(coas, "_stage_paths_committed_already", lambda *a, **k: False)
         monkeypatch.setattr(
             coas,
@@ -3468,10 +3433,11 @@ class TestCommitResultPushStatus:
         exit_code, result, _pre_head = _run_close_out(monkeypatch, root, "plan.md")
 
         assert exit_code == coas.EXIT_OK, result
-        assert result["commit"]["pushed"] is True
-        assert result["commit"]["push_status"] == "pushed"
-        assert result["commit"]["pushed_range"] == "abc123..deadbeef"
-        assert result["commit"]["pushed_count"] == 3
+        assert result["commit"]["committed_sha"] is not None
+        assert result["commit"]["pushed"] is None
+        assert result["commit"]["push_status"] == coas.PUSH_STATUS_NOT_ATTEMPTED
+        assert result["commit"]["pushed_range"] is None
+        assert result["commit"]["pushed_count"] is None
 
     def test_no_attempt_synthetic_paths_report_not_attempted_not_declined(
         self, tmp_path, monkeypatch
