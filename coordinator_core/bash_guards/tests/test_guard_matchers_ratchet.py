@@ -146,13 +146,13 @@ class _Expected:
     reason: Optional[str] = None
 
 
-#: The full tracked population (AC1, AC5, AC8) -- all 48 live `guard_
+#: The full tracked population (AC1, AC5, AC8) -- all 52 live `guard_
 #: roster()` registrations, inline and module-backed alike. Full-universe,
 #: dialect-reading entries carry no `kind`; every Bash-only entry and every
 #: dual-declaring-but-Bash-detecting entry carries a machine-
 #: distinguishable `kind` plus prose (AC5, AC7, AC8).
 EXPECTED: Dict[str, _Expected] = {
-    # -- full-universe, dialect-reading (23) --
+    # -- full-universe, dialect-reading (26) --
     "block-approval-sentinel-creation": _Expected(("Bash", "PowerShell")),
     "block-disarm-marker-sentinel-creation": _Expected(("Bash", "PowerShell")),
     "block-illegal-filename": _Expected(("Bash", "PowerShell")),
@@ -179,8 +179,16 @@ EXPECTED: Dict[str, _Expected] = {
     "destructive-git-orphan": _Expected(("Bash", "PowerShell")),
     "destructive-git-clean": _Expected(("Bash", "PowerShell")),
     "blanket-git-add": _Expected(("Bash", "PowerShell")),
-    # -- Bash-only by construction, never a conversion candidate (10) --
+    "guard-doctrine-surface-bash-write": _Expected(("Bash", "PowerShell")),
+    "guard-repo-setup-claude-home-refusal": _Expected(("Bash", "PowerShell")),
+    "guard-host-subagent-bash-spawn-shapes": _Expected(("Bash", "PowerShell")),
+    # -- Bash-only by construction, never a conversion candidate (11) --
     # docs/reference/guard-tool-name-membership.md § 8's Bucket C table.
+    "guard-host-subagent-bash-ban": _Expected(
+        ("Bash",),
+        BASH_ONLY_BY_CONSTRUCTION,
+        "Bash-only by PM ruling recorded in the guard's own docstring. Its deny message names the PowerShell tool as the remedy for a confined agent, so registering it on PowerShell would deny the escape hatch its own message points at. The asymmetry with guard-repo-setup-claude-home-refusal is deliberate, not an inconsistency to tidy.",
+    ),
     "powershell-via-bash-guard": _Expected(
         ("Bash",),
         BASH_ONLY_BY_CONSTRUCTION,
@@ -423,13 +431,13 @@ def _compare(
 
 def test_discovery_found_the_expected_scope():
     """Guards the guard: pins the module-level-`MATCHERS`-declaring
-    population this module's docstring derives -- 23 modules (22 full +
-    1 Bash-only) -- not the plan's own unverified 19/5 estimate. This is a
+    population this module's docstring derives -- 27 modules (25 full +
+    2 Bash-only) -- not the plan's own unverified 19/5 estimate. This is a
     documentation fact about module declarations, distinct from (and
-    smaller than) the 48-entry population `_actual_matchers()` enforces
+    smaller than) the 52-entry population `_actual_matchers()` enforces
     (see `test_every_registered_guard_is_classified`)."""
     stems = _scoped_module_stems()
-    assert len(stems) == 23, sorted(stems)
+    assert len(stems) == 27, sorted(stems)
     assert "block_stash_destruction" in stems
     assert "guard_powershell_via_bash" in stems
     assert "block_dev_repo_sentinel_removal" not in stems
@@ -437,11 +445,11 @@ def test_discovery_found_the_expected_scope():
 
 def test_every_registered_guard_is_classified():
     """AC8's own precondition: if `_actual_matchers` or `EXPECTED` drift
-    out of step with the live 48-entry chain, this fails loudly instead of
+    out of step with the live 52-entry chain, this fails loudly instead of
     every other assertion below passing vacuously by comparing an empty or
     partial set."""
     actual = _actual_matchers()
-    assert len(actual) == 48, sorted(actual)
+    assert len(actual) == 52, sorted(actual)
     assert set(actual) == set(EXPECTED)
 
 
@@ -483,7 +491,7 @@ def test_every_entry_is_in_exactly_one_partition_bucket():
             bucket3 += 1
         else:
             raise AssertionError("%r has an unrecognised kind %r" % (guard_id, exp.kind))
-    assert bucket1 + bucket2 + bucket3 == len(EXPECTED) == 48
+    assert bucket1 + bucket2 + bucket3 == len(EXPECTED) == 52
     assert bucket3 == 0, (
         "expected 0 dual-declaring-but-Bash-detecting entries -- C8's "
         "second pass converted all 9 (Finding 7 of the recensus record), "
@@ -526,7 +534,7 @@ def test_held_cohort_kinds_are_uniform_and_distinct_from_by_construction():
     not_yet_converted = {
         gid for gid, exp in EXPECTED.items() if exp.kind == NOT_YET_CONVERTED
     }
-    assert len(by_construction) == 10
+    assert len(by_construction) == 11
     # EMPTY as of 2026-08-26, and that is this plan's terminal state, not a
     # dropped assertion: pln-the-destructive-core-learns-th-d5ade0 converted
     # every entry that was carrying `not-yet-converted` -- Bucket B's four

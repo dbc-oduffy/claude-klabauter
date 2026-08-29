@@ -6314,6 +6314,47 @@ def check_validate_commit(
                     except Exception:
                         _own_content_hashes = {}
 
+                # C6b item 2 (2026-08-27-a-pathspec-is-not-a-scope): a staged
+                # file that no longer exists ANYWHERE on disk AND was never
+                # tracked at HEAD (a never-committed staged-then-vanished
+                # path, AC10 case (a)'s strict half) is DIRECTLY OBSERVABLE
+                # -- disk absence, not an ownership accusation -- so it gets
+                # its own predicate and its own denial text, independent of
+                # `_owner_is_provable`. Computed once (one `git ls-tree`
+                # spawn), not per staged file. Fails OPEN: `None` (the git
+                # call errored) never denies -- an indeterminate HEAD listing
+                # is not proof of anything, same posture as every other arm
+                # here.
+                _head_tracked_cache: List[Optional[set]] = []
+
+                def _head_tracked_paths_lazy() -> Optional[set]:
+                    """Resolve HEAD's tracked set at most once per call, and
+                    ONLY when a staged path is already known to be missing
+                    from disk.
+
+                    Measured on this repo 2026-08-28: the `ls-tree` costs
+                    ~36ms and materializes ~34.8k entries, against a 500ms
+                    end-to-end brightline. The predicate it feeds fires only
+                    for a staged-then-vanished path, which is rare, so paying
+                    it eagerly spent that on EVERY commit to answer a
+                    question almost none of them ask. The cheap `os.path.
+                    exists` check gates this one; do not hoist it back above
+                    that check for tidiness.
+                    """
+                    if _head_tracked_cache:
+                        return _head_tracked_cache[0]
+                    _resolved: Optional[set] = None
+                    try:
+                        _rc_head, _head_out = _run_git(
+                            ["ls-tree", "-r", "--name-only", "HEAD"], _cwd
+                        )
+                        if _rc_head == 0:
+                            _resolved = {l for l in _head_out.splitlines() if l}
+                    except Exception:
+                        _resolved = None
+                    _head_tracked_cache.append(_resolved)
+                    return _resolved
+
                 def _record_scope_event(_verdict: str, _warned: List[str]) -> None:
                     try:
                         from coordinator_core.session.commit_scope_events import (
@@ -6373,6 +6414,38 @@ def check_validate_commit(
                                 )
                         continue
 
+                    # C6b item 2: own predicate, own reason -- a staged path
+                    # never tracked at HEAD and absent from disk right now.
+                    # This does NOT route through `_owner_is_provable`: the
+                    # provable fact here is the disk absence itself, not a
+                    # claim about who owns it.
+                    if scope_strict and not compute_scope_raised:
+                        _abs_staged_vanish = (
+                            os.path.join(git_root, staged_file)
+                            if git_root
+                            else staged_file
+                        )
+                        _head_tracked_paths = (
+                            _head_tracked_paths_lazy()
+                            if not os.path.exists(_abs_staged_vanish)
+                            else None
+                        )
+                        if (
+                            _head_tracked_paths is not None
+                            and staged_file not in _head_tracked_paths
+                        ):
+                            _record_scope_event(
+                                "deny", _warned_paths + [staged_file]
+                            )
+                            return _deny(
+                                "BLOCKED (strict scope): %s is staged but no "
+                                "longer exists on disk and was never "
+                                "committed -- its content cannot be "
+                                "verified.\n\nUnstage it (git restore "
+                                "--staged %s) or restore the file before "
+                                "committing." % (staged_file, staged_file)
+                            )
+
                     owner_fact = (
                         _compute_scope_raised_fact
                         if compute_scope_raised
@@ -6402,21 +6475,42 @@ def check_validate_commit(
                     # raising compute_scope() to a deny would turn one
                     # exception into a repo-wide commit outage (every staged
                     # file across every commit would render CONTESTED and
-                    # DENY). PM-RULED 2026-08-03: warn-only stands, and
-                    # strict mode is not being pursued until something makes
-                    # it necessary -- an outage teaches operators to reach
-                    # for override keys, which costs more than the sweep it
-                    # would prevent. Do NOT "complete" AC7 by deleting the
+                    # DENY). PM-RULED 2026-08-03, and this arm's warn-only
+                    # SURVIVES the 2026-08-28 deny-by-default flip: strict
+                    # mode now applies to the arm below, but a raising
+                    # compute_scope() still may not deny, because the outage
+                    # shape that ruling names is unchanged by the flip.
+                    # Do NOT "complete" AC7 by deleting the
                     # `not compute_scope_raised` guard below on the grounds
                     # that fail-closed is always safer; that reading is
                     # what this ruling settles against.
                     _warned_paths.append(staged_file)
 
-                    if scope_strict and not compute_scope_raised:
+                    # Deny only on a PROVABLE owner. `claim_source` in
+                    # ("session", "agent") means another session's claim was
+                    # actually read for this path; every other rendering --
+                    # no fact at all, "agent-race", "unreadable" -- is an
+                    # ABSENT or INDETERMINATE write record, which is not
+                    # evidence a foreign edit happened. Denying there accuses
+                    # on state the engine cannot demonstrate, and it is the
+                    # majority case: measured 2026-08-28, 22 of 37 committing
+                    # sessions had no session directory at all
+                    # (state/audits/2026-08-28-the-census-denominator-is-
+                    # sessions-that-were-never-instrumented.md). A guard that
+                    # denies the common case is overridden by habit within a
+                    # day, which costs more than the sweep it prevents -- the
+                    # surviving half of the 2026-08-03 ruling above, whose
+                    # warn-only default the PM lifted on 2026-08-28.
+                    _owner_is_provable = (
+                        owner_fact is not None
+                        and owner_fact.claim_source in ("session", "agent")
+                    )
+
+                    if scope_strict and not compute_scope_raised and _owner_is_provable:
                         _record_scope_event("deny", _warned_paths)
                         return _deny(
                             "BLOCKED (strict scope): %s is staged but not in "
-                            "this session's touch list — likely owned by %s.\n\n"
+                            "this session's touch list — owned by %s.\n\n"
                             "Unstage it (git restore --staged %s) or, if it "
                             "genuinely belongs to this session's work, record it "
                             "as touched first." % (staged_file, owner_sentence, staged_file)

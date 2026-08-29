@@ -54,6 +54,14 @@ CONFINEMENT_DENY_NAMES = [
     # block_subagent_guard_grant.py's own module docstring "NEAR-EXACT
     # PORT of block_subagent_grant_acquisition.py").
     "block-subagent-guard-grant",
+    # The four guards rehomed from DoE's in-process fold (C4-C7,
+    # docs/plans/2026-08-28-the-four-folded-bash-guards-get-registered-not-folded.md).
+    # All four are hard-deny confinement, registered in this band by their own
+    # chunks; named here by C12 because no chunk declared this file.
+    "guard-repo-setup-claude-home-refusal",
+    "guard-host-subagent-bash-ban",
+    "guard-host-subagent-bash-spawn-shapes",
+    "guard-doctrine-surface-bash-write",
 ]
 
 # Every ADVISORY_REWRITE guard, in registration order. `inprocess-search`

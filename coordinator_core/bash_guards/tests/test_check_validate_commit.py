@@ -121,6 +121,11 @@ class TestCheckFiveScopedStaging:
         assert "foreign-staged | foo.txt | owner:orphan" in log.read_text(encoding="utf-8")
 
     def test_foreign_file_owned_by_another_session_warns_with_owner(self, tmp_path):
+        """C6b item 3: this is a PROVABLE owner (a live sibling's own touch
+        record claims ``foo.txt``) -- post-flip, the un-overridden default
+        now DENIES this shape rather than warning on it (the surviving
+        warn-only path is COORDINATOR_SCOPE_STRICT_OFF=1, pinned separately
+        by the sibling-deletion suite's non-strict test)."""
         root = _init_repo(tmp_path)
         sid = "my-sess"
         other_sid = "other-sess"
@@ -138,9 +143,8 @@ class TestCheckFiveScopedStaging:
         )
         assert result is not None
         out = result["hookSpecificOutput"]
-        assert out["permissionDecision"] == "allow"
-        assert "SCOPE:" in out["additionalContext"]
-        assert "session %s" % other_sid in out["additionalContext"]
+        assert out["permissionDecision"] == "deny"
+        assert "session %s" % other_sid in out["permissionDecisionReason"]
 
     def test_own_scoped_file_no_scope_warning(self, tmp_path):
         root = _init_repo(tmp_path)
@@ -220,7 +224,7 @@ class TestCheckFiveScopedStaging:
         assert result is None
 
     def test_staged_vanished_untracked_file_still_warns_though_absent_from_orphans(
-        self, tmp_path
+        self, tmp_path, monkeypatch
     ):
         """C7 verification (2026-08-05-touched-sibling-escape-and-suppressed-
         trailer, `check_validate_commit` against C1's narrowed `my_scope`),
@@ -246,7 +250,16 @@ class TestCheckFiveScopedStaging:
         loop below, which exercises AC10's literal `mtime_epoch()==0`
         mechanism directly -- this test's shape is invisible to
         `compute_scope` for an earlier, different reason and never reaches
-        that call at all."""
+        that call at all.
+
+        C6b item 3: pins AC10 case (a)'s DEFAULT-mode half. Post-flip, the
+        strict half of this same shape now denies on its own
+        disk-absence-keyed reason (see
+        test_strict_mode_denies_staged_vanished_untracked_file), so this
+        test needs COORDINATOR_SCOPE_STRICT_OFF=1 to keep exercising the
+        warn-only default it was written to pin -- the warn assertion is
+        unchanged."""
+        monkeypatch.setenv("COORDINATOR_SCOPE_STRICT_OFF", "1")
         root = _init_repo(tmp_path)
         sid = "my-sess"
         assert core.init(sid, cwd=root)
@@ -376,7 +389,13 @@ class TestCheckFiveStrictModePromotion:
         _git(root, "add", "sibling.txt")
         _git(root, "commit", "-q", "-m", "seed sibling.txt")
 
-        _claim(root, other_sid, "foo.txt")
+        # C6b item 1: the claim MUST be on the deleted path itself --
+        # `attribution` is populated per-path from a peer's own touch
+        # record (scope.py Step 3), never inferred from an unrelated
+        # claim. A claim on any other path leaves `sibling.txt` unprovable
+        # and this fixture would stop testing the sibling-owned shape its
+        # own name and docstring describe.
+        _claim(root, other_sid, "sibling.txt")
 
         _git(root, "rm", "-q", "sibling.txt")
 
@@ -406,7 +425,12 @@ class TestCheckFiveStrictModePromotion:
         assert "sibling.txt" in out["permissionDecisionReason"]
 
     def test_non_strict_mode_only_warns_same_shape(self, tmp_path, monkeypatch):
+        # C6b item 3: `COORDINATOR_SCOPE_STRICT` no longer controls
+        # strictness post-flip -- `COORDINATOR_SCOPE_STRICT_OFF` is the only
+        # escape hatch back to warn-only now. This test's intent is
+        # "warn-only mode behaves like X"; the assertion is unchanged.
         monkeypatch.delenv("COORDINATOR_SCOPE_STRICT", raising=False)
+        monkeypatch.setenv("COORDINATOR_SCOPE_STRICT_OFF", "1")
         root = _init_repo(tmp_path)
         sid, other_sid = "my-sess", "other-sess"
         self._stage_sibling_owned_deletion(tmp_path, root, sid, other_sid)
@@ -587,11 +611,19 @@ class TestCheckFiveOwnerAttributionIntegration:
         it exactly -- a surviving local scan of any form (``os.listdir``,
         ``os.scandir``, ``Path.iterdir``, ``glob``) would produce a
         mismatching label (since it cannot see this injected id at all) and
-        fail this test."""
+        fail this test.
+
+        C6b item 3: this test's intent is RENDERING (does the label
+        match what was injected), not verdict -- the injected fact is a
+        provable "session"-source claim, which post-flip would otherwise
+        DENY by default and never reach additionalContext at all.
+        COORDINATOR_SCOPE_STRICT_OFF=1 keeps this on the warn-only path
+        so the rendering assertion below stays meaningful."""
         root = _init_repo(tmp_path)
         sid = "my-sess"
         assert core.init(sid, cwd=root)
         _push_started_at_to_future(root, sid)
+        monkeypatch.setenv("COORDINATOR_SCOPE_STRICT_OFF", "1")
 
         (tmp_path / "foo.txt").write_text("hello\n", encoding="utf-8")
         _git(root, "add", "foo.txt")
@@ -620,11 +652,21 @@ class TestCheckFiveOwnerAttributionIntegration:
         ONE formatter, so the two cannot drift. Monkeypatch that shared
         formatter to a distinguishable marker and assert the SAME marker
         appears verbatim in both the advisory's ``additionalContext`` and
-        the strict-mode deny's ``permissionDecisionReason``."""
+        the strict-mode deny's ``permissionDecisionReason``.
+
+        C6b item 3: the deny arm only fires on a PROVABLE owner
+        (``_owner_is_provable``) post-flip, so ``foo.txt`` needs a real
+        peer claim to reach ``deny`` at all -- an unclaimed orphan never
+        would, marker or not. ``COORDINATOR_SCOPE_STRICT_OFF`` (not the
+        now-inert ``COORDINATOR_SCOPE_STRICT``) is the actual strictness
+        control post-flip: set for the advisory half, cleared for the
+        deny half."""
         root = _init_repo(tmp_path)
-        sid = "my-sess"
+        sid, other_sid = "my-sess", "other-sess"
         assert core.init(sid, cwd=root)
+        assert core.init(other_sid, cwd=root)
         _push_started_at_to_future(root, sid)
+        _claim(root, other_sid, "foo.txt")
 
         (tmp_path / "foo.txt").write_text("hello\n", encoding="utf-8")
         _git(root, "add", "foo.txt")
@@ -634,13 +676,14 @@ class TestCheckFiveOwnerAttributionIntegration:
             dispatch_checks, "_format_owner_sentence", lambda *a, **kw: marker
         )
 
+        monkeypatch.setenv("COORDINATOR_SCOPE_STRICT_OFF", "1")
         advisory = dispatch_checks.check_validate_commit(
             'git commit -m "add foo"', sid, cwd=root
         )
         assert advisory is not None
         assert marker in advisory["hookSpecificOutput"]["additionalContext"]
 
-        monkeypatch.setenv("COORDINATOR_SCOPE_STRICT", "1")
+        monkeypatch.delenv("COORDINATOR_SCOPE_STRICT_OFF", raising=False)
         denied = dispatch_checks.check_validate_commit(
             'git commit -m "add foo"', sid, cwd=root
         )

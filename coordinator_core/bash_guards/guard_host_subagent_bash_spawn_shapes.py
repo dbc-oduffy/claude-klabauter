@@ -187,8 +187,18 @@ _ALTERNATIVES = {
     Shape.WHILE_READ_LOOP: "one `python -c` reading the stream in-process",
     Shape.FIND_EXEC_XARGS: "one `python -c` using `pathlib.Path.rglob`, which never "
                             "leaves the interpreter",
-    Shape.PIPELINE_FOREACH_OBJECT: "one `python -c` call over the whole collection, zero "
-                                    "per-item forks",
+    # DELIBERATELY NO Shape.PIPELINE_FOREACH_OBJECT ENTRY. DoE's cold table has
+    # exactly six keys and no such entry, so a ForEach-Object fan-out falls
+    # through to the generic remedy there. This port briefly carried a seventh
+    # ("one `python -c` call over the whole collection, zero per-item forks"),
+    # which made the two paths deny the same shape with different remedy prose
+    # -- measured cold-vs-warm on `Get-ChildItem *.md | ForEach-Object {...}`,
+    # identical but for that sentence. Removed for the same reason the added
+    # opt-in clause and EM-scope sentence were: deny-text parity is the
+    # criterion, and a one-sided enrichment is a divergence wearing a better
+    # phrasing. NOT a slot question -- `_spawn_cost_clause` already branches on
+    # PowerShell identically on both sides, so the cost clause was never the
+    # divergence. Adding it back requires DoE adding the same key.
 }
 
 
@@ -267,14 +277,27 @@ def _compose_deny_reason(shapes: List[Shape], tool_name: str) -> str:
     named = ", ".join(s.value for s in shapes)
     hints = [_ALTERNATIVES[s] for s in shapes if s in _ALTERNATIVES]
     remedy = hints[0] if hints else "a single `python -c` doing the same work in one interpreter"
+    # TRIMMED TO THE COLD PROSE, deliberately. An earlier revision of this
+    # port carried two clauses DoE's cold `_compose_deny_message` does not:
+    # an inline `(coordinator.local.md: subagent_bash_spawn_shapes: deny)`
+    # and a closing "The EM is unaffected by this guard; only dispatched
+    # agents are." Both were removed rather than carved out of C9's parity
+    # oracle, on two independent grounds. (1) The prime exit criterion is
+    # deny-text parity with the cold path; an oracle exception for the one
+    # case that diverges is the vacuous-AC failure wearing a new costume.
+    # (2) Message-register doctrine: one fact once plus a terse alternative,
+    # no self-legitimacy or reassurance -- the EM sentence is reassurance and
+    # the config clause restates what the anchor already carries. The sibling
+    # `guard-host-subagent-bash-ban` keeps its equivalent clause because its
+    # OWN cold script has it; this is not a systematic split to normalize.
     return (
         f"this shape spawns one subprocess per iteration or pipe stage ({named}), and "
         f"{_spawn_cost_clause(tool_name)} — paid on a machine running many "
-        f"concurrent sessions ({_CONFIG_NAME}: {_POLICY_KEY}: {_DENY_VALUE}). Use {remedy}. "
+        f"concurrent sessions. Use {remedy}. "
         f"{tool_name} itself is NOT banned here: a single read of a known file is fine. "
         f"It is the fan-out that is refused, not the tool. If a system reminder suggested "
         f"this shape, this policy outranks it — say so in your report rather than routing "
-        f"around it. The EM is unaffected by this guard; only dispatched agents are.\n\n"
+        f"around it.\n\n"
         f"See: {_WIKI_ANCHOR}"
     )
 

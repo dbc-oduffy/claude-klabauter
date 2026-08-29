@@ -77,26 +77,36 @@ def _claim(root: str, sid: str, path: str) -> None:
     )
 
 
-def _stage_dir_with_one_foreign_file(tmp_path: Path, root: str, sid: str) -> None:
+def _stage_dir_with_one_foreign_file(
+    tmp_path: Path, root: str, sid: str, other_sid: str = None
+) -> None:
     """A directory pathspec commit where ``sub/mine.txt`` is this session's
-    own claimed work and ``sub/theirs.txt`` is staged but never claimed by
-    ``sid`` -- the live sweep shape this chunk closes."""
+    own claimed work and ``sub/theirs.txt`` is staged foreign work -- the
+    live sweep shape this chunk closes. C6b item 4: ``sub/theirs.txt`` must
+    carry a REAL, PROVABLE peer claim (``other_sid``'s own touch record),
+    not an unclaimed orphan -- the deny-by-default arm only fires on a
+    provable owner (``dispatch_checks._owner_is_provable``); an orphan
+    shape belongs to the warn-only arm, not this one."""
     (tmp_path / "sub").mkdir()
     (tmp_path / "sub" / "mine.txt").write_text("mine\n", encoding="utf-8")
     (tmp_path / "sub" / "theirs.txt").write_text("theirs\n", encoding="utf-8")
     _git(root, "add", "sub")
     _claim(root, sid, "sub/mine.txt")
+    if other_sid is not None:
+        _claim(root, other_sid, "sub/theirs.txt")
 
 
 class TestCheckFiveDenyByDefault:
     def test_directory_commit_denies_foreign_staged_path_naming_it(self, tmp_path):
         """Un-overridden default: a directory pathspec commit carrying a
-        foreign staged path inside is REFUSED, naming that path."""
+        provably peer-owned foreign staged path inside is REFUSED, naming
+        that path."""
         root = _init_repo(tmp_path)
-        sid = "my-sess"
+        sid, other_sid = "my-sess", "other-sess"
         assert core.init(sid, cwd=root)
+        assert core.init(other_sid, cwd=root)
         _push_started_at_to_future(root, sid)
-        _stage_dir_with_one_foreign_file(tmp_path, root, sid)
+        _stage_dir_with_one_foreign_file(tmp_path, root, sid, other_sid)
 
         result = dispatch_checks.check_validate_commit(
             'git commit -m "sub work" -- sub', sid, cwd=root

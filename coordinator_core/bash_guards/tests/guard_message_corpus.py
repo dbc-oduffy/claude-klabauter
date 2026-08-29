@@ -628,6 +628,67 @@ def fire_row(row: CorpusRow) -> GuardCapture:
 
 _DENY = dispatch.GuardBand.CONFINEMENT_DENY
 
+def _rehomed_doctrine_surface_setup(
+    scratch_dir: Path, mp: pytest.MonkeyPatch
+) -> Dict[str, str]:
+    """`guard-doctrine-surface-bash-write` resolves its governed identifiers
+    per call from `<plugin_root>/governed-authoring-surfaces.json` (C3), never
+    a module constant -- so supply a scratch plugin root with a one-entry
+    manifest rather than depending on whichever plugin is installed on the
+    host running the suite."""
+    (scratch_dir / "governed-authoring-surfaces.json").write_text(
+        '["docs/wiki/governed-thing.md"]', encoding="utf-8"
+    )
+    return {"plugin_root": str(scratch_dir)}
+
+
+def _rehomed_repo_setup_claude_home_setup(
+    scratch_dir: Path, mp: pytest.MonkeyPatch
+) -> Dict[str, str]:
+    """This guard denies only when the scaffold mechanism's resolved target
+    root EQUALS Claude Home, so both sides must name the same scratch path:
+    `CLAUDE_CONFIG_DIR` declares it and the overridden command targets it. A
+    fixed literal would compare the real machine's Claude Home against an
+    invented path and never fire."""
+    home = scratch_dir / ".claude"
+    home.mkdir(exist_ok=True)
+    return {
+        "env": {"CLAUDE_CONFIG_DIR": str(home)},
+        _CMD_OVERRIDE_KEY: (
+            "python3 -m coordinator_core.install.scaffold_structure --root %s" % home
+        ),
+    }
+
+
+def _rehomed_subagent_bash_ban_setup(
+    scratch_dir: Path, mp: pytest.MonkeyPatch
+) -> Dict[str, str]:
+    """Host-opt-in guard: inert until `coordinator.local.md` declares
+    `subagent_bash_policy: deny` at or above cwd AND the payload carries an
+    agent_id the identity resolver RECOGNISES. `deadbeef0123` is bare hex and
+    resolves; a shape like `a1` does not and is EM-treated (allow) -- the
+    named divergence from DoE's raw non-empty-string test."""
+    (scratch_dir / "coordinator.local.md").write_text(
+        "---" + chr(10) + "subagent_bash_policy: deny" + chr(10) + "---" + chr(10),
+        encoding="utf-8",
+    )
+    return dict(_EXECUTOR_IDENTITY)
+
+
+def _rehomed_subagent_spawn_shapes_setup(
+    scratch_dir: Path, mp: pytest.MonkeyPatch
+) -> Dict[str, str]:
+    """Same opt-in posture as the ban above, on its own separate key. The
+    fired command must be a FAN-OUT shape: this guard bans spawn SHAPES, not
+    the tool, so a single `cat`/`grep` is correctly allowed and cannot serve
+    as a firing row."""
+    (scratch_dir / "coordinator.local.md").write_text(
+        "---" + chr(10) + "subagent_bash_spawn_shapes: deny" + chr(10) + "---" + chr(10),
+        encoding="utf-8",
+    )
+    return dict(_EXECUTOR_IDENTITY)
+
+
 CONFINEMENT_ROWS: List[CorpusRow] = [
     CorpusRow(
         "no-verify",
@@ -1011,6 +1072,81 @@ CONFINEMENT_ROWS: List[CorpusRow] = [
         _DENY,
         False,
         setup=lambda scratch_dir, mp: dict(_EXECUTOR_IDENTITY),
+    ),
+    # -- The four guards rehomed from DoE's in-process fold (C4-C7 of
+    # docs/plans/2026-08-28-the-four-folded-bash-guards-get-registered-not-
+    # folded.md). Added by C12: each registration trips three separate
+    # admission gates that read this list, and no chunk C4-C7 declared this
+    # file in its writes: scope, so the rows landed nowhere until here.
+    CorpusRow(
+        "guard-doctrine-surface-bash-write",
+        "guard-doctrine-surface-bash-write-fire",
+        "echo corrupted > docs/wiki/governed-thing.md",
+        True,
+        _DENY,
+        False,
+        setup=_rehomed_doctrine_surface_setup,
+    ),
+    CorpusRow(
+        "guard-doctrine-surface-bash-write",
+        "guard-doctrine-surface-bash-write-control",
+        "cat docs/wiki/governed-thing.md",
+        False,
+        _DENY,
+        False,
+        setup=_rehomed_doctrine_surface_setup,
+    ),
+    CorpusRow(
+        "guard-repo-setup-claude-home-refusal",
+        "guard-repo-setup-claude-home-refusal-fire",
+        "python3 -m coordinator_core.install.scaffold_structure --root <claude-home>",
+        True,
+        _DENY,
+        False,
+        setup=_rehomed_repo_setup_claude_home_setup,
+    ),
+    CorpusRow(
+        "guard-repo-setup-claude-home-refusal",
+        "guard-repo-setup-claude-home-refusal-control",
+        "python3 -m coordinator_core.install.scaffold_structure --root ./somewhere-else",
+        False,
+        _DENY,
+        False,
+    ),
+    CorpusRow(
+        "guard-host-subagent-bash-ban",
+        "guard-host-subagent-bash-ban-fire",
+        "ls -la",
+        True,
+        _DENY,
+        False,
+        setup=_rehomed_subagent_bash_ban_setup,
+    ),
+    CorpusRow(
+        "guard-host-subagent-bash-ban",
+        "guard-host-subagent-bash-ban-control",
+        "ls -la",
+        False,
+        _DENY,
+        False,
+    ),
+    CorpusRow(
+        "guard-host-subagent-bash-spawn-shapes",
+        "guard-host-subagent-bash-spawn-shapes-fire",
+        'for f in *.md; do wc -l "$f"; done',
+        True,
+        _DENY,
+        False,
+        setup=_rehomed_subagent_spawn_shapes_setup,
+    ),
+    CorpusRow(
+        "guard-host-subagent-bash-spawn-shapes",
+        "guard-host-subagent-bash-spawn-shapes-control",
+        "cat one.md",
+        False,
+        _DENY,
+        False,
+        setup=_rehomed_subagent_spawn_shapes_setup,
     ),
 ]
 
