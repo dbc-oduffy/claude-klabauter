@@ -243,7 +243,7 @@ def _ensure_bin_lib_bootstrapped() -> None:
     and are latently exposed on any path order that puts `coordinator/` first;
     those are not touched here.
     """
-    import importlib.util  # stdlib, imported here to keep this module's body inert
+    import importlib.util
 
     if "lib" in sys.modules and getattr(sys.modules["lib"], "__file__", None):
         return

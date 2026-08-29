@@ -173,7 +173,6 @@ OP_MODULE_MAP: Dict[str, str] = {
     "changelog.upsert_reviewed":              "coordinator_core.ops.changelog_ops",
     "cruft_sweep.run":                        "coordinator_core.ops.cruft_sweep",
     "plan.append_session":                    "coordinator_core.ops.completion_ops",
-    "review_trail.readjudication_report":     "coordinator_core.ops.review_trail_readjudication_report",
     "fleet.backfill_dispositionless_memos":   "coordinator_core.ops.fleet.backfill_memo_disposition",
     "fleet.reap_unintegrated_findings":       "coordinator_core.ops.fleet.reap_unintegrated_findings",
     "fleet.reap_integrated_findings":         "coordinator_core.ops.fleet.reap_integrated_findings",

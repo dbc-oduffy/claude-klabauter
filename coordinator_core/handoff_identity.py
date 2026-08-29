@@ -21,10 +21,16 @@ O(files read) rather than O(comparisons) (AC3).
 
 This module is deliberately narrow: one canonical keying primitive, importable and
 documented, for callers that stamp a handoff record's identity at ingest. It does not
-itself touch any of the ~17 existing call sites that still call the filesystem at
-compare time (`_norm_path` and its callers in `handoff_reconcile.py` chief among
-them) — migrating those is out of this chunk's scope; this module is what they
-migrate onto.
+itself touch the call sites that called the filesystem at compare time —
+migrating those was out of this chunk's scope; this module is what they migrate
+onto.
+
+That migration has since happened. `_norm_path` no longer exists in
+`handoff_reconcile.py`, and that module now performs no `Path.resolve()`,
+`os.path.abspath`, `os.path.realpath` or `samefile` call at all. The "~17
+unmigrated call sites" this docstring used to name are gone; do not read the
+paragraph above as an inventory of live debt. It survives as the WHY — the
+defect class that motivated `rel_id` — not as a worklist.
 
 Negative-spec:
   - Does NOT wrap or call `_norm_path` — that helper is being replaced, not

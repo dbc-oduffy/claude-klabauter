@@ -487,7 +487,6 @@ _GRANDFATHERED_RUNNER_MODULES: frozenset[str] = frozenset(
         "coordinator/bin/coordinator-doc-new.py",
         "coordinator/bin/coordinator-prepare-commit-msg.py",
         "coordinator/bin/coordinator-safe-commit.py",
-        "coordinator/bin/coordinator-write-review-trail.py",
         "coordinator/bin/cross-repo-memo.py",
         "coordinator/bin/emit-goal-from-artifact.py",
         "coordinator/bin/fan-out-dispatch.py",
@@ -507,12 +506,10 @@ _GRANDFATHERED_RUNNER_MODULES: frozenset[str] = frozenset(
         "coordinator/bin/publish-allowlist-generate.py",
         "coordinator/bin/publish.py",
         "coordinator/bin/reap-integrated-review-findings.py",
-        "coordinator/bin/reap-orphaned-in-flight-handoffs.py",
         "coordinator/bin/reap-stale-subagent-sidecars.py",
         "coordinator/bin/red-set-report.py",
         "coordinator/bin/refresh-plugin-live-install.py",
         "coordinator/bin/regen-cockpit-schema.py",
-        "coordinator/bin/repair-empty-review-trail-ranges.py",
         "coordinator/bin/repo-setup-args-and-register.py",
         "coordinator/bin/repomap/generate-repomap.py",
         "coordinator/bin/spinoff-deliverable-and-commit.py",
@@ -624,8 +621,6 @@ _GRANDFATHERED_RUNNER_MODULES: frozenset[str] = frozenset(
         "coordinator_core/ops/resolve_swept_baton.py",
         "coordinator_core/ops/review_brightline_gate.py",
         "coordinator_core/ops/review_coverage_core.py",
-        "coordinator_core/ops/review_trail_readjudication_report.py",
-        "coordinator_core/ops/review_trail_write.py",
         "coordinator_core/ops/rollup_derive.py",
         "coordinator_core/ops/run_semgrep_scan.py",
         "coordinator_core/ops/run_shellcheck_sweep.py",
@@ -759,7 +754,7 @@ _GRANDFATHERED_DIALS: frozenset = frozenset(
 #: all. Lowering either is free and is the point; raising either is the
 #: deliberate, reviewable act of arguing that the tree needs one more private
 #: git runner than it had yesterday.
-_PINNED_RUNNER_CEILING = 198
+_PINNED_RUNNER_CEILING = 194
 _PINNED_DIAL_CEILING = 68
 
 

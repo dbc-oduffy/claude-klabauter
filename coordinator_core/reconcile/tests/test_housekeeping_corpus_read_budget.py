@@ -61,6 +61,13 @@ or reused one; confirmed by direct reproduction (4 independent fixtures fed to
 comes from the shared PROCESS (imports, git pack cache, OS page cache), not
 from a shared fixture — the two were conflated in the earlier attempt.
 
+The subtraction also assumes LOW and HIGH see comparable OS cache state, since
+they are separate process trees. `_measure_one_pair` builds every fixture for
+BOTH scripts before launching either, then launches them back-to-back with no
+intervening work, so no sample pair's fixture I/O lands between them. That
+bounds the drift to whatever a peer session does in the gap; it does not
+eliminate it, which is the other half of why the assertion is on a median.
+
 QUANTISATION. Windows job accounting lands on ~15.6ms scheduler ticks, and a
 difference of two readings carries the noise of both. `n=5` pairs are built
 and measured, and the assertion is on the MEDIAN delta — a single sample near a
@@ -112,6 +119,7 @@ from coordinator_core.benchmarks.process_time import (
     IS_WINDOWS,
     single_invocation_tree_process_time,
 )
+from coordinator_core.lifecycle_constants import HANDOFF_TERMINAL_DEPLOYMENT
 from coordinator_core.win_portability import no_console_creationflags
 
 # Real-git spawn is load-bearing: the job's third step commits, and a gate that
@@ -206,6 +214,13 @@ _STEADY_TERMINAL = 8
 #: live+archived gate index, which would make the eager-walk assertion
 #: untestable (see `_build_corpus`).
 _NONTERMINAL_DEPLOYMENT_STATE = "ready_to_fire"
+
+# The prose above is the reason; this is the check. Twice now this fixture has
+# drifted into measuring a worst case while still reading as steady state, and
+# both times the prose was correct and unenforced. A future edit to the constant
+# that lands it in the terminal set makes every non-terminal record a move and
+# silently restores the 271-full-parse shape this gate exists to keep out.
+assert _NONTERMINAL_DEPLOYMENT_STATE not in HANDOFF_TERMINAL_DEPLOYMENT
 
 #: Paired one-shots. Enough that the median is not one tick's worth of luck,
 #: few enough that a cadence run does not occupy a box carrying 50-70 peers.

@@ -4753,11 +4753,6 @@ _ORACLE_CLAIMS: dict[tuple[str, str, str], tuple[str, str]] = {
         "_plans_with_review_trail_coverage",
         "_resolve_range_shas",
     ): ("test_git_argument_surface::test_git_rev_list_exclusions_are_global", "cadence"),
-    (
-        "coordinator_core/ops/review_trail_readjudication_report.py",
-        "compute_readjudication_report",
-        "_full_range_shas",
-    ): ("test_git_argument_surface::test_git_rev_list_exclusions_are_global", "cadence"),
     #: SIXTH site, bound 2026-08-27. The family's own comment said "one measured fact, six call
     #: sites" while listing five -- `reviewed_set.py` is the sixth and was never bound, so it
     #: surfaced as a NEW site the moment a discriminator narrowed. It earned its entry the hard

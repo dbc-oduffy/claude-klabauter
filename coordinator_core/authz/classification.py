@@ -1755,26 +1755,6 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # Authority: docs/decisions/DR-216-changelog-completion-reviewtrail-write-carveout.md § D2
     #            docs/decisions/DR-208-invoke-op-authz-model.md § 5
     "plan.append_session": OpClass.MUTATING,
-    # DR-208 five-question affirmation (review_trail.readjudication_report, citing
-    # ops/review_trail_readjudication_report.py) — COMPUTE_ONLY, a read-only
-    # diagnostic over the state/review-trail/ corpus. Was registered (ops/__init__ +
-    # _registry_map + op_scopes) without a classification — the one missing quad
-    # member — leaving test_unclassified_baseline_never_grows RED in the fast tier on
-    # HEAD. Pre-existing gap, surfaced by the 2026-07-29 wsc kill-list op removal
-    # rather than caused by it; classified here to green that guard, same shape as
-    # session.guard_settings_integrity below.
-    #   1. Writes/deletes/reorders any state file, queue, or git object?      No.
-    #      Only open(path, "r", ...) on existing trail records — no write mode,
-    #      no os.replace, no git-write call anywhere in the module.
-    #   2. Writes into rag's relational store?                               No.
-    #   3. Opens any file for write (including sentinel creation)?           No.
-    #      Emits no receipt, unlike the ceremony ops whose records it reports on.
-    #   4. Mutates shared mutable state outside its own module?              No.
-    #   5. Persistent state changes observable across process boundaries?    No.
-    #      Its only subprocesses are read-only git reads (rev-list, log,
-    #      rev-parse --show-toplevel); the handler validates repo_root, delegates
-    #      to compute_readjudication_report off-thread, and returns to_dict().
-    "review_trail.readjudication_report": OpClass.COMPUTE_ONLY,
     # review.freeze_diff — MUTATING: writes two files per invocation —
     # state/review-trail/diffs/<slice_id>.diff and <slice_id>.head.sha — under the
     # caller's worktree. DR-208 five-question affirmation (citing

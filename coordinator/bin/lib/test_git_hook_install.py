@@ -148,7 +148,7 @@ def test_shim_body_missing_interpreter_and_missing_script_read_the_same_shape():
 # rungs, and losing either must still be caught.
 # ---------------------------------------------------------------------------
 
-_EXPECTED_BODY_SHAPE_CHECKSUM = "8bf19d485fe4e5905f75419fb8527b657a629a562ba71550efe3d26ddde49209"
+_EXPECTED_BODY_SHAPE_CHECKSUM = "ae22138cdbe1323d3366c01ce1766d06fe75515445e495e1b348273a9515736d"
 
 _BAKED_PY_PLACEHOLDER = "<BAKED-INTERPRETER>"
 

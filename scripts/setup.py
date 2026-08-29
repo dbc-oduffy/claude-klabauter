@@ -475,6 +475,26 @@ def _git_version_tuple(timeout: float = 10.0) -> tuple[int, ...] | None:
         return None
 
 
+def apply_git_perf_config(claude_klabauter_root: Path) -> None:
+    """WARN-only, non-blocking: applies the measured git performance settings so a
+    fresh clone is born with them instead of acquiring them when someone notices.
+
+    Advisory by construction. A repo that cannot carry the untracked cache (the
+    module's own filesystem probe says so), or a git that refuses the key, is a
+    slower repo — never a failed install. Measurements behind the setting list:
+    `state/audits/2026-08-29-git-config-warm-measurements.md`.
+    """
+    try:
+        if str(claude_klabauter_root) not in sys.path:
+            sys.path.insert(0, str(claude_klabauter_root))
+        from coordinator_core.install.git_perf_config import apply as apply_perf
+
+        for line in apply_perf(claude_klabauter_root):
+            print(f"     git-perf: {line}")
+    except Exception as exc:  # noqa: BLE001 — advisory step, never fails the install
+        print(f"[ADVISORY] git performance config not applied: {exc}", file=sys.stderr)
+
+
 def check_git_version() -> None:
     """WARN-only, non-blocking: coordinator_core's commit ceremony (git_native.py)
     and the prepare-commit-msg hook both call `git interpret-trailers
@@ -4190,6 +4210,7 @@ def main(argv: list[str]) -> int:
         py_version = (version_proc.stdout or version_proc.stderr).strip().split()[-1]
         print(f"PASS [hard] python — {py_version} ({py})")
         check_git_version()
+        apply_git_perf_config(claude_klabauter_root_resolved)
 
     engine_py, import_names = provision_deps(
         claude_klabauter_root_resolved, py, args.allow_venv_fallback

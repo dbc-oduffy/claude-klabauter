@@ -22,7 +22,10 @@ materialize a restricted tree (`build_allowlisted_source` performs a real
 `shutil.copytree`; this module only needs the file-set membership question,
 not a copy) — mirrors that sibling module's own stated tradeoff.
 
-Spec backlink: docs/plans/2026-08-16-one-environment-for-the-fleet.md § C11, AC14
+Spec backlink: docs/wiki/install-machinery.md -- the plan that specified
+this (`2026-08-16-one-environment-for-the-fleet.md` § C11, AC14) was
+distilled into that page and deleted (`state/distillation-log.md:790`), so
+the wiki page is now the only readable source for this module's spec.
 
 Negative-spec:
     - Does NOT run a publish round, and does NOT touch the claude-klabauter
@@ -61,6 +64,26 @@ _PORTABLE_TARGETS_PATH = _REPO_ROOT / "setup" / "publish-targets.portable"
 # fragile dependency on that file's exact shape for no reachability benefit
 # -- the thing under test is the PUBLISH ROW SET's coverage of this list,
 # not the list's own extraction.
+#: FROZEN, and no longer drift-checkable -- this used to be verified against
+#: the plan's own `scope:` frontmatter by
+#: `test_plan_scope_matches_frontmatter_scope_block`, which was retired
+#: 2026-08-29 with `_PLAN_STEM`/`_PLAN_PATH` and the block scanner, because
+#: its oracle no longer exists and cannot: `fleet.archive_completed_plans`
+#: moved the plan to `archive/specs/2026-08/` (a748935102) and the distill
+#: sweep then deleted it per the brightline (c2a5076b49), capturing its
+#: content into `docs/wiki/install-machinery.md`
+#: (`state/distillation-log.md:790`). Nothing about that should be undone.
+#:
+#: So editing this list has no second side to check it any more. If you add
+#: or remove an entry, the reachability tests below still assert every entry
+#: is publishable, and `test_every_plan_scope_path_is_accounted_for` still
+#: assures nothing is silently dropped -- but nothing verifies the list
+#: still matches what the plan actually scoped. Reconcile against
+#: `docs/wiki/install-machinery.md` by hand, and do NOT restore the check by
+#: pointing it at a filename search of `archive/`: a plan and a handoff share
+#: this stem, so a search finds the WRONG KIND of artifact, and if its
+#: frontmatter happens to parse the test goes green against the wrong
+#: document (`state/bug-backlog/2026-08-29-distillation-deletes-artifacts-that-test-059acf5a71c9.yaml`).
 _PLAN_SCOPE = [
     "coordinator_core/install/fleet_env.py",
     "coordinator_core/install/fleet_env_lock.py",
@@ -163,67 +186,6 @@ def _covering_row(rows: list[dict[str, str]], repo_relative_path: str) -> Option
     return None
 
 
-_PLAN_STEM = "2026-08-16-one-environment-for-the-fleet.md"
-
-#: A terminal plan does not stay in `docs/plans/` — the archive ceremony moves it under
-#: `archive/specs/<YYYY-MM>/`, and this drift check went red the moment that happened,
-#: naming a missing file rather than the scope drift it exists to catch. Resolve both
-#: homes so an archival stops reading as a test failure. NEGATIVE SPEC: this does NOT
-#: search the archive broadly; it checks the one dated directory the ceremony writes to,
-#: so a plan moved anywhere else still fails loudly rather than being silently skipped.
-_PLAN_PATH = next(
-    (
-        candidate
-        for candidate in (
-            _REPO_ROOT / "docs" / "plans" / _PLAN_STEM,
-            _REPO_ROOT / "archive" / "specs" / _PLAN_STEM[:7] / _PLAN_STEM,
-        )
-        if candidate.is_file()
-    ),
-    _REPO_ROOT / "docs" / "plans" / _PLAN_STEM,
-)
-
-
-def _plan_scope_block_paths(plan_path: Path) -> list[str]:
-    """Cheap, narrow drift check for `_PLAN_SCOPE`: extract the literal
-    `  - path` lines between the frontmatter `scope:` key and the next
-    top-level (unindented) key, by plain line scanning. Deliberately NOT a
-    YAML parser -- this reads exactly one fixed-shape flat list block, the
-    same proportionality call `_PLAN_SCOPE`'s own docstring makes against
-    re-parsing YAML-in-markdown generally. Catches a scope addition/removal
-    going out of sync with the hand-copied `_PLAN_SCOPE` list; does not
-    catch a scope path being reworded without the line count changing in a
-    way this scanner would miss."""
-    lines = plan_path.read_text(encoding="utf-8").splitlines()
-    paths: list[str] = []
-    in_scope = False
-    for line in lines:
-        if line.strip() == "scope:":
-            in_scope = True
-            continue
-        if in_scope:
-            if line.startswith("  - "):
-                paths.append(line[len("  - "):].strip())
-                continue
-            break  # first non-list-item line ends the block
-    return paths
-
-
-def test_plan_scope_matches_frontmatter_scope_block() -> None:
-    """`_PLAN_SCOPE` is a hand-copied literal by design (see its own
-    docstring) -- this is the cheap assertion that catches it drifting from
-    the plan's actual `scope:` frontmatter, without adding a real YAML
-    parser for YAML-in-markdown."""
-    live_scope = _plan_scope_block_paths(_PLAN_PATH)
-    assert live_scope, f"could not locate a scope: block in {_PLAN_PATH}"
-    assert set(live_scope) == set(_PLAN_SCOPE), (
-        "_PLAN_SCOPE has drifted from the plan's scope: frontmatter -- "
-        f"plan has {sorted(set(live_scope) - set(_PLAN_SCOPE))} not in "
-        f"_PLAN_SCOPE, and _PLAN_SCOPE has "
-        f"{sorted(set(_PLAN_SCOPE) - set(live_scope))} not in the plan. "
-        "Update _PLAN_SCOPE (and _NOT_THIS_CHUNKS_TO_PUBLISH if the added "
-        "path isn't this chunk's to publish) to match."
-    )
 
 
 def _assertable_scope_paths() -> list[str]:

@@ -3725,9 +3725,6 @@ _FROZEN_UNENROLLED_SPAWN_SITES: frozenset = frozenset(
         ("coordinator_core/ops/repo_bootstrap.py", "_machine_local_get", "<dynamic>", 0),
         ("coordinator_core/ops/repo_bootstrap.py", "_machine_local_set", "<dynamic>", 0),
         ("coordinator_core/ops/resolve_swept_baton.py", "_archiving_commit", "git", 0),
-        ("coordinator_core/ops/review_trail_readjudication_report.py", "_full_range_shas", "git", 0),
-        ("coordinator_core/ops/review_trail_readjudication_report.py", "_resolve_repo_root", "git", 0),
-        ("coordinator_core/ops/review_trail_readjudication_report.py", "_run", "<dynamic>", 0),
         ("coordinator_core/ops/review_trail_write.py", "_batch_resolve_ref_pair", "git", 0),
         ("coordinator_core/ops/review_trail_write.py", "_git_runner", "<dynamic>", 0),
         ("coordinator_core/ops/review_trail_write.py", "_resolve_ref_to_sha", "git", 0),
@@ -3944,7 +3941,7 @@ def test_frozen_unenrolled_inventory_is_monotonically_non_growing():
 #:     toolchain_caches`), or by a caller-supplied argv/cmd parameter with
 #:     no single fixed value across its call sites (`prereq_probe._run`,
 #:     `create_github_remote._run`, `orphan_branch_sweep._run`,
-#:     `release_tagging._run`, `review_trail_readjudication_report._run`,
+#:     `release_tagging._run`,
 #:     `updatedocs_gates._run`'s own platform+suffix branch,
 #:     `repo_bootstrap._machine_local_get`/`_machine_local_set`'s caller-
 #:     resolved `machine_local_bin`). This is the real methodological limit
@@ -4236,16 +4233,6 @@ _DYNAMIC_ARGV0_DISPOSITIONS: dict[tuple[str, str, str, int], str] = {
         "2026-08-23 dynamic argv0, runtime evidence not gathered -- same "
         "caller-resolved `machine_local_bin` parameter as this module's own "
         "`_machine_local_get` above."
-    ),
-    (
-        "coordinator_core/ops/review_trail_readjudication_report.py",
-        "_run",
-        "<dynamic>",
-        0,
-    ): (
-        "2026-08-23 dynamic argv0, runtime evidence not gathered -- `_run` is a "
-        "generic subprocess.run wrapper (mirrors `coverage.py::_run`'s own "
-        "conventions per its docstring); `cmd` is caller-supplied."
     ),
     (
         "coordinator_core/ops/review_trail_write.py",
@@ -5184,30 +5171,6 @@ _NAMED_ARGV0_DISPOSITIONS_B: dict[tuple[str, str, str, int], str] = {
         "non-budgeted scope as this file's other site."
     ),
     (
-        "coordinator_core/ops/review_trail_readjudication_report.py",
-        "_full_range_shas",
-        "git",
-        0,
-    ): (
-        "2026-08-23 exempt -- one `git rev-list` resolution per "
-        "`sha_range`, cached per `(sha_range, cwd)` in a caller-supplied "
-        "cache (this function's own docstring); `review_trail."
-        "readjudication_report`'s own `_review_trail_readjudication_"
-        "report` (C2a-widened, measured-empty) does not call this "
-        "function directly from its own body."
-    ),
-    (
-        "coordinator_core/ops/review_trail_readjudication_report.py",
-        "_resolve_repo_root",
-        "git",
-        0,
-    ): (
-        "2026-08-23 exempt -- one `git rev-parse --show-toplevel` call, "
-        "this module's CLI `main()` own repo-root resolver, not called "
-        "from `_review_trail_readjudication_report` (C2a-widened, "
-        "measured-empty) -- a separate CLI-entry path."
-    ),
-    (
         "coordinator_core/ops/run_shellcheck_sweep.py",
         "_lint_one_file",
         "shellcheck",
@@ -5267,7 +5230,6 @@ _TRANCHE_B_FILES: frozenset = frozenset({
     "coordinator_core/ops/commit_anchors.py",
     "coordinator_core/ops/cutover_gate.py",
     "coordinator_core/ops/propagate_body.py",
-    "coordinator_core/ops/review_trail_readjudication_report.py",
     "coordinator_core/ops/run_shellcheck_sweep.py",
     "coordinator_core/install/clone_sibling_repo.py",
     "coordinator_core/ops/completion_ops.py",
@@ -6093,7 +6055,6 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     "plugin_health.forwarder_drift": 2,
     "release.cut_tag": 2,
     "repo_setup.copy_console_subprocess_tripwire": 2,
-    "review_trail.readjudication_report": 2,
     "schema.drift_gate": 2,
     "session.guard_settings_integrity": 2,
     "app_session.launch": 1,

@@ -1216,40 +1216,6 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # main-worktree-rooted per list_review_trail_records.py's own resolution, same
     # class as the existing review_trail.write op.
     "review_trail.scan_unresolved_ubt":        "common_dir",
-    # review_trail.readjudication_report — show_top, NOT common_dir like the two
-    # review_trail.* rows above it. Read-only C7 re-adjudication diagnostic
-    # (review_trail_readjudication_report.py). This op is a genuine HYBRID: its
-    # corpus reads are main-worktree-rooted (like its two review_trail.* siblings)
-    # but its git reads are per-worktree (like coverage.gate). show_top is the only
-    # scope that can serve both, because it is strictly the more informative key:
-    #   (1) show_top hands the handler the CALLER's worktree, from which the op
-    #       derives the corpus's main worktree itself — it calls the same single
-    #       reviewed derivation the siblings use, main_worktree_root() over
-    #       lifecycle.git_common_dir(), in its own `_corpus_root()`. So the
-    #       "state/ is main-worktree-rooted" requirement that earns
-    #       review_trail.write / scan_unresolved_ubt their common_dir key is
-    #       satisfied here WITHOUT the common_dir key.
-    #   (2) The reverse does not hold: common_dir hands a handler
-    #       <main-worktree>/.git, and the caller's worktree is NOT recoverable
-    #       from it (many linked worktrees share one common dir). That would
-    #       misroot the git half — `git rev-list <sha_range>` and the Session-Id
-    #       trailer lookup — onto the main checkout. Not academic: a record's
-    #       sha_range may name HEAD, which is per-worktree state (4 of the 29
-    #       chain/workstream-close-auto records on disk at authoring do), so those
-    #       ranges would resolve against the wrong checkout's HEAD.
-    #   Net: common_dir trades a derivable fact (the main worktree) for an
-    #   underivable one (the caller's worktree). Do not "fix" this row to
-    #   common_dir by analogy with the two rows above — the analogy covers only
-    #   half of what this op reads.
-    # History: this row's earlier justification argued show_top on the grounds that
-    # the op lacked the main_worktree_root derivation entirely — true when written
-    # (2fa1c4cf), and a real silent-wrong-output defect: from a linked worktree the
-    # op globbed an absent state/review-trail and reported records_scanned=0,
-    # flips=0, which reads as a clean bill of health because "no surface re-opens"
-    # is a legitimate result. The derivation now exists; the verdict is unchanged
-    # but the reasoning is not.
-    # Spec: archive/specs/2026-07/2026-07-27-review-trail-scope-guard.md § C8, AC11
-    "review_trail.readjudication_report":      "show_top",
     # findings.self_persist_fallback — "none": target_path is caller-supplied; the
     # op does not resolve relative paths against a repo root itself.
     "findings.self_persist_fallback":          "none",

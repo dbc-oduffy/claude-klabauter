@@ -376,7 +376,7 @@ def _resolve_claude_klabauter_bin_sh(bin_dir: str, script_name: str) -> Optional
 # APPLIED`, distinct from post-commit's) -- an already-installed
 # prepare-commit-msg hook from generation 6 has no sentinel line at all and
 # must be recognized as stale for the same reason generation 5 was.
-_HOOK_GEN_STAMP = 8
+_HOOK_GEN_STAMP = 9
 
 
 def _hook_gen_stamp_line() -> str:
@@ -530,6 +530,22 @@ def _shim_body(
         f'{script_name} not found (looked in settings-home forwarder, baked path, '
         '.doe-root, machine-local repos.claude_klabauter, and marketplace) — commits '
         'are NOT being auto-pushed / annotated by this hook" 1>&2; exit 0; }\n'
+        # Every rung above tests $SCRIPT with `[ -f ]` under git's MSYS `sh`,
+        # which resolves a POSIX-absolute path like /c/Users/... happily. The
+        # invoke line then hands that same string to a NATIVE python.exe, which
+        # has no /c mount and reads a leading slash as repo-relative, so the
+        # settings-home rung can pass its own existence test and still exec a
+        # path rooted at the repo drive. The two halves disagree only when
+        # $HOME or $COORDINATOR_SETTINGS_HOME is itself POSIX-style, i.e. when a
+        # ceremony CLI is launched from Git Bash rather than PowerShell, which
+        # is why hook-annotated commits work all day and then fail inside
+        # `baton-assemble apply`.
+        # Pure parameter expansion, never `cygpath` in a subshell: this runs on
+        # every commit, and a spawn here is a DR-344 cost the hook must not pay.
+        # /c/Users/... -> C:/Users/... ; the MSYS single-letter drive form is the
+        # only shape $HOME or $COORDINATOR_SETTINGS_HOME ever takes here.
+        'case "$SCRIPT" in /?/*) _sd="${SCRIPT#/}"; '
+        'SCRIPT="${_sd%%/*}:/${_sd#*/}" ;; esac\n'
         f"{invoke_line}\n"
     )
 

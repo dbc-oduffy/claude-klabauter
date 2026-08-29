@@ -30,10 +30,31 @@ import pytest
 from coordinator_core.install import door_install, door_route_signal, substrate
 
 
-def _stamp_engine_root(root: Path) -> None:
+def _stamp_engine_root(root: Path, *entrypoints: str) -> None:
+    """Stamp `root` as a published engine, and give it the
+    `coordinator/bin/<name>.py` scripts `entrypoints` names.
+
+    THE SCRIPTS ARE NOT DECORATION. `substrate._write_native_door_forwarder`
+    refuses to cut a name over unless the engine being installed from
+    actually carries that name's entrypoint script -- a door image for a
+    name the engine cannot resolve has no working leg at all and shadows the
+    Python pair that does (see
+    `door_install.engine_carries_entrypoint_script`). A fixture that stamps
+    a root with an EMPTY `coordinator/bin/` is modelling an engine that
+    cannot serve the names the test then asserts are served, so seeding them
+    is what makes these tests exercise the real path rather than a state
+    production refuses to create.
+    """
     stamp_dir = root / "coordinator_core"
     stamp_dir.mkdir(parents=True, exist_ok=True)
     (stamp_dir / "_engine_stamp").write_text("sha:deadbeef\n", encoding="utf-8")
+
+    bin_dir = root / "coordinator" / "bin"
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    for name in entrypoints:
+        (bin_dir / f"{name}.py").write_text(
+            "def main(argv):\n    return 0\n", encoding="utf-8"
+        )
 
 
 def _skip_if_no_prebuilt() -> None:
@@ -67,7 +88,7 @@ def test_door_eligible_forwarder_names_degrades_to_empty_on_missing_allowlist(mo
 def test_install_named_forwarder_body_matches_the_door_emission_shape(tmp_path):
     _skip_if_no_prebuilt()
     engine_root = tmp_path / "engine"
-    _stamp_engine_root(engine_root)
+    _stamp_engine_root(engine_root, "cross-repo-memo")
     bin_dst = tmp_path / "bin"
 
     dest = door_install.install_named_forwarder(bin_dst, engine_root, "cross-repo-memo")
@@ -90,7 +111,7 @@ def test_named_forwarder_path_is_exe_direct_on_windows_bare_on_posix(tmp_path):
 
 def test_install_named_forwarder_check_only_never_writes(tmp_path):
     engine_root = tmp_path / "engine"
-    _stamp_engine_root(engine_root)
+    _stamp_engine_root(engine_root, "cross-repo-memo")
     bin_dst = tmp_path / "bin"
     bin_dst.mkdir()
 
@@ -129,7 +150,7 @@ def test_write_agent_helper_forwarders_replaces_the_python_pair_for_eligible_nam
     invariant. See `door_install.remove_superseded_python_forwarders`."""
     _skip_if_no_prebuilt()
     engine_root = tmp_path / "engine"
-    _stamp_engine_root(engine_root)
+    _stamp_engine_root(engine_root, "cross-repo-memo")
     bin_dst = tmp_path / "bin"
 
     target_map = {"cross-repo-memo": "cross-repo-memo"}
@@ -227,7 +248,7 @@ def test_remove_superseded_python_forwarders_is_a_noop_when_absent(tmp_path):
 def test_write_agent_helper_forwarders_persists_the_native_forwarder_manifest(tmp_path):
     _skip_if_no_prebuilt()
     engine_root = tmp_path / "engine"
-    _stamp_engine_root(engine_root)
+    _stamp_engine_root(engine_root, "cross-repo-memo")
     bin_dst = tmp_path / "bin"
 
     target_map = {"cross-repo-memo": "cross-repo-memo"}
@@ -322,7 +343,7 @@ def test_named_invocation_records_route_warm_server_not_exit_code(monkeypatch, t
     from the sink rather than trusting `returncode` -- is the real one."""
     _skip_if_no_prebuilt()
     engine_root = tmp_path / "engine"
-    _stamp_engine_root(engine_root)
+    _stamp_engine_root(engine_root, "cross-repo-memo")
     bin_dst = tmp_path / "bin"
     named = door_install.install_named_forwarder(bin_dst, engine_root, "cross-repo-memo")
 
@@ -351,3 +372,4 @@ def test_named_invocation_records_route_warm_server_not_exit_code(monkeypatch, t
 
     assert result.route == door_route_signal.WARM_SERVER
     assert result.entry is not None
+

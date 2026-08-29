@@ -55,44 +55,20 @@ assert len(RETIRED_REVIEW_TRAIL_FILES) == 14, (
 )
 
 
-#: The one member of the SSOT tuple whose deletion is withheld by C6's uncleared
-#: `external_gate` on DoE-claude -- the op is REGISTERED, so a sibling repo can dispatch it,
-#: and the memo asking whether anything does has been unanswered since 2026-08-16. Split out
-#: of the standing assertion below, NOT exempted from it: it carries the same expectation
-#: under `pending_fix`, exactly as the `build_ubt_pending_check_directive` leg does.
-GATED_ON_SIBLING_ANSWER: tuple[str, ...] = (
-    "coordinator_core/ops/review_trail_readjudication_report.py",
-)
-
-
 def test_no_retired_review_trail_file_remains_on_disk():
-    """Every file in `RETIRED_REVIEW_TRAIL_FILES` except the C6-gated member must be gone
-    (`git rm`, not a filesystem delete -- see the plan's HARD CONSTRAINTS). Red at authoring
-    time: all fourteen existed.
+    """All fourteen files in `RETIRED_REVIEW_TRAIL_FILES` must be gone (`git rm`, not a
+    filesystem delete -- see the plan's HARD CONSTRAINTS). Red at authoring time: all
+    fourteen existed.
+
+    The readjudication reporter briefly sat under its own `pending_fix` leg while C6 waited
+    on DoE-claude's answer; doe-claude-ae answered on 2026-08-29 (nothing there dispatches
+    it), C6 landed, and the split was deleted with the gate it existed for.
     """
     still_present = [
-        rel
-        for rel in RETIRED_REVIEW_TRAIL_FILES
-        if rel not in GATED_ON_SIBLING_ANSWER and (_REPO_ROOT / rel).exists()
+        rel for rel in RETIRED_REVIEW_TRAIL_FILES if (_REPO_ROOT / rel).exists()
     ]
     assert still_present == [], (
         "retired review-trail files still on disk (expected zero): "
-        f"{still_present}"
-    )
-
-
-@pytest.mark.pending_fix
-def test_c6_gated_review_trail_file_is_gone_once_the_sibling_answers():
-    """The readjudication reporter must go too -- the prime exit criterion is 0 of 14, not
-    0 of 13. Marked `pending_fix` because C6 is withheld by an uncleared cross-repo gate, so
-    this leg stays open without reading as a regression of the assertion above. Delete the
-    marker, not the assertion, when doe-claude-em answers.
-    """
-    still_present = [
-        rel for rel in GATED_ON_SIBLING_ANSWER if (_REPO_ROOT / rel).exists()
-    ]
-    assert still_present == [], (
-        "C6-gated review-trail files still on disk (expected zero once the gate clears): "
         f"{still_present}"
     )
 
@@ -139,14 +115,11 @@ def test_no_registration_surface_names_the_retired_ops():
     )
 
 
-@pytest.mark.pending_fix
 def test_workstream_complete_does_not_call_ubt_pending_check_directive():
     """`workstream_complete/__init__.py` must stop calling
     `directives_review.build_ubt_pending_check_directive` once the scanner it feeds is
-    deleted. Marked `pending_fix`, not the standing gate: this call site is drained by a
-    later chunk in this plan (leg 3), and until that lands this assertion stays open without
-    reading as a regression of the two assertions above. Red today: the call site is live at
-    `workstream_complete/__init__.py`.
+    deleted. Carried `pending_fix` until C2 drained the call site; standing now, like the
+    two assertions above.
     """
     init_text = (_REPO_ROOT / "coordinator_core/workstream_complete/__init__.py").read_text(
         encoding="utf-8"

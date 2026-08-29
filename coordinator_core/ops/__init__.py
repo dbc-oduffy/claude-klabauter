@@ -265,11 +265,6 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
         'registers "completion.flip_to_released", "plan.append_session" (strang-10 B, DR-216)',
     ),
     (
-        "coordinator_core.ops.review_trail_readjudication_report",
-        'registers "review_trail.readjudication_report" '
-        "(state/improvement-queue/2026-07-27-wire-review-trail-readjudication-report-628d6e5848a9.yaml)",
-    ),
-    (
         "coordinator_core.ops.review_freeze_diff",
         'registers "review.freeze_diff" (cross-repo/inbox/2026-07-23-claude-central-em-'
         "review-diff-freeze-op-wanted.md)",

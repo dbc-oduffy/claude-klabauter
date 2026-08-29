@@ -1227,6 +1227,30 @@ def _write_native_door_forwarder(
         )
         return None
 
+    # THE ENGINE MUST KNOW THE NAME, or the image is a launcher with no
+    # working leg at all. See `door_install.engine_carries_entrypoint_script`
+    # for the two ways the door-eligible roster and the published engine's
+    # namespace diverge (a publisher-side CLI excluded from its own product,
+    # and a repo-identifying name rewritten by the publish-time substitution)
+    # and for what the divergence cost: warm is -32603 -> a -32004 refusal
+    # the door will not re-run, cold is the same absent path, and the `.exe`
+    # outranks the `.cmd` that would have worked. Degrading here is the same
+    # shape as the unstamped-root branch above -- the name keeps the Python
+    # pair its callers have already written, which is the leg that resolves
+    # the generator's own tree and therefore still works.
+    if not door_install.engine_carries_entrypoint_script(engine_root, name):
+        print(
+            f"[install-substrate] {name}: no native door forwarder -- "
+            f"{engine_root} carries no coordinator/bin/{name}.py, so the door "
+            f"has no entrypoint to resolve for this name (excluded from the "
+            f"published payload, or renamed by the publish-time substitution). "
+            f"Left on its Python forwarder.",
+            file=sys.stderr,
+        )
+        if not check_only:
+            door_install.remove_stale_named_forwarder(bin_dst, name)
+        return None
+
     dest = door_install.install_named_forwarder(bin_dst, engine_root, name, check_only=check_only)
     if not check_only:
         door_install.remove_shadowing_ps1_sibling(bin_dst, name)

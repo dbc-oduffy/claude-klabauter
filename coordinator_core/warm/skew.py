@@ -72,6 +72,7 @@ import hashlib
 import json
 import os
 import subprocess
+import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -340,7 +341,33 @@ def write_engine_stamp(repo_root: Path, identity: str) -> Path:
     """
     stamp = _engine_stamp_path(repo_root)
     stamp.parent.mkdir(parents=True, exist_ok=True)
-    stamp.write_text(identity.strip() + "\n", encoding="utf-8", newline="\n")
+    # Atomic, and load-bearing rather than tidy. `Path.write_text` opens
+    # mode "w", which TRUNCATES TO ZERO before writing, so every publish
+    # opened a window in which a concurrent reader observes a zero-length
+    # stamp. Every consumer folds that into "not an engine root at all":
+    # `engine_root.is_engine_root` and the C door's own
+    # `is_valid_engine_root_w` (`warm/door/door.c`) both collapse missing
+    # and zero-length into ONE failing verdict, and `compute_client_token`
+    # derives a DIFFERENT token from empty bytes -- which renames the warm
+    # pipe, since the token is embedded in it. A reader landing mid-write
+    # therefore did not merely see a stale engine; it saw no engine, or
+    # dialled a pipe nobody serves. The mkstemp + os.replace shape
+    # (`session/fleet_delegation.py`, `session/grant.py`) closes the window
+    # outright -- os.replace is atomic on Windows and POSIX alike, so no
+    # reader can observe a partial or empty stamp at any instant.
+    fd, tmp_name = tempfile.mkstemp(
+        prefix=ENGINE_STAMP_FILENAME + ".", dir=str(stamp.parent)
+    )
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fh:
+            fh.write(identity.strip() + "\n")
+        os.replace(tmp_name, stamp)
+    except BaseException:
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise
     return stamp
 
 

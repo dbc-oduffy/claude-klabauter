@@ -453,6 +453,82 @@ def install_named_forwarder(
     return dest
 
 
+def engine_carries_entrypoint_script(engine_root: Path, name: str) -> bool:
+    """True when `engine_root` carries the `coordinator/bin/<name>.py` this
+    name's door image would dial.
+
+    THE ORACLE HAS TO BE THE ENGINE, NOT THIS REPO, and that is the whole
+    point of this function. A door image resolves its own basename and sends
+    it as the request's `entrypoint`; the server resolves that name through
+    `ops/invoke_from_argv.py :: _resolve_entrypoint_script`, which looks for
+    `<engine_root>/coordinator/bin/<name>.py` and nothing else. The
+    door-eligible roster, by contrast, is derived from the GENERATOR's own
+    `coordinator/bin/` -- and the two namespaces are not the same one:
+
+      - EXCLUSION. A publisher-side CLI is deliberately not carried into the
+        published engine at all. `publish`, `percolate-push`,
+        `percolate-round` and `coordinator-publish` are the sharp case:
+        they are the chain that produces the mirror, so they do not ship in
+        it.
+      - RENAME. `setup/percolate-hooks/percolate-store.yaml`'s `substitute`
+        section rewrites repo-identifying names at publish time, so
+        `check-claude-klabauter-doctor-sentinel.sh` lands as
+        `check-claude-klabauter-doctor-sentinel.py`. The script IS published;
+        the NAME the door would ask for is not.
+
+    Measured 2026-08-29: 14 of 365 door-eligible names had no script under
+    their own name in the engine their image dials.
+
+    WHAT THAT COST, and why this is not a cosmetic roster tidy. Such a name
+    has NO working leg. Warm, `_resolve_entrypoint_script` raises a plain
+    `ValueError` -> -32603, which `door_core.c :: is_provably_undispatched`
+    correctly refuses to treat as proof of non-dispatch, so the door emits
+    -32004 and the invocation FAILS rather than degrading. Cold, `door.c ::
+    fall_through` spawns `<engine_root>\\coordinator\\bin\\<name>.py` -- the
+    same absent path. And on Windows the `.exe` outranks the `.cmd` in
+    PATHEXT, so the broken image SHADOWS the `publish.cmd` forwarder that
+    does work (it resolves claude-klabauter's own tree via `_resolve_claude_klabauter.py`). The
+    net effect is a name that worked before it was cut over and fails after.
+
+    Checked at INSTALL time, against the root actually being installed from,
+    rather than modelled in the census that builds the roster. The publish
+    transform is a moving target -- an exclusion list plus a substitution
+    table, both editable in the publishing repo -- and any static model of it
+    in the generator is a second source of truth that goes stale silently.
+    The engine on disk cannot.
+    """
+    return (Path(engine_root) / "coordinator" / "bin" / f"{name}.py").is_file()
+
+
+def remove_stale_named_forwarder(bin_dst: Path, name: str) -> Optional[Path]:
+    """Removes a previously-installed native image for `name`, returning the
+    path removed or None.
+
+    The cleanup half of `engine_carries_entrypoint_script`: a name cut over
+    by an earlier install, and only later found to have no script in the
+    engine it dials, leaves a broken `.exe` behind that outranks the working
+    Python pair on PATH. Re-running the installer has to take it back out,
+    or the fix never reaches a box that already ran the broken cutover.
+
+    NEVER touches the canonical door itself. `DOOR_INSTALLED_NAME` resolves
+    here to the same path `install_door` writes, and removing it would strip
+    every session on the box of its engine entrypoint -- the same
+    self-collision `install_named_forwarder` guards against, in the opposite
+    direction.
+    """
+    dest = named_forwarder_path(bin_dst, name)
+    canonical = bin_dst / DOOR_INSTALLED_NAME
+    if os.path.normcase(os.path.abspath(dest)) == os.path.normcase(os.path.abspath(canonical)):
+        return None
+    if not dest.exists():
+        return None
+    try:
+        dest.unlink()
+    except OSError:
+        return None
+    return dest
+
+
 def remove_shadowing_ps1_sibling(bin_dst: Path, name: str) -> Optional[Path]:
     """Removes `name + ".ps1"` at `bin_dst` if present -- the per-name
     counterpart to `_remove_shadowing_forwarder_siblings` for an arbitrary
