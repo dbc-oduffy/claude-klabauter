@@ -18,9 +18,18 @@ override goes silently dead (not present in the server's environ), and whatever 
 server happened to start under becomes a fleet-wide, invisible disarm. This module
 therefore never reads ``os.environ`` itself, and does not need to: ``params["payload"]``
 already carries a per-call ``env`` mapping (``warm/hook_http.py :: payload_from_event``
-populates it from the FORWARDED event), and passing that payload straight through to
+populates it from the FORWARDED event), and passing that payload through to
 ``evaluate_payload_json`` is what lets ``bash_guards/dispatch_checks.py :: _override``
 prefer it over ambient environ, exactly as C14c re-keyed that function to do.
+
+THE SAME RULE GOVERNS THE TWO KWARGS THIS OP SUPPLIES, and they fall on opposite sides of
+it — see ``_RESOLUTION_CLASS`` / ``_policy_file_for`` below for the full reasoning.
+``policy_file`` is a CALLER fact, derived per call from the payload's own ``plugin_root``
+(the key DoE's forwarder computes onto the body from its ``X-Coordinator-Clone-Root``
+header) and never memoized. ``resolution_class`` is a SERVER fact — this engine's own
+DR-132 class, which cannot vary per caller — and IS memoized, because resolving it pays a
+shim load and this op runs per Bash tool call. Reading either one the other way round is
+the invisible-disarm hazard this module's first paragraph exists to prevent.
 
 RESPONSE SHAPE — the contract ``warm/hook_http.py :: interpret_result`` reads:
     result.get("permissionDecision") or result.get("decision")
@@ -79,6 +88,62 @@ from typing import Any, Dict, List, Optional, Union
 
 from coordinator_core.bash_guards.dispatch import evaluate_payload_json
 from coordinator_core.ipc import register_op
+from coordinator_core.warm.caller_context import resolve_caller_context
+
+#: Memoized `resolution_class` for THIS process. Safe to cache, and the asymmetry with
+#: `policy_file` below is the whole correctness of this pair -- do not "simplify" them into one
+#: helper. `resolution_class` classifies THE ENGINE'S OWN resolution of itself
+#: (`engine_root.coordinator_engine_root_with_class`), so it is a property of this resident
+#: server and cannot vary per caller. `policy_file` is a CALLER fact and must be recomputed
+#: every call: caching it would freeze it to whichever session booted the engine, the exact
+#: hazard DoE's governed-surfaces manifest acceptance was bound to ("read per-call, never
+#: memoized in the resident server") one seam over.
+#:
+#: `""` is the NEGATIVE cache, deliberately distinct from `None`. `coordinator_engine_root_with_class`
+#: pays an unconditional `_load_shim()`/`exec_module` (its own "HOT-PATH SHAPE" note) and this op
+#: runs per Bash tool call, so a plain try/except that retried would re-pay that shim load on
+#: every call forever on a box where resolution fails -- a per-call cost to re-learn a fact that
+#: does not change. Swallowing is licensed here and NOT for `policy_file`: an absent
+#: `resolution_class` only degrades `_crash_deny`'s message phrasing back to its
+#: pre-`resolution_class` text (`dispatch._RESOLUTION_CLASS_PHRASES.get`), never a dropped guard.
+_RESOLUTION_CLASS: Optional[str] = None
+
+
+def _engine_resolution_class() -> Optional[str]:
+    """This engine's own DR-132 resolution class, resolved once per process.
+
+    Returns `None` when unresolvable, which is what every caller predating the
+    `resolution_class` kwarg already passed -- a cosmetic degradation of deny-message
+    phrasing, never a behavioural one.
+    """
+    global _RESOLUTION_CLASS
+    if _RESOLUTION_CLASS is None:
+        try:
+            from coordinator_core.engine_root import coordinator_engine_root_with_class
+
+            _RESOLUTION_CLASS = coordinator_engine_root_with_class()[1] or ""
+        except Exception:  # noqa: BLE001 -- negative-cache; never re-pay the shim load per call
+            _RESOLUTION_CLASS = ""
+    return _RESOLUTION_CLASS or None
+
+
+def _policy_file_for(payload: Dict[str, Any]) -> Optional[str]:
+    """DoE's `subagent-sandbox-policy.yaml` path for THIS call's caller.
+
+    Derived from the payload's own `plugin_root` -- the per-call, caller-supplied key DoE's
+    forwarder computes onto the body from its `X-Coordinator-Clone-Root` header -- never from
+    this process's environment. `resolve_caller_context` prefers that payload key and only falls
+    back to an ambient probe on a miss; a miss here therefore yields `None` rather than the
+    server's own root, and `None` is the pre-existing behaviour: `block_reviewer_bash_outside_allowlist`
+    falls through to its hardcoded `_default_ruleset()` path, never to an empty/unconfined
+    ruleset. Degrading to `None` is safe; guessing a path is not.
+
+    NEVER MEMOIZE THIS. See `_RESOLUTION_CLASS` above for the asymmetry and its reason.
+    """
+    plugin_root = resolve_caller_context(payload).plugin_root
+    if not plugin_root:
+        return None
+    return str(Path(plugin_root) / "subagent-sandbox-policy.yaml")
 
 #: The no-objection verdict this op ever answers with — an empty result dict. Mirrors
 #: `hook_http.allow_response`'s own "carries no permissionDecision" contract one layer
@@ -161,5 +226,10 @@ async def _warm_guard_evaluate(params: dict, repo_root: Optional[Path] = None) -
             % (payload, type(payload).__name__)
         )
     raw = json.dumps(payload)
-    out = await asyncio.to_thread(evaluate_payload_json, raw)
+    out = await asyncio.to_thread(
+        evaluate_payload_json,
+        raw,
+        policy_file=_policy_file_for(payload),
+        resolution_class=_engine_resolution_class(),
+    )
     return _verdict_from_envelope(out)

@@ -124,20 +124,39 @@ read pipelines"):
       identifier ANYWHERE denies, whole-command-scoped like point 4.
 
   11. INTERPRETER-INVOCATION READ-SHAPE -- a segment whose own command
-      token IS an interpreter, carries no write marker, no OS-exec escape
-      hatch, no ``eval``/``xargs``, is not a ``-m <module>`` invocation, and
-      whose governed-identifier mention does NOT survive quoted-span
-      stripping (i.e. it is quoted content, e.g.
-      ``python3 -c "print('reads CLAUDE.md')"``) is read-shape.
+      token IS an interpreter, no OS-exec escape hatch, no ``eval``/
+      ``xargs``, is not a ``-m <module>`` invocation, and whose
+      governed-identifier mention does NOT survive quoted-span stripping
+      (i.e. it is quoted content, e.g.
+      ``python3 -c "print('reads a governed surface')"``) is read-shape.
+
+      NARROWED BY SINK 2026-08-29. This carve-out used to decline on ANY
+      write marker in the segment. An interpreter payload is a SINGLE
+      segment, so a governed read and an unrelated write shared it and the
+      carve-out never applied -- the same defect point 4 carried, one leg
+      over. A write marker now declines only when
+      ``_interpreter_write_sinks_are_ungoverned`` cannot clear it: every
+      write must be an analysable literal-path ``open()`` in a write mode
+      landing on a non-governed path. Anything else -- a non-literal path,
+      a file object bound to a name, a redirect, ``tee``, ``sed -i`` -- is
+      unreadable here and still declines.
 
 NEGATIVE-SPEC (accepted over-denial, preserved from the original): a segment
 mentioning a governed surface AND an unrelated write marker in the SAME
 segment (``git diff CLAUDE.md > /tmp/out.txt``) still denies -- this guard
 does not parse which argument a redirect targets within one segment. A
-second, deliberately un-fixed same-segment over-denial: an interpreter
-payload writing an UNRELATED destination whose STRING ARGUMENT happens to
-quote a governed surface's filename as prose (a finding *about* the file,
-not a path operand) still denies for the identical structural reason.
+second same-segment over-denial WAS an interpreter payload writing an
+unrelated destination while quoting a governed filename; point 11's
+by-sink narrowing (2026-08-29) closes it for the analysable literal-open
+shape and leaves it standing everywhere else, by design.
+
+A THIRD, UPSTREAM hole is open and is NOT an over-denial: point 1's
+prefilter is plain substring matching, so a payload splitting the name
+across a concatenation (``open('CLAU' 'DE.md', 'w')``) never reaches any
+leg. Filed with its own measurement and a perf constraint at
+``state/bug-backlog/2026-08-29-string-concatenation-defeats-the-governed-
+identifier-prefilter.yaml``; pinned by a test that asserts the current
+wrong behaviour so the fix cannot land silently.
 
 Contract: ``check(payload, governed_surfaces) -> Optional[Dict[str, Any]]``
 (this package's own convention, replacing DoE's stdin/exit-code ``main()``).
@@ -804,6 +823,93 @@ def _has_os_exec_marker(text: str) -> bool:
     return bool(_OS_EXEC_RE.search(text))
 
 
+_OPEN_CALL_RE = re.compile(r"\bopen\s*\(")
+_WRITE_MODE_RE = re.compile(r"['\"][^'\"]*[wax][^'\"]*['\"]")
+_LITERAL_FIRST_ARG_RE = re.compile(r"\A\s*(['\"])(?P<path>[^'\"]*)\1\s*(?:,|\Z)")
+_TRAILING_WRITE_CALL_RE = re.compile(r"\A\s*\.\s*write(?:_text|_bytes)?\s*\(")
+
+
+def _open_call_spans(segment: str) -> "list[tuple[int, int, str]]":
+    """Every ``open(`` call in ``segment`` as ``(start, end, args)``, where
+    ``end`` is one past the call's matching close paren and ``args`` is the
+    raw argument text. Depth-counted rather than regex-matched: an argument
+    list can itself contain parens (``open(str(p), 'w')``), and a regex that
+    stops at the first ``)`` would truncate the mode and read a write as a
+    read. A call whose paren never closes is skipped, so a truncated payload
+    contributes no analysable span and the caller falls back to closed."""
+    spans: "list[tuple[int, int, str]]" = []
+    for match in _OPEN_CALL_RE.finditer(segment):
+        depth = 0
+        i = match.end() - 1
+        while i < len(segment):
+            if segment[i] == "(":
+                depth += 1
+            elif segment[i] == ")":
+                depth -= 1
+                if depth == 0:
+                    spans.append((match.start(), i + 1, segment[match.end():i]))
+                    break
+            i += 1
+    return spans
+
+
+def _interpreter_write_sinks_are_ungoverned(
+    segment: str, identifiers_lower: Tuple[str, ...]
+) -> bool:
+    """Point 3's by-SINK narrowing for the INTERPRETER shape -- MEASURED
+    FALSE POSITIVE FIX, the companion leg to
+    ``_assignment_indirection_reaches_a_write``.
+
+    ``_is_interpreter_read_shape`` declines the moment the segment carries
+    ANY write marker, regardless of what that write targets. A ``python3 -c``
+    payload is a SINGLE segment, so a governed READ and an unrelated write
+    share it and the carve-out never applies:
+
+        python3 -c "print(open('<governed>').read()); open('/tmp/x','w').write('y')"
+
+    ...is denied even though the only write lands in scratch. Same defect as
+    point 4's, one leg over: the marker was never related to its sink.
+
+    True only when EVERY write in the payload is an analysable literal-path
+    ``open()`` in a write mode and none of those paths names a governed
+    surface. A write-mode ``open()`` whose path is not a string literal
+    (``open(p, 'w')``) is unresolvable and returns False, as does any write
+    marker left over once the analysable opens are blanked out -- a
+    redirect, ``tee``, ``sed -i``, ``.write(`` on a name bound earlier
+    (``f = open(...)`` then ``f.write(...)``), or anything else.
+
+    FAIL-CLOSED EVERYWHERE ELSE, deliberately, and narrower than point 4's
+    equivalent: only the adjacent ``open(<literal>, <write mode>)`` shape --
+    optionally chained into ``.write()``/``.write_text()``/``.write_bytes()``
+    -- is analysed. Widening this to a bound file object needs dataflow
+    inside the payload, which this guard does not have and must not fake.
+    Pinned by a test so a later widening is a deliberate act.
+
+    READS ARE NOT SINKS. A read-mode ``open('<governed>')`` is left standing
+    on purpose: reading a governed surface is exactly the shape this
+    narrowing exists to stop denying."""
+    blanked = list(segment)
+    analysable = False
+    for start, end, args in _open_call_spans(segment):
+        if not _WRITE_MODE_RE.search(args[args.find(",") + 1:]) or "," not in args:
+            continue  # read-mode open -- not a sink, leave it standing
+        literal = _LITERAL_FIRST_ARG_RE.match(args)
+        if literal is None:
+            return False  # write target is not a literal -- unresolvable
+        if _mentions_governed_identifier(literal.group("path"), identifiers_lower):
+            return False  # the write names a governed surface
+        analysable = True
+        stop = end
+        chained = _TRAILING_WRITE_CALL_RE.match(segment[end:])
+        if chained is not None:
+            stop = end + chained.end()
+        for i in range(start, stop):
+            blanked[i] = " "
+    if not analysable:
+        return False
+    return not _has_write_marker("".join(blanked))
+
+
 def _is_interpreter_read_shape(segment: str, identifiers_lower: Tuple[str, ...]) -> bool:
     """See module docstring point 11 for the full rationale."""
     token = _segment_command_token(segment)
@@ -815,7 +921,9 @@ def _is_interpreter_read_shape(segment: str, identifiers_lower: Tuple[str, ...])
         return False
     if _python_dash_m_module(segment) is not None:
         return False
-    if _has_write_marker(segment):
+    if _has_write_marker(segment) and not _interpreter_write_sinks_are_ungoverned(
+        segment, identifiers_lower
+    ):
         return False
     if _has_os_exec_marker(segment):
         return False
