@@ -21,6 +21,10 @@ Coverage:
   (j) default_path_helper — default_receipt_path returns expected path shape
   (k) applicable_node_ids — the persisted receipt carries the declared-membership
                             list from ctx.applicable_node_ids (op-spec §3)
+  (m) unknown_partition    — a tail D-node's evidence.unknown[] reaches both the
+                            computed_op_tail emit_receipt returns to its caller AND
+                            the receipt written to disk, and never leaks into
+                            acted/skipped/failed (C2, op_tail's unknown[] partition)
 
 Spec backlink:
   coordinator_core/ops/ceremony/receipt_emit.py
@@ -499,6 +503,93 @@ def test_resolve_latest_receipt_path_none_when_absent(tmp_path: Path) -> None:
     from coordinator_core.ops.ceremony.receipt_emit import resolve_latest_receipt_path
 
     assert resolve_latest_receipt_path(tmp_path, "wsc", "no-such-sid") is None
+
+
+# ---------------------------------------------------------------------------
+# (m) unknown_partition — evidence.unknown[] survives the emit_receipt round trip
+#     (C2: op_tail's unknown[] partition, added additively in C1)
+# ---------------------------------------------------------------------------
+
+
+def test_unknown_reaches_returned_computed_op_tail(tmp_path: Path) -> None:
+    """A tail D-node's evidence.unknown[] entries appear in the computed_op_tail
+    dict emit_receipt returns to its caller — the caller-visible half of the C1
+    partition needs no new contract, per receipt_emit's own F7 review note.
+    """
+    tail_node = make_d_node(
+        "step-3.5a",
+        resolving_op="cs_archive",
+        evidence={"acted": [], "skipped": [], "failed": [], "unknown": ["sid-x"]},
+        tail_step=True,
+    )
+    ctx = _make_ctx(nodes=[tail_node])
+    _, computed_op_tail = emit_receipt(
+        ctx, repo_root=tmp_path, sid="test-sid", tail_phase="archival"
+    )
+    assert computed_op_tail["unknown"] == ["sid-x"]
+
+
+def test_unknown_reaches_written_receipt(tmp_path: Path) -> None:
+    """The same evidence.unknown[] entries are present in the receipt written to disk."""
+    tail_node = make_d_node(
+        "step-3.5a",
+        resolving_op="cs_archive",
+        evidence={"acted": [], "skipped": [], "failed": [], "unknown": ["sid-x"]},
+        tail_step=True,
+    )
+    ctx = _make_ctx(nodes=[tail_node])
+    path, _ = emit_receipt(ctx, repo_root=tmp_path, sid="test-sid", tail_phase="archival")
+    receipt = read_receipt(path)
+    assert receipt["op_tail"]["unknown"] == ["sid-x"]
+    errors = validate(receipt)
+    assert errors == [], f"Unexpected validation errors: {errors}"
+
+
+def test_unknown_never_collapses_into_other_partitions(tmp_path: Path) -> None:
+    """An unknown outcome must never appear in acted, skipped, or failed — this
+    fails loudly if a future producer, or a future change to compute_op_tail,
+    quietly folds unknown back into skipped (or any other partition).
+    """
+    tail_node = make_d_node(
+        "step-3.5a",
+        resolving_op="cs_archive",
+        evidence={
+            "acted": ["acted-item"],
+            "skipped": ["skipped-item"],
+            "failed": ["failed-item"],
+            "unknown": ["unknown-item"],
+        },
+        tail_step=True,
+    )
+    ctx = _make_ctx(nodes=[tail_node])
+    path, computed_op_tail = emit_receipt(
+        ctx, repo_root=tmp_path, sid="test-sid", tail_phase="archival"
+    )
+
+    for partition_name in ("acted", "skipped", "failed", "failed_critical"):
+        assert "unknown-item" not in computed_op_tail[partition_name], (
+            f"'unknown-item' leaked into computed_op_tail[{partition_name!r}]"
+        )
+    assert computed_op_tail["unknown"] == ["unknown-item"]
+
+    receipt = read_receipt(path)
+    op_tail = receipt["op_tail"]
+    for partition_name in ("acted", "skipped", "failed", "failed_critical"):
+        assert "unknown-item" not in op_tail[partition_name], (
+            f"'unknown-item' leaked into the written receipt's op_tail[{partition_name!r}]"
+        )
+    assert op_tail["unknown"] == ["unknown-item"]
+
+
+def test_op_tail_unknown_always_present_even_when_empty(tmp_path: Path) -> None:
+    """op_tail.unknown is present as an empty list even when no tail node reports
+    an unknown outcome (graceful-absent, not key-absent — same posture as
+    acted/skipped/failed)."""
+    ctx = _make_ctx()  # no nodes
+    path, computed_op_tail = emit_receipt(ctx, repo_root=tmp_path, sid="test-sid")
+    assert computed_op_tail["unknown"] == []
+    receipt = read_receipt(path)
+    assert receipt["op_tail"]["unknown"] == []
 
 
 # ---------------------------------------------------------------------------

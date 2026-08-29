@@ -23,9 +23,10 @@ Receipt top-level shape:
   scope_mode        str         — session scope_mode from session-shape.json (write-time fact);
                                   NEVER a derived light|full ceremony weight (pcore-06 / C7)
   nodes             list[dict]  — node ledger (single source of truth for op_tail derivation)
-  op_tail           dict        — {phase, acted[], skipped[], failed[]}; capability-generic
-                                  derived view over D-node tail entries; computed at emit time,
-                                  NOT stored independently of the ledger
+  op_tail           dict        — {phase, acted[], skipped[], failed[], failed_critical[],
+                                  unknown[]}; capability-generic derived view over D-node
+                                  tail entries; computed at emit time, NOT stored
+                                  independently of the ledger
   applicable_node_ids  list[str]  — OPTIONAL, additive.  Ordered step-IDs that apply to
                                   this session's disposition, declared once by the
                                   producer (wsc_resolve) off already-resolved state —
@@ -67,12 +68,20 @@ op_tail shape:
   acted   list[str]  — items acted on by the tail ops (aggregated across all tail D-nodes)
   skipped list[str]  — items skipped
   failed  list[str]  — items that failed; legible in receipt for best-effort-with-report
+  failed_critical list[str] — critical-class failures; feeds the hard-exit-1 predicate
+  unknown list[str]  — items a tail op could not determine the outcome of; legible
+                       indeterminacy, NOT failure — a step that cannot tell fine from
+                       broken lands here instead of guessing acted or skipped.  Does
+                       NOT feed the failed_critical exit predicate and is never fatal.
 
 Graceful-absent rules (HARD):
   - Absent file = "pipeline not yet run" — not an error; callers MUST treat absence gracefully
   - Every required field present; empty arrays NEVER key-absent
-  - op_tail ALWAYS present even when tail did not run: {phase:"<label>", acted:[], skipped:[], failed:[]}
-    — absence of the op_tail object reintroduces the "absent vs. not-run" ambiguity
+  - op_tail ALWAYS present even when tail did not run: {phase:"<label>", acted:[], skipped:[],
+    failed:[], failed_critical:[], unknown:[]} — absence of the op_tail object reintroduces
+    the "absent vs. not-run" ambiguity
+  - unknown[] is legible indeterminacy, not failure — it MUST NOT feed the failed_critical
+    hard-exit-1 predicate; that predicate reads failed_critical only, untouched by this field
 
 Negative spec — do NOT reintroduce `coverage_pointer`: the review-coverage gate it
 pointed at was killed under K-001 (state/kill-ledger.md), and its artifact path
@@ -228,6 +237,11 @@ def make_empty_op_tail(phase: str) -> dict[str, Any]:
                         but review_trail absent/incomplete).  Empty when no critical
                         failures occurred.  Exit predicate reads this field directly —
                         NOT via substring-matching on failed[].
+      unknown[]         legible indeterminacy, added additively the same way
+                        failed_critical was: a tail op that cannot establish its own
+                        outcome records it here instead of guessing acted or skipped.
+                        NOT fatal — does NOT feed the failed_critical exit predicate.
+                        Empty when every tail op could determine its outcome.
     """
     return {
         "phase": phase,
@@ -235,6 +249,7 @@ def make_empty_op_tail(phase: str) -> dict[str, Any]:
         "skipped": [],
         "failed": [],
         "failed_critical": [],  # C3: structured critical-class failures (hard-exit-1)
+        "unknown": [],  # legible indeterminacy — not fatal, not the exit predicate
     }
 
 
@@ -242,8 +257,8 @@ def compute_op_tail(nodes: list[dict[str, Any]], phase: str) -> dict[str, Any]:
     """Derive the op_tail view from the node ledger.
 
     Filters D-nodes with tail_step=True, then aggregates their evidence.acted[],
-    evidence.skipped[], evidence.failed[], and evidence.failed_critical[] into
-    four partitions.
+    evidence.skipped[], evidence.failed[], evidence.failed_critical[], and
+    evidence.unknown[] into five partitions.
 
     C3 — structured failure-class discriminator:
       failed[]          environmental-class (tolerant; aggregated from evidence.failed[]).
@@ -253,6 +268,12 @@ def compute_op_tail(nodes: list[dict[str, Any]], phase: str) -> dict[str, Any]:
       failed_critical[] critical-class (hard-exit-1; aggregated from
                         evidence.failed_critical[]).  Absent from pre-C3 evidence dicts —
                         graceful-absent via .get("failed_critical", []).
+
+    unknown[] — legible indeterminacy, added additively the same way failed_critical
+      was: aggregated from evidence.unknown[], graceful-absent via
+      .get("unknown", []) so pre-existing evidence dicts stay valid.  NOT fatal — does
+      NOT feed the failed_critical exit predicate, and MUST NOT be folded into acted,
+      skipped, or failed by a producer or a future change to this function.
 
     op_tail is the SINGLE DERIVED VIEW — it is computed here from the ledger and
     stored in the receipt at emit time.  The ledger (nodes) is the source of truth;
@@ -265,6 +286,7 @@ def compute_op_tail(nodes: list[dict[str, Any]], phase: str) -> dict[str, Any]:
     skipped: list[str] = []
     failed: list[str] = []
     failed_critical: list[str] = []  # C3: structured critical-class failures
+    unknown: list[str] = []  # legible indeterminacy — not fatal, not the exit predicate
 
     for node in nodes:
         if node.get("type") != "D" or not node.get("tail_step", False):
@@ -274,6 +296,7 @@ def compute_op_tail(nodes: list[dict[str, Any]], phase: str) -> dict[str, Any]:
         skipped.extend(evidence.get("skipped", []))
         failed.extend(evidence.get("failed", []))
         failed_critical.extend(evidence.get("failed_critical", []))  # C3: graceful-absent
+        unknown.extend(evidence.get("unknown", []))  # graceful-absent
 
     return {
         "phase": phase,
@@ -281,6 +304,7 @@ def compute_op_tail(nodes: list[dict[str, Any]], phase: str) -> dict[str, Any]:
         "skipped": skipped,
         "failed": failed,
         "failed_critical": failed_critical,  # C3: empty list when no critical failures
+        "unknown": unknown,  # empty list when every tail op determined its outcome
     }
 
 
@@ -402,6 +426,13 @@ _REQUIRED_OP_TAIL_FIELDS: tuple[str, ...] = ("phase", "acted", "skipped", "faile
 # external producers must also include it for C3(C) to function correctly.
 # See test_phase2_receipt_schema_valid for the positive assertion that the emitted
 # receipt always carries failed_critical as a list.
+#
+# `unknown` follows the identical posture: intentionally ABSENT from
+# _REQUIRED_OP_TAIL_FIELDS for backward-compat with pre-existing receipts that never
+# carried it — a receipt with and without `unknown` both validate.  Unlike
+# failed_critical, `unknown` feeds no exit predicate; its absence changes no runtime
+# behavior, only legibility.  make_empty_op_tail() and compute_op_tail() always
+# include it.
 
 _NODE_TYPE_REQUIRED: dict[str, tuple[str, ...]] = {
     "D": ("id", "type", "resolving_op", "evidence", "tail_step"),
@@ -514,6 +545,11 @@ def validate(receipt: dict[str, Any]) -> list[str]:
         if "failed_critical" in op_tail and not isinstance(op_tail["failed_critical"], list):
             errors.append(
                 f"op_tail.failed_critical must be a list; got {type(op_tail['failed_critical']).__name__}"
+            )
+        # unknown is optional in pre-existing receipts (graceful-absent); when present, must be a list.
+        if "unknown" in op_tail and not isinstance(op_tail["unknown"], list):
+            errors.append(
+                f"op_tail.unknown must be a list; got {type(op_tail['unknown']).__name__}"
             )
 
     # --- nodes ---

@@ -86,7 +86,12 @@ def __getattr__(name: str):
     again for that name."""
     if name in _BOOTSTRAP_NAMES:
         _bootstrap_imports()
-        return globals()[name]
+        try:
+            return globals()[name]
+        except KeyError:
+            raise AttributeError(
+                f"module {__name__!r} has no attribute {name!r}"
+            ) from None
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 

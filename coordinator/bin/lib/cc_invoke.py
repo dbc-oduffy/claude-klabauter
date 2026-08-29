@@ -1125,6 +1125,29 @@ def _seam_present(claude_klabauter_root: str) -> bool:
 # and cc_invoke_bare() (--bare convention) so the fail-closed ladder lives once.
 # ---------------------------------------------------------------------------
 
+_SHOULD_PASS_REPO_FAIL_OPEN_EMITTED: set[str] = set()
+
+
+def _emit_should_pass_repo_fail_open(branch: str, op: str) -> None:
+    """Emit a one-line stderr diagnostic for a TERMINAL `_should_pass_repo`
+    fail-open branch, once per (branch, process) — never for the ambient-import
+    `except Exception: pass` at the top of `_should_pass_repo`, which is a
+    normal miss with a working sys.path-injected retry behind it (see that
+    function's docstring), not an unresolved scope. Swallows its own failure:
+    a broken stderr write must not take the transport down.
+    """
+    if branch in _SHOULD_PASS_REPO_FAIL_OPEN_EMITTED:
+        return
+    _SHOULD_PASS_REPO_FAIL_OPEN_EMITTED.add(branch)
+    try:
+        sys.stderr.write(
+            "cc_invoke: _should_pass_repo could not resolve scope for op '"
+            + op + "' (" + branch + ") -- --repo is being passed unchecked\n"
+        )
+    except Exception:
+        pass
+
+
 def _should_pass_repo(op: str, claude_klabauter_root: str | None = None) -> bool:
     """Return whether `--repo` should be spawned on argv for `op`.
 
@@ -1167,9 +1190,11 @@ def _should_pass_repo(op: str, claude_klabauter_root: str | None = None) -> bool
     try:
         _root = claude_klabauter_root if claude_klabauter_root is not None else _resolve_claude_klabauter_root()
     except RuntimeError:
+        _emit_should_pass_repo_fail_open("root-resolution-failed", op)
         return True
 
     if not os.path.isabs(_root) or not os.path.isdir(_root):
+        _emit_should_pass_repo_fail_open("root-not-isabs-or-isdir", op)
         return True
 
     _injected = _root not in sys.path
@@ -1180,6 +1205,7 @@ def _should_pass_repo(op: str, claude_klabauter_root: str | None = None) -> bool
 
         return op in WORKTREE_SCOPED_OPS
     except Exception:
+        _emit_should_pass_repo_fail_open("post-injection-import-failed", op)
         return True
     finally:
         if _injected:

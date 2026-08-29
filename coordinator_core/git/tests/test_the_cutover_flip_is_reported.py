@@ -31,6 +31,8 @@ import pytest
 
 from coordinator_core.git import commit as gcommit
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 
 def _git(repo: pathlib.Path, *args: str) -> None:
     subprocess.run(
@@ -147,6 +149,51 @@ class TestTheFlipIsReported:
         assert outcome.worktree_over_staged == ("a.txt",)
 
 
+class TestPreferDeliberateStagePolicy:
+    """DR-379: `worktree_over_staged` is already the correct discriminator
+    (index-vs-HEAD, not index-vs-worktree); this makes it consumable as a
+    caller-declared substitution rather than only a report."""
+
+    def test_policy_on_partial_stage_lands_the_staged_bytes(self, repo):
+        _partial_stage(repo)
+
+        outcome = gcommit.commit_paths(
+            repo, ["a.txt"], "policy on", prefer_deliberate_stage=True
+        )
+
+        assert _committed_bytes(repo) == b"staged\n"
+
+    def test_policy_on_ordinary_edit_still_lands_worktree_bytes(self, repo):
+        # THE CASE THAT PROVES THE DISCRIMINATOR: index still equals HEAD, so
+        # this is an ordinary unstaged edit, not a deliberate partial stage --
+        # the policy must NOT reach for the stage here even though it is on.
+        (repo / "a.txt").write_text("just an edit\n", encoding="utf-8")
+
+        outcome = gcommit.commit_paths(
+            repo, ["a.txt"], "policy on, ordinary edit", prefer_deliberate_stage=True
+        )
+
+        assert _committed_bytes(repo) == b"just an edit\n"
+
+    def test_policy_off_partial_stage_is_unregressed(self, repo):
+        _partial_stage(repo)
+
+        outcome = gcommit.commit_paths(repo, ["a.txt"], "policy off")
+
+        assert _committed_bytes(repo) == b"worktree\n"
+        assert outcome.worktree_over_staged == ("a.txt",)
+
+    def test_policy_on_preserved_path_is_not_reported_as_passed_over(self, repo):
+        _partial_stage(repo)
+
+        outcome = gcommit.commit_paths(
+            repo, ["a.txt"], "policy on, not a loss", prefer_deliberate_stage=True
+        )
+
+        assert outcome.worktree_over_staged == ()
+        assert outcome.staged_preferred == ("a.txt",)
+
+
 class TestBothRoutesReportTheDisagreement:
     """The flip is between TWO functions, so a report on one side only moves
     the silence rather than ending it.
@@ -195,3 +242,52 @@ class TestBothRoutesReportTheDisagreement:
 
         assert result["committed"] is True
         assert result["warnings"] == []
+
+
+class TestBlobFallbackLegAlsoReportsTheLoss:
+    """The candidacy check the main loop applies (index differs from the
+    worktree, settled against HEAD) had no counterpart in the `blob_fallback`
+    resolution leg (`commit.py`'s `for p in refused:` loop) -- a path refused
+    by the in-process checkin check (an `eol=crlf` pin over CR bytes here)
+    committed its worktree blob over a divergent stage exactly like the main
+    loop's case, but never entered `staged_passed_over`, so it never reached
+    `worktree_over_staged`. Same loss, silent on this one leg only."""
+
+    def test_a_refused_partial_staged_path_is_reported_via_the_fallback_leg(self, repo):
+        (repo / ".gitattributes").write_text(
+            "*.cmd text eol=crlf\n", encoding="utf-8", newline="\n"
+        )
+        _git(repo, "add", "-A")
+        _git(repo, "commit", "-qm", "attrs")
+
+        # Partial stage: one CR-bearing blob staged, a DIFFERENT CR-bearing
+        # blob left in the worktree -- the same shape `_partial_stage`
+        # exercises for the main loop, but on a path the in-process checkin
+        # check refuses (CR bytes under an `eol=crlf` pin), forcing it
+        # through `blob_fallback`.
+        (repo / "run.cmd").write_bytes(b"echo staged\r\n")
+        _git(repo, "add", "run.cmd")
+        (repo / "run.cmd").write_bytes(b"echo worktree\r\n")
+
+        def fallback(paths):
+            out = {}
+            for rel in paths:
+                result = subprocess.run(
+                    ["git", "-C", str(repo), "hash-object", "-w", f"--path={rel}", "--", rel],
+                    check=True,
+                    capture_output=True,
+                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                )
+                out[rel] = result.stdout.decode().strip()
+            return out
+
+        outcome = gcommit.commit_paths(
+            repo, ["run.cmd"], "refused, partial staged", blob_fallback=fallback
+        )
+
+        # `eol=crlf` normalizes CRLF -> LF on checkin -- the STORED blob is
+        # LF-normalized even though the worktree bytes are CRLF; this
+        # assertion is about which CONTENT landed (the worktree's, not the
+        # stage's), not about literal byte preservation across the filter.
+        assert _committed_bytes(repo, "run.cmd") == b"echo worktree\n"
+        assert outcome.worktree_over_staged == ("run.cmd",)

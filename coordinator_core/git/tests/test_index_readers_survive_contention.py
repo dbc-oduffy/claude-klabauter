@@ -28,6 +28,7 @@ itself, and it is why one shared ladder is right here and wrong there.
 """
 from __future__ import annotations
 
+import inspect
 import pathlib
 import struct
 
@@ -42,6 +43,17 @@ from coordinator_core.git.git_state import IndexParseError
 #: creation IS the cost. Empty is sufficient: every assertion here is about
 #: reaching the parse, not about what the parse finds.
 _EMPTY_INDEX = b"DIRC" + struct.pack(">II", 2, 0) + b"\x00" * 20
+
+#: Injected-failure count for the "transient, then recovers" legs below,
+#: derived from the live ladder rather than hardcoded -- Review: code-reviewer
+#: finding 3 (a0f120ca85333568d) -- a hardcoded failure count that happens to
+#: sit under the ladder's length today goes stale silently if the ladder is
+#: ever shortened; deriving it keeps the relationship explicit and the count
+#: fewer than the ladder's max, so headroom is never exhausted by accident.
+_INJECTED_FAILURES = len(git_objects._TRANSIENT_READ_RETRY_DELAYS_S) - 1
+#: The call that must succeed: one real attempt, then a retry per delay
+#: consumed by the injected failures above.
+_ATTEMPTS_TO_SUCCEED = _INJECTED_FAILURES + 1
 
 
 @pytest.fixture
@@ -84,20 +96,31 @@ class TestGitStateReadIndex:
         self, repo, monkeypatch
     ):
         calls = _flaky(
-            monkeypatch, "read_bytes", 3, PermissionError(5, "Access is denied")
+            monkeypatch,
+            "read_bytes",
+            _INJECTED_FAILURES,
+            PermissionError(5, "Access is denied"),
         )
 
         assert git_state.read_index(repo, fresh=True) == {}
-        assert calls["n"] == 4
+        assert calls["n"] == _ATTEMPTS_TO_SUCCEED
 
     def test_the_stat_beside_the_read_is_retried_too(self, repo, monkeypatch):
         # Two reads of the same file in one call, and only the first was ever
         # the reported symptom -- an unretried `stat` here would surface as a
         # raw `OSError`, not even as the `IndexParseError` the contract names.
-        calls = _flaky(monkeypatch, "stat", 3, PermissionError(5, "Access is denied"))
+        calls = _flaky(
+            monkeypatch,
+            "stat",
+            _INJECTED_FAILURES,
+            PermissionError(5, "Access is denied"),
+        )
 
         assert git_state.read_index(repo, fresh=True) == {}
-        assert calls["n"] >= 4
+        # Review: code-reviewer finding 2 (a0f120ca85333568d) -- `read_index`
+        # calls `index_path.stat` exactly once, so the count is deterministic;
+        # tightened from `>=` to match the sibling `read_bytes` assertion.
+        assert calls["n"] == _ATTEMPTS_TO_SUCCEED
 
     def test_a_persistent_failure_still_raises_indexparseerror(
         self, repo, monkeypatch
@@ -131,10 +154,15 @@ class TestReadIndexStatIdentity:
     not degrade an answer -- it destroys the only property the caller wants."""
 
     def test_a_transient_stat_is_retried(self, repo, monkeypatch):
-        calls = _flaky(monkeypatch, "stat", 3, PermissionError(5, "Access is denied"))
+        calls = _flaky(
+            monkeypatch,
+            "stat",
+            _INJECTED_FAILURES,
+            PermissionError(5, "Access is denied"),
+        )
 
         assert git_state.read_index_stat_identity(repo) is not None
-        assert calls["n"] == 4
+        assert calls["n"] == _ATTEMPTS_TO_SUCCEED
 
     def test_an_absent_index_returns_none_without_retrying(self, repo, monkeypatch):
         (repo / ".git" / "index").unlink()
@@ -152,11 +180,14 @@ class TestGitIndexScopedStatus:
 
     def test_a_transient_read_is_retried(self, repo, monkeypatch):
         calls = _flaky(
-            monkeypatch, "read_bytes", 3, PermissionError(5, "Access is denied")
+            monkeypatch,
+            "read_bytes",
+            _INJECTED_FAILURES,
+            PermissionError(5, "Access is denied"),
         )
 
         assert git_index.scoped_status(repo, ["a.txt"]) == {"a.txt": "untracked"}
-        assert calls["n"] == 4
+        assert calls["n"] == _ATTEMPTS_TO_SUCCEED
 
 
 class TestExactlyOneLadder:
@@ -189,17 +220,18 @@ class TestExactlyOneLadder:
         git_index.scoped_status(repo, ["a.txt"])
         assert seen, "git_index.scoped_status bypassed the shared ladder"
 
-    def test_neither_reader_module_defines_its_own_retry_delays(self):
-        # The tell for a resurrected per-site copy: a second delay tuple. The
-        # ladder's timings are a choice about occupancy on a shared box, and
-        # two copies of that choice diverge silently.
+    def test_neither_reader_module_calls_time_sleep_directly(self):
+        # Review: code-reviewer finding 1 (a0f120ca85333568d) -- a name-grep
+        # for "RETRY_DELAY" is evaded by a resurrected ladder under any other
+        # name (`_BACKOFF_S`, `_READ_PAUSE_S`, a local var `vars(module)`
+        # never sees), so it was never "the tell" its own comment claimed. A
+        # per-site ladder must itself pause, and only `time.sleep` can do
+        # that -- scanning the module's source for the literal call is not
+        # evadable by renaming a delay tuple or hiding it as a local.
         for module in (git_state, git_index):
-            local = [
-                name
-                for name in vars(module)
-                if "RETRY_DELAY" in name and name in module.__dict__
-            ]
-            assert not local, (
-                f"{module.__name__} defines its own retry ladder ({local}); "
-                "the one ladder lives in git_objects -- see this class's docstring"
+            source = inspect.getsource(module)
+            assert "time.sleep(" not in source, (
+                f"{module.__name__} calls time.sleep directly; a resurrected "
+                "per-site retry ladder lives here instead of in git_objects "
+                "-- see this class's docstring"
             )

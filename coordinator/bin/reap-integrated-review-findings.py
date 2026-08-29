@@ -165,25 +165,18 @@ def __getattr__(name: str):
     plain global wins on every later lookup and this function is not called
     again for that name.
 
-    NEGATIVE SPEC -- the forced re-run below is not belt-and-braces.
-    `_bootstrap_imports()` short-circuits on `"cc_invoke" in globals()`, so a
-    name that leaves `__dict__` AFTER the first bootstrap is never rebound by
-    a plain call. `mock.patch.object` does exactly that: it reads the name
-    through this hook (so the value is absent from `__dict__` at enter), sets
-    its mock, and on exit `delattr`s rather than restoring -- then probes
-    `hasattr`, landing back here with the sentinel already satisfied. The
-    forced re-run defeats that sentinel; `_saved` preserves any OTHER
-    bootstrapped name a caller has separately monkeypatched (e.g. `cc_invoke`
-    itself) across the re-run, since the requested `name` was, by
-    construction, absent and so is never captured into `_saved`."""
+    NEGATIVE SPEC -- the bootstrap guard checks ALL of `_BOOTSTRAP_NAMES`,
+    not a single sentinel: `mock.patch.object` reading one name through this
+    hook and `delattr`ing it on exit (rather than restoring it) is exactly
+    the case the all-names guard covers -- a name absent from `__dict__`
+    means `_bootstrap_imports()` re-runs. The re-run publishes each
+    freshly-imported name via `globals().setdefault(...)`, so it rebinds
+    exactly what is missing and leaves any OTHER already-present
+    bootstrapped name (e.g. one a test patched) untouched. No pop/restore
+    snapshot is needed because a partially-bound state is never mistaken
+    for a fully-bound one."""
     if name in _BOOTSTRAP_NAMES:
         _bootstrap_imports()
-        if name not in globals():
-            _saved = {k: globals().pop(k) for k in _BOOTSTRAP_NAMES if k in globals()}
-            try:
-                _bootstrap_imports()
-            finally:
-                globals().update(_saved)
         try:
             return globals()[name]
         except KeyError:
@@ -201,20 +194,29 @@ def _bootstrap_imports() -> None:
     the former module-scope sequence. Idempotent by construction (see the
     `__getattr__` hook above, which may trigger this ahead of `main()`).
     """
-    if "cc_invoke" in globals():
+    if all(n in globals() for n in _BOOTSTRAP_NAMES):
         return
 
-    global cc_invoke, coordinator_engine_root_env, no_console_creationflags
-    global resolve_checked_repo_root
-
     import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
-    import cc_invoke
+    import cc_invoke as _cc_invoke
 
-    cc_invoke.ensure_engine_on_path(__file__)
+    _cc_invoke.ensure_engine_on_path(__file__)
 
-    from coordinator_core.engine_root import coordinator_engine_root_env
-    from coordinator_core.win_portability import no_console_creationflags
-    from repo_identity import resolve_checked_repo_root
+    from coordinator_core.engine_root import (
+        coordinator_engine_root_env as _coordinator_engine_root_env,
+    )
+    from coordinator_core.win_portability import (
+        no_console_creationflags as _no_console_creationflags,
+    )
+    from repo_identity import resolve_checked_repo_root as _rccr
+
+    for _name, _value in (
+        ("cc_invoke", _cc_invoke),
+        ("coordinator_engine_root_env", _coordinator_engine_root_env),
+        ("no_console_creationflags", _no_console_creationflags),
+        ("resolve_checked_repo_root", _rccr),
+    ):
+        globals().setdefault(_name, _value)
 
 # --summary sample size (F8 — a 64KB single-line JSON dump of 334 verbose
 # candidate rows is engine-friendly but EM-hostile at a PM dry-run gate,

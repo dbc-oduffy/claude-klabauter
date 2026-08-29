@@ -106,7 +106,9 @@ def test_memo_surface_suppressed_entirely_at_session_cadence(monkeypatch):
     monkeypatch.setattr(
         rco,
         "_resolve_inbox_dir",
-        lambda: (_ for _ in ()).throw(AssertionError("inbox dir must not be read when suppressed")),
+        lambda cwd=None: (_ for _ in ()).throw(
+            AssertionError("inbox dir must not be read when suppressed")
+        ),
     )
     result = rco._read_memo_surface("suppress")
     assert result == ReaderResult()
@@ -116,12 +118,12 @@ def test_memo_surface_suppressed_entirely_at_session_cadence(monkeypatch):
 def test_memo_surface_collect_suppresses_only_at_session_cadence(monkeypatch, tmp_path):
     inbox = tmp_path / "inbox"
     inbox.mkdir()
-    monkeypatch.setattr(rco, "_resolve_inbox_dir", lambda: str(inbox))
+    monkeypatch.setattr(rco, "_resolve_inbox_dir", lambda cwd=None: str(inbox))
     monkeypatch.setattr(rco, "_list_qualifying_lines", lambda d: ["memo line 1", "memo line 2"])
     monkeypatch.setattr(rco, "_read_em_environment", lambda: ReaderResult())
     monkeypatch.setattr(rco, "_scan_addon_health_run", lambda mode: ([], 0))
     monkeypatch.setattr(rco, "_read_rag_staleness", lambda: ReaderResult())
-    monkeypatch.setattr(rco, "_read_worktree_sweep", lambda: ReaderResult())
+    monkeypatch.setattr(rco, "_read_worktree_sweep", lambda **kw: ReaderResult())
 
     session_result = rco.collect("session")
     day_result = rco.collect("day")
@@ -132,11 +134,40 @@ def test_memo_surface_collect_suppresses_only_at_session_cadence(monkeypatch, tm
     assert len([jp for jp in week_result.judgment_points if jp["id"].startswith("j-memo-")]) == 2
 
 
+def test_collect_threads_repo_root_into_memo_surface_and_worktree_sweep(monkeypatch, tmp_path):
+    """`collect(repo_root=...)` must reach `_read_memo_surface` and
+    `_read_worktree_sweep` — the two readers whose underlying helpers
+    already accept a `cwd` override."""
+    seen_memo_root = []
+    seen_worktree_root = []
+
+    monkeypatch.setattr(rco, "_read_em_environment", lambda: ReaderResult())
+    monkeypatch.setattr(rco, "_scan_addon_health_run", lambda mode: ([], 0))
+    monkeypatch.setattr(rco, "_read_rag_staleness", lambda: ReaderResult())
+
+    def _fake_memo_surface(mode, *, repo_root=None):
+        seen_memo_root.append(repo_root)
+        return ReaderResult()
+
+    def _fake_worktree_sweep(*, repo_root=None):
+        seen_worktree_root.append(repo_root)
+        return ReaderResult()
+
+    monkeypatch.setattr(rco, "_read_memo_surface", _fake_memo_surface)
+    monkeypatch.setattr(rco, "_read_worktree_sweep", _fake_worktree_sweep)
+
+    passed_root = str(tmp_path / "caller-repo")
+    rco.collect("day", repo_root=passed_root)
+
+    assert seen_memo_root == [passed_root]
+    assert seen_worktree_root == [passed_root]
+
+
 def test_memo_surface_caps_at_day_cadence(monkeypatch, tmp_path):
     inbox = tmp_path / "inbox"
     inbox.mkdir()
     lines = [f"memo line {i}" for i in range(rco._MEMO_JUDGMENT_POINT_CAP + 5)]
-    monkeypatch.setattr(rco, "_resolve_inbox_dir", lambda: str(inbox))
+    monkeypatch.setattr(rco, "_resolve_inbox_dir", lambda cwd=None: str(inbox))
     monkeypatch.setattr(rco, "_list_qualifying_lines", lambda d: lines)
 
     result = rco._read_memo_surface("surface")
@@ -166,7 +197,7 @@ def test_memo_cap_keeps_action_required_over_newer_fyi(monkeypatch, tmp_path):
         f"1|2026-07-30|sibling|fresh fyi {i}|fyi"
         for i in range(rco._MEMO_JUDGMENT_POINT_CAP + 5)
     ]
-    monkeypatch.setattr(rco, "_resolve_inbox_dir", lambda: str(inbox))
+    monkeypatch.setattr(rco, "_resolve_inbox_dir", lambda cwd=None: str(inbox))
     monkeypatch.setattr(rco, "_list_qualifying_lines", lambda d: fresh_fyis + [old_action])
 
     result = rco._read_memo_surface("surface")
@@ -185,7 +216,7 @@ def test_memo_cap_orders_recent_first_within_a_band(monkeypatch, tmp_path):
         "0|2026-07-24|sibling|older ask|ask",
         "0|2026-07-30|sibling|newer ask|ask",
     ]
-    monkeypatch.setattr(rco, "_resolve_inbox_dir", lambda: str(inbox))
+    monkeypatch.setattr(rco, "_resolve_inbox_dir", lambda cwd=None: str(inbox))
     monkeypatch.setattr(rco, "_list_qualifying_lines", lambda d: lines)
 
     result = rco._read_memo_surface("surface")
@@ -198,7 +229,7 @@ def test_memo_cap_orders_recent_first_within_a_band(monkeypatch, tmp_path):
 def test_memo_surface_no_overflow_when_under_cap(monkeypatch, tmp_path):
     inbox = tmp_path / "inbox"
     inbox.mkdir()
-    monkeypatch.setattr(rco, "_resolve_inbox_dir", lambda: str(inbox))
+    monkeypatch.setattr(rco, "_resolve_inbox_dir", lambda cwd=None: str(inbox))
     monkeypatch.setattr(rco, "_list_qualifying_lines", lambda d: ["only one memo"])
 
     result = rco._read_memo_surface("surface")

@@ -383,3 +383,24 @@ class TestCheckFleetDelegation:
         granted, _record = fd.check_fleet_delegation("target-class")
 
         assert granted is False
+
+
+class TestAuthorshipVerdictWiring:
+    """Smoke test for the real (unmocked) ``fd.authorship_verdict`` binding —
+    every other writer test in this module monkeypatches ``fd.authorship_verdict``
+    to a fixed verdict (module docstring), so nothing else here would catch a
+    rename or signature drift in ``grant_authorship.authorship_verdict``.
+    (Review: code-reviewer, finding 3.)
+    """
+
+    def test_write_refuses_under_real_authorship_walk_from_pytest(self, tmp_path):
+        # Deliberately does NOT patch fd.authorship_verdict — exercises the
+        # real import binding end-to-end. Running under pytest, the calling
+        # process is agent-driven (AGENT or UNRESOLVED, never HUMAN), so the
+        # writer must refuse — proving both that the binding resolves to the
+        # real grant_authorship.authorship_verdict and that its default
+        # authorship_start_pid=None wiring is intact.
+        ok, reason = _write_ok()
+
+        assert ok is False
+        assert reason.startswith("authorship-refused:")

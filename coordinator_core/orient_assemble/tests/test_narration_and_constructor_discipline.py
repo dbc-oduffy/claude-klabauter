@@ -54,9 +54,9 @@ def _all_reader_results(monkeypatch):
     produce at least one entry of each shape, reusing the same fixtures
     exercised in test_round_trip_parity.py."""
     monkeypatch.setattr(rco, "_read_em_environment", lambda: ReaderResult())
-    monkeypatch.setattr(rco, "_read_memo_surface", lambda mode: ReaderResult())
+    monkeypatch.setattr(rco, "_read_memo_surface", lambda mode, **kw: ReaderResult())
     monkeypatch.setattr(rco, "_read_rag_staleness", lambda: ReaderResult())
-    monkeypatch.setattr(rco, "_read_worktree_sweep", lambda: ReaderResult())
+    monkeypatch.setattr(rco, "_read_worktree_sweep", lambda **kw: ReaderResult())
     monkeypatch.setattr(rco, "_scan_addon_health_run", lambda mode: (["RED: x"], 1))
     clean_ops = rco.collect("day")
 
@@ -107,16 +107,27 @@ def test_worktree_sweep_dirty_judgment_points_are_built_via_the_shipped_construc
         state = "dirty-nonbenign"
         dirty_count = 3
 
-    monkeypatch.setattr(rco_mod, "_wt_repo_root", lambda: fake_repo_root)
+    seen_repo_root_cwd = []
+
+    def _fake_wt_repo_root(cwd=None):
+        seen_repo_root_cwd.append(cwd)
+        return fake_repo_root
+
+    monkeypatch.setattr(rco_mod, "_wt_repo_root", _fake_wt_repo_root)
     monkeypatch.setattr(rco_mod, "_wt_active_branch", lambda root: "main")
     monkeypatch.setattr(rco_mod, "_is_agent_worktree", lambda path: True)
     monkeypatch.setattr(rco_mod, "_list_worktrees", lambda root: [_FakeWorktree()])
     monkeypatch.setattr(rco_mod, "classify_worktree", lambda path, ref: _FakeClassification())
 
-    result = rco._read_worktree_sweep()
+    passed_root = str(tmp_path / "caller-repo")
+    result = rco._read_worktree_sweep(repo_root=passed_root)
     assert result.judgment_points
     for jp in result.judgment_points:
         assert set(jp.keys()) == _JUDGMENT_POINT_CONSTRUCTOR_KEYS
+
+    from pathlib import Path as _Path
+
+    assert seen_repo_root_cwd == [_Path(passed_root)]
 
 
 def test_narration_is_not_a_verbatim_reproduction_of_any_reader_directive_detail(monkeypatch):

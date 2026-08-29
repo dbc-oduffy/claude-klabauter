@@ -114,10 +114,9 @@ import os
 import tempfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, List, Optional, Tuple
 
 from coordinator_core._settings_home import settings_home
-from coordinator_core.session import core
 from coordinator_core.session.core import _psutil
 from coordinator_core.session.grant_authorship import Verdict, authorship_verdict
 

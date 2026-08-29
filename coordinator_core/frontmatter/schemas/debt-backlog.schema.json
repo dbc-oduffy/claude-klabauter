@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://coordinator.local/schemas/debt-backlog.schema.json",
   "x-schema-name": "debt-backlog",
-  "x-schema-version": "1.1.0",
+  "x-schema-version": "1.2.0",
   "applies_to": "state/debt-backlog/*.yaml",
   "match_mode": "whole-document-yaml",
   "description": "Debt-backlog record — a queued structural/technical-debt entry, one YAML file per entry under state/debt-backlog/<date>-<slug>.yaml (whole-document YAML; no prose markdown body). additionalProperties-posture: open — unknown fields in debt-backlog records are tolerated (not rejected). This preserves forward-compatibility as new optional fields are added without invalidating existing records. Decision: keep open; tighten only if strict-mode corpus conformance enforcement is required at a future governance stage.",
@@ -139,11 +139,11 @@
     },
     "pm_approved": {
       "type": "boolean",
-      "description": "Records that the PM gate authorising this deferral fired. For a ceremony park (/debt-triage Step 6b class 4) the ceremony asserts its own gate; it is not a second approval act by the PM. No ceremony parks bug rows today -- /bug-blitz has no park step -- so a deferred bug row is hand-authored and the grant is the author's to state. Same field name as plan-tasks.schema.json's shipped gate -- one vocabulary across surfaces, deliberately."
+      "description": "Records that the PM gate authorising this deferral fired. For a ceremony park (/debt-triage Step 6b class 4) the ceremony asserts its own gate; it is not a second approval act by the PM. No ceremony parks bug rows today -- /bug-blitz has no park step -- so a deferred bug row is hand-authored: the author RECORDS a grant the PM gave, and never grants it themselves. Same field name as plan-tasks.schema.json's shipped gate -- one vocabulary across surfaces, deliberately. Boolean, not the PM's words -- a date or a quote here is schema-invalid and refuses at the step that reads it; put what was said in `why_blocked` or `body` (tripwire PM-APPROVED-IS-A-BOOLEAN-NOT-THE-PMS-WORDS)."
     },
     "deferred_by": {
       "type": "string",
-      "description": "Who granted the deferral: for a ceremony park, the ceremony identifier plus the session that ran it. Mirrors closed_by."
+      "description": "Who granted the deferral: for a ceremony park, the ceremony identifier plus the session that ran it. Mirrors closed_by. For a hand-authored park, name the granting authority and when -- never the authoring session. A sibling deny refuses a `deferred_by` that names the record's own author, and that refusal is correct: this field answers who authorised the park, not who typed it."
     },
     "deferred_until": {
       "type": "string",
@@ -152,6 +152,37 @@
     "why_blocked": {
       "type": "string",
       "description": "Why this entry is deferred. Required in doctrine whenever status=deferred."
+    },
+    "case_against": {
+      "type": "string",
+      "description": "OPTIONAL. The argument that lost -- so a triager sees both the case for doing the work (proposed_action/body) and the case against it. Mirrors improvement-queue.schema.json's field of the same name, added here so the three backlog families stop disagreeing on a property one of them already had. It MUST stay optional at the top level even though the deferred-grant branch requires it: an omitted field says nothing was carried, while an empty string asserts there was no argument, and a hand-authored row that was never a plan deferral has nothing to carry."
     }
-  }
+  },
+  "allOf": [
+    {
+      "$comment": "Cross-field rule: a deferral is a GRANT, not a state. When `status` is `deferred` the four grant fields plus `case_against` must be PRESENT. Presence, not truthiness -- a row with `pm_approved: false` or a blank `why_blocked` still validates here; this schema does not hard-fail it. The truthiness floor (pm_approved must be literal true, non-blank case_against/why_blocked, parseable deferred_until, non-empty deferred_by) lives in claude-klabauter's schema_validate.py cross-field rule, and refusal lives in their write guard. Reading this branch as the enforcement point is the misread the $comment exists to prevent. Shape copied from plan-tasks.schema.json's own allOf[0], on claude-klabauter-em's ask (cross-repo/inbox/2026-08-28-claude-klabauter-em-queue-deferral-grant-conditional-on-the-three-backlog-schemas.md) -- they cannot author it locally without tripping three vendor-drift gates.",
+      "if": {
+        "properties": {
+          "status": {
+            "const": "deferred"
+          }
+        },
+        "required": [
+          "status"
+        ]
+      },
+      "then": {
+        "$comment": "Presence-only, per the branch $comment above. Required here so a deferral cannot be asserted without naming who granted it, until when, what the argument against was, and what is blocking.",
+        "required": [
+          "pm_approved",
+          "deferred_by",
+          "deferred_until",
+          "case_against",
+          "why_blocked"
+        ]
+      }
+    }
+  ],
+  "x-bump-class": "nested-field-additive",
+  "x-bump-note": "1.1.0 -> 1.2.0 adds the status:deferred conditional the four grant fields existed for but nothing tied together, plus case_against where it was missing. Requested by claude-klabauter-em, who cannot author it in their vendored copy: a shape change under an unmoved x-schema-version is red on their parity test, check_schema_drift byte-compares against a pinned DoE ref, and the consumer-ahead gate blocks a local bump. Presence-only by contract -- truthiness and refusal are theirs. Zero records in either tree carry status: deferred today (727 measured across the three DoE queues), so nothing existing is invalidated."
 }

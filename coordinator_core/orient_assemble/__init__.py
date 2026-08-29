@@ -53,6 +53,7 @@ from __future__ import annotations
 
 import json
 import sys
+from pathlib import Path
 from typing import Any
 
 from coordinator_core.contract.decision_object.envelope import (
@@ -147,16 +148,24 @@ def _assert_null_recommendation_reason_legal(judgment_point: dict[str, Any]) -> 
     )
 
 
-def brief(cadence: str) -> dict[str, Any]:
+def brief(cadence: str, *, repo_root: str | None = None) -> dict[str, Any]:
     """Compute the cadence-parameterized orient decision object.
 
-    Calls all four reader families' `collect(cadence)` and concatenates
-    their `directives`/`judgment_points` into the emitted envelope. Each
-    reader family self-gates its own cadence scope (e.g. the health-reaper
-    family's day-cadence-only handoff-archival probe) — this seam calls all
-    four unconditionally for every cadence. Read-only; performs no disk
-    mutation and no git fetch (the reap-family's one accepted `--dry-run`
-    subprocess is documented in `readers_health_reaper.py`).
+    Calls all four reader families' `collect(cadence, repo_root=repo_root)`
+    and concatenates their `directives`/`judgment_points` into the emitted
+    envelope. Each reader family self-gates its own cadence scope (e.g. the
+    health-reaper family's day-cadence-only handoff-archival probe) — this
+    seam calls all four unconditionally for every cadence. Read-only;
+    performs no disk mutation and no git fetch (the reap-family's one
+    accepted `--dry-run` subprocess is documented in `readers_health_reaper.py`).
+
+    `repo_root` is keyword-only and forwarded uniformly to every reader
+    (mirrors `backlog_grind_assemble`'s `run_id` threading precedent — see
+    this module's plan retraction on why `repo_root` itself is NOT copied
+    from that module's shape). Defaults to `None`, meaning "resolve as
+    today" — this chunk changes no existing caller's behaviour. Every
+    reader accepts and ignores it in this chunk; C3-C7 consume it one
+    reader at a time.
 
     Raises `ValueError` for a `cadence` outside `CADENCES`, matching
     `backlog_grind_assemble.brief`'s contract. `main()` below validates too,
@@ -176,7 +185,7 @@ def brief(cadence: str) -> dict[str, Any]:
     directives: list[dict[str, Any]] = []
     judgment_points: list[dict[str, Any]] = []
     for reader in _READER_MODULES:
-        result = reader.collect(cadence)
+        result = reader.collect(cadence, repo_root=repo_root)
         directives.extend(result.directives)
         judgment_points.extend(result.judgment_points)
     judgment_points = [
@@ -236,6 +245,32 @@ def brief(cadence: str) -> dict[str, Any]:
     return dict(_envelope_emit(envelope))
 
 
+def _resolve_target_root(target_root_arg: str | None) -> str:
+    """Resolve the repo root this `orient-assemble` invocation reports on.
+
+    Defaults to git-toplevel-from-cwd (`find_repo_root()`, no explicit cwd —
+    the caller's own process cwd is what "my repo" means here; this CLI is
+    invoked directly, unlike `coordinator_core.invoke`'s argv-forwarded-cwd
+    trampoline shape, so there is no separate caller cwd to thread through).
+    An explicit `--target-root <path>` overrides this and is resolved
+    relative to the current process cwd without a git-toplevel check —
+    a caller naming a path already knows it is a target repo root.
+
+    AC9 / negative-spec: raises `RuntimeError` when no `--target-root` was
+    given and cwd is not inside a git working tree — never falls back to a
+    default or returns quietly. Silence here is the exact bug this chunk
+    exists to close: DoE-claude's `/workday-start` Step 1.475 read claude-klabauter's
+    own work-state as if it were DoE's for twelve days because an
+    unresolvable root was never distinguished from "the answer is empty".
+    Mirrors `coordinator_core.invoke.__main__._resolve_repo_root`'s AC-5
+    fail-loud discipline (see that function's own docstring).
+    """
+    if target_root_arg is not None:
+        return str(Path(target_root_arg).resolve())
+    from coordinator_core.lifecycle import find_repo_root  # deferred: no side effects at import time
+    return str(find_repo_root())
+
+
 def _usage() -> int:
     """Print a usage error and return the shipped envelope's `_emit`-backed
     usage exit — a decision object is emitted on every exit, including a
@@ -256,9 +291,19 @@ def _usage() -> int:
 
 
 def main(argv: list[str]) -> int:
-    """`orient-assemble brief --cadence {session|day|week}` CLI entrypoint."""
+    """`orient-assemble brief --cadence {session|day|week} [--target-root <path>]`
+    CLI entrypoint.
+
+    `--target-root` (AC9, C8): explicit repo root this invocation reports
+    on, defaulting to git-toplevel-from-cwd via `_resolve_target_root`. An
+    unresolvable root (no flag, cwd not inside a git working tree) fails
+    loud here rather than falling through to `brief()` with `repo_root=None`
+    — see `_resolve_target_root`'s docstring for why silence is the bug."""
     if argv[:1] and argv[0] in ("--help", "-h"):
-        print("usage: orient-assemble brief --cadence {session|day|week}")
+        print(
+            "usage: orient-assemble brief --cadence {session|day|week} "
+            "[--target-root <path>]"
+        )
         return int(OrientExitCode.SUCCESS)
 
     if not argv or argv[0] != "brief":
@@ -266,6 +311,7 @@ def main(argv: list[str]) -> int:
 
     rest = argv[1:]
     cadence: str | None = None
+    target_root_arg: str | None = None
     i = 0
     while i < len(rest):
         tok = rest[i]
@@ -273,6 +319,11 @@ def main(argv: list[str]) -> int:
             if i + 1 >= len(rest):
                 return _usage()
             cadence = rest[i + 1]
+            i += 2
+        elif tok == "--target-root":
+            if i + 1 >= len(rest):
+                return _usage()
+            target_root_arg = rest[i + 1]
             i += 2
         else:
             print(f"orient-assemble: unrecognized argument {tok!r}", file=sys.stderr)
@@ -285,7 +336,18 @@ def main(argv: list[str]) -> int:
         )
         return _usage()
 
-    decision_object = brief(cadence)
+    try:
+        target_root = _resolve_target_root(target_root_arg)
+    except RuntimeError as exc:
+        print(
+            "orient-assemble: --target-root unresolvable: not inside a git "
+            "working tree and --target-root was not provided. Run from a "
+            f"git repo or pass --target-root <path>. Detail: {exc}",
+            file=sys.stderr,
+        )
+        return int(OrientExitCode.USAGE)
+
+    decision_object = brief(cadence, repo_root=target_root)
     print(json.dumps(decision_object, indent=2, sort_keys=True))
     return int(ExitCodeBase.SUCCESS)
 

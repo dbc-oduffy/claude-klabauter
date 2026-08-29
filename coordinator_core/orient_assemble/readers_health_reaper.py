@@ -89,9 +89,12 @@ from coordinator_core.orient_assemble.reader_result import ReaderResult
 #: file, never a literal device path (portability discipline, AC-16). This
 #: file lives at coordinator_core/orient_assemble/, so parents[2] is the
 #: claude-klabauter repo root (mirrors readers_handoff_triage._SOURCE_PATH's same
-#: parents[2]).
-_REPO_ROOT = Path(__file__).resolve().parents[2]
-_HEALTH_PROBES_PATH = _REPO_ROOT / "coordinator" / "bin" / "workday-start-health-probes.py"
+#: parents[2]). Deliberately claude-klabauter-pinned — this is the script-location
+#: role (where `workday-start-health-probes.py` lives on disk), never the
+#: scan-scope role (which repo `_reap_survey` walks); the latter is now the
+#: threaded `repo_root` parameter, see `_read_reaper_dry_run`/`collect`.
+_CLAUDE_KLABAUTER_ROOT = Path(__file__).resolve().parents[2]
+_HEALTH_PROBES_PATH = _CLAUDE_KLABAUTER_ROOT / "coordinator" / "bin" / "workday-start-health-probes.py"
 
 #: Ceremony-name each cadence's own converted surface hooks — mirrors the
 #: three command surfaces this baton converts (workday-start.md,
@@ -207,12 +210,18 @@ def _read_ceremony_hook(cadence: str) -> ReaderResult:
     )
 
 
-def _read_reaper_dry_run() -> ReaderResult:
+def _read_reaper_dry_run(repo_root: str | None = None) -> ReaderResult:
     """Day-cadence handoff-archival/reaper family. Calls
     `reap_in_flight_claims.survey()` directly, in-process — no subprocess,
     no prose parsing. `survey()` returns the two integers this reader needs
     (`would_release`, `would_reclaim`) directly; there is no stdout to
     regex-match and nothing left to parse.
+
+    `repo_root` is the scan-scope role — the repo `survey()` walks — kept
+    distinct from `_CLAUDE_KLABAUTER_ROOT` (the script-location role: where
+    `workday-start-health-probes.py` lives). Falls back to `_CLAUDE_KLABAUTER_ROOT`
+    when the caller passes no threaded root, preserving prior behaviour for
+    callers that don't supply one.
 
     Fail-soft on ANY exception, returning an empty result. This is a
     RESTORATION of the guard the subprocess form carried (`except (OSError,
@@ -226,7 +235,7 @@ def _read_reaper_dry_run() -> ReaderResult:
     file vanishing mid-scan is an ordinary event, not a defect. An advisory
     reader going quiet is the correct failure; orientation dying is not."""
     try:
-        result = _reap_survey(_REPO_ROOT)
+        result = _reap_survey(repo_root if repo_root is not None else _CLAUDE_KLABAUTER_ROOT)
     except Exception:  # noqa: BLE001 - see negative-spec below
         return ReaderResult()
     would_release = result.would_release
@@ -280,6 +289,16 @@ def _read_marker_freshness(cadence: str) -> ReaderResult:
       and surfaces STALE/MILD as a judgment point — reset-vs-update-in-place
       is a genuine week-cadence human call, kept as ceremony-side residue
       per the Approach, never auto-resolved here.
+
+    Carve-out: `check_weekly_staleness._resolve_state_root()` is a THIRD
+    resolution path (its own `CWS_TEST_STATE_ROOT` env override plus a
+    meta-repo/claude-klabauter ladder) and takes no argument to thread a root
+    through — unlike `_CLAUDE_KLABAUTER_ROOT`/`_read_reaper_dry_run`'s `repo_root`,
+    there is no parameter here to carry a caller-supplied scope. Threading
+    it would mean changing `_resolve_state_root`'s own signature, which
+    lives in `coordinator_core/ops/check_weekly_staleness.py` — outside
+    this chunk's writes scope. Named here deliberately rather than left to
+    silently disagree with its `_CLAUDE_KLABAUTER_ROOT`/`repo_root` neighbours.
     """
     from coordinator_core.daily_day import local_day
     from coordinator_core.ops.check_weekly_staleness import (
@@ -367,13 +386,20 @@ def _read_marker_freshness(cadence: str) -> ReaderResult:
     return ReaderResult(directives=directives, judgment_points=judgment_points)
 
 
-def collect(cadence: str) -> ReaderResult:
+def collect(cadence: str, *, repo_root: str | None = None) -> ReaderResult:
     """Compute this reader family's directives/judgment_points for `cadence`.
 
     Health probes run for every cadence (their detail is not cadence-tuned).
     The reaper family's survey() call is day-cadence only — the Approach
     scopes it as "the day-cadence handoff-archival/reaper family", never
     fired at session/week cadence.
+
+    `repo_root` is keyword-only, threaded into `_read_reaper_dry_run` as the
+    scan-scope role (C3 of the orient-assemble repo-scope plan) — the other
+    readers in this family are unaffected: `_CLAUDE_KLABAUTER_ROOT` (script-location
+    role for `_HEALTH_PROBES_PATH`) stays pinned, and `_read_marker_freshness`
+    reaches its own third resolution path (see that function's carve-out
+    note). Falls back to `_CLAUDE_KLABAUTER_ROOT` when `repo_root` is None.
     """
     results = [
         _read_claude_klabauter_bin_sentinel(),
@@ -382,7 +408,7 @@ def collect(cadence: str) -> ReaderResult:
         _read_marker_freshness(cadence),
     ]
     if cadence == "day":
-        results.append(_read_reaper_dry_run())
+        results.append(_read_reaper_dry_run(repo_root))
 
     directives: list[dict[str, Any]] = []
     judgment_points: list[dict[str, Any]] = []

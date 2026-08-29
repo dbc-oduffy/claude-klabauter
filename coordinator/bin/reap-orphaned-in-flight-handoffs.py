@@ -76,26 +76,17 @@ def __getattr__(name: str):
     run once (via this hook or via `main()`), the plain global wins on every
     later lookup and this function is not called again for that name.
 
-    NEGATIVE SPEC -- the forced re-run below is not belt-and-braces.
-    `_bootstrap_imports()` short-circuits on
-    `"resolve_checked_repo_root" in globals()`, so a name that leaves
-    `__dict__` AFTER the first bootstrap is never rebound by a plain call.
-    `mock.patch.object`/`monkeypatch.setattr` do exactly that: the value is
-    read through this hook (so it is absent from `__dict__` at enter), set to
-    a mock, and on exit `delattr`d rather than restored -- then probed via
-    `hasattr`, landing back here with the sentinel already satisfied. The
-    forced re-run defeats that sentinel; `_saved` preserves any OTHER
-    bootstrapped name a caller has separately monkeypatched across the
-    re-run, since the requested `name` was, by construction, absent and so
-    is never captured into `_saved`."""
+    NEGATIVE SPEC -- the bootstrap guard checks ALL of `_BOOTSTRAP_NAMES`,
+    not a single sentinel: `mock.patch.object`/`monkeypatch.setattr` reading
+    one name through this hook and `delattr`ing it on exit (rather than
+    restoring it) is exactly the case the all-names guard covers -- a name
+    absent from `__dict__` means `_bootstrap_imports()` re-runs. The re-run
+    publishes each freshly-imported name via `globals().setdefault(...)`, so
+    it rebinds exactly what is missing and leaves any OTHER already-present
+    bootstrapped name untouched. No pop/restore snapshot is needed because a
+    partially-bound state is never mistaken for a fully-bound one."""
     if name in _BOOTSTRAP_NAMES:
         _bootstrap_imports()
-        if name not in globals():
-            _saved = {k: globals().pop(k) for k in _BOOTSTRAP_NAMES if k in globals()}
-            try:
-                _bootstrap_imports()
-            finally:
-                globals().update(_saved)
         try:
             return globals()[name]
         except KeyError:
@@ -115,21 +106,26 @@ def _bootstrap_imports() -> None:
     `monkeypatch.setattr(mod, "resolve_checked_repo_root", ...)` ahead of
     calling `main()`) is left alone rather than clobbered by a real import.
     """
-    if "resolve_checked_repo_root" in globals():
+    if all(n in globals() for n in _BOOTSTRAP_NAMES):
         return
-
-    global resolve_checked_repo_root, survey, apply_dispositions
 
     import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
     from cc_invoke import ensure_engine_on_path
-    from repo_identity import resolve_checked_repo_root
+    from repo_identity import resolve_checked_repo_root as _rccr
 
     ensure_engine_on_path(__file__)
 
     from coordinator_core.ops.reap_in_flight_claims import (
-        apply_dispositions,
-        survey,
+        apply_dispositions as _apply_dispositions,
+        survey as _survey,
     )
+
+    for _name, _value in (
+        ("resolve_checked_repo_root", _rccr),
+        ("survey", _survey),
+        ("apply_dispositions", _apply_dispositions),
+    ):
+        globals().setdefault(_name, _value)
 
 HELP_TEXT = """\
 reap-orphaned-in-flight-handoffs — release crash-orphaned in_flight handoff

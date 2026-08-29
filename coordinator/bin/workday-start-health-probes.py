@@ -220,6 +220,7 @@ def _ensure_repo_root_on_path() -> None:
     `test_mis_channelled_box_probe.py` monkeypatches `_mod._resolve_claude_klabauter`
     before calling the subcommand."""
     global _BOOTSTRAP_DONE
+    import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
     if _REPO_ROOT not in sys.path:
         sys.path.insert(0, _REPO_ROOT)
     if _RESOLVE_CLAUDE_KLABAUTER_DIR not in sys.path:

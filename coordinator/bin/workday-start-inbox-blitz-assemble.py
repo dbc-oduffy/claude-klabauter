@@ -86,6 +86,7 @@ def _no_console_kw() -> dict:
     window (Review: code-reviewer P2 — matched to the pattern ccbdbecc2 applied
     to sweep-boot.py/standup.py/render-project-tracker/refresh-plugin-live-install.py)."""
     try:
+        import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
         from cc_invoke import _resolve_claude_klabauter_root, require_dispatch_engine_on_path
 
         claude_klabauter_root = require_dispatch_engine_on_path()
@@ -283,6 +284,7 @@ def _fetch_result(repo_root: str) -> dict:
         result = envelope.get("result", envelope)
         return result if isinstance(result, dict) else {}
 
+    import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
     from cc_invoke import _resolve_claude_klabauter_root, cc_invoke  # noqa: E402
 
     try:
@@ -432,6 +434,7 @@ def _resolve_repo_root() -> str:
     if env:
         return env
     try:
+        import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
         from cc_invoke import require_dispatch_engine_on_path
 
         require_dispatch_engine_on_path()

@@ -72,7 +72,12 @@ def __getattr__(name: str):
     again for that name."""
     if name in ("_round", "publish_lane"):
         _bootstrap_engine()
-        return globals()[name]
+        try:
+            return globals()[name]
+        except KeyError:
+            raise AttributeError(
+                f"module {__name__!r} has no attribute {name!r}"
+            ) from None
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
@@ -101,9 +106,7 @@ def _bootstrap_engine() -> None:
     `coordinator/lib` (the percolate helpers), while `cc_invoke` lives in
     `coordinator/bin/lib`. They are different directories.
     """
-    global _round, publish_lane
-
-    if "_round" in globals():
+    if all(n in globals() for n in ("_round", "publish_lane")):
         # Already bootstrapped (via `main()` or a prior `__getattr__` hit) --
         # re-running would call `_load_round_module()` again and rebind
         # `_round` to a BRAND NEW module object (`importlib.util.module_
@@ -128,11 +131,15 @@ def _bootstrap_engine() -> None:
     # docs/research/engine-provenance-carrier-dependence.md
     import coordinator_core  # noqa: F401
 
-    _round = _load_round_module()
+    _round_ = _load_round_module()
 
-    from coordinator_core import publish_lane as _publish_lane  # type: ignore[import-not-found]
+    from coordinator_core import publish_lane as _publish_lane_  # type: ignore[import-not-found]
 
-    publish_lane = _publish_lane
+    for _name, _value in (
+        ("_round", _round_),
+        ("publish_lane", _publish_lane_),
+    ):
+        globals().setdefault(_name, _value)
 
 
 def _mirror_groups(percolate_root: str) -> Dict[str, List[str]]:
@@ -147,6 +154,7 @@ def _mirror_groups(percolate_root: str) -> Dict[str, List[str]]:
     (`<mirror>`, `<mirror>/bin`, `<mirror>/coordinator/lib`) resolve to the
     same root and so group together, which is exactly the set one publish
     invocation and one lock must cover."""
+    _bootstrap_engine()
     from percolate.targets import TargetsError, load_targets  # noqa: E402
 
     setup_dir = Path(percolate_root) / "setup"
@@ -241,6 +249,7 @@ def _run_gate_legs(
     row the whole run's list on an "over-inclusive is safe" reading; that is
     wrong in this direction, and the failure is recorded at the call site.
     """
+    _bootstrap_engine()
     # Per-row stdout, keyed by that row's own reported `Target:` line. Each
     # row's scan list must come from ITS OWN chunk: `scan-secrets` is
     # target-scoped (peer-repo pattern, `registry_codenames` guard), so feeding

@@ -216,6 +216,7 @@ W3a-preuse-bash-recipe.md Sec(c)
 from __future__ import annotations
 
 import json
+import re
 import sys
 from dataclasses import dataclass
 from enum import Enum
@@ -310,6 +311,10 @@ from coordinator_core.bash_guards.block_approval_sentinel_creation import (
 from coordinator_core.bash_guards.block_worktree_sentinel_creation import (
     check as _check_worktree_sentinel_creation,
     MATCHERS as _matchers_worktree_sentinel_creation,
+)
+from coordinator_core.bash_guards.block_fleet_delegation_creation import (
+    check as _check_fleet_delegation_creation,
+    MATCHERS as _matchers_fleet_delegation_creation,
 )
 # block_dev_repo_sentinel_removal.py DOES declare a module-level MATCHERS,
 # but on the module whose registered leg here is `check_advisory` -- the
@@ -829,6 +834,20 @@ def resolve_plugin_root_loud(
     call site of this recorder in this module, so a counter write failure can
     never turn this resolution miss into anything worse than the miss itself.
 
+    NEITHER HALF OF "LOUD" REACHES THE CALLING AGENT TODAY (state/bug-
+    backlog/2026-08-29-loud-and-counted-is-neither-*). The `stderr` line goes
+    to the RESIDENT WARM SERVER's own stderr, a different process from the
+    agent whose Bash call this dispatcher just allowed -- it never reaches
+    that agent. The counted event lands in
+    `state/subagent-share/<session_id>/advisory-fire-counts.jsonl`, but
+    nothing in this tree reads that file back: no session-start step, no
+    ceremony, no doctor probe, no report. So "LOUD" is accurate only about
+    the mechanism's INTENT and its resident-process-local diagnostic; to the
+    caller, a miss here is currently indistinguishable from a call this
+    dispatcher had nothing to say about. Fixing that is tracked separately
+    and is not this function's job -- do not infer observability from this
+    docstring alone.
+
     Returns ``None`` on a miss (never raises) -- the caller (a future
     consuming guard) is responsible for its OWN fail-open behavior on that
     ``None``, same as it always would be for `resolve_plugin_root()`'s
@@ -917,9 +936,14 @@ def resolve_governed_authoring_surfaces(
 
     Still returns ``None`` rather than denying, on the same reasoning C2
     applied to the ROOT miss: a hard deny bricks Bash on an install that
-    legitimately has no plugin. But the miss is now LOUD and COUNTED, exactly
-    as ``resolve_plugin_root_loud`` already makes the root miss -- that guard
-    having a signal while this one had none was the asymmetry.
+    legitimately has no plugin. The miss is stderr'd and counted, mirroring
+    ``resolve_plugin_root_loud`` exactly -- but mirroring that shape also
+    means inheriting its limits (see that function's own docstring, "NEITHER
+    HALF OF 'LOUD' REACHES THE CALLING AGENT TODAY"): the stderr line lands
+    on the resident warm server's own stderr, not the calling agent's, and
+    the counted event's `advisory-fire-counts.jsonl` record has no reader
+    anywhere in this tree. To the caller, this miss is not currently
+    distinguishable from a call this dispatcher had nothing to say about.
 
     NOT loud when ``plugin_root`` is itself None: that is the OSS-mirror shape,
     ``resolve_plugin_root_loud`` has already spoken for it, and repeating the
@@ -962,6 +986,106 @@ def resolve_governed_authoring_surfaces(
         _unreadable("a list containing non-string entries")
         return None
     return data
+
+
+#: MIRRORS a PEER REPO's regex -- ``DoE-claude/coordinator/hooks/scripts/
+#: _message_envelope.py``'s ``_WIKI_CITATION_RE`` -- and is not something to
+#: reason about locally: read it fresh at source before touching this
+#: pattern, every time, rather than trusting any comment (including this
+#: one) that claims to describe its current shape. It has moved TWICE in one
+#: day (2026-08-29): first narrowed to flat-anchor-only (state/audits/
+#: 2026-08-29-unverified-parity-findings-measured.md FINDING B), then widened
+#: same-day to admit nested segments, silently turning that measurement
+#: stale. The standing obligation this leaves: before relying on any stated
+#: behaviour of DoE's resolver, re-read ``_message_envelope.py`` at its
+#: current HEAD -- do not copy a pattern out of a plan, brief, or prior
+#: comment, this one included.
+_WIKI_CITATION_RE = re.compile(
+    r"(?:coordinator/)?docs/wiki/((?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+\.md)"
+)
+
+
+def resolve_wiki_citation(text: str, plugin_root: Optional[str]) -> str:
+    """Rewrite a ``coordinator/docs/wiki/<page>.md`` citation (flat or
+    nested) embedded in ``text`` into an absolute path anchored at
+    ``plugin_root`` -- the warm engine's mirror of DoE's
+    ``_message_envelope.resolve_wiki_citation()``.
+
+    Renamed from ``resolve_doctrine_surface_wiki_citation`` (2026-08-29): the
+    name was doctrine-surface-specific from when this had exactly one
+    caller (``guard-doctrine-surface-bash-write``); it is now also threaded
+    into ``guard-host-subagent-bash-ban`` and
+    ``guard-host-subagent-bash-spawn-shapes``, so a name naming one caller
+    was wrong for the other two.
+
+    ``plugin_root`` here plays the same role as DoE's own ``_coordinator_dir()``:
+    both name the ``coordinator/`` directory a page path is joined onto (see
+    ``resolve_governed_authoring_surfaces`` above, which joins the same
+    ``plugin_root`` onto ``governed-authoring-surfaces.json`` and finds it at
+    ``<DoE-claude>/coordinator/governed-authoring-surfaces.json`` -- the
+    identical root DoE's ``_coordinator_dir()`` resolves to).
+
+    Called ONLY from each caller's own deny path: the overwhelming majority
+    of Bash/PowerShell calls never deny, so this substitution never runs for
+    them -- placing it here rather than on every call keeps the DR-344
+    hot-path budget unaffected by a guard that almost never fires.
+
+    Fails open to ``text`` UNCHANGED (never raises, never emits a broken
+    absolute path) when: ``plugin_root`` is ``None`` (unresolvable install,
+    same shape ``resolve_plugin_root_loud`` already made LOUD/COUNTED
+    upstream -- this function does not re-report it), or the citation does
+    not match ``_WIKI_CITATION_RE`` at all, or the match does not start at
+    the beginning of ``text`` or immediately follow whitespace/an opening
+    delimiter (mirrors cold's own double-mangling guard).
+    """
+    if not plugin_root:
+        return text
+    from pathlib import Path as _Path
+
+    def _render_resolved(path: "_Path") -> str:
+        """Home-collapse a resolved citation so it carries no operator
+        identity, mirroring DoE's ``_render_resolved`` (DoE ``367671b59``)
+        byte-for-byte -- taken verbatim rather than reimplemented, because
+        deny-text parity is measured on the rendered string.
+
+        The ``~/`` prefix is a LITERAL and ``as_posix()`` runs on the
+        RELATIVE part only. That is not style: ``str(_Path("~") / rel)``
+        renders ``~\\...`` on Windows, and backslash-tilde does not expand
+        -- measured against the tool a dispatched agent reads with
+        (``~/.claude/CLAUDE.md`` opens, ``~\\.claude\\CLAUDE.md`` does not),
+        so the naive collapse would trade an identity leak for an
+        UNOPENABLE citation, reintroducing the very defect the resolver
+        exists to fix on the one platform where the leak is worst.
+
+        ``relative.parts`` guards the exact-home case, where
+        ``relative_to`` yields ``.`` and naive formatting emits ``~/.``.
+
+        Fails open to the absolute path on ``RuntimeError``/``OSError`` as
+        well as ``ValueError``: ``Path.home()`` raises when home cannot be
+        determined, and leaking a path is recoverable where dropping the
+        reader's only pointer is not.
+        """
+        try:
+            relative = path.relative_to(_Path.home())
+        except (ValueError, RuntimeError, OSError):
+            return str(path)
+        return f"~/{relative.as_posix()}" if relative.parts else "~"
+
+    def _sub(match: "re.Match[str]") -> str:
+        start = match.start()
+        if start > 0 and text[start - 1] not in " \t\n(['\"`":
+            return match.group(0)
+        # `pathlib.Path`, not `os.path.join` -- matches cold's own
+        # `_coordinator_dir() / "docs" / "wiki" / match.group(1)` exactly,
+        # INCLUDING its normalization of a nested `match.group(1)`'s
+        # internal `/` separators to the platform-native separator on
+        # `str()`. `os.path.join` does not perform that normalization on
+        # a piece it is handed verbatim, which broke byte-for-byte parity
+        # on a nested anchor on Windows (`coordinator-tripwires/page.md`
+        # stayed forward-slashed while cold rendered it backslashed).
+        return _render_resolved(_Path(plugin_root) / "docs" / "wiki" / match.group(1))
+
+    return _WIKI_CITATION_RE.sub(_sub, text)
 
 
 _ANY_DECLARED_MATCHERS_CACHE: Optional["frozenset[str]"] = None
@@ -1836,6 +1960,27 @@ def _build_guard_chain(
             _git_revert_cache[key] = _dc._check_destructive_git_revert_full(cmd, session_id, hook_payload=payload)
         return _git_revert_cache[key]
 
+    def _doctrine_surface_bash_write_entry() -> Optional[Dict[str, Any]]:
+        """``guard-doctrine-surface-bash-write``'s per-call closure --
+        resolves ``plugin_root`` ONCE (`resolve_plugin_root_loud`) and reuses
+        it for both ``governed_surfaces`` (as before) and the deny-message
+        wiki citation, rather than resolving `plugin_root` twice (which would
+        double-count `resolve_plugin_root_loud`'s own LOUD/COUNTED miss
+        signal). The citation resolver is passed as a THUNK
+        (`resolve_wiki_citation` bound to this call's
+        `plugin_root`) -- `check()` only invokes it from its own deny path
+        (`_compose_deny_message`), so the regex substitution never runs for
+        the overwhelming majority of calls that allow (DR-344 hot-path
+        budget; see `resolve_wiki_citation`'s own
+        docstring)."""
+        plugin_root = resolve_plugin_root_loud(payload, session_id, cwd)
+        governed_surfaces = resolve_governed_authoring_surfaces(plugin_root, session_id, cwd)
+        return _check_doctrine_surface_bash_write(
+            payload,
+            governed_surfaces,
+            resolve_wiki_citation=lambda citation: resolve_wiki_citation(citation, plugin_root),
+        )
+
     guard_chain: List[GuardEntry] = [
         # 1. preuse-bash-dispatch.sh own internal 11-check order.
         # `payload=payload` / `hook_payload=payload` threaded into every `_override()`-
@@ -1961,6 +2106,23 @@ def _build_guard_chain(
             AdvisoryValue.NOT_COST_ARGUED,
             matchers=tuple(_matchers_worktree_sentinel_creation),
         ),
+        # Same ordering requirement as block-worktree-creation and the two
+        # sentinel-creation guards immediately above, for the identical
+        # reason: `offer-git-c` short-circuits any guard placed after it via
+        # allow+updatedInput, so a guard denying `cd /tmp && touch
+        # fleet-delegation.json` must sit ahead of it too. Registered
+        # directly adjacent to block-worktree-sentinel-creation -- the same
+        # class of guard (a Bash-level grant-record forgery ban), same
+        # non-identity-gated posture (the EM is exactly who this guard also
+        # exists to constrain -- see that module's own module docstring).
+        GuardEntry(
+            "block-fleet-delegation-creation",
+            lambda: _check_fleet_delegation_creation(payload),
+            True,
+            GuardBand.CONFINEMENT_DENY,
+            AdvisoryValue.NOT_COST_ARGUED,
+            matchers=tuple(_matchers_fleet_delegation_creation),
+        ),
         # `block-dev-repo-sentinel-removal`'s hard-deny leg was RETIRED here
         # (C13, docs/plans/2026-08-06-apply-guard-class-census.md), collapsing
         # its former TWO-LEG SPLIT into the single already-registered
@@ -2080,7 +2242,19 @@ def _build_guard_chain(
         # rewrite short-circuit. MATCHERS pinned to ("Bash",) ONLY -- see
         # that module's own docstring "SCOPED TO `Bash`" section; do not
         # widen this one onto COMMAND_TOOL_NAMES alongside its siblings.
-        GuardEntry("guard-host-subagent-bash-ban", lambda: _check_host_subagent_bash_ban(payload), True, GuardBand.CONFINEMENT_DENY, AdvisoryValue.NOT_COST_ARGUED, matchers=tuple(_matchers_host_subagent_bash_ban)),
+        GuardEntry(
+            "guard-host-subagent-bash-ban",
+            lambda: _check_host_subagent_bash_ban(
+                payload,
+                resolve_wiki_citation=lambda citation: resolve_wiki_citation(
+                    citation, resolve_plugin_root_loud(payload, session_id, cwd)
+                ),
+            ),
+            True,
+            GuardBand.CONFINEMENT_DENY,
+            AdvisoryValue.NOT_COST_ARGUED,
+            matchers=tuple(_matchers_host_subagent_bash_ban),
+        ),
         # guard-host-subagent-bash-spawn-shapes -- registered port of DoE's
         # folded `_run_folded_bash_guards` entry (C7, state/dispatch-briefs/
         # 2026-08-28-the-four-folded-bash-guards-get-registered-not-folded/
@@ -2107,7 +2281,19 @@ def _build_guard_chain(
         # guard's own deny message already names the tripped shape and
         # offers the identical in-process alternative. See that module's
         # own "SECOND COLLISION" section for the full reasoning.
-        GuardEntry("guard-host-subagent-bash-spawn-shapes", lambda: _check_host_subagent_bash_spawn_shapes(payload), True, GuardBand.CONFINEMENT_DENY, AdvisoryValue.NOT_COST_ARGUED, matchers=tuple(_matchers_host_subagent_bash_spawn_shapes)),
+        GuardEntry(
+            "guard-host-subagent-bash-spawn-shapes",
+            lambda: _check_host_subagent_bash_spawn_shapes(
+                payload,
+                resolve_wiki_citation=lambda citation: resolve_wiki_citation(
+                    citation, resolve_plugin_root_loud(payload, session_id, cwd)
+                ),
+            ),
+            True,
+            GuardBand.CONFINEMENT_DENY,
+            AdvisoryValue.NOT_COST_ARGUED,
+            matchers=tuple(_matchers_host_subagent_bash_spawn_shapes),
+        ),
         # This one is a hard-deny (fail_closed) and belongs on this side of every
         # rewriting guard for the same reason as the three above. It previously sat
         # further down the chain, behind `offer-git-c`. No bypass was demonstrated for
@@ -2176,17 +2362,18 @@ def _build_guard_chain(
         # among the CONFINEMENT_DENY entries is a convenience, not a
         # behaviour dependency -- registered at the tail of the hard-deny
         # run, same `offer-git-c` short-circuit ordering requirement as
-        # every entry in this CONFINEMENT_DENY run.
+        # every entry in this CONFINEMENT_DENY run. Closure factored out to
+        # `_doctrine_surface_bash_write_entry` (defined above, next to
+        # `_git_revert_full`'s own single-resolve-and-reuse closure) so
+        # `plugin_root` is resolved once per call and reused for both the
+        # governed-surfaces manifest AND the deny-message wiki citation
+        # (`resolve_wiki_citation`, invoked only from
+        # `check()`'s own deny path; also threaded into
+        # `guard-host-subagent-bash-ban`/`guard-host-subagent-bash-spawn-
+        # shapes` below the same way).
         GuardEntry(
             "guard-doctrine-surface-bash-write",
-            lambda: _check_doctrine_surface_bash_write(
-                payload,
-                resolve_governed_authoring_surfaces(
-                    resolve_plugin_root_loud(payload, session_id, cwd),
-                    session_id,
-                    cwd,
-                ),
-            ),
+            _doctrine_surface_bash_write_entry,
             True,
             GuardBand.CONFINEMENT_DENY,
             AdvisoryValue.NOT_COST_ARGUED,

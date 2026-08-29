@@ -219,6 +219,45 @@ _BOOTSTRAPPED_NAMES = (
 )
 
 
+def _ensure_bin_lib_bootstrapped() -> None:
+    """Import `coordinator/bin/lib` by location, never by bare name.
+
+    Negative-spec: this is NOT a reintroduced per-CLI `sys.path` preamble. It
+    adds nothing to `sys.path` itself -- `lib/__init__.py` remains the single
+    site that does, and this only guarantees that the `lib` whose `__init__`
+    runs is the one adjacent to this file.
+
+    Why by location. `coordinator/lib` and `coordinator/scripts/lib` are
+    directories of scripts with no `__init__.py`, so both are PEP-420 implicit
+    NAMESPACE packages. Whenever `coordinator/` precedes `coordinator/bin` on
+    `sys.path`, a bare `import lib` binds `coordinator/lib` (merged, on this
+    box, with site-packages `win32/lib`), succeeds silently, and executes no
+    bootstrap -- after which the sibling imports below fail with
+    `ModuleNotFoundError: No module named 'memo_compose'`. That is not a
+    hypothetical: it is why `coordinator_core/baton_assemble/tests/
+    test_apply_degrade_no_compensation.py` was 11-red at HEAD, leaving d6's
+    degrade paths unexercised by their own suite.
+
+    A shadowed `import lib` fails OPEN -- wrong package, no error -- which is
+    why the ambiguity survived. 293 bin CLIs carry the same bare `import lib`
+    and are latently exposed on any path order that puts `coordinator/` first;
+    those are not touched here.
+    """
+    import importlib.util  # stdlib, imported here to keep this module's body inert
+
+    if "lib" in sys.modules and getattr(sys.modules["lib"], "__file__", None):
+        return
+    _bin_lib = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib")
+    _spec = importlib.util.spec_from_file_location(
+        "lib", os.path.join(_bin_lib, "__init__.py"), submodule_search_locations=[_bin_lib]
+    )
+    if _spec is None or _spec.loader is None:
+        raise ImportError(f"coordinator/bin/lib is not importable at {_bin_lib}")
+    _module = importlib.util.module_from_spec(_spec)
+    sys.modules["lib"] = _module
+    _spec.loader.exec_module(_module)
+
+
 def _bootstrap_engine() -> None:
     """Run this file's module-scope non-stdlib imports and engine-path
     mutation on first use instead of at import time.
@@ -239,7 +278,7 @@ def _bootstrap_engine() -> None:
     if _BOOTSTRAP_DONE:
         return
     try:
-        import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
+        _ensure_bin_lib_bootstrapped()
         from memo_compose import (  # noqa: E402
             compose_memo as _memo_compose,  # Review: code-reviewer S3-F3 — use compose_memo (full-doc composer) instead of compose_frontmatter + manual concat
             _today,

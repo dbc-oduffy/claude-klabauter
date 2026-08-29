@@ -1197,6 +1197,11 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # percolate.validate_store's existing none entries — dest is passed explicitly
     # as a param, not derived from repo_root/worktree context.
     "percolate.run_ci_smoke_check":            "none",
+    # delegation.check — "none": reads one small JSON grant file under the settings
+    # home (fleet_delegation's own location seam) and probes one pid for liveness,
+    # not any repo state; _origin_worktree not required (same "none" class as
+    # plugin_health.drift).
+    "delegation.check":                        "none",
     # percolate.run_identity_check — "none": matches percolate.run_ci_smoke_check's
     # own entry immediately above — dest is passed explicitly as a param, not
     # derived from repo_root/worktree context.

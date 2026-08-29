@@ -43,6 +43,10 @@ CONFINEMENT_DENY_NAMES = [
     "block-subagent-stash-creation",
     "block-approval-sentinel-creation",
     "block-worktree-sentinel-creation",
+    # Near-exact sibling of the entry above (dispatch.py registers it
+    # immediately after, same CONFINEMENT_DENY hard-deny posture -- see
+    # block_fleet_delegation_creation.py's own module docstring).
+    "block-fleet-delegation-creation",
     "block-disarm-marker-sentinel-creation",
     "block-reviewer-bash-outside-allowlist",
     "block-subagent-destructive-action",

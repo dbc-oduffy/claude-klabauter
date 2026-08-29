@@ -248,7 +248,7 @@ def _read_addon_health(mode: str) -> ReaderResult:
     return ReaderResult(directives=directives)
 
 
-def _read_memo_surface(mode: str) -> ReaderResult:
+def _read_memo_surface(mode: str, *, repo_root: str | None = None) -> ReaderResult:
     """Inbound cross-repo memo staleness — an open human branch (Accept /
     Decline / Surface-to-PM), never silently auto-resolved.
 
@@ -258,11 +258,15 @@ def _read_memo_surface(mode: str) -> ReaderResult:
     summarizing judgment point in place of the per-memo ones. `mode="surface"`
     (day/week cadence) emits the existing per-memo judgment points, capped
     via `cap_judgment_points`.
+
+    `repo_root`, when given, is threaded into `_resolve_inbox_dir(cwd=...)`
+    so the inbox resolves against the caller's repo rather than whatever
+    repo this process happens to be invoked from.
     """
     if mode == "suppress":
         return ReaderResult()
 
-    inbox_dir = _resolve_inbox_dir()
+    inbox_dir = _resolve_inbox_dir(cwd=repo_root)
     if not os.path.isdir(inbox_dir):
         return ReaderResult()
 
@@ -323,22 +327,26 @@ def _read_rag_staleness() -> ReaderResult:
     )
 
 
-def _read_worktree_sweep() -> ReaderResult:
+def _read_worktree_sweep(*, repo_root: str | None = None) -> ReaderResult:
     """Agent-worktree classification (no `--reap`): reapable states become
     directives naming the existing `agent-worktree-sweep --reap` CLI;
     non-benign dirty worktrees become a judgment point (PM must handle,
-    never auto-reaped)."""
-    repo_root_str = _wt_repo_root()
+    never auto-reaped).
+
+    `repo_root`, when given, is threaded into `_wt_repo_root(cwd=...)` so
+    the swept worktree set resolves against the caller's repo rather than
+    whatever repo this process happens to be invoked from."""
+    repo_root_str = _wt_repo_root(cwd=Path(repo_root) if repo_root else None)
     if not repo_root_str:
         return ReaderResult()
-    repo_root = Path(repo_root_str)
-    compare_ref = _wt_active_branch(repo_root)
+    swept_root = Path(repo_root_str)
+    compare_ref = _wt_active_branch(swept_root)
     if not compare_ref:
         return ReaderResult()
 
     directives: list[dict[str, Any]] = []
     judgment_points: list[dict[str, Any]] = []
-    worktrees = [w for w in _list_worktrees(repo_root) if _is_agent_worktree(w.path)]
+    worktrees = [w for w in _list_worktrees(swept_root) if _is_agent_worktree(w.path)]
     for idx, wt in enumerate(worktrees):
         classification = classify_worktree(wt.path, compare_ref)
         if classification.state in ("empty-clean", "dirty-benign", "commits-clean"):
@@ -377,7 +385,7 @@ def _read_worktree_sweep() -> ReaderResult:
     return ReaderResult(directives=directives, judgment_points=judgment_points)
 
 
-def collect(cadence: str) -> ReaderResult:
+def collect(cadence: str, *, repo_root: str | None = None) -> ReaderResult:
     """Compute this reader family's directives/judgment_points for `cadence`.
 
     Cadence tunes two independent knobs — the addon-health severity mode
@@ -385,6 +393,18 @@ def collect(cadence: str) -> ReaderResult:
     mode (session = suppress; day/week = surface, capped) — the same five
     reader calls run for every cadence; nothing here branches into a
     different reader per cadence.
+
+    `repo_root` is threaded into the two readers whose underlying helpers
+    already accept a `cwd` override — `_read_worktree_sweep` (via
+    `agent_worktree_sweep._repo_root(cwd=...)`) and `_read_memo_surface`
+    (via `workday_start_cross_repo_memo_surface._resolve_inbox_dir(cwd=...)`)
+    — so both resolve against the invoking repo rather than this process's
+    cwd. `_read_em_environment` is deliberately NOT threaded: it resolves
+    `CLAUDE_PROJECT_DIR` -> `PWD` -> `os.getcwd()` for the EM's settings
+    dir, which is session config, not repo work-state, and stays on that
+    resolution chain (C1 of the orient-assemble repo-scope plan). `_read_
+    addon_health` and `_read_rag_staleness` are explicitly NOT repo-scoped
+    (settings-home / DoE-root scoped) and are left untouched.
     """
     addon_mode = _ADDON_HEALTH_MODE_BY_CADENCE.get(cadence, "--red-only")
     memo_mode = _MEMO_SURFACE_MODE_BY_CADENCE.get(cadence, "surface")
@@ -394,9 +414,9 @@ def collect(cadence: str) -> ReaderResult:
     for result in (
         _read_em_environment(),
         _read_addon_health(addon_mode),
-        _read_memo_surface(memo_mode),
+        _read_memo_surface(memo_mode, repo_root=repo_root),
         _read_rag_staleness(),
-        _read_worktree_sweep(),
+        _read_worktree_sweep(repo_root=repo_root),
     ):
         directives.extend(result.directives)
         judgment_points.extend(result.judgment_points)

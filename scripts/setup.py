@@ -1949,6 +1949,94 @@ def resolve_repo_identity(repo_root: Path) -> str | None:
     return None
 
 
+def check_governed_authoring_surfaces_manifest(repo_root: Path, args: Args) -> None:
+    """HARD (PM ruling 2026-08-29): `coordinator_core.bash_guards.dispatch.
+    resolve_governed_authoring_surfaces` reads `<plugin_root>/governed-
+    authoring-surfaces.json` fresh on every Bash call, and a miss (absent,
+    unreadable, bad JSON, wrong shape) degrades `guard-doctrine-surface-bash-
+    write` to a silent DECLINE — that guard's own hard-deny denies nothing it
+    is supposed to (state/bug-backlog/2026-08-29-the-guard-rehome-is-not-yet-
+    safe-to-dele-9f7396118b81.yaml, gap 2). Once DoE deletes their in-process
+    fold there is no second path to catch this, so install time is the only
+    place a missing/broken manifest can be caught before it matters — fails
+    loud (exit 90) the same as `check_coordinator_claude_dep`, whose call-site
+    guard (`main`'s `if args.skip_dep_check: ... else: ...`) already covers
+    this function too, so the --skip-dep-check + --accept-missing-deps-risk
+    override pair applies here identically without a separate check.
+
+    RUNTIME STAYS FAIL-OPEN — this hardens the INSTALLER only. Do not read
+    this as license to make `resolve_governed_authoring_surfaces` or
+    `guard-doctrine-surface-bash-write` hard-deny on a miss: a runtime hard-
+    deny would refuse every Bash call on an install with no plugin, bricking
+    the tool, which is exactly why that call site chose loud-fail-open.
+
+    Only runs when `check_coordinator_claude_dep` already passed (same call-
+    site guard as that function), so `coord_path` here is a verified
+    coordinator-claude checkout, not an unresolved guess."""
+    print()
+    print("--- Dep check: governed-authoring-surfaces manifest (hard) ---")
+
+    coord_path, _coord_source = _resolve_coordinator_claude_root(repo_root, args)
+    plugin_root = _resolve_plugin_root_for_machine_local(coord_path)
+    if plugin_root is None:
+        print(f"ERROR [hard] governed-authoring-surfaces manifest — could not resolve a plugin root under "
+              f"{coord_path} (exit {EXIT_HARD_DEP_MISSING})", file=sys.stderr)
+        print("  guard-doctrine-surface-bash-write would find no manifest to read and decline every call.", file=sys.stderr)
+        print(file=sys.stderr)
+        print("  Fix the coordinator-claude checkout so a plugin root can be resolved under it, or", file=sys.stderr)
+        print("  point --coordinator-root / $COORDINATOR_CLAUDE_ROOT at one that has one.", file=sys.stderr)
+        print(file=sys.stderr)
+        print("  To proceed anyway, accept the risk explicitly (both flags together):", file=sys.stderr)
+        print("    --skip-dep-check --accept-missing-deps-risk", file=sys.stderr)
+        print(file=sys.stderr)
+        sys.exit(EXIT_HARD_DEP_MISSING)
+
+    manifest_path = plugin_root / "governed-authoring-surfaces.json"
+    try:
+        data = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        print(f"ERROR [hard] governed-authoring-surfaces manifest — absent at {manifest_path} "
+              f"(exit {EXIT_HARD_DEP_MISSING})", file=sys.stderr)
+        print("  guard-doctrine-surface-bash-write reads this file on every Bash call; with no file", file=sys.stderr)
+        print("  present it silently declines rather than enforcing anything.", file=sys.stderr)
+        print(file=sys.stderr)
+        print(f"  Fix: ship/create a well-formed governed-authoring-surfaces.json at {manifest_path}", file=sys.stderr)
+        print("  (a flat JSON list of surface-path strings) — this is normally shipped by the plugin install.", file=sys.stderr)
+        print(file=sys.stderr)
+        print("  To proceed anyway, accept the risk explicitly (both flags together):", file=sys.stderr)
+        print("    --skip-dep-check --accept-missing-deps-risk", file=sys.stderr)
+        print(file=sys.stderr)
+        sys.exit(EXIT_HARD_DEP_MISSING)
+    except Exception as exc:  # noqa: BLE001 -- any other read/parse failure is fatal too
+        print(f"ERROR [hard] governed-authoring-surfaces manifest — unreadable at {manifest_path} "
+              f"({type(exc).__name__}) (exit {EXIT_HARD_DEP_MISSING})", file=sys.stderr)
+        print("  guard-doctrine-surface-bash-write cannot parse this file and will silently decline", file=sys.stderr)
+        print("  rather than enforcing anything.", file=sys.stderr)
+        print(file=sys.stderr)
+        print(f"  Fix: repair or regenerate {manifest_path} as valid JSON (a flat list of surface-path", file=sys.stderr)
+        print("  strings).", file=sys.stderr)
+        print(file=sys.stderr)
+        print("  To proceed anyway, accept the risk explicitly (both flags together):", file=sys.stderr)
+        print("    --skip-dep-check --accept-missing-deps-risk", file=sys.stderr)
+        print(file=sys.stderr)
+        sys.exit(EXIT_HARD_DEP_MISSING)
+
+    if not isinstance(data, list) or not all(isinstance(entry, str) for entry in data):
+        print(f"ERROR [hard] governed-authoring-surfaces manifest — {manifest_path} is valid JSON but not a "
+              f"flat list of strings (exit {EXIT_HARD_DEP_MISSING})", file=sys.stderr)
+        print("  guard-doctrine-surface-bash-write expects a flat JSON array of surface-path strings and", file=sys.stderr)
+        print("  will silently decline rather than enforcing anything against this shape.", file=sys.stderr)
+        print(file=sys.stderr)
+        print(f"  Fix: rewrite {manifest_path} as a flat JSON list of strings, e.g. [\"path/one\", \"path/two\"].", file=sys.stderr)
+        print(file=sys.stderr)
+        print("  To proceed anyway, accept the risk explicitly (both flags together):", file=sys.stderr)
+        print("    --skip-dep-check --accept-missing-deps-risk", file=sys.stderr)
+        print(file=sys.stderr)
+        sys.exit(EXIT_HARD_DEP_MISSING)
+
+    print(f"PASS [hard] governed-authoring-surfaces manifest — {len(data)} surface(s) at {manifest_path}")
+
+
 def check_coordinator_claude_dep(repo_root: Path, args: Args) -> None:
     """coordinator-claude sibling-dep check (hard, PM ruling 2026-08-03) — fails
     loud (exit 90) when missing/broken. `main()` only calls this function when
@@ -4116,6 +4204,7 @@ def main(argv: list[str]) -> int:
             print("[SKIP] dep check bypassed (--skip-dep-check + --accept-missing-deps-risk).")
         else:
             check_coordinator_claude_dep(repo_root, args)
+            check_governed_authoring_surfaces_manifest(repo_root, args)
 
     claude_klabauter_root_resolved = register_claude_klabauter_root(claude_klabauter_root_resolved, claude_klabauter_root_source, repo_root, args)
     offer_warm_opt_in(repo_root, args)

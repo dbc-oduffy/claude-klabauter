@@ -732,9 +732,27 @@ def check_harvest_provenance(frontmatter_text: str, path: Path, repo_root: Path)
         needle = path.name
     basename = path.name
 
-    cited = active_reference_guard(needle, repo_root, scope=_HARVEST_PROVENANCE_SCOPE)
+    # `exclude_provenance_blocks=False` is load-bearing, not a default being restated.
+    # The canonical durable-capture shape IS a provenance-marker block: a docs/wiki or
+    # docs/decisions page recording where this artifact's content went, via its own
+    # `archived_handoff:` / `cross_repo_memo:` entry. Guard 3 excludes that block because a
+    # tombstone is not a dependency; this guard REQUIRES it because a tombstone is exactly
+    # the proof it looks for. Leaving the exclusion on here makes Guard 7's own evidence
+    # invisible to it — fail-closed, so no data loss, but the artifact becomes permanently
+    # undeletable, which is the DR-111 self-pinning defect relocated rather than fixed.
+    cited = active_reference_guard(
+        needle,
+        repo_root,
+        scope=_HARVEST_PROVENANCE_SCOPE,
+        exclude_provenance_blocks=False,
+    )
     if not cited and basename != needle:
-        cited = active_reference_guard(basename, repo_root, scope=_HARVEST_PROVENANCE_SCOPE)
+        cited = active_reference_guard(
+            basename,
+            repo_root,
+            scope=_HARVEST_PROVENANCE_SCOPE,
+            exclude_provenance_blocks=False,
+        )
     if cited:
         return GuardResult(
             "harvest-provenance",

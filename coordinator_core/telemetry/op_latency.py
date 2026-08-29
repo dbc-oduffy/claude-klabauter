@@ -919,6 +919,78 @@ def record_fact_span(
     _write_entry(entry, repo_root)
 
 
+def record_commit_pipeline_entry(
+    *,
+    invocation_id: str,
+    t_start: float,
+    repo_root: Optional[Path] = None,
+    sid: Optional[str] = None,
+) -> None:
+    """Append one JSON line for ONE entry into
+    ``coordinator_core.ops.ceremony.commit_pipeline.run_commit_pipeline`` --
+    written at the top of the call, before any work, so that an execution
+    that never returns to its caller is still on the record.
+
+    Record shape:
+        {"invocation_id": str, "t_start": float epoch, "pid": int,
+         "ppid": int, "sid": str|null, "repo_key": str|null,
+         "kind": "commit_pipeline_entry"}
+
+    WHY THIS ROW EXISTS. The sanctioned commit route reports a landed commit
+    as a failure at a measured ~36% rate, and the discriminator on its own
+    ``reconcile_decline`` return closed the cause to A SECOND EXECUTION: the
+    landed commit carries one ``Commit-Token:`` and the reconciler searches
+    for another, with ``pre_sha`` anchored at the first execution's own
+    commit (``state/bug-backlog/2026-08-27-the-sanctioned-commit-route-
+    reports-success-as-failure-six-ways.yaml``, instance 9). What re-executes
+    was then unanswerable FROM DISK, because nothing recorded an execution:
+    ``run_commit_pipeline`` emitted rows only on its two push legs
+    (``_COMPOSITION_SPAN_PRE_PUSH``/``_PUSH``), which had produced ZERO rows
+    in the whole 16,592-row ledger -- the dispatched-committer route never
+    reaches them. Nine instances across multiple sessions therefore yielded
+    inference and no observation.
+
+    ``ppid`` is the field that names the re-entry path, and is why this is not
+    a ``record_composition_span`` call. Two rows seconds apart sharing a
+    ``pid`` mean ONE process called the pipeline twice (look inside the
+    caller's own script); two rows with different ``pid``s mean the COMMAND
+    ran twice, and the shared ``ppid`` names what ran it.
+
+    Deliberately a NEW ``kind``, following ``record_fact_span``'s own
+    precedent and for the same reason: ``kind: "composition"`` is the
+    population DR-325 armed ``FLEET_AGGREGATE_ELAPSED_BUDGET`` from, and an
+    entry row carries neither an elapsed span nor an outcome, so injecting it
+    there would corrupt that corpus. ``pairing_summary`` and
+    ``breach_summary`` key strictly on ``"started"``/``"complete"`` and
+    ``cost_census`` accepts only an absent or ``"complete"`` kind, so all
+    three ignore this row already.
+
+    Negative-spec:
+      - Carries NO ``Commit-Token`` and NO ``pre_sha``. The token is minted
+        inside ``commit()``, well below this seam, and reading HEAD here would
+        put a ``git rev-parse`` spawn on the commit hot path for a field the
+        pid/ppid pair already answers. ``invocation_id`` is the pipeline's own
+        ``_composition_id``, which joins this row to the push spans without a
+        second identifier.
+      - Records the ENTRY, never the outcome. A row with no successor is the
+        signal, not a defect in the row.
+
+    Same fail-open contract as the other row kinds: resolves the sink via
+    ``coordinator_core.lifecycle.git_common_dir``, honours
+    ``COORDINATOR_OP_LATENCY_DISABLE``, and never raises.
+    """
+    entry = {
+        "invocation_id": invocation_id,
+        "t_start": t_start,
+        "pid": os.getpid(),
+        "ppid": os.getppid(),
+        "sid": sid,
+        "repo_key": None,
+        "kind": "commit_pipeline_entry",
+    }
+    _write_entry(entry, repo_root)
+
+
 # The longest a client-side subprocess.run(timeout=) waits before killing an
 # invocation, for any op that has not overridden its budget — see
 # coordinator/bin/lib/cc_invoke.py::_op_timeout_ceiling:

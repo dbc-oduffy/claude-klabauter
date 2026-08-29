@@ -126,7 +126,6 @@ class CommitOutcome(NamedTuple):
     worktree_over_staged: Tuple[str, ...] = ()
 
 
-
 class FilterUnsupported(CommitRefused):
     """This path's bytes go through a filter this module does not reproduce
     (an LFS/`filter.*.clean` driver, or an explicit `text`/`eol` attribute
@@ -309,6 +308,7 @@ def commit_paths(
     deleted_paths: Sequence[str] = (),
     supplied_blobs: Optional[Mapping[str, str]] = None,
     prefer_staged: Sequence[str] = (),
+    prefer_deliberate_stage: bool = False,
     blob_fallback: Optional[Callable[[Sequence[str]], Mapping[str, str]]] = None,
 ) -> CommitOutcome:
     """Commit exactly `paths` (+ remove `deleted_paths`). Zero git spawns.
@@ -317,6 +317,22 @@ def commit_paths(
     empty pathspec to `git commit` commits the WHOLE INDEX, so it is refused
     here rather than defaulted), a directory in `paths`, an unresolvable CAS
     ref, or a lost CAS race.
+
+    `prefer_deliberate_stage` (DR-379): a caller-declared opt-in, DEFAULT
+    FALSE, that turns the already-computed `worktree_over_staged` set from a
+    report into a substitution. When true, every path this call would
+    otherwise have named passed-over instead commits its staged bytes
+    (`entry.mode`, `entry.sha`), landing inside the existing settle-against-
+    HEAD window -- no extra spawn, no extra object read, no extra index read.
+    A path this policy preserves is not "passed over", so it moves out of
+    `worktree_over_staged` and into `staged_preferred` alongside a
+    caller-declared `prefer_staged` path: both are the same observable
+    outcome (staged bytes committed), just declared through a different
+    door. Opt in only where a third party's deliberate partial stage can
+    exist to be preserved (`ops/session/safe_commit_offer.py`,
+    `coordinator/bin/coordinator-safe-commit.py`) -- every other caller
+    commits paths it authored itself in the same pass, so there is nothing
+    a widened default could preserve, only stale blobs it could newly hide.
     """
     root = Path(repo)
     gitdir = resolve_git_dir(repo)
@@ -413,6 +429,14 @@ def commit_paths(
                 )
             entry = staged.get(p)
             mode = entry.mode if entry is not None else _mode_for(root / p)
+            if entry is not None and blob != entry.sha:
+                # SAME CANDIDACY CHECK as the direct-blob branch above -- a
+                # path refused to `blob_fallback` (LFS/CRLF-pinned/`[attr]`)
+                # can diverge from a partial stage exactly like a directly
+                # hashed one, and was silently absent from the loss report
+                # before this. Settled against HEAD in the same pass below,
+                # off the same spine -- no extra spawn, no extra read.
+                staged_passed_over.append(p)
             assembled[p] = (mode, blob)
             index_updates[p] = (mode, blob)
 
@@ -441,7 +465,16 @@ def commit_paths(
         head_entry = spine.get(head_dir, {}).get(head_name)
         entry = staged.get(p)
         if entry is not None and (head_entry is None or head_entry[1] != entry.sha):
-            worktree_over_staged.append(p)
+            if prefer_deliberate_stage:
+                # DR-379: the settled set is a substitution here, not just a
+                # report -- the caller declared it wants the deliberate stage
+                # preserved rather than passed over. Same window, same spine,
+                # same entry already in hand: no extra read.
+                assembled[p] = (entry.mode, entry.sha)
+                index_updates[p] = (entry.mode, entry.sha)
+                staged_preferred.append(p)
+            else:
+                worktree_over_staged.append(p)
 
     filled = _synthesize_absent_spine_dirs(spine, assembled)
     if filled is not None:

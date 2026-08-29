@@ -192,7 +192,10 @@ from coordinator_core.ops.ceremony.commit_message import (
 from coordinator_core.session.core import session_dir as _session_core_session_dir
 from coordinator_core.session.core import sessions_dir as session_hub_dir
 from coordinator_core.session.liveness import live_session_ids
-from coordinator_core.telemetry.op_latency import record_composition_span
+from coordinator_core.telemetry.op_latency import (
+    record_commit_pipeline_entry,
+    record_composition_span,
+)
 
 #: `run_commit_pipeline()` composition-span names (C2, docs/plans/2026-08-19-
 #: the-engine-stops-paying-a-network-push-on-every-commit.md § C2). Two rows
@@ -4537,6 +4540,19 @@ def run_commit_pipeline(
     _pipeline_t_start = time.time()
     _composition_id = uuid.uuid4().hex
     _span_sid = attributed_session_id if attributed_session_id is not None else session_id
+    # ONE row per entry into this function, written before any work -- the
+    # observation the nine-instance false-failure row could not make. See
+    # `record_commit_pipeline_entry`'s own docstring for why the pid/ppid pair
+    # is the discriminator, and why the two push spans below could not stand in
+    # for it (they have never fired on the dispatched-committer route).
+    # Fail-open and zero-spawn; an execution that dies mid-pipeline still
+    # leaves its row.
+    record_commit_pipeline_entry(
+        invocation_id=_composition_id,
+        t_start=_pipeline_t_start,
+        repo_root=root,
+        sid=_span_sid,
+    )
     _preflight_reap_stale_lock(str(root))
     common_dir = _resolve_pass_common_dir(str(root))
 

@@ -540,28 +540,39 @@ def _scan_day(
 # ---------------------------------------------------------------------------
 
 
-def _parse_args(argv: List[str]) -> Tuple[Optional[int], Optional[str], Optional[str]]:
-    """Returns (lookback, today_override, error_message). error_message set means
-    usage error (exit 1)."""
+def _parse_args(
+    argv: List[str],
+) -> Tuple[Optional[int], Optional[str], Optional[str], Optional[str]]:
+    """Returns (lookback, today_override, repo_root, error_message). error_message
+    set means usage error (exit 1).
+
+    `--repo-root` (2026-08-29): this op is the PRODUCER of the Step 3.5 gap-row
+    TSV that both the Phase-A0 anchor and the Phase-B dispatcher consume, and
+    both of those receive their root explicitly. Without this flag the producer
+    alone resolved its root from the process cwd, so under in-process directive
+    dispatch it scanned whatever tree the ceremony happened to stand in and
+    silently mis-drove both writers. `COORDINATOR_ROOT` is not the answer: its
+    own warning names it TEST-ONLY."""
     lookback = 14
     today_override = None
+    repo_root = None
     i = 0
     while i < len(argv):
         arg = argv[i]
         if arg == "--lookback":
             if i + 1 >= len(argv):
-                return None, None, "--lookback needs a value"
+                return None, None, None, "--lookback needs a value"
             raw = argv[i + 1]
             # Bash oracle: [[ "$LOOKBACK" =~ ^[0-9]+$ ]] — unsigned decimal digits
             # only; "-5"/"+5"/"3.5" are all rejected. Regex-gate BEFORE int() so a
             # leading '+' (which int() would silently accept) is faithfully rejected.
             if not re.match(r"^[0-9]+$", raw):
-                return None, None, f"--lookback must be a positive integer (got '{raw}')"
+                return None, None, None, f"--lookback must be a positive integer (got '{raw}')"
             lookback = int(raw)
             i += 2
         elif arg == "--today":
             if i + 1 >= len(argv):
-                return None, None, "--today needs a value"
+                return None, None, None, "--today needs a value"
             raw = argv[i + 1]
             # --- Tier 2 (behaviour change -- PM sign-off required) ---
             # A malformed --today silently degraded the scan into a no-op: every
@@ -572,25 +583,32 @@ def _parse_args(argv: List[str]) -> Tuple[Optional[int], Optional[str], Optional
             # Regex-gate at parse time (mirrors the --lookback idiom above) so
             # malformed input is a usage error, not a silent empty scan.
             if not re.match(r"^\d{4}-\d{2}-\d{2}$", raw):
-                return None, None, f"--today must be YYYY-MM-DD (got '{raw}')"
+                return None, None, None, f"--today must be YYYY-MM-DD (got '{raw}')"
             try:
                 date.fromisoformat(raw)
             except ValueError:
-                return None, None, f"--today must be a valid YYYY-MM-DD date (got '{raw}')"
+                return None, None, None, f"--today must be a valid YYYY-MM-DD date (got '{raw}')"
             today_override = raw
             # --- end Tier 2 ---
             i += 2
+        elif arg == "--repo-root":
+            if i + 1 >= len(argv):
+                return None, None, None, "--repo-root needs a value"
+            repo_root = argv[i + 1]
+            if not os.path.isdir(repo_root):
+                return None, None, None, f"--repo-root is not a directory: '{repo_root}'"
+            i += 2
         elif arg.startswith("-"):
-            return None, None, f"Unknown option: {arg}"
+            return None, None, None, f"Unknown option: {arg}"
         else:
-            return None, None, f"Unexpected argument: {arg}"
+            return None, None, None, f"Unexpected argument: {arg}"
     if lookback < 1:
-        return None, None, f"--lookback must be a positive integer (got '{lookback}')"
-    return lookback, today_override, None
+        return None, None, None, f"--lookback must be a positive integer (got '{lookback}')"
+    return lookback, today_override, repo_root, None
 
 
 def main(argv: List[str]) -> int:
-    lookback, today_override, err = _parse_args(argv)
+    lookback, today_override, repo_root_arg, err = _parse_args(argv)
     if err is not None:
         print(f"ERROR: {err}", file=sys.stderr)
         return 1
@@ -622,13 +640,30 @@ def main(argv: List[str]) -> int:
                 file=sys.stderr,
             )
 
-    root = coordinator_root or cwd_top
+    # An explicit --repo-root outranks both: it is the only one of the three
+    # that is a CONTRACT rather than an ambient fact about where the process
+    # happens to stand (COORDINATOR_ROOT's own warning above names itself
+    # TEST-ONLY, and cwd is what in-process directive dispatch gets wrong).
+    root = repo_root_arg or coordinator_root or cwd_top
     if not root:
-        print("ERROR: cwd is not a git repo and COORDINATOR_ROOT is not set", file=sys.stderr)
+        print(
+            "ERROR: no repo root — pass --repo-root, or run from inside a git repo",
+            file=sys.stderr,
+        )
         return 1
 
-    if coordinator_root:
-        state_root: Optional[str] = os.path.join(root, "state")
+    if repo_root_arg:
+        # Mirrors `_resolve_state_root_seam` exactly, resolved from the given
+        # root instead of the cwd: a meta-repo root routes to claude-klabauter's state,
+        # anything else to <root>/state. Not a bare join — that would send a
+        # `~/.claude` root to a state dir that does not exist.
+        state_root: Optional[str] = (
+            (os.path.join(_claude_klabauter_root(), "state") if _claude_klabauter_root() else None)
+            if _same_path(root, _claude_home())
+            else os.path.join(root, "state")
+        )
+    elif coordinator_root:
+        state_root = os.path.join(root, "state")
     else:
         state_root = _resolve_state_root_seam()
 

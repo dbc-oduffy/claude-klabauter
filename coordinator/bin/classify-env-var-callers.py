@@ -195,7 +195,10 @@ _REVIEWED_DISPOSITIONS: dict[str, tuple[str, str]] = {
                     "stats a file, but the root it wants is the dispatch answer -- its own "
                     "docstring refuses to import coordinator_core to ask, because that would "
                     "bind whichever tree pytest put on sys.path first. Routing it to the engine "
-                    "accessor is correct, not the silent failure this bucket guards against."),
+                    "accessor is correct, not the silent failure this bucket guards against. "
+                    "NOTE: it reaches cc_invoke._resolve_claude_klabauter_root, a PRIVATE name across a "
+                    "module boundary -- recorded here so a future cc_invoke refactor has a "
+                    "known consumer instead of breaking this probe silently."),
 }
 
 

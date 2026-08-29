@@ -61,6 +61,11 @@ Spec backlink: docs/plans/2026-08-27-every-bin-name-warm-serves-and-a-classifier
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
+import pytest
+
 from coordinator_core.warm import serve_classifier as sc
 
 
@@ -83,17 +88,38 @@ def _verdict_entries(verdict: sc.ServeVerdict) -> list[tuple[str, str, str]]:
     return entries
 
 
-def _live_entries() -> set[tuple[str, str, str]]:
-    """Every current baseline-comparable entry over the LIVE allowlist --
-    the load-bearing call in this module: `load_allowlist_names` reads
+def _live_entries(
+    names: list[str] | None = None, bin_dir: Path | None = None
+) -> set[tuple[str, str, str]]:
+    """Every current baseline-comparable entry over a population --
+    defaults to the LIVE allowlist: `load_allowlist_names` reads
     `warm_entrypoint_allowlist.json` fresh each run, so a name C2/C5 add or
-    remove changes this set on the next test run with no edit here."""
-    names = sc.load_allowlist_names()
-    verdicts = sc.classify_population(names)
+    remove changes this set on the next test run with no edit here. A
+    caller may inject `names`/`bin_dir` (the C8 fail-closed leg does, over
+    synthetic `tmp_path` scripts) without touching the live allowlist."""
+    if names is None:
+        names = sc.load_allowlist_names()
+    kwargs = {} if bin_dir is None else {"bin_dir": bin_dir}
+    verdicts = sc.classify_population(names, **kwargs)
     live: set[tuple[str, str, str]] = set()
     for verdict in verdicts:
         live.update(_verdict_entries(verdict))
     return live
+
+
+def _assert_no_new(live: set[tuple[str, str, str]]) -> None:
+    """The guard's own comparison, extracted so both the real guard
+    (`test_no_new_warm_serve_violations`) and the fail-closed leg
+    (`test_fails_closed_on_each_unservable_shape`) call the SAME function
+    rather than the leg re-implementing a copy of it."""
+    baseline = set(_BASELINE)
+    new = sorted(live - baseline)
+    rendered = "\n".join(f"  {name}: [{reason}] {text}" for name, reason, text in new)
+    assert new == [], (
+        f"Found {len(new)} NEW warm-serve violation(s) not in _BASELINE "
+        f"-- resolve them or, if genuinely unfixable, add them to the "
+        f"baseline with a stated reason:\n{rendered}"
+    )
 
 
 # --- Committed baseline -------------------------------------------------
@@ -120,15 +146,24 @@ def test_no_new_warm_serve_violations():
     this test the moment it lands -- the failure mode this chunk exists to
     close (`_write_allowlist`'s accumulating union, and a phantom row with
     no author review, per the origin plan's C2/C5 rows)."""
-    live = _live_entries()
-    baseline = set(_BASELINE)
-    new = sorted(live - baseline)
-    rendered = "\n".join(f"  {name}: [{reason}] {text}" for name, reason, text in new)
-    assert new == [], (
-        f"Found {len(new)} NEW warm-serve violation(s) not in _BASELINE "
-        f"-- resolve them or, if genuinely unfixable, add them to the "
-        f"baseline with a stated reason:\n{rendered}"
-    )
+    _assert_no_new(_live_entries())
+
+
+def test_live_population_matches_allowlist_file():
+    """Pins the population itself, not just the derived findings: a
+    silently-shrunk `load_allowlist_names()` (wrong `_ALLOWLIST_PATH`, a
+    `bin_dir` regression, a swallowed exception) would make
+    `test_no_new_warm_serve_violations` and the fail-closed leg both pass
+    vacuously over an empty or partial set. This leg reads the allowlist
+    file directly and cross-checks both that `load_allowlist_names()`
+    matches it exactly and that `classify_population` returns exactly one
+    verdict per name -- no silent drop, no silent duplicate."""
+    names = sc.load_allowlist_names()
+    on_disk = json.loads(Path(sc._ALLOWLIST_PATH).read_text(encoding="utf-8"))
+    assert set(names) == set(on_disk["entrypoints"])
+    verdicts = sc.classify_population(names)
+    assert len(verdicts) == len(names)
+    assert {v.name for v in verdicts} == set(names)
 
 
 def test_baseline_has_no_stale_entries():
@@ -157,20 +192,31 @@ def test_baseline_will_reach_empty():
     two collections drifted out of the same shape rather than merely
     shrinking. `_BASELINE == []` is the plan's own `expected_when_true`,
     not something this chunk asserts directly."""
-    assert len(_BASELINE) <= len(_live_entries()) + len(sc.load_allowlist_names()) * 4
+    assert _BASELINE == []
 
 
-def test_scans_the_live_allowlist_not_a_frozen_copy():
-    """Guards against the ratchet degrading into a static fixture: re-reads
-    `warm_entrypoint_allowlist.json` from disk on every call, so a name
-    C2/C5 add or remove is visible to this suite on the very next run with
-    no edit to this file. Regression target: a future refactor caching
-    `_live_entries()` at import time would make this test the only thing
-    that still notices."""
-    names_first = sc.load_allowlist_names()
-    names_second = sc.load_allowlist_names()
-    assert names_first == names_second
-    assert len(names_first) > 0
+def test_scans_the_live_allowlist_not_a_frozen_copy(tmp_path):
+    """Guards against the ratchet degrading into a static fixture: writes a
+    real allowlist file, reads it via `load_allowlist_names(path=...)`,
+    mutates the file on disk, and asserts the SECOND read reflects the
+    mutation -- a frozen copy (a module-level constant, or an
+    `lru_cache`-wrapped `_live_entries`) would return the stale first
+    result and fail this test."""
+    allowlist_path = tmp_path / "warm_entrypoint_allowlist.json"
+    allowlist_path.write_text(
+        json.dumps({"entrypoints": ["alpha", "beta"]}), encoding="utf-8"
+    )
+    names_first = sc.load_allowlist_names(path=allowlist_path)
+    assert names_first == ["alpha", "beta"]
+
+    allowlist_path.write_text(
+        json.dumps({"entrypoints": ["alpha", "beta", "gamma"]}), encoding="utf-8"
+    )
+    names_second = sc.load_allowlist_names(path=allowlist_path)
+    assert names_second == ["alpha", "beta", "gamma"], (
+        "load_allowlist_names did not observe the on-disk mutation -- it "
+        "is reading a frozen copy, not the live file"
+    )
 
 
 def test_fails_closed_on_each_unservable_shape(tmp_path):
@@ -210,23 +256,32 @@ def test_fails_closed_on_each_unservable_shape(tmp_path):
     # Deliberately has no file on disk: the fourth unservable shape.
     names = [*shapes, "shape-no-script"]
 
-    live: set[tuple[str, str, str]] = set()
-    for verdict in sc.classify_population(names, bin_dir=tmp_path):
-        live.update(_verdict_entries(verdict))
+    live = _live_entries(names=names, bin_dir=tmp_path)
 
-    # The guard's own comparison, against the committed baseline rather
-    # than an empty set -- a baseline that ever grew to swallow these
-    # would fail here too.
+    # Drive the SAME comparison the real guard calls -- not a copy of it --
+    # so this leg actually proves the guard fails closed rather than
+    # merely proving `serve_classifier` + a set-difference flag shapes.
+    with pytest.raises(AssertionError) as excinfo:
+        _assert_no_new(live)
+    message = str(excinfo.value)
+
     new = sorted(live - set(_BASELINE))
     flagged = {name for name, _reason, _text in new}
     assert flagged == set(names), (
         "the C8 comparison did not fail closed on every unservable shape; "
         f"missed {sorted(set(names) - flagged)}"
     )
+    for name in names:
+        assert name in message, f"{name} missing from _assert_no_new's failure message"
 
-    reasons = {name: reason for name, reason, _text in new}
-    assert reasons["shape-no-script"] == "no_script"
-    assert reasons["shape-no-main"] == "no_main"
-    assert reasons["shape-zero-arity"] == "zero_arity_main"
-    assert reasons["shape-impure-body"] == "module-scope non-stdlib import"
-    assert reasons["shape-sys-path-mutation"] == "module-scope process mutation"
+    # dict[str, set[str]] rather than a collapsed scalar -- a name with
+    # multiple findings sharing a reason today must not make this
+    # assertion depend on dict-comprehension overwrite order tomorrow.
+    reasons: dict[str, set[str]] = {}
+    for name, reason, _text in new:
+        reasons.setdefault(name, set()).add(reason)
+    assert reasons["shape-no-script"] == {"no_script"}
+    assert reasons["shape-no-main"] == {"no_main"}
+    assert reasons["shape-zero-arity"] == {"zero_arity_main"}
+    assert "module-scope non-stdlib import" in reasons["shape-impure-body"]
+    assert "module-scope process mutation" in reasons["shape-sys-path-mutation"]

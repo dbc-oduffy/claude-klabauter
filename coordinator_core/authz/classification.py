@@ -2143,6 +2143,12 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # the vendored schema, returns a validation/drift report; performs no write, rename, or
     # commit (ops/percolate_validate.py — the shrunken --refresh-skeleton, read-only by design).
     "percolate.validate_store": OpClass.COMPUTE_ONLY,
+    # delegation.check — COMPUTE_ONLY: reads one small JSON grant file under the
+    # settings home and probes one pid for liveness via psutil; performs no write,
+    # rename, or commit (ops/delegation_check.py, wrapping fleet_delegation's own
+    # read-only check_fleet_delegation). Mirrors plugin_health.drift's own-machine-
+    # probe classification rationale.
+    "delegation.check": OpClass.COMPUTE_ONLY,
     # percolate.run_identity_check — COMPUTE_ONLY: subprocesses a publish target's
     # own `check-persona-names.py` and returns its exit code + captured stdout;
     # performs no write, rename, or commit of its own (ops/percolate_identity_check.py).

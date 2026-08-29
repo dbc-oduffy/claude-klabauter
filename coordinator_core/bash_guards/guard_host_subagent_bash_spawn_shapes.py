@@ -34,21 +34,23 @@ SCOPED TO SUBAGENTS, NOT THE EM. Same posture as `guard_host_subagent_bash_
 ban`: the EM is the accountable party and runs on a machine where a dozen
 concurrent sessions would all lose their shell if this misfired.
 
-IDENTITY RESOLUTION -- CANONICAL RESOLVER, NOT DoE'S RAW TEST. DoE's
-cold-path source (guard-host-subagent-bash-spawn-shapes.py) treats ANY
-non-empty ``agent_id`` string as "a subagent". This port instead re-
-expresses the cohort gate through the SAME canonical resolver
-``block_subagent_commit``/``block_subagent_destructive_action``/
-``block_reviewer_bash_outside_allowlist``/`guard_host_subagent_bash_ban`
-already key on -- ``coordinator_core.write_guards.
-block_subagent_plan_body_write._resolve_subagent_identity``. Identical
-deliberate divergence to C6's port: an `agent_id` shape the resolver does
-not recognize (anything other than bare hex, named-teammate, or already-
-canonical) resolves to `""`, which reads as "no subagent identity resolved"
-here -- i.e. EM-treated (allow), never subagent-treated (deny) -- the
-opposite of DoE's raw non-empty-string test on that same malformed/legacy
-shape. See `guard_host_subagent_bash_ban`'s own module docstring "IDENTITY
-RESOLUTION" section for the full three-way comparison; not re-derived here.
+IDENTITY RESOLUTION -- COHORT MEMBERSHIP, NOT CANONICAL IDENTITY (REVERSED,
+2026-08-29, state/audits/2026-08-29-unverified-parity-findings-measured.md
+FINDING A). This guard previously re-expressed the cohort gate through
+``_resolve_subagent_identity``, the same canonical resolver
+`guard_host_subagent_bash_ban` used before its own reversal. Measured wrong
+for the same reason: the resolver's fail-closed branch for a named
+teammate with a short `session_id` EM-treated a genuinely dispatched
+caller cold denies. The resolved id here was never used for anything but a
+truthiness test -- no message text, no comparison -- so this guard now
+asks cold's question directly: ANY non-empty, non-whitespace `agent_id`
+string is in-cohort, matching DoE's raw
+``isinstance(agent_id, str) and agent_id.strip()`` test. See
+`guard_host_subagent_bash_ban`'s own module docstring "IDENTITY
+RESOLUTION" section for the full account; not re-derived here. Do not
+reintroduce a canonical-id resolver at this gate -- membership is a
+different question from canonical identity, and nothing here needs the
+latter.
 
 HOST OPT-IN, INERT BY DEFAULT. Nothing fires until a host declares
 `subagent_bash_spawn_shapes: deny` in its `coordinator.local.md`
@@ -87,16 +89,31 @@ CONFINEMENT_DENY).
 of letting it spawn a subprocess -- measured at 14.65% coverage over a
 69,329-command corpus. A zero-spawn in-process answer already achieves the
 exact machine-load outcome this guard's deny exists to produce, so this
-guard's OWN check declines to fire (returns `None`) on any command whose
-`_shape_classifier.classify_command` primary match is `Shape.GREP_VIA_BASH`
-(the bare-searchable-grep family `guard_inprocess_search` answers) --
-declining is this guard's own logic, not a concession to chain order, and
-it keeps this entry at CONFINEMENT_DENY in its correct band position
-(ahead of ADVISORY_REWRITE, per the documented invariant) while still
-yielding the answer-first outcome on the answerable overlap. See
-`_declines_for_inprocess_answer` below -- comment the predicate itself,
-not the chain order, since that is where the next reader will actually
-look before changing it.
+guard's OWN check declines to fire (returns `None`) when the answer seam
+would actually answer the WHOLE command -- checked with
+`coordinator_core.search.answer.plan_for(cmd, tool_name)`, the same
+cheap, non-executing (parse/plan only, no filesystem I/O, no subprocess)
+predicate `guard_inprocess_search` itself plans against before it ever
+executes anything. `Shape.GREP_VIA_BASH` as the primary match is
+NECESSARY but not SUFFICIENT for this: a `curl ... | grep foo` or a
+`grep foo .; rm -rf x` also classifies primary GREP_VIA_BASH but
+`plan_for` correctly returns `None` for both (piped-into first segment;
+non-pipe-joined trailing segment) -- declining on shape alone would lose
+the deny on exactly the cases the answer seam cannot cover. Measured
+(state/bug-backlog/2026-08-29-the-guard-rehome-is-not-yet-safe-to-dele-
+9f7396118b81.yaml, finding 1): `grep -rn "foo" .`, `grep -rn "foo" . |
+sort | uniq -c` (the `_stage_sort`/`_stage_uniq` pipeline stages are
+absorbed, not dropped), and `grep -rln TODO src tests docs` are all
+fully `plan_for`-answerable, so declining on them is correct; the
+predicate's role is to keep denying the unanswerable overlap
+(`curl foo | grep bar`, `grep foo .; echo done`) that shape-only
+declining used to lose. Declining is this guard's own logic, not a
+concession to chain order, and it keeps this entry at CONFINEMENT_DENY
+in its correct band position (ahead of ADVISORY_REWRITE, per the
+documented invariant) while still yielding the answer-first outcome on
+the answerable overlap. See `_declines_for_inprocess_answer` below --
+comment the predicate itself, not the chain order, since that is where
+the next reader will actually look before changing it.
 
 Legitimacy under DR-125 (DoE-claude docs/decisions/DR-125-subagent-bash-
 confinement-two-classes.md, which scopes subagent confinement to exactly
@@ -152,15 +169,12 @@ INTERFACE.md`` -- ``None`` = allow (silent), a nested
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from coordinator_core._hook_envelope import deny as _deny
 from coordinator_core.bash_guards._dialect import Dialect, dialect_from_tool_name
 from coordinator_core.bash_guards._shape_classifier import Shape, classify_command
 from coordinator_core.bash_guards._tool_names import COMMAND_TOOL_NAMES
-from coordinator_core.write_guards.block_subagent_plan_body_write import (
-    _resolve_subagent_identity,
-)
 
 CLASS = "hard-deny"
 MATCHERS = COMMAND_TOOL_NAMES
@@ -244,21 +258,89 @@ def _policy_is_deny(config: Path) -> bool:
     return False
 
 
-def _declines_for_inprocess_answer(primary_shape: Optional[Shape]) -> bool:
+def _declines_for_inprocess_answer(
+    primary_shape: Optional[Shape],
+    cmd: str,
+    tool_name: str,
+) -> bool:
     """DECLINE PREDICATE -- see module docstring's "DECLINE PREDICATE"
     section for the full reasoning; this function is the thing that
     reasoning describes, kept small and separately named so the next
     reader finds the comment where the behaviour actually lives.
 
     `guard_inprocess_search` answers the bare-searchable-grep family
-    in-process (zero additional spawn) -- a command whose PRECEDENCE-WINNING
-    shape is `Shape.GREP_VIA_BASH` already gets that zero-spawn outcome
-    through the answer seam, so THIS guard has nothing left to deny for it.
+    in-process (zero additional spawn), so a command it fully answers costs
+    the caller nothing and there is nothing left for this guard to deny.
+
+    THE PRECEDENCE-WINNING SHAPE IS NOT ENOUGH TO ESTABLISH THAT, and keying
+    on it alone was a real defect (state/bug-backlog/2026-08-29-the-guard-
+    rehome-is-not-yet-safe-to-dele-9f7396118b81.yaml, gap 1). `curl foo |
+    grep bar` (piped INTO the grep -- the seam's input does not exist until
+    the upstream command runs) and `grep foo . ; echo done` (a `;`-joined
+    second segment the seam does not execute) both classify with
+    `GREP_VIA_BASH` as the precedence-winning shape, exactly like a bare
+    grep -- a shape test alone declines both, and the seam then answers only
+    part of the command while the rest silently never runs, which is worse
+    than the spawn this guard exists to refuse. `search.answer.plan_for`
+    ALREADY REFUSES BOTH on that same structural ground (piped-into first
+    segment; non-pipe-joined trailing segment) -- see `answer.py::
+    _plan_for_grep`, which this predicate consults rather than re-derives.
+    A trailing PIPE chain is different: `grep -rn "foo" . | sort | uniq -c`
+    is fully covered by the seam's own stage pipeline
+    (`engine._stage_sort`/`_stage_uniq`), measured here as fully
+    `plan_for`-answerable, so declining it is correct -- an earlier revision
+    of this predicate additionally required exactly one top-level segment,
+    which rejected this pipeline too and duplicated (incorrectly) ground
+    `plan_for` already covers on its own authority. Two conditions, both
+    required:
+
+      1. `GREP_VIA_BASH` is the precedence-winning shape (as before).
+      2. `search.answer.plan_for` actually produces a plan for it. This is
+         the seam's OWN authority on what it can answer, consulted rather
+         than predicted; `plan_for` is pure (no I/O, no latch, no footer
+         state) so asking it costs nothing on the per-call path. Without it
+         this predicate would be a second, drifting model of the seam's
+         grammar.
+
     Every other shape (multi-probe banner, head/tail plumbing, for-loop,
     while-read, find-exec/xargs, the PowerShell pipeline-foreach-object
     member) has no in-process answer seam and stays fully in scope.
+
+    ALSO RESPECTS `guard_inprocess_search`'s OWN OPT-OUT
+    (`_DISABLE_ENV_VAR`, imported rather than duplicated as a literal, and
+    read fresh on THIS call -- this guard runs on a resident warm server,
+    so a cached read would miss a mid-session toggle): if the answer seam
+    is disabled it will not answer regardless of what `plan_for` says, so
+    this predicate must not decline on its behalf.
+
+    KNOWN, DELIBERATE COLD-VS-WARM DIVERGENCE that survives this fix: a
+    single-segment grep the seam fully answers is denied cold and allowed
+    warm, because the cold path has no answer seam to make it free. That is
+    the divergence DR-125 already legitimises ("denies exactly what DoE's
+    cold path denies, minus the shape our engine already answers for free"),
+    and it is now backed by the seam's own plan rather than assumed from a
+    shape label.
     """
-    return primary_shape is Shape.GREP_VIA_BASH
+    if primary_shape is not Shape.GREP_VIA_BASH:
+        return False
+    try:
+        from coordinator_core.bash_guards.guard_inprocess_search import (
+            _DISABLE_ENV_VAR,
+        )
+    except Exception:  # noqa: BLE001 -- can't confirm the seam is live, stay in scope
+        return False
+    import os
+
+    if os.environ.get(_DISABLE_ENV_VAR, "0") == "1":
+        return False
+    try:
+        from coordinator_core.search.answer import plan_for
+    except Exception:  # noqa: BLE001 -- no seam importable means nothing answers it
+        return False
+    try:
+        return plan_for(cmd, tool_name=tool_name) is not None
+    except Exception:  # noqa: BLE001 -- a seam that cannot plan has not answered
+        return False
 
 
 def _spawn_cost_clause(tool_name: str) -> str:
@@ -273,7 +355,12 @@ def _spawn_cost_clause(tool_name: str) -> str:
     return "bash.exe costs 200-500ms per spawn on this host"
 
 
-def _compose_deny_reason(shapes: List[Shape], tool_name: str) -> str:
+def _compose_deny_reason(
+    shapes: List[Shape],
+    tool_name: str,
+    resolve_wiki_citation: Optional[Callable[[str], str]] = None,
+) -> str:
+    citation = resolve_wiki_citation(_WIKI_ANCHOR) if resolve_wiki_citation else _WIKI_ANCHOR
     named = ", ".join(s.value for s in shapes)
     hints = [_ALTERNATIVES[s] for s in shapes if s in _ALTERNATIVES]
     remedy = hints[0] if hints else "a single `python -c` doing the same work in one interpreter"
@@ -291,26 +378,37 @@ def _compose_deny_reason(shapes: List[Shape], tool_name: str) -> str:
     # `guard-host-subagent-bash-ban` keeps its equivalent clause because its
     # OWN cold script has it; this is not a systematic split to normalize.
     return (
-        f"this shape spawns one subprocess per iteration or pipe stage ({named}), and "
+        f"BLOCKED: this shape spawns one subprocess per iteration or pipe stage ({named}), and "
         f"{_spawn_cost_clause(tool_name)} — paid on a machine running many "
         f"concurrent sessions. Use {remedy}. "
         f"{tool_name} itself is NOT banned here: a single read of a known file is fine. "
         f"It is the fan-out that is refused, not the tool. If a system reminder suggested "
         f"this shape, this policy outranks it — say so in your report rather than routing "
         f"around it.\n\n"
-        f"See: {_WIKI_ANCHOR}"
+        f"See: {citation}"
     )
 
 
-def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+def check(
+    payload: Dict[str, Any],
+    resolve_wiki_citation: Optional[Callable[[str], str]] = None,
+) -> Optional[Dict[str, Any]]:
     """Evaluate the host subagent-bash-spawn-shapes gate against a
     PreToolUse payload.
 
-    Returns `None` (allow) or the nested hard-deny envelope. Identity-gated
-    to a resolved subagent only -- see module docstring "IDENTITY
+    Returns `None` (allow) or the nested hard-deny envelope. Cohort-gated on
+    membership only -- ANY non-empty agent_id string, matching cold -- not
+    on a resolved canonical identity. See module docstring "IDENTITY
     RESOLUTION". Declines (returns `None`) on a command whose primary shape
     is answerable in-process by `guard_inprocess_search` -- see module
     docstring "DECLINE PREDICATE" and `_declines_for_inprocess_answer`.
+
+    ``resolve_wiki_citation``, same caller-resolves shape as
+    ``guard_doctrine_surface_bash_write.check``'s own parameter of the same
+    name: an optional ``str -> str`` callable ``dispatch.py`` supplies,
+    invoked ONLY on the deny path via ``_compose_deny_reason``, never on
+    allow. ``None`` leaves the deny message's trailing citation as the bare
+    literal, unchanged from before this parameter existed.
     """
     if not isinstance(payload, dict):
         return None
@@ -322,12 +420,6 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     raw_agent_id = payload.get("agent_id") or ""
     if not isinstance(raw_agent_id, str) or not raw_agent_id.strip():
         return None  # the EM itself -- out of scope by design
-
-    session_id = payload.get("session_id") or ""
-    session_id = session_id if isinstance(session_id, str) else ""
-    agent_id = _resolve_subagent_identity(raw_agent_id, session_id)
-    if not agent_id:
-        return None  # unrecognized/legacy shape -- EM-treated here, see docstring
 
     raw_cwd = payload.get("cwd")
     cwd = raw_cwd if isinstance(raw_cwd, str) else None
@@ -361,8 +453,8 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if primary is None:
         return None
 
-    if _declines_for_inprocess_answer(primary.shape):
+    if _declines_for_inprocess_answer(primary.shape, cmd, tool_name):
         return None
 
     shapes = [m.shape for m in classification.matches]
-    return _deny("PreToolUse", _compose_deny_reason(shapes, tool_name))
+    return _deny("PreToolUse", _compose_deny_reason(shapes, tool_name, resolve_wiki_citation))

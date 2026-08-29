@@ -45,7 +45,7 @@ next step. To reproduce that exactly across two independently-invoked
 modules, ``_first_result()`` below re-walks the ENTIRE sequence and returns
 the (shape, message) of the FIRST step that fires, or ``None`` if nothing
 does. This module returns a DENY envelope only when that first hit is
-shape=="deny" (always one of the four unconditional findings above); for a
+shape=="deny" (always one of the five unconditional findings above); for a
 shape=="advisory" first hit it returns an ADVISORY envelope of its own only
 under ``COORDINATOR_SCHEMA_STRICT=1`` (exactly when the advisory sibling is
 standing down for that same finding), and ``None`` otherwise. The advisory
@@ -57,15 +57,18 @@ non-firing step must fall through to the NEXT step exactly as the source's
 
 What this leg covers
 ---------------------
-- The four unconditional (never strict-gated, never downgraded by the
+- The five unconditional (never strict-gated, never downgraded by the
   2026-08-06 warn-not-block ruling) denies: the own-inbox misplacement guard
   (an outbound memo, ``from`` == this repo and ``to`` != this repo, landing
   in this repo's OWN ``cross-repo/inbox/``); the C2 lineage-reachability
   hard-reject (predecessor/forked_from/additional_predecessors[]/
   origin_handoff resolving to nothing live, archived, or in git history);
   the grouping-approval scope-cut contract (closing a task-spine row under a
-  still-pending PM grouping approval); and the D3 out-of-enum handoff
-  ``kind`` contract (scoped to ``state/handoffs/**`` only).
+  still-pending PM grouping approval); the D3 out-of-enum handoff ``kind``
+  contract (scoped to ``state/handoffs/**`` only); and the queue-deferral
+  grant contract (2026-08-27-a-queue-deferral-is-a-grant-the-pm-issues.md
+  C4 — an ungranted ``status: deferred`` on a
+  ``state/{improvement-queue,debt-backlog,bug-backlog}/**`` record).
 - Every other branch is now always-"advisory" (2026-08-06 ruling): the
   mislocated-memo / free-form-header offer, the routing-mismatch offer, the
   new-file scaffold offer, and a schema-shape validation failure. This
@@ -144,6 +147,7 @@ from coordinator_core.frontmatter.schema_validate import (
     parse_frontmatter as _parse_frontmatter,
     parse_yaml as _parse_yaml,
     validate_frontmatter_obj as _validate_frontmatter_obj,
+    _is_parseable_iso_date as _is_parseable_iso_date,
 )
 
 CLASS = "hard-deny"
@@ -1113,6 +1117,185 @@ def _evaluate_grouping_approval(prospective_content: str, repo_rel: str) -> Opti
     )
 
 
+# Fifth UNCONDITIONAL deny (this plan's own row, C4) — see module docstring
+# extension below. Path-keyed, exactly like the grouping-approval branch
+# above and the reasons in its NEGATIVE SPEC comment: this must key on
+# CONTENT (path + `status: deferred`), never on `schema_name`, so a corpus
+# repoint or a re-vendor cannot silently switch this unconditional deny off.
+_QUEUE_FAMILY_DIRS = ("improvement-queue", "debt-backlog", "bug-backlog")
+_QUEUE_FAMILY_PATH_RE = re.compile(
+    r"^state/(?:" + "|".join(_QUEUE_FAMILY_DIRS) + r")/"
+)
+
+
+def _is_queue_family_path(repo_rel: str) -> bool:
+    return bool(_QUEUE_FAMILY_PATH_RE.match(repo_rel.replace("\\", "/")))
+
+
+def _queue_deferral_grant_message(reason: str) -> str:
+    # Message register (docs/wiki/guard-messaging.md § Register): one fact,
+    # once, plus the terse alternative. Names ONLY the absent grant this
+    # evaluator found — never unrelated fields from `schema_message`'s own
+    # (advisory-only) finding on the same payload, per eng-director finding 3.
+    return (
+        f"A queue deferral is a grant the PM issues, not a status an agent "
+        f"types: {reason}. Acquire the grant, then re-write."
+    )
+
+
+def _queue_record_fields(
+    frontmatter: Optional[dict], prospective_content: str
+) -> Optional[dict]:
+    """The queue record's own fields, however the file carries them.
+
+    THE ONE THING THAT MADE THIS DENY A SILENT NO-OP. Queue records are BARE
+    YAML documents — `state/{improvement-queue,debt-backlog,bug-backlog}/*.yaml`
+    has no `---` fence — and their schemas declare `match_mode:
+    "whole-document-yaml"`, so `_evaluate_schema_validation` parses
+    `prospective_content` for them and never reads `frontmatter` at all.
+    `parse_frontmatter` returns None for any content not starting with `---`,
+    so the `frontmatter` argument is not merely often None for this file class,
+    it is STRUCTURALLY ALWAYS None. An evaluator keyed on it therefore returns
+    at its first guard on every record it exists to guard, while passing every
+    unit test that hands it a dict directly.
+
+    Caught by the plan's own falsifier, which reported WARNED ONLY at a HEAD
+    where the deny was fully written, correctly ordered, and covered by green
+    tests — the "correctly-written arm that never executes" failure this plan's
+    own predecessor handoff recorded as a lesson, reproduced one chunk later.
+    That is what the falsifier is for, and it is why an executable falsifier
+    outranks a passing suite as delivery evidence.
+
+    Resolves the same way `_evaluate_schema_validation` does, so the deny and
+    the schema layer can never disagree about what the record says: real
+    frontmatter when the file has a fence, else the whole document parsed as
+    YAML. Fails open to None on anything unparseable.
+    """
+    if frontmatter:
+        return frontmatter
+    try:
+        parsed = _parse_yaml(prospective_content)
+    except Exception:  # noqa: BLE001 — fail-open, matching every sibling evaluator
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def _is_doe_owned_repo(repo_root: str) -> bool:
+    """True when `repo_root` is DoE-claude's own checkout.
+
+    THE QUEUE-DEFERRAL DENY IS CLAUDE-KLABAUTER-SCOPED BY AGREEMENT, and unlike C3's
+    cross-field rule this one is a WRITE GUARD keyed on path pattern plus
+    content — nothing about `state/debt-backlog/**` says whose repo it is. The
+    guard runs from claude-klabauter's engine but fires in whatever session invokes the
+    shared hook chain, so without this check a `/debt-triage` Step 6b class 4
+    park in DoE's own tree is HARD-BLOCKED by claude-klabauter's rule.
+
+    Measured 2026-08-29, not supposed: driving `check()` with a ceremony park
+    written into `X:/DoE-claude/state/debt-backlog/` — `pm_approved`,
+    `deferred_by: /debt-triage <session-id>`, `deferred_until`, `why_blocked`,
+    exactly as their `SKILL.md:148-150` writes one — returned a deny on the
+    absent `case_against`, which their ceremony does not stamp. That is Queue
+    Terminus outcome class 4 refused in a sibling repo by this repo's rule: the
+    precise harm this chunk's own `external_gate` was raised to prevent, and it
+    would have shipped while that gate was certified discharged. C3's scoping
+    fix did not cover it, because C3 scopes on SCHEMA provenance and a write
+    guard never consults a schema path.
+
+    Fail-safe direction is deliberate: any failure to resolve DoE's root answers
+    False, so the deny keeps firing on claude-klabauter's own corpus. The failure mode of
+    a wrong answer here is a rule that under-enforces at home, never one that
+    reaches into a sibling.
+    """
+    try:
+        doe_root = coordinator_doe_root()
+        if not doe_root:
+            return False
+        return Path(repo_root).resolve() == Path(str(doe_root)).resolve()
+    except Exception:  # noqa: BLE001 — fail-safe: keep enforcing locally
+        return False
+
+
+def _evaluate_queue_deferral_grant(
+    frontmatter: Optional[dict],
+    repo_rel: str,
+    payload: Optional[Dict[str, Any]],
+    prospective_content: str = "",
+    repo_root: str = "",
+) -> Optional[str]:
+    """Violation MESSAGE when a prospective write to a queue-family record
+    (``state/{improvement-queue,debt-backlog,bug-backlog}/**``) sets
+    ``status: deferred`` without a genuine PM-issued grant, else ``None``.
+
+    OWN INDEPENDENT EVALUATOR (dispatch brief, eng-director finding 3,
+    major, accepted) — this reimplements the truthiness floor directly
+    against ``frontmatter`` rather than calling
+    ``schema_validate._cf_queue_disposition_shape`` (C3's cross-field rule).
+    That rule runs inside ``_evaluate_schema_validation`` and its finding
+    surfaces only through the terminal always-"advisory" ``schema_message``
+    branch (2026-08-06 C15 ruling) — the one leg denying off of it would
+    have silently re-classified as a deny, wrongly, since ``schema_message``
+    can also fire for unrelated field errors on the SAME payload and this
+    deny's message must name only the absent grant, never those. Keeping
+    this evaluator independent, ordered before `schema_message`, is what
+    keeps the two from ever describing each other's finding.
+
+    Truthiness floor (mirrors `_cf_queue_disposition_shape` field-for-field,
+    intentionally NOT shared code — see above): `pm_approved` must be the
+    literal boolean `true`; `case_against` non-blank; `deferred_until` a
+    parseable ISO-8601 date; `deferred_by` non-blank.
+
+    THE SELF-GRANT DISCRIMINATOR (co-located here per eng-director finding
+    6, major, accepted — `schema_validate.py` cannot host it: no
+    authoring/agent/session property lives on any of the three schemas, and
+    DoE's file-path import forbids an ambient session dependency). A floor,
+    not a proof: a determined author can still write any string into
+    `deferred_by`. Refuses only when `deferred_by` literally equals the
+    firing payload's own `session_id` — the field's own schema description
+    (see the three vendored queue schemas) already states `deferred_by`
+    names the GRANTOR, never the requester.
+
+    Fails OPEN on a missing/unparseable payload session id (never a false
+    positive from an absent signal) and on any non-queue-family path or
+    non-``deferred`` status (somebody else's surface).
+    """
+    if not _is_queue_family_path(repo_rel):
+        return None
+    if repo_root and _is_doe_owned_repo(repo_root):
+        return None  # sibling repo's corpus — see `_is_doe_owned_repo`
+    frontmatter = _queue_record_fields(frontmatter, prospective_content)
+    if not frontmatter:
+        return None
+    if frontmatter.get("status") != "deferred":
+        return None
+
+    if frontmatter.get("pm_approved") is not True:
+        return _queue_deferral_grant_message(
+            f"pm_approved must be the literal boolean true (got {frontmatter.get('pm_approved')!r})"
+        )
+
+    case_against = frontmatter.get("case_against")
+    if case_against is None or not str(case_against).strip():
+        return _queue_deferral_grant_message("case_against is missing or blank")
+
+    deferred_until = frontmatter.get("deferred_until")
+    if not _is_parseable_iso_date(deferred_until):
+        return _queue_deferral_grant_message(
+            f"deferred_until is not a parseable ISO date (got {deferred_until!r})"
+        )
+
+    deferred_by = frontmatter.get("deferred_by")
+    if deferred_by is None or not str(deferred_by).strip():
+        return _queue_deferral_grant_message("deferred_by is missing or blank")
+
+    session_id = ((payload or {}).get("session_id") or "").strip()
+    if session_id and str(deferred_by).strip() == session_id:
+        return _queue_deferral_grant_message(
+            "deferred_by names the authoring session itself, not a PM grantor"
+        )
+
+    return None
+
+
 _HANDOFF_KIND_SCHEMA_NAME = "handoff"
 
 
@@ -1203,6 +1386,7 @@ def _reachability_and_schema_step(
     repo_root: str,
     abs_file_path: str,
     schemas: Dict[str, Any],
+    payload: Optional[Dict[str, Any]] = None,
 ) -> Optional[Tuple[str, str]]:
     # Computed but not yet emitted — mirrors source docstring point 9.
     schema_message = _evaluate_schema_validation(
@@ -1264,6 +1448,18 @@ def _reachability_and_schema_step(
     grouping_message = _evaluate_grouping_approval(prospective_content, repo_rel)
     if grouping_message is not None:
         return ("deny", grouping_message)
+
+    # Fifth UNCONDITIONAL deny (this plan's own row, C4): an ungranted
+    # `status: deferred` on a queue-family record. Computed alongside
+    # `_evaluate_grouping_approval` above (own independent evaluator, never
+    # a `schema_message` re-classification — see `_evaluate_queue_deferral_
+    # grant`'s own docstring) and returned BEFORE the always-"advisory"
+    # `schema_message` branch below, exactly like the other four.
+    queue_deferral_message = _evaluate_queue_deferral_grant(
+        frontmatter, repo_rel, payload, prospective_content, repo_root
+    )
+    if queue_deferral_message is not None:
+        return ("deny", queue_deferral_message)
 
     # Fourth UNCONDITIONAL deny (2026-07-29 D3 out-of-enum handoff `kind`
     # contract), alongside own-inbox, lineage-reachability, and
@@ -1386,7 +1582,7 @@ def _first_result(
     # write. See `check()` for the companion rule this enables: a write
     # whose repo_root differs from the session's OWN repo is a cross-repo
     # write, and gets ADVISORY-ONLY treatment there — never a deny, whatever
-    # the finding class (DR-277) — even for the four findings that deny
+    # the finding class (DR-277) — even for the five findings that deny
     # unconditionally in-repo. In-repo callers (repo_root == session repo)
     # are unaffected: the resolved root is identical either way.
     target_dir = os.path.dirname(abs_file_path) or cwd
@@ -1503,7 +1699,8 @@ def _first_result(
         return scaffold_result
 
     return _reachability_and_schema_step(
-        schema_name, schema, frontmatter, prospective_content, repo_rel, repo_root, abs_file_path, schemas
+        schema_name, schema, frontmatter, prospective_content, repo_rel, repo_root, abs_file_path, schemas,
+        payload=payload,
     )
 
 
@@ -1652,18 +1849,19 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     unvalidated on a cross-repo write. Making that write reachable does NOT
     make it denyable: a write whose resolved `repo_root` differs from the
     session's OWN repo (`forensics["is_cross_repo_write"]`) gets ADVISORY-ONLY
-    treatment below, whatever the finding class — including the four findings
+    treatment below, whatever the finding class — including the five findings
     that deny unconditionally in-repo. This is DR-277 (guards are advisory by
     default) applied deliberately, not a hardening: a sibling guard's hardness
     on another tool surface (here, this module's own in-repo behavior) is not
     grounds for hardening the cross-repo case too. In-repo behavior
     (`is_cross_repo_write` False) is BYTE-IDENTICAL to before this fix.
 
-    Returns a hard-deny envelope only for the four genuinely-UNCONDITIONAL
+    Returns a hard-deny envelope only for the five genuinely-UNCONDITIONAL
     findings (own-inbox misplacement, lineage-reachability, grouping-approval
-    scope cut, out-of-enum handoff `kind` — see the four "UNCONDITIONAL deny"
-    call sites in `_reachability_and_schema_step` and `_memo_guard_step`'s
-    own-inbox branch), none of which are gated on `COORDINATOR_SCHEMA_STRICT`
+    scope cut, out-of-enum handoff `kind`, ungranted queue-deferral — see the
+    five "UNCONDITIONAL deny" call sites in `_reachability_and_schema_step`
+    and `_memo_guard_step`'s own-inbox branch), none of which are gated on
+    `COORDINATOR_SCHEMA_STRICT`
     at all, and ONLY for an in-repo target. Every other first-firing step is
     shape=="advisory" (2026-08-06 PM ruling: a schema-shaped violation warns,
     never hard-blocks — see this module's docstring). In default (non-strict)
@@ -1720,9 +1918,10 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             # DR-277 advisory-by-default (docs/decisions/DR-277-guards-are-
             # advisory-by-default-two-named.md): a target outside the
             # session's OWN repo never denies here, whatever the finding
-            # class — including the four findings that deny unconditionally
+            # class — including the five findings that deny unconditionally
             # in-repo (own-inbox misplacement, lineage-reachability,
-            # grouping-approval scope cut, out-of-enum handoff `kind`). This
+            # grouping-approval scope cut, out-of-enum handoff `kind`,
+            # ungranted queue-deferral). This
             # is closing the cwd-vs-target blindness (`_first_result`) into
             # a WARNING, not a new hard-block surface: cross-surface parity
             # with the in-repo deny is explicitly not grounds for hardening

@@ -73,12 +73,14 @@ from pathlib import Path
 import pytest
 
 from coordinator_core.distill import delete_guard
+from coordinator_core.distill._common import active_reference_guard
 from coordinator_core.frontmatter.primitives import serialize_yaml_scalar
 from coordinator_core.distill.delete_guard import (
     DeleteCandidate,
     check_active_reference,
     check_commitment_closure,
     check_distill_fate,
+    check_harvest_provenance,
     check_realized_by,
     check_shipped_in,
     check_status_actioned,
@@ -899,8 +901,95 @@ def test_evaluate_candidate_needle_is_forward_slash_not_native_separator(tmp_pat
 
     candidate = DeleteCandidate(path=handoff, repo_root=tmp_path, basis_refs=())
     outcome = evaluate_candidate(candidate)
-    assert "active-reference" in outcome["blocked_by"]
-    assert outcome["eligible"] is False
+    # Asserting the full set, not just membership: `eligible is False` would be satisfied by
+    # the other two guards even under the mutation this test exists to catch, so it would
+    # read as coverage while carrying no signal.
+    assert set(outcome["blocked_by"]) == {
+        "active-reference",
+        "commitment-closure",
+        "distill-fate",
+    }
+
+
+def test_evaluate_candidate_needle_shape_is_posix_on_every_platform(monkeypatch, tmp_path: Path):
+    # Platform-independent companion to the end-to-end test above. That one can only go red
+    # where os.sep != '/', which is correct for the defect (fail-OPEN is Windows-only) but
+    # leaves the fleet floor -- a MacBook, per CLAUDE.md -- with no signal: a contributor on
+    # macOS could land the native-separator regression on a fully green suite. This asserts
+    # the needle's SHAPE at the seam instead of a downstream guard outcome, so it is red on
+    # every platform. Keep both: this pins the string, the other pins the wire path.
+    candidate_dir = tmp_path / "cross-repo" / "archive"
+    candidate_dir.mkdir(parents=True)
+    handoff = candidate_dir / "candidate.md"
+    handoff.write_text(
+        "---\nshipped_in: 68b27420\nstatus: actioned\nrealized_by: inline\n---\nbody\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "docs").mkdir()
+
+    seen: list[str] = []
+
+    def _capture(needle, repo_root, **kwargs):
+        seen.append(needle)
+        return False
+
+    monkeypatch.setattr(delete_guard, "active_reference_guard", _capture)
+    candidate = DeleteCandidate(path=handoff, repo_root=tmp_path, basis_refs=())
+    evaluate_candidate(candidate)
+
+    assert "cross-repo/archive/candidate.md" in seen
+    assert not any("\\" in needle for needle in seen)
+
+
+# ---------------------------------------------------------------------------
+# Guard 3 / Guard 7 read the SAME provenance block two opposite ways
+#
+# Guard 3 (active-reference) excludes it: a tombstone is not a dependency, so the artifact
+# is deletable. Guard 7 (harvest-provenance) REQUIRES it: a tombstone is proof the content
+# reached a durable location. Both readings must be implemented; when Guard 7 silently
+# inherited Guard 3's exclusion through their shared callee, it lost its own evidence and
+# the DR-111 self-pinning defect relocated from one guard to the other for the `commitment`
+# class (fail-closed -- permanently undeletable, not wrongly deleted).
+# ---------------------------------------------------------------------------
+
+@_requires_rg
+def test_guard7_counts_provenance_block_as_durable_capture_proof(tmp_path: Path):
+    wiki = tmp_path / "docs" / "wiki"
+    wiki.mkdir(parents=True)
+    (wiki / "guide.md").write_text(
+        "---\n"
+        "archived_handoff:\n"
+        "  - path: archive/handoffs/old-thing.md\n"
+        "    workstream: foo\n"
+        "---\n"
+        "the harvested content lives here now\n",
+        encoding="utf-8",
+    )
+    candidate = tmp_path / "archive" / "handoffs" / "old-thing.md"
+    candidate.parent.mkdir(parents=True)
+    candidate.write_text("body\n", encoding="utf-8")
+
+    result = check_harvest_provenance("distill_fate: commitment", candidate, tmp_path)
+    assert result.passed is True
+
+
+@_requires_rg
+def test_guard3_excludes_the_same_block_guard7_requires(tmp_path: Path):
+    # The other half of the invariant, over an identical corpus: what Guard 7 reads as proof,
+    # Guard 3 must read as a tombstone. If a change ever makes these two agree, one of them
+    # is wrong -- and which one depends on which direction they agreed in.
+    wiki = tmp_path / "docs" / "wiki"
+    wiki.mkdir(parents=True)
+    (wiki / "guide.md").write_text(
+        "---\n"
+        "archived_handoff:\n"
+        "  - path: archive/handoffs/old-thing.md\n"
+        "    workstream: foo\n"
+        "---\n"
+        "the harvested content lives here now\n",
+        encoding="utf-8",
+    )
+    assert active_reference_guard("archive/handoffs/old-thing.md", tmp_path) is False
 
 
 @_requires_rg

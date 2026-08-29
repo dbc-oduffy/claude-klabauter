@@ -117,6 +117,11 @@ def __getattr__(name: str):
 
 
 def _no_console_creationflags() -> dict:
+    import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
+    import cc_invoke
+
+    cc_invoke.ensure_engine_on_path(__file__)
+
     try:
         from coordinator_core.win_portability import (
             no_console_creationflags as _impl,

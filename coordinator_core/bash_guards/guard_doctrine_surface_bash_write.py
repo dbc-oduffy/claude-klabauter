@@ -157,7 +157,7 @@ doctrine-cut-and-refill-gate.md § C7a (DoE-claude)
 from __future__ import annotations
 
 import re
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from coordinator_core.bash_guards._tool_names import COMMAND_TOOL_NAMES
 
@@ -167,11 +167,15 @@ PRIORITY = 41
 
 #: Relocated deny-reason explanation on DoE's own wiki -- kept as a citation
 #: even though this repo has no local copy of that page, so a reader with
-#: the DoE-claude plugin installed can still resolve it. Deliberately a bare
-#: repo-relative literal (never resolved to an absolute path the way DoE's
-#: own ``_message_envelope.render`` would): this port carries no wiki-anchor
-#: resolution machinery of its own, and a wrong absolute-path guess would be
-#: worse than an unresolved relative one.
+#: the DoE-claude plugin installed can still resolve it. This module itself
+#: carries no wiki-anchor resolution machinery (see ``check()``'s own
+#: ``resolve_wiki_citation`` parameter docstring): the CALLER
+#: (``dispatch.py``'s ``resolve_doctrine_surface_wiki_citation``) resolves
+#: this literal into an absolute path off that call's own ``plugin_root``,
+#: on the deny path only, falling back to this bare repo-relative literal
+#: unchanged whenever resolution is unavailable or declined -- never a wrong
+#: absolute-path guess (state/audits/2026-08-29-unverified-parity-findings-
+#: measured.md FINDING B).
 _WIKI_ANCHOR = (
     "coordinator/docs/wiki/guard-message-concision.md"
     "#doctrine-surface-bash-write-guard-carve-outs-and-remedies"
@@ -696,6 +700,92 @@ def _has_var_assignment_indirection(
     return False
 
 
+_ASSIGN_NAME_RE = re.compile(r"^\s*([A-Za-z_][A-Za-z0-9_]*)=")
+_VAR_DEREF_RE = re.compile(r"\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?")
+
+
+def _governed_bound_variables(
+    segments: "list[str]", identifiers_lower: Tuple[str, ...]
+) -> "set[str]":
+    """Variable names bound to a governed path, following aliases.
+
+    ``p=<governed>`` binds ``p`` directly; ``q=$p`` then binds ``q`` too. The
+    fixed-point loop is bounded (an alias chain longer than the segment count
+    cannot exist) so a pathological command cannot spin here."""
+    bound: "set[str]" = set()
+    for _ in range(len(segments) + 1):
+        changed = False
+        for segment in segments:
+            match = _ASSIGN_NAME_RE.match(segment)
+            if not match:
+                continue
+            name = match.group(1)
+            if name in bound:
+                continue
+            value = segment[match.end():]
+            if _mentions_governed_identifier(segment, identifiers_lower) or any(
+                deref in bound for deref in _VAR_DEREF_RE.findall(value)
+            ):
+                bound.add(name)
+                changed = True
+        if not changed:
+            break
+    return bound
+
+
+def _assignment_indirection_reaches_a_write(
+    segments: "list[str]", identifiers_lower: Tuple[str, ...]
+) -> bool:
+    """Point 4's by-SINK narrowing -- MEASURED FALSE POSITIVE FIX.
+
+    Point 4 denied on "some segment assigns a governed path to a variable"
+    AND "a write marker exists ANYWHERE in the whole command". The second
+    conjunct never asked what the write actually TARGETS, so a command that
+    merely READS the governed file through the variable and writes somewhere
+    unrelated was denied. Reproduced independently by three sessions in one
+    day (2026-08-28), minimal pair, the only difference being the assignment:
+
+        p=<governed> ; cat $p ; echo x > /tmp/probe.txt   -> denied (wrong)
+        cat <governed> ;        echo x > /tmp/probe.txt   -> allowed
+
+    This mirrors, for point 4, exactly the narrowing
+    ``_has_write_marker_for_point3`` already applies to point 3: a REDIRECT
+    counts as evidence of a governed write only when its own target names one
+    -- here, when the target dereferences a variable bound to a governed path
+    (``> $p``, ``> "${p}"``) or names a governed identifier outright.
+
+    FAIL-CLOSED EVERYWHERE ELSE, deliberately. Only the plain-redirect shape
+    is analysable by target token. A segment carrying any OTHER write marker
+    (``tee``, ``cp``/``mv``, ``sed -i``, an interpreter payload, ``xargs``)
+    keeps point 4's original broad behaviour, because this guard cannot
+    cheaply tell ``tee $p`` from ``tee /tmp/x``. Narrowing those needs
+    argument parsing per marker family; it is not attempted here, and a
+    future narrowing must add them one measured family at a time.
+
+    Ported from DoE-claude ``9d1404fa6``; the only divergence is that
+    ``identifiers_lower`` is threaded in per call rather than read off an
+    import-time constant (module docstring, "GOVERNED IDENTIFIER SOURCE")."""
+    bound = _governed_bound_variables(segments, identifiers_lower)
+    for segment in segments:
+        if not _has_write_marker(segment):
+            continue
+        if not _has_redirect_marker(segment):
+            return True  # unanalysable marker family -- fail closed
+        without_redirect = _BARE_REDIRECT_RE.sub(
+            " ", _SAFE_REDIRECT_RE.sub(" ", segment)
+        )
+        if _has_write_marker(without_redirect):
+            return True  # a second, unanalysable marker rides along
+        target = _redirect_target_token(segment)
+        if not target:
+            return True  # cannot resolve the destination -- fail closed
+        if _mentions_governed_identifier(target, identifiers_lower):
+            return True
+        if any(deref in bound for deref in _VAR_DEREF_RE.findall(target)):
+            return True
+    return False
+
+
 def _has_xargs_pipe_indirection(
     segments: "list[str]", identifiers_lower: Tuple[str, ...]
 ) -> bool:
@@ -743,8 +833,11 @@ def is_denied_bash_write(cmd: str, identifiers_lower: Tuple[str, ...]) -> bool:
       (a) some top-level segment mentions a governed identifier AND that
           same segment contains a write or indirection marker (point 3), or
       (b) some segment is a variable assignment whose value mentions a
-          governed identifier, AND the whole command contains a write
-          marker somewhere (point 4).
+          governed identifier, AND some segment's write actually REACHES a
+          governed sink -- a redirect whose own target names a governed
+          identifier or dereferences a variable bound to one, or any write
+          marker family too coarse to analyse by target (point 4, narrowed
+          by ``_assignment_indirection_reaches_a_write``).
 
     ...EXCEPT a segment satisfying the point-7 git carve-out, the point-7
     wrapper-family mirror, the point-9 grant-CLI carve-out, or the point-11
@@ -756,9 +849,9 @@ def is_denied_bash_write(cmd: str, identifiers_lower: Tuple[str, ...]) -> bool:
 
     stripped_cmd = _strip_heredoc_bodies(cmd)
     stripped_segments = _split_top_level_segments(stripped_cmd)
-    if _has_var_assignment_indirection(stripped_segments, identifiers_lower) and _has_write_marker(
-        stripped_cmd
-    ):
+    if _has_var_assignment_indirection(
+        stripped_segments, identifiers_lower
+    ) and _assignment_indirection_reaches_a_write(stripped_segments, identifiers_lower):
         return True
 
     if _has_stdin_program_var_write(cmd, identifiers_lower):
@@ -812,11 +905,28 @@ def _looks_quoted_content_shaped(cmd: str, identifiers_lower: Tuple[str, ...]) -
     )
 
 
-def _compose_deny_message(*, commit_shaped: bool = False, quoted_content_shaped: bool = False) -> str:
+def _compose_deny_message(
+    *,
+    commit_shaped: bool = False,
+    quoted_content_shaped: bool = False,
+    resolve_wiki_citation: Optional[Callable[[str], str]] = None,
+) -> str:
     """Construction-verified equivalent of DoE's ``_compose_deny_message`` +
     ``render()`` pipeline: same three prose shapes, a trailing wiki pointer.
     See module docstring "GOVERNED IDENTIFIER SOURCE" note on ``_WIKI_ANCHOR``
-    for why the anchor is a bare literal here rather than a resolved path."""
+    for why this module carries no resolution machinery of its own.
+
+    ``resolve_wiki_citation``, when given, is called on ``_WIKI_ANCHOR`` HERE
+    -- on the deny path only, since this function is only ever reached once
+    ``check()`` has already decided to deny -- never on the allow path. The
+    caller (``dispatch.py``'s ``resolve_doctrine_surface_wiki_citation``,
+    threaded down from ``check()``'s own ``resolve_wiki_citation`` parameter)
+    owns the resolution logic and its own plugin-root-derived fail-open
+    behaviour; this module only invokes what it is handed, mirroring the
+    ``governed_surfaces`` parameter's own caller-resolves shape. ``None``
+    (the default -- no resolver supplied, or the caller's own resolution
+    missed) leaves ``_WIKI_ANCHOR`` untouched, the pre-existing behaviour."""
+    citation = resolve_wiki_citation(_WIKI_ANCHOR) if resolve_wiki_citation else _WIKI_ANCHOR
     if commit_shaped:
         prose = (
             "BLOCKED: this looks commit-shaped, but a write marker sits "
@@ -834,11 +944,13 @@ def _compose_deny_message(*, commit_shaped: bool = False, quoted_content_shaped:
             "surface. If the real target is one of the four files, use "
             "Write or Edit."
         )
-    return f"{prose}\n\nSee {_WIKI_ANCHOR}."
+    return f"{prose}\n\nSee {citation}."
 
 
 def check(
-    payload: Dict[str, Any], governed_surfaces: Optional[List[str]]
+    payload: Dict[str, Any],
+    governed_surfaces: Optional[List[str]],
+    resolve_wiki_citation: Optional[Callable[[str], str]] = None,
 ) -> Optional[Dict[str, Any]]:
     """Evaluate the doctrine-surface Bash/PowerShell write gate against a
     PreToolUse payload. Returns ``None`` (allow) or the nested hard-deny
@@ -851,6 +963,16 @@ def check(
     ``None`` or an empty list fails OPEN: this guard has nothing to key its
     detection on, mirroring the resolver's own fail-open contract on a
     manifest miss.
+
+    ``resolve_wiki_citation``, same caller-resolves shape as
+    ``governed_surfaces``: an optional ``str -> str`` callable
+    ``dispatch.py`` supplies (``resolve_doctrine_surface_wiki_citation``,
+    bound to that call's own resolved ``plugin_root``), threaded down to
+    ``_compose_deny_message`` and invoked ONLY there -- i.e. only once this
+    function has already decided to deny, never on the allow path. ``None``
+    (no resolver, or the caller's own resolution missed) leaves the deny
+    message's trailing citation as the bare literal, unchanged from before
+    this parameter existed.
 
     Deliberately no try/except here -- fail-CLOSED-on-exception is the
     dispatcher's own job for hard-deny guards.
@@ -875,6 +997,7 @@ def check(
     message = _compose_deny_message(
         commit_shaped=_looks_commit_shaped(cmd),
         quoted_content_shaped=_looks_quoted_content_shaped(cmd, identifiers_lower),
+        resolve_wiki_citation=resolve_wiki_citation,
     )
 
     return {

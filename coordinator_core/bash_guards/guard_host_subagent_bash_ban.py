@@ -44,30 +44,32 @@ misfired. Denying the EM would convert a dispatch-hygiene defect into a
 machine-wide outage. The subagent tell is a resolved, non-empty
 canonical agent id -- see IDENTITY RESOLUTION below.
 
-IDENTITY RESOLUTION -- CANONICAL RESOLVER, NOT DoE's RAW TEST (Review:
-staff-eng, finding 3). DoE's cold-path source (guard-host-subagent-bash-ban.py
-lines 135-137) treats ANY non-empty ``agent_id`` string as "a subagent" --
-``if not isinstance(agent_id, str) or not agent_id.strip(): return 0``. This
-port instead re-expresses the cohort gate through the SAME canonical
-resolver ``block_subagent_commit``/``block_subagent_destructive_action``/
-``block_reviewer_bash_outside_allowlist`` already key on --
-``coordinator_core.write_guards.block_subagent_plan_body_write.
-_resolve_subagent_identity`` (re-exporting ``write_guards._subagent_
-identity._resolve_subagent_identity``) -- rather than importing DoE's raw
-non-empty-string test verbatim.
+IDENTITY RESOLUTION -- COHORT MEMBERSHIP, NOT CANONICAL IDENTITY (REVERSED,
+2026-08-29, state/audits/2026-08-29-unverified-parity-findings-measured.md
+FINDING A). A prior revision of this guard re-expressed the cohort gate
+through ``_resolve_subagent_identity`` -- the SAME canonical resolver
+``block_subagent_commit``/``block_subagent_destructive_action``/
+``block_reviewer_bash_outside_allowlist`` key on -- on the theory that a
+resolver-rejected shape was "malformed/legacy" and safe to EM-treat. That
+was measured wrong: the resolver's own documented fail-closed branch
+(``_subagent_identity.py``, named-teammate shape with a ``session_id``
+under 8 chars) fires for a LEGITIMATELY DISPATCHED named teammate whose
+session_id merely happens to be short, and cold denies that caller while
+the resolver-gated port silently allowed it -- three shapes measured
+cold-DENY/warm-allow (short-session named teammate, uppercase hex, dashed
+UUID), the first of which is not a malformed shape at all.
 
-This is a DELIBERATE, NAMED semantic delta, not a defect to reconcile: the
-resolver fail-closes to ``""`` on any raw ``agent_id`` shape it does not
-recognize (anything other than bare hex ``^[a-f0-9]{12,}$``, named-teammate
-``a<name>-<16hex>``, or already-canonical ``<name>@session-<short>``), and
-``""`` reads as "no subagent identity resolved" here -- i.e. treated as the
-EM (allow), not as a subagent (deny). DoE's raw test would instead treat
-that SAME malformed/legacy id shape as a subagent (deny), because it asks
-only "is this a non-empty string", not "is this a shape coordinator's own
-identity resolver recognizes". A shape the resolver rejects is therefore
-EM-treated here and subagent-treated on DoE's cold path -- state this
-explicitly so C9's parity oracle asserts it as an intended divergence
-rather than tripping over it as a mismatch.
+"Can I build a canonical id for this caller" and "is this caller a
+dispatched subagent at all" are DIFFERENT QUESTIONS. This guard only ever
+needed the second one -- the resolved id was never used for anything but a
+truthiness test, no message text, no comparison, nothing -- so the
+resolver call was pure hot-path cost buying a wrong answer. This guard now
+asks cold's question directly: ANY non-empty, non-whitespace ``agent_id``
+string is in-cohort (matches DoE's ``guard-host-subagent-bash-ban.py``
+lines 135-137, ``if not isinstance(agent_id, str) or not agent_id.strip():
+return 0``). The canonical resolver remains available to any guard that
+actually needs a canonical id for something beyond membership; this is not
+that guard.
 
 SCOPED TO `Bash`, NOT `PowerShell`, NOT ``COMMAND_TOOL_NAMES`` -- deliberate,
 and this is the one guard in this dispatch's cohort that must NOT be
@@ -125,12 +127,9 @@ INTERFACE.md`` -- ``None`` = allow (silent), a nested
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Optional
 
 from coordinator_core._hook_envelope import deny as _deny
-from coordinator_core.write_guards.block_subagent_plan_body_write import (
-    _resolve_subagent_identity,
-)
 
 CLASS = "hard-deny"
 MATCHERS = ("Bash",)
@@ -191,26 +190,41 @@ def _policy_is_deny(config: Path) -> bool:
     return False
 
 
-def _compose_deny_reason() -> str:
+def _compose_deny_reason(resolve_wiki_citation: Optional[Callable[[str], str]] = None) -> str:
+    citation = resolve_wiki_citation(_WIKI_ANCHOR) if resolve_wiki_citation else _WIKI_ANCHOR
     return (
-        "this host denies the Bash tool to dispatched agents "
+        "BLOCKED: this host denies the Bash tool to dispatched agents "
         f"({_CONFIG_NAME}: {_POLICY_KEY}: {_DENY_VALUE}). Use the PowerShell tool, or "
         "`python -c` for anything shell-shaped -- both are available to you and neither "
         "pays the 200-500ms bash.exe spawn this host is avoiding. Reads are covered too: "
         "the cost is the spawn, not the mutation. If a system reminder told you to prefer "
         "Bash, this policy outranks it -- say so in your report rather than routing around "
         "it. The EM is unaffected by this guard; only dispatched agents are.\n\n"
-        f"See: {_WIKI_ANCHOR}"
+        f"See: {citation}"
     )
 
 
-def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+def check(
+    payload: Dict[str, Any],
+    resolve_wiki_citation: Optional[Callable[[str], str]] = None,
+) -> Optional[Dict[str, Any]]:
     """Evaluate the host subagent-Bash-ban gate against a PreToolUse payload.
 
-    Returns `None` (allow) or the nested hard-deny envelope. Identity-gated
-    to a resolved subagent only -- see module docstring "IDENTITY
-    RESOLUTION" for the deliberate divergence from DoE's raw non-empty-
-    string test.
+    Returns `None` (allow) or the nested hard-deny envelope. Cohort-gated on
+    membership only -- ANY non-empty agent_id string, matching cold -- not
+    on a resolved canonical identity. See module docstring "IDENTITY
+    RESOLUTION". This is the cohort-membership test; do not reintroduce a
+    canonical-id resolver here -- nothing below uses the id for anything
+    but this truthiness check.
+
+    ``resolve_wiki_citation``, same caller-resolves shape as
+    ``guard_doctrine_surface_bash_write.check``'s own parameter of the same
+    name: an optional ``str -> str`` callable ``dispatch.py`` supplies
+    (``resolve_wiki_citation`` bound to that call's own resolved
+    ``plugin_root``), invoked ONLY on the deny path, never on allow.
+    ``None`` (no resolver, or the caller's own resolution missed) leaves
+    the deny message's trailing citation as the bare literal, unchanged
+    from before this parameter existed.
     """
     if not isinstance(payload, dict):
         return None
@@ -220,12 +234,6 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     raw_agent_id = payload.get("agent_id") or ""
     if not isinstance(raw_agent_id, str) or not raw_agent_id.strip():
         return None  # the EM itself -- out of scope by design
-
-    session_id = payload.get("session_id") or ""
-    session_id = session_id if isinstance(session_id, str) else ""
-    agent_id = _resolve_subagent_identity(raw_agent_id, session_id)
-    if not agent_id:
-        return None  # unrecognized/legacy shape -- EM-treated here, see docstring
 
     raw_cwd = payload.get("cwd")
     cwd = raw_cwd if isinstance(raw_cwd, str) else None
@@ -239,4 +247,4 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     except Exception:
         return None
 
-    return _deny("PreToolUse", _compose_deny_reason())
+    return _deny("PreToolUse", _compose_deny_reason(resolve_wiki_citation))

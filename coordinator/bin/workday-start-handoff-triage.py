@@ -138,11 +138,19 @@ def _frontmatter_status_is_executing(frontmatter_lines: list[str]) -> bool:
 # --------------------------------------------------------------------------
 
 
-def _git_last_commit_epochs_batch(plan_paths: list[Path]) -> dict[Path, int | None]:
+def _git_last_commit_epochs_batch(
+    plan_paths: list[Path], cwd: str | None = None
+) -> dict[Path, int | None]:
     """Resolve each `plan_paths` entry's most-recent-commit epoch via ONE
     multi-pathspec `git log` walk plus in-memory grouping, instead of one
     `git log -1 -- <path>` subprocess per plan (the N+1 git-spawn class this
     batching chunk exists to close).
+
+    `cwd` is threaded from the already-parameterised `plans_dir` (C7(b),
+    2026-08-27 orient_assemble reader repo-scope plan) so the `git log`
+    subprocess below runs against the CALLER's repo rather than whatever
+    directory the process happened to start in. Default `None` preserves the
+    prior behavior (subprocess inherits the process cwd) exactly.
 
     This is a per-path last-touch-timestamp query, not a range query (no
     positive/negative ref sets to combine) — `reachable(...) \\ reachable(...)`
@@ -167,8 +175,11 @@ def _git_last_commit_epochs_batch(plan_paths: list[Path]) -> dict[Path, int | No
     # how the pathspec argument itself was spelled, so normalize both the
     # pathspecs sent to git and the lookup key off the CWD-relative form
     # (the CLI's own callers always pass CWD-relative plan paths in
-    # practice; the relpath call is a no-op for those).
-    relspecs = [os.path.relpath(str(p)) for p in plan_paths]
+    # practice; the relpath call is a no-op for those). relpath's `start`
+    # MUST match the subprocess's actual `cwd` (below) — computing pathspecs
+    # relative to the process cwd while git itself runs from a different
+    # `cwd` would silently mis-resolve every pathspec once the two diverge.
+    relspecs = [os.path.relpath(str(p), start=cwd) for p in plan_paths]
     pathspecs = [Path(r).as_posix() for r in relspecs]
     try:
         proc = subprocess.run(
@@ -193,6 +204,7 @@ def _git_last_commit_epochs_batch(plan_paths: list[Path]) -> dict[Path, int | No
             ],
             capture_output=True,
             text=True,
+            cwd=cwd,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
     except OSError:
@@ -250,7 +262,7 @@ def find_stale_executing_plans(
             continue
         executing_paths.append(plan_path)
 
-    epochs = _git_last_commit_epochs_batch(executing_paths)
+    epochs = _git_last_commit_epochs_batch(executing_paths, cwd=plans_dir)
 
     results: list[str] = []
     for plan_path in executing_paths:

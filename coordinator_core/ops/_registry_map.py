@@ -263,6 +263,7 @@ OP_MODULE_MAP: Dict[str, str] = {
     "install.probe_windows_terminal_presence": "coordinator_core.install.prereq_probe",
     "mcp.resolve_server_cli_path":            "coordinator_core.ops.resolve_mcp_server_cli_path",
     "baton.resolve_swept_in_archive":         "coordinator_core.ops.resolve_swept_baton",
+    "delegation.check":                       "coordinator_core.ops.delegation_check",
     "ci.run_pip_audit":                       "coordinator_core.ops.run_pip_audit",
     "ci.run_semgrep_scan":                    "coordinator_core.ops.run_semgrep_scan",
     "ci.run_shellcheck_sweep":                "coordinator_core.ops.run_shellcheck_sweep",

@@ -7,9 +7,14 @@ whether the process asking for a decision is a human-driven session or an
 agent-driven one, and to REFUSE rather than guess when it cannot tell.
 
 It reuses the existing harness-ancestor machinery from
-``coordinator_core.session.core`` — ``_find_windows_claude_ancestor`` on
-Windows, the same comm-verified single-parent check ``core.init()`` already
-performs on POSIX (Guard-1 leg (a)) — rather than re-implementing a walk.
+``coordinator_core.session.core`` — ``_find_windows_claude_ancestor``, on
+BOTH platforms. That walk is platform-neutral apart from its name: it climbs
+``.ppid()`` links via ``psutil``, nothing Windows-specific about the
+mechanics. A single-parent name check (POSIX's old approach here) cannot
+tell a human's shell-launched CLI apart from an agent-spawned hook
+subprocess — both commonly have a shell as their *immediate* parent (see
+``core.py``'s compound-command hook topology, ~lines 1629-1639) — so POSIX
+gets the same bounded climb Windows already had, not a weaker check.
 ``session/core.py`` is consumed, never modified, by this module.
 
 Disposition is INVERTED from ``core.init()``'s. There, a walk/check miss
@@ -47,8 +52,6 @@ from typing import NamedTuple, Optional
 from coordinator_core.session.core import (
     _IS_WINDOWS,
     _find_windows_claude_ancestor,
-    _harness_process_comm,
-    _is_harness_process,
     _psutil,
 )
 
@@ -68,13 +71,11 @@ class Verdict(enum.Enum):
 
 
 class AuthorshipVerdict(NamedTuple):
-    """``verdict`` plus the raw walk/check reason string that produced it,
-    so a refusal can name which rung failed without the caller re-deriving
-    it. ``reason`` is the underlying ``walk-hit:*`` / ``walk-miss:*`` /
-    ``posix-parent-*`` string this module's categorization was based on —
-    carried through unmodified from the reused ``core.py`` machinery (or
-    this module's own POSIX single-check vocabulary, prefixed the same way
-    for a reader used to that vocabulary).
+    """``verdict`` plus the raw walk reason string that produced it, so a
+    refusal can name which rung failed without the caller re-deriving it.
+    ``reason`` is the underlying ``walk-hit:*`` / ``walk-miss:*`` string
+    ``_find_windows_claude_ancestor`` produced — carried through unmodified
+    from the reused ``core.py`` machinery, on both platforms.
     """
 
     verdict: Verdict
@@ -87,40 +88,6 @@ class AuthorshipVerdict(NamedTuple):
         return self.verdict is not Verdict.HUMAN
 
 
-def _posix_parent_check(ppid: int) -> "tuple[Optional[bool], str]":
-    """Comm-verify ``ppid`` exactly as ``core.init()``'s POSIX Guard-1 leg
-    (a) does — NOT a walk (POSIX's ``sh -c "<cmd>"`` exec-replace makes the
-    direct parent the harness process where it exec-replaced; this checks
-    only that one rung, mirroring ``core.init()``'s inline logic rather
-    than re-implementing ``_find_windows_claude_ancestor``'s bounded climb,
-    which POSIX has no need of).
-
-    Returns ``(is_claude, reason)``. ``is_claude`` is ``True`` on a
-    comm-verified "claude" parent, ``False`` on a comm-verified NON-"claude"
-    parent (a clean, completed answer — the parent process itself is
-    live and readable, it simply is not the harness), or ``None`` when the
-    parent could not be read at all (ambiguous — ``psutil`` absent, or the
-    parent process raised ``NoSuchProcess`` / ``AccessDenied`` / any other
-    ``psutil.Error``).
-
-      posix-parent-hit                  comm-verified "claude" parent
-      posix-parent-miss:name-mismatch   comm-verified, NOT "claude" — clean
-      walk-miss:psutil-absent           psutil unavailable — ambiguous
-      walk-miss:rung-unreadable:<exc>   parent process unreadable — ambiguous
-    """
-    _ps = _psutil()
-    if _ps is None:
-        return None, "walk-miss:psutil-absent"
-    try:
-        parent = _ps.Process(ppid)
-        comm = _harness_process_comm(parent)
-    except (_ps.NoSuchProcess, _ps.AccessDenied, _ps.Error) as exc:
-        return None, f"walk-miss:rung-unreadable:{type(exc).__name__}"
-    if _is_harness_process(comm):
-        return True, "posix-parent-hit"
-    return False, "posix-parent-miss:name-mismatch"
-
-
 def authorship_verdict(start_pid: Optional[int] = None) -> AuthorshipVerdict:
     """Did a human author this write, as strongly as this harness can tell?
 
@@ -129,57 +96,81 @@ def authorship_verdict(start_pid: Optional[int] = None) -> AuthorshipVerdict:
     checks. Exposed as a parameter purely for test injection; production
     callers should not need to pass it.
 
+    Both platforms run the SAME bounded ``.ppid()`` climb
+    (``_find_windows_claude_ancestor`` — platform-neutral apart from its
+    name; see this module's own docstring). Only the categorization of a
+    miss differs, and only there:
+
     Verdict rules:
-      HUMAN       — no harness ancestor found AND the check completed
-                    cleanly. Windows' reused walk vocabulary draws no line
-                    between "cap reached with nothing to report" and "a
-                    rung along the way could not be read" — every no-match
-                    outcome from ``_find_windows_claude_ancestor`` comes
-                    back ``walk-miss:*``, so on Windows EVERY miss folds to
-                    UNRESOLVED (see below), never HUMAN: this predicate has
-                    no clean-vs-ambiguous distinction to draw on that arm.
-                    POSIX's single-rung check (no walk) DOES draw that
-                    line: a comm-verified parent that reads successfully
-                    and is NOT "claude" (``posix-parent-miss:name-mismatch``)
-                    is a clean, completed answer — that is the only path
-                    that reaches HUMAN.
-      AGENT       — a harness ("claude") ancestor was found (Windows:
-                    ``walk-hit:*``; POSIX: ``posix-parent-hit``).
-      UNRESOLVED  — every ``walk-miss:*`` reason on Windows (depth-exhausted,
-                    no-parent, and rung-unreadable alike — the reused walk
-                    cannot distinguish a clean cap-out from an unreadable
-                    rung, so ALL of them refuse), plus an unreadable POSIX
-                    parent, missing ``psutil``, or any other exception this
-                    module did not expect. Never degrades to HUMAN or
-                    AGENT — REFUSE is the only safe default for "could not
-                    tell".
+      AGENT       — a harness ("claude") ancestor was found anywhere in the
+                    climb (``walk-hit:*``), on either platform.
+      HUMAN       — POSIX ONLY: the climb reached the TOP of the process
+                    tree with no harness ancestor found
+                    (``walk-miss:no-parent``) — a COMPLETED climb, and
+                    completion with nothing found is the only honest
+                    positive signal this mechanism has. ``depth-exhausted``
+                    is NOT this case: it means the climb hit its bound
+                    (``_STABLE_PID_WINDOWS_ANCESTOR_DEPTH`` rungs) while the
+                    chain was still going, so a harness ancestor could still
+                    sit above the cap — that is an INCOMPLETE climb, not a
+                    clean one. Windows draws no HUMAN line at all: its
+                    reused walk vocabulary cannot distinguish these cases as
+                    cleanly (a wider set of hook topologies feed it), so on
+                    Windows EVERY miss folds to UNRESOLVED, never HUMAN.
+      UNRESOLVED  — every OTHER ``walk-miss:*`` reason on POSIX, including
+                    ``walk-miss:depth-exhausted`` (the climb did not
+                    complete) and ``rung-unreadable:*`` (an unreadable
+                    rung), plus missing ``psutil`` or any other exception
+                    this module did not expect, on EITHER platform. On
+                    Windows this also includes ``walk-miss:no-parent`` (see
+                    HUMAN above — Windows draws no HUMAN line). Never
+                    degrades to HUMAN or AGENT — REFUSE is the only safe
+                    default for "could not tell".
 
     UNRESOLVED and AGENT are both refusals (``AuthorshipVerdict.refuses``);
     only HUMAN is not.
+
+    RESIDUAL, stated plainly rather than papered over: ``core.py``'s walk
+    can also return ``walk-miss:no-parent`` from its skip branch, after
+    stepping over a rung whose NAME was unreadable (``AccessDenied`` /
+    ``ZombieProcess``) but whose ``.ppid()`` link was still good enough to
+    keep climbing. The ``+skipped:`` annotation the walk appends is only
+    ever appended on HIT paths, so a bare ``no-parent`` reason cannot prove
+    every rung along the way was readable — it proves only that the climb
+    reached the top without finding a harness ancestor. Under this
+    deliverable's stated threat model — the adversary is a confused peer,
+    not a malicious one — accepting that gap is the deliberate call, not an
+    oversight: a completed climb with an unreadable rung along the way is
+    still treated as HUMAN, because the alternative (folding every
+    ``no-parent`` to UNRESOLVED) would refuse the ordinary human case this
+    predicate exists to recognize.
     """
     ppid = start_pid if start_pid is not None else os.getppid()
 
+    _ps = _psutil()
+    if _ps is None:
+        return AuthorshipVerdict(Verdict.UNRESOLVED, "walk-miss:psutil-absent")
+    try:
+        match, reason = _find_windows_claude_ancestor(ppid)
+    except Exception as exc:  # pragma: no cover - defensive, matches core.init()'s own guard
+        return AuthorshipVerdict(Verdict.UNRESOLVED, f"walk-miss:{type(exc).__name__}")
+
+    if match is not None:
+        return AuthorshipVerdict(Verdict.AGENT, reason)
+
     if _IS_WINDOWS:
-        _ps = _psutil()
-        if _ps is None:
-            return AuthorshipVerdict(Verdict.UNRESOLVED, "walk-miss:psutil-absent")
-        try:
-            match, reason = _find_windows_claude_ancestor(ppid)
-        except Exception as exc:  # pragma: no cover - defensive, matches core.init()'s own guard
-            return AuthorshipVerdict(Verdict.UNRESOLVED, f"walk-miss:{type(exc).__name__}")
-        if match is not None:
-            return AuthorshipVerdict(Verdict.AGENT, reason)
         # Every walk-miss:* reason refuses on Windows — the reused walk's
         # vocabulary has no clean/ambiguous split for this module to lean
         # on (see authorship_verdict's docstring).
         return AuthorshipVerdict(Verdict.UNRESOLVED, reason)
 
-    try:
-        is_claude, reason = _posix_parent_check(ppid)
-    except Exception as exc:  # pragma: no cover - defensive, matches core.init()'s own guard
-        return AuthorshipVerdict(Verdict.UNRESOLVED, f"walk-miss:{type(exc).__name__}")
-    if is_claude is True:
-        return AuthorshipVerdict(Verdict.AGENT, reason)
-    if is_claude is False:
+    # POSIX draws the clean/ambiguous line Windows does not: a climb that
+    # reaches the TOP of the process tree with no harness ancestor found
+    # (walk-miss:no-parent) is a COMPLETED climb and the only clean HUMAN
+    # answer this mechanism has. depth-exhausted means the climb hit its
+    # bound while the chain was still going — a harness ancestor could
+    # still sit above the cap — so that stays ambiguous, along with every
+    # other miss reason (an unreadable rung, etc).
+    if reason == "walk-miss:no-parent":
         return AuthorshipVerdict(Verdict.HUMAN, reason)
     return AuthorshipVerdict(Verdict.UNRESOLVED, reason)

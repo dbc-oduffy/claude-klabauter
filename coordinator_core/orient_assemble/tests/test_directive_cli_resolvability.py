@@ -223,6 +223,72 @@ def test_no_directives_cli_carries_a_dot_py_suffix(monkeypatch, tmp_path):
             )
 
 
+def test_target_root_flag_parsed_and_forwarded_to_brief(monkeypatch, tmp_path):
+    """C8/AC9: `--target-root <path>` overrides the default and is forwarded
+    to `brief(cadence, repo_root=...)` — asserted by capturing the
+    `repo_root` `brief()` actually receives, not by inspecting output shape
+    (this chunk changes no consumer-visible envelope field)."""
+    import coordinator_core.orient_assemble as orient_assemble
+
+    seen: dict = {}
+
+    def _fake_brief(cadence, *, repo_root=None):
+        seen["cadence"] = cadence
+        seen["repo_root"] = repo_root
+        return {"ok": True}
+
+    monkeypatch.setattr(orient_assemble, "brief", _fake_brief)
+    explicit_root = str(tmp_path / "some-other-repo")
+    exit_code = orient_assemble.main(
+        ["brief", "--cadence", "session", "--target-root", explicit_root]
+    )
+    assert exit_code == 0
+    assert seen["repo_root"] == str(Path(explicit_root).resolve())
+
+
+def test_target_root_defaults_to_git_toplevel_from_cwd(monkeypatch, tmp_path):
+    """No `--target-root` given: resolution falls back to
+    `find_repo_root()` (git-toplevel-from-cwd), not `None` and not the bare
+    caller cwd unresolved — mirrors `_resolve_repo_root`'s no-`--repo`
+    branch in `coordinator_core.invoke.__main__`."""
+    import coordinator_core.orient_assemble as orient_assemble
+
+    seen: dict = {}
+
+    def _fake_brief(cadence, *, repo_root=None):
+        seen["repo_root"] = repo_root
+        return {"ok": True}
+
+    monkeypatch.setattr(orient_assemble, "brief", _fake_brief)
+    fake_toplevel = tmp_path / "resolved-toplevel"
+    monkeypatch.setattr(
+        "coordinator_core.lifecycle.find_repo_root", lambda: fake_toplevel
+    )
+    exit_code = orient_assemble.main(["brief", "--cadence", "session"])
+    assert exit_code == 0
+    assert seen["repo_root"] == str(fake_toplevel)
+
+
+def test_unresolvable_target_root_fails_loud_naming_the_flag(monkeypatch, capsys):
+    """AC9: an unresolvable root (no `--target-root`, cwd not inside a git
+    working tree) exits non-zero with a stderr message naming
+    `--target-root` — never a silently-empty `ReaderResult`, which is the
+    exact failure mode that let claude-klabauter's work-state be misreported as DoE's
+    for twelve days (see module docstring / plan Problem statement)."""
+    import coordinator_core.orient_assemble as orient_assemble
+
+    def _raise(*, cwd=None):
+        raise RuntimeError("git rev-parse --show-toplevel failed (not a git repo?)")
+
+    monkeypatch.setattr(
+        "coordinator_core.lifecycle.find_repo_root", lambda: _raise()
+    )
+    exit_code = orient_assemble.main(["brief", "--cadence", "session"])
+    assert exit_code != 0
+    captured = capsys.readouterr()
+    assert "--target-root" in captured.err
+
+
 def test_no_directives_cli_is_a_ceremony_or_skill_name(monkeypatch, tmp_path):
     """Sites #12/#13 named `"workday-start"` (a ceremony/skill name, not a
     bin CLI) as if it were executable — the self-referential category-error

@@ -70,6 +70,8 @@ from coordinator_core.frontmatter.schema_validate import (
     validate,
     validate_frontmatter,
     validate_frontmatter_obj,
+    _cf_queue_disposition_shape,
+    _is_claude_klabauter_vendored_schema,
     validate_memo_cross_fields,
     DIRECTION_BOTH,
     DIRECTION_WE_AHEAD,
@@ -3639,7 +3641,11 @@ _QUEUE_SCHEMA_PINS = {
     #   shape_hash and x-schema-version unmoved, zero validation delta. Taken
     #   because our copy otherwise carries a delegation statement both planes
     #   have now measured to be false.
-    'bug-backlog': "d4dff494b6d639a9c6fa6fd9d9a876c91c102d11",
+    # Pin moved 2026-08-29 to 8b5ab1769b2c82b090782e182b54a3bec6ef002b (DoE
+    # 8b5ab1769) by bin/claude-klabauter-revendor-schema.py bug-backlog.
+    #   C2: consume DoE's status:deferred grant conditional (plan
+    #   2026-08-27-a-queue-deferral-is-a-grant-the-pm-issues)
+    'bug-backlog': "8b5ab1769b2c82b090782e182b54a3bec6ef002b",
     # Pin moved 2026-08-17 to cd70f651f95503ac2d8979b6900ba905c910a75a (DoE
     # HEAD) by bin/claude-klabauter-revendor-schema.py cross-repo-commitment.
     #   scheduled re-vendor pass: sync non-major drifted schemas from DoE HEAD
@@ -3683,7 +3689,11 @@ _QUEUE_SCHEMA_PINS = {
     #   shape_hash and x-schema-version unmoved, zero validation delta. Taken
     #   because our copy otherwise carries a delegation statement both planes
     #   have now measured to be false.
-    'debt-backlog': "d4dff494b6d639a9c6fa6fd9d9a876c91c102d11",
+    # Pin moved 2026-08-29 to 8b5ab1769b2c82b090782e182b54a3bec6ef002b (DoE
+    # 8b5ab1769) by bin/claude-klabauter-revendor-schema.py debt-backlog.
+    #   C2: consume DoE's status:deferred grant conditional (plan
+    #   2026-08-27-a-queue-deferral-is-a-grant-the-pm-issues)
+    'debt-backlog': "8b5ab1769b2c82b090782e182b54a3bec6ef002b",
     # Pin moved 2026-07-29 to 9f6ee8540e7b09da9ce6b81509402a4f118aefd8 (DoE
     # HEAD) by bin/claude-klabauter-revendor-schema.py improvement-queue.
     #   DoE 1239761c1 added the 'verification' member; b142e8dc re-vendored
@@ -3760,7 +3770,11 @@ _QUEUE_SCHEMA_PINS = {
     #   shape_hash and x-schema-version unmoved, zero validation delta. Taken
     #   because our copy otherwise carries a delegation statement both planes
     #   have now measured to be false.
-    'improvement-queue': "d4dff494b6d639a9c6fa6fd9d9a876c91c102d11",
+    # Pin moved 2026-08-29 to 8b5ab1769b2c82b090782e182b54a3bec6ef002b (DoE
+    # 8b5ab1769) by bin/claude-klabauter-revendor-schema.py improvement-queue.
+    #   C2: consume DoE's status:deferred grant conditional (plan
+    #   2026-08-27-a-queue-deferral-is-a-grant-the-pm-issues)
+    'improvement-queue': "8b5ab1769b2c82b090782e182b54a3bec6ef002b",
     # Pin moved 2026-08-17 to cd70f651f95503ac2d8979b6900ba905c910a75a (DoE
     # HEAD) by bin/claude-klabauter-revendor-schema.py lesson-entry.
     #   scheduled re-vendor pass: sync non-major drifted schemas from DoE HEAD
@@ -6795,3 +6809,399 @@ class TestReconcileDispositionFields:
     def test_both_fields_absent_valid_on_archived_handoff(self):
         errors = validate_frontmatter(_valid_archived_handoff(), _HANDOFF_ARCHIVED_SCHEMA)
         assert errors == []
+
+
+class TestQueueDeferralGrantConditional:
+    """The `status: deferred` -> grant-field-set conditional on all three queue schemas.
+
+    Vendored from DoE at 8b5ab1769 ("schemas: the author records a PM grant, never
+    issues one") and consumed here by C2 of
+    docs/plans/2026-08-27-a-queue-deferral-is-a-grant-the-pm-issues.md. The branch is
+    `if status == deferred` / `then required: [pm_approved, deferred_by,
+    deferred_until, case_against, why_blocked]`.
+
+    THIS LAYER IS PRESENCE-ONLY AND NON-HARD-FAILING, by the `$comment` DoE shipped on
+    both the branch and its `then` — the same house style every conditional in
+    plan-tasks.schema.json carries. It asserts the five fields are THERE, never that
+    they say anything. `pm_approved: false` and a blank `case_against` both satisfy it.
+    Truthiness is C3's cross-field rule; refusal at the write is C4's deny guard.
+    A test here asserting hollow-grant rejection would be testing the wrong layer and
+    would go green for the wrong reason once C3 lands.
+
+    VENDOR CONSTRAINT, stated by DoE and deliberately NOT "corrected" during the
+    re-vendor: `case_against` stays OPTIONAL at the top level while the deferred branch
+    requires it. An omitted field says nothing was carried; an empty string asserts
+    there was no argument; a hand-authored row that was never a plan deferral has
+    nothing to carry. If a parity check ever wants the two to agree, they agree on
+    optional-plus-conditional, never on required — hence
+    `test_case_against_stays_optional_at_top_level` below, which exists to fail loudly
+    if someone tightens it.
+    """
+
+    _GRANT_FIELDS = ('pm_approved', 'deferred_by', 'deferred_until', 'case_against', 'why_blocked')
+    _FAMILIES = ('improvement-queue', 'debt-backlog', 'bug-backlog')
+
+    def _schema_path(self, family: str) -> Path:
+        return _SCHEMAS_DIR / f'{family}.schema.json'
+
+    def _schema(self, family: str) -> dict:
+        return json.loads(self._schema_path(family).read_text(encoding='utf-8'))
+
+    def _deferred_branch(self, family: str) -> dict:
+        branches = self._schema(family).get('allOf') or []
+        matches = [
+            c for c in branches
+            if c.get('if', {}).get('properties', {}).get('status', {}).get('const') == 'deferred'
+        ]
+        assert len(matches) == 1, (
+            f'{family}: expected exactly one status:deferred branch, got {len(matches)}'
+        )
+        return matches[0]
+
+    #: Each family's OWN top-level required fields, which have nothing to do with the
+    #: deferral grant but must be present or the record fails for an unrelated reason
+    #: and the assertions below stop measuring the branch they are aimed at.
+    _FAMILY_REQUIRED = {
+        'improvement-queue': {
+            'surface': 'coordinator_core/frontmatter/',
+            'proposed_action': 'Do the thing the entry describes.',
+            'from_repo': 'claude-klabauter-em',
+            'change_kind': 'script-edit',
+        },
+        'debt-backlog': {
+            'source': 'A review finding.',
+            'risk': 'The stated boundary is not the real one.',
+            'proposed_action': 'Do the thing the entry describes.',
+        },
+        'bug-backlog': {
+            'surface': 'coordinator_core/frontmatter/',
+            'severity': 'P2',
+        },
+    }
+
+    def _granted_record(self, family: str, **over) -> dict:
+        fm = {
+            'created': '2026-08-29',
+            'title': 'a parked entry carrying the grant that parked it',
+            'body': 'Body text.',
+            'status': 'deferred',
+            'pm_approved': True,
+            'deferred_by': 'PM (ruling recorded in session)',
+            'deferred_until': '2026-12-31',
+            'case_against': 'Acting now costs more than the defect does.',
+            'why_blocked': 'Parked pending a third consumer.',
+        }
+        fm.update(self._FAMILY_REQUIRED[family])
+        fm.update(over)
+        return fm
+
+    @pytest.mark.parametrize('family', _FAMILIES)
+    def test_conditional_branch_is_declared(self, family):
+        """The vendored schema carries the deferred branch at all — a re-vendor that
+        silently dropped it would otherwise leave every test below passing vacuously,
+        since a record with all five fields present validates fine against no branch."""
+        branch = self._deferred_branch(family)
+        assert set(branch['then']['required']) == set(self._GRANT_FIELDS), (
+            f'{family}: deferred branch requires {branch["then"]["required"]!r}, '
+            f'expected {list(self._GRANT_FIELDS)!r}'
+        )
+
+    @pytest.mark.parametrize('family', _FAMILIES)
+    def test_branch_carries_the_presence_only_comment(self, family):
+        """A conditional without the house-style `$comment` reads as an enforcement
+        point it is not — the reason C2 required the prose to land in DoE's same commit."""
+        blob = json.dumps(self._deferred_branch(family))
+        assert '$comment' in blob, f'{family}: deferred branch carries no $comment'
+
+    @pytest.mark.parametrize('family', _FAMILIES)
+    @pytest.mark.parametrize('missing', _GRANT_FIELDS)
+    def test_deferred_without_each_grant_field_is_rejected(self, family, missing):
+        fm = self._granted_record(family)
+        fm.pop(missing)
+        errors = validate_frontmatter(fm, self._schema_path(family))
+        assert any(e.get('field') == missing for e in errors), (
+            f'{family}: dropping {missing} from a status:deferred record raised no error on '
+            f'that field; got {errors!r}'
+        )
+
+    @pytest.mark.parametrize('family', _FAMILIES)
+    def test_fully_granted_deferred_record_passes(self, family):
+        errors = validate_frontmatter(self._granted_record(family), self._schema_path(family))
+        assert errors == [], f'{family}: a fully-granted deferral should validate; got {errors!r}'
+
+    @pytest.mark.parametrize('family', _FAMILIES)
+    def test_conditional_does_not_fire_on_a_non_deferred_record(self, family):
+        """An `open` record owes none of the five fields — the branch must key on
+        status, not apply the requirement corpus-wide."""
+        fm = {
+            k: v for k, v in self._granted_record(family, status='open').items()
+            if k not in self._GRANT_FIELDS
+        }
+        errors = validate_frontmatter(fm, self._schema_path(family))
+        assert not any(e.get('field') in self._GRANT_FIELDS for e in errors), (
+            f'{family}: the deferred branch fired on a status:open record; got {errors!r}'
+        )
+
+    @pytest.mark.parametrize('family', _FAMILIES)
+    def test_case_against_stays_optional_at_top_level(self, family):
+        """DoE's vendor constraint, asserted so a future parity pass cannot quietly
+        promote it to top-level required. See the class docstring for why the two
+        deliberately disagree."""
+        schema = self._schema(family)
+        assert 'case_against' in schema.get('properties', {}), (
+            f'{family}: case_against is not declared at all'
+        )
+        assert 'case_against' not in (schema.get('required') or []), (
+            f'{family}: case_against was promoted to top-level required — DoE states it stays '
+            f'optional-plus-conditional; an omitted field says nothing was carried, an empty '
+            f'string asserts there was no argument'
+        )
+
+    @pytest.mark.parametrize('family', _FAMILIES)
+    def test_presence_only_a_hollow_grant_still_passes_this_layer(self, family):
+        """Negative spec, pinning the layer boundary: `pm_approved: false` with a blank
+        `case_against` is a hollow grant and the SCHEMA (presence-only) layer ACCEPTS
+        it — isolated here via `_validate_json_schema_node` directly rather than
+        `validate_frontmatter`, which since C3 also runs the cross-field rule that DOES
+        reject this same record (see `TestQueueDeferralHollowGrantRejection` below). If
+        this test ever starts failing, the rejection arrived at the schema layer
+        rather than in C3's cross-field rule, and the plan's layering has been
+        violated — do not "fix" this test by inverting it."""
+        fm = self._granted_record(family, pm_approved=False, case_against='   ')
+        schema = self._schema(family)
+        errors = _validate_json_schema_node(fm, schema, schema, '')
+        assert errors == [], (
+            f'{family}: the schema layer rejected a hollow grant; that belongs to C3 '
+            f'(_cf cross-field rule), not here. Got {errors!r}'
+        )
+
+
+class TestQueueDeferralHollowGrantRejection:
+    """C3: the cross-field rule (`_cf_queue_disposition_shape`) rejects a queue-family
+    `status: deferred` record whose grant is present but HOLLOW — the half C2's
+    presence-only schema branch cannot stop (`pm_approved: false` and a blank
+    `case_against` both satisfy presence).
+
+    Built over the shared `_cf_disposition_shape` primitive via field aliasing
+    (`status` -> `disposition`, `why_blocked` -> `disposition_detail`, `deferred_by`
+    -> `disposition_ref`) rather than a fresh copy — see `_cf_queue_disposition_shape`'s
+    own docstring. NOT in this test surface: who granted the deferral (the self-grant
+    discriminator is C4's, and so is its test).
+    """
+
+    _FAMILIES = TestQueueDeferralGrantConditional._FAMILIES
+    _FAMILY_REQUIRED = TestQueueDeferralGrantConditional._FAMILY_REQUIRED
+
+    def _schema_path(self, family: str) -> Path:
+        return _SCHEMAS_DIR / f'{family}.schema.json'
+
+    def _granted_record(self, family: str, **over) -> dict:
+        fm = {
+            'created': '2026-08-29',
+            'title': 'a parked entry carrying the grant that parked it',
+            'body': 'Body text.',
+            'status': 'deferred',
+            'pm_approved': True,
+            'deferred_by': 'PM (ruling recorded in session)',
+            'deferred_until': '2026-12-31',
+            'case_against': 'Acting now costs more than the defect does.',
+            'why_blocked': 'Parked pending a third consumer.',
+        }
+        fm.update(self._FAMILY_REQUIRED[family])
+        fm.update(over)
+        return fm
+
+    @pytest.mark.parametrize('family', _FAMILIES)
+    def test_pm_approved_false_is_rejected(self, family):
+        fm = self._granted_record(family, pm_approved=False)
+        errors = validate_frontmatter(fm, self._schema_path(family))
+        assert any(e.get('field') == 'pm_approved' for e in errors), (
+            f'{family}: pm_approved: false on a deferred record raised no error; got {errors!r}'
+        )
+
+    @pytest.mark.parametrize('family', _FAMILIES)
+    def test_pm_approved_absent_is_rejected(self, family):
+        fm = self._granted_record(family)
+        fm.pop('pm_approved')
+        errors = validate_frontmatter(fm, self._schema_path(family))
+        assert any(e.get('field') == 'pm_approved' for e in errors), (
+            f'{family}: an absent pm_approved on a deferred record raised no error; got {errors!r}'
+        )
+
+    @pytest.mark.parametrize('family', _FAMILIES)
+    def test_whitespace_only_case_against_is_rejected(self, family):
+        fm = self._granted_record(family, case_against='   ')
+        errors = validate_frontmatter(fm, self._schema_path(family))
+        assert any(e.get('field') == 'case_against' for e in errors), (
+            f'{family}: a whitespace-only case_against on a deferred record raised no error; '
+            f'got {errors!r}'
+        )
+
+    @pytest.mark.parametrize('family', _FAMILIES)
+    def test_whitespace_only_why_blocked_is_rejected(self, family):
+        fm = self._granted_record(family, why_blocked='   ')
+        errors = validate_frontmatter(fm, self._schema_path(family))
+        assert any(e.get('field') == 'why_blocked' for e in errors), (
+            f'{family}: a whitespace-only why_blocked on a deferred record raised no error; '
+            f'got {errors!r}'
+        )
+
+    @pytest.mark.parametrize('family', _FAMILIES)
+    def test_a_condition_form_deferred_until_is_accepted(self, family):
+        """The ISO-date-only refusal was WITHDRAWN 2026-08-29.
+
+        It refused the one record on disk that was doing the right thing: a real
+        PM ruling parks an entry "until a THIRD consumer appears", and the record
+        says in its own `deferred_until` that it records the condition verbatim
+        "rather than a fabricated date". A rule satisfied by an invented date and
+        refused by an honest one is pointed the wrong way.
+
+        The requirement was never "a date" — it is that a park comes back. The
+        backstop in `expired_grant_signal` covers the condition form; refusing the
+        write never made anyone revisit a park, it only stopped the record being
+        edited.
+        """
+        fm = self._granted_record(
+            family,
+            deferred_until=(
+                "no fixed calendar date -- revisit when a third consumer appears"
+            ),
+        )
+        errors = validate_frontmatter(fm, self._schema_path(family))
+        assert not any(e.get('field') == 'deferred_until' for e in errors), (
+            f'{family}: a condition-form deferred_until was refused; got {errors!r}'
+        )
+
+    @pytest.mark.parametrize('family', _FAMILIES)
+    def test_blank_deferred_until_is_still_rejected(self, family):
+        """Widening to accept a condition must not accept nothing at all."""
+        fm = self._granted_record(family, deferred_until='   ')
+        errors = validate_frontmatter(fm, self._schema_path(family))
+        assert any(e.get('field') == 'deferred_until' for e in errors), (
+            f'{family}: a blank deferred_until raised no error; got {errors!r}'
+        )
+
+    @pytest.mark.parametrize('family', _FAMILIES)
+    def test_empty_deferred_by_is_rejected(self, family):
+        fm = self._granted_record(family, deferred_by='')
+        errors = validate_frontmatter(fm, self._schema_path(family))
+        assert any(e.get('field') == 'deferred_by' for e in errors), (
+            f'{family}: an empty deferred_by on a deferred record raised no error; got {errors!r}'
+        )
+
+    @pytest.mark.parametrize('family', _FAMILIES)
+    def test_fully_granted_deferred_record_passes_this_layer(self, family):
+        fm = self._granted_record(family)
+        errors = validate_frontmatter(fm, self._schema_path(family))
+        assert errors == [], (
+            f'{family}: a fully-granted deferral should pass the hollow-grant layer; '
+            f'got {errors!r}'
+        )
+
+    @pytest.mark.parametrize('family', _FAMILIES)
+    def test_rule_does_not_fire_on_a_non_deferred_record(self, family):
+        fm = {
+            k: v for k, v in self._granted_record(family, status='open').items()
+            if k not in TestQueueDeferralGrantConditional._GRANT_FIELDS
+        }
+        errors = validate_frontmatter(fm, self._schema_path(family))
+        assert errors == [], (
+            f'{family}: the hollow-grant rule fired on a status:open record; got {errors!r}'
+        )
+
+    @pytest.mark.parametrize('family', _FAMILIES)
+    def test_error_message_shape_comes_from_shared_primitive(self, family):
+        """Pins the reuse: dropping why_blocked (routed through
+        `_cf_disposition_shape`'s non-open-needs-detail leg) produces the SAME error
+        shape the primitive emits for plan-tasks' disposition_detail leg — 'has
+        disposition ... but no non-empty' — rather than a locally-authored string,
+        which is what stops the third-copy drift the primitive was extracted to
+        prevent."""
+        fm = self._granted_record(family, why_blocked='   ')
+        errors = validate_frontmatter(fm, self._schema_path(family))
+        matches = [e for e in errors if e.get('field') == 'why_blocked']
+        assert matches, f'{family}: expected a why_blocked error; got {errors!r}'
+        assert 'has disposition' in matches[0]['error'] and 'no non-empty' in matches[0]['error'], (
+            f'{family}: why_blocked error does not carry the shared primitive\'s error shape: '
+            f'{matches[0]!r}'
+        )
+
+
+class TestQueueRuleIsClaudeKlabauterScoped:
+    """`_cf_queue_disposition_shape` must not change enforcement in DoE's tree.
+
+    DoE-claude imports THIS MODULE by file path — `Path(claude_klabauter_root) /
+    "coordinator_core" / "frontmatter" / "schema_validate.py"`, in live tests
+    including `coordinator/tests/test_artifact_corpus_validates_against_schema.py`
+    — with no re-vendor and no version gate between our edit and their next
+    validation run. A cross-field rule keyed on schema NAME alone therefore
+    reaches their corpus the instant it lands on our disk.
+
+    This is not hypothetical: the first draft of C3 was measured rejecting a real
+    `/debt-triage` Step 6b class 4 park (DoE `19f6b1551` stamps `pm_approved`,
+    `deferred_by: /debt-triage <session-id>`, `deferred_until` and `why_blocked`,
+    and NOT `case_against`) through DoE's own `validate_frontmatter_obj` seam.
+    That is Queue Terminus outcome class 4 breaking in a sibling repo.
+
+    DoE asked for the rule to stay claude-klabauter-scoped and opt in on their own schedule
+    (`cross-repo/inbox/2026-08-28-doe-claude-em-doe-schema-branch-already-landed-
+    and-scoping-answers.md`), and this plan adopted that as C6's decision. These
+    tests are that decision's mechanical half — delete them and the seam silently
+    re-opens.
+    """
+
+    _CEREMONY_PARK = {
+        'created': '2026-08-29',
+        'title': 'a ceremony-parked debt row',
+        'body': 'Body text.',
+        'status': 'deferred',
+        'source': 'A triage ceremony.',
+        'risk': 'r',
+        'proposed_action': 'p',
+        'pm_approved': True,
+        'deferred_by': '/debt-triage 23eee8e4',
+        'deferred_until': '2026-12-31',
+        'why_blocked': 'Parked at triage.',
+        # deliberately no case_against — DoE's ceremony does not stamp it
+    }
+
+    def test_rule_is_inert_without_the_opt_in(self):
+        """Default false is the fail-safe direction — a caller that does not
+        declare it is treated as a foreign corpus, never as claude-klabauter's."""
+        assert _cf_queue_disposition_shape(dict(self._CEREMONY_PARK)) is None
+
+    def test_rule_fires_when_opted_in(self):
+        violation = _cf_queue_disposition_shape(
+            dict(self._CEREMONY_PARK), local_queue_corpus=True
+        )
+        assert violation is not None and violation['field'] == 'case_against'
+
+    def test_foreign_schema_object_seam_does_not_get_our_rule(self):
+        """`validate_frontmatter_obj` is the seam DoE's port was given. Whatever
+        their own schema says is theirs to enforce; OUR cross-field rule must
+        contribute nothing through it."""
+        schema = json.loads(
+            (_SCHEMAS_DIR / 'debt-backlog.schema.json').read_text(encoding='utf-8')
+        )
+        result = validate_frontmatter_obj(dict(self._CEREMONY_PARK), schema)
+        ours = [
+            e for e in (result.get('errors') or [])
+            if 'requires a non-empty' in str(e.get('error', ''))
+            or 'requires pm_approved' in str(e.get('error', ''))
+        ]
+        assert ours == [], (
+            f'the queue cross-field rule fired through the foreign-schema seam: {ours!r}'
+        )
+
+    def test_claude_klabauter_vendored_path_still_enforces(self):
+        """The other half of the scoping: narrowing it must not have made the
+        rule inert on claude-klabauter's own corpus, which is the whole point of C3."""
+        hollow = dict(self._CEREMONY_PARK, case_against='   ')
+        errors = validate_frontmatter(hollow, _SCHEMAS_DIR / 'debt-backlog.schema.json')
+        assert any('case_against' == e.get('field') for e in errors), (
+            f'a hollow grant passed claude-klabauter\'s own validation path; got {errors!r}'
+        )
+
+    def test_provenance_predicate_rejects_a_foreign_path(self):
+        assert _is_claude_klabauter_vendored_schema(_SCHEMAS_DIR / 'debt-backlog.schema.json') is True
+        assert _is_claude_klabauter_vendored_schema('/nowhere/debt-backlog.schema.json') is False

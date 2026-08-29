@@ -1597,3 +1597,314 @@ class TestCrossRepoTargetReachesSchemaStepAdvisoryOnly:
         reason = _assert_advisory_shape(result)
         assert "not-a-real-kind" in reason
         assert "cross-repo target" in reason
+
+
+_GRANTED_QUEUE_RECORD = {
+    "created": "2026-08-29",
+    "title": "a parked entry carrying the grant that parked it",
+    "body": "Body text.",
+    "status": "deferred",
+    "source": "A triage ceremony.",
+    "risk": "r",
+    "proposed_action": "p",
+    "pm_approved": True,
+    "deferred_by": "PM (ruling recorded in session)",
+    "deferred_until": "2026-12-31",
+    "case_against": "Acting now costs more than the defect does.",
+    "why_blocked": "Parked pending a third consumer.",
+}
+
+_QUEUE_REL = "state/debt-backlog/2026-08-29-a-parked-entry.yaml"
+
+
+def _queue_fm(**over) -> dict:
+    fm = dict(_GRANTED_QUEUE_RECORD)
+    fm.update(over)
+    return fm
+
+
+def _session_payload(session_id: str = "sess-abc123") -> dict:
+    return {"session_id": session_id, "tool_name": "Write", "tool_input": {}}
+
+
+class TestQueueDeferralGrantDeny:
+    """C4's own independent evaluator — the chunk the plan exists for.
+
+    Covers the three cases the chunk's TEST SURFACE names: the mutual-exclusivity
+    differential against the advisory mirror, a positive (ungranted -> deny naming
+    only the absent grant) and a negative (granted -> neither fires).
+
+    Authored by the EM after the fact: this test file was never in C4's declared
+    `writes:` scope, so the executor correctly declined to write it and said so.
+    That is the THIRD row in this plan whose `writes:` omitted its own test file
+    (C2 and C3 were the others) — recorded here because the pattern, not the
+    instance, is the defect.
+    """
+
+    def test_granted_record_denies_nothing(self):
+        assert guard._evaluate_queue_deferral_grant(
+            _queue_fm(), _QUEUE_REL, _session_payload()
+        ) is None
+
+    @pytest.mark.parametrize(
+        "over,expected_field",
+        [
+            ({"pm_approved": False}, "pm_approved"),
+            ({"pm_approved": None}, "pm_approved"),
+            ({"case_against": "   "}, "case_against"),
+            ({"deferred_until": "when a third consumer appears"}, "deferred_until"),
+            ({"deferred_by": ""}, "deferred_by"),
+        ],
+    )
+    def test_hollow_grant_denies_naming_only_the_absent_grant(self, over, expected_field):
+        message = guard._evaluate_queue_deferral_grant(
+            _queue_fm(**over), _QUEUE_REL, _session_payload()
+        )
+        assert message is not None, f"{over!r} should have denied"
+        assert expected_field in message
+        # The whole point of the independent evaluator (eng-director finding 3):
+        # the message names the absent grant, never the unrelated required fields
+        # a schema_message-derived deny would have named.
+        for unrelated in ("surface", "from_repo", "change_kind"):
+            assert unrelated not in message, (
+                f"deny message names {unrelated!r}, which is not the violation: {message!r}"
+            )
+
+    def test_self_granted_deferral_is_refused(self):
+        message = guard._evaluate_queue_deferral_grant(
+            _queue_fm(deferred_by="sess-abc123"), _QUEUE_REL, _session_payload("sess-abc123")
+        )
+        assert message is not None and "deferred_by" in message
+
+    def test_ceremony_identity_is_not_a_self_grant(self):
+        """The carve-out that keeps this deny from breaking the ceremony whose
+        landing unblocked it.
+
+        DoE's `/debt-triage` Step 6b class 4 (`19f6b1551`, `SKILL.md:148-150`)
+        writes `deferred_by: /debt-triage <session-id>` — a CEREMONY identity that
+        CONTAINS the session id. A substring-based discriminator would refuse the
+        ceremony's own park and break Queue Terminus outcome class 4 on the day
+        this shipped, which is precisely what C4's external gate was waiting on.
+        Exact equality is therefore load-bearing, not incidental — do not
+        "harden" this to a substring or prefix match.
+        """
+        assert guard._evaluate_queue_deferral_grant(
+            _queue_fm(deferred_by="/debt-triage sess-abc123"),
+            _QUEUE_REL,
+            _session_payload("sess-abc123"),
+        ) is None
+
+    def test_non_queue_path_is_somebody_elses_surface(self):
+        assert guard._evaluate_queue_deferral_grant(
+            _queue_fm(pm_approved=False), "docs/plans/whatever.md", _session_payload()
+        ) is None
+
+    def test_non_deferred_status_does_not_fire(self):
+        assert guard._evaluate_queue_deferral_grant(
+            _queue_fm(status="open", pm_approved=False), _QUEUE_REL, _session_payload()
+        ) is None
+
+    def test_absent_session_id_fails_open_on_the_discriminator(self):
+        """A missing session signal must never manufacture a self-grant finding."""
+        assert guard._evaluate_queue_deferral_grant(
+            _queue_fm(), _QUEUE_REL, {"tool_name": "Write", "tool_input": {}}
+        ) is None
+
+    @pytest.mark.parametrize(
+        "over",
+        [
+            {},
+            {"pm_approved": False},
+            {"case_against": "   "},
+            {"deferred_until": "not-a-date"},
+            {"deferred_by": ""},
+            {"status": "open"},
+        ],
+    )
+    def test_deny_and_advisory_mirror_are_mutually_exclusive(self, over):
+        """The invariant the whole deny/advisory pairing rests on: the two modules
+        must never both return non-None for one payload. Every existing deny
+        carries such a mirror; without this one the advisory module would compute
+        its own schema-shape failure for a payload the deny already refused.
+        """
+        fm = _queue_fm(**over)
+        payload = _session_payload()
+        denied = guard._evaluate_queue_deferral_grant(fm, _QUEUE_REL, payload)
+        stood_down = advisory_guard._queue_deferral_grant_fires(fm, _QUEUE_REL, payload)
+        assert not (denied is not None and not stood_down), (
+            f"both modules non-None for {over!r}: deny={denied!r} advisory_fires={stood_down!r}"
+        )
+        assert bool(denied) == bool(stood_down), (
+            f"deny and its advisory mirror disagree for {over!r}: "
+            f"deny={denied!r} fires={stood_down!r}"
+        )
+
+
+class TestQueueDeferralDenyFiresThroughCheck:
+    """The deny must fire through the REAL `check()`, not merely when its
+    evaluator is called directly with a dict.
+
+    This class exists because the unit tests above did not catch a shipped
+    silent no-op, and could not have. Queue records are bare YAML documents
+    (`match_mode: whole-document-yaml`); `parse_frontmatter` returns None for
+    any content lacking a `---` fence, so the `frontmatter` argument
+    `check()` hands this evaluator is STRUCTURALLY ALWAYS None for the exact
+    file class the deny guards. Every direct-call test passed while the guard
+    denied nothing in production.
+
+    The plan's own falsifier caught it, reporting WARNED ONLY at a HEAD where
+    the deny was written, correctly ordered, and green. Two lessons worth more
+    than the fix: a test that constructs the evaluator's input by hand cannot
+    prove the caller constructs it the same way, and an executable falsifier
+    outranks a passing suite as delivery evidence.
+
+    These tests drive `check()` end-to-end with a real bare-YAML payload, which
+    is the shape the falsifier uses and the shape production writes.
+    """
+
+    _PROBE = (
+        "created: 2026-08-29\n"
+        "title: an ungranted park\n"
+        "body: Body text.\n"
+        "status: deferred\n"
+        "source: probe\n"
+        "proposed_action: none\n"
+        "severity: P3\n"
+    )
+
+    def _write_payload(self, content: str, repo_root, session_id="sess-abc123"):
+        return {
+            "session_id": session_id,
+            "tool_name": "Write",
+            "cwd": str(repo_root),
+            "tool_input": {
+                "file_path": str(
+                    Path(repo_root)
+                    / "state"
+                    / "improvement-queue"
+                    / "2026-08-29-probe-deferred.yaml"
+                ),
+                "content": content,
+            },
+        }
+
+    def test_bare_yaml_ungranted_deferral_is_denied_through_check(self):
+        result = guard.check(self._write_payload(self._PROBE, Path.cwd()))
+        assert result is not None, (
+            'check() returned None for an ungranted bare-YAML deferral — the deny '
+            'is a no-op on the exact file class it guards'
+        )
+        reason = _assert_deny_shape(result)
+        assert "pm_approved" in reason
+        for unrelated in ("surface", "from_repo", "change_kind"):
+            assert unrelated not in reason, (
+                f'deny names {unrelated!r}, which is not the violation: {reason!r}'
+            )
+
+    def test_advisory_stands_down_on_the_same_bare_yaml_payload(self):
+        """Mutual exclusivity, exercised through both real entry points rather
+        than through the two helpers in isolation."""
+        payload = self._write_payload(self._PROBE, Path.cwd())
+        assert guard.check(payload) is not None
+        assert advisory_guard.check(payload) is None, (
+            'both guards fired for one payload — the invariant the deny/advisory '
+            'pairing rests on'
+        )
+
+    def test_fully_granted_bare_yaml_deferral_passes_check(self):
+        granted = self._PROBE + (
+            "pm_approved: true\n"
+            'deferred_by: "PM (ruling recorded in session)"\n'
+            "deferred_until: '2026-12-31'\n"
+            'case_against: "Acting now costs more than the defect does."\n'
+            'why_blocked: "Parked pending a third consumer."\n'
+            "surface: coordinator_core/\n"
+            "from_repo: claude-klabauter-em\n"
+            "change_kind: script-edit\n"
+        )
+        assert guard.check(self._write_payload(granted, Path.cwd())) is None
+
+
+class TestQueueDeferralDenyIsClaudeKlabauterScoped:
+    """The deny must not reach into a sibling repo's corpus.
+
+    C3's cross-field rule was scoped on SCHEMA provenance, which a write guard
+    never consults — so scoping C3 did nothing for this one, which keys on path
+    pattern plus content. Nothing about `state/debt-backlog/**` says whose repo
+    it is, and the guard fires in whatever session invokes the shared hook chain.
+
+    Measured before the fix: a `/debt-triage` Step 6b class 4 park written into
+    DoE's own tree — `pm_approved`, `deferred_by: /debt-triage <session-id>`,
+    `deferred_until`, `why_blocked`, exactly as their `SKILL.md:148-150` writes
+    one — was HARD-DENIED on the absent `case_against` their ceremony does not
+    stamp. Queue Terminus outcome class 4, refused in a sibling repo by this
+    repo's rule, while this chunk's own `external_gate` was certified discharged.
+
+    Both directions matter, which is why the advisory half is pinned here too: a
+    deny correctly silenced in DoE's tree while its advisory mirror still
+    reported "fires" would suppress the ordinary schema warning as well, leaving
+    them with neither a refusal nor a warning where they previously had a
+    warning. Silence is the worse failure, not the safer one.
+    """
+
+    _CEREMONY_PARK = (
+        "created: 2026-08-29\n"
+        "title: a ceremony park\n"
+        "body: Body text.\n"
+        "status: deferred\n"
+        "source: s\n"
+        "risk: r\n"
+        "proposed_action: p\n"
+        "pm_approved: true\n"
+        "deferred_by: '/debt-triage 23eee8e4'\n"
+        "deferred_until: '2026-12-31'\n"
+        "why_blocked: Parked at triage.\n"
+    )
+
+    def _payload(self, root):
+        return {
+            "session_id": "sess-abc123",
+            "tool_name": "Write",
+            "cwd": str(root),
+            "tool_input": {
+                "file_path": str(Path(root) / "state" / "debt-backlog" / "park.yaml"),
+                "content": self._CEREMONY_PARK,
+            },
+        }
+
+    def test_a_sibling_repos_ceremony_park_is_not_denied(self, tmp_path, monkeypatch):
+        sibling = tmp_path / "DoE-claude"
+        (sibling / "state" / "debt-backlog").mkdir(parents=True)
+        monkeypatch.setattr(guard, "coordinator_doe_root", lambda: str(sibling))
+        monkeypatch.setattr(advisory_guard, "coordinator_doe_root", lambda: str(sibling))
+        assert guard.check(self._payload(sibling)) is None
+
+    def test_the_same_payload_is_denied_in_our_own_tree(self, tmp_path, monkeypatch):
+        """The other half — scoping must not have disabled the rule at home."""
+        sibling = tmp_path / "DoE-claude"
+        (sibling / "state" / "debt-backlog").mkdir(parents=True)
+        monkeypatch.setattr(guard, "coordinator_doe_root", lambda: str(sibling))
+        result = guard.check(self._payload(Path.cwd()))
+        assert result is not None
+        assert "case_against" in _assert_deny_shape(result)
+
+    def test_evaluator_declines_on_a_doe_owned_root(self, tmp_path, monkeypatch):
+        sibling = tmp_path / "DoE-claude"
+        sibling.mkdir(parents=True)
+        monkeypatch.setattr(guard, "coordinator_doe_root", lambda: str(sibling))
+        fm = {"status": "deferred", "pm_approved": True, "deferred_by": "/debt-triage x",
+              "deferred_until": "2026-12-31", "why_blocked": "w"}
+        assert guard._evaluate_queue_deferral_grant(
+            fm, "state/debt-backlog/park.yaml", {"session_id": "s"}, "", str(sibling)
+        ) is None
+
+    def test_an_unresolvable_doe_root_keeps_enforcing_locally(self, monkeypatch):
+        """Fail-safe direction: a resolver that raises must not silently disable
+        the guard. Under-enforcing at home is recoverable; reaching into a
+        sibling is not, and neither is a rule that quietly stops working."""
+        def _boom():
+            raise RuntimeError("registry unavailable")
+        monkeypatch.setattr(guard, "coordinator_doe_root", _boom)
+        assert guard._is_doe_owned_repo(str(Path.cwd())) is False
+        result = guard.check(self._payload(Path.cwd()))
+        assert result is not None, "guard stopped enforcing when DoE root was unresolvable"

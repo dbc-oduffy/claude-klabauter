@@ -398,10 +398,14 @@ def _memory_probe() -> str:
         return ""
     try:
         # `lib` is injected by `_resolve_claude_klabauter_root_silent`, which this path
-        # does not call -- so inject here too rather than depend on call order.
-        _lib = os.path.join(SCRIPT_DIR, "lib")
-        if _lib not in sys.path:
-            sys.path.insert(0, _lib)
+        # does not call -- so bootstrap here too rather than depend on call
+        # order. `import lib` (coordinator/bin/lib/__init__.py is the ONE
+        # place that directory is put on sys.path), not a per-file
+        # sys.path.insert -- the latter was a genuinely NEW per-file insert
+        # introduced during the 2026-08 lazy-bootstrap sweep (Finding 6,
+        # 2026-08-29 review-finding sweep), the one case in this file's slice
+        # without a matching deletion elsewhere.
+        import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
         from cc_invoke import child_env  # noqa: E402
 
         proc = subprocess.run(

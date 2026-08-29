@@ -99,15 +99,25 @@ _BOOTSTRAPPED_NAMES = ("resolve_claude_klabauter_root_or_exit", "resolve_repo_ro
 def _bootstrap_op_trampoline() -> None:
     """Import `coordinator/bin/lib/op_trampoline.py`'s two Shape-A
     resolvers into this module's globals, deferred out of module scope so
-    a warm-serve import of this file stays inert until `main()` runs."""
+    a warm-serve import of this file stays inert until `main()` runs.
+    Idempotent by construction: each name is published via
+    `globals().setdefault(...)`, so a name a caller already bound (e.g. a
+    `mock.patch.object` of just one of the two resolvers) is left alone
+    rather than clobbered when the other name is still missing."""
+    if all(n in globals() for n in _BOOTSTRAPPED_NAMES):
+        return
+
     import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
     from op_trampoline import (
-        resolve_claude_klabauter_root_or_exit,
-        resolve_repo_root_or_exit,
+        resolve_claude_klabauter_root_or_exit as _resolve_claude_klabauter_root_or_exit,
+        resolve_repo_root_or_exit as _resolve_repo_root_or_exit,
     )
 
-    globals()["resolve_claude_klabauter_root_or_exit"] = resolve_claude_klabauter_root_or_exit
-    globals()["resolve_repo_root_or_exit"] = resolve_repo_root_or_exit
+    for _name, _value in (
+        ("resolve_claude_klabauter_root_or_exit", _resolve_claude_klabauter_root_or_exit),
+        ("resolve_repo_root_or_exit", _resolve_repo_root_or_exit),
+    ):
+        globals().setdefault(_name, _value)
 
 
 def __getattr__(name: str):
@@ -121,12 +131,6 @@ def __getattr__(name: str):
     """
     if name in _BOOTSTRAPPED_NAMES:
         _bootstrap_op_trampoline()
-        if name not in globals():
-            _saved = {k: globals().pop(k) for k in _BOOTSTRAPPED_NAMES if k in globals()}
-            try:
-                _bootstrap_op_trampoline()
-            finally:
-                globals().update(_saved)
         try:
             return globals()[name]
         except KeyError:

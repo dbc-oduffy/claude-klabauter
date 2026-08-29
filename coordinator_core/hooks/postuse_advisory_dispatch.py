@@ -48,8 +48,21 @@ from coordinator_core.ipc import register_op
 from coordinator_core.hooks._envelope import no_advisory, post_advisory
 from coordinator_core.hooks._payload import field
 from coordinator_core.hooks import nudge_unauthorized_handoff
-from coordinator_core.session.autonomous_sentinel import sentinel_path
+from coordinator_core.session.autonomous_sentinel import sentinel_path  # noqa: F401 -- back-compat monkeypatch target, see below
 from coordinator_core.session.context_usage_sidecar import read_usage
+from coordinator_core.session.mode_resolution import resolve_mode
+
+# `sentinel_path` above is no longer called by this module's own logic (both
+# call sites now go through `resolve_mode("autonomous", ...)`, C3 of
+# 2026-08-28-the-fleet-gets-one-file-and-the-floor-moves-to-the-reader.md) --
+# kept as a live module attribute solely because
+# coordinator_core/hooks/tests/test_postuse_context_pressure.py's `_under_sentinel`
+# helper (out of this chunk's file scope) monkeypatches BOTH
+# `autonomous_sentinel.sentinel_path` (which resolve_mode's `_autonomous_session_value`
+# actually reads, module-qualified, so this patch is what changes behaviour) AND this
+# module's own `sentinel_path` name, redundantly. Removing this import raises
+# AttributeError on that second, now-inert patch. Do not remove without updating that
+# test file in its own chunk.
 
 
 def _tempfile():
@@ -424,8 +437,16 @@ def _check_context_pressure_sync(session_id: str, transcript_path: str) -> str:
     except Exception:
         transcript_hash = session_id
 
-    # --- Autonomous run detection (read-only; sentinel written by EM/user, not this op) ---
-    autonomous_run = os.path.isfile(str(sentinel_path(session_id)))
+    # --- Autonomous run detection (session-wins key via the resolve_mode seam) ---
+    autonomous_run = resolve_mode("autonomous", session_id)
+
+    # --- compaction_warnings variant selector (fleet-wins key via resolve_mode).
+    # SELECTOR ONLY — never an off switch. No value of this key returns "" here
+    # where the function would otherwise return advisory text; it only picks
+    # which non-empty variant fires (see mode_resolution module docstring and
+    # this function's own autonomous_run branches below, which already
+    # implement the two variants this key selects between).
+    compaction_warnings_variant = resolve_mode("compaction_warnings", session_id)
 
     reading = read_usage(session_id, now=time.time())
     context_window_block = reading.context_window if reading is not None else None
@@ -501,7 +522,7 @@ def _check_context_pressure_sync(session_id: str, transcript_path: str) -> str:
         # delivers the exact nudge the PM switched the mode on to remove, at
         # the moment a long run is most likely to take it.
         # (Reported by doe-claude-41, observed firing twice in one session.)
-        if autonomous_run:
+        if autonomous_run or compaction_warnings_variant == "informational":
             return (
                 f"CONTEXT PRESSURE — INFORMATIONAL: ~{display_pct}% of window"
                 f" used{age_note}, measured from the harness's own context_window"
@@ -527,7 +548,7 @@ def _check_context_pressure_sync(session_id: str, transcript_path: str) -> str:
             f" start moving toward /handoff. If it can, carry on — the hard call"
             f" comes at 47%."
         )
-        if autonomous_run:
+        if autonomous_run or compaction_warnings_variant == "informational":
             return (
                 f"CONTEXT PRESSURE — INFORMATIONAL: ~{display_pct}% of window"
                 f" used{age_note}, measured from the harness's own context_window"
@@ -721,8 +742,8 @@ def _check_runtime_tripwire_sync(session_id: str, agent_id: str) -> str:
         # silently losing the tripwire forever.
         pass
 
-    # --- Autonomous-run detection (read-only sentinel written by EM/user, not this op) ---
-    autonomous = os.path.isfile(str(sentinel_path(em_sid)))
+    # --- Autonomous-run detection (session-wins key via the resolve_mode seam) ---
+    autonomous = resolve_mode("autonomous", em_sid)
 
     # Review: code-reviewer (B-F1) — fire-log append (state/runtime-tripwire-fire-log.tsv)
     #   dropped entirely. Calibration evidence now captured via the durable

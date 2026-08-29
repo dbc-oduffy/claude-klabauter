@@ -55,10 +55,10 @@ from coordinator_core._settings_home import settings_home
 from coordinator_core.hooks._envelope import context_only, no_advisory
 from coordinator_core.hooks._payload import field, present
 from coordinator_core.ipc import register_op
-from coordinator_core.session.autonomous_sentinel import sentinel_path
 from coordinator_core.session.dispatch_nudge_sentinel import (
     sentinel_path as dispatch_nudge_sentinel_path,
 )
+from coordinator_core.session.mode_resolution import resolve_mode
 
 # ---------------------------------------------------------------------------
 # Doc / data extension denylist — mirrors nudge-em-code-dispatch.js:30-33.
@@ -157,16 +157,15 @@ async def _handler(params: dict, repo_root=None) -> dict:
     session_id, has_true_sid = _resolve_session_id(raw_sid)
 
     nudge_ok_tmp = str(dispatch_nudge_sentinel_path(session_id))
-    autonomous_tmp = str(sentinel_path(session_id))
 
     # --- Bypass 3: dispatch-nudge suppression sentinel ---
     found = await asyncio.to_thread(_sentinel_exists, nudge_ok_tmp)
     if found:
         return no_advisory()  # sentinel present → suppressed
 
-    # --- Bypass 4: autonomous-run sentinel ---
-    found = await asyncio.to_thread(_sentinel_exists, autonomous_tmp)
-    if found:
+    # --- Bypass 4: autonomous-run mode (resolve_mode seam — session-wins key) ---
+    autonomous_run = await asyncio.to_thread(resolve_mode, "autonomous", session_id)
+    if autonomous_run:
         return no_advisory()  # autonomous mode → suppress nudge
 
     # --- Emit the offer-shaped nudge ---
@@ -730,9 +729,8 @@ def op(payload: dict) -> dict | None:
     if _sentinel_exists(nudge_ok_sentinel):
         return None
 
-    # --- Bypass 4: autonomous-run sentinel ---
-    autonomous_sentinel = str(sentinel_path(session_id))
-    if _sentinel_exists(autonomous_sentinel):
+    # --- Bypass 4: autonomous-run mode (resolve_mode seam — session-wins key) ---
+    if resolve_mode("autonomous", session_id):
         return None
 
     # --- Derive executor type and build dispatch brief ---

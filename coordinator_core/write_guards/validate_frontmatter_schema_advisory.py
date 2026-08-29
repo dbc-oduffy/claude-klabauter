@@ -104,11 +104,15 @@ from pathlib import Path
 from typing import Any, Callable, Optional, TypeVar
 
 from coordinator_core.bash_guards._helpers import operator_override_note
+from coordinator_core.write_guards.validate_frontmatter_schema_deny import (
+    _is_doe_owned_repo as _deny_guard_is_doe_owned_repo,
+)
 from coordinator_core.dag import check_lineage_reachability as _check_lineage_reachability
 from coordinator_core.frontmatter.baton_class import canonical_kind as _canonical_kind
 from coordinator_core.frontmatter.body_blocks import LocateStatus, locate_fenced_block
 from coordinator_core.frontmatter.schema_validate import (
     _apply_cross_field_rules,
+    _is_parseable_iso_date,
     _plan_tasks_schema_without_pm_approved_required,
     _validate_json_schema_node,
     check_plan_tasks_grouping_approval as _check_plan_tasks_grouping_approval,
@@ -1355,6 +1359,83 @@ def _grouping_approval_fires(prospective_content: str) -> bool:
         return False
 
 
+_QUEUE_FAMILY_DIRS = ("improvement-queue", "debt-backlog", "bug-backlog")
+_QUEUE_FAMILY_PATH_RE = re.compile(
+    r"^state/(?:" + "|".join(_QUEUE_FAMILY_DIRS) + r")/"
+)
+
+
+def _queue_deferral_grant_fires(
+    frontmatter: Optional[dict],
+    repo_rel: str,
+    payload: Optional[dict],
+    prospective_content: str = "",
+    repo_root: str = "",
+) -> bool:
+    """True when the deny sibling's fifth UNCONDITIONAL deny
+    (`_evaluate_queue_deferral_grant`, 2026-08-27-a-queue-deferral-is-a-
+    grant-the-pm-issues.md C4) would fire on this payload.
+
+    Mirrors that function's predicate exactly — same path scope
+    (``state/{improvement-queue,debt-backlog,bug-backlog}/**``), same
+    truthiness floor on `pm_approved`/`case_against`/`deferred_until`/
+    `deferred_by`, same self-grant discriminator against the firing
+    payload's own `session_id` — so the two can never both fire on one
+    payload. Kept as a boolean, mirroring `_grouping_approval_fires` and
+    `_handoff_kind_off_enum_fires` immediately above, because this side
+    never renders the message; it only needs to know whether to stand
+    down.
+    """
+    if not _QUEUE_FAMILY_PATH_RE.match(repo_rel.replace("\\", "/")):
+        return False
+    # Scoped exactly as the deny sibling is (`_is_doe_owned_repo` there, and see
+    # that function for the measured breakage). This must track the deny or the
+    # stand-down goes wrong in the WORSE direction: with the deny correctly
+    # silent in DoE's tree, a mirror that still reported "fires" would suppress
+    # the ordinary schema advisory too, leaving a sibling repo with neither a
+    # refusal nor a warning where they previously had a warning.
+    if repo_root and _deny_guard_is_doe_owned_repo(repo_root):
+        return False
+    # Queue records are BARE YAML (whole-document-yaml match_mode), so
+    # `frontmatter` is structurally always None for them and reading it
+    # directly made the deny sibling a silent no-op — see
+    # `_queue_record_fields` in validate_frontmatter_schema_deny.py for the
+    # full account. Resolved identically here: the mirror must agree with the
+    # deny on what the record says, or the mutual-exclusivity invariant the
+    # two modules rest on is decided by a parsing accident.
+    if not frontmatter:
+        try:
+            parsed = parse_yaml(prospective_content)
+        except Exception:  # noqa: BLE001 — fail-open, matching the deny sibling
+            return False
+        frontmatter = parsed if isinstance(parsed, dict) else None
+    if not frontmatter:
+        return False
+    if frontmatter.get("status") != "deferred":
+        return False
+
+    if frontmatter.get("pm_approved") is not True:
+        return True
+
+    case_against = frontmatter.get("case_against")
+    if case_against is None or not str(case_against).strip():
+        return True
+
+    deferred_until = frontmatter.get("deferred_until")
+    if not _is_parseable_iso_date(deferred_until):
+        return True
+
+    deferred_by = frontmatter.get("deferred_by")
+    if deferred_by is None or not str(deferred_by).strip():
+        return True
+
+    session_id = ((payload or {}).get("session_id") or "").strip()
+    if session_id and str(deferred_by).strip() == session_id:
+        return True
+
+    return False
+
+
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
@@ -1523,6 +1604,17 @@ def check(payload: dict) -> Optional[dict]:
     # down in lockstep — same mutual-exclusivity reasoning as the lineage
     # and grouping-approval stand-downs immediately above.
     if _handoff_kind_off_enum_fires(schema_name, schema, frontmatter):
+        return None
+
+    # Ungranted queue-deferral (2026-08-27-a-queue-deferral-is-a-grant-the-
+    # pm-issues.md C4) is the fifth UNCONDITIONAL deny, so it is the deny
+    # sibling's territory too and this one stands down in lockstep — same
+    # mutual-exclusivity reasoning as the three stand-downs immediately
+    # above. `test_at_most_one_sibling_fires_per_payload`-shaped differential
+    # coverage is what keeps this honest.
+    if _queue_deferral_grant_fires(
+        frontmatter, repo_rel, payload, prospective_content, repo_root
+    ):
         return None
 
     return schema_advisory

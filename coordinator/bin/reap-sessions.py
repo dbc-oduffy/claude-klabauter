@@ -122,24 +122,17 @@ def __getattr__(name: str):
     via `main()`), the plain global wins on every later lookup and this
     function is not called again for that name.
 
-    NEGATIVE SPEC -- the forced re-run is not belt-and-braces. The plain
-    `_bootstrap_imports()` call above short-circuits on its own
-    `"cc_invoke" in globals()` sentinel, so a name that leaves `__dict__`
-    AFTER the first bootstrap (e.g. `mock.patch.object` teardown, which
-    `delattr`s rather than restoring, then probes `hasattr` and lands back
-    here with the sentinel already satisfied) is never rebound by a plain
-    call and this hook raises `KeyError` instead of returning the name. The
-    forced re-run below defeats the sentinel; `_saved` snapshots and
-    restores every OTHER already-present bootstrapped name around it, so a
-    caller's live monkeypatch of a different name survives."""
+    NEGATIVE SPEC -- the bootstrap guard checks ALL of `_BOOTSTRAP_NAMES`,
+    not a single sentinel: `mock.patch.object` teardown, which `delattr`s
+    rather than restoring and then probes via `hasattr`, is exactly the case
+    the all-names guard covers -- a name absent from `__dict__` means
+    `_bootstrap_imports()` re-runs. The re-run publishes each
+    freshly-imported name via `globals().setdefault(...)`, so it rebinds
+    exactly what is missing and leaves any OTHER already-present
+    bootstrapped name untouched. No pop/restore snapshot is needed because a
+    partially-bound state is never mistaken for a fully-bound one."""
     if name in _BOOTSTRAP_NAMES:
         _bootstrap_imports()
-        if name not in globals():
-            _saved = {k: globals().pop(k) for k in _BOOTSTRAP_NAMES if k in globals()}
-            try:
-                _bootstrap_imports()
-            finally:
-                globals().update(_saved)
         try:
             return globals()[name]
         except KeyError:
@@ -158,14 +151,18 @@ def _bootstrap_imports() -> None:
     `mod.cc_invoke` ahead of calling `main()`) is left alone rather than
     clobbered by a real import.
     """
-    if "cc_invoke" in globals():
+    if all(n in globals() for n in _BOOTSTRAP_NAMES):
         return
 
-    global cc_invoke, _resolve_claude_klabauter_root
-
     import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
-    import cc_invoke
-    from cc_invoke import _resolve_claude_klabauter_root
+    import cc_invoke as _cc_invoke
+    from cc_invoke import _resolve_claude_klabauter_root as _resolve_claude_klabauter_root_fn
+
+    for _name, _value in (
+        ("cc_invoke", _cc_invoke),
+        ("_resolve_claude_klabauter_root", _resolve_claude_klabauter_root_fn),
+    ):
+        globals().setdefault(_name, _value)
 
 
 def main(argv: list[str] | None = None) -> int:

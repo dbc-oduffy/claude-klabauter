@@ -85,6 +85,40 @@ def _bootstrap_engine() -> None:
         sys.path.insert(0, _lib_dir)
     _BOOTSTRAP_DONE = True
 
+
+_CLUSTERING_NAMES = ("detect_candidates", "_normalize_tags", "_humanize", "_extract_keywords")
+
+
+def _bootstrap_clustering() -> None:
+    """Publish `detect_candidates`/`_normalize_tags`/`_humanize`/`_extract_keywords`
+    into module globals on first access.
+
+    These live in `coordinator_core.clustering.candidates` (2026-07-23 C2
+    extraction); this module's own callers (`_emit()`) import them locally,
+    but external readers (`coordinator/tests/test_detect_initiative_candidates_port.py`)
+    access them as `_mod.detect_candidates` / `_mod._normalize_tags` module
+    attributes. Deferred import, not module-scope, to keep a warm server's
+    import of this file cheap; `globals().setdefault` per-name so a caller's
+    monkeypatch of one name is never clobbered by a later bootstrap call.
+    """
+    if all(_n in globals() for _n in _CLUSTERING_NAMES):
+        return
+    _bootstrap_engine()
+    from coordinator_core.clustering import candidates as _candidates_mod
+
+    for _n in _CLUSTERING_NAMES:
+        globals().setdefault(_n, getattr(_candidates_mod, _n))
+
+
+def __getattr__(name: str):
+    if name in _CLUSTERING_NAMES:
+        _bootstrap_clustering()
+        try:
+            return globals()[name]
+        except KeyError:
+            raise AttributeError(f"module {__name__!r} has no attribute {name!r}") from None
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
@@ -244,8 +278,7 @@ def _render_text(candidates: list[dict]) -> str:
 
 
 def _emit(records: list[dict], format_: str) -> None:
-    _bootstrap_engine()
-    from coordinator_core.clustering.candidates import detect_candidates
+    _bootstrap_clustering()
 
     candidates = detect_candidates(records)
     if format_ == "json":

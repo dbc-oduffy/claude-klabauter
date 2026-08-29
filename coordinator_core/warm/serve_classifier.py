@@ -77,6 +77,17 @@ Negative-spec (RAG-bait):
     and `partition_report` are read-only over the corpus; C3-C6 are the
     chunks that make the flagged buckets shrink.
 
+    This module's predicate answers module-body inertness -- whether
+    executing the file's TOP-LEVEL statements mutates process-global state
+    -- and NOT the stronger claim "this name causes no process-global
+    mutation at request time." A `_bootstrap_*` helper deferred out of
+    module scope (the C6k import-motion shape) that writes `sys.path` or
+    `globals()` the first time a request calls it is invisible to this walk
+    by construction, because the walk never descends into a function body.
+    "servable N / every failure bucket 0" means every surveyed module body
+    is inert at import time; a reader who hears "no shared-process mutation
+    remains" is reading a claim this module does not make.
+
 Spec backlink: docs/plans/2026-08-27-every-bin-name-warm-serves-and-a-classifier-says-so.md, chunk C1
 """
 
@@ -107,6 +118,7 @@ class Finding:
     line: int
     text: str
     reason: str
+    is_sys_path_mutation: bool = False
 
     def key(self) -> tuple[str, str]:
         return (self.path, self.text)
@@ -237,9 +249,12 @@ _PURE_CALL_TARGETS = frozenset(
         "property",
         "staticmethod",
         "classmethod",
-        "setter",
-        "getter",
-        "deleter",
+        # NOTE: `setter`/`getter`/`deleter` are handled structurally in
+        # `_check_decorators`, not by name here -- `@x.setter` where `x` is
+        # a bare `Name` yields `_expr_target_key` == "x.setter", which can
+        # never match a bare "setter" entry (that shape only matches a
+        # receiver that is itself an Attribute or Call, e.g. `a.b.setter`,
+        # which this idiom never produces). See `_check_decorators`.
         "contextlib.contextmanager",
         "contextmanager",
         "functools.lru_cache",
@@ -322,9 +337,26 @@ def _source_line_text(source: str, node: ast.AST) -> str:
     return segment.strip().splitlines()[0]
 
 
+_DESCRIPTOR_PROTOCOL_ATTRS = frozenset({"setter", "getter", "deleter"})
+
+
+def _is_descriptor_protocol_decorator(dec: ast.expr) -> bool:
+    """True for `@x.setter` / `@x.getter` / `@x.deleter` on ANY receiver
+    shape -- the receiver is always the property object being redefined
+    (`x` a bare `Name` in the common idiom, or an Attribute/Call chain),
+    never process state, so the receiver shape is irrelevant to purity.
+    Checked on `attr` directly rather than through `_expr_target_key` +
+    `_PURE_CALL_TARGETS`, because a bare-name whitelist entry can only ever
+    match a receiver that is itself an Attribute or Call (`a.b.setter`) --
+    not the bare-Name receiver (`@x.setter`) this idiom actually produces."""
+    return isinstance(dec, ast.Attribute) and dec.attr in _DESCRIPTOR_PROTOCOL_ATTRS
+
+
 def _check_decorators(stmt: ast.stmt, relpath: str, source: str) -> list[Finding]:
     violations: list[Finding] = []
     for dec in getattr(stmt, "decorator_list", []):
+        if _is_descriptor_protocol_decorator(dec):
+            continue
         target = _expr_target_key(dec)
         pure = target in _PURE_CALL_TARGETS and (not isinstance(dec, ast.Call) or _is_pure_expr(dec))
         if not pure:
@@ -455,7 +487,40 @@ def _check_class_bases(stmt: ast.ClassDef, relpath: str, source: str) -> list[Fi
     return violations
 
 
-def _check_body(body: list[ast.stmt], relpath: str, source: str) -> list[Finding]:
+def _sys_aliases(tree: ast.Module) -> frozenset[str]:
+    """Every module-scope name bound to the `sys` module -- `import sys` ->
+    `{"sys"}`, `import sys as s` -> `{"s"}`. Used to detect `sys.path`
+    mutation STRUCTURALLY (an Attribute chain rooted at one of these names)
+    rather than by the literal substring `"sys.path"` in the finding's
+    rendered source text, which an alias (`s.path.insert(...)`) evades."""
+    aliases: set[str] = set()
+    for stmt in tree.body:
+        if isinstance(stmt, ast.Import):
+            for alias in stmt.names:
+                if alias.name == "sys":
+                    aliases.add(alias.asname or alias.name)
+    return frozenset(aliases)
+
+
+def _contains_sys_path_mutation(node: ast.AST, sys_aliases: frozenset[str]) -> bool:
+    """True iff any Attribute node inside `node` is `<alias>.path` for a
+    name bound to the `sys` module -- catches `sys.path.insert(...)`,
+    `sys.path += [...]`, and any aliased-import equivalent, wherever it
+    appears in the statement (not just at the statement's own top level)."""
+    for sub in ast.walk(node):
+        if (
+            isinstance(sub, ast.Attribute)
+            and sub.attr == "path"
+            and isinstance(sub.value, ast.Name)
+            and sub.value.id in sys_aliases
+        ):
+            return True
+    return False
+
+
+def _check_body(
+    body: list[ast.stmt], relpath: str, source: str, sys_aliases: frozenset[str] = frozenset()
+) -> list[Finding]:
     """Check one statement-body (module top level, or a ClassDef body
     recursed into with the same rules) for module-body-inertness
     violations, including C1's third (import-purity) conjunct."""
@@ -479,7 +544,13 @@ def _check_body(body: list[ast.stmt], relpath: str, source: str) -> list[Finding
             if _is_pure_assign(stmt):
                 continue
             violations.append(
-                Finding(relpath, stmt.lineno, _source_line_text(source, stmt), "module-scope process mutation")
+                Finding(
+                    relpath,
+                    stmt.lineno,
+                    _source_line_text(source, stmt),
+                    "module-scope process mutation",
+                    is_sys_path_mutation=_contains_sys_path_mutation(stmt, sys_aliases),
+                )
             )
             continue
         if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
@@ -489,10 +560,16 @@ def _check_body(body: list[ast.stmt], relpath: str, source: str) -> list[Finding
         if isinstance(stmt, ast.ClassDef):
             violations.extend(_check_decorators(stmt, relpath, source))
             violations.extend(_check_class_bases(stmt, relpath, source))
-            violations.extend(_check_body(stmt.body, relpath, source))
+            violations.extend(_check_body(stmt.body, relpath, source, sys_aliases))
             continue
         violations.append(
-            Finding(relpath, stmt.lineno, _source_line_text(source, stmt), "module-scope process mutation")
+            Finding(
+                relpath,
+                stmt.lineno,
+                _source_line_text(source, stmt),
+                "module-scope process mutation",
+                is_sys_path_mutation=_contains_sys_path_mutation(stmt, sys_aliases),
+            )
         )
     return violations
 
@@ -503,8 +580,18 @@ def find_module_body_violations(source: str, relpath: str) -> list[Finding]:
     mutation, `main` presence) plus C1's import-purity conjunct. Does NOT
     check arity -- see `_main_arity_ok` / `classify_entrypoint`, a
     deliberately separate axis (a file can be module-body-inert and still
-    unservable for having `def main():` with no `argv` parameter)."""
+    unservable for having `def main():` with no `argv` parameter).
+
+    NEGATIVE SPEC -- this predicate answers module-body inertness at IMPORT
+    time, NOT absence of process-global mutation at REQUEST time. A
+    `_bootstrap_*` helper deferred out of module scope (C6k's own shape)
+    that mutates `sys.path` or `globals()` the first time a request calls
+    it is invisible here by construction -- this walk never descends into a
+    function body. 'every failure bucket 0' over this predicate means every
+    surveyed module body is inert; it does not mean the process this module
+    serves in never mutates shared state."""
     tree = ast.parse(source, filename=relpath)
+    sys_aliases = _sys_aliases(tree)
     violations: list[Finding] = []
 
     if not any(_is_main_def(stmt) for stmt in tree.body):
@@ -512,7 +599,7 @@ def find_module_body_violations(source: str, relpath: str) -> list[Finding]:
             Finding(relpath, 1, "<no module-level def main>", "missing module-level main(argv)")
         )
 
-    violations.extend(_check_body(tree.body, relpath, source))
+    violations.extend(_check_body(tree.body, relpath, source, sys_aliases))
 
     return violations
 
@@ -551,6 +638,7 @@ class ServeVerdict:
     has_main: bool
     main_arity_ok: bool
     findings: tuple[Finding, ...]
+    parse_error: str | None = None
 
     @property
     def servable(self) -> bool:
@@ -563,12 +651,15 @@ class ServeVerdict:
     @property
     def inert(self) -> bool:
         """Module body carries zero purity findings (sys.path mutation,
-        non-stdlib import, or any other structural violation)."""
-        return self.script_exists and len(self.findings) == 0
+        non-stdlib import, or any other structural violation). A file that
+        could not be read/parsed (`parse_error` set) is NOT inert -- it was
+        never examined, which is a distinct state from "examined and
+        clean"."""
+        return self.script_exists and self.parse_error is None and len(self.findings) == 0
 
     @property
     def sys_path_mutation(self) -> bool:
-        return any(f.reason == "module-scope process mutation" and "sys.path" in f.text for f in self.findings)
+        return any(f.is_sys_path_mutation for f in self.findings)
 
     @property
     def non_stdlib_import(self) -> bool:
@@ -596,8 +687,23 @@ def classify_entrypoint(name: str, bin_dir: Path = _BIN_DIR) -> ServeVerdict:
             main_arity_ok=False,
             findings=(),
         )
-    source = script.read_text(encoding="utf-8")
-    tree = ast.parse(source, filename=script_relpath)
+    try:
+        source = script.read_text(encoding="utf-8")
+        tree = ast.parse(source, filename=script_relpath)
+    except (UnicodeDecodeError, SyntaxError, ValueError) as exc:
+        # Counted, not crashed -- an unparseable/non-UTF-8 file must show up
+        # as its own bucket (`partition_report`'s `unparseable`) so "every
+        # failure bucket 0" cannot be misread as "this file was examined and
+        # found clean" when it was never examined at all.
+        return ServeVerdict(
+            name=name,
+            script_relpath=script_relpath,
+            script_exists=True,
+            has_main=False,
+            main_arity_ok=False,
+            findings=(),
+            parse_error=f"{type(exc).__name__}: {exc}",
+        )
     main_fn = _main_def(tree)
     has_main = main_fn is not None
     arity_ok = has_main and _main_arity_ok(main_fn)  # type: ignore[arg-type]
@@ -639,11 +745,12 @@ def partition_report(verdicts: list[ServeVerdict]) -> dict:
     module-scope non-stdlib import -- servability and module-body purity
     are different properties, see `ServeVerdict.servable`'s docstring)."""
     total = len(verdicts)
+    unparseable = sum(1 for v in verdicts if v.parse_error is not None)
     no_script = sum(1 for v in verdicts if not v.script_exists)
-    no_main = sum(1 for v in verdicts if v.script_exists and not v.has_main)
+    no_main = sum(1 for v in verdicts if v.script_exists and v.parse_error is None and not v.has_main)
     zero_arity_main = sum(1 for v in verdicts if v.has_main and not v.main_arity_ok)
     main_argv = sum(1 for v in verdicts if v.has_main and v.main_arity_ok)
-    cannot_serve = no_script + no_main + zero_arity_main
+    cannot_serve = no_script + no_main + zero_arity_main + unparseable
     servable = sum(1 for v in verdicts if v.servable)
     servable_and_inert = sum(1 for v in verdicts if v.servable and v.inert)
     sys_path_mutation = sum(1 for v in verdicts if v.sys_path_mutation)
@@ -656,6 +763,7 @@ def partition_report(verdicts: list[ServeVerdict]) -> dict:
         "zero_arity_main": zero_arity_main,
         "no_main": no_main,
         "no_script": no_script,
+        "unparseable": unparseable,
         "cannot_serve": cannot_serve,
         "servable": servable,
         "servable_and_inert": servable_and_inert,

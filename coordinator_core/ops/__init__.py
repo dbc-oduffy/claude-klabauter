@@ -183,6 +183,7 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ("coordinator_core.ops.fleet.memo_blitz_buckets", 'registers "memo.blitz_buckets"'),
     ("coordinator_core.ops.push_outstanding", 'registers "push.outstanding"'),
     ("coordinator_core.ops.deliverable_rollup", 'registers "deliverable.rollup"'),
+    ("coordinator_core.ops.delegation_check", 'registers "delegation.check"'),
     (
         "coordinator_core.ops.spec_backlink_resolve",
         'registers "spec_backlink.resolve", "spec_backlink.rewrite"',

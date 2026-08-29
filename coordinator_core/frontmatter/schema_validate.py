@@ -2599,6 +2599,199 @@ def _cf_plan_tasks_disposition_shape(fm: dict, *, governed: bool = False) -> Err
     return None
 
 
+def _is_parseable_iso_date(value: Any) -> bool:
+    """True iff `value` is a non-blank string parseable as an ISO-8601 date.
+
+    Deliberately narrow (a calendar date, not an event description) — see
+    `_cf_queue_disposition_shape`'s own docstring for the unresolved tension
+    this narrowness creates against an event-trigger grant already on disk.
+    """
+    if not isinstance(value, str) or not value.strip():
+        return False
+    try:
+        datetime.date.fromisoformat(value.strip())
+    except ValueError:
+        return False
+    return True
+
+
+# Non-open, non-deferred `status` values across all three queue-family
+# schemas (bug-backlog/debt-backlog/improvement-queue) — exempted from
+# `_cf_disposition_shape`'s "non-open needs a non-empty detail" leg the same
+# way `_cf_plan_tasks_disposition_shape` exempts `coded`: a routine close or
+# a bug wontfix is a resolution, not a park, and owes no `why_blocked`.
+_QUEUE_STATUS_DETAIL_EXEMPT = frozenset({'closed', 'wontfix'})
+
+
+def _cf_queue_disposition_shape(
+    fm: dict, local_queue_corpus: bool = False
+) -> ErrorDict | None:
+    """Hard-reject cross-field validator for the queue-family (bug-backlog /
+    debt-backlog / improvement-queue) `status: deferred` grant shape — the
+    hard-failing sibling to C2's presence-only `allOf` branch vendored onto
+    all three schemas (docs/plans/2026-08-27-a-queue-deferral-is-a-grant-
+    the-pm-issues.md § C3). That branch requires the five grant fields be
+    PRESENT; this function is where a record whose grant is present but
+    HOLLOW (`pm_approved: false`, a blank `case_against`, ...) actually
+    rejects.
+
+    Reuses `_cf_disposition_shape` (:2077) via field aliasing rather than a
+    fresh iterate/reject/require-detail copy, exactly as
+    `_cf_plan_tasks_disposition_shape` (:2476) does over the same primitive:
+    the synthetic single-entry list passed in maps `status` -> the
+    primitive's `disposition` key and `why_blocked` -> its
+    `disposition_detail` key (so "a deferred row needs a non-empty
+    why_blocked" reuses the primitive's non-open-needs-detail leg, with
+    `_QUEUE_STATUS_DETAIL_EXEMPT` standing in for `detail_exempt` so a
+    routine `closed`/`wontfix` owes nothing), and `deferred_by` -> its
+    `disposition_ref` key (so "a deferred row needs a non-empty deferred_by"
+    reuses the primitive's `requires_ref` leg). The primitive's own
+    error/hint strings name `disposition_detail`/`disposition_ref` literally;
+    those are rewritten to the real field names below rather than left
+    pointing at vocabulary the caller never declared.
+
+    Layered on top, with no primitive analogue (mirroring how
+    `_cf_plan_tasks_disposition_shape` layers its own `pm_approved`/
+    `case_against` checks after its own primitive call):
+      - `pm_approved` must be literal `true` — absent and `false` both refuse.
+      - `case_against` must be present and non-blank.
+      - `deferred_until` must be present and non-blank, in EITHER form: a
+        calendar date, or the condition the grantor named.
+
+        THE ISO-DATE-ONLY RULE WAS WITHDRAWN 2026-08-29, and the reason is
+        worth keeping. It was authored as specified against a plan that had
+        not noticed the case, and it refused a record that was doing the right
+        thing: a real PM ruling on disk parks an entry "until a THIRD consumer
+        appears", and the record says in its own `deferred_until` that it is
+        recording a condition verbatim "rather than a fabricated date". A rule
+        that refuses the honest record and would have been satisfied by an
+        invented date is pointed the wrong way — it penalises the accuracy it
+        exists to protect, and the only way to comply is the fabrication this
+        whole plan forbids one field over.
+
+        The real requirement was never "a date". It is that a park comes back.
+        A date is one way; a named condition is another, and the mechanism owes
+        the reader a backstop for the second — see
+        `coordinator_core/orientation/expired_grant_signal.py`, which surfaces
+        a condition-form grant once it has sat long enough that nobody is
+        plausibly still watching for the condition. Refusal is not the tool for
+        this: refusing the write does not make anyone revisit the park, it just
+        stops the record being edited.
+
+    Negative-spec: does NOT check WHO granted the deferral — the self-grant
+    discriminator needs the authoring session/agent, which lives only in the
+    write-guard payload this pure (schema, content) validator never sees;
+    that check is C4's, co-located with C4's own independent evaluator. Does
+    NOT widen `_cf_disposition_shape` itself to understand `status` or
+    `why_blocked` — the aliasing lives entirely in the synthetic entry built
+    here, per the primitive's own negative-spec against per-token vocabulary
+    creeping into the shared function.
+
+    SCOPED TO CLAUDE-KLABAUTER'S OWN CORPUS, and inert by default — `local_queue_corpus`
+    must be passed true or this rule does nothing. DoE-claude imports THIS FILE
+    by path (`Path(claude_klabauter_root) / "coordinator_core" / "frontmatter" /
+    "schema_validate.py"`, e.g. their `test_artifact_corpus_validates_against_
+    schema.py`) with no re-vendor and no version gate, so an unscoped rule here
+    changes enforcement on their corpus the instant it lands on our disk. That
+    is the seam the version gate exists to prevent, and it is why DoE asked for
+    this rule to stay claude-klabauter-scoped and opt in on their own schedule
+    (`cross-repo/inbox/2026-08-28-doe-claude-em-doe-schema-branch-already-
+    landed-and-scoping-answers.md`; adopted as this plan's C6 decision).
+
+    MEASURED, not supposed — the unscoped first draft was verified to reject a
+    real `/debt-triage` Step 6b class 4 park (DoE `19f6b1551`: `pm_approved`,
+    `deferred_by: /debt-triage <session-id>`, `deferred_until`, `why_blocked`,
+    and NO `case_against`, which their ceremony does not stamp) through DoE's
+    own `validate_frontmatter_obj` seam against DoE's own schema object. That
+    is Queue Terminus outcome class 4 breaking in another repo — exactly the
+    harm C4's external gate was built to prevent, arriving a chunk early
+    through a different door.
+
+    The discriminator is the SCHEMA'S provenance, because it is the only one
+    this layer has: a record path never reaches a pure (schema, content)
+    validator. `validate_frontmatter` passes true only when resolving against
+    claude-klabauter's own vendored `_SCHEMAS_DIR`; a caller-supplied foreign schema
+    object (`validate_frontmatter_obj`, the seam DoE's port was given) never
+    does. Default false is the fail-safe direction: a claude-klabauter path that forgets
+    to opt in loses enforcement here and still has C4's write-guard deny above
+    it, whereas a default of true silently re-breaks a sibling repo.
+    """
+    if not local_queue_corpus:
+        return None
+    status = fm.get('status', 'open')
+    error = _cf_disposition_shape(
+        [{
+            'disposition': status,
+            'disposition_detail': fm.get('why_blocked'),
+            'disposition_ref': fm.get('deferred_by'),
+        }],
+        field_name='status',
+        open_token='open',
+        requires_ref=frozenset({'deferred'}),
+        detail_exempt=_QUEUE_STATUS_DETAIL_EXEMPT,
+    )
+    if error is not None:
+        error = dict(error)
+        error['error'] = (
+            error['error']
+            .replace('disposition_detail', 'why_blocked')
+            .replace('disposition_ref', 'deferred_by')
+        )
+        error['hint'] = (
+            error['hint']
+            .replace('disposition_detail', 'why_blocked')
+            .replace('disposition_ref', 'deferred_by')
+        )
+        error['field'] = 'why_blocked' if 'why_blocked' in error['error'] else 'deferred_by'
+        return error
+
+    if status != 'deferred':
+        return None
+
+    if fm.get('pm_approved') is not True:
+        return {
+            'field': 'pm_approved',
+            'error': (
+                f"status 'deferred' requires pm_approved: true (got "
+                f"{fm.get('pm_approved')!r})"
+            ),
+            'hint': (
+                'a queue deferral is a grant the PM issues, not a status an '
+                'EM types — pm_approved must be the literal boolean true.'
+            ),
+        }
+
+    case_against = fm.get('case_against')
+    if case_against is None or not str(case_against).strip():
+        return {
+            'field': 'case_against',
+            'error': (
+                f"status 'deferred' requires a non-empty case_against "
+                f"(got {case_against!r})"
+            ),
+            'hint': (
+                'case_against is the argument that lost — a deferral without '
+                'it is a park with no record of what was weighed against it.'
+            ),
+        }
+
+    deferred_until = fm.get('deferred_until')
+    if deferred_until is None or not str(deferred_until).strip():
+        return {
+            'field': 'deferred_until',
+            'error': (
+                f"status 'deferred' requires a non-empty deferred_until "
+                f"(got {deferred_until!r})"
+            ),
+            'hint': (
+                'deferred_until says when the park comes back: a calendar date '
+                '(YYYY-MM-DD), or the condition the grantor named. Either is '
+                'accepted; nothing is not.'
+            ),
+        }
+    return None
+
+
 # `writes` landed as an optional field on plan-tasks.schema.json 1.7.0
 # (2026-07-19-pcli-phase2-stubs-claude-klabauter-contracts.md C2). Enforcement below is
 # going-forward only, gated on THIS date — the date `_cf_plan_tasks_writes_declared`
@@ -3899,12 +4092,19 @@ _CUTOVER_CROSS_FIELD_RULES = [
 # Map schema name → list of cross-field rule functions.
 # handoff-archived has no cross-field rules (relaxed-schema sibling).
 # cross-repo-memo rules are cross-field ONLY (no base-required validation).
+_QUEUE_CROSS_FIELD_RULES = [
+    _cf_queue_disposition_shape,
+]
+
 _CROSS_FIELD_RULES_BY_SCHEMA: dict[str, list] = {
     'handoff': _HANDOFF_CROSS_FIELD_RULES,
     'handoff-archived': [],
     'cross-repo-memo': _MEMO_CROSS_FIELD_RULES,
     'cutover': _CUTOVER_CROSS_FIELD_RULES,
     'plan-tasks': _PLAN_TASKS_CROSS_FIELD_RULES,
+    'bug-backlog': _QUEUE_CROSS_FIELD_RULES,
+    'debt-backlog': _QUEUE_CROSS_FIELD_RULES,
+    'improvement-queue': _QUEUE_CROSS_FIELD_RULES,
 }
 
 
@@ -4026,9 +4226,39 @@ def validate_frontmatter(fm_dict: dict, schema_path: str | Path) -> list[ErrorDi
     # Phase 2: cross-field rules.
     # Review: code-reviewer — F3: `schema_name or ''` is dead — the `if schema_name`
     # guard already ensures schema_name is truthy in the true-branch.
-    cross_errors = _apply_cross_field_rules(fm_dict, schema_name) if schema_name else []
+    # `local_queue_corpus` is consumed only by `_cf_queue_disposition_shape`,
+    # which is inert without it (see that rule's docstring for the measured
+    # cross-repo breakage that made the scoping load-bearing). Forwarded via the
+    # opt-in keyword mechanism `_apply_cross_field_rules` already documents, so
+    # no other rule set sees it. True only when the schema being validated
+    # against is claude-klabauter's OWN vendored copy — a caller validating against a
+    # schema from another tree is not validating claude-klabauter's corpus.
+    cross_errors = (
+        _apply_cross_field_rules(
+            fm_dict,
+            schema_name,
+            local_queue_corpus=_is_claude_klabauter_vendored_schema(schema_path),
+        )
+        if schema_name
+        else []
+    )
 
     return shape_errors + cross_errors
+
+
+def _is_claude_klabauter_vendored_schema(schema_path: str | Path) -> bool:
+    """True when `schema_path` is claude-klabauter's own vendored schema copy.
+
+    The provenance discriminator behind `_cf_queue_disposition_shape`'s
+    claude-klabauter-scoping. Resolved rather than string-compared so a relative path, a
+    `..`-laden one, or a differently-cased Windows drive letter all answer
+    correctly; any resolution failure answers False, which is the inert
+    direction for every rule keyed on it.
+    """
+    try:
+        return Path(schema_path).resolve().parent == _SCHEMAS_DIR.resolve()
+    except (OSError, ValueError):
+        return False
 
 
 def validate_memo_cross_fields(fm_dict: dict) -> list[ErrorDict]:

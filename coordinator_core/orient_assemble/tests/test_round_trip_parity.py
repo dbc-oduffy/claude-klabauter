@@ -66,7 +66,9 @@ def test_branch_reconcile_span_assert_reader_matches_a_direct_call_to_the_ported
     from coordinator_core.daily_branch import format_span_suffix, parse_branch_span
     from coordinator_core.machine_resolver import compute_machine
 
-    monkeypatch.setattr(rbr, "_current_branch", lambda: "work/testmachine/2026-07-01_02")
+    monkeypatch.setattr(
+        rbr, "_current_branch", lambda repo_root=None: "work/testmachine/2026-07-01_02"
+    )
 
     direct = rbr._span_assert_compute(
         "work/testmachine/2026-07-01_02",
@@ -81,6 +83,67 @@ def test_branch_reconcile_span_assert_reader_matches_a_direct_call_to_the_ported
         assert result.directives == []
     else:
         assert result.directives[0]["detail"] == direct
+
+
+def test_branch_reconcile_current_branch_passes_repo_root_as_cwd(monkeypatch, tmp_path):
+    """DR-382: scan scope is an explicit parameter threaded to the git
+    subprocess, never re-derived from process cwd inside the reader."""
+    captured = {}
+
+    class _FakeCompleted:
+        returncode = 0
+        stdout = "work/example/2026-08-29\n"
+
+    def fake_run(cmd, **kwargs):
+        captured["cwd"] = kwargs.get("cwd")
+        return _FakeCompleted()
+
+    monkeypatch.setattr(rbr.subprocess, "run", fake_run)
+
+    result = rbr._current_branch(str(tmp_path))
+
+    assert captured["cwd"] == str(tmp_path)
+    assert result == "work/example/2026-08-29"
+
+
+def test_branch_reconcile_current_branch_defaults_cwd_to_none_when_no_repo_root(monkeypatch):
+    """Omitting `repo_root` preserves the prior ambient-cwd behaviour
+    byte-for-byte — `cwd=None` is `subprocess.run`'s own "use process cwd"
+    default, unchanged from before this fix."""
+    captured = {}
+
+    class _FakeCompleted:
+        returncode = 0
+        stdout = "main\n"
+
+    def fake_run(cmd, **kwargs):
+        captured["cwd"] = kwargs.get("cwd")
+        return _FakeCompleted()
+
+    monkeypatch.setattr(rbr.subprocess, "run", fake_run)
+
+    result = rbr._current_branch()
+
+    assert captured["cwd"] is None
+    assert result == "main"
+
+
+def test_branch_reconcile_read_span_assert_accepts_and_forwards_repo_root(monkeypatch):
+    """`_read_span_assert(repo_root=...)` forwards to `_current_branch` —
+    the callable seam a future threading chunk wires into `collect()`.
+    `collect()` itself does not yet forward `repo_root` here (see
+    `collect`'s own docstring); this asserts the seam exists and works."""
+    captured = {}
+
+    def fake_current_branch(repo_root=None):
+        captured["repo_root"] = repo_root
+        return ""
+
+    monkeypatch.setattr(rbr, "_current_branch", fake_current_branch)
+
+    rbr._read_span_assert("/some/other/repo")
+
+    assert captured["repo_root"] == "/some/other/repo"
 
 
 def test_clean_ops_addon_health_reader_translates_scan_lines_1to1_into_directives(monkeypatch):

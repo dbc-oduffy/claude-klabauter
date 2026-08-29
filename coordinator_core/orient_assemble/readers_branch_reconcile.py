@@ -118,19 +118,28 @@ _day_branch_resolve = _load_source_module()
 _span_assert_compute = _day_branch_resolve._span_assert
 
 
-def _current_branch() -> str:
+def _current_branch(repo_root: str | None = None) -> str:
     """`git branch --show-current` — empty string on detached HEAD or
     failure. In-process read, not a shell-out to the fused CLI; mirrors the
     source module's own `_current_branch` (not reused directly since that
     helper is private to the loaded module and this call is trivial enough
     to keep local rather than reach back into the loaded module's private
-    surface a second time)."""
+    surface a second time).
+
+    `repo_root`, when given, is passed as `cwd=` (DR-382: scan scope is an
+    explicit parameter, never re-derived from process cwd inside a reader).
+    `None` preserves the prior ambient-cwd behaviour byte-for-byte — this
+    reader is not itself the argv entry point, but `collect()`'s own
+    `repo_root` keyword was `None` by default before this fix and every
+    existing caller (direct `collect()` invocation with no `repo_root`)
+    must keep resolving exactly as it did."""
     try:
         result = subprocess.run(
             ["git", "branch", "--show-current"],
             capture_output=True,
             text=True,
             timeout=_GIT_TIMEOUT,
+            cwd=repo_root,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
     except (OSError, subprocess.TimeoutExpired):
@@ -140,7 +149,7 @@ def _current_branch() -> str:
     return (result.stdout or "").strip()
 
 
-def _read_span_assert() -> ReaderResult:
+def _read_span_assert(repo_root: str | None = None) -> ReaderResult:
     """Local-day/branch-span mismatch — a directive naming the ceremony's
     own remediation step (re-run `/workday-start` Step 0 or rename inline),
     never a judgment point (the source CLI's own contract: "a TRIPWIRE, not
@@ -150,7 +159,7 @@ def _read_span_assert() -> ReaderResult:
     from coordinator_core.daily_day import local_day
     from coordinator_core.machine_resolver import compute_machine
 
-    branch = _current_branch()
+    branch = _current_branch(repo_root)
     today = local_day()
     msg = _span_assert_compute(
         branch, today, parse_branch_span, format_span_suffix, compute_machine
@@ -400,12 +409,28 @@ def _read_auto_reconcile() -> ReaderResult:
     return ReaderResult(judgment_points=judgment_points + gate_clear_points + desync_points)
 
 
-def collect(cadence: str) -> ReaderResult:
+def collect(cadence: str, *, repo_root: str | None = None) -> ReaderResult:
     """Compute this reader family's directives/judgment_points.
 
     `cadence` is accepted for signature parity with sibling reader families
     (`readers_clean_ops.collect`) but unused here — neither probe's
     severity varies by cadence.
+
+    `repo_root` is keyword-only and accepted for signature parity across
+    all four reader families (C2 of the orient-assemble repo-scope plan) —
+    still unwired here, deliberately: `__init__.py`'s cadence dispatch
+    (`brief()`) is shared write-surface across C2a-C2d and this module's
+    own negative-spec already excludes wiring `collect()`'s results into
+    `brief()` from this chunk. `_current_branch`/`_read_span_assert` DO now
+    accept `repo_root` (C6(a) — see their own docstrings) so a future
+    threading chunk has the parameter to pass; `collect()` itself does not
+    yet forward it, matching every existing caller's behaviour byte-for-
+    byte. `_read_auto_reconcile` is unwired for the separate reason that
+    `check_auto_reconcile.get_response()` takes no arguments and giving it
+    an optional root is C1's ruling but not in any chunk's `writes:` scope
+    (`coordinator_core/ops/check_auto_reconcile.py` is not listed as
+    writable by C6, and no other chunk in this plan claims it either — see
+    C7(c): "SEE C1. Not this chunk's call.").
     """
     directives: list[dict[str, Any]] = []
     judgment_points: list[dict[str, Any]] = []

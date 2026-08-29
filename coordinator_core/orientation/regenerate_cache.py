@@ -211,6 +211,7 @@ from coordinator_core.ipc import register_op
 from coordinator_core.orientation.hook_cancellation_signal import emit_hook_cancellation_rate
 from coordinator_core.orientation.warm_health_signal import emit_warm_engine_health
 from coordinator_core.orientation.budget_breach_signal import emit_budget_breaches
+from coordinator_core.orientation.expired_grant_signal import emit_expired_grants
 from coordinator_core.ops.ceremony.detached_spawn import (
     advance_failures_cursor,
     clear_failures_log,  # noqa: F401 — reset primitive, re-exported for callers
@@ -1239,6 +1240,7 @@ def _render_cache(
     hook_cancellation_line: str,
     warm_engine_line: str,
     budget_breach_line: str,
+    expired_grant_lines: str,
     housekeeping_lines: List[str],
     pinboard_final: str,
 ) -> str:
@@ -1289,6 +1291,9 @@ def _render_cache(
 
     if budget_breach_line:
         parts.append("\n## Budget breaches\n" + budget_breach_line + "\n")
+
+    if expired_grant_lines:
+        parts.append("\n## Expired grants\n" + expired_grant_lines + "\n")
 
     if housekeeping_lines:
         parts.append("\n## Housekeeping\n" + "\n".join(housekeeping_lines) + "\n")
@@ -1373,6 +1378,7 @@ def build_cache(
     hook_cancellation_line = emit_hook_cancellation_rate(repo_root)
     warm_engine_line = emit_warm_engine_health()
     budget_breach_line = emit_budget_breaches(repo_root)
+    expired_grant_lines = emit_expired_grants(repo_root)
     housekeeping_lines = _emit_housekeeping(repo_root)
 
     pinboard_final = ""
@@ -1401,6 +1407,7 @@ def build_cache(
         hook_cancellation_line=hook_cancellation_line,
         warm_engine_line=warm_engine_line,
         budget_breach_line=budget_breach_line,
+        expired_grant_lines=expired_grant_lines,
         housekeeping_lines=housekeeping_lines,
         pinboard_final=pinboard_final,
     )
@@ -1563,7 +1570,17 @@ once already).
 # Never truncated -- small by construction, load-bearing for orientation.
 _CACHE_PROTECTED_SECTIONS = frozenset({
     "Branch", "Rechecks due ≤7 days", "Pinboard", "Budget breaches",
+    "Expired grants",
 })
+# "Expired grants" is PROTECTED on the same ground as "Budget breaches" above:
+# it renders ONLY when a PM grant has actually passed its own deferred_until
+# (emit_expired_grants), which makes it a defect report -- an expired grant is
+# a defect to act on, not an accepted residual (C5's own posture instruction,
+# mirroring emit_budget_breaches over emit_hook_cancellation_rate) -- and a
+# defect report trimmed largest-first, exactly on a crowded/busy box, is a
+# line nobody ever reads. One line, small by construction, absent entirely on
+# a repo with no overdue grant, so protecting it costs a healthy repo nothing.
+# → coordinator_core.orientation.expired_grant_signal
 # "Budget breaches" is PROTECTED, breaking from the one-informational-line
 # precedent that put "Warm engine" and "Hook cancellation miss rate" in the
 # elastic set below, and the break is the point. Those two are rates an agent

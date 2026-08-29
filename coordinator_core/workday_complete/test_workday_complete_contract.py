@@ -232,13 +232,13 @@ def test_phase_b_default_call_unchanged() -> None:
     explicitly passed as their own defaults)."""
     directives = wc_brief._build_directives({}, _EMPTY_OPEN_DAY_GOALS, _CLEAN_TREE)
     by_id = {d["id"]: d for d in directives}
-    assert by_id["d_step3_5_backfill_phase_b"]["args"] == ["backfill-dispatch-rows"]
+    assert by_id["d_step3_5_backfill_phase_b"]["args"] == ["backfill-dispatch-rows", "--allow-empty"]
 
     directives_explicit = wc_brief._build_directives(
         {}, _EMPTY_OPEN_DAY_GOALS, _CLEAN_TREE, for_date=None, only_mode=False
     )
     by_id_explicit = {d["id"]: d for d in directives_explicit}
-    assert by_id_explicit["d_step3_5_backfill_phase_b"]["args"] == ["backfill-dispatch-rows"]
+    assert by_id_explicit["d_step3_5_backfill_phase_b"]["args"] == ["backfill-dispatch-rows", "--allow-empty"]
 
 
 def test_phase_b_for_date_alone_threads_for_date_flag() -> None:
@@ -253,6 +253,7 @@ def test_phase_b_for_date_alone_threads_for_date_flag() -> None:
     by_id = {d["id"]: d for d in directives}
     assert by_id["d_step3_5_backfill_phase_b"]["args"] == [
         "backfill-dispatch-rows",
+        "--allow-empty",
         "--for-date",
         "2026-07-20",
     ]
@@ -268,6 +269,7 @@ def test_phase_b_for_date_and_only_mode_threads_both_flags() -> None:
     by_id = {d["id"]: d for d in directives}
     assert by_id["d_step3_5_backfill_phase_b"]["args"] == [
         "backfill-dispatch-rows",
+        "--allow-empty",
         "--for-date",
         "2026-07-20",
         "--only-mode",
@@ -284,7 +286,7 @@ def test_phase_b_only_mode_without_for_date_is_a_noop() -> None:
         {}, _EMPTY_OPEN_DAY_GOALS, _CLEAN_TREE, only_mode=True
     )
     by_id = {d["id"]: d for d in directives}
-    assert by_id["d_step3_5_backfill_phase_b"]["args"] == ["backfill-dispatch-rows"]
+    assert by_id["d_step3_5_backfill_phase_b"]["args"] == ["backfill-dispatch-rows", "--allow-empty"]
 
 
 def test_scope_summary_default_leaves_both_directives_unchanged() -> None:
@@ -294,7 +296,7 @@ def test_scope_summary_default_leaves_both_directives_unchanged() -> None:
     directives = wc_brief._build_directives({}, _EMPTY_OPEN_DAY_GOALS, _CLEAN_TREE)
     by_id = {d["id"]: d for d in directives}
     assert by_id["d_step9_changelog"]["args"] == ["step9-dispatch"]
-    assert by_id["d_step3_5_backfill_phase_b"]["args"] == ["backfill-dispatch-rows"]
+    assert by_id["d_step3_5_backfill_phase_b"]["args"] == ["backfill-dispatch-rows", "--allow-empty"]
 
 
 def test_scope_summary_alone_reaches_step9_changelog_positionally() -> None:
@@ -311,7 +313,7 @@ def test_scope_summary_alone_reaches_step9_changelog_positionally() -> None:
         "--",
         "shipped the thing",
     ]
-    assert by_id["d_step3_5_backfill_phase_b"]["args"] == ["backfill-dispatch-rows"]
+    assert by_id["d_step3_5_backfill_phase_b"]["args"] == ["backfill-dispatch-rows", "--allow-empty"]
 
 
 def test_scope_summary_and_for_date_reach_both_directives() -> None:
@@ -334,6 +336,7 @@ def test_scope_summary_and_for_date_reach_both_directives() -> None:
     ]
     assert by_id["d_step3_5_backfill_phase_b"]["args"] == [
         "backfill-dispatch-rows",
+        "--allow-empty",
         "--for-date",
         "2026-07-20",
         "--scope-summary=shipped the thing",
@@ -418,6 +421,7 @@ def test_scope_summary_leading_dash_survives_intact() -> None:
     ]
     assert by_id["d_step3_5_backfill_phase_b"]["args"] == [
         "backfill-dispatch-rows",
+        "--allow-empty",
         "--for-date",
         "2026-07-20",
         "--scope-summary=-- wrapped the refactor",

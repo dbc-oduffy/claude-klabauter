@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import coordinator_core.daily_day as daily_day
 import coordinator_core.ops.check_weekly_staleness as check_weekly_staleness
+import coordinator_core.orient_assemble as orient_assemble
 from coordinator_core.orient_assemble import (
     readers_branch_reconcile as rbr,
     readers_clean_ops as rco,
@@ -184,3 +185,31 @@ def test_handoff_triage_collect_is_cadence_insensitive(monkeypatch):
 
     results = [rht.collect(cadence) for cadence in ("session", "day", "week")]
     assert all(r == results[0] for r in results)
+
+
+def test_brief_forwards_repo_root_to_all_four_reader_collect_calls(monkeypatch):
+    """C2 AC: `brief(cadence, *, repo_root=...)` forwards `repo_root` as a
+    keyword to every reader family's `collect(cadence, repo_root=...)` —
+    pure plumbing, no reader consumes it yet (C3-C7 do, one at a time)."""
+    received: dict[str, tuple[str, str | None]] = {}
+
+    def make_stub(name):
+        def _stub(cadence, *, repo_root=None):
+            received[name] = (cadence, repo_root)
+            return ReaderResult()
+
+        return _stub
+
+    monkeypatch.setattr(rco, "collect", make_stub("clean_ops"))
+    monkeypatch.setattr(rht, "collect", make_stub("handoff_triage"))
+    monkeypatch.setattr(rbr, "collect", make_stub("branch_reconcile"))
+    monkeypatch.setattr(rhr, "collect", make_stub("health_reaper"))
+
+    orient_assemble.brief("day", repo_root="/some/repo")
+
+    assert received == {
+        "clean_ops": ("day", "/some/repo"),
+        "handoff_triage": ("day", "/some/repo"),
+        "branch_reconcile": ("day", "/some/repo"),
+        "health_reaper": ("day", "/some/repo"),
+    }

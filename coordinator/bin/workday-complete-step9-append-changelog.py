@@ -357,20 +357,13 @@ def __getattr__(name: str):
     triggers `_bootstrap_repo_identity()` lazily rather than finding the
     name absent.
 
-    NEGATIVE SPEC -- the forced re-run defeats the sentinel guard
-    (`"resolve_checked_repo_root" in globals()`) without destroying a
-    caller's `mock.patch.object` of a DIFFERENT bootstrapped name: `_saved`
-    snapshots and restores every already-present bootstrapped name around
-    the forced re-run.
+    NEGATIVE SPEC -- `_BOOTSTRAP_NAMES` holds exactly one name here, so the
+    sentinel guard in `_bootstrap_repo_identity()` is already an all-names
+    guard; no pop/restore snapshot is needed because there is no OTHER
+    bootstrapped name whose binding could be left partial.
     """
     if name in _BOOTSTRAP_NAMES:
         _bootstrap_repo_identity()
-        if name not in globals():
-            _saved = {k: globals().pop(k) for k in _BOOTSTRAP_NAMES if k in globals()}
-            try:
-                _bootstrap_repo_identity()
-            finally:
-                globals().update(_saved)
         try:
             return globals()[name]
         except KeyError:

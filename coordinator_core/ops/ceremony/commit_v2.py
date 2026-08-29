@@ -177,7 +177,14 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     # disagreement was loud on one path and silent on the other.
     warnings = []
     if outcome.worktree_over_staged:
-        paths = ", ".join(outcome.worktree_over_staged)
+        # Bounded like the other truncation sites in this diff area
+        # (commit.py's `refused[:5]` / `sorted(unknown)[:5]`) -- an unbounded
+        # join of every passed-over path violates the register's bounded,
+        # terse intent (docs/wiki/guard-messaging.md § Register) on a commit
+        # touching a dozen-plus partially-staged paths.
+        paths = ", ".join(outcome.worktree_over_staged[:5])
+        if len(outcome.worktree_over_staged) > 5:
+            paths += ", ..."
         warnings.append(
             f"committed worktree content for {len(outcome.worktree_over_staged)} "
             f"path(s) whose index held different content: {paths}. "

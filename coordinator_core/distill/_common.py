@@ -175,16 +175,15 @@ DoE owns this vocabulary as a cross-repo contract; claude-klabauter mirrors it h
 same ownership split `SIDECAR_SUFFIXES`'s own comment already documents (DoE authors and
 evolves the list, the engine mirrors it locally rather than reading it live). Source of
 truth: `coordinator/docs/wiki/provenance-markers.md` § "The marker key set (the contract)"
-(lines 20-28 as of 2026-07-23) — currently exactly these two keys; `provenance:` and
-`judgment_provenance:` are named there as under-consideration, NOT yet part of the
-enforced set, and must not be added here until that doc says so.
+— currently exactly these two keys; `provenance:` and `judgment_provenance:` are named
+there as under-consideration, NOT yet part of the enforced set, and must not be added here
+until that doc says so.
 
-STALE BACK-POINTER (verified 2026-08-29): the DoE doc named above no longer carries that
-contract — a distill harvest (`DoE f064affb0`) replaced its body with review-trail
-provenance, and no section names these keys anywhere under `coordinator/docs/`. The tuple
-below is therefore the surviving statement of the key set, not a mirror of a live upstream.
-Do NOT widen it on inference; re-establish the DoE-side contract first (memo raised to
-claude-central-em 2026-08-29).
+Back-pointer integrity: that section was temporarily lost — a distill harvest (DoE
+`f064affb0`, 2026-08-06) replaced the page's body with review-trail provenance — and was
+restored at DoE `269adc5b9` (2026-08-29) after a memo. Re-verify the cited section still
+says what it is cited for before widening this tuple; a back-pointer to a page that no
+longer carries the contract reads as ratification nobody gave.
 
 Each key introduces a YAML list block (`path:`, plus per-key metadata fields) whose entries
 record a candidate's own repo-relative path as a harvest tombstone. Without this exclusion,
@@ -252,9 +251,19 @@ def active_reference_guard(
     repo_root: Path,
     *,
     scope: tuple[str, ...] = ACTIVE_REFERENCE_SCOPE,
+    exclude_provenance_blocks: bool = True,
 ) -> bool:
     """Return True if `needle` (typically a candidate-for-deletion path or slug) is still
     actively referenced somewhere under `scope` (default: docs/ tasks/ archive/) in `repo_root`.
+
+    `exclude_provenance_blocks=False` turns the exclusion OFF and restores a plain
+    "cited anywhere" search. That is not a laxity knob — it is the OTHER reading of the same
+    block. A caller asking "is this artifact's content durably captured somewhere?"
+    (`delete_guard.check_harvest_provenance`, Guard 7) wants the tombstone to COUNT, because
+    the tombstone is its positive proof; a caller asking "does anything still depend on this
+    artifact?" (Guard 3) wants it excluded. One block, two opposite readings, by design — so
+    the two readings must be two distinct calls, not one shared default. Defaulting to True
+    keeps the delete-safety caller safe when a new call site forgets to choose.
 
     A citation that occurs ONLY inside a recognized provenance-marker block (see
     `PROVENANCE_MARKER_KEYS`) does NOT count as a live reference — that block is the
@@ -335,16 +344,29 @@ def active_reference_guard(
                         continue
                     if needle in text:
                         matched_paths.append(str(candidate))
-    return _needle_referenced_in(needle, matched_paths)
+    return _needle_referenced_in(
+        needle, matched_paths, exclude_provenance_blocks=exclude_provenance_blocks
+    )
 
 
-def _needle_referenced_in(needle: str, matched_paths: list[str]) -> bool:
+def _needle_referenced_in(
+    needle: str,
+    matched_paths: list[str],
+    *,
+    exclude_provenance_blocks: bool = True,
+) -> bool:
     """Shared post-processing for `active_reference_guard` / `active_reference_guard_many`:
     given the set of files a fixed-string search already flagged as containing `needle`
     somewhere, read each one to decide whether the citation is a live reference (True) or
     lives only inside a recognized provenance-marker tombstone block (excluded, does not
     count). Same ambiguity-blocks posture as `active_reference_guard`'s docstring: a file
-    this cannot read is treated as a reference, never silently skipped."""
+    this cannot read is treated as a reference, never silently skipped.
+
+    `exclude_provenance_blocks=False` short-circuits to "the search already found it" — the
+    caller wants the tombstone to count. See `active_reference_guard`'s docstring for why
+    that is a second reading rather than a weaker one."""
+    if not exclude_provenance_blocks:
+        return any(matched_path for matched_path in matched_paths)
     for matched_path in matched_paths:
         if not matched_path:
             continue
@@ -378,7 +400,11 @@ def active_reference_guard_many(
     the returned dict has one entry per DISTINCT input needle.
 
     Negative-spec: performs no writes; behavior (per-needle result) is identical to calling
-    `active_reference_guard` once per needle — this is a process-count optimization only."""
+    `active_reference_guard` once per needle at its default `exclude_provenance_blocks=True`
+    — this is a process-count optimization only. There is deliberately no
+    `exclude_provenance_blocks` knob here: the only caller that turns the exclusion off
+    (`delete_guard.check_harvest_provenance`) is single-needle, and an unused parameter on a
+    delete-safety seam is a trap, not a convenience. Add it when a batched caller exists."""
     distinct_needles = list(dict.fromkeys(needles))
     if not distinct_needles:
         return {}

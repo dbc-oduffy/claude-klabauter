@@ -162,3 +162,90 @@ def test_title_containing_unbalanced_brackets_still_advertised_when_unclaimed(wo
     filtered = rht._suppress_live_ledger_claims(text, common_dir=common_dir)
 
     assert "untouched" in filtered
+
+
+# --- 2026-08-06-orient-assemble-reader-repo-scope C4: caller-threaded
+# `repo_root` reconciliation (sites (a)/(b)/(c)) ---------------------------
+#
+# THE BUG THIS COVERS: readers_handoff_triage was internally split-brained
+# — (a)/(b) scanned claude-klabauter's own plans regardless of the caller's root, and
+# (c) (director review F4) resolved the ledger-claim join, `repo_root=`
+# keyword, AND `git_common_dir` against the module-pinned `_REPO_ROOT`
+# even when a caller (e.g. DoE-claude's `/workday-start`) threaded a
+# foreign root through `collect(repo_root=...)`. (c) is the sharper failure
+# mode: the suppression filter fails OPEN from a foreign root (no ledger
+# claim ever found at the wrong path), so a still-worked handoff gets
+# confidently, wrongly advertised as pickup-ready — not silently omitted.
+
+
+def test_read_orphaned_plans_threads_the_caller_root(tmp_path, monkeypatch):
+    """(a): `_read_orphaned_plans(repo_root=foreign)` calls `list_orphaned`
+    with the THREADED root, not the module-pinned `_REPO_ROOT` — extends
+    AC14's explicit-root discipline to a caller-threaded root rather than
+    reversing it (own-explicit-root remains the `None` default)."""
+    foreign_root = tmp_path / "foreign-repo"
+    foreign_root.mkdir()
+    captured: dict = {}
+
+    def _fake_list_orphaned(repo_root, threshold_days):
+        captured["repo_root"] = repo_root
+        return {
+            "authorized_orphan": [],
+            "parked_count": 0,
+            "legacy_unjoinable_count": 0,
+            "unrecognized_status": [],
+        }
+
+    monkeypatch.setattr(rht, "list_orphaned", _fake_list_orphaned)
+
+    rht._read_orphaned_plans(repo_root=foreign_root)
+
+    assert captured["repo_root"] == foreign_root
+
+
+def test_read_stale_plans_threads_the_caller_root(tmp_path, monkeypatch):
+    """(b): `_read_stale_plans(repo_root=foreign)` scans
+    `foreign/docs/plans`, not the source CLI's cwd-relative `"docs/plans"`
+    default — so the module agrees with itself about which repo it is
+    scanning at (a) and (b)."""
+    foreign_root = tmp_path / "foreign-repo"
+    (foreign_root / "docs" / "plans").mkdir(parents=True)
+    captured: dict = {}
+
+    def _fake_cmd_stale_plans(args):
+        captured["plans_dir"] = args.plans_dir
+        return 0
+
+    monkeypatch.setattr(rht, "_cmd_stale_plans", _fake_cmd_stale_plans)
+
+    rht._read_stale_plans(repo_root=foreign_root)
+
+    assert captured["plans_dir"] == str(foreign_root / "docs" / "plans")
+
+
+def test_read_ready_suppresses_live_claim_from_a_foreign_root(tmp_path, monkeypatch):
+    """(c): a foreign root populated with a ready handoff that HAS a live
+    ledger claim must still be suppressed by `_read_ready(repo_root=...)` —
+    the pre-fix behaviour resolved the join/`repo_root=`/`common_dir`
+    trio against the claude-klabauter-pinned `_REPO_ROOT` and found no claim at the
+    foreign path, failing OPEN (confidently wrong, not empty)."""
+    foreign_root = tmp_path / "foreign-repo"
+    common_dir = foreign_root / "gitdir"
+    common_dir.mkdir(parents=True)
+    link_path = "state/handoffs/2026-08-29-worked.md"
+    _write_handoff(foreign_root / link_path, status="open")
+    _write_claim_dir(common_dir, "2026-08-29-worked.md", "sess-live")
+
+    text = f"- [worked]({link_path}) — open\n"
+    monkeypatch.setattr(rht, "_cmd_ready", lambda args: 0)
+    monkeypatch.setattr(
+        rht,
+        "_capture_stdout",
+        lambda cmd_func, args: (text, 0),
+    )
+    monkeypatch.setattr(rht, "git_common_dir", lambda root: common_dir if root == foreign_root else None)
+
+    with mock.patch.object(claim_state_module, "cs_claim_holder_live", return_value=True):
+        result = rht._read_ready(repo_root=foreign_root)
+
+    assert result.directives == []

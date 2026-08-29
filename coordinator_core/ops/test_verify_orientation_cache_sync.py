@@ -216,6 +216,7 @@ def test_engine_output_passes_its_own_verifier(tmp_path):
         hook_cancellation_line="",
         warm_engine_line="",
         budget_breach_line="",
+        expired_grant_lines="",
         housekeeping_lines=[],
         pinboard_final="",
     )

@@ -309,6 +309,7 @@ def _schema_cli_describe(schema_name: str) -> dict:
 
     Spec backlink: dual-yaml-parser option-d, C3
     """
+    _bootstrap_imports()
     repo_root = _current_repo_root() or os.getcwd()
     try:
         return _cc_route(
@@ -345,6 +346,7 @@ def _schema_cli_validate(schema_name: str, fields: dict) -> tuple[bool, list[str
 
     Spec backlink: dual-yaml-parser option-d, C3
     """
+    _bootstrap_imports()
     json_safe_fields = json.loads(json.dumps(fields, default=str))
     repo_root = _current_repo_root() or os.getcwd()
     try:
@@ -481,6 +483,7 @@ def _current_repo_root() -> str | None:
     root (identity attribution, not a destructive action), matching
     `cli_shared.resolve_from_repo`'s disposition under DR-277.
     """
+    _bootstrap_imports()
     root, verdict = resolve_checked_repo_root(explicit_root=None)
     if verdict.get("verdict") == "MISMATCH":
         print(
@@ -514,6 +517,7 @@ def _resolve_session_id() -> str:
     Spec backlink: docs/plans/2026-06-26-queue-schema-unify.md § C2 STEP 1
     """
     try:
+        _bootstrap_imports()
         claude_klabauter_root = _claude_klabauter_root()
         if claude_klabauter_root and claude_klabauter_root not in sys.path:
             sys.path.insert(0, claude_klabauter_root)
@@ -692,6 +696,7 @@ def _output_path(
     the flip never took effect on the production path) — it was never ratified and
     must not be cited as authority for this branch's routing decision.
     """
+    _bootstrap_imports()
     output_dir = _SCHEMA_OUTPUT_DIRS[schema_name]
     override_root = os.environ.get(_QUEUE_APPEND_OUTPUT_ROOT_ENV)
     if override_root:
@@ -775,6 +780,7 @@ def _write_out_path_excl(out_path: str, content: str) -> str:
 
     Spec backlink: F1/F2 legacy-fallback silent-overwrite collision guard (chunk C1).
     """
+    _bootstrap_imports()
     return cli_shared.write_path_excl(
         out_path, content, caller_name="coordinator-queue-append"
     )

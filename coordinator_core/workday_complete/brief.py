@@ -501,7 +501,16 @@ def _build_directives(
         _directive(
             "d_step3_5_backfill_scan",
             cli="workday-complete-backfill-scan",
-            args=["--lookback", "14"],
+            # The producer was the last directive in this leg still resolving
+            # its root from the process cwd while both its consumers received
+            # one explicitly — under in-process dispatch that scanned whatever
+            # tree apply stood in and silently mis-drove both writers.
+            args=[
+                "--lookback",
+                "14",
+                "--repo-root",
+                _main_worktree_root_for_directive(),
+            ],
         ),
         _directive(
             "d_step3_5_backfill_anchor_a0",
@@ -513,7 +522,12 @@ def _build_directives(
             # resolves the MAIN worktree root (never `Path.cwd()`/
             # `--show-toplevel`) so this directive's write leg matches every
             # other ceremony read/write pairing in this module.
-            args=["run", _main_worktree_root_for_directive()],
+            # `--allow-empty`: `stdin_from` below already proves the scan
+            # landed this pass, so empty gap rows here genuinely mean a gapless
+            # window. Without the flag the CLI now refuses empty stdin rather
+            # than exiting 0 having anchored nothing — the silent-success shape
+            # this whole leg was reported for.
+            args=["run", _main_worktree_root_for_directive(), "--allow-empty"],
             # `run` also reads the Phase-A0 gap-row TSV on stdin (2026-07-26
             # stdin-wiring fix) — `apply._execute_directives` feeds it the
             # scan directive's own captured stdout.
@@ -523,9 +537,9 @@ def _build_directives(
             "d_step3_5_backfill_phase_b",
             cli="workday-complete-close",
             args=(
-                ["backfill-dispatch-rows", "--for-date", for_date]
+                ["backfill-dispatch-rows", "--allow-empty", "--for-date", for_date]
                 if for_date
-                else ["backfill-dispatch-rows"]
+                else ["backfill-dispatch-rows", "--allow-empty"]
             )
             + (["--only-mode"] if for_date and only_mode else [])
             + ([f"--scope-summary={scope_summary}"] if for_date and scope_summary else []),

@@ -1987,6 +1987,115 @@ class TestRepoFlagScopeGate(unittest.TestCase):
         ):
             self.assertTrue(_mod._should_pass_repo("memo.list"))
 
+    def test_workflow_scaffold_dispatches_without_repo(self) -> None:
+        """workflow.scaffold is a scope="none" op — cc_invoke() must not spawn
+        --repo for it (the caller class this chunk closes out)."""
+        mock_proc = self._mock_proc({})
+        captured: list[Any] = []
+
+        def _capture(*args: Any, **kwargs: Any) -> Any:
+            captured.append(args[0])
+            return mock_proc
+
+        with unittest.mock.patch("subprocess.run", side_effect=_capture):
+            _mod.cc_invoke("workflow.scaffold", {}, "/the/repo", _claude_klabauter_root="/fake/mr")
+
+        cmd = _invoke_argv(captured)
+        self.assertNotIn("--repo", cmd)
+
+
+class TestShouldPassRepoFailOpenDiagnostics(unittest.TestCase):
+    """AC restated: each TERMINAL fail-open branch in `_should_pass_repo`
+    emits exactly one stderr diagnostic per process; the ambient-import
+    `except Exception: pass` branch (a normal miss with a working retry
+    behind it, not an unresolved scope) emits nothing.
+    Spec backlink: state/dispatch-briefs/2026-08-06-orient-assemble-reader-repo-scope/C10.md
+    """
+
+    def setUp(self) -> None:
+        _mod._SHOULD_PASS_REPO_FAIL_OPEN_EMITTED.clear()
+
+    def tearDown(self) -> None:
+        _mod._SHOULD_PASS_REPO_FAIL_OPEN_EMITTED.clear()
+
+    def test_root_resolution_failed_emits_diagnostic(self) -> None:
+        import io
+
+        with unittest.mock.patch.dict(
+            sys.modules, {"coordinator_core.op_scopes": None}
+        ), unittest.mock.patch.object(
+            _mod, "_resolve_claude_klabauter_root", side_effect=RuntimeError("no root")
+        ):
+            fake_err = io.StringIO()
+            with unittest.mock.patch("sys.stderr", fake_err):
+                result = _mod._should_pass_repo("memo.list")
+
+        self.assertTrue(result)
+        out = fake_err.getvalue()
+        self.assertIn("root-resolution-failed", out)
+        self.assertIn("memo.list", out)
+
+    def test_root_not_isabs_or_isdir_emits_diagnostic(self) -> None:
+        import io
+
+        with unittest.mock.patch.dict(
+            sys.modules, {"coordinator_core.op_scopes": None}
+        ):
+            fake_err = io.StringIO()
+            with unittest.mock.patch("sys.stderr", fake_err):
+                result = _mod._should_pass_repo("memo.list", claude_klabauter_root="not-absolute")
+
+        self.assertTrue(result)
+        out = fake_err.getvalue()
+        self.assertIn("root-not-isabs-or-isdir", out)
+        self.assertIn("memo.list", out)
+
+    def test_post_injection_import_failed_emits_diagnostic(self) -> None:
+        import io
+
+        with unittest.mock.patch.dict(
+            sys.modules, {"coordinator_core.op_scopes": None}
+        ):
+            fake_err = io.StringIO()
+            with unittest.mock.patch("sys.stderr", fake_err):
+                result = _mod._should_pass_repo("memo.list", claude_klabauter_root=os.getcwd())
+
+        self.assertTrue(result)
+        out = fake_err.getvalue()
+        self.assertIn("post-injection-import-failed", out)
+        self.assertIn("memo.list", out)
+
+    def test_dedup_one_emission_per_process_per_branch(self) -> None:
+        import io
+
+        with unittest.mock.patch.dict(
+            sys.modules, {"coordinator_core.op_scopes": None}
+        ):
+            fake_err = io.StringIO()
+            with unittest.mock.patch("sys.stderr", fake_err):
+                _mod._should_pass_repo("memo.list", claude_klabauter_root="not-absolute")
+                _mod._should_pass_repo("queue.append", claude_klabauter_root="not-absolute")
+
+        out = fake_err.getvalue()
+        self.assertEqual(out.count("root-not-isabs-or-isdir"), 1)
+
+    def test_ambient_branch_emits_nothing_even_when_terminal_reached(self) -> None:
+        """The first except-Exception:pass around the ambient import must
+        never itself emit -- only the three branches after it may."""
+        import io
+
+        with unittest.mock.patch.dict(
+            sys.modules, {"coordinator_core.op_scopes": None}
+        ):
+            fake_err = io.StringIO()
+            with unittest.mock.patch("sys.stderr", fake_err):
+                _mod._should_pass_repo("memo.list", claude_klabauter_root=os.getcwd())
+
+        out = fake_err.getvalue()
+        # Exactly one diagnostic line (the terminal post-injection branch),
+        # never a second one for the ambient miss that preceded it.
+        self.assertEqual(len(out.strip().splitlines()), 1)
+
 
 class ResolveEngineRootTest(unittest.TestCase):
     """resolve_engine_root / ensure_engine_on_path — the override-first ladder

@@ -221,12 +221,27 @@ def _capture_stdout(cmd_func, args: argparse.Namespace) -> tuple[str, int]:
     return buf.getvalue(), exit_code
 
 
-def _read_stale_plans() -> ReaderResult:
+def _read_stale_plans(repo_root: Optional[Path] = None) -> ReaderResult:
     """Stale `status: executing` plan advisory — informational only (the
     source CLI's own docstring: "Advisory only — never blocks the
     ceremony"), surfaced as a directive so the EM sees it in the same
-    decision-object surface as every other orient finding."""
-    text, _exit_code = _capture_stdout(_cmd_stale_plans, _STALE_PLANS_DEFAULT_ARGS)
+    decision-object surface as every other orient finding.
+
+    `repo_root` (site (b), 2026-08-06-orient-assemble-reader-repo-scope
+    C4): when threaded, `plans_dir` resolves against the CALLER's root
+    instead of the source CLI's own cwd-relative `"docs/plans"` default
+    (`_STALE_PLANS_DEFAULT_ARGS`) — otherwise this reader scans the
+    caller's plans at (a)/(c) but claude-klabauter's own plans here, silently
+    disagreeing with itself. `None` preserves the exact prior default
+    (relative, cwd-resolved) unchanged."""
+    if repo_root is None:
+        args = _STALE_PLANS_DEFAULT_ARGS
+    else:
+        args = argparse.Namespace(
+            plans_dir=str(repo_root / "docs" / "plans"),
+            threshold_days=_handoff_triage._DEFAULT_STALE_THRESHOLD_DAYS,
+        )
+    text, _exit_code = _capture_stdout(_cmd_stale_plans, args)
     if not text.strip():
         return ReaderResult()
     return ReaderResult(
@@ -250,8 +265,18 @@ def _read_stale_plans() -> ReaderResult:
 _LINK_PATH_RE = re.compile(r"\]\(([^)]+)\)")
 
 
-def _suppress_live_ledger_claims(text: str, *, common_dir: Optional[Path]) -> str:
+def _suppress_live_ledger_claims(
+    text: str, *, common_dir: Optional[Path], repo_root: Optional[Path] = None
+) -> str:
     """Drop lines whose handoff currently holds a LIVE ledger claim.
+
+    `repo_root` (site (c), 2026-08-06-orient-assemble-reader-repo-scope C4,
+    director review F4): both the `handoff_path` join below AND the
+    `resolve_claim_state(repo_root=...)` argument use this instead of the
+    module-pinned `_REPO_ROOT` when threaded — from a foreign root, the
+    claude-klabauter-pinned join found no ledger claim at the wrong path and this
+    filter failed OPEN (a confidently WRONG listing, not an empty one).
+    `None` falls back to `_REPO_ROOT`, preserving prior behaviour exactly.
 
     AC11: `_read_ready`'s query (`deployment_state=ready_to_fire AND
     status=open`) has no ledger check — the exact surface that advertised
@@ -272,6 +297,7 @@ def _suppress_live_ledger_claims(text: str, *, common_dir: Optional[Path]) -> st
     negative-spec; only the already-rendered markdown-list output is
     filtered here, by parsing each line's own `(link_path)` back out.
     """
+    root = repo_root if repo_root is not None else _REPO_ROOT
     lines = text.split("\n")
     kept: list[str] = []
     for line in lines:
@@ -290,9 +316,9 @@ def _suppress_live_ledger_claims(text: str, *, common_dir: Optional[Path]) -> st
         matches = list(_LINK_PATH_RE.finditer(line))
         if matches:
             link_path = matches[-1].group(1)
-            handoff_path = _REPO_ROOT / link_path
+            handoff_path = root / link_path
             claim_state = resolve_claim_state(
-                handoff_path, common_dir=common_dir, repo_root=_REPO_ROOT
+                handoff_path, common_dir=common_dir, repo_root=root
             )
             if claim_state.source == "ledger":
                 # Live ledger claim (resolve_claim_state only resolves
@@ -303,28 +329,41 @@ def _suppress_live_ledger_claims(text: str, *, common_dir: Optional[Path]) -> st
     return "\n".join(kept)
 
 
-def _ready_common_dir() -> Optional[Path]:
+def _ready_common_dir(repo_root: Optional[Path] = None) -> Optional[Path]:
     """Resolve `common_dir` once per `collect()` call (hot-path note: this
     reader runs across the whole handoff corpus on every orientation
     assembly) rather than re-resolving per handoff inside the filter loop —
     `git_common_dir` is itself `lru_cache`d, so this is a cached-dict-lookup
     saving, not a subprocess-avoidance one, matching `resolve_claim_state`'s
-    own `common_dir` parameter docstring."""
+    own `common_dir` parameter docstring.
+
+    `repo_root` (site (c), C4): threaded through to `git_common_dir` instead
+    of the module-pinned `_REPO_ROOT` when given — `None` preserves prior
+    behaviour. `git_common_dir` is `lru_cache(maxsize=32)`d on its argument;
+    a varying root costs at most one resolution per distinct root, not a
+    subprocess (brightline note, brief (c))."""
+    root = repo_root if repo_root is not None else _REPO_ROOT
     try:
-        return git_common_dir(_REPO_ROOT)
+        return git_common_dir(root)
     except Exception:
         return None
 
 
-def _read_ready() -> ReaderResult:
+def _read_ready(repo_root: Optional[Path] = None) -> ReaderResult:
     """Actionable-now handoffs (`deployment_state=ready_to_fire AND
     status=open`) — a directive naming the query subcommand that produced
     the listing, carrying the captured markdown-list with any live-ledger-
-    claimed handoff suppressed (AC11 — see `_suppress_live_ledger_claims`)."""
+    claimed handoff suppressed (AC11 — see `_suppress_live_ledger_claims`).
+
+    `repo_root`: threaded into both `_ready_common_dir` and
+    `_suppress_live_ledger_claims` (site (c), C4) — `None` preserves prior
+    (claude-klabauter-pinned) behaviour."""
     text, _exit_code = _capture_stdout(_cmd_ready, argparse.Namespace())
     if not text.strip():
         return ReaderResult()
-    text = _suppress_live_ledger_claims(text, common_dir=_ready_common_dir())
+    text = _suppress_live_ledger_claims(
+        text, common_dir=_ready_common_dir(repo_root), repo_root=repo_root
+    )
     if not text.strip():
         return ReaderResult()
     text = _cap_rendered_lines(text, _READY_LINE_CAP, subcommand="ready")
@@ -369,19 +408,26 @@ def _read_awaiting_gate() -> ReaderResult:
     )
 
 
-def _read_orphaned_plans() -> ReaderResult:
+def _read_orphaned_plans(repo_root: Optional[Path] = None) -> ReaderResult:
     """Tiered orphan census (P1 `authorized_orphan`, P3 `parked` count,
     plus the `legacy_unjoinable`/`unrecognized_status` diagnostic buckets) —
-    calls `list_orphaned` in-process with this module's own explicit
-    `_REPO_ROOT` (AC14), never through the bin CLI's cwd-relative scope
-    resolution (see this module's own docstring "Purpose" note above and
+    calls `list_orphaned` in-process with an explicit root (AC14), never
+    through the bin CLI's cwd-relative scope resolution (see this module's
+    own docstring "Purpose" note above and
     coordinator/bin/list-orphaned-plans.py's docstring for why that
     distinction matters).
 
-    No parameters, cadence-insensitive — matches `_read_stale_plans`'s
-    arity; every cadence runs the same census.
+    `repo_root` (site (a), C4): threaded to `list_orphaned` instead of the
+    module-pinned `_REPO_ROOT` when given. This is an EXTENSION of AC14's
+    explicit-root discipline, not a reversal — the caller-threaded root is
+    still an explicit `Path`, never the bin CLI's cwd-relative resolution;
+    `None` preserves the exact prior (own-explicit-root) behaviour.
+
+    Cadence-insensitive — matches `_read_stale_plans`'s arity; every
+    cadence runs the same census.
     """
-    result = list_orphaned(_REPO_ROOT, AGING_THRESHOLD_DAYS)
+    root = repo_root if repo_root is not None else _REPO_ROOT
+    result = list_orphaned(root, AGING_THRESHOLD_DAYS)
 
     lines: list[str] = []
     # P1 authorized_orphan is spec'd "loud, one line per plan, no age gate"
@@ -433,20 +479,31 @@ def _read_orphaned_plans() -> ReaderResult:
     )
 
 
-def collect(cadence: str) -> ReaderResult:
+def collect(cadence: str, *, repo_root: str | None = None) -> ReaderResult:
     """Compute this reader family's directives/judgment_points.
 
     `cadence` is accepted for signature parity with sibling reader families
     (`readers_clean_ops.collect`) but unused here — this reader's severity
     does not vary by cadence; all four sources run for every cadence.
+
+    `repo_root` is keyword-only, threaded (C4, sites (a)/(b)/(c)) into
+    `_read_stale_plans`/`_read_ready`/`_read_orphaned_plans` only when
+    explicitly given — `None` (the default; every existing caller passes
+    this) calls each with zero arguments, preserving the exact prior
+    call shape and behaviour byte-for-byte. `_read_awaiting_gate` is
+    untouched here; its cwd-relative reach (`_git_last_commit_epoch`,
+    `records_query.query_records`) is C7's, not this chunk's (module
+    docstring, "Reaches outside the module").
     """
+    root = Path(repo_root) if repo_root is not None else None
+    kwargs: dict[str, Any] = {"repo_root": root} if root is not None else {}
     directives: list[dict[str, Any]] = []
     judgment_points: list[dict[str, Any]] = []
     for result in (
-        _read_stale_plans(),
-        _read_ready(),
+        _read_stale_plans(**kwargs),
+        _read_ready(**kwargs),
         _read_awaiting_gate(),
-        _read_orphaned_plans(),
+        _read_orphaned_plans(**kwargs),
     ):
         directives.extend(result.directives)
         judgment_points.extend(result.judgment_points)

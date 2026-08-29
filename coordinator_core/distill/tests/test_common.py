@@ -401,9 +401,36 @@ def test_active_reference_guard_excludes_cross_repo_memo_tombstone(tmp_path):
         "  - path: cross-repo/archive/old-memo.md\n"
         "    sender: claude-central-em\n"
         "---\n"
-        "body text with nothing else\n"
+        "body text with nothing else\n",
+        encoding="utf-8",
     )
     assert active_reference_guard("cross-repo/archive/old-memo.md", tmp_path) is False
+
+
+def test_active_reference_guard_excludes_provenance_block_without_ripgrep(monkeypatch, tmp_path):
+    # The rg-absent fallback walk is a real execution path — its own comment justifies it for
+    # "a dev box (or a minimal container) without it on PATH" — and every other provenance
+    # test in this file is gated on @_requires_rg, so on such a box the exclusion behaviour
+    # would have no coverage at all on the branch that box actually runs. Forces the fallback
+    # over the same corpus; both branches funnel through `_needle_referenced_in`, so this
+    # pins the shared post-processing seam from the other side.
+    monkeypatch.setattr(_common.shutil, "which", lambda _name: None)
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    (docs / "harvested.md").write_text(
+        "---\n"
+        "cross_repo_memo:\n"
+        "  - path: cross-repo/archive/old-memo.md\n"
+        "---\n"
+        "body text with nothing else\n",
+        encoding="utf-8",
+    )
+    assert active_reference_guard("cross-repo/archive/old-memo.md", tmp_path) is False
+
+    (docs / "still-cited.md").write_text(
+        "see cross-repo/archive/old-memo.md for context\n", encoding="utf-8"
+    )
+    assert active_reference_guard("cross-repo/archive/old-memo.md", tmp_path) is True
 
 
 @_requires_rg

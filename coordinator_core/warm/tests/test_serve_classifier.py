@@ -444,7 +444,12 @@ def test_partition_report_buckets_are_mutually_exclusive_and_sum_to_total():
             True,
             True,
             True,
-            (sc.Finding("e.py", 3, "sys.path.insert(0, 'x')", "module-scope process mutation"),),
+            (
+                sc.Finding(
+                    "e.py", 3, "sys.path.insert(0, 'x')", "module-scope process mutation",
+                    is_sys_path_mutation=True,
+                ),
+            ),
         ),  # main_argv, sys_path_mutation
     ]
     report = sc.partition_report(verdicts)
@@ -495,7 +500,10 @@ def test_live_allowlist_population_classifies_without_error():
     assert len(verdicts) == len(names)
     report = sc.partition_report(verdicts)
     assert report["total"] == len(names)
-    assert report["no_script"] + report["no_main"] + report["zero_arity_main"] + report["main_argv"] == report["total"]
+    assert (
+        report["no_script"] + report["no_main"] + report["zero_arity_main"]
+        + report["unparseable"] + report["main_argv"] == report["total"]
+    )
     assert report["cannot_serve"] + report["main_argv"] == report["total"]
 
 
@@ -522,6 +530,9 @@ def test_predicate_passes_stdlib_def_time_decorators():
         + "    @property" + chr(10)
         + "    def x(self):" + chr(10)
         + "        return 1" + chr(10) * 2
+        + "    @x.setter" + chr(10)
+        + "    def x(self, value):" + chr(10)
+        + "        self._x = value" + chr(10) * 2
         + "@contextlib.contextmanager" + chr(10)
         + "def scope():" + chr(10)
         + "    yield" + chr(10) * 2

@@ -68,12 +68,6 @@ def __getattr__(name: str):
     """
     if name in _BOOTSTRAPPED_NAMES:
         _bootstrap_cc_invoke()
-        if name not in globals():
-            _saved = {k: globals().pop(k) for k in _BOOTSTRAPPED_NAMES if k in globals()}
-            try:
-                _bootstrap_cc_invoke()
-            finally:
-                globals().update(_saved)
         try:
             return globals()[name]
         except KeyError:

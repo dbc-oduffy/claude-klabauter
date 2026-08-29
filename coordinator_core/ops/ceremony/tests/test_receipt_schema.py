@@ -868,3 +868,113 @@ def test_validate_both_new_fields_absent_together_validates_clean() -> None:
         f"C2: receipt without scoping_method/foreign_commit_count must validate "
         f"clean (backward-compat); got {errors}"
     )
+
+
+# ---------------------------------------------------------------------------
+# (r) unknown — op_tail's legible-indeterminacy partition (additive, mirrors
+#     the failed_critical pattern)
+#
+# Spec backlink: docs/plans/2026-08-29-steps-report-what-they-do-not-know.md § C1
+# ---------------------------------------------------------------------------
+
+
+def test_validate_receipt_without_any_unknown_key_still_validates() -> None:
+    """A receipt built without an unknown key anywhere still passes validate().
+
+    Graceful-absent guarantee: pre-existing receipts (written before this
+    change) never carried op_tail.unknown and must continue to validate clean.
+    """
+    r = _minimal_receipt(op_tail=make_empty_op_tail("archival"))
+    r["op_tail"].pop("unknown", None)
+    assert "unknown" not in r["op_tail"]
+    errors = validate(r)
+    assert errors == [], (
+        f"receipt without op_tail.unknown must validate clean (backward-compat); got {errors}"
+    )
+
+
+def test_make_empty_op_tail_has_unknown_present_and_empty() -> None:
+    """make_empty_op_tail includes unknown[] (empty list, never key-absent)."""
+    tail = make_empty_op_tail("archival")
+    assert "unknown" in tail, "unknown must always be present in op_tail (graceful-absent)"
+    assert tail["unknown"] == [], f"unknown must be empty in make_empty_op_tail; got {tail['unknown']!r}"
+    assert isinstance(tail["unknown"], list)
+
+
+def test_compute_op_tail_aggregates_unknown_from_evidence() -> None:
+    """compute_op_tail aggregates evidence.unknown[] from tail-step D-nodes."""
+    nodes = [
+        make_d_node(
+            "step-x",
+            resolving_op="some-tail-op",
+            evidence={
+                "acted": [], "skipped": [], "failed": [],
+                "unknown": ["step-x: could not determine outcome"],
+            },
+            tail_step=True,
+        ),
+        # Pre-existing evidence dict with no unknown key — must not raise.
+        make_d_node(
+            "step-old",
+            resolving_op="pre-existing-op",
+            evidence={"acted": ["old-op"], "skipped": [], "failed": []},
+            tail_step=True,
+        ),
+    ]
+    tail = compute_op_tail(nodes, phase="archival")
+    assert "step-x: could not determine outcome" in tail["unknown"]
+    assert "old-op" in tail["acted"]
+    assert tail["unknown"] == ["step-x: could not determine outcome"]
+
+
+def test_unknown_entry_does_not_leak_into_other_partitions() -> None:
+    """An entry placed in unknown appears in NO other partition.
+
+    Written to fail loudly if a future change folds unknown back into
+    skipped (or acted, or failed, or failed_critical).
+    """
+    nodes = [
+        make_d_node(
+            "step-y",
+            resolving_op="some-tail-op",
+            evidence={
+                "acted": [], "skipped": [], "failed": [], "failed_critical": [],
+                "unknown": ["mystery-item"],
+            },
+            tail_step=True,
+        ),
+    ]
+    tail = compute_op_tail(nodes, phase="archival")
+    assert "mystery-item" in tail["unknown"]
+    assert "mystery-item" not in tail["acted"], "unknown entry leaked into acted"
+    assert "mystery-item" not in tail["skipped"], "unknown entry leaked into skipped"
+    assert "mystery-item" not in tail["failed"], "unknown entry leaked into failed"
+    assert "mystery-item" not in tail["failed_critical"], (
+        "unknown entry leaked into failed_critical"
+    )
+
+
+def test_validate_op_tail_unknown_wrong_type_rejected() -> None:
+    """validate rejects op_tail.unknown when not a list."""
+    r = make_receipt(
+        ceremony="wsc", phase="phase-1",
+        emitted_at="2026-08-29T12:00:00Z", scope_mode="architecture",
+        op_tail=make_empty_op_tail("archival"),
+    )
+    r["op_tail"]["unknown"] = "should-be-a-list"
+    errors = validate(r)
+    assert any("unknown" in e for e in errors), (
+        f"expected validation error for unknown non-list; got {errors}"
+    )
+
+
+def test_validate_op_tail_unknown_list_accepted() -> None:
+    """validate accepts op_tail.unknown when it is a list."""
+    r = make_receipt(
+        ceremony="wsc", phase="phase-1",
+        emitted_at="2026-08-29T12:00:00Z", scope_mode="architecture",
+        op_tail=make_empty_op_tail("archival"),
+    )
+    r["op_tail"]["unknown"] = ["some-indeterminate-item"]
+    errors = validate(r)
+    assert errors == [], f"unknown as list must validate clean; got {errors}"
