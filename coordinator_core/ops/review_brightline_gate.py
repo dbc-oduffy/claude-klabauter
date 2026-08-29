@@ -362,6 +362,55 @@ def _is_prose_bearing_path(path: str) -> bool:
     return path.endswith(_PROSE_BEARING_EXTS)
 
 
+#: Ceremony-exhaust directories: substrate the CLOSE ITSELF writes, whose
+#: contents are an output of the ceremony rather than an input to review.
+#: DELIBERATELY NARROW — a directory earns a row here only if a close
+#: writes it as bookkeeping every time and a reviewer has nothing to read
+#: in it. `state/audits/` and `state/dispatch-briefs/` are NOT here and
+#: must not be added: those are session-AUTHORED content, and excluding
+#: them would suppress genuine review obligation, which is the one
+#: direction this predicate must never fail in.
+_CEREMONY_EXHAUST_RE = re.compile(
+    r"^("
+    r"state/tasks/"
+    r"|state/sizings/"
+    r"|state/improvement-queue/"
+    r")"
+)
+
+
+def _is_ceremony_exhaust_path(path: str) -> bool:
+    """True iff `path` is bookkeeping the closing ceremony writes about
+    itself, at any extension.
+
+    `_NOISE_LIFECYCLE_RE` already names most of this substrate
+    (`state/handoffs/`, `state/ceremony/`, `state/review-trail/`, …) but
+    reaches it through `_is_noise_path`, which ALSO serves coverage
+    crediting and defensive noise exclusion. `_is_prose_bearing_path`'s own
+    docstring records the ruling that a mandate-only exemption is
+    deliberately NOT folded into that shared predicate, so the remaining
+    ceremony directories get their own review-mandate-scoped predicate here
+    rather than widening one whose other consumers would silently inherit
+    the change.
+
+    Extension-independent, and that is the whole point. Prose exclusion
+    already covers the `.md` handoff stamp and the `.yaml` status flip, but
+    a ceremony receipt written as `.json` is neither noise nor prose — it
+    lands in `code_loc` as reviewable code, which additionally defeats the
+    `code_loc == 0` suppressor that would otherwise have cleared the
+    commit- and surface-count proxy arms (see `directives_review.
+    _decide_review_scale_core`'s `code_loc_resolved_zero`). One JSON
+    receipt was therefore enough to force a partitioned review onto a close
+    whose entire reviewable delta was prose.
+
+    NEGATIVE-SPEC: this narrows a review-COUNT heuristic only. It never
+    suppresses review of the file itself, never touches coverage
+    crediting, and must not grow to cover a directory whose contents a
+    session authors as work product.
+    """
+    return bool(_CEREMONY_EXHAUST_RE.match(path))
+
+
 def _sum_loc(text: str) -> Tuple[int, bool]:
     """Sum `N insertion`/`N deletion` occurrences in `text`.
 
@@ -499,7 +548,9 @@ def _accumulate_countable_rows(
         countable = [
             (a, d, p, status)
             for a, d, p, status in resolved
-            if not _is_noise_path(p) and not _is_prose_bearing_path(p)
+            if not _is_noise_path(p)
+            and not _is_prose_bearing_path(p)
+            and not _is_ceremony_exhaust_path(p)
         ]
         if not countable:
             continue

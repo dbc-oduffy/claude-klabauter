@@ -1510,3 +1510,175 @@ def test_zero_diff_commits_do_not_count_toward_the_commit_brightline():
     # Absent (the pre-existing caller) is a no-op, never read as "all zero".
     unsupplied = decide_review_scale(commit_count=6, **kwargs)
     assert unsupplied == tripped
+
+
+# ---------------------------------------------------------------------------
+# The surface arm reads the same reviewability predicate as `code_loc`
+# (2026-08-29, doe-claude-9d live report: a close whose whole reviewable
+# delta was a 22-line prose fix was forced into a partitioned review).
+# `_accumulate_numstat` folded EVERY numstat row's path into `surfaces`
+# while `_accumulate_code_loc_numstat`, over the same `git show` text in
+# the same function, excluded noise and prose — two row-4 arms derived
+# from one measurement under two disagreeing definitions of "reviewable".
+# ---------------------------------------------------------------------------
+
+
+def test_measure_surface_count_excludes_prose_and_ceremony_bookkeeping(tmp_path):
+    """Ceremony exhaust (a handoff stamp, a YAML status flip, a flight
+    recorder) contributes to `gross_loc` but not to `surface_count`.
+
+    Every close writes these, so counting them as review surfaces inflated
+    the arm at EVERY close — the failure mode that trains a session to read
+    a mandatory gate as noise.
+    """
+    _init_git_repo(tmp_path)
+    (tmp_path / "state").mkdir()
+    (tmp_path / "state" / "handoffs").mkdir()
+    (tmp_path / "engine.py").write_text("def f():\n    return 1\n", encoding="utf-8")
+    (tmp_path / "state" / "handoffs" / "h.md").write_text("shipped\n" * 40, encoding="utf-8")
+    (tmp_path / "cascade.yaml").write_text("status: terminal\n" * 10, encoding="utf-8")
+    _run_git(["add", "-A"], str(tmp_path))
+    _commit_as(tmp_path, "code plus ceremony exhaust", _SESSION_ID)
+    session_start_time = datetime.now(timezone.utc) - timedelta(minutes=5)
+
+    gross_loc, code_loc, commit_count, surface_count = wsc._measure_session_review_scale_inputs(
+        tmp_path, session_start_time, _SESSION_ID
+    )
+
+    assert commit_count == 1
+    # The prose rows are still in the raw sum — `gross_loc`'s contract is
+    # unfiltered, and this pin is what keeps the fix on the surface arm only.
+    assert gross_loc is not None and gross_loc > 50
+    # One reviewable surface: `engine.py`. `state/handoffs/h.md` is noise
+    # AND prose; `cascade.yaml` is prose.
+    assert surface_count == 1
+    assert code_loc == 2
+
+
+def test_ceremony_only_close_resolves_zero_surfaces(tmp_path):
+    """A close carrying nothing but bookkeeping resolves `surface_count`
+    to an honest 0 — resolved-and-empty, never `None`, which would read as
+    unresolvable and block the row instead of clearing it."""
+    _init_git_repo(tmp_path)
+    (tmp_path / "notes.md").write_text("prose\n" * 30, encoding="utf-8")
+    (tmp_path / "sizing.yaml").write_text("size: s\n" * 5, encoding="utf-8")
+    _run_git(["add", "-A"], str(tmp_path))
+    _commit_as(tmp_path, "bookkeeping only", _SESSION_ID)
+    session_start_time = datetime.now(timezone.utc) - timedelta(minutes=5)
+
+    gross_loc, code_loc, commit_count, surface_count = wsc._measure_session_review_scale_inputs(
+        tmp_path, session_start_time, _SESSION_ID
+    )
+
+    assert surface_count == 0
+    assert code_loc == 0
+    assert gross_loc is not None and gross_loc > 0
+
+    decision = decide_review_scale(
+        gross_loc=gross_loc,
+        code_loc=code_loc,
+        commit_count=commit_count,
+        surface_count=surface_count,
+        executor_dispatched=False,
+        shared_schema_touched=False,
+        chain_disposition=_SINGLE_SESSION,
+    )
+    assert decision.partition_mandatory is False
+
+
+def test_untracked_prose_contributes_loc_but_not_a_surface(tmp_path):
+    """The untracked leg gets the same treatment as the committed one — it
+    had its own `code_loc` filter already and added the surface anyway."""
+    _init_git_repo(tmp_path)
+    (tmp_path / "handoff.md").write_text("x\n" * 20, encoding="utf-8")
+    session_start_time = datetime.now(timezone.utc) - timedelta(minutes=5)
+
+    gross_loc, code_loc, _commit_count, surface_count = wsc._measure_session_review_scale_inputs(
+        tmp_path, session_start_time, _SESSION_ID
+    )
+
+    assert gross_loc == 20
+    assert code_loc == 0
+    assert surface_count == 0
+
+
+def test_code_bearing_close_still_counts_its_own_surfaces(tmp_path):
+    """The arm stays armed: prose exclusion never suppresses a surface a
+    reviewer actually has to read."""
+    _init_git_repo(tmp_path)
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "one.py").write_text("a = 1\n", encoding="utf-8")
+    (tmp_path / "two.ts").write_text("const a = 1;\n", encoding="utf-8")
+    (tmp_path / "conf.json").write_text('{"a": 1}\n', encoding="utf-8")
+    (tmp_path / "tests" / "test_one.py").write_text("assert True\n", encoding="utf-8")
+    (tmp_path / "doc.md").write_text("prose\n", encoding="utf-8")
+    _run_git(["add", "-A"], str(tmp_path))
+    _commit_as(tmp_path, "four real surfaces plus prose", _SESSION_ID)
+    session_start_time = datetime.now(timezone.utc) - timedelta(minutes=5)
+
+    _gross_loc, _code_loc, _commit_count, surface_count = wsc._measure_session_review_scale_inputs(
+        tmp_path, session_start_time, _SESSION_ID
+    )
+
+    # python, js, config, test — the `doctrine` bucket is gone, the four
+    # code-bearing ones are not.
+    assert surface_count == 4
+
+
+def test_json_ceremony_receipt_is_not_reviewable_code(tmp_path):
+    """The residue prose exclusion could not reach: a ceremony receipt
+    written as `.json` is neither noise nor prose, so it landed in
+    `code_loc` as reviewable code — and one non-zero `code_loc` defeats the
+    `code_loc == 0` suppressor that would otherwise clear the commit- and
+    surface-count proxy arms. One receipt was enough to force a partition
+    onto a close whose whole reviewable delta was prose."""
+    _init_git_repo(tmp_path)
+    (tmp_path / "state").mkdir()
+    (tmp_path / "state" / "tasks").mkdir()
+    (tmp_path / "state" / "tasks" / "run-report.json").write_text(
+        '{"ok": true}\n' * 12, encoding="utf-8"
+    )
+    (tmp_path / "prose.md").write_text("a 22-line fix\n" * 22, encoding="utf-8")
+    _run_git(["add", "-A"], str(tmp_path))
+    _commit_as(tmp_path, "prose fix plus a json receipt", _SESSION_ID)
+    session_start_time = datetime.now(timezone.utc) - timedelta(minutes=5)
+
+    gross_loc, code_loc, commit_count, surface_count = wsc._measure_session_review_scale_inputs(
+        tmp_path, session_start_time, _SESSION_ID
+    )
+
+    assert gross_loc is not None and gross_loc > 30
+    assert code_loc == 0
+    assert surface_count == 0
+
+    decision = decide_review_scale(
+        gross_loc=gross_loc,
+        code_loc=code_loc,
+        commit_count=commit_count,
+        surface_count=surface_count,
+        executor_dispatched=False,
+        shared_schema_touched=False,
+        chain_disposition=_SINGLE_SESSION,
+    )
+    assert decision.partition_mandatory is False
+
+
+def test_session_authored_directories_stay_reviewable(tmp_path):
+    """The predicate's fail-safe direction. `state/audits/` and
+    `state/dispatch-briefs/` are session-AUTHORED work product, not
+    ceremony exhaust — excluding them would suppress genuine review
+    obligation, the one direction this must never fail in."""
+    _init_git_repo(tmp_path)
+    for sub in ("audits", "dispatch-briefs"):
+        (tmp_path / "state" / sub).mkdir(parents=True)
+        (tmp_path / "state" / sub / "note.json").write_text('{"a": 1}\n', encoding="utf-8")
+    _run_git(["add", "-A"], str(tmp_path))
+    _commit_as(tmp_path, "authored work product", _SESSION_ID)
+    session_start_time = datetime.now(timezone.utc) - timedelta(minutes=5)
+
+    _gross_loc, code_loc, _commit_count, surface_count = wsc._measure_session_review_scale_inputs(
+        tmp_path, session_start_time, _SESSION_ID
+    )
+
+    assert code_loc > 0
+    assert surface_count == 1

@@ -21,6 +21,32 @@ import pytest
 
 from coordinator_core.telemetry import op_latency
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
+
+def _init_repo(tmp_path):
+    """A minimal real git repo with one commit.
+
+    Duplicated from `test_sole_publisher_suppression.py` rather than
+    imported: that module lives under `ops/ceremony/tests`, a different
+    package-test root than this file's `telemetry/tests`, and the two
+    families have no shared fixture module today.
+    """
+    import subprocess
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    for args in (["init", "-q"], ["config", "user.email", "t@t.example"],
+                 ["config", "user.name", "t"]):
+        subprocess.run(["git", *args], cwd=str(repo), check=True,
+                       capture_output=True, text=True)
+    (repo / "seed.txt").write_text("seed\n", encoding="utf-8")
+    subprocess.run(["git", "add", "-A"], cwd=str(repo), check=True,
+                   capture_output=True, text=True)
+    subprocess.run(["git", "commit", "-q", "-m", "seed"], cwd=str(repo), check=True,
+                   capture_output=True, text=True)
+    return repo
+
 
 def _rows(sink):
     return [json.loads(line) for line in sink.read_text(encoding="utf-8").splitlines() if line.strip()]
@@ -114,7 +140,7 @@ def test_pipeline_entry_is_recorded_before_any_work(monkeypatch):
     assert calls[0]["invocation_id"]
 
 
-def test_landed_commit_names_the_entry_row_that_made_it(monkeypatch):
+def test_landed_commit_names_the_entry_row_that_made_it(monkeypatch, tmp_path):
     """The join the row was built for, made executable.
 
     The entry row's `invocation_id` is `run_commit_pipeline`'s own
@@ -124,8 +150,17 @@ def test_landed_commit_names_the_entry_row_that_made_it(monkeypatch):
     makes a landed commit name its entry, so two entries against one commit
     resolve without inference: the trailer names the committer, the other
     entry names the re-entry.
+
+    Review (code-reviewer, ac5d349d): the prior version guarded its real
+    assertion behind `if tokens:`, so a control-flow change that stopped
+    `run_commit_pipeline` from reaching `commit()` would silently degrade
+    this test to a source-string match proving nothing about runtime token
+    flow. `assert tokens` now makes that failure loud instead of quiet.
     """
     from coordinator_core.ops.ceremony import commit_pipeline
+
+    repo = _init_repo(tmp_path)
+    (repo / "a.txt").write_text("v1\n", encoding="utf-8")
 
     entries = []
     monkeypatch.setattr(
@@ -141,25 +176,49 @@ def test_landed_commit_names_the_entry_row_that_made_it(monkeypatch):
 
     monkeypatch.setattr(commit_pipeline, "commit", _capture)
     try:
-        commit_pipeline.run_commit_pipeline(".", session_id="s", subject="x")
+        commit_pipeline.run_commit_pipeline(
+            str(repo),
+            session_id="s",
+            subject="x",
+            stage_paths=["a.txt"],
+        )
     except RuntimeError:
         pass
-    import inspect
 
-    assert "token=_composition_id" in inspect.getsource(
-        commit_pipeline.run_commit_pipeline
-    ), "the call site stopped passing the entry row's id as the commit token"
-    if tokens:
-        assert tokens[0] == entries[0]["invocation_id"]
+    assert tokens, "commit() was never reached; token flow not exercised"
+    assert tokens[0] == entries[0]["invocation_id"]
 
 
-def test_commit_mints_its_own_token_when_none_is_passed():
-    """`token=None` (every non-pipeline caller, every test) is unchanged."""
-    import inspect
+def test_commit_mints_its_own_token_when_none_is_passed(monkeypatch, tmp_path):
+    """`token=None` (every non-pipeline caller, every test) is unchanged.
 
-    from coordinator_core.ops.ceremony import commit_pipeline
+    Review (code-reviewer, ac5d349d): asserted by source-string previously,
+    which would still pass if the runtime default silently changed behind an
+    early-return branch. Drives `commit()` directly against a real fixture
+    repo and reads the `Commit-Token:` trailer `commit_scoped` actually
+    receives, following `test_commit_forwards_suppression_to_commit_scoped`'s
+    pattern in `test_sole_publisher_suppression.py`.
+    """
+    import re
 
-    sig = inspect.signature(commit_pipeline.commit)
-    assert sig.parameters["token"].default is None
-    src = inspect.getsource(commit_pipeline.commit)
-    assert "token if token is not None else uuid.uuid4().hex" in src
+    from coordinator_core.ops.ceremony import commit_pipeline, git_native
+
+    repo = _init_repo(tmp_path)
+    (repo / "a.txt").write_text("v1\n", encoding="utf-8")
+
+    seen: dict = {}
+
+    def _fake_commit_scoped(paths, msg_file, cwd, **kw):
+        seen["message"] = msg_file.read_text(encoding="utf-8")
+        return git_native.GitResult(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(git_native, "commit_scoped", _fake_commit_scoped)
+    commit_pipeline.commit(
+        repo,
+        message="m",
+        commit_paths=["a.txt"],
+    )
+
+    match = re.search(r"^Commit-Token: ([0-9a-f]+)$", seen["message"], re.MULTILINE)
+    assert match, f"no Commit-Token trailer in commit message: {seen['message']!r}"
+    assert re.fullmatch(r"[0-9a-f]{32}", match.group(1))

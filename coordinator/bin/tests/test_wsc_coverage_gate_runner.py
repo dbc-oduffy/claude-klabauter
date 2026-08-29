@@ -497,3 +497,76 @@ def _commit_with_unparseable_trailing_session_trailer(repo_dir, filename, messag
 # 2026-08-23, kill review_trail.write): it loaded and ran
 # coordinator-write-review-trail.py's own main(), which was deleted along
 # with the review_trail.write op it trampolined.
+
+
+# ---------------------------------------------------------------------------
+# claim-plan identity propagation across the subprocess boundary
+# (2026-08-29, doe-claude-9d live report: a plan-execution claim record
+# named a session that had never read the plan, blocking the session that
+# owned it). `resolve_session_id`'s tier 0 is a ContextVar — in-process by
+# construction — so a warm request's CARRIED identity was dropped at this
+# spawn and the child re-resolved from the ambient environment, which
+# inside the warm server belongs to whoever spawned the server.
+# ---------------------------------------------------------------------------
+
+
+_CARRIED_SID = "304997f1-4143-4beb-b2dc-657a16fef082"
+_SERVER_ENV_SID = "f3865ac1-1111-2222-3333-444444444444"
+
+
+def _spy_subprocess_run(monkeypatch):
+    captured = {}
+
+    def _fake_run(cmd, **kwargs):
+        captured["cmd"] = cmd
+        captured["env"] = kwargs.get("env")
+        return SimpleNamespace(returncode=0, stdout="")
+
+    monkeypatch.setattr(_mod.subprocess, "run", _fake_run)
+    return captured
+
+
+def test_claim_child_env_carries_the_resolved_session_id(monkeypatch):
+    """The child is TOLD the identity this process resolved, never left to
+    re-resolve one of its own."""
+    from coordinator_core.session import core as session_core
+
+    captured = _spy_subprocess_run(monkeypatch)
+    monkeypatch.setenv("COORDINATOR_SESSION_ID", _CARRIED_SID)
+
+    rc, _out = _mod._run_session_claim_cli("some-plan")
+
+    assert rc == 0
+    assert captured["env"] is not None
+    assert captured["env"]["COORDINATOR_SESSION_ID"] == _CARRIED_SID
+    assert session_core.resolve_session_id() == _CARRIED_SID
+
+
+def test_carried_identity_beats_the_ambient_environment_in_the_child(monkeypatch):
+    """The regression pin. With a tier-0 identity bound (what the warm
+    server binds per request) and a DIFFERENT sid in this process's own
+    environment (the server's spawner), the child must be handed the
+    carried one — before this fix it inherited the ambient one and stamped
+    the claim record with an uninvolved session."""
+    from coordinator_core.session import core as session_core
+
+    captured = _spy_subprocess_run(monkeypatch)
+    monkeypatch.setenv("COORDINATOR_SESSION_ID", _SERVER_ENV_SID)
+
+    with session_core.session_identity_override(_CARRIED_SID):
+        _mod._run_session_claim_cli("some-plan")
+
+    assert captured["env"]["COORDINATOR_SESSION_ID"] == _CARRIED_SID
+
+
+def test_unresolvable_identity_leaves_the_child_env_untouched(monkeypatch):
+    """Closes the DROP, never the ABSENCE: with nothing to carry, the child
+    is spawned exactly as before so its own `unresolvable session id`
+    refusal still fires. Never fabricate an identity to fill the gap."""
+    captured = _spy_subprocess_run(monkeypatch)
+    for var in ("COORDINATOR_SESSION_ID", "CLAUDE_SESSION_ID", "CLAUDE_CODE_SESSION_ID"):
+        monkeypatch.delenv(var, raising=False)
+
+    _mod._run_session_claim_cli("some-plan")
+
+    assert captured["env"] is None

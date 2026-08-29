@@ -241,6 +241,7 @@ from coordinator_core.ops.session_commits import (
 from coordinator_core.ops.review_brightline_gate import classify_surface
 from coordinator_core.ops.review_brightline_gate import _is_noise_path  # C5: code_loc noise exclusion, same predicate as C1
 from coordinator_core.ops.review_brightline_gate import _is_prose_bearing_path  # 2026-08-20: code_loc stops counting prose, same predicate as the brightline gate's mandate arms
+from coordinator_core.ops.review_brightline_gate import _is_ceremony_exhaust_path  # 2026-08-29: a .json ceremony receipt is neither noise nor prose; same predicate as the gate's mandate arms
 from coordinator_core.coverage import _is_planning_artifact_path  # review finding P2: planning-artifact LOC de-weight
 from coordinator_core.coverage import (  # 2026-08-12: numstat rename-row resolution, shared with review_brightline_gate.py (see this module's own site below)
     _REVIEW_SCALE_BARE_RENAME_RE,
@@ -3361,6 +3362,31 @@ def _added_paths_from_numstat_blocks(blocks: "dict[str, str]") -> "Optional[froz
 # pulls them in alongside `_is_planning_artifact_path`.
 
 
+def _reviewable_row(path: str) -> bool:
+    """True iff `path` is something a reviewer of this close has to read.
+
+    THE single definition of "reviewable" behind every row-4 brightline
+    input this module measures — `code_loc` and `surface_count` both, from
+    the same numstat text. Keeping it one function is the point: the
+    2026-08-20 defect (a `code_loc` that counted prose while the sibling
+    oracle excluded it) and the 2026-08-29 one (a `surface_count` that
+    counted ceremony bookkeeping while `code_loc` excluded it) were the
+    same mistake twice, both reachable only because each arm carried its
+    own inline copy of the predicate pair.
+
+    Composed of the three predicates `review_brightline_gate._accumulate_
+    rows` applies to the gate's own mandate arms, in the same order and
+    with the same meanings — the two oracles agree by construction rather
+    than by review. `gross_loc` is deliberately not a caller: its contract
+    is the raw, unfiltered sum.
+    """
+    return not (
+        _is_noise_path(path)
+        or _is_prose_bearing_path(path)
+        or _is_ceremony_exhaust_path(path)
+    )
+
+
 def _accumulate_numstat(text: str, surfaces: set[str]) -> int:
     """Sums added+deleted over `git --numstat` rows, folding each row's path
     into `surfaces`. Binary rows (`-`/`-`) contribute 0 LOC but still count
@@ -3371,7 +3397,28 @@ def _accumulate_numstat(text: str, surfaces: set[str]) -> int:
     `code_loc` (`_accumulate_code_loc_numstat`) is this module's
     noise-excluded sibling. `backlog_grind_assemble/readers_mise.py`'s own
     `gross_loc` means the OPPOSITE — already noise-excluded — so the same
-    name carries two different contracts across these two modules."""
+    name carries two different contracts across these two modules.
+
+    The `surfaces` OUT-PARAM is not on that raw side. It feeds only
+    `surface_count`, which `decide_review_scale` reads as row 4's third
+    brightline arm alongside `code_loc` — so it is filtered by the SAME
+    `_reviewable_row` predicate `_accumulate_code_loc_numstat` applies to
+    the very same numstat text. Before this, one
+    function derived two row-4 arms from one `git show` under two
+    disagreeing definitions of "reviewable": a close whose only markdown
+    and YAML was ceremony bookkeeping still contributed a `doctrine` and a
+    `config` surface, and four such buckets force `partition_mandatory`
+    off rows a reviewer has nothing to read in. That is the same defect
+    the 2026-08-20 memo (`cross-repo/archive/2026-08-20-example-retrieval-repo-em-
+    review-gate-doc-only-em-discretion.md`, PM-endorsed) named for
+    `code_loc` — a counter feeding the mandate must not measure prose the
+    sibling oracle deliberately excludes — applied to the arm that ruling
+    left behind. `gross_loc` is untouched and stays the raw sum.
+
+    NEGATIVE-SPEC: never filter the LOC accumulation here. `gross_loc`'s
+    contract is the unfiltered total, and `code_loc` is the filtered
+    sibling that already exists; a second filtered LOC counter under this
+    name is what the naming trap above warns about."""
     gross = 0
     for line in text.splitlines():
         match = _REVIEW_SCALE_NUMSTAT_ROW_RE.match(line)
@@ -3382,7 +3429,10 @@ def _accumulate_numstat(text: str, surfaces: set[str]) -> int:
             gross += int(added)
         if deleted != "-":
             gross += int(deleted)
-        surfaces.add(classify_surface(_resolve_numstat_row_path(path)))
+        resolved_path = _resolve_numstat_row_path(path)
+        if not _reviewable_row(resolved_path):
+            continue
+        surfaces.add(classify_surface(resolved_path))
     return gross
 
 
@@ -3436,7 +3486,7 @@ def _accumulate_code_loc_numstat(text: str) -> int:
             continue
         added, deleted, path = match.groups()
         resolved_path = _resolve_numstat_row_path(path)
-        if _is_noise_path(resolved_path) or _is_prose_bearing_path(resolved_path):
+        if not _reviewable_row(resolved_path):
             continue
         row_loc = (int(added) if added != "-" else 0) + (int(deleted) if deleted != "-" else 0)
         if _is_planning_artifact_path(resolved_path):
@@ -3788,9 +3838,9 @@ def _measure_session_review_scale_inputs(
             if added is None:
                 return None, None, None, None
             gross_loc += added
-            if not (_is_noise_path(member) or _is_prose_bearing_path(member)):
+            if _reviewable_row(member):
                 code_loc += added
-            surfaces.add(classify_surface(member))
+                surfaces.add(classify_surface(member))
     if walk_budget[0] <= 0:
         # An untracked tree too large to enumerate exactly IS a big diff, so
         # the exhausted budget resolves the brightline rather than defeating

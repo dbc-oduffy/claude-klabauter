@@ -2294,7 +2294,15 @@ def check_destructive_git_orphan(
     for seg in list(_split_segments(cmd)) + _orphan_ps_segments:
         if not seg.strip():
             continue
-        if not re.search(r"\bgit\b", seg):
+        # `_word_present`, not a raw scan: this per-segment gate is the last
+        # member of the quote-split verb class (2026-08-29 sweep) still
+        # gating on raw text. `'g''it' reset --hard origin/main` skipped
+        # every segment here, so the orphaned-commit leg never ran, while
+        # the plain spelling denied -- measured against the published
+        # mirror, whose worktree does not also trip the already-fixed gate
+        # in `_check_destructive_git_revert_full`, which is what masks this
+        # one in the claude-klabauter tree.
+        if not _word_present(r"\bgit\b", seg):
             continue
 
         c_dir = _extract_git_c_dir(seg)
