@@ -377,6 +377,57 @@ class TestUniqueItemsKeyword:
         assert _validate_json_schema_node(None, schema, schema, 'field') == []
 
 
+class TestContainsKeyword:
+    """`contains` arrived with plan.schema.json 2.10.0, whose
+    `gated_exit_criteria` uses four `contains` branches under `allOf` to
+    require each fleet brightline be present. Implemented rather than
+    allowlisted for the reason this whole section exists: the schema would
+    have asserted the brightlines and enforced nothing.
+
+    Both directions are pinned deliberately. `contains` is an EXISTENTIAL
+    quantifier, and the easy mistake is to implement it as a universal one --
+    an array where only SOME items match must ACCEPT, and a test suite that
+    only checks the all-match and none-match cases cannot tell the two
+    readings apart."""
+
+    _BRIGHTLINE = {
+        'contains': {
+            'properties': {'brightline': {'const': 'multi-os-first-class'}},
+            'required': ['brightline'],
+        }
+    }
+
+    def test_one_matching_item_among_others_accepts(self):
+        """The arm that distinguishes existential from universal: the
+        non-matching sibling must not make this fail."""
+        value = [{'brightline': 'work-vs-question-ratio'}, {'brightline': 'multi-os-first-class'}]
+        assert _validate_json_schema_node(value, self._BRIGHTLINE, self._BRIGHTLINE, 'field') == []
+
+    def test_no_matching_item_rejects(self):
+        value = [{'brightline': 'work-vs-question-ratio'}]
+        errors = _validate_json_schema_node(value, self._BRIGHTLINE, self._BRIGHTLINE, 'field')
+        assert errors != []
+        assert any('contains' in e['error'] for e in errors)
+
+    def test_empty_array_rejects(self):
+        """An empty array satisfies no existential claim -- and this is the
+        shape a plan that omits every brightline actually authors."""
+        errors = _validate_json_schema_node([], self._BRIGHTLINE, self._BRIGHTLINE, 'field')
+        assert errors != []
+
+    def test_item_missing_the_required_key_does_not_match(self):
+        value = [{'other': 'multi-os-first-class'}]
+        assert _validate_json_schema_node(value, self._BRIGHTLINE, self._BRIGHTLINE, 'field') != []
+
+    def test_absent_keyword_is_inert(self):
+        schema = {'type': 'array'}
+        assert _validate_json_schema_node([{'brightline': 'anything'}], schema, schema, 'field') == []
+
+    def test_non_array_value_ignored(self):
+        schema = dict(self._BRIGHTLINE, type=['array', 'null'])
+        assert _validate_json_schema_node(None, schema, schema, 'field') == []
+
+
 class TestMinLengthKeyword:
     def test_top_level_scalar_accept(self):
         fm = _valid_handoff(gate_evidence={

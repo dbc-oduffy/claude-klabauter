@@ -2644,7 +2644,16 @@ def _rm_is_rm_segment(seg: str) -> bool:
         return bool(re.search(r"\brm\b", probe))
     firstword = s.split(None, 1)[0] if s.split(None, 1) else ""
     if firstword in _RM_WRAPPER_WORDS:
-        return bool(re.search(r"(^|[\s({`])(/\S*/)?rm([\s)}`]|$)", s))
+        # Searched on `probe` as well as `s`: the non-wrapper branch below
+        # already reads the quote-stripped form, and reading only `s` here let
+        # `sudo 'r''m' -rf <path>` past while the bare `'r''m' -rf <path>` was
+        # caught (measured 2026-08-29). Quote-stripping does not disturb the
+        # `(){}` and backtick boundaries this pattern anchors on -- it removes
+        # only quote characters.
+        return bool(
+            re.search(r"(^|[\s({`])(/\S*/)?rm([\s)}`]|$)", s)
+            or re.search(r"(^|[\s({`])(/\S*/)?rm([\s)}`]|$)", probe)
+        )
     return bool(_RM_CMD_RE.search(probe))
 
 
@@ -2910,9 +2919,27 @@ def check_destructive_rm(
     # unrelated bash command, which is not a realistic false-positive shape
     # (none of those words collides with ordinary bash vocabulary the way a
     # narrower alias might).
-    _has_bash_rm_word = bool(re.search(r"\brm\b", cmd))
+    # Scanned on the raw command AND on a quote-stripped copy. The shell
+    # resolves `'r''m'` to `rm`, but `\brm\b` matched neither the raw text nor
+    # anything downstream, so this fast path returned None and the whole guard
+    # never ran: measured 2026-08-29, `rm -rf <path>` denied while
+    # `'r''m' -rf <path>` was ALLOWED against the same path with the same
+    # uncommitted work under it. Same shape as the doctrine-surface guard's
+    # prefilter bypass closed the same day -- a correct analyzer gated behind a
+    # raw-text probe that shell quoting walks straight past.
+    #
+    # WIDENING ONLY, and this gate decides solely whether to LOOK: every
+    # downstream check still requires a real rm segment, a target that exists,
+    # and uncommitted work under it, so a spurious word here cannot produce a
+    # deny on its own. `_rm_is_rm_segment` already reads segments this way; the
+    # gate in front of it did not.
+    _cmd_unquoted = cmd.replace("'", "").replace('"', "")
+    _has_bash_rm_word = bool(
+        re.search(r"\brm\b", cmd) or re.search(r"\brm\b", _cmd_unquoted)
+    )
     _has_ps_remove_word = bool(
         re.search(r"(?i)\b(remove-item|ri|rd|del|erase)\b", cmd)
+        or re.search(r"(?i)\b(remove-item|ri|rd|del|erase)\b", _cmd_unquoted)
     )
     if not _has_bash_rm_word and not _has_ps_remove_word:
         return None
@@ -3069,7 +3096,19 @@ def check_destructive_rm(
 
         if not _rm_is_rm_segment(seg):
             continue
-        after = re.sub(r".*(^|\s)rm(\s|$)", " ", seg, count=1)
+        # Quote-stripped, for the SAME reason `_rm_is_rm_segment` builds its
+        # own `probe` that way: the shell resolves `'r''m'` to `rm`, so the
+        # segment reaches here correctly identified as an rm -- but this
+        # verb-strip needed a LITERAL `rm` token, found none, and left `after`
+        # as the whole segment. Measured 2026-08-29: `rm -rf <path>` denied
+        # while `'r''m' -rf <path>` was ALLOWED on the same path with the same
+        # uncommitted work under it. The two must read the segment the same
+        # way or the detector and the extractor disagree about what they are
+        # looking at. Whitespace-splitting a quoted path was already lossy
+        # here (`rm -rf 'my dir'` split to `'my` + `dir'` before this), so
+        # this changes no case that previously resolved.
+        seg_unquoted = seg.replace("'", "").replace('"', "")
+        after = re.sub(r".*(^|\s)rm(\s|$)", " ", seg_unquoted, count=1)
         recursive = bool(re.search(r"(^|\s)-[a-zA-Z]*[rR][a-zA-Z]*(\s|$)|--recursive", after))
 
         if recursive and re.search(r"\$\(|`", after) and not rm_override:

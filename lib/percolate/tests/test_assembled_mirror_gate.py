@@ -57,6 +57,10 @@ def _write_tree(tmp_path: Path, test_source: "str | None") -> Path:
     tree = tmp_path / "assembled_mirror"
     tree.mkdir()
     (tree / "pyproject.toml").write_text(_PYPROJECT, encoding="utf-8")
+    # Every real assembled mirror ships coordinator_core/ at its root; the
+    # isolation precondition (_verify_isolation_precondition) requires it,
+    # so test trees standing in for a real mirror must carry it too.
+    (tree / "coordinator_core").mkdir()
     if test_source is not None:
         (tree / "test_probe.py").write_text(test_source, encoding="utf-8")
     return tree
@@ -111,12 +115,14 @@ def test_the_two_zero_shapes_are_never_conflated(tmp_path):
     errored_tree = tmp_path / "errored_tree"
     errored_tree.mkdir()
     (errored_tree / "pyproject.toml").write_text(_PYPROJECT, encoding="utf-8")
+    (errored_tree / "coordinator_core").mkdir()
     (errored_tree / "test_probe.py").write_text(
         "import this_module_does_not_exist_anywhere_1234\n", encoding="utf-8"
     )
     clean_zero_tree = tmp_path / "clean_zero_tree"
     clean_zero_tree.mkdir()
     (clean_zero_tree / "pyproject.toml").write_text(_PYPROJECT, encoding="utf-8")
+    (clean_zero_tree / "coordinator_core").mkdir()
 
     errored_result = run_assembled_mirror_gate(errored_tree, timeout_s=30.0)
     clean_zero_result = run_assembled_mirror_gate(clean_zero_tree, timeout_s=30.0)
@@ -183,6 +189,7 @@ def test_subprocess_isolated_from_claude_klabauter_via_cwd_and_stripped_pythonpa
     tree = tmp_path / "isolated_tree"
     tree.mkdir()
     (tree / "pyproject.toml").write_text(_PYPROJECT, encoding="utf-8")
+    (tree / "coordinator_core").mkdir()
 
     captured = {}
 
@@ -202,12 +209,31 @@ def test_subprocess_isolated_from_claude_klabauter_via_cwd_and_stripped_pythonpa
 
     assert captured["cwd"] == str(tree)
     assert "PYTHONPATH" not in captured["env"]
-    claude_klabauter_root = str(Path(__file__).resolve().parents[4])
-    assert claude_klabauter_root not in captured["cwd"]
 
 
 def test_command_uses_the_trees_own_documented_marker_expression():
     assert MARKER_EXPRESSION == "not cadence and not pending_fix and not designed_red"
+
+
+def test_tree_missing_coordinator_core_refuses_before_running_a_subprocess(tmp_path):
+    """The isolation reliance (cwd shadowing an ambient editable install) is
+    only real when `tree_root` carries `coordinator_core/` for cwd to
+    shadow with. A tree that doesn't must refuse -- never silently run a
+    subprocess whose isolation cannot be trusted, and never call
+    `subprocess.run` at all for this shape."""
+    tree = tmp_path / "no_coordinator_core"
+    tree.mkdir()
+    (tree / "pyproject.toml").write_text(_PYPROJECT, encoding="utf-8")
+
+    with mock.patch("percolate.assembled_mirror_gate.subprocess.run") as run_mock:
+        result = run_assembled_mirror_gate(tree, timeout_s=5.0)
+
+    run_mock.assert_not_called()
+    assert result.passed is False
+    assert result.isolation_unverified is True
+    assert result.errored is True
+    assert result.exit_code is None
+    assert "coordinator_core" in format_refusal(result)
 
 
 # --- summary-parsing unit pins ----------------------------------------------

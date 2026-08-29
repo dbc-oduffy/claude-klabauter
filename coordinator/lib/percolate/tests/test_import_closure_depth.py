@@ -278,3 +278,26 @@ def test_examined_count_is_zero_on_an_empty_tree(tmp_path):
     root = tmp_path / "coordinator_core"
     root.mkdir()
     assert find_import_closure_violations(root) == (0, [])
+
+
+def test_unparseable_file_is_not_counted_in_examined_and_produces_no_violation(tmp_path):
+    """`examined` increments only after a successful `ast.parse`
+    (`find_import_closure_violations`'s `try: tree = ast.parse(...) except
+    SyntaxError: continue` ordering) — a file the gate could not inspect must
+    not inflate a denominator that claims coverage. Counting it would let "0
+    violations over N examined" read as clean coverage over a file that was
+    never actually walked for imports.
+
+    Pinned so a future change moving `examined += 1` above the `try` fails
+    here, with this rationale attached, instead of silently shipping a
+    denominator that includes files the gate skipped."""
+    root = _tree(
+        tmp_path,
+        {
+            "a.py": "x = 1\n",
+            "broken.py": "def broken(:\n",
+        },
+    )
+    examined, violations = find_import_closure_violations(root)
+    assert examined == 1
+    assert violations == []

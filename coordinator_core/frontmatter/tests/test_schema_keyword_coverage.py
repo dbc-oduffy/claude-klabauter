@@ -77,6 +77,12 @@ _SUPPORTED_KEYWORDS = frozenset({
     # allowlisted-away for the reason this test exists: vendoring the bump
     # without it would have shipped that constraint as a silent no-op.
     "dependentRequired",
+    # Implemented in _validate_json_schema_node's array-level block. Arrived
+    # with plan.schema.json 2.10.0, whose `gated_exit_criteria` uses four
+    # `contains` branches under `allOf` to require each fleet brightline be
+    # present. Implemented rather than allowlisted-away: tolerating it would
+    # have shipped the brightline requirement as a silent no-op.
+    "contains",
 })
 
 # Non-keyword structural/metadata keys that may appear on a schema node but

@@ -51,8 +51,19 @@ def _write_collectable_tree(root: Path) -> None:
     """A tree whose own fast-tier command collects cleanly: one passing
     test, a `pytest.ini` declaring the marker vocabulary the gate's own
     `MARKER_EXPRESSION` selects against, and no `cadence`/`pending_fix`/
-    `designed_red` marker registration needed since none is used."""
+    `designed_red` marker registration needed since none is used.
+
+    Also carries an empty `coordinator_core/` directory at its root --
+    `_verify_isolation_precondition` (assembled_mirror_gate.py) refuses to
+    spawn the collection subprocess against a tree missing this directory,
+    since cwd-shadowing of the ambient editable install is what the gate's
+    own isolation guarantee rests on (see that function's docstring). A
+    synthetic scratch tree without it is REFUSED before any subprocess
+    runs, not collected cleanly -- this fixture is standing in for a real
+    assembled mirror, which always has this directory.
+    """
     root.mkdir(parents=True, exist_ok=True)
+    (root / "coordinator_core").mkdir(parents=True, exist_ok=True)
     (root / "pytest.ini").write_text(
         "[pytest]\ntestpaths = .\n", encoding="utf-8", newline="\n"
     )

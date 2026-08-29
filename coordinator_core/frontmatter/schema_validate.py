@@ -473,7 +473,7 @@ def _validate_json_schema_node(
     silently passing a schema this validator cannot actually check).
 
     minLength (string values only), maxLength (string values only),
-    minItems and uniqueItems (array values only), and
+    minItems, uniqueItems and contains (array values only), and
     minimum / maximum (numeric values only, `bool` excluded — JSON Schema's
     `number` type does not include booleans even though Python's `bool`
     subclasses `int`) are size/magnitude bound checks, each ignored for a value of
@@ -916,6 +916,31 @@ def _validate_json_schema_node(
                     'field': field,
                     'error': 'array contains duplicate items but uniqueItems is true',
                     'hint': 'Remove the duplicate entries',
+                })
+
+        # contains — array values only. At least ONE element must validate
+        # against the subschema; JSON Schema does not require every element to,
+        # and does not report WHICH element failed (there is no failing element,
+        # only a missing satisfying one). So the sub-errors are discarded and a
+        # single miss is reported against the array itself.
+        #
+        # Implemented rather than tolerated, for the same reason `uniqueItems`
+        # above is: plan.schema.json 2.10.0 ships four `contains` branches under
+        # `gated_exit_criteria`/`allOf` to require each fleet brightline be
+        # present, and an unimplemented keyword validates as a silent no-op --
+        # the schema would have asserted the brightlines and enforced nothing.
+        # test_schema_keyword_coverage caught it on the re-vendor, which is what
+        # that test is for.
+        if 'contains' in schema:
+            contains_schema = schema['contains']
+            if not any(
+                not _validate_json_schema_node(item, contains_schema, root_schema, path)
+                for item in value
+            ):
+                errors.append({
+                    'field': field,
+                    'error': 'no array item matches the required `contains` shape',
+                    'hint': 'Add an item satisfying the contains subschema',
                 })
 
         if 'items' in schema:

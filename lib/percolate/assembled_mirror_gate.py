@@ -55,13 +55,42 @@ discharged as (i).)
 
 ## Scope
 
-This module owns MECHANISM only: build the subprocess invocation, isolate
-it from `sys.path` contamination, run it, and parse its own reported
-collected-count / error shape. It does not decide WHEN in the publish
-pipeline to call `run_assembled_mirror_gate`, and does not itself read
-`setup/publish-allowlist-declarations.yaml` or any exemption ledger — that
-wiring is `coordinator/bin/publish.py`'s job (C3, same plan, not this
-chunk).
+This module owns MECHANISM only: build the subprocess invocation, clear
+`PYTHONPATH` and set `cwd=tree_root` on it, verify `tree_root` actually
+carries the package directory that isolation relies on before trusting the
+run, run it, and parse its own reported collected-count / error shape. It
+does not decide WHEN in the publish pipeline to call
+`run_assembled_mirror_gate`, and does not itself read `setup/publish-
+allowlist-declarations.yaml` or any exemption ledger — that wiring is
+`coordinator/bin/publish.py`'s job (C3, same plan, not this chunk).
+
+## What "isolated from claude-klabauter" actually means here (measured 2026-08-29)
+
+This module does NOT run the child in a separate interpreter and does NOT
+prevent it from resolving `coordinator_core` via claude-klabauter's own editable
+install. What it enforces directly: `PYTHONPATH` is cleared
+(`_subprocess_env`) and `cwd` is set to `tree_root`. What it RELIES ON:
+Python's own import-path ordering puts `sys.path[0]` (derived from `cwd`
+for a `-m pytest` invocation) ahead of any same-named distribution an
+ambient interpreter has installed — including claude-klabauter's own
+`coordinator_core`, which IS `pip install -e`'d into the default
+interpreter this module runs under (`__editable__.coordinator_core-
+0.1.0.pth` maps it to the claude-klabauter repo root's own `coordinator_core/`
+directory). Measured with
+`cwd` at a fresh clone of the published mirror: `sys.path[0]` is `''`, cwd
+precedes the editable finder, and `coordinator_core` resolves to the
+CLONE's own copy — so a module missing from the mirror is not silently
+supplied by claude-klabauter.
+
+That reliance is INCIDENTAL to the tree, not enforced by this module,
+unless checked: it holds only because the tree happens to carry a
+`coordinator_core/` directory at its root for cwd to shadow the ambient
+install with. A tree that does not carry that directory (or a box running
+more editable installs of the same package name) would get a different
+answer with no signal that isolation had quietly stopped applying — the
+exact abstention this whole plan exists to kill. `_verify_isolation_
+precondition` below turns that reliance into a checked precondition:
+absent, this function refuses rather than running an unverified subprocess.
 
 Negative spec: never runs the full suite. `--collect-only` answers the
 prime exit criterion; execution does not (parent plan Anti-scope, "Do not
@@ -101,10 +130,14 @@ the other way around."""
 DEFAULT_TIMEOUT_S = 60.0
 """Parent plan's own budget note: "one pytest collection per publish, not
 per op ... If it exceeds ~60s, run C1 first and escalate to the full
-collection only when C1 is clean". This is the wiring caller's (C3's)
-escalation threshold to apply, not a value this module enforces by
-itself — the default here is the same number so a caller that does not
-override it inherits the documented budget rather than an arbitrary one."""
+collection only when C1 is clean". This module DOES enforce this number as
+a literal `subprocess.run(..., timeout=timeout_s)` value — a run that
+exceeds it is killed and reported as `timed_out=True`. What this module
+does NOT enforce is the ESCALATION that number is meant to signal ("run C1
+first"): that decision belongs to the wiring caller (C3), which sees
+`timed_out=True` and decides whether to escalate. The default here is the
+same number so a caller that does not override `timeout_s` inherits the
+documented budget rather than an arbitrary one."""
 
 _NO_CONSOLE = {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)}
 # See coordinator/lib/percolate/publish_sync.py's identical constant for the
@@ -159,6 +192,14 @@ class MirrorCollectionResult:
     tree_root: str
     stdout_tail: str
     stderr_tail: str
+    isolation_unverified: bool = False
+    """True only when `run_assembled_mirror_gate` refused BEFORE spawning a
+    subprocess because `_verify_isolation_precondition` found `tree_root`
+    missing the `coordinator_core/` directory its cwd-shadowing isolation
+    relies on — see that function's own docstring. `passed` is always
+    False alongside this; no subprocess ran, so `exit_code` is None and
+    `collected_count`/`errored` carry the same fail-closed values a
+    `TimeoutExpired` reports."""
 
 
 def _tail(text: str, n_lines: int = 40) -> str:
@@ -178,7 +219,20 @@ def _parse_collection_summary(stdout: str) -> "tuple[int, bool]":
     and misreading a genuine collection error as a clean empty collection
     is the dangerous direction, not the reverse (same asymmetry
     `import_closure.py`'s `_unguarded_import_nodes` documents for its own
-    guard/unguarded split)."""
+    guard/unguarded split).
+
+    Ordering dependency: the "N tests collected" match is checked BEFORE
+    the tail-line error/interrupted check, which is only safe because this
+    module's own `run_assembled_mirror_gate` never passes
+    `--continue-on-collection-errors` to pytest. Without that flag, pytest
+    aborts collection on the first error before ever printing a partial
+    "N tests collected" summary line — so a collected-count match, when one
+    occurs, cannot itself be masking an in-progress error the tail-line
+    check would otherwise have caught. If this module ever adds that flag
+    (or any flag that lets pytest print a count alongside an error it
+    doesn't also embed in the same summary line via `_SUMMARY_ERROR_CLAUSE_
+    RE`), this ordering must be re-verified against a real partial-
+    collection run, not assumed."""
     stripped = stdout.rstrip()
     if not stripped:
         return 0, True
@@ -217,17 +271,41 @@ def _parse_collection_summary(stdout: str) -> "tuple[int, bool]":
 def _subprocess_env() -> "dict[str, str]":
     """A copy of the current environment with `PYTHONPATH` removed — the
     only generic vector by which claude-klabauter's own source tree could leak onto
-    the child's `sys.path` and let a module resolve from claude-klabauter instead of
-    (or in addition to) the tree actually under test. Combined with
+    the child's `sys.path` via an explicit path entry. This closes ONE
+    channel, not all of them: it does not and cannot prevent the child from
+    resolving `coordinator_core` via an ambient editable install on the
+    interpreter it runs under (see this module's own docstring, "What
+    'isolated from claude-klabauter' actually means here"). Combined with
     `cwd=tree_root` in the caller (Python's own `-m pytest` invocation adds
-    the CURRENT directory, not the parent process's, to `sys.path[0]`),
-    this is what "a `sys.path` that cannot reach claude-klabauter" means in practice —
-    there is no portable way to positively assert an empty `sys.path` from
-    outside the child process, so this gate closes the one channel it can:
-    the environment it hands the child."""
+    the CURRENT directory, not the parent process's, to `sys.path[0]`), the
+    combination is sufficient in practice ONLY because `sys.path[0]`
+    precedence lets `cwd` shadow a same-named ambient install — a reliance
+    `_verify_isolation_precondition` checks rather than assumes. There is no
+    portable way to positively assert an empty `sys.path` from outside the
+    child process, so this function closes the one channel it directly
+    controls: the environment it hands the child."""
     env = dict(os.environ)
     env.pop("PYTHONPATH", None)
     return env
+
+
+def _verify_isolation_precondition(tree_root: Path) -> bool:
+    """Return whether `tree_root` carries the package directory that
+    `run_assembled_mirror_gate`'s isolation reliance depends on shadowing.
+
+    The gate's isolation is NOT interpreter-level (see module docstring);
+    it depends on `cwd=tree_root` giving `sys.path[0]` precedence over an
+    ambient editable install of the same package name (measured
+    2026-08-29: claude-klabauter's own interpreter has exactly this install). That
+    precedence only produces the intended answer if `tree_root` itself
+    contains a `coordinator_core/` directory for `cwd` to shadow the
+    ambient install with — a tree missing that directory would still run
+    collection, but a resolved `import coordinator_core` inside it could
+    silently come from claude-klabauter instead, with no signal that isolation had
+    stopped applying. This function turns that reliance into a checked
+    precondition instead of an assumed one: callers must refuse rather
+    than trust a run made without it."""
+    return (tree_root / "coordinator_core").is_dir()
 
 
 def run_assembled_mirror_gate(
@@ -237,8 +315,20 @@ def run_assembled_mirror_gate(
     timeout_s: float = DEFAULT_TIMEOUT_S,
 ) -> MirrorCollectionResult:
     """Run the tree's own documented fast-tier command, in `--collect-only
-    -q` form, as a subprocess with `cwd=tree_root` and an environment that
-    cannot leak claude-klabauter onto the child's `sys.path` (`_subprocess_env`).
+    -q` form, as a subprocess with `cwd=tree_root` and `PYTHONPATH`
+    stripped from its environment (`_subprocess_env`). This does NOT run
+    the child in a separate interpreter and does NOT, by itself, prevent
+    the child from resolving `coordinator_core` via an ambient editable
+    install on the interpreter it runs under — see this module's own
+    docstring, "What 'isolated from claude-klabauter' actually means here", for the
+    measured basis of what IS enforced (PYTHONPATH cleared, cwd set) versus
+    what is RELIED ON (cwd's `sys.path[0]` precedence shadowing an ambient
+    install). That reliance is checked, not assumed:
+    `_verify_isolation_precondition` runs before the subprocess, and a
+    `tree_root` missing the `coordinator_core/` directory the shadowing
+    depends on refuses immediately (`passed=False, isolation_unverified
+    =True`) rather than running an unverified subprocess.
+
     `tree_root` MUST be POST-SYNC bytes — see this module's own docstring,
     "BLOCKING PRECONDITION discharged: (i)"; this function does not and
     cannot verify that from inside `tree_root` alone.
@@ -265,6 +355,27 @@ def run_assembled_mirror_gate(
         "--collect-only",
         "-q",
     )
+
+    if not _verify_isolation_precondition(tree_root):
+        return MirrorCollectionResult(
+            passed=False,
+            collected_count=0,
+            errored=True,
+            exit_code=None,
+            timed_out=False,
+            elapsed_s=0.0,
+            command=command,
+            tree_root=str(tree_root),
+            stdout_tail="",
+            stderr_tail=(
+                "assembled-mirror-gate: refused before running — tree_root "
+                "carries no coordinator_core/ directory for cwd to shadow "
+                "the ambient editable install with, so the subprocess's "
+                "sys.path isolation cannot be trusted (see "
+                "_verify_isolation_precondition)."
+            ),
+            isolation_unverified=True,
+        )
 
     start = time.perf_counter()
     try:
@@ -429,7 +540,9 @@ def format_refusal(result: MirrorCollectionResult) -> str:
     "assembled mirror gate failed" without the collected count and the
     errored/clean-zero distinction reproduces the abstention defect this
     plan exists to close."""
-    if result.timed_out:
+    if result.isolation_unverified:
+        shape = "ISOLATION UNVERIFIED — no subprocess run"
+    elif result.timed_out:
         shape = f"TIMED OUT after {result.elapsed_s:.1f}s (budget {DEFAULT_TIMEOUT_S:.0f}s)"
     elif result.errored:
         shape = (

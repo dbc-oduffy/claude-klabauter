@@ -382,10 +382,13 @@ def _extract_top_level_imports(py_source: str, filename: str) -> tuple[set[str],
 def _extract_from_tree(tree: ast.Module) -> tuple[set[str], set[str], set[str]]:
     """`_extract_top_level_imports`'s body over an already-parsed module.
 
-    Split out so the walk parses each file ONCE and hands the same tree to
-    both this and `_never_published_imports`. Re-parsing per grader took the
-    walk from 7.4s to 14.5s over 3208 files (measured 2026-08-29) — the same
-    answer for double the process time, on a gate the brightline governs.
+    Split out so the walk parses each file ONCE: this single walk populates
+    all three return sets in one pass, including the never-published-roots
+    collection below, rather than a second walk over the same tree.
+    Re-parsing per grader took the walk from 7.4s to 14.5s over 3208 files
+    (measured 2026-08-29) — the same answer for double the process time,
+    on a gate the brightline governs; the folded single-walk shape measures
+    8.2s.
     `_extract_top_level_imports` stays a source-taking wrapper returning
     only the first two, because its own regression pin calls it that way.
 
