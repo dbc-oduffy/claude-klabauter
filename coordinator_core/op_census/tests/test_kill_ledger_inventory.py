@@ -415,3 +415,57 @@ def test_both_fail_flags_together_exit_1_if_either_fires(monkeypatch, capsys) ->
     err = capsys.readouterr().err
     assert "CONTESTED K-900" in err
     assert "CROSS-REPO-EVIDENCE K-901" in err
+
+
+# --- Disposition-first status entries (handoff 2026-08-29, Next Steps 5) ------
+#
+# An entry that opens with its disposition in bold instead of labelling it read
+# as an EMPTY status, matched no rule, and rendered CONTESTED -- a defect report
+# about the ledger for a disposition the ledger states plainly. K-066 was this
+# shape and was fixed at the entry; these pin the reading rather than the entry.
+
+
+def _entry_body(text):
+    from coordinator_core.op_census.kill_ledger_inventory import parse_ledger
+
+    return parse_ledger(f"## K-900 — `some.op`\n{text}\n")[0]
+
+
+def test_disposition_first_entry_is_read_not_contested():
+    entry = _entry_body(
+        "**WITHDRAWN.** The nomination is retracted; the op stays and the surface\n"
+        "stays with it.\n"
+    )
+    assert entry.status_text.lower().startswith("withdrawn")
+
+
+def test_labelled_status_still_wins_over_a_leading_bold_run():
+    entry = _entry_body(
+        "**LANDED.** prose that is not the status\n\n**Status:** not yet cut, deferred\n"
+    )
+    assert entry.status_text == "not yet cut, deferred"
+
+
+def test_a_bold_section_heading_is_not_read_as_a_disposition():
+    """`**Cut scope:**` opens with a disposition word and is a heading. Equality
+    against the vocabulary, not a prefix test, is what separates them."""
+    entry = _entry_body("**Cut scope:** three call sites and their tests\n")
+    assert entry.status_text == ""
+
+
+def test_an_entry_stating_no_disposition_still_reaches_contested():
+    from coordinator_core.op_census.kill_ledger_inventory import classify
+
+    entry = _entry_body("**What is removed:** the op and its trampoline\n")
+    assert entry.status_text == ""
+    classify([entry], live_ops=frozenset(), suspended_ops=frozenset())
+    assert entry.population == "CONTESTED"
+
+
+def test_the_vocabulary_is_derived_from_the_marker_tuples():
+    """Assembled from the tuples rather than restated, so a marker added there is
+    reachable here in the same edit -- the drift that opened this gap twice."""
+    from coordinator_core.op_census import kill_ledger_inventory as k
+
+    for marker in k._LANDED_MARKERS + k._NON_CUT_MARKERS + k._WITHDRAWN_MARKERS:
+        assert marker in k._DISPOSITION_VOCABULARY

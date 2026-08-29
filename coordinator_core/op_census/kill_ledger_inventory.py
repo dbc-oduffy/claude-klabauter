@@ -185,6 +185,59 @@ def _field(body: str, *labels: str, limit: int = 400) -> str:
     return ""
 
 
+#: Every disposition word the classifier can place, for `_status_text`'s
+#: fallback below. Assembled from the marker tuples themselves rather than
+#: restated, so a vocabulary added there is reachable by the fallback in the
+#: same edit -- the drift that produced the gravestone and CUT. gaps twice.
+_DISPOSITION_VOCABULARY = frozenset(
+    _LANDED_MARKERS + _NON_CUT_MARKERS + _WITHDRAWN_MARKERS + ("candidate", "convicted")
+)
+
+
+def _status_text(body: str, *, limit: int = 260) -> str:
+    """The entry's status text: its `**Status...**` run, or -- for an entry that
+    opens with its disposition in bold instead of labelling it -- that opening
+    run.
+
+    THE GAP THIS CLOSES. `_field` requires a literal `**Status**` label. An
+    entry written as `**WITHDRAWN.** The nomination is retracted...` yields an
+    EMPTY status, which matches no rule in `classify()` and lands in its final
+    `else` as CONTESTED -- rendered to a reader as "the ledger's status and the
+    live registry disagree", a defect report about the ledger. There is no
+    disagreement: the entry states its disposition plainly and this module
+    could not read it. K-066 was exactly this, and its author fixed the ENTRY.
+    The class recurs for as long as the reading is the narrow one, so the
+    reading widens here (`state/handoffs/2026-08-29-eight-false-greens-a-kill-
+    nomination-rev.md` § Next Steps 5).
+
+    DELIBERATELY NARROW, because a wrong status is worse than an empty one:
+      - Fires ONLY when there is no `**Status**` run at all. A labelled status
+        always wins, so no currently-classified entry changes population.
+      - Anchored to the START of the body. A disposition-first entry leads with
+        it; a bold run further down is prose, and the windowed matches in
+        `classify()` already exist because status prose is not disposition.
+      - The bold run must EQUAL a known disposition word once trailing
+        punctuation is stripped -- never merely start with one. `**Cut scope:**`
+        opens with "cut" and is a section heading, not a disposition; requiring
+        equality is what separates them without a heading blocklist that would
+        need maintaining.
+
+    An entry that matches none of this still returns "" and still reaches
+    CONTESTED, which is correct: an entry that neither labels its status nor
+    opens with a disposition has not stated one.
+    """
+    labelled = _field(body, "Status", limit=limit)
+    if labelled:
+        return labelled
+    lead = re.match(r"\s*\*\*([^*\n]{1,80})\*\*[:.]?\s*(.*?)(?=\n\n|\Z)", body, re.S)
+    if not lead:
+        return ""
+    disposition = lead.group(1).strip().rstrip(".:").lower()
+    if disposition not in _DISPOSITION_VOCABULARY:
+        return ""
+    return " ".join((lead.group(1).strip() + " " + lead.group(2)).split())[:limit]
+
+
 def _op_name_for(title: str, body: str) -> Optional[str]:
     """The op a K-entry is about, or None for entries that name a function or a
     mechanism rather than a registered op."""
@@ -227,7 +280,7 @@ def parse_ledger(text: str) -> List[LedgerEntry]:
                 number=number,
                 key=f"K-{matched.group(1)}",
                 title=matched.group(2).strip(),
-                status_text=_field(body, "Status", limit=260),
+                status_text=_status_text(body, limit=260),
                 op_name=_op_name_for(matched.group(2), body),
                 cost_text=_field(body, "Cost", "Measured cost", limit=260),
                 breaks_text=_field(body, "What breaks", "Breaks", limit=260),
@@ -253,7 +306,7 @@ def _expand_range_entry(matched: "re.Match[str]", body: str) -> List[LedgerEntry
     from the range's own per-op table (`_RANGE_ROW_OP`); an id absent from that
     table gets `op_name=None` rather than a guess."""
     start, end, title = int(matched.group(1)), int(matched.group(2)), matched.group(3).strip()
-    status_text = _field(body, "Status", limit=260)
+    status_text = _status_text(body, limit=260)
     cost_text = _field(body, "Cost", "Measured cost", limit=260)
     breaks_text = _field(body, "What breaks", "Breaks", limit=260)
     returns_when_text = _field(

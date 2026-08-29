@@ -17,20 +17,55 @@ floor by 4x (187.5ms, not the 46.9ms the plan carried until `4c420bc79`). A gate
 blind to spawned children is not a weaker gate; it is a gate that certifies the
 defect it exists to catch.
 
-THE FIGURE IS A DIFFERENCE, not a reading. Two child scripts run against the
-same fixture: a FLOOR script that pays interpreter start and every import the
-job touches — including `handoff_reconcile`, which `_close_finished` imports
-lazily and which would otherwise be charged to the job — and a FULL script that
-pays all of that and then calls `_handler`. The delta is the job's own work.
-Measuring the full script alone would gate the job on ~109ms of interpreter and
-engine import, which is the DOOR's budget (`coordinator_core/warm/tests/
-test_handoff_housekeeping_warm_serves.py` holds that half) and not this one's.
+THE FIGURE IS A DIFFERENCE OF WARM CALLS, not a cold reading. The job only
+EVER runs warm in production: `docs/plans/2026-08-27-one-corpus-read-or-the-
+housekeeping-job-dies-a-fourth-time.md` § Anti-scope — "The job must not be
+reachable by a cold CLI spawn" and "A CLI door that spawns a fresh interpreter
+to do housekeeping is this plan failing even if every other number is green."
+The door satisfies `warm/serve_classifier.py`, and the ceremonies that call it
+(`workday-complete`, `workweek-complete`) run it in-process inside a live,
+already-warm session. A gate that pays cold interpreter start and cold
+cache-fill on every sample is measuring an occasion production never takes —
+`docs/research/2026-08-27-the-archival-per-invocation-figure-decomposed.md`
+found `archive_and_commit`'s op body 46.9ms cold and 0.0ms warm, entirely
+cache-fill, and an in-process 6-call trace of the whole job found call 1 at
+250.0ms and calls 2-6 stable at a 187.5ms p50 — full warmth by the SECOND
+call, not a slow asymptote requiring many.
+
+So this file no longer subtracts a FLOOR script's interpreter-and-import cost
+from a single cold FULL call. It subtracts a LOW script's cost (one `_handler`
+call, itself paying the cold interpreter/import price) from a HIGH script's
+cost (two `_handler` calls, over a second, independently-built, identically-
+shaped fixture). Both scripts pay the same cold start; the delta is exactly
+the marginal, WARM second call — the occasion the job actually runs on. Each
+call runs over its OWN freshly-built fixture (never a shared, reused one) so
+neither script's second call is measuring a corpus the first call already
+swept: see `_measure_one_pair` and the WARM/equal-work note below for why a
+shared fixture was rejected. Measuring either script alone would still gate on
+the DOOR's interpreter/import budget (`coordinator_core/warm/tests/
+test_handoff_housekeeping_warm_serves.py` holds that half), not this one's.
+
+EQUAL WORK PER CALL, verified empirically before this shape was trusted. An
+earlier attempt at this same differential (loop N `_handler` calls in one
+process over a shared, growing fixture, see plan handoff) produced incoherent
+deltas — negative, and a K+1-call script reporting FEWER processes than a
+K-call script — traced to calls 1..k-1 each reporting `archived=0` and only
+the LAST call reporting the full `archived=8`: the fixture was being consumed
+across calls (step 3's commit changes what step 2's re-scan sees), so later
+calls in the loop had less work left to do, and the "delta" was measuring
+fixture decay, not warmth. The fix here is that every call — LOW and HIGH
+alike — gets its OWN independently `_build_corpus`-ed fixture, never a shared
+or reused one; confirmed by direct reproduction (4 independent fixtures fed to
+4 sequential in-process `_handler` calls) that every call then reports
+`archived=8`, identically, regardless of position in the sequence. Warmth
+comes from the shared PROCESS (imports, git pack cache, OS page cache), not
+from a shared fixture — the two were conflated in the earlier attempt.
 
 QUANTISATION. Windows job accounting lands on ~15.6ms scheduler ticks, and a
-difference of two readings carries the noise of both. `n=5` fixtures are built
+difference of two readings carries the noise of both. `n=5` pairs are built
 and measured, and the assertion is on the MEDIAN delta — a single sample near a
-200ms bar measures the tick, not the job. The fixture cannot be reused across
-samples because step 3 mutates it, which is why this is a median over paired
+200ms bar measures the tick, not the job. Fixtures cannot be reused across
+samples because step 3 mutates them, which is why this is a median over paired
 one-shots rather than `batched_process_time_ms`.
 
 THE BAR IS 200ms. Not `SUSPENSION_BAR_MS` (2000ms), which is a
@@ -211,34 +246,49 @@ def _build_corpus(root: Path, terminal: int = _STEADY_TERMINAL) -> Path:
     return Path(common.stdout.strip()).resolve()
 
 
+#: LOW pays one cold `_handler` call; HIGH pays that same cold call plus a
+#: SECOND, warm one over its own independent fixture. The delta isolates the
+#: marginal warm call — see the module docstring's evidence that call 2 is
+#: already at the stable p50 (250.0ms call 1, 187.5ms calls 2-6). Not larger:
+#: a bigger K would only add more independent fixtures (and git spawns) to
+#: build per sample without changing which call the delta isolates, because
+#: the shared cold-start prefix cancels regardless of its length.
+_WARM_K = 1
+
 _PREAMBLE = """
 import sys
 sys.path.insert(0, {repo_root!r})
+import json
 from pathlib import Path
 
 # Both scripts pay these BEFORE the measured region. `_close_finished` imports
-# `handoff_reconcile` lazily, inside the call, so a floor that skipped it would
-# charge the job a first-import cost it does not own -- the same correction the
-# close-coverage advisory's own AC5 measurement needed (Finding 2 there).
+# `handoff_reconcile` lazily, inside the call, so a script that skipped it
+# would charge the job a first-import cost it does not own -- the same
+# correction the close-coverage advisory's own AC5 measurement needed
+# (Finding 2 there).
 from coordinator_core.ops.handoff_housekeeping import _handler
 from coordinator_core.ops import handoff_reconcile  # noqa: F401
 """
 
-_FLOOR_SCRIPT = _PREAMBLE + """
-print("floor")
-"""
-
-_FULL_SCRIPT = _PREAMBLE + """
-import json
-result = _handler({{"cap": {cap}}}, Path({common_dir!r}))
-print(json.dumps({{
-    "exit_code": result["exit_code"],
-    "archived": len(result["archived"]),
-    "skipped": len(result["skipped"]),
-    "failed": len(result["failed"]),
-    "close_error": result["close_error"],
-    "error": result.get("error"),
-}}))
+#: `common_dirs` is a list of git-common-dir strings, one per `_handler` call,
+#: each its OWN independently `_build_corpus`-ed fixture -- see the module
+#: docstring's EQUAL WORK note for why a shared/reused fixture is rejected.
+#: Results are a JSON array, one entry per call, in call order, so the LAST
+#: entry of the HIGH script is always the marginal (warm, second-in-process)
+#: call's own verdict.
+_CALL_SCRIPT = _PREAMBLE + """
+results = []
+for common_dir in {common_dirs!r}:
+    result = _handler({{"cap": {cap}}}, Path(common_dir))
+    results.append({{
+        "exit_code": result["exit_code"],
+        "archived": len(result["archived"]),
+        "skipped": len(result["skipped"]),
+        "failed": len(result["failed"]),
+        "close_error": result["close_error"],
+        "error": result.get("error"),
+    }})
+print(json.dumps(results))
 """
 
 
@@ -247,57 +297,59 @@ def _write_script(path: Path, body: str) -> Path:
     return path
 
 
-def _measure_one_pair(tmp_path: Path, index: int, terminal: int = _STEADY_TERMINAL) -> dict:
-    """Build a fresh corpus, read the floor against it, then read the job.
-
-    ORDER IS LOAD-BEARING: the floor script does not mutate, the full script
-    does. Reading the floor second would read it against an already-swept
-    corpus, which is a different fixture wearing the same path.
-    """
-    root = tmp_path / f"corpus-{index}"
-    common_dir = _build_corpus(root, terminal=terminal)
-
-    floor_script = _write_script(
-        tmp_path / f"floor-{index}.py", _FLOOR_SCRIPT.format(repo_root=str(_REPO_ROOT))
-    )
-    full_script = _write_script(
-        tmp_path / f"full-{index}.py",
-        _FULL_SCRIPT.format(
-            repo_root=str(_REPO_ROOT), cap=_CAP, common_dir=str(common_dir)
+def _run_call_script(
+    tmp_path: Path, label: str, common_dirs: list, cap: int = _CAP
+) -> dict:
+    script = _write_script(
+        tmp_path / f"{label}.py",
+        _CALL_SCRIPT.format(
+            repo_root=str(_REPO_ROOT), cap=cap, common_dirs=list(common_dirs)
         ),
     )
-
-    floor_out = tmp_path / f"floor-{index}.out"
-    full_out = tmp_path / f"full-{index}.out"
-
-    floor = single_invocation_tree_process_time(
-        [sys.executable, str(floor_script)],
+    out_path = tmp_path / f"{label}.out"
+    reading = single_invocation_tree_process_time(
+        [sys.executable, str(script)],
         cwd=str(_REPO_ROOT),
-        stdout_path=str(floor_out),
-        stderr_path=str(tmp_path / f"floor-{index}.err"),
+        stdout_path=str(out_path),
+        stderr_path=str(tmp_path / f"{label}.err"),
     )
-    full = single_invocation_tree_process_time(
-        [sys.executable, str(full_script)],
-        cwd=str(_REPO_ROOT),
-        stdout_path=str(full_out),
-        stderr_path=str(tmp_path / f"full-{index}.err"),
+    assert reading["rc"] == 0, (
+        label, reading, (tmp_path / f"{label}.err").read_text(errors="replace")
     )
+    verdicts = json.loads(out_path.read_text(encoding="utf-8").strip().splitlines()[-1])
+    return {"reading": reading, "verdicts": verdicts}
 
-    assert floor["rc"] == 0, (
-        floor, (tmp_path / f"floor-{index}.err").read_text(errors="replace")
-    )
-    assert full["rc"] == 0, (
-        full, (tmp_path / f"full-{index}.err").read_text(errors="replace")
-    )
 
-    verdict = json.loads(full_out.read_text(encoding="utf-8").strip().splitlines()[-1])
+def _measure_one_pair(tmp_path: Path, index: int, terminal: int = _STEADY_TERMINAL) -> dict:
+    """Build `2 * _WARM_K + 1` independent fixtures, run a LOW script of
+    `_WARM_K` calls and a HIGH script of `_WARM_K + 1` calls, and return the
+    delta as the marginal warm call's own cost.
+
+    Every fixture is built fresh and used by exactly one call in exactly one
+    script -- never shared between LOW and HIGH, and never reused across
+    calls within a script -- so neither script's later calls are measuring a
+    corpus an earlier call already swept (the EQUAL WORK failure mode the
+    module docstring documents).
+    """
+    low_dirs = [
+        str(_build_corpus(tmp_path / f"corpus-{index}-low-{i}", terminal=terminal))
+        for i in range(_WARM_K)
+    ]
+    high_dirs = [
+        str(_build_corpus(tmp_path / f"corpus-{index}-high-{i}", terminal=terminal))
+        for i in range(_WARM_K + 1)
+    ]
+
+    low = _run_call_script(tmp_path, f"low-{index}", low_dirs)
+    high = _run_call_script(tmp_path, f"high-{index}", high_dirs)
 
     return {
-        "process_time_ms": full["process_time_ms"] - floor["process_time_ms"],
-        "procs": full["procs"] - floor["procs"],
-        "verdict": verdict,
-        "floor": floor,
-        "full": full,
+        "process_time_ms": high["reading"]["process_time_ms"] - low["reading"]["process_time_ms"],
+        "procs": high["reading"]["procs"] - low["reading"]["procs"],
+        "verdict": high["verdicts"][-1],
+        "all_verdicts": low["verdicts"] + high["verdicts"],
+        "low": low["reading"],
+        "high": high["reading"],
     }
 
 
@@ -337,21 +389,28 @@ def test_every_sample_measured_a_job_that_actually_ran(measurement: dict) -> Non
     makes a green perf gate worse than none.
     """
     for i, sample in enumerate(measurement["samples"]):
-        verdict = sample["verdict"]
-        assert verdict["exit_code"] == 0, (i, verdict)
-        assert verdict["error"] is None, (i, verdict)
-        assert verdict["close_error"] is None, (
-            f"sample {i}: the close pass failed, so this reading measures a "
-            f"two-leg job and is not the figure the bar is about: {verdict}"
-        )
-        assert verdict["archived"] == _STEADY_TERMINAL, (
-            f"fixture sanity, sample {i}: expected the {_STEADY_TERMINAL} "
-            f"terminal records of {_CORPUS_SIZE} to be filed and the rest walked "
-            f"past; got {verdict['archived']} archived, {verdict['skipped']} "
-            f"skipped, {verdict['failed']} failed. A reading over a corpus where "
-            f"nothing moved never enters the commit path; one where everything "
-            f"moved is the per-move fixture, not this one."
-        )
+        # Every call in BOTH scripts (LOW and HIGH), not only the marginal
+        # one the bar reads: the EQUAL WORK failure mode this module's
+        # docstring documents corrupted an EARLIER call in the sequence, not
+        # the last one, so a check scoped to `verdict` alone would have
+        # missed it.
+        for j, verdict in enumerate(sample["all_verdicts"]):
+            assert verdict["exit_code"] == 0, (i, j, verdict)
+            assert verdict["error"] is None, (i, j, verdict)
+            assert verdict["close_error"] is None, (
+                f"sample {i} call {j}: the close pass failed, so this reading "
+                f"measures a two-leg job and is not the figure the bar is "
+                f"about: {verdict}"
+            )
+            assert verdict["archived"] == _STEADY_TERMINAL, (
+                f"fixture sanity, sample {i} call {j}: expected the "
+                f"{_STEADY_TERMINAL} terminal records of {_CORPUS_SIZE} to be "
+                f"filed and the rest walked past; got {verdict['archived']} "
+                f"archived, {verdict['skipped']} skipped, {verdict['failed']} "
+                f"failed. Every call must do IDENTICAL work -- a call doing "
+                f"less than another is the fixture-decay failure mode the "
+                f"module docstring's EQUAL WORK note documents, not warmth."
+            )
 
 
 def test_the_whole_housekeeping_job_fits_the_200ms_brightline(
@@ -359,6 +418,9 @@ def test_the_whole_housekeeping_job_fits_the_200ms_brightline(
 ) -> None:
     """The gate, and the plan's scope verdict in one number.
 
+    Measures the marginal WARM call (HIGH's `_WARM_K + 1`'th call minus
+    LOW's `_WARM_K` calls) -- the occasion the job actually runs on, per the
+    plan's Anti-scope: "The job must not be reachable by a cold CLI spawn."
     Fails honestly when the job is over: 200ms is the bar DR-344 ratified and
     nothing in this file may move it to recover the second ceremony tier.
     """
@@ -367,7 +429,8 @@ def test_the_whole_housekeeping_job_fits_the_200ms_brightline(
 
     print(
         f"handoff.housekeeping over {_CORPUS_SIZE} records, n={_SAMPLES} paired "
-        f"one-shots (job-object whole-tree, full minus floor): "
+        f"one-shots (job-object whole-tree, marginal WARM call: HIGH's "
+        f"{_WARM_K + 1}-call script minus LOW's {_WARM_K}-call script): "
         f"p50={p50_ms:.1f}ms process, "
         f"samples={[round(x, 1) for x in process_times]}, "
         f"proc delta p50={measurement['p50_procs']}, "

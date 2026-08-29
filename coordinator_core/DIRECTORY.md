@@ -100,7 +100,6 @@ Each sub-module self-registers its op via `register_op()` at import time.
 | `resolve_baton_path.py` | `baton.resolve_path_and_repo` | Resolves a caller-supplied baton path to its absolute native form + owning git repo |
 | `resolve_mcp_server_cli_path.py` | `mcp.resolve_server_cli_path` | Resolves an MCP server's CLI path + project root from `~/.claude.json` |
 | `resolve_swept_baton.py` | `baton.resolve_swept_in_archive` | Finds a swept (already-archived) baton by basename across the three known archive dirs |
-| `review_trail_write.py` | — | Writes a review-trail record |
 | `roadmap_dag.py` | — | Pure derivation helper — builds per-roadmap `{nodes, edges, roll_up, critical_path}` |
 | `roadmap_serve.py` | `roadmap.serve` | Read-only single-initiative DAG view |
 | `run_pip_audit.py` | `ci.run_pip_audit` | Runs pip-audit against a lock file, with optional `--extra-index-url` detection for non-PyPI wheel sources |
@@ -112,7 +111,6 @@ Each sub-module self-registers its op via `register_op()` at import time.
 | `run_semgrep_scan.py` | `ci.run_semgrep_scan` | Runs a tiered semgrep scan over a diff scope, native `shutil.which` fallback-tier dispatch |
 | `run_shellcheck_sweep.py` | `ci.run_shellcheck_sweep` | Runs shellcheck over the caller's own worktree's tracked `.sh` files |
 | `scan_content_leakage.py` | `percolate.scan_content_leakage_tiers` | Three-tier (HIGH/MEDIUM/LOW) content-leakage regex sweep over an about-to-publish tree |
-| `scan_unresolved_ubt_records.py` | `review_trail.scan_unresolved_ubt` | Read-only scan of `state/review-trail` for unresolved UBT-compile-pending markers |
 | `schema_drift_gate.py` | `schema.drift_gate` | GATING reduction of `schema_drift_watch.scan_vendored_schema_drift()` to a pass/fail verdict — blocks only on a positively observed DRIFT, never on INDETERMINATE/UNRESOLVED |
 | `session_context.py` | — | Shared `resolve_current_session_id(worktree_root)` resolver |
 | `verify_fix_files_changed.py` | `bug_sweep.verify_fix_files_changed` | Read-only comparison of a fix-manifest's claimed-fixed files against `git diff --name-only` |
