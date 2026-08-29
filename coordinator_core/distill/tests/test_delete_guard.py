@@ -877,6 +877,33 @@ def test_evaluate_candidate_uses_repo_relative_needle_not_bare_filename(tmp_path
 
 
 @_requires_rg
+def test_evaluate_candidate_needle_is_forward_slash_not_native_separator(tmp_path: Path):
+    # SECURITY-ADJACENT regression, companion to the repo-relative needle test above.
+    # In-repo documents spell their references with '/'. A native-separator needle would read
+    # "cross-repo\\archive\\candidate.md" on Windows, match NOTHING against the forward-slash
+    # citation below, and report a still-referenced artifact as delete-eligible — the guard
+    # failing OPEN. Pins that a live citation of the candidate's own repo-relative posix path
+    # is seen on every platform, for a candidate whose path has separators in it.
+    candidate_dir = tmp_path / "cross-repo" / "archive"
+    candidate_dir.mkdir(parents=True)
+    handoff = candidate_dir / "candidate.md"
+    handoff.write_text(
+        "---\nshipped_in: 68b27420\nstatus: actioned\nrealized_by: inline\n---\nbody\n",
+        encoding="utf-8",
+    )
+
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs" / "note.md").write_text(
+        "still depends on cross-repo/archive/candidate.md\n", encoding="utf-8"
+    )
+
+    candidate = DeleteCandidate(path=handoff, repo_root=tmp_path, basis_refs=())
+    outcome = evaluate_candidate(candidate)
+    assert "active-reference" in outcome["blocked_by"]
+    assert outcome["eligible"] is False
+
+
+@_requires_rg
 def test_evaluate_candidate_multiple_guards_fail(tmp_path: Path):
     handoff = tmp_path / "state" / "handoffs" / "bad-candidate.md"
     handoff.parent.mkdir(parents=True)

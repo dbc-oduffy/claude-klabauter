@@ -77,6 +77,12 @@ def _bootstrap_engine() -> None:
         return
     if _REPO_ROOT not in sys.path:
         sys.path.insert(0, _REPO_ROOT)
+    # `records_query` is the trampoline at coordinator/bin/lib/, not a
+    # repo-root package: the repo root alone leaves `from records_query import
+    # query_records` unresolvable, which killed the self-query branch outright.
+    _lib_dir = os.path.join(_SCRIPT_DIR, "lib")
+    if _lib_dir not in sys.path:
+        sys.path.insert(0, _lib_dir)
     _BOOTSTRAP_DONE = True
 
 # ---------------------------------------------------------------------------
@@ -173,7 +179,7 @@ def _parse_args(argv: list[str]) -> dict:
     """Parse CLI arguments. Hard-errors on any --output / --out flag to enforce the
     read-only contract structurally.
     """
-    opts = {"format": "text", "root": None}
+    opts = {"format": "text", "root": None, "no_stdin": False}
     i = 0
     while i < len(argv):
         arg = argv[i]
@@ -188,6 +194,14 @@ def _parse_args(argv: list[str]) -> dict:
             i += 2
         elif arg.startswith("--root="):
             opts["root"] = arg[len("--root="):]
+            i += 1
+        elif arg == "--no-stdin":
+            # Negative spec: an in-process ceremony directive has no pipe on
+            # stdin, but stdin is not a tty either, so the isatty() probe below
+            # would take the pipe branch and block forever on read(). Callers
+            # that dispatch this CLI without a producer pass --no-stdin to
+            # select the self-query branch structurally instead of guessing.
+            opts["no_stdin"] = True
             i += 1
         elif arg.startswith("--output") or arg.startswith("--out=") or arg == "--out":
             # Structural backstop: reject any attempt to specify an output path.
@@ -264,7 +278,7 @@ def main(argv: "list[str] | None" = None) -> int:
         opts = _parse_args(argv)
     
         # Determine input source: stdin pipe or direct native self-query.
-        stdin_is_pipe = not sys.stdin.isatty()
+        stdin_is_pipe = not opts["no_stdin"] and not sys.stdin.isatty()
     
         if stdin_is_pipe:
             # Read JSON from stdin (supports: query-records --unattached | detect-initiative-candidates)

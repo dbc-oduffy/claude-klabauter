@@ -91,6 +91,33 @@ class TestItSpeaksOnlyWhenTheTreesDisagree:
         announce a split on a single-tree box every single time."""
         assert _announce(monkeypatch, capsys, "X:/Same/Tree", r"X:\same\tree") == ""  # abs-path-ok: synthetic fixture, never resolved on disk
 
+    def test_realpath_class_spellings_resolve_to_the_same_tree(
+        self, monkeypatch, capsys
+    ):
+        """A junction/symlink/8.3-short-name spelling difference is exactly
+        the class plain abspath+normcase cannot resolve (Review:
+        code-reviewer P2/P5, slice a6725136cee84332c) -- realpath is what
+        closes it. Simulated via a monkeypatched os.path.realpath rather than
+        a real junction/symlink fixture, since this module has no honest way
+        to construct one on disk; this proves the new call site actually
+        routes the comparison through realpath, not that a live junction
+        resolves correctly on this box."""
+        canonical = r"X:\canonical-tree"  # abs-path-ok: synthetic fixture, never resolved on disk
+        fake_names = {
+            r"X:\PROGRA~1\short-name-tree": canonical,  # abs-path-ok: synthetic fixture, never resolved on disk
+            r"X:\junction-to-tree": canonical,  # abs-path-ok: synthetic fixture, never resolved on disk
+        }
+        monkeypatch.setattr(
+            _mod.os.path, "realpath", lambda p: fake_names.get(p, p)
+        )
+        err = _announce(
+            monkeypatch,
+            capsys,
+            r"X:\PROGRA~1\short-name-tree",  # abs-path-ok: synthetic fixture, never resolved on disk
+            r"X:\junction-to-tree",  # abs-path-ok: synthetic fixture, never resolved on disk
+        )
+        assert err == "", f"realpath-equivalent trees must not announce a split, got: {err!r}"
+
     def test_it_speaks_once_per_process(self, monkeypatch, capsys):
         monkeypatch.setattr(_mod, "resolve_engine_root", lambda _f: r"X:\cli")  # abs-path-ok: synthetic fixture, never resolved on disk
         _mod._announce_engine_cli_split(r"X:\engine")  # abs-path-ok: synthetic fixture, never resolved on disk

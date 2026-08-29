@@ -865,6 +865,23 @@ def require_colocated_engine_on_path(script_file: str) -> str:
 _ENGINE_SPLIT_ANNOUNCED = False
 
 
+def _norm_path_for_split_compare(path: str) -> str:
+    """normcase over realpath, falling back to normcase(abspath) if realpath
+    raises (e.g. a broken junction or an inaccessible ancestor).
+
+    Review: code-reviewer P2 (slice a6725136cee84332c) — plain
+    abspath+normcase never resolves a symlink/junction/8.3-short-name
+    spelling to canonical form, so two spellings of one physical tree can
+    read as a false split. realpath closes that gap; the fallback keeps
+    this function from ever raising past `_announce_engine_cli_split`'s own
+    outer `except Exception`, which must never take a dispatch down.
+    """
+    try:
+        return os.path.normcase(os.path.realpath(path))
+    except OSError:
+        return os.path.normcase(os.path.abspath(path))
+
+
 def _announce_engine_cli_split(dispatch_root: str) -> None:
     """Say once, on stderr, when the engine that will execute is not the tree
     the CLI was read from.
@@ -892,6 +909,14 @@ def _announce_engine_cli_split(dispatch_root: str) -> None:
     per process, and never when the two roots agree, so a single-tree box sees
     nothing. Any failure to emit is swallowed: a broken stderr must not take a
     dispatch down.
+
+    Approximation (Review: code-reviewer nit, slice a6725136cee84332c): the
+    locator half of the comparison resolves `resolve_engine_root(__file__)`
+    against THIS module's own location (`cc_invoke.py`), not the invoking
+    CLI script's -- always the same checkout today since this module is
+    co-located under `coordinator/bin/lib/` in every checkout that imports
+    it, but a future vendor/symlink split of `cc_invoke.py` away from
+    `coordinator/bin/*.py` would silently break that assumption.
     """
     global _ENGINE_SPLIT_ANNOUNCED
     if _ENGINE_SPLIT_ANNOUNCED:
@@ -901,8 +926,8 @@ def _announce_engine_cli_split(dispatch_root: str) -> None:
         cli_root = resolve_engine_root(__file__)
         if not cli_root or not dispatch_root:
             return
-        same = os.path.normcase(os.path.abspath(cli_root)) == os.path.normcase(
-            os.path.abspath(dispatch_root)
+        same = _norm_path_for_split_compare(cli_root) == _norm_path_for_split_compare(
+            dispatch_root
         )
         if same:
             return

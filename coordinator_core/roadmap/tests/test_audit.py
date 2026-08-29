@@ -21,6 +21,7 @@ from coordinator_core.roadmap.audit import (
     _claude_klabauter_root,
     _machine_local_get,
     _parse_pending_stubs,
+    parse_post_reconciliation_stubs,
     _same_path,
     _state_root,
     check_dependency_order,
@@ -745,3 +746,106 @@ def test_audit1_succession_pair_counts_as_one_stub(tmp_path: Path) -> None:
     assert any("Stub-coverage: 2 stubs" in line for line in stdout_lines), stdout_lines
     # The record count is still reported — the succession is visible, not hidden.
     assert any("3 record(s)" in line for line in stdout_lines), stdout_lines
+
+
+# ---------------------------------------------------------------------------
+# Post-reconciliation stub declarations — Audit 1 scoping.
+#
+# `expected` counts KEEP only: a MERGE verdict folds its cluster into an
+# existing KEEP cluster and mints no stub, which is what every reconciliation
+# file in the corpus says in its own prose. Stubs that postdate the Phase-1
+# pass (expansion cohorts, sub-split stub families) carry no verdict row and
+# are declared per-stub in `post-reconciliation-stubs.md` rather than given a
+# fabricated one.
+# ---------------------------------------------------------------------------
+
+
+def test_parse_post_reconciliation_stubs_reads_id_and_provenance() -> None:
+    text = (
+        "| stub_id | minted | why |\n"
+        "|---------|--------|-----|\n"
+        "| foo-04 | 2026-07-04 | expansion cohort, clusters.md Cluster 7 |\n"
+        "| foo-10-C | 2026-07-06 | sub-split of foo-10 |\n"
+    )
+    assert parse_post_reconciliation_stubs(text) == {
+        "foo-04": "expansion cohort, clusters.md Cluster 7",
+        "foo-10-C": "sub-split of foo-10",
+    }
+
+
+def test_parse_post_reconciliation_stubs_ignores_row_with_empty_provenance() -> None:
+    """An undeclared reason exempts nothing — the file is a scoping
+    declaration, not a suppression list."""
+    text = "| stub_id | minted | why |\n| foo-04 | 2026-07-04 |  |\n"
+    assert parse_post_reconciliation_stubs(text) == {}
+
+
+def test_merge_verdicts_do_not_inflate_expected_stub_count(tmp_path: Path) -> None:
+    root = _init_tree(tmp_path)
+    run_id = "zzz-merge-arith"
+    handoffs = root / "state" / "handoffs"
+    _write_stub(handoffs / f"{run_id}-1.md", run_id, f"{run_id}-1", 1, 1)
+    recon = root / "state" / "roadmap" / run_id / "reconciliation.md"
+    recon.parent.mkdir(parents=True, exist_ok=True)
+    recon.write_text(
+        "| 1 — a | **KEEP** | → stub |\n| 2 — b | **MERGE** | folds into 1, no stub |\n",
+        encoding="utf-8",
+    )
+
+    exit_code, stdout_lines, stderr_lines = run_audit(run_id, root, root / "state")
+
+    assert exit_code == 0, stderr_lines
+    assert any(
+        "Stub-coverage: 1 stubs" in line and "MERGE=1" in line for line in stdout_lines
+    )
+
+
+def test_declared_post_reconciliation_stub_is_excluded_from_coverage(
+    tmp_path: Path,
+) -> None:
+    root = _init_tree(tmp_path)
+    run_id = "zzz-post-recon"
+    handoffs = root / "state" / "handoffs"
+    _write_stub(handoffs / f"{run_id}-1.md", run_id, f"{run_id}-1", 1, 1)
+    _write_stub(handoffs / f"{run_id}-2.md", run_id, f"{run_id}-2", 1, 2)
+    roadmap_dir = root / "state" / "roadmap" / run_id
+    _write_reconciliation(roadmap_dir / "reconciliation.md", 1)
+
+    exit_code, _stdout, stderr_lines = run_audit(run_id, root, root / "state")
+    assert exit_code == 1
+    assert any("Stub-coverage mismatch: 2 stubs" in line for line in stderr_lines)
+
+    (roadmap_dir / "post-reconciliation-stubs.md").write_text(
+        "| stub_id | minted | why |\n"
+        "|---------|--------|-----|\n"
+        f"| {run_id}-2 | 2026-08-01 | minted after the Phase-1 pass |\n",
+        encoding="utf-8",
+    )
+
+    exit_code, stdout_lines, stderr_lines = run_audit(run_id, root, root / "state")
+    assert exit_code == 0, stderr_lines
+    assert any(
+        "1 post-reconciliation stub(s) declared" in line for line in stdout_lines
+    )
+
+
+def test_declaration_naming_a_stub_not_on_disk_fails(tmp_path: Path) -> None:
+    """A declaration that outlives its stub is a standing waiver — fail loudly
+    rather than let it keep widening the coverage bar."""
+    root = _init_tree(tmp_path)
+    run_id = "zzz-post-recon-orphan"
+    handoffs = root / "state" / "handoffs"
+    _write_stub(handoffs / f"{run_id}-1.md", run_id, f"{run_id}-1", 1, 1)
+    roadmap_dir = root / "state" / "roadmap" / run_id
+    _write_reconciliation(roadmap_dir / "reconciliation.md", 1)
+    (roadmap_dir / "post-reconciliation-stubs.md").write_text(
+        "| stub_id | minted | why |\n"
+        "|---------|--------|-----|\n"
+        "| ghost-99 | 2026-08-01 | never minted |\n",
+        encoding="utf-8",
+    )
+
+    exit_code, _stdout, stderr_lines = run_audit(run_id, root, root / "state")
+
+    assert exit_code == 1
+    assert any("ghost-99" in line and "not on disk" in line for line in stderr_lines)

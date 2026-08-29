@@ -179,6 +179,13 @@ truth: `coordinator/docs/wiki/provenance-markers.md` § "The marker key set (the
 `judgment_provenance:` are named there as under-consideration, NOT yet part of the
 enforced set, and must not be added here until that doc says so.
 
+STALE BACK-POINTER (verified 2026-08-29): the DoE doc named above no longer carries that
+contract — a distill harvest (`DoE f064affb0`) replaced its body with review-trail
+provenance, and no section names these keys anywhere under `coordinator/docs/`. The tuple
+below is therefore the surviving statement of the key set, not a mirror of a live upstream.
+Do NOT widen it on inference; re-establish the DoE-side contract first (memo raised to
+claude-central-em 2026-08-29).
+
 Each key introduces a YAML list block (`path:`, plus per-key metadata fields) whose entries
 record a candidate's own repo-relative path as a harvest tombstone. Without this exclusion,
 that tombstone trips `active_reference_guard` against itself and the candidate becomes

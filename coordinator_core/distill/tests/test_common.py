@@ -387,6 +387,26 @@ def test_active_reference_guard_excludes_provenance_only_citation(tmp_path):
 
 
 @_requires_rg
+def test_active_reference_guard_excludes_cross_repo_memo_tombstone(tmp_path):
+    # The memo half of the same contract: a harvested commitment memo whose ONLY citation is
+    # its own `cross_repo_memo:` tombstone is deletable. Pinned separately from the
+    # `archived_handoff:` case because the two keys arrive from different harvest paths — a
+    # regression that dropped either one from PROVENANCE_MARKER_KEYS would leave that whole
+    # artifact class permanently undeletable while the other class kept passing.
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    (docs / "harvested.md").write_text(
+        "---\n"
+        "cross_repo_memo:\n"
+        "  - path: cross-repo/archive/old-memo.md\n"
+        "    sender: claude-central-em\n"
+        "---\n"
+        "body text with nothing else\n"
+    )
+    assert active_reference_guard("cross-repo/archive/old-memo.md", tmp_path) is False
+
+
+@_requires_rg
 def test_active_reference_guard_blocks_citation_outside_provenance_block(tmp_path):
     docs = tmp_path / "docs"
     docs.mkdir()

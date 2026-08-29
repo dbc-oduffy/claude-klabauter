@@ -508,14 +508,37 @@ def _build_directives(
         _directive(
             "d_step4_counts_initiative_candidates",
             cli="detect-initiative-candidates",
-            args=[],
+            # `--no-stdin` selects the self-query branch structurally: under
+            # in-process apply there is no producer on stdin, but stdin is not
+            # a tty either, so the CLI's isatty() probe would take the pipe
+            # branch and block the weekly ceremony on an unterminated read.
+            # `--root` follows the pickup/baton/merge precedent of passing the
+            # repo root explicitly rather than deriving it from apply's cwd.
+            args=(
+                ["--no-stdin", "--root", _root]
+                if (_root := _resolve_repo_root_for_doc_staleness())
+                else ["--no-stdin"]
+            ),
         ),
         _directive(
             "d_step4_counts_coordinator_initiative",
             cli="coordinator-initiative",
             args=["--list"],
         ),
-        _directive("d_step4_counts_cruft_sweep", cli="cruft-sweep", args=[]),
+        _directive(
+            "d_step4_counts_cruft_sweep",
+            cli="cruft-sweep",
+            # cruft-sweep DELETES, and without `--repo-root` it falls back to
+            # `show_toplevel() or os.getcwd()` — under in-process apply that is
+            # whatever tree the ceremony process happens to stand in, not the
+            # repo being closed. The only data-loss-capable directive in this
+            # assembler; the root is passed explicitly for that reason.
+            args=(
+                ["--repo-root", _cs_root]
+                if (_cs_root := _resolve_repo_root_for_doc_staleness())
+                else []
+            ),
+        ),
         _directive(
             # Sub-reap (iii), the orphaned-claim-dir cull, was cut out of
             # `session.reap`'s `_handler` by PM ruling 2026-08-22 (an

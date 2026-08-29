@@ -109,20 +109,41 @@ def _run_warm(payload: Dict[str, Any]) -> Any:
     return evaluate_payload_json(json.dumps(payload))
 
 
-#: Trailing wiki-citation line ("See <anchor>." / "See: <anchor>"), stripped
-#: before comparison. Its RESOLUTION is legitimately environment-dependent,
-#: not a text defect: the cold script runs inside the DoE-claude checkout and
-#: resolves the anchor to a local absolute path via its own
-#: `resolve_wiki_citation()`; the ported guard has no such resolver (avoiding
-#: a circular import back into `dispatch.py`, per the module docstrings) and
-#: emits the bare repo-relative anchor text instead. Measured directly
-#: (2026-08-28): case 1's cold citation resolves to an absolute local path
-#: under whichever DoE-claude checkout ran it (abs-path-ok: describes a
-#: path resolved at runtime on the machine that measured it, not a
-#: hardcoded one) while the engine's is the bare repo-relative anchor text
-#: (`See coordinator/docs/wiki/guard-message-concision.md#...`) -- same
-#: anchor, different (both correct, for their own reader) resolution.
-_SEE_CITATION_RE = re.compile(r"\n\nSee:? .*$", re.DOTALL)
+#: Trailing wiki-citation line ("See <anchor>." / "See: <anchor>"), SPLIT OFF
+#: the prose before comparison and then compared on its own axis -- no longer
+#: discarded (REVERSED 2026-08-29; see `_split_citation` and
+#: `_assert_cold_and_warm_both_deny`).
+#:
+#: The prior revision stripped this line from BOTH sides unconditionally, on
+#: the measurement that case 1's cold citation resolved to a local absolute
+#: path while warm emitted the bare repo-relative anchor -- recorded then as
+#: "same anchor, different (both correct, for their own reader) resolution".
+#: That reading was wrong in a way this oracle is specifically supposed to
+#: catch. Warm's anchor resolved for NO reader: it named
+#: `coordinator/docs/wiki/...` relative to a repo that has no `coordinator/`
+#: directory, so a reader in this checkout got a path that does not exist,
+#: which is exactly the 404 DoE's own `resolve_wiki_citation()` exists to
+#: prevent. The engine now resolves it (`dispatch.
+#: resolve_doctrine_surface_wiki_citation`, threaded into the guard's
+#: `resolve_wiki_citation` parameter), and both sides emit the same absolute
+#: path -- verified 2026-08-29.
+#:
+#: Stripping the line is what let that divergence live: an oracle that
+#: discards the one line a fix changes cannot pin the fix, and cannot fail on
+#: a regression in either direction (anchor literal drift, or the resolver
+#: being unwired again -- it WAS unwired, `resolve_doctrine_surface_wiki_
+#: citation` sat with no caller at all while its own docstring named one).
+#: Same failure mode as the Bash-only fixture set that hid the seventh
+#: `_ALTERNATIVES` key: a case that cannot fail is not a measurement.
+_SEE_CITATION_RE = re.compile(r"\n\nSee:? (?P<anchor>.*)$", re.DOTALL)
+
+#: Trailing sentence period on the citation line. Cold appends one
+#: unconditionally (`_message_envelope.render`: `f"See {...}."`); two of the
+#: ported guards compose their own citation line and omit it. Normalized
+#: rather than compared -- a sentence-terminator convention, not an anchor
+#: difference, and it is the ONLY thing normalized on this axis. The anchor
+#: text itself is compared verbatim.
+_CITATION_PERIOD_RE = re.compile(r"\.\s*$")
 
 #: The engine stamps every deny reason with `[coordinator] ` (provenance
 #: marking so a dispatched agent can tell a genuine coordinator imperative
@@ -150,14 +171,29 @@ _LEADING_BLOCKED_RE = re.compile(r"^BLOCKED: ")
 #: `guard_host_subagent_bash_spawn_shapes._compose_deny_reason`.
 
 
-def _normalize_cold(text: str) -> str:
+def _split_citation(text: str) -> "tuple[str, Optional[str]]":
+    """Split `text` into (prose, citation-anchor-or-None).
+
+    The anchor is returned rather than discarded so the caller can compare it
+    on its own axis (see `_SEE_CITATION_RE`'s own comment for why discarding
+    it was the defect). Only the trailing sentence period is normalized off;
+    the anchor text itself is returned verbatim.
+    """
+    match = _SEE_CITATION_RE.search(text)
+    if not match:
+        return text, None
+    anchor = _CITATION_PERIOD_RE.sub("", match.group("anchor").strip())
+    return text[: match.start()], anchor
+
+
+def _normalize_cold(text: str) -> "tuple[str, Optional[str]]":
     text = text.replace("\r\n", "\n").strip()
-    text = _SEE_CITATION_RE.sub("", text)
+    text, anchor = _split_citation(text)
     text = _LEADING_BLOCKED_RE.sub("", text)
-    return text.strip()
+    return text.strip(), anchor
 
 
-def _normalize_warm(text: str, *, case: str) -> str:
+def _normalize_warm(text: str, *, case: str) -> "tuple[str, Optional[str]]":
     """No per-case exception lives here, deliberately.
 
     An earlier revision carried one: the spawn-shapes port had added an
@@ -175,8 +211,8 @@ def _normalize_warm(text: str, *, case: str) -> str:
     if text.startswith(COORDINATOR_PROVENANCE_MARKER + " "):
         text = text[len(COORDINATOR_PROVENANCE_MARKER) + 1 :]
     text = _LEADING_BLOCKED_RE.sub("", text)
-    text = _SEE_CITATION_RE.sub("", text)
-    return text.strip()
+    text, anchor = _split_citation(text)
+    return text.strip(), anchor
 
 
 def _assert_cold_and_warm_both_deny(
@@ -209,12 +245,29 @@ def _assert_cold_and_warm_both_deny(
         f"{case}: engine envelope is not a deny ({warm_envelope!r})"
     )
 
-    cold_text = _normalize_cold(cold_stderr)
-    warm_text = _normalize_warm(hso.get("permissionDecisionReason") or "", case=case)
+    cold_text, cold_anchor = _normalize_cold(cold_stderr)
+    warm_text, warm_anchor = _normalize_warm(hso.get("permissionDecisionReason") or "", case=case)
     assert warm_text == cold_text, (
         f"{case}: deny text mismatch after normalization.\n"
         f"  cold: {cold_text!r}\n"
         f"  warm: {warm_text!r}"
+    )
+
+    # Citation axis, compared rather than discarded (see `_SEE_CITATION_RE`).
+    # Both sides must agree on WHETHER there is a citation and on the anchor
+    # it resolves to -- an anchor that resolves on one path and not the other
+    # is a reader-facing 404 on the path that does not, which is precisely
+    # what DoE's own `resolve_wiki_citation()` exists to prevent.
+    assert (cold_anchor is None) == (warm_anchor is None), (
+        f"{case}: one path emits a wiki citation and the other does not.\n"
+        f"  cold: {cold_anchor!r}\n"
+        f"  warm: {warm_anchor!r}"
+    )
+    assert warm_anchor == cold_anchor, (
+        f"{case}: wiki-citation anchor mismatch -- the two paths point their "
+        f"readers at different targets.\n"
+        f"  cold: {cold_anchor!r}\n"
+        f"  warm: {warm_anchor!r}"
     )
 
 
@@ -383,3 +436,43 @@ def test_assert_helper_rejects_a_non_firing_case(tmp_path: Path) -> None:
         _assert_cold_and_warm_both_deny(
             case="bash_ban_zero_fire", hook_name="guard-host-subagent-bash-ban.py", payload=payload
         )
+
+
+def test_citation_axis_can_actually_fail() -> None:
+    """Red-capability pin for the citation axis added 2026-08-29.
+
+    The axis exists because the previous revision DISCARDED the citation line
+    and therefore could not fail on it. Adding a comparison and trusting it
+    would repeat that mistake in the other direction -- a comparison whose
+    inputs are always equal is as blind as a strip. So this proves the two
+    properties the axis rests on, directly, without needing the DoE sibling
+    checkout (hence no skipif): the anchor SURVIVES normalization distinct,
+    and unequal anchors are actually unequal after it.
+
+    Also pins the one thing that IS normalized: cold's trailing sentence
+    period (`_message_envelope.render`'s `f"See {...}."`) must not by itself
+    read as a mismatch against a port that omits it.
+    """
+    resolved = "See X:/DoE-claude/coordinator/docs/wiki/guard-message-concision.md#x."  # abs-path-ok: literal fixture text, never resolved against this machine
+    unresolved = "See coordinator/docs/wiki/guard-message-concision.md#x"
+
+    cold_prose, cold_anchor = _split_citation("BLOCKED: prose.\n\n" + resolved)
+    warm_prose, warm_anchor = _split_citation("BLOCKED: prose.\n\n" + unresolved)
+
+    assert cold_anchor is not None and warm_anchor is not None
+    assert cold_prose == warm_prose, "prose must split identically off both"
+    assert cold_anchor != warm_anchor, (
+        "a resolved absolute anchor and an unresolved repo-relative one must "
+        "compare UNEQUAL -- if these normalize to the same string, the axis "
+        "cannot catch the exact regression it was added for"
+    )
+
+    # The period is a convention, not an anchor difference: same anchor with
+    # and without it must compare EQUAL, or every case goes red on punctuation.
+    _, with_period = _split_citation("p\n\nSee coordinator/docs/wiki/a.md.")
+    _, without_period = _split_citation("p\n\nSee coordinator/docs/wiki/a.md")
+    assert with_period == without_period == "coordinator/docs/wiki/a.md"
+
+    # A missing citation on one side must be detectable, not silently equal.
+    _, none_anchor = _split_citation("BLOCKED: prose with no citation at all.")
+    assert none_anchor is None

@@ -347,6 +347,48 @@ def _count_verdict(text: str, kind: str) -> int:
 
 
 # ---------------------------------------------------------------------------
+# Post-reconciliation stub declarations (Audit 1 scoping).
+# ---------------------------------------------------------------------------
+
+POST_RECONCILIATION_FILENAME = "post-reconciliation-stubs.md"
+
+_DECLARED_STUB_RE = re.compile(r'^[A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)+$')
+
+
+def parse_post_reconciliation_stubs(text: str) -> Dict[str, str]:
+    """Parse a roadmap's ``post-reconciliation-stubs.md`` sibling into
+    ``{stub_id: provenance}``.
+
+    Negative spec — this is a scoping declaration, NOT a suppression list. A row
+    only exempts its stub if it carries a non-empty provenance cell saying where
+    the stub came from; a bare stub_id with an empty reason is ignored, so an
+    undocumented exemption cannot quietly widen the coverage bar. Audit 1
+    additionally fails on a declared stub_id that is not on disk, so the file
+    cannot rot into a standing waiver for stubs that no longer exist.
+
+    Row shape (pm-gates.md-style pipe table, header and separator rows skipped
+    by the stub_id pattern not matching):
+
+        | stub_id | minted | why it postdates reconciliation |
+        |---------|--------|---------------------------------|
+        | foo-04  | 2026-07-04 | expansion cohort, clusters.md Cluster 7 |
+    """
+    out: Dict[str, str] = {}
+    for line in text.splitlines():
+        if not line.lstrip().startswith("|"):
+            continue
+        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        if len(cells) < 3:
+            continue
+        stub_id = cells[0].strip("`*")
+        provenance = cells[-1]
+        if not _DECLARED_STUB_RE.match(stub_id) or not provenance:
+            continue
+        out[stub_id] = provenance
+    return out
+
+
+# ---------------------------------------------------------------------------
 # Pending-row parse (Audit 4) — port of the awk -F'|' extraction.
 # ---------------------------------------------------------------------------
 
@@ -670,7 +712,16 @@ def _audit1_stub_coverage(
     text = recon_path.read_text(encoding="utf-8")
     keep_count = _count_verdict(text, "KEEP")
     merge_count = _count_verdict(text, "MERGE")
-    expected = keep_count + merge_count
+    # A MERGE verdict folds its cluster into an existing KEEP cluster and mints
+    # NO stub of its own — the reconciliation corpus says so in its own words
+    # (claude-klabauter-strangler-2026-07-04 line 17; op-proportionality
+    # § "Verdict-time MERGE — the four, and why each produces no stub of its
+    # own"). Counting MERGE into `expected` inflated the bar by one per merged
+    # cluster and made the pre-2026-08-29 PASS on claude-klabauter-strangler coincidental:
+    # 4 live stubs happened to equal a wrong expected of 4, and neither number
+    # was the truth. MERGE stays parsed and reported so a reconciliation file
+    # that changes the convention fails loudly rather than silently.
+    expected = keep_count
 
     where = f"{_ROADMAP_BATON_KIND_WHERE} AND roadmap_id={run_id}"
     live_records = query_records("handoff", data_root, where=where)
@@ -714,6 +765,37 @@ def _audit1_stub_coverage(
     stub_count = len(stub_ids) + untagged_count
     record_count = len(all_records)
 
+    # A long-lived roadmap can legitimately mint stubs AFTER its Phase-1
+    # reconciliation pass — an expansion cohort minted against a later
+    # clusters.md section, or a stub sub-split into a family. Neither has a
+    # verdict row, and neither can honestly be given one after the fact.
+    # `post-reconciliation-stubs.md` is where that growth is declared, per stub,
+    # with its provenance; declared stubs come out of the coverage count so the
+    # equality below stays an equality for everything the pass actually covered.
+    post_recon_path = recon_path.parent / POST_RECONCILIATION_FILENAME
+    declared: Dict[str, str] = {}
+    if post_recon_path.is_file():
+        declared = parse_post_reconciliation_stubs(
+            post_recon_path.read_text(encoding="utf-8")
+        )
+    if stub_filter is not None:
+        declared = {k: v for k, v in declared.items() if k in stub_filter}
+
+    orphaned = sorted(set(declared) - stub_ids)
+    if orphaned:
+        r.fail(
+            f"Stub-coverage{label}: {post_recon_path} declares post-reconciliation "
+            f"stub_id(s) [{' '.join(orphaned)}] that are not on disk for "
+            f"roadmap_id={run_id} — a declaration outlived its stub and is now a "
+            f"standing waiver. Remove the row or restore the stub."
+        )
+        return
+
+    exempt_count = len(declared)
+    stub_count -= exempt_count
+    if exempt_count:
+        label = f"{label} ({exempt_count} post-reconciliation stub(s) declared)"
+
     if stub_count == 0 and expected == 0:
         r.fail(
             f"Stub-coverage{label}: 0 stubs on disk AND 0 KEEP/MERGE verdicts parsed from "
@@ -729,8 +811,10 @@ def _audit1_stub_coverage(
         r.fail(
             f"Stub-coverage{label} mismatch: {stub_count} stubs on disk across "
             f"{record_count} record(s) ({live_count} live + {arch_count} "
-            f"archived), {expected} expected (KEEP={keep_count} + MERGE={merge_count}). "
-            f"See {recon_path}."
+            f"archived), {expected} expected (KEEP={keep_count}; MERGE={merge_count} "
+            f"folds into a KEEP cluster and mints no stub). "
+            f"If the excess stubs postdate the reconciliation pass, declare them in "
+            f"{post_recon_path}. See {recon_path}."
         )
     else:
         r.passed(

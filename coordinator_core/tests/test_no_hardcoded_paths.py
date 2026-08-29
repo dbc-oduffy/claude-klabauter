@@ -206,6 +206,12 @@ _EXEMPT_SITES: set[str] = {
     # git-for-windows sibling layout); `/bin/sh` names a real, portable
     # convention path, not a repo-local hardcode. 2026-08-25.
     "coordinator_core/testing/sh_interpreter.py::_resolve_sh_interpreter",
+    # Tooth 3. Locates the published klabauter engine, which genuinely IS a
+    # sibling of this repo -- the flat-sibling layout is the thing under test,
+    # not an accident. Consults the engine-root override env var first and only
+    # then falls back to the sibling guess; the fallback is what trips Tooth 3,
+    # and it reads, never creates. 2026-08-29.
+    "coordinator_core/benchmarks/tests/test_warm_door_process_time_gate.py::_candidate_source_roots",
     # System-gitconfig discovery ladder: git-for-windows sibling layouts
     # derived from `git`'s own bin dir, then `/etc/gitconfig` as the last
     # rung. That literal names git's POSIX system-config convention, which is
@@ -214,16 +220,6 @@ _EXEMPT_SITES: set[str] = {
     # it. Same shape as `sh_interpreter`'s `/bin/sh` rung above. 2026-08-29.
     "coordinator_core/git/content_hash.py::_system_gitconfig_paths",
 }
-
-
-#: Tooth 3 (above-repo-root traversal) applies to EVERY `.py` file under
-#: the scan root, test-directory helpers included. Teeth 1 and 2 keep
-#: their narrower scopes -- the per-tooth filters in
-#: `find_hardcoded_path_violations` still apply. The file this tooth was
-#: added for, `bash_guards/tests/guard_message_corpus.py`, is exactly the
-#: shape `_is_excluded_source_path` skips: a helper under `tests/` whose
-#: name does not start with `test_`.
-_TOOTH3_SEES_EVERY_FILE = True
 
 
 def _is_test_file(path: Path) -> bool:
@@ -286,6 +282,15 @@ def _is_climb_tainted_expr(node: ast.AST) -> bool:
     return _contains_climb_marker(node) and _contains_dunder_file(node)
 
 
+#: Returned as the level count for a climb that lands at the anchoring file's
+#: filesystem root -- `parents[-1]`. The exact number of levels is unknowable
+#: statically (it depends where the checkout lives), but the DESTINATION is
+#: known exactly: the top of the drive, which is above every repo root there
+#: can be. A sentinel larger than any real path depth makes that destination
+#: compare correctly against any `file_depth` without inventing a fake count.
+_CLIMB_TO_FILESYSTEM_ROOT = 10**6
+
+
 def _is_dunder_file_anchor(node: ast.AST) -> bool:
     """The BARE `__file__` name only.
 
@@ -297,41 +302,117 @@ def _is_dunder_file_anchor(node: ast.AST) -> bool:
     module it loaded out of the DoE-claude checkout -- starts somewhere this
     gate cannot measure, so counting its levels against the scanned file's
     depth reports an escape that is not one. Unmeasurable is `None`, never a
-    guess."""
+    guess. Binding it to a local first (`_FILE = __file__`) is still traced:
+    see `bindings` on `_climb_levels_above_file`.
+    """
     return isinstance(node, ast.Name) and node.id == "__file__"
 
 
-def _climb_levels_above_file(node: ast.AST) -> int | None:
+def _parents_index_levels(index: ast.expr) -> int | None:
+    """Levels contributed by the subscript of a `.parents[...]` access.
+
+    `parents[k]` is `k + 1` levels above the anchor (`parents[0]` is already
+    the containing directory). `parents[-1]` is the filesystem root, the
+    single most extreme climb expressible, and parses as `UnaryOp(USub,
+    Constant)` rather than a `Constant` -- the shape a naive `isinstance(...,
+    ast.Constant)` check misses precisely where it matters most.
+
+    NEGATIVE SPEC -- a non-literal subscript (`parents[i]`, `parents[n - 1]`)
+    returns `None`. No amount of further AST matching closes that one; it is
+    the accepted blind spot of a static tooth, named here rather than left
+    implicit.
+    """
+    if isinstance(index, ast.Constant) and isinstance(index.value, int):
+        return index.value + 1 if index.value >= 0 else _CLIMB_TO_FILESYSTEM_ROOT
+    if (
+        isinstance(index, ast.UnaryOp)
+        and isinstance(index.op, ast.USub)
+        and isinstance(index.operand, ast.Constant)
+        and isinstance(index.operand.value, int)
+    ):
+        return _CLIMB_TO_FILESYSTEM_ROOT
+    return None
+
+
+def _segment_delta(nodes: list[ast.expr]) -> int | None:
+    """Net level change from appending path segments, or `None` if unknowable.
+
+    `".."` climbs one, `"."` moves nothing, and ANY other literal segment
+    DESCENDS one. That last rule is the one worth stating: a climb followed by
+    a descent is the overwhelmingly common shape in this repo --
+    `Path(__file__).resolve().parents[3] / "coordinator" / "bin"` reaches the
+    repo root and then walks back down into it, and is not an escape. Counting
+    only the climb and ignoring the descent reports every such expression as
+    leaving the repo, which is how the first cut of this helper produced a
+    dozen false positives.
+
+    A non-literal segment (`root / name`) makes the destination unknowable, so
+    the whole expression yields `None` rather than a guess -- consistent with
+    every other unresolvable shape in this tooth.
+    """
+    delta = 0
+    for n in nodes:
+        if not (isinstance(n, ast.Constant) and isinstance(n.value, str)):
+            return None
+        if n.value == "..":
+            delta += 1
+        elif n.value not in (".", ""):
+            delta -= 1
+    return delta
+
+
+def _climb_levels_above_file(node: ast.AST, bindings: dict[str, int] | None = None) -> int | None:
     """How many directory levels above the anchoring file `node` resolves to,
     or `None` when `node` is not a `__file__`-anchored climb at all.
 
-    `Path(__file__)` is 0 (the file itself), `.parent` adds one, and
-    `.parents[k]` adds `k + 1` (`parents[0]` is already the containing
-    directory). `Path(...)`/`.resolve()`/`.absolute()` are transparent
+    `Path(__file__)` is 0 (the file itself), `.parent` adds one, `.parents[k]`
+    adds `k + 1`, an `os.path.dirname(...)` wrap adds one, a `".."` segment
+    adds one, and any other literal segment SUBTRACTS one (a descent back down
+    -- see `_segment_delta`). `Path(...)`/`.resolve()`/`.absolute()` are transparent
     wrappers that move nothing. Anything else returns `None` rather than a
     guess -- an unrecognized shape must not be reported as an escape.
+
+    `bindings` maps a local name to the climb it already resolves to, so a
+    chain broken across statements (`p = Path(__file__).resolve()` then
+    `q = p.parents[3].parent`) is traced rather than silently dropped at the
+    variable. Aliasing is an ordinary refactor, not an exotic evasion, and
+    without this the tooth goes blind the moment anyone does it.
     """
+    bindings = bindings or {}
     if _is_dunder_file_anchor(node):
         return 0
+    if isinstance(node, ast.Name):
+        return bindings.get(node.id)
     if isinstance(node, ast.Call):
         func_name = _resolved_func_name(node.func)
         if func_name in ("resolve", "absolute") and isinstance(node.func, ast.Attribute):
-            return _climb_levels_above_file(node.func.value)
+            return _climb_levels_above_file(node.func.value, bindings)
         if func_name == "Path" and len(node.args) == 1:
-            return _climb_levels_above_file(node.args[0])
+            return _climb_levels_above_file(node.args[0], bindings)
+        if func_name == "dirname" and _is_os_path_dirname_call(node) and len(node.args) == 1:
+            inner = _climb_levels_above_file(node.args[0], bindings)
+            return None if inner is None else inner + 1
+        if func_name in ("joinpath", "join") and isinstance(node.func, ast.Attribute):
+            inner = _climb_levels_above_file(node.func.value, bindings)
+            delta = _segment_delta(node.args)
+            return None if inner is None or delta is None else inner + delta
         return None
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div):
+        inner = _climb_levels_above_file(node.left, bindings)
+        delta = _segment_delta([node.right])
+        return None if inner is None or delta is None else inner + delta
     if isinstance(node, ast.Attribute) and node.attr == "parent":
-        inner = _climb_levels_above_file(node.value)
+        inner = _climb_levels_above_file(node.value, bindings)
         return None if inner is None else inner + 1
     if isinstance(node, ast.Subscript):
         base = node.value
         if isinstance(base, ast.Attribute) and base.attr == "parents":
-            index = node.slice
-            if isinstance(index, ast.Constant) and isinstance(index.value, int):
-                inner = _climb_levels_above_file(base.value)
-                return None if inner is None else inner + index.value + 1
+            levels = _parents_index_levels(node.slice)
+            if levels is None:
+                return None
+            inner = _climb_levels_above_file(base.value, bindings)
+            return None if inner is None else inner + levels
     return None
-
 
 
 def _string_constants(node: ast.AST) -> list[str]:
@@ -405,6 +486,11 @@ class _HardcodedPathVisitor(ast.NodeVisitor):
         #: chain also parses as a shorter climb, so the outermost -- the one
         #: that actually decides where the expression lands -- is the max.
         self._climbs: dict[tuple[int, str], int] = {}
+        #: Local name -> the climb depth its RHS already resolves to, so a
+        #: chain broken across statements stays traceable. Function-scoped
+        #: exactly like `_tainted_names`, and for the same reason: two
+        #: unrelated functions reusing a name must not bleed into each other.
+        self._climb_bindings: dict[str, int] = {}
 
     @property
     def _symbol(self) -> str:
@@ -418,11 +504,14 @@ class _HardcodedPathVisitor(ast.NodeVisitor):
         # (e.g. both use `root`) is falsely flagged as climb-tainted purely
         # from name reuse, not from any actual __file__-climb relationship.
         outer_tainted = self._tainted_names
+        outer_bindings = self._climb_bindings
         self._tainted_names = set()
+        self._climb_bindings = dict(outer_bindings)
         self._fn_stack.append(node.name)
         self.generic_visit(node)
         self._fn_stack.pop()
         self._tainted_names = outer_tainted
+        self._climb_bindings = outer_bindings
 
     visit_AsyncFunctionDef = visit_FunctionDef  # type: ignore[assignment]
 
@@ -451,9 +540,22 @@ class _HardcodedPathVisitor(ast.NodeVisitor):
                 if isinstance(target, ast.Name):
                     self._tainted_names.add(target.id)
         self.generic_visit(node)
+        # Bind AFTER the RHS has been visited: the assignment's own value is
+        # recorded as a climb in its own right by visit_Attribute/Subscript,
+        # and only then does the target name become an alias later statements
+        # can chain off.
+        levels = _climb_levels_above_file(node.value, self._climb_bindings)
+        if levels is not None:
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    self._climb_bindings[target.id] = levels
 
     def visit_Call(self, node: ast.Call) -> None:
         self._check_construction(node)
+        # Tooth 3 too: an `os.path.dirname(...)` climb is a Call at its
+        # outermost node, never an Attribute or a Subscript, so without this
+        # the whole stdlib climb shape goes unrecorded.
+        self._record_climb(node)
         self.generic_visit(node)
 
     def visit_Attribute(self, node: ast.Attribute) -> None:
@@ -471,7 +573,7 @@ class _HardcodedPathVisitor(ast.NodeVisitor):
         not known until its inner nodes have been visited."""
         if self._file_depth is None:
             return
-        levels = _climb_levels_above_file(node)
+        levels = _climb_levels_above_file(node, self._climb_bindings)
         if levels is None:
             return
         key = (node.lineno, self._symbol)
@@ -489,7 +591,9 @@ class _HardcodedPathVisitor(ast.NodeVisitor):
                     lineno,
                     "above-repo-root-traversal",
                     symbol,
-                    f"climbs {levels} level(s) from a file {self._file_depth} below the repo root",
+                    "resolves at the filesystem root"
+                    if levels >= _CLIMB_TO_FILESYSTEM_ROOT
+                    else f"climbs {levels} level(s) from a file {self._file_depth} below the repo root",
                 ))
         return out
 
@@ -910,3 +1014,85 @@ def test_no_above_repo_root_traversal_anywhere_in_coordinator_core():
     assert violations == [], (
         "path expression(s) resolving above the repo root: %r" % (violations,)
     )
+
+
+def test_tooth3_traces_a_climb_through_an_intermediate_variable(tmp_path):
+    """Aliasing the anchor to a local is an ordinary refactor, not an exotic
+    evasion -- the tooth must follow it across statements."""
+    _plant(
+        tmp_path,
+        "coordinator_core/a/b/mod.py",
+        "_P = Path(__file__).resolve()\n_Q = _P.parents[3].parent",
+    )
+    assert [v[2] for v in find_hardcoded_path_violations(tmp_path, repo_root=tmp_path)] == [
+        "above-repo-root-traversal"
+    ]
+
+
+def test_tooth3_traces_an_aliased_dunder_file(tmp_path):
+    """`_FILE = __file__` defeats a bare-Name anchor check unless the binding
+    is traced too."""
+    _plant(tmp_path, "coordinator_core/a/b/mod.py", "_FILE = __file__\n_R = Path(_FILE).parents[4]")
+    assert [v[2] for v in find_hardcoded_path_violations(tmp_path, repo_root=tmp_path)] == [
+        "above-repo-root-traversal"
+    ]
+
+
+def test_tooth3_detects_a_negative_parents_index(tmp_path):
+    """`parents[-1]` is the filesystem root -- the most extreme climb there
+    is, and the one shape a plain `ast.Constant` check cannot see because it
+    parses as `UnaryOp(USub, Constant)`."""
+    _plant(tmp_path, "coordinator_core/a/b/mod.py", "_R = Path(__file__).resolve().parents[-1]")
+    violations = find_hardcoded_path_violations(tmp_path, repo_root=tmp_path)
+    assert [(v[2], v[3]) for v in violations] == [
+        ("above-repo-root-traversal", "resolves at the filesystem root")
+    ]
+
+
+def test_tooth3_detects_dotdot_segments_and_dirname_chains(tmp_path):
+    """Climbing by `".."` string or by nested `os.path.dirname` counts the
+    same as climbing by `.parent`."""
+    # `.parent` is one level, so FOUR `".."` segments are needed to clear a
+    # file four components below the root -- three would land exactly on it.
+    _plant(tmp_path, "coordinator_core/a/b/mod.py", '_R = Path(__file__).parent.joinpath("..", "..", "..", "..")')
+    assert [v[2] for v in find_hardcoded_path_violations(tmp_path, repo_root=tmp_path)] == [
+        "above-repo-root-traversal"
+    ]
+
+    other = tmp_path / "other"
+    # FIVE dirname wraps, not four: from a file four components below the
+    # root, four of them lands ON the root and is not an escape. The
+    # off-by-one is the whole point of the tooth, so the fixture has to clear
+    # it rather than sit on it.
+    _plant(
+        other,
+        "coordinator_core/a/b/mod.py",
+        "import os\n_R = os.path.dirname(os.path.dirname(os.path.dirname("
+        "os.path.dirname(os.path.dirname(__file__)))))",
+    )
+    assert [v[2] for v in find_hardcoded_path_violations(other, repo_root=other)] == [
+        "above-repo-root-traversal"
+    ]
+
+
+def test_tooth3_subtracts_a_descent_back_into_the_repo(tmp_path):
+    """The false-positive direction, and the reason segments are counted
+    rather than ignored: reaching the repo root and walking back down into it
+    is the most common shape in this repo and is not an escape."""
+    _plant(
+        tmp_path,
+        "coordinator_core/a/b/mod.py",
+        '_R = Path(__file__).resolve().parents[3] / "coordinator" / "bin"',
+    )
+    assert find_hardcoded_path_violations(tmp_path, repo_root=tmp_path) == []
+
+
+def test_tooth3_declines_to_guess_at_a_non_literal_segment(tmp_path):
+    """An unresolvable segment yields no verdict, never a guess -- the same
+    posture as a non-literal `parents[i]` subscript."""
+    _plant(
+        tmp_path,
+        "coordinator_core/a/b/mod.py",
+        "def f(name):\n    return Path(__file__).resolve().parents[3] / name",
+    )
+    assert find_hardcoded_path_violations(tmp_path, repo_root=tmp_path) == []
