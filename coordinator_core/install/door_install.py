@@ -500,6 +500,50 @@ def engine_carries_entrypoint_script(engine_root: Path, name: str) -> bool:
     return (Path(engine_root) / "coordinator" / "bin" / f"{name}.py").is_file()
 
 
+#: The generator's own `coordinator/bin/`, resolved the same way
+#: `forwarder_door_census._BIN_DIR` resolves it -- the tree the installed NAME
+#: comes from, as against the engine tree the image dials.
+_GENERATOR_BIN_DIR = Path(__file__).resolve().parents[2] / "coordinator" / "bin"
+
+
+def launcher_is_installable(engine_root: Path, name: str) -> bool:
+    """False only for a name that HAS a `.py` CLI here and does NOT have one in
+    `engine_root` -- the publish-excluded and publish-renamed set.
+
+    NARROWER THAN `engine_carries_entrypoint_script`, and the narrowing is the
+    correction that matters. "The engine cannot resolve this name" is true of
+    two populations that want opposite treatment:
+
+      1. THE EXCLUDED AND THE RENAMED. `coordinator/bin/<name>.py` exists HERE
+         and not in the engine -- the publisher chain that produces the mirror
+         (`publish`, `percolate-push`, `percolate-round`,
+         `coordinator-publish`), claude-klabauter's own migrations and probes, and the
+         names `percolate-store.yaml`'s `substitute` section rewrites. These
+         get no launcher: they are repo-side tools, run from their own
+         checkout, and PM-ruled 2026-08-29 ("we shouldn't need a publish.exe
+         nor a publish.cmd").
+      2. THE EXTENSIONLESS TWELVE. `chunk-commits`, `static-check`,
+         `with-suite-mutex`, `coordinator-precommit-foreign-platform-check`
+         and their siblings exist as extensionless files with NO `.py` twin in
+         EITHER tree, so `_resolve_entrypoint_script` (which hardcodes
+         `<name>.py`) has never resolved them -- recorded in
+         `warm_entrypoint_allowlist.json`'s own `$comment` as a known,
+         separate defect. They are nonetheless live PATH tools: the git hooks
+         this install writes invoke them by name. Stripping their launchers
+         breaks committing on the box.
+
+    A predicate keyed only on the engine cannot tell those apart, and the
+    version that could not was measured doing real damage: it queued all 26
+    for removal, hook CLIs included. Requiring the `.py` to exist HERE is what
+    separates "deliberately not shipped" from "never resolvable in the first
+    place" -- the second is someone else's open row, not this function's to
+    act on.
+    """
+    if not (_GENERATOR_BIN_DIR / f"{name}.py").is_file():
+        return True
+    return engine_carries_entrypoint_script(engine_root, name)
+
+
 def remove_stale_named_forwarder(bin_dst: Path, name: str) -> Optional[Path]:
     """Removes a previously-installed native image for `name`, returning the
     path removed or None.

@@ -3376,6 +3376,18 @@ _COMMITTING_OP_NAMES = frozenset(
         # adding the name without the marker leaves the next such op to be
         # found by hand).
         "ceremony.commit_v2",                # ops/ceremony/commit_v2.py -- commit_paths(...)
+        # Eighth pass (2026-08-29), found by the same registry sink scan
+        # that earned the seventh: both land a real commit and neither
+        # routes through a name already in this set. Verified against each
+        # handler's own source before being added, per the fourth-pass
+        # rule -- `session.safe_commit_offer` was repointed off the killed
+        # `run_commit_pipeline` onto `git.commit.commit_paths` directly (C3,
+        # docs/plans/2026-08-29-the-push-subsystem-leaves-and-then-the-
+        # pipeline-can-go.md), which is exactly the repoint that dropped it
+        # out of this set's coverage; `handoff.housekeeping` commits the
+        # whole archived set in one `fleet._common.archive_and_commit`.
+        "session.safe_commit_offer",         # ops/session/safe_commit_offer.py -- commit_paths(...)
+        "handoff.housekeeping",              # ops/handoff_housekeeping.py -- archive_and_commit(...)
     }
 )
 _CEREMONY_INVOKE_MODULE = "coordinator_core.invoke"
@@ -6119,8 +6131,8 @@ def _git_commit_agent_may_commit(
 _GIT_COMMIT_AGENT_DENY_REASON = (
     "BLOCKED: git-commit-agent commits only via a non-sweeping, in-scope "
     "pathspec -- use instead: `ceremony.commit_v2` with an explicit `paths` "
-    "list (reject `.`, `-A`, globs, repo-root/ancestor paths). Already used "
-    "that form? Check path scope, not argv shape."
+    "list (no `.`, `-A`, globs, ancestors); deletions go in `deleted_paths`. "
+    "Already used that form? Check scope, not argv."
 )
 
 #: The deny message for `_PAYLOAD_LEG_PYTHON_STRING_LITERALS` -- reached
@@ -6371,7 +6383,8 @@ def _deny_reason(
             return (
                 "BLOCKED: git-commit-agent commits only via a non-sweeping, "
                 "in-scope pathspec -- use instead: `ceremony.commit_v2` with "
-                "an explicit `paths` list. Argv shape was fine; denied on path "
+                "an explicit `paths` list (a deleted path goes in "
+                "`deleted_paths`). Argv shape was fine; denied on path "
                 "scope: `%s`." % summary
             )
         return _GIT_COMMIT_AGENT_DENY_REASON

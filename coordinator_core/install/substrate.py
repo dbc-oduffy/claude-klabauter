@@ -101,7 +101,6 @@ from coordinator_core.install.write_surface import (
     WriteSurfaceDeclaration,
     WriteSurfaceEntry,
 )
-from coordinator_core.install.policy_gate import PolicyGateVerdict, evaluate_policy_gate
 from coordinator_core.engine_root import _registry_mtime_pair, coordinator_engine_root_with_class
 
 # Generator-provenance declaration (generator_provenance.py). Every write
@@ -1227,43 +1226,48 @@ def _write_native_door_forwarder(
         )
         return None
 
-    # REPORTS, NEVER REFUSES, and the distinction is the whole of what this
-    # branch learned the hard way. `engine_carries_entrypoint_script` detects
-    # a real defect -- 14 names whose image dials an engine with no
-    # `coordinator/bin/<name>.py` for them, so the call fails warm (-32603 ->
-    # a -32004 the door will not re-run) and cold (`fall_through` spawns the
-    # same absent path). See that function for the two causes: a
-    # publisher-side CLI excluded from the product it publishes, and a
-    # repo-identifying name rewritten by the publish-time substitution.
+    # NO LAUNCHER FOR A NAME THE ENGINE CANNOT SERVE (PM ruling 2026-08-29,
+    # on `publish`: "we shouldn't need a publish.exe nor a publish.cmd").
     #
-    # WHY IT MUST NOT SKIP THE IMAGE. Under ONE ENTRYPOINT PER PLATFORM (PM
-    # ruling 2026-08-29, `_write_agent_helper_forwarders`'s own docstring)
-    # the door image is the ONLY launcher a name gets -- no `.cmd` is written
-    # for any name, ever, and `_write_agent_cmd_forwarder` is deleted. There
-    # is no Python pair left to degrade onto, so declining to write the image
-    # does not leave the name on a slower leg, it leaves the name with NO
-    # LAUNCHER. Measured on a live box 2026-08-29: an install run with the
-    # skip in place removed 14 names outright, `publish` and `percolate-push`
-    # among them. A broken launcher is bad; an absent one is worse, and
-    # neither is this function's call to make.
+    # These are the repo-side tools -- the publisher chain that produces the
+    # mirror (`publish`, `percolate-push`, `percolate-round`,
+    # `coordinator-publish`), claude-klabauter's own migrations and probes, and the
+    # names the publish-time substitution renames. They are deliberately not
+    # carried into the published engine, so `_resolve_entrypoint_script` has
+    # nothing to resolve for them and neither leg of the door works: warm
+    # raises a plain `ValueError` (-32603) which the door will not re-run,
+    # and `door.c :: fall_through` spawns the same absent path. They are run
+    # from their own checkout (`python coordinator/bin/publish.py`), which is
+    # what the ruling settles -- they were never PATH tools, and installing a
+    # launcher for them only ever produced one that fails.
     #
-    # The fix these names actually need is upstream of the installer -- the
-    # engine has to carry a script for every name the door is installed under,
-    # or those names must leave the map -- and that trades against the
-    # one-entrypoint ruling, so it is recorded and surfaced rather than
-    # decided here. Backlog: state/bug-backlog/2026-08-29-a-door-image-is-
-    # installed-for-names-the-engine-cannot-resolve.yaml.
-    if not door_install.engine_carries_entrypoint_script(engine_root, name):
+    # `engine_carries_entrypoint_script` is the oracle rather than a name
+    # list because it is self-maintaining: it asks the root being installed
+    # FROM, so a CLI that later joins or leaves the published payload, or
+    # gets renamed by the substitution table, changes its own answer with no
+    # roster to update. See that function for the two divergence mechanisms.
+    #
+    # THE REMOVAL IS THE POINT, NOT A SIDE EFFECT. Under ONE ENTRYPOINT PER
+    # PLATFORM (`_write_agent_helper_forwarders`) the image is the only
+    # launcher a name gets, so skipping the write leaves the name off PATH
+    # entirely -- which is the intended end state here, and why the stale
+    # image an earlier install wrote is taken back rather than left to keep
+    # failing. An earlier revision of this branch did the same thing for the
+    # wrong stated reason ("left on its Python forwarder" -- there is no
+    # Python forwarder), and the wrong reason is what made it look like a
+    # regression when 14 names left PATH.
+    if not door_install.launcher_is_installable(engine_root, name):
         print(
-            f"[install-substrate] WARNING: {name}: {engine_root} carries no "
-            f"coordinator/bin/{name}.py, so this name's door image has no "
-            f"entrypoint to resolve -- it will fail warm AND cold (excluded "
-            f"from the published payload, or renamed by the publish-time "
-            f"substitution). Installing it anyway: it is the only launcher "
-            f"this name gets, and an absent launcher is worse than a broken "
-            f"one.",
+            f"[install-substrate] {name}: no launcher installed -- "
+            f"{engine_root} carries no coordinator/bin/{name}.py. This is a "
+            f"repo-side tool (not carried into the published engine, or "
+            f"renamed by the publish-time substitution); run it from its own "
+            f"checkout as `python coordinator/bin/{name}.py`.",
             file=sys.stderr,
         )
+        if not check_only:
+            door_install.remove_stale_named_forwarder(bin_dst, name)
+        return None
 
     dest = door_install.install_named_forwarder(bin_dst, engine_root, name, check_only=check_only)
     if not check_only:
@@ -1664,142 +1668,23 @@ exec_cli("{target}")
 # Do not reintroduce a writer to round out those helpers.
 
 
-def _agent_ps1_dest_name(cmd_dest_name: str) -> str:
-    """The installed `.ps1` sibling's filename for a given RESOLVED `.cmd`
-    destination name (a value of ``_resolve_agent_cmd_dest_collisions``'s
-    return map) -- same stem, `.ps1` suffix, mirroring
-    ``_agent_cmd_dest_name``'s stem-stripping so an extension-carrying
-    installed name (e.g. ``foo.sh`` -> ``foo.cmd``) never produces a
-    malformed ``foo.cmd.ps1``. Deliberately keyed off the `.cmd` dest name
-    rather than re-deriving from the installed name directly, so the two
-    legs can never disagree on which bare name they occupy -- this is also
-    exactly the convention ``_sweep_orphaned_agent_helpers``'s
-    ``protected_names`` complement already assumes (``Path(n).stem +
-    ".ps1"`` for every protected `.cmd` dest name)."""
-    return Path(cmd_dest_name).stem + ".ps1"
-
-
-def _write_agent_ps1_forwarder(
-    name: str, dst: Path, check_only: bool, *, python3_cmd_resolved_bin: str
-) -> None:
-    """Generates the installed Windows ``.ps1`` half of an agent-helper
-    forwarder pair -- the second managed launcher class (see
-    docs/plans/2026-08-07-ps1-launcher-class-and-fail-closed-policy-gate.md).
-    Mirrors ``_write_agent_cmd_forwarder`` exactly in shape and intent: same
-    co-located-Unix-half-invocation strategy (``$_here/<name>``, never the
-    claude-klabauter-side ``<target>.py`` directly, so the resolve-claude-klabauter-bin ladder
-    stays in exactly one place), same baked-``python3_cmd_resolved_bin``
-    fast path with a ``Test-Path`` existence guard so a bake naming a
-    now-missing interpreter self-heals instead of hard-failing (the same
-    Mac/Windows-sync hazard ``_write_agent_cmd_forwarder``'s docstring
-    documents), same host-local ``%LOCALAPPDATA%`` resolution-cache rung
-    (DR-303 — see that function's docstring for the full rationale; this
-    dialect writes/reads its OWN cache file,
-    ``<LOCALAPPDATA>/coordinator/python-bin-cache-ps1.txt`` — a SEPARATE
-    file from the cmd leg's ``python-bin-cache.txt``, never shared, because
-    the two dialects write/read in different encodings (console codepage
-    vs UTF-8 without BOM) and a single shared file only round-trips for an
-    ASCII interpreter path — see that function's docstring "Cross-dialect
-    encoding" paragraph for the full rationale), same ``where
-    python.exe``-equivalent / ``py -3`` / fail-loud
-    exit-127 ladder. Every cache step here is an in-process cmdlet
-    (``Test-Path``, ``Get-Content``, ``New-Item``, ``[System.IO.File]``,
-    ``Move-Item``) — no new process on the steady-state path.
-
-    This is deliberately NOT ``gen-launcher-shim.py::render_ps1`` and does
-    not call it -- that function is the GENERATOR's source-side path for
-    ``coordinator/bin/`` itself and its emitted body carries no substrate
-    marker at all. Calling it here would ship a ``.ps1`` carrying
-    ``_LEGACY_CMD_MARKER`` and no ``_AGENT_PS1_FORWARDER_MARKER``, making
-    every installed `.ps1` permanently unsweepable by
-    ``_sweep_orphaned_agent_helpers``'s marker-branch check -- precisely
-    the hazard that check exists to close (see this module's own marker
-    constants block above and the plan's Problem §1 / Anti-scope).
-
-    ``name`` is the INSTALLED forwarder name (not a re-derived stem) for
-    the same reason ``_write_agent_cmd_forwarder`` takes it that way -- see
-    that function's docstring.
-
-    shell-doc-ok: the expansion quoted above is the emitted PowerShell body's
-    own variable, reproduced verbatim because this docstring specifies what
-    that script literally contains; re-rendering it in prose would describe a
-    forwarder this function does not write.
-    """
-    py = python3_cmd_resolved_bin or ""
-    content = f"""# PowerShell launcher for {name} -- direct exec of the co-located
-# Unix-half forwarder ("$_here/{name}"), which resolves claude-klabauter's
-# coordinator/bin/ via _resolve_claude_klabauter.py and execs the real target
-# there. {_AGENT_PS1_FORWARDER_MARKER} on every install run --
-# do not hand-edit.
-# Spec backlink: pln-second-managed-launcher-class-aea900
-$ErrorActionPreference = 'Stop'
-$_here = Split-Path -Parent $MyInvocation.MyCommand.Path
-$_entry = Join-Path $_here '{name}'
-$_pybin = '{py}'
-if ($_pybin -ne '' -and (Test-Path -LiteralPath $_pybin)) {{
-    & $_pybin $_entry @args
-    exit $LASTEXITCODE
-}}
-# Host-local resolution cache (DR-303 / windows-interpreter-bake-is-empty):
-# %LOCALAPPDATA% never syncs between machines, unlike the settings-home a
-# bake is written into, so it cannot be poisoned by a Mac/Windows-synced
-# home the way a bake can. Mirrors the bake's own Test-Path self-heal: a
-# cached path that is stale or foreign falls through to re-resolution.
-# Every step here is in-process (no new spawn on the steady-state path).
-$_cachefile = $null
-if ($env:LOCALAPPDATA) {{
-    $_cachefile = Join-Path $env:LOCALAPPDATA 'coordinator\\python-bin-cache-ps1.txt'
-    if (Test-Path -LiteralPath $_cachefile) {{
-        $_cached = $null
-        try {{ $_cached = Get-Content -LiteralPath $_cachefile -TotalCount 1 -ErrorAction SilentlyContinue }} catch {{}}
-        if ($_cached -and (Test-Path -LiteralPath $_cached)) {{
-            & $_cached $_entry @args
-            exit $LASTEXITCODE
-        }}
-    }}
-}}
-$_py = Get-Command python.exe -ErrorAction SilentlyContinue | Where-Object {{ $_.Source -notlike '*\\WindowsApps\\*' }} | Select-Object -First 1
-if ($_py) {{
-    if ($_cachefile) {{
-        # Persist for future invocations on THIS host. Every writer resolves
-        # the same value (deterministic per machine), so a write-write race
-        # can only race identical content -- and the target is only ever
-        # mutated via Move-Item -Force (an atomic same-volume rename, never
-        # an in-place write), so a reader can never observe a torn file. A
-        # losing writer's move is swallowed (SilentlyContinue): no retry, no
-        # wait, no added steady-state process either way.
-        try {{
-            $_cachedir = Split-Path -Parent $_cachefile
-            if (-not (Test-Path -LiteralPath $_cachedir)) {{
-                New-Item -ItemType Directory -Path $_cachedir -Force -ErrorAction SilentlyContinue | Out-Null
-            }}
-            $_tmpfile = Join-Path $_cachedir ([System.Guid]::NewGuid().ToString('N') + '.tmp')
-            [System.IO.File]::WriteAllText($_tmpfile, $_py.Source)
-            Move-Item -LiteralPath $_tmpfile -Destination $_cachefile -Force -ErrorAction SilentlyContinue
-        }} catch {{}}
-    }}
-    & $_py.Source $_entry @args
-    exit $LASTEXITCODE
-}}
-$_pyl = Get-Command py -ErrorAction SilentlyContinue
-if ($_pyl) {{
-    & $_pyl.Source -3 $_entry @args
-    exit $LASTEXITCODE
-}}
-[Console]::Error.WriteLine('[{name}] ERROR: no Python interpreter found (python.exe / py -3).')
-[Console]::Error.WriteLine('[{name}] Install Python: https://www.python.org/downloads/windows/')
-exit 127
-"""
-    if check_only:
-        if dst.exists() and dst.read_text(encoding="utf-8") == content:
-            print(f"[install-substrate] check: {dst.name} up to date -> {dst} (no-op)")
-            return
-        status = "stale" if dst.exists() else "absent"
-        raise SubstrateFatalError(
-            f"install-substrate: check failed: {dst.name} is {status} at {dst} "
-            f"(would write forwarder)"
-        )
-    dst.write_text(content, encoding="utf-8", newline="\n")
+# GRAVESTONE -- `_agent_ps1_dest_name` and `_write_agent_ps1_forwarder`
+# (deleted 2026-08-29, docs/plans/2026-08-26-every-forwarder-that-can-reach-
+# the-door-does.md C12; DR-365 condemns both managed launcher classes).
+#
+# `_write_agent_ps1_forwarder` generated the installed Windows `.ps1` half
+# of the second managed launcher class (the ps1-launcher-class plan). Per
+# DR-365 every `coordinator/bin` name gets the one native door image now
+# (see `_write_agent_helper_forwarders`); a `.ps1` trampoline serves nothing
+# the door does not, and PowerShell ranks a same-directory `.ps1` ABOVE
+# `.exe`, so a leftover `.ps1` would silently SHADOW the door cutover on
+# PowerShell specifically -- one more reason it had to go, not merely one
+# it could.
+#
+# `_AGENT_PS1_FORWARDER_MARKER` (module-level constant, above) SURVIVES on
+# the removal side only -- `_sweep_orphaned_agent_helpers` still reads it to
+# find and delete `.ps1` orphans a prior install run left behind. Nothing
+# writes one. Do not reintroduce a writer to round out that helper.
 
 
 # Names already installed by ml_family/ch_family/the coordinator-settings-home
@@ -3272,271 +3157,19 @@ def _unblock_files(paths: "list[Path]") -> None:
             pass  # no ADS present -- the common case, a no-op, not an error
 
 
-def _emit_and_verify_ps1_forwarders(
-    bin_dst: Path,
-    agent_cmd_dest_map: "dict[str, str]",
-    check_only: bool,
-    *,
-    python3_cmd_resolved_bin: str,
-    exclude_names: "frozenset[str]" = frozenset(),
-) -> "Optional[PolicyGateVerdict]":
-    """Emit the `.ps1` leg of every agent-helper forwarder, driven off the
-    RESOLVED `.cmd` map (``agent_cmd_dest_map``, `_resolve_agent_cmd_dest_
-    collisions`'s return value) exactly as `_install_bin_resolvers` already
-    drives `.cmd` emission -- never the raw `agent_helper_target_map` (AC1):
-    that map is keyed by every candidate installed name BEFORE collision
-    resolution, so emitting `.ps1` from it independently could let a
-    collision LOSER win the `.ps1` slot while a different name wins the
-    `.cmd` slot for the same bare name -- the same bare name resolving to
-    different implementations under PowerShell and cmd.exe, on one box.
-
-    Sequence, in order: emit every `.ps1` -> `Unblock-File` what this pass
-    just wrote (AC14, gated by `_refuse_machine_mutation`, BEFORE the gate
-    so the verdict reflects the artifact as it will finally sit rather than
-    a mid-treatment state) -> verify via C2's `evaluate_policy_gate()`
-    against those real emitted launchers at their final destination paths
-    -> keep on GREEN, roll back every `.ps1` this pass wrote on RED (AC7,
-    zero left behind is the goal -- a half-emitted state is the hazard, not
-    a fallback). Rollback is best-effort: a per-path `unlink()` failure is
-    reported loudly to stderr rather than swallowed, but is not retried --
-    a transient handle/lock (see below) can still leave a launcher behind,
-    reported rather than silent, but not guaranteed removed.
-
-    Verification is POST-emission specifically because: `AllSigned` rejects
-    an unsigned throwaway probe file exactly as readily as an unsigned
-    emitted launcher, so soundness requires verifying by EXECUTING the real
-    artifact rather than inspecting or probing a stand-in; the destination
-    path's own path/ACL/landing conditions apply to the real file and not
-    to a probe written elsewhere; and rollback (AC7) only means something
-    once emission has actually happened -- there is nothing to roll back
-    for a launcher that was never written. (Not Mark-of-the-Web: that was
-    measured ABSENT on this box's `~/.claude` sync path -- 0 of 5,513 files
-    carry a `Zone.Identifier` stream -- marking is a transport property,
-    not a volume property, so it argues nothing about emission ordering.
-    See the plan's Problem section, Consequence paragraph.)
-
-    On RED the install chain still SUCCEEDS (AC8) -- this function never
-    raises on a RED verdict and never touches the `.cmd` leg, which stays
-    installed and usable regardless of this function's outcome.
-
-    Returns the computed `PolicyGateVerdict` so the caller (and C4, which
-    lands the loud-skip message and durable skip record right after this
-    chunk in the same file) can render `verdict.reason` to the operator on
-    RED. Returns `None` when nothing was emitted -- an empty resolved map,
-    or `check_only` mode PROVIDED every destination is already up to date
-    (no write happens; `_write_agent_ps1_forwarder` alone reports staleness)
-    -- because there is then nothing to verify or roll back. `check_only`
-    with a stale/absent destination does not reach `return None`:
-    `_write_agent_ps1_forwarder` raises `SubstrateFatalError` first.
-
-    NO `resolution_journal.record_resolution` call for this leg (C4
-    decision, against the sibling-clause precedent): every other
-    `WRITE_SURFACE` clause journals what it wrote once, right after
-    writing it, and that write is final. This one is not -- `written` is
-    provisional until the gate below returns, and on RED every path in it
-    is unlinked a few lines down. Journaling `written` before the gate
-    would record paths that no longer exist the moment this function
-    returns; journaling it only on the GREEN branch would still misname a
-    provisional set as a resolution. `WRITE_SURFACE` clause 4's own
-    comment (this module, near `_CLAUSE_AGENT_HELPER_FORWARDERS`) already
-    declares the `.ps1` leg as part of its SHAPED surface, which is the
-    durable declaration this repo asks for; the resolution journal is a
-    per-run log of what a writer actually committed, and a rolled-back
-    write was never a commitment.
-
-    ``exclude_names`` (C5, docs/plans/2026-08-26-every-forwarder-that-can-
-    reach-the-door-does.md): door-eligible names to skip entirely -- their
-    native `.exe`-direct forwarder already wins bare-name resolution over
-    any `.cmd` on PATHEXT alone, but PowerShell ranks a same-directory
-    `.ps1` ABOVE `.exe`, so a `.ps1` emitted here for one of them would
-    silently shadow the cutover on PowerShell specifically. Never emitting
-    one for these names is simpler and safer than emit-then-remove: this
-    function runs (Step 3b2) after the native forwarder is already written
-    (Step 3b), so a removal here would just be undone by this function
-    re-creating the shadow it was meant to defuse. Default-empty so every
-    other caller (there are none today besides `_install_bin_resolvers`)
-    is unaffected.
-    """
-    if check_only:
-        for name, cmd_dest in sorted(agent_cmd_dest_map.items()):
-            if name in exclude_names:
-                continue
-            ps1_dst = bin_dst / _agent_ps1_dest_name(cmd_dest)
-            _write_agent_ps1_forwarder(
-                name, ps1_dst, True, python3_cmd_resolved_bin=python3_cmd_resolved_bin,
-            )
-        return None
-
-    written: "list[Path]" = []
-    for name, cmd_dest in sorted(agent_cmd_dest_map.items()):
-        if name in exclude_names:
-            continue
-        ps1_dst = bin_dst / _agent_ps1_dest_name(cmd_dest)
-        _write_agent_ps1_forwarder(
-            name, ps1_dst, False, python3_cmd_resolved_bin=python3_cmd_resolved_bin,
-        )
-        written.append(ps1_dst)
-
-    if not written:
-        return None
-
-    blocked = _refuse_machine_mutation(
-        str(bin_dst), what="Unblock-File the .ps1 launchers this pass emitted",
-        check_temp_path=False,
-    )
-    if blocked:
-        print(f"[install-substrate] REFUSED: {blocked}", file=sys.stderr)
-    else:
-        _unblock_files(written)
-
-    verdict = evaluate_policy_gate()
-    if verdict.green:
-        return verdict
-
-    for ps1_dst in written:
-        try:
-            ps1_dst.unlink()
-        except OSError as exc:
-            # Not harmless the way substrate.py:2194's scratch-file cleanup
-            # is: a leftover here is PROTECTED from the orphan sweep on a
-            # later run by `protected_names` membership (its bare name's
-            # `.cmd` is in the resolved dest map, so the sweep's limb-2
-            # derivation adds this `.ps1`), checked before the marker branch
-            # ever runs -- carrying `_AGENT_PS1_FORWARDER_MARKER` is what
-            # would make it eligible for deletion if it were NOT otherwise
-            # protected, not what protects it (see
-            # `_sweep_orphaned_agent_helpers`) -- silence would turn
-            # a failed rollback into an invisible, permanent half-emitted
-            # state. Report loudly, matching how a refused machine mutation
-            # is reported above, and continue rolling back the rest.
-            print(
-                f"[install-substrate] ROLLBACK FAILED: could not remove "
-                f"{ps1_dst} after RED verdict: {exc}", file=sys.stderr,
-            )
-    return verdict
-
-
-_PS1_POLICY_STATUS_FILENAME = "ps1-policy-gate-status.json"
-"""Durable, findable-later surface for the `.ps1` execution-policy verdict
-(AC13). Lives at `<settings-home>/ps1-policy-gate-status.json` --
-`bin_dst.parent`, i.e. one level above `<settings-home>/bin/`, since this is
-a status record about that directory's contents, not another entry in it."""
-
-
-def _ps1_policy_status_path(bin_dst: Path) -> Path:
-    return bin_dst.parent / _PS1_POLICY_STATUS_FILENAME
-
-
-def _ps1_policy_repair_message(bin_dst: Path) -> str:
-    """AC9's mandated fallback: invoking the co-located EXTENSIONLESS
-    forwarder directly via `python` bypasses `.ps1`/`.cmd` launcher
-    resolution entirely, so it runs regardless of PowerShell execution
-    policy on either host. `<command-name>` names the pattern rather than
-    every forwarder in `agent_cmd_dest_map` -- the same fallback applies to
-    every name this pass skipped, and enumerating all of them here would
-    drift the moment `coordinator/bin/` gains or loses a CLI."""
-    return (
-        f"python {bin_dst / '<command-name>'} <args...>  "
-        "(the extensionless forwarder next to the .cmd/.ps1 launchers -- "
-        "preserves argv intact regardless of PowerShell execution policy)"
-    )
-
-
-def _write_ps1_policy_status(bin_dst: Path, verdict: "PolicyGateVerdict") -> None:
-    """AC13: write the verdict this install pass computed to the durable
-    surface -- EVERY non-check-only pass that reached the gate, GREEN or
-    RED, not just RED. This is deliberate, not scope creep on AC9 (which
-    stays RED-only, see `_report_ps1_policy_gate_skip`): the population
-    this file exists for is the operator whose host was GREEN at install
-    time and only had policy tightened afterward (AC10's post-install
-    mutability residual, documented in `policy_gate`'s module docstring).
-    That operator gets no install-time stdout at all to recall regardless
-    of wording, because nothing was wrong yet -- the only thing that can
-    possibly reach them later is something already sitting on disk. A
-    GREEN write, not a RED-only one, is what makes that reachable.
-    """
-    path = _ps1_policy_status_path(bin_dst)
-    payload = {
-        "green": verdict.green,
-        "unreadable": verdict.unreadable,
-        "reason": verdict.reason,
-        "repair_entrypoint": _ps1_policy_repair_message(bin_dst),
-        "note": (
-            "If a .ps1 launcher under this bin/ directory fails to run "
-            "with a PowerShell execution-policy error, the "
-            "repair_entrypoint above works regardless of policy. "
-            "'green' reflects the dual-host execution-policy verdict as "
-            "of the most recent install run only -- policy is mutable "
-            "afterward and this file is not re-checked between installs. "
-            "See coordinator_core/install/policy_gate.py's module "
-            "docstring, AC10."
-        ),
-    }
-    if verdict.unreadable:
-        # A probe that could not RUN and a policy that FORBIDS execution are
-        # different faults wanting different fixes, and `reason` alone reads as
-        # the latter: it quotes a cmdlet error under a key named for a policy
-        # verdict. A reader taking it at face value concludes the HOST is broken
-        # and goes looking at `Set-ExecutionPolicy`. That read cost two sessions
-        # and eight days before anyone measured the probe environment instead.
-        payload["diagnosis"] = (
-            "No execution policy was read this pass -- the probe did not run to "
-            "completion. This is not a policy verdict, and not evidence that this "
-            "host's policy forbids anything. Known cause on this fleet: an "
-            "inherited PSModulePath carrying PowerShell 7's $PSHOME\\Modules, which "
-            "makes Windows PowerShell 5.1 resolve PS7's CoreCLR-only "
-            "Microsoft.PowerShell.Security and fail to load it. The host is "
-            "healthy; the probe environment is not. See "
-            "docs/decisions/DR-365-ruling-2-governs-every-managed-launcher-class.md."
-        )
-    try:
-        path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8", newline="\n")
-    except OSError as exc:
-        print(f"[install-substrate] WARNING: could not write {path}: {exc}", file=sys.stderr)
-
-
-def _report_ps1_policy_gate_skip(verdict: "PolicyGateVerdict", bin_dst: Path) -> None:
-    """AC9: the loud skip. RED only -- the GREEN path prints nothing here
-    (AC13's second half; the durable-surface write above is not this
-    warning and happens on both verdicts). Names the reason, WHICH host(s)
-    failed (`verdict.reason` is `evaluate_policy_gate`'s '; '-joined RED-
-    host reasons), and the repair entrypoint that works under any policy.
-    A silent skip is indistinguishable from a silent fix -- see this
-    plan's Problem section; this is the message that closes that gap at
-    install time.
-    """
-    status_path = _ps1_policy_status_path(bin_dst)
-    headline = (
-        "could not determine execution policy (probe failed to run)"
-        if verdict.unreadable
-        else "PowerShell execution-policy gate reported RED"
-    )
-    print(
-        f"[install-substrate] SKIPPED .ps1 launcher emission this pass -- {headline}:",
-        file=sys.stderr,
-    )
-    print(f"[install-substrate]   {verdict.reason}", file=sys.stderr)
-    print(
-        "[install-substrate]   The .cmd launchers remain installed and "
-        "usable -- only the .ps1 leg was rolled back. Fallback (works "
-        "under any execution policy):",
-        file=sys.stderr,
-    )
-    print(f"[install-substrate]   {_ps1_policy_repair_message(bin_dst)}", file=sys.stderr)
-    print(f"[install-substrate]   Recorded at {status_path}", file=sys.stderr)
-
-
-def _handle_ps1_gate_verdict(verdict: "PolicyGateVerdict", bin_dst: Path) -> None:
-    """C4's seam, called once per install pass with the non-`None`
-    `PolicyGateVerdict` `_emit_and_verify_ps1_forwarders` computed. Always
-    writes the durable surface (AC13, both verdicts); reports the loud
-    stdout skip only on RED (AC9; AC13's green-path-prints-nothing half).
-    Split out from `_install_bin_resolvers` so both branches are directly
-    unit-testable without standing up that function's full fixture set.
-    """
-    _write_ps1_policy_status(bin_dst, verdict)
-    if not verdict.green:
-        _report_ps1_policy_gate_skip(verdict, bin_dst)
+# GRAVESTONE -- `_emit_and_verify_ps1_forwarders`, `_PS1_POLICY_STATUS_FILENAME`,
+# `_ps1_policy_status_path`, `_ps1_policy_repair_message`, `_write_ps1_policy_status`,
+# `_report_ps1_policy_gate_skip`, and `_handle_ps1_gate_verdict`
+# (deleted 2026-08-29, docs/plans/2026-08-26-every-forwarder-that-can-reach-the-door-
+# does.md C12; DR-365 condemns both managed launcher classes).
+#
+# This block emitted, execution-policy-verified, and durably recorded
+# the `.ps1` leg of the second managed launcher class. Per DR-365 every
+# `coordinator/bin` name gets the one native door image now (see
+# `_write_agent_helper_forwarders`); with nothing left to emit `.ps1`
+# launchers, `policy_gate.py` -- whose only caller this block was --
+# is deleted alongside it (see that module's own removal note) rather
+# than left to gate a class of launcher this repo no longer writes.
 
 
 def _write_python_bin_sidecar(bin_dst: Path, python3_cmd_resolved_bin: str) -> None:
@@ -3584,9 +3217,12 @@ def _write_agent_helper_forwarders(
     """Step 3b's forwarder-write loop proper, extracted out of
     ``_install_bin_resolvers`` so a second caller (the missing-forwarder
     self-heal path — ``coordinator_core.install.forwarder_self_heal``) can
-    write the SAME forwarder bodies through the SAME two writers
-    (``_write_agent_forwarder``/``_write_agent_cmd_forwarder``) without a
-    second, drift-prone implementation.
+    write the SAME forwarder bodies through the SAME writer
+    (``_write_agent_forwarder``, or ``_cut_over_to_native_door`` for a
+    door-eligible name) without a second, drift-prone implementation.
+    ``_write_agent_cmd_forwarder``, this docstring's former second writer,
+    is deleted (91771f631d, "the cmd forwarder dies") — every name gets the
+    native door image or the bare-Python forwarder now, never a ``.cmd``.
 
     Pure refactor of ``_install_bin_resolvers``'s Step 3b body — same two
     maps in, same per-entry writer calls, same ``WriteSurfaceEntry`` list
@@ -3599,24 +3235,26 @@ def _write_agent_helper_forwarders(
     that journal call itself, at the original call site, using this
     function's return value; behaviour there is unchanged.
 
-    Also deliberately excludes the ``.ps1`` leg
-    (``_emit_and_verify_ps1_forwarders``/``_handle_ps1_gate_verdict``),
-    ``_sweep_orphaned_agent_helpers``, platform-localize, and the ml/ch
-    families — none of those are forwarder-loop concerns, and the ``.ps1``
-    leg in particular spawns ``powershell.exe`` for its execution-policy
-    gate, which is out of scope for a self-heal path that must never spawn
-    a subprocess. Callers needing those must still go through
-    ``_install_bin_resolvers``/``run()``.
+    Also deliberately excludes ``_sweep_orphaned_agent_helpers``,
+    platform-localize, and the ml/ch families — none of those are
+    forwarder-loop concerns. Callers needing those must still go through
+    ``_install_bin_resolvers``/``run()``. (Formerly also excluded the
+    ``.ps1`` leg, ``_emit_and_verify_ps1_forwarders``/
+    ``_handle_ps1_gate_verdict`` — DR-365 condemned that leg outright and
+    C12 deleted both writers; see their gravestones above. Its exclusion
+    reason survives only as history: it spawned ``powershell.exe`` for its
+    execution-policy gate, out of scope for a self-heal path that must
+    never spawn a subprocess.)
 
-    Concurrency: ``_write_agent_forwarder``/``_write_agent_cmd_forwarder``
-    write via a plain in-place ``Path.write_text`` (see their docstrings),
+    Concurrency: ``_write_agent_forwarder`` writes via a plain in-place
+    ``Path.write_text`` (see its docstring),
     not atomic-temp-and-rename, so two writers racing the SAME destination
     can interleave and leave a torn file a concurrent reader (a peer
     session executing that forwarder, or `forwarder_self_heal`'s own
     writer) can observe mid-write. `forwarder_self_heal.py` already takes
     `coordinator_core.locked_write.held_lock` on this same `bin_dst`
-    before calling these two writers directly; this, the full-installer
-    caller of the identical writers, previously took no lock at all --
+    before calling this writer directly; this, the full-installer caller
+    of the identical writer, previously took no lock at all --
     a real install run (which a human can trigger by hand at any moment
     per CLAUDE.md § Load norm, alongside a dozen concurrent sessions'
     session-boot self-heal) raced the self-heal path and any concurrent
@@ -3868,8 +3506,11 @@ def _install_bin_resolvers(
     # does.md): the door-eligible bucket, restricted to names this run
     # actually derived a CLI for. NO LONGER GATES FORWARDER WRITING -- every
     # name gets the native door image now (PM ruling 2026-08-29; see
-    # `_write_agent_helper_forwarders`). Retained solely for the `.ps1`-skip
-    # call below, which is a peer-owned surface.
+    # `_write_agent_helper_forwarders`). Retained solely to derive each
+    # native forwarder's own filename for `_sweep_orphaned_agent_helpers`'s
+    # `extra_protected_names` below -- the `.ps1`-skip call this comment
+    # used to also describe is deleted (C12: DR-365 condemns the `.ps1`
+    # leg outright, see `_write_agent_ps1_forwarder`'s gravestone above).
     door_eligible_names = _door_eligible_forwarder_names() & set(agent_helper_target_map)
 
     rm_family(bin_dst, "resolve-claude-klabauter")
@@ -3881,24 +3522,6 @@ def _install_bin_resolvers(
         resolution_journal.record_resolution(
             _WRITER_ID, _CLAUSE_AGENT_HELPER_FORWARDERS, agent_helper_resolved,
         )
-
-    # --- Step 3b2: `.ps1` leg of the same forwarder pair (C3 of the
-    # ps1-launcher-class plan) --- driven off `agent_cmd_dest_map` (the
-    # RESOLVED map), never `agent_helper_target_map`, exactly as the `.cmd`
-    # loop above -- see `_emit_and_verify_ps1_forwarders`'s docstring (AC1).
-    # `ps1_gate_verdict` is this run's `PolicyGateVerdict` (or `None` when
-    # nothing was emitted -- `check_only`, or an empty resolved map, in
-    # which case there is nothing to report). AC13's durable status write
-    # runs on every non-`None` verdict; AC9's loud stdout skip is RED-only.
-    # `exclude_names=door_eligible_names` (C5): a door-eligible name's `.ps1`
-    # is never (re-)emitted here -- see that parameter's own docstring.
-    ps1_gate_verdict = _emit_and_verify_ps1_forwarders(
-        bin_dst, agent_cmd_dest_map, check_only,
-        python3_cmd_resolved_bin=python3_cmd_resolved_bin,
-        exclude_names=door_eligible_names,
-    )
-    if ps1_gate_verdict is not None:
-        _handle_ps1_gate_verdict(ps1_gate_verdict, bin_dst)
 
     _sweep_orphaned_agent_helpers(
         bin_dst, agent_helper_target_map, agent_cmd_dest_map, check_only,
@@ -4794,38 +4417,28 @@ WRITE_SURFACE = WriteSurfaceDeclaration(
                 ),
             ),
         ),
-        # Clause 4 — the agent-helper forwarder TRIPLE generator: ONE
-        # discovery mechanism (`_derive_agent_helper_target_map`, scanning
-        # `coordinator/bin/`) feeding ONE fixed `.py`/`.cmd`/`.ps1` forwarder
-        # template set per discovered CLI. Was a pair before the
-        # ps1-launcher-class plan's C3/C4 (`.py`+`.cmd` only); the `.ps1`
-        # leg is now a third emission off the SAME discovery mechanism and
-        # the SAME resolved-collision map (`_resolve_agent_cmd_dest_
-        # collisions`) the `.cmd` leg already used, via
-        # `_emit_and_verify_ps1_forwarders` — one more suffix out of the one
-        # discovery mechanism, not a second clause. SHAPED, not a frozen
-        # count of static entries — the map's size varies with
-        # `coordinator/bin/`'s contents and is not enumerable in source.
+        # Clause 4 — the agent-helper forwarder generator: ONE discovery
+        # mechanism (`_derive_agent_helper_target_map`, scanning
+        # `coordinator/bin/`) feeding the extensionless POSIX-shaped
+        # forwarder `_write_agent_forwarder` writes per discovered CLI.
+        # SHAPED, not a frozen count of static entries — the map's size
+        # varies with `coordinator/bin/`'s contents and is not enumerable
+        # in source.
         #
-        # The `.ps1` leg is also, uniquely among this clause's three
-        # suffixes, sometimes UNDONE seconds after being written: on a RED
-        # `evaluate_policy_gate()` verdict, `_emit_and_verify_ps1_forwarders`
-        # unlinks every `.ps1` path this SAME clause's SAME call just wrote
-        # (AC7). That rollback still belongs here, not in a clause of its
-        # own — unlike clause 13's orphan sweep (`_CLAUSE_ORPHAN_SWEEP`),
-        # which deletes files a PRIOR install run wrote and therefore earns
-        # its own clause and its own resolution-journal entry, this delete
-        # only ever removes what this clause's own write loop emitted
-        # moments earlier in the SAME call. A clause describes one writer's
-        # declared surface, not a append-only journal of every write that
-        # ever landed — see `_emit_and_verify_ps1_forwarders`'s own
-        # resolution_journal note for why no journal entry is recorded for
-        # this leg either.
+        # Formerly a `.py`/`.cmd`/`.ps1` triple (ps1-launcher-class plan's
+        # C3/C4). DR-365 condemns both the `.cmd` and `.ps1` legs outright;
+        # C12 of docs/plans/2026-08-26-every-forwarder-that-can-reach-the-
+        # door-does.md deletes both writers (`_write_agent_cmd_forwarder`'s
+        # and `_write_agent_ps1_forwarder`'s gravestones, above) — this
+        # clause's shape narrows to match what this generator itself writes
+        # now. The native door image a door-eligible name also gets
+        # (`_cut_over_to_native_door`) is a separate write path this clause
+        # does not describe -- unchanged by C12, out of this row's scope.
         ShapedClause(
             discovered_by="_derive_agent_helper_target_map",
             entry_template=WriteSurfaceEntry(
                 kind="file-path",
-                path="<agent-bin-dir>/<forwarder-name>[.py|.cmd|.ps1]",
+                path="<agent-bin-dir>/<forwarder-name>",
             ),
         ),
         # Clause 5 — percolation, operator-preservable half:
@@ -5227,39 +4840,32 @@ WRITE_SURFACE = WriteSurfaceDeclaration(
                 ),
             ),
         ),
-        # Clause 28 — `_write_ps1_policy_status` (ps1-launcher-class plan,
-        # C4): the `.ps1` execution-policy verdict's durable, findable-later
-        # surface (AC13). A single STATIC file at
-        # `<settings-home>/ps1-policy-gate-status.json` — `bin_dst.parent`,
-        # deliberately BESIDE `<settings-home>/bin/` rather than inside it,
-        # since this is a status record ABOUT that directory's `.ps1`
-        # contents (clause 4), not another entry in it; clause 4's SHAPED
-        # `<agent-bin-dir>/...` template does not reach a path one level up
-        # and this clause exists precisely because it does not. Written on
-        # EVERY non-check-only install pass that reached the policy gate —
-        # GREEN as well as RED — not gated on the skip: AC13's durable
-        # record has to outlive a GREEN install, since the operator it
-        # protects is the one whose host was clean at install time and had
-        # policy tightened afterward (AC10's post-install mutability
-        # residual), and that operator gets no install-time stdout to
-        # recall regardless of wording. Same shape as clause 20
-        # (`settings-manifest.md`) — a single named file directly under
-        # settings-home — kept as its own clause for that same reason: one
-        # file, one call site, one STATIC entry.
+        # Clause 28 — RETIRED 2026-08-29 (docs/plans/2026-08-26-every-
+        # forwarder-that-can-reach-the-door-does.md C12). Formerly
+        # `_write_ps1_policy_status` (ps1-launcher-class plan, C4): the
+        # `.ps1` execution-policy verdict's durable, findable-later surface
+        # (AC13), at `<settings-home>/ps1-policy-gate-status.json`. DR-365
+        # condemns the `.ps1` leg outright; with `_emit_and_verify_ps1_
+        # forwarders`/`policy_gate.py` deleted (see their gravestones
+        # above), nothing computes a verdict for this file to record.
+        # Entry stays declared, unwritten — same precedent as clause 29
+        # below — so a stale status file left by a pre-C12 install remains
+        # a recognized prune candidate for `_prune_orphaned_static_bin_names`
+        # rather than an orphan outside that mechanism.
         StaticClause(
             entries=(
                 WriteSurfaceEntry(
                     kind="file-path",
-                    path=f"<settings-home>/{_PS1_POLICY_STATUS_FILENAME}",
+                    path="<settings-home>/ps1-policy-gate-status.json",
                     reason=(
-                        "written by _write_ps1_policy_status on every "
-                        "non-check-only install pass that reached "
-                        "evaluate_policy_gate(), regardless of verdict "
-                        "(GREEN and RED both write) — AC13's durable, "
-                        "findable-later surface for the .ps1 "
-                        "execution-policy skip reason and repair "
-                        "entrypoint; best-effort, an OSError warns rather "
-                        "than raising"
+                        "RETIRED 2026-08-29: no longer written — "
+                        "_write_ps1_policy_status/_emit_and_verify_ps1_"
+                        "forwarders/policy_gate.py are deleted with the "
+                        ".ps1 leg (DR-365). This entry stays declared, "
+                        "unwritten, so a stale status file left by a "
+                        "pre-C12 box remains a recognized prune candidate "
+                        "for _prune_orphaned_static_bin_names rather than "
+                        "an orphan outside that mechanism"
                     ),
                 ),
             ),
@@ -5319,8 +4925,10 @@ silently undeclared — no kind in the frozen eight-kind vocabulary honestly
 expresses an unenumerable third-party installer footprint) — see
 ``state/audits/2026-08-06-install-substrate-write-surface-completeness.md``
 refs C/D/E/F/G/I/W/X/Y/Z/AB for the census this closed. Clause 28
-(`_write_ps1_policy_status`'s `<settings-home>/ps1-policy-gate-status.json`
-status file, ps1-launcher-class plan C4, AC13), then clause 29
+(formerly `_write_ps1_policy_status`'s `<settings-home>/ps1-policy-gate-
+status.json` status file, ps1-launcher-class plan C4, AC13 — RETIRED
+2026-08-29, docs/plans/2026-08-26-every-forwarder-that-can-reach-the-door-
+does.md C12, with the rest of the `.ps1` leg), then clause 29
 (`ensure_coordinator_venv`'s `<settings-home>/bin/hook-sitepackages.txt`
 site-packages pointer, 2026-08-10-interpreter-surface-four-asks.md chunk
 C5) is the current closing clause. `write_strategy` (`_write_strategy_for`,

@@ -4,6 +4,27 @@ coordinator_core.ops.ceremony.commit_gates -- native ports of the deleted
 (187 LOC), the C3 chunk of the `wsc_tail` rebuild
 (docs/plans/2026-07-16-wsc-pure-python-tail-rebuild.md).
 
+NO IN-COMMIT CALLER, AND THAT IS RECORDED, NOT AN OVERSIGHT. As of 2026-08-29
+nothing on the commit path invokes these gates. `run_commit_pipeline` called
+four of them (`deletion_block_gate`, `dirty_tree_gate`, `carry_gate`,
+`op_scope_coverage_gate`) immediately before landing; it was killed at the
+500ms brightline and C3 repointed every caller onto `commit_paths` /
+`ceremony.commit_v2`, which implement none of them
+(docs/plans/2026-08-29-the-push-subsystem-leaves-and-then-the-pipeline-can-go.md,
+C4). The capability drop is filed as a P1 with the exposure enumerated and a
+proposed action:
+state/bug-backlog/2026-08-29-the-commit-v2-route-runs-none-of-the-fou-3e8811d511b7.yaml.
+
+READ THAT BEFORE REINSTATING OR DELETING EITHER SIDE. The gates are not free,
+and `commit_v2` is the zero-spawn replacement for an op killed on process
+cost -- putting them back blind puts that cost on the sanctioned committer
+every session and the dispatchable `git-commit-agent` route through. The P1
+wants a spike measuring each gate in-process first. Equally, "no caller" is
+not licence to delete this module: `deletion_block_gate` still has one live
+entry point in `main()` below, reached by
+`coordinator/bin/check-workstream-complete-deletion-blocks` (registered in
+`authz/dispatchable.py`). `dirty_tree_gate` is the one with no caller at all.
+
 Two gates, both pure-Python classification over `git` state (routed through
 `git_native`'s single Windows-safe subprocess choke point -- AC3):
 

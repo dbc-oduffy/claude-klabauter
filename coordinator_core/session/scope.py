@@ -400,6 +400,17 @@ class GitRun(NamedTuple):
     stderr: str
 
 
+#: Wall-clock bound for the one git seam below. Matches
+#: `coordinator_core.git.repo_root._TIMEOUT_SECS` deliberately -- these are the
+#: same class of call (a small local-metadata git on a hook hot path) and a
+#: second, different number here would be a budget nobody could justify against
+#: the other. `subprocess.run(timeout=)` bounds WALL CLOCK, so on a box carrying
+#: ~50 concurrent sessions this is a HANG detector, not a performance budget:
+#: it exists so a wedged git cannot hold a PreToolUse hook open indefinitely,
+#: not to enforce the brightline (which is measured in process time).
+_GIT_TIMEOUT_SECS = 2.0
+
+
 def _git_run(args: List[str], cwd: Optional[str] = None) -> Optional[GitRun]:
     """Run ``git <args>`` and return the full :class:`GitRun`, or ``None`` iff
     git could not be EXECUTED at all (``OSError``: binary missing, not
@@ -414,6 +425,16 @@ def _git_run(args: List[str], cwd: Optional[str] = None) -> Optional[GitRun]:
     exit is a fully-populated ``GitRun`` and must stay distinguishable from
     ``None``, because the two classify differently downstream (an unexecutable
     git is always operational; a non-zero exit may be benign).
+
+    A TIMEOUT joins ``OSError`` on the ``None`` side of that line, not the
+    ``GitRun`` side. There is no exit code and no output to report, and a
+    wedged git is an operational fact of exactly the kind the ``None`` branch
+    already classifies -- whereas a synthetic non-zero ``GitRun`` would let a
+    hang read downstream as a benign git verdict. This module is reachable from
+    the PreToolUse dispatch path, where an unbounded spawn can hold a hook open
+    for as long as git is willing to hang; the bound is what
+    `bash_guards/tests/test_hot_path_subprocess_timeouts.py` requires of every
+    spawn on that path.
     """
     try:
         result = subprocess.run(
@@ -421,9 +442,11 @@ def _git_run(args: List[str], cwd: Optional[str] = None) -> Optional[GitRun]:
             capture_output=True,
             text=True,
             cwd=cwd,
+            stdin=subprocess.DEVNULL,
+            timeout=_GIT_TIMEOUT_SECS,
             **no_console_creationflags(),
         )
-    except OSError:
+    except (OSError, subprocess.TimeoutExpired):
         return None
     return GitRun(result.returncode, result.stdout, result.stderr)
 

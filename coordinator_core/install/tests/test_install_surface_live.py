@@ -78,12 +78,14 @@ from coordinator_core.install.substrate import (
     _resolve_bin_templates_manifest_root,
 )
 
-# `_install_bin_resolvers` reaches `_emit_and_verify_ps1_forwarders`, which
-# spawns a real `powershell.exe` execution-policy probe on Windows, and this
-# module's own "dump is an accepted verb" check spawns `machine-local.cmd`
-# for real -- both are genuine OS-process spawns (spawn ratchet Rule 2),
-# mirroring `test_bin_family_refresh.py`'s own tiering decision for the same
-# underlying call.
+# `_install_bin_resolvers` formerly reached `_emit_and_verify_ps1_forwarders`,
+# which spawned a real `powershell.exe` execution-policy probe on Windows --
+# that function is deleted 2026-08-29 (docs/plans/2026-08-26-every-forwarder-
+# that-can-reach-the-door-does.md C12, DR-365: the `.ps1` leg is condemned
+# outright). This module's own "dump is an accepted verb" check still spawns
+# `machine-local.cmd` for real -- a genuine OS-process spawn (spawn ratchet
+# Rule 2) independent of that deletion, and reason enough on its own for the
+# cadence tiering below, mirroring `test_bin_family_refresh.py`'s tiering note.
 pytestmark = [
     pytest.mark.cadence,
     pytest.mark.spawns_process,

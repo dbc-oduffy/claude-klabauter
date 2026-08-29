@@ -139,3 +139,94 @@ def test_fsmonitor_never_set(tmp_path):
     gpc.apply(repo)
 
     assert _config_get(repo, "core.fsmonitor") is None
+
+
+def _fake_registry_helpers(roots, classify):
+    def registry_repo_roots(_bin_dir):
+        return list(roots)
+
+    def classify_target(root):
+        return classify(root)
+
+    return registry_repo_roots, classify_target
+
+
+def test_apply_fleet_applies_to_multiple_repos_and_is_idempotent(tmp_path, monkeypatch):
+    (tmp_path / "a").mkdir()
+    (tmp_path / "b").mkdir()
+    repo_a = _init_repo(tmp_path / "a")
+    repo_b = _init_repo(tmp_path / "b")
+    if not gpc.filesystem_supports_untracked_cache(repo_a):
+        pytest.skip("filesystem failed git's untracked-cache mtime probe")
+
+    roots = [("repos.a", str(repo_a)), ("repos.b", str(repo_b))]
+    monkeypatch.setattr(
+        gpc,
+        "_git_hook_install_registry_helpers",
+        lambda: _fake_registry_helpers(roots, lambda root: "worktree"),
+    )
+
+    first = gpc.apply_fleet(tmp_path)
+    assert any("repos.a: set     core.untrackedCache" in line for line in first), first
+    assert any("repos.b: set     core.untrackedCache" in line for line in first), first
+    assert any(line.startswith("fleet summary:") for line in first), first
+    assert _config_get(repo_a, "core.untrackedCache") == "true"
+    assert _config_get(repo_b, "core.untrackedCache") == "true"
+
+    second = gpc.apply_fleet(tmp_path)
+    assert any("repos.a: ok      core.untrackedCache" in line for line in second), second
+    assert any("repos.b: ok      core.untrackedCache" in line for line in second), second
+
+
+def test_apply_fleet_reports_missing_without_raising(tmp_path, monkeypatch):
+    missing_path = str(tmp_path / "does-not-exist")
+    roots = [("repos.gone", missing_path)]
+    monkeypatch.setattr(
+        gpc,
+        "_git_hook_install_registry_helpers",
+        lambda: _fake_registry_helpers(roots, lambda root: "missing"),
+    )
+
+    report = gpc.apply_fleet(tmp_path)
+
+    assert any("missing" in line and missing_path in line for line in report), report
+    assert any(line.startswith("fleet summary:") for line in report), report
+
+
+def test_apply_fleet_skips_mirrors_silently(tmp_path, monkeypatch):
+    (tmp_path / "mirror").mkdir()
+    repo_mirror = _init_repo(tmp_path / "mirror")
+    roots = [("repos.mirror", str(repo_mirror))]
+    monkeypatch.setattr(
+        gpc,
+        "_git_hook_install_registry_helpers",
+        lambda: _fake_registry_helpers(roots, lambda root: "mirror"),
+    )
+
+    report = gpc.apply_fleet(tmp_path)
+
+    assert not any("core.untrackedCache" in line for line in report), report
+    assert any(line.startswith("fleet summary:") for line in report), report
+
+
+def test_apply_fleet_empty_fleet_is_explicit_not_success(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        gpc,
+        "_git_hook_install_registry_helpers",
+        lambda: _fake_registry_helpers([], lambda root: "worktree"),
+    )
+
+    report = gpc.apply_fleet(tmp_path)
+
+    assert len(report) == 1
+    assert "found no registered repos" in report[0]
+    assert "not the same fact as 'every repo is current'" in report[0]
+
+
+def test_apply_fleet_helper_import_unavailable_degrades_to_advisory(tmp_path, monkeypatch):
+    monkeypatch.setattr(gpc, "_git_hook_install_registry_helpers", lambda: None)
+
+    report = gpc.apply_fleet(tmp_path)
+
+    assert len(report) == 1
+    assert "advisory" in report[0]

@@ -1,4 +1,4 @@
-"""A door image whose name the engine cannot resolve is REPORTED, not skipped.
+"""A name the engine cannot resolve gets no launcher at all.
 
 Bug backlog: state/bug-backlog/2026-08-29-a-door-image-is-installed-for-names-the-engine-cannot-resolve.yaml
 
@@ -17,18 +17,20 @@ which the door rightly declines to read as proof of non-dispatch, so it emits
 -32004 and fails rather than degrading; cold, `door.c :: fall_through` spawns
 the same absent path.
 
-AND THE INSTALLER MUST STILL WRITE THE IMAGE. This is the correction the first
-revision of this fix earned the hard way. Under ONE ENTRYPOINT PER PLATFORM
-(PM ruling 2026-08-29, see `substrate._write_agent_helper_forwarders`) the door
-image is the ONLY launcher a name gets: no `.cmd` is written for any name and
-`_write_agent_cmd_forwarder` is deleted. Skipping the image therefore does not
-leave the name on a slower leg -- it leaves the name with no launcher at all.
-An install run carrying the skip removed 14 names from a live box outright,
-`publish` and `percolate-push` among them. A broken launcher is bad; an absent
-one is worse, and choosing between them is not the installer's call. The
-detector stays and warns; the repair (the engine carries a script for every
-name the door is installed under, or those names leave the map) is upstream and
-trades against that ruling.
+SO THEY GET NO LAUNCHER (PM ruling 2026-08-29, on `publish`: "we shouldn't
+need a publish.exe nor a publish.cmd"). Under ONE ENTRYPOINT PER PLATFORM the
+door image is the only launcher a name gets -- no `.cmd` is written for any
+name and `_write_agent_cmd_forwarder` is deleted -- so declining to write it
+takes the name off PATH entirely. That is the intended end state here: these
+are repo-side tools, run from their own checkout as
+`python coordinator/bin/<name>.py`, and a launcher for them only ever produced
+one that fails.
+
+An intermediate revision of this file asserted the opposite, on the reasoning
+that an absent launcher is worse than a broken one. It is not, for THESE
+names -- they were never PATH tools. What that revision got right, and what
+the `check_only` test below still pins, is that the removal must be
+deliberate and never a side effect of a read-only probe.
 
 NO SUITE-LEVEL ASSERTION OVER THE LIVE ROSTER AND THE LIVE ENGINE. The obvious
 test is a trap: asked from a checkout, `warm.engine_root.current_engine_clone()`
@@ -81,14 +83,16 @@ def test_engine_carries_entrypoint_script_is_keyed_on_the_name_the_door_sends(tm
     )
 
 
-def test_a_name_absent_from_the_engine_is_reported_but_still_installed(tmp_path, capsys):
-    """The image is STILL WRITTEN, and the warning is the deliverable.
+def test_a_name_the_engine_cannot_serve_gets_no_launcher(tmp_path, capsys):
+    """PM ruling 2026-08-29, on `publish`: "we shouldn't need a publish.exe
+    nor a publish.cmd".
 
-    The regression pin for the first revision of this fix, which skipped the
-    write and stripped 14 names off a live box. There is no Python pair left
-    to fall back to, so the skip did not degrade the name -- it deleted it.
+    These are repo-side tools -- the publisher chain, claude-klabauter's own migrations
+    and probes -- deliberately not carried into the published engine. Neither
+    leg of the door can work for them, and they were never PATH tools: they
+    run from their own checkout. So no launcher is written, and the message
+    says how to run it instead.
     """
-    _skip_if_no_prebuilt()
     root = _engine_root(tmp_path, names=["coordinator-invoke"])
     bin_dst = tmp_path / "bin"
     bin_dst.mkdir()
@@ -97,30 +101,46 @@ def test_a_name_absent_from_the_engine_is_reported_but_still_installed(tmp_path,
         "publish", bin_dst, check_only=False, engine_root=root
     )
 
-    assert result is not None and result.exists()
+    assert result is None
+    assert not door_install.named_forwarder_path(bin_dst, "publish").exists()
     err = capsys.readouterr().err
-    assert "WARNING" in err
-    assert "no coordinator/bin/publish.py" in err
+    assert "no launcher installed" in err
+    assert "python coordinator/bin/publish.py" in err
 
 
-def test_an_existing_image_is_never_taken_away(tmp_path):
-    """An install run must not leave a name launcher-less, including a name
-    an earlier run already cut over."""
-    _skip_if_no_prebuilt()
+def test_a_stale_launcher_from_an_earlier_install_is_taken_back(tmp_path):
+    """The removal is the point, not a side effect: a box that already ran an
+    install which wrote these images keeps a launcher that fails both warm and
+    cold until the next run takes it back."""
     root = _engine_root(tmp_path, names=["coordinator-invoke"])
     bin_dst = tmp_path / "bin"
     bin_dst.mkdir()
-    existing = door_install.named_forwarder_path(bin_dst, "publish")
-    existing.write_bytes(b"MZ-an-earlier-image")
+    stale = door_install.named_forwarder_path(bin_dst, "publish")
+    stale.write_bytes(b"MZ-an-earlier-image")
 
     substrate._write_native_door_forwarder(
         "publish", bin_dst, check_only=False, engine_root=root
     )
 
-    assert existing.exists()
+    assert not stale.exists()
 
 
-def test_a_name_the_engine_carries_installs_without_a_warning(tmp_path, capsys):
+def test_check_only_removes_nothing(tmp_path):
+    """`check_only` is read-only across this module; a probe that deleted a
+    launcher would make `--check-only` a mutating verb."""
+    root = _engine_root(tmp_path, names=["coordinator-invoke"])
+    bin_dst = tmp_path / "bin"
+    bin_dst.mkdir()
+    stale = door_install.named_forwarder_path(bin_dst, "publish")
+    stale.write_bytes(b"MZ-an-earlier-image")
+
+    substrate._write_native_door_forwarder(
+        "publish", bin_dst, check_only=True, engine_root=root
+    )
+
+    assert stale.exists()
+
+def test_a_name_the_engine_carries_still_gets_its_launcher(tmp_path, capsys):
     """Negative-spec companion: the warning must name only the broken names.
     A detector that fires on every name is noise an operator learns to skip,
     which is how the 14 stayed unnoticed in the first place."""
@@ -134,7 +154,32 @@ def test_a_name_the_engine_carries_installs_without_a_warning(tmp_path, capsys):
     )
 
     assert dest is not None and dest.exists()
-    assert "WARNING" not in capsys.readouterr().err
+    assert "no launcher installed" not in capsys.readouterr().err
+
+
+def test_a_name_with_no_py_twin_in_either_tree_keeps_its_launcher(tmp_path, capsys):
+    """The extensionless twelve -- chunk-commits, static-check,
+    with-suite-mutex, coordinator-precommit-foreign-platform-check and
+    siblings -- have no .py in EITHER tree, so _resolve_entrypoint_script
+    has never resolved them (a separate, already-recorded defect). They are
+    live PATH tools the git hooks this installer writes invoke by name.
+
+    The engine-only predicate could not tell them from the publish-excluded
+    set and queued all 26 for removal, hook CLIs included. This is the pin for
+    the narrowing."""
+    _skip_if_no_prebuilt()
+    root = _engine_root(tmp_path, names=["coordinator-invoke"])
+    bin_dst = tmp_path / "bin"
+    bin_dst.mkdir()
+
+    # with-suite-mutex has no coordinator/bin/with-suite-mutex.py in this
+    # repo, which is exactly what distinguishes it from publish.
+    dest = substrate._write_native_door_forwarder(
+        "with-suite-mutex", bin_dst, check_only=False, engine_root=root
+    )
+
+    assert dest is not None and dest.exists()
+    assert "no launcher installed" not in capsys.readouterr().err
 
 
 def test_the_canonical_door_is_never_removed_as_stale(tmp_path):

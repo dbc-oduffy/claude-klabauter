@@ -1567,6 +1567,32 @@ def _run_body(
                 file=sys.stderr,
             )
 
+    # -- Step 3.5a.1c -- git-perf-config fleet sweep (advisory) --
+    # `core.untrackedCache` lives inside `.git/index` (per-repo, not a global
+    # `~/.gitconfig` stanza -- see git_perf_config's own module docstring),
+    # and since the session-init hook was removed 2026-07-15 nothing
+    # re-applies git config to an already-registered repo either. Placed
+    # immediately after the `repos.claude_klabauter` seed above: that is the
+    # last point in this chain where the registry is guaranteed to carry at
+    # least `repos.doe_claude` and `repos.claude_klabauter`, which the sweep
+    # below enumerates via `_registry_repo_roots` (same source
+    # `ensure_hooks_fleet` reads for hooks). WARN-only, never blocks the
+    # install, matching scripts/setup.py::apply_git_perf_config's own
+    # non-blocking convention. On a genuinely fresh machine the registry
+    # holds only those two repos, so sweeping two is the correct outcome
+    # here, not a partial-coverage bug.
+    if check_only:
+        orch.skip_note("git-perf-config fleet sweep (Step 3.5a.1c) -- check-only (advisory, no dry-run mode wired here)")
+    else:
+        orch.phase_header("git-perf-config fleet sweep (Step 3.5a.1c -- per-repo git performance settings)")
+        try:
+            from coordinator_core.install.git_perf_config import apply_fleet as _apply_git_perf_fleet
+
+            for line in _apply_git_perf_fleet(Path(settings_bin)):
+                print(f"     git-perf-fleet: {line}")
+        except Exception as exc:  # noqa: BLE001 -- advisory step, never fails the install
+            print(f"[ADVISORY] git-perf-config fleet sweep not applied: {exc}", file=sys.stderr)
+
     # -- Step 3.5a.1 -- gen-doe-root-pointer --
     # Retired the ["bash", gen-doe-root-pointer.sh] spawn (C13): that DoE-side
     # script was only a thin polyglot trampoline back into THIS repo's

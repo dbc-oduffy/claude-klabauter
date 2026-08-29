@@ -15,6 +15,7 @@ from pathlib import Path
 
 import pytest
 
+import coordinator_core.session.touch_record as touch_record
 from coordinator_core.session.touch_record import (
     MAX_ENCODED_LINE_LEN,
     MAX_RECORD_BYTES,
@@ -576,3 +577,62 @@ def test_missing_family_member_between_discover_and_read_is_benign(tmp_path, mon
     assert degraded is False
     assert after == before
     assert set(stream_claims) == {"a.py"}
+
+
+def test_same_process_double_rotation_in_one_millisecond_keeps_both_generations(
+    tmp_path, monkeypatch
+):
+    """The mechanism behind the lost lines, pinned directly rather than through
+    the concurrency test that found it.
+
+    A rotated filename was `<name>.rotated-<ts_ms>-<pid>.jsonl`. One process
+    crossing the bound twice inside the same millisecond built that name twice,
+    and `os.replace` onto an existing path overwrites -- so the first rotated
+    generation was destroyed with its events in it. `pid` tie-breaks two
+    PROCESSES, which is what the module reasoned about; it cannot tie-break one
+    process against itself.
+    """
+    monkeypatch.setattr(touch_record.time, "time", lambda: 1788000000.0)
+
+    sink = tmp_path / "touch-record.jsonl"
+    sink.write_bytes(b"generation-one\n")
+    touch_record._rotate_oversized(sink)
+    sink.write_bytes(b"generation-two\n")
+    touch_record._rotate_oversized(sink)
+
+    rotated = sorted(tmp_path.glob("touch-record.jsonl.rotated-*"))
+    assert len(rotated) == 2, f"a generation was clobbered: {rotated!r}"
+    assert {p.read_bytes() for p in rotated} == {b"generation-one\n", b"generation-two\n"}
+
+
+def test_discover_family_orders_a_same_millisecond_double_rotation_chronologically(
+    tmp_path, monkeypatch
+):
+    """The counter is monotonic so `discover_family` can still order one
+    process's own generations correctly inside a millisecond -- which random
+    tokens would not give."""
+    monkeypatch.setattr(touch_record.time, "time", lambda: 1788000000.0)
+
+    sink = tmp_path / "touch-record.jsonl"
+    sink.write_bytes(b"first\n")
+    touch_record._rotate_oversized(sink)
+    sink.write_bytes(b"second\n")
+    touch_record._rotate_oversized(sink)
+    sink.write_bytes(b"live\n")
+
+    family = touch_record.discover_family(sink)
+    assert [p.read_bytes() for p in family] == [b"first\n", b"second\n", b"live\n"]
+
+
+def test_discover_family_still_finds_generations_rotated_before_the_counter(tmp_path):
+    """Files rotated under the two-component name are on disk right now. A
+    legacy generation reads as seq 0, which orders it before any same-(ts, pid)
+    generation written after it -- the correct order, since it was written
+    first."""
+    sink = tmp_path / "touch-record.jsonl"
+    (tmp_path / "touch-record.jsonl.rotated-1788000000000-4242.jsonl").write_bytes(b"legacy\n")
+    (tmp_path / "touch-record.jsonl.rotated-1788000000000-4242-1.jsonl").write_bytes(b"newer\n")
+    sink.write_bytes(b"live\n")
+
+    family = touch_record.discover_family(sink)
+    assert [p.read_bytes() for p in family] == [b"legacy\n", b"newer\n", b"live\n"]

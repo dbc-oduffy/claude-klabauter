@@ -289,6 +289,87 @@ def _load_entrypoint_main(script: Path, entrypoint: str) -> Callable[[Optional[l
     return cast(Callable[[Optional[list]], int], main_fn)
 
 
+#: `(mtime_ns, size) -> shape` per script path. The shape is a property of
+#: the file's source, so it is re-derived whenever the file changes on disk
+#: and never otherwise — a warm server that outlives a publish must not keep
+#: serving the pre-publish shape. Keyed on the stat pair rather than the path
+#: alone for exactly that reason.
+_ARGV_SHAPE_CACHE: dict[tuple[str, int, int], str] = {}
+
+
+def _entrypoint_argv_shape(script: Path) -> str:
+    """Which `serve_classifier.ARGV_SHAPE_*` this script's own `__main__`
+    guard uses, or `ARGV_SHAPE_TAIL` when the file cannot be read or parsed.
+
+    An unreadable/unparseable file is not an error here: `_load_entrypoint_
+    main` is about to fail on it anyway, with a better message, and tail is
+    the behaviour-preserving default this whole mechanism degrades to.
+    """
+    # Imported here, not at module scope: this module is on the warm-reach
+    # entry path, which carries a 20ms import-CPU ceiling
+    # (`test_warm_reach_import_ceiling.py`, AC3), and `ast` alone spends most
+    # of it. Both are needed once per distinct script per warm process and
+    # are cached by `sys.modules` from then on.
+    import ast
+
+    from coordinator_core.warm import serve_classifier
+
+    try:
+        stat = script.stat()
+        key = (str(script), stat.st_mtime_ns, stat.st_size)
+    except OSError:
+        return serve_classifier.ARGV_SHAPE_TAIL
+    cached = _ARGV_SHAPE_CACHE.get(key)
+    if cached is not None:
+        return cached
+    try:
+        tree = ast.parse(script.read_text(encoding="utf-8"), filename=str(script))
+    except (OSError, UnicodeDecodeError, SyntaxError, ValueError):
+        shape = serve_classifier.ARGV_SHAPE_TAIL
+    else:
+        shape = serve_classifier.classify_main_argv_shape(tree)
+    _ARGV_SHAPE_CACHE[key] = shape
+    return shape
+
+
+def entrypoint_call_args(shape: str, script: Path, argv: list) -> tuple:
+    """The positional arguments the warm route hands `main`, given the shape
+    its own `__main__` guard uses. THE decision, isolated as a pure function
+    so the route-parity suite can assert it per CLI against each file's real
+    guard expression without loading 365 module bodies to find out (see
+    `coordinator_core/warm/tests/test_entrypoint_argv_route_parity.py`).
+
+    The door relays `argv[1:]` — argv[0] never crosses the wire (`door.c`) —
+    so `argv` here is always the bare argument list, and this function's job
+    is to re-derive what the file's cold route would have handed `main` from
+    the same arguments:
+
+      - FULL (`main(sys.argv)`): the callee slices `[1:]` itself, so it needs
+        the program name back in front or it eats its own first real argument
+        (the "unknown subcommand" symptom on every ceremony CLI).
+      - NONE (`main()`): the callee reads `sys.argv` internally; the caller's
+        arguments reach it through `_run_entrypoint`'s `sys.argv` assignment,
+        not through a parameter, so passing one here would be inventing an
+        argument the cold route never passes.
+      - TAIL (everything else): bare arguments, unchanged — what the door
+        already did before any of this existed.
+
+    Negative-spec (RAG-bait): this is NOT a per-name table, and NOT a
+    forwarder-argv-to-op mapping (the mis-dispatch `invoke.from_argv`'s own
+    module docstring forbids). Nothing here is keyed on a CLI's identity —
+    only on a shape read off that CLI's own source, which is the same line
+    that defines its cold behaviour. A file that changes its `__main__` guard
+    changes this answer with it, with no registry to keep in sync.
+    """
+    from coordinator_core.warm import serve_classifier
+
+    if shape == serve_classifier.ARGV_SHAPE_FULL:
+        return ([str(script)] + list(argv),)
+    if shape == serve_classifier.ARGV_SHAPE_NONE:
+        return ()
+    return (list(argv),)
+
+
 def _run_entrypoint(entrypoint: str, argv: list, cwd: str) -> dict:
     """Runs `coordinator/bin/<entrypoint>.py`'s OWN `main(argv)` in-process.
 
@@ -323,18 +404,43 @@ def _run_entrypoint(entrypoint: str, argv: list, cwd: str) -> dict:
     JSON-RPC error, never a killed server.
     """
     script = _resolve_entrypoint_script(entrypoint)
+    shape = _entrypoint_argv_shape(script)
 
     stdout_buf = io.StringIO()
     stderr_buf = io.StringIO()
     with _ENTRYPOINT_CWD_LOCK:
         previous_cwd = os.getcwd()
         previous_sys_path = list(sys.path)
+        previous_sys_argv = list(sys.argv)
         try:
             os.chdir(cwd)
+            # WHY sys.argv IS SET, not just passed as a parameter. Served
+            # in-process, `sys.argv` is the warm SERVER's own command line --
+            # so any CLI that reads it directly sees the server's arguments
+            # instead of the caller's, silently. That is the majority shape in
+            # `coordinator/bin`: 218 entrypoints end in `sys.exit(main())` and
+            # resolve their own argv internally, and one calls a bare
+            # `parser.parse_args()` mid-body after correctly accepting an argv
+            # parameter -- which is why `coordinator-queue-append` reached its
+            # parser with the caller's arguments missing entirely, and why
+            # prepending a dummy token did not shift them back. Restored in the
+            # `finally` beside cwd and sys.path, and mutated only under
+            # `_ENTRYPOINT_CWD_LOCK` for the same reason chdir is: this process
+            # is shared by ~50 sessions, so process-global state may only be
+            # borrowed for the span a single caller is entitled to it.
+            #
+            # This assignment is also what makes the NONE shape's parameter
+            # list correct: `entrypoint_call_args` passes those entrypoints
+            # nothing, because `sys.argv` is the channel their own cold route
+            # uses. It covers what a `__main__` guard cannot state, too --
+            # `coordinator-queue-append` accepts an `argv` parameter and then
+            # calls a bare `parser.parse_args()` mid-body, and no shape read
+            # off its guard would reveal that.
+            sys.argv = [str(script)] + list(argv)
             with contextlib.redirect_stdout(stdout_buf), contextlib.redirect_stderr(stderr_buf):
                 try:
                     main_fn = _load_entrypoint_main(script, entrypoint)
-                    exit_code = main_fn(argv)
+                    exit_code = main_fn(*entrypoint_call_args(shape, script, argv))
                 except SystemExit as exc:
                     code = exc.code
                     exit_code = 0 if code is None else (code if isinstance(code, int) else 1)
@@ -351,6 +457,7 @@ def _run_entrypoint(entrypoint: str, argv: list, cwd: str) -> dict:
         finally:
             os.chdir(previous_cwd)
             sys.path[:] = previous_sys_path
+            sys.argv[:] = previous_sys_argv
 
     return {
         "stdout": stdout_buf.getvalue(),

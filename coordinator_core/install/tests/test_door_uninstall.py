@@ -15,7 +15,8 @@ import sys
 import pytest
 
 from coordinator_core.install import door_install, door_uninstall
-from coordinator_core.install.substrate import _AGENT_FORWARDER_MARKER, _AGENT_PS1_FORWARDER_MARKER
+from coordinator_core.install.door_uninstall import _UNINSTALL_FALLBACK_CMD_MARKER
+from coordinator_core.install.substrate import _AGENT_FORWARDER_MARKER
 from coordinator_core.warm.door import build as door_build
 
 
@@ -69,9 +70,14 @@ def test_uninstall_removes_installed_door_and_sidecars(tmp_path):
     fallback = bin_dst / door_install.BARE_FORWARDER_NAME
     assert fallback.is_file()
     assert _AGENT_FORWARDER_MARKER in fallback.read_text(encoding="utf-8")
-    ps1_fallback = bin_dst / f"{door_install.BARE_FORWARDER_NAME}.ps1"
-    assert ps1_fallback.is_file()
-    assert _AGENT_PS1_FORWARDER_MARKER in ps1_fallback.read_text(encoding="utf-8")
+    # PATHEXT-resolvable sibling: `.cmd`, not `.ps1` (docs/plans/2026-08-26-
+    # every-forwarder-that-can-reach-the-door-does.md C12 -- default
+    # Windows PATHEXT carries no `.PS1`, so a `.ps1` fallback here would
+    # never discharge door_install.py's Hard Invariant 1 for a `cmd.exe` or
+    # bare-`CreateProcess` caller).
+    cmd_fallback = bin_dst / f"{door_install.BARE_FORWARDER_NAME}.cmd"
+    assert cmd_fallback.is_file()
+    assert _UNINSTALL_FALLBACK_CMD_MARKER in cmd_fallback.read_text(encoding="utf-8")
 
 
 def test_uninstall_is_idempotent(tmp_path):

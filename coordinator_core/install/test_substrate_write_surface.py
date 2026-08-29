@@ -8,7 +8,9 @@ chunk C3c (`install-substrate`), corrected by chunk C3c2, extended by the
 Purpose: proves the declaration carries exactly the twenty-eight
 survey-pinned clauses — C3c/C3c2's original six (two distinct `os-env-var`
 Windows-PATH call sites, one `delete`-effect AppX-stub clause, one SHAPED
-agent-helper forwarder-triple clause, two SHAPED percolation clauses), the
+agent-helper forwarder clause (a `.py`/`.cmd`/`.ps1` triple until C12
+narrowed it back to the extensionless leg alone -- see clause 4's own
+test), two SHAPED percolation clauses), the
 prior follow-on's nine (clauses 7-15: three SHAPED `<settings-home>/bin/`
 static-manifest-driven family clauses `ml_family`/`ml_explicit`/
 `platform_localize`, two STATIC hand-maintained family clauses
@@ -21,9 +23,11 @@ the `concerns[]` structured-key merge, and the `_c10a_steps` whoami/venv
 group (tree copy, legacy-dir delete, compat-pointer creation,
 `coordinator.whoami_src` key, legacy-venv delete), clause 27 (`_fnm_step`'s
 brew/curl third-party `fnm` installer leg, declared via the stated-reason
-escape hatch), and the ps1-launcher-class plan's closing clause 28
-(`_write_ps1_policy_status`'s `<settings-home>/ps1-policy-gate-status.json`
-durable AC13 status file) — never the flattened misreading an earlier
+escape hatch), and clause 28, the ps1-launcher-class plan's former closing
+clause (`<settings-home>/ps1-policy-gate-status.json` durable AC13 status
+file, RETIRED 2026-08-29 with the rest of the `.ps1` leg -- DR-365, C12 of
+docs/plans/2026-08-26-every-forwarder-that-can-reach-the-door-does.md) —
+never the flattened misreading an earlier
 estimate produced, and never varying with what a runtime-read manifest
 happens to list today.
 
@@ -77,16 +81,19 @@ def test_appx_stub_removal_clause_is_delete_not_write():
 
 
 def test_agent_helper_forwarder_triple_clause_is_shaped_not_flattened():
-    """Widened by the ps1-launcher-class plan's C4: the `.py`/`.cmd` pair
-    became a `.py`/`.cmd`/`.ps1` triple off the SAME discovery mechanism —
-    still one clause, not a 28th."""
+    """Narrowed 2026-08-29 (docs/plans/2026-08-26-every-forwarder-that-can-
+    reach-the-door-does.md C12): the ps1-launcher-class plan's C4 had
+    widened this clause from a `.py`/`.cmd` pair to a `.py`/`.cmd`/`.ps1`
+    triple. DR-365 condemns both the `.cmd` and `.ps1` legs outright, so
+    the generator this clause describes now writes only the extensionless
+    POSIX-shaped forwarder -- still one clause, off the SAME discovery
+    mechanism, not a renumbered one."""
     clause = target.WRITE_SURFACE.clauses[3]
     assert isinstance(clause, ShapedClause)
     assert clause.discovered_by == "_derive_agent_helper_target_map"
     assert clause.entry_template.kind == "file-path"
-    assert ".ps1" in clause.entry_template.path
-    assert ".cmd" in clause.entry_template.path
-    assert ".py" in clause.entry_template.path
+    assert ".ps1" not in clause.entry_template.path
+    assert ".cmd" not in clause.entry_template.path
 
 
 def test_percolation_clauses_are_shaped_and_manifest_independent():
@@ -350,17 +357,19 @@ def test_fnm_step_clause_uses_stated_reason_escape_hatch():
     assert "cannot enumerate" in entry.reason
 
 
-def test_ps1_policy_status_clause_is_static_and_beside_bin_dir():
-    """Clause 28 (ps1-launcher-class plan C4, AC13) — the durable `.ps1`
-    execution-policy status file, `<settings-home>/ps1-policy-gate-
-    status.json`. STATIC (one named file, one call site), and deliberately
-    NOT under `<settings-home>/bin/` — it is a status record about that
-    directory's `.ps1` contents (clause 4), not another entry in it."""
+def test_ps1_policy_status_clause_is_static_and_retired():
+    """Clause 28 (formerly ps1-launcher-class plan C4, AC13) — the durable
+    `.ps1` execution-policy status file, `<settings-home>/ps1-policy-gate-
+    status.json`. RETIRED 2026-08-29 (docs/plans/2026-08-26-every-forwarder-
+    that-can-reach-the-door-does.md C12, DR-365): nothing writes this file
+    anymore, but the clause stays declared -- unwritten -- so a stale
+    pre-C12 status file remains a recognized prune candidate rather than an
+    orphan outside `_prune_orphaned_static_bin_names`."""
     clause = target.WRITE_SURFACE.clauses[27]
     assert isinstance(clause, StaticClause)
     assert len(clause.entries) == 1
     entry = clause.entries[0]
     assert entry.kind == "file-path"
-    assert entry.path == f"<settings-home>/{target._PS1_POLICY_STATUS_FILENAME}"
+    assert entry.path == "<settings-home>/ps1-policy-gate-status.json"
     assert "<settings-home>/bin/" not in entry.path
-    assert "GREEN and RED both write" in entry.reason
+    assert "RETIRED" in entry.reason

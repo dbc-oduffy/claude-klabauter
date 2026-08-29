@@ -285,33 +285,12 @@ def test_write_agent_helper_forwarders_without_engine_root_is_unaffected(tmp_pat
         assert not native_dst.exists()
 
 
-def test_emit_and_verify_ps1_forwarders_skips_excluded_names(monkeypatch, tmp_path):
-    """Asserts at the call level, not end-state file presence: the policy
-    gate itself rolls every emitted `.ps1` back under this test suite's
-    machine-mutation-disabled environment (see `_refuse_machine_mutation`),
-    which would make an end-state assertion prove nothing either way. What
-    matters here is that an excluded name's writer is never CALLED at all."""
-    bin_dst = tmp_path / "bin"
-    bin_dst.mkdir()
-    cmd_map = {"cross-repo-memo": "cross-repo-memo.cmd", "stub-file-gate": "stub-file-gate.cmd"}
-
-    called_names: "list[str]" = []
-    real_writer = substrate._write_agent_ps1_forwarder
-
-    def spy(name, dst, check_only, **kwargs):
-        called_names.append(name)
-        return real_writer(name, dst, check_only, **kwargs)
-
-    monkeypatch.setattr(substrate, "_write_agent_ps1_forwarder", spy)
-
-    substrate._emit_and_verify_ps1_forwarders(
-        bin_dst, cmd_map, False,
-        python3_cmd_resolved_bin="",
-        exclude_names=frozenset({"cross-repo-memo"}),
-    )
-
-    assert "cross-repo-memo" not in called_names
-    assert "stub-file-gate" in called_names
+# GRAVESTONE -- `test_emit_and_verify_ps1_forwarders_skips_excluded_names`
+# (deleted 2026-08-29, docs/plans/2026-08-26-every-forwarder-that-can-reach-
+# the-door-does.md C12). Covered `_emit_and_verify_ps1_forwarders`'s
+# `exclude_names` parameter, which is deleted along with the rest of the
+# `.ps1` leg (DR-365) -- see `substrate.py`'s own gravestone for that
+# function.
 
 
 # --- Route verification: telemetry, never an exit code -------------------

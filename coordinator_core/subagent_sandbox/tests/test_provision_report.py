@@ -43,6 +43,8 @@ from coordinator_core.subagent_sandbox.provision_report import (
     _build_plan_coverage_check_doc_text,
 )
 from coordinator_core.subagent_sandbox.provision_report import _frontmatter
+from coordinator_core.subagent_sandbox.engine import _canonical_agent_id
+from coordinator_core.subagent_sandbox.provision_report import _sidecar_pointer_path
 from coordinator_core.subagent_sandbox.provision_report import _PLAN_DERIVABLE_LENS
 from coordinator_core.subagent_sandbox.provision_report import _TEMPLATE_REGISTRY
 from coordinator_core.subagent_sandbox.provision_report import _provision
@@ -66,6 +68,27 @@ NAMED_AGENT_ID = "aReviewBot-0123456789abcdef"
 _EMIT_RE = re.compile(
     r'^state/subagent-share/(?P<session>[^/]+)/(?P<label>[^/]+)-(?P<nonce>[0-9a-f]{8})\.md$'
 )
+
+
+def _derived_path(session_id: str, label: str, agent_id: str = BARE_HEX_AGENT_ID) -> str:
+    """The path a payload carrying a sanitize-stable ``agent_id`` resolves to.
+
+    NOT the `_EMIT_RE` nonce shape. Since the 2026-08-15 anonymous-provision
+    fix, a payload with a usable ``agent_id`` and no explicit ``provision_key``
+    DERIVES a deterministic key (`<label>.<agent_id>`) rather than falling back
+    to a random nonce -- so the nonce shape is now reached only by a payload
+    with no usable agent id, and asserting it anywhere else pins behaviour the
+    module deliberately stopped having. `_EMIT_RE` is kept for the tests that
+    genuinely exercise that fallback.
+
+    ``agent_id`` here is the CANONICAL id (`engine._canonical_agent_id`), which
+    for an unnamed agent is the raw one unchanged and for a named teammate is
+    `<name>@session-<short>`.
+    """
+    return (
+        f"state/subagent-share/{_sanitize_expected(session_id)}/"
+        f"{_sanitize_expected(label)}.{agent_id}.md"
+    )
 
 
 def _sanitize_expected(seg: str) -> str:
@@ -205,10 +228,7 @@ def test_eligible_agent_type_creates_doc_and_emits_json(
     lines = out.splitlines()
     assert len(lines) == 1
     envelope = json.loads(lines[0])
-    match = _EMIT_RE.match(envelope["report_sidecar"])
-    assert match is not None
-    assert match.group("session") == session_id
-    assert match.group("label") == _sanitize_expected(REPORT_SIDECAR_TYPE)
+    assert envelope["report_sidecar"] == _derived_path(session_id, REPORT_SIDECAR_TYPE)
 
     doc_path = git_repo / envelope["report_sidecar"]
     assert doc_path.is_file()
@@ -219,7 +239,13 @@ def test_eligible_via_subagent_type_backpointer_leg(
     git_repo: Path, policy_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
 ) -> None:
     em_session_id = "em-session-backpointer-1"
-    _write_backpointer(git_repo, NAMED_AGENT_ID, em_session_id, REPORT_SIDECAR_TYPE)
+    # Keyed by the CANONICAL id, never the raw one: `_canonical_agent_id`
+    # rewrites `a<name>-<16hex>` through `<name>@session-<session_id[:8]>`
+    # before the back-pointer directory is read (see
+    # test_canonical_agent_id_adopts_named_form.py), so a raw-keyed fixture
+    # resolves nothing and the leg under test never engages.
+    canonical = _canonical_agent_id(NAMED_AGENT_ID, em_session_id)
+    _write_backpointer(git_repo, canonical, em_session_id, REPORT_SIDECAR_TYPE)
     payload = _payload(agent_id=NAMED_AGENT_ID, session_id=em_session_id)
     exit_code, out = _run(payload, policy_path, git_repo, monkeypatch, capsys)
 
@@ -227,10 +253,9 @@ def test_eligible_via_subagent_type_backpointer_leg(
     lines = out.splitlines()
     assert len(lines) == 1
     envelope = json.loads(lines[0])
-    match = _EMIT_RE.match(envelope["report_sidecar"])
-    assert match is not None
-    assert match.group("session") == em_session_id
-    assert match.group("label") == _sanitize_expected(REPORT_SIDECAR_TYPE)
+    assert envelope["report_sidecar"] == _derived_path(
+        em_session_id, REPORT_SIDECAR_TYPE, canonical
+    )
 
     doc_path = git_repo / envelope["report_sidecar"]
     assert doc_path.is_file()
@@ -358,9 +383,7 @@ def test_label_with_traversal_segments_sanitized_stays_inside_session_dir(
     # all (the whitelist preserves '.', only '/' is what could smuggle a
     # directory separator, and that is what this test locks in as gone).
     assert "/" not in Path(emitted_path).name
-    match = _EMIT_RE.match(emitted_path)
-    assert match is not None
-    assert match.group("session") == session_id
+    assert emitted_path == _derived_path(session_id, dangerous_label)
 
     doc_path = git_repo / emitted_path
     assert doc_path.is_file()
@@ -416,10 +439,10 @@ def test_malicious_session_id_traversal_confined_single_segment_no_escape(
     envelope = json.loads(lines[0])
     emitted_path = envelope["report_sidecar"]
 
-    match = _EMIT_RE.match(emitted_path)
-    assert match is not None
-    assert match.group("session") == "..escape"
-    assert "/" not in match.group("session")
+    assert emitted_path == _derived_path("../escape", REPORT_SIDECAR_TYPE)
+    session_segment = emitted_path.split("/")[2]
+    assert session_segment == "..escape"
+    assert "/" not in session_segment
 
     share_root = git_repo / "state" / "subagent-share"
     doc_path = git_repo / emitted_path
@@ -482,9 +505,12 @@ def test_two_provisions_same_type_session_distinct_nonces_both_exist(
     git_repo: Path, policy_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
 ) -> None:
     session_id = "sess-double-provision"
-    payload = _payload(
-        agent_id=BARE_HEX_AGENT_ID, agent_type=REPORT_SIDECAR_TYPE, session_id=session_id
-    )
+    # NO agent_id: the nonce fallback this test is about is reached only by a
+    # payload with no usable agent id. With one, the 2026-08-15 fix derives a
+    # deterministic key and BOTH provisions resolve to the same path on
+    # purpose -- which is the idempotent-re-dispatch behaviour covered
+    # elsewhere, not a nonce collision.
+    payload = _payload(agent_type=REPORT_SIDECAR_TYPE, session_id=session_id)
 
     exit_code_1, out_1 = _run(payload, policy_path, git_repo, monkeypatch, capsys)
     exit_code_2, out_2 = _run(payload, policy_path, git_repo, monkeypatch, capsys)
@@ -642,13 +668,16 @@ def test_provision_key_sanitizes_to_empty_fails_open(
         assert list(share_root.rglob("*.md")) == []
 
 
-def test_absent_provision_key_regresses_to_nonce_path(
+def test_absent_provision_key_and_no_agent_id_regresses_to_nonce_path(
     git_repo: Path, policy_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
 ) -> None:
+    """BOTH absences are load-bearing, which is why the name carries both. An
+    absent `provision_key` alone no longer reaches the nonce path: since the
+    2026-08-15 anonymous-provision fix it derives a deterministic key from
+    `agent_id` instead, and only a payload with neither falls all the way back
+    to a nonce."""
     session_id = "sess-provkey-absent"
-    payload = _payload(
-        agent_id=BARE_HEX_AGENT_ID, agent_type=REPORT_SIDECAR_TYPE, session_id=session_id
-    )
+    payload = _payload(agent_type=REPORT_SIDECAR_TYPE, session_id=session_id)
     exit_code, out = _run(payload, policy_path, git_repo, monkeypatch, capsys)
 
     assert exit_code == 0
@@ -1397,9 +1426,7 @@ def test_docs_checker_without_plan_path_keeps_session_keyed_home(
 
     assert exit_code == 0
     envelope = json.loads(out.splitlines()[0])
-    match = _EMIT_RE.match(envelope["report_sidecar"])
-    assert match is not None
-    assert match.group("session") == session_id
+    assert envelope["report_sidecar"] == _derived_path(session_id, "coordinator:docs-checker")
 
 
 def test_reviewer_persona_with_plan_path_still_session_keyed(
@@ -1422,9 +1449,7 @@ def test_reviewer_persona_with_plan_path_still_session_keyed(
 
     assert exit_code == 0
     envelope = json.loads(out.splitlines()[0])
-    match = _EMIT_RE.match(envelope["report_sidecar"])
-    assert match is not None
-    assert match.group("session") == session_id
+    assert envelope["report_sidecar"] == _derived_path(session_id, REPORT_SIDECAR_TYPE)
 
 
 def test_plan_derivable_idempotent_reopen_preserves_content(
@@ -1503,9 +1528,7 @@ def test_plan_path_stem_sanitizes_to_empty_falls_back_to_session_keyed(
 
     assert exit_code == 0
     envelope = json.loads(out.splitlines()[0])
-    match = _EMIT_RE.match(envelope["report_sidecar"])
-    assert match is not None
-    assert match.group("session") == session_id
+    assert envelope["report_sidecar"] == _derived_path(session_id, "coordinator:docs-checker")
 
 
 # ---------------------------------------------------------------------------
@@ -1738,3 +1761,378 @@ def test_plan_coverage_check_idempotent_reopen_never_clobbers_filled_body(
 
     assert path_1 == path_2
     assert doc_path.read_text(encoding="utf-8") == filled_content
+
+
+# ---------------------------------------------------------------------------
+# Header/filename agreement -- the frontmatter `agent_type:` stamp reads the
+# same resolved label the filename and the eligibility test read
+# ---------------------------------------------------------------------------
+
+def test_header_agent_type_matches_filename_on_backpointer_only_leg(
+    git_repo: Path, policy_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+) -> None:
+    """Back-pointer-only eligibility: no `agent_type` on the payload at all.
+
+    The filename has always carried the real type (it is built from
+    `effective_label`); the header read the raw `agent_type` leg and so
+    stamped an EMPTY value. Both now read the same label.
+    """
+    em_session_id = "em-session-header-backpointer"
+    # Keyed by the CANONICAL id, never the raw one: `_canonical_agent_id`
+    # rewrites `a<name>-<16hex>` through `<name>@session-<session_id[:8]>`
+    # before the back-pointer directory is read (see
+    # test_canonical_agent_id_adopts_named_form.py), so a raw-keyed fixture
+    # resolves nothing and the leg under test never engages.
+    _write_backpointer(
+        git_repo,
+        _canonical_agent_id(NAMED_AGENT_ID, em_session_id),
+        em_session_id,
+        REPORT_SIDECAR_TYPE,
+    )
+    payload = _payload(agent_id=NAMED_AGENT_ID, session_id=em_session_id)
+    exit_code, out = _run(payload, policy_path, git_repo, monkeypatch, capsys)
+
+    assert exit_code == 0
+    envelope = json.loads(out.splitlines()[0])
+    text = (git_repo / envelope["report_sidecar"]).read_text(encoding="utf-8")
+    assert f"agent_type: {REPORT_SIDECAR_TYPE}\n" in text
+    assert "agent_type: \n" not in text
+
+
+def test_header_agent_type_prefers_resolved_type_over_a_masking_raw_label(
+    git_repo: Path, policy_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+) -> None:
+    """The live 2026-08-29 shape: a RESUMED agent, whose payload `agent_type`
+    the harness reports as `general-purpose` while the back-pointer row still
+    holds the type it was actually dispatched as. The header used to claim the
+    masking label -- on the one field a consumer filters by -- while the
+    filename beside it recorded the truth."""
+    em_session_id = "em-session-header-resumed"
+    _write_backpointer(
+        git_repo,
+        _canonical_agent_id(NAMED_AGENT_ID, em_session_id),
+        em_session_id,
+        REPORT_SIDECAR_TYPE,
+    )
+    payload = _payload(
+        agent_id=NAMED_AGENT_ID, agent_type="general-purpose", session_id=em_session_id
+    )
+    exit_code, out = _run(payload, policy_path, git_repo, monkeypatch, capsys)
+
+    assert exit_code == 0
+    envelope = json.loads(out.splitlines()[0])
+    # Derived-key path shape (`<label>.<canonical agent_id>.md`), not the nonce
+    # shape `_EMIT_RE` describes -- a resolvable agent_id takes the
+    # deterministic branch. Asserted here because the filename is the half of
+    # this pair that was ALREADY right; the point of the test is that the
+    # header no longer disagrees with it.
+    leaf = envelope["report_sidecar"].split("/")[-1]
+    assert leaf.startswith(_sanitize_expected(REPORT_SIDECAR_TYPE) + ".")
+
+    text = (git_repo / envelope["report_sidecar"]).read_text(encoding="utf-8")
+    assert f"agent_type: {REPORT_SIDECAR_TYPE}\n" in text
+    assert "agent_type: general-purpose\n" not in text
+
+
+def test_header_agent_type_is_the_raw_label_verbatim_when_it_is_what_qualified(
+    git_repo: Path, policy_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+) -> None:
+    """Negative spec, and the reason this can never cost a workflow-spawned
+    agent its only identity: with no back-pointer row to resolve through, the
+    payload `agent_type` is both what made the spawn eligible and what gets
+    stamped -- byte-identical to the pre-change behaviour."""
+    payload = _payload(
+        agent_id=BARE_HEX_AGENT_ID,
+        agent_type=REPORT_SIDECAR_TYPE,
+        session_id="sess-header-verbatim",
+    )
+    exit_code, out = _run(payload, policy_path, git_repo, monkeypatch, capsys)
+
+    assert exit_code == 0
+    envelope = json.loads(out.splitlines()[0])
+    text = (git_repo / envelope["report_sidecar"]).read_text(encoding="utf-8")
+    assert f"agent_type: {REPORT_SIDECAR_TYPE}\n" in text
+
+
+# ---------------------------------------------------------------------------
+# Continuity across a session-id change -- the sidecar follows the AGENT, not
+# the session id the agent happened to be spawned under
+# ---------------------------------------------------------------------------
+
+def test_sidecar_is_adopted_when_the_session_id_changes_under_a_live_agent(
+    git_repo: Path, policy_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+) -> None:
+    """The live 2026-08-29 defect: `/clear` mints a fresh session id without
+    ending the process, so a subagent that outlives one re-fires SubagentStart
+    under a new session id. It used to miss the FileExistsError branch and get
+    a second, EMPTY sidecar while its populated one was orphaned under the old
+    id."""
+    first = _payload(
+        agent_id=BARE_HEX_AGENT_ID, agent_type=REPORT_SIDECAR_TYPE, session_id="sess-before-clear"
+    )
+    exit_code, out = _run(first, policy_path, git_repo, monkeypatch, capsys)
+    assert exit_code == 0
+    original = json.loads(out.splitlines()[0])["report_sidecar"]
+
+    # The agent does its work.
+    doc = git_repo / original
+    doc.write_text(doc.read_text(encoding="utf-8") + "the findings\n", encoding="utf-8")
+
+    # Same agent, same process, new session id.
+    second = _payload(
+        agent_id=BARE_HEX_AGENT_ID, agent_type=REPORT_SIDECAR_TYPE, session_id="sess-after-clear"
+    )
+    exit_code, out = _run(second, policy_path, git_repo, monkeypatch, capsys)
+    assert exit_code == 0
+    resumed = json.loads(out.splitlines()[0])["report_sidecar"]
+
+    assert resumed == original, "the resumed spawn must be handed its own sidecar back"
+    assert "the findings" in (git_repo / resumed).read_text(encoding="utf-8")
+    # And no empty second sidecar -- not even an empty session directory for it.
+    assert not (git_repo / "state" / "subagent-share" / "sess-after-clear").exists()
+
+
+def test_a_different_agent_under_the_same_session_never_adopts(
+    git_repo: Path, policy_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+) -> None:
+    """Adoption is keyed on the agent, so a second, genuinely different agent
+    gets its own sidecar rather than being handed the first one's."""
+    other_agent_id = "fedcba9876543210"
+    first = _payload(
+        agent_id=BARE_HEX_AGENT_ID, agent_type=REPORT_SIDECAR_TYPE, session_id="sess-two-agents"
+    )
+    _, out = _run(first, policy_path, git_repo, monkeypatch, capsys)
+    first_path = json.loads(out.splitlines()[0])["report_sidecar"]
+
+    second = _payload(
+        agent_id=other_agent_id, agent_type=REPORT_SIDECAR_TYPE, session_id="sess-two-agents"
+    )
+    _, out = _run(second, policy_path, git_repo, monkeypatch, capsys)
+    second_path = json.loads(out.splitlines()[0])["report_sidecar"]
+
+    assert first_path != second_path
+    assert (git_repo / first_path).is_file()
+    assert (git_repo / second_path).is_file()
+
+
+def test_a_pointer_naming_a_reaped_sidecar_provisions_fresh(
+    git_repo: Path, policy_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+) -> None:
+    """The reaper is entitled to have swept the file the pointer names. A
+    pointer to nothing must cost a wasted read, never the sidecar."""
+    first = _payload(
+        agent_id=BARE_HEX_AGENT_ID, agent_type=REPORT_SIDECAR_TYPE, session_id="sess-before-reap"
+    )
+    _, out = _run(first, policy_path, git_repo, monkeypatch, capsys)
+    original = json.loads(out.splitlines()[0])["report_sidecar"]
+    (git_repo / original).unlink()
+
+    second = _payload(
+        agent_id=BARE_HEX_AGENT_ID, agent_type=REPORT_SIDECAR_TYPE, session_id="sess-after-reap"
+    )
+    exit_code, out = _run(second, policy_path, git_repo, monkeypatch, capsys)
+    assert exit_code == 0
+    fresh = json.loads(out.splitlines()[0])["report_sidecar"]
+    assert fresh != original
+    assert (git_repo / fresh).is_file()
+
+
+@pytest.mark.parametrize(
+    "hostile",
+    [
+        "../../../../etc/passwd",
+        "state/subagent-share/../../../etc/passwd",
+        "/etc/passwd",
+        "docs/plans/not-a-sidecar.md",
+        "",
+    ],
+)
+def test_a_hostile_pointer_value_is_never_followed(
+    hostile: str,
+    git_repo: Path,
+    policy_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture,
+) -> None:
+    """The pointer file is the only input to this module that is neither the
+    policy nor the spawn payload, so it is read as untrusted: anything not
+    under `state/subagent-share/`, or carrying a `..` component, is discarded
+    rather than followed."""
+    pointer = _sidecar_pointer_path(str(git_repo), BARE_HEX_AGENT_ID)
+    assert pointer is not None
+    pointer.parent.mkdir(parents=True, exist_ok=True)
+    pointer.write_text(hostile + "\n", encoding="utf-8")
+
+    payload = _payload(
+        agent_id=BARE_HEX_AGENT_ID, agent_type=REPORT_SIDECAR_TYPE, session_id="sess-hostile-ptr"
+    )
+    exit_code, out = _run(payload, policy_path, git_repo, monkeypatch, capsys)
+    assert exit_code == 0
+    emitted = json.loads(out.splitlines()[0])["report_sidecar"]
+    assert emitted.startswith("state/subagent-share/sess-hostile-ptr/")
+    assert (git_repo / emitted).is_file()
+
+
+def test_pointer_is_keyed_on_the_raw_agent_id_not_the_canonical_one(
+    git_repo: Path, policy_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+) -> None:
+    """The whole point of the index. `_canonical_agent_id`'s named-teammate leg
+    returns `build_canonical_agent_id(name, session_id[:8])`, so the canonical
+    id has the session id baked into it and moves in exact lockstep with the
+    instability the index exists to survive. Keyed on the raw id, one pointer
+    serves the same agent across the change."""
+    em_session_id = "em-session-raw-key-1"
+    canonical = _canonical_agent_id(NAMED_AGENT_ID, em_session_id)
+    assert canonical != NAMED_AGENT_ID, "fixture must exercise the named leg"
+
+    _write_backpointer(git_repo, canonical, em_session_id, REPORT_SIDECAR_TYPE)
+    _, out = _run(
+        _payload(agent_id=NAMED_AGENT_ID, session_id=em_session_id),
+        policy_path,
+        git_repo,
+        monkeypatch,
+        capsys,
+    )
+    emitted = json.loads(out.splitlines()[0])["report_sidecar"]
+
+    raw_pointer = _sidecar_pointer_path(str(git_repo), NAMED_AGENT_ID)
+    assert raw_pointer is not None and raw_pointer.is_file()
+    assert raw_pointer.read_text(encoding="utf-8").strip() == emitted
+
+    canonical_pointer = _sidecar_pointer_path(str(git_repo), canonical)
+    assert canonical_pointer is not None and not canonical_pointer.exists()
+
+
+def test_the_pointer_index_is_untracked_and_outside_the_reaped_tree(
+    git_repo: Path, policy_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+) -> None:
+    """The index is a rebuildable cache, not a record. It lives under
+    `.git/coordinator-sessions/` beside the `.agents/` back-pointer chain, so
+    it adds no commit churn and never enters the tree
+    `reap-stale-subagent-sidecars.py` sweeps."""
+    payload = _payload(
+        agent_id=BARE_HEX_AGENT_ID, agent_type=REPORT_SIDECAR_TYPE, session_id="sess-index-home"
+    )
+    _run(payload, policy_path, git_repo, monkeypatch, capsys)
+
+    pointer = _sidecar_pointer_path(str(git_repo), BARE_HEX_AGENT_ID)
+    assert pointer is not None and pointer.is_file()
+    # Namespaced by producer: `dispatch.provision` writes the same agent a
+    # sidecar with a different leaf suffix, and a shared flat key would hand
+    # one producer's spawn the other's document.
+    assert (
+        pointer.parent
+        == git_repo / ".git" / "coordinator-sessions" / ".agent-sidecars" / "report"
+    )
+    assert not (git_repo / "state" / "subagent-share" / ".agent-sidecars").exists()
+
+
+# ---------------------------------------------------------------------------
+# Eligibility recovery -- a named teammate whose back-pointer moved out from
+# under it is not ineligible, it is unrecognizable
+# ---------------------------------------------------------------------------
+
+def test_named_teammate_recovers_its_sidecar_when_the_backpointer_key_moves(
+    git_repo: Path, policy_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+) -> None:
+    """The quieter half of the defect. `.agents/<canonical_id>/` is keyed by
+    `<name>@session-<session_id[:8]>`, so a session-id change moves the key and
+    the back-pointer lookup misses. A dispatch admitted to `report_sidecar`
+    through that leg ALONE then fails eligibility outright -- not a second
+    empty sidecar, but no sidecar and no emitted path at all."""
+    # The short session is `session_id[:8]`, so the two fixtures must differ
+    # inside those 8 characters -- real session ids are UUIDs and do.
+    first_session = "aaaaaaaa-1111-4000-8000-before00cafe"
+    _write_backpointer(
+        git_repo,
+        _canonical_agent_id(NAMED_AGENT_ID, first_session),
+        first_session,
+        REPORT_SIDECAR_TYPE,
+    )
+    _, out = _run(
+        _payload(agent_id=NAMED_AGENT_ID, session_id=first_session),
+        policy_path,
+        git_repo,
+        monkeypatch,
+        capsys,
+    )
+    original = json.loads(out.splitlines()[0])["report_sidecar"]
+    doc = git_repo / original
+    doc.write_text(doc.read_text(encoding="utf-8") + "the findings\n", encoding="utf-8")
+
+    # Same teammate, same process, new session id -- and NO back-pointer under
+    # the new canonical key, exactly as the live shape leaves it.
+    second_session = "bbbbbbbb-2222-4000-8000-after00cafe"
+    assert _canonical_agent_id(NAMED_AGENT_ID, second_session) != _canonical_agent_id(
+        NAMED_AGENT_ID, first_session
+    )
+    exit_code, out = _run(
+        _payload(agent_id=NAMED_AGENT_ID, session_id=second_session),
+        policy_path,
+        git_repo,
+        monkeypatch,
+        capsys,
+    )
+
+    assert exit_code == 0
+    lines = out.splitlines()
+    assert len(lines) == 1, "the resumed teammate must still be handed a sidecar"
+    assert json.loads(lines[0])["report_sidecar"] == original
+    assert "the findings" in (git_repo / original).read_text(encoding="utf-8")
+
+
+def test_recovery_never_invents_eligibility_for_an_agent_that_never_had_it(
+    git_repo: Path, policy_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+) -> None:
+    """A pointer is only ever written AFTER the policy admitted a spawn, so
+    recovery reads one as proof of past eligibility. With no pointer there is
+    no proof, and an ineligible named teammate stays ineligible."""
+    payload = _payload(
+        agent_id=NAMED_AGENT_ID, agent_type=INELIGIBLE_TYPE, session_id="em-session-never-eligible"
+    )
+    exit_code, out = _run(payload, policy_path, git_repo, monkeypatch, capsys)
+    assert exit_code == 0
+    assert out == ""
+
+
+def test_recovery_does_not_fire_for_an_unnamed_agent(
+    git_repo: Path, policy_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+) -> None:
+    """Gated to the population that can actually suffer this. The bare-hex leg
+    of `resolve_subagent_identity` ignores `session_id` entirely, so an unnamed
+    agent's canonical id never moves and its back-pointer never misses for this
+    reason -- an ineligible bare-hex spawn must stay a plain miss even with a
+    pointer sitting there from an earlier eligible life."""
+    pointer = _sidecar_pointer_path(str(git_repo), BARE_HEX_AGENT_ID)
+    assert pointer is not None
+    pointer.parent.mkdir(parents=True, exist_ok=True)
+    stale = "state/subagent-share/old-session/coordinatorcode-reviewer.abc.md"
+    (git_repo / stale).parent.mkdir(parents=True, exist_ok=True)
+    (git_repo / stale).write_text("prior life\n", encoding="utf-8")
+    pointer.write_text(stale + "\n", encoding="utf-8")
+
+    payload = _payload(
+        agent_id=BARE_HEX_AGENT_ID, agent_type=INELIGIBLE_TYPE, session_id="sess-unnamed-ineligible"
+    )
+    exit_code, out = _run(payload, policy_path, git_repo, monkeypatch, capsys)
+    assert exit_code == 0
+    assert out == ""
+
+
+def test_recovery_does_not_fire_when_the_backpointer_still_resolves(
+    git_repo: Path, policy_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+) -> None:
+    """`subagent_type` non-empty means eligibility resolved normally and there
+    is nothing to recover -- the ordinary ineligible-named-teammate case must
+    still be a plain miss, and must not read the index at all."""
+    em_session_id = "em-session-resolves-fine"
+    _write_backpointer(
+        git_repo,
+        _canonical_agent_id(NAMED_AGENT_ID, em_session_id),
+        em_session_id,
+        INELIGIBLE_TYPE,
+    )
+    payload = _payload(agent_id=NAMED_AGENT_ID, session_id=em_session_id)
+    exit_code, out = _run(payload, policy_path, git_repo, monkeypatch, capsys)
+    assert exit_code == 0
+    assert out == ""

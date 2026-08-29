@@ -271,7 +271,7 @@ def _usage(prog: str) -> int:
         f"usage: {prog} <subcommand> <args...>\n"
         "subcommands: observer-sidecar-scan [--dir <path>] | "
         "claude-klabauter-bin-sentinel | ceremony-hook <ceremony-name> | "
-        "mis-channelled-box | working-repo-registration [--fix]",
+        "mis-channelled-box | working-repo-registration [--fix] | hook-currency",
         file=sys.stderr,
     )
     return 2
@@ -625,12 +625,75 @@ def cmd_working_repo_registration(argv: list[str]) -> int:
     return 0
 
 
+def cmd_hook_currency(argv: list[str]) -> int:
+    """Re-run the fleet hook installer so a stale generation cannot sit silently.
+
+    Purpose: `git_hook_install.heal_fleet_hooks` compares every registered
+    repo's installed hook body against the generation this installer would
+    write, and rewrites the stale ones. It shipped with a docstring saying it
+    "can sit on a daily ceremony" and then had NO CALLER anywhere in the tree,
+    so nothing ever ran it. A hook body therefore stayed at whatever generation
+    was current when its repo was first installed.
+
+    Why that is not cosmetic: the `post-commit` hook IS the auto-push. A stale
+    body whose script ladder resolves a rung to an installed `.exe` forwarder
+    and hands that path to a native `python.exe` dies on every commit, and dies
+    QUIETLY -- the commit itself always lands, only the push leg is lost. The
+    operator-visible symptom is an unpushed-commit backlog that the session
+    banner attributes to a diverged branch, which is a different defect with a
+    different fix, so the real cause survives every round of looking at it.
+    Observed 2026-08-29 on this box: both hooks sat at generation 9 against an
+    emitter at 10, and running the per-repo ensure CLI by hand repaired them in
+    one silent call.
+
+    Non-blocking by construction, like every probe here: the heal is
+    best-effort per repo and a failure to reach one registered target must not
+    stop the ceremony that called it. Exit is always 0.
+
+    Negative-spec:
+      - Does NOT install hooks into an unregistered repo. `heal_fleet_hooks`
+        walks the machine-local registry; a repo absent from it is silently
+        never healed, and that is the registry's gap to fix, not this probe's.
+      - Does NOT print on the healthy path. An all-current fleet says nothing,
+        so this can sit on a daily ceremony without teaching the operator to
+        scroll past it.
+    """
+    if argv:
+        print("usage: workday-start-health-probes.py hook-currency", file=sys.stderr)
+        return 2
+    _ensure_repo_root_on_path()
+    from coordinator_core.win_portability import no_console_creationflags
+
+    try:
+        proc = subprocess.run(
+            [sys.executable, _sibling("coordinator-ensure-hooks-fleet")],
+            capture_output=True,
+            text=True,
+            timeout=_FIX_SPAWN_TIMEOUT,
+            **no_console_creationflags(),
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        print(f"[workday-start] WARN: hook-currency heal did not run: {exc}", file=sys.stderr)
+        return 0
+    detail = (proc.stderr or proc.stdout or "").strip()
+    if detail:
+        print(detail, file=sys.stderr)
+    if proc.returncode != 0:
+        print(
+            f"[workday-start] WARN: hook-currency heal exited {proc.returncode} "
+            "(non-blocking) -- auto-push may be running on a stale post-commit body",
+            file=sys.stderr,
+        )
+    return 0
+
+
 _SUBCOMMANDS = {
     "observer-sidecar-scan": cmd_observer_sidecar_scan,
     "claude-klabauter-bin-sentinel": cmd_claude_klabauter_bin_sentinel,
     "ceremony-hook": cmd_ceremony_hook,
     "mis-channelled-box": cmd_mis_channelled_box,
     "working-repo-registration": cmd_working_repo_registration,
+    "hook-currency": cmd_hook_currency,
 }
 
 

@@ -184,7 +184,6 @@ live — imported directly by `ceremony.session_instructions`) survives as
 | `git_native.py` | — | Windows-safe shared `git` subprocess helper (`_git`) — every native git call in the `wsc_tail` rebuild routes through this single choke point (creationflags/stdin/capture_output/text) |
 | `commit_message.py` | — | Commit-message composer + dual path-set computation — pure functions, no I/O |
 | `commit_gates.py` | — | Deletion-block and dirty-tree classification gates |
-| `commit_pipeline.py` | — | `run_commit_pipeline()` — locked stage→gate→commit→push critical section integrating `git_native`/`commit_message`/`commit_gates` |
 | `resolver.py` | — | Public `resolve_in_repo`/`find_all_consumed_handoffs`/`get_handoff_consumed_by` helpers shared by `branch_resolution.py` and the `wsc_tail` rebuild |
 | `consumed_handoff_stamp.py` | — | Consumed-handoff ship-stamp + R1-R4 ship-drift correctness — `post_commit_stamp_and_ship()`, called by the commit pipeline with no ceremony-wide lock held |
 | `tail_ops.py` | — | Reused tail-op wiring (`coverage.gate`/`review_trail.write`) plus native `cs_archive`/`cs_release_artifact` ports; archive sweeps fire DETACHED via `fire_archive_sweeps_detached` (C2, 2026-07-23), not in-process |

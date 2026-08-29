@@ -148,7 +148,7 @@ def test_shim_body_missing_interpreter_and_missing_script_read_the_same_shape():
 # rungs, and losing either must still be caught.
 # ---------------------------------------------------------------------------
 
-_EXPECTED_BODY_SHAPE_CHECKSUM = "ae22138cdbe1323d3366c01ce1766d06fe75515445e495e1b348273a9515736d"
+_EXPECTED_BODY_SHAPE_CHECKSUM = "b4162604b3bd0afe3c8483dadcda99e5c707cbb96cec245ca7c330d0314d90a2"
 
 _BAKED_PY_PLACEHOLDER = "<BAKED-INTERPRETER>"
 
@@ -271,6 +271,9 @@ def test_append_block_missing_interpreter_blocks_loudly_at_runtime(tmp_path):
 
     env = dict(os.environ)
     env["PATH"] = _no_python_path(tmp_path)
+    # Hermetic, not incidental: without this the block resolves THIS box's real
+    # settings-home forwarder and the exhaustion path under test never runs.
+    env["COORDINATOR_SETTINGS_HOME"] = (tmp_path / "no-such-settings-home").as_posix()
     result = subprocess.run([_sh(), str(hook)], capture_output=True, text=True, env=env)
 
     assert result.returncode == 0  # append blocks never disturb the parent hook's exit status
@@ -449,3 +452,94 @@ def test_post_commit_never_carries_the_no_session_gate():
     )
     assert not [ln for ln in body.splitlines() if ln.startswith('[ -z "')]
     assert "CLAUDE_SESSION_ID" not in body
+
+
+# ---------------------------------------------------------------------------
+# _append_block — MSYS `.exe`-sibling discipline (2026-08-29). The fix that
+# taught `_shim_body` to guard every rung with `_have_py` reached exactly one
+# rung of `_append_block` and left the helper undefined there, so the emitted
+# block called a function that does not exist: the `.doe-root` rung answered
+# "no" unconditionally and every commit through a foreign hook printed a shell
+# error. These tests pin BOTH halves — the helper is emitted wherever it is
+# called, and no resolution rung is left on the bare `[ -f ]` that the MSYS
+# `.exe` fallback makes a lie.
+# ---------------------------------------------------------------------------
+
+_APPEND_BLOCK_ARGS = (
+    "/fake/coord/bin",
+    "coordinator-auto-push",
+    "coordinator auto-push (crash insurance)",
+    '"$_PY" "$_T" "$@"',
+)
+
+
+def test_append_block_defines_every_helper_it_calls():
+    block = _append_block(*_APPEND_BLOCK_ARGS)
+    assert "_have_py " in block, "no _have_py call at all — the rungs regressed to [ -f ]"
+    assert '_have_py() {' in block, (
+        "_append_block calls _have_py without emitting its definition. The block is "
+        "appended into a foreign hook, so nothing above it is ours to borrow from."
+    )
+    # The definition must precede every call, or the first rungs run against an
+    # undefined function.
+    assert block.index('_have_py() {') < block.index('_have_py "')
+
+
+def test_append_block_resolution_rungs_never_use_bare_dash_f():
+    """`[ -f "$_T" ]` is TRUE under MSYS sh when only `$_T.exe` exists."""
+    block = _append_block(*_APPEND_BLOCK_ARGS)
+    assert '[ -f "$_T" ]' not in block
+    assert '[ ! -f "$_T" ]' not in block
+
+
+def test_append_block_runs_an_installed_exe_forwarder_directly(tmp_path):
+    """A `.exe` forwarder is the intended post-install artifact: run it, and
+    never enter the interpreter chain that would hand it to python."""
+    settings_home = tmp_path / "settings-home"
+    (settings_home / "bin").mkdir(parents=True)
+    forwarder = settings_home / "bin" / "coordinator-auto-push.exe"
+    marker = tmp_path / "forwarder-ran"
+    forwarder.write_text(
+        f'#!/bin/sh\nprintf ran > "{marker.as_posix()}"\n', encoding="utf-8"
+    )
+    forwarder.chmod(0o755)
+
+    hook = tmp_path / "post-commit"
+    hook.write_text(
+        _with_unresolvable_interpreter(
+            "#!/bin/sh\n" + _append_block(*_APPEND_BLOCK_ARGS) + " || true\n"
+        ),
+        encoding="utf-8",
+    )
+
+    env = dict(os.environ)
+    env["COORDINATOR_SETTINGS_HOME"] = settings_home.as_posix()
+    result = subprocess.run([_sh(), str(hook)], capture_output=True, text=True, env=env)
+
+    assert result.returncode == 0
+    assert marker.exists(), (
+        f"the .exe forwarder was not run; stderr={result.stderr!r}"
+    )
+    assert "WARNING" not in result.stderr
+
+
+def test_append_block_emits_no_shell_errors_when_nothing_resolves(tmp_path):
+    """Exhaustion must be the two loud WARNINGs and nothing else — a
+    `command not found` here means the block called a helper it never emitted."""
+    hook = tmp_path / "post-commit"
+    hook.write_text(
+        _with_unresolvable_interpreter(
+            "#!/bin/sh\n" + _append_block(*_APPEND_BLOCK_ARGS) + " || true\n"
+        ),
+        encoding="utf-8",
+    )
+
+    env = dict(os.environ)
+    env["PATH"] = _no_python_path(tmp_path)
+    env["COORDINATOR_SETTINGS_HOME"] = (tmp_path / "no-such-settings-home").as_posix()
+    result = subprocess.run([_sh(), str(hook)], capture_output=True, text=True, env=env)
+
+    assert result.returncode == 0
+    assert "not found" in result.stderr  # the coordinator WARNING, checked below
+    for line in result.stderr.splitlines():
+        assert "[coordinator] WARNING" in line, f"unexpected shell error: {line!r}"

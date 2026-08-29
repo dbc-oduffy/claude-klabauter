@@ -1,28 +1,37 @@
-"""The door only wins the bare name because a removal runs after a write.
+"""The door only wins the bare name because a removal runs after a write --
+HISTORICAL HAZARD, now structurally impossible, kept as regression coverage.
 
-`install_bin_forwarders` emits `coordinator-invoke.ps1` on every install
-(`substrate._emit_and_verify_ps1_forwarders`), and PowerShell ranks a
-same-directory `.ps1` ABOVE the door's `.exe` -- so that sibling, if it
-survives, silently takes every PowerShell caller off the ~2.34ms native door
+`install_bin_forwarders` used to emit `coordinator-invoke.ps1` on every
+install (`substrate._emit_and_verify_ps1_forwarders`), and PowerShell ranks
+a same-directory `.ps1` ABOVE the door's `.exe` -- so that sibling, if it
+survived, silently took every PowerShell caller off the ~2.34ms native door
 and back onto a cold interpreter start (~39ms interpreter + ~55ms engine
 import, measured 2026-08-26). `install_warm_door` ends by calling
 `door_install.claim_bare_name`, which strips it.
 
+RETIRED 2026-08-29 (docs/plans/2026-08-26-every-forwarder-that-can-reach-
+the-door-does.md C12; DR-365 condemns the `.ps1` leg outright,
+`_emit_and_verify_ps1_forwarders` is deleted): `install_bin_forwarders` no
+longer emits `coordinator-invoke.ps1` at all, so there is no fresh write
+left for `claim_bare_name` to race against -- the specific hazard this
+module was written to catch cannot recur. `claim_bare_name` itself is
+UNCHANGED and still strips a STALE `.ps1` a pre-C12 install left behind
+(belt-and-braces cleanup, not an ordering-dependent defusal anymore), so the
+assertions below (writer-before-remover, no later re-write) remain true and
+harmless as defense-in-depth -- they just no longer protect against a live
+race. Left in place rather than deleted: re-anchor or gravestone outright if
+a future change makes even that reading stale.
+
 Nothing in the type system, the call signatures, or the two functions'
 docstrings couples those steps: they are adjacent lines in
-`scripts/setup.py :: main`, and the whole guarantee is that one runs after the
-other. There is no error on the wrong order and no runtime signal -- the door
-is simply never reached, and the only symptom is a number nobody is watching.
-
-`door_install.py`'s own docstring already records that the `.ps1` "is now a
-certainty on every install", so this is not a hypothetical kept true by
-absence; it is a live write, defused by ordering alone. This module pins the
-ordering so the defusal cannot be reordered away in silence.
+`scripts/setup.py :: main`. There is no error on the wrong order and no
+runtime signal -- historically the door was simply never reached, and the
+only symptom was a number nobody was watching.
 
 Negative-spec: this does NOT test that the removal works -- `test_door_install.py`
 owns `_remove_shadowing_forwarder_siblings` / `claim_bare_name` behaviour. This
-tests only that the removal is SEQUENCED after the write, which is the property
-no behavioural test of either function alone can see.
+tests only the calls' relative order, which is the property no behavioural
+test of either function alone can see.
 """
 
 from __future__ import annotations

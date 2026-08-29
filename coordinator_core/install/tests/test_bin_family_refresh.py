@@ -51,10 +51,15 @@ from coordinator_core.locked_write import held_lock
 
 # `_install_bin_resolvers` (exercised throughout this module, mirroring
 # `test_install_agent_helper_execution_and_idempotency.py`'s own tiering
-# decision for the same call) reaches `_emit_and_verify_ps1_forwarders`,
-# which spawns a real `powershell.exe` execution-policy probe on Windows --
-# a real external-process spawn (spawn ratchet Rule 2), so this file is
-# cadence-tiered like its sibling rather than left on the fast/default gate.
+# decision for the same call) formerly reached
+# `_emit_and_verify_ps1_forwarders`, which spawned a real `powershell.exe`
+# execution-policy probe on Windows -- a real external-process spawn (spawn
+# ratchet Rule 2). That function is deleted 2026-08-29 (docs/plans/
+# 2026-08-26-every-forwarder-that-can-reach-the-door-does.md C12, DR-365:
+# the `.ps1` leg is condemned outright). Left cadence-tiered here rather
+# than re-tiered unilaterally as a side effect of that deletion -- verifying
+# no OTHER spawn remains on this file's exercised path is a retiering
+# decision out of this row's own scope, surfaced rather than acted on.
 pytestmark = [
     pytest.mark.cadence,
     pytest.mark.spawns_process,

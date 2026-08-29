@@ -46,10 +46,17 @@ Failure posture (AC6) — decided HERE, once, for the whole record:
 Cross-file ordering:
     Within one sink's family, ordering is NEVER the embedded ``ts`` field —
     it is (generation, position): rotated siblings sort oldest-generation
-    first by their own ``<name>.rotated-<ts>-<pid>.jsonl`` suffix
-    (ascending ``(ts, pid)`` — ``pid`` is an arbitrary but deterministic
-    tie-break for the rare case two rotations of the same sink land in the
-    same millisecond), the live file (if present) is always the newest
+    first by their own ``<name>.rotated-<ts>-<pid>-<seq>.jsonl`` suffix
+    (ascending ``(ts, pid, seq)``). ``pid`` tie-breaks two PROCESSES whose
+    rotations of the same sink land in the same millisecond. ``seq`` -- a
+    process-local counter, see ``_ROTATE_SEQ`` -- is not a tie-break at all
+    but a uniqueness component: ONE process crossing the bound twice inside
+    a millisecond used to build the identical filename twice, and
+    ``os.replace`` onto an existing path overwrites, so the first rotated
+    generation was destroyed with its events in it (reproduced 2026-08-29:
+    5 of 160 concurrent appends lost, every writer exiting 0). ``seq`` is
+    absent on generations rotated before that counter existed and reads as
+    0. The live file (if present) is always the newest
     generation, and within any one file, line order IS append order
     (guaranteed by the kernel for ``atomic_append``'s single-writer-per-call
     appends — see that module). ``_last_verb_wins`` folds a family's
@@ -195,6 +202,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import itertools
 import os
 import re
 import time
@@ -628,6 +636,31 @@ def compact_record(sink: "Path | str") -> None:
     os.replace(tmp_path, sink_path)
 
 
+#: Process-local rotation counter -- the third component of a rotated
+#: filename, and the reason two rotations by the SAME process inside one
+#: millisecond cannot collide.
+#:
+#: `ts_ms` + `pid` was not unique. The module's cross-file ordering note
+#: already reasoned about a same-millisecond double rotation and picked `pid`
+#: as the tie-break, which settles it for two DIFFERENT processes -- but one
+#: process crossing the bound twice inside a millisecond produced the IDENTICAL
+#: name both times, and `os.replace` onto an existing path overwrites it. The
+#: first rotated generation was destroyed, silently, with its events in it.
+#:
+#: Reproduced 2026-08-29 by `test_concurrent_append_across_growth_control_
+#: loses_no_line`, which lost 5 of 160 appends on ~1 run in 9 (every child
+#: exiting 0). It is rare in production only because `MAX_RECORD_BYTES` is
+#: 256KiB; it is not impossible there, and the lost bytes are touch claims,
+#: so the visible symptom is a file quietly dropping out of the safe-commit
+#: offer -- the exact defect class this record substrate exists to prevent.
+#:
+#: A counter rather than random bytes: `discover_family` sorts generations by
+#: their embedded key, and a monotonic counter keeps a single process's own
+#: rotations in true chronological order within a millisecond, where random
+#: tokens would order them arbitrarily.
+_ROTATE_SEQ = itertools.count()
+
+
 def _rotate_oversized(sink_path: Path) -> None:
     """Rename an oversized sink out of the way so the next append (through
     ``atomic_append.append_line``, which opens fresh by path every call)
@@ -648,7 +681,7 @@ def _rotate_oversized(sink_path: Path) -> None:
     """
     ts_ms = int(time.time() * 1000)
     rotated_path = sink_path.with_name(
-        f"{sink_path.name}.rotated-{ts_ms}-{os.getpid()}.jsonl"
+        f"{sink_path.name}.rotated-{ts_ms}-{os.getpid()}-{next(_ROTATE_SEQ)}.jsonl"
     )
     try:
         os.replace(sink_path, rotated_path)
@@ -720,7 +753,14 @@ def append_event(
 # C3: the read seam.
 # ---------------------------------------------------------------------------
 
-_ROTATED_SUFFIX_RE = re.compile(r"^(?P<base>.+)\.rotated-(?P<ts>\d+)-(?P<pid>\d+)\.jsonl$")
+#: `seq` is OPTIONAL: files rotated before the counter existed are on disk
+#: right now under the two-component name and must keep being discovered. A
+#: missing group reads as 0, which orders a legacy generation before any
+#: same-(ts, pid) generation written after -- the correct order, since the
+#: legacy one was written first.
+_ROTATED_SUFFIX_RE = re.compile(
+    r"^(?P<base>.+)\.rotated-(?P<ts>\d+)-(?P<pid>\d+)(?:-(?P<seq>\d+))?\.jsonl$"
+)
 
 #: Process-local, keyed by degrade cause ("unreadable_file" / "malformed_line").
 #: See module docstring's Observability section for why this stays
@@ -751,10 +791,13 @@ def discover_family(sink_path: "Path | str") -> list[Path]:
     """Return every on-disk file backing one sink's record, oldest
     generation first, live file last (if present).
 
-    Rotated siblings (``<name>.rotated-<ts>-<pid>.jsonl``) sort by their own
-    embedded ``(ts, pid)`` ascending -- see module docstring's Cross-file
-    ordering section for why ``pid`` is the deterministic tie-break for a
-    same-millisecond double rotation. The live path, if it exists, is
+    Rotated siblings (``<name>.rotated-<ts>-<pid>-<seq>.jsonl``) sort by their
+    own embedded ``(ts, pid, seq)`` ascending -- see module docstring's
+    Cross-file ordering section for why ``pid`` is the deterministic tie-break
+    between two PROCESSES rotating in the same millisecond, and
+    ``_ROTATE_SEQ`` for why one process rotating twice in that millisecond
+    needs a third component rather than a tie-break. ``seq`` is absent on
+    generations rotated before that counter existed and reads as 0. The live path, if it exists, is
     always the newest generation: nothing can rotate INTO existence after
     it, only out of it.
     """
@@ -788,7 +831,7 @@ def discover_family(sink_path: "Path | str") -> list[Path]:
     #   - the live entry appended is `sink_path` itself, never
     #     `entry.path`, so the caller's own separator dialect survives
     #     (a raw `a/b` argument must not come back normalised to `a\\b`).
-    rotated: list[tuple[int, int, Path]] = []
+    rotated: list[tuple[int, int, int, Path]] = []
     live_exists = False
     rotated_prefix = f"{name}.rotated-"
     try:
@@ -804,13 +847,18 @@ def discover_family(sink_path: "Path | str") -> list[Path]:
                 if not match or match.group("base") != name:
                     continue
                 rotated.append(
-                    (int(match.group("ts")), int(match.group("pid")), Path(entry.path))
+                    (
+                        int(match.group("ts")),
+                        int(match.group("pid")),
+                        int(match.group("seq") or 0),
+                        Path(entry.path),
+                    )
                 )
     except (FileNotFoundError, NotADirectoryError):
         return []
-    rotated.sort(key=lambda item: (item[0], item[1]))
+    rotated.sort(key=lambda item: (item[0], item[1], item[2]))
 
-    family = [candidate for _, _, candidate in rotated]
+    family = [candidate for _, _, _, candidate in rotated]
     if live_exists:
         family.append(sink_path)
     return family

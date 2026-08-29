@@ -497,19 +497,11 @@ _ALLOWLIST: dict[str, str] = {
         "its captured stdout/stderr for a pass/fail signal — read-only "
         "validation, not a write."
     ),
-    "policy_gate.py": (
-        "EXEMPT: the one flagged call (`subprocess.run` in `_default_probe`) "
-        "runs `_PROBE_COMMAND`, the literal string `Get-ExecutionPolicy`, "
-        "with `-NoProfile -NonInteractive` and the inherited "
-        "`PSExecutionPolicyPreference` popped from the child env — a "
-        "read-only effective-policy query, never a mutation. The module "
-        "docstring states plainly it 'is pure verdict computation — it "
-        "probes and reports. It does not emit launchers, roll back "
-        "anything, or mutate the machine in any way: no "
-        "`Set-ExecutionPolicy`, no `Unblock-File`,' per the C7 ruling "
-        "(`wont_do`, pm_approved) putting remediation out of scope for "
-        "this module."
-    ),
+    # "policy_gate.py" gravestone -- module deleted 2026-08-29
+    # (docs/plans/2026-08-26-every-forwarder-that-can-reach-the-door-does.md
+    # C12, DR-365: the `.ps1` leg it gated is deleted with it). Its
+    # exemption entry is removed, not left stale, per
+    # `test_allowlist_has_no_stale_entries` below.
     "coordinator_install_entry.py": (
         "EXEMPT: pure delegation. Its one flagged call spawns the installer "
         "declared in `docs/install/agent-install-manifest.json` "

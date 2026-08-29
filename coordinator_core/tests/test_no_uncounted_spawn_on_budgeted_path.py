@@ -139,13 +139,13 @@ call chains in this file's own run-report sidecar):
     sites") -- `_sibling_committed_chunk_ids` -> `_committed_chunk_ids` -> `_committed_chunk_shas`
     reaches it 3-4 hops deep, past where the by-hand trace stopped. That whole call chain is gone
     along with the op (see above); this site is no longer part of any budgeted op's reachable set.
-  - 8 sites belong to `ceremony.scoped_git_commit`, which the C-08 audit called CLEAN (0 sites) --
-    verified by hand-tracing every one back to `_handler`: `_handler` calls
-    `run_commit_pipeline` (`commit_pipeline.py`, imported), which directly imports and calls
+  - 8 sites belonged to `ceremony.scoped_git_commit`, which the C-08 audit called CLEAN (0 sites) --
+    verified at the time by hand-tracing every one back to `_handler`: `_handler` called
+    `run_commit_pipeline` (`commit_pipeline.py`, imported), which directly imported and called
     `git_native._git` (the op's own declared, intentionally-counted seam -- reachable and correct,
     simply not yet `_LEGITIMIZED_SITES`-entered) and `diverging_paths` (`git/divergence.py`,
     confirmed: its body calls `_run_git` directly), and separately -- past where `run_commit_pipeline`
-    itself hands off to a best-effort post-sync helper -- `auto_push.drain_pending_push` (a real,
+    itself handed off to a best-effort post-sync helper -- `auto_push.drain_pending_push` (a real,
     confirmed one-hop `module.attr(...)` call at `commit_pipeline.py`'s own local `from
     coordinator_core.hooks import auto_push`), whose body calls `run_push_with_retry`,
     `_branch_resolves_locally`, and `_drain_dead_ref_record`, which in turn reach `push_once`,
@@ -155,6 +155,17 @@ call chains in this file's own run-report sidecar):
     helpers in `session/scope.py` reaching `_git_run`). Every one of these 8 was traced to an
     actual `ast.Call` node, not inferred -- ZERO of them are collision artifacts of the precise
     (per-import-pinned) resolution this gate uses.
+
+PAST-TENSE PROVENANCE, NOT A LIVE CLASSIFICATION (2026-08-29). Every `run_commit_pipeline`
+mention above and below is a record of what the C-08 measurement traced when it ran, and none of it
+is load-bearing today: `ceremony.scoped_git_commit` was killed under K-045, `ceremony.commit` with
+it, and `coordinator_core/ops/ceremony/commit_pipeline.py` was deleted outright at 12b6a009aa (C4 of
+docs/plans/2026-08-29-the-push-subsystem-leaves-and-then-the-pipeline-can-go.md). The 8-site trace is
+kept because it is the evidence behind this gate's design finding -- that transitive analysis reached
+further than the manual one-hop audit -- and that finding outlives the function it was measured on.
+No entry in any disposition dict is justified by a `run_commit_pipeline` call chain any more; the
+surviving committer is `ceremony.commit_v2` / `git/commit.py :: commit_paths`, and the push
+subsystem the trace followed into `auto_push.py` now lives at `ops/ceremony/push.py`.
 
 MEASURED FALSE-POSITIVE RATE: 0 of 18 (every flagged site traced to a real call chain). This IS a
 genuine result, not a tuned one, and it is a NARROWER claim than "the technique has no false
@@ -4432,10 +4443,14 @@ def test_dynamic_argv0_sites_are_dispositioned_on_their_own_terms():
         "sub-chunk's job) or this entry is a leftover that should be removed:\n"
         + "\n".join(f"  {k}" for k in stale)
     )
-    assert len(_DYNAMIC_ARGV0_DISPOSITIONS) == 43, (
+    assert len(_DYNAMIC_ARGV0_DISPOSITIONS) == 42, (
         f"_DYNAMIC_ARGV0_DISPOSITIONS carries {len(_DYNAMIC_ARGV0_DISPOSITIONS)} "
-        "entries, not the 43 <dynamic>-argv0 sites the dispatch brief's "
-        "EM-measured inventory names -- a count drift here means either a "
+        "entries, not the 42 <dynamic>-argv0 sites tranche dyn's inventory now "
+        "names -- the dispatch brief's EM-measured figure was 43, and the 2026-08-29 "
+        "gravestone deletion of review_trail_readjudication_report.py "
+        "(docs/plans/2026-08-29-the-gravestoned-review-trail-surface-is-deleted.md, "
+        "DR-374's last row) removed its `_run` site along with the whole module, "
+        "taking the count from 43 to 42 -- a count drift here means either a "
         "site was missed or one was double-counted."
     )
 
@@ -5270,9 +5285,9 @@ def test_named_argv0_sites_in_tranche_b_are_dispositioned_on_their_own_terms():
         "reaches outside tranche b's own file scope:\n"
         + "\n".join(f"  {k}" for k in stale)
     )
-    assert len(_NAMED_ARGV0_DISPOSITIONS_B) == 28, (
+    assert len(_NAMED_ARGV0_DISPOSITIONS_B) == 26, (
         f"_NAMED_ARGV0_DISPOSITIONS_B carries "
-        f"{len(_NAMED_ARGV0_DISPOSITIONS_B)} entries, not the 28 "
+        f"{len(_NAMED_ARGV0_DISPOSITIONS_B)} entries, not the 26 "
         "still-frozen named-argv0 sites tranche b's own file list names "
         "now that C6 (2026-08-23) drained the 2 dead "
         "`_ensure_session_dir` ordinals, C5 of docs/plans/2026-08-22-the-"
@@ -5282,7 +5297,10 @@ def test_named_argv0_sites_in_tranche_b_are_dispositioned_on_their_own_terms():
         "(K-059) then removed outright along with its module, taking this "
         "count from 29 to 28 -- and fleet.archive_shipped_handoffs's kill (2026-08-25, "
         "C1b) removed archive_shipped_handoffs.py's `_sha_reachable` site "
-        "along with the whole module -- a count drift "
+        "along with the whole module -- and the 2026-08-29 gravestone deletion of "
+        "review_trail_readjudication_report.py removed its `_full_range_shas` and "
+        "`_resolve_repo_root` sites the same way, taking this count from 28 to 26 "
+        "-- a count drift "
         "here means either a site was missed or one was double-counted."
     )
 
@@ -5759,14 +5777,21 @@ def test_named_argv0_sites_in_tranche_c_are_dispositioned_on_their_own_terms():
         "reaches outside tranche c's own file scope:\n"
         + "\n".join(f"  {k}" for k in stale)
     )
-    assert len(_NAMED_ARGV0_DISPOSITIONS_C) == 28, (
+    assert len(_NAMED_ARGV0_DISPOSITIONS_C) == 25, (
         f"_NAMED_ARGV0_DISPOSITIONS_C carries "
-        f"{len(_NAMED_ARGV0_DISPOSITIONS_C)} entries, not the 28 "
+        f"{len(_NAMED_ARGV0_DISPOSITIONS_C)} entries, not the 25 "
         "still-frozen named-argv0 sites tranche c's own file list names "
         "now that C6 (2026-08-23) drained the 2 dead "
-        "`_commit_delivered_memo` ordinals and C10 (2026-08-23) enrolled "
+        "`_commit_delivered_memo` ordinals, C10 (2026-08-23) enrolled "
         "`memo.send`, draining its own remaining 5 sites out of "
-        "_FROZEN_UNENROLLED_SPAWN_SITES -- a count drift here means either "
+        "_FROZEN_UNENROLLED_SPAWN_SITES, and the 2026-08-29 gravestone plan "
+        "(docs/plans/2026-08-29-the-gravestoned-review-trail-surface-is-deleted.md) "
+        "deleted `coordinator_core/ops/review_trail_write.py` outright, taking its "
+        "3 tranche-c sites with it and this count from 28 to 25. That file is "
+        "deliberately left in `_TRANCHE_C_FILES`: the frozenset records the scope "
+        "this sub-chunk was measured against, and a path that no longer exists "
+        "contributes no sites to the filter, so removing it would rewrite history "
+        "to no effect. A count drift here means either "
         "a site was missed or one was double-counted."
     )
 

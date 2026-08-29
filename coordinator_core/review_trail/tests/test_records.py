@@ -38,9 +38,8 @@ def test_coordinator_root_repo_root_gets_state_appended(monkeypatch, tmp_path):
     assert records._resolve_state_root() == str(tmp_path) + "/state"
 
 
-def test_no_override_not_a_git_repo_returns_none(monkeypatch, tmp_path):
+def test_no_override_at_all_returns_none(monkeypatch):
     monkeypatch.delenv("COORDINATOR_ROOT", raising=False)
-    monkeypatch.setattr(records, "_git_root", lambda: None)
     assert records._resolve_state_root() is None
 
 
@@ -94,33 +93,8 @@ def test_list_paths_sorted_union_of_live_and_archive_by_basename(tmp_path):
     assert got == [str(archived), str(live)]
 
 
-def test_list_paths_date_prefix_filters_to_matching_basenames(tmp_path):
-    _touch(tmp_path / "state" / "review-trail" / "2026-05-20-aaaa.json")
-    _touch(tmp_path / "state" / "review-trail" / "2026-05-21-bbbb.json")
-    got = records.list_paths(
-        date_prefix="2026-05-21", state_root_override=str(tmp_path / "state")
-    )
-    assert got == [str(tmp_path / "state" / "review-trail" / "2026-05-21-bbbb.json")]
-
-
-def test_list_paths_date_prefix_no_match_is_empty_not_error(tmp_path):
-    _touch(tmp_path / "state" / "review-trail" / "2026-05-20-aaaa.json")
-    got = records.list_paths(
-        date_prefix="1999-01-01", state_root_override=str(tmp_path / "state")
-    )
-    assert got == []
-
-
-def test_list_paths_bad_date_prefix_raises(tmp_path):
-    with pytest.raises(records.ReviewTrailListError, match="must be YYYY-MM-DD"):
-        records.list_paths(
-            date_prefix="bad-date", state_root_override=str(tmp_path / "state")
-        )
-
-
 def test_list_paths_unresolvable_state_root_raises(monkeypatch):
     monkeypatch.delenv("COORDINATOR_ROOT", raising=False)
-    monkeypatch.setattr(records, "_git_root", lambda: None)
     with pytest.raises(records.ReviewTrailListError, match="cannot resolve state/review-trail/"):
         records.list_paths()
 

@@ -252,7 +252,9 @@ _LEGACY_UNVERIFIED_ENTRYPOINTS = frozenset({
     "lint-frontmatter.py",
     "list-orphaned-plans.py",
     "list-reverse-drift-cmds.py",
-    "list-review-trail-records.py",
+    # list-review-trail-records.py: Review: code-reviewer (ab4b0acad263f7450) --
+    # deleted by the-gravestoned-review-trail-surface-is-deleted C6; dangling
+    # sweep row of the same shape as the render-handoff-tracker.py note above.
     "list-week-changelog.py",
     "mint-deliverable-id.py",
     "misc-session-and-guards.py",

@@ -4,13 +4,16 @@ Contract tests for two out-of-repo-write concurrency fixes found during the
 
 1. `substrate._write_agent_helper_forwarders` (Step 3b's real-install write
    loop) previously called `_write_agent_forwarder`/`_write_agent_cmd_forwarder`
-   — both plain in-place `Path.write_text`, not atomic-temp-and-rename — with
-   NO lock held, unlike `forwarder_self_heal.py`'s identical writers, which
-   already take `coordinator_core.locked_write.held_lock` on the same
-   `<settings-home>/bin` directory before writing. A concurrent installer run,
-   or a concurrent self-heal (routine at session boot per CLAUDE.md § Load
-   norm), could interleave on the same destination file. Fixed by wrapping
-   the real (non-check_only) write loop in the same `held_lock` primitive.
+   (the second of which is since deleted -- 91771f631d, "the cmd forwarder
+   dies"; every name gets the native door image or the bare-Python forwarder
+   now, never a `.cmd`) — both plain in-place `Path.write_text`, not
+   atomic-temp-and-rename — with NO lock held, unlike `forwarder_self_heal.py`'s
+   identical writer(s), which already take
+   `coordinator_core.locked_write.held_lock` on the same `<settings-home>/bin`
+   directory before writing. A concurrent installer run, or a concurrent
+   self-heal (routine at session boot per CLAUDE.md § Load norm), could
+   interleave on the same destination file. Fixed by wrapping the real
+   (non-check_only) write loop in the same `held_lock` primitive.
 
 2. `uninstall_legs.uninstall_remove_substrate` removed only the live
    `.coordinator-venv` path via `_rmtree_target`, never the

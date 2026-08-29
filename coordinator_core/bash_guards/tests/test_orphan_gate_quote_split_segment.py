@@ -17,22 +17,11 @@ dispatched executor and a reviewer alike.
 This file is deliberately tree-independent where the sweep is not. It drives
 CHECK 2 (force-push), which is textual and needs no repository state, so the
 verdict does not move with anyone's worktree.
-
-REGRESSION_COVER: `test_pre_fix_predicate_would_have_skipped_the_segment`
-reconstructs the retired raw-text gate and asserts it misses the split
-spelling. Without it, a future edit reverting the gate to `re.search` would
-leave the deny assertions below passing on some trees and failing on others,
-which is exactly how this leg survived the sweep.
 """
 
 from __future__ import annotations
 
-import re
-
-from coordinator_core.bash_guards.dispatch_checks import (
-    _word_present,
-    check_destructive_git_orphan,
-)
+from coordinator_core.bash_guards.dispatch_checks import check_destructive_git_orphan
 
 #: Built at runtime rather than written as a literal so this file does not
 #: itself carry a spelled-out force-push token for source scanners.
@@ -50,10 +39,3 @@ def test_quote_split_spelling_denies_too():
         "quote-splitting the verb walked past the orphan guard's per-segment "
         "gate -- the gate is scanning raw text again"
     )
-
-
-def test_pre_fix_predicate_would_have_skipped_the_segment():
-    """The retired gate, reconstructed: raw `\bgit\b` against the segment."""
-    assert re.search(r"\bgit\b", _PLAIN)
-    assert not re.search(r"\bgit\b", _SPLIT)
-    assert _word_present(r"\bgit\b", _SPLIT)

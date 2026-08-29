@@ -56,22 +56,24 @@ dispatching an op.
 
 Negative-spec (RAG-bait):
     This module does NOT count files installed under any settings-home
-    `bin/` — that is the exact blindness the `.ps1` split census exposed (a
-    file-count census reads that leg as zero when it in fact emits 393
-    entries and then unlinks them behind a RED policy gate; see
-    `coordinator_core/install/substrate.py :: _write_ps1_policy_status` and
-    `_PS1_POLICY_STATUS_FILENAME`, written to `bin_dst.parent` — the
-    settings-home ROOT, not `bin/` — as
-    `ps1-policy-gate-status.json`). This census reads exclusively from
-    GENERATOR STATE — `_derive_agent_helper_target_map(coordinator/bin)` —
-    and each forwarder's on-disk TARGET script, never from an install
-    output directory. If a caller wants the `.ps1` leg's own status, the
-    positive evidence source is `ps1-policy-gate-status.json` at the
-    settings-home root; an absent `bin_dst` is "emitted-then-rolled-back",
-    never "never built" — `render_table` surfaces this as a footer note
-    when that file is reachable, and says nothing when it is not (this
-    module is not itself an install-time reader and never fails for a
-    missing settings-home).
+    `bin/` — that is the exact blindness the (now-retired) `.ps1` split
+    census used to expose (a file-count census read that leg as zero when
+    it in fact emitted 393 entries and then unlinked them behind a RED
+    policy gate). This census reads exclusively from GENERATOR STATE —
+    `_derive_agent_helper_target_map(coordinator/bin)` — and each
+    forwarder's on-disk TARGET script, never from an install output
+    directory.
+
+    HISTORICAL, RETIRED 2026-08-29 (docs/plans/2026-08-26-every-forwarder-
+    that-can-reach-the-door-does.md C12; DR-365 condemns the `.ps1` leg
+    outright, and `substrate.py :: _write_ps1_policy_status`/
+    `_emit_and_verify_ps1_forwarders`/`policy_gate.py` are deleted with
+    it): a pre-C12 box may still carry a stale
+    `<settings-home>/ps1-policy-gate-status.json` from a prior install run
+    — nothing writes a fresh one anymore. `render_table` still surfaces a
+    footer note when that file is reachable (harmless, opportunistic, never
+    a failure when absent), named here as historical residue rather than a
+    live leg's status.
 
     This module does NOT gate `SystemExit`/exception containment at the op
     boundary — that already exists in `invoke_from_argv._run_entrypoint`.
@@ -168,8 +170,10 @@ WRITE_SURFACE = WriteSurfaceDeclaration(
 
 
 def _settings_home_root() -> Path:
-    """`bin_dst.parent` in `substrate.py :: _ps1_policy_status_path` terms --
-    the settings-home ROOT, one level above its `bin/`. Read the same
+    """The settings-home ROOT, one level above its `bin/` -- historically
+    `substrate.py :: _ps1_policy_status_path`'s `bin_dst.parent` (that
+    function is deleted, see module docstring's HISTORICAL, RETIRED note;
+    this module keeps its own resolution independent of it). Read the same
     `COORDINATOR_SETTINGS_HOME` env var the rest of this codebase's
     forwarders honor, falling back to the documented default. This module
     never fails for the settings home being absent -- see `render_table`,
@@ -688,9 +692,11 @@ def render_table(verdicts: "list[ForwarderVerdict]") -> str:
     if ps1_status.is_file():
         lines += [
             "",
-            f"Note: `.ps1` leg policy-gate status found at `{ps1_status}` -- "
-            "consult it directly for that leg's emitted-then-rolled-back "
-            "state; this census does not read or summarize it.",
+            f"Note: retired `.ps1` leg policy-gate status residue found at "
+            f"`{ps1_status}` (RETIRED 2026-08-29, DR-365 -- nothing writes "
+            "this file anymore) -- stale status from a pre-cutover install, "
+            "not a live leg's state; this census does not read or "
+            "summarize it.",
         ]
 
     return "\n".join(lines) + "\n"

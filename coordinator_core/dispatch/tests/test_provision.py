@@ -24,6 +24,7 @@ from typing import Optional
 import pytest
 import yaml
 
+from coordinator_core.subagent_sandbox.provision_report import _sidecar_pointer_path
 from coordinator_core.dispatch.provision import (
     _build_sidecar_text,
     provision_subagent_sidecar,
@@ -505,3 +506,67 @@ def test_confinement_guard_allowlist_constants_unchanged_by_this_module() -> Non
         name.startswith("block_reviewer") or "bash_guards" in name
         for name in dir(provision_module)
     )
+
+
+# ---------------------------------------------------------------------------
+# Continuity across a session-id change (sibling of
+# subagent_sandbox/tests/test_provision_report.py's own continuity block --
+# this module shares that one's home, key, and idempotency, so it shared the
+# defect)
+# ---------------------------------------------------------------------------
+
+def test_sidecar_is_adopted_when_the_session_id_changes_under_a_live_agent(
+    git_repo: Path, policy_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+) -> None:
+    """`/clear` mints a fresh session id without ending the process, so a
+    subagent that outlives one re-fires SubagentStart under a new session id.
+    It used to miss the FileExistsError branch and get a second, EMPTY sidecar
+    while its populated one was orphaned under the old id."""
+    first = _payload(
+        agent_id=BARE_HEX_AGENT_ID, agent_type=SIDECAR_ELIGIBLE_TYPE, session_id="sess-before-clear"
+    )
+    exit_code, out = _run(first, policy_path, git_repo, monkeypatch, capsys)
+    assert exit_code == 0
+    original = json.loads(out.splitlines()[0])["subagent_sidecar"]
+
+    doc = git_repo / original
+    doc.write_text(doc.read_text(encoding="utf-8") + "the decisions\n", encoding="utf-8")
+
+    second = _payload(
+        agent_id=BARE_HEX_AGENT_ID, agent_type=SIDECAR_ELIGIBLE_TYPE, session_id="sess-after-clear"
+    )
+    exit_code, out = _run(second, policy_path, git_repo, monkeypatch, capsys)
+    assert exit_code == 0
+    resumed = json.loads(out.splitlines()[0])["subagent_sidecar"]
+
+    assert resumed == original
+    assert "the decisions" in (git_repo / resumed).read_text(encoding="utf-8")
+    assert not (git_repo / "state" / "subagent-share" / "sess-after-clear").exists()
+
+
+def test_the_two_producers_never_adopt_each_others_sidecars(
+    git_repo: Path, policy_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+) -> None:
+    """Both producers provision into `state/subagent-share/` for the SAME
+    agent, with different leaf suffixes (`<key>.md` there,
+    `<key>.subagent-sidecar.md` here). The pointer index is namespaced by
+    producer precisely so one producer's spawn is never handed the other's
+    document."""
+    pointer = _sidecar_pointer_path(str(git_repo), BARE_HEX_AGENT_ID, "report")
+    assert pointer is not None
+    pointer.parent.mkdir(parents=True, exist_ok=True)
+    foreign = "state/subagent-share/some-other-session/coordinatorexecutor.abc.md"
+    (git_repo / "state" / "subagent-share" / "some-other-session").mkdir(parents=True)
+    (git_repo / foreign).write_text("not mine\n", encoding="utf-8")
+    pointer.write_text(foreign + "\n", encoding="utf-8")
+
+    payload = _payload(
+        agent_id=BARE_HEX_AGENT_ID, agent_type=SIDECAR_ELIGIBLE_TYPE, session_id="sess-namespaced"
+    )
+    exit_code, out = _run(payload, policy_path, git_repo, monkeypatch, capsys)
+    assert exit_code == 0
+    emitted = json.loads(out.splitlines()[0])["subagent_sidecar"]
+
+    assert emitted != foreign
+    assert emitted.endswith(".subagent-sidecar.md")
+    assert "not mine" not in (git_repo / emitted).read_text(encoding="utf-8")

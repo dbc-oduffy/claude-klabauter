@@ -341,6 +341,20 @@ _NON_SESSION_DIR_NAMES = frozenset(
         # is minting a session id it had no business minting (delete the writer)
         # or owns a fixed non-session name (name it here).
         ".commit-ledger",
+        # `subagent_sandbox/provision_report.py`'s sidecar POINTER index
+        # (`_SIDECAR_POINTER_DIRNAME`) -- one file per raw agent id, naming
+        # where that agent's sidecar was provisioned, so a subagent that
+        # outlives a session-id change is handed its own populated sidecar
+        # instead of a fresh empty one. Keyed by AGENT id, never by session id.
+        #
+        # Same class as `.commit-ledger` above and named here for the same
+        # reason: a fixed directory name a module owns outright, not a stray
+        # session id minted by a writer that should be fixed instead. It sits
+        # beside `.agents/` deliberately -- that is already the home of the
+        # agent-keyed back-pointer chain this index serves the same population
+        # as -- which is precisely why it lands inside the registry directory
+        # this denylist guards.
+        ".agent-sidecars",
     }
 )
 

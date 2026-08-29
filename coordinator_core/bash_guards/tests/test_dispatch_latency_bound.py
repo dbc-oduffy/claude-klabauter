@@ -94,6 +94,7 @@ from __future__ import annotations
 
 import json
 import shlex
+import shutil
 import subprocess
 import sys
 import time
@@ -547,7 +548,7 @@ def _payload(cmd: str) -> str:
         {
             "tool_name": "Bash",
             "tool_input": {"command": cmd},
-            "session_id": "latency-bound-probe",
+            "session_id": _PROBE_SESSION_ID,
             "cwd": str(_REPO_ROOT),
             "agent_id": "agent_latency_probe",
             "agent_type": "coordinator:executor",
@@ -700,6 +701,44 @@ class _SpawnCountCounter:
         _sandbox_engine.reset_resolve_git_root_cache()
         evaluate_payload_json(_payload(cmd))
         return self.spawns
+
+
+#: The probe payload's `session_id`. Named here rather than inlined because
+#: the cleanup fixture below has to remove exactly the directory it mints.
+_PROBE_SESSION_ID = "latency-bound-probe"
+
+
+@pytest.fixture(autouse=True)
+def _reap_probe_session_dir():
+    """Remove the session directory this module's probe mints in the REAL
+    registry.
+
+    `_payload` deliberately runs the dispatch chain against `_REPO_ROOT` -- the
+    live repo is the thing whose latency is being bounded, and a synthetic
+    tmp_path repo would measure a different git tree. The cost is that the
+    chain's write-claim leg then mints
+    `.git/coordinator-sessions/<_PROBE_SESSION_ID>/` for a session that never
+    existed, and `session.liveness.live_session_ids` enumerates every non-
+    denylisted child of that directory as a session -- so the residue reads as
+    a live phantom peer to every real session on the box, and
+    `session/tests/test_liveness.py::TestLiveSessionIdsCorpus` goes red.
+
+    Cleaned up rather than added to `_NON_SESSION_DIR_NAMES`: that denylist is
+    for fixed directory names a MODULE owns, and its own instruction is that a
+    stray minted by a writer that should not have minted it gets the writer
+    fixed, not the name quieted. A test writing into the live registry is that
+    case.
+    """
+    yield
+    # Function-scoped, not module-scoped: `coordinator_core/conftest.py`'s
+    # `_no_new_live_session_hub_entries` checks the hub after EVERY test, so a
+    # module-scoped cleanup runs far too late and the first test still trips it.
+    # A conftest-level autouse fixture is set up before a module-level one, so
+    # teardown runs in reverse and this cleanup lands first, which is the
+    # ordering this fix depends on.
+    probe_dir = _REPO_ROOT / ".git" / "coordinator-sessions" / _PROBE_SESSION_ID
+    if probe_dir.is_dir():
+        shutil.rmtree(probe_dir, ignore_errors=True)
 
 
 @pytest.fixture(scope="module")

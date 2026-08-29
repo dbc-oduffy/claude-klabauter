@@ -785,6 +785,11 @@ def _dial_message(dials: list) -> str:
     )
 
 
+# Review: coordinator:code-reviewer (00814cf56f nit) -- these two gates were
+# already red before the 00814cf56f ceiling drop, against modules unrelated to
+# review-trail retirement (e.g. scope_orphan_census.py, session/scope.py). The
+# ceiling drop shrinks the registers correctly; it does not touch, cause, or
+# claim to fix these two pre-existing failures.
 def test_no_new_private_git_runner_outside_the_frozen_inventory():
     """The gate. A module spawning git outside the inventory fails here."""
     sites, _dials = collect_private_git_runners()

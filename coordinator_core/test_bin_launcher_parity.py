@@ -1107,62 +1107,55 @@ _PS1_EXISTENCE_GATE = (
 _PS1_EMPTINESS_ONLY_GATE = "if ($_pybin -eq '') { $_pybin = '' }"
 
 
-def test_interpreter_ladder_existence_gate_present_in_all_three_emitters(tmp_path):
-    """One-fixed-two-not regression guard for the baked-interpreter existence
-    gate (`_write_agent_cmd_forwarder`'s own docstring § "The baked rung is
-    guarded by `if exist`"; `render_cmd`/`render_ps1`'s own module docstring
-    § "The baked rung is EXISTENCE-GATED").
+def test_interpreter_ladder_existence_gate_present_in_both_emitters(tmp_path):
+    """Regression guard for the baked-interpreter existence gate
+    (`render_cmd`/`render_ps1`'s own module docstring § "The baked rung is
+    EXISTENCE-GATED").
+
+    Narrowed 2026-08-29 (docs/plans/2026-08-26-every-forwarder-that-can-
+    reach-the-door-does.md C12): this test formerly also rendered a THIRD
+    emitter, `coordinator_core.install.substrate._write_agent_cmd_forwarder`,
+    and asserted all three stayed in sync. That writer is deleted (DR-365
+    condemns the install-side `.cmd`/`.ps1` legs outright; see
+    `substrate.py`'s own gravestone) — there is no install-side emitter
+    left to drift against. `gen-launcher-shim.py`'s two repo-tree emitters
+    (`render_cmd`, `render_ps1`) are unaffected by that deletion and this
+    test still guards them against each other.
 
     On 2026-07-28 review (Finding 1 of that pass) found the exist-gate
-    present in `coordinator_core/install/substrate.py`'s emitter but absent
-    from BOTH `gen-launcher-shim.py` emitters (`render_cmd`, `render_ps1`).
-    All three were later fixed, but nothing asserted they stay in sync --
-    reverting any ONE of the three back to a bare emptiness check (
-    `if not "%_py%"=="" goto :run_baked`, no `if exist`; PowerShell's
-    `-and -not (Test-Path ...)` conjunct dropped) fails no other test in this
-    file, since none of it diffs rendered BYTES against a fourth ladder
-    generator or reads gate semantics -- only exact byte parity against
-    each generator's OWN current output. A baked `_py=`/`$_pybin` naming a
-    since-deleted interpreter then passes the emptiness-only check and the
-    launcher execs a nonexistent binary: the Windows silent-degradation
-    shape this whole gate family exists to kill (see this file's own
+    present in the (then three-emitter) install-side writer but absent from
+    BOTH `gen-launcher-shim.py` emitters. Both were later fixed, but
+    nothing asserted they stay in sync -- reverting either back to a bare
+    emptiness check (`if not "%_py%"=="" goto :run_baked`, no `if exist`;
+    PowerShell's `-and -not (Test-Path ...)` conjunct dropped) fails no
+    other test in this file, since none of it diffs rendered BYTES against
+    gate semantics -- only exact byte parity against each generator's OWN
+    current output. A baked `_py=`/`$_pybin` naming a since-deleted
+    interpreter then passes the emptiness-only check and the launcher
+    execs a nonexistent binary: the Windows silent-degradation shape this
+    whole gate family exists to kill (see this file's own
     LAUNCHER_PARITY_ROOTS section header for the related but distinct byte-
-    parity mechanism -- that mechanism catches a launcher body drifting from
-    its OWN generator's current output; this test catches the three
+    parity mechanism -- that mechanism catches a launcher body drifting
+    from its OWN generator's current output; this test catches the two
     generators' gates drifting from EACH OTHER).
 
-    Renders all three emitters fresh (never reads committed launcher files,
+    Renders both emitters fresh (never reads committed launcher files,
     which byte-parity already covers) and, for each, both confirms the real
     existence-gate string is present AND proves a degraded (emptiness-only)
     substitute is texturally distinguishable -- so this test would actually
-    fail, not vacuously pass, if any one emitter regressed.
+    fail, not vacuously pass, if either emitter regressed.
     """
-    from coordinator_core.install.substrate import _write_agent_cmd_forwarder
-
     gen = _load_gen_launcher_shim()
 
-    dst = tmp_path / "fake-tool.cmd"
-    _write_agent_cmd_forwarder(
-        "fake-tool",
-        dst,
-        False,
-        python3_cmd_resolved_bin="C:\\fake-python-bin\\python.exe",  # abs-path-ok: synthetic test fixture value, never resolved on disk
-        target="",
-    )
-    substrate_body = dst.read_text(encoding="utf-8")
     cmd_body = gen.render_cmd("fake-tool.py")
     ps1_body = gen.render_ps1("fake-tool.py")
 
-    assert _CMD_EXISTENCE_GATE in substrate_body
     assert _CMD_EXISTENCE_GATE in cmd_body
     assert _PS1_EXISTENCE_GATE in ps1_body
 
     # Prove each assertion is not vacuous: an in-memory degrade of the
     # rendered string (never the on-disk generator source) to the
     # emptiness-only form must make the positive assertion above fail.
-    degraded_substrate = substrate_body.replace(_CMD_EXISTENCE_GATE, _CMD_EMPTINESS_ONLY_GATE)
-    assert _CMD_EXISTENCE_GATE not in degraded_substrate
-
     degraded_cmd = cmd_body.replace(_CMD_EXISTENCE_GATE, _CMD_EMPTINESS_ONLY_GATE)
     assert _CMD_EXISTENCE_GATE not in degraded_cmd
 

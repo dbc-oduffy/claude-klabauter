@@ -25,6 +25,7 @@ at all, and this file deliberately does not depend on that.
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 
 import pytest
@@ -32,6 +33,43 @@ import pytest
 from coordinator_core.bash_guards import dispatch
 
 CWD = str(Path(__file__).resolve().parents[3])
+
+#: The probe payload's `session_id`. Named rather than inlined so the cleanup
+#: fixture below removes exactly the directory it mints.
+_PROBE_SESSION_ID = "quote-split-sweep"
+
+
+@pytest.fixture(autouse=True)
+def _reap_probe_session_dir():
+    """Remove the session directory this module's probe mints in the REAL
+    registry.
+
+    `CWD` is the live repo deliberately -- these guards reason about the tree
+    they are pointed at, and a tmp_path repo would not be the tree whose
+    governed surfaces the cases name. The cost is that the dispatch chain's
+    write-claim leg then mints
+    `.git/coordinator-sessions/<_PROBE_SESSION_ID>/` for a session that never
+    existed, and `session.liveness.live_session_ids` enumerates every
+    non-denylisted child of that directory as a session -- so the residue reads
+    as a live phantom peer to every real session on the box, and
+    `session/tests/test_liveness.py::TestLiveSessionIdsCorpus` goes red.
+
+    Cleaned up rather than denylisted: `_NON_SESSION_DIR_NAMES` is for fixed
+    directory names a MODULE owns, and its own instruction is that a stray
+    minted by a writer that should not have minted it gets the writer fixed,
+    not the name quieted. Same fix, same reasoning, as
+    `test_dispatch_latency_bound.py::_reap_probe_session_dir`.
+    """
+    yield
+    # Function-scoped, not module-scoped: `coordinator_core/conftest.py`'s
+    # `_no_new_live_session_hub_entries` checks the hub after EVERY test, so a
+    # module-scoped cleanup runs far too late and the first test still trips it.
+    # A conftest-level autouse fixture is set up before a module-level one, so
+    # teardown runs in reverse and this cleanup lands first, which is the
+    # ordering this fix depends on.
+    probe_dir = Path(CWD) / ".git" / "coordinator-sessions" / _PROBE_SESSION_ID
+    if probe_dir.is_dir():
+        shutil.rmtree(probe_dir, ignore_errors=True)
 
 #: Commands whose first word is a verb a guard is expected to reason about.
 #: The governed-surface spellings are literal on purpose: they are what the
@@ -66,7 +104,7 @@ def _split_first_verb(cmd: str) -> str:
 
 def _decision(cmd: str, agent: str | None) -> str:
     payload = {
-        "session_id": "quote-split-sweep",
+        "session_id": _PROBE_SESSION_ID,
         "cwd": CWD,
         "tool_name": "Bash",
         "tool_input": {"command": cmd},

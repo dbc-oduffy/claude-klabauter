@@ -75,32 +75,74 @@ false-clean scan of whatever trees happened to resolve. Does NOT perform a
 real filesystem `..` traversal when checking a `../../`-prefixed citation
 against `--consumer-root` (P-nit fix) — such a citation always falls
 through to the DoE-tree check instead of an unsafe path join.
+
+Anchoring supersedes existence (2026-08-29 correction): the rule worth
+enforcing is not "does this bare `docs/...` citation happen to resolve" but
+"is this citation anchored at all". A citation with NO explicit root anchor
+(`_CITATION_RE`'s `prefix` group empty) is reported `unanchored` — the
+PRIMARY finding class — regardless of whether it resolves uniquely on the
+machine running the lint; eight filenames now collide between DoE's tree and
+Claude-klabauter's own (`baton-lifecycle.md`, `cockpit-contract.md`, `code-review.md`,
+`cross-repo.md`, `guard-messaging.md`, `test-infrastructure.md`,
+`write-confinement.md`, `plans/INDEX.md`), so a bare citation resolving
+cleanly here can resolve to different content wherever else it is read, with
+no error anywhere existence-checking would catch. `unresolvable`/`ambiguous`
+existence-checking remains the SECONDARY class, run only against citations
+that already carry an explicit anchor (`coordinator/`, `~/.claude/`,
+`${CLAUDE_PLUGIN_ROOT}/`, `../../`, a bare `/`).
+
+`${CLAUDE_PLUGIN_ROOT}/` misparse (2026-08-29 fix, false-positive class):
+`${CLAUDE_PLUGIN_ROOT}/docs/wiki/foo.md` is a harness-expanded,
+cwd-independent plugin-install-root anchor — the CORRECT anchored form, not
+a broken one. The prior `_CITATION_RE` had no alternative for the literal
+`${CLAUDE_PLUGIN_ROOT}/` text, so the engine's leftmost-match search instead
+matched the bare `/` immediately before `docs/` (the `}` boundary of the
+variable expansion), misreporting a deliberately-anchored citation as a
+"leading slash absolute" or unresolvable one. Fixed by giving
+`${CLAUDE_PLUGIN_ROOT}/` its own alternative in `_CITATION_RE`'s prefix
+group, mapped through `_PREFIX_TREE_MAP` to a dedicated `plugin_root` tree,
+resolvable via `--plugin-root PATH` or the `plugin_root` default tree entry.
+Negative-spec gotcha: `${CLAUDE_PLUGIN_ROOT}` resolves to the plugin INSTALL
+directory, not the repo root — for a marketplace source of `./plugin` that
+is `<repo>/plugin`, not `<repo>/`; DoE-claude's own shipped citations resolve
+it against the `coordinator/` subtree, which is why the default `plugin_root`
+tree entry mirrors `doe_coordinator` rather than the bare repo root. Do NOT
+assume plugin root == repo root elsewhere.
+
+`tests/fixtures/` exclusion (2026-08-29): a path an artifact reads as an
+oracle, not a doctrine citation a session is meant to follow, does not
+belong in the scanned corpus at all — `_iter_corpus_files` prunes any
+directory literally named `fixtures` directly under a directory literally
+named `tests` (both os.walk pruning via `dirs[:] = []` and a file-level
+skip), narrower than excluding all of `tests/` so a genuine doctrine
+citation embedded in test prose is still scanned.
+
+`.template` corpus widening (2026-08-29 fix, silent-skip class): the
+corpus glob scanned only `*.md`, so `skills/repo-setup/templates/
+README.md.template` — a markdown template written verbatim into a
+consumer repo's README at repo-setup time — was never opened, and its
+line-8 citation was invisible to this lint despite landing in someone
+else's tree. Surveyed DoE-claude's `coordinator/{commands,skills,agents}`
+trees: every non-`.md` file under those trees is `.yaml`/`.tsx`/`.ts`/
+`.json`/`.mjs`/`.gitignore`/`.css` (code/config, correctly excluded) except
+the 7 files under `skills/repo-setup/templates/*.template` — all markdown
+prose (`CLAUDE.md.template`, `README.md.template`, `exec-summary.md.
+template`, `lessons.md.template`, and three `project-type-block.*.
+template` snippet fragments), none binary, none code. `_iter_corpus_files`
+now yields both `*.md` and `*.template` — narrower than a bare `*` glob
+(which would pull in the `.tsx`/`.ts`/`.json` siblings), wide enough to
+catch every markdown-shaped template file in the surveyed trees.
 """
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import os
 import re
-import subprocess
 import sys
 from dataclasses import dataclass, field
 
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-_BOOTSTRAP_DONE = False
-
-
-def _bootstrap_engine() -> None:
-    """See resolve-repo-path.py's identical helper: puts `_REPO_ROOT` on
-    `sys.path` for the deferred `coordinator_core.*` import below, on first
-    use only — never at module scope, so importing this file cannot mutate a
-    warm server's shared `sys.path`."""
-    global _BOOTSTRAP_DONE
-    if _BOOTSTRAP_DONE:
-        return
-    if _REPO_ROOT not in sys.path:
-        sys.path.insert(0, _REPO_ROOT)
-    _BOOTSTRAP_DONE = True
 
 
 # Citation shapes measured live by the spike's probe 3 regex, reproduced
@@ -113,14 +155,28 @@ def _bootstrap_engine() -> None:
 _PREFIX_TREE_MAP: dict[str, str] = {
     "coordinator/": "doe_coordinator",
     "~/.claude/": "doe_root",
+    "${CLAUDE_PLUGIN_ROOT}/": "plugin_root",
 }
 
 _CITATION_RE = re.compile(
-    r"""(?P<prefix>coordinator/|~/\.claude/|\.\./\.\./|/)?
+    r"""(?P<prefix>coordinator/|~/\.claude/|\$\{CLAUDE_PLUGIN_ROOT\}/|\.\./\.\./|(?:^|(?<=\s))/)?
         (?P<core>docs/(?:wiki|decisions|plans|problems|research)/[^\s\)\]"'<>]+\.md)
     """,
     re.VERBOSE,
 )
+# The bare "/" (absolute-path) alternative is gated on start-of-line or a
+# preceding whitespace char -- WITHOUT this gate a regex search finds the
+# leftmost position where prefix+core can match, and a "/" immediately
+# preceding "docs/" for an unrelated reason (a closing `>` of an
+# `<other-placeholder>` form, a `}` boundary of an unrecognized variable
+# expansion, any punctuation) gets silently mis-captured as a deliberate
+# absolute-path anchor. That is the SAME misparse class the
+# `${CLAUDE_PLUGIN_ROOT}/` fix corrects, generalized: `<resolved-engine-root>/
+# docs/wiki/uninstall-agentic-judgment.md` (coordinator/commands/uninstall.md)
+# is not an anchored citation -- `<resolved-engine-root>` is not a recognized
+# anchor prefix -- yet without this gate its trailing "/" resolved cleanly
+# against the claude-klabauter default tree and the citation was silently never
+# reported as unanchored.
 
 # Matches the census's own definition (state/audits/2026-07-23-doctrine-doc-
 # reference-resolution-census.md § headline: "Illustrative placeholders
@@ -140,6 +196,12 @@ _DEFAULT_TREE_SHORTNAMES: dict[str, tuple[str, str]] = {
     # tree name -> (repo shortname for resolve-repo-path.py, subpath under it)
     "doe_root": ("doe-claude", ""),
     "doe_coordinator": ("doe-claude", "coordinator"),
+    # Sensible default only: DoE-claude's shipped plugin happens to install
+    # from its `coordinator/` subtree, so this default mirrors
+    # `doe_coordinator`. It is NOT a general "plugin root == this subpath"
+    # assumption -- a caller whose plugin installs elsewhere overrides via
+    # `--plugin-root PATH`, which replaces this entry outright.
+    "plugin_root": ("doe-claude", "coordinator"),
     "claude-klabauter": ("claude-klabauter", ""),
 }
 
@@ -159,40 +221,64 @@ class Finding:
     candidate_trees: list[str] = field(default_factory=list)
 
 
+_RESOLVE_REPO_PATH_MODULE = None
+
+
+def _load_resolve_repo_path_module():
+    """Load resolve-repo-path.py as an in-process module, memoized at module
+    scope for the life of the interpreter — never re-imported per shortname,
+    never re-imported per run.
+
+    resolve-repo-path.py is a hyphenated sibling script (not a valid Python
+    module name), so it cannot be `import`-ed directly; this is the same
+    `importlib.util.spec_from_file_location` pattern this file's own test
+    module (test_check_doctrine_citations.py) already uses to load THIS
+    file. No `sys.path` mutation, no `sys.modules` registration under a
+    name another import could collide with."""
+    global _RESOLVE_REPO_PATH_MODULE
+    if _RESOLVE_REPO_PATH_MODULE is not None:
+        return _RESOLVE_REPO_PATH_MODULE
+    script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "resolve-repo-path.py")
+    spec = importlib.util.spec_from_file_location("_check_doctrine_citations_rrp", script)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    _RESOLVE_REPO_PATH_MODULE = module
+    return module
+
+
 def _resolve_repo_path_shortname(shortname: str) -> tuple[str, str]:
-    """Subprocess call to the sibling resolver, memoized by the caller.
+    """In-process call into resolve-repo-path.py's own registry resolver.
     Returns (resolved_path, error_message) — error_message is "" on success.
 
-    resolve-repo-path.py's own contract is FAIL-LOUD-SKIP: an unregistered
-    shortname is a legitimate empty-stdout/exit-0 skip, distinct from a
-    genuine spawn failure or non-zero exit. From THIS tool's perspective
-    that distinction does not matter — either way a default tree this run
-    was supposed to scan did not resolve, and P1's fix is to make that
-    visible rather than silently narrowing the candidate set. So every
-    failure mode here (spawn OSError, non-zero exit, empty stdout) is
-    surfaced with whatever stderr resolve-repo-path.py wrote, never
-    swallowed via `capture_output=True` the way the pre-fix version did."""
-    _bootstrap_engine()
-    from coordinator_core.win_portability import no_console_creationflags
+    Negative-spec: does NOT spawn a `python <script>` subprocess to reach
+    resolve-repo-path.py's resolution logic — that shape (an unnamed
+    shell-out, absent from docs/reference/shell-out-carve-outs.md's closed
+    list) doubled this tool's process-creation cost for zero behavioural
+    gain, since resolve-repo-path.py's own registry read
+    (`_resolve_registry_value`) is a plain in-process function once its
+    module is loaded. The ONE subprocess resolve-repo-path.py itself still
+    spawns (the machine-local CLI, to read the actual [repos] registry
+    value) is untouched — that spawn reads real data this tool cannot get
+    any other way, which is the shell-out-carve-outs distinction between
+    "unnamed convenience shell-out" and "the one process that does the
+    actual work". Do NOT reintroduce a `subprocess.run([sys.executable,
+    ...])` wrapper here for convenience; import the module instead.
 
-    script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "resolve-repo-path.py")
+    resolve-repo-path.py's own contract is FAIL-LOUD-SKIP: an unregistered
+    shortname is a legitimate empty-result skip, distinct from a genuine
+    module-load failure. From THIS tool's perspective that distinction does
+    not matter — either way a default tree this run was supposed to scan
+    did not resolve, and P1's fix (see `_default_tree_roots`) is to make
+    that visible rather than silently narrowing the candidate set."""
     try:
-        result = subprocess.run(
-            [sys.executable, script, shortname],
-            capture_output=True,
-            text=True,
-            **no_console_creationflags(),
-        )
-    except OSError as exc:
-        return "", f"resolve-repo-path.py spawn failed: {exc}"
-    stderr = (result.stderr or "").strip()
-    if result.returncode != 0:
-        detail = f": {stderr}" if stderr else ""
-        return "", f"resolve-repo-path.py exited {result.returncode}{detail}"
-    resolved = result.stdout.strip()
+        rrp = _load_resolve_repo_path_module()
+    except Exception as exc:
+        return "", f"resolve-repo-path.py failed to load in-process: {exc}"
+    normalized = shortname.replace("-", "_")
+    key = f"repos.{normalized}"
+    resolved = rrp._resolve_registry_value(key)
     if not resolved:
-        detail = f": {stderr}" if stderr else " (unregistered shortname or empty repos.* key)"
-        return "", f"resolve-repo-path.py resolved empty{detail}"
+        return "", "resolve-repo-path.py resolved empty (unregistered shortname or empty repos.* key)"
     return resolved, ""
 
 
@@ -248,18 +334,53 @@ def _unscannable_corpus_dirs(corpus_dirs: list[str]) -> list[tuple[str, str]]:
     return unscannable
 
 
+def _is_test_fixture_dir(dir_path: str) -> bool:
+    """True when `dir_path` is literally named `fixtures` directly under a
+    directory literally named `tests` -- narrower than excluding all of
+    `tests/`, so a genuine doctrine citation embedded in test prose is still
+    scanned. Matches skills/learn-lessons/tests/fixtures/lesson-triage/
+    expected-manifest.yaml's shape: an artifact read as an oracle, not a
+    citation a session is meant to follow."""
+    normalized = dir_path.replace("\\", "/").rstrip("/")
+    if os.path.basename(normalized) != "fixtures":
+        return False
+    parent = os.path.dirname(normalized)
+    return os.path.basename(parent) == "tests"
+
+
 def _iter_corpus_files(corpus_dirs: list[str]):
     for corpus_dir in corpus_dirs:
-        for root, _dirs, files in os.walk(corpus_dir):
+        for root, dirs, files in os.walk(corpus_dir):
+            if _is_test_fixture_dir(root):
+                dirs[:] = []
+                continue
+            dirs[:] = [d for d in dirs if not _is_test_fixture_dir(os.path.join(root, d))]
             for name in files:
-                if name.endswith(".md"):
+                if name.endswith(".md") or name.endswith(".template"):
                     yield os.path.join(root, name)
 
 
 def _extract_citations(path: str) -> tuple[list[Citation], int]:
-    """Returns (citations, illustrative_excluded_count)."""
+    """Returns (citations, illustrative_excluded_count).
+
+    Dedup happens HERE, at extraction, on `(line_no, prefix, core)` --
+    never downstream in a per-branch finding-emission pass. A markdown
+    self-link (`[docs/wiki/x.md](docs/wiki/x.md)`) makes `_CITATION_RE`
+    match the identical citation site twice on one line: once in the link
+    text, once in the link target. Both matches name the same document at
+    the same source line -- one citation appearing twice on a line is one
+    citation, not two -- so deduping the raw match stream before a single
+    Citation object is ever created is the point in the pipeline where
+    "one finding per citation site" is true by construction for every
+    downstream consumer (find_unanchored, resolve_citations,
+    find_dead_from_consumer) and for the illustrative `excluded` tally,
+    rather than needing the same dedup repeated in each branch
+    separately. First-occurrence order is preserved -- `seen` only
+    suppresses a repeat, it never reorders what already appeared.
+    """
     citations: list[Citation] = []
     excluded = 0
+    seen: set[tuple[int, str, str]] = set()
     try:
         with open(path, "r", encoding="utf-8", errors="replace") as fh:
             lines = fh.readlines()
@@ -269,7 +390,18 @@ def _extract_citations(path: str) -> tuple[list[Citation], int]:
         for match in _CITATION_RE.finditer(line):
             prefix = match.group("prefix") or ""
             core = match.group("core")
-            if _is_illustrative(prefix + core):
+            key = (line_no, prefix, core)
+            if key in seen:
+                continue
+            seen.add(key)
+            # Illustrative-ness is checked on `core` alone, never `prefix`:
+            # a recognized anchor prefix is already known-good text, and
+            # `${CLAUDE_PLUGIN_ROOT}/` legitimately contains `{`/`}` -- the
+            # very characters `_ILLUSTRATIVE_RE` uses to catch a `{...}`
+            # template slot in the CORE path. Folding prefix into the check
+            # would make every plugin-root-anchored citation excluded as
+            # illustrative rather than scanned.
+            if _is_illustrative(core):
                 excluded += 1
                 continue
             citations.append(Citation(core_path=core, prefix=prefix, source_file=path, line_no=line_no))
@@ -280,9 +412,83 @@ def _tree_for_prefix(prefix: str) -> str | None:
     return _PREFIX_TREE_MAP.get(prefix)
 
 
-def resolve_citations(citations: list[Citation], tree_roots: dict[str, str]) -> list[Finding]:
+def _is_anchored(citation: Citation) -> bool:
+    """Shared "does this citation carry an explicit root anchor" question --
+    the one `find_unanchored` asks. An anchored citation (`coordinator/`,
+    `~/.claude/`, `${CLAUDE_PLUGIN_ROOT}/`, `../../`, a bare `/`) is answered
+    by its anchor and is never a candidate for `find_unanchored`'s findings
+    on the strength of anchoring alone -- the question that function asks
+    ("does this have an anchor") is already satisfied. This is deliberately
+    NOT the question `find_dead_from_consumer` asks (see
+    `_resolves_cwd_independently` below): most anchors, `coordinator/`
+    included, are relative-to-some-repo-root text that a consumer-cwd check
+    is exactly right to interrogate -- only a harness-expanded anchor is
+    exempt from that check, not every anchored form."""
+    return bool(citation.prefix)
+
+
+# The subset of `_PREFIX_TREE_MAP`'s keys that the HARNESS expands to a fixed
+# absolute location before a shell/reader ever sees the citation text --
+# cwd-independent by construction, distinct from an anchor like `coordinator/`
+# that is merely relative-to-some-repo-root (exactly what `--consumer-root`
+# mode exists to interrogate). `${CLAUDE_PLUGIN_ROOT}/` is the one form that
+# qualifies today; a future harness-expanded anchor form is added here, not
+# by duplicating this reasoning at each call site.
+_CWD_INDEPENDENT_PREFIXES: frozenset[str] = frozenset({"${CLAUDE_PLUGIN_ROOT}/"})
+
+
+def _resolves_cwd_independently(citation: Citation) -> bool:
+    """The question `find_dead_from_consumer` asks, and the only one it
+    asks about anchoring: is this citation's root already fixed regardless
+    of the reading agent's cwd. True only for `_CWD_INDEPENDENT_PREFIXES`
+    members -- an anchor like `coordinator/` is NOT cwd-independent (its
+    whole meaning is "relative to whichever repo root"), so it stays a
+    `find_dead_from_consumer` candidate exactly as an unanchored citation
+    does. Sharing `_PREFIX_TREE_MAP`'s prefix vocabulary (rather than
+    inventing a second prefix literal here) is what keeps a future anchor
+    form's cwd-independence a one-place decision -- add it to
+    `_CWD_INDEPENDENT_PREFIXES` and both this function and
+    `_tree_for_prefix`'s caller already agree on its identity."""
+    return citation.prefix in _CWD_INDEPENDENT_PREFIXES
+
+
+def find_unanchored(citations: list[Citation], tree_roots: dict[str, str]) -> list[Finding]:
+    """PRIMARY finding class (supersedes plain existence-checking): a
+    citation with no explicit root anchor is reported regardless of whether
+    it happens to resolve uniquely on the machine running the lint. Eight
+    filenames now collide between DoE's tree and claude-klabauter's own, so a bare
+    `docs/...` citation that resolves cleanly here can resolve to different
+    content wherever else it is read, with no error anywhere
+    existence-checking alone would catch. `candidate_trees` is carried
+    through for diagnostic value only (which tree(s) it happens to resolve
+    in on this run) -- it never changes whether the citation is flagged.
+
+    Negative-spec: does NOT consult `_tree_for_prefix` or attempt to
+    disambiguate -- an unanchored citation is flagged on the sole fact of
+    having an empty `prefix`, never on the outcome of a resolution attempt."""
     findings: list[Finding] = []
     for citation in citations:
+        if _is_anchored(citation):
+            continue
+        matches = [
+            tree_name
+            for tree_name, root in tree_roots.items()
+            if os.path.isfile(os.path.join(root, citation.core_path))
+        ]
+        findings.append(Finding(citation, "unanchored", sorted(matches)))
+    return findings
+
+
+def resolve_citations(citations: list[Citation], tree_roots: dict[str, str]) -> list[Finding]:
+    """SECONDARY finding class: existence/ambiguity checking, run only
+    against citations that already carry an explicit anchor. A citation with
+    no prefix is skipped here entirely -- it is `find_unanchored`'s to
+    report, not this function's, so an unanchored citation is never
+    double-reported under both reasons."""
+    findings: list[Finding] = []
+    for citation in citations:
+        if not citation.prefix:
+            continue
         mapped_tree = _tree_for_prefix(citation.prefix)
         if mapped_tree is not None:
             root = tree_roots.get(mapped_tree)
@@ -317,6 +523,22 @@ def find_dead_from_consumer(citations: list[Citation], tree_roots: dict[str, str
     against the claude-klabauter/consumer tree entry, which is the question already
     answered by the first check).
 
+    A citation that resolves cwd-independently (`_resolves_cwd_independently`
+    true -- `${CLAUDE_PLUGIN_ROOT}/` today) is excluded from this mode
+    entirely, before the literal-text check runs: such an anchor is
+    harness-expanded to a fixed root before a shell ever sees it, which is
+    exactly the property this mode's "does it resolve from where the agent
+    stands" question is asking about. Testing `consumer_root + prefix +
+    core_path` for such a citation was previously meaningless (the joined
+    path is not how the citation is ever actually resolved), and reproduced
+    the same false-positive class this file's `${CLAUDE_PLUGIN_ROOT}/`
+    misparse fix already corrected for `find_unanchored`/`resolve_citations`
+    -- the same defect surviving in a second code path, not a separate one.
+    A merely-anchored-but-relative citation (`coordinator/`, `~/.claude/`)
+    is NOT exempt -- its whole meaning is relative to some repo root, which
+    is precisely what a consumer-cwd check exists to interrogate, so it
+    remains a candidate here exactly as an unanchored citation does.
+
     A `../../`-prefixed citation (the census counted 5 of this shape) is
     NEVER joined onto `consumer_root` for the literal-existence check: doing
     so performs a genuine filesystem `..` traversal that can escape
@@ -329,6 +551,8 @@ def find_dead_from_consumer(citations: list[Citation], tree_roots: dict[str, str
     findings: list[Finding] = []
     doe_roots = {name: tree_roots[name] for name in _DOE_TREE_NAMES if tree_roots.get(name)}
     for citation in citations:
+        if _resolves_cwd_independently(citation):
+            continue
         literal_path = citation.prefix + citation.core_path
         if not _contains_dotdot_segment(literal_path) and os.path.isfile(os.path.join(consumer_root, literal_path)):
             continue
@@ -343,6 +567,9 @@ def find_dead_from_consumer(citations: list[Citation], tree_roots: dict[str, str
 def _format_finding(finding: Finding) -> str:
     loc = f"{finding.citation.source_file}:{finding.citation.line_no}"
     cited = f"{finding.citation.prefix}{finding.citation.core_path}"
+    if finding.reason == "unanchored":
+        trees = ", ".join(finding.candidate_trees) if finding.candidate_trees else "nowhere"
+        return f"{loc}: unanchored citation '{cited}' — no explicit root anchor (resolves in: {trees})"
     if finding.reason == "ambiguous":
         trees = ", ".join(finding.candidate_trees)
         return f"{loc}: ambiguous citation '{cited}' resolves in trees: {trees}"
@@ -357,6 +584,7 @@ def run(
     tree_overrides: dict[str, str],
     use_default_trees: bool,
     consumer_root: str | None = None,
+    plugin_root: str | None = None,
 ) -> tuple[int, list[str], int, int]:
     """Returns (exit_code, finding_lines, illustrative_excluded_count,
     unresolved_default_tree_count).
@@ -369,13 +597,28 @@ def run(
     ambiguities -> a false-clean exit 0). A `--tree` override for the same
     name still fills the gap deliberately; only a tree left genuinely absent
     after overrides are applied is reported and forces a non-zero exit,
-    even when zero citations were found."""
+    even when zero citations were found.
+
+    `plugin_root`, when given, overrides the `plugin_root` tree entry
+    outright (same override semantics as `--tree`) -- it answers where
+    `${CLAUDE_PLUGIN_ROOT}/`-anchored citations resolve, which is NOT
+    necessarily the repo root (see module docstring's plugin-root gotcha).
+
+    Anchoring supersedes existence when `consumer_root` is None: citations
+    are split into unanchored (no prefix -- reported via `find_unanchored`,
+    the PRIMARY class, regardless of resolution) and anchored (existence/
+    ambiguity-checked via `resolve_citations`, the SECONDARY class). The
+    `--consumer-root` leg (`find_dead_from_consumer`) is untouched by this
+    split -- it already answers a literal-text question, not an existence
+    question, so the anchoring rule does not apply there."""
     tree_roots: dict[str, str] = {}
     default_tree_failures: list[tuple[str, str]] = []
     if use_default_trees:
         default_roots, default_tree_failures = _default_tree_roots()
         tree_roots.update(default_roots)
     tree_roots.update(tree_overrides)
+    if plugin_root is not None:
+        tree_roots["plugin_root"] = plugin_root
 
     unresolved_defaults = [
         (name, err) for name, err in default_tree_failures if name not in tree_roots
@@ -400,7 +643,7 @@ def run(
     if consumer_root is not None:
         findings = find_dead_from_consumer(citations, tree_roots, consumer_root)
     else:
-        findings = resolve_citations(citations, tree_roots)
+        findings = find_unanchored(citations, tree_roots) + resolve_citations(citations, tree_roots)
 
     lines = [_format_finding(f) for f in findings]
     for tree_name, err in unresolved_defaults:
@@ -438,6 +681,16 @@ def main(argv: list[str]) -> int:
             "literal text does not exist under PATH but DOES exist in a DoE tree."
         ),
     )
+    parser.add_argument(
+        "--plugin-root",
+        default=None,
+        metavar="PATH",
+        help=(
+            "Root a ${CLAUDE_PLUGIN_ROOT}/-anchored citation resolves against. "
+            "Overrides the 'plugin_root' default tree entry outright; this is NOT "
+            "necessarily the repo root -- see the module docstring's plugin-root gotcha."
+        ),
+    )
     args = parser.parse_args(argv[1:])
 
     corpus_dirs = args.corpus or [_REPO_ROOT]
@@ -462,6 +715,7 @@ def main(argv: list[str]) -> int:
         tree_overrides,
         use_default_trees=not args.no_default_trees,
         consumer_root=args.consumer_root,
+        plugin_root=args.plugin_root,
     )
     for line in lines:
         print(line, file=sys.stderr)

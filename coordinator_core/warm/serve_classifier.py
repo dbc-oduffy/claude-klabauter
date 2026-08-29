@@ -626,6 +626,74 @@ def _main_arity_ok(fn: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
     return positional >= 1 or args.vararg is not None
 
 
+#: The three ways a `coordinator/bin/*.py` file's own
+#: `if __name__ == "__main__":` guard hands argv to its `main`. The door's
+#: warm route (`coordinator_core.ops.invoke_from_argv :: _run_entrypoint`)
+#: REPLAYS the shape recorded here rather than picking one, so a name served
+#: warm receives byte-identical arguments to the same name run cold.
+#:
+#: Why a shape at all: the door relays `argv[1:]` (`door.c` — argv[0] never
+#: crosses the wire), and the three families disagree about what that list
+#: means. `main(sys.argv)` files re-slice `[1:]` internally, so handing them
+#: the door's already-sliced list drops their first real argument; `main()`
+#: files read `sys.argv` themselves, which inside the shared warm server is
+#: the SERVER's argv, not the caller's. Both are silent argv corruption at
+#: the ceremony entrypoints — see
+#: cross-repo/inbox/2026-08-29-doe-claude-em-exe-forwarder-argv-mangling.md.
+ARGV_SHAPE_FULL = "full"
+"""`main(sys.argv)` — the callee re-slices; it needs argv[0] present."""
+
+ARGV_SHAPE_NONE = "none"
+"""`main()` — the callee reads `sys.argv` itself; it needs `sys.argv` set."""
+
+ARGV_SHAPE_TAIL = "tail"
+"""Anything else (`main(sys.argv[1:])`, `main(_argv)`, no `main` call at all
+in the guard) — the callee is handed bare arguments, which is what the door
+already relays. The DEFAULT, deliberately: it is the shape that leaves the
+pre-existing behaviour unchanged, so an unrecognised guard degrades to what
+the door did before this classification existed rather than to a guess."""
+
+ARGV_SHAPES = (ARGV_SHAPE_FULL, ARGV_SHAPE_NONE, ARGV_SHAPE_TAIL)
+
+
+def _guard_main_calls(tree: ast.Module) -> list[ast.Call]:
+    """Every `main(...)` call inside a module-scope `if __name__ ==
+    "__main__":` guard. Walks the whole guard body, not just its top
+    statement: the recovery-shaped entrypoints (`cross-repo-memo`,
+    `freeze-review-diff`) call `main` from inside a `try`/`except` pair, and
+    `workday-complete-backfill-inject-anchor` calls it from both arms of
+    one."""
+    calls: list[ast.Call] = []
+    for stmt in tree.body:
+        if not _is_name_main_guard(stmt):
+            continue
+        for node in ast.walk(stmt):
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "main":
+                calls.append(node)
+    return calls
+
+
+def _one_call_shape(call: ast.Call) -> str:
+    if call.keywords or len(call.args) > 1:
+        return ARGV_SHAPE_TAIL
+    if not call.args:
+        return ARGV_SHAPE_NONE
+    return ARGV_SHAPE_FULL if ast.unparse(call.args[0]) == "sys.argv" else ARGV_SHAPE_TAIL
+
+
+def classify_main_argv_shape(tree: ast.Module) -> str:
+    """Which `ARGV_SHAPE_*` a parsed entrypoint's `__main__` guard uses.
+
+    Disagreeing calls in one guard resolve to `ARGV_SHAPE_TAIL` for the same
+    reason an unrecognised expression does — the default is the
+    behaviour-preserving answer, never a majority vote between two shapes
+    this function cannot reconcile."""
+    shapes = {_one_call_shape(call) for call in _guard_main_calls(tree)}
+    if len(shapes) != 1:
+        return ARGV_SHAPE_TAIL
+    return shapes.pop()
+
+
 @dataclass(frozen=True)
 class ServeVerdict:
     """One name's full warm-serve verdict: resolution, arity, and
@@ -639,6 +707,10 @@ class ServeVerdict:
     main_arity_ok: bool
     findings: tuple[Finding, ...]
     parse_error: str | None = None
+    #: `ARGV_SHAPE_TAIL` for a name with no script / an unparseable one --
+    #: neither was examined, and tail is this module's behaviour-preserving
+    #: default (see `ARGV_SHAPE_TAIL`).
+    main_argv_shape: str = ARGV_SHAPE_TAIL
 
     @property
     def servable(self) -> bool:
@@ -715,6 +787,7 @@ def classify_entrypoint(name: str, bin_dir: Path = _BIN_DIR) -> ServeVerdict:
         has_main=has_main,
         main_arity_ok=arity_ok,
         findings=findings,
+        main_argv_shape=classify_main_argv_shape(tree),
     )
 
 

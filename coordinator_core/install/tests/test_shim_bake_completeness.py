@@ -8,9 +8,9 @@ literal ``__PYTHON_BIN__`` token after install: ``claude-home.cmd``,
 ``mint-deliverable-id.sh.cmd``, ``platform-localize.cmd``, and
 ``resolve-coordinator-clone.cmd``. That audit disproved the standing
 hypothesis (commit ``d852809a1``) that these are all agent-helper
-forwarders exempted by ``_write_agent_cmd_forwarder``'s own contract —
-NONE of the 6 carry ``_AGENT_CMD_FORWARDER_MARKER``. The real contract is
-one level lower:
+forwarders exempted by the (since-deleted, 91771f631d/2026-08-29 DR-365)
+`.cmd`/`.ps1` writers' own contract — NONE of the 6 carry
+``_AGENT_CMD_FORWARDER_MARKER``. The real contract is one level lower:
 
 * ``_install_one`` (the copier every STATIC bin family --
   ``ml_family``/``ml_explicit``/``ch_family``/``platform_localize`` --
@@ -20,10 +20,12 @@ one level lower:
   the real, durable reason 5 of the 6 (``claude-home.cmd``,
   ``coordinator-settings-home.cmd``, ``machine-local.cmd``,
   ``platform-localize.cmd``, ``resolve-coordinator-clone.cmd``) stay
-  unbaked. Only ``python3.cmd`` (Step 3a) and the dynamic agent-helper
-  `.cmd`/`.ps1` forwarders (Step 3b, via ``_write_agent_cmd_forwarder``/
-  ``_write_agent_ps1_forwarder``) ever receive the resolved-interpreter
-  substitution.
+  unbaked. Only ``python3.cmd`` (Step 3a) ever received the
+  resolved-interpreter substitution this way -- the dynamic agent-helper
+  `.cmd`/`.ps1` forwarders (Step 3b) that used to also bake it are
+  deleted outright (DR-365 condemns both launcher classes; every name
+  gets the native door image or the bare-Python forwarder now, neither
+  of which carries an interpreter-bake token to substitute).
 * ``mint-deliverable-id.sh.cmd`` is not a member of any static family at
   all -- it is a pre-``_LEGACY_CMD_MARKER`` orphan from the retired
   double-suffix CLI naming scheme, hand-authored before
@@ -36,8 +38,8 @@ one level lower:
 This module asserts the PROPERTY, not a snapshot of today's 6 names: the
 one pre-marker orphan shape is swept while an unrelated marker-less
 `.cmd` (standing in for operator-authored or foreign files) is left
-alone, and the dynamic forwarder path always bakes when given a
-non-empty interpreter.
+alone. (The dynamic agent-helper forwarder path's own baking behavior,
+described above, is moot post-DR-365 — that path no longer exists.)
 
 **Superseded 2026-08-16 by registry-read-stops-costing-a-process (C2,
 C3):** the "static-copy path never bakes" half of the property above was

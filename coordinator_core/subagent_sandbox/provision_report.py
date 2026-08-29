@@ -70,6 +70,7 @@ from coordinator_core.snippet_sync.registry import (
     load_registry,
 )
 from coordinator_core.subagent_sandbox.engine import (
+    _NAMED_TEAMMATE_RE,
     load_policy,
     resolve_effective_types,
     resolve_git_root,
@@ -108,6 +109,105 @@ def _sanitize_segment(seg: str) -> Optional[str]:
     if sanitized in _REJECTED_SEGMENTS:
         return None
     return sanitized
+
+
+#: Leaf of the sidecar POINTER index, under the same
+#: ``.git/coordinator-sessions/`` home the ``.agents/`` back-pointer chain
+#: already occupies (``engine._read_backpointer_subagent_type``). Untracked and
+#: machine-local on purpose: it is a rebuildable cache of "where did this
+#: agent's sidecar go", not a record, so it must never enter the tree the
+#: reaper sweeps or add commit churn.
+_SIDECAR_POINTER_DIRNAME = ".agent-sidecars"
+
+#: The one prefix a pointer is allowed to name. A pointer file is the only
+#: input to this module that is neither the policy nor the spawn payload, so
+#: it is read as UNTRUSTED: a value that does not start with this, or that
+#: carries any ``..`` component, is discarded rather than followed.
+_SIDECAR_POINTER_PREFIX = "state/subagent-share/"
+
+
+def _sidecar_pointer_path(git_root: str, raw_agent_id: str, kind: str = "report") -> Optional[Path]:
+    """Pointer file for ``raw_agent_id``, or ``None`` if it cannot key one.
+
+    ``kind`` namespaces the index by PRODUCER, because two of them provision
+    into ``state/subagent-share/`` for the same agent with different leaf
+    suffixes -- this module (``<key>.md``) and ``dispatch.provision``
+    (``<key>.subagent-sidecar.md``). A single flat key would hand one
+    producer's spawn the other's document.
+
+    Keyed by the RAW payload ``agent_id``, never the canonicalized one, and
+    this is the whole point of the index rather than an implementation detail.
+    ``engine.resolve_effective_types`` canonicalizes through
+    ``session.identity.resolve_subagent_identity``, whose named-teammate leg
+    returns ``build_canonical_agent_id(name, session_id[:8])`` -- so the
+    canonical id has the SESSION ID baked into it and moves whenever the
+    session id does. An index keyed on it would move in exact lockstep with
+    the instability it exists to survive. The raw id is what the harness hands
+    the same agent across a resume.
+    """
+    seg = _sanitize_segment(raw_agent_id)
+    # Same gate the derived provision_key uses: an id that does not survive
+    # sanitization UNCHANGED is not keyed at all, rather than keyed under a
+    # silently different name that would never be found again.
+    if seg is None or seg != raw_agent_id:
+        return None
+    kind_seg = _sanitize_segment(kind)
+    if kind_seg is None or kind_seg != kind:
+        return None
+    return (
+        Path(git_root)
+        / ".git"
+        / "coordinator-sessions"
+        / _SIDECAR_POINTER_DIRNAME
+        / kind_seg
+        / seg
+    )
+
+
+def _read_sidecar_pointer(git_root: str, raw_agent_id: str, kind: str = "report") -> Optional[str]:
+    """Repo-relative path of this agent's EXISTING sidecar, or ``None``.
+
+    Every failure mode -- no pointer, unreadable, malformed, naming a path
+    outside ``state/subagent-share/``, or naming a file that is no longer
+    there (the reaper is entitled to have swept it) -- returns ``None``, which
+    the caller reads as "nothing to adopt" and provisions normally. A stale
+    pointer can therefore only ever cost a wasted read.
+    """
+    pointer = _sidecar_pointer_path(git_root, raw_agent_id, kind)
+    if pointer is None:
+        return None
+    try:
+        content = pointer.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    rel = content.splitlines()[0].strip() if content else ""
+    if not rel.startswith(_SIDECAR_POINTER_PREFIX):
+        return None
+    if ".." in rel.split("/"):
+        return None
+    if not (Path(git_root) / rel).is_file():
+        return None
+    return rel
+
+
+def _write_sidecar_pointer(
+    git_root: str, raw_agent_id: str, rel_path: str, kind: str = "report"
+) -> None:
+    """Record where this agent's sidecar went. Best-effort by contract.
+
+    Never raises and never reports: the pointer is a cache, and a spawn that
+    cannot write one must still get its sidecar. Rewritten (not created-once)
+    on every provision, so the pointer tracks the newest home if a sidecar is
+    ever legitimately re-provisioned elsewhere.
+    """
+    pointer = _sidecar_pointer_path(git_root, raw_agent_id, kind)
+    if pointer is None:
+        return
+    try:
+        pointer.parent.mkdir(parents=True, exist_ok=True)
+        pointer.write_text(rel_path + "\n", encoding="utf-8", newline="\n")
+    except OSError:
+        return
 
 
 #: Plan-derivable ``subagent_type``/``agent_type`` -> lens suffix map
@@ -983,6 +1083,55 @@ def assemble_contract_blocks_for_payload(
     )
 
 
+def _recover_orphaned_sidecar(
+    git_root: Optional[str],
+    payload: Dict[str, Any],
+    subagent_type: str,
+    kind: str = "report",
+) -> Optional[str]:
+    """This agent's existing sidecar when its ELIGIBILITY -- not merely its
+    path -- was lost to a session-id change. ``None`` in every other case.
+
+    The narrower, quieter half of the same defect the pointer index closes.
+    ``engine.resolve_effective_types`` resolves the second eligibility leg
+    through the back-pointer directory ``.agents/<canonical_id>/``, and that
+    directory is keyed by ``<name>@session-<session_id[:8]>`` -- the REQUESTING
+    session's id, baked into the key by
+    ``session.identity.resolve_subagent_identity``'s named-teammate leg. When
+    ``/clear`` mints a new session id, a NAMED teammate's back-pointer lookup
+    misses, ``subagent_type`` comes back empty, and a dispatch that was
+    admitted to ``report_sidecar`` through that leg alone now fails the
+    eligibility test outright. Not a second empty sidecar: NO sidecar, and no
+    emitted path for the agent to write into. The adoption check further down
+    never runs, because the caller has already returned.
+
+    A pointer is only ever written AFTER the policy admitted a spawn, so a
+    pointer for this agent is standing proof that this agent was eligible --
+    which is why recovering eligibility from one invents nothing. The sidecar
+    it names is this agent's own prior document, and handing it back is the
+    same continuity the adoption path provides, reached one step earlier.
+
+    Gated to cost nothing on the population that does not need it. The check
+    only touches disk when ALL of:
+      - the back-pointer leg came back EMPTY (``subagent_type`` falsy) -- a
+        spawn whose eligibility resolved normally has nothing to recover;
+      - the raw id is NAMED-teammate shaped -- the bare-hex leg of
+        ``resolve_subagent_identity`` ignores ``session_id`` entirely, so an
+        unnamed agent's canonical id never moves and its back-pointer never
+        misses for this reason;
+      - a git root resolved.
+    Every ineligible spawn outside that intersection -- which is nearly all of
+    them, since most dispatches are unnamed -- pays two in-memory tests and no
+    syscall.
+    """
+    if not git_root or subagent_type:
+        return None
+    raw_agent_id = str(payload.get("agent_id") or "")
+    if not raw_agent_id or not _NAMED_TEAMMATE_RE.fullmatch(raw_agent_id):
+        return None
+    return _read_sidecar_pointer(git_root, raw_agent_id, kind)
+
+
 def _provision_plan_derivable_doc(
     *,
     git_root: str,
@@ -1047,9 +1196,39 @@ def _provision(payload: Dict[str, Any], policy_path: Optional[str], cwd: Optiona
 
     is_eligible = agent_type in policy.report_sidecar or subagent_type in policy.report_sidecar
     if not is_eligible:
-        return None
+        # A named teammate whose back-pointer moved out from under it is not
+        # ineligible -- it is unrecognizable. See _recover_orphaned_sidecar.
+        return _recover_orphaned_sidecar(git_root, payload, subagent_type)
 
     effective_label = agent_type if agent_type in policy.report_sidecar else subagent_type
+
+    # `effective_label` is ALSO the label the frontmatter `agent_type:` field
+    # is stamped with (both `_provision_plan_derivable_doc` below and the
+    # session-keyed leg's `_build_doc_text`), not just the one naming the
+    # file. The two were separate reads -- filename off `effective_label`,
+    # header off the RAW `agent_type` leg -- and they disagree for exactly the
+    # populations the OR-resolver exists to serve:
+    #   - back-pointer-only eligibility (no `agent_type` on the payload at
+    #     all): the header stamped an EMPTY value while the filename carried
+    #     the real type.
+    #   - a NAMED teammate dispatch: `agent_type` is the teammate's own name.
+    #   - a RESUMED agent: the harness reports `general-purpose` for it, so
+    #     the header claimed a type the agent is not, on the one field a
+    #     consumer filters by. Observed live 2026-08-29 on a resumed
+    #     `coordinator:review-integrator` (reported by doe-claude-6c).
+    # Reading the SAME label the filename and the eligibility test already
+    # read closes that by construction -- the header can no longer disagree
+    # with the name of the file it sits in.
+    #
+    # Negative spec: this never invents a type and never costs a
+    # workflow-spawned agent its only identity. `effective_label` is
+    # `agent_type` VERBATIM whenever `agent_type` is what made this spawn
+    # eligible, which is the entire population with no back-pointer row to
+    # resolve through; `subagent_type` is only reached when `agent_type` did
+    # NOT carry an eligible type, i.e. when it was not the truer of the two.
+    # Distinct from `_receipt_agent_type`, which is vocabulary-gated because a
+    # receipt must be creditable against a closed set; the header has no such
+    # set and takes the resolved label unconditionally.
 
     if not git_root:
         return None
@@ -1083,7 +1262,7 @@ def _provision(payload: Dict[str, Any], policy_path: Optional[str], cwd: Optiona
                 git_root=git_root,
                 plan_stem=plan_stem,
                 lens=lens,
-                agent_type=agent_type,
+                agent_type=effective_label,
                 doc_type=doc_type,
                 session_id=str(session_id),
                 plan_path=str(plan_path),
@@ -1123,10 +1302,49 @@ def _provision(payload: Dict[str, Any], policy_path: Optional[str], cwd: Optiona
             sanitized_provision_key = _sanitize_segment(derived_key)
 
     session_dir = Path(git_root) / "state" / "subagent-share" / sanitized_session_id
+
+    # CONTINUITY: adopt this agent's EXISTING sidecar when the session id has
+    # moved out from under it.
+    #
+    # The home is `state/subagent-share/<session_id>/<label>.<agent_id>.md` and
+    # the idempotency below is a FileExistsError catch, so the continuity key
+    # is the PAIR (session_id, agent_id). `/clear` mints a fresh session id
+    # WITHOUT ending the process, so a subagent that outlives one re-fires
+    # SubagentStart under a new session id, misses the FileExistsError branch,
+    # and gets scaffolded a second, EMPTY sidecar while its populated one is
+    # orphaned under the old id. Observed live 2026-08-29 on a resumed
+    # `coordinator:review-integrator` (reported by doe-claude-6c): the run
+    # report read as lost work, and only survived because the agent noticed
+    # and hand-copied the file across.
+    #
+    # The orphan is worse than a duplicate. `reap-stale-subagent-sidecars.py`
+    # gates preservation PER SESSION DIRECTORY on that session being live, so
+    # the populated sidecars of a very-much-live session sit under a directory
+    # named for a session id that no longer exists -- the gate that exists to
+    # protect in-flight work aimed at the wrong directory.
+    #
+    # Only the deterministic-key branch is adopted into. The nonce branch has
+    # no stable identity by construction (a fresh nonce per spawn), so there is
+    # no continuity there to preserve and a re-dispatch is MEANT to open a new
+    # doc.
+    raw_agent_id = str(payload.get("agent_id") or "")
+    # Empty, not None: the deterministic branch below is the only reader and
+    # only reaches it under the same `sanitized_provision_key is not None`
+    # condition that fills it, so a non-optional type keeps that guarantee
+    # readable at the call sites instead of restating it as a narrowing.
+    rel_path = ""
+    if sanitized_provision_key is not None:
+        rel_path = f"state/subagent-share/{sanitized_session_id}/{sanitized_provision_key}.md"
+        if raw_agent_id and not (session_dir / f"{sanitized_provision_key}.md").exists():
+            adopted = _read_sidecar_pointer(git_root, raw_agent_id)
+            if adopted is not None and adopted != rel_path:
+                return adopted
+
     # Review: the Staff Engineer -- sanitized_session_id is guaranteed separator-free by
     # _sanitize_segment, so this can only ever mkdir a direct child of
     # subagent-share/ (confinement invariant -- do not relax the sanitizer
-    # without revisiting this).
+    # without revisiting this). Deferred until after the adoption check above
+    # so an adopting spawn leaves no stray empty session dir behind.
     session_dir.mkdir(parents=True, exist_ok=True)
 
     # SUBSUME: --type axis. `type` is read straight off the payload -- the
@@ -1144,7 +1362,7 @@ def _provision(payload: Dict[str, Any], policy_path: Optional[str], cwd: Optiona
     # (resolve_effective_types' first return leg above): agent_id is the
     # SPAWNED agent's own id, session_id/lead_session_id is who dispatched
     # it. Never conflate the two when reading this doc downstream.
-    doc_text = _build_doc_text(agent_type, spawned_at, doc_type, lead_session_id=session_id)
+    doc_text = _build_doc_text(effective_label, spawned_at, doc_type, lead_session_id=session_id)
 
     # AC1: stamp the review receipt on an eligible reviewer's OWN sidecar,
     # at dispatch, before the very first write -- see _splice_review_receipt
@@ -1186,9 +1404,15 @@ def _provision(payload: Dict[str, Any], policy_path: Optional[str], cwd: Optiona
             # rationale and the phantom-live-peer guard it applies.
             session_scope.touch_written_path(
                 str(session_id),
-                f"state/subagent-share/{sanitized_session_id}/{sanitized_provision_key}.md",
+                rel_path,
                 git_root,
             )
+            # CONTINUITY: record where this agent's sidecar went, so the next
+            # spawn under a DIFFERENT session id can find it (see the adoption
+            # check above). Best-effort -- a pointer that cannot be written
+            # costs continuity, never the sidecar.
+            if raw_agent_id:
+                _write_sidecar_pointer(git_root, raw_agent_id, rel_path)
         except FileExistsError:
             # Intended idempotent hit, not an error: a chunk re-dispatch with
             # the same provision_key re-opens the SAME doc rather than
@@ -1197,7 +1421,7 @@ def _provision(payload: Dict[str, Any], policy_path: Optional[str], cwd: Optiona
             # the bytes.
             pass
 
-        return f"state/subagent-share/{sanitized_session_id}/{sanitized_provision_key}.md"
+        return rel_path
 
     nonce = secrets.token_hex(4)
     doc_path = session_dir / f"{sanitized_label}-{nonce}.md"

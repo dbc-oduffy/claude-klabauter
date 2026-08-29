@@ -214,6 +214,16 @@ from coordinator_core.subagent_sandbox.engine import (
     resolve_git_root,
 )
 from coordinator_core.subagent_sandbox.provision_report import _sanitize_segment
+from coordinator_core.subagent_sandbox.provision_report import (
+    _read_sidecar_pointer,
+    _recover_orphaned_sidecar,
+    _write_sidecar_pointer,
+)
+
+#: Producer namespace for the sidecar pointer index (see
+#: `provision_report._sidecar_pointer_path`). Distinct from that module's own
+#: default because the two write different leaf suffixes for the same agent.
+_POINTER_KIND = "dispatch"
 
 # DEFERRED, NOT a module-level import (2026-08-13 hot-path import-budget fix,
 # fourth site of the same defect shape as coordinator_core/bash_guards/
@@ -381,6 +391,13 @@ def provision_subagent_sidecar(
 
     is_eligible = agent_type in policy.report_sidecar or subagent_type in policy.report_sidecar
     if not is_eligible:
+        # A named teammate whose back-pointer moved out from under it is not
+        # ineligible -- it is unrecognizable. Checked BEFORE the miss is
+        # logged, so a recovered spawn is not also reported as an
+        # unenumerated-type miss it never was.
+        recovered = _recover_orphaned_sidecar(git_root, payload, subagent_type, _POINTER_KIND)
+        if recovered is not None:
+            return recovered
         _log_unenumerated_sidecar_miss(agent_type, subagent_type)
         return None
 
@@ -457,9 +474,35 @@ def provision_subagent_sidecar(
             sanitized_provision_key = _sanitize_segment(derived_key)
 
     session_dir = Path(git_root) / "state" / "subagent-share" / sanitized_session_id
+
+    # CONTINUITY: adopt this agent's EXISTING sidecar when the session id has
+    # moved out from under it. Same defect, same fix, same reasoning as
+    # `subagent_sandbox.provision_report._provision` -- see the long comment
+    # there. This module shares that module's home, its `(session_id,
+    # agent_id)` key, and its FileExistsError idempotency, so it shared the
+    # defect too: `/clear` mints a fresh session id without ending the
+    # process, and a subagent that outlives one was scaffolded a second, EMPTY
+    # sidecar while its populated one was orphaned under the old id.
+    #
+    # `_POINTER_KIND` keeps the two producers' indexes apart. They provision
+    # for the same agent with different leaf suffixes (`<key>.md` there,
+    # `<key>.subagent-sidecar.md` here), so a shared flat key would hand one
+    # producer's spawn the other's document.
+    raw_agent_id = str(payload.get("agent_id") or "")
+    if sanitized_provision_key is not None and raw_agent_id:
+        leaf = f"{sanitized_provision_key}.subagent-sidecar.md"
+        if not (session_dir / leaf).exists():
+            adopted = _read_sidecar_pointer(git_root, raw_agent_id, _POINTER_KIND)
+            if adopted is not None and adopted != (
+                f"state/subagent-share/{sanitized_session_id}/{leaf}"
+            ):
+                return adopted
+
     # sanitized_session_id is guaranteed separator-free by _sanitize_segment,
     # so this can only ever mkdir a direct child of subagent-share/
-    # (confinement invariant -- do not relax the sanitizer without revisiting this).
+    # (confinement invariant -- do not relax the sanitizer without revisiting
+    # this). Deferred until after the adoption check above so an adopting
+    # spawn leaves no stray empty session dir behind.
     session_dir.mkdir(parents=True, exist_ok=True)
 
     spawned_at = datetime.now(timezone.utc).isoformat()
@@ -485,6 +528,12 @@ def provision_subagent_sidecar(
             # for the full rationale and the phantom-live-peer guard it
             # applies before recording.
             session_scope.touch_written_path(str(session_id), rel_path, cwd)
+            # CONTINUITY: record where this agent's sidecar went, so the next
+            # spawn under a DIFFERENT session id can find it. Best-effort -- a
+            # pointer that cannot be written costs continuity, never the
+            # sidecar.
+            if raw_agent_id:
+                _write_sidecar_pointer(git_root, raw_agent_id, rel_path, _POINTER_KIND)
         except FileExistsError:
             # Idempotent re-dispatch hit (same provision_key): preserve
             # existing content, just return its path -- matches

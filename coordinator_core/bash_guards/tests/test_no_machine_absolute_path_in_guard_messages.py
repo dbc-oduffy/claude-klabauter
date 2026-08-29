@@ -202,7 +202,11 @@ it' half" (companion to the peer executor's per-site `_helpers.py` fix).
 
 from __future__ import annotations
 
+import pytest
+
 import re
+import shutil
+from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
 from coordinator_core.bash_guards._helpers import (
@@ -229,6 +233,46 @@ from coordinator_core.ops.check_posix_exec_assumptions import (
 )
 from coordinator_core.ops.session._path_shape_regexes import WIN_DRIVE_RE
 from coordinator_core.bash_guards.dispatch_checks import _bt_python3_invocation
+
+
+#: The probe session id this module hands guard-message helpers. Named rather
+#: than inlined so the cleanup fixture below removes exactly what it mints.
+_PROBE_SESSION_ID = "test-session-abc123"
+
+
+@pytest.fixture(autouse=True)
+def _reap_probe_session_dir():
+    """Remove the session directory this module's probe mints in the REAL
+    registry.
+
+    `annotate_deny` resolves its sentinel path from the repo it is pointed at,
+    which here is the live one, so a probe session id lands
+    `.git/coordinator-sessions/<_PROBE_SESSION_ID>/` for a session that never
+    existed -- and `session.liveness.live_session_ids` enumerates every
+    non-denylisted child of that directory as a session, so the residue reads
+    as a live phantom peer to every real session on the box.
+
+    Function-scoped, not module-scoped: `coordinator_core/conftest.py`'s
+    `_no_new_live_session_hub_entries` checks the hub after EVERY test, so a
+    module-scoped cleanup runs far too late and the first test still trips it.
+    A conftest-level autouse fixture is set up before a module-level one, so
+    teardown runs in reverse and this cleanup lands first.
+
+    Cleaned up rather than denylisted, and the third instance of this class
+    fixed on 2026-08-29 (see `test_dispatch_latency_bound.py` and
+    `test_quote_split_verb_bypass_sweep.py`): `_NON_SESSION_DIR_NAMES` is for
+    fixed directory names a MODULE owns, and a stray minted by a writer that
+    should not have minted it gets the writer fixed, not the name quieted.
+    """
+    yield
+    probe_dir = (
+        Path(__file__).resolve().parents[3]
+        / ".git"
+        / "coordinator-sessions"
+        / _PROBE_SESSION_ID
+    )
+    if probe_dir.is_dir():
+        shutil.rmtree(probe_dir, ignore_errors=True)
 
 # ---------------------------------------------------------------------------
 # The predicate -- platform-independent, regex-only (see module docstring).
@@ -535,7 +579,7 @@ def test_annotate_deny_funnel_renders_no_machine_absolute_path_at_all():
     }
     annotated = annotate_deny(
         envelope,
-        "test-session-abc123",
+        _PROBE_SESSION_ID,
         "example-guard",
         resolve_override_keys_doc_display(),
     )

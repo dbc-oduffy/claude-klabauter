@@ -484,6 +484,15 @@ discharge-by-remembering. `--policy`/`--cwd` are deliberately excluded: pure inv
 plumbing (where to find the policy file / what cwd to resolve the git root from), not part
 of the DoE<->claude-klabauter wire grammar this file pins.
 
+`plugin_root` is the contract-block leg's FIRST rung: the coordinator-claude plugin's CONTENT
+root (the directory directly holding `snippets/`), computed per call by
+`hook_http.payload_from_event` and carried on the payload. It is a wire axis, not plumbing,
+precisely because the payload rung EXISTS to beat `resolve_plugin_root()`'s ambient probe —
+a resident server freezes its environment at start, so an env-derived root can go stale in a
+way a per-call payload field cannot. `resolve_plugin_root()` remains the fallback, reached
+only when the payload is silent (a direct in-process caller that never crossed the HTTP hook
+seam).
+
 - stdin: `agent_type`
 - stdin: `subagent_type`
 - stdin: `agent_id`
@@ -492,6 +501,7 @@ of the DoE<->claude-klabauter wire grammar this file pins.
 - stdin: `type`
 - stdin: `contract_blocks`
 - stdin: `plan_path`
+- stdin: `plugin_root`
 - cli: `type`
 - stdout: `report_sidecar`
 - stdout: `injected_prompt_blocks`
@@ -531,6 +541,95 @@ name, the exact-match subagent_type keying, the Bash-only scope, and this loader
 contract) — the same DoE/claude-klabauter split as every other axis in this contract. A `bash_policy`-shaped
 change on either side (key rename, value-grammar change, fail-open weakened) is exactly as much
 breaking drift as a `report_sidecar`-shaped change (see § Drift detection below).
+
+## Sidecar pointer index — continuity across a session-id change
+
+A sidecar's home is `state/subagent-share/<session_id>/<key>.md` and its idempotency is a
+`FileExistsError` catch, so the continuity key is the **pair** `(session_id, agent_id)`.
+`/clear` mints a fresh session id **without ending the process**, so a subagent that outlives
+one re-fires SubagentStart under a new session id, misses that catch, and — before this index
+— was scaffolded a second, EMPTY sidecar while its populated one was orphaned under the old
+id. Observed live 2026-08-29 on a resumed `coordinator:review-integrator`, reported by
+doe-claude-6c: the run report read as lost work.
+
+The orphan is the worse half. `coordinator/bin/reap-stale-subagent-sidecars.py` gates
+preservation **per session directory** on that session being live, so the populated sidecars
+of a very-much-live session sat under a directory named for a session id that no longer
+existed — the gate that exists to protect in-flight work aimed at the wrong directory.
+
+**Mechanism.** `_provision` records `<agent_id> -> <repo-relative sidecar path>` under
+`.git/coordinator-sessions/.agent-sidecars/<kind>/<agent_id>` on the write that creates a
+sidecar, and consults it before scaffolding a new one. A hit whose target still exists is
+ADOPTED — the emitted path is the existing sidecar's, and nothing is written.
+
+- **Keyed on the RAW payload `agent_id`, never the canonical one.** This is the whole point
+  rather than an implementation detail: `engine.resolve_effective_types` canonicalizes through
+  `session.identity.resolve_subagent_identity`, whose named-teammate leg returns
+  `build_canonical_agent_id(name, session_id[:8])` — the canonical id has the session id baked
+  into it and moves in exact lockstep with the instability the index exists to survive.
+- **`<kind>` namespaces by producer.** Two modules provision into `state/subagent-share/` for
+  the same agent with different leaf suffixes — `provision_report` (`<key>.md`, kind `report`)
+  and `dispatch.provision` (`<key>.subagent-sidecar.md`, kind `dispatch`). A shared flat key
+  would hand one producer's spawn the other's document.
+- **Untracked and machine-local, under the `.agents/` back-pointer chain's own home.** It is a
+  rebuildable cache of "where did this agent's sidecar go", not a record: it must add no commit
+  churn and must never enter the tree the reaper sweeps.
+- **The pointer file is read as UNTRUSTED** — the only input to the module that is neither the
+  policy nor the spawn payload. A value not under `state/subagent-share/`, carrying a `..`
+  component, or naming a file that is no longer there (the reaper is entitled to have swept it)
+  is discarded, and the spawn provisions normally. A stale or hostile pointer can only ever
+  cost a wasted read.
+- **Deterministic-key branch only.** The nonce branch has no stable identity by construction (a
+  fresh nonce per spawn), so there is no continuity there to preserve and a re-dispatch is
+  MEANT to open a new doc.
+- **Best-effort write.** A pointer that cannot be written costs continuity, never the sidecar.
+
+**Not a wire change.** No stdin/cli/stdout axis is added or altered — consumers take the emitted
+path string as-is, and adopting an existing path instead of scaffolding a new one is
+compatible by construction.
+
+**Measured** (process time, 20000 rounds x5 best-of, this box, 2026-08-29), because this is the
+spawn hot path and `bash_guards/tests/test_dispatch_latency_bound.py` bounds it:
+
+    pointer read (miss — every fresh spawn)   106 us
+    pointer read (hit  — the resume path)     140 us
+    pointer write (once per sidecar created)  399 us
+    target .exists() probe                      8 us
+
+    added on a fresh spawn   513 us   (0.10% of the 500ms brightline)
+    added on a resume        148 us
+
+No new process is spawned; the cost is three filesystem touches, dominated by the pointer
+write on the create path.
+
+### The eligibility half — `_recover_orphaned_sidecar`
+
+The adoption check above repairs a spawn that is still ADMITTED to `report_sidecar`. A named
+teammate loses more than its path. `.agents/<canonical_id>/` is keyed by that same
+session-derived canonical id, so after a session-id change the back-pointer lookup misses,
+`subagent_type` resolves empty, and a dispatch admitted through that leg ALONE fails the
+eligibility test outright — not a second empty sidecar but no sidecar and no emitted path, with
+`_provision` returning before adoption is ever reached.
+
+`_recover_orphaned_sidecar` runs on the ineligible branch and returns this agent's existing
+sidecar. A pointer is only ever written AFTER the policy admitted a spawn, so a pointer is
+standing proof that this agent was eligible — which is why recovering eligibility from one
+invents nothing, and why an agent that never had a pointer stays ineligible.
+
+Gated to cost nothing on the population that does not need it. Disk is touched only when the
+back-pointer leg came back empty AND the raw id is named-teammate shaped AND a git root
+resolved. The bare-hex leg of `resolve_subagent_identity` ignores `session_id` entirely, so an
+unnamed agent's canonical id never moves and its back-pointer never misses for this reason;
+every ineligible spawn outside that intersection — nearly all of them, since most dispatches
+are unnamed — pays two in-memory tests and no syscall.
+
+**Registry neighbourhood.** `.agent-sidecars` is named in
+`session.liveness._NON_SESSION_DIR_NAMES`. `live_session_ids` enumerates every non-denylisted
+child of `.git/coordinator-sessions/` as a session, so an unnamed index directory would read as
+a live phantom peer to every session on the box. It is named there as a fixed directory this
+module owns — the case that denylist exists for — not as a passlist for a stray.
+
+Row: `state/bug-backlog/2026-08-29-a-session-id-change-orphans-a-live-agents-sidecar.yaml`.
 
 ## Drift detection
 

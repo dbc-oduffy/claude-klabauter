@@ -12,17 +12,19 @@ remembers to re-run the installer by hand — which nobody does. Ten CLIs
 
 This module is the narrow fix: a cheap, silent, best-effort check — call it
 every session boot — that closes ONLY the missing-forwarder gap, using the
-exact same two writers (`_write_agent_forwarder`/`_write_agent_cmd_forwarder`)
-`substrate.py`'s own install path uses, so there is no second, drift-prone
-forwarder-body implementation.
+exact same writer (`_write_agent_forwarder`, or `_cut_over_to_native_door`
+for a door-eligible name) `substrate.py`'s own install path uses, so there
+is no second, drift-prone forwarder-body implementation.
+(`_write_agent_cmd_forwarder`, this module's former second writer, is
+deleted -- 91771f631d, "the cmd forwarder dies": every name gets the
+native door image or the bare-Python forwarder now, never a `.cmd`.)
 
 Why not just invoke the full `substrate.run()` when a gap is detected
 --------------------------------------------------------------------
 Considered and rejected. `run()` bundles far more than the forwarder loop:
 a hardware audit that spawns a subprocess and writes `hardware.local.toml`
-(Step 3h), an `fnm` brew/curl third-party installer step, a PowerShell
-execution-policy gate that spawns `powershell.exe` (the `.ps1` forwarder
-leg), and — the decisive one — a legacy `.coordinator-venv` HEALTH PROBE
+(Step 3h), an `fnm` brew/curl third-party installer step, and — the
+decisive one — a legacy `.coordinator-venv` HEALTH PROBE
 AND DELETE plus a venv REBUILD (Step C10a-3,
 `coordinator_core.install.ensure_venv.ensure_coordinator_venv`). Firing
 that unattended, even rarely, risks racing another concurrent session's
@@ -39,8 +41,8 @@ So: extract (`substrate._write_agent_helper_forwarders`, a pure refactor of
 
 Concurrency
 -----------
-`_write_agent_forwarder`/`_write_agent_cmd_forwarder` write via a plain
-in-place `Path.write_text` — not atomic-temp-and-rename — so two processes
+`_write_agent_forwarder` writes via a plain in-place `Path.write_text` —
+not atomic-temp-and-rename — so two processes
 writing the SAME destination concurrently can interleave and leave a
 truncated/half-written file on disk. This module therefore:
 

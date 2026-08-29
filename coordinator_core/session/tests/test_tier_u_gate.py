@@ -17,6 +17,7 @@ import ast
 import inspect
 import json
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -552,12 +553,47 @@ class TestGateCallSitesPinned:
 
     @staticmethod
     def _load_module(name, path):
+        """Load a `coordinator/bin` CLI by file path, with the sys.path
+        precondition that CLI is entitled to assume.
+
+        Both CLIs open with `import lib` and then `from cc_invoke import ...`,
+        and `coordinator/bin/lib/__init__.py` is what puts `coordinator/bin/lib`
+        on sys.path so the bare `cc_invoke` resolves. Its own negative-spec
+        forbids a CLI from carrying a sys.path preamble of its own, and names
+        the two paths that satisfy the precondition instead: a real invocation,
+        where the script's directory IS `sys.path[0]`, and the warm path, where
+        `ops/invoke_from_argv.py` inserts the bin directory before loading any
+        entrypoint. `spec_from_file_location` is neither, so `import lib` fell
+        through to whatever else on sys.path answers to that very generic name
+        -- on any box with pywin32 installed, that is
+        `site-packages/win32/lib`, an unrelated namespace package with no
+        `cc_invoke` in it, and the CLI died on import before this test could
+        read a single call site.
+
+        Restored afterwards, including `sys.modules["lib"]`: a cached binding
+        for a name this generic must not leak out of this loader into the rest
+        of the session.
+        """
         import importlib.util
 
-        spec = importlib.util.spec_from_file_location(name, path)
-        mod = importlib.util.module_from_spec(spec)
-        assert spec.loader is not None
-        spec.loader.exec_module(mod)
+        bin_dir = str(Path(TestGateCallSitesPinned._REPO_ROOT) / "coordinator" / "bin")
+        lib_dir = str(Path(bin_dir) / "lib")
+        saved_sys_path = list(sys.path)
+        saved_lib = sys.modules.pop("lib", None)
+        for entry in (lib_dir, bin_dir):
+            if entry not in sys.path:
+                sys.path.insert(0, entry)
+        try:
+            spec = importlib.util.spec_from_file_location(name, path)
+            mod = importlib.util.module_from_spec(spec)
+            assert spec.loader is not None
+            spec.loader.exec_module(mod)
+        finally:
+            sys.path[:] = saved_sys_path
+            if saved_lib is not None:
+                sys.modules["lib"] = saved_lib
+            else:
+                sys.modules.pop("lib", None)
         return mod
 
     def test_validate_fast_and_packageability_run_fast_pins_both_gate_call_sites(self):
