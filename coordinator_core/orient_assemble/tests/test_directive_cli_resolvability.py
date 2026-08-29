@@ -128,8 +128,8 @@ def _fully_stubbed_brief(monkeypatch, cadence: str, tmp_path: Path) -> dict:
     # readers_branch_reconcile: span-assert directive + auto-reconcile
     # judgment points (no directive from this family; stubbed to a no-op
     # so the family stays cadence-insensitive-but-present in the envelope).
-    monkeypatch.setattr(rbr, "_read_span_assert", lambda: ReaderResult())
-    monkeypatch.setattr(rbr, "_read_auto_reconcile", lambda: ReaderResult())
+    monkeypatch.setattr(rbr, "_read_span_assert", lambda repo_root=None: ReaderResult())
+    monkeypatch.setattr(rbr, "_read_auto_reconcile", lambda repo_root=None: ReaderResult())
 
     # readers_health_reaper: sites 8-13 (claude-klabauter-bin-sentinel, ceremony-hook,
     # reaper-dry-run, day/session marker-freshness). exec-bit-check was

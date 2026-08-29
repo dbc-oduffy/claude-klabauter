@@ -256,7 +256,14 @@ def _redirect_target_token(segment: str) -> Optional[str]:
     """The token immediately following the last real (non-fd-duplication,
     non-``/dev/null``) bare ``>``/``>>`` in ``segment``. ``None`` when
     ``segment`` carries no such redirect, or it is trailing with nothing
-    after it."""
+    after it.
+
+    Literal joins are folded first (``> 'CLAU''DE.md'``). This token is read
+    for its IDENTITY, never its offsets, so rewriting the segment here is
+    safe -- and an unfolded read stopped at the first closing quote, returning
+    a truncated name that matched no governed identifier. That is how a split
+    name reached a real redirect target and was allowed."""
+    segment = _fold_literal_joins(segment)
     masked = _SAFE_REDIRECT_RE.sub(lambda m: " " * len(m.group(0)), segment)
     last = None
     for match in _BARE_REDIRECT_RE.finditer(masked):
@@ -316,13 +323,69 @@ def _has_indirection_marker(text: str) -> bool:
     return any(pattern.search(text) for pattern in _INDIRECTION_PATTERNS)
 
 
+#: A ZERO-WIDTH literal join: two quote characters with nothing between them
+#: but an optional ``+``, each optionally backslash-escaped. Covers shell
+#: adjacency (``'CLAU''DE.md'``), Python implicit concatenation (the same
+#: bytes), Python explicit concatenation (``'CLAU' + 'DE.md'``), either quote
+#: style, mixed between them, and the escaped form a payload nested inside a
+#: double-quoted shell word must use (``'CLAU'+\"DE.md\"``).
+#: WHITESPACE-SEPARATED words are deliberately NOT joined: ``'a' 'b'`` is one
+#: string in Python but two arguments in shell, and folding it would invent
+#: governed mentions in ordinary commands. That is why a gap requires a ``+``.
+_LITERAL_JOIN_RE = re.compile(r"\\?['\"]\\?['\"]|\\?['\"]\s*\+\s*\\?['\"]")
+
+#: One pass collapses every non-overlapping join; a second catches joins the
+#: first pass created by removing the quotes between them (``'a''b''c'``).
+#: Three is slack, not a measurement -- the loop exits on the first no-op pass.
+_LITERAL_JOIN_FOLD_PASSES = 3
+
+
+def _fold_literal_joins(text: str) -> str:
+    """``text`` with zero-width literal joins collapsed, so a governed name
+    split across a concatenation reads as contiguous text.
+
+    WHY THIS EXISTS: the prefilter below is plain substring matching, so
+    ``open('CLAU' 'DE.md', 'w')`` named no governed surface anywhere in the
+    raw command and was allowed at the fast path -- never reaching any sink
+    leg (measured 2026-08-29; the defect predated both by-sink narrowings).
+    Folding is applied IN ADDITION to the raw text, never instead of it, so
+    this can only ever admit more commands to the sink legs, never fewer.
+
+    Bounded: each pass strictly shortens the string, and the loop stops when
+    a pass changes nothing, so a pathological payload cannot spin here.
+
+    The quote-character test first is a HOT-PATH guard, not tidiness: this
+    runs on every Bash tool call in the fleet, and a command carrying no
+    quote at all cannot contain a join, so it must not pay for a regex scan
+    to find that out."""
+    if "'" not in text and '"' not in text:
+        return text
+    for _ in range(_LITERAL_JOIN_FOLD_PASSES):
+        folded = _LITERAL_JOIN_RE.sub("", text)
+        if folded == text:
+            return text
+        text = folded
+    return text
+
+
 def _mentions_governed_identifier(text: str, identifiers_lower: Tuple[str, ...]) -> bool:
     """Whole-command PREFILTER: does ``text`` mention a governed surface at
     all? Deliberately UNBOUNDED (plain substring) -- see module docstring
     point 1 and the original's own rationale for why an anchored prefilter
-    would miss a variable-name-shaped smuggled write."""
+    would miss a variable-name-shaped smuggled write.
+
+    Checked against the raw text AND its literal-join fold, so splitting the
+    name across a concatenation does not evade the guard. The raw check runs
+    first and short-circuits, so the ordinary case -- a command that names a
+    governed surface plainly, or one that mentions none -- pays for the fold
+    only when the raw text has already missed."""
     lowered = text.lower()
-    return any(identifier in lowered for identifier in identifiers_lower)
+    if any(identifier in lowered for identifier in identifiers_lower):
+        return True
+    folded = _fold_literal_joins(lowered)
+    if folded == lowered:
+        return False
+    return any(identifier in folded for identifier in identifiers_lower)
 
 
 def _names_governed_identifier(text: str, patterns: Tuple["re.Pattern[str]", ...]) -> bool:

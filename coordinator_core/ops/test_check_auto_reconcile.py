@@ -61,7 +61,7 @@ def test_get_response_returns_envelope_on_success(monkeypatch, tmp_path):
         },
     }
 
-    async def _fake_dispatch(msg):
+    async def _fake_dispatch(msg, caller=None):
         assert msg["method"] == "handoff.reconcile_open"
         assert msg["params"] == {}
         assert msg["_origin_worktree"] == str(tmp_path)
@@ -175,7 +175,7 @@ def test_get_response_stamps_origin_worktree_from_cwd_not_module_location(
 
     seen: dict = {}
 
-    async def _fake_dispatch(msg):
+    async def _fake_dispatch(msg, caller=None):
         seen["origin_worktree"] = msg["_origin_worktree"]
         return {"jsonrpc": "2.0", "id": 1, "result": {"surfaced": []}}
 

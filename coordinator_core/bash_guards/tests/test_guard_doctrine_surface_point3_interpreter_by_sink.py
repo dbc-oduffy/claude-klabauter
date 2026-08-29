@@ -123,26 +123,51 @@ def test_a_read_mode_open_is_not_treated_as_a_sink() -> None:
     assert guard._interpreter_write_sinks_are_ungoverned(segment, IDENTIFIERS) is True
 
 
-def test_the_substring_prefilter_hole_is_upstream_of_this_leg() -> None:
-    """NOT A PASS -- a pinned, measured LIMIT, recorded so it is not mistaken for
-    coverage this file provides.
+SPLIT_NAME_CASES = [
+    ("explicit concat in a payload", f"python3 -c \"open('{GOV[:-3]}'+'.md','w').write('x')\""),
+    ("implicit concat in a payload", f"python3 -c \"open('{GOV[:-3]}''.md','w').write('x')\""),
+    ("spaced explicit concat", f"python3 -c \"open('{GOV[:-3]}' + '.md','w').write('x')\""),
+    ("mixed quote styles", f"python3 -c \"open('{GOV[:-3]}'+\\\".md\\\",'w').write('x')\""),
+    ("shell adjacency in a redirect target", f"echo x > '{GOV[:-3]}''.md'"),
+    ("three-way split", f"python3 -c \"open('{GOV[:-4]}'+'{GOV[-4]}'+'.md','w').write('x')\""),
+]
 
-    Point 1's governed-identifier prefilter is plain substring matching, so a
-    payload that splits the name never reaches ANY sink leg:
 
-        python3 -c "open('CLAUDE'+'.md','w').write('x')"
+@pytest.mark.parametrize("label,cmd", SPLIT_NAME_CASES, ids=[c[0] for c in SPLIT_NAME_CASES])
+def test_a_name_split_across_a_concatenation_still_denies(label: str, cmd: str) -> None:
+    """Point 1's prefilter is plain substring matching, so a governed name split
+    across a concatenation used to name no surface anywhere in the raw command
+    and was allowed at the FAST PATH -- never reaching any sink leg at all
+    (measured on the pre-change module, 2026-08-29). `_fold_literal_joins` now
+    collapses zero-width literal joins and the prefilter checks the fold as well
+    as the raw text.
 
-    is allowed, and was allowed identically before the point-3 narrowing
-    (measured against the pre-change module, 2026-08-29). Closing it means
-    folding literal concatenation before the prefilter, on the hot path every
-    Bash call crosses -- its own design and its own perf spike, filed rather
-    than smuggled in here. See
-    `state/bug-backlog/2026-08-29-string-concatenation-defeats-the-governed-identifier-prefilter.yaml`.
+    These are DENY rather than allow for two different reasons and both are
+    correct: the payload cases reach the interpreter leg and fail closed there
+    because a concatenated path is not a resolvable literal; the redirect case
+    reaches point 3's own target test and matches a governed identifier."""
+    assert guard.is_denied_bash_write(cmd, IDENTIFIERS) is True, (
+        f"{label}: a split governed name evaded the prefilter -- {cmd!r}"
+    )
 
-    This test asserts the CURRENT behaviour so the day it is fixed, this file
-    fails and is updated deliberately."""
-    split_name = f"python3 -c \"open('{GOV[:-3]}'+'.md','w').write('x')\""
-    assert guard.is_denied_bash_write(split_name, IDENTIFIERS) is False
+
+def test_whitespace_separated_words_are_never_joined() -> None:
+    """The fold is deliberately ZERO-WIDTH only. `'a' 'b'` is one string in
+    Python but two arguments in shell, so joining it would invent governed
+    mentions in ordinary commands -- an over-denial introduced by a fix for an
+    under-denial. Pinned so a later widening is a deliberate act."""
+    assert guard._fold_literal_joins("cat 'foo' 'bar'") == "cat 'foo' 'bar'"
+    two_words = f"grep -n heading '{GOV[:-3]}' '.md'"
+    assert guard.is_denied_bash_write(two_words, IDENTIFIERS) is False
+
+
+def test_folding_cannot_reduce_what_the_prefilter_admits() -> None:
+    """The fold runs IN ADDITION to the raw check, never instead of it, so it
+    can only widen what reaches the sink legs. A plainly-named surface must
+    still be seen even in text the fold would rewrite."""
+    plain = f"echo x > {GOV} ; python3 -c \"print('a'+'b')\""
+    assert guard._mentions_governed_identifier(plain, IDENTIFIERS) is True
+    assert guard.is_denied_bash_write(plain, IDENTIFIERS) is True
 
 
 def test_open_call_spans_survive_nested_parens() -> None:

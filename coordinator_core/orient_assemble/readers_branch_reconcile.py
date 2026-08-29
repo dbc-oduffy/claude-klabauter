@@ -233,10 +233,14 @@ def _auto_reconcile_probe_failed(error: dict[str, Any]) -> ReaderResult:
     )
 
 
-def _read_auto_reconcile() -> ReaderResult:
+def _read_auto_reconcile(repo_root: str | None = None) -> ReaderResult:
     """Open-handoff auto-reconcile observation — `check_auto_reconcile.get_response()`
     dispatches `handoff.reconcile_open` in-process under its own conservative
-    `dry_run=True` default (never overridden here). Each `surfaced[]` entry
+    `dry_run=True` default (never overridden here). `repo_root`, when given,
+    is threaded through to `get_response(repo_root)` (DR-382: an explicit
+    scan scope, never re-derived from process cwd inside a reader); `None`
+    preserves the prior ambient-cwd behaviour byte-for-byte via
+    `get_response()`'s own `_resolve_own_repo_root()` fallback. Each `surfaced[]` entry
     names a handoff the reconcile op could not auto-resolve — an open human
     branch (review/reconcile manually), so becomes a `judgment_points[]`
     entry, never a silently-applied directive.
@@ -279,7 +283,16 @@ def _read_auto_reconcile() -> ReaderResult:
     """
     from coordinator_core.ops.check_auto_reconcile import get_response
 
-    response = get_response()
+    # `repo_root=None` is called with get_response()'s own bare 0-arg form
+    # rather than get_response(None) -- byte-for-byte the same result (both
+    # resolve via _resolve_own_repo_root()), but preserves every existing
+    # 0-arg `get_response` fake across this reader family's own test suite
+    # (test_context_flood_caps.py, test_error_envelope_is_not_a_clean_corpus.py,
+    # test_reconcile_surface_legibility.py) and check_auto_reconcile's own
+    # (test_check_auto_reconcile.py) -- none of those four files are in this
+    # chunk's writes scope, so a positional None here would break signatures
+    # this chunk has no authorization to touch.
+    response = get_response(repo_root) if repo_root is not None else get_response()
     if not response:
         return ReaderResult()
     error = response.get("error")
@@ -416,27 +429,24 @@ def collect(cadence: str, *, repo_root: str | None = None) -> ReaderResult:
     (`readers_clean_ops.collect`) but unused here — neither probe's
     severity varies by cadence.
 
-    `repo_root` is keyword-only and accepted for signature parity across
-    all four reader families (C2 of the orient-assemble repo-scope plan) —
-    still unwired here, deliberately: `__init__.py`'s cadence dispatch
-    (`brief()`) is shared write-surface across C2a-C2d and this module's
-    own negative-spec already excludes wiring `collect()`'s results into
-    `brief()` from this chunk. `_current_branch`/`_read_span_assert` DO now
-    accept `repo_root` (C6(a) — see their own docstrings) so a future
-    threading chunk has the parameter to pass; `collect()` itself does not
-    yet forward it, matching every existing caller's behaviour byte-for-
-    byte. `_read_auto_reconcile` is unwired for the separate reason that
-    `check_auto_reconcile.get_response()` takes no arguments and giving it
-    an optional root is C1's ruling but not in any chunk's `writes:` scope
-    (`coordinator_core/ops/check_auto_reconcile.py` is not listed as
-    writable by C6, and no other chunk in this plan claims it either — see
-    C7(c): "SEE C1. Not this chunk's call.").
+    `repo_root` is keyword-only and now threaded to both probes (C12 of the
+    orient-assemble repo-scope plan, DR-382): `_read_span_assert(repo_root)`
+    and `_read_auto_reconcile(repo_root)` each pass it through to their own
+    `repo_root`-accepting internals (`_current_branch` and
+    `check_auto_reconcile.get_response()` respectively). `None` — the
+    default, and every existing caller's prior behaviour — preserves the
+    prior ambient-cwd resolution byte-for-byte at each leaf. Still unwired
+    into `__init__.py`'s cadence dispatch (`brief()`) — that remains shared
+    write-surface across C2a-C2d and this module's own negative-spec already
+    excludes wiring `collect()`'s results into `brief()` from this chunk;
+    this only closes the gap between `collect()`'s own `repo_root` parameter
+    and the leaves it calls.
     """
     directives: list[dict[str, Any]] = []
     judgment_points: list[dict[str, Any]] = []
     for result in (
-        _read_span_assert(),
-        _read_auto_reconcile(),
+        _read_span_assert(repo_root),
+        _read_auto_reconcile(repo_root),
     ):
         directives.extend(result.directives)
         judgment_points.extend(result.judgment_points)

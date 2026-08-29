@@ -2,8 +2,9 @@
 coordinator_core.ops.check_auto_reconcile -- in-process dispatch step for DoE's
 check-auto-reconcile.sh trampoline (fleet /workday-start Morning Briefing probe).
 
-Purpose: resolve the INVOKING repo's root (via process cwd -- see
-_resolve_own_repo_root()) and run the already-registered
+Purpose: resolve the INVOKING repo's root (an explicit `repo_root` passed to
+get_response(), falling back to process cwd via _resolve_own_repo_root()
+when omitted -- DR-382) and run the already-registered
 "handoff.reconcile_open" op (coordinator_core/ops/handoff_reconcile.py) in-process
 via coordinator_core.invoke.dispatch.dispatch_message -- the same in-process
 JSON-RPC path `python -m coordinator_core.invoke handoff.reconcile_open` used as
@@ -49,7 +50,7 @@ import asyncio
 import json
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 
 def _resolve_own_repo_root() -> Optional[Path]:
@@ -87,11 +88,25 @@ def _resolve_own_repo_root() -> Optional[Path]:
         return None
 
 
-def get_response() -> Optional[Dict[str, Any]]:
+def get_response(repo_root: Optional[Union[Path, str]] = None) -> Optional[Dict[str, Any]]:
     """Dispatch handoff.reconcile_open in-process and return the raw JSON-RPC
     response dict (envelope intact -- 'result' or 'error' key), or None on any
-    infrastructure failure."""
-    repo_root = _resolve_own_repo_root()
+    infrastructure failure.
+
+    `repo_root`, when given, is used as-is (DR-382: an explicit root passed
+    in by an argv-edge caller or an in-process reader threading its own
+    scan scope). A `str` is accepted alongside a `Path`: the value is
+    stringified into `_origin_worktree` either way, and the orient_assemble
+    readers that thread a scan scope carry it as `str` end-to-end
+    (`brief(cadence, *, repo_root: str | None)`), so narrowing here would
+    force a conversion at every threading call site for no gain at the wire.
+    `None` -- the default, and every caller's behaviour before
+    this parameter existed -- falls back to `_resolve_own_repo_root()`,
+    which stays the entry-point default (this function is still an argv-edge
+    entry point per its own module docstring; cwd resolution is correct
+    there when no root is supplied)."""
+    if repo_root is None:
+        repo_root = _resolve_own_repo_root()
     if repo_root is None:
         return None
 
