@@ -1144,8 +1144,12 @@ def directory_pathspecs(cwd: Union[str, Path], paths: Sequence[str]) -> List[str
     """Return every entry of `paths` currently a directory on disk, order preserved.
 
     Shared predicate behind `commit_scoped()`'s own directory-pathspec
-    refusal AND `commit_pipeline.run_commit_pipeline()`'s pre-stage guard
-    (session fb5fa766, 2026-07-31 incident: a directory pathspec reached
+    refusal and (until its C4 deletion) the now-killed `commit_pipeline.
+    run_commit_pipeline()`'s pre-stage guard -- `coordinator_core.git.commit.
+    commit_paths` (C3's repoint target for every `run_commit_pipeline`
+    caller) does NOT use this module or this predicate at all; it carries
+    its own inline directory-pathspec check (session fb5fa766, 2026-07-31
+    incident: a directory pathspec reached
     `git add` before ever hitting this check, one layer down, leaving
     staged-and-abandoned residue on refusal) -- extracted so both refuse the
     IDENTICAL input shape rather than drifting into two subtly different
@@ -2322,12 +2326,14 @@ def patch_touched_paths(patch_path: Union[str, Path], cwd: Union[str, Path]) -> 
     """AC4 (C3, docs/plans/2026-08-14-the-tool-stages-what-it-commits.md):
     the set of paths `patch_path` touches, WITHOUT applying it or mutating
     anything -- `git apply --numstat` parses the patch text only, spawning
-    no read against the repository's own index/worktree/HEAD. Used by
-    `commit_pipeline.run_commit_pipeline()` to decide, BEFORE staging runs,
-    which of the caller's `stage_paths` a `stage_patch` will cover (and must
-    therefore never see an ordinary `git add`) vs. which fall through to
-    today's staged-or-worktree route unchanged (and DO need an ordinary
-    `git add` so the dirty-tree gate can attribute them).
+    no read against the repository's own index/worktree/HEAD. Used by the
+    now-killed `commit_pipeline.run_commit_pipeline()` to decide, BEFORE
+    staging ran, which of the caller's `stage_paths` a `stage_patch` would
+    cover (and must therefore never see an ordinary `git add`) vs. which
+    fell through to the staged-or-worktree route unchanged (and DID need an
+    ordinary `git add` so the dirty-tree gate could attribute them).
+    `coordinator_core.git.commit.commit_paths` (C3's repoint target) has no
+    `stage_patch` concept and does not call this function.
 
     Returns an empty set (never raises) on a malformed/unreadable patch --
     the caller is expected to treat "nothing covered" the same as any other
@@ -5433,6 +5439,23 @@ def rebase_abort(cwd: Union[str, Path]) -> GitResult:
 def merge_base(cwd: Union[str, Path], ref_a: str, ref_b: str) -> GitResult:
     """`git merge-base <ref_a> <ref_b>` — push-retry rebase-onto preflight."""
     return _git(["merge-base", ref_a, ref_b], cwd=cwd)
+
+
+def merge_base_is_ancestor(
+    cwd: Union[str, Path], ancestor_ref: str, descendant_ref: str
+) -> GitResult:
+    """`git merge-base --is-ancestor <ancestor_ref> <descendant_ref>` — the
+    reachability half of the push ladder's reject recovery.
+
+    THE RETURN CODE IS THE ANSWER, NOT AN ERROR: git exits 0 for "yes,
+    reachable", 1 for "no", and 128 (or anything else) for a genuine
+    failure -- a bad ref, an unreadable object store. Callers MUST branch on
+    all three; treating any non-zero as "no" folds a broken repo into a
+    confident negative, which on the push path would send a caller into a
+    rebase it did not need. `GitResult.ok` alone cannot express this, so it
+    is deliberately not the interface here.
+    """
+    return _git(["merge-base", "--is-ancestor", ancestor_ref, descendant_ref], cwd=cwd)
 
 
 def rev_parse_upstream(cwd: Union[str, Path]) -> GitResult:

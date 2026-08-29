@@ -173,6 +173,40 @@ _CAP = _CORPUS_SIZE + 29
 #: touch would measure a walk with the commit path never entered.
 _STEADY_TERMINAL = 8
 
+#: What a non-terminal record carries. NOT cosmetic — this constant is the
+#: difference between measuring the steady state and measuring a worst case.
+#:
+#: `_scan_terminal`'s pre-filter (`_prefilter_scan_disqualifies`) refuses a
+#: record byte-level, WITHOUT paying `dag._read_meta`'s full read+sha256+YAML
+#: parse, only when BOTH `status` and `deployment_state` are readable plain
+#: scalars. Its documented fall-through list is closed, and "either target key
+#: absent" is on it. So a fixture record with no `deployment_state` cannot be
+#: refused cheaply -- it falls through to the full parse, every time.
+#:
+#: This fixture used to omit the key. Measured 2026-08-29, `plan_sweep` over
+#: 271 records:
+#:     fixture, key absent : 0 of 271 refused (0.0%), 271 full parses (1.00/rec)
+#:     real corpus at HEAD : 244 of 248 refused (98.4%), 4 full parses (0.02/rec)
+#: Every live record on the real corpus carries the key (204 ready_to_fire,
+#: 22 in_flight, 19 awaiting_gate, 2 shipped, 1 delivered). The fixture was
+#: making all 271 take the expensive path where production takes it 4 times,
+#: so the bar was being defended against a job that does not exist.
+#:
+#: This is the SECOND time this fixture measured a worst case while reading as
+#: steady state. The first was seeding all 271 records terminal, corrected to
+#: `_STEADY_TERMINAL`; the population fraction was fixed and the pre-filter
+#: fraction was not. Before trusting any per-record ratio here, ask what
+#: fraction of the fixture is supposed to be doing the expensive thing.
+#:
+#: `ready_to_fire` is the real corpus's dominant value (204 of 248) and is not
+#: in `_TERMINAL_DEPLOYMENT_STATES` ({shipped, continued, closed}), so it does
+#: not change which records qualify as a move -- only how cheaply the sweep can
+#: decline the ones that never did. Deliberately NOT `awaiting_gate`: that is
+#: the one state whose `blocked_by` resolution legitimately needs the
+#: live+archived gate index, which would make the eager-walk assertion
+#: untestable (see `_build_corpus`).
+_NONTERMINAL_DEPLOYMENT_STATE = "ready_to_fire"
+
 #: Paired one-shots. Enough that the median is not one tick's worth of luck,
 #: few enough that a cadence run does not occupy a box carrying 50-70 peers.
 _SAMPLES = 5
@@ -207,10 +241,17 @@ def _build_corpus(root: Path, terminal: int = _STEADY_TERMINAL) -> Path:
     `test_archive_terminal_handoffs.py :: _seed_bulk_claimed` already proves
     plans as a move — reused rather than re-derived, so this fixture cannot
     drift away from the sweep's own terminality rules and quietly start
-    measuring a job with nothing to do. The remainder are `status: open`, which
-    the sweep's own `_classify_branch` refuses as not-terminal: they are read by
-    the walk and never moved, which is exactly the population a ceremony pass
-    walks past.
+    measuring a job with nothing to do. The remainder are `status: open` plus
+    `deployment_state: _NONTERMINAL_DEPLOYMENT_STATE`, which the sweep refuses
+    as not-terminal.
+
+    THE `deployment_state` ON THE NON-TERMINAL REMAINDER IS LOAD-BEARING, and
+    this docstring previously claimed those records were "exactly the population
+    a ceremony pass walks past" while omitting the key. They were not: without
+    it the pre-filter cannot refuse them cheaply and all 271 pay a full parse,
+    against 4 of 248 on the real corpus. See `_NONTERMINAL_DEPLOYMENT_STATE` for
+    the measurement. Do not remove the key to "simplify" the fixture — that
+    silently restores a worst-case measurement wearing a steady-state name.
 
     None of them is `deployment_state: awaiting_gate`, deliberately — that is the
     ONE state whose `blocked_by` resolution needs the live+archived gate index,
@@ -232,9 +273,17 @@ def _build_corpus(root: Path, terminal: int = _STEADY_TERMINAL) -> Path:
     handoffs.mkdir(parents=True, exist_ok=True)
     for i in range(_CORPUS_SIZE):
         name = f"2026-02-{(i % 28) + 1:02d}-corpus-{i}.md"
-        status = "claimed" if i < terminal else "open"
+        if i < terminal:
+            # Terminal: `status: claimed`, no `deployment_state` — the shape
+            # `test_archive_terminal_handoffs.py :: _seed_bulk_claimed` proves
+            # plans as a move. Unchanged.
+            front = f"status: claimed\n"
+        else:
+            # Non-terminal: carries `deployment_state`, because EVERY record on
+            # the real corpus does. See `_NONTERMINAL_DEPLOYMENT_STATE`.
+            front = f"status: open\ndeployment_state: {_NONTERMINAL_DEPLOYMENT_STATE}\n"
         (handoffs / name).write_text(
-            f'---\ntitle: "{name}"\ncreated: 2026-01-01\nstatus: {status}\n'
+            f'---\ntitle: "{name}"\ncreated: 2026-01-01\n{front}'
             f"---\n\nBody.\n",
             encoding="utf-8",
             newline="",

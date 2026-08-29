@@ -63,7 +63,7 @@ def _write_ok(**overrides):
     kwargs = dict(
         designated_pid=1234,
         designated_create_time=1000.5,
-        classes=["some-class"],
+        classes=["execute-approved-plan"],
         granted_at=_iso(now),
         expires_at=_iso(now + timedelta(hours=1)),
         granted_by="human",
@@ -193,6 +193,44 @@ class TestWriteFleetDelegation:
             assert ok is False, cls
             assert not (tmp_path / "fleet-delegation.json").exists()
 
+    def test_accepts_each_delegable_class(self, human_verdict, tmp_path):
+        for cls in fd.DELEGABLE:
+            ok, reason = _write_ok(classes=[cls])
+            assert ok is True, (cls, reason)
+            record = fd.read_fleet_delegation()
+            assert record["classes"] == [cls]
+
+    def test_rejects_unknown_class_and_names_it(self, human_verdict, tmp_path):
+        ok, reason = _write_ok(classes=["typo-ed-class"])
+        assert ok is False
+        assert "typo-ed-class" in reason
+        assert "execute-approved-plan" in reason
+        assert "expensive-test-tier" in reason
+        assert not (tmp_path / "fleet-delegation.json").exists()
+
+    def test_never_delegable_class_keeps_its_own_message_not_the_allow_list_one(self, human_verdict, tmp_path):
+        """Ordering assertion: a never-delegable class must be refused with
+        the NEVER_DELEGABLE message, not fall through to the allow-list's
+        'not in the delegable allow-list' message -- this is the check most
+        likely to regress if the ordering is ever reversed."""
+        ok, reason = _write_ok(classes=["scope-change"])
+        assert ok is False
+        assert "not delegable" in reason
+        assert "allow-list" not in reason
+        assert not (tmp_path / "fleet-delegation.json").exists()
+
+    def test_rejects_mix_of_accepted_and_unknown_class(self, human_verdict, tmp_path):
+        ok, reason = _write_ok(classes=["execute-approved-plan", "typo-ed-class"])
+        assert ok is False
+        assert "typo-ed-class" in reason
+        assert not (tmp_path / "fleet-delegation.json").exists()
+
+    def test_rejects_empty_classes_list(self, human_verdict, tmp_path):
+        ok, reason = _write_ok(classes=[])
+        assert ok is False
+        assert "non-empty" in reason
+        assert not (tmp_path / "fleet-delegation.json").exists()
+
     def test_accepts_a_valid_grant_and_round_trips(self, human_verdict, tmp_path):
         ok, reason = _write_ok()
         assert ok is True
@@ -201,17 +239,17 @@ class TestWriteFleetDelegation:
         record = fd.read_fleet_delegation()
         assert record["schema_version"] == 1
         assert record["designated"] == {"pid": 1234, "create_time": 1000.5}
-        assert record["classes"] == ["some-class"]
+        assert record["classes"] == ["execute-approved-plan"]
         assert record["granted_by"] == "human"
         assert record["authorship"]["verdict"] == "human"
         assert record["note"] == "pm said so"
 
     def test_overwrite_is_atomic_and_leaves_no_temp_file(self, human_verdict, tmp_path):
         _write_ok()
-        ok, _ = _write_ok(classes=["another-class"])
+        ok, _ = _write_ok(classes=["expensive-test-tier"])
         assert ok is True
         record = fd.read_fleet_delegation()
-        assert record["classes"] == ["another-class"]
+        assert record["classes"] == ["expensive-test-tier"]
         leftovers = [p for p in tmp_path.iterdir() if p.name != "fleet-delegation.json"]
         assert leftovers == []
 
@@ -244,34 +282,66 @@ class TestCheckFleetDelegation:
         granted, record = fd.check_fleet_delegation("some-class")
         assert (granted, record) == (False, None)
 
-    def test_expired_and_missing_are_identical_by_value(self, human_verdict, tmp_path, monkeypatch):
-        """The whole of owed item (3): expired reads BYTE-IDENTICAL to the
-        no-file case -- not merely falsey, the same (bool, None) tuple by
-        value. This assertion must not be softened."""
+    def test_expired_denial_carries_the_record_no_file_does_not(self, human_verdict, tmp_path, monkeypatch):
+        """This layer does NOT make expired identical to absent -- that
+        identity property belongs to the op layer
+        (coordinator_core/ops/tests/test_delegation_check.py), which is the
+        agent-facing consumer surface where a session must not be able to
+        tell expired from absent. This function is the inspection API
+        behind ``coordinator-delegation show``, which genuinely needs to
+        explain WHY a grant was refused, so it surfaces the record on every
+        denial but true absence -- expired included. This test asserts
+        THAT split, not identity.
+
+        The writer rejects a back-dated ``granted_at`` outright (+/-5min
+        tolerance, module docstring), so a grant cannot be written already
+        expired -- writing one via ``_write_ok(granted_at=..., expires_at=...)``
+        both in the past would leave NO FILE on disk and silently compare an
+        absent read to an absent read, proving nothing. Instead: write a
+        genuinely LIVE grant through the real writer, then age it out by
+        rewriting ``expires_at`` in place on disk (the honest way to get a
+        genuinely-expired record without lying to the writer's own freshness
+        gate).
+        The pre-mutation existence assertion below is the vacuity guard: if
+        a future writer-side change ever rejects this fixture too, the
+        missing file makes this test FAIL loudly instead of silently
+        passing on two absent reads again."""
         no_file_result = fd.check_fleet_delegation("some-class")
+        assert no_file_result == (False, None)
 
         now = _now()
-        _write_ok(
-            granted_at=_iso(now - timedelta(hours=2)),
-            expires_at=_iso(now - timedelta(hours=1)),
+        ok, reason = _write_ok(
+            granted_at=_iso(now),
+            expires_at=_iso(now + timedelta(hours=1)),
         )
+        assert ok is True, f"fixture grant write must succeed: {reason!r}"
+        grant_file = tmp_path / "fleet-delegation.json"
+        assert grant_file.exists(), "vacuity guard: grant file must exist before aging it out"
+
+        record = json.loads(grant_file.read_text(encoding="utf-8"))
+        record["expires_at"] = _iso(now - timedelta(hours=1))
+        grant_file.write_text(json.dumps(record), encoding="utf-8")
+
         _install_fake_psutil(monkeypatch, lambda pid: _FakeLiveProcess(1000.5))
 
         expired_result = fd.check_fleet_delegation("some-class")
 
-        assert expired_result == no_file_result == (False, None)
+        assert expired_result[0] is False
+        assert expired_result[1] is not None
+        assert expired_result[1]["expires_at"] == record["expires_at"]
+        assert expired_result != no_file_result
 
     def test_grants_when_class_covered_and_designated_is_live(self, human_verdict, tmp_path, monkeypatch):
-        _write_ok(classes=["target-class"], designated_pid=555, designated_create_time=42.0)
+        _write_ok(classes=["execute-approved-plan"], designated_pid=555, designated_create_time=42.0)
         _install_fake_psutil(monkeypatch, lambda pid: _FakeLiveProcess(42.0))
 
-        granted, record = fd.check_fleet_delegation("target-class")
+        granted, record = fd.check_fleet_delegation("execute-approved-plan")
 
         assert granted is True
-        assert record["classes"] == ["target-class"]
+        assert record["classes"] == ["execute-approved-plan"]
 
     def test_denies_when_class_not_covered(self, human_verdict, tmp_path, monkeypatch):
-        _write_ok(classes=["target-class"])
+        _write_ok(classes=["execute-approved-plan"])
         _install_fake_psutil(monkeypatch, lambda pid: _FakeLiveProcess(1000.5))
 
         granted, record = fd.check_fleet_delegation("other-class")
@@ -280,7 +350,7 @@ class TestCheckFleetDelegation:
         assert record is not None  # record still surfaced for audit/denial quoting
 
     def test_denies_when_authorship_is_not_human(self, human_verdict, tmp_path, monkeypatch):
-        _write_ok(classes=["target-class"])
+        _write_ok(classes=["execute-approved-plan"])
         # Tamper the stored record's authorship after the fact -- the reader
         # never re-verifies authorship, it reads whatever the writer stored.
         grant_file = tmp_path / "fleet-delegation.json"
@@ -289,98 +359,98 @@ class TestCheckFleetDelegation:
         grant_file.write_text(json.dumps(record), encoding="utf-8")
         _install_fake_psutil(monkeypatch, lambda pid: _FakeLiveProcess(1000.5))
 
-        granted, record = fd.check_fleet_delegation("target-class")
+        granted, record = fd.check_fleet_delegation("execute-approved-plan")
 
         assert granted is False
 
     def test_denies_unknown_schema_version(self, human_verdict, tmp_path, monkeypatch):
-        _write_ok(classes=["target-class"])
+        _write_ok(classes=["execute-approved-plan"])
         grant_file = tmp_path / "fleet-delegation.json"
         record = json.loads(grant_file.read_text(encoding="utf-8"))
         record["schema_version"] = 2
         grant_file.write_text(json.dumps(record), encoding="utf-8")
         _install_fake_psutil(monkeypatch, lambda pid: _FakeLiveProcess(1000.5))
 
-        granted, _record = fd.check_fleet_delegation("target-class")
+        granted, _record = fd.check_fleet_delegation("execute-approved-plan")
 
         assert granted is False
 
     def test_denies_when_designated_pid_recycled_different_create_time(self, human_verdict, tmp_path, monkeypatch):
-        _write_ok(classes=["target-class"], designated_pid=555, designated_create_time=42.0)
+        _write_ok(classes=["execute-approved-plan"], designated_pid=555, designated_create_time=42.0)
         # A different process now owns pid 555 (create_time mismatch) --
         # must read not-live, never "close enough".
         _install_fake_psutil(monkeypatch, lambda pid: _FakeLiveProcess(9999.0))
 
-        granted, record = fd.check_fleet_delegation("target-class")
+        granted, record = fd.check_fleet_delegation("execute-approved-plan")
 
         assert granted is False
         assert record is not None
 
     def test_denies_when_designated_process_not_found(self, human_verdict, tmp_path, monkeypatch):
-        _write_ok(classes=["target-class"])
+        _write_ok(classes=["execute-approved-plan"])
 
         def _raise(pid):
             raise _FakeNoSuchProcess()
 
         _install_fake_psutil(monkeypatch, _raise)
 
-        granted, _record = fd.check_fleet_delegation("target-class")
+        granted, _record = fd.check_fleet_delegation("execute-approved-plan")
 
         assert granted is False
 
     def test_liveness_probe_access_denied_fails_closed(self, human_verdict, tmp_path, monkeypatch):
-        _write_ok(classes=["target-class"])
+        _write_ok(classes=["execute-approved-plan"])
 
         def _raise(pid):
             raise _FakeAccessDenied()
 
         _install_fake_psutil(monkeypatch, _raise)
 
-        granted, _record = fd.check_fleet_delegation("target-class")
+        granted, _record = fd.check_fleet_delegation("execute-approved-plan")
 
         assert granted is False
 
     def test_liveness_probe_os_error_fails_closed(self, human_verdict, tmp_path, monkeypatch):
-        _write_ok(classes=["target-class"])
+        _write_ok(classes=["execute-approved-plan"])
 
         def _raise(pid):
             raise OSError("disk full")
 
         _install_fake_psutil(monkeypatch, _raise)
 
-        granted, _record = fd.check_fleet_delegation("target-class")
+        granted, _record = fd.check_fleet_delegation("execute-approved-plan")
 
         assert granted is False
 
     def test_liveness_probe_arbitrary_exception_fails_closed(self, human_verdict, tmp_path, monkeypatch):
-        _write_ok(classes=["target-class"])
+        _write_ok(classes=["execute-approved-plan"])
 
         def _raise(pid):
             raise ValueError("something unexpected")
 
         _install_fake_psutil(monkeypatch, _raise)
 
-        granted, _record = fd.check_fleet_delegation("target-class")
+        granted, _record = fd.check_fleet_delegation("execute-approved-plan")
 
         assert granted is False
 
     def test_liveness_probe_psutil_absent_fails_closed(self, human_verdict, tmp_path, monkeypatch):
-        _write_ok(classes=["target-class"])
+        _write_ok(classes=["execute-approved-plan"])
         monkeypatch.setattr(fd, "_psutil", lambda: None)
 
-        granted, _record = fd.check_fleet_delegation("target-class")
+        granted, _record = fd.check_fleet_delegation("execute-approved-plan")
 
         assert granted is False
 
     def test_malformed_designated_field_fails_closed(self, human_verdict, tmp_path, monkeypatch):
-        _write_ok(classes=["target-class"])
+        _write_ok(classes=["execute-approved-plan"])
         grant_file = tmp_path / "fleet-delegation.json"
         record = json.loads(grant_file.read_text(encoding="utf-8"))
         record["designated"] = "not-a-dict"
         grant_file.write_text(json.dumps(record), encoding="utf-8")
         _install_fake_psutil(monkeypatch, lambda pid: _FakeLiveProcess(1000.5))
 
-        granted, _record = fd.check_fleet_delegation("target-class")
+        granted, _record = fd.check_fleet_delegation("execute-approved-plan")
 
         assert granted is False
 

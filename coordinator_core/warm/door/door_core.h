@@ -128,6 +128,8 @@ int parse_response_envelope(
 #define JSONRPC_UNTRUSTED_CALLER (-32003)
 #define JSONRPC_UNSTAMPED_ENGINE_ROOT (-32005)
 #define JSONRPC_OP_SUSPENDED (-32006)
+#define JSONRPC_ENTRYPOINT_NOT_WARM_LOADABLE (-32007)
+#define JSONRPC_SETTINGS_HOME_MISMATCH (-32008)
 /* Mirrors `coordinator_core.warm.client.WARM_DISPATCH_INDETERMINATE` --
  * same code, same meaning ("delivered, no usable answer, do not re-run"). */
 #define JSONRPC_WARM_DISPATCH_INDETERMINATE (-32004)
@@ -186,6 +188,54 @@ int parse_response_envelope(
  *     all. Falling through re-runs it cold, where the SAME refusal fires
  *     from the same shared `_dispatch_message_impl` and the real message
  *     reaches the operator.
+ *
+ *   -32007 ENTRYPOINT_NOT_WARM_LOADABLE_ERROR: `ops/invoke_from_argv.py ::
+ *     _resolve_entrypoint_script` raises `EntrypointNotWarmLoadableError` on
+ *     its FIRST statement -- an allowlist membership test -- strictly before
+ *     `_load_entrypoint_main` imports the target module body and before that
+ *     CLI's own `main(argv)` is called. No module body was executed, so
+ *     nothing could have mutated; this is proof of non-dispatch of the same
+ *     class as -32601, one layer in.
+ *
+ *     ADDED 2026-08-29 (PM ruling: one native entrypoint per platform, and
+ *     that entrypoint is the door). This entry is what makes the ruling
+ *     implementable. The warm-load allowlist answers "may this CLI's module
+ *     body be imported into the shared ~50-session server?" -- an
+ *     OPTIMIZATION question. Without this code its refusal arrived as a
+ *     blanket -32603, which `is_provably_undispatched` rightly rejects, so
+ *     the door emitted -32004 and the invocation FAILED rather than running
+ *     cold. A non-allowlisted name therefore could not use the door at all,
+ *     and the generator kept it on a `.cmd` + interpreter trampoline -- the
+ *     ~46ms-per-call second entrypoint the ruling deletes. With -32007 the
+ *     allowlist stops doubling as an entrypoint-existence boundary: every
+ *     `coordinator/bin` name carries the one native image, warm-serves when
+ *     vetted, and falls through to its own cold CLI when not.
+ *
+ *     NOTE the deliberate asymmetry inside that same resolver: a MISSING
+ *     `coordinator/bin/<name>.py` keeps raising a plain `ValueError`/-32603
+ *     and is NOT fall-through-able. That is a broken install rather than a
+ *     warm-loadability verdict, and spending an interpreter start to
+ *     rediscover the same absence buys nothing.
+ *
+ *   -32008 SETTINGS_HOME_MISMATCH: `warm/server.py :: _serve_line` compares
+ *     the request's `_settings_home` claim against its own resolution and
+ *     returns AFTER the skew check but strictly BEFORE it calls `dispatch`.
+ *     No handler was reached, so nothing could have mutated -- the same
+ *     class of proof as -32002, and for the same structural reason: the
+ *     refusing branch and the dispatching branch are the two arms of one
+ *     `if` in one function.
+ *
+ *     THIS ONE IS ALSO THE CORRECTIVE ACTION, not merely a safe abandon.
+ *     The server refuses because it resolved its settings home once, at
+ *     spawn time, and cannot serve the home this caller named. The cold leg
+ *     runs `coordinator_core.invoke` in THIS process's own environment,
+ *     where `settings_home()` resolves exactly the home the caller named --
+ *     so falling through does not just avoid a wrong answer, it produces
+ *     the right one. A 0 here would instead emit -32004 and fail the
+ *     invocation outright, which is the worse of the two available
+ *     answers and the one this row exists to prevent.
+ *     Backlog: state/bug-backlog/2026-08-29-the-warm-server-answers-against-
+ *     its-spaw-f1bcc4154ca4.yaml (P0).
  *
  * DELIBERATELY EXCLUDES -32602 INVALID_PARAMS: `ipc.py`'s
  * `_handler_exception_error` ALSO emits it for a

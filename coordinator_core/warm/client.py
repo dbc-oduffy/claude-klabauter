@@ -930,6 +930,30 @@ def _try_warm_dispatch_inner(msg: dict) -> Optional[dict]:
 
     if publish_lane.env_declares_lane():
         request[publish_lane.PUBLISH_LANE_FIELD] = True
+
+    # Settings-home seam, third instance of the same shape as `_session_id` and
+    # `_publish_lane` directly above and stamped for the same reason: the warm server
+    # resolved `settings_home()` once, from the environment of whoever SPAWNED it, and is
+    # keyed on (user, engine-clone, engine-token) -- never on the settings home. Without
+    # this field a caller that set `COORDINATOR_SETTINGS_HOME` is answered against a home
+    # it did not name, with no error and no warning, and the settings home is where
+    # guard-DISARMING state lives (`bash_guards/_blanket_disarm.py :: marker_path`,
+    # `authz/classification.py`, `secrets/`) -- a wrong answer there answers in the
+    # direction that disarms. See `warm/settings_home_claim.py` for the full defect and
+    # for why absence is not a mismatch: `caller_claim()` returns None unless THIS process
+    # explicitly set the variable, so the ordinary no-override invocation stamps nothing
+    # and is unchanged byte-for-byte.
+    #
+    # Imported inside the function on the same import-budget grounds as `publish_lane`:
+    # this module sits on every invocation's cold-start preamble. The module is
+    # stdlib-only and its own `_settings_home` import is deferred behind the
+    # variable-is-set check, so an ordinary call pays one `os.environ.get`.
+    from coordinator_core.warm import settings_home_claim
+
+    claimed_home = settings_home_claim.caller_claim()
+    if claimed_home:
+        request[settings_home_claim.SETTINGS_HOME_FIELD] = claimed_home
+
     payload = json.dumps(request, ensure_ascii=False).encode("utf-8") + b"\n"
 
     # At most 2 attempts: the original open, plus the table's single

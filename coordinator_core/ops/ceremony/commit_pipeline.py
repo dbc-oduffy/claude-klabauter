@@ -2200,6 +2200,7 @@ def commit(
     stage_patch: Optional[Union[str, Path]] = None,
     suppress_post_commit_auto_push: bool = False,
     attributed_session_id: Optional[str] = None,
+    token: Optional[str] = None,
 ) -> CommitOutcome:
     """Commit exactly `commit_paths`, via `git_native.commit_scoped()` (C3/C4).
 
@@ -2316,6 +2317,31 @@ def commit(
     identity, authoritative for the `Session-Id:` trailer over a blind
     env-var read. `None` (the default) leaves every existing caller's
     behaviour unchanged.
+
+    `token` is the value written into the `Commit-Token:` trailer and
+    searched for by `_reconcile_landed_despite_failure`. `run_commit_pipeline`
+    passes its own `_composition_id` -- the same value it wrote to the
+    `commit_pipeline_entry` telemetry row before any work -- so a landed
+    commit NAMES the pipeline entry that made it. Without that, the entry
+    row's `invocation_id` joins to nothing on the dispatched-committer route:
+    the two push spans that also carry a `composition_id` have never fired
+    there (`record_commit_pipeline_entry`'s docstring, measured at zero rows
+    in 16,592), and an independently minted `uuid4` shares no field with any
+    commit. The false-failure row's own instruction -- "join each entry to
+    what actually landed" -- was unexecutable until this line
+    (`state/bug-backlog/2026-08-27-the-sanctioned-commit-route-reports-
+    success-as-failure-six-ways.yaml`, instance 9). With it, two entries
+    against one landed commit resolve directly: the trailer names which entry
+    committed, and the OTHER entry's `pid`/`ppid`/`t_start` name the
+    re-entry.
+
+    Negative-spec: this is an identity join, never a uniqueness mechanism.
+    Both values are `uuid4().hex` and the collision argument is unchanged;
+    `None` (the default) still mints a fresh one, so every non-pipeline
+    caller and every test is unaffected. It does NOT make the token
+    deterministic or reproducible -- a re-execution mints a NEW
+    `_composition_id` and therefore a new token, which is precisely what
+    makes the mismatch legible.
     """
     root = Path(worktree_root)
     # Mint a per-commit token (W1) and append it as a `Commit-Token:` trailer
@@ -2330,7 +2356,7 @@ def commit(
     # block does the token start its own paragraph, using the original
     # blank-line-before-trailers convention `commit_message.compose_message`
     # itself implements (`"\n" + trailers + "\n"`).
-    token = uuid.uuid4().hex
+    token = token if token is not None else uuid.uuid4().hex
     token_trailer = f"Commit-Token: {token}"
     if _ends_with_trailer_block(message):
         # Normalize to EXACTLY one trailing newline before joining. A bare
@@ -3468,6 +3494,7 @@ def run_commit_pipeline(
                 deliverable_id=deliverable_id,
                 stage_patch=stage_patch,
                 attributed_session_id=attributed_session_id,
+                token=_composition_id,
                 suppress_post_commit_auto_push=(
                     push_mode in _PUSH_MODES_SUPPRESSING_POST_COMMIT_HOOK
                 ),

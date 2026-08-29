@@ -73,7 +73,6 @@ from coordinator_core.install.substrate import (
     _install_one,
     _static_bin_family_names,
     _sweep_orphaned_agent_helpers,
-    _write_agent_cmd_forwarder,
 )
 
 
@@ -236,22 +235,20 @@ def test_install_bin_resolvers_succeeds_when_only_the_py_launcher_is_found(
     assert (bin_dst / "machine-local.cmd").is_file()
 
 
-def test_write_agent_cmd_forwarder_always_bakes_a_resolved_interpreter(tmp_path: Path):
-    """The dynamic agent-helper path is the OTHER half of the property:
-    unlike `_install_one`, `_write_agent_cmd_forwarder` always substitutes
-    a non-empty `python3_cmd_resolved_bin` -- no shim reachable through
-    Step 3b's derived-forwarder loop should ever retain the literal
-    placeholder."""
-    dst = tmp_path / "some-cli.cmd"
-
-    fake_interpreter = r"C:\fake\python.exe"  # abs-path-ok: fixture value, never resolved/executed
-    _write_agent_cmd_forwarder(
-        "some-cli", dst, False, python3_cmd_resolved_bin=fake_interpreter,
-    )
-
-    text = dst.read_text(encoding="utf-8")
-    assert "__PYTHON_BIN__" not in text
-    assert fake_interpreter in text
+# GRAVESTONE -- `test_write_agent_cmd_forwarder_always_bakes_a_resolved_
+# interpreter` (deleted 2026-08-29 with the generator it tested; PM ruling:
+# one native entrypoint per platform, and that entrypoint is the door).
+#
+# It asserted that Step 3b's derived-forwarder loop never left the literal
+# `__PYTHON_BIN__` placeholder unsubstituted in an emitted `.cmd`. Step 3b
+# emits no `.cmd` at all now -- it installs the native door image per name --
+# so there is no interpreter to bake and no placeholder to leave behind. The
+# question the test asked is not answered differently; it has stopped
+# existing.
+#
+# The STATIC half of the same property (`_install_one`'s own baking, asserted
+# above against the `machine-local`/`claude-doe` families) is untouched and
+# still live: those shims are not agent-helper forwarders.
 
 
 def test_pre_marker_legacy_orphan_name_is_explicit_and_documented():

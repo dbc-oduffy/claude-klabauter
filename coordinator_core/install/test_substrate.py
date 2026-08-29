@@ -55,7 +55,6 @@ from coordinator_core.install.substrate import (
     _static_bin_family_names,
     _sweep_orphaned_agent_helpers,
     _windows_health_steps,
-    _write_agent_cmd_forwarder,
     _write_agent_ps1_forwarder,
     _write_bin_manifest,
     run,
@@ -295,428 +294,31 @@ def test_resolve_baked_python_bin_windowless_with_no_console_sibling_warns_and_f
     assert "windowless" in err
 
 
-# --- agent-helper .cmd forwarder -- self-healing baked interpreter ----------
+# GRAVESTONE -- the agent-helper `.cmd` forwarder body suite (deleted
+# 2026-08-29 with `_write_agent_cmd_forwarder` itself; PM ruling: one
+# native entrypoint per platform, and that entrypoint is the door).
 #
-# `_write_agent_cmd_forwarder` bakes the install-time interpreter path into
-# every generated `.cmd` launcher as a fast path. The baked rung must fall
-# through when the path is empty OR absent from disk -- a WRONG bake was
-# previously a permanent hard rc=3 ("The system cannot find the path
-# specified") with no self-heal, because only an EMPTY bake reached the
-# `where python.exe` / `py -3` rungs.
+# Seven tests went, all of them executing a REAL generated batch body under
+# cmd.exe: the self-healing baked-interpreter rungs (empty bake, foreign-
+# platform bake from a Mac/Windows-synced `~/.claude`, on-disk-absent bake),
+# the %LOCALAPPDATA% resolution cache rungs, the no-new-process guarantee
+# for cache hits, and the raw-command-line capture including its embedded-
+# newline case.
 #
-# This is not hypothetical: a `~/.claude` synced between a Mac and a Windows
-# box carries macOS interpreter paths in launchers Windows executes (and vice
-# versa). Neither sweeping nor regenerating can be correct on both machines at
-# once -- falling back on non-existence is the repair that is right on
-# whichever platform is actually running.
+# THE SELF-HEAL THOSE TESTS PROTECTED IS NOT LOST -- IT IS UNREACHABLE.
+# Every one of them existed because a `.cmd` had to rediscover a Python
+# interpreter on each call, and could bake the wrong platform's path. The
+# door image starts no interpreter to resolve, so the whole failure class
+# (rc=3 'system cannot find the path specified' from a foreign bake) has no
+# surface left. Deleting these is removing tests for a mechanism, not
+# lowering a bar: what replaced the mechanism is asserted in
+# `install/tests/test_forwarder_routes_through_door.py`.
 #
-# These tests execute the REAL generated batch body under cmd.exe rather than
-# asserting on its text: the branch under test is batch-level (`if not
-# ""=="" if exist ""`), and only cmd.exe's own parser can confirm the quoting
-# survives paths with spaces and POSIX separators.
-
-
-_FORWARDER_TOKEN = "forwarder-ran-ok"
-
-
-def _render_forwarder_pair(tmp_path: Path, baked_bin: str) -> Path:
-    """Write a `<name>` Unix-half stub (a real Python script) plus the
-    generated `<name>.cmd` half beside it, and return the `.cmd` path."""
-    name = "coordinator-fake-cli"
-    unix_half = tmp_path / name
-    unix_half.write_text(
-        f"import sys\nprint({_FORWARDER_TOKEN!r})\nprint(' '.join(sys.argv[1:]))\n"
-        "print(sys.executable)\n",
-        encoding="utf-8",
-    )
-    cmd_half = tmp_path / f"{name}.cmd"
-    _write_agent_cmd_forwarder(
-        name, cmd_half, False, python3_cmd_resolved_bin=baked_bin, target=f"{name}.py"
-    )
-    return cmd_half
-
-
-def _run_forwarder(cmd_half: Path, *args: str) -> subprocess.CompletedProcess:
-    return subprocess.run(
-        [str(cmd_half), *args],
-        capture_output=True,
-        text=True,
-        timeout=60,
-        **no_console_creationflags(),
-    )
-
-
-@pytest.mark.skipif(sys.platform != "win32", reason=".cmd forwarders are Windows-only")
-def test_agent_cmd_forwarder_uses_baked_interpreter_when_it_exists(tmp_path):
-    # sys.executable is guaranteed to exist -- stands in for a healthy bake.
-    proc = _run_forwarder(_render_forwarder_pair(tmp_path, sys.executable), "hello")
-
-    assert proc.returncode == 0, proc.stderr
-    assert _FORWARDER_TOKEN in proc.stdout
-    assert "hello" in proc.stdout
-
-
-@pytest.mark.skipif(sys.platform != "win32", reason=".cmd forwarders are Windows-only")
-def test_agent_cmd_forwarder_falls_through_on_empty_bake(tmp_path):
-    # "" is the documented "nothing resolvable at install time" value -- the
-    # `where python.exe` / `py -3` rungs must carry it.
-    proc = _run_forwarder(_render_forwarder_pair(tmp_path, ""), "hello")
-
-    assert proc.returncode == 0, proc.stderr
-    assert _FORWARDER_TOKEN in proc.stdout
-
-
-@pytest.mark.skipif(sys.platform != "win32", reason=".cmd forwarders are Windows-only")
-def test_agent_cmd_forwarder_falls_through_on_foreign_platform_bake(tmp_path):
-    # The synced-~/.claude case verbatim: a macOS venv interpreter path baked
-    # into a launcher running on Windows. Pre-fix this was rc=3 forever.
-    macos_bake = "/Users/alice/.coordinator-claude-settings/.coordinator-venv/bin/python"
-    assert not Path(macos_bake).exists()
-
-    proc = _run_forwarder(_render_forwarder_pair(tmp_path, macos_bake), "hello")
-
-    assert proc.returncode == 0, proc.stderr
-    assert _FORWARDER_TOKEN in proc.stdout
-
-
-@pytest.mark.skipif(sys.platform != "win32", reason=".cmd forwarders are Windows-only")
-def test_agent_cmd_forwarder_falls_through_on_missing_bake_with_spaces(tmp_path):
-    # Quoting check with teeth: an unquoted `if exist %_py%` would make
-    # cmd.exe parse this as multiple tokens rather than falling through
-    # cleanly, so a green here is evidence the guard quotes its operand.
-    missing_bake = str(tmp_path / "Program Files" / "gone" / "python.exe")
-    assert not Path(missing_bake).exists()
-
-    proc = _run_forwarder(_render_forwarder_pair(tmp_path, missing_bake), "hello")
-
-    assert proc.returncode == 0, proc.stderr
-    assert _FORWARDER_TOKEN in proc.stdout
-
-
-# --- Windows resolution cache (DR-303 / windows-interpreter-bake-is-empty) --
-#
-# The baked rung stays empty for every install run off-Windows (or via
-# --setup-only), so the ladder falls through to `where python.exe` on EVERY
-# invocation -- ~10 process spawns per op instead of 2. The fix: cache a
-# successful `where`-rung resolution under %LOCALAPPDATA% (never synced
-# between machines, unlike the settings-home a bake lives in) so the ladder
-# only pays the slow rung roughly once per host, not once per invocation.
-#
-# Text-level tests below are platform-portable (assert on the generated
-# body); the runtime proofs are Windows-only, mirroring the skip pattern the
-# existing baked-rung tests already use in this file.
-
-
-def test_agent_cmd_forwarder_body_includes_localappdata_cache_rungs(tmp_path):
-    dst = tmp_path / "some-other-cli.cmd"
-    _write_agent_cmd_forwarder(
-        "some-other-cli", dst, False, python3_cmd_resolved_bin="", target="some-other-cli"
-    )
-    body = dst.read_text(encoding="utf-8")
-
-    assert "LOCALAPPDATA" in body
-    assert "python-bin-cache.txt" in body
-    # Cache write must be an atomic rename, never an in-place write to the
-    # cache file itself.
-    assert "move /y" in body.lower() or "move  /y" in body.lower()
-
-
-def test_agent_ps1_forwarder_body_includes_localappdata_cache_rungs(tmp_path):
-    dst = tmp_path / "some-other-cli.ps1"
-    _write_agent_ps1_forwarder("some-other-cli", dst, False, python3_cmd_resolved_bin="")
-    body = dst.read_text(encoding="utf-8")
-
-    assert "$env:LOCALAPPDATA" in body
-    # R2 (cross-dialect cache-file encoding fix): the .ps1 leg uses its OWN
-    # cache file, never the .cmd leg's `python-bin-cache.txt` -- the two
-    # dialects write/read in different encodings (UTF-8-no-BOM vs console
-    # codepage) and a shared file only round-trips for an ASCII interpreter
-    # path. See `_write_agent_cmd_forwarder`'s "Cross-dialect encoding"
-    # docstring paragraph.
-    assert "python-bin-cache-ps1.txt" in body
-    assert "python-bin-cache.txt" not in body.replace("python-bin-cache-ps1.txt", "")
-    # Cache write must be an atomic rename (Move-Item), never an in-place
-    # write to the cache file itself, and must stay in-process (no new
-    # spawn on the steady-state path).
-    assert "Move-Item" in body
-    assert "Start-Process" not in body
-
-
-@pytest.mark.skipif(sys.platform != "win32", reason=".cmd forwarders are Windows-only")
-def test_agent_cmd_forwarder_cold_cache_resolves_and_warms_cache(tmp_path, monkeypatch):
-    # No baked interpreter, no pre-existing cache: the where.exe rung must
-    # still resolve (via the real python.exe on PATH in CI) and the cache
-    # file must exist afterward, pointing at an existing interpreter.
-    fake_localappdata = tmp_path / "LocalAppData"
-    monkeypatch.setenv("LOCALAPPDATA", str(fake_localappdata))
-
-    proc = _run_forwarder(_render_forwarder_pair(tmp_path, ""), "hello")
-
-    assert proc.returncode == 0, proc.stderr
-    assert _FORWARDER_TOKEN in proc.stdout
-
-    cache_file = fake_localappdata / "coordinator" / "python-bin-cache.txt"
-    assert cache_file.exists()
-    cached_bin = cache_file.read_text(encoding="utf-8").strip()
-    assert cached_bin != ""
-    assert Path(cached_bin).exists()
-
-
-@pytest.mark.skipif(sys.platform != "win32", reason=".cmd forwarders are Windows-only")
-def test_agent_cmd_forwarder_warm_cache_is_used_without_reresolving(tmp_path, monkeypatch):
-    # A valid, pre-seeded cache entry must be used directly -- no baked bin
-    # required. Review: staff-eng (Finding 6) -- the prior version of this
-    # test seeded the cache with sys.executable itself, which is also what
-    # the where.exe miss-path would resolve on this host, so it passed even
-    # with the entire cache rung deleted. Seed a COPY of sys.executable at a
-    # path `where python.exe` cannot find (a directory never added to
-    # PATH) and assert the output identifies THAT copy specifically -- only
-    # reachable if the cache rung actually fired.
-    shim_dir = tmp_path / "shim-not-on-path"
-    shim_dir.mkdir()
-    shim_bin = shim_dir / Path(sys.executable).name
-    shutil.copy2(sys.executable, shim_bin)
-
-    fake_localappdata = tmp_path / "LocalAppData"
-    cache_dir = fake_localappdata / "coordinator"
-    cache_dir.mkdir(parents=True)
-    (cache_dir / "python-bin-cache.txt").write_text(str(shim_bin) + "\n", encoding="utf-8")
-    monkeypatch.setenv("LOCALAPPDATA", str(fake_localappdata))
-
-    proc = _run_forwarder(_render_forwarder_pair(tmp_path, ""), "hello")
-
-    assert proc.returncode == 0, proc.stderr
-    assert _FORWARDER_TOKEN in proc.stdout
-    assert str(shim_bin) in proc.stdout
-
-
-@pytest.mark.skipif(sys.platform != "win32", reason=".cmd forwarders are Windows-only")
-def test_agent_cmd_forwarder_stale_cache_self_heals(tmp_path, monkeypatch):
-    # A cache entry naming a path that no longer exists (the exact
-    # Mac/Windows-sync hazard, one level down) must fall through to the
-    # where.exe rung rather than hard-failing, AND must overwrite the cache
-    # file with a fresh, valid entry -- if the cache rung were deleted
-    # outright, the where.exe fallback would still succeed but the stale
-    # on-disk entry would be left untouched (Review: staff-eng Finding 6).
-    fake_localappdata = tmp_path / "LocalAppData"
-    cache_dir = fake_localappdata / "coordinator"
-    cache_dir.mkdir(parents=True)
-    stale_bin = str(tmp_path / "Users" / "alice" / "gone-python")
-    assert not Path(stale_bin).exists()
-    cache_file = cache_dir / "python-bin-cache.txt"
-    cache_file.write_text(stale_bin + "\n", encoding="utf-8")
-    monkeypatch.setenv("LOCALAPPDATA", str(fake_localappdata))
-
-    proc = _run_forwarder(_render_forwarder_pair(tmp_path, ""), "hello")
-
-    assert proc.returncode == 0, proc.stderr
-    assert _FORWARDER_TOKEN in proc.stdout
-    healed = cache_file.read_text(encoding="utf-8").strip()
-    assert healed != stale_bin
-    assert Path(healed).exists()
-
-
-def test_agent_cmd_forwarder_body_never_creates_a_new_process_for_cache_ops(tmp_path):
-    # Every cache-rung token must be a cmd.exe builtin (if/exist/set /p/
-    # mkdir/move) -- no PowerShell, cscript, or other spawned helper.
-    dst = tmp_path / "some-other-cli.cmd"
-    _write_agent_cmd_forwarder(
-        "some-other-cli", dst, False, python3_cmd_resolved_bin="", target="some-other-cli"
-    )
-    body = dst.read_text(encoding="utf-8")
-
-    assert "powershell" not in body.lower()
-    assert "cscript" not in body.lower()
-    assert "start " not in body.lower()
-
-
-def test_agent_cmd_forwarder_cache_hit_region_never_spawns_where_or_findstr(tmp_path):
-    # Review: staff-eng (Finding 6) -- the whole-body assertion above denylists
-    # powershell/cscript/start but the body still legitimately spawns `where`
-    # and `findstr` on the MISS path, so it never checked the claim in the
-    # cache rung's own comment ("zero added processes on the cache-hit
-    # path"). Scope to the cache-hit region specifically: the baked fast
-    # path plus the cache-read rung, up through `:skip_cache_read` -- before
-    # the miss-path `where`/`findstr` ladder begins.
-    dst = tmp_path / "some-other-cli.cmd"
-    _write_agent_cmd_forwarder(
-        "some-other-cli", dst, False, python3_cmd_resolved_bin="", target="some-other-cli"
-    )
-    body = dst.read_text(encoding="utf-8")
-
-    # Review: review-integrator (F2) -- `body.index(":skip_cache_read")`
-    # matched the FIRST occurrence of that substring, which is inside a
-    # `goto :skip_cache_read` reference in the cache-read rung itself (e.g.
-    # `if not defined LOCALAPPDATA goto :skip_cache_read`), not the LABEL
-    # several lines later -- truncating hit_region before the cache-read
-    # block's own findstr call, the exact defect this test exists to catch.
-    # Slice on the label line itself instead.
-    hit_region = body[: body.index("\n:skip_cache_read\n")]
-
-    assert "where " not in hit_region.lower()
-    assert "findstr" not in hit_region.lower()
-    assert "powershell" not in hit_region.lower()
-    assert "cscript" not in hit_region.lower()
-    assert "start " not in hit_region.lower()
-
-
-# --- _RAW_CMDLINE_TARGETS coverage -- cross-repo-memo ------------------------
-#
-# cross-repo/inbox/2026-08-07-doe-claude-em-cmd-forwarder-drops-everything-
-# after-a-newline.md: `%*`-populated batch parameters silently lose everything
-# after a literal newline in an argument (a `.cmd` forwarder parse-time
-# defect, not a caller-side quoting bug -- see `_agent_cmd_raw_cmdline_block`'s
-# docstring). `coordinator-write-review-trail.py` was the only target opted
-# into the `%CMDCMDLINE%`-capture workaround; `cross-repo-memo` takes
-# multi-line arguments as a matter of course (memo bodies) and was silently
-# NOT covered.
-#
-# `scoped-git-commit` was enrolled alongside it and is gone from these tests
-# as of 2026-08-28: DR-344 killed the CLI, 47c78a3a5 deleted the file, and
-# `_installed_to_ondisk` -- which resolves through production's own
-# `_derive_agent_helper_target_map` -- stopped being able to answer for a
-# name the map no longer carries. Do NOT re-add it as a string literal to
-# make these green; the map is the point.
-#
-# These first two tests are platform-portable: they assert on the GENERATED
-# TEXT of the raw-cmdline capture block and the full `.cmd` body, not on
-# runtime behavior -- the actual newline-survives-the-round-trip behavior is
-# only observable by running a real `.cmd` file under `cmd.exe`, which this
-# environment (macOS) cannot do. The third test below is the Windows-only
-# runtime proof and is skipped here; it is included for the Windows box that
-# runs this suite.
-
-
-def _installed_to_ondisk(agent_bin: Path, installed_name: str) -> str:
-    """Resolve `installed_name` to its on-disk TARGET filename the same way
-    the real install path does (`_derive_agent_helper_target_map`), rather
-    than hardcoding either the installed or the on-disk form.
-
-    `_RAW_CMDLINE_TARGETS` is keyed by on-disk filename (see that set's own
-    docstring in substrate.py), but production only ever has the INSTALLED
-    name in hand up front — it resolves the on-disk filename through this
-    same map before ever touching `_RAW_CMDLINE_TARGETS`. A test that
-    hardcodes `cross-repo-memo.py` fixes today's mismatch but re-breaks
-    silently the day a target's on-disk filename changes; resolving through
-    the map cannot drift from production keying because it IS production's
-    own resolution step.
-    """
-    return _derive_agent_helper_target_map(agent_bin)[installed_name]
-
-
-def test_raw_cmdline_targets_cover_cross_repo_memo():
-    agent_bin = Path(__file__).resolve().parents[2] / "coordinator" / "bin"
-    # cross-repo-memo's installed and on-disk forms DIFFER
-    # ("cross-repo-memo" vs "cross-repo-memo.py") -- this is the assertion
-    # that actually distinguishes the two key forms and would have caught
-    # the installed-name/on-disk-filename mismatch this test previously
-    # missed.
-    assert (
-        _installed_to_ondisk(agent_bin, "cross-repo-memo") in _RAW_CMDLINE_TARGETS
-    )
-    assert _installed_to_ondisk(agent_bin, "cross-repo-memo") == "cross-repo-memo.py"
-    # Regression guard (AC1): the original sole member must still be present.
-    assert "coordinator-write-review-trail.py" in _RAW_CMDLINE_TARGETS
-
-
-@pytest.mark.parametrize("installed_name", ["cross-repo-memo"])
-def test_agent_cmd_raw_cmdline_block_emits_capture_for_newly_covered_targets(
-    installed_name,
-):
-    agent_bin = Path(__file__).resolve().parents[2] / "coordinator" / "bin"
-    target = _installed_to_ondisk(agent_bin, installed_name)
-    block = _agent_cmd_raw_cmdline_block(target)
-
-    assert block != ""
-    assert "_LAUNCHER_RAW_CMDLINE_FILE" in block
-    assert "%CMDCMDLINE%" in block
-
-
-def test_agent_cmd_raw_cmdline_block_stays_empty_for_uncovered_target():
-    # AC1: a target NOT in `_RAW_CMDLINE_TARGETS` renders byte-identical to
-    # before this mechanism existed -- the gate must stay closed by default.
-    assert _agent_cmd_raw_cmdline_block("some-other-cli") == ""
-
-
-@pytest.mark.parametrize("installed_name", ["cross-repo-memo"])
-def test_agent_cmd_forwarder_body_includes_raw_cmdline_capture_for_target(
-    tmp_path, installed_name
-):
-    # `_write_agent_cmd_forwarder`'s first positional arg (`name`) is the
-    # INSTALLED forwarder name; its `target=` kwarg is the on-disk filename
-    # -- exactly the two forms production resolves apart via
-    # `_derive_agent_helper_target_map` before calling this function (see
-    # the real call site in substrate.py's install loop). Passing the same
-    # string for both, as this test previously did, is what hid the
-    # installed-name/on-disk-filename mismatch.
-    agent_bin = Path(__file__).resolve().parents[2] / "coordinator" / "bin"
-    ondisk_target = _installed_to_ondisk(agent_bin, installed_name)
-    dst = tmp_path / f"{installed_name}.cmd"
-    _write_agent_cmd_forwarder(
-        installed_name,
-        dst,
-        False,
-        python3_cmd_resolved_bin="",
-        target=ondisk_target,
-    )
-    body = dst.read_text(encoding="utf-8")
-
-    assert "_LAUNCHER_RAW_CMDLINE_FILE" in body
-    assert "%CMDCMDLINE%" in body
-
-
-def test_agent_cmd_forwarder_body_omits_raw_cmdline_capture_for_uncovered_target(
-    tmp_path,
-):
-    dst = tmp_path / "some-other-cli.cmd"
-    _write_agent_cmd_forwarder(
-        "some-other-cli", dst, False, python3_cmd_resolved_bin="", target="some-other-cli"
-    )
-    body = dst.read_text(encoding="utf-8")
-
-    assert "_LAUNCHER_RAW_CMDLINE_FILE" not in body
-    assert "%CMDCMDLINE%" not in body
-
-
-@pytest.mark.skipif(sys.platform != "win32", reason=".cmd forwarders are Windows-only")
-def test_agent_cmd_forwarder_raw_cmdline_survives_embedded_newline(tmp_path):
-    # Windows-only runtime proof: the Unix-half stub below reads the raw
-    # cmdline capture file the .cmd half writes and echoes it back, so a
-    # newline embedded in the invocation (the exact defect this mechanism
-    # exists to work around) surviving into that echoed text is direct
-    # evidence the capture mechanism engages for a newly-covered target, not
-    # just that the generated text contains the right tokens.
-    #
-    # The name must be a LIVE member of `_RAW_CMDLINE_TARGETS`: the block only
-    # renders for an enrolled target, so a name retired from the set (as
-    # `scoped-git-commit` was on 2026-08-28) turns this proof into a test of
-    # nothing that still passes its `assert "CAPTURED:" in proc.stdout` by
-    # coincidence of the stub echoing an empty capture.
-    name = "cross-repo-memo.py"
-    unix_half = tmp_path / name
-    unix_half.write_text(
-        "import os\n"
-        "p = os.environ.get('_LAUNCHER_RAW_CMDLINE_FILE', '')\n"
-        "print('CAPTURED:' + (open(p, encoding='utf-8').read() if p else ''))\n",
-        encoding="utf-8",
-    )
-    cmd_half = tmp_path / f"{name}.cmd"
-    _write_agent_cmd_forwarder(
-        name, cmd_half, False, python3_cmd_resolved_bin=sys.executable, target=name
-    )
-
-    proc = subprocess.run(
-        [str(cmd_half), "line-one^\nline-two"],
-        capture_output=True,
-        text=True,
-        timeout=60,
-        shell=False,
-        **no_console_creationflags(),
-    )
-
-    assert proc.returncode == 0, proc.stderr
-    assert "CAPTURED:" in proc.stdout
-    assert "line-two" in proc.stdout
+# The one property here NOT inherited by the door is `%*` argument fidelity
+# through cmd.exe's re-parse -- because the door never goes through cmd.exe.
+# It reads its own command line via `GetCommandLineW`/`CommandLineToArgvW`
+# (`door.c`), so quote-and-space payloads that the `.cmd` had to defend
+# against are structurally not at risk.
 
 
 # --- _refuse_machine_mutation / _windows_health_steps guard -----------------
@@ -1224,8 +826,13 @@ def test_sweep_orphaned_agent_helpers_retires_both_legs_cmd_and_ps1(monkeypatch,
     monkeypatch.setattr(substrate.tempfile, "gettempdir", lambda: str(tmp_path / "_unrelated-temp-root"))
     name = "retired-cli"
     cmd_orphan = tmp_path / f"{name}.cmd"
-    _write_agent_cmd_forwarder(
-        name, cmd_orphan, False, python3_cmd_resolved_bin="", target=f"{name}.py"
+    # Fabricated rather than generated: the generator is deleted, but the
+    # SWEEP that clears what it left on real boxes is live and is what this
+    # test is about. Only the marker matters to the sweep.
+    cmd_orphan.write_text(
+        f"@echo off\nREM {substrate._AGENT_CMD_FORWARDER_MARKER}\nREM stale fixture for {name}\n",
+        encoding="utf-8",
+        newline="\n",
     )
     ps1_orphan = tmp_path / f"{name}.ps1"
     ps1_orphan.write_text(

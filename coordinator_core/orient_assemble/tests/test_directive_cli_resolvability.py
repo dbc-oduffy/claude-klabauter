@@ -238,7 +238,9 @@ def test_target_root_flag_parsed_and_forwarded_to_brief(monkeypatch, tmp_path):
         return {"ok": True}
 
     monkeypatch.setattr(orient_assemble, "brief", _fake_brief)
-    explicit_root = str(tmp_path / "some-other-repo")
+    other_repo = tmp_path / "some-other-repo"
+    other_repo.mkdir()  # _resolve_target_root rejects a non-directory explicit root (AC9)
+    explicit_root = str(other_repo)
     exit_code = orient_assemble.main(
         ["brief", "--cadence", "session", "--target-root", explicit_root]
     )
@@ -304,3 +306,27 @@ def test_no_directives_cli_is_a_ceremony_or_skill_name(monkeypatch, tmp_path):
                 "CLI — this is the self-referential category error, not a "
                 "legitimate directive target"
             )
+
+
+def test_nonexistent_target_root_fails_loud_rather_than_scanning_nothing(tmp_path, capsys):
+    """AC9: an explicit `--target-root` that is not a directory must refuse at
+    the argv edge.
+
+    Every reader that scans a directory under the target root treats a missing
+    directory as "nothing to report" and returns an empty ReaderResult, so an
+    unchecked bad root renders as a clean corpus across all four reader
+    families at once — the silent zero this plan exists to remove, arriving
+    through the one argument whose whole job is naming the repo to look at.
+    """
+    import coordinator_core.orient_assemble as orient_assemble
+
+    missing = tmp_path / "not-a-repo"
+    exit_code = orient_assemble.main(
+        ["brief", "--cadence", "session", "--target-root", str(missing)]
+    )
+
+    assert exit_code != 0
+    err = capsys.readouterr().err
+    assert "is not a directory" in err
+    assert str(missing) in err
+    assert "--target-root was not provided" not in err

@@ -636,10 +636,34 @@ def test_substrate_run_success_path_dual_anchor_populated_tree(tmp_path, monkeyp
     # claude-klabauter-side (coordinator/bin) agent-helper forwarders landed, resolving
     # against CLAUDE_KLABAUTER_ROOT — not a dead plugin_root/bin.
     assert (bin_dst / "cross-repo-memo").is_file()
-    assert is_executable(bin_dst / "cross-repo-memo")
     forwarder_body = (bin_dst / "cross-repo-memo").read_text(encoding="utf-8")
     assert "coordinator/bin" in forwarder_body
-    assert (bin_dst / "cross-repo-memo.cmd").is_file()
+
+    # THIS FIXTURE'S CLAUDE-KLABAUTER ROOT CARRIES NO ENGINE STAMP, so it is the
+    # DOORLESS install shape, and the assertions here changed with the
+    # 2026-08-29 ruling (one native entrypoint per platform, and that
+    # entrypoint is the door) rather than being relaxed to keep a green bar.
+    #
+    # No `.cmd` twin is emitted for any name any more -- the writer is
+    # deleted. On Windows the consequence, stated rather than hidden, is that
+    # the bare extensionless forwarder above is NOT `is_executable`: that
+    # predicate answers "would CreateProcess launch this", and for an
+    # extensionless path it looks for a PATHEXT-suffixed sibling, of which a
+    # doorless root now has none. A doorless root is a broken install --
+    # `_write_native_door_forwarder` prints the stamp-the-root remediation per
+    # name -- and the correct repair is to stamp the root so the `.exe` door
+    # image lands, never to re-emit an interpreter trampoline.
+    #
+    # The DOOR-BEARING shape (root stamped, `<name>.exe` installed, therefore
+    # `is_executable` true and bare-name resolvable) is asserted in
+    # `coordinator_core/install/tests/test_forwarder_routes_through_door.py`,
+    # which skips when no prebuilt door image is available -- which is why
+    # that coverage lives there and not in this installer-shape test.
+    assert not (bin_dst / "cross-repo-memo.cmd").exists()
+    if sys.platform == "win32":
+        assert not is_executable(bin_dst / "cross-repo-memo")
+    else:
+        assert is_executable(bin_dst / "cross-repo-memo")
     assert (bin_dst / "mint-deliverable-id").is_file(), (
         "installed name is the extensionless stem-stripped form, matching "
         "every other .py-suffixed CLI, targeting mint-deliverable-id.py"

@@ -10,8 +10,10 @@ Suppression conditions (no_advisory):
   2. file_path absent or extension in DOC_DATA_EXTENSIONS denylist.
   3. Session sentinel present, platform-temp-dir-rooted, resolved via
        coordinator_core.session.dispatch_nudge_sentinel.sentinel_path.
-  4. Autonomous-run sentinel present, platform-temp-dir-rooted, resolved via
-       coordinator_core.session.autonomous_sentinel.sentinel_path.
+  4. Autonomous-run mode resolved via
+       coordinator_core.session.mode_resolution.resolve_mode("autonomous", session_id)
+       — a session-wins key, so the session's own sentinel always takes precedence
+       over any fleet-level value for this key.
   5. `op()` ONLY (the async `_handler` above never receives old_string/new_string/
      content — see the MultiEdit negative-spec below): the triggering edit is a
      semantic-bypass shape — whitespace-only, comment/docstring-only (heuristic,

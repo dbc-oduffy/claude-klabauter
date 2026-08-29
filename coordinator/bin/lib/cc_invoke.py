@@ -1125,20 +1125,25 @@ def _seam_present(claude_klabauter_root: str) -> bool:
 # and cc_invoke_bare() (--bare convention) so the fail-closed ladder lives once.
 # ---------------------------------------------------------------------------
 
-_SHOULD_PASS_REPO_FAIL_OPEN_EMITTED: set[str] = set()
+_SHOULD_PASS_REPO_FAIL_OPEN_EMITTED: set[tuple[str, str]] = set()
 
 
 def _emit_should_pass_repo_fail_open(branch: str, op: str) -> None:
     """Emit a one-line stderr diagnostic for a TERMINAL `_should_pass_repo`
-    fail-open branch, once per (branch, process) — never for the ambient-import
+    fail-open branch, once per (branch, op, process) — never for the ambient-import
     `except Exception: pass` at the top of `_should_pass_repo`, which is a
     normal miss with a working sys.path-injected retry behind it (see that
     function's docstring), not an unresolved scope. Swallows its own failure:
     a broken stderr write must not take the transport down.
+
+    # Review: coordinator:code-reviewer — keyed on (branch, op), not branch alone,
+    # so a second genuinely-different op hitting the same fail-open branch still
+    # gets its own warning instead of being silenced by the first op's emission.
     """
-    if branch in _SHOULD_PASS_REPO_FAIL_OPEN_EMITTED:
+    _key = (branch, op)
+    if _key in _SHOULD_PASS_REPO_FAIL_OPEN_EMITTED:
         return
-    _SHOULD_PASS_REPO_FAIL_OPEN_EMITTED.add(branch)
+    _SHOULD_PASS_REPO_FAIL_OPEN_EMITTED.add(_key)
     try:
         sys.stderr.write(
             "cc_invoke: _should_pass_repo could not resolve scope for op '"

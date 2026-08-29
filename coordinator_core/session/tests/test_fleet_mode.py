@@ -110,3 +110,19 @@ def test_write_atomicity_no_partial_file_observable(isolated_home, monkeypatch):
 def test_write_requires_dict(isolated_home):
     with pytest.raises(TypeError):
         fleet_mode.write_fleet_mode(["not", "a", "dict"])  # type: ignore[arg-type]
+
+
+def test_write_non_serializable_dict_value_leaves_no_tmp_file(isolated_home):
+    """A dict record passes the isinstance(dict) gate but can still fail
+    json.dump on a non-serializable value (e.g. a raw datetime). This must
+    degrade to False, not propagate, and must not leak the mkstemp tmp file
+    into settings_home() (Review: code-reviewer, finding 1)."""
+    import datetime
+
+    record = {"set_at": datetime.datetime(2026, 8, 29)}
+    assert fleet_mode.write_fleet_mode(record) is False
+    leftover = [
+        p for p in isolated_home.iterdir() if p.name.startswith("fleet-mode.json.")
+    ]
+    assert leftover == []
+    assert fleet_mode.fleet_mode_path().exists() is False

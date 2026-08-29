@@ -1,5 +1,7 @@
-"""Measure `run_commit_pipeline` end-to-end: process time and job-object spawn
-count, against this repo's REAL checkin surface.
+"""Measure `coordinator_core.git.commit.commit_paths` end-to-end: process
+time and job-object spawn count, against this repo's REAL checkin surface
+(C3, docs/plans/2026-08-29-the-push-subsystem-leaves-and-then-the-pipeline-
+can-go.md -- repointed off the killed `commit_pipeline.run_commit_pipeline`).
 
 Each measured window commits N times into the same repo, so history grows by N
 across the window. That biases toward OVER-reporting, never under: a later call
@@ -11,6 +13,7 @@ Windows allocates alongside one (DR-373) is counted -- the undercount a
 `subprocess.Popen` patch produces is exactly what this exists to avoid.
 """
 import os, shutil, subprocess, sys, tempfile, time
+from functools import partial
 from pathlib import Path
 
 #: This file's own location, never a literal: `coordinator_core/benchmarks/<this>`,
@@ -22,7 +25,9 @@ SRC = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(SRC))
 from coordinator_core.benchmarks import declare_benchmark_origin
 from coordinator_core.benchmarks.process_time import LiveTreeAccountant
-from coordinator_core.ops.ceremony.commit_pipeline import run_commit_pipeline
+from coordinator_core.git.commit import CommitRefused, FilterUnsupported, commit_paths
+from coordinator_core.git.commit import hash_worktree_blobs_via_spawn
+from coordinator_core.ops.ceremony.commit_message import compose_message
 
 
 WARMUP = 6
@@ -90,13 +95,16 @@ def _one_window(label, tracked, n, rep):
         f = repo / nm
         f.parent.mkdir(parents=True, exist_ok=True)
         f.write_text(f"v{i}" + chr(10))
-        return run_commit_pipeline(
-            repo,
-            session_id=f"{label}{rep}_{i}",
-            subject=f"{label} {i}",
-            stage_paths=[nm],
-            caller_paths={nm},
-        )
+        try:
+            commit_paths(
+                repo,
+                [nm],
+                compose_message(subject=f"{label} {i}"),
+                blob_fallback=partial(hash_worktree_blobs_via_spawn, cwd=repo),
+            )
+        except (CommitRefused, FilterUnsupported):
+            return False
+        return True
 
     # WARMUP calls are excluded because the FIRST call through this path pays
     # one-off import and page-in cost that no subsequent commit pays. It is a
@@ -107,7 +115,7 @@ def _one_window(label, tracked, n, rep):
 
     acc = LiveTreeAccountant(os.getpid())
     before = acc.snapshot()
-    landed = sum(1 for i in range(WARMUP, WARMUP + n) if not one(i).commit_failed)
+    landed = sum(1 for i in range(WARMUP, WARMUP + n) if one(i))
     after = acc.snapshot()
     acc.close()
 

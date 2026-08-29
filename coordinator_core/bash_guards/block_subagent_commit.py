@@ -3284,15 +3284,24 @@ _COMMITTING_OP_NAMES = frozenset(
         "fleet.archive_completed_handoffs",  # fleet/archive_terminal_handoffs.py -- archive_and_commit(...)
         "fleet.archive_paper_trail",        # fleet/archive_paper_trail.py -- archive_and_commit(...)
         "fleet.archive_queue_entry",        # fleet/archive_queue_entry.py -- archive_and_commit(...)
-        "fleet.prune_closed_bugs",          # fleet/prune_bugs.py -- archive_and_commit(...)
-        "handoff.archive_transition",       # handoff_archive_transition.py -- archive_and_commit(...)
+        # "fleet.prune_closed_bugs" and "handoff.archive_transition" REMOVED
+        # (C3, docs/plans/2026-08-29-the-push-subsystem-leaves-and-then-the-
+        # pipeline-can-go.md): both dead since the `d20d56893` 200ms sweep
+        # stripped their `@register_op` decorator (their modules still exist
+        # as in-process libraries -- see fleet/prune_bugs.py's and
+        # handoff_archive_transition.py's own gravestones -- but the NAME is
+        # unregistered, which is what this set gates on). One of six dead
+        # entries this same pass removes; see claude-klabauter-59's row
+        # state/bug-backlog/2026-08-29-six-dead-ops-from-the-200ms-sweep-are-
+        # st-bf460ad64e85.yaml.
         "handoff.ship_and_archive",         # handoff_ship_archive.py -- delegates to archive_shipped_handoffs._handle_act (archive_and_commit)
         # Fourth pass (2026-08-17), found by this file's own
         # test_committing_op_names_covers_registry_sink_scan rather than by a
         # human grep -- the mechanical enforcement of the BINDING RULE above
         # working as designed. Each verified against its handler's source
         # before being added, not taken from the failure message:
-        "deliverable.cascade_terminal",      # ops/deliverable_cascade.py -- commit_scoped(...)
+        # "deliverable.cascade_terminal" REMOVED (C3, same six-dead-ops pass
+        # as above) -- dead since the `d20d56893` sweep unregistered it.
         "fleet.archive_terminal_sizings",    # ops/fleet/archive_sizings.py -- archive_and_commit(...)
         # NOTE: "repo_setup.validate_target_root" was added here in the
         # fourth pass above and then removed (coordinator:code-reviewer,
@@ -3328,7 +3337,16 @@ _COMMITTING_OP_NAMES = frozenset(
         # to be found by hand as well. See the sixth-pass note on
         # `_COMMIT_SINK_CALL_MARKERS` in
         # tests/test_subagent_commit_prefilter_and_flags.py.
-        "ceremony.commit",                  # ops/ceremony/commit_op.py -- run_commit_pipeline(...)
+        #
+        # "ceremony.commit" REMOVED (C3, docs/plans/2026-08-29-the-push-
+        # subsystem-leaves-and-then-the-pipeline-can-go.md): `ceremony.commit`
+        # itself was separately KILLED at the 200ms process-time bar
+        # (p50 421.9ms, n=241; `op_budget_suspension.py`) and replaced by
+        # `ceremony.commit_v2` below -- this sixth-pass entry is dead twice
+        # over now (both the `d20d56893` sweep's unregistration AND the
+        # dedicated kill verdict apply to the same name). The paragraph
+        # above is preserved as the record of why the entry and its sink
+        # marker were added in the first place, not as a live description.
         # Seventh pass (2026-08-27), and this one is the ratchet earning its
         # keep in real time: these three registered DURING the session that
         # added `ceremony.commit` above -- the scan passed at the start of it
@@ -3340,9 +3358,15 @@ _COMMITTING_OP_NAMES = frozenset(
         # above) after a PM ruling killed the op and its module; the module
         # exists and is registered again, so the name is live once more and
         # its removal comment above now describes only that earlier era.
-        "fleet.archive_completed_plans",     # ops/fleet/archive_plans.py -- archive_and_commit(...)
+        # "fleet.archive_completed_plans" and "session.sweep_consumed_
+        # handoffs" REMOVED (C3, docs/plans/2026-08-29-the-push-subsystem-
+        # leaves-and-then-the-pipeline-can-go.md) -- the remaining two of the
+        # six dead entries the `d20d56893` sweep left in this set;
+        # `session.sweep_consumed_handoffs` additionally cites kill ledger
+        # K-110 on its own module's gravestone. `fleet.archive_actioned_
+        # memos` below is NOT one of the six -- it is the earlier RETURN
+        # (see the "Seventh pass" note above): registered again, still live.
         "fleet.archive_actioned_memos",      # ops/fleet/archive_actioned_memos.py -- archive_and_commit(...)
-        "session.sweep_consumed_handoffs",   # ops/session/sweep_consumed_handoffs.py -- archive_and_commit(...)
         # C3 (docs/plans/2026-08-27-something-must-commit-ceremony-commit-v2.md):
         # `ceremony.commit_v2` (ops/ceremony/commit_v2.py :: _handler) is the
         # fresh dispatchable identity over `commit.commit_paths`
@@ -6094,7 +6118,7 @@ def _git_commit_agent_may_commit(
 #: UNCHANGED by this correction -- text only.
 _GIT_COMMIT_AGENT_DENY_REASON = (
     "BLOCKED: git-commit-agent commits only via a non-sweeping, in-scope "
-    "pathspec -- use instead: `run_commit_pipeline` with an explicit `paths` "
+    "pathspec -- use instead: `ceremony.commit_v2` with an explicit `paths` "
     "list (reject `.`, `-A`, globs, repo-root/ancestor paths). Already used "
     "that form? Check path scope, not argv shape."
 )
@@ -6346,7 +6370,7 @@ def _deny_reason(
         if summary:
             return (
                 "BLOCKED: git-commit-agent commits only via a non-sweeping, "
-                "in-scope pathspec -- use instead: `run_commit_pipeline` with "
+                "in-scope pathspec -- use instead: `ceremony.commit_v2` with "
                 "an explicit `paths` list. Argv shape was fine; denied on path "
                 "scope: `%s`." % summary
             )

@@ -457,7 +457,9 @@ int is_provably_undispatched(long code) {
     return code == JSONRPC_PARSE_ERROR || code == JSONRPC_INVALID_REQUEST ||
            code == JSONRPC_METHOD_NOT_FOUND || code == JSONRPC_ENGINE_SKEW ||
            code == JSONRPC_UNTRUSTED_CALLER ||
-           code == JSONRPC_UNSTAMPED_ENGINE_ROOT || code == JSONRPC_OP_SUSPENDED;
+           code == JSONRPC_UNSTAMPED_ENGINE_ROOT || code == JSONRPC_OP_SUSPENDED ||
+           code == JSONRPC_ENTRYPOINT_NOT_WARM_LOADABLE ||
+           code == JSONRPC_SETTINGS_HOME_MISMATCH;
 }
 
 int build_indeterminate_envelope(buf_t *out, const char *detail) {

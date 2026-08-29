@@ -447,6 +447,11 @@ def _check_context_pressure_sync(session_id: str, transcript_path: str) -> str:
     # Scope, since PM ruling 2026-08-29: this key governs the 47 band ONLY. The
     # 40 band is informational for every session regardless, so there is no
     # variant left there to select — see that branch's own comment.
+    # Cost: one stat + one small json.loads via read_fleet_mode() on this hot
+    # path (fires every PostToolUse turn boundary, every session) — documented
+    # never-raise/fail-open, 27.6us median / 69.0us p99. See
+    # coordinator_core.session.fleet_mode.read_fleet_mode's docstring for the
+    # budget this call site draws against.
     compaction_warnings_variant = resolve_mode("compaction_warnings", session_id)
 
     reading = read_usage(session_id, now=time.time())

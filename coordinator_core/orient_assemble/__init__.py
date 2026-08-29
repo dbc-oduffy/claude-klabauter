@@ -254,7 +254,14 @@ def _resolve_target_root(target_root_arg: str | None) -> str:
     trampoline shape, so there is no separate caller cwd to thread through).
     An explicit `--target-root <path>` overrides this and is resolved
     relative to the current process cwd without a git-toplevel check —
-    a caller naming a path already knows it is a target repo root.
+    a caller naming a path already knows it is a target repo root. It IS
+    checked for existence: an unresolvable explicit root raises here rather
+    than reaching the readers, because every reader that scans a directory
+    under it treats a missing directory as "nothing to report" and returns
+    an empty ReaderResult. Without this check `--target-root /nonexistent`
+    renders as a clean corpus across every reader at once — AC9's silent
+    zero, arriving through the one argument whose whole purpose is to say
+    which repo to look at.
 
     AC9 / negative-spec: raises `RuntimeError` when no `--target-root` was
     given and cwd is not inside a git working tree — never falls back to a
@@ -266,7 +273,13 @@ def _resolve_target_root(target_root_arg: str | None) -> str:
     fail-loud discipline (see that function's own docstring).
     """
     if target_root_arg is not None:
-        return str(Path(target_root_arg).resolve())
+        resolved = Path(target_root_arg).resolve()
+        if not resolved.is_dir():
+            raise RuntimeError(
+                f"--target-root {target_root_arg!r} is not a directory "
+                f"(resolved to {resolved})"
+            )
+        return str(resolved)
     from coordinator_core.lifecycle import find_repo_root  # deferred: no side effects at import time
     return str(find_repo_root())
 
@@ -339,12 +352,15 @@ def main(argv: list[str]) -> int:
     try:
         target_root = _resolve_target_root(target_root_arg)
     except RuntimeError as exc:
-        print(
-            "orient-assemble: --target-root unresolvable: not inside a git "
-            "working tree and --target-root was not provided. Run from a "
-            f"git repo or pass --target-root <path>. Detail: {exc}",
-            file=sys.stderr,
-        )
+        if target_root_arg is not None:
+            print(f"orient-assemble: {exc}", file=sys.stderr)
+        else:
+            print(
+                "orient-assemble: no --target-root given and cwd is not "
+                "inside a git working tree. Run from a git repo or pass "
+                f"--target-root <path>. Detail: {exc}",
+                file=sys.stderr,
+            )
         return int(OrientExitCode.USAGE)
 
     decision_object = brief(cadence, repo_root=target_root)

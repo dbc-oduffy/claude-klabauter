@@ -48,6 +48,7 @@ from coordinator_core.win_portability import no_console_creationflags
 from coordinator_core.install.substrate import (
     _LEGACY_CMD_MARKER,
     SubstrateFatalError,
+    _AGENT_CMD_FORWARDER_MARKER,
     _agent_cmd_dest_name,
     _derive_agent_helper_names,
     _derive_agent_helper_target_map,
@@ -56,12 +57,29 @@ from coordinator_core.install.substrate import (
     _resolve_agent_cmd_dest_collisions,
     _static_bin_family_names,
     _sweep_orphaned_agent_helpers,
-    _write_agent_cmd_forwarder,
     _write_agent_forwarder,
     _write_bin_manifest,
 )
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
+
+def _plant_stale_cmd(dst: Path, name: str = "") -> Path:
+    """Fabricates a stale `.cmd` carrying the generator marker.
+
+    The generator (`_write_agent_cmd_forwarder`) is deleted -- one native
+    entrypoint per platform, PM ruling 2026-08-29 -- but the SWEEP that
+    removes files it left behind on real boxes is very much live, and needs
+    a fixture to sweep. This writes the minimum the sweep keys on (the
+    marker), not a working trampoline: nothing should ever execute this.
+    """
+    dst.write_text(
+        f"@echo off\nREM {_AGENT_CMD_FORWARDER_MARKER}\nREM stale fixture for {name}\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+    return dst
+
 
 @pytest.fixture(autouse=True)
 def _allow_machine_mutation_in_tmp_path(monkeypatch):
@@ -302,73 +320,22 @@ def test_py_suffixed_cli_forwarder_execs_py_target(tmp_path: Path):
     assert 'exec_cli("wsc-close")' not in content
 
 
-def test_write_agent_cmd_forwarder_targets_installed_name_not_stem(tmp_path: Path):
-    """The generated `.cmd` body must invoke `%~dp0<installed-name>` — the
-    co-located Unix-half forwarder's OWN filename — never the stem-stripped
-    `.cmd` destination name and never the claude-klabauter-side `.py` target. This is
-    the divergent-installed-name case: an installed name that carries its
-    own suffix (e.g. a hypothetical `foo.sh` — the shape the retired
-    `mint-deliverable-id.sh` divergence used to exercise) installs the Unix
-    half as `foo.sh`, the `.cmd` twin as `foo.cmd`, but the `.cmd` body must
-    still target `%~dp0foo.sh`."""
-    dst = tmp_path / "foo.cmd"
-    _write_agent_cmd_forwarder(
-        "foo.sh", dst, False, python3_cmd_resolved_bin="",
-    )
-    content = dst.read_text(encoding="utf-8")
-    assert '"%~dp0foo.sh"' in content
-    assert "foo.py" not in content
-    assert "foo.cmd" not in content
-
-
-def test_write_agent_cmd_forwarder_substitutes_resolved_interpreter(tmp_path: Path):
-    """Unlike the retired copy-a-source-.cmd approach (whose `__PYTHON_BIN__`
-    placeholder was never substituted for agent-helper `.cmd`s), the
-    generator does the substitution for real at generation time."""
-    dst = tmp_path / "cross-repo-memo.cmd"
-    _write_agent_cmd_forwarder(
-        "cross-repo-memo", dst, False,
-        python3_cmd_resolved_bin=r"C:\Python311\python.exe",
-    )
-    content = dst.read_text(encoding="utf-8")
-    assert r'set "_py=C:\Python311\python.exe"' in content
-    assert "__PYTHON_BIN__" not in content
-
-
-def test_write_agent_cmd_forwarder_empty_resolved_bin_falls_through(tmp_path: Path):
-    """An empty resolved bin (nothing bakeable at install time) must fall
-    through to the `where python.exe` / `py -3` ladder rungs, not emit a
-    quoted empty-string exec that would blow up as `"" "%~dp0..."`."""
-    dst = tmp_path / "cross-repo-memo.cmd"
-    _write_agent_cmd_forwarder(
-        "cross-repo-memo", dst, False, python3_cmd_resolved_bin="",
-    )
-    content = dst.read_text(encoding="utf-8")
-    assert 'set "_py="' in content
-    assert "where python.exe" in content
-    assert "py -3" in content
-    assert "exit /b 127" in content
-
-
-def test_write_agent_cmd_forwarder_check_only_does_not_write(tmp_path: Path):
-    dst = tmp_path / "cross-repo-memo.cmd"
-    # dst is absent -- a real run would write it, so check-only now fails
-    # loud rather than silently no-op-ing.
-    with pytest.raises(SubstrateFatalError, match="absent"):
-        _write_agent_cmd_forwarder(
-            "cross-repo-memo", dst, True, python3_cmd_resolved_bin="",
-        )
-    assert not dst.exists()
-
-
-def test_write_agent_cmd_forwarder_check_only_fresh_is_no_op(tmp_path: Path):
-    dst = tmp_path / "cross-repo-memo.cmd"
-    _write_agent_cmd_forwarder("cross-repo-memo", dst, False, python3_cmd_resolved_bin="")
-    before = dst.read_text(encoding="utf-8")
-
-    _write_agent_cmd_forwarder("cross-repo-memo", dst, True, python3_cmd_resolved_bin="")
-
-    assert dst.read_text(encoding="utf-8") == before
+# GRAVESTONE -- the `_write_agent_cmd_forwarder` body tests (deleted
+# 2026-08-29 with the generator itself; PM ruling: one native entrypoint per
+# platform, and that entrypoint is the door).
+#
+# Removed: delayed-expansion/`%*` corruption, `__PYTHON_BIN__` substitution,
+# the `where python.exe` / `py -3` fallback ladder, check-only staleness, and
+# installed-name-not-stem targeting. Every one of them asserted a property of
+# a cmd.exe trampoline that is no longer emitted, so keeping them would have
+# meant keeping the generator alive purely to be tested.
+#
+# WHAT REPLACED THE COVERAGE, so this is not a silent coverage loss: the
+# behaviour those tests protected (a bare name typed on Windows reaches this
+# CLI) is now carried by the native door image and asserted in
+# `install/tests/test_forwarder_routes_through_door.py`. The REMOVAL of stale
+# `.cmd` files left by older installs is still live and still tested below
+# via `_plant_stale_cmd`.
 
 
 def test_forwarder_missing_target_exits_127_without_traceback(tmp_path: Path):
@@ -1018,67 +985,39 @@ def test_install_bin_resolvers_agent_helper_pairs_resolve_at_destination(
                 f"fixture coordinator/bin/ — claude-klabauter-side target is dead"
             )
 
+            # NO `.cmd` HALF IS WRITTEN, FOR ANY NAME (PM ruling 2026-08-29:
+            # one native entrypoint per platform, and that entrypoint is the
+            # door). This assertion is inverted from what it used to be, and
+            # the inversion is the point: this gate previously proved the
+            # `.cmd` twin resolved to a real co-located target, which was the
+            # right gate while a trampoline existed. The trampoline is gone,
+            # so the gate now proves the installer emits none.
+            #
+            # This fixture's root carries no engine stamp, so it is the
+            # DOORLESS path -- the Unix half asserted above is the whole
+            # product here. Door-bearing coverage lives in
+            # `install/tests/test_forwarder_routes_through_door.py`.
             cmd_dest_name = cmd_dest_map.get(name)
             if cmd_dest_name is None:
-                # A collision loser (e.g. render-handoff-tracker.js) — no
-                # .cmd is written under its own dest name, since that name
-                # was resolved to a DIFFERENT installed name's forwarder.
                 continue
-
-            cmd_dst = dest_dir / cmd_dest_name
-            assert cmd_dst.is_file(), f".cmd half missing at {cmd_dst}"
-            cmd_content = cmd_dst.read_text(encoding="utf-8")
-            m = _DP0_TARGET_RE.search(cmd_content)
-            assert m, f".cmd half for {name!r} has no %~dp0<target> reference"
-            cmd_target = m.group(1)
-            assert cmd_target == name, (
-                f".cmd half for {name!r} targets {cmd_target!r} via "
-                f"%~dp0 — expected the co-located Unix-half forwarder's own "
-                f"installed name {name!r}"
+            assert not (dest_dir / cmd_dest_name).exists(), (
+                f"{name}: installer emitted a .cmd trampoline at "
+                f"{dest_dir / cmd_dest_name} -- the writer is deleted, so "
+                f"something reintroduced one"
             )
-            assert (dest_dir / cmd_target).is_file(), (
-                f"{name}: .cmd half targets %~dp0{cmd_target}, which does "
-                f"NOT exist at the install destination {dest_dir} — this is "
-                f"the break-class defect this gate exists to catch"
-            )
-            assert "__PYTHON_BIN__" not in cmd_content, (
-                f"{name}: .cmd half left the __PYTHON_BIN__ placeholder "
-                f"unsubstituted"
-            )
-
-
-def test_write_agent_cmd_forwarder_no_delayed_expansion(tmp_path: Path):
-    """`enabledelayedexpansion` + unguarded `%*` silently corrupts any
-    forwarded argument containing a literal `!` (cmd.exe scans the whole
-    command line -- including whatever %* substitutes in -- for `!...!`
-    tokens before running it). The generated body must forward %* with NO
-    delayed expansion in effect at all, not merely avoid `!ERRORLEVEL!`.
-    Regression for the P1 finding in
-    state/review-trail/findings/2026-07-23-codereview-slicecmd-forwarder-fix-17db70f4-coordinator-core-install-substrate-py-co.md."""
-    dst = tmp_path / "cross-repo-memo.cmd"
-    _write_agent_cmd_forwarder(
-        "cross-repo-memo", dst, False, python3_cmd_resolved_bin=r"C:\Python311\python.exe",
-    )
-    content = dst.read_text(encoding="utf-8")
-    assert not _DIRECTIVE_ENABLES_DELAYED_EXPANSION_RE.search(content)
-    non_comment_lines = "\n".join(
-        line for line in content.splitlines() if not line.strip().upper().startswith("REM")
-    )
-    assert "!" not in non_comment_lines, (
-        "no `!...!` delayed-expansion token may appear in any executable "
-        "line of a body that forwards %* without delayed expansion enabled "
-        "(a mention inside an explanatory REM comment is fine)"
-    )
-    assert "%*" in content
-    assert "%ERRORLEVEL%" in content
 
 
 # Matches the actual `setlocal enabledelayedexpansion` DIRECTIVE (optionally
 # combined with other setlocal options, e.g. `setlocal enabledelayedexpansion
 # enableextensions`) -- deliberately NOT a bare substring check, since a REM
-# comment is allowed to mention "enabledelayedexpansion" by name (as this
-# file's own generated launchers now do, explaining why it's absent) without
+# comment is allowed to mention "enabledelayedexpansion" by name without
 # tripping the gate.
+#
+# SURVIVES THE GENERATOR'S DELETION deliberately. The INSTALLED `.cmd` half is
+# gone (PM ruling 2026-08-29), but the repo-side `coordinator/bin/*.cmd`
+# launchers -- a separate family, emitted by `coordinator/bin/gen-launcher-
+# shim.py`, not by the installer -- are still on disk, and the corpus gate
+# below still reads them. Delete this only when that family goes too.
 _DIRECTIVE_ENABLES_DELAYED_EXPANSION_RE = re.compile(
     r"^\s*setlocal\b.*\benabledelayedexpansion\b", re.IGNORECASE | re.MULTILINE
 )
@@ -1103,19 +1042,6 @@ def _assert_cmd_body_never_combines_delayed_expansion_with_arg_forward(
         f"silently mangled (unmatched `!` truncates the line; a matched "
         f"`!token!` that isn't a defined env var becomes empty string)"
     )
-
-
-def test_generated_cmd_never_combines_delayed_expansion_with_arg_forward(tmp_path: Path):
-    """Direct regression for the P1 finding, asserted on the actual emitted
-    shape rather than on a comment or a single token's absence."""
-    dst = tmp_path / "some-cli.cmd"
-    for resolved_bin in ("", r"C:\Python311\python.exe"):
-        _write_agent_cmd_forwarder(
-            "some-cli", dst, False, python3_cmd_resolved_bin=resolved_bin,
-        )
-        _assert_cmd_body_never_combines_delayed_expansion_with_arg_forward(
-            dst.read_text(encoding="utf-8"), f"_write_agent_cmd_forwarder({resolved_bin!r})"
-        )
 
 
 def test_source_cmd_corpus_never_combines_delayed_expansion_with_arg_forward():
@@ -1170,7 +1096,7 @@ def test_sweep_removes_orphaned_cmd_forwarder(tmp_path: Path):
     present on disk, carrying the generator marker, but not a value in this
     run's `agent_cmd_dest_map`."""
     orphan = tmp_path / "old-cli.cmd"
-    _write_agent_cmd_forwarder("old-cli", orphan, False, python3_cmd_resolved_bin="")
+    _plant_stale_cmd(orphan, "old-cli")
     assert orphan.is_file()
 
     _sweep_orphaned_agent_helpers(tmp_path, {}, {}, False)
@@ -1272,7 +1198,7 @@ def test_sweep_leaves_currently_installed_names_alone(tmp_path: Path):
     kept = tmp_path / "cross-repo-memo"
     _write_agent_forwarder("cross-repo-memo", kept, False, target="cross-repo-memo.py")
     kept_cmd = tmp_path / "cross-repo-memo.cmd"
-    _write_agent_cmd_forwarder("cross-repo-memo", kept_cmd, False, python3_cmd_resolved_bin="")
+    _plant_stale_cmd(kept_cmd, "cross-repo-memo")
 
     _sweep_orphaned_agent_helpers(
         tmp_path,
@@ -1307,7 +1233,7 @@ def test_sweep_against_real_coordinator_bin_derivation_does_not_remove_live_forw
     live_cmd = None
     if live_cmd_dest is not None:
         live_cmd = tmp_path / live_cmd_dest
-        _write_agent_cmd_forwarder(live_name, live_cmd, False, python3_cmd_resolved_bin="")
+        _plant_stale_cmd(live_cmd, live_name)
 
     _sweep_orphaned_agent_helpers(tmp_path, mapping, cmd_dest_map, False)
 
@@ -1333,9 +1259,7 @@ def test_install_bin_resolvers_sweeps_orphan_in_install_dir(
     _write_agent_forwarder(
         "deleted-cli", bin_dst / "deleted-cli", False, target="deleted-cli.py",
     )
-    _write_agent_cmd_forwarder(
-        "deleted-cli", bin_dst / "deleted-cli.cmd", False, python3_cmd_resolved_bin="",
-    )
+    _plant_stale_cmd(bin_dst / "deleted-cli.cmd", "deleted-cli")
 
     from coordinator_core.install.substrate import _install_bin_resolvers
 

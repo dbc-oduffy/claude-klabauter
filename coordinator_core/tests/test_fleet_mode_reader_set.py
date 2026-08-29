@@ -171,6 +171,13 @@ EXPECTED_READERS = (
     "coordinator_core.ops.tests.test_fleet_mode_control",
     "coordinator_core.session.tests.test_fleet_mode",
     "coordinator_core.session.tests.test_mode_resolution",
+    # Names "fleet-mode.json" as a literal in its own docstring/source (same
+    # basename-reader shape as this file's own _SELF_MODULE exclusion, but
+    # this module is not itself the reader_closure() walker so it does not
+    # get that exclusion) -- a basename reader, not an importer of either
+    # target module. Pre-existing gap found while integrating this diff's
+    # review; not one of the reviewer's three findings.
+    "coordinator_core.tests.test_fleet_mode_process_boundary",
     "coordinator_core.tests.test_hooks_roundtrip",
     "coordinator_core.write_guards.nudge_em_code_dispatch",
     "coordinator_core.write_guards.tests.test_windows_platform_simulation",
@@ -214,21 +221,51 @@ def _is_top_level_guard_module(dotted: str) -> bool:
 _GUARD_DISPATCH_MARKER = "MATCHERS"
 
 
+# The one module this walk exempts from the inverted default below: a
+# mechanism helper at the TOP LEVEL of a guard directory whose absence of a
+# dispatch surface is UNAMBIGUOUS, not merely undetected. `_firing_shape.py`
+# carries no MATCHERS and no PRIORITY -- it is the classification mechanism
+# the firing-shape gate itself runs, not a registered guard -- and it reaches
+# the fleet record only through a function-local import of
+# `nudge_em_code_dispatch` used as a test specimen (see module docstring's
+# "GUARD-CORPUS / MESSAGE-REGISTER / FIRING-SHAPE META-TESTS" cluster note).
+# No other module may be added here without the same unambiguous-absence
+# analysis recorded inline.
+_UNAMBIGUOUS_NON_GUARD_MODULES = frozenset({
+    "coordinator_core/bash_guards/_firing_shape.py",
+})
+
+
 def _declares_guard_dispatch_surface(path: Path) -> bool:
-    """True when `path` declares a module-level ``MATCHERS`` -- i.e. it is a
-    guard the dispatcher can fire, rather than a helper that merely lives in a
-    guard directory.
+    """True unless `path` can be shown to POSITIVELY LACK a dispatchable
+    ``MATCHERS`` surface -- i.e. ambiguity resolves to IS-A-GUARD, never to
+    not-a-guard, matching the guard directories' own stated convention
+    ("default posture on ambiguity is deny",
+    ``coordinator_core/bash_guards/block_disarm_marker_sentinel_creation.py``).
 
     WHY THIS EXISTS, so it is not "simplified" back into a directory check.
     Without it, `_module_class()` returning None collapses two facts that carry
     opposite obligations: "this is a guard whose CLASS I could not read" (an
     unresolved question -- fail loud, default posture on ambiguity is deny) and
-    "this is not a guard, so it has no CLASS to read" (nothing to resolve). The
-    chunk that first shipped this file failed loud on
-    `bash_guards/_firing_shape.py`, which is the mechanism half of the
-    firing-shape gate -- no MATCHERS, no PRIORITY, cannot fire as a guard, and
-    reaches the record only through a function-local import of a hook it uses
-    as a test specimen. That is the second fact wearing the first's alarm.
+    "this is not a guard, so it has no CLASS to read" (nothing to resolve).
+
+    INVERTED DEFAULT (review finding, 2026-08-29). The original version of
+    this function matched only a literal top-level `MATCHERS = ...` /
+    `MATCHERS: T = ...` statement in `tree.body`, and returned False -- "not a
+    guard" -- for everything else, including a `MATCHERS` bound by
+    `from ... import MATCHERS`, by a conditional top-level assignment inside
+    an `if`/`try` block, or dynamically via `globals()["MATCHERS"] = ...`.
+    Any of those shapes lands the module in `non_guard_readers`, where CLASS
+    is never checked at all -- exactly the "validated key instead of an
+    absent reader" failure this file's docstring says it exists to prevent,
+    and once such a module is allowlisted the tests go permanently green with
+    zero further pushback on its denial-shaped nature. The fix is not to
+    enumerate more binding forms and hope the list is complete: this function
+    now returns True (treat as guard, subject to the CLASS check) for
+    anything it cannot positively prove lacks a MATCHERS surface. The only
+    modules exempted from that default are named explicitly in
+    `_UNAMBIGUOUS_NON_GUARD_MODULES` above, with the reasoning recorded
+    inline -- never inferred structurally.
 
     This narrows the SUBJECT of the denial-shaped check, never its STRENGTH: a
     module declaring MATCHERS with no derivable CLASS still fails loud below.
@@ -246,21 +283,36 @@ def _declares_guard_dispatch_surface(path: Path) -> bool:
     try:
         source = path.read_text(encoding="utf-8")
     except OSError:
-        return False
+        return True  # unreadable -- cannot prove absence, default to guard
     try:
         tree = ast.parse(source, filename=str(path))
     except SyntaxError:
+        return True  # unparseable -- cannot prove absence, default to guard
+
+    # Positive detection, over the WHOLE tree (not just tree.body), so a
+    # conditional top-level assignment inside `if`/`try` is not missed: a
+    # direct MATCHERS bind, a `from ... import MATCHERS` re-export, or the
+    # bare string literal "MATCHERS" appearing anywhere (a dynamic bind via
+    # `globals()["MATCHERS"] = ...` / `setattr(..., "MATCHERS", ...)` cannot
+    # be proven a bind statically, so its mere presence is treated as
+    # ambiguous-therefore-guard rather than an attempt to prove intent).
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Assign, ast.AnnAssign)):
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            for target in targets:
+                if isinstance(target, ast.Name) and target.id == _GUARD_DISPATCH_MARKER:
+                    return True
+        elif isinstance(node, ast.ImportFrom):
+            for alias in node.names:
+                if _GUARD_DISPATCH_MARKER in (alias.name, alias.asname):
+                    return True
+        elif isinstance(node, ast.Constant) and node.value == _GUARD_DISPATCH_MARKER:
+            return True
+
+    posix_path = path.as_posix().replace("\\", "/")
+    if any(posix_path.endswith(exempt) for exempt in _UNAMBIGUOUS_NON_GUARD_MODULES):
         return False
-    for node in tree.body:
-        targets = (
-            node.targets
-            if isinstance(node, ast.Assign)
-            else ([node.target] if isinstance(node, ast.AnnAssign) else [])
-        )
-        for target in targets:
-            if isinstance(target, ast.Name) and target.id == _GUARD_DISPATCH_MARKER:
-                return True
-    return False
+    return True
 
 
 # This test module inevitably names "fleet-mode.json" in its own docstring
@@ -459,14 +511,6 @@ def test_no_denial_shaped_guard_reaches_the_record():
     ]
     non_guard_readers = [m for m in guard_dir_readers if m not in guard_readers]
 
-    assert guard_readers == [_ALLOWLISTED_TOP_LEVEL_GUARD_MODULE], (
-        f"dispatchable guard(s) reaching the fleet record: {guard_readers}. "
-        f"Only {_ALLOWLISTED_TOP_LEVEL_GUARD_MODULE} is allowlisted, on the "
-        "allowlist-vs-restructure analysis this file's module docstring "
-        "records. A guard that is not on this list must not reach the record "
-        "at all -- the floor is an absent reader, not a validated key."
-    )
-
     # Non-guard modules in these directories are out of the CLASS question's
     # subject, never out of the floor: each one still has to be in
     # EXPECTED_READERS, which `test_reader_set_matches_allowlist_exactly`
@@ -480,35 +524,49 @@ def test_no_denial_shaped_guard_reaches_the_record():
         "readers and the allowlist has to name them."
     )
 
-    for dotted in guard_readers:
+    # CLASS derivation runs BEFORE the list-equality assert below, so the
+    # specific "CLASS cannot be statically derived" message can actually
+    # fire -- previously this loop ran AFTER `assert guard_readers == [...]`,
+    # which already failed the test for any non-allowlisted entry, making
+    # this branch dead code (review finding: the docstring's claim about how
+    # this fails loud was false because the branch could never execute).
+    non_allowlisted_guard_readers = [
+        m for m in guard_readers if m != _ALLOWLISTED_TOP_LEVEL_GUARD_MODULE
+    ]
+    for dotted in non_allowlisted_guard_readers:
         path = _module_path(root, dotted)
         cls = _module_class(path)
-        if dotted == _ALLOWLISTED_TOP_LEVEL_GUARD_MODULE:
-            assert cls == "advisory", (
-                f"{dotted} is allowlisted on the assumption its CLASS is "
-                f"'advisory'; it is now {cls!r}. Re-run the allowlist-vs-"
-                "restructure analysis in this file's module docstring -- "
-                "the allowlisting was conditioned on this CLASS."
+        if cls is None:
+            # Every other dispatchable guard reaching the record must fail
+            # loud: an unclassifiable guard is an unresolved question, never
+            # silently treated as advisory (default posture on ambiguity is
+            # deny).
+            pytest.fail(
+                f"{dotted} reaches the fleet record but its module-level CLASS "
+                "cannot be statically derived -- an unclassifiable module is an "
+                "unresolved question, never silently treated as advisory "
+                "(default posture on ambiguity is deny). This is a known, "
+                "unremediated finding (see this chunk's run report) -- "
+                "disposing of it (classify or restructure the import away) is "
+                "out of this file's scope."
             )
-            continue
-        # Every other dispatchable guard reaching the record must fail loud: an
-        # unclassifiable guard is an unresolved question, never silently
-        # treated as advisory (default posture on ambiguity is deny).
-        assert cls is None, (
-            f"{dotted} now has a derivable CLASS={cls!r} -- if that CLASS "
-            "is 'advisory', add it to EXPECTED_READERS with the allowlist-"
-            "vs-restructure analysis this file's docstring requires; if "
-            "denial-shaped, it must not reach the fleet record at all."
-        )
-        pytest.fail(
-            f"{dotted} reaches the fleet record but its module-level CLASS "
-            "cannot be statically derived -- an unclassifiable module is an "
-            "unresolved question, never silently treated as advisory "
-            "(default posture on ambiguity is deny). This is a known, "
-            "unremediated finding (see this chunk's run report) -- "
-            "disposing of it (classify or restructure the import away) is "
-            "out of this file's scope."
-        )
+
+    assert guard_readers == [_ALLOWLISTED_TOP_LEVEL_GUARD_MODULE], (
+        f"dispatchable guard(s) reaching the fleet record: {guard_readers}. "
+        f"Only {_ALLOWLISTED_TOP_LEVEL_GUARD_MODULE} is allowlisted, on the "
+        "allowlist-vs-restructure analysis this file's module docstring "
+        "records. A guard that is not on this list must not reach the record "
+        "at all -- the floor is an absent reader, not a validated key."
+    )
+
+    allowlisted_path = _module_path(root, _ALLOWLISTED_TOP_LEVEL_GUARD_MODULE)
+    allowlisted_cls = _module_class(allowlisted_path)
+    assert allowlisted_cls == "advisory", (
+        f"{_ALLOWLISTED_TOP_LEVEL_GUARD_MODULE} is allowlisted on the "
+        f"assumption its CLASS is 'advisory'; it is now {allowlisted_cls!r}. "
+        "Re-run the allowlist-vs-restructure analysis in this file's module "
+        "docstring -- the allowlisting was conditioned on this CLASS."
+    )
 
 
 # --- self-verification: the mechanism itself is red in both directions ------

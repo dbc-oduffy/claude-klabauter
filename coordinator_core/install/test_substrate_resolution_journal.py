@@ -431,14 +431,19 @@ def test_install_bin_resolvers_journals_all_four_shaped_clauses(tmp_path, monkey
     platform_localize_paths = {e.path for e in per_clause[substrate._CLAUSE_PLATFORM_LOCALIZE].entries}
     assert platform_localize_paths == {str(bin_dst / e.name) for e in bin_manifest.platform_localize}
 
+    # ONE JOURNALLED PATH PER NAME, not two. The `.cmd` half is no longer
+    # written (PM ruling 2026-08-29, one native entrypoint per platform), so
+    # it is no longer journalled either -- and the journal feeding
+    # `receipt.build_receipt` is exactly where a stale second path would show
+    # up as a phantom managed artifact. This fixture's root carries no engine
+    # stamp, so every name lands on the doorless bare-Python path; a stamped
+    # root journals the native image at the same one-per-name cardinality.
     agent_bin = Path(_REPO_ROOT) / "coordinator" / "bin"
     agent_map = substrate._derive_agent_helper_target_map(agent_bin)
-    agent_cmd_map = substrate._resolve_agent_cmd_dest_collisions(agent_map)
-    expected_agent_paths = {str(bin_dst / f) for f in agent_map} | {
-        str(bin_dst / cmd) for cmd in agent_cmd_map.values()
-    }
+    expected_agent_paths = {str(bin_dst / f) for f in agent_map}
     agent_forwarder_paths = {e.path for e in per_clause[substrate._CLAUSE_AGENT_HELPER_FORWARDERS].entries}
     assert agent_forwarder_paths == expected_agent_paths
+    assert not any(p.endswith(".cmd") for p in agent_forwarder_paths)
 
 
 def test_install_bin_resolvers_check_only_never_journals(tmp_path, monkeypatch):

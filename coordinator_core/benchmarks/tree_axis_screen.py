@@ -135,12 +135,22 @@ class OpResult:
         return abs(ratio - round(ratio)) < TICK_PROXIMITY
 
 
-def resolve_warm_server_pid(repo_root: Path) -> Optional[int]:
-    """Newest still-alive warm-server pid, read off the sink's own rows.
+def live_warm_server_pids(repo_root: Path) -> List[int]:
+    """Every still-alive warm-server pid the sink knows, newest-first.
 
     Why the sink and not a process scan: every ``route: warm_server`` row already
     carries the pid that served it, so the answer is on disk and costs no process
     enumeration on a box running ~50 sessions.
+
+    NEGATIVE SPEC -- this returns a LIST because the box runs more than one server
+    and dispatch spreads invocations across them. Measured 2026-08-29: eight
+    invocations each of ``ping`` and ``commit.anchors`` alternated 50/50 between
+    two live servers, and the live sink carried 20 distinct warm-server pids in
+    its last 8000 rows with no dominant one. A caller that collapses this to a
+    single pid and brackets that one server measures a fraction of the work and
+    reports the fraction as the whole -- an UNDERSTATEMENT, which against a kill
+    bar manufactures false under-bar readings. Do not re-add a
+    ``resolve_warm_server_pid`` that returns one pid.
     """
     import ctypes.wintypes as wt
 
@@ -154,7 +164,7 @@ def resolve_warm_server_pid(repo_root: Path) -> Optional[int]:
     try:
         blob = path.read_text(encoding="utf-8", errors="replace")
     except OSError:
-        return None
+        return []
     for line in blob.splitlines():
         if '"warm_server"' not in line:
             continue
@@ -166,12 +176,13 @@ def resolve_warm_server_pid(repo_root: Path) -> Optional[int]:
         if isinstance(pid, int) and t >= seen.get(pid, 0):
             seen[pid] = t
 
+    live: List[int] = []
     for pid, _ in sorted(seen.items(), key=lambda kv: -kv[1]):
         h = k32.OpenProcess(0x1000, False, pid)   # QUERY_LIMITED_INFORMATION
         if h:
             k32.CloseHandle(h)
-            return pid
-    return None
+            live.append(pid)
+    return live
 
 
 def _sink_path(repo_root: Path) -> Path:
@@ -300,13 +311,24 @@ def run_screen(ops: Optional[List[str]] = None) -> Dict[str, OpResult]:
     population = ops or sorted(op_fixtures.COMPUTE_ONLY_FIXTURES)
     repo_root = Path(__file__).resolve().parents[2]
     worktree_root = op_fixtures.materialize_fixture_repo()
-    server_pid = resolve_warm_server_pid(repo_root)
-    if server_pid is None:
+    server_pids = live_warm_server_pids(repo_root)
+    if not server_pids:
         raise RuntimeError(
             "no live warm-server pid found in the sink; the tree axis cannot be "
             "read without one. Refusing to fall back to this process's own job -- "
             "that would measure the client framer and report it as the op."
         )
+    if len(server_pids) > 1:
+        raise RuntimeError(
+            f"{len(server_pids)} live warm servers ({server_pids}); dispatch spreads "
+            "invocations across them and bracketing one measures a fraction of the "
+            "work. Refusing rather than under-reporting: an understated figure "
+            "against a kill bar is a false under-bar reading. Screening needs a "
+            "private server on its own engine clone -- see docs/research/"
+            "spike-verdicts/2026-08-29-write-safe-fixtures-for-the-spawning-op-"
+            "population.md."
+        )
+    server_pid = server_pids[0]
     print(f"  attaching to warm server pid {server_pid}", flush=True)
     accountant = LiveTreeAccountant(server_pid)
 

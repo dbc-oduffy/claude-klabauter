@@ -69,16 +69,35 @@ Write-time validation (rejects with the reason, and writes NOTHING):
     so an ungated ``granted_at`` could buy 101 live hours from a single
     dishonest or clock-skewed writer.
   - ``granted_by`` is not the literal string ``"human"``.
+  - ``classes`` is empty.
   - any requested class is a member of ``NEVER_DELEGABLE``.
+  - any requested class is not a member of ``DELEGABLE`` (the positive
+    allow-list, checked AFTER the ``NEVER_DELEGABLE`` check so a
+    never-delegable class keeps its own message rather than falling
+    through to the allow-list's "unknown class" one).
 
-Read-time semantics (``check_fleet_delegation``): the ABSENT value —
-BYTE-IDENTICAL to the no-file case, ``(False, None)`` — is returned when the
-file is missing, malformed, an unknown ``schema_version``, expired
-(``now >= expires_at``), carrying a non-HUMAN ``authorship`` verdict, naming
-a class not in the record's own ``classes``, or naming a designated
-``(pid, create_time)`` pair that is not LIVE. No warning branch, no grace
-window — see the module's own test suite for the identity assertion this
-promise rests on.
+Read-time semantics (``check_fleet_delegation``): this is the INSPECTION
+API, the layer behind ``coordinator-delegation show``, which genuinely needs
+to explain WHY a grant was refused. ``granted`` is False, and the RECORD IS
+STILL RETURNED (never coerced to None), when the grant is malformed, an
+unknown ``schema_version``, expired (``now >= expires_at``), carrying a
+non-HUMAN ``authorship`` verdict, naming a class not in the record's own
+``classes``, or naming a designated ``(pid, create_time)`` pair that is not
+LIVE — only a TRUE ABSENCE (no file at all, or an unreadable/malformed-JSON
+file that never parsed into a record) returns ``(False, None)``. No warning
+branch, no grace window on the boolean — but no identity-with-absence
+promise at THIS layer either: that promise belongs to
+``coordinator_core.ops.delegation_check`` (the agent-facing consumer
+surface), which collapses every one of these denial reasons — expired
+included — to the SAME reply an absent grant would produce, because a
+session asking that surface must not be able to distinguish "never granted"
+from "expired" any more than a "not granted" denial should disclose who
+currently holds the relay. See that module's own test suite
+(``coordinator_core/ops/tests/test_delegation_check.py``) for the identity
+assertion; THIS module's test suite
+(``coordinator_core/session/tests/test_fleet_delegation.py``) instead
+asserts that the record survives an expired denial, which is what the
+inspection API is for.
 
 Liveness-probe failure is explicitly FAIL-CLOSED (Review: staff-eng
 (the Staff Engineer), finding 8): any exception the ``psutil`` probe raises
@@ -105,6 +124,8 @@ Negative-spec:
     reads byte-identical to absence, full stop.
   - Does NOT restate ``NEVER_DELEGABLE`` anywhere else in this codebase —
     every other consumer imports this module's frozenset.
+  - Does NOT restate ``DELEGABLE`` anywhere else in this codebase either —
+    same import-not-restate rule, same reason.
 """
 
 from __future__ import annotations
@@ -138,6 +159,35 @@ NEVER_DELEGABLE = frozenset(
         "scope-change",
         "deliverable-change",
         "product-direction",
+    }
+)
+
+#: The positive delegable-class allow-list — the ONLY classes a grant may
+#: name. Declared HERE and nowhere else in this codebase, mirroring
+#: ``NEVER_DELEGABLE``'s own convention: every other consumer imports this
+#: frozenset rather than restating it. Enforced at write time, AFTER the
+#: ``NEVER_DELEGABLE`` check (order matters — see ``write_fleet_delegation``)
+#: so a never-delegable class keeps its own existing rejection message
+#: instead of falling through to the allow-list's "unknown class" message.
+#:
+#: This list is the coordinator-claude plane's (DoE's) to change — it
+#: arrives here as a ratified list, not a proposal this module negotiates.
+#: Membership, exactly two:
+#:   - "execute-approved-plan" — the gate where the PM has already ratified
+#:     the plan and only timing remains.
+#:   - "expensive-test-tier" — a pure cost and machine-load call.
+#:
+#: DELIBERATELY EXCLUDED, and why the list stays short rather than growing
+#: by oversight:
+#:   - "merging-to-main" and cross-repo commit assent — excluded outright,
+#:     these are never delegable via this mechanism.
+#:   - every keyword-gated skill — for those, the literal keyword IS the
+#:     authorization; a grant covering one would become a second route
+#:     around that keyword, defeating the reason the keyword gate exists.
+DELEGABLE = frozenset(
+    {
+        "execute-approved-plan",
+        "expensive-test-tier",
     }
 )
 
@@ -257,9 +307,19 @@ def write_fleet_delegation(
         )
 
     requested_classes = list(classes or [])
+    if not requested_classes:
+        return False, "classes must be a non-empty list"
+
     never_delegable_hit = NEVER_DELEGABLE.intersection(requested_classes)
     if never_delegable_hit:
         return False, f"class(es) not delegable: {sorted(never_delegable_hit)}"
+
+    unknown_classes = [c for c in requested_classes if c not in DELEGABLE]
+    if unknown_classes:
+        return False, (
+            f"class(es) not in the delegable allow-list: {sorted(unknown_classes)} "
+            f"(accepted: {sorted(DELEGABLE)})"
+        )
 
     record = {
         "schema_version": 1,

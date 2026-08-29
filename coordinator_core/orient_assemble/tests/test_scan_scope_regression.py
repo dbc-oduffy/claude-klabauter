@@ -33,6 +33,12 @@ Negative-spec:
       an isolated, empty tmp_path root, never the real repo tree, so this
       suite's pass/fail never depends on this repo's own live corpus
       contents.
+    - Does NOT normalize `repo_root` to one type across every reader
+      (Review: code-reviewer — Finding 3): `_read_orphaned_plans` is
+      exercised with a `Path` (its own parameter type) and
+      `_read_memo_surface` with a `str` (matching its own signature) —
+      deliberate per-reader coverage of the type each one actually
+      declares, not accidental drift.
 """
 
 from __future__ import annotations
@@ -336,28 +342,61 @@ def test_cmd_ready_forwards_namespace_repo_root_to_query_records_as_explicit_roo
     that does not exist until the function actually runs. Sidesteps this
     environment's bare `import records_query` gap (see this section's own
     header note) entirely, since the deferred import consults `sys.modules`
-    first."""
+    first.
+
+    Asserts on the RECORDS RETURNED (the printed output), not only the
+    `explicit_root` kwarg having arrived (Review: code-reviewer — Finding
+    1): the fake `query_records` returns a foreign-root-distinguishing
+    marker, and the test proves `_cmd_ready` actually threads that returned
+    content through to its own output — the "parameter arrived" assertion
+    alone would still pass if `_cmd_ready` forwarded `explicit_root` but
+    then discarded or ignored what `query_records` gave back."""
     import argparse
+    import contextlib
+    import io
 
     fake_module = mock.MagicMock()
-    fake_module.query_records = mock.MagicMock(return_value="")
+    fake_module.query_records = mock.MagicMock(
+        return_value="- [ZZZ Foreign Ready Handoff](zzz-foreign-ready.md) — ready\n"
+    )
+    buf = io.StringIO()
     with mock.patch.dict(sys.modules, {"records_query": fake_module}):
-        rht._cmd_ready(argparse.Namespace(repo_root=str(foreign_repo)))
+        with contextlib.redirect_stdout(buf):
+            rht._cmd_ready(argparse.Namespace(repo_root=str(foreign_repo)))
 
     assert fake_module.query_records.call_args.kwargs.get("explicit_root") == str(foreign_repo)
+    assert "ZZZ Foreign Ready Handoff" in buf.getvalue()
 
 
 def test_cmd_awaiting_gate_forwards_namespace_repo_root_to_query_records_as_explicit_root(foreign_repo):
+    """Same content-return strengthening as the `_cmd_ready` test above
+    (Review: code-reviewer — Finding 1): `_cmd_awaiting_gate` makes TWO
+    `query_records` calls (full listing, then the >6d stale subset) and
+    concatenates both into its output — distinct markers on each call's
+    return value prove BOTH returned payloads actually reach the printed
+    output, not only that `explicit_root` was threaded into both calls."""
     import argparse
+    import contextlib
+    import io
 
     fake_module = mock.MagicMock()
-    fake_module.query_records = mock.MagicMock(return_value="")
+    fake_module.query_records = mock.MagicMock(
+        side_effect=[
+            "- [ZZZ Foreign Full Listing](zzz-foreign-full.md) — awaiting_gate\n",
+            "- [ZZZ Foreign Stale Subset](zzz-foreign-stale.md) — awaiting_gate\n",
+        ]
+    )
+    buf = io.StringIO()
     with mock.patch.dict(sys.modules, {"records_query": fake_module}):
-        rht._cmd_awaiting_gate(argparse.Namespace(repo_root=str(foreign_repo)))
+        with contextlib.redirect_stdout(buf):
+            rht._cmd_awaiting_gate(argparse.Namespace(repo_root=str(foreign_repo)))
 
     assert fake_module.query_records.call_count == 2
     for call in fake_module.query_records.call_args_list:
         assert call.kwargs.get("explicit_root") == str(foreign_repo)
+    output = buf.getvalue()
+    assert "ZZZ Foreign Full Listing" in output
+    assert "ZZZ Foreign Stale Subset" in output
 
 
 # ---------------------------------------------------------------------------

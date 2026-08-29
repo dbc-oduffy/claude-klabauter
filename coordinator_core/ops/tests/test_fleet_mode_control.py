@@ -98,6 +98,17 @@ def test_bad_set_does_not_write_anything(isolated_home):
     assert mode_control.read_fleet_mode() == {}
 
 
+def test_failed_write_raises_oserror_and_leaves_no_partial_state(isolated_home, monkeypatch):
+    # Review finding: a failed write_fleet_mode() must not be silently
+    # reported as success -- forces the return-False path and asserts
+    # both the OSError and the absence of any partial write.
+    monkeypatch.setattr(mode_control, "write_fleet_mode", lambda record: False)
+    with pytest.raises(OSError) as exc_info:
+        mode_control.set_fleet_mode_key("autonomous", "on")
+    assert "autonomous" in str(exc_info.value)
+    assert mode_control.read_fleet_mode() == {}
+
+
 # --- show self-explains precedence and variant-selector floor --------------
 
 

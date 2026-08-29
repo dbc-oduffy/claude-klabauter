@@ -39,10 +39,8 @@ from coordinator_core.install import uninstall_legs
 from coordinator_core.locked_write import LockTimeout, held_lock
 
 
-def _target_map_for(tmp_path: Path) -> "tuple[dict[str, str], dict[str, str]]":
-    target_map = {"widget": "widget.py"}
-    cmd_dest_map = {"widget": "widget.cmd"}
-    return target_map, cmd_dest_map
+def _target_map_for(tmp_path: Path) -> "dict[str, str]":
+    return {"widget": "widget.py"}
 
 
 class TestForwarderWriteLoopTakesHeldLock:
@@ -63,7 +61,7 @@ class TestForwarderWriteLoopTakesHeldLock:
         self._isolate_lock_root(monkeypatch, tmp_path)
         bin_dst = tmp_path / "bin"
         bin_dst.mkdir()
-        target_map, cmd_dest_map = _target_map_for(tmp_path)
+        target_map = _target_map_for(tmp_path)
 
         # Hold the SAME lock `_write_agent_helper_forwarders` must acquire,
         # from this thread, before the write loop runs on another thread.
@@ -73,8 +71,7 @@ class TestForwarderWriteLoopTakesHeldLock:
             def _call():
                 try:
                     substrate._write_agent_helper_forwarders(
-                        target_map, cmd_dest_map, bin_dst, False,
-                        python3_cmd_resolved_bin="",
+                        target_map, bin_dst, False,
                     )
                 except LockTimeout as exc:
                     result["timeout"] = exc
@@ -94,28 +91,30 @@ class TestForwarderWriteLoopTakesHeldLock:
         self._isolate_lock_root(monkeypatch, tmp_path)
         bin_dst = tmp_path / "bin"
         bin_dst.mkdir()
-        target_map, cmd_dest_map = _target_map_for(tmp_path)
+        target_map = _target_map_for(tmp_path)
 
         substrate._write_agent_helper_forwarders(
-            target_map, cmd_dest_map, bin_dst, False,
-            python3_cmd_resolved_bin="",
+            target_map, bin_dst, False,
         )
         assert (bin_dst / "widget").is_file()
-        assert (bin_dst / "widget.cmd").is_file()
+        # No `.cmd` half exists to assert on any more -- the writer is deleted
+        # (PM ruling 2026-08-29, one native entrypoint per platform). This
+        # `engine_root=None` call is the doorless path, so the bare Python
+        # forwarder above is the whole product.
+        assert not (bin_dst / "widget.cmd").exists()
 
     def test_check_only_mode_never_touches_the_lock(self, monkeypatch, tmp_path):
         self._isolate_lock_root(monkeypatch, tmp_path)
         bin_dst = tmp_path / "bin"
         bin_dst.mkdir()
-        target_map, cmd_dest_map = _target_map_for(tmp_path)
+        target_map = _target_map_for(tmp_path)
 
         # check_only mode raises SubstrateFatalError for a missing/stale
         # destination -- confirm that failure is the ordinary check-mode
         # complaint, not a lock timeout (i.e. no lock is attempted at all).
         with pytest.raises(substrate.SubstrateFatalError):
             substrate._write_agent_helper_forwarders(
-                target_map, cmd_dest_map, bin_dst, True,
-                python3_cmd_resolved_bin="",
+                target_map, bin_dst, True,
             )
 
 

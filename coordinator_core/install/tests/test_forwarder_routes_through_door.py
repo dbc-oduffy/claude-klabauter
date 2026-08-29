@@ -133,13 +133,10 @@ def test_write_agent_helper_forwarders_replaces_the_python_pair_for_eligible_nam
     bin_dst = tmp_path / "bin"
 
     target_map = {"cross-repo-memo": "cross-repo-memo"}
-    cmd_map = {"cross-repo-memo": "cross-repo-memo.cmd"}
     bin_dst.mkdir(parents=True, exist_ok=True)
 
     substrate._write_agent_helper_forwarders(
-        target_map, cmd_map, bin_dst, False,
-        python3_cmd_resolved_bin="",
-        door_eligible_names=frozenset({"cross-repo-memo"}),
+        target_map, bin_dst, False,
         engine_root=engine_root,
     )
 
@@ -164,11 +161,20 @@ def test_write_agent_helper_forwarders_replaces_the_python_pair_for_eligible_nam
     assert native_dst.read_bytes() == door_dst.read_bytes()
 
 
-def test_doorless_root_keeps_the_python_pair_for_an_eligible_name(tmp_path):
-    """The kill removes a superseded artifact, never the only route to the
-    engine. An UNSTAMPED engine root cannot supply a door, so a door-
-    eligible name falls through to the ordinary Python pair -- correct,
-    merely uncut-over."""
+def test_doorless_root_falls_back_to_the_bare_python_forwarder_and_never_a_cmd(tmp_path):
+    """An UNSTAMPED engine root cannot supply a door, so a name falls back to
+    the bare Python forwarder -- and to NOTHING ELSE.
+
+    The `.cmd` half that used to accompany it is gone with its writer (PM
+    ruling 2026-08-29, one native entrypoint per platform). Asserting its
+    ABSENCE is the point of this test: a doorless root is the one path that
+    could plausibly justify reintroducing an interpreter trampoline, and it
+    must not. Note the consequence, which is deliberate and not a defect
+    this test is papering over: on Windows the bare extensionless forwarder
+    is not PATHEXT-resolvable, so a doorless root yields a `bin/` no bare
+    name reaches. That is a broken install -- `_write_native_door_forwarder`
+    prints the stamp-the-root remediation per name -- not a case for a
+    second entrypoint."""
     engine_root = tmp_path / "engine"
     engine_root.mkdir(parents=True, exist_ok=True)
     bin_dst = tmp_path / "bin"
@@ -176,17 +182,14 @@ def test_doorless_root_keeps_the_python_pair_for_an_eligible_name(tmp_path):
 
     substrate._write_agent_helper_forwarders(
         {"cross-repo-memo": "cross-repo-memo"},
-        {"cross-repo-memo": "cross-repo-memo.cmd"},
         bin_dst, False,
-        python3_cmd_resolved_bin="",
-        door_eligible_names=frozenset({"cross-repo-memo"}),
         engine_root=engine_root,
     )
 
     py_dst = bin_dst / "cross-repo-memo"
     assert py_dst.exists()
     assert substrate._AGENT_FORWARDER_MARKER in py_dst.read_text(encoding="utf-8")
-    assert (bin_dst / "cross-repo-memo.cmd").exists()
+    assert not (bin_dst / "cross-repo-memo.cmd").exists()
     assert not door_install.named_forwarder_path(bin_dst, "cross-repo-memo").exists() or (
         door_install.named_forwarder_path(bin_dst, "cross-repo-memo") == py_dst
     )
@@ -228,13 +231,10 @@ def test_write_agent_helper_forwarders_persists_the_native_forwarder_manifest(tm
     bin_dst = tmp_path / "bin"
 
     target_map = {"cross-repo-memo": "cross-repo-memo"}
-    cmd_map = {"cross-repo-memo": "cross-repo-memo.cmd"}
     bin_dst.mkdir(parents=True, exist_ok=True)
 
     substrate._write_agent_helper_forwarders(
-        target_map, cmd_map, bin_dst, False,
-        python3_cmd_resolved_bin="",
-        door_eligible_names=frozenset({"cross-repo-memo"}),
+        target_map, bin_dst, False,
         engine_root=engine_root,
     )
 
@@ -243,17 +243,19 @@ def test_write_agent_helper_forwarders_persists_the_native_forwarder_manifest(tm
 
 
 def test_write_agent_helper_forwarders_without_engine_root_is_unaffected(tmp_path):
-    """The self-heal caller (`forwarder_self_heal.py`) passes neither
-    `door_eligible_names` nor `engine_root` -- must stay byte-for-byte the
-    pre-C5 behaviour: no native forwarder, no manifest write."""
+    """A caller that passes no `engine_root` gets no native forwarder and no
+    manifest write -- the doorless path, unchanged.
+
+    (`forwarder_self_heal.py` no longer reaches this function at all: it
+    resolves its own engine root and calls `_cut_over_to_native_door`
+    directly, so that it heals the SAME artifact the installer writes rather
+    than regenerating a `.cmd` pair the installer stopped emitting.)"""
     bin_dst = tmp_path / "bin"
     target_map = {"cross-repo-memo": "cross-repo-memo"}
-    cmd_map = {"cross-repo-memo": "cross-repo-memo.cmd"}
     bin_dst.mkdir(parents=True, exist_ok=True)
 
     substrate._write_agent_helper_forwarders(
-        target_map, cmd_map, bin_dst, False,
-        python3_cmd_resolved_bin="",
+        target_map, bin_dst, False,
     )
 
     assert not (bin_dst / substrate._NATIVE_FORWARDER_MANIFEST_NAME).exists()

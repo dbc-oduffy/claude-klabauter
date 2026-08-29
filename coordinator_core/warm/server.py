@@ -194,7 +194,15 @@ from typing import Any, Callable, NamedTuple, Optional
 from coordinator_core.ipc import INTERNAL_ERROR, INVALID_REQUEST, PARSE_ERROR
 from coordinator_core.telemetry import op_latency
 from coordinator_core.telemetry import spawn_counter as _spawn_counter
-from coordinator_core.warm import breadcrumb, election, idle, lifecycle, skew, telemetry
+from coordinator_core.warm import (
+    breadcrumb,
+    election,
+    idle,
+    lifecycle,
+    settings_home_claim,
+    skew,
+    telemetry,
+)
 from coordinator_core.warm.engine_root import current_engine_clone
 from coordinator_core.warm.entry_seam import per_request_state
 # Reached into directly, not duplicated, despite this module's own
@@ -215,6 +223,7 @@ __all__ = [
     "DISPATCH_PROCESS_POOL_SIZE",
     "ACCEPTOR_POOL_SIZE",
     "UNTRUSTED_CALLER_ERROR",
+    "SETTINGS_HOME_MISMATCH_ERROR",
     "main",
 ]
 
@@ -225,6 +234,17 @@ __all__ = [
 # in the app-defined range JSON-RPC 2.0 §5.1 reserves (`ipc.py`'s own
 # comment); `WARM_DISPATCH_INDETERMINATE` already claimed -32004.
 UNTRUSTED_CALLER_ERROR = -32003
+
+# SETTINGS HOME MISMATCH -- a request whose caller explicitly named a
+# `COORDINATOR_SETTINGS_HOME` this server does not serve. Next free slot after
+# -32007 (`ipc.ENTRYPOINT_NOT_WARM_LOADABLE_ERROR`); mirrored in
+# `warm/door/door_core.h` as `JSONRPC_SETTINGS_HOME_MISMATCH`, which is what lets
+# the native door classify it as provably undispatched and run the call cold.
+# Distinct from every code above it in kind: those are statements about the
+# REQUEST (unparseable, untrusted, skewed, not warm-loadable); this one is a
+# statement about THIS SERVER -- the request is well-formed and authorized, and
+# this process simply is not the one that can answer it.
+SETTINGS_HOME_MISMATCH_ERROR = -32008
 
 # How often the idle watchdog re-checks `idle.should_demote` -- independent
 # of request arrival (module docstring's "idle demotion" ownership note).
@@ -966,6 +986,66 @@ def _untrusted_caller_response(request_id) -> dict:
     }
 
 
+def _settings_home_refusal(request_id, claim: str, resolved: str) -> dict:
+    """JSON-RPC 2.0 error envelope for a request that named a settings home
+    this server does not serve.
+
+    WHAT IS BEING REFUSED, AND WHY REFUSAL IS THE ANSWER. This server resolved
+    `settings_home()` ONCE, out of the environment of whoever spawned it, and
+    its identity key is (user, engine-clone, engine-token) -- the settings home
+    is not in it. A request naming a different home therefore had exactly two
+    possible outcomes before this check existed, and both were silent: the op
+    read the WRONG home and returned a correct-looking result, or it WROTE to
+    the wrong home. Verified 2026-08-29 through both `coordinator-invoke.cmd`
+    and `coordinator-invoke.exe` -- `fleet.mode_show` reporting `fleet_value:
+    null` while the overridden home held a set record -- and the diagnosis run
+    that found it wrote a fleet-wide advisory suppression into the REAL shared
+    home of a box carrying ~50 live sessions
+    (state/bug-backlog/2026-08-29-the-warm-server-answers-against-its-spaw-
+    f1bcc4154ca4.yaml).
+
+    NOT AN ADVISORY-STATE PROBLEM. `bash_guards/_blanket_disarm.py ::
+    marker_path()` resolves the blanket-disarm marker -- a file whose PRESENCE
+    turns guards off -- through `settings_home()`, `authz/classification.py`
+    keys op authorization off it, and `secrets/` is a directory inside it. A
+    silently-wrong home on those paths answers in the direction that DISARMS,
+    which is why this is a refusal rather than a warning, and why the posture
+    matches the guard directories' own stated default on ambiguity: deny.
+
+    BEFORE `dispatch`, AND THAT IS THE LOAD-BEARING PART. `_serve_line` runs
+    this check ahead of the dispatch call, so a refused request provably never
+    reached `coordinator_core.ipc.dispatch_message` and cannot have mutated
+    anything. That is what earns -32008 its place in `door_core.c ::
+    is_provably_undispatched`, which lets the native door fall through and run
+    the call COLD -- in the caller's own process, where `settings_home()`
+    resolves the home the caller actually named. The refusal is the honest
+    answer on this side of the pipe; the cold leg is the working one.
+
+    NOT `skew.evict_on_skew`, for the same reason `_untrusted_caller_response`
+    is not: a caller naming another home is evidence about the CALLER's
+    environment, not about this server's generation. Tearing down the resident
+    server every session on this box shares, on the word of one request's env
+    var, would turn an env var into a remote kill switch.
+
+    NOT A FIX FOR THE UNDERLYING DEFECT, said plainly: a warm server still
+    serves exactly one settings home, and callers that want another still do
+    not get warm service. Resolving the home per REQUEST -- following
+    `warm/caller_context.py`'s payload-first shape -- is the second step of
+    that row's disposition, plan-sized because ~30 non-test callers of
+    `settings_home()` need auditing for import-time resolution. This chunk
+    converts a silent wrong answer into a visible one; it does not deliver
+    isolation and must not be read as having done so.
+    """
+    return {
+        "jsonrpc": "2.0",
+        "id": request_id,
+        "error": {
+            "code": SETTINGS_HOME_MISMATCH_ERROR,
+            "message": settings_home_claim.mismatch_message(claim, resolved),
+        },
+    }
+
+
 def _serve_line(
     raw_line: bytes,
     *,
@@ -1007,6 +1087,16 @@ def _serve_line(
     bind/no-op contract from there. Absent (older client, or a caller
     `resolve_session_id()` could not identify) is `None`, which is a no-op
     bind, not a fabricated identity.
+
+    Pops `_settings_home` (the caller's own resolved settings home, stamped
+    by `warm.client._try_warm_dispatch_inner` and by the native door only
+    when that caller EXPLICITLY set `COORDINATOR_SETTINGS_HOME`) and refuses
+    the request outright when it names a home this server does not serve --
+    after the skew check, before `dispatch`. Absent (no override in the
+    caller's environment, which is every ordinary invocation) is not a
+    mismatch and costs one `dict.pop`; see `_settings_home_refusal` for the
+    defect and `warm/settings_home_claim.py` for why absence may never
+    refuse.
 
     `mark_invocation` runs for EVERY frame this function is handed,
     including a skew-evicting one -- `warm.idle`'s own module docstring
@@ -1067,6 +1157,34 @@ def _serve_line(
             client_token=client_token,
         )
         return
+
+    # AFTER skew, BEFORE dispatch. After skew because a stale server's
+    # generation is the more fundamental disagreement and evicting is the
+    # stronger response; before dispatch because the whole value of this
+    # refusal is that it is provably pre-dispatch -- see
+    # `_settings_home_refusal`'s own docstring, and `door_core.c ::
+    # is_provably_undispatched`, which relies on exactly that placement to let
+    # the native door re-run the call cold.
+    #
+    # The field is POPPED, not merely read, like `_engine_token` and
+    # `_session_id` above it: `dispatch_message` validates the envelope it is
+    # handed, and transport metadata must never reach an op's params.
+    #
+    # Costs nothing when nothing is claimed. `request_claim` is a dict lookup;
+    # this server's own `settings_home()` is resolved only once a claim is
+    # actually present, so the ordinary invocation -- no override anywhere,
+    # which is every user-path call -- pays one `dict.pop` and no resolution.
+    claimed_home = settings_home_claim.request_claim(msg)
+    msg.pop(settings_home_claim.SETTINGS_HOME_FIELD, None)
+    if claimed_home is not None:
+        from coordinator_core._settings_home import settings_home as _resolve_settings_home
+
+        served_home = str(_resolve_settings_home())
+        if not settings_home_claim.claims_agree(claimed_home, served_home):
+            _write_and_release(
+                _settings_home_refusal(request_id, claimed_home, served_home)
+            )
+            return
 
     try:
         response = dispatch(msg, session_id=caller_session_id)

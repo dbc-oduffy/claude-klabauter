@@ -80,8 +80,8 @@ def test_clean_ops_collect_is_read_only(forbid_disk_mutation, forbid_git_fetch, 
 
 
 def test_branch_reconcile_collect_is_read_only(forbid_disk_mutation, forbid_git_fetch, monkeypatch):
-    monkeypatch.setattr(rbr, "_read_span_assert", lambda: ReaderResult())
-    monkeypatch.setattr(rbr, "_read_auto_reconcile", lambda: ReaderResult())
+    monkeypatch.setattr(rbr, "_read_span_assert", lambda repo_root=None: ReaderResult())
+    monkeypatch.setattr(rbr, "_read_auto_reconcile", lambda repo_root=None: ReaderResult())
 
     for cadence in ("session", "day", "week"):
         rbr.collect(cadence)

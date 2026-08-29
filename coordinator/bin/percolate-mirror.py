@@ -640,28 +640,37 @@ def main(argv: Optional[List[str]] = None) -> int:
             # kill, and invisible because the tests above it never got past
             # "nothing to commit". Routed onto the same in-process seam
             # percolate-round's own commit leg uses (§ C6, 2026-08-25).
-            import uuid  # noqa: PLC0415 - lazy, matching percolate-round's own commit leg
-            from coordinator_core.ops.ceremony import commit_pipeline  # noqa: PLC0415
+            # C3 (docs/plans/2026-08-29-the-push-subsystem-leaves-and-then-the-
+            # pipeline-can-go.md): repointed off the killed
+            # `commit_pipeline.run_commit_pipeline` onto the sanctioned
+            # zero-spawn shape, `coordinator_core.git.commit.commit_paths`.
+            from functools import partial  # noqa: PLC0415
 
-            pipeline_result = commit_pipeline.run_commit_pipeline(
-                repo_root,
-                session_id=f"percolate-mirror-{uuid.uuid4().hex}",
-                subject=subject,
-                stage_paths=pathspec,
-                caller_paths=set(pathspec),
-                push_mode=commit_pipeline.PUSH_MODE_NEVER,
+            from coordinator_core.git.commit import (  # noqa: PLC0415
+                CommitRefused,
+                FilterUnsupported,
+                commit_paths,
+                hash_worktree_blobs_via_spawn,
             )
-            committed = (
-                pipeline_result.committed_sha is not None or pipeline_result.sha_unverified
+            from coordinator_core.ops.ceremony.commit_message import (  # noqa: PLC0415
+                compose_message,
             )
-            if not committed:
+
+            try:
+                outcome = commit_paths(
+                    repo_root,
+                    pathspec,
+                    compose_message(subject=subject),
+                    blob_fallback=partial(hash_worktree_blobs_via_spawn, cwd=repo_root),
+                )
+            except (CommitRefused, FilterUnsupported) as exc:
                 _round._print_step_failure(
-                    "commit (ceremony.commit)",
-                    ["run_commit_pipeline"],
-                    pipeline_result.reason or "commit did not land",
+                    "commit (ceremony.commit_v2)",
+                    ["commit_paths"],
+                    str(exc),
                 )
                 return _round._EXIT_FAIL
-            sha = pipeline_result.committed_sha or "(sha unverified)"
+            sha = outcome.sha
             print(f"percolate-mirror {mirror_root} — commit {sha[:12]}")
 
             if args.no_publish:

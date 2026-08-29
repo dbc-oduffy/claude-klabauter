@@ -127,6 +127,33 @@ def _load_allowlist() -> frozenset:
 _WARM_ENTRYPOINT_ALLOWLIST = _load_allowlist()
 
 
+class EntrypointNotWarmLoadableError(ValueError):
+    """Raised by `_resolve_entrypoint_script` when a door image names a
+    `coordinator/bin` CLI that is not on the committed warm-load allowlist.
+
+    `entrypoint_not_warm_loadable = True` is a duck-type marker consumed by
+    `ipc._handler_exception_error`, mirroring `CallerFacingValidationError`'s
+    `caller_facing_validation` and `ContractPinError`'s `structurally_wedged`:
+    an exception carrying it is answered with
+    `ipc.ENTRYPOINT_NOT_WARM_LOADABLE_ERROR` (-32007) and the exception's own
+    message, instead of the blanket -32603.
+
+    THE CODE IS THE POINT, NOT THE MESSAGE. -32007 is in
+    `door_core.c :: is_provably_undispatched`, so the native door reads this
+    refusal as proof that nothing was imported and no `main` was invoked, and
+    answers by running that name's CLI cold. -32603 is not, and could not be
+    made so without also licensing a cold re-run of an op that may have half
+    executed. See `ipc.ENTRYPOINT_NOT_WARM_LOADABLE_ERROR`'s docstring for why
+    this distinction is what lets every `coordinator/bin` name share the one
+    native door image.
+
+    Subclasses `ValueError` so existing `pytest.raises(ValueError, ...)` call
+    sites against this resolver keep passing.
+    """
+
+    entrypoint_not_warm_loadable = True
+
+
 #: `os.chdir` is process-global — every thread in this warm server shares
 #: ONE current working directory. A named entrypoint's own `main(argv)` is
 #: a subprocess-shaped CLI that resolves its relative-path defaults (five
@@ -152,19 +179,43 @@ def _resolve_entrypoint_script(entrypoint: str) -> Path:
     script path. Does NOT load the module — see `_load_entrypoint_main`,
     which runs inside the op-boundary containment in `_run_entrypoint`.
 
-    FAILS CLOSED on both checks: raises `ValueError` naming the image
-    (`entrypoint`) and, respectively, the allowlist path or the missing
-    script — never falls back to a different script (this module's own
-    negative-spec above names the mis-dispatch that substitution would
-    reproduce). A name failing the allowlist check never reaches the
-    filesystem-existence check, and never reaches the loader at all —
-    resolving to a real script is necessary but not sufficient to load it.
+    FAILS CLOSED on both checks: raises naming the image (`entrypoint`) and,
+    respectively, the allowlist path or the missing script — never falls back
+    to a different script (this module's own negative-spec above names the
+    mis-dispatch that substitution would reproduce). A name failing the
+    allowlist check never reaches the filesystem-existence check, and never
+    reaches the loader at all — resolving to a real script is necessary but
+    not sufficient to load it.
+
+    THE TWO REFUSALS ARE DIFFERENT CLASSES, AND THE DIFFERENCE IS LOAD-BEARING
+    FOR THE DOOR (PM ruling 2026-08-29 — one native entrypoint per platform).
+
+      - ALLOWLIST MISS raises `EntrypointNotWarmLoadableError`, which
+        `ipc._handler_exception_error` maps to -32007 and `door_core.c ::
+        is_provably_undispatched` classifies as safe to re-run cold. Nothing
+        was imported and nothing was invoked, so the door answers by running
+        that name's own CLI in a cold process. This is what lets EVERY
+        `coordinator/bin` name carry the native door image: the allowlist is
+        an optimization boundary (may this module body be imported into the
+        shared server?), never an entrypoint-existence boundary. Under the
+        previous blanket `ValueError`/-32603 the door could not prove the
+        request was undispatched, refused with WARM_DISPATCH_INDETERMINATE,
+        and a non-allowlisted name was therefore unable to use the door at
+        all — which is precisely what kept the `.cmd` interpreter trampolines
+        alive for those names.
+
+      - MISSING SCRIPT stays a plain `ValueError` (-32603) and is NOT made
+        fall-through-able. A door image whose `coordinator/bin/<name>.py`
+        does not exist is a broken install, not a warm-loadability question,
+        and spawning a cold interpreter to rediscover the same absence buys
+        an interpreter start to reach the identical failure.
     """
     if entrypoint not in _WARM_ENTRYPOINT_ALLOWLIST:
-        raise ValueError(
+        raise EntrypointNotWarmLoadableError(
             f"invoke.from_argv: entrypoint {entrypoint!r} is not on the committed "
             f"warm-load allowlist ({_ALLOWLIST_PATH}) — refusing to warm-load an "
-            f"unvetted CLI's module body into the shared server process"
+            f"unvetted CLI's module body into the shared server process; the door "
+            f"runs this name cold instead"
         )
 
     script = _ENGINE_ROOT / "coordinator" / "bin" / f"{entrypoint}.py"

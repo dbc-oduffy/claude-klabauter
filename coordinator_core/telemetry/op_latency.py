@@ -971,7 +971,13 @@ def record_commit_pipeline_entry(
         put a ``git rev-parse`` spawn on the commit hot path for a field the
         pid/ppid pair already answers. ``invocation_id`` is the pipeline's own
         ``_composition_id``, which joins this row to the push spans without a
-        second identifier.
+        second identifier -- and, since 2026-08-29, to the LANDED COMMIT:
+        ``run_commit_pipeline`` passes that same id down as the commit's
+        ``Commit-Token:`` trailer, so the commit names its entry rather than
+        the row naming the commit. Until then the join THIS DOCSTRING
+        INSTRUCTS ("join each entry to what landed") had no key on the
+        dispatched-committer route, the push spans never having fired there
+        and the token being an unrelated ``uuid4``.
       - Records the ENTRY, never the outcome. A row with no successor is the
         signal, not a defect in the row.
 

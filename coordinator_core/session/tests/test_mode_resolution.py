@@ -19,6 +19,7 @@ from coordinator_core.session.mode_resolution import (
     MODE_KEYS,
     ModeKey,
     _validate_registry,
+    _validate_value,
     resolve_mode,
 )
 
@@ -174,3 +175,16 @@ class TestRegistryInvariant:
         entry = MODE_KEYS["autonomous"]
         with pytest.raises(dataclasses.FrozenInstanceError):
             entry.precedence = "fleet-wins"
+
+
+# --- _validate_value: unsupported value_type branch ---------------------------
+
+
+def test_validate_value_raises_on_unsupported_value_type():
+    """Neither bool nor a frozenset -- the defensive branch has zero
+    coverage from the two shipped MODE_KEYS entries (both bool or
+    frozenset); exercise it directly via a fixture value_type that mirrors
+    what a mis-registered future key would declare (Review: code-reviewer,
+    finding 2)."""
+    with pytest.raises(TypeError):
+        _validate_value("whatever", str)

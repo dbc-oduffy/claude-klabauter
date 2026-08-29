@@ -112,3 +112,54 @@ def test_pipeline_entry_is_recorded_before_any_work(monkeypatch):
         pass
     assert len(calls) == 1
     assert calls[0]["invocation_id"]
+
+
+def test_landed_commit_names_the_entry_row_that_made_it(monkeypatch):
+    """The join the row was built for, made executable.
+
+    The entry row's `invocation_id` is `run_commit_pipeline`'s own
+    `_composition_id`; on the dispatched-committer route it joined to nothing
+    (the push spans carrying that id have never fired there, and the
+    `Commit-Token:` trailer was an unrelated `uuid4`). Passing it as the token
+    makes a landed commit name its entry, so two entries against one commit
+    resolve without inference: the trailer names the committer, the other
+    entry names the re-entry.
+    """
+    from coordinator_core.ops.ceremony import commit_pipeline
+
+    entries = []
+    monkeypatch.setattr(
+        commit_pipeline,
+        "record_commit_pipeline_entry",
+        lambda **kw: entries.append(kw),
+    )
+    tokens = []
+
+    def _capture(*_a, **kw):
+        tokens.append(kw.get("token"))
+        raise RuntimeError("stop after the token is chosen")
+
+    monkeypatch.setattr(commit_pipeline, "commit", _capture)
+    try:
+        commit_pipeline.run_commit_pipeline(".", session_id="s", subject="x")
+    except RuntimeError:
+        pass
+    import inspect
+
+    assert "token=_composition_id" in inspect.getsource(
+        commit_pipeline.run_commit_pipeline
+    ), "the call site stopped passing the entry row's id as the commit token"
+    if tokens:
+        assert tokens[0] == entries[0]["invocation_id"]
+
+
+def test_commit_mints_its_own_token_when_none_is_passed():
+    """`token=None` (every non-pipeline caller, every test) is unchanged."""
+    import inspect
+
+    from coordinator_core.ops.ceremony import commit_pipeline
+
+    sig = inspect.signature(commit_pipeline.commit)
+    assert sig.parameters["token"].default is None
+    src = inspect.getsource(commit_pipeline.commit)
+    assert "token if token is not None else uuid.uuid4().hex" in src

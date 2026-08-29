@@ -462,6 +462,32 @@ a timeout: nothing ran, so nothing was paid for. A caller that degrades-to-skip 
 METHOD_NOT_FOUND should do the same here; a caller that RETRIES on either is wrong,
 since this recurs identically until the op is made fast or deleted."""
 
+ENTRYPOINT_NOT_WARM_LOADABLE_ERROR = -32007
+"""`invoke.from_argv` refused to warm-load a named `coordinator/bin` CLI into the shared
+server, because that name is not on the committed warm-load allowlist
+(`coordinator_core/ops/warm_entrypoint_allowlist.json`).
+
+WHY THIS NEEDS ITS OWN CODE, AND WHY THE DOOR MUST TREAT IT AS UNDISPATCHED. This refusal
+fires in `_resolve_entrypoint_script`, strictly BEFORE `_load_entrypoint_main` imports the
+module body and before that CLI's `main(argv)` is ever called -- nothing ran, nothing
+mutated. Under the previous blanket `INTERNAL_ERROR` (-32603) the native door could not
+prove that, so `door_core.c :: is_provably_undispatched` correctly refused to re-run the
+request cold and emitted WARM_DISPATCH_INDETERMINATE instead. That is the mechanism that
+forced a name off the door entirely and onto a `.cmd`/interpreter trampoline: the warm
+allowlist was acting as an ENTRYPOINT-EXISTENCE boundary when it is only ever an
+OPTIMIZATION boundary.
+
+With this code the allowlist means what it says -- "this CLI is not vetted to be loaded
+into the shared process" -- and the door falls through to that name's own cold leg, which
+is the correct answer for an unvetted CLI. Every `coordinator/bin` name can therefore
+carry the one native door image regardless of its warm-loadability (PM ruling 2026-08-29:
+one native entrypoint per platform, and that entrypoint is the door).
+
+Distinct from METHOD_NOT_FOUND: the OP (`invoke.from_argv`) exists and dispatched fine; it
+is the named CLI that is not warm-loadable. Distinct from INVALID_PARAMS: the caller's
+request is well-formed and correct -- a door image legitimately named itself, and the right
+outcome is a cold run, not a caller-side fix."""
+
 
 # ---------------------------------------------------------------------------
 # Dispatch-axis stamp gate (state/handoffs/2026-08-21_103635_reaching-the-
@@ -2002,7 +2028,11 @@ def _handler_exception_error(exc: BaseException) -> dict:
 
     Selects STRUCTURAL_PIN_ERROR (preserving the exception's own message, which already
     states the remediation — see ContractPinError) when ``exc`` carries the
-    ``structurally_wedged`` duck-type marker; selects INVALID_PARAMS (preserving the
+    ``structurally_wedged`` duck-type marker; selects ENTRYPOINT_NOT_WARM_LOADABLE_ERROR
+    (preserving the message, length-bounded — see that constant's docstring) when ``exc``
+    carries the ``entrypoint_not_warm_loadable`` marker, which the native door reads as
+    provably-undispatched and answers by running the named CLI cold; selects INVALID_PARAMS
+    (preserving the
     exception's own message, length-bounded — see CallerFacingValidationError) when ``exc``
     carries the ``caller_facing_validation`` duck-type marker; otherwise falls back to the
     generic INTERNAL_ERROR shape, which now carries both the exception class name and its
@@ -2011,6 +2041,11 @@ def _handler_exception_error(exc: BaseException) -> dict:
     """
     if getattr(exc, "structurally_wedged", False):
         return {"code": STRUCTURAL_PIN_ERROR, "message": f"{type(exc).__name__}: {exc}"}
+    if getattr(exc, "entrypoint_not_warm_loadable", False):
+        message = str(exc)
+        if len(message) > _CALLER_FACING_MESSAGE_MAX_LEN:
+            message = message[:_CALLER_FACING_MESSAGE_MAX_LEN] + "...(truncated)"
+        return {"code": ENTRYPOINT_NOT_WARM_LOADABLE_ERROR, "message": message}
     if getattr(exc, "caller_facing_validation", False):
         message = str(exc)
         if len(message) > _CALLER_FACING_MESSAGE_MAX_LEN:

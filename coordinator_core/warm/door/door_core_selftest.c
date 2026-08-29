@@ -189,6 +189,19 @@ int main(void) {
      * strong a proof of non-dispatch. A 0 here is the door telling an
      * operator a suspended commit may have landed. */
     check_int("classify/-32006_suspended", is_provably_undispatched(JSONRPC_OP_SUSPENDED), 1);
+    /* The warm-load allowlist test is `_resolve_entrypoint_script`'s first
+     * statement, ahead of the module import and of the target CLI's `main`.
+     * A 0 here puts every non-allowlisted name back on a `.cmd` interpreter
+     * trampoline -- the second entrypoint the 2026-08-29 ruling deletes. */
+    check_int("classify/-32007_not_warm_loadable",
+              is_provably_undispatched(JSONRPC_ENTRYPOINT_NOT_WARM_LOADABLE), 1);
+    /* The settings-home comparison is one arm of one `if` in `_serve_line`,
+     * whose other arm is the dispatch call -- refusing proves non-dispatch.
+     * A 0 here fails the invocation with -32004 instead of running it cold
+     * in the caller's own environment, which is where the home the caller
+     * named actually resolves. */
+    check_int("classify/-32008_settings_home_mismatch",
+              is_provably_undispatched(JSONRPC_SETTINGS_HOME_MISMATCH), 1);
     check_int("classify/-32602_invalid_params", is_provably_undispatched(-32602), 0);
     check_int("classify/-32603_internal", is_provably_undispatched(-32603), 0);
     check_int("classify/-32004_indeterminate",

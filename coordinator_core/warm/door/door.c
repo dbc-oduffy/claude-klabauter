@@ -1179,6 +1179,75 @@ int main(void) {
     req_ok &= buf_append_cstr(&req, engine_token);
     req_ok &= buf_append_cstr(&req, "\"");
 
+    /* ADDITIVE, AND ONLY WHEN THIS CALLER ASKED FOR A HOME (2026-08-29).
+     * The warm server resolves its settings home ONCE, from the environment
+     * of whoever spawned it, and is keyed on (user, engine-clone,
+     * engine-token) -- never on the home. Without this field a caller that
+     * set COORDINATOR_SETTINGS_HOME is answered against a home it did not
+     * name, silently: verified through THIS binary on 2026-08-29,
+     * `fleet.mode_show` reporting a null fleet value while the overridden
+     * home held a set record. The settings home is where guard-DISARMING
+     * state lives (`bash_guards/_blanket_disarm.py :: marker_path`,
+     * `authz/classification.py`, `secrets/`), so a wrong answer there
+     * answers in the direction that disarms.
+     * Backlog: state/bug-backlog/2026-08-29-the-warm-server-answers-against-
+     * its-spaw-f1bcc4154ca4.yaml (P0, step 1 of two).
+     *
+     * OMITTED ENTIRELY when the variable is unset or empty, which is every
+     * ordinary invocation. The server reads absence as "this caller has no
+     * opinion" and serves exactly as it does today -- BACKWARD COMPATIBILITY
+     * IS AN AC here for the same reason it is for `entrypoint` above, and
+     * the plain user path (no override anywhere) must stay byte-identical.
+     *
+     * THE RAW VALUE, NOT A DERIVED ONE. `coordinator_core/_settings_home.py
+     * :: settings_home()` returns this variable VERBATIM when it is set (its
+     * override rung validates and returns, it does not canonicalise), so
+     * passing the raw wide value through `wide_to_utf8` is what makes the
+     * two sides of the server's comparison the same string. Deriving or
+     * normalising anything here would be a second resolver.
+     *
+     * ENVELOPE LEVEL, sibling of `_engine_token` -- NOT inside `params`,
+     * which is the opposite of `entrypoint`'s placement above and
+     * deliberately so: this is transport metadata the server pops before
+     * dispatch (`_serve_line`), never an argument any op reads. */
+    if (req_ok) {
+        /* `GetEnvironmentVariableW`, matching `resolve_engine_root`'s own read
+         * above rather than introducing `_wgetenv` (deprecated by the UCRT,
+         * and a second env-reading family in one file). Sized in two calls --
+         * the length probe, then the read -- because a TRUNCATED home would be
+         * the worst possible value to stamp: a claim naming a directory nobody
+         * asked for, which the server would then refuse or, worse, match by
+         * accident. A read that will not fit sends NOTHING, which the server
+         * reads as "no opinion" and serves as it does today. */
+        DWORD sh_len = GetEnvironmentVariableW(L"COORDINATOR_SETTINGS_HOME", NULL, 0);
+        if (sh_len > 1) {
+            wchar_t *settings_home_w = (wchar_t *)malloc(sh_len * sizeof(wchar_t));
+            if (settings_home_w == NULL) {
+                req_ok = 0;
+            } else {
+                DWORD got = GetEnvironmentVariableW(
+                    L"COORDINATOR_SETTINGS_HOME", settings_home_w, sh_len);
+                if (got > 0 && got < sh_len && settings_home_w[0] != L'\0') {
+                    req_ok &= buf_append_cstr(&req, ",\"_settings_home\":\"");
+                    if (req_ok) {
+                        int settings_home_u8_len;
+                        char *settings_home_u8 =
+                            wide_to_utf8(settings_home_w, &settings_home_u8_len);
+                        if (!settings_home_u8) {
+                            req_ok = 0;
+                        } else {
+                            req_ok &= buf_append_json_escaped(
+                                &req, settings_home_u8, (size_t)settings_home_u8_len);
+                            free(settings_home_u8);
+                        }
+                    }
+                    req_ok &= buf_append_cstr(&req, "\"");
+                }
+                free(settings_home_w);
+            }
+        }
+    }
+
     req_ok &= buf_append_cstr(&req, "}\n");
 
     LocalFree(wargv);

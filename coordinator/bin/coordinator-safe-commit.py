@@ -1964,8 +1964,7 @@ def do_scoped(
             print(
                 "\nDid you mean:\n" + _scoped_commit_suggestion(subject) + "\n\n"
                 "(dirty files this session touched are pre-filled above — trim 'paths' "
-                "to what THIS workstream owns before running; run_commit_pipeline "
-                "selects the agree-case vs. private-index staging form for you). For a "
+                "to what THIS workstream owns before running). For a "
                 "true emergency, stage explicitly (git add -- <paths>) and set "
                 "COORDINATOR_OVERRIDE_SCOPE=1 — it commits your pre-staged index as-is "
                 "(falls back to staging ALL dirty files, including any concurrent "

@@ -72,6 +72,7 @@ drift incident, 2026-08-14).
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 
@@ -118,11 +119,8 @@ def _self_heal_forwarders_inner() -> None:
     from coordinator_core._settings_home import settings_home
     from coordinator_core.locked_write import LockTimeout, held_lock
     from coordinator_core.install.substrate import (
-        SubstrateFatalError,
         _derive_agent_helper_target_map,
-        _resolve_agent_cmd_dest_collisions,
-        _resolve_baked_python_bin,
-        _write_agent_cmd_forwarder,
+        _cut_over_to_native_door,
         _write_agent_forwarder,
     )
     from coordinator_core.engine_root import coordinator_engine_root_with_class
@@ -143,42 +141,60 @@ def _self_heal_forwarders_inner() -> None:
     if not target_map:
         return
 
-    try:
-        cmd_dest_map = _resolve_agent_cmd_dest_collisions(target_map)
-    except SubstrateFatalError:
-        # A genuine installed-name collision is a real defect, but this is
-        # a silent self-heal path, not the place to surface or resolve it
-        # -- the real installer's fail-loud path already covers it.
-        return
+    # HEALS THE NATIVE DOOR IMAGE, NEVER A `.cmd` (PM ruling 2026-08-29 --
+    # one native entrypoint per platform). This path used to regenerate the
+    # `.py`/`.cmd` pair, which made it a SECOND producer of the interpreter
+    # trampolines the installer had already stopped emitting: a rename or a
+    # sweep would drop a `.cmd`, and the next session boot silently put it
+    # back. That is why the live box carried more `.cmd` files (399) than the
+    # generator even knows names for (384). Healing the same artifact the
+    # installer writes is the only shape that does not drift back.
+    from coordinator_core.warm.engine_root import is_engine_root
 
-    missing_py: "dict[str, str]" = {}
-    missing_cmd: "dict[str, str]" = {}
+    door_root = claude_klabauter_root if is_engine_root(claude_klabauter_root) else None
+
+    missing: "dict[str, str]" = {}
     for name, target in target_map.items():
-        if not (bin_dst / name).exists():
-            missing_py[name] = target
-        cmd_dest = cmd_dest_map.get(name)
-        if cmd_dest is not None and not (bin_dst / cmd_dest).exists():
-            missing_cmd[name] = cmd_dest
+        if not _installed_forwarder_present(bin_dst, name):
+            missing[name] = target
 
-    if not missing_py and not missing_cmd:
+    if not missing:
         return
-
-    python3_cmd_resolved_bin = _resolve_baked_python_bin() if missing_cmd else ""
 
     try:
         with held_lock(bin_dst, holder_label="forwarder-self-heal", timeout=2.0):
-            for name, target in sorted(missing_py.items()):
-                py_dst = bin_dst / name
-                if not py_dst.exists():
-                    _write_agent_forwarder(name, py_dst, False, target=target)
-            for name, cmd_dest in sorted(missing_cmd.items()):
-                cmd_dst = bin_dst / cmd_dest
-                if not cmd_dst.exists():
-                    target = target_map[name]
-                    _write_agent_cmd_forwarder(
-                        name, cmd_dst, False,
-                        python3_cmd_resolved_bin=python3_cmd_resolved_bin,
-                        target=target,
-                    )
+            for name, target in sorted(missing.items()):
+                if _installed_forwarder_present(bin_dst, name):
+                    continue
+                if door_root is not None:
+                    if _cut_over_to_native_door(
+                        name, bin_dst, False, engine_root=door_root
+                    ) is not None:
+                        continue
+                # Doorless root: the bare Python forwarder is all that can be
+                # written. Correct on POSIX, and on Windows it is the same
+                # degraded shape the installer leaves for an unstamped root --
+                # not bare-name resolvable, and not papered over with a `.cmd`.
+                _write_agent_forwarder(name, bin_dst / name, False, target=target)
     except LockTimeout:
         return
+
+
+def _installed_forwarder_present(bin_dst: Path, name: str) -> bool:
+    """True if `name` already has a forwarder this platform can actually
+    REACH by bare name -- which is a stricter question than "a file called
+    `name` exists".
+
+    On Windows only `named_forwarder_path` (`name.exe`) counts. The
+    extensionless `name` sitting beside it is the POSIX Python forwarder,
+    carried onto this box by a settings-home synced from a Mac, and PATHEXT
+    gives it no bare-name resolution at all -- treating its presence as
+    coverage is what would let this heal skip every name on a Windows box
+    that has such a sync (this one has ~400 of them). On POSIX the two paths
+    are the same path by construction, so the check collapses to one stat.
+    """
+    from coordinator_core.install.door_install import named_forwarder_path
+
+    if sys.platform == "win32":
+        return named_forwarder_path(bin_dst, name).exists()
+    return named_forwarder_path(bin_dst, name).exists() or (bin_dst / name).exists()

@@ -34,24 +34,40 @@ own return value):
                                       covers ``decision_class``.
     designated  (dict | None)     -- the raw ``{"pid", "create_time"}``
                                       pair from the grant record, verbatim,
-                                      whenever a record was found (parsed
-                                      as an object) -- REGARDLESS of
-                                      ``granted``, mirroring C2's own
-                                      "record whenever found" shape. None
-                                      when no record was found.
-    reason      (str)             -- "granted" when granted; "no-grant"
-                                      when C2 found no record at all
-                                      (byte-identical to the no-file case,
-                                      per C2's own contract); "not-granted"
-                                      when a record was found but C2 did
-                                      not grant it. This module does NOT
-                                      discriminate the finer reason
-                                      (expired vs malformed vs wrong class
-                                      vs not-live) -- doing so would
-                                      require re-deriving C2's own
-                                      judgment, which is the policy
-                                      duplication this op is built to
-                                      avoid.
+                                      ONLY when ``granted`` is True -- that
+                                      is the one case where the caller needs
+                                      it (it is the routing target). Every
+                                      other outcome carries ``None``: a
+                                      denial must never disclose the
+                                      (pid, create_time) of whoever currently
+                                      holds the relay, whether the caller was
+                                      never granted anything, was granted a
+                                      different class, or the grant expired.
+                                      Populating it on a denial would make
+                                      this op an identity oracle for a class
+                                      the caller has no standing to ask
+                                      about.
+    reason      (str)             -- "granted" when granted; "no-grant" for
+                                      EVERY non-granted outcome (no file,
+                                      malformed record, unknown
+                                      ``schema_version``, expired,
+                                      class-not-covered, dead/unreachable
+                                      grantee, or any other reason C2's own
+                                      ``check_fleet_delegation`` denies).
+                                      This module does NOT discriminate the
+                                      finer reason -- doing so would require
+                                      re-deriving C2's own judgment (the
+                                      policy duplication this op is built to
+                                      avoid), AND would leak which of those
+                                      cases applied, which is itself a signal
+                                      the denial reply must not carry. A
+                                      denied reply is therefore
+                                      byte-identical to the absent-grant
+                                      reply, full stop -- this also keeps
+                                      C2's own "expired reads identical to
+                                      absent" promise intact at this wrapper
+                                      rather than letting the wrapper reveal
+                                      a distinction C2 deliberately erased.
 
 BUDGET, ASSERTED NOT ASSUMED (Review: staff-eng (the Staff Engineer), finding 9): the
 check body is <=5ms process time -- one ``stat``, one small JSON read, one
@@ -102,18 +118,16 @@ def check_delegation(decision_class):
 
     Parameter list is exactly ``(decision_class)`` -- see module docstring's
     TESTABLE OBLIGATION. Returns {granted, designated, reason} (see module
-    docstring "Reply fields"). Adds no policy: the granted boolean and the
-    record come from ``check_fleet_delegation`` (C2) unchanged.
+    docstring "Reply fields"). Adds no policy: the granted boolean comes from
+    ``check_fleet_delegation`` (C2) unchanged; every non-granted outcome is
+    collapsed to the SAME byte-identical reply as the absent case, so a
+    denial never discloses who currently holds the relay.
     """
     granted, record = check_fleet_delegation(decision_class)
+    if not granted:
+        return {"granted": False, "designated": None, "reason": "no-grant"}
     designated = record.get("designated") if isinstance(record, dict) else None
-    if record is None:
-        reason = "no-grant"
-    elif granted:
-        reason = "granted"
-    else:
-        reason = "not-granted"
-    return {"granted": granted, "designated": designated, "reason": reason}
+    return {"granted": True, "designated": designated, "reason": "granted"}
 
 
 @register_op("delegation.check")

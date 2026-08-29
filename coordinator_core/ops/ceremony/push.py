@@ -82,6 +82,7 @@ def condense_git_diagnostic(text: str, *, limit: int = _MAX_DIAGNOSTIC_CHARS) ->
 
 from coordinator_core.ipc import CEREMONY_BUDGET_SECS
 from coordinator_core.lifecycle import git_common_dir
+from coordinator_core.git.git_state import head_sha as head_sha_local
 from coordinator_core.ops.ceremony import git_native
 
 PUSH_MODE_SYNC = "sync"
@@ -722,6 +723,52 @@ def _recover_rule_violation_reject(
     return None
 
 
+def _head_already_reached_upstream(
+    worktree_root: Path, upstream_abbrev: str, refetched_upstream_sha: Optional[str]
+) -> bool:
+    """Is HEAD already reachable from the freshly-fetched upstream tip -- i.e.
+    did this session's commits land on the remote via SOMEONE ELSE'S push?
+
+    THE CASE THIS ANSWERS is the ordinary one on a shared-worktree fleet, not
+    an edge case. Every session on this box drives the SAME worktree and the
+    SAME branch, so a peer's push carries our commits with it. Our own push
+    then rejects non-fast-forward for a range that is already on the remote,
+    and the ladder below would answer that with a `rebase --onto` -- which
+    `_rebase_onto_fetched_ref` refuses outright, because at the 50-70
+    concurrent-session load norm a peer always has something uncommitted in
+    the tree. The result was a `failed` push reporting "rebase recovery
+    cannot run: worktree has uncommitted changes" for work that was already
+    published, with no path to a correct answer that did not involve
+    committing or stashing a peer's files -- the shared-tree move doctrine
+    forbids outright. Checked HERE, before the rebase, so nothing needs the
+    worktree to be clean and no peer's files are touched to answer it.
+
+    Cost order, cheapest arm first:
+      1. ZERO SPAWNS -- HEAD's sha (read off `.git/HEAD` plus the loose ref
+         or `packed-refs`, never a `git` invocation) equals the tip this
+         fetch just observed. The dominant shape: our commit IS the remote
+         tip because a peer pushed it.
+      2. ONE SPAWN -- `git merge-base --is-ancestor HEAD <upstream>`, for the
+         case where a peer pushed our commits AND some of their own on top.
+         Paid only on a reject that already cost a network leg.
+
+    `False` on an indeterminate answer (a `--is-ancestor` that failed rather
+    than answered, an unresolvable HEAD): the caller then attempts the rebase
+    exactly as it did before this function existed. Never a confident "no"
+    synthesized from a broken repo.
+    """
+    head = head_sha_local(worktree_root)
+    if head is not None and refetched_upstream_sha is not None and head == refetched_upstream_sha:
+        return True
+
+    result = git_native.merge_base_is_ancestor(worktree_root, "HEAD", upstream_abbrev)
+    if result.returncode == 0:
+        return True
+    # returncode 1 is git's own "not an ancestor"; anything else (128, a spawn
+    # failure, a timeout) is indeterminate. Both fall through to the rebase.
+    return False
+
+
 def _rebase_onto_fetched_ref(worktree_root: Path, upstream_ref: str) -> Tuple[int, str]:
     """Rebase THIS session's own commit range onto the freshly-fetched `upstream_ref`.
 
@@ -1302,6 +1349,23 @@ def push_with_retry(
         refetched_sha = _ref_sha_local(root, upstream_info.ref_path)
         if refetched_sha:
             pre_push_upstream_sha = refetched_sha
+
+        # Before reaching for a rebase, ask whether one is needed at all: on a
+        # shared worktree a peer's push routinely carries THIS session's
+        # commits to the remote, so the reject we just took can be for a range
+        # that is already published. Answering that here keeps the recovery
+        # working on a dirty tree, which `_rebase_onto_fetched_ref` cannot.
+        if _head_already_reached_upstream(root, upstream_info.abbrev, refetched_sha):
+            return PushOutcome(
+                exit_code=0,
+                skipped=["push:landed-by-peer"],
+                message=(
+                    "coordinator-ceremony: push rejected, but HEAD is already "
+                    f"reachable from {upstream_info.abbrev} -- these commits "
+                    "reached the remote via another session's push; nothing to "
+                    "rebase, nothing left to push."
+                ),
+            )
 
         rebase_exit_code, rebase_reason = _rebase_onto_fetched_ref(root, upstream_info.abbrev)
         if rebase_exit_code != 0:

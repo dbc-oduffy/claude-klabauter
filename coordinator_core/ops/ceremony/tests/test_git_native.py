@@ -96,6 +96,7 @@ _WRAPPER_INVOCATIONS = [
     (git_native.rebase_onto, ("/tmp/repo", "origin/main", "abc123"), {}),
     (git_native.rebase_abort, ("/tmp/repo",), {}),
     (git_native.merge_base, ("/tmp/repo", "HEAD", "origin/main"), {}),
+    (git_native.merge_base_is_ancestor, ("/tmp/repo", "HEAD", "origin/main"), {}),
     (git_native.rev_parse_upstream, ("/tmp/repo",), {}),
     (git_native.rev_parse, ("/tmp/repo", "origin/main"), {}),
     (git_native.rev_list_count, ("/tmp/repo", "abc123..def456"), {}),

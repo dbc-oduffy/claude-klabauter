@@ -417,6 +417,28 @@ def install_named_forwarder(
 
     source = install_door(bin_dst, engine_root, check_only=False)
 
+    # SELF-COLLISION GUARD. `coordinator-invoke` is itself a member of the
+    # door-eligible population, and for that one name `named_forwarder_path`
+    # resolves to exactly the path `install_door` just wrote -- the canonical
+    # door. Without this branch the unlink below DELETES `source`, and both
+    # `os.link` and its `shutil.copy2` fallback then raise `FileNotFoundError`
+    # out of this function. Nothing in `substrate._write_agent_helper_
+    # forwarders`'s per-name loop catches it, so a real install run reaching
+    # this name in sorted() order aborts the WHOLE run -- every name after it
+    # alphabetically never gets written. It is not a missing-coverage bug for
+    # one name, it is an install-crashing one for the tail of the corpus.
+    # Reproduced against a real engine-stamped root: 381/382 names install
+    # clean, `coordinator-invoke` raises uncaught
+    # (state/audits/2026-08-27-native-launcher-coverage.md, finding F0).
+    #
+    # The canonical door IS the correct artifact at this path, so the right
+    # answer is to return it, not to link it to itself.
+    # Compared normcase/abspath rather than by `Path.__eq__`, which is
+    # case-sensitive even on Windows and would miss a `bin_dst` spelled with
+    # different case than `install_door` returned.
+    if os.path.normcase(os.path.abspath(dest)) == os.path.normcase(os.path.abspath(source)):
+        return dest
+
     if dest.exists() or dest.is_symlink():
         try:
             dest.unlink()

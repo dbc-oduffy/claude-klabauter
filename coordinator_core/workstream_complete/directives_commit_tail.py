@@ -59,7 +59,12 @@ without hand-landing the commit — was rebuilt, not restored, by DR-358
   at `push_mode=PUSH_MODE_NEVER` (hard constraints 5/6), with no new CLI or
   `directives[]` layer above it — `d-close-tail-args`'s former argument
   computation merges into this one call per DR-358's own ruling, rather
-  than being rebuilt as a separate step.
+  than being rebuilt as a separate step. C3 (docs/plans/2026-08-29-the-
+  push-subsystem-leaves-and-then-the-pipeline-can-go.md) repointed the
+  in-process call itself off the killed `commit_pipeline.
+  run_commit_pipeline` onto `coordinator_core.git.commit.commit_paths` --
+  DR-358's own ruling about the SHAPE (in-process, no new CLI/directive
+  layer) is unaffected by which commit primitive sits underneath it.
 - `d-release-plan-claim` (formerly `build_release_plan_claim_directive`,
   fronting `session-claim-cli release-artifact`) remains gone as a
   standalone directive — DR-358 rules it discharged by an inline call to
@@ -87,7 +92,7 @@ Negative-spec:
       `concurrent-peer-attribution`, `session-work-summary`, and
       `flag-severity-classification` are C2f's (`judgments.py`) judgment
       points. This module only turns already-decided values into a
-      `run_commit_pipeline` call or a rendered summary string.
+      `commit_paths` call or a rendered summary string.
     - Does NOT implement the dirty-tree classifier itself
       (`d-classify-dirty-tree`) — per the census, that step is already
       engine-owned inside the commit-gate stack (`commit_gates`) and has
@@ -105,8 +110,8 @@ Negative-spec:
       above, folded by the caller), and does NOT release the governing-plan
       claim (`cs_release_artifact` wiring is `run_close_commit_and_release_
       claims`'s route, not this function's body) — it only turns
-      already-decided values into one `run_commit_pipeline` call, at a push
-      mode this module never lets the caller override.
+      already-decided values into one `commit_paths` call; there is no push
+      leg here for a mode to govern at all.
     - DOES retry, narrowly: `_chunked_committed_paths`' per-chunk git spawn
       (`_run_git_ok_retrying`, `_GIT_RETRY_ATTEMPTS`) is bounded lock-
       contention absorption for a git SPAWN that has not yet succeeded, not
@@ -142,6 +147,24 @@ from coordinator_core.win_portability import no_console_creationflags
 from coordinator_core.workstream_complete import directives_memo_lifecycle as _memo_lifecycle
 
 _NO_CONSOLE = no_console_creationflags()
+
+
+class CommitTailOutcome(NamedTuple):
+    """`run_close_commit`'s own return shape (C3, repointed off the killed
+    `commit_pipeline.PipelineResult`) -- carries only the fields this
+    module's callers (`apply.py :: _run_close_commit_tail`, this module's own
+    tests) actually read off a `PipelineResult` today. `pushed`/`push_status`
+    are always the "not attempted" values: this route never had a push leg
+    (`commit_paths` has no push concept at all), so there is nothing here to
+    disambiguate."""
+
+    committed_sha: Optional[str]
+    pushed: Optional[bool]
+    push_status: str
+    commit_failed: bool
+    integrity_breach: bool
+    sha_unverified: bool
+    diagnostics: List[str]
 
 
 # ---------------------------------------------------------------------------
@@ -1077,69 +1100,122 @@ def run_close_commit(
     """The rebuilt `d-run-wsc-tail` — restores the operator's ability to
     close a session without hand-landing the commit, at the shape DR-358
     rules and `state/audits/2026-08-25-close-ceremony-floor-probe.md`
-    measures (AC3's shape budget: `run_commit_pipeline(...,
-    push_mode=PUSH_MODE_NEVER)`, called directly IN-PROCESS, no new CLI or
+    measures (AC3's shape budget), called directly IN-PROCESS, no new CLI or
     `directives[]` layer above it — `d-close-tail-args`'s former argument
     computation merges into this one call, per DR-358's own ruling).
 
-    `push_mode` is NEVER a parameter here — hard constraints 5/6 bind
-    absolutely: this always calls `run_commit_pipeline` (never
-    `git_native.commit_scoped` directly, which gets staging safety and
-    silently skips `commit_gates.carry_gate` and every other gate) at
-    `push_mode=PUSH_MODE_NEVER` (never omitted, which now defaults to
-    `PUSH_MODE_NONE` since 2026-08-26, not `PUSH_MODE_SYNC` — and never
-    `PUSH_MODE_SYNC` itself, a synchronous network push, and never
-    `"deferred"` — `_PUSH_MODES_
-    SUPPRESSING_POST_COMMIT_HOOK == frozenset({SYNC, NEVER})` leaves the
-    post-commit hook's push armed under `"deferred"`). A caller wanting a
-    push does so as its own separate, later step; this function never
-    pushes.
+    C3 (docs/plans/2026-08-29-the-push-subsystem-leaves-and-then-the-
+    pipeline-can-go.md): repointed off the killed `commit_pipeline.
+    run_commit_pipeline` onto `coordinator_core.git.commit.commit_paths`,
+    the sanctioned zero-spawn commit shape. There is no `push_mode`
+    parameter to preserve here — this route never owned a push leg (hard
+    constraints 5/6 bound the old call to `PUSH_MODE_NEVER` unconditionally,
+    so no push was ever attempted from here); `commit_paths` has no push
+    concept at all, so the constraint is now structural rather than an
+    argument value. A caller wanting a push does so as its own separate,
+    later step (`run_push_outstanding_tail`); this function never pushes.
 
-    Every keyword argument here is a caller-supplied, already-decided value
-    passed straight through to `run_commit_pipeline` — `subject`/`prose`
-    (commit-message-authoring, `judgments.py`'s C2f), `stage_paths`
-    (`accumulate_session_paths`/`resolve_known_concurrent_paths` above),
-    `deleted_paths`/`kept_entries`/`trailers` (the Step-2.67 message blocks,
-    `commit_pipeline.compose_message`'s own contract). This function decides
-    none of them and composes no message text itself — see this module's own
-    Negative-spec. AC8 (the `Closes:` composed-by-hand message text
-    surviving verbatim) is a property of NOT mutating `prose` anywhere
-    between the caller and `run_commit_pipeline`'s own `compose_message`
-    call — this function's whole job is to not be the place that breaks
-    that.
+    Every keyword argument here is a caller-supplied, already-decided value:
+    `subject`/`prose`/`deleted_paths`/`kept_entries`/`trailers` compose the
+    message via `coordinator_core.ops.ceremony.commit_message.
+    compose_message` (the same Step-2.67 message shape `run_commit_pipeline`
+    used), `stage_paths` (`accumulate_session_paths`/
+    `resolve_known_concurrent_paths` above) becomes `commit_paths`'s pathspec.
+    This function decides none of the message content itself — see this
+    module's own Negative-spec. AC8 (the `Closes:` composed-by-hand message
+    text surviving verbatim) is a property of NOT mutating `prose` anywhere
+    between the caller and `compose_message` — this function's whole job is
+    to not be the place that breaks that.
+
+    `caller_paths`/`on_committed`/`attributed_session_id` are accepted for
+    call-shape compatibility with every existing caller but are no longer
+    threaded anywhere: `commit_paths` has no tolerant pre-stage step to scope
+    (`caller_paths` gated `explicit_stage`'s swept-path tolerance, which does
+    not exist on this path — a `stage_paths` entry absent from disk and not
+    also listed in `deleted_paths` is a genuine caller error now, surfaced as
+    `CommitRefused` rather than silently skipped), no `on_committed` hook
+    fires mid-call, and `commit_paths` carries no `Session-Id:` trailer
+    concept to attribute.
 
     Governing-plan claim release (`d-release-plan-claim`'s DR-358 ruling,
     `ops/ceremony/tail_ops.py :: cs_release_artifact`) is NOT called here,
     nor is hard constraint 4's per-path `release_committed_claims` — both
     are wired by `run_close_commit_and_release_claims` (this module, C5),
     the wrapper that calls this function and releases both claims at both
-    its success and failure exits; this function's own return is
-    `run_commit_pipeline`'s `PipelineResult`, unmodified. A caller closing a
+    its success and failure exits; this function's own return is a
+    `CommitTailOutcome`, this module's own `PipelineResult`-shaped stand-in
+    (`committed_sha`/`pushed`/`push_status`/`commit_failed`/
+    `integrity_breach`/`sha_unverified`/`diagnostics`). A caller closing a
     session should call `run_close_commit_and_release_claims`, not this
     function directly.
-
-    Imports `run_commit_pipeline`/`PUSH_MODE_NEVER` lazily (mirrors
-    `_raise_on_review_enum_values`'s own lazy import above) — this module is
-    on the assemble hot path and `commit_pipeline` pulls in the op-registry
-    side effects of the full commit-gate stack with it.
     """
-    from coordinator_core.ops.ceremony.commit_pipeline import run_commit_pipeline
-    from coordinator_core.ops.ceremony.push import PUSH_MODE_NEVER
+    from coordinator_core.git.commit import CommitRefused, FilterUnsupported, commit_paths
+    from coordinator_core.git.commit import hash_worktree_blobs_via_spawn
+    from coordinator_core.ops.ceremony.commit_message import compose_message
+    from coordinator_core.ops.ceremony.push import PUSH_STATUS_NOT_ATTEMPTED
+    from functools import partial
 
-    return run_commit_pipeline(
-        worktree_root,
-        session_id=session_id,
+    root = Path(worktree_root)
+    message = compose_message(
         subject=subject,
         prose=prose,
         deleted_paths=deleted_paths,
         kept_entries=kept_entries,
         trailers=trailers,
-        stage_paths=stage_paths,
-        caller_paths=caller_paths,
-        on_committed=on_committed,
-        push_mode=PUSH_MODE_NEVER,
-        deliverable_id=deliverable_id,
-        attributed_session_id=attributed_session_id,
+    )
+    # `commit_paths` cannot read a path it cannot find; a `stage_paths` entry
+    # already absent on disk and not also declared via `deleted_paths` is
+    # what `explicit_stage`'s swept-path tolerance used to paper over --
+    # dropped here rather than silently included, since a missing path in
+    # `paths` raises `CommitRefused` (an OSError on read), not a no-op skip.
+    deleted_set = set(deleted_paths)
+    present_paths = [
+        p for p in stage_paths if p in deleted_set or (root / p).exists()
+    ]
+    if not present_paths and not deleted_paths:
+        # Mirrors `run_commit_pipeline`'s own empty-`commit_paths` short-
+        # circuit (step 2 of its docstring sequence): nothing to stage is a
+        # benign no-op, not a refusal -- `commit_paths` itself raises
+        # `CommitRefused` on an empty pathspec (it never defaults to "commit
+        # the whole index"), so that case is intercepted here before the call
+        # rather than reported as a failure.
+        return CommitTailOutcome(
+            committed_sha=None,
+            pushed=None,
+            push_status=PUSH_STATUS_NOT_ATTEMPTED,
+            commit_failed=False,
+            integrity_breach=False,
+            sha_unverified=False,
+            diagnostics=[],
+        )
+    try:
+        outcome = commit_paths(
+            root,
+            present_paths,
+            message,
+            deleted_paths=list(deleted_paths),
+            blob_fallback=partial(hash_worktree_blobs_via_spawn, cwd=root),
+        )
+    except (CommitRefused, FilterUnsupported) as exc:
+        return CommitTailOutcome(
+            committed_sha=None,
+            pushed=None,
+            push_status=PUSH_STATUS_NOT_ATTEMPTED,
+            commit_failed=True,
+            integrity_breach=False,
+            sha_unverified=False,
+            diagnostics=[str(exc)],
+        )
+    if on_committed is not None:
+        on_committed(outcome.sha)
+    return CommitTailOutcome(
+        committed_sha=outcome.sha,
+        pushed=None,
+        push_status=PUSH_STATUS_NOT_ATTEMPTED,
+        commit_failed=False,
+        integrity_breach=False,
+        sha_unverified=False,
+        diagnostics=[],
     )
 
 
@@ -1148,7 +1224,7 @@ def _release_committed_path_claims(
 ) -> None:
     """Hard constraint 4's per-route wiring of `session/scope.py ::
     release_committed_claims` — the PATH-claim mechanism (`touched.txt` `R`
-    events), never wired automatically by `run_commit_pipeline`/`git_native.py`
+    events), never wired automatically by `commit_paths`/`git_native.py`
     (84 hand-wired call sites repo-wide, zero there — hard constraint 4's own
     count). Mirrors `post_commit_tail.py ::
     _commit_and_push_origin_stub_close`'s own call shape exactly (same
@@ -1288,9 +1364,10 @@ def run_close_commit_and_release_claims(
 def run_push_outstanding_tail(worktree_root: "Union[Path, str]") -> Dict[str, Any]:
     """The "separate, later step" `run_close_commit`'s own docstring names
     ("A caller wanting a push does so as its own separate, later step; this
-    function never pushes") -- `run_close_commit` always calls
-    `run_commit_pipeline` at `push_mode=PUSH_MODE_NEVER` (hard constraints
-    5/6), and nothing else in this module's Step 3 push-confirmation tree
+    function never pushes") -- `run_close_commit` calls `commit_paths` (C3),
+    which has no push leg at all (hard constraints 5/6's old
+    `push_mode=PUSH_MODE_NEVER` binding is now structural, not an argument
+    value), and nothing else in this module's Step 3 push-confirmation tree
     issues `git push` either (`compute_push_landed_gate`'s own docstring:
     "Never issues `git push` itself"). This function is that missing
     producer, wired to `coordinator_core.ops.push_outstanding.

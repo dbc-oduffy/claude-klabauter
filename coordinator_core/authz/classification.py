@@ -3652,12 +3652,18 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #   ceremony.scoped_git_commit — ops/ceremony/scoped_git_commit.py: the
     #     module's entire purpose is a path-scoped `git add && git commit`;
     #     the file's own docstring is explicit throughout.
-    #   ceremony.commit — ops/ceremony/commit_op.py: delegates to
-    #     `run_commit_pipeline`, whose entire purpose is a stage+commit(+push)
-    #     write — landing a git commit (and, in the pipeline's own default
-    #     push mode, pushing it). Classified MUTATING explicitly (docs/plans/
-    #     2026-08-26-the-commit-becomes-a-warm-served-op.md § AC2), never left
-    #     to `_op_may_mutate`'s fail-closed default.
+    #   ceremony.commit — REMOVED (C3, docs/plans/2026-08-29-the-push-
+    #     subsystem-leaves-and-then-the-pipeline-can-go.md): this op has no
+    #     dict entry any more, and this comment no longer has one to
+    #     justify. `ceremony.commit` (ops/ceremony/commit_op.py) was killed
+    #     at the 200ms process-time bar (p50 421.9ms, n=241) and replaced by
+    #     `ceremony.commit_v2` (see that entry, immediately above this
+    #     block) -- `commit_op.py` is now a 101-line husk with no handler,
+    #     unregistered, and nothing here classifies it. The original
+    #     warrant (docs/plans/2026-08-26-the-commit-becomes-a-warm-served-
+    #     op.md § AC2, classifying MUTATING because the op delegated to
+    #     `run_commit_pipeline`'s stage+commit(+push) write) applied to a
+    #     dict entry that is gone; do not resurrect it from this text.
     #   commit.exec_bit_change — ops/ceremony/commit_exec_bit.py: `git commit`
     #     (unrestricted, per DR-151) writing an exec-bit change.
     #   findings.self_persist_fallback — ops/self_persist_findings.py: writes

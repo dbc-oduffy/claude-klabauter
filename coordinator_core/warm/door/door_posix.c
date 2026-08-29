@@ -1030,7 +1030,36 @@ int main(int argc, char **argv) {
     }
     req_ok &= buf_append_cstr(&req, "\"},\"_engine_token\":\"");
     req_ok &= buf_append_cstr(&req, engine_token);
-    req_ok &= buf_append_cstr(&req, "\"}\n");
+    req_ok &= buf_append_cstr(&req, "\"");
+
+    /* ADDITIVE, AND ONLY WHEN THIS CALLER ASKED FOR A HOME (2026-08-29) --
+     * the POSIX half of the same stamp `door.c` carries; see that file for
+     * the full rationale. In brief: the warm server resolves its settings
+     * home ONCE, from the environment of whoever spawned it, and is keyed on
+     * (user, engine-clone, engine-token), never on the home -- so without
+     * this field a caller that set COORDINATOR_SETTINGS_HOME is answered
+     * against a home it did not name, silently, and that home is where
+     * guard-DISARMING state lives.
+     * Backlog: state/bug-backlog/2026-08-29-the-warm-server-answers-against-
+     * its-spaw-f1bcc4154ca4.yaml (P0).
+     *
+     * Unset or empty is OMITTED, never sent as "" -- the server reads absence
+     * as "no opinion" and serves unchanged, which is every ordinary call.
+     * The RAW value crosses, because `_settings_home.settings_home()` returns
+     * this variable verbatim when set; deriving anything here would be a
+     * second resolver. Envelope level, sibling of `_engine_token`: transport
+     * metadata the server pops before dispatch, never an op param. */
+    if (req_ok) {
+        const char *settings_home_env = getenv("COORDINATOR_SETTINGS_HOME");
+        if (settings_home_env != NULL && settings_home_env[0] != '\0') {
+            req_ok &= buf_append_cstr(&req, ",\"_settings_home\":\"");
+            req_ok &= buf_append_json_escaped(
+                &req, settings_home_env, strlen(settings_home_env));
+            req_ok &= buf_append_cstr(&req, "\"");
+        }
+    }
+
+    req_ok &= buf_append_cstr(&req, "}\n");
 
     if (!req_ok) {
         /* Pre-delivery: nothing has been written yet, so falling through is

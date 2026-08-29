@@ -80,16 +80,16 @@ NOT re-derive the `status:` transition logic or hand-roll a second
 frontmatter writer -- it calls `coordinator_core.archive_stamp.
 cs_stamp_plan_implemented` (itself a thin wrapper over the already-native
 `coordinator_core.ops.plan_status_transition` port) for the stamp. The
-commit leg calls `coordinator_core.ops.ceremony.commit_pipeline.
-run_commit_pipeline` directly, in-process, with an explicit `stage_paths`
-pathspec -- the SAME seam `ceremony.scoped_git_commit` and `wsc-tail`'s own
-commit leg already use, chosen over the former `coordinator/bin/
-coordinator-safe-commit` shell-out (Defect 3, 2026-07-27) because that
+commit leg calls `coordinator_core.git.commit.commit_paths` directly,
+in-process, with an explicit pathspec (C3, docs/plans/2026-08-29-the-push-
+subsystem-leaves-and-then-the-pipeline-can-go.md -- repointed off the killed
+`commit_pipeline.run_commit_pipeline`), chosen over the former `coordinator/
+bin/coordinator-safe-commit` shell-out (Defect 3, 2026-07-27) because that
 binary's default mode refuses outright under ordinary multi-session
 concurrency ("multiple live sessions detected; default-mode commit is
 unsafe") and this caller never passed it a scope to avoid that refusal --
 see `close_out_and_stamp()`'s own docstring for the explicit-path derivation
-this fix introduces. Neither the stamp nor the commit pipeline itself is
+this fix introduces. Neither the stamp nor the commit path itself is
 reimplemented here.
 
 Negative-spec -- no plan-body-hash write here, deliberately: this op writes
@@ -124,7 +124,7 @@ import os
 import re
 import sys
 import tempfile
-import uuid
+from functools import partial
 from pathlib import Path
 from typing import Any, Iterable, Optional, Sequence
 
@@ -167,12 +167,11 @@ from coordinator_core.frontmatter.primitives import (
 from coordinator_core.lifecycle import git_common_dir
 from coordinator_core.locked_write import LOCK_TIMEOUT_SECS, LockTimeout, MutateAbort, locked_rmw
 from coordinator_core.machine_resolver import registry_get
+from coordinator_core.git.commit import CommitRefused, FilterUnsupported, commit_paths
+from coordinator_core.git.commit import hash_worktree_blobs_via_spawn
 from coordinator_core.ops.ceremony import git_native, post_commit_tail
-from coordinator_core.ops.ceremony.commit_pipeline import run_commit_pipeline
-from coordinator_core.ops.ceremony.push import (
-    PUSH_MODE_NEVER,
-    PUSH_STATUS_NOT_ATTEMPTED,
-)
+from coordinator_core.ops.ceremony.commit_message import compose_message
+from coordinator_core.ops.ceremony.push import PUSH_STATUS_NOT_ATTEMPTED
 from coordinator_core.ops.extract_scope_paths import _extract_scope_paths
 from coordinator_core.ops.fleet._common import plan_claim_dir
 from coordinator_core.ops.handoff_close_origin_stub import _handler as _close_origin_stub_handler
@@ -2034,35 +2033,29 @@ def _stage_paths_committed_already(root: Path, stage_paths: Sequence[str]) -> bo
     own name, via `git_native.commit_authored_content` -- so by the time
     control returns to THIS function, the plan doc this op just stamped (and,
     when AC8 also fired, auto-resolved) is very often ALREADY sitting at
-    HEAD, byte-identical to the worktree. `run_commit_pipeline`'s own
-    `explicit_stage` does not distinguish that from a genuinely dirty path --
-    it includes any EXISTING path in `stage_paths` in its computed
-    `commit_paths` regardless of whether that path actually differs from
-    HEAD -- so without this check `close_out_and_stamp` would always reach a
-    real `git commit` with nothing to commit, which git (correctly) refuses
-    with a bare `exit_code=1`. See this function's only call site for how
-    the two are told apart.
+    HEAD, byte-identical to the worktree. `coordinator_core.git.commit.
+    commit_paths` (C3, repointed off the killed `run_commit_pipeline`) does
+    not distinguish that from a genuinely dirty path either -- it commits
+    whatever tree the resolved blobs assemble to regardless of whether that
+    tree actually differs from HEAD's, so without this check
+    `close_out_and_stamp` would reach `commit_paths` with nothing new to
+    commit and land a real, spurious commit object pointing at an
+    unchanged tree, rather than git's own "nothing to commit" refusal the
+    old `run_commit_pipeline`/`git commit` path used to raise. See this
+    function's only call site for how the two are told apart.
 
-    What's now true (W3, docs/plans/2026-08-08-a-landed-commit-reported-as-
-    failed.md): this specific `exit_code=1` -- the genuine "nothing to
-    commit" no-op -- is NOT the defect that plan fixes. `commit_pipeline.
-    commit()` (W1) still sets `landed=False` on exactly this path by design
-    (see `CommitOutcome.landed`'s own docstring: "the ordinary 'nothing to
-    commit' empty-commit-set exit 1... must keep `landed=False`"), so
-    `run_commit_pipeline` still reports it as an ordinary `commit_failed=
-    True`, same as before W1/W2 -- this function's own check below remains
-    the correct, load-bearing way to tell that apart from a genuine refusal.
-    The DEFECT W1/W2/W3 fix is a DIFFERENT `exit_code=1` shape entirely: a
-    commit that DID land (history changed) but whose sha could not be
-    resolved (`PipelineResult.sha_unverified`) -- see this module's own
-    `elif pipeline_result.sha_unverified:` branch at this function's call
-    site for how that state (never reaching this function at all, since it
-    is not "nothing landed") is now rendered honestly instead.
+    Historical note (W3, docs/plans/2026-08-08-a-landed-commit-reported-as-
+    failed.md): under the now-deleted `run_commit_pipeline`, this same
+    "already landed" case surfaced as an ordinary `commit_failed=True` exit,
+    which this function's check existed to tell apart from a genuine
+    refusal. `commit_paths` carries no such no-op detection of its own (see
+    above), so this function's check is now the ONLY thing preventing a
+    spurious empty-tree commit, not merely the loudest way to explain one.
 
     Deliberately narrower than a repo-wide dirty check: scoped to exactly
     `stage_paths` (this op's own pathspec), so a live peer session's
     unrelated dirty file elsewhere in the shared worktree never influences
-    this decision -- mirrors `run_commit_pipeline`'s own gate_paths scoping.
+    this decision.
     """
     result = git_native.status_porcelain(root)
     if not result.ok:
@@ -2307,7 +2300,7 @@ def close_out_and_stamp(
          docstring for why composing over the real writer (pointed at a
          copy) is the shared-computation-preserving choice here, not a
          parallel implementation.
-      2. The commit leg (`run_commit_pipeline`) is not invoked at all under
+      2. The commit leg (`commit_paths`) is not invoked at all under
          `dry_run` -- there is no scratch-copy equivalent for "stage and
          commit into THIS repo's real history", so this leg is skipped
          outright rather than simulated; `commit_result` reports what WOULD
@@ -2324,8 +2317,8 @@ def close_out_and_stamp(
     liveness-auto-detecting default mode with no scope at all, which that
     binary correctly refuses under ordinary multi-session concurrency ("this
     repo's NORMAL state" -- Defect 3 report). The fix runs the commit
-    in-process through `run_commit_pipeline` with an EXPLICIT `stage_paths`
-    of exactly `[plan_path_rel]` -- the one path this function is capable of
+    in-process through `commit_paths` with an EXPLICIT pathspec of exactly
+    `[plan_path_rel]` -- the one path this function is capable of
     having changed -- never a broad/auto-detected scope, so a peer session's
     concurrently-dirty files on the same branch are never swept in. This is
     intentionally NOT "the plan document itself, plus other changed paths"
@@ -2336,16 +2329,15 @@ def close_out_and_stamp(
     Commit leg gated on `wrote_anything` (`stamped or partial_evaluation_
     stamped`), not unconditional (correction during this fix's own test
     pass; corrected AGAIN, review finding, 2026-07-27 -- see below):
-    `run_commit_pipeline`'s empty-`commit_paths` short-circuit fires ONLY
-    when `stage_paths` resolves to nothing stageable at all (a
-    missing/swept path) -- it does NOT detect "staged content is
-    byte-identical to HEAD". If this op wrote nothing, but the commit leg
-    still ran anyway, `plan_path_rel` would still exist and still stage
-    cleanly with zero actual diff, and the underlying `git commit --
-    plan_path_rel` would fail loud ("nothing to commit", exit 1) rather
-    than no-op. `wrote_anything` is this op's own single source of truth
-    for "did I change anything"; the commit leg runs ONLY when it is
-    `True`, and is skipped entirely (`committed_sha=None`,
+    `commit_paths` raises `CommitRefused` on an empty pathspec, but that
+    fires ONLY when `stage_paths` resolves to nothing stageable at all -- it
+    does NOT detect "the resolved tree is byte-identical to HEAD". If this
+    op wrote nothing, but the commit leg still ran anyway, `plan_path_rel`
+    would still exist and still resolve to a real blob, and `commit_paths`
+    would land a real, spurious commit object over an unchanged tree rather
+    than refusing or no-op'ing. `wrote_anything` is this op's own single
+    source of truth for "did I change anything"; the commit leg runs ONLY
+    when it is `True`, and is skipped entirely (`committed_sha=None`,
     `commit_failed=False`) rather than attempted and caught otherwise.
 
     `stamped` alone is NOT that source of truth, and must not be read as
@@ -2854,75 +2846,37 @@ def close_out_and_stamp(
         # blanket-add hazard the (now-bypassed) coordinator-safe-commit
         # liveness gate existed to prevent, and reintroducing it here would
         # defeat this fix.
-        session_id = f"close-out-and-stamp-{uuid.uuid4().hex}"
-
-        pipeline_result = run_commit_pipeline(
-            root,
-            session_id=session_id,
-            subject=subject,
-            stage_paths=stage_paths,
-            caller_paths=set(stage_paths),
-            # DR-329 § 7 (docs/decisions/DR-329-push-runs-on-a-cadence-not-
-            # on-every-commit.md): this call site is not one of the six
-            # named cadence surfaces, so it no longer owns a synchronous
-            # push at all -- publication is deferred to whichever cadence
-            # checkpoint (`workday-complete`, `workstream-complete`, ...)
-            # runs next and calls `push_outstanding()` itself. Explicit,
-            # never by omission (C5, AC5/AC6) -- an omitted `push_mode`
-            # here would fall back to `run_commit_pipeline`'s own default
-            # (`PUSH_MODE_NONE` since 2026-08-26; `PUSH_MODE_SYNC` before
-            # that, which is the regression this line was written against),
-            # exactly
-            # the failure `test_close_out_and_stamp_publishes.py`'s
-            # `TestPublishBoundaryHistoricalRedProof` pins against.
-            push_mode=PUSH_MODE_NEVER,
-        )
-        commit_result = {
-            "committed_sha": pipeline_result.committed_sha,
-            "pushed": pipeline_result.pushed,
-            # C6a (docs/plans/2026-08-08-the-push-leg-that-never-asked-
-            # which-branch.md): surfaces the fully-disambiguated
-            # `push_status` alongside the legacy tristate `pushed` field --
-            # `pushed` is kept verbatim for compatibility (never removed or
-            # renamed), `push_status` is the richer companion a caller
-            # should read to tell "declined" apart from "no-remote" apart
-            # from "not-attempted" (all three read `pushed=None`). Every
-            # `PipelineResult` construction site sets `push_status` (C2), so
-            # a plain attribute read is correct -- a `getattr` fallback here
-            # would silently degrade a future missing-field bug into
-            # "not-attempted" instead of raising loud (C7b, docs/plans/
-            # 2026-08-08-the-push-leg-that-never-asked-which-branch.md).
-            "push_status": pipeline_result.push_status,
-            # AC7 (C3b): the pushed-extent fields belong on THIS payload,
-            # not buried in `diagnostics` prose -- this is the exact site
-            # the original memo pinned as reporting `"pushed": true` while
-            # DoE-claude's stamp had actually advanced `origin/main` by
-            # three commits that were not its own; an operator reading
-            # `commit_result` needs the range/count alongside the bare
-            # boolean to see the extent of what landed. `None` unless a
-            # push actually landed (`push_status == PUSH_STATUS_PUSHED`) --
-            # mirrors `PipelineResult.pushed_range`/`pushed_count`'s own
-            # explicit-unknown-vs-not-applicable contract. Plain attribute
-            # reads, same reasoning as `push_status` above: C3b set these on
-            # every construction site, so a `getattr` fallback would only
-            # mask a future missing-field bug.
-            "pushed_range": pipeline_result.pushed_range,
-            "pushed_count": pipeline_result.pushed_count,
-            "commit_failed": pipeline_result.commit_failed,
-            # W3 (docs/plans/2026-08-08-a-landed-commit-reported-as-failed.md):
-            # surfaced unconditionally, not just on the failure branch below --
-            # a caller inspecting `commit_result` after a `sha_unverified`
-            # landing needs to see WHY `committed_sha` stayed `None` despite
-            # `commit_failed` also being `False`.
-            "sha_unverified": pipeline_result.sha_unverified,
-            "diagnostics": pipeline_result.diagnostics,
-        }
-        if pipeline_result.commit_failed:
+        # C3 (docs/plans/2026-08-29-the-push-subsystem-leaves-and-then-the-
+        # pipeline-can-go.md): repointed off the killed `run_commit_pipeline`
+        # onto the sanctioned zero-spawn commit shape, `coordinator_core.git.
+        # commit.commit_paths` (`ceremony.commit_v2`'s own in-process call,
+        # mirrored here rather than round-tripped through the op registry --
+        # this module already runs in-process). No push leg at all any more:
+        # this call site never owned a synchronous push (DR-329 § 7 --
+        # publication is deferred to whichever cadence checkpoint runs next
+        # and calls `push_outstanding()` itself), so there is nothing here to
+        # preserve a `push_mode` for.
+        message = compose_message(subject=subject)
+        try:
+            outcome = commit_paths(
+                root,
+                stage_paths,
+                message,
+                blob_fallback=partial(hash_worktree_blobs_via_spawn, cwd=root),
+            )
+        except (CommitRefused, FilterUnsupported) as exc:
+            commit_result = {
+                "committed_sha": None,
+                "pushed": None,
+                "push_status": PUSH_STATUS_NOT_ATTEMPTED,
+                "pushed_range": None,
+                "pushed_count": None,
+                "commit_failed": True,
+                "sha_unverified": False,
+                "diagnostics": [str(exc)],
+            }
             return EXIT_BUSINESS_FAIL, {
-                "error": (
-                    "close-out commit failed: "
-                    f"{'; '.join(pipeline_result.diagnostics) or 'commit pipeline reported commit_failed with no diagnostics'}"
-                ),
+                "error": f"close-out commit failed: {exc}",
                 "shipped": shipped,
                 "stamped": stamped,
                 "partial_evaluation_stamped": partial_evaluation_stamped,
@@ -2933,36 +2887,27 @@ def close_out_and_stamp(
                 "commit": commit_result,
                 "dry_run": dry_run,
             }
-        if pipeline_result.committed_sha:
-            # Reach `post_commit_tail`'s stub-close leg (AC4) -- see
-            # `_reach_post_commit_tail_stub_close`'s own docstring.
-            # `delivery_proof` (PM ruling) lets a complete, stub-specific
-            # proof close the origin stub WITHOUT consulting the
-            # live-children guard: this close is IN PLACE (deployment_state
-            # -> shipped, no `git mv`), so it cannot strand a dependent the
-            # way an archival move could -- archival remains separately
-            # gated on liveness in `archive_handoffs.py`, untouched here.
-            origin_stub_result = _reach_post_commit_tail_stub_close(
-                root, plan_path_rel, pipeline_result.committed_sha, delivery_proof
-            )
-        elif pipeline_result.sha_unverified:
-            # W3: the commit landed (`commit_failed=False` above, so this is
-            # NOT the raise branch) but has no resolvable sha --
-            # `_reach_post_commit_tail_stub_close` needs a real sha to join
-            # the origin stub on (see that function's own docstring), so the
-            # reach is skipped rather than attempted-and-crashed. Recorded
-            # here, not silently dropped -- same labelled-skip posture as
-            # `wsc_tail`'s own W3 fix for the identical gap.
-            origin_stub_result = {
-                "acted": [],
-                "skipped": [
-                    "post_commit_tail:landed-sha-unverified -- commit "
-                    "landed but its sha could not be resolved, so the "
-                    "origin-stub-close reach (needs a real committed sha) "
-                    "was skipped"
-                ],
-                "failed": [],
-            }
+        commit_result = {
+            "committed_sha": outcome.sha,
+            "pushed": None,
+            "push_status": PUSH_STATUS_NOT_ATTEMPTED,
+            "pushed_range": None,
+            "pushed_count": None,
+            "commit_failed": False,
+            "sha_unverified": False,
+            "diagnostics": [],
+        }
+        # Reach `post_commit_tail`'s stub-close leg (AC4) -- see
+        # `_reach_post_commit_tail_stub_close`'s own docstring.
+        # `delivery_proof` (PM ruling) lets a complete, stub-specific
+        # proof close the origin stub WITHOUT consulting the
+        # live-children guard: this close is IN PLACE (deployment_state
+        # -> shipped, no `git mv`), so it cannot strand a dependent the
+        # way an archival move could -- archival remains separately
+        # gated on liveness in `archive_handoffs.py`, untouched here.
+        origin_stub_result = _reach_post_commit_tail_stub_close(
+            root, plan_path_rel, outcome.sha, delivery_proof
+        )
     else:
         # Nothing of this op's own to commit -- skipped entirely rather
         # than attempted-and-caught (see "wrote_anything" above; this is

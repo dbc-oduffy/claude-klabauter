@@ -170,8 +170,8 @@ def test_marker_freshness_week_cadence_reads_header_not_the_day_marker(tmp_path,
 
 
 def test_branch_reconcile_collect_is_cadence_insensitive(monkeypatch):
-    monkeypatch.setattr(rbr, "_read_span_assert", lambda: ReaderResult())
-    monkeypatch.setattr(rbr, "_read_auto_reconcile", lambda: ReaderResult())
+    monkeypatch.setattr(rbr, "_read_span_assert", lambda repo_root=None: ReaderResult())
+    monkeypatch.setattr(rbr, "_read_auto_reconcile", lambda repo_root=None: ReaderResult())
 
     results = [rbr.collect(cadence) for cadence in ("session", "day", "week")]
     assert all(r == results[0] for r in results)

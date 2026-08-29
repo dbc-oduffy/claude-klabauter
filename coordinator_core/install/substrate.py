@@ -1597,286 +1597,33 @@ exec_cli("{target}")
     dst.chmod(dst.stat().st_mode | 0o111)
 
 
-def _write_agent_cmd_forwarder(
-    name: str, dst: Path, check_only: bool, *, python3_cmd_resolved_bin: str, target: str = ""
-) -> None:
-    """Generates the installed Windows ``.cmd`` half of an agent-helper
-    forwarder pair. Invokes the CO-LOCATED Unix-half forwarder
-    (``%~dp0<name>`` — i.e. ``dst``'s own sibling written by
-    ``_write_agent_forwarder`` under the SAME installed ``name``), never the
-    claude-klabauter-side ``<target>.py`` directly — the resolve-claude-klabauter-bin ladder
-    must exist in exactly ONE place (``_resolve_claude_klabauter.py``, exec'd by the
-    Unix half), so re-deriving claude-klabauter-live-root resolution in batch here would
-    duplicate that ladder once per forwarder in
-    ``_derive_agent_helper_target_map``'s live ``coordinator/bin/`` scan —
-    call it for the current count rather than trusting a frozen figure here.
-
-    ``name`` is the INSTALLED forwarder name — NOT
-    ``_agent_cmd_dest_name(name)``'s stem-stripped ``.cmd`` filename. An
-    installed name that carries its own suffix (e.g. a hypothetical
-    ``foo.sh`` installing as ``foo.cmd`` — the shape the retired
-    ``mint-deliverable-id.sh`` divergence used to exercise before that CLI's
-    installed name was made extensionless) is exactly why this must stay
-    `name`, not a re-derived stem: a naive ``%~dp0<stem>`` would target a
-    Unix-half file that was never written under that name.
-
-    Formerly this ``.cmd`` half was a VERBATIM COPY of claude-klabauter's own
-    ``coordinator/bin/<stem>.cmd`` (only the destination filename was
-    transformed — see the retired ``_agent_cmd_source_name``). That body
-    targeted ``%~dp0<target>.py`` — correct in ``coordinator/bin/`` where
-    the ``.py`` is co-located, but DEAD at the install destination, which
-    ships only the 5 resolver files (``machine-local``, ``claude-home``,
-    ``_resolve_claude_klabauter.py``, etc.) plus the generated Unix-half forwarders —
-    never the claude-klabauter-side ``.py``/``.sh`` targets themselves. Every launcher
-    in the (then-smaller) forwarder set derived from ``coordinator/bin/`` —
-    see ``_derive_agent_helper_target_map`` for the current count — times 2
-    install dirs, failed with "can't open file" on Windows. See
-    cross-repo/inbox/2026-07-23-claude-central-em-cmd-forwarder-install-break.md
-    § The short version.
-
-    Because this body now GENERATES rather than copies, it also stops
-    depending on a source-side ``.cmd`` twin existing at all — every
-    installed forwarder gets a working launcher unconditionally (the prior
-    copy-gated approach silently skipped Windows coverage for the ~8
-    on-disk CLIs that never shipped a hand-authored ``.cmd`` twin, e.g.
-    ``claude-doe``, the ``.js`` CLIs).
-
-    ``python3_cmd_resolved_bin`` is the SAME interpreter path
-    ``_resolve_baked_python_bin`` resolves for ``python3.cmd`` (``""`` when
-    none was resolvable at install time) — substituted directly into the
-    fast-path branch below, unlike the copied body this replaces, whose
-    ``__PYTHON_BIN__`` placeholder was never substituted for agent-helper
-    ``.cmd``s (the render leg that has since been withdrawn wrote only that
-    one file, so its behavior says nothing about the forwarder-writing path
-    documented here).
-    That template comment claimed install-substrate substitutes it — a lie
-    for every one of these files, though a benign one: the self-detecting
-    ``if "!_py!"=="__PYTHON_BIN__" set "_py="`` guard cleared it and fell
-    through to the ``where python.exe`` rung. Now that this body is
-    generated (not copied), the substitution is done for real at generation
-    time, matching the documented fast path instead of silently degrading
-    to it.
-
-    Interpreter-resolution ladder mirrors ``coordinator/bin/wsc-close.cmd``:
-    baked ``__PYTHON_BIN__`` fast path -> host-local ``%LOCALAPPDATA%``
-    resolution cache -> ``where python.exe`` (skipping the Microsoft Store
-    App Execution Alias picker under ``WindowsApps``, and caching a
-    successful hit for future invocations on this host) -> ``py -3`` ->
-    fail-loud exit 127.
-
-    The cache rung exists for DR-303 / the ``windows-interpreter-bake-is-
-    empty`` bug: an install performed off-Windows (or via ``--setup-only``)
-    bakes nothing (``_resolve_baked_python_bin`` is ``os.name``-gated), so
-    every invocation fell through to the ``where``/``findstr`` ladder
-    permanently — roughly 10 process spawns per op instead of 2. Caching
-    under ``%LOCALAPPDATA%`` rather than the settings-home is deliberate:
-    ``%LOCALAPPDATA%`` does not roam/sync between machines (unlike a
-    Mac/Windows-synced ``~/.claude``), so a cached path can never carry the
-    OTHER platform's interpreter the way a synced bake can — the exact
-    poisoning this fixes, one level down. Guarded by the same ``if exist``
-    self-heal as the bake rung: a stale or foreign cached path falls through
-    to full re-resolution and re-caches. The write on a cache miss is a
-    ``move`` (atomic same-volume rename) of a per-attempt temp file, never
-    an in-place write, so a torn read is not reachable — see the write
-    site's own comment for the concurrency argument. A stray temp file left
-    behind by a `move` that lost the race (target open by a concurrent
-    reader) is best-effort cleaned up (``rd /s /q``) after the move either
-    way — a leaked `.tmp` never blocks a future write, since the temp
-    DIRECTORY name is drawn fresh per attempt.
-
-    Cross-dialect encoding: this cmd body writes/reads the cached path in
-    the console's active codepage (``echo``/``set /p``); ``_write_agent_ps1_
-    forwarder``'s body writes/reads UTF-8 without a BOM
-    (``[System.IO.File]::WriteAllText``/``Get-Content``). Those two dialects
-    do NOT share a cache file — each writes/reads its own
-    ``%LOCALAPPDATA%\\coordinator\\`` file (``python-bin-cache.txt`` for
-    cmd, ``python-bin-cache-ps1.txt`` for ps1) for exactly this reason: a
-    single shared file would only round-trip for an ASCII interpreter path,
-    silently corrupting the cache for a non-ASCII one (a codepage cannot be
-    forced without spawning `chcp`/similar, which the zero-added-process
-    contract on this path forbids — see the DR-303 rung's own paragraph
-    above). The cost is that a host warms each dialect's cache
-    independently rather than cross-warming; both still hit
-    ``where python.exe``/``py -3`` on a cold cache exactly as before this
-    mechanism existed, so cold-path behavior is unaffected.
-
-    The baked rung is guarded by ``if exist``, matching DoE's
-    ``templates/bin/python3.cmd``: the ladder falls through when the baked
-    path is empty OR names something no longer on disk, so a *wrong* bake is
-    self-healing rather than a permanent hard failure. Without the exist
-    check, only an EMPTY bake fell through and a stale/foreign baked path was
-    an unrecoverable ``rc=3`` ("The system cannot find the path specified") —
-    the shape that bites hardest on a ``~/.claude`` synced between a Mac and
-    a Windows box, where every launcher carries the OTHER platform's
-    interpreter path and neither deleting nor regenerating can be correct on
-    both machines at once. Falling back on non-existence is the only repair
-    that is right on whichever platform is actually running the forwarder.
-    ``set "_py="`` after the guard keeps a rejected bake from leaking into
-    the later rungs.
-
-    ``target`` is the on-disk filename in claude-klabauter's ``coordinator/bin/`` this
-    forwarder ultimately reaches (the same value the Step-3b call site's
-    ``agent_helper_target_map`` loop already holds) — used ONLY to gate
-    `_agent_cmd_raw_cmdline_block`'s emission per `_RAW_CMDLINE_TARGETS`, not
-    interpolated into the body itself (the Unix-half forwarder re-derives its
-    own target; duplicating that here would put the ladder in a second
-    place). Defaults to ``""``, which is never a member of
-    `_RAW_CMDLINE_TARGETS` — a caller that omits it (every pre-existing
-    caller of this function, none of which know about the raw-cmdline
-    mechanism) keeps the gate closed and its output byte-identical to before
-    this parameter existed (AC1). The one real caller that needs the gate
-    open (Step 3b) passes its resolved target explicitly.
-    """
-    py = python3_cmd_resolved_bin or ""
-    raw_cmdline_block = _agent_cmd_raw_cmdline_block(target)
-    # Review: staff-eng (Finding 2) -- mirrors gen-launcher-shim.py::
-    # render_cmd's own fix: cleans up the raw-cmdline capture dir on every
-    # exit path (interpreter-cascade failure included), not just the happy
-    # path recover_windows_argv itself cleans up after a successful read.
-    # Empty for targets outside _RAW_CMDLINE_TARGETS, so their body stays
-    # byte-identical.
-    raw_cmdline_cleanup = (
-        '2>nul rd /s /q "%_LAUNCHER_RAW_CMDLINE_DIR%"\n'
-        if target in _RAW_CMDLINE_TARGETS
-        else ""
-    )
-    content = f"""@echo off
-setlocal
-REM Windows launcher for {name} -- batch-direct exec of the co-located
-REM Unix-half forwarder ("%~dp0{name}"), which resolves claude-klabauter's
-REM coordinator/bin/ via _resolve_claude_klabauter.py and execs the real target
-REM there. {_AGENT_CMD_FORWARDER_MARKER} on every install run --
-REM do not hand-edit.
-REM Spec backlink: cross-repo/inbox/2026-07-23-claude-central-em-cmd-forwarder-install-break.md
-REM No `enabledelayedexpansion`: with it on, cmd.exe scans the WHOLE command
-REM line -- including whatever %* substitutes in -- for `!...!` tokens before
-REM running it, silently mangling any forwarded argument containing a literal
-REM `!` (commit messages, JSON payloads, ...). Each interpreter rung below is
-REM isolated behind its own `goto` label instead, so %ERRORLEVEL% is read
-REM outside any parenthesized block (fresh at that point, not frozen at
-REM block-parse-time) with no delayed expansion needed.
-{raw_cmdline_block}set "_py={py}"
-if not "%_py%"=="" if exist "%_py%" goto :run_baked
-set "_py="
-
-REM Host-local resolution cache (DR-303 / windows-interpreter-bake-is-empty):
-REM lives under %LOCALAPPDATA%, which never syncs between machines, so it
-REM cannot be poisoned by a Mac/Windows-synced settings-home the way a bake
-REM can. Guarded by `if exist`/non-empty exactly like the bake rung above --
-REM self-heals the same way when the cached path is stale or foreign.
-REM Review: staff-eng (Finding 4) -- `if exist`/non-empty is an EXISTENCE
-REM check, not a content validator: the cache file lives under
-REM %LOCALAPPDATA%, writable by this user and admins only (the same trust
-REM boundary %LOCALAPPDATA% itself already carries), so this is not
-REM cross-user exploitable. The WindowsApps reject below matches both
-REM writers' own filter so a cached App Execution Alias path can't slip
-REM back in through the read side.
-if not defined LOCALAPPDATA goto :skip_cache_read
-set "_cachefile=%LOCALAPPDATA%\\coordinator\\python-bin-cache.txt"
-if not exist "%_cachefile%" goto :skip_cache_read
-set "_cached="
-set /p _cached=<"%_cachefile%"
-if "%_cached%"=="" goto :skip_cache_read
-set "_cached=%_cached:"=%"
-REM Review: review-integrator (F1) -- the prior piped-substring-search form
-REM this replaces spawned a child cmd.exe (for the pipe) plus a second
-REM process on every cache HIT, contradicting the zero-added-process
-REM contract this whole rung exists for. cmd.exe's `%VAR:search=replace%`
-REM substitution performs a CASE-INSENSITIVE search for `search` (a
-REM documented cmd.exe quirk, not an assumption) and is parser-level -- no
-REM process, no enabledelayedexpansion needed. `_cachedtest` differs from
-REM `_cached` iff "WindowsApps" (any case) was found and substituted out.
-set "_cachedtest=%_cached:WindowsApps=%"
-if not "%_cachedtest%"=="%_cached%" goto :skip_cache_read
-if not exist "%_cached%" goto :skip_cache_read
-set "_py=%_cached%"
-goto :run_baked
-:skip_cache_read
-
-for /f "delims=" %%i in ('where python.exe 2^>nul') do (
-    echo %%i| findstr /I /C:"\\WindowsApps\\" >nul
-    if errorlevel 1 (
-        set "_py=%%i"
-        goto :cache_and_run_baked
-    )
-)
-
-where py >nul 2>&1
-if not errorlevel 1 goto :run_py3
-
-echo [{name}] ERROR: no Python interpreter found (python.exe / py -3). 1>&2
-echo [{name}] Install Python: https://www.python.org/downloads/windows/ 1>&2
-{raw_cmdline_cleanup}exit /b 127
-
-:cache_and_run_baked
-REM Persist the resolved interpreter for future invocations on THIS host.
-REM Every writer resolves the same `_py` value (deterministic per machine),
-REM so a write-write race can only ever race identical content into the
-REM target. Review: staff-eng (Finding 0) -- the write happens inside a
-REM per-writer temp DIRECTORY, not a bare %RANDOM%%RANDOM% filename: mkdir
-REM is atomic (a second `mkdir` of the same name fails outright, no
-REM exists-then-write race window), whereas %RANDOM% is seeded once per
-REM cmd.exe at one-second resolution, so two writers started in the SAME
-REM second draw the IDENTICAL %RANDOM% sequence and would share a temp
-REM path -- see gen-launcher-shim.py::_cmd_raw_cmdline_block's docstring
-REM for the incident this mirrors. With a genuinely private temp dir, the
-REM target is mutated only via `move`, an atomic same-volume rename, never
-REM an in-place write, so a reader can never observe a torn file. A losing
-REM writer's `move` silently no-ops (`>nul 2>nul`): no retry, no wait,
-REM steady-state cost stays zero extra processes either way. No spawned
-REM process (wmic, an out-of-dialect shell, ...) is used to fetch a PID or
-REM GUID -- that would itself add a process hop on this path; three unrolled `mkdir`
-REM attempts (bounded, not an unbounded retry loop) is what actually
-REM guarantees uniqueness, matching the raw-cmdline-capture mechanism.
-if not defined LOCALAPPDATA goto :run_baked
-set "_cachedir=%LOCALAPPDATA%\\coordinator"
-if exist "%_cachedir%\\" goto :cache_write
-mkdir "%_cachedir%" 2>nul
-:cache_write
-set "_tmpdir=%_cachedir%\\python-bin-cache.%RANDOM%%RANDOM%%RANDOM%.tmp"
-2>nul mkdir "%_tmpdir%"
-if not errorlevel 1 goto :cache_write_got_dir
-set "_tmpdir=%_cachedir%\\python-bin-cache.%RANDOM%%RANDOM%%RANDOM%.tmp"
-2>nul mkdir "%_tmpdir%"
-if not errorlevel 1 goto :cache_write_got_dir
-set "_tmpdir=%_cachedir%\\python-bin-cache.%RANDOM%%RANDOM%%RANDOM%.tmp"
-2>nul mkdir "%_tmpdir%"
-if errorlevel 1 goto :run_baked
-:cache_write_got_dir
-set "_tmpfile=%_tmpdir%\\python-bin-cache.tmp"
-REM The cache file holds a BARE path, not a quoted one. `echo "%_py%">file`
-REM wrote the quotes literally, so the file's content was not itself a usable
-REM path -- only this forwarder's own reader could consume it, and only because
-REM the read rung above strips quotes with `%_cached:"=%`. Any other consumer,
-REM including the install-contract test that asserts the cached value points at
-REM an interpreter that exists, saw a path that could never resolve.
-REM Leading redirect (`>"file" echo ...`) rather than trailing: a trailing
-REM redirect after an unquoted value binds the final character of the value to
-REM the redirect operator, and it is also what forces the quoting that caused
-REM this. No trailing space is emitted this way either.
->"%_tmpfile%" echo %_py%
-move /y "%_tmpfile%" "%_cachefile%" >nul 2>nul
-2>nul rd /s /q "%_tmpdir%"
-goto :run_baked
-
-:run_baked
-"%_py%" "%~dp0{name}" %*
-{raw_cmdline_cleanup}exit /b %ERRORLEVEL%
-
-:run_py3
-py -3 "%~dp0{name}" %*
-{raw_cmdline_cleanup}exit /b %ERRORLEVEL%
-"""
-    if check_only:
-        if dst.exists() and dst.read_text(encoding="utf-8") == content:
-            print(f"[install-substrate] check: {dst.name} up to date -> {dst} (no-op)")
-            return
-        status = "stale" if dst.exists() else "absent"
-        raise SubstrateFatalError(
-            f"install-substrate: check failed: {dst.name} is {status} at {dst} "
-            f"(would write forwarder)"
-        )
-    dst.write_text(content, encoding="utf-8", newline="\n")
+# GRAVESTONE -- `_write_agent_cmd_forwarder` (deleted 2026-08-29, PM ruling:
+# one native entrypoint per platform, and that entrypoint is the door).
+#
+# It generated the installed Windows `.cmd` half of every agent-helper
+# forwarder: a cmd.exe shim that resolved a Python interpreter and re-execed
+# the co-located Unix half. Measured on the reference box, same op and
+# byte-identical response through both routes: 113ms via the `.cmd`, 16.5ms
+# via the native door. `cmd.exe /c rem` alone is 11.4ms and a bare
+# `python.exe -c pass` is 34.4ms -- ~46ms of ceremony per call, across ~400
+# names, on a box running 50-70 concurrent sessions (CLAUDE.md Load norm).
+#
+# THE `.cmd` NEVER SOLVED A PROBLEM THE `.exe` DOES NOT. PATHEXT ranks .EXE
+# ahead of .CMD, so the door image wins bare-name resolution outright; the
+# trampoline was not filling a resolution gap. What actually kept it alive
+# was the allowlist refusal in `ops/invoke_from_argv.py` arriving as a
+# blanket -32603, which `door_core.c :: is_provably_undispatched` cannot
+# classify as safe to re-run -- so a non-allowlisted name could not use the
+# door at all and had to keep an interpreter trampoline.
+# `ipc.ENTRYPOINT_NOT_WARM_LOADABLE_ERROR` (-32007) removed that constraint;
+# see its docstring. The requirement this code served -- a bare name typed
+# on Windows reaches this CLI -- is discharged by the door image alone.
+#
+# `.cmd` NAMING SURVIVES ON THE REMOVAL SIDE ONLY: `_agent_cmd_dest_name`,
+# `_AGENT_CMD_FORWARDER_MARKER` and `_resolve_agent_cmd_dest_collisions` are
+# still read by `uninstall_legs.py` and `_sweep_orphaned_agent_helpers` to
+# FIND and delete stale files left by prior installs. Nothing writes one.
+# Do not reintroduce a writer to round out those helpers.
 
 
 def _agent_ps1_dest_name(cmd_dest_name: str) -> str:
@@ -3791,12 +3538,9 @@ def _write_python_bin_sidecar(bin_dst: Path, python3_cmd_resolved_bin: str) -> N
 
 def _write_agent_helper_forwarders(
     agent_helper_target_map: "dict[str, str]",
-    agent_cmd_dest_map: "dict[str, str]",
     bin_dst: Path,
     check_only: bool,
     *,
-    python3_cmd_resolved_bin: str,
-    door_eligible_names: "frozenset[str]" = frozenset(),
     engine_root: "Optional[Path]" = None,
 ) -> "list[WriteSurfaceEntry]":
     """Step 3b's forwarder-write loop proper, extracted out of
@@ -3844,21 +3588,38 @@ def _write_agent_helper_forwarders(
     propagates (unlike self-heal's silent best-effort swallow): this is
     the fail-loud installer path, not a best-effort session-boot heal.
 
-    C5 CUTOVER (docs/plans/2026-08-26-every-forwarder-that-can-reach-the-
-    door-does.md): ``door_eligible_names`` and ``engine_root`` are additive,
-    default-empty/``None`` keyword-only parameters -- the self-heal caller
-    above passes neither, so it is byte-for-byte unaffected. When both are
-    supplied (the real installer's own call site, ``_install_bin_resolvers``
-    below), every name that is BOTH a door-eligible name AND a key of
-    ``agent_helper_target_map`` also gets a native ``.exe``-direct forwarder
-    via ``_cut_over_to_native_door`` -- INSTEAD OF, not additive to, the
-    ``.py``/``.cmd`` pair (PM ruling 2026-08-27: the superseded pair is
-    wrong-if-reached and was kept reachable-only-by-accident; see
-    ``door_install.remove_superseded_python_forwarders``). A name whose
-    cutover returns ``None`` -- a root carrying no engine stamp -- falls
-    through to the ordinary Python pair, which is the doorless fallback
-    and is deliberately untouched by the kill. The
-    complete set actually written this run is persisted to the native-
+    ONE ENTRYPOINT PER PLATFORM (PM ruling 2026-08-29). EVERY name in
+    ``agent_helper_target_map`` gets the native door image via
+    ``_cut_over_to_native_door`` -- no eligibility gate, no per-name
+    exception list, and no ``.cmd`` written for any name, ever.
+    ``_write_agent_cmd_forwarder`` is deleted; this loop had been its last
+    installer-side caller.
+
+    WHY THE ELIGIBILITY GATE WENT. This loop previously cut over only names
+    in ``door_eligible_names`` (the warm-load allowlist) and left every other
+    name on a ``.py``/``.cmd`` pair. That was not a preference -- it was
+    forced: a door image whose name was absent from the allowlist got a
+    blanket ``-32603`` back from ``invoke.from_argv``, which
+    ``door_core.c :: is_provably_undispatched`` cannot classify as safe to
+    re-run, so the door refused with ``-32004`` instead of running the name
+    cold, and the invocation FAILED. The allowlist was acting as an
+    entrypoint-existence boundary. ``ipc.ENTRYPOINT_NOT_WARM_LOADABLE_ERROR``
+    (-32007) fixes that at the root: the refusal is now provably
+    undispatched, the door falls through to that name's own cold CLI, and
+    warm-loadability goes back to being purely an optimization question.
+    So the gate has nothing left to protect and the ~46ms-per-call
+    interpreter trampoline it protected is gone with it.
+
+    ``engine_root`` stays a ``None``-defaulted keyword-only parameter for the
+    self-heal caller. A name whose cutover returns ``None`` -- a root
+    carrying no engine stamp, so there is no door to install -- falls through
+    to the bare Python forwarder. NOTE that on Windows this fallback is NOT
+    bare-name resolvable on its own (no ``.cmd``, and PATHEXT does not rank
+    an extensionless file); an unstamped root is a broken install, and
+    ``_write_native_door_forwarder`` already prints the stamp-the-root
+    remediation per name.
+
+    The complete set actually written this run is persisted to the native-
     forwarder manifest (``_write_native_forwarder_manifest``) so
     ``_sweep_orphaned_agent_helpers`` never mistakes a freshly-cut-over
     image for an orphan -- see that function's condition 0. Manifest write
@@ -3871,46 +3632,26 @@ def _write_agent_helper_forwarders(
     if check_only:
         agent_helper_resolved: "list[WriteSurfaceEntry]" = []
         for f, target in sorted(agent_helper_target_map.items()):
-            if f in door_eligible_names:
-                native_dst = _cut_over_to_native_door(f, bin_dst, check_only, engine_root=engine_root)
-                if native_dst is not None:
-                    agent_helper_resolved.append(WriteSurfaceEntry(kind="file-path", path=str(native_dst)))
-                    continue
+            native_dst = _cut_over_to_native_door(f, bin_dst, check_only, engine_root=engine_root)
+            if native_dst is not None:
+                agent_helper_resolved.append(WriteSurfaceEntry(kind="file-path", path=str(native_dst)))
+                continue
             py_dst = bin_dst / f
             _write_agent_forwarder(f, py_dst, check_only, target=target)
             agent_helper_resolved.append(WriteSurfaceEntry(kind="file-path", path=str(py_dst)))
-            cmd_dest = agent_cmd_dest_map.get(f)
-            if cmd_dest is not None:
-                cmd_dst = bin_dst / cmd_dest
-                _write_agent_cmd_forwarder(
-                    f, cmd_dst, check_only,
-                    python3_cmd_resolved_bin=python3_cmd_resolved_bin,
-                    target=target,
-                )
-                agent_helper_resolved.append(WriteSurfaceEntry(kind="file-path", path=str(cmd_dst)))
         return agent_helper_resolved
 
     agent_helper_resolved = []
     with held_lock(bin_dst, holder_label="install-substrate-forwarders"):
         for f, target in sorted(agent_helper_target_map.items()):
-            if f in door_eligible_names:
-                native_dst = _cut_over_to_native_door(f, bin_dst, check_only, engine_root=engine_root)
-                if native_dst is not None:
-                    agent_helper_resolved.append(WriteSurfaceEntry(kind="file-path", path=str(native_dst)))
-                    native_written.add(f)
-                    continue
+            native_dst = _cut_over_to_native_door(f, bin_dst, check_only, engine_root=engine_root)
+            if native_dst is not None:
+                agent_helper_resolved.append(WriteSurfaceEntry(kind="file-path", path=str(native_dst)))
+                native_written.add(f)
+                continue
             py_dst = bin_dst / f
             _write_agent_forwarder(f, py_dst, check_only, target=target)
             agent_helper_resolved.append(WriteSurfaceEntry(kind="file-path", path=str(py_dst)))
-            cmd_dest = agent_cmd_dest_map.get(f)
-            if cmd_dest is not None:
-                cmd_dst = bin_dst / cmd_dest
-                _write_agent_cmd_forwarder(
-                    f, cmd_dst, check_only,
-                    python3_cmd_resolved_bin=python3_cmd_resolved_bin,
-                    target=target,
-                )
-                agent_helper_resolved.append(WriteSurfaceEntry(kind="file-path", path=str(cmd_dst)))
 
     if engine_root is not None:
         _write_native_forwarder_manifest(bin_dst, native_written)
@@ -4087,16 +3828,15 @@ def _install_bin_resolvers(
 
     # C5 (docs/plans/2026-08-26-every-forwarder-that-can-reach-the-door-
     # does.md): the door-eligible bucket, restricted to names this run
-    # actually derived a CLI for -- `_write_agent_helper_forwarders` itself
-    # re-intersects against `agent_helper_target_map`'s keys per entry, this
-    # narrowing is only for the `.ps1`-skip call below.
+    # actually derived a CLI for. NO LONGER GATES FORWARDER WRITING -- every
+    # name gets the native door image now (PM ruling 2026-08-29; see
+    # `_write_agent_helper_forwarders`). Retained solely for the `.ps1`-skip
+    # call below, which is a peer-owned surface.
     door_eligible_names = _door_eligible_forwarder_names() & set(agent_helper_target_map)
 
     rm_family(bin_dst, "resolve-claude-klabauter")
     agent_helper_resolved = _write_agent_helper_forwarders(
-        agent_helper_target_map, agent_cmd_dest_map, bin_dst, check_only,
-        python3_cmd_resolved_bin=python3_cmd_resolved_bin,
-        door_eligible_names=door_eligible_names,
+        agent_helper_target_map, bin_dst, check_only,
         engine_root=claude_klabauter_root_resolved,
     )
     if not check_only:

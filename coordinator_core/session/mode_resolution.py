@@ -89,7 +89,7 @@ Negative-spec:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Callable, FrozenSet, Optional, Union
+from typing import Callable, Dict, FrozenSet, Optional, Union
 
 from coordinator_core.session import autonomous_sentinel
 from coordinator_core.session.fleet_mode import read_fleet_mode
@@ -158,7 +158,7 @@ def _autonomous_session_value(session_id: str) -> bool:
     return autonomous_sentinel.sentinel_path(session_id).exists()
 
 
-MODE_KEYS: dict = {
+MODE_KEYS: Dict[str, ModeKey] = {
     "autonomous": ModeKey(
         session_pair=_autonomous_session_value,
         precedence="session-wins",

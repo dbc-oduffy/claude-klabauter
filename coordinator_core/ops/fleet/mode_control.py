@@ -180,6 +180,22 @@ def set_fleet_mode_key(key: str, value: str) -> dict:
     `set` of one key never clobbers another key already on record),
     updates the one key, writes it back atomically via C1's
     `write_fleet_mode`, and returns the resulting full record.
+
+    KNOWN LIMITATION -- lost update on concurrent invocations. The
+    read-modify-write here (`read_fleet_mode()` -> mutate -> `write_fleet_mode()`)
+    is unlocked. C1's atomic-file write only protects a reader from a torn
+    write; it does not protect this function from a stale read. Two
+    concurrent `fleet.mode_set` calls setting *different* keys can both
+    read the same record, each write back only their own key, and
+    whichever `os.replace` lands second silently drops the other's
+    update -- not observable from either caller's return value. This is
+    accepted, not fixed, because the only caller today is a rare
+    human-invoked admin op (effectively single-invocation-at-a-time in
+    practice); the module's "one writer" framing above is about C1 having
+    one writer *component*, not one writer *invocation* at a time, and
+    should not be read as ruling this race out. Revisit (lock or
+    compare-and-swap) if a caller ever sets keys programmatically, or from
+    more than one session concurrently.
     """
     if key not in _KNOWN_KEYS:
         raise ValueError(

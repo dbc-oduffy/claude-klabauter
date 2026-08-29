@@ -2089,7 +2089,14 @@ class TestShouldPassRepoFailOpenDiagnostics(unittest.TestCase):
         self.assertIn("post-injection-import-failed", out)
         self.assertIn("memo.list", out)
 
-    def test_dedup_one_emission_per_process_per_branch(self) -> None:
+    def test_dedup_one_emission_per_process_per_branch_and_op(self) -> None:
+        """Dedup key is (branch, op): two different ops on the same fail-open
+        branch must each get their own diagnostic; the same op twice must not.
+
+        # Review: coordinator:code-reviewer — this test previously asserted the
+        # branch-only-keyed suppression as correct behavior, proving the defect
+        # instead of catching it. Rewritten to assert the (branch, op) contract.
+        """
         import io
 
         with unittest.mock.patch.dict(
@@ -2099,6 +2106,25 @@ class TestShouldPassRepoFailOpenDiagnostics(unittest.TestCase):
             with unittest.mock.patch("sys.stderr", fake_err):
                 _mod._should_pass_repo("memo.list", claude_klabauter_root="not-absolute")
                 _mod._should_pass_repo("queue.append", claude_klabauter_root="not-absolute")
+
+        out = fake_err.getvalue()
+        # Two genuinely different ops hitting the same fail-open branch must
+        # both be reported, not silenced by the first op's emission.
+        self.assertEqual(out.count("root-not-isabs-or-isdir"), 2)
+        self.assertIn("memo.list", out)
+        self.assertIn("queue.append", out)
+
+    def test_dedup_one_emission_per_process_per_branch_same_op(self) -> None:
+        """The same op hitting the same fail-open branch twice must emit once."""
+        import io
+
+        with unittest.mock.patch.dict(
+            sys.modules, {"coordinator_core.op_scopes": None}
+        ):
+            fake_err = io.StringIO()
+            with unittest.mock.patch("sys.stderr", fake_err):
+                _mod._should_pass_repo("memo.list", claude_klabauter_root="not-absolute")
+                _mod._should_pass_repo("memo.list", claude_klabauter_root="not-absolute")
 
         out = fake_err.getvalue()
         self.assertEqual(out.count("root-not-isabs-or-isdir"), 1)

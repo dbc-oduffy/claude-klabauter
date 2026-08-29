@@ -34,7 +34,7 @@ from pathlib import Path
 
 import pytest
 
-import coordinator_core.ops.ceremony.commit_pipeline as commit_pipeline_mod
+import coordinator_core.ops.ceremony.push as push_mod
 from coordinator_core.ops.ceremony import git_native
 from coordinator_core.ops.ceremony.git_native import GitResult
 
@@ -81,19 +81,19 @@ _GH013_SECRET_SCANNING_STDERR = (
 
 
 def test_gh013_rule_violation_without_secret_phrase_is_rule_violation_not_secret_scanning():
-    assert commit_pipeline_mod._is_rule_violation_reject(_GH013_RULE_VIOLATION_STDERR) is True
-    assert commit_pipeline_mod._is_secret_scanning_reject(_GH013_RULE_VIOLATION_STDERR) is False
+    assert push_mod._is_rule_violation_reject(_GH013_RULE_VIOLATION_STDERR) is True
+    assert push_mod._is_secret_scanning_reject(_GH013_RULE_VIOLATION_STDERR) is False
 
 
 def test_gh013_secret_scanning_phrase_is_secret_scanning_not_rule_violation():
-    assert commit_pipeline_mod._is_secret_scanning_reject(_GH013_SECRET_SCANNING_STDERR) is True
-    assert commit_pipeline_mod._is_rule_violation_reject(_GH013_SECRET_SCANNING_STDERR) is False
+    assert push_mod._is_secret_scanning_reject(_GH013_SECRET_SCANNING_STDERR) is True
+    assert push_mod._is_rule_violation_reject(_GH013_SECRET_SCANNING_STDERR) is False
 
 
 def test_non_gh_push_protection_reason_is_neither_subclass():
     non_fast_forward = "! [rejected] work/x -> work/x (non-fast-forward)\n"
-    assert commit_pipeline_mod._is_rule_violation_reject(non_fast_forward) is False
-    assert commit_pipeline_mod._is_secret_scanning_reject(non_fast_forward) is False
+    assert push_mod._is_rule_violation_reject(non_fast_forward) is False
+    assert push_mod._is_secret_scanning_reject(non_fast_forward) is False
 
 
 # ---------------------------------------------------------------------------
@@ -125,16 +125,16 @@ def test_rule_violation_reject_skips_rebase_ladder_and_recovers_then_repushes(tm
     )
     rebase_calls = []
     monkeypatch.setattr(
-        commit_pipeline_mod, "_rebase_onto_fetched_ref",
+        push_mod, "_rebase_onto_fetched_ref",
         lambda *a, **kw: rebase_calls.append(1) or (0, ""),
     )
     recovery_calls = []
     monkeypatch.setattr(
-        commit_pipeline_mod, "_recover_rule_violation_reject",
+        push_mod, "_recover_rule_violation_reject",
         lambda *a, **kw: recovery_calls.append(1) or None,
     )
 
-    outcome = commit_pipeline_mod.push_with_retry(repo)
+    outcome = push_mod.push_with_retry(repo)
 
     assert recovery_calls == [1]
     assert fetch_calls == []
@@ -163,16 +163,16 @@ def test_rule_violation_recovery_failure_is_failed_never_unconfirmed(tmp_path, m
         lambda *a, **kw: fetch_calls.append(1) or GitResult(returncode=0, stdout="", stderr=""),
     )
     monkeypatch.setattr(
-        commit_pipeline_mod, "_recover_rule_violation_reject",
+        push_mod, "_recover_rule_violation_reject",
         lambda *a, **kw: "rule-violation recovery: coverage status unpostable (no token)",
     )
 
-    outcome = commit_pipeline_mod.push_with_retry(repo)
+    outcome = push_mod.push_with_retry(repo)
 
     assert fetch_calls == []
     assert outcome.failed
     assert outcome.unconfirmed == []
-    assert commit_pipeline_mod.derive_push_status(outcome) == commit_pipeline_mod.PUSH_STATUS_FAILED
+    assert push_mod.derive_push_status(outcome) == push_mod.PUSH_STATUS_FAILED
 
 
 def test_secret_scanning_reject_is_never_repushed_even_though_it_shares_gh_push_protection(
@@ -199,18 +199,18 @@ def test_secret_scanning_reject_is_never_repushed_even_though_it_shares_gh_push_
     )
     recovery_calls = []
     monkeypatch.setattr(
-        commit_pipeline_mod, "_recover_rule_violation_reject",
+        push_mod, "_recover_rule_violation_reject",
         lambda *a, **kw: recovery_calls.append(1) or None,
     )
 
-    outcome = commit_pipeline_mod.push_with_retry(repo)
+    outcome = push_mod.push_with_retry(repo)
 
     assert len(push_calls) == 1
     assert fetch_calls == []
     assert recovery_calls == []
     assert outcome.failed
     assert outcome.unconfirmed == []
-    assert commit_pipeline_mod.derive_push_status(outcome) == commit_pipeline_mod.PUSH_STATUS_FAILED
+    assert push_mod.derive_push_status(outcome) == push_mod.PUSH_STATUS_FAILED
 
 
 def test_push_subprocess_timeout_still_yields_unconfirmed_not_failed_in_c2_neighbourhood(
@@ -235,14 +235,14 @@ def test_push_subprocess_timeout_still_yields_unconfirmed_not_failed_in_c2_neigh
     )
     recovery_calls = []
     monkeypatch.setattr(
-        commit_pipeline_mod, "_recover_rule_violation_reject",
+        push_mod, "_recover_rule_violation_reject",
         lambda *a, **kw: recovery_calls.append(1) or None,
     )
 
-    outcome = commit_pipeline_mod.push_with_retry(repo)
+    outcome = push_mod.push_with_retry(repo)
 
     assert fetch_calls == []
     assert recovery_calls == []
     assert outcome.unconfirmed
     assert outcome.failed == []
-    assert commit_pipeline_mod.derive_push_status(outcome) == commit_pipeline_mod.PUSH_STATUS_UNCONFIRMED
+    assert push_mod.derive_push_status(outcome) == push_mod.PUSH_STATUS_UNCONFIRMED

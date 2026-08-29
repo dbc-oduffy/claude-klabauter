@@ -149,6 +149,14 @@ def _fleet_op_present(text: str) -> bool:
     return '"fleet.mode_set"' in text and '"fleet.mode_show"' in text
 
 
+def _atomic_write_bytes(path: Path, data: bytes) -> None:
+    """Write-to-temp-then-``os.replace`` so a peer concurrently reading
+    ``path`` never observes a torn/partial write."""
+    tmp = path.with_name(f"{path.name}.tmp-{uuid.uuid4().hex}")
+    tmp.write_bytes(data)
+    os.replace(tmp, path)
+
+
 def _isolated_settings_home(tmp_path: Path, real_home: Path) -> Path:
     """A fresh settings home carrying only a copy of the REAL machine-local
     registry -- so the engine-resolution seam (both the compiled
@@ -270,11 +278,21 @@ def test_leg1_real_door_write_and_leg3_no_session_traffic(tmp_path, real_home, e
     WARM=0 still reported this machine's real ``compaction_warnings``
     value). This test therefore checks BOTH the isolated home and the real
     one for where the write actually landed, asserts against whichever one
-    changed, and -- unconditionally, in a ``finally`` -- restores the real
-    ``fleet-mode.json`` to its exact pre-test bytes (or removes it if it
-    did not exist) so a shared, concurrently-read machine-wide file is
-    never left mutated by this test. Only the ``autonomous`` key is ever
-    written here (never ``compaction_warnings``): it is session-wins by
+    changed, and -- in a ``finally``, ONLY WHEN this run's own write actually
+    landed in the real (shared, machine-wide) file rather than the isolated
+    one -- restores it to its exact pre-test bytes (or removes it if it did
+    not exist). The restore is CONDITIONAL, not unconditional: on ~50 live
+    peer sessions, an unconditional restore would rewrite a shared file this
+    test never touched, and blindly restoring stale pre-test bytes risks
+    clobbering a peer's write that lands between this test's snapshot and its
+    restore. So when the real file was the one written to, this test
+    re-reads it immediately before restoring and only restores if its
+    content still matches the exact bytes this test itself wrote -- if a peer
+    mutated it in between, this test leaves the peer's write alone rather
+    than overwrite it with a stale snapshot. The restore write itself is
+    atomic (write-to-temp + ``os.replace``) so a peer reading the file
+    mid-restore never observes a torn write. Only the ``autonomous`` key is
+    ever written here (never ``compaction_warnings``): it is session-wins by
     design (mode_resolution.py), so a transient fleet value never changes
     any *other* live session's own behaviour even during the tiny window
     this test's write is live.
@@ -299,6 +317,14 @@ def test_leg1_real_door_write_and_leg3_no_session_traffic(tmp_path, real_home, e
     real_dirs_before = (
         {p.name for p in real_home.iterdir() if p.is_dir()} if real_home.is_dir() else set()
     )
+
+    # Set only when the warm-server caveat fires and this run's own write
+    # actually lands in the real, shared file -- gates the conditional
+    # restore in `finally` below. `real_after_write` is this test's own
+    # write, captured immediately, so the restore can detect a peer's write
+    # landing in the interim rather than blindly overwriting it.
+    wrote_to_real_home = False
+    real_after_write: bytes | None = None
 
     try:
         result = subprocess.run(
@@ -338,7 +364,9 @@ def test_leg1_real_door_write_and_leg3_no_session_traffic(tmp_path, real_home, e
                 f"({isolated_fleet_file}) NOR the real one ({real_fleet_file}) "
                 "after a successful fleet.mode_set call"
             )
-            record = json.loads(real_fleet_file.read_text(encoding="utf-8"))
+            wrote_to_real_home = True
+            real_after_write = real_fleet_file.read_bytes()
+            record = json.loads(real_after_write.decode("utf-8"))
             assert record.get("autonomous") is True
 
             after_dirs = {p.name for p in real_home.iterdir() if p.is_dir()}
@@ -358,15 +386,27 @@ def test_leg1_real_door_write_and_leg3_no_session_traffic(tmp_path, real_home, e
             "peer-address / messaging-surface side effect"
         )
     finally:
-        # Unconditional real-production restore, regardless of which branch
-        # fired above or whether an assertion failed.
-        if real_before is None:
-            try:
-                real_fleet_file.unlink()
-            except FileNotFoundError:
+        # CONDITIONAL restore: only when this run's own write actually
+        # landed in the real, shared file (the warm-server caveat branch).
+        # When the write landed in the isolated home instead -- the common
+        # case -- the real file was never touched by this test and must not
+        # be rewritten at all, atomically or otherwise.
+        if wrote_to_real_home:
+            current = real_fleet_file.read_bytes() if real_fleet_file.is_file() else None
+            if current != real_after_write:
+                # TOCTOU: a peer session mutated the real, shared file
+                # between this test's write and this restore. The pre-test
+                # snapshot (`real_before`) is now stale -- restoring it would
+                # clobber the peer's write with bytes that predate it. Leave
+                # the file exactly as the peer left it.
                 pass
-        else:
-            real_fleet_file.write_bytes(real_before)
+            elif real_before is None:
+                try:
+                    real_fleet_file.unlink()
+                except FileNotFoundError:
+                    pass
+            else:
+                _atomic_write_bytes(real_fleet_file, real_before)
 
 
 # ---------------------------------------------------------------------------

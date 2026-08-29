@@ -93,10 +93,8 @@ class TestCleanStateWritesNothing:
         # the tree is genuinely clean (not just an empty dir the self-heal
         # would trivially skip regardless of its diff logic).
         target_map = _derive_agent_helper_target_map(agent_bin)
-        cmd_dest_map = _resolve_agent_cmd_dest_collisions(target_map)
         _write_agent_helper_forwarders(
-            target_map, cmd_dest_map, bin_dst, False,
-            python3_cmd_resolved_bin="",
+            target_map, bin_dst, False,
         )
 
         before = {p.name: p.read_text(encoding="utf-8") for p in bin_dst.iterdir()}
@@ -179,21 +177,21 @@ class TestExtractionPreservesInstallBehaviour:
         bin_dst.mkdir(parents=True)
 
         target_map = _derive_agent_helper_target_map(agent_bin)
-        cmd_dest_map = _resolve_agent_cmd_dest_collisions(target_map)
 
         resolved = _write_agent_helper_forwarders(
-            target_map, cmd_dest_map, bin_dst, False,
-            python3_cmd_resolved_bin="",
+            target_map, bin_dst, False,
         )
 
+        # Doorless root (no engine stamp on this fixture), so the bare Python
+        # forwarder is the whole product -- and the `.cmd` twin that used to
+        # accompany it is gone with its writer (PM ruling 2026-08-29, one
+        # native entrypoint per platform).
         assert (bin_dst / "percolate-push").exists()
         assert (bin_dst / "other-cli").exists()
-        assert (bin_dst / "percolate-push.cmd").exists()
-        assert (bin_dst / "other-cli.cmd").exists()
+        assert not (bin_dst / "percolate-push.cmd").exists()
+        assert not (bin_dst / "other-cli.cmd").exists()
         resolved_paths = {Path(e.path).name for e in resolved}
-        assert resolved_paths == {
-            "percolate-push", "percolate-push.cmd", "other-cli", "other-cli.cmd",
-        }
+        assert resolved_paths == {"percolate-push", "other-cli"}
 
 
 class TestSelfHealIsSilentOnEveryPath:

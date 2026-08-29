@@ -111,7 +111,12 @@ def write_fleet_mode(record: dict) -> bool:
     (see module docstring).
 
     Returns True on success; False on ANY infra failure (settings-home
-    directory uncreatable, write/replace failure).
+    directory uncreatable, write/replace failure) — including a ``dict``
+    ``record`` whose contents are not JSON-serializable (e.g. a
+    ``datetime`` value): that is a per-value failure discovered only once
+    serialization is attempted, not the caller-programming-error shape the
+    up-front ``isinstance`` check exists to catch, so it degrades to
+    ``False`` with the tmp file cleaned up rather than propagating.
     """
     if not isinstance(record, dict):
         raise TypeError(f"record must be a dict, got {type(record).__name__}")
@@ -128,11 +133,30 @@ def write_fleet_mode(record: dict) -> bool:
     except OSError:
         return False
     try:
-        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fh:
+        fh = os.fdopen(fd, "w", encoding="utf-8", newline="\n")
+    except OSError:
+        # os.fdopen failing mid-construction does not guarantee it
+        # consumed fd; close it ourselves so the raw descriptor is never
+        # leaked (Review: code-reviewer, finding 4).
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        return False
+    try:
+        with fh:
             json.dump(record, fh)
             fh.write("\n")
         os.replace(tmp_name, target)
-    except OSError:
+    except (OSError, TypeError):
+        # Widened to catch json.dump's TypeError on a dict record carrying
+        # a non-JSON-serializable value -- passes the isinstance(dict) gate
+        # above but still must not leak the tmp file (Review: code-reviewer,
+        # finding 1).
         try:
             os.unlink(tmp_name)
         except OSError:

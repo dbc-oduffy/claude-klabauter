@@ -309,16 +309,15 @@ _NEWLY_ADDED_COMMITTING_OPS = (
     "fleet.archive_completed_handoffs",
     "fleet.archive_paper_trail",
     "fleet.archive_queue_entry",
-    "fleet.prune_closed_bugs",
-    "handoff.archive_transition",
+    # "fleet.prune_closed_bugs", "handoff.archive_transition", and
+    # "ceremony.commit" REMOVED (C3, docs/plans/2026-08-29-the-push-
+    # subsystem-leaves-and-then-the-pipeline-can-go.md): all three are among
+    # the six dead entries the `d20d56893` 200ms sweep left in
+    # `_COMMITTING_OP_NAMES` -- unregistered names this fixture must not
+    # assert membership for once the real set drops them. See
+    # `block_subagent_commit.py`'s own allowlist comment for the removal
+    # record.
     "handoff.ship_and_archive",
-    # Sixth pass (2026-08-27) -- `ceremony.commit`, registered 2026-08-26 at
-    # `ec503138c` as the replacement for the killed `ceremony.scoped_git_
-    # commit` (K-045). It is the op the guard's own deny message names as the
-    # sanctioned route, which is precisely why its absence from the set was
-    # the worst one available: the guard told a blocked subagent to use the
-    # one op it would not then stop.
-    "ceremony.commit",
 )
 
 
@@ -380,7 +379,7 @@ _COMMIT_SINK_CALL_MARKERS = (
     "commit_with_message_file(",
     # Sixth pass (2026-08-27): the marker list is the ratchet's real reach,
     # and it was one name short of the op every commit now routes through.
-    # `ceremony.commit` (ops/ceremony/commit_op.py :: _handler) calls
+    # `ceremony.commit` (ops/ceremony/commit_op.py :: _handler) called
     # `run_commit_pipeline(...)` directly -- a genuine sink, absent from the
     # four markers above -- so the scan walked that module, found no Call it
     # recognized, and passed while `ceremony.commit` sat outside
@@ -389,7 +388,19 @@ _COMMIT_SINK_CALL_MARKERS = (
     # triage, not by this test, which is the tell: a hand-maintained marker
     # tuple bounds a mechanical scan, so the scan is only ever as complete as
     # its least-recently-updated name.
-    "run_commit_pipeline(",
+    #
+    # "run_commit_pipeline(" RETIRED (C3, docs/plans/2026-08-29-the-push-
+    # subsystem-leaves-and-then-the-pipeline-can-go.md): its subject,
+    # `commit_pipeline.run_commit_pipeline`, is deleted (C4 of the same
+    # plan) and its one op-registered caller this marker existed to catch,
+    # `ceremony.commit`, was already removed from `_COMMITTING_OP_NAMES` by
+    # this same pass as one of the six dead entries the `d20d56893` sweep
+    # left behind -- see `block_subagent_commit.py`'s own allowlist comment.
+    # No live registered op reaches git via `run_commit_pipeline(...)` any
+    # more, so the marker's stated justification evaporated before the
+    # delete did; retiring it here is the stronger of the two reasons to
+    # act, not merely a consequence of the delete.
+    #
     # C3 (docs/plans/2026-08-27-something-must-commit-ceremony-commit-v2.md):
     # `ceremony.commit_v2` (ops/ceremony/commit_v2.py :: _handler) reaches git
     # via `commit_paths(...)` directly -- not `run_commit_pipeline` -- so it
