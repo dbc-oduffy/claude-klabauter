@@ -1277,10 +1277,23 @@ def _evaluate_queue_deferral_grant(
     if case_against is None or not str(case_against).strip():
         return _queue_deferral_grant_message("case_against is missing or blank")
 
+    # EITHER form: a calendar date, or the condition the grantor named. The
+    # ISO-date-only rule was withdrawn 2026-08-29 (DR-383 § Consequences) because
+    # it refused the one record on disk that scrupulously recorded a PM-named
+    # condition "rather than a fabricated date", while an invented date would have
+    # satisfied it. A condition-form grant still has to come back; that is the
+    # backstop in `orientation/expired_grant_signal.py`, not a refusal here.
+    #
+    # This check is a deliberate copy of `_cf_queue_disposition_shape`'s, not a
+    # shared call (see this function's docstring). Copies drift: the withdrawal
+    # landed in the cross-field rule first and this mirror kept refusing the
+    # record for half an hour, which is exactly the failure duplication invites.
+    # Change one, change all three.
     deferred_until = frontmatter.get("deferred_until")
-    if not _is_parseable_iso_date(deferred_until):
+    if deferred_until is None or not str(deferred_until).strip():
         return _queue_deferral_grant_message(
-            f"deferred_until is not a parseable ISO date (got {deferred_until!r})"
+            f"deferred_until is missing or blank (got {deferred_until!r}) — give a "
+            f"calendar date or the condition the grant names"
         )
 
     deferred_by = frontmatter.get("deferred_by")

@@ -29,11 +29,20 @@ Commands:
                           author, never ran /coordinator:install), record
                           setup_concluded implicitly. No-op otherwise and on
                           every subsequent call (record is first-write-wins).
-                          Always exits 0; emits nothing.
+                          Always exits 0 and emits nothing -- except on a
+                          doubled CLAUDE_HOME (see Environment below), which
+                          is reported and exits 2 on every subcommand.
 
     milestone in { setup_concluded, orientation_started, orientation_completed }
 
-Environment: CLAUDE_HOME (defaults to $HOME/.claude) selects the install root.
+Environment: CLAUDE_HOME (defaults to $HOME) selects the install root. It names
+the PARENT of `.claude`, never `.claude` itself — every resolver below appends
+that segment. `CLAUDE_HOME=$HOME/.claude` therefore resolves the receipt to
+`$HOME/.claude/.claude/coordinator-setup-state.yaml`; that is rejected outright
+(`_settings_home.reject_doubled_claude_home`) rather than silently written,
+because on a box whose doubled directory already exists the write succeeds, the
+receipt splits, and every gating reader of the canonical file reports PENDING
+forever.
 
 Negative-spec (faithfully reproduced bash-oracle quirks, NOT bugs to fix here):
     - `record` does NOT create missing intermediate directories under
@@ -80,6 +89,7 @@ try:
 except ImportError:  # pragma: no cover - only on <3.11
     tomllib = None  # type: ignore[assignment]
 
+from coordinator_core._settings_home import reject_doubled_claude_home
 from coordinator_core.install.write_surface import (
     StaticClause,
     WriteSurfaceDeclaration,
@@ -166,9 +176,23 @@ def _home_dir(env: Optional[dict] = None) -> str:
     return env.get("HOME") or env.get("USERPROFILE") or os.path.expanduser("~")
 
 
+def _claude_home_base(env: Optional[dict] = None) -> str:
+    """The `$HOME` analog every path below hangs off: CLAUDE_HOME, else the
+    home directory. Rejects a CLAUDE_HOME that already ends in `.claude` — see
+    the module docstring's Environment note and
+    `_settings_home.reject_doubled_claude_home` for why that is a hard failure
+    rather than a warning."""
+    env = env if env is not None else os.environ
+    override = env.get("CLAUDE_HOME")
+    if override:
+        reject_doubled_claude_home("CLAUDE_HOME", override)
+        return override
+    return _home_dir(env)
+
+
 def _claude_home(env: Optional[dict] = None) -> str:
     env = env if env is not None else os.environ
-    return os.path.join(env.get("CLAUDE_HOME") or _home_dir(env), ".claude")
+    return os.path.join(_claude_home_base(env), ".claude")
 
 
 def _state_file(env: Optional[dict] = None) -> str:
@@ -198,7 +222,7 @@ def _machine_local_dir(env: Optional[dict] = None) -> str:
         settings_home = override
     else:
         settings_home = os.path.join(
-            env.get("CLAUDE_HOME") or _home_dir(env), ".coordinator-claude-settings"
+            _claude_home_base(env), ".coordinator-claude-settings"
         )
     return os.path.join(settings_home, "machine-local")
 
@@ -381,6 +405,8 @@ def cmd_auto_record_if_source_is_live(env: Optional[dict] = None) -> int:
     try:
         with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
             cmd_record("setup_concluded", env)
+    except ValueError:
+        raise
     except Exception:
         print(f"skip: cmd_auto_record_if_source_is_live: with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_st failed: {sys.exc_info()[1]}", file=sys.stderr)
         pass
@@ -393,6 +419,19 @@ def main(argv: List[str]) -> int:
         sys.stderr.write(_USAGE)
         return 2
 
+    try:
+        return _dispatch(cmd, argv)
+    except ValueError as exc:
+        # A doubled CLAUDE_HOME reaches here from _claude_home_base. It is
+        # reported on every subcommand INCLUDING auto-record-if-source-is-live,
+        # whose "always exits 0, emits nothing" contract covers the no-op case,
+        # not a CLAUDE_HOME the resolver cannot honour: swallowing it is how the
+        # receipt silently splits in the first place.
+        sys.stderr.write(f"coordinator-setup-state: {exc}\n")
+        return 2
+
+
+def _dispatch(cmd: str, argv: List[str]) -> int:
     if cmd == "record":
         milestone = argv[1] if len(argv) > 1 else ""
         return cmd_record(milestone)

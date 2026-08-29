@@ -10,7 +10,10 @@ current exit-code contract.
 
 Purpose: localize per-machine settings for THIS filesystem on every session
 start. Writes/patches three gitignored tri-file-contract artifacts under
-CLAUDE_HOME (default `~/.claude`):
+`${CLAUDE_HOME:-$HOME}/.claude` -- CLAUDE_HOME names the PARENT of `.claude`
+and this module appends that segment itself, so a CLAUDE_HOME that already
+ends in `.claude` is rejected outright rather than localizing settings into
+`~/.claude/.claude/` (see `_settings_home.reject_doubled_claude_home`):
   - settings.local.json      -- extraKnownMarketplaces (absolute paths for
                                  this machine) + enabledPlugins gating (a
                                  plugin whose registry.local.toml repo key is
@@ -102,6 +105,8 @@ import os
 import re
 import sys
 from typing import Any, Dict, List, Optional, Tuple
+
+from coordinator_core._settings_home import reject_doubled_claude_home
 
 try:
     from coordinator_core.async_hook_status import record_failure as _ahs_record_failure
@@ -455,13 +460,15 @@ def main(argv: Optional[List[str]] = None) -> int:
              (first-run.sh, install-maximalist.sh's `run_required`) -- see
              the trampoline's own header for the full fail-loud posture.
     """
-    claude_home = os.path.join(
+    claude_home_base = (
         os.environ.get("CLAUDE_HOME")
         or os.environ.get("HOME")
         or os.environ.get("USERPROFILE")
-        or os.path.expanduser("~"),
-        ".claude",
+        or os.path.expanduser("~")
     )
+    if os.environ.get("CLAUDE_HOME"):
+        reject_doubled_claude_home("CLAUDE_HOME", os.environ["CLAUDE_HOME"])
+    claude_home = os.path.join(claude_home_base, ".claude")
     settings_local_path = os.path.join(claude_home, "settings.local.json")
     known_marketplaces_path = os.path.join(claude_home, "plugins", "known_marketplaces.json")
     plugins_dir = os.path.join(claude_home, "plugins")

@@ -216,6 +216,31 @@ def env_from_headers(
     channel that carries a caller-side value, so this is where the override boundary lives.
     See `docs/research/spike-verdicts/2026-08-25-allowedenvvars-populates-headers-not-the-post-body.md`.
 
+    THAT KEY SET IS A CALLER SHAPE, NOT A TRANSPORT CEILING -- DO NOT CITE IT AS EVIDENCE
+    A FIELD CANNOT REACH THE WIRE. The 2.1.246 measurement above was two MAIN-THREAD calls;
+    it could not have distinguished "this transport drops the field" from "this caller has
+    no field to send". Measured again by doe-claude-e7, 2026-08-29, harness 2.1.251, against
+    a real `type: "http"` registration pointed at a recording sink in an isolated scratch
+    settings session (the live registration was never touched): a dispatched SUBAGENT's
+    body carries those same ten keys PLUS top-level `agent_id` and `agent_type`, both
+    present and non-empty. `agent_id`/`agent_type` are documented as subagent-only fields
+    (the vendored harness docs tie them to "When running as subagent" -- DoE-claude
+    `state/reference/anthropic-docs/claude-code/hooks.md:201-203`, not vendored into THIS
+    tree, which is why the claim is cited to the sibling rather than asserted locally);
+    their absence on a main-thread call is a property of the CALLER, not the transport. A
+    key set measured on one caller shape must never be read as proof that a field is absent
+    on the wire for every caller shape -- re-measure against the actual caller shape in
+    question before drawing that conclusion.
+
+    SECOND-ORDER: `session_id` is IDENTICAL between the main-thread and subagent bodies.
+    Subagent identity is reachable ONLY via `agent_id` -- never reconstruct it from
+    `session_id`.
+
+    CONFIRMED AGAIN BY THE SAME MEASUREMENT: `plugin_root` remains absent on http under any
+    spelling, and the request carried no custom headers at all (`Accept, Accept-Encoding,
+    Connection, Content-Length, Content-Type, Host, User-Agent`). This is why the forwarder
+    computes `plugin_root` server-side -- it is not on the wire under any caller shape.
+
     Returns `(env, disarm_reason)`. A non-None `disarm_reason` means the channel is declared
     but not working, and the caller MUST refuse to report a verdict.
 

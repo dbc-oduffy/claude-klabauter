@@ -33,7 +33,10 @@ import tempfile
 from pathlib import Path
 from typing import Dict, Iterator, Optional, Tuple, Union
 
-from coordinator_core._settings_home import settings_home  # noqa: F401  (re-exported)
+from coordinator_core._settings_home import (  # noqa: F401  (settings_home re-exported)
+    reject_doubled_claude_home,
+    settings_home,
+)
 from coordinator_core.machine_resolver import registry_get
 from coordinator_core.win_portability import no_console_creationflags
 
@@ -100,6 +103,16 @@ def require_home(caller: str) -> str:
     error, so it raises rather than falling through to the next rung — falling
     through would mask the operator's mistake and act on a different tree than
     they named.
+
+    The doubled-`.claude` check is the same reasoning applied to the one
+    malformed value that is not merely relative but confidently wrong:
+    CLAUDE_HOME names the PARENT of `.claude` and every caller appends that
+    segment, so `CLAUDE_HOME=$HOME/.claude` derives `$HOME/.claude/.claude/...`
+    — a real, writable path on any box where that directory already exists, so
+    nothing downstream fails and the operator's receipts and identity file
+    silently split in two. It is checked only for CLAUDE_HOME: a HOME or
+    USERPROFILE that happens to end in `.claude` is somebody's odd home
+    directory, not this mistake.
     """
     for var in _HOME_VARS:
         value = os.environ.get(var) or ""
@@ -112,6 +125,11 @@ def require_home(caller: str) -> str:
                 "to derive destructive targets from a cwd-relative home. "
                 "(On Windows, a drive letter alone is insufficient — use 'C:\\...' form.)"
             )
+        if var == "CLAUDE_HOME":
+            try:
+                reject_doubled_claude_home(f"{caller}: $CLAUDE_HOME", value)
+            except ValueError as exc:
+                raise RequireHomeError(str(exc)) from exc
         return value
     raise RequireHomeError(
         f"{caller}: none of $CLAUDE_HOME, $HOME, $USERPROFILE is set — "

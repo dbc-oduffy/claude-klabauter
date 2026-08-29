@@ -251,3 +251,38 @@ def test_auto_record_local_mode_wins_over_tracked(tmp_path, monkeypatch):
     rc = _run(monkeypatch, env, "auto-record-if-source-is-live")
     assert rc == 0
     assert not state_file.is_file()
+
+
+def test_doubled_claude_home_is_rejected_on_every_subcommand(tmp_path, monkeypatch):
+    """CLAUDE_HOME is the PARENT of `.claude`; the resolver appends that
+    segment. `CLAUDE_HOME=$HOME/.claude` resolved the receipt to
+    `$HOME/.claude/.claude/coordinator-setup-state.yaml` -- and where that
+    directory already existed the write SUCCEEDED, so the module's
+    fail-loud-on-missing-parent safeguard never fired. The receipt split, the
+    canonical file stopped being updated, and coordinator install.md's Phase 7
+    orientation gate read PENDING on every install thereafter."""
+    home = tmp_path / "home"
+    (home / ".claude" / ".claude").mkdir(parents=True)
+    env = {"CLAUDE_HOME": str(home / ".claude"), "HOME": str(home)}
+
+    for args in (
+        ("record", "setup_concluded"),
+        ("check", "setup_concluded"),
+        ("status",),
+        ("auto-record-if-source-is-live",),
+    ):
+        assert _run(monkeypatch, env, *args) == 2, args
+
+    assert not (home / ".claude" / ".claude" / "coordinator-setup-state.yaml").exists()
+
+
+def test_doubled_claude_home_names_the_value_to_pass_instead(tmp_path, monkeypatch, capsys):
+    home = tmp_path / "home"
+    (home / ".claude").mkdir(parents=True)
+    env = {"CLAUDE_HOME": str(home / ".claude"), "HOME": str(home)}
+
+    _run(monkeypatch, env, "status")
+
+    err = capsys.readouterr().err
+    assert "CLAUDE_HOME" in err
+    assert repr(str(home)) in err

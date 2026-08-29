@@ -1517,6 +1517,17 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # root and silently fall back to each function's own `resolve_repo_root()`
     # (a real git-command probe against ambient cwd) on every call.
     "merge_assemble.apply":                      "show_top",
+    # fleet.mode_set / fleet.mode_show — "none", and exact rather than defaulted: the
+    # record these ops read and write lives under `_settings_home.settings_home()`, which
+    # session/fleet_mode.py resolves with no repo input at all. Neither handler accepts
+    # or forwards repo_root (both take it for signature parity and ignore it), so there
+    # is no repo-specific state to key. Per this table's own header, a production op
+    # absent here is an oversight, not a silent promotion — hence the explicit rows.
+    # Scope-table caveat, same one stated for diagnostics.* / install.write_identity_file
+    # above: "none" keys REPO STATE, not write-freedom. fleet.mode_set is MUTATING in
+    # OP_CLASSIFICATION and scope "none" here, and the two are not in tension.
+    "fleet.mode_set":                            "none",
+    "fleet.mode_show":                           "none",
 }
 
 # ---------------------------------------------------------------------------

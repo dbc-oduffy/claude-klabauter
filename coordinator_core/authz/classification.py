@@ -3740,6 +3740,42 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     "fleet.archive_queue_entry": OpClass.MUTATING,
     "fleet.archive_release_accumulator": OpClass.MUTATING,
     "fleet.migrate_handoff_vocabulary": OpClass.MUTATING,
+    # fleet.mode_set / fleet.mode_show — the fleet-scoped settings plane's human-invoked
+    # half (ops/fleet/mode_control.py; plan 2026-08-28-the-fleet-gets-one-file-and-the-
+    # floor-moves-to-the-reader § C4). The pair splits across the class line because one
+    # writes the record and one only renders it.
+    #
+    # NOT a DR-211 archival-writer. That sub-category exists for ops writing RESERVED
+    # SUBSTRATE NOUNS (the archive/ tree plus a scoped git commit), and its five-bound
+    # applies there. The fleet record is neither: session/fleet_mode.py resolves it
+    # under `_settings_home.settings_home()`, outside every git worktree, touched by no
+    # git object and covered by no substrate reservation. Classifying it MUTATING is the
+    # write-semantics call below, not an invocation of DR-211 § D2.
+    #
+    # fleet.mode_set — MUTATING: `set_fleet_mode_key` read-modify-writes the record
+    # through C1's atomic `write_fleet_mode`. Fails Q1/Q3/Q5 of the DR-208 five-question
+    # test outright, so no COMPUTE_ONLY affirmation is available:
+    #   1. Writes/deletes/reorders any state file, queue, or git object?      YES —
+    #      write_fleet_mode() atomically replaces the settings-home record.
+    #   2. Writes into rag's relational store?                                No.
+    #   3. Opens any file for write (including sentinel creation)?            YES.
+    #   4. Mutates shared mutable state outside its own module?               No.
+    #   5. Persistent state changes observable across process boundaries?     YES —
+    #      that is the op's entire purpose: every session on the box resolves against
+    #      the record this op writes.
+    "fleet.mode_set": OpClass.MUTATING,
+    # fleet.mode_show — COMPUTE_ONLY: `show_fleet_mode` renders one `read_fleet_mode()`
+    # against the local `_KNOWN_KEYS` table and returns it. Same DR-208 five-question
+    # posture as fleet.handoffs_for_plan:
+    #   1. Writes/deletes/reorders any state file, queue, or git object?      No.
+    #      No open(..., "w")/os.replace/git-write call reachable from the handler; it
+    #      does not call write_fleet_mode, and read_fleet_mode never creates the file
+    #      it fails open on.
+    #   2. Writes into rag's relational store?                                No.
+    #   3. Opens any file for write (including sentinel creation)?            No.
+    #   4. Mutates shared mutable state outside its own module?               No.
+    #   5. Persistent state changes observable across process boundaries?     No.
+    "fleet.mode_show": OpClass.COMPUTE_ONLY,
     "install.write_cmd_autorun_guard": OpClass.MUTATING,
     "install.strip_cmd_autorun_guard": OpClass.MUTATING,
     "install.write_identity_file": OpClass.MUTATING,

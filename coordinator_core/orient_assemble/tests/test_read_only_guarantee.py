@@ -69,9 +69,9 @@ def forbid_git_fetch(monkeypatch):
 def test_clean_ops_collect_is_read_only(forbid_disk_mutation, forbid_git_fetch, monkeypatch):
     monkeypatch.setattr(rco, "_read_em_environment", lambda: ReaderResult())
     monkeypatch.setattr(rco, "_scan_addon_health_run", lambda mode: ([], 0))
-    monkeypatch.setattr(rco, "_read_memo_surface", lambda mode: ReaderResult())
+    monkeypatch.setattr(rco, "_read_memo_surface", lambda mode, *, repo_root=None: ReaderResult())
     monkeypatch.setattr(rco, "_read_rag_staleness", lambda: ReaderResult())
-    monkeypatch.setattr(rco, "_read_worktree_sweep", lambda: ReaderResult())
+    monkeypatch.setattr(rco, "_read_worktree_sweep", lambda *, repo_root=None: ReaderResult())
 
     for cadence in ("session", "day", "week"):
         rco.collect(cadence)

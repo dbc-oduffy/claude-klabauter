@@ -31,9 +31,9 @@ from coordinator_core.orient_assemble.readers_clean_ops import ReaderResult
 
 def _noop_isolate_clean_ops(monkeypatch, *, except_addon=False):
     monkeypatch.setattr(rco, "_read_em_environment", lambda: ReaderResult())
-    monkeypatch.setattr(rco, "_read_memo_surface", lambda mode: ReaderResult())
+    monkeypatch.setattr(rco, "_read_memo_surface", lambda mode, *, repo_root=None: ReaderResult())
     monkeypatch.setattr(rco, "_read_rag_staleness", lambda: ReaderResult())
-    monkeypatch.setattr(rco, "_read_worktree_sweep", lambda: ReaderResult())
+    monkeypatch.setattr(rco, "_read_worktree_sweep", lambda *, repo_root=None: ReaderResult())
     if not except_addon:
         monkeypatch.setattr(rco, "_scan_addon_health_run", lambda mode: ([], 0))
 
@@ -64,7 +64,7 @@ def test_clean_ops_runs_the_same_five_readers_for_every_cadence(monkeypatch):
     monkeypatch.setattr(rco, "_scan_addon_health_run", lambda mode: ([], 0))
     monkeypatch.setattr(
         rco, "_read_memo_surface",
-        lambda mode: (seen.__setitem__("memo", seen["memo"] + 1), ReaderResult())[1],
+        lambda mode, *, repo_root=None: (seen.__setitem__("memo", seen["memo"] + 1), ReaderResult())[1],
     )
     monkeypatch.setattr(
         rco, "_read_rag_staleness",
@@ -72,7 +72,7 @@ def test_clean_ops_runs_the_same_five_readers_for_every_cadence(monkeypatch):
     )
     monkeypatch.setattr(
         rco, "_read_worktree_sweep",
-        lambda: (seen.__setitem__("worktree", seen["worktree"] + 1), ReaderResult())[1],
+        lambda *, repo_root=None: (seen.__setitem__("worktree", seen["worktree"] + 1), ReaderResult())[1],
     )
 
     for cadence in ("session", "day", "week"):
@@ -90,7 +90,7 @@ def test_health_reaper_dry_run_fires_on_day_cadence_only(monkeypatch):
     monkeypatch.setattr(rhr, "_read_marker_freshness", lambda cadence: ReaderResult())
     monkeypatch.setattr(
         rhr, "_read_reaper_dry_run",
-        lambda: (calls.__setitem__("reaper", calls["reaper"] + 1), ReaderResult())[1],
+        lambda repo_root=None: (calls.__setitem__("reaper", calls["reaper"] + 1), ReaderResult())[1],
     )
 
     rhr.collect("session")
@@ -110,7 +110,7 @@ def test_health_reaper_ceremony_hook_receives_the_cadence(monkeypatch):
         lambda cadence: (received.append(cadence), ReaderResult())[1],
     )
     monkeypatch.setattr(rhr, "_read_marker_freshness", lambda cadence: ReaderResult())
-    monkeypatch.setattr(rhr, "_read_reaper_dry_run", lambda: ReaderResult())
+    monkeypatch.setattr(rhr, "_read_reaper_dry_run", lambda repo_root=None: ReaderResult())
 
     for cadence in ("session", "day", "week"):
         rhr.collect(cadence)
@@ -127,7 +127,7 @@ def test_health_reaper_working_repo_registration_runs_every_cadence(monkeypatch)
     )
     monkeypatch.setattr(rhr, "_read_ceremony_hook", lambda cadence: ReaderResult())
     monkeypatch.setattr(rhr, "_read_marker_freshness", lambda cadence: ReaderResult())
-    monkeypatch.setattr(rhr, "_read_reaper_dry_run", lambda: ReaderResult())
+    monkeypatch.setattr(rhr, "_read_reaper_dry_run", lambda repo_root=None: ReaderResult())
 
     for cadence in ("session", "day", "week"):
         rhr.collect(cadence)

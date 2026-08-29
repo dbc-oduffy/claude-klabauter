@@ -120,6 +120,7 @@ CONSUMES_MANIFEST: tuple[str, ...] = (
     "coordinator-initiative",
     "cruft-sweep",
     "reap-claims-for-repos",
+    "handoff-housekeeping",
     "check-wsc-inline-budget",
     "reassess-goal-krs",
     "workweek-complete-drift-guards",
@@ -554,6 +555,11 @@ def _build_directives(
             # same ceremony chain regardless.
             "d_step4_counts_reap_claims",
             cli="reap-claims-for-repos",
+            args=[],
+        ),
+        _directive(
+            "d_step4_counts_handoff_housekeeping",
+            cli="handoff-housekeeping",
             args=[],
         ),
         _directive(

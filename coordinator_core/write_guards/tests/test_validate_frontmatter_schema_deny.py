@@ -1652,7 +1652,7 @@ class TestQueueDeferralGrantDeny:
             ({"pm_approved": False}, "pm_approved"),
             ({"pm_approved": None}, "pm_approved"),
             ({"case_against": "   "}, "case_against"),
-            ({"deferred_until": "when a third consumer appears"}, "deferred_until"),
+            ({"deferred_until": "   "}, "deferred_until"),
             ({"deferred_by": ""}, "deferred_by"),
         ],
     )
@@ -1908,3 +1908,73 @@ class TestQueueDeferralDenyIsClaudeKlabauterScoped:
         assert guard._is_doe_owned_repo(str(Path.cwd())) is False
         result = guard.check(self._payload(Path.cwd()))
         assert result is not None, "guard stopped enforcing when DoE root was unresolvable"
+
+
+NL = chr(10)
+
+
+class TestQueueDeferralLayersAgree:
+    """The three copies of the truthiness floor must give the same verdict.
+
+    `_cf_queue_disposition_shape` (cross-field), `_evaluate_queue_deferral_grant`
+    (deny) and `_queue_deferral_grant_fires` (advisory mirror) each implement the
+    floor separately and on purpose — the deny must not surface through the
+    C15-governed `schema_message` leg. The cost of that deliberate duplication is
+    drift, and it is not hypothetical: when the ISO-date-only rule was withdrawn on
+    2026-08-29 the cross-field copy was updated and the two guard copies were not,
+    so a record the validator accepted was still refused at the write. Caught by
+    checking the record, not by the suite.
+
+    This pins the three together on the cases that distinguish them.
+    """
+
+    _CASES = [
+        ("2026-12-31", False),                       # calendar date
+        ("revisit when a THIRD consumer appears", False),  # condition form
+        ("", True),                                  # blank
+        ("   ", True),                               # whitespace-only
+    ]
+
+    def _record(self, deferred_until: str) -> str:
+        return (
+            "created: 2026-08-29" + NL +
+            "title: a park" + NL +
+            "body: b" + NL +
+            "status: deferred" + NL +
+            "source: s" + NL +
+            "risk: r" + NL +
+            "proposed_action: p" + NL +
+            "pm_approved: true" + NL +
+            "deferred_by: PM" + NL +
+            "case_against: the argument that lost" + NL +
+            "why_blocked: parked" + NL +
+            "deferred_until: '" + deferred_until + "'" + NL
+        )
+
+    @pytest.mark.parametrize("value,should_refuse", _CASES)
+    def test_all_three_layers_agree(self, value, should_refuse):
+        import yaml as _yaml
+        from coordinator_core.frontmatter.schema_validate import (
+            _cf_queue_disposition_shape,
+        )
+        text = self._record(value)
+        fm = _yaml.safe_load(text)
+        rel = "state/debt-backlog/park.yaml"
+        payload = {"session_id": "sess-1", "tool_name": "Write", "tool_input": {}}
+
+        cross = _cf_queue_disposition_shape(fm, local_queue_corpus=True)
+        cross_refuses = cross is not None and cross.get("field") == "deferred_until"
+        deny = guard._evaluate_queue_deferral_grant(fm, rel, payload, text)
+        deny_refuses = deny is not None and "deferred_until" in deny
+        mirror_fires = advisory_guard._queue_deferral_grant_fires(fm, rel, payload, text)
+
+        assert cross_refuses == should_refuse, (
+            f"cross-field layer disagrees for {value!r}: {cross!r}"
+        )
+        assert deny_refuses == should_refuse, (
+            f"deny layer disagrees for {value!r}: {deny!r}"
+        )
+        assert mirror_fires == deny_refuses, (
+            f"advisory mirror disagrees with the deny for {value!r}: "
+            f"fires={mirror_fires} deny={deny!r}"
+        )

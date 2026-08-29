@@ -46,13 +46,13 @@ def _quiet_everything_else(monkeypatch):
     envelope are the two forced `j-em-env-*` points — isolates the
     partition behavior under test from unrelated ambient findings."""
     monkeypatch.setattr(rco, "_scan_addon_health_run", lambda mode: ([], 0))
-    monkeypatch.setattr(rco, "_read_memo_surface", lambda mode: ReaderResult())
+    monkeypatch.setattr(rco, "_read_memo_surface", lambda mode, *, repo_root=None: ReaderResult())
     monkeypatch.setattr(rco, "_read_rag_staleness", lambda: ReaderResult())
-    monkeypatch.setattr(rco, "_read_worktree_sweep", lambda: ReaderResult())
+    monkeypatch.setattr(rco, "_read_worktree_sweep", lambda *, repo_root=None: ReaderResult())
 
-    monkeypatch.setattr(rht, "collect", lambda cadence: ReaderResult())
-    monkeypatch.setattr(rbr, "collect", lambda cadence: ReaderResult())
-    monkeypatch.setattr(rhr, "collect", lambda cadence: ReaderResult())
+    monkeypatch.setattr(rht, "collect", lambda cadence, *, repo_root=None: ReaderResult())
+    monkeypatch.setattr(rbr, "collect", lambda cadence, *, repo_root=None: ReaderResult())
+    monkeypatch.setattr(rhr, "collect", lambda cadence, *, repo_root=None: ReaderResult())
 
 
 def test_em_environment_points_are_reported_not_asked_when_both_conditions_drift(
@@ -95,7 +95,7 @@ def test_em_environment_points_are_asked_not_reported_when_a_directive_names_the
     monkeypatch.setattr(
         rco,
         "_read_worktree_sweep",
-        lambda: ReaderResult(directives=[fake_directive]),
+        lambda *, repo_root=None: ReaderResult(directives=[fake_directive]),
     )
 
     envelope = brief("day")

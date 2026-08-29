@@ -29,7 +29,7 @@ def test_two_integer_contract_produces_expected_directive():
     with mock.patch.object(rhr, "_reap_survey", return_value=fake_result) as survey_mock:
         result = rhr._read_reaper_dry_run()
 
-    survey_mock.assert_called_once_with(rhr._REPO_ROOT)
+    survey_mock.assert_called_once_with(rhr._CLAUDE_KLABAUTER_ROOT)
     assert len(result.directives) == 1
     directive = result.directives[0]
     assert directive["id"] == "d-reaper-orphaned-handoffs"

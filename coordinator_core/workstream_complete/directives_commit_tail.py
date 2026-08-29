@@ -1123,10 +1123,8 @@ def run_close_commit(
     on the assemble hot path and `commit_pipeline` pulls in the op-registry
     side effects of the full commit-gate stack with it.
     """
-    from coordinator_core.ops.ceremony.commit_pipeline import (
-        PUSH_MODE_NEVER,
-        run_commit_pipeline,
-    )
+    from coordinator_core.ops.ceremony.commit_pipeline import run_commit_pipeline
+    from coordinator_core.ops.ceremony.push import PUSH_MODE_NEVER
 
     return run_commit_pipeline(
         worktree_root,
@@ -1320,7 +1318,7 @@ def run_push_outstanding_tail(worktree_root: "Union[Path, str]") -> Dict[str, An
     returns to ITS callers, so a report reader sees one vocabulary
     regardless of which caller reached this primitive.
     """
-    from coordinator_core.ops.ceremony.commit_pipeline import derive_push_status
+    from coordinator_core.ops.ceremony.push import derive_push_status
     from coordinator_core.ops.push_outstanding import push_outstanding
 
     try:

@@ -1015,6 +1015,32 @@ def collect_live_handoff_paths(worktree_root: Path) -> List[Path]:
     handoffs visible this call" (skip archival for anything depending on this
     enumeration) — never let it crash the caller, and never conflate "scan
     raised" with "directory genuinely empty".
+
+    ABSOLUTE, NOT CANONICALIZED (2026-08-29, perf: `Path.resolve()` per file
+    was ~47ms/271 files, ~50% of the close leg — `nt._getfinalpathname`, the
+    Windows syscall behind it, per-file, is the largest single cost in
+    `handoff.housekeeping`'s corpus read). Every returned path is already
+    absolute for free (`entries` come from `handoff_dir.iterdir()`, and
+    `handoff_dir` is built as `worktree_root / "state" / "handoffs"` — a
+    child of an already-absolute path is already absolute; no `.resolve()`
+    or `.absolute()` call is needed to get that property). What `.resolve()`
+    additionally bought — symlink/junction resolution and Windows drive-
+    letter/short-name case normalization — is deliberately NOT reproduced
+    here: every verified consumer (`reconcile/handoff_corpus.py`,
+    `ops/fleet/archive_terminal_handoffs.py`, `session/stale_claims.py`,
+    `session/work_state.py`) only ever compares a path from this function
+    against (a) another path from this same function called with the same
+    `worktree_root`, or (b) `worktree_root`/`repo_root` itself via
+    `wire_paths.rel_id`'s `relative_to()` — never against an independently-
+    resolved path from a different provenance. Because every path this
+    function returns is built by string concatenation under the SAME
+    `worktree_root` object the caller also holds, dropping `.resolve()`
+    cannot break either comparison shape: `relative_to()` needs a shared
+    path-component prefix, not filesystem canonicalization, and a self-
+    consistent membership/equality test never needed canonicalization in the
+    first place. A future consumer that needs symlink-resolved paths (e.g. to
+    compare against an independently-`.resolve()`d path from elsewhere) must
+    resolve its own copy — this function no longer does it for free.
     """
     handoff_dir = worktree_root / "state" / "handoffs"
     if not handoff_dir.is_dir():
@@ -1026,7 +1052,7 @@ def collect_live_handoff_paths(worktree_root: Path) -> List[Path]:
             "collect_live_handoff_paths: cannot scan %s — %s", handoff_dir, exc,
         )
         raise
-    return sorted(p.resolve() for p in entries if p.suffix == ".md" and p.is_file())
+    return sorted(p for p in entries if p.suffix == ".md" and p.is_file())
 
 
 # ---------------------------------------------------------------------------

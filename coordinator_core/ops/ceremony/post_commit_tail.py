@@ -188,7 +188,7 @@ from coordinator_core.ipc import get_op_handler, register_op
 from coordinator_core.op_budget_suspension import OpSuspendedError
 from coordinator_core.ops.ceremony import consumed_handoff_stamp
 from coordinator_core.ops.handoff_children import blocked_by_dependents
-from coordinator_core.ops.ceremony.commit_pipeline import (
+from coordinator_core.ops.ceremony.push import (
     PUSH_MODE_SYNC,
     PUSH_STATUS_DECLINED,
     PUSH_STATUS_FAILED,

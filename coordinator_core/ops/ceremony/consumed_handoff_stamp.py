@@ -193,7 +193,7 @@ from coordinator_core.lifecycle_constants import HANDOFF_TERMINAL_DEPLOYMENT
 from coordinator_core.locked_write import LockTimeout, MutateAbort, locked_rmw
 from coordinator_core.ops._path_guard import contained_path
 from coordinator_core.ops.ceremony import git_native
-from coordinator_core.ops.ceremony.commit_pipeline import (
+from coordinator_core.ops.ceremony.push import (
     PUSH_MODE_SYNC,
     PUSH_STATUS_FAILED,
     PUSH_STATUS_NOT_ATTEMPTED,

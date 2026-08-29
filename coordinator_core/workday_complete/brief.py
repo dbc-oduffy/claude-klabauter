@@ -152,6 +152,7 @@ CONSUMES_MANIFEST: tuple[str, ...] = (
     "workday-complete-step2_5-dirty-tree",
     "reap-orphaned-in-flight-handoffs",
     "reap-claims-for-repos",
+    "handoff-housekeeping",
     "workday-complete-step3-consolidate",
     "workday-complete-backfill-scan",
     "workday-complete-backfill-anchor",
@@ -481,6 +482,11 @@ def _build_directives(
             # orphan cull has no live ask to wait on.
             "d_step2_66_reap_claims",
             cli="reap-claims-for-repos",
+            args=[],
+        ),
+        _directive(
+            "d_step2_67_handoff_housekeeping",
+            cli="handoff-housekeeping",
             args=[],
         ),
         _directive(

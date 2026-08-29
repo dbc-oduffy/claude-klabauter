@@ -39,6 +39,7 @@ from pathlib import Path
 import pytest
 
 import coordinator_core.ops.ceremony.commit_pipeline as commit_pipeline_mod
+import coordinator_core.ops.ceremony.push as push_mod
 from coordinator_core.git.commit_trailers import compute_missing_trailer_args
 from coordinator_core.ops.ceremony.commit_pipeline import (
     StageOutcome,
@@ -2970,7 +2971,7 @@ def test_push_with_retry_unresolvable_branch_declines_not_pushes(tmp_path, monke
     # production path no longer makes would leave these tests short-
     # circuiting on the no-remote skip and never reaching the gate below.
     _git(["remote", "add", "origin", str(tmp_path / "origin.git")], repo)
-    monkeypatch.setattr(commit_pipeline_mod, "resolve_branch", lambda repo_root: None)
+    monkeypatch.setattr(push_mod, "resolve_branch", lambda repo_root: None)
     push_calls = []
     monkeypatch.setattr(
         git_native, "push", lambda *a, **kw: push_calls.append(a) or GitResult(returncode=0, stdout="", stderr="")
@@ -3003,7 +3004,7 @@ def test_push_with_retry_unresolvable_branch_prints_its_own_decline_line(tmp_pat
     # production path no longer makes would leave these tests short-
     # circuiting on the no-remote skip and never reaching the gate below.
     _git(["remote", "add", "origin", str(tmp_path / "origin.git")], repo)
-    monkeypatch.setattr(commit_pipeline_mod, "resolve_branch", lambda repo_root: None)
+    monkeypatch.setattr(push_mod, "resolve_branch", lambda repo_root: None)
     monkeypatch.setattr(
         git_native, "push", lambda *a, **kw: GitResult(returncode=0, stdout="", stderr="")
     )
@@ -3369,8 +3370,7 @@ def test_push_with_retry_gh013_fails_loud_without_fetch_or_rebase(tmp_path, monk
     fetch_calls = []
     monkeypatch.setattr(git_native, "fetch", lambda *a, **kw: fetch_calls.append(a) or GitResult(returncode=0, stdout="", stderr=""))
     rebase_calls = []
-    monkeypatch.setattr(
-        commit_pipeline_mod, "_rebase_onto_fetched_ref",
+    monkeypatch.setattr(push_mod, "_rebase_onto_fetched_ref",
         lambda *a, **kw: rebase_calls.append(a) or (0, ""),
     )
 
@@ -3467,7 +3467,7 @@ def test_rebase_onto_fetched_ref_dirty_worktree_names_the_real_cause(tmp_path):
     # Dirty the worktree -- an uncommitted, unstaged change.
     _seed_file(repo, "README.md", "dirty change, never staged")
 
-    exit_code, reason = commit_pipeline_mod._rebase_onto_fetched_ref(repo, "HEAD")
+    exit_code, reason = push_mod._rebase_onto_fetched_ref(repo, "HEAD")
 
     assert exit_code != 0
     assert "uncommitted changes" in reason

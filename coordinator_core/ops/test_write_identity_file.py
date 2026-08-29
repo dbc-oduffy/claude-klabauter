@@ -242,3 +242,26 @@ def test_lock_timeout_surfaces_as_error(tmp_path, monkeypatch):
     result = _call({"claude_home": str(claude_home), "fields": {"operator_name": "Dax"}})
     assert result["exit_code"] == 1
     assert "lock timeout" in result["error"]
+
+
+# ---------------------------------------------------------------------------
+# (k) doubled CLAUDE_HOME is rejected, not written into
+# ---------------------------------------------------------------------------
+
+
+def test_claude_home_ending_in_dot_claude_is_rejected(tmp_path):
+    """`claude_home` names the PARENT of `.claude`; this op appends that
+    segment. A caller passing `$HOME/.claude` would write to
+    `$HOME/.claude/.claude/coordinator-identity.yaml` -- a real path wherever
+    the doubled directory already exists, splitting the identity document in
+    two with no error. coordinator-claude's commands/install.md warns about
+    exactly this in prose; the check belongs here, where it can fire."""
+    claude_home = _make_git_repo(tmp_path / "home")
+    doubled = claude_home / ".claude"
+    doubled.mkdir(parents=True, exist_ok=True)
+
+    result = _call({"claude_home": str(doubled), "fields": {"operator_name": "Dax"}})
+
+    assert result["exit_code"] == 1
+    assert "must name the home directory" in result["error"]
+    assert not (doubled / ".claude").exists()

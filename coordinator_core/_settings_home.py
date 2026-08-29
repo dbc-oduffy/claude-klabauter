@@ -95,6 +95,47 @@ import re
 from pathlib import Path
 
 
+def reject_doubled_claude_home(var: str, raw: str) -> None:
+    """Raise ValueError when *raw* already ends in a ``.claude`` segment.
+
+    `CLAUDE_HOME` names the *parent* of `.claude` — every resolver in the
+    tri-plane appends the `.claude` segment itself. A caller that passes
+    `$HOME/.claude` therefore resolves to `$HOME/.claude/.claude/...`, which is
+    a real, writable path on any machine whose `~/.claude/.claude` already
+    exists: the receipt splits in two, the canonical one stops being updated,
+    and every gating reader that consults it reports PENDING forever. That is
+    not a hypothetical — it happened on a live install box and went unseen
+    because the resolver's "fail loud on a missing parent" safeguard only fires
+    when the doubled directory does *not* exist.
+
+    `basename == ".claude"` is unambiguously that mistake and never a
+    legitimate value, so it is checked here rather than warned about in prose:
+    coordinator-claude's `commands/install.md` currently carries a hand-written
+    warning about exactly this footgun, and a warning in one repo is not a
+    guard. Call this from every seam that accepts a CLAUDE_HOME-analog value —
+    env override or op param alike.
+
+    Four older hand-rolled copies of this same test predate this helper and are
+    NOT routed through it, because each returns a finding or a boolean rather
+    than raising and rewriting them would change their pinned contracts:
+    `install/check_install_singularity.py`, `install/ensure_venv.py`,
+    `install/uninstall_legs.py`, `ops/probe_onboarding_currency.py`. This is
+    the seam a fifth site should adopt instead of writing a fifth copy.
+    """
+    if not raw:
+        return
+    trimmed = raw.rstrip("/\\")
+    cut = max(trimmed.rfind("/"), trimmed.rfind("\\"))
+    if trimmed[cut + 1 :].casefold() != ".claude":
+        return
+    parent = trimmed[:cut] if cut > 0 else trimmed[: cut + 1]
+    raise ValueError(
+        f"{var} must name the home directory, not the .claude directory; "
+        f"got {raw!r}. The '.claude' segment is appended by the resolver"
+        + (f" — pass {parent!r}." if parent else ".")
+    )
+
+
 def _require_rooted(var: str, raw: str) -> Path:
     """Return `Path(raw)`, or raise ValueError if it would anchor at the cwd.
 
@@ -123,6 +164,7 @@ def _home_dir() -> Path:
     """Resolve the $HOME analog: CLAUDE_HOME if set, else the platform home."""
     claude_home = os.environ.get("CLAUDE_HOME")
     if claude_home:
+        reject_doubled_claude_home("CLAUDE_HOME", claude_home)
         return _require_rooted("CLAUDE_HOME", claude_home)
     return Path.home()
 

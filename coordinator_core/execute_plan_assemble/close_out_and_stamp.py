@@ -168,10 +168,10 @@ from coordinator_core.lifecycle import git_common_dir
 from coordinator_core.locked_write import LOCK_TIMEOUT_SECS, LockTimeout, MutateAbort, locked_rmw
 from coordinator_core.machine_resolver import registry_get
 from coordinator_core.ops.ceremony import git_native, post_commit_tail
-from coordinator_core.ops.ceremony.commit_pipeline import (
+from coordinator_core.ops.ceremony.commit_pipeline import run_commit_pipeline
+from coordinator_core.ops.ceremony.push import (
     PUSH_MODE_NEVER,
     PUSH_STATUS_NOT_ATTEMPTED,
-    run_commit_pipeline,
 )
 from coordinator_core.ops.extract_scope_paths import _extract_scope_paths
 from coordinator_core.ops.fleet._common import plan_claim_dir

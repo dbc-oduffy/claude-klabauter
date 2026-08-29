@@ -154,7 +154,7 @@ from coordinator_core.git.git_dir import resolve_git_common_dir
 from coordinator_core.lifecycle import main_worktree_root
 from coordinator_core.ipc import register_op
 from coordinator_core.git.git_state import head_branch, head_sha
-from coordinator_core.ops.ceremony.commit_pipeline import (
+from coordinator_core.ops.ceremony.push import (
     PUSH_RETRY_BUDGET_SECS,
     PushOutcome,
     push_with_retry,

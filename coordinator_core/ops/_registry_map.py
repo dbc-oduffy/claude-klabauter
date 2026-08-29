@@ -103,6 +103,8 @@ OP_MODULE_MAP: Dict[str, str] = {
     "fleet.work_state":                       "coordinator_core.ops.fleet.work_state",
     "fleet.record_history":                   "coordinator_core.ops.fleet.record_history",
     "fleet.aggregate_capability_index":       "coordinator_core.ops.fleet.capability_index",
+    "fleet.mode_set":                         "coordinator_core.ops.fleet.mode_control",
+    "fleet.mode_show":                        "coordinator_core.ops.fleet.mode_control",
     "distill.curate_clusters":                "coordinator_core.ops.distill_curate_clusters",
     "gate_liveness.resolve":                  "coordinator_core.ops.gate_liveness.resolve",
     "gate_liveness.reconcile":                "coordinator_core.ops.gate_liveness.reconcile",

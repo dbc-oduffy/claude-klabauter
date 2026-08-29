@@ -1249,7 +1249,11 @@ def test_plugin_endstate_revert_to_marketplace_runs_localize_in_process_no_bash(
     claude_home_dir = tmp_path / "home" / ".claude"
     (claude_home_dir / "plugins" / "coordinator-claude").mkdir(parents=True)
 
-    monkeypatch.setenv("CLAUDE_HOME", str(claude_home_dir))
+    # CLAUDE_HOME names the PARENT of `.claude`; the resolver appends that
+    # segment. Set to `claude_home_dir` itself this resolved every consumer to
+    # `<home>/.claude/.claude/`, and passed only because nothing on this leg
+    # read a path deep enough to notice.
+    monkeypatch.setenv("CLAUDE_HOME", str(claude_home_dir.parent))
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "settings-home-does-not-exist"))
     monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(tmp_path / "ml-does-not-exist"))
     # Poison PATH so a `bash` subprocess.run, if one still existed on this
@@ -1262,7 +1266,7 @@ def test_plugin_endstate_revert_to_marketplace_runs_localize_in_process_no_bash(
 
     assert result is True
     # env must be restored exactly (no leaked CLAUDE_HOME pop / HOME rewrite)
-    assert os.environ.get("CLAUDE_HOME") == str(claude_home_dir)
+    assert os.environ.get("CLAUDE_HOME") == str(claude_home_dir.parent)
     assert os.environ.get("HOME") == prior_home_env
     assert (claude_home_dir / "settings.local.json").is_file()
 
@@ -1339,7 +1343,11 @@ def test_plugin_endstate_revert_to_marketplace_reports_localize_failure(tmp_path
     claude_home_dir = tmp_path / "home" / ".claude"
     (claude_home_dir / "plugins" / "coordinator-claude").mkdir(parents=True)
 
-    monkeypatch.setenv("CLAUDE_HOME", str(claude_home_dir))
+    # CLAUDE_HOME names the PARENT of `.claude`; the resolver appends that
+    # segment. Set to `claude_home_dir` itself this resolved every consumer to
+    # `<home>/.claude/.claude/`, and passed only because nothing on this leg
+    # read a path deep enough to notice.
+    monkeypatch.setenv("CLAUDE_HOME", str(claude_home_dir.parent))
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "settings-home-does-not-exist"))
     monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(tmp_path / "ml-does-not-exist"))
     monkeypatch.setenv("PATH", str(tmp_path / "nonexistent-bin-dir"))

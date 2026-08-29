@@ -166,7 +166,8 @@ from pathlib import Path
 from typing import List, Literal, Optional, Sequence, TypedDict
 
 from coordinator_core.ipc import register_op
-from coordinator_core.ops.ceremony.commit_pipeline import PUSH_MODE_NEVER, run_commit_pipeline
+from coordinator_core.ops.ceremony.commit_pipeline import run_commit_pipeline
+from coordinator_core.ops.ceremony.push import PUSH_MODE_NEVER
 from coordinator_core.ops.dirty_tree_gate import parse_porcelain_paths
 from coordinator_core.session import core
 from coordinator_core.win_portability import no_console_creationflags

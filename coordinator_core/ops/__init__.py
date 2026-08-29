@@ -142,6 +142,7 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ("coordinator_core.ops.fleet.capability_index", 'registers "fleet.aggregate_capability_index"'),
     ("coordinator_core.ops.fleet.sweep_status", 'registers "fleet.archive_sweep_status"'),
     ("coordinator_core.ops.fleet.archive_actioned_memos", 'registers "fleet.archive_actioned_memos"'),
+    ("coordinator_core.ops.fleet.mode_control", 'registers "fleet.mode_set", "fleet.mode_show"'),
     ("coordinator_core.ops.commit_anchors", 'registers "commit.anchors"'),
     ("coordinator_core.ops.ceremony.commit_exec_bit", 'registers "commit.exec_bit_change"'),
     ("coordinator_core.ops.ceremony.commit_v2", 'registers "ceremony.commit_v2"'),

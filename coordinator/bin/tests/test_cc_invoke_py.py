@@ -676,7 +676,30 @@ class TestRouteState2Success(unittest.TestCase):
 
     def test_fdopen_failure_closes_params_fd(self) -> None:
         """A16: os.fdopen(_params_fd, ...) raising must not leak the mkstemp fd —
-        the finally block unlinks the path but previously never closed the descriptor."""
+        the finally block unlinks the path but previously never closed the descriptor.
+
+        Two ambient-environment sources of `os.close` calls are pinned out so this
+        stays hermetic rather than machine-dependent:
+
+        1. `tempfile.gettempdir()` is pre-warmed before `os.close` is patched: on a
+           cold cache, CPython's own `tempfile._get_default_tempdir()` probes
+           candidate temp dirs and calls `os.close` itself as part of that one-time,
+           per-process self-test.
+        2. `_capture_warm_reach` is forced to a deterministic miss. Left ambient, on
+           a machine where warm dispatch is enabled it attempts a real pipe connect
+           whose cleanup calls `os.close` on an unrelated fd (observed: this
+           coincidentally reused the same low fd number freed by the warm-reach
+           cleanup, inflating the count to 2) — same failure shape either source
+           produces alone: a real, unrelated close counted as if it were the
+           leak-fix's own close.
+
+        Neither source is anywhere near `_should_pass_repo` (never reached: the
+        fdopen exception fires before `cc_invoke` gets to the `_should_pass_repo`
+        call), so this is not a fd-handling regression in the leak-fix path."""
+        import tempfile as _tempfile
+
+        _tempfile.gettempdir()
+
         closed_fds: list[int] = []
         real_close = os.close
 
@@ -697,6 +720,7 @@ class TestRouteState2Success(unittest.TestCase):
         with (
             unittest.mock.patch.object(_mod, "_resolve_claude_klabauter_root", return_value="/fake/mr"),
             unittest.mock.patch.object(_mod, "_seam_present", return_value=True),
+            unittest.mock.patch.object(_mod, "_capture_warm_reach", return_value=(None, "")),
             unittest.mock.patch("subprocess.run", side_effect=_run),
             unittest.mock.patch("os.fdopen", side_effect=_boom_fdopen),
             unittest.mock.patch("os.close", side_effect=_close_spy),

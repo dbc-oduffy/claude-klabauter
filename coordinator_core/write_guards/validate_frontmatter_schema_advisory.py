@@ -1421,8 +1421,10 @@ def _queue_deferral_grant_fires(
     if case_against is None or not str(case_against).strip():
         return True
 
+    # Mirrors the deny sibling exactly, including the 2026-08-29 withdrawal of the
+    # ISO-date-only rule — a condition-form expiry is accepted; only blank refuses.
     deferred_until = frontmatter.get("deferred_until")
-    if not _is_parseable_iso_date(deferred_until):
+    if deferred_until is None or not str(deferred_until).strip():
         return True
 
     deferred_by = frontmatter.get("deferred_by")

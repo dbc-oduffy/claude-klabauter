@@ -28,6 +28,7 @@ from coordinator_core._settings_home import (
     machine_local_dir,
     native_path_form,
     normalize_native_path,
+    reject_doubled_claude_home,
     settings_home,
 )
 
@@ -381,3 +382,42 @@ def test_native_path_form_is_noop_on_posix(monkeypatch):
 def test_native_path_form_leaves_empty_string_empty(monkeypatch):
     monkeypatch.setattr("coordinator_core._settings_home.os.name", "nt")
     assert native_path_form("") == ""
+
+
+# ---------------------------------------------------------------------------
+# reject_doubled_claude_home — the $HOME/.claude footgun, guarded not warned
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "/srv/oper/.claude",
+        "/srv/oper/.claude/",
+        "/srv/oper/.CLAUDE",
+        r"C:\Users\oper\.claude",  # abs-path-ok: fixture input, not a citation
+        "C:" + "\\Users\\oper\\.claude\\",  # abs-path-ok: fixture input, not a citation
+    ],
+)
+def test_reject_doubled_claude_home_rejects_a_dot_claude_leaf(raw):
+    """`CLAUDE_HOME` names the PARENT of `.claude`; a value ending in that
+    segment resolves every consumer to `<home>/.claude/.claude/...`, which is a
+    real writable path wherever the doubled directory already exists — the
+    receipt splits and the canonical one silently stops being updated."""
+    with pytest.raises(ValueError) as excinfo:
+        reject_doubled_claude_home("CLAUDE_HOME", raw)
+    assert "CLAUDE_HOME" in str(excinfo.value)
+
+
+@pytest.mark.parametrize(
+    "raw",
+    ["", "/srv/oper", "/srv/oper/", "/srv/.claude-backup", "/srv/claude", "/"],
+)
+def test_reject_doubled_claude_home_passes_every_legitimate_value(raw):
+    reject_doubled_claude_home("CLAUDE_HOME", raw)
+
+
+def test_home_dir_rejects_doubled_claude_home(tmp_path, monkeypatch):
+    monkeypatch.setenv("CLAUDE_HOME", str(tmp_path / ".claude"))
+    with pytest.raises(ValueError):
+        home_dir()

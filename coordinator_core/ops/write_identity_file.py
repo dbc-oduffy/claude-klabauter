@@ -58,7 +58,18 @@ Params:
     claude_home (str)            — the resolved ``${CLAUDE_HOME:-$HOME}`` value
                                     (caller resolves the env-var-or-HOME
                                     fallback; this op does not re-derive it).
-                                    Required.
+                                    Required. The PARENT of ``.claude``, never
+                                    ``.claude`` itself — this op appends that
+                                    segment. A value ending in ``.claude`` is
+                                    rejected (exit_code 1), because
+                                    ``$HOME/.claude/.claude/`` is a writable
+                                    path on any box where it already exists and
+                                    the identity file would silently split in
+                                    two. coordinator-claude's own
+                                    ``commands/install.md`` carries a
+                                    hand-written warning about exactly this;
+                                    this check is that warning made enforceable
+                                    on the engine side.
     fields      (dict[str, str]) — keys/values to merge into the identity
                                     document. Required; every value must be a
                                     string (matches the fence's plain scalar
@@ -115,7 +126,10 @@ from typing import Optional
 
 import yaml
 
-from coordinator_core._settings_home import normalize_native_path
+from coordinator_core._settings_home import (
+    normalize_native_path,
+    reject_doubled_claude_home,
+)
 from coordinator_core.ipc import register_op
 from coordinator_core.locked_write import LockTimeout, locked_rmw
 
@@ -229,6 +243,11 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
                 f"{key!r} -> {value!r}",
                 path="",
             )
+
+    try:
+        reject_doubled_claude_home("claude_home", claude_home_raw)
+    except ValueError as exc:
+        return _err(str(exc), path="")
 
     claude_home = normalize_native_path(claude_home_raw)
     target = claude_home / ".claude" / "coordinator-identity.yaml"

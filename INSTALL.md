@@ -75,12 +75,34 @@ coordinator-claude's own `/coordinator:setup` has run, which includes a restart.
 forwarder exits 127, reporting `resolver not installed` and directing you to
 `run /coordinator:setup (Phase 3)`.
 
-So on a fresh machine, complete coordinator-claude's install first — clone, run
-`/coordinator:setup`, restart, and confirm `machine-local` resolves — and only then run this
-repo's installer. Starting here instead produces that 127 and a remediation instruction that
-cannot succeed until the prerequisite side is finished. This is deliberate on their side: a
-resolver that fails loudly is preferable to one that returns nothing and lets every consumer
-silently fall through to a last-resort guess.
+Read alongside coordinator-claude's own `commands/install.md`, which requires this engine's
+repo cloned *and* `repos.claude_klabauter` registered before it runs, that looks circular — each
+side apparently demanding the other first. It is not: **one side needs the other's clone, the
+other needs its install.** An installing agent that reads it as circular interleaves the two legs
+and re-enters coordinator's Phase 2, re-asking operator identity and engagement posture that were
+already answered. The one true sequence on a fresh machine:
+
+1. **Clone both repos**, side by side. Clone only — neither installer runs yet.
+   coordinator-claude needs this engine's *files* on disk (its command fences resolve out of that
+   tree); it does not need this engine installed.
+2. **Register `repos.claude_klabauter`** at the clone from step 1 —
+   `machine-local set repos.claude_klabauter <path>`. Hard, never auto-discovered;
+   coordinator-claude's `commands/install.md` § Requirements states the exact invocation.
+3. **Run coordinator-claude's `/coordinator:setup`**, restart, and confirm `machine-local`
+   resolves. Operator identity and engagement posture are captured **here, once**.
+4. **Run this repo's installer.**
+
+Running step 4 before step 3 produces that 127 and a remediation instruction that cannot succeed
+until the prerequisite side is finished. This is deliberate on their side: a resolver that fails
+loudly is preferable to one that returns nothing and lets every consumer silently fall through to
+a last-resort guess.
+
+**If you are asked for your name or your engagement posture during step 4, that is coordinator's
+Phase 2 being re-entered — not a question this repo needs answered.** Nothing in this engine's
+leg asks either: its installer prompts for exactly two things (a Homebrew-uninstall offer on
+macOS, and the warm-engine opt-in), and its Phase B is a read-only check that reports
+`operator_identity: ready` when `~/.claude/coordinator-identity.yaml` exists. That file is the
+answer.
 
 Windows note, accurate as of 2026-08-05 and expected to lapse: coordinator-claude's *published*
 snapshot predates their Windows de-bash work, so the forwarder a fresh clone gets today is a bash

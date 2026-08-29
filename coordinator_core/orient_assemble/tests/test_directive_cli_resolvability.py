@@ -83,7 +83,7 @@ def _fully_stubbed_brief(monkeypatch, cadence: str, tmp_path: Path) -> dict:
     # RAG staleness), 7 (agent-worktree-sweep --reap).
     monkeypatch.setattr(rco, "_read_em_environment", lambda: ReaderResult())
     monkeypatch.setattr(rco, "_scan_addon_health_run", lambda mode: (["RED: x"], 1))
-    monkeypatch.setattr(rco, "_read_memo_surface", lambda mode: ReaderResult())
+    monkeypatch.setattr(rco, "_read_memo_surface", lambda mode, *, repo_root=None: ReaderResult())
     monkeypatch.setattr(rco, "check_rag_state", lambda: ("stale", 1))
 
     fake_worktree_path = str(tmp_path / "fake-worktree")
@@ -96,7 +96,7 @@ def _fully_stubbed_brief(monkeypatch, cadence: str, tmp_path: Path) -> dict:
         state = "empty-clean"
         dirty_count = 0
 
-    monkeypatch.setattr(rco, "_wt_repo_root", lambda: fake_repo_root)
+    monkeypatch.setattr(rco, "_wt_repo_root", lambda *, cwd=None: fake_repo_root)
     monkeypatch.setattr(rco, "_wt_active_branch", lambda root: "main")
     monkeypatch.setattr(rco, "_is_agent_worktree", lambda path: True)
     monkeypatch.setattr(rco, "_list_worktrees", lambda root: [_FakeWorktree()])

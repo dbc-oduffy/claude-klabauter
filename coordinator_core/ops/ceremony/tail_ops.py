@@ -194,11 +194,11 @@ OP_CS_RELEASE_ARTIFACT = "cs_release_artifact"
 
 
 def _empty_result() -> TailResult:
-    return {"acted": [], "skipped": [], "failed": []}
+    return {"acted": [], "skipped": [], "failed": [], "unknown": []}
 
 
 def _fail(op_label: str, reason: str) -> TailResult:
-    return {"acted": [], "skipped": [], "failed": [f"{op_label}: {reason}"]}
+    return {"acted": [], "skipped": [], "failed": [f"{op_label}: {reason}"], "unknown": []}
 
 
 def _ids(items: List[Any]) -> List[str]:
@@ -227,12 +227,13 @@ def fleet_result_to_tail(result: dict, op_label: str) -> TailResult:
     acted = _ids(result.get("acted", []))
     skipped = _ids(result.get("skipped", []))
     failed = _ids(result.get("failed", []))
+    unknown = _ids(result.get("unknown", []))
 
     ec = result.get("exit_code", 0)
     if ec not in (0, 2) and not failed:
         failed.append(f"{op_label}: exit_code={ec}")
 
-    return {"acted": acted, "skipped": skipped, "failed": failed}
+    return {"acted": acted, "skipped": skipped, "failed": failed, "unknown": unknown}
 
 
 # ---------------------------------------------------------------------------
@@ -349,7 +350,10 @@ def refresh_roadmap_callout(worktree_root: Path, consumed_handoff_paths: List[st
     not a failure.
     """
     if not consumed_handoff_paths:
-        return {"acted": [], "skipped": [f"{OP_ROADMAP_CALLOUT}:no-consumed-handoff"], "failed": []}
+        return {
+            "acted": [], "skipped": [f"{OP_ROADMAP_CALLOUT}:no-consumed-handoff"],
+            "failed": [], "unknown": [],
+        }
 
     from coordinator_core.ops.refresh_roadmap_callout import main as _refresh_roadmap_callout_main
 
@@ -409,7 +413,7 @@ def refresh_roadmap_callout(worktree_root: Path, consumed_handoff_paths: List[st
         stamp_liveness(str(worktree_root), _HL_ROADMAP_CALLOUT)
 
     return {
-        "acted": acted, "skipped": skipped, "failed": failed,
+        "acted": acted, "skipped": skipped, "failed": failed, "unknown": [],
         "roadmap_stub_index_paths": stub_index_paths,
     }
 
@@ -598,7 +602,10 @@ def cs_archive(common_dir: Path, session_id: str) -> TailResult:
     sessions_dir = _sessions_dir(common_dir)
     sdir = sessions_dir / session_id
     if not sdir.is_dir():
-        return {"acted": [], "skipped": [f"{OP_CS_ARCHIVE}:already-archived-or-absent"], "failed": []}
+        return {
+            "acted": [], "skipped": [], "failed": [],
+            "unknown": [f"{OP_CS_ARCHIVE}:already-archived-or-absent"],
+        }
 
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     archive_dir = sessions_dir / ".archive" / f"{session_id}-{today}"
@@ -606,7 +613,7 @@ def cs_archive(common_dir: Path, session_id: str) -> TailResult:
     try:
         archive_dir.parent.mkdir(parents=True, exist_ok=True)
         shutil.move(str(sdir), str(archive_dir))
-        return {"acted": [f"{OP_CS_ARCHIVE}:{session_id}"], "skipped": [], "failed": []}
+        return {"acted": [f"{OP_CS_ARCHIVE}:{session_id}"], "skipped": [], "failed": [], "unknown": []}
     except OSError as exc:
         return _fail(OP_CS_ARCHIVE, f"{type(exc).__name__} -- {str(exc)[:160]}")
 
@@ -667,23 +674,34 @@ def cs_release_artifact(common_dir: Path, artifact_class: str, basename: str) ->
     """
     claim_dir = _sessions_dir(common_dir) / f"{artifact_class}-claims" / basename
     if not claim_dir.is_dir():
-        return {"acted": [], "skipped": [f"{OP_CS_RELEASE_ARTIFACT}:already-absent"], "failed": []}
+        return {
+            "acted": [], "skipped": [], "failed": [],
+            "unknown": [f"{OP_CS_RELEASE_ARTIFACT}:already-absent"],
+        }
 
     worktree_root = main_worktree_root(common_dir)
     my_session_id = resolve_current_session_id(worktree_root) or ""
 
-    # First read: am I the holder at all?
+    # First read: am I the holder at all? -- this IS a determined fact (the op
+    # established it is not the holder), so it stays skipped, not unknown.
     if not _claim_held_by_me(claim_dir, my_session_id):
-        return {"acted": [], "skipped": [f"{OP_CS_RELEASE_ARTIFACT}:not-holder"], "failed": []}
+        return {"acted": [], "skipped": [f"{OP_CS_RELEASE_ARTIFACT}:not-holder"], "failed": [], "unknown": []}
 
     # Second read (TOCTOU re-check): re-verify immediately before the destructive rm.
     # A takeover between the two reads flips this to False -- conservative outcome is to
-    # skip, never delete a live peer's claim.
+    # skip the delete (never delete a live peer's claim), but the claim's own disposition
+    # after the takeover is not something this call can establish -- unknown, not skipped.
     if not _claim_held_by_me(claim_dir, my_session_id):
-        return {"acted": [], "skipped": [f"{OP_CS_RELEASE_ARTIFACT}:holder-changed-toctou"], "failed": []}
+        return {
+            "acted": [], "skipped": [], "failed": [],
+            "unknown": [f"{OP_CS_RELEASE_ARTIFACT}:holder-changed-toctou"],
+        }
 
     try:
         shutil.rmtree(claim_dir, ignore_errors=True)
-        return {"acted": [f"{OP_CS_RELEASE_ARTIFACT}:{artifact_class}/{basename}"], "skipped": [], "failed": []}
+        return {
+            "acted": [f"{OP_CS_RELEASE_ARTIFACT}:{artifact_class}/{basename}"],
+            "skipped": [], "failed": [], "unknown": [],
+        }
     except OSError as exc:
         return _fail(OP_CS_RELEASE_ARTIFACT, f"{type(exc).__name__} -- {str(exc)[:160]}")

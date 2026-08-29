@@ -117,13 +117,16 @@ def _make_common_dir(tmp_path: Path) -> Path:
 def test_archive_idempotency(tmp_path):
     common_dir = _make_common_dir(tmp_path)
 
-    # Never existed -> clean skip.
+    # Never existed -- the op cannot tell an already-archived session from one that
+    # never existed, so this is unknown, not a determined skip. Action unchanged:
+    # still a clean early return, no side effect.
     result = tail_ops.cs_archive(common_dir, "sid-never-existed")
     assert result["acted"] == []
     assert result["failed"] == []
-    assert result["skipped"] == [f"{tail_ops.OP_CS_ARCHIVE}:already-archived-or-absent"]
+    assert result["skipped"] == []
+    assert result["unknown"] == [f"{tail_ops.OP_CS_ARCHIVE}:already-archived-or-absent"]
 
-    # Archive once for real, then call again -- second call must also be a clean skip.
+    # Archive once for real, then call again -- second call is the same indeterminate case.
     sdir = common_dir / "coordinator-sessions" / "sid-1"
     sdir.mkdir(parents=True)
     (sdir / "meta.json").write_text("{}", encoding="utf-8")
@@ -136,7 +139,8 @@ def test_archive_idempotency(tmp_path):
     second = tail_ops.cs_archive(common_dir, "sid-1")
     assert second["failed"] == []
     assert second["acted"] == []
-    assert second["skipped"] == [f"{tail_ops.OP_CS_ARCHIVE}:already-archived-or-absent"]
+    assert second["skipped"] == []
+    assert second["unknown"] == [f"{tail_ops.OP_CS_ARCHIVE}:already-archived-or-absent"]
 
 
 def test_archive_moves_session_dir(tmp_path):
@@ -205,7 +209,8 @@ def test_release_absent_claim_is_clean_skip(tmp_path, monkeypatch):
 
     assert result["failed"] == []
     assert result["acted"] == []
-    assert result["skipped"] == [f"{tail_ops.OP_CS_RELEASE_ARTIFACT}:already-absent"]
+    assert result["skipped"] == []
+    assert result["unknown"] == [f"{tail_ops.OP_CS_RELEASE_ARTIFACT}:already-absent"]
 
 
 def test_release_legacy_pid_only_never_held(tmp_path, monkeypatch):
@@ -247,8 +252,14 @@ def test_release_toctou_takeover_is_noop(tmp_path, monkeypatch):
 
     result = tail_ops.cs_release_artifact(common_dir, "plan", "raced-plan")
 
+    # Peer-safety behaviour is unchanged: the claim dir must still exist afterward --
+    # this is the assertion protecting the conservative never-delete-a-live-peer's-claim
+    # action; only the report (unknown, not skipped) changes.
     assert claim_dir.is_dir(), "a mid-flight takeover must abort the release, not delete it"
-    assert result["skipped"] == [f"{tail_ops.OP_CS_RELEASE_ARTIFACT}:holder-changed-toctou"]
+    assert result["acted"] == []
+    assert result["failed"] == []
+    assert result["skipped"] == []
+    assert result["unknown"] == [f"{tail_ops.OP_CS_RELEASE_ARTIFACT}:holder-changed-toctou"]
     assert calls["n"] == 2
 
 
@@ -271,7 +282,7 @@ def test_two_phase_no_candidates_short_circuits(tmp_path):
 
     result = _run(tail_ops.run_fleet_op_two_phase(_handler, "fleet.fake_op", common_dir))
 
-    assert result == {"acted": [], "skipped": [], "failed": []}
+    assert result == {"acted": [], "skipped": [], "failed": [], "unknown": []}
     assert len(preview_calls) == 1
     assert not act_calls, "T3 act must NOT be called when T1 preview has no candidates"
 
@@ -296,7 +307,7 @@ def test_two_phase_acts_on_preview_candidates(tmp_path):
     assert len(act_calls) == 1
     assert act_calls[0]["candidate_ids"] == ["c1", "c2"]
     assert act_calls[0]["mode"] == "already-terminal"
-    assert result == {"acted": ["c1"], "skipped": ["c2"], "failed": []}
+    assert result == {"acted": ["c1"], "skipped": ["c2"], "failed": [], "unknown": []}
 
 
 def test_two_phase_preview_failure_short_circuits(tmp_path):
@@ -357,7 +368,8 @@ def test_refresh_roadmap_callout_no_consumed_handoffs_is_clean_skip(tmp_path):
 
     mock_main.assert_not_called()
     assert result == {
-        "acted": [], "skipped": [f"{tail_ops.OP_ROADMAP_CALLOUT}:no-consumed-handoff"], "failed": [],
+        "acted": [], "skipped": [f"{tail_ops.OP_ROADMAP_CALLOUT}:no-consumed-handoff"],
+        "failed": [], "unknown": [],
     }
 
 
@@ -402,7 +414,7 @@ def test_refresh_roadmap_callout_acts_when_id_present(tmp_path):
     mock_main.assert_called_once_with(["goal-example", "--root", str(worktree_root)])
     assert result == {
         "acted": [f"{tail_ops.OP_ROADMAP_CALLOUT}:goal-example"], "skipped": [], "failed": [],
-        "roadmap_stub_index_paths": [],
+        "unknown": [], "roadmap_stub_index_paths": [],
     }
 
 
