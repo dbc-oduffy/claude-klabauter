@@ -38,11 +38,17 @@ def _make_ctx(ceremony: str = "wsc") -> PipelineContext:
 
 
 def _claimed_paths(repo_root: Path, sid: str) -> set[str]:
+    """Reads the session's claim state through the same seam production
+    code uses (`session_scope._read_touch_record_as_legacy_lines` over
+    `touch-record.jsonl`) -- NOT a raw `touched.txt` read. The old
+    `touched.txt` sink was fully retired 2026-08-26
+    (`_read_touch_record_as_legacy_lines`'s own docstring, "THE COMPAT
+    UNION IS GONE"); a direct `touched.txt` read here always sees an empty
+    set post-retirement regardless of whether the write actually happened.
+    """
     sdir = Path(session_core.session_dir(sid, str(repo_root)))
-    touched = sdir / "touched.txt"
-    if not touched.exists():
-        return set()
-    lines = touched.read_text(encoding="utf-8").splitlines()
+    sink_path = sdir / session_scope._TOUCH_RECORD_FILENAME
+    lines, _degraded = session_scope._read_touch_record_as_legacy_lines(sink_path)
     return session_scope.project_self_scope(lines)
 
 

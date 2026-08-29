@@ -2096,7 +2096,15 @@ _AC_NEXT_HEADING_RE = re.compile(r"^## ", re.MULTILINE)
 _AC_TABLE_ROW_RE = re.compile(r"^\s*\|(.+)\|\s*$")
 _AC_TABLE_SEPARATOR_RE = re.compile(r"^[\s|:-]+$")
 
-_AC_UNRESOLVED_STATUS_RE = re.compile(r"^(pending|todo|tbd|open)?$", re.IGNORECASE)
+_AC_UNRESOLVED_STATUS_RE = re.compile(r"^(?:$|(?:pending|todo|tbd|open))", re.IGNORECASE)
+"""Matches an EMPTY `Status` cell, or one whose vocabulary word OPENS the cell.
+
+Word-bounded rather than whole-cell anchored: the anchored form read
+`open -- owned by X` as resolved, because the trailing reason defeated the
+`$`. A cell that names an unresolved status and then explains itself is still
+unresolved, and that shape is exactly how an author records WHO owes the
+resolution. The empty-cell alternative is kept explicit (a bare `\b` after an
+optional group would match every cell, resolved ones included)."""
 _AC_STRIKETHROUGH_CELL_RE = re.compile(r"^~~(.+)~~$", re.DOTALL)
 """Matches a `Status` cell whose ENTIRE (whitespace-trimmed) content is
 struck through, e.g. `~~pending~~` -- see `_ac_status_is_unresolved` for

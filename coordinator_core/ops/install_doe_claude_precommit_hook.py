@@ -125,7 +125,11 @@ class _Gate:
 _GATE_REGISTRY: List[_Gate] = [
     _Gate(
         marker="guard-doctrine-surface-ratio",
-        filename="guard-doctrine-surface-ratio.py",
+        # The ENFORCING leg (1b). `guard-doctrine-surface-ratio.py` is leg 1a, an
+        # advisory-only PreToolUse guard that DoE-claude's own hook roster maps to
+        # `preuse-write-dispatch.py` — naming it here installed a gate that cannot
+        # block, leaving the ratchet with no enforcing leg installed by anything.
+        filename="guard-doctrine-surface-ratio-precommit.py",
         label="doctrine-surface-ratio",
         override_env="COORDINATOR_OVERRIDE_PRECOMMIT_DOCTRINE_SURFACE_RATIO",
     ),

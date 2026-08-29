@@ -77,6 +77,21 @@ Negative-spec (hard-won):
   - Does NOT accept a caller-supplied range/anchor override (AC4) — no
     parameter of `resolve_chunk_commits` or this op's handler can widen the
     query past `<plan's own add-sha>..HEAD`.
+  - Does NOT establish that a matched commit belongs to THIS plan. The range
+    is anchored to the plan's own add-commit, but on a shared branch that
+    range also carries every peer's commits, and a peer plan's own `C1:`
+    subject satisfies the stage-3 prefix test. So the answer is "a commit
+    whose subject opens `<chunk-id>:` landed in this plan's range", never
+    "this plan's chunk `<chunk-id>` committed". A caller treating a hit as
+    delivery evidence for THIS plan can attribute a peer's commit, at exit 0.
+    The precision mechanism that would close this — joining the commit
+    SUBJECT against a `Deliverable-Id:` git trailer — was DELETED on purpose
+    (`close_out_and_stamp`, C3 2026-08-21, "the close ceremony stops paying
+    for the join"): measured recall across the corpus was very low, and every
+    widening it received was chasing that rather than closing it. Do not
+    rebuild it here. The sanctioned direction for delivery evidence is a pure
+    sha-ancestry check against an explicit sha (`disposition_ref`), which this
+    liveness op deliberately is not.
   - Does NOT collapse the return to a boolean (AC5) — the caller is a
     liveness precondition, but collapsing to true/false throws away which
     commits landed, which is the evidence the caller actually needs.

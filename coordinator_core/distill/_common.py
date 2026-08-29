@@ -179,11 +179,12 @@ truth: `coordinator/docs/wiki/provenance-markers.md` § "The marker key set (the
 there as under-consideration, NOT yet part of the enforced set, and must not be added here
 until that doc says so.
 
-Back-pointer integrity: that section was temporarily lost — a distill harvest (DoE
-`f064affb0`, 2026-08-06) replaced the page's body with review-trail provenance — and was
-restored at DoE `269adc5b9` (2026-08-29) after a memo. Re-verify the cited section still
-says what it is cited for before widening this tuple; a back-pointer to a page that no
-longer carries the contract reads as ratification nobody gave.
+Back-pointer integrity: `coordinator/docs/wiki/provenance-markers.md` § "The marker key
+set (the contract)" was temporarily lost — a distill harvest (DoE `f064affb0`, 2026-08-06)
+replaced the page's body with review-trail provenance — and was restored at DoE
+`269adc5b9` (2026-08-29) after a memo. Re-verify that section still says what it is cited
+for before widening this tuple; a back-pointer to a page that no longer carries the
+contract reads as ratification nobody gave.
 
 Each key introduces a YAML list block (`path:`, plus per-key metadata fields) whose entries
 record a candidate's own repo-relative path as a harvest tombstone. Without this exclusion,
@@ -366,7 +367,7 @@ def _needle_referenced_in(
     caller wants the tombstone to count. See `active_reference_guard`'s docstring for why
     that is a second reading rather than a weaker one."""
     if not exclude_provenance_blocks:
-        return any(matched_path for matched_path in matched_paths)
+        return bool(matched_paths)
     for matched_path in matched_paths:
         if not matched_path:
             continue

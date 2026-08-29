@@ -712,6 +712,12 @@ def check_harvest_provenance(frontmatter_text: str, path: Path, repo_root: Path)
     scan (SECURITY-ADJACENT: the needle passed to it must be forward-slash —
     see `evaluate_candidate_detailed`'s note on why a native-separator needle
     fails OPEN on Windows; this guard computes its needle the identical way).
+    The two needles are searched under DIFFERENT `exclude_provenance_blocks`
+    settings — see the two call sites below — because a full path inside a
+    provenance block is trustworthy proof but a bare basename inside one is
+    not (2026-08-29 code-review Finding 1: a same-basename-different-path
+    artifact could otherwise falsely satisfy this guard for an unrelated
+    candidate).
 
     Fail-closed: if `docs/wiki/` and `docs/decisions/` are BOTH absent on
     disk, that is "no citation found" -> BLOCK, consistent with
@@ -747,11 +753,18 @@ def check_harvest_provenance(frontmatter_text: str, path: Path, repo_root: Path)
         exclude_provenance_blocks=False,
     )
     if not cited and basename != needle:
+        # Basename fallback keeps the SAFE default (exclude_provenance_blocks=True,
+        # i.e. not passed here at all): a bare basename is not path-qualified, so a
+        # provenance block belonging to a DIFFERENT harvested artifact that merely
+        # shares this candidate's filename must not count as proof. A basename
+        # citation in prose (outside any provenance block) still counts — only the
+        # provenance-block reading of the basename needle is excluded. The full-path
+        # needle above is unaffected: a provenance block citing the candidate's own
+        # full repo-relative path IS durable-capture proof and must keep counting.
         cited = active_reference_guard(
             basename,
             repo_root,
             scope=_HARVEST_PROVENANCE_SCOPE,
-            exclude_provenance_blocks=False,
         )
     if cited:
         return GuardResult(

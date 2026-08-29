@@ -24,9 +24,14 @@ from typing import Any, Optional
 # DR-084 P4 transitional ingest tolerance (see sections/handoffs.py's module docstring for the
 # full history and named exit condition) — the union of old-and-new legal `deployment_state`
 # values. A value outside this union is neither, and is per-record quarantined by the caller.
+# `record` is the ratified spelling for a non-workstream parent record (`kind:
+# spinoff-parent-record`) — an artifact naming its split pieces, which by
+# construction never reaches `ready_to_fire`, `in_flight`, or `shipped`. It is a
+# legitimate terminal on this axis, not a malformed value; quarantining it left
+# every reader scanning the `malformed` bucket re-deciding the same record was fine.
 _DEPLOYMENT_RECOGNIZED = {
     "in_flight", "shipped", "awaiting_gate", "ready_to_fire", "abandoned",
-    "continued", "closed",
+    "continued", "closed", "record",
 }
 
 # `predecessor`'s only computation: the default projected when frontmatter omits the field.

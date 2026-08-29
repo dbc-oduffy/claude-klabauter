@@ -993,6 +993,51 @@ def test_guard3_excludes_the_same_block_guard7_requires(tmp_path: Path):
 
 
 @_requires_rg
+def test_guard7_basename_collision_in_unrelated_provenance_block_does_not_pass(
+    tmp_path: Path,
+):
+    # 2026-08-29 code-review Finding 1: the basename fallback must NOT match inside a
+    # provenance block belonging to a DIFFERENT harvested artifact that merely shares this
+    # candidate's filename. Only a full-path citation inside a provenance block counts.
+    wiki = tmp_path / "docs" / "wiki"
+    wiki.mkdir(parents=True)
+    (wiki / "guide.md").write_text(
+        "---\n"
+        "archived_handoff:\n"
+        "  - path: some/other/dir/old-thing.md\n"
+        "    workstream: foo\n"
+        "---\n"
+        "unrelated content\n",
+        encoding="utf-8",
+    )
+    candidate = tmp_path / "archive" / "handoffs" / "old-thing.md"
+    candidate.parent.mkdir(parents=True)
+    candidate.write_text("body\n", encoding="utf-8")
+
+    result = check_harvest_provenance("distill_fate: commitment", candidate, tmp_path)
+    assert result.passed is False
+
+
+@_requires_rg
+def test_guard7_basename_citation_in_prose_still_passes(tmp_path: Path):
+    # Companion to the above: a basename citation OUTSIDE any provenance block (plain
+    # prose) must still count as proof -- only the provenance-block reading of the
+    # basename needle is excluded, not the basename fallback itself.
+    wiki = tmp_path / "docs" / "wiki"
+    wiki.mkdir(parents=True)
+    (wiki / "guide.md").write_text(
+        "the harvested content for old-thing.md lives here now\n",
+        encoding="utf-8",
+    )
+    candidate = tmp_path / "archive" / "handoffs" / "old-thing.md"
+    candidate.parent.mkdir(parents=True)
+    candidate.write_text("body\n", encoding="utf-8")
+
+    result = check_harvest_provenance("distill_fate: commitment", candidate, tmp_path)
+    assert result.passed is True
+
+
+@_requires_rg
 def test_evaluate_candidate_multiple_guards_fail(tmp_path: Path):
     handoff = tmp_path / "state" / "handoffs" / "bad-candidate.md"
     handoff.parent.mkdir(parents=True)

@@ -14,7 +14,9 @@ reading raw git output on every invocation. Returns the eight-key decision
 object (`artifact`/`preflight`/`gates`/`directives`/`judgment_points`/
 `decisions`/`narration`/`next_move`) per the Tier-B contract; every mutating
 step is either an unconditional `directives[]` entry (a branch with zero
-unique commits is safe to delete outright — no judgment needed) or gated
+unique commits is safe to delete outright — no judgment needed, EXCEPT a
+backup ref, whose emptiness is its success condition; see
+`is_backup_branch`) or gated
 behind a `judgment_points[]` entry a human/EM disposition resolves
 (absorb-or-skip on a branch WITH unique commits, dirty-worktree removal,
 behind-main merge-first, and the Step 8 merge-ready recommendation).
@@ -178,11 +180,38 @@ def tip_authors(run_git: RunGit, repo_root: Path) -> dict[str, str]:
     return authors
 
 
+#: Branch-name segments that mark a ref as a deliberate safety copy. A backup
+#: ref doing its job perfectly is byte-identical to what it protects, so it has
+#: ZERO unique commits -- which the redundancy test below reads as "safe to
+#: delete outright, no judgment needed" and turns into an unconditional delete
+#: directive with no judgment point in front of it. That is exactly backwards:
+#: emptiness is the backup's success condition, not evidence it is disposable.
+#: Reported after a near-loss of unrecoverable history during an active
+#: blob-purge (recovered via reflog).
+#:
+#: Deliberately broad, and deliberately erring toward retention: a working
+#: branch wrongly spared costs one manual delete, a backup wrongly deleted can
+#: cost history that exists nowhere else. Matched per slash-separated segment,
+#: so `backup/pre-purge`, `wip/backup-2026-08-18`, and `pre-rewrite` all hold.
+_BACKUP_BRANCH_SEGMENT_PREFIXES = ("backup", "pre-")
+
+
+def is_backup_branch(name: str) -> bool:
+    """True when any slash-separated segment of `name` marks a safety copy."""
+    return any(
+        segment.startswith(prefix)
+        for segment in name.split("/")
+        for prefix in _BACKUP_BRANCH_SEGMENT_PREFIXES
+    )
+
+
 def categorize_branch(name: str, current: str, main_branch: Optional[str], tip_email: str, my_email: str) -> str:
     if name == current:
         return "current"
     if main_branch is not None and name == main_branch:
         return "main"
+    if is_backup_branch(name):
+        return "backup"
     if tip_email == my_email:
         return "mine-stale"
     return "others"
@@ -389,7 +418,10 @@ def brief(
         author = all_tip_authors[ref] if ref in all_tip_authors else tip_author(run_git, repo_root, ref)
         category = categorize_branch(name, current, main_branch, author, my_email)
         if category != "mine-stale":
-            branches_report.append({**entry, "tip_author": author, "category": "others"})
+            # Report the category actually computed. The old literal `"others"`
+            # collapsed every non-stale branch into one bucket, which would have
+            # hidden the `backup` category from the brief the moment it existed.
+            branches_report.append({**entry, "tip_author": author, "category": category})
             continue
 
         commits = unique_commits(run_git, repo_root, current, ref)
