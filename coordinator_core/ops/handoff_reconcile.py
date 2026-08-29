@@ -115,7 +115,6 @@ import logging
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from coordinator_core.ipc import register_op
 from coordinator_core.lifecycle import main_worktree_root
 from coordinator_core.ops.handoff_transition import (
     _gate_cascade_clear,
@@ -406,4 +405,13 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     return response
 
 
-register_op("handoff.reconcile_open", _handler)
+# handoff.reconcile_open is KILLED (200ms sweep, 5,546ms CPU) -- superseded by
+# handoff.housekeeping, which reaches `_handler` above as a LIBRARY (see that
+# module's `_reconcile_open`, a deferred import). The register_op() call that
+# stood here was the cut's residue: it re-registered the dead op every time the
+# live successor imported this module, leaving a killed key dispatchable through
+# an import side effect. Deleting it completes the cut and keeps the compute.
+# Do NOT restore it, and do not add this module to _EAGER_OP_MODULES or the op
+# to OP_CLASSIFICATION / OP_MODULE_MAP / _OP_KEY_SCOPE -- see CLAUDE.md's kill
+# bar ("kill means kill forever"), test_housekeeping_is_the_one_job.py's
+# _LEGACY_KEYS, and test_occupancy_scan.py's Liveness.DEAD pin.

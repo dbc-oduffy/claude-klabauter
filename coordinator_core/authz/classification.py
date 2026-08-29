@@ -3740,6 +3740,58 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     "fleet.archive_queue_entry": OpClass.MUTATING,
     "fleet.archive_release_accumulator": OpClass.MUTATING,
     "fleet.migrate_handoff_vocabulary": OpClass.MUTATING,
+    # fleet.archive_actioned_memos — MUTATING, and a DR-211 archival writer of the
+    # same sub-category as fleet.archive_completed_handoffs above: _handle_act calls
+    # _common.archive_and_commit, the batched os.replace-plus-_commit_via_head_spine
+    # mover every fleet sweep now shares (ops/fleet/archive_actioned_memos.py). It
+    # moves ALREADY-committed terminal memos and is never the first committer of a
+    # memo.transition write (DR-273 terminal-committer contract, named in that
+    # module's own docstring) — which bounds what it writes, not whether it writes.
+    "fleet.archive_actioned_memos": OpClass.MUTATING,
+    # fleet.archive_sweep_status — COMPUTE_ONLY despite the "archive" in the name:
+    # it reports on the sweeps, it does not run one. `_handler` (ops/fleet/
+    # sweep_status.py) reads _sweep_receipt.receipt_path and summarizes the rows;
+    # repo_root is None degrades to an empty-and-healthy answer rather than raising.
+    #   1. Writes/deletes/reorders any state file, queue, or git object?      No.
+    #   2. Writes into rag's relational store?                                No.
+    #   3. Opens any file for write (including sentinel creation)?            No.
+    #   4. Mutates shared mutable state outside its own module?               No.
+    #   5. Persistent state changes observable across process boundaries?     No.
+    "fleet.archive_sweep_status": OpClass.COMPUTE_ONLY,
+    # session.audit_unreapable — COMPUTE_ONLY: the read-only naming half of
+    # session.reap, added because that op's contract is fixed at a count and an
+    # operator diagnosing hub growth needs the names (ops/session/reap.py). Its own
+    # docstring states the affirmation directly: "Mutates NOTHING: no move, no rm,
+    # no `.last-reap` touch, no cadence gate."
+    #   1. Writes/deletes/reorders any state file, queue, or git object?      No.
+    #   2. Writes into rag's relational store?                                No.
+    #   3. Opens any file for write (including sentinel creation)?            No.
+    #   4. Mutates shared mutable state outside its own module?               No.
+    #   5. Persistent state changes observable across process boundaries?     No.
+    #      A directory listing plus one stat per entry; git_common_dir resolves by
+    #      pure-Python upward walk, so not even a spawn.
+    "session.audit_unreapable": OpClass.COMPUTE_ONLY,
+    # handoff.reconcile_open — DELIBERATELY LEFT UNCLASSIFIED, and this comment is the
+    # reason, so the next person to run the quad check does not "fix" it the way this
+    # one first did. The op was CUT by the 200ms sweep (5,546ms CPU) and is dead:
+    # nothing imports coordinator_core/ops/handoff_reconcile.py any more, so its
+    # module-level register_op() never fires at runtime and coordinator-invoke cannot
+    # reach the op. It surfaces as a quad violation only because
+    # check_registration_quad()'s discovery does a full pkgutil walk that imports every
+    # module on disk, including dead ones — the violation is an artifact of the probe,
+    # not a reachable op missing its paperwork.
+    #
+    # Classifying it, or adding it to OP_MODULE_MAP/_OP_KEY_SCOPE/_EAGER_OP_MODULES,
+    # RESURRECTS it: the eager-list entry is exactly the import that makes register_op
+    # fire again. CLAUDE.md's kill bar is explicit that kill means kill forever, and
+    # test_occupancy_scan.py::test_classify_liveness_three_known_answers pins the op at
+    # Liveness.DEAD with the same warning in its own words ("if any future edit
+    # re-imports it, this goes red and the message is 'the cut is incomplete'").
+    #
+    # The real remaining work is completing the cut — deleting the dangling
+    # register_op("handoff.reconcile_open", _handler) line, and the module with it if
+    # nothing else needs it. That is the cut's owner's call, not a drive-by edit from a
+    # quad-check green-up.
     # fleet.mode_set / fleet.mode_show — the fleet-scoped settings plane's human-invoked
     # half (ops/fleet/mode_control.py; plan 2026-08-28-the-fleet-gets-one-file-and-the-
     # floor-moves-to-the-reader § C4). The pair splits across the class line because one
