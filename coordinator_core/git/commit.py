@@ -105,6 +105,25 @@ class CommitOutcome(NamedTuple):
     #: worktree bytes (invariant 1). The caller reports these; a silent
     #: substitution is how a deliberate partial stage gets lost.
     staged_preferred: Tuple[str, ...]
+    #: The counterpart, and the one that can LOSE something: paths whose
+    #: worktree bytes were committed while the index held DIFFERENT bytes the
+    #: caller never declared via `prefer_staged`.
+    #:
+    #: Reporting only `staged_preferred` had the field pointing the safe way.
+    #: A declared preference is safe by construction -- the caller asked for
+    #: it. The undeclared divergence is the lossy direction, and it is exactly
+    #: what changes hands at the `commit_scoped` -> `commit_paths` cutover:
+    #: for the same pathspec, `commit_scoped` INFERS a partial stage from
+    #: divergence and commits the index blob, while this function commits the
+    #: worktree. Both cannot be right, and the disagreement was invisible in
+    #: the outcome of either.
+    #:
+    #: This is a REPORT, never a refusal. Divergence does not identify intent
+    #: (see invariant 1 below): the common case is an ordinary unstaged edit
+    #: whose worktree bytes are precisely what the caller meant, and refusing
+    #: those would make the safe default unusable. Free to compute -- the
+    #: staged identity and the worktree blob are both already in hand.
+    worktree_over_staged: Tuple[str, ...] = ()
 
 
 
@@ -326,6 +345,7 @@ def commit_paths(
     assembled: Dict[str, object] = {}
     index_updates: Dict[str, object] = {}
     staged_preferred = []
+    staged_passed_over: list = []
     refused: list = []
 
     prefer_staged_set = {p.replace("\\", "/") for p in prefer_staged}
@@ -362,6 +382,14 @@ def commit_paths(
                 refused.append(p)
                 continue
             mode = entry.mode if entry is not None else _mode_for(root / p)
+            if entry is not None and blob != entry.sha:
+                # CANDIDATE ONLY -- the worktree differs from the index, which
+                # is NOT yet evidence that anything was deliberately staged.
+                # It is equally true of an ordinary unstaged edit, where the
+                # index still holds HEAD's bytes. Settled against HEAD below,
+                # once the tree spine (already read for the commit itself) is
+                # in hand.
+                staged_passed_over.append(p)
         assembled[p] = (mode, blob)
         index_updates[p] = (mode, blob)
 
@@ -396,6 +424,25 @@ def commit_paths(
     spine = read_tree_spine(repo, list(assembled))
     if spine is None:
         raise CommitRefused("could not read HEAD's tree spine")
+    # SETTLE THE CANDIDATES AGAINST HEAD, off the spine that was read for the
+    # commit anyway -- no extra spawn, no extra object read, and the "zero git
+    # spawns" contract is untouched.
+    #
+    # The discriminator is index-vs-HEAD, never index-vs-worktree. A path whose
+    # index entry still equals HEAD was never deliberately staged: the worktree
+    # simply moved on, which is an ordinary edit and the common case. Only a
+    # path whose index differs from HEAD had something put there on purpose,
+    # and only that path loses anything by committing the worktree instead.
+    # Reporting the wider set would fire on nearly every commit and train its
+    # reader to ignore the field, which is the same silence by another route.
+    worktree_over_staged = []
+    for p in staged_passed_over:
+        head_dir, _, head_name = p.rpartition("/")
+        head_entry = spine.get(head_dir, {}).get(head_name)
+        entry = staged.get(p)
+        if entry is not None and (head_entry is None or head_entry[1] != entry.sha):
+            worktree_over_staged.append(p)
+
     filled = _synthesize_absent_spine_dirs(spine, assembled)
     if filled is not None:
         spine = filled
@@ -439,7 +486,11 @@ def commit_paths(
     # rolled back onto a landed commit.
     index_write.splice_index(repo, index_updates)
 
-    return CommitOutcome(sha=commit_sha, staged_preferred=tuple(staged_preferred))
+    return CommitOutcome(
+        sha=commit_sha,
+        staged_preferred=tuple(staged_preferred),
+        worktree_over_staged=tuple(worktree_over_staged),
+    )
 
 
 def _index_key(root: Path, raw_path: str) -> str:

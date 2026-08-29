@@ -104,7 +104,7 @@ def test_verification_runs_from_neutral_cwd(tmp_path, monkeypatch):
     import tempfile
 
     assert captured_kwargs.get("cwd") == tempfile.gettempdir()
-    repo_root = str(Path(__file__).resolve().parents[4])
+    repo_root = str(Path(__file__).resolve().parents[3])
     assert captured_kwargs.get("cwd") != repo_root
 
 

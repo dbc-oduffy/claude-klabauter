@@ -112,8 +112,12 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
                                        declared, never inferred).
 
     Returns:
-        {"committed": True, "sha": str, "staged_preferred": [str, ...]}
-        on success, or {"committed": False, "sha": None, "error": str} on any
+        {"committed": True, "sha": str, "staged_preferred": [str, ...],
+         "worktree_over_staged": [str, ...], "warnings": [str, ...]} on
+        success -- `warnings` is non-empty exactly when
+        `worktree_over_staged` is, and says the same thing in the register
+        an operator reads. Or
+        {"committed": False, "sha": None, "error": str} on any
         structured refusal (an empty pathspec, a directory in `paths`, an
         unresolvable CAS ref, a lost CAS race, or a path needing a checkin
         conversion neither this module nor its `blob_fallback` can
@@ -164,8 +168,26 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     except (CommitRefused, FilterUnsupported) as exc:
         return _error(str(exc))
 
+    # A FIELD IS NOT A SIGNAL. The other route through this same disagreement
+    # (`commit_scoped`'s private-index branch, via `commit_pipeline`) has
+    # carried a loud message on SUCCESS since the 2026-08-10 bug-backlog row,
+    # on the reasoning that a commit which sets one side aside is a legitimate
+    # success and the operator still needs to see why. This route returned the
+    # equivalent fact as a dict key nobody is obliged to read, so the same
+    # disagreement was loud on one path and silent on the other.
+    warnings = []
+    if outcome.worktree_over_staged:
+        paths = ", ".join(outcome.worktree_over_staged)
+        warnings.append(
+            f"committed worktree content for {len(outcome.worktree_over_staged)} "
+            f"path(s) whose index held different content: {paths}. "
+            "Pass prefer_staged to commit the staged content instead."
+        )
+
     return {
         "committed": True,
         "sha": outcome.sha,
         "staged_preferred": list(outcome.staged_preferred),
+        "worktree_over_staged": list(outcome.worktree_over_staged),
+        "warnings": warnings,
     }

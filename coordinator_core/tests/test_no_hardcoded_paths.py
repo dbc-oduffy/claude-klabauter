@@ -206,7 +206,24 @@ _EXEMPT_SITES: set[str] = {
     # git-for-windows sibling layout); `/bin/sh` names a real, portable
     # convention path, not a repo-local hardcode. 2026-08-25.
     "coordinator_core/testing/sh_interpreter.py::_resolve_sh_interpreter",
+    # System-gitconfig discovery ladder: git-for-windows sibling layouts
+    # derived from `git`'s own bin dir, then `/etc/gitconfig` as the last
+    # rung. That literal names git's POSIX system-config convention, which is
+    # the same path on every POSIX host -- it is not a repo-local or
+    # machine-local hardcode, and there is no registry key that could resolve
+    # it. Same shape as `sh_interpreter`'s `/bin/sh` rung above. 2026-08-29.
+    "coordinator_core/git/content_hash.py::_system_gitconfig_paths",
 }
+
+
+#: Tooth 3 (above-repo-root traversal) applies to EVERY `.py` file under
+#: the scan root, test-directory helpers included. Teeth 1 and 2 keep
+#: their narrower scopes -- the per-tooth filters in
+#: `find_hardcoded_path_violations` still apply. The file this tooth was
+#: added for, `bash_guards/tests/guard_message_corpus.py`, is exactly the
+#: shape `_is_excluded_source_path` skips: a helper under `tests/` whose
+#: name does not start with `test_`.
+_TOOTH3_SEES_EVERY_FILE = True
 
 
 def _is_test_file(path: Path) -> bool:
@@ -269,6 +286,54 @@ def _is_climb_tainted_expr(node: ast.AST) -> bool:
     return _contains_climb_marker(node) and _contains_dunder_file(node)
 
 
+def _is_dunder_file_anchor(node: ast.AST) -> bool:
+    """The BARE `__file__` name only.
+
+    NEGATIVE SPEC -- `<module>.__file__` (an ast.Attribute) is deliberately
+    NOT an anchor. Tooth 3 decides "above the repo root" by comparing a climb
+    against the depth of the file being SCANNED, and that arithmetic only
+    holds when the climb starts at that same file. A climb rooted at another
+    module's `__file__` -- `test_engine_root_conformance.py` walks from a
+    module it loaded out of the DoE-claude checkout -- starts somewhere this
+    gate cannot measure, so counting its levels against the scanned file's
+    depth reports an escape that is not one. Unmeasurable is `None`, never a
+    guess."""
+    return isinstance(node, ast.Name) and node.id == "__file__"
+
+
+def _climb_levels_above_file(node: ast.AST) -> int | None:
+    """How many directory levels above the anchoring file `node` resolves to,
+    or `None` when `node` is not a `__file__`-anchored climb at all.
+
+    `Path(__file__)` is 0 (the file itself), `.parent` adds one, and
+    `.parents[k]` adds `k + 1` (`parents[0]` is already the containing
+    directory). `Path(...)`/`.resolve()`/`.absolute()` are transparent
+    wrappers that move nothing. Anything else returns `None` rather than a
+    guess -- an unrecognized shape must not be reported as an escape.
+    """
+    if _is_dunder_file_anchor(node):
+        return 0
+    if isinstance(node, ast.Call):
+        func_name = _resolved_func_name(node.func)
+        if func_name in ("resolve", "absolute") and isinstance(node.func, ast.Attribute):
+            return _climb_levels_above_file(node.func.value)
+        if func_name == "Path" and len(node.args) == 1:
+            return _climb_levels_above_file(node.args[0])
+        return None
+    if isinstance(node, ast.Attribute) and node.attr == "parent":
+        inner = _climb_levels_above_file(node.value)
+        return None if inner is None else inner + 1
+    if isinstance(node, ast.Subscript):
+        base = node.value
+        if isinstance(base, ast.Attribute) and base.attr == "parents":
+            index = node.slice
+            if isinstance(index, ast.Constant) and isinstance(index.value, int):
+                inner = _climb_levels_above_file(base.value)
+                return None if inner is None else inner + index.value + 1
+    return None
+
+
+
 def _string_constants(node: ast.AST) -> list[str]:
     return [n.value for n in ast.walk(node) if isinstance(n, ast.Constant) and isinstance(n.value, str)]
 
@@ -327,10 +392,19 @@ class _HardcodedPathVisitor(ast.NodeVisitor):
     literal construction) and Tooth 2 (sibling-repo-crossing traversal)
     violations as they're encountered, in source order."""
 
-    def __init__(self, enclosing_fn: str = "<module>") -> None:
+    def __init__(self, enclosing_fn: str = "<module>", file_depth: int | None = None) -> None:
         self.violations: list[tuple[int, str, str, str]] = []  # (lineno, tooth, symbol, detail)
         self._tainted_names: set[str] = set()
         self._fn_stack: list[str] = [enclosing_fn]
+        #: Path components between the repo root and this file inclusive, so a
+        #: climb of exactly `file_depth` lands ON the repo root and anything
+        #: greater lands above it. `None` disables Tooth 3 (a caller scanning
+        #: a file whose position relative to a repo root is unknown).
+        self._file_depth = file_depth
+        #: (lineno, symbol) -> greatest climb seen. Every inner node of a
+        #: chain also parses as a shorter climb, so the outermost -- the one
+        #: that actually decides where the expression lands -- is the max.
+        self._climbs: dict[tuple[int, str], int] = {}
 
     @property
     def _symbol(self) -> str:
@@ -381,6 +455,43 @@ class _HardcodedPathVisitor(ast.NodeVisitor):
     def visit_Call(self, node: ast.Call) -> None:
         self._check_construction(node)
         self.generic_visit(node)
+
+    def visit_Attribute(self, node: ast.Attribute) -> None:
+        self._record_climb(node)
+        self.generic_visit(node)
+
+    def visit_Subscript(self, node: ast.Subscript) -> None:
+        self._record_climb(node)
+        self.generic_visit(node)
+
+    def _record_climb(self, node: ast.AST) -> None:
+        """Tooth 3 evidence gathering. Deliberately NOT a violation append:
+        an escape is only decided once the whole module is walked, in
+        `escape_violations`, because the outermost node of a climb chain is
+        not known until its inner nodes have been visited."""
+        if self._file_depth is None:
+            return
+        levels = _climb_levels_above_file(node)
+        if levels is None:
+            return
+        key = (node.lineno, self._symbol)
+        if levels > self._climbs.get(key, -1):
+            self._climbs[key] = levels
+
+    def escape_violations(self) -> list[tuple[int, str, str, str]]:
+        """Tooth 3: every climb that lands strictly above the repo root."""
+        if self._file_depth is None:
+            return []
+        out = []
+        for (lineno, symbol), levels in sorted(self._climbs.items()):
+            if levels > self._file_depth:
+                out.append((
+                    lineno,
+                    "above-repo-root-traversal",
+                    symbol,
+                    f"climbs {levels} level(s) from a file {self._file_depth} below the repo root",
+                ))
+        return out
 
     def visit_BinOp(self, node: ast.BinOp) -> None:
         if isinstance(node.op, ast.Div):
@@ -450,8 +561,10 @@ def find_hardcoded_path_violations(root: Path, *, repo_root: Path | None = None)
     repo_root = repo_root if repo_root is not None else _REPO_ROOT
     violations: list[tuple[str, int, str, str]] = []
     for path in sorted(root.rglob("*.py")):
-        if _is_excluded_source_path(path):
-            continue
+        # Excluded files are still PARSED, but only Tooth 3 may speak for
+        # them -- teeth 1 and 2 keep the narrower scope they were measured
+        # against. Filtered below, after the visitor runs.
+        tooth3_only = _is_excluded_source_path(path)
         is_test = _is_test_file(path)
         relpath = _relpath(path, repo_root)
         source = path.read_text(encoding="utf-8")
@@ -459,9 +572,15 @@ def find_hardcoded_path_violations(root: Path, *, repo_root: Path | None = None)
             tree = ast.parse(source, filename=str(path))
         except SyntaxError:
             continue
-        visitor = _HardcodedPathVisitor()
+        try:
+            depth = len(path.resolve().relative_to(repo_root.resolve()).parts)
+        except ValueError:
+            depth = None
+        visitor = _HardcodedPathVisitor(file_depth=depth)
         visitor.visit(tree)
-        for lineno, tooth, symbol, detail in visitor.violations:
+        for lineno, tooth, symbol, detail in visitor.violations + visitor.escape_violations():
+            if tooth3_only and tooth != "above-repo-root-traversal":
+                continue
             if is_test and tooth == "root-or-drive-anchored-literal":
                 continue
             site = f"{relpath}::{symbol}"
@@ -660,7 +779,13 @@ def test_gate_ignores_in_repo_only_climbing_and_doc_comment_mentions(tmp_path):
     fine); a docstring/comment mentioning the hazardous shape in prose must
     not trip the AST-based scanner; a root-anchored `/tmp`-style literal
     with no sibling token is Tooth-1-eligible ONLY, not Tooth 2."""
-    fixture = tmp_path / "fixture_benign.py"
+    # Nested to a realistic depth: `parents[2]` from a file three components
+    # below the root lands ON the root, which is the benign in-repo climb this
+    # control is asserting about. At tmp_path's top level the same expression
+    # would resolve two levels ABOVE the fixture root and Tooth 3 would be
+    # right to flag it -- the fixture's own placement, not the code it plants.
+    fixture = tmp_path / "pkg" / "sub" / "fixture_benign.py"
+    fixture.parent.mkdir(parents=True, exist_ok=True)
     fixture.write_text(
         '"""Uses Path(__file__).resolve().parents[4] / "DoE-claude" in prose only."""\n'
         "from pathlib import Path\n"
@@ -697,3 +822,91 @@ def test_exempt_sites_do_not_trip_the_gate_by_construction():
 
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))
+
+
+def _plant(tmp_path: Path, relpath: str, body: str) -> Path:
+    target = tmp_path / relpath
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("from pathlib import Path\n" + body + "\n", encoding="utf-8")
+    return target
+
+
+def test_tooth3_detects_a_planted_scratch_dir_above_the_repo_root(tmp_path):
+    """The live violation this tooth was added for, in its original form.
+
+    `bash_guards/tests/guard_message_corpus.py` climbed to the DRIVE ROOT and
+    `mkdir`'d a scratch parent there, on every suite run, on whatever drive
+    the checkout lived on. Teeth 1 and 2 were both blind to it: Tooth 1 wants
+    a root-anchored string literal (there is none -- the path is computed),
+    and Tooth 2 wants a known sibling-repo token as the leaf (the leaf is a
+    scratch directory nobody had named before).
+    """
+    _plant(
+        tmp_path,
+        "coordinator_core/bash_guards/tests/guard_message_corpus.py",
+        '_NEUTRAL_SCRATCH_PARENT = Path(__file__).resolve().parents[3].parent / "corpus-scratch"',
+    )
+    violations = find_hardcoded_path_violations(tmp_path, repo_root=tmp_path)
+    assert [(v[0], v[2]) for v in violations] == [
+        ("coordinator_core/bash_guards/tests/guard_message_corpus.py", "above-repo-root-traversal")
+    ]
+
+
+def test_tooth3_detects_a_bare_parent_climb_with_no_leaf_at_all(tmp_path):
+    """No `/` join, no string literal anywhere -- just a climb that lands
+    above the root. Tooth 3 keys on WHERE the expression resolves, never on
+    what is appended to it."""
+    _plant(tmp_path, "coordinator_core/pkg/mod.py", "_X = Path(__file__).resolve().parents[2].parent")
+    violations = find_hardcoded_path_violations(tmp_path, repo_root=tmp_path)
+    assert [v[2] for v in violations] == ["above-repo-root-traversal"]
+
+
+def test_tooth3_detects_a_parents_index_one_past_the_repo_root(tmp_path):
+    """The off-by-one shape: `parents[N]` where N is one deeper than the
+    climb to the repo root. This is what `test_whoami_pin_migration.py` did
+    -- binding the result to a variable named `repo_root` that actually held
+    the drive root, which silently degraded its `!=` assertion to always
+    true."""
+    _plant(tmp_path, "coordinator_core/a/b/mod.py", "_ROOT = str(Path(__file__).resolve().parents[4])")
+    violations = find_hardcoded_path_violations(tmp_path, repo_root=tmp_path)
+    assert [v[2] for v in violations] == ["above-repo-root-traversal"]
+
+
+def test_tooth3_allows_a_climb_that_lands_exactly_on_the_repo_root(tmp_path):
+    """The negative direction, and the reason this tooth counts rather than
+    pattern-matches: reaching the repo root is the single most common thing
+    these climbs do. `parents[3]` from a file three directories deep is the
+    root itself, not an escape."""
+    _plant(tmp_path, "coordinator_core/a/b/mod.py", "_ROOT = Path(__file__).resolve().parents[3]")
+    assert find_hardcoded_path_violations(tmp_path, repo_root=tmp_path) == []
+
+
+def test_tooth3_ignores_a_climb_anchored_at_another_modules_file(tmp_path):
+    """`<module>.__file__` starts somewhere this gate cannot measure -- the
+    module may have been loaded from an entirely different checkout, which is
+    exactly what `test_engine_root_conformance.py` does. Counting its levels
+    against the SCANNED file's depth would report an escape that is not one,
+    so an unmeasurable anchor yields no verdict."""
+    _plant(tmp_path, "coordinator_core/a/b/mod.py", "_X = Path(mr.__file__).resolve().parents[3].parent")
+    assert find_hardcoded_path_violations(tmp_path, repo_root=tmp_path) == []
+
+
+def test_tooth3_sees_helper_modules_under_a_tests_directory(tmp_path):
+    """Scope proof. Teeth 1 and 2 skip a non-`test_*.py` file under `tests/`
+    outright, which is precisely the slot the real violation occupied for
+    months. Tooth 3 must not inherit that blind spot."""
+    _plant(tmp_path, "coordinator_core/pkg/tests/helper_corpus.py", "_X = Path(__file__).resolve().parents[3].parent")
+    violations = find_hardcoded_path_violations(tmp_path, repo_root=tmp_path)
+    assert [v[2] for v in violations] == ["above-repo-root-traversal"]
+
+
+def test_no_above_repo_root_traversal_anywhere_in_coordinator_core():
+    """Standing gate: nothing under `coordinator_core/` may resolve a path
+    above this repo's own root. Every repo has its own scratch folder; the
+    wider drive is not ours to write into (PM ruling, 2026-08-28)."""
+    violations = [
+        v for v in find_hardcoded_path_violations(_SCAN_ROOT) if v[2] == "above-repo-root-traversal"
+    ]
+    assert violations == [], (
+        "path expression(s) resolving above the repo root: %r" % (violations,)
+    )

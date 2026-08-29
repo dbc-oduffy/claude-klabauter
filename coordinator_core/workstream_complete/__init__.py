@@ -1364,6 +1364,14 @@ def build_directives(
     close_coverage_diff_base = _brightline_args[2] if len(_brightline_args) == 3 else None
     if close_coverage_diff_base is None:
         close_coverage_diff_base = _session_own_range_from_disk(repo_root, gate.sid)
+    # `or []` collapses stage_paths' two distinct states -- None (unresolved,
+    # "call 1") and [] (resolved, no uncommitted files), documented as
+    # semantically distinct further down this file -- into one. That is
+    # deliberate and fail-safe here: both take the advisory's silent path
+    # (D2), so an unresolved value can never produce a wrong advisory, only
+    # no advisory. This call site assumes call-2/resolved semantics; if a
+    # future caller needs to tell the two apart, it must not do so by
+    # widening this line.  <!-- Review: code-reviewer finding 6 -->
     close_coverage_changed_files = list(decisions.get("stage_paths") or [])
     directives.append(
         directives_review.build_close_coverage_advisory_directive(

@@ -545,7 +545,12 @@ def test_unclean_prior_holder_fires_on_a_dead_stale_apply_claim(
     assert grant["verdict"] == "granted-with-warning"
     assert grant["unclean_prior_holder"] is True
     assert grant["holder"] == "sid-dead"
-    assert grant["claim_age_minutes"] >= pa.CLAIM_STALE_AFTER_MINUTES
+    # R4 (docs/plans/2026-08-21-rebuild-the-three-ceremony-assemblers.md C2)
+    # dropped age as an input to this decision entirely — `claim_age_minutes`
+    # is retained on the dict for shape stability only and is always `None`
+    # here, per `compute_claim_grant`'s docstring ("claim_age_minutes is
+    # retained ... but is no longer used to resolve verdict").
+    assert grant["claim_age_minutes"] is None
 
 
 def test_unclean_prior_holder_is_false_on_a_clean_pickup(tmp_path):
@@ -564,13 +569,16 @@ def test_unclean_prior_holder_is_false_on_a_clean_pickup(tmp_path):
     assert grant["unclean_prior_holder"] is False
 
 
-def test_unclean_prior_holder_is_false_within_the_settling_window(
+def test_unclean_prior_holder_is_true_even_within_the_former_settling_window(
     tmp_path, holder_reads_live
 ):
-    """Negative-spec: a not-live holder still inside the settling window is
-    an inconclusive liveness read (`liveness.py`'s INDETERMINATE contract),
-    not evidence of death — `denied`, and `unclean_prior_holder` stays
-    `False`."""
+    """R4 (docs/plans/2026-08-21-rebuild-the-three-ceremony-assemblers.md C2)
+    retired the age-keyed settling-window split this test used to pin: a
+    not-live holder is now `granted-with-warning`/`unclean_prior_holder:
+    True` regardless of how recently the claim was taken — `claimed_at` is
+    never read to reach row 4 (see `compute_claim_grant`'s docstring, "Age is
+    NOT an input to the row-4 decision"). This test now asserts that a young
+    claim age does not smuggle back the retired `denied` outcome."""
     repo = tmp_path / "repo"
     _init_repo(repo)
     _seed_handoff(repo, "h1.md")
@@ -583,8 +591,8 @@ def test_unclean_prior_holder_is_false_within_the_settling_window(
         repo, "handoff", "h1.md", "state/handoffs/h1.md", cwd=str(repo)
     )
 
-    assert grant["verdict"] == "denied"
-    assert grant["unclean_prior_holder"] is False
+    assert grant["verdict"] == "granted-with-warning"
+    assert grant["unclean_prior_holder"] is True
 
 
 def test_unclean_prior_holder_is_false_when_holder_reads_live(

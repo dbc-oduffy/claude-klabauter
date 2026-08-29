@@ -13,12 +13,16 @@ Windows allocates alongside one (DR-373) is counted -- the undercount a
 import os, shutil, subprocess, sys, tempfile, time
 from pathlib import Path
 
-sys.path.insert(0, r"X:\claude-klabauter")
+#: This file's own location, never a literal: `coordinator_core/benchmarks/<this>`,
+#: so the repo root is three parents up. A drive-anchored literal here was wrong on
+#: every other host AND blocked the commit of any `coordinator_core/` change,
+#: because the hardcoded-path gate runs at pre-commit over the whole package.
+SRC = Path(__file__).resolve().parents[2]
+
+sys.path.insert(0, str(SRC))
 from coordinator_core.benchmarks import declare_benchmark_origin
 from coordinator_core.benchmarks.process_time import LiveTreeAccountant
 from coordinator_core.ops.ceremony.commit_pipeline import run_commit_pipeline
-
-SRC = Path(r"X:\claude-klabauter")
 
 
 WARMUP = 6

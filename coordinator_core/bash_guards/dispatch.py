@@ -835,12 +835,9 @@ def resolve_plugin_root_loud(
     existing ``Optional[str]`` contract; this function only makes the miss
     LOUD, it does not change what happens next.
 
-    No consumer yet (2026-08-28): nothing in `guard_chain` calls this today
-    -- C3/C4/C5 are this function's first consumers, landing in later chunks
-    of the same plan. Defining it here, ungated, mirrors C0's own "no caller
-    wiring yet" shape for the identical reason: the miss-handling contract
-    is worth pinning and testing on its own, independent of any one
-    consumer's timing.
+    Consumer: `_build_guard_chain`'s `guard-doctrine-surface-bash-write`
+    entry calls this directly (C4, 2026-08-28), feeding its result into
+    `resolve_governed_authoring_surfaces` below.
     """
     plugin_root = _resolve_caller_context(payload).plugin_root
     if plugin_root is None:
@@ -860,6 +857,12 @@ def resolve_plugin_root_loud(
     return plugin_root
 
 
+_GOVERNED_MANIFEST_UNREADABLE_GUARD_NAME = "governed-surfaces-manifest-unreadable"
+"""Synthetic label for the counted event above -- a resolution failure, not a
+guard firing. Named separately from `_PLUGIN_ROOT_UNRESOLVED_GUARD_NAME` so the
+two misses stay distinguishable in the counter: an install with no plugin at
+all and an install whose manifest is corrupt need different remedies."""
+
 _GOVERNED_AUTHORING_SURFACES_MANIFEST_NAME = "governed-authoring-surfaces.json"
 """Filename (never a path) of the flat-list-of-strings manifest DoE-side pins
 to their own ``GOVERNED_AUTHORING_SURFACES`` tuple (`coordinator/hooks/scripts/
@@ -873,6 +876,8 @@ known per call (``resolve_plugin_root_loud``)."""
 
 def resolve_governed_authoring_surfaces(
     plugin_root: Optional[str],
+    session_id: str = "",
+    cwd: str = "",
 ) -> Optional[List[str]]:
     """Read the flat list of governed-authoring-surface path strings from
     ``<plugin_root>/governed-authoring-surfaces.json``, FRESH ON EVERY CALL.
@@ -897,30 +902,64 @@ def resolve_governed_authoring_surfaces(
     manifest in the resident server. A cached manifest freezes to whichever
     session booted the engine."). Read fresh, every call, no exceptions.
 
-    Returns ``None`` on ANY miss -- ``plugin_root`` itself unresolved (see
-    ``resolve_plugin_root_loud``, already LOUD about that miss on its own;
-    this function does not duplicate that stderr/counter emission), the
-    manifest file absent, unreadable, not valid JSON, or valid JSON that is
-    not a flat list of strings. Every one of those is fail-open by design:
-    this function has no consumer yet (this chunk lands the reader only; a
-    future consuming guard -- C4 -- owns deciding what "no manifest" means
-    for ITS OWN detection, same no-caller-wiring-yet shape as
-    ``resolve_plugin_root_loud``'s own "No consumer yet" note above). Never
-    raises.
+    TWO OUTCOMES THAT MUST NOT LOOK ALIKE, and conflating them was a real
+    defect (state/bug-backlog/2026-08-29-the-guard-rehome-is-not-yet-safe-to-
+    dele-9f7396118b81.yaml, gap 2). An explicit empty list means "this install
+    governs no surfaces" -- a real answer, correctly silent, correctly allow.
+    A read failure means "I could not find out what I protect", which is a
+    DEGRADED guard, and a confinement guard that silently declines because its
+    config is unreadable is indistinguishable from one that had nothing to
+    refuse. DoE's cold twin cannot reach this state at all: it does
+    ``from _claude_md_ledger import GOVERNED_AUTHORING_SURFACES``, so a broken
+    ledger is an ImportError that takes the hook down, never an empty surface
+    set. Ours reads a file, so it can -- and did, measured cold DENY / warm
+    ALLOW against a plugin_root holding no manifest.
+
+    Still returns ``None`` rather than denying, on the same reasoning C2
+    applied to the ROOT miss: a hard deny bricks Bash on an install that
+    legitimately has no plugin. But the miss is now LOUD and COUNTED, exactly
+    as ``resolve_plugin_root_loud`` already makes the root miss -- that guard
+    having a signal while this one had none was the asymmetry.
+
+    NOT loud when ``plugin_root`` is itself None: that is the OSS-mirror shape,
+    ``resolve_plugin_root_loud`` has already spoken for it, and repeating the
+    complaint here would double-count one miss and train readers to skip both.
+    Never raises.
     """
     if not plugin_root:
         return None
     import os
 
     manifest_path = os.path.join(plugin_root, _GOVERNED_AUTHORING_SURFACES_MANIFEST_NAME)
+
+    def _unreadable(detail: str) -> None:
+        """One stderr line plus one counted event, best-effort, never fatal."""
+        print(
+            "bash_guards.dispatch: governed-authoring-surfaces manifest at "
+            f"{manifest_path} is {detail}; guard-doctrine-surface-bash-write "
+            "has no identifier list for this call and will DECLINE rather than "
+            "refuse -- this is a degraded guard chain, not a clean one.",
+            file=sys.stderr,
+        )
+        try:
+            _record_advisory_fire(_GOVERNED_MANIFEST_UNREADABLE_GUARD_NAME, session_id, cwd)
+        except Exception:  # noqa: BLE001 -- counter write failure must never widen this miss
+            pass
+
     try:
         with open(manifest_path, "r", encoding="utf-8") as fh:
             data = json.load(fh)
-    except Exception:  # noqa: BLE001 -- any read/parse failure is a fail-open miss, never a crash
+    except FileNotFoundError:
+        _unreadable("absent")
+        return None
+    except Exception as exc:  # noqa: BLE001 -- read/parse failure is a miss, never a crash
+        _unreadable(f"unreadable or not valid JSON ({type(exc).__name__})")
         return None
     if not isinstance(data, list):
+        _unreadable("valid JSON but not a list")
         return None
     if not all(isinstance(entry, str) for entry in data):
+        _unreadable("a list containing non-string entries")
         return None
     return data
 
@@ -2143,7 +2182,9 @@ def _build_guard_chain(
             lambda: _check_doctrine_surface_bash_write(
                 payload,
                 resolve_governed_authoring_surfaces(
-                    resolve_plugin_root_loud(payload, session_id, cwd)
+                    resolve_plugin_root_loud(payload, session_id, cwd),
+                    session_id,
+                    cwd,
                 ),
             ),
             True,
