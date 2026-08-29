@@ -20,13 +20,12 @@ of calling `read_index` at all. The oracle here is the observable CAS
 outcome, exercised specifically with the cache scope this defect needed to
 hide behind.
 
-This module also pins the paired classification fix (same chunk, "blast
-radius" clause): once this refusal can fire, `commit_pipeline._classify_
-commit_scoped_failure_reason` must resolve it to `_REASON_INDEX_HEAD_CAS_
-REFUSAL`, not the generic `_REASON_COMMIT_FAILURE` a prose-only marker
-match previously fell through to (`_commit_via_head_spine`'s own diagnostic
-leads "compare-and-swap failed", not "...refused", so the old marker never
-matched it).
+The paired classification fix this module used to pin alongside the refusal
+(`commit_pipeline._classify_commit_scoped_failure_reason`) died with that
+module (C4, docs/plans/2026-08-29-the-push-subsystem-leaves-and-then-the-
+pipeline-can-go.md) -- it had no caller left once `commit_pipeline.commit()`
+was deleted, and nothing repoints it: this module's own refusal-observable
+assertions below are the surviving oracle.
 
 Spec backlink: docs/plans/2026-08-27-the-commit-op-resolves-one-pass-
 context.md, chunk C1; dispatch brief state/dispatch-briefs/2026-08-27-the-
@@ -42,7 +41,7 @@ from typing import Callable
 import pytest
 
 from coordinator_core.git.git_state import index_read_cache_scope
-from coordinator_core.ops.ceremony import commit_pipeline, git_native
+from coordinator_core.ops.ceremony import git_native
 
 from .fixtures.real_git import make_diverged_path, real_git_repo
 
@@ -116,51 +115,15 @@ def test_index_cas_refuses_inside_open_cache_scope_when_peer_writes_index(
     # The peer's newer staged blob was never silently committed.
     assert "file.txt" not in _committed_files_at_head(repo)
 
-    reason = commit_pipeline._classify_commit_scoped_failure_reason(result)
-    assert reason == commit_pipeline._REASON_INDEX_HEAD_CAS_REFUSAL
-
     # Reconcile the peer's own still-pending staged edit before any later
     # test in this process touches the same repo path.
     _git(["reset", "--", "file.txt"], repo)
     (repo / "file.txt").unlink()
 
 
-def test_classify_marks_head_spine_index_refusal_distinct_from_head_moved(tmp_path):
-    """Unit-level companion to the race above: `_commit_via_head_spine`'s
-    own index-CAS diagnostic (`INDEX_STAT_CAS_MARKER`) classifies as the
-    CAS-refusal reason, while its UNRELATED ref-CAS "HEAD moved" failure
-    (a genuine, different failure category -- the ref moved, not the
-    index) does NOT collapse into the same reason.
-    """
-    index_cas_result = git_native.GitResult(
-        returncode=1,
-        stdout="",
-        stderr=(
-            f"compare-and-swap failed -- {git_native.INDEX_STAT_CAS_MARKER}; "
-            "refusing to retry silently"
-        ),
-    )
-    assert (
-        commit_pipeline._classify_commit_scoped_failure_reason(index_cas_result)
-        == commit_pipeline._REASON_INDEX_HEAD_CAS_REFUSAL
-    )
-
-    head_moved_result = git_native.GitResult(
-        returncode=1,
-        stdout="",
-        stderr="commit_scoped: compare-and-swap failed -- HEAD moved since it was read",
-    )
-    assert (
-        commit_pipeline._classify_commit_scoped_failure_reason(head_moved_result)
-        == commit_pipeline._REASON_COMMIT_FAILURE
-    )
-
-    agree_branch_result = git_native.GitResult(
-        returncode=-1,
-        stdout="",
-        stderr="commit_scoped: compare-and-swap refused -- index entry changed",
-    )
-    assert (
-        commit_pipeline._classify_commit_scoped_failure_reason(agree_branch_result)
-        == commit_pipeline._REASON_INDEX_HEAD_CAS_REFUSAL
-    )
+# `test_classify_marks_head_spine_index_refusal_distinct_from_head_moved`
+# (deleted, C4 of docs/plans/2026-08-29-the-push-subsystem-leaves-and-then-
+# the-pipeline-can-go.md): a pure unit test of `commit_pipeline._classify_
+# commit_scoped_failure_reason`, which died with the module -- it had no
+# caller left once `commit_pipeline.commit()` was deleted, and nothing
+# repoints it.

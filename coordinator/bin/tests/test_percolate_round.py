@@ -32,7 +32,6 @@ from typing import List, Tuple
 
 import pytest
 
-from coordinator_core.ops.ceremony import commit_pipeline
 import coordinator_core.git.commit as _commit_mod
 
 # Declares a real external-process spawn (spawn ratchet Rule 2). Tiering onto the
@@ -422,53 +421,42 @@ def _install_manifest_stub(monkeypatch, spy: "_SubprocessSpy") -> None:
     monkeypatch.setattr(_mod, "_read_fresh_round_manifest", _fake_read_fresh_manifest)
 
 
-def _default_commit_pipeline_result(**overrides) -> commit_pipeline.PipelineResult:
+def _default_commit_outcome(**overrides) -> _commit_mod.CommitOutcome:
     """A landed, clean commit -- the shape most callers of § `_install_
     commit_pipeline_stub` want when they are not exercising the commit leg's
     own failure/decline modes."""
-    fields = dict(
-        stage=commit_pipeline.StageOutcome(exit_code=0),
-        deletion_gate=None,
-        dirty_gate=None,
-        carry_gate=None,
-        op_scope_gate=None,
-        commit=None,
-        push=None,
-        committed_sha="deadbeef1234",
-        pushed=None,
-        commit_failed=False,
-        integrity_breach=False,
-    )
+    fields = dict(sha="deadbeef1234", staged_preferred=(), worktree_over_staged=())
     fields.update(overrides)
-    return commit_pipeline.PipelineResult(**fields)
+    return _commit_mod.CommitOutcome(**fields)
 
 
 def _install_commit_pipeline_stub(monkeypatch, *, result=None) -> list:
-    """Chunk C6 (docs/plans/2026-08-25-the-dispatchable-committer-comes-back-
-    as-an-envelope.md): the commit leg is now an in-process call to
-    `commit_pipeline.run_commit_pipeline`, not a `scoped-git-commit`
-    subprocess spawn -- so a test driving the commit leg's own outcome
-    (failure, declined paths, ...) patches the function directly here rather
-    than adding another argv-shape branch to `_SubprocessSpy`.
+    """The commit leg is an in-process call to
+    `coordinator_core.git.commit.commit_paths` (C4 repoint, docs/plans/
+    2026-08-29-the-push-subsystem-leaves-and-then-the-pipeline-can-go.md,
+    off the killed `commit_pipeline.run_commit_pipeline`) -- so a test
+    driving the commit leg's own outcome (failure, declined paths, ...)
+    patches the function directly here rather than adding another argv-shape
+    branch to `_SubprocessSpy`.
 
-    `_cmd_round_default` resolves `commit_pipeline` via a lazy `from
-    coordinator_core.ops.ceremony import commit_pipeline` at call time, but
-    that binds the SAME module object this file imports at collection time
-    -- patching `run_commit_pipeline` on it here is visible to that later
-    call regardless of import order.
+    `_cmd_round_default` resolves `commit_paths` via a lazy `from
+    coordinator_core.git.commit import commit_paths` at call time, but that
+    reads the SAME module object this file imports at collection time --
+    patching `commit_paths` on it here is visible to that later call
+    regardless of import order.
 
     Returns the list of (args, kwargs) tuples the fake was called with --
     `assert calls == []` proves the commit leg was never reached at all
     (the stronger, more direct claim than inferring it from subprocess.run
     call absence, now that commit no longer rides that boundary)."""
     calls: list = []
-    fixed_result = result if result is not None else _default_commit_pipeline_result()
+    fixed_result = result if result is not None else _default_commit_outcome()
 
-    def _fake_run_commit_pipeline(*args, **kwargs):
+    def _fake_commit_paths(*args, **kwargs):
         calls.append((args, kwargs))
         return fixed_result
 
-    monkeypatch.setattr(commit_pipeline, "run_commit_pipeline", _fake_run_commit_pipeline)
+    monkeypatch.setattr(_commit_mod, "commit_paths", _fake_commit_paths)
     return calls
 
 

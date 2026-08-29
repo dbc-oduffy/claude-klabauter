@@ -51,7 +51,7 @@ from typing import Optional
 import pytest
 
 import coordinator_core.execute_plan_assemble.close_out_and_stamp as coas
-from coordinator_core.ops.ceremony import commit_pipeline as cp
+from coordinator_core.ops.ceremony import push as cp
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
@@ -182,64 +182,11 @@ class TestPublishBoundaryCurrentContract:
         assert result["commit"]["pushed"] is None
 
 
-class TestPreFixCallShapeContrastCase:
-    """Review: coordinator:code-reviewer -- does NOT call `coas.close_out_
-    and_stamp` and is not itself a regression pin on that call site; AC6 is
-    carried entirely by `TestPublishBoundaryCurrentContract` above. This
-    class instead characterises `cp.run_commit_pipeline`'s OWN behaviour
-    under a synchronous in-pipeline push (the pre-C5 `close_out_and_stamp.py`
-    call shape, reproduced here by hand): it shows the SAME remote-ref
-    assertion `TestPublishBoundaryCurrentContract` makes about the post-fix
-    call shape is false under the sync shape, as a side-by-side contrast case
-    for a reader comparing the two. A future edit that drops
-    `close_out_and_stamp.py`'s own explicit `push_mode=PUSH_MODE_NEVER`
-    argument would NOT be caught here -- only `TestPublishBoundaryCurrent
-    Contract`, which calls the real module, would fail."""
-
-    def test_pre_fix_call_shape_synchronously_reaches_the_remote(
-        self, tmp_path, monkeypatch
-    ):
-        root = tmp_path / "work"
-        remote = tmp_path / "remote.git"
-        _init_repo_with_real_remote(root, remote)
-        plan_file = _seed_plan(root, _FIXTURE_VALID_SPINE)
-        _commit_chunk(root, "plan.md", "C1", deliverable_id=_DLV_VALID_SPINE)
-        _push_initial_state(root)
-        pre_call_origin_head = _origin_head_sha(root)
-
-        # Dirty `plan.md` uncommitted -- the real call boundary always has
-        # SOMETHING dirty on `stage_paths` at the point it reaches
-        # `run_commit_pipeline` (AC8's auto-resolve write, in the module's
-        # own case); a clean `stage_paths` here would hit git's own
-        # "nothing to commit" refusal for a reason unrelated to the one
-        # under test.
-        with plan_file.open("a", encoding="utf-8") as fh:
-            fh.write("\n<!-- red-proof dirty -->\n")
-
-        # Locally reproduce the PRE-C5 call shape: `run_commit_pipeline`
-        # taking a synchronous in-pipeline push -- exactly
-        # `close_out_and_stamp.py`'s call shape before this chunk's fix. It
-        # got there by omission then; omission now yields `PUSH_MODE_NONE`,
-        # so the shape under test is named rather than inherited. Reached the
-        # same way the module reaches it
-        # (`_stage_paths_committed_already` False, AC8 auto-resolve dirties
-        # `stage_paths`), so this is the real boundary, not a synthetic one.
-        session_id = "publish-boundary-red-proof"
-        pipeline_result = cp.run_commit_pipeline(
-            root,
-            session_id=session_id,
-            subject="red-proof: pre-C5 sync-by-omission call shape",
-            stage_paths=["plan.md"],
-            caller_paths={"plan.md"},
-            push_mode=cp.PUSH_MODE_SYNC,
-        )
-
-        assert pipeline_result.commit_failed is False
-        assert pipeline_result.committed_sha is not None
-        # The pre-fix call shape DOES reach the remote synchronously -- a
-        # contrast case only, not a call through `close_out_and_stamp`: the
-        # same assertion `TestPublishBoundaryCurrentContract` makes about
-        # the post-fix call shape is FALSE here, by construction.
-        assert _origin_head_sha(root) != pre_call_origin_head
-        assert _origin_head_sha(root) == _head_sha(root)
-        assert pipeline_result.push_status == cp.PUSH_STATUS_PUSHED
+# `TestPreFixCallShapeContrastCase` (deleted, C4 of docs/plans/2026-08-29-
+# the-push-subsystem-leaves-and-then-the-pipeline-can-go.md): it never called
+# `coas.close_out_and_stamp` -- AC6 was always carried entirely by
+# `TestPublishBoundaryCurrentContract` above -- and instead characterised
+# `cp.run_commit_pipeline`'s OWN synchronous-push behaviour by hand, as a
+# contrast case for a reader comparing the pre-C5 and post-C5 shapes.
+# `run_commit_pipeline` died with `commit_pipeline.py` this chunk; the
+# contrast case has no subject left to characterise.

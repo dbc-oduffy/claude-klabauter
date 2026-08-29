@@ -48,46 +48,10 @@ from pathlib import Path
 
 import pytest
 
+from coordinator_core.git.commit import CommitOutcome, CommitRefused
 from coordinator_core.ipc import dispatch_message
-from coordinator_core.ops.ceremony.commit_pipeline import (
-    PUSH_STATUS_NOT_ATTEMPTED,
-    PipelineResult,
-)
 from coordinator_core.session import claim_index, core, scope, touch_record
 from coordinator_core.ops.session import safe_commit_offer
-
-
-def _fake_pipeline_result(**overrides) -> PipelineResult:
-    """Minimal `PipelineResult` builder for tests that mock
-    `safe_commit_offer.run_commit_pipeline` directly -- exercises this
-    module's own `_commit_group` mapping logic, cheaply and without a git
-    spawn, across result shapes a real pipeline is awkward to provoke on
-    demand (declined, integrity_breach, commit_failed with diagnostics).
-
-    These prove the MAPPING only. That a commit actually lands through the
-    wiring is proved by `test_commit_group_lands_a_real_commit_through_the
-    _pipeline`, which drives a real repo and reads the sha back -- keep at
-    least one such test; a file that mocks the pipeline everywhere can go
-    fully green with the commit leg dead, which is exactly how this module
-    shipped a stub that committed nothing."""
-    defaults = dict(
-        stage=None,
-        deletion_gate=None,
-        dirty_gate=None,
-        carry_gate=None,
-        op_scope_gate=None,
-        commit=None,
-        push=None,
-        committed_sha=None,
-        pushed=None,
-        commit_failed=False,
-        integrity_breach=False,
-        push_status=PUSH_STATUS_NOT_ATTEMPTED,
-        diagnostics=[],
-        reason="",
-    )
-    defaults.update(overrides)
-    return PipelineResult(**defaults)
 
 # Real git spawn is load-bearing: compute_offer's dirty-set math and
 # `_dirty_files_under` read actual `git status`/diff output, and
@@ -835,11 +799,13 @@ class TestAutoCommitSession:
         asserting otherwise could never pass again -- it failed before the
         behavioural assertions below ever ran, which is how a live guard came
         to read as permanently-red bookkeeping. `_commit_group` now routes
-        through `run_commit_pipeline`.
+        through `coordinator_core.git.commit.commit_paths` (C4 repoint,
+        docs/plans/2026-08-29-the-push-subsystem-leaves-and-then-the-
+        pipeline-can-go.md).
 
         The assertions below are the ones that carried the value, and they are
-        deliberately NOT mocked: the sibling tests stub `run_commit_pipeline`
-        to prove the result mapping, which cannot show that a commit lands.
+        deliberately NOT mocked: the sibling tests stub `commit_paths` to
+        prove the result mapping, which cannot show that a commit lands.
         This one drives a real repo and reads the sha back."""
         repo = _make_repo(tmp_path)
         core.init("mine", cwd=str(repo))
@@ -1098,15 +1064,14 @@ class TestAutoCommitSession:
         assert report["failed_groups"] == []
 
     def test_commit_failure_surfaces_via_failed_groups_not_swallowed(self, tmp_path, monkeypatch):
-        """2026-08-26 rewiring (DR-344 follow-up): `_commit_group` now calls
-        `run_commit_pipeline` directly, in-process -- no `ceremony.
-        scoped_git_commit` op to resolve by name any more (mocked here at
-        `safe_commit_offer.run_commit_pipeline` instead of the retired
-        `ipc.get_op_handler` seam). A declined/failed `PipelineResult` must
-        surface through `CommitOfferReport.failed_groups`, distinct from a
-        landed commit (next test) -- constraint 2 of this rewiring's own
-        brief: a false `committed: True` is worse than the prior dead
-        stub."""
+        """C4 repoint (docs/plans/2026-08-29-the-push-subsystem-leaves-and-
+        then-the-pipeline-can-go.md): `_commit_group` now calls
+        `coordinator_core.git.commit.commit_paths` directly, in-process --
+        mocked here at `safe_commit_offer.commit_paths`. A `CommitRefused`
+        must surface through `CommitOfferReport.failed_groups`, distinct
+        from a landed commit (next test) -- constraint 2 of the original
+        DR-344 rewiring's brief, unchanged by this repoint: a false
+        `committed: True` is worse than the prior dead stub."""
         repo = _make_repo(tmp_path)
         core.init("mine", cwd=str(repo))
         (repo / "a.py").write_text("a")
@@ -1114,16 +1079,11 @@ class TestAutoCommitSession:
 
         captured_calls = []
 
-        def fake_run_commit_pipeline(worktree_root, **kwargs):
-            captured_calls.append(kwargs)
-            return _fake_pipeline_result(
-                commit_failed=True,
-                diagnostics=["dirty-tree gate: unattributable paths: peer.py"],
-            )
+        def fake_commit_paths(worktree_root, paths, message, **kwargs):
+            captured_calls.append({"worktree_root": worktree_root, "paths": paths, "message": message, **kwargs})
+            raise CommitRefused("dirty-tree gate: unattributable paths: peer.py")
 
-        monkeypatch.setattr(
-            safe_commit_offer, "run_commit_pipeline", fake_run_commit_pipeline
-        )
+        monkeypatch.setattr(safe_commit_offer, "commit_paths", fake_commit_paths)
 
         report = safe_commit_offer.commit_session_offer("mine", cwd=str(repo))
 
@@ -1134,18 +1094,12 @@ class TestAutoCommitSession:
         assert report["failed_groups"] == [report["groups"][0]]
         # constraint 3 -- exactly the group's own paths were staged, never a
         # caller-widened or auto-detected pathspec.
-        assert captured_calls[0]["stage_paths"] == ["a.py"]
-        assert captured_calls[0]["caller_paths"] == {"a.py"}
-        # constraint 4 -- the real committing session's own identity is the
-        # trailer-authoritative `attributed_session_id`, never the synthetic
-        # per-call nonce passed as `session_id`.
-        assert captured_calls[0]["attributed_session_id"] == "mine"
-        assert captured_calls[0]["session_id"] != "mine"
+        assert captured_calls[0]["paths"] == ["a.py"]
 
     def test_commit_group_maps_a_landed_pipeline_result(self, tmp_path, monkeypatch):
-        """A successful `PipelineResult` maps to `committed: True` with the
-        landed sha populated -- constraint 1 (populate `GroupResult`
-        verbatim from `PipelineResult`, never inventing a shape)."""
+        """A successful `commit_paths()` call maps to `committed: True` with
+        the landed sha populated -- constraint 1 (populate `GroupResult`
+        verbatim from the outcome, never inventing a shape)."""
         repo = _make_repo(tmp_path)
         core.init("mine", cwd=str(repo))
         (repo / "a.py").write_text("a")
@@ -1153,9 +1107,9 @@ class TestAutoCommitSession:
 
         monkeypatch.setattr(
             safe_commit_offer,
-            "run_commit_pipeline",
-            lambda worktree_root, **kwargs: _fake_pipeline_result(
-                committed_sha="deadbeef",
+            "commit_paths",
+            lambda worktree_root, paths, message, **kwargs: CommitOutcome(
+                sha="deadbeef", staged_preferred=(), worktree_over_staged=()
             ),
         )
 
@@ -1172,31 +1126,19 @@ class TestAutoCommitSession:
         # `GroupResult.reason`'s own docstring: "None on a landed commit or
         # a genuine `commit_failed`" -- `_render_report`'s two branches
         # (the "NOT committed" line vs the quiet benign-no-op line) depend
-        # on that split. Under the rewired `run_commit_pipeline`
-        # composition, `PipelineResult.reason` (e.g. "empty-commit-set") is
-        # populated ONLY on the `commit_failed: True` path (see that
-        # dataclass's own docstring) -- there is currently no PipelineResult
-        # shape that is both `commit_failed: False` and carries a non-empty
-        # `reason`, so the old op's quiet "empty-commit-set stays quiet"
-        # no-op shape is not reachable through this call site as wired
-        # (flagged in this rewiring's own report, not a regression this
-        # test can pin -- see Notes). This pins the suppression that keeps
-        # `_render_report` honest in the meantime: a `commit_failed` group
-        # must never surface `reason`, whatever the pipeline reports.
+        # on that split. Under the `commit_paths()` composition (C4 repoint)
+        # a refusal never carries a `reason` of its own -- `_commit_group`'s
+        # refusal branch hard-codes `reason: None`, so this pins the
+        # suppression that keeps `_render_report` honest.
         repo = _make_repo(tmp_path)
         core.init("mine", cwd=str(repo))
         (repo / "a.py").write_text("a")
         scope.touch("mine", "a.py", cwd=str(repo))
 
-        monkeypatch.setattr(
-            safe_commit_offer,
-            "run_commit_pipeline",
-            lambda worktree_root, **kwargs: _fake_pipeline_result(
-                commit_failed=True,
-                reason="empty-commit-set",
-                diagnostics=["nothing to commit"],
-            ),
-        )
+        def _refuse(worktree_root, paths, message, **kwargs):
+            raise CommitRefused("nothing to commit")
+
+        monkeypatch.setattr(safe_commit_offer, "commit_paths", _refuse)
 
         report = safe_commit_offer.commit_session_offer("mine", cwd=str(repo))
 
@@ -1377,14 +1319,10 @@ class TestHandler:
         (repo / "a.py").write_text("a")
         scope.touch("mine", "a.py", cwd=str(repo))
 
-        monkeypatch.setattr(
-            safe_commit_offer,
-            "run_commit_pipeline",
-            lambda worktree_root, **kwargs: _fake_pipeline_result(
-                commit_failed=True,
-                diagnostics=["dirty-tree gate: unattributable paths: peer.py"],
-            ),
-        )
+        def _refuse(worktree_root, paths, message, **kwargs):
+            raise CommitRefused("dirty-tree gate: unattributable paths: peer.py")
+
+        monkeypatch.setattr(safe_commit_offer, "commit_paths", _refuse)
 
         out = safe_commit_offer._handler({"session_id": "mine", "cwd": str(repo)})
         assert out["failed_groups"] != []

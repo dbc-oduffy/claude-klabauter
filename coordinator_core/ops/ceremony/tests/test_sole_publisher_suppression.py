@@ -41,7 +41,7 @@ import pytest
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 from coordinator_core.hooks import auto_push
-from coordinator_core.ops.ceremony import commit_pipeline, git_native
+from coordinator_core.ops.ceremony import git_native
 
 _ENV = "COORDINATOR_AUTO_PUSH_SUPPRESS_FOR_SYNC_PUSH"
 
@@ -131,175 +131,28 @@ def test_marker_name_matches_the_hook_that_reads_it():
     assert git_native._AUTO_PUSH_SUPPRESS_ENV == auto_push._ENV_SUPPRESS_FOR_SYNC_PUSH
 
 
-def _init_repo(tmp_path):
-    """A minimal real git repo with one commit -- `run_commit_pipeline` reads
-    live index/worktree state and cannot be driven against a bare tmp dir."""
-    import subprocess
-
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    for args in (["init", "-q"], ["config", "user.email", "t@t.example"],
-                 ["config", "user.name", "t"]):
-        subprocess.run(["git", *args], cwd=str(repo), check=True,
-                       capture_output=True, text=True)
-    (repo / "seed.txt").write_text("seed\n", encoding="utf-8")
-    subprocess.run(["git", "add", "-A"], cwd=str(repo), check=True,
-                   capture_output=True, text=True)
-    subprocess.run(["git", "commit", "-q", "-m", "seed"], cwd=str(repo), check=True,
-                   capture_output=True, text=True)
-    return repo
-
-
 # ---------------------------------------------------------------------------
 # Wiring: sync and nothing else
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize(
-    "push_mode,expected",
-    [
-        (commit_pipeline.PUSH_MODE_SYNC, True),
-        (commit_pipeline.PUSH_MODE_DEFERRED, False),
-        (commit_pipeline.PUSH_MODE_NONE, False),
-        (commit_pipeline.PUSH_MODE_NEVER, True),
-    ],
-)
-def test_suppression_is_wired_to_sync_mode_only(monkeypatch, tmp_path, push_mode, expected):
-    """Pins the LOWER layer only: the per-call `suppress_post_commit_auto_
-    push` argument `commit_pipeline.commit()` computes for itself is tied to
-    `_PUSH_MODES_SUPPRESSING_POST_COMMIT_HOOK` and nothing else in
-    `push_mode`.
-
-    Two modes suppress, for OPPOSITE reasons, and the distinction is what
-    keeps this parametrization honest rather than arbitrary. `"sync"`
-    suppresses because this pipeline publishes the commit itself moments
-    later — one publisher, not two. `"never"` (2026-08-21) suppresses
-    because the commit is not to be published AT ALL, by anyone: its caller
-    (`publish.py::_commit_published_dests`) ends a percolation at a local
-    commit and hands the push to the operator. `"deferred"`/`"none"` do NOT
-    suppress, because there the hook's push is the only one there is and
-    standing it down would strand the commit — which is why a
-    must-not-publish caller cannot be expressed as `"none"`.
-
-    A regression that widened this to `push_mode != PUSH_MODE_SYNC` would
-    re-arm the hook under `"never"` and put a percolation's push back on
-    whatever the hook's branch policy happens to say. That is the exact
-    shape this mode replaced, so it is pinned here rather than left to the
-    caller.
-
-    Re-derived (C5, docs/plans/2026-08-19-windows-commit-hook-starts-python-
-    once.md): this test used to pin the WHOLE invariant -- "suppression is
-    wired to sync mode only" -- because before C5 that per-call argument WAS
-    the whole story: `_sole_publisher_env()` suppressed iff this one boolean
-    was True, full stop, and the old docstring said so verbatim ("whoever
-    sets this WILL push, synchronously, in this same invocation").
-
-    C5 makes that no longer true at the EFFECTIVE layer: a deferred-path
-    backstop widens suppression for the WHOLE deferred-path span via
-    `git_native.deferred_publisher_span()`, additively -- `_sole_publisher_env()`
-    suppresses when EITHER this per-call argument is True OR that span is
-    active (see its own docstring: the invariant is now "the caller will
-    publish", not "... synchronously, in this same invocation" -- a
-    deferred-path commit publishes via a DETACHED child spawned later, not
-    synchronously, but is still published by exactly one caller). This test
-    still asserts `expected is (push_mode == PUSH_MODE_SYNC)` because that
-    remains true of THIS ONE ARGUMENT -- `commit_pipeline.commit()`'s own
-    wiring is genuinely unchanged, and re-deriving this test to check the
-    EFFECTIVE (span-widened) suppression would test the wrong layer, and
-    silently stop pinning that the raw argument itself never drifts back
-    onto `push_mode` inputs it should not read. The widened, EFFECTIVE
-    invariant is pinned separately below, by
-    `test_deferred_publisher_span_widens_effective_suppression` and
-    `test_deferred_publisher_backstop_wraps_the_deferred_path_only`.
-
-    Review (code-reviewer, s4): this test previously compared
-    `push_mode == PUSH_MODE_SYNC` to its own parametrize value and never called
-    into `commit_pipeline` at all -- a tautology that would have stayed green if
-    `run_commit_pipeline`'s call site were rewritten to suppress
-    unconditionally, which is precisely the regression it names. It now drives
-    the real pipeline and reads the flag off the `commit()` call it actually
-    makes.
-    """
-    repo = _init_repo(tmp_path)
-    (repo / "a.txt").write_text("v1\n", encoding="utf-8")
-
-    seen: dict = {}
-    orig_commit = commit_pipeline.commit
-
-    def _spy_commit(*a, **kw):
-        seen["suppress"] = kw.get("suppress_post_commit_auto_push")
-        return orig_commit(*a, **kw)
-
-    monkeypatch.setattr(commit_pipeline, "commit", _spy_commit)
-    commit_pipeline.run_commit_pipeline(
-        str(repo),
-        session_id="sess-suppression",
-        subject="test commit",
-        stage_paths=["a.txt"],
-        push_mode=push_mode,
-    )
-
-    assert "suppress" in seen, (
-        "run_commit_pipeline never reached its commit step -- this test is "
-        "measuring nothing"
-    )
-    assert seen["suppress"] is expected
-
-
-def test_commit_forwards_suppression_to_commit_scoped(monkeypatch, tmp_path):
-    """The flag reaches `commit_scoped`, not just the signature.
-
-    A parameter threaded through three call layers is exactly the kind of thing
-    that gets added and then not passed at the last hop.
-    """
-    seen: dict = {}
-
-    def _fake_commit_scoped(paths, msg_file, cwd, **kw):
-        seen.update(kw)
-        return git_native.GitResult(returncode=0, stdout="", stderr="")
-
-    repo = _init_repo(tmp_path)
-    (repo / "a.txt").write_text("v1\n", encoding="utf-8")
-
-    monkeypatch.setattr(git_native, "commit_scoped", _fake_commit_scoped)
-    commit_pipeline.commit(
-        repo,
-        message="m",
-        commit_paths=["a.txt"],
-        suppress_post_commit_auto_push=True,
-    )
-    assert seen.get("suppress_post_commit_auto_push") is True
-
-
-# ---------------------------------------------------------------------------
-# The re-hosted drain
-# ---------------------------------------------------------------------------
-
-
-def test_pending_push_drain_is_rehosted_not_dropped(monkeypatch, tmp_path):
-    """`drain_pending_push` still has a per-commit host after the hook stands down.
-
-    Its own docstring names three independent call sites and rests its
-    "delay, never lose" argument on their independence; C-01 removes the first
-    one for sync-push commits. This asserts the replacement host fires, so the
-    guarantee narrows to two hosts only if someone deletes this deliberately.
-    """
-    drained: list = []
-    monkeypatch.setattr(
-        auto_push, "drain_pending_push", lambda root: drained.append(root)
-    )
-    commit_pipeline._drain_pending_push_after_sync(tmp_path)
-    assert drained == [str(tmp_path)]
-
-
-def test_drain_failure_never_fails_a_landed_push(monkeypatch, tmp_path):
-    """A drain that raises must not turn a landed, pushed commit into a failure."""
-
-    def _boom(root):
-        raise RuntimeError("drain exploded")
-
-    monkeypatch.setattr(auto_push, "drain_pending_push", _boom)
-    commit_pipeline._drain_pending_push_after_sync(tmp_path)  # must not raise
+# `test_suppression_is_wired_to_sync_mode_only`,
+# `test_commit_forwards_suppression_to_commit_scoped`,
+# `test_pending_push_drain_is_rehosted_not_dropped`, and
+# `test_drain_failure_never_fails_a_landed_push` (all deleted, C4 of
+# docs/plans/2026-08-29-the-push-subsystem-leaves-and-then-the-pipeline-can-
+# go.md): they pinned `commit_pipeline.commit()`'s OWN wiring of
+# `suppress_post_commit_auto_push` and `commit_pipeline._drain_pending_push_
+# after_sync`, both of which died with the module. The suppression
+# MECHANISM itself (`git_native._sole_publisher_env`,
+# `deferred_publisher_span()`) is unowned by `commit_pipeline` and is pinned
+# below, unchanged; the wiring of a SURVIVING caller into that mechanism
+# (`push_mode == PUSH_MODE_SYNC` -> `suppress_post_commit_auto_push=True`)
+# is that caller's own test file's job now -- see
+# `ops/ceremony/tests/test_post_commit_tail.py` and
+# `ops/ceremony/tests/test_consumed_handoff_stamp.py`, both of which already
+# drive `push_mode` through their own real call sites onto
+# `git_native.commit_scoped` directly.
 
 
 # ---------------------------------------------------------------------------

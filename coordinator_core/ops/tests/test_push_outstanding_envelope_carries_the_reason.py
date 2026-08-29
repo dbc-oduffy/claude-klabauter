@@ -22,7 +22,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import coordinator_core.ops.push_outstanding as po
-from coordinator_core.ops.ceremony.commit_pipeline import PushOutcome
+from coordinator_core.ops.ceremony.push import PushOutcome
 
 
 def _envelope(monkeypatch, outcome: PushOutcome) -> dict:

@@ -34,9 +34,8 @@ from typing import List, Sequence
 
 import pytest
 
-import coordinator_core.ops.ceremony.commit_pipeline as commit_pipeline_mod
 import coordinator_core.ops.ceremony.git_native as git_native_mod
-from coordinator_core.ops.ceremony.commit_pipeline import push_with_retry
+from coordinator_core.ops.ceremony.push import push_with_retry
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 

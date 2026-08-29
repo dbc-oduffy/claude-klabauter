@@ -59,7 +59,7 @@ import pytest
 from coordinator_core import ipc
 from coordinator_core.ops.ceremony import consumed_handoff_stamp
 from coordinator_core.ops.ceremony import post_commit_tail as m
-from coordinator_core.ops.ceremony.commit_pipeline import PUSH_MODE_NONE, PushOutcome
+from coordinator_core.ops.ceremony.push import PUSH_MODE_NONE, PushOutcome
 from ._ceremony_lock_guard import assert_no_ceremony_lock_reintroduction
 from .fixtures.real_git import make_diverged_path, real_git_repo
 

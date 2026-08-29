@@ -21,13 +21,12 @@ Spec backlink: coordinator_core/ops/session/safe_commit_offer.py
 from __future__ import annotations
 
 import os
-from types import SimpleNamespace
 import subprocess
 from pathlib import Path
 
 import pytest
 
-from coordinator_core.ops.ceremony import commit_pipeline
+from coordinator_core.git.commit import CommitRefused
 from coordinator_core.session import claim_index, core, scope
 from coordinator_core.ops.session import safe_commit_offer
 
@@ -194,8 +193,10 @@ class TestGitFailureReturnsNonBlocking:
         `commit_session_offer_async` -- it comes back as a structured
         `failed_groups` entry, and the call itself completes normally.
 
-        The failure is injected at `run_commit_pipeline`, which is what
-        `_commit_group` actually calls. It previously patched
+        The failure is injected at `commit_paths`, which is what
+        `_commit_group` actually calls (C4 repoint, docs/plans/2026-08-29-
+        the-push-subsystem-leaves-and-then-the-pipeline-can-go.md, off the
+        killed `run_commit_pipeline`). It previously patched
         `coordinator_core.ipc.get_op_handler` to return None, simulating an
         unregistered `ceremony.scoped_git_commit`; that op was DELETED
         2026-08-23 and `_commit_group` was rewired on 2026-08-26 to call the
@@ -208,21 +209,13 @@ class TestGitFailureReturnsNonBlocking:
         (repo / "a.py").write_text("a")
         scope.touch("mine", "a.py", cwd=str(repo))
 
-        # Failure is a RETURN VALUE, not an exception: `_commit_group` reads
-        # `pipeline_result.commit_failed` and maps it onto `GroupResult`. A
-        # raising stub would test a path the real pipeline never takes.
+        # A git-level commit failure is an EXCEPTION from `commit_paths`
+        # (`CommitRefused`), not a return-value shape -- `_commit_group`
+        # catches it and maps it onto `GroupResult`.
         def _failed_commit(*args, **kwargs):
-            return SimpleNamespace(
-                committed_sha=None,
-                commit_failed=True,
-                diagnostics=["simulated git-level commit failure"],
-                push_status=commit_pipeline.PUSH_STATUS_NOT_ATTEMPTED,
-                reason=None,
-            )
+            raise CommitRefused("simulated git-level commit failure")
 
-        monkeypatch.setattr(
-            safe_commit_offer, "run_commit_pipeline", _failed_commit
-        )
+        monkeypatch.setattr(safe_commit_offer, "commit_paths", _failed_commit)
 
         report = safe_commit_offer.commit_session_offer("mine", cwd=str(repo))
 

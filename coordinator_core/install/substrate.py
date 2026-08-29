@@ -1227,29 +1227,43 @@ def _write_native_door_forwarder(
         )
         return None
 
-    # THE ENGINE MUST KNOW THE NAME, or the image is a launcher with no
-    # working leg at all. See `door_install.engine_carries_entrypoint_script`
-    # for the two ways the door-eligible roster and the published engine's
-    # namespace diverge (a publisher-side CLI excluded from its own product,
-    # and a repo-identifying name rewritten by the publish-time substitution)
-    # and for what the divergence cost: warm is -32603 -> a -32004 refusal
-    # the door will not re-run, cold is the same absent path, and the `.exe`
-    # outranks the `.cmd` that would have worked. Degrading here is the same
-    # shape as the unstamped-root branch above -- the name keeps the Python
-    # pair its callers have already written, which is the leg that resolves
-    # the generator's own tree and therefore still works.
+    # REPORTS, NEVER REFUSES, and the distinction is the whole of what this
+    # branch learned the hard way. `engine_carries_entrypoint_script` detects
+    # a real defect -- 14 names whose image dials an engine with no
+    # `coordinator/bin/<name>.py` for them, so the call fails warm (-32603 ->
+    # a -32004 the door will not re-run) and cold (`fall_through` spawns the
+    # same absent path). See that function for the two causes: a
+    # publisher-side CLI excluded from the product it publishes, and a
+    # repo-identifying name rewritten by the publish-time substitution.
+    #
+    # WHY IT MUST NOT SKIP THE IMAGE. Under ONE ENTRYPOINT PER PLATFORM (PM
+    # ruling 2026-08-29, `_write_agent_helper_forwarders`'s own docstring)
+    # the door image is the ONLY launcher a name gets -- no `.cmd` is written
+    # for any name, ever, and `_write_agent_cmd_forwarder` is deleted. There
+    # is no Python pair left to degrade onto, so declining to write the image
+    # does not leave the name on a slower leg, it leaves the name with NO
+    # LAUNCHER. Measured on a live box 2026-08-29: an install run with the
+    # skip in place removed 14 names outright, `publish` and `percolate-push`
+    # among them. A broken launcher is bad; an absent one is worse, and
+    # neither is this function's call to make.
+    #
+    # The fix these names actually need is upstream of the installer -- the
+    # engine has to carry a script for every name the door is installed under,
+    # or those names must leave the map -- and that trades against the
+    # one-entrypoint ruling, so it is recorded and surfaced rather than
+    # decided here. Backlog: state/bug-backlog/2026-08-29-a-door-image-is-
+    # installed-for-names-the-engine-cannot-resolve.yaml.
     if not door_install.engine_carries_entrypoint_script(engine_root, name):
         print(
-            f"[install-substrate] {name}: no native door forwarder -- "
-            f"{engine_root} carries no coordinator/bin/{name}.py, so the door "
-            f"has no entrypoint to resolve for this name (excluded from the "
-            f"published payload, or renamed by the publish-time substitution). "
-            f"Left on its Python forwarder.",
+            f"[install-substrate] WARNING: {name}: {engine_root} carries no "
+            f"coordinator/bin/{name}.py, so this name's door image has no "
+            f"entrypoint to resolve -- it will fail warm AND cold (excluded "
+            f"from the published payload, or renamed by the publish-time "
+            f"substitution). Installing it anyway: it is the only launcher "
+            f"this name gets, and an absent launcher is worse than a broken "
+            f"one.",
             file=sys.stderr,
         )
-        if not check_only:
-            door_install.remove_stale_named_forwarder(bin_dst, name)
-        return None
 
     dest = door_install.install_named_forwarder(bin_dst, engine_root, name, check_only=check_only)
     if not check_only:

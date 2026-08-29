@@ -70,7 +70,7 @@ from typing import Any, Optional
 import pytest
 
 from coordinator_core.ops.ceremony import consumed_handoff_stamp as m
-from coordinator_core.ops.ceremony.commit_pipeline import (
+from coordinator_core.ops.ceremony.push import (
     PUSH_MODE_NONE,
     PUSH_MODE_SYNC,
     PUSH_STATUS_DECLINED,
@@ -198,7 +198,7 @@ def repo_with_remote(tmp_path, repo) -> StampRepo:
     fixture (`test_post_commit_happy_path_stamps_and_follow_up_commits_pushed`,
     `test_ship_drift_regression_full_pass`) assert the push itself LANDING
     (`follow_up_pushed is True`, the sha reaching `origin/main`'s log), which
-    the real `work/*`-only push-leg branch policy (commit_pipeline.py, same
+    the real `work/*`-only push-leg branch policy (ops/ceremony/push.py, same
     plan) would otherwise decline on `main` -- repair (a): move the fixture
     onto an allowed branch rather than invert the assertion, since the push
     landing is the tests' own subject, not the branch-policy contract.

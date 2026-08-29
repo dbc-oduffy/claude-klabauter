@@ -37,7 +37,7 @@ from pathlib import Path
 
 import pytest
 
-from coordinator_core.ops.ceremony.commit_pipeline import (
+from coordinator_core.ops.ceremony.push import (
     PUSH_MODE_NEVER,
     PUSH_STATUS_NOT_ATTEMPTED,
 )
@@ -121,33 +121,17 @@ def test_multiline_prose_with_closes_line_survives_verbatim(tmp_path):
     assert "Closes: dlv-example-close-multiline-02" in message
 
 
-def test_push_mode_never_is_the_kwarg_run_commit_pipeline_actually_receives(tmp_path, monkeypatch):
-    repo = _init_repo(tmp_path)
-    captured = {}
-
-    def _fake_run_commit_pipeline(worktree_root, **kwargs):
-        captured.update(kwargs)
-        captured["worktree_root"] = worktree_root
-
-        class _Stub:
-            commit_failed = False
-            committed_sha = "deadbeef"
-
-        return _Stub()
-
-    monkeypatch.setattr(
-        "coordinator_core.ops.ceremony.commit_pipeline.run_commit_pipeline",
-        _fake_run_commit_pipeline,
-    )
-
-    _tail.run_close_commit(
-        repo,
-        session_id=_unique_session_id(),
-        subject="spy on the push mode kwarg",
-        stage_paths=[],
-    )
-
-    assert captured["push_mode"] == PUSH_MODE_NEVER
+# `test_push_mode_never_is_the_kwarg_run_commit_pipeline_actually_receives`
+# (deleted, C4 of docs/plans/2026-08-29-the-push-subsystem-leaves-and-then-
+# the-pipeline-can-go.md): it monkeypatched `commit_pipeline.
+# run_commit_pipeline`, a call `run_close_commit` no longer makes --
+# `directives_commit_tail.py` was already repointed onto
+# `coordinator_core.git.commit.commit_paths` by an earlier chunk, so the spy
+# never fired (pre-existing failure at this chunk's dispatch: `KeyError:
+# 'push_mode'`, not something this chunk introduced). The sibling test below,
+# `test_a_real_close_never_pushes_and_never_touches_a_remote`, already covers
+# the same behavioural claim (`PUSH_MODE_NEVER`'s effect) via real state
+# observation rather than a spy on a dead call path.
 
 
 def test_a_real_close_never_pushes_and_never_touches_a_remote(tmp_path):

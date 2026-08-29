@@ -115,17 +115,15 @@ def test_index_is_actually_extended_not_just_config_key(tmp_path):
 
     assert _config_get(repo, "core.untrackedCache") == "true"
 
-    # `update-index --test-untracked-cache` returning 0 confirms the working
-    # tree/filesystem is compatible; the actual proof that the cache is live
-    # in the index (not merely configured) is `git ls-files --debug`
-    # reporting an untracked-cache extension for the index. This is used
-    # (rather than parsing --debug output, which is fragile) as a combined
-    # signal: the probe succeeding plus the config already being set to
-    # true is the module's own idempotence contract for a live cache --
-    # a stale/inert config would have been reported as `set` not `ok` on a
-    # follow-up call.
-    probe = _git(repo, "update-index", "--test-untracked-cache")
-    assert probe.returncode == 0
+    # Review: coordinator:code-reviewer -- `update-index --test-untracked-cache`
+    # is git's filesystem-support probe; it returns 0 regardless of whether the
+    # index was ever extended, so it would still pass with the `update-index
+    # --untracked-cache` call in apply() deleted entirely. The genuine proof
+    # that the cache is LIVE in the index (not merely configured) is the
+    # `UNTR` extension header appearing in `.git/index`'s raw bytes.
+    with open(repo / ".git" / "index", "rb") as handle:
+        index_bytes = handle.read()
+    assert b"UNTR" in index_bytes, "index has no untracked-cache (UNTR) extension"
 
     second_report = gpc.apply(repo)
     assert any(

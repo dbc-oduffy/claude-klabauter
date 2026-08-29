@@ -128,20 +128,16 @@ Read-only halves stay read-only; the mutating half
 module that stages, commits, or pushes — and it does so by composing an
 ALREADY-EXISTING commit primitive in-process, never a hand-rolled
 `git commit`. That primitive is
-`ops.ceremony.commit_pipeline.run_commit_pipeline`, called directly (see
-`_commit_group`). It is NOT `ceremony.scoped_git_commit`: that op was
+`coordinator_core.git.commit.commit_paths`, called directly (see
+`_commit_group`) -- repointed (C4, docs/plans/2026-08-29-the-push-subsystem-
+leaves-and-then-the-pipeline-can-go.md) off the killed `run_commit_pipeline`,
+mirroring `execute_plan_assemble.close_out_and_stamp`'s own repoint (C3 of
+the same plan). It is NOT `ceremony.scoped_git_commit`: that op was
 DELETED 2026-08-23 over the DR-344 brightline and is registered nowhere
 outside a test fixture, so resolving it by name gets "Method not found".
-This paragraph claimed the deleted op until 2026-08-27 — `_commit_group`
-was rewired on 2026-08-26 and the module docstring was not updated with it,
-which is how a killed op name outlives the call site that dropped it.
-The pipeline pushes-with-retry as part of its own contract, so auto-push
-here is the SAME seam `close_out_and_stamp` already uses, not a second push
-path. It is also already
-written to coexist with `coordinator_core.hooks.auto_push`'s post-commit
-git hook (`_resolve_push_report`'s docstring: a `False` from its own push
-step is treated as UNKNOWN, not failure, deferring to the confirmed remote
-state) — the two are non-conflicting if both happen to be installed.
+This module never owns a push: `_commit_group` never pushes, and publication
+is left to `coordinator_core.hooks.auto_push`'s post-commit git hook and
+whichever cadence checkpoint runs `push_outstanding()` next.
 
 Multi-session overlap on the SAME file remains accepted collateral, by
 explicit PM ruling — this module does not attempt conflict resolution for
@@ -154,20 +150,26 @@ session-stop-events.yaml
 
 from __future__ import annotations
 
-GENERATES = []  # only direct file write is an append to coordinator-sessions/logs/sessionend-auto-commit-diagnostics.log under the git common dir; actual commits delegate to commit_pipeline.run_commit_pipeline, not written here
+GENERATES = []  # only direct file write is an append to coordinator-sessions/logs/sessionend-auto-commit-diagnostics.log under the git common dir; actual commits delegate to coordinator_core.git.commit.commit_paths, not written here
 
 import asyncio
 import posixpath
 import subprocess
-import uuid
 from collections import OrderedDict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Literal, Optional, Sequence, Tuple, TypedDict
 
+from functools import partial
+
+from coordinator_core.git.commit import (
+    CommitRefused,
+    FilterUnsupported,
+    commit_paths,
+    hash_worktree_blobs_via_spawn,
+)
 from coordinator_core.ipc import register_op
-from coordinator_core.ops.ceremony.commit_pipeline import run_commit_pipeline
-from coordinator_core.ops.ceremony.push import PUSH_MODE_NEVER
+from coordinator_core.ops.ceremony.push import PUSH_STATUS_NOT_ATTEMPTED
 from coordinator_core.ops.dirty_tree_gate import parse_porcelain_paths
 from coordinator_core.session import core
 from coordinator_core.win_portability import no_console_creationflags
@@ -394,13 +396,13 @@ class CommitOutcome(TypedDict):
     (b) post-stage verify (brief item (b): `git diff --cached --name-only`
     after staging, compared against the expected claim set) is NOT
     represented in this TypedDict -- staging itself is owned by
-    `ops.ceremony.commit_pipeline.run_commit_pipeline`, which this module composes in-process
-    rather than reaching into (see this module's own docstring, "Composition,
-    not new computation"). Implementing a true post-STAGE (pre-commit) verify
-    would require observing that op's index state mid-call, which is outside
-    this chunk's `writes:` scope -- named here as a follow-up chunk against
-    `coordinator_core.ops.ceremony.commit_pipeline` itself, not implemented
-    in this module."""
+    `coordinator_core.git.commit.commit_paths`, which this module composes
+    in-process rather than reaching into (see this module's own docstring,
+    "Composition, not new computation"). Implementing a true post-STAGE
+    (pre-commit) verify would require observing that call's index state
+    mid-call, which is outside this chunk's `writes:` scope -- named here as
+    a follow-up chunk against `coordinator_core.git.commit` itself, not
+    implemented in this module."""
 
     status: Literal[
         "committed",
@@ -1413,86 +1415,81 @@ def _compute_residue(
 async def _commit_group(
     worktree_root: str, group: CommitGroup, session_id: Optional[str] = None
 ) -> GroupResult:
-    """Rewired 2026-08-26 (DR-344 follow-up): `ceremony.scoped_git_commit`
-    was deleted 2026-08-23 with no replacement wired here (see the killed
-    version of this function, git history). The replacement is the SAME
-    in-process pipeline `execute_plan_assemble.close_out_and_stamp` already
-    calls -- `ops.ceremony.commit_pipeline.run_commit_pipeline` -- called
-    directly, never re-resolved by op name (there is no suspension ladder
-    to route through here: a deleted op has no handler to look up).
+    """Repointed (C4, docs/plans/2026-08-29-the-push-subsystem-leaves-and-
+    then-the-pipeline-can-go.md) off the killed `run_commit_pipeline` onto the
+    sanctioned zero-spawn commit shape, `coordinator_core.git.commit.
+    commit_paths` -- `ceremony.commit_v2`'s own in-process call, mirrored here
+    exactly as `execute_plan_assemble.close_out_and_stamp` already does (C3 of
+    the same plan), rather than round-tripped through the op registry: this
+    module already runs in-process.
 
-    Pathspec scope mirrors `close_out_and_stamp`'s own call site exactly:
-    `stage_paths=group["paths"]` and `caller_paths=set(group["paths"])` --
-    only the group's own paths are ever staged, never a caller-widened or
-    auto-detected scope (constraint 3 of this rewiring's own brief).
+    Pathspec scope mirrors the prior pipeline call site exactly: only
+    `group["paths"]` is ever staged, never a caller-widened or auto-detected
+    scope (constraint 3 of the original DR-344 rewiring's brief, unchanged by
+    this repoint).
 
-    Session attribution (state/bug-backlog/2026-08-18-scoped-git-commit-
-    stamps-a-foreign-session-id-8d21f0c4e7b9.yaml): `run_commit_pipeline`'s
-    own `session_id` kwarg is a confirmed DEAD nonce -- unread across its
-    entire body, kept only because `scoped_git_commit.py` also mints one
-    per invocation for a reason unrelated to attribution. A synthetic,
-    call-scoped nonce is minted for it here, same as `close_out_and_stamp`
-    does. `attributed_session_id` is the one that actually stamps the
-    commit's `Session-Id:` trailer -- this passes the REAL caller-supplied
-    `session_id` (this session's own committing identity, threaded in from
-    `commit_session_offer_async`), never the synthetic nonce, so the landed
-    commit is attributed to the session that actually owns the paths.
+    `prefer_deliberate_stage=True` (DR-379) -- the opt-in `close_out_and_stamp`
+    could not take (AC4's missing half, this chunk): this module commits a
+    SESSION's own claimed dirty paths, so a path this session has already
+    deliberately staged (a partial hunk, a curated subset) should land its
+    staged bytes rather than being passed over for its worktree content. That
+    is exactly the substitution `prefer_deliberate_stage` performs.
 
-    `push_mode=PUSH_MODE_NEVER` -- same choice `close_out_and_stamp` makes
-    at its own call site (DR-329 § 7): this module's auto-commit path has
-    never owned a synchronous push (`push_state` was already always
-    reported `None` on every prior real-commit path here), and publication
-    is left to whichever cadence checkpoint runs next. Explicit, never by
-    omission -- an omitted `push_mode` would now default to
-    `PUSH_MODE_NONE` (2026-08-26), which leaves the in-pipeline push
-    skipped but the post-commit hook still armed, rather than firing a
-    synchronous push; still not the intent here, so the explicit kwarg
-    stays.
+    No push leg at all any more: this module's auto-commit path never owned a
+    synchronous push (`push_state` was already always reported `None` on
+    every prior real-commit path here, same as `close_out_and_stamp`'s own
+    reasoning) -- publication is left to whichever cadence checkpoint runs
+    next.
 
-    Return-contract mapping (constraint 1): every `GroupResult` key is
-    populated from `PipelineResult`, none renamed/dropped/added.
-    `committed` is `pipeline_result.committed_sha is not None` -- a
-    declined/failed/no-op pipeline result never reports `committed: True`
-    (constraint 2); `sha`/`error`/`reason`/`commit_failed` mirror the
-    pipeline's own fields, `push_state` mirrors `push_status` (a rendering
-    label only -- see `GroupResult.push_state`'s own docstring; this call
-    never pushes, so it is always `PUSH_STATUS_NOT_ATTEMPTED` here).
+    Return-contract mapping (constraint 1, unchanged): every `GroupResult`
+    key is still populated, none renamed/dropped/added. `committed` is
+    `outcome.sha is not None` on the success path -- a refused commit never
+    reports `committed: True` (constraint 2); `push_state` is always
+    `PUSH_STATUS_NOT_ATTEMPTED` (this call never pushes, mirroring the prior
+    `push_mode=PUSH_MODE_NEVER` behaviour).
     """
-    session_nonce = f"safe-commit-offer-{uuid.uuid4().hex}"
-    pipeline_result = run_commit_pipeline(
-        worktree_root,
-        session_id=session_nonce,
-        subject=group["message"],
-        prose=group.get("prose", ""),
-        stage_paths=group["paths"],
-        caller_paths=set(group["paths"]),
-        push_mode=PUSH_MODE_NEVER,
-        attributed_session_id=session_id,
-    )
-    error: Optional[str] = None
-    if pipeline_result.commit_failed:
-        error = (
-            "; ".join(pipeline_result.diagnostics)
-            or "commit pipeline reported commit_failed with no diagnostics"
+    message = group["message"]
+    prose = group.get("prose", "")
+    if prose:
+        message = f"{message}\n\n{prose}"
+    # `group["paths"]` may legitimately name a claimed-but-deleted path (a
+    # deletion this session made is a real thing to commit -- see this
+    # module's own `Reconciliation.claimed_absent` docstring) -- `commit_
+    # paths` needs those split into its own `deleted_paths` kwarg rather than
+    # `paths`, since a present-path read (`root / p).read_bytes()`) is what
+    # the old `run_commit_pipeline`'s `stage_paths` auto-classification used
+    # to do internally.
+    present_paths = [p for p in group["paths"] if (Path(worktree_root) / p).exists()]
+    deleted_paths = [p for p in group["paths"] if p not in present_paths]
+    try:
+        outcome = commit_paths(
+            worktree_root,
+            present_paths,
+            message,
+            deleted_paths=deleted_paths,
+            prefer_deliberate_stage=True,
+            blob_fallback=partial(hash_worktree_blobs_via_spawn, cwd=worktree_root),
         )
+    except (CommitRefused, FilterUnsupported) as exc:
+        return {
+            "paths": group["paths"],
+            "message": group["message"],
+            "committed": False,
+            "sha": None,
+            "push_state": PUSH_STATUS_NOT_ATTEMPTED,
+            "error": str(exc),
+            "commit_failed": True,
+            "reason": None,
+        }
     return {
         "paths": group["paths"],
         "message": group["message"],
-        "committed": pipeline_result.committed_sha is not None,
-        "sha": pipeline_result.committed_sha,
-        "push_state": pipeline_result.push_status,
-        "error": error,
-        "commit_failed": pipeline_result.commit_failed,
-        # `GroupResult.reason` is the BENIGN-no-op reason only (its own
-        # docstring: "None on a landed commit or a genuine `commit_failed`")
-        # -- `_render_report`'s two branches (line ~1817/1830) depend on
-        # that split to decide "NOT committed" vs the quiet no-op line.
-        # `PipelineResult.reason` is populated on the empty-commit-set
-        # no-op too, but that shape reports `commit_failed=True` under the
-        # rewired pipeline (see this function's own docstring) -- suppress
-        # it here rather than let a `commit_failed` group carry a `reason`
-        # `_render_report` was never written to expect.
-        "reason": None if pipeline_result.commit_failed else (pipeline_result.reason or None),
+        "committed": outcome.sha is not None,
+        "sha": outcome.sha,
+        "push_state": PUSH_STATUS_NOT_ATTEMPTED,
+        "error": None,
+        "commit_failed": False,
+        "reason": None,
     }
 
 

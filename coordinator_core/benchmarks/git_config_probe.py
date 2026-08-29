@@ -69,10 +69,37 @@ ARMS: Dict[str, Dict[str, Optional[str]]] = {
 FSMONITOR_ARM: Dict[str, Optional[str]] = {"core.fsmonitor": "true"}
 
 #: Every key any arm touches. Reset to unset before each arm so arms cannot leak
-#: into one another through the clone's persistent config.
+#: into one another through the clone's persistent CONFIG. Index FORMAT is a
+#: separate axis -- see `index_version` -- and is not reset by this list; an
+#: arm that wrote index.version=4 leaves a v4 index on disk for the next arm
+#: to warm against until git next rewrites it. Each arm's report attests the
+#: index version it actually ran with (`index_version` field) rather than
+#: assuming isolation on that axis.
 ALL_KEYS = sorted(
     {key for arm in ARMS.values() for key in arm} | set(FSMONITOR_ARM)
 )
+
+
+def index_version(clone: Path) -> Optional[int]:
+    """Read the on-disk index format version out of `.git/index`'s header.
+
+    `_apply_arm` can only unset CONFIG. Index FORMAT is not config -- it lives in
+    the file, and git rewrites it on its next write, not when the key is unset.
+    So an arm that wrote v4 leaves a v4 index behind for the next arm to warm
+    against. Reading the version back is the only way an arm's report can be
+    trusted rather than assumed; without it, `effective_config` attests the half
+    that was never in doubt.
+
+    Header is `DIRC` + a 4-byte big-endian version. Returns None if unreadable.
+    """
+    try:
+        with open(clone / ".git" / "index", "rb") as handle:
+            header = handle.read(8)
+    except OSError:
+        return None
+    if len(header) < 8 or header[:4] != b"DIRC":
+        return None
+    return int.from_bytes(header[4:8], "big")
 
 
 def _git(clone: Path, *args: str, check: bool = True) -> str:
@@ -82,6 +109,7 @@ def _git(clone: Path, *args: str, check: bool = True) -> str:
         cwd=str(clone),
         capture_output=True,
         text=True,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
     )
     if check and proc.returncode != 0:
         raise RuntimeError(
@@ -130,6 +158,12 @@ def measure_arm(
         "k": result["k"],
         "n": result["n"],
         "effective_config": effective,
+        # Review: coordinator:code-reviewer -- config isolation between arms is
+        # verified above via `effective_config`, but index FORMAT is not config
+        # and unsetting a key does not retroactively rewrite the index. This
+        # attests the index version actually in effect for this arm's warm-up
+        # and sample, rather than assuming it matches the arm's own setting.
+        "index_version": index_version(clone),
     }
 
 
@@ -152,6 +186,7 @@ def run(
             capture_output=True,
             text=True,
             check=True,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
         entries = len(_git(clone, "ls-files").splitlines())
         results: List[dict] = []

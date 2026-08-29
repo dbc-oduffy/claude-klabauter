@@ -25,7 +25,7 @@ from pathlib import Path
 
 import pytest
 
-from coordinator_core.ops.ceremony.commit_pipeline import PUSH_MODE_NONE
+from coordinator_core.ops.ceremony.push import PUSH_MODE_NONE
 from coordinator_core.ops.ceremony.post_commit_tail import (
     _commit_and_push_origin_stub_close,
 )

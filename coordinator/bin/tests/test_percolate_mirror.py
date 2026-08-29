@@ -207,29 +207,21 @@ def _wire(monkeypatch, order, *, dirty=False, scan_rc=0, drift_anchor="marker", 
         _mod._round, "_pathspec_from_manifest", lambda manifest, repo_root: (sorted(declared), _mod._round._no_filter_drops())
     )
 
-    # The commit leg is an in-process `run_commit_pipeline` call now, not a
-    # `scoped-git-commit` spawn, so the "commit" ordering marker comes from here
-    # rather than from `_fake_run`'s argv branch. Same reasoning as
+    # The commit leg is an in-process `commit_paths` call (C4 repoint,
+    # docs/plans/2026-08-29-the-push-subsystem-leaves-and-then-the-pipeline-
+    # can-go.md, off the killed `run_commit_pipeline`), not a
+    # `scoped-git-commit` spawn, so the "commit" ordering marker comes from
+    # here rather than from `_fake_run`'s argv branch. Same reasoning as
     # `test_percolate_round.py::_install_commit_pipeline_stub`.
-    from coordinator_core.ops.ceremony import commit_pipeline
+    from coordinator_core.git import commit as commit_mod
 
-    def _fake_pipeline(repo_root, **kwargs):
+    def _fake_commit_paths(repo_root, paths, message, **kwargs):
         order.append("commit")
-        return commit_pipeline.PipelineResult(
-            stage=commit_pipeline.StageOutcome(exit_code=0),
-            deletion_gate=None,
-            dirty_gate=None,
-            carry_gate=None,
-            op_scope_gate=None,
-            commit=None,
-            push=None,
-            committed_sha="deadbeef1234",
-            pushed=None,
-            commit_failed=False,
-            integrity_breach=False,
+        return commit_mod.CommitOutcome(
+            sha="deadbeef1234", staged_preferred=(), worktree_over_staged=()
         )
 
-    monkeypatch.setattr(commit_pipeline, "run_commit_pipeline", _fake_pipeline)
+    monkeypatch.setattr(commit_mod, "commit_paths", _fake_commit_paths)
     return targets, publish_calls
 
 

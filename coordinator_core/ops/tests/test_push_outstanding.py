@@ -25,7 +25,7 @@ from pathlib import Path
 import pytest
 
 import coordinator_core.ops.push_outstanding as push_outstanding_mod
-from coordinator_core.ops.ceremony.commit_pipeline import PushOutcome
+from coordinator_core.ops.ceremony.push import PushOutcome
 from coordinator_core.ops.push_outstanding import (
     _gitattributes_declares_lfs_filter,
     _range_touches_lfs_paths,

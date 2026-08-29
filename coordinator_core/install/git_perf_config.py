@@ -106,7 +106,12 @@ def apply(repo: Path, *, dry_run: bool = False) -> List[str]:
             # must be extended into it. Cheap and idempotent when already present.
             extend = _git(repo, "update-index", "--untracked-cache")
             if extend.returncode != 0:
-                report.append("        (index not extended: %s)" % extend.stderr.strip())
+                # Review: coordinator:code-reviewer -- this used to append a
+                # SECOND report line for the same key, violating the
+                # docstring's "one line per setting, always" contract that
+                # test_every_setting_produces_a_report_line_always enforces.
+                # Folded into the line already appended for this key instead.
+                report[-1] += " (index not extended: %s)" % extend.stderr.strip()
 
     return report
 
