@@ -4,11 +4,13 @@ coordinator/lib/resolve-claude-klabauter/tests/test_dispatch_prefers_stamped_eng
 Chunk C5 (docs/plans/2026-08-19-an-engine-root-is-a-stamped-build.md): pins
 the new rule at its chokepoint — "an engine root is a stamped build. No
 stamp, no engine." — with OUR OWN test, synthetic and in-process, never
-depending on DoE's conformance fixture (which does not yet create a stamped
-`<KLABAUTER>/coordinator_core/_engine_stamp` in any of its 19 cases; see
-`coordinator_core/tests/test_engine_root_conformance.py`'s
-`_XFAIL_STAMP_RULE_REASON` table for the fixture-side gap this test does not
-wait on).
+depending on DoE's conformance fixture. That independence was originally
+motivated by a fixture-side gap (no case created a stamped
+`<KLABAUTER>/coordinator_core/_engine_stamp`); DoE closed that gap on
+2026-08-29 with fixture schema 1.1.0's `paths.existing_files`, and the
+driver's `_XFAIL_STAMP_RULE_REASON` table retired with it. The independence
+is kept on its own merits — this test pins the chokepoint directly and must
+not start depending on a fixture owned by another repo.
 
 Negative-spec:
   - Does NOT touch `resolve_claude_klabauter_bin_dir()` — that stays single-tier,
