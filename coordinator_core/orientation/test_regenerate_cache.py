@@ -1551,10 +1551,23 @@ from datetime import datetime as _datetime, timezone as _timezone
 from coordinator_core.win_portability import no_console_passthrough_kwargs
 
 
-def _make_repo_with_upstream(tmp_path: Path, branch: str = "work/x", unpushed: int = 2) -> Path:
+#: Past `mod._CADENCE_GRACE_SECONDS`, so the fixture's unpushed commits are old
+#: enough for `emit_auto_push_health` to report on at all.
+_AGED_UNPUSHED_SECS = 4 * 3600
+
+
+def _make_repo_with_upstream(
+    tmp_path: Path, branch: str = "work/x", unpushed: int = 2, *, age_secs: int = _AGED_UNPUSHED_SECS
+) -> Path:
     """A real repo + bare "origin" remote, `branch` pushed once then given
-    `unpushed` further local-only commits -- the shape emit_auto_push_health
-    needs to get past its "0 unpushed -> no section" early return."""
+    `unpushed` further local-only commits, each backdated by `age_secs` -- the
+    shape emit_auto_push_health needs to get past BOTH of its early returns.
+
+    THE BACKDATE IS LOAD-BEARING. Since the per-commit push was replaced by
+    `warm.push_cadence`'s 600s tick, a freshly-made unpushed commit is the
+    designed steady state and the renderer stays silent on it. A fixture
+    committing at wall-clock now exercises the silent path regardless of the
+    `unpushed` count it asks for."""
     env = dict(
         os.environ,
         GIT_AUTHOR_NAME="test", GIT_AUTHOR_EMAIL="test@example.com",
@@ -1571,10 +1584,12 @@ def _make_repo_with_upstream(tmp_path: Path, branch: str = "work/x", unpushed: i
     subprocess.run(["git", "add", "."], cwd=str(repo), check=True, env=env, **no_console_passthrough_kwargs())
     subprocess.run(["git", "commit", "-q", "-m", "base"], cwd=str(repo), check=True, env=env, **no_console_passthrough_kwargs())
     subprocess.run(["git", "push", "-q", "-u", "origin", branch], cwd=str(repo), check=True, env=env, **no_console_passthrough_kwargs())
+    when = (_datetime.now(_timezone.utc) - _time_delta_seconds(age_secs)).strftime("%Y-%m-%dT%H:%M:%S+00:00")
+    aged_env = dict(env, GIT_AUTHOR_DATE=when, GIT_COMMITTER_DATE=when)
     for i in range(unpushed):
         (repo / f"file-{i}.txt").write_text(str(i), encoding="utf-8")
-        subprocess.run(["git", "add", "."], cwd=str(repo), check=True, env=env, **no_console_passthrough_kwargs())
-        subprocess.run(["git", "commit", "-q", "-m", f"unpushed {i}"], cwd=str(repo), check=True, env=env, **no_console_passthrough_kwargs())
+        subprocess.run(["git", "add", "."], cwd=str(repo), check=True, env=aged_env, **no_console_passthrough_kwargs())
+        subprocess.run(["git", "commit", "-q", "-m", f"unpushed {i}"], cwd=str(repo), check=True, env=aged_env, **no_console_passthrough_kwargs())
     return repo
 
 

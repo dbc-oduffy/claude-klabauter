@@ -217,6 +217,10 @@ from coordinator_core.ops.ceremony.detached_spawn import (
 )
 from coordinator_core.win_portability import same_path
 from coordinator_core.telemetry import op_latency
+from coordinator_core.warm.push_cadence import (
+    PUSH_CADENCE_INTERVAL_SECS,
+    SWEEP_TOTAL_CEILING_SECS,
+)
 from coordinator_core.ops.ceremony.housekeeping_liveness import (
     ARCHIVE_SWEEPS,
     REMEDY_COMMANDS,
@@ -880,7 +884,7 @@ def emit_recent_commits(repo_root: Path) -> List[str]:
 # `coordinator_core` unimportable). Admitted here so that class reaches a
 # reader at all; kept lexically distinct from the two real routes so no one
 # reads it as a remote rejecting a push.
-_LASTCLASS_RE = re.compile(r"\((direct push|powershell ssh push|trampoline)/([a-z-]+) after")
+_LASTCLASS_RE = re.compile(r"\((direct push|cadence-sweep|powershell ssh push|trampoline)/([a-z-]+) after")
 
 _ACTION_MAP = {
     "non-fast-forward": "branch diverged — reconcile (/workday-start Step 0.4.5) then push",
@@ -914,6 +918,32 @@ _ACTION_MAP = {
 # from an earlier session does not read as causing a fresh count.
 _FAILURE_RECENCY_SECONDS = 900
 
+#: The cadence's own publish latency, under which unpushed commits are NORMAL
+#: and `emit_auto_push_health` stays silent.
+#:
+#: THE DEFECT THIS CLOSES. Until C6/C7 (2026-08-30, docs/plans/2026-08-30-who-
+#: pushes-and-when.md) every commit was published by its own detached child, so
+#: any unpushed commit really was a failed push and a bare `unpushed >= 1` was a
+#: sound trigger. That publisher is deleted. `warm.push_cadence` now publishes on
+#: a `PUSH_CADENCE_INTERVAL_SECS` tick, which makes a just-committed repo
+#: unpushed BY DESIGN -- so the unchanged trigger fired on healthy repos across
+#: the whole fleet, putting "auto-push lagging" into the boot context of every
+#: session whose last commit was inside the cadence window. That is how a real
+#: multi-hour lag gets read as noise.
+#:
+#: TWO intervals, not one: `push_cadence.sweep_repos` refuses to START a repo it
+#: cannot finish inside `SWEEP_TOTAL_CEILING_SECS`, so a repo deferred by that
+#: ceiling costs exactly one extra interval before its next attempt. A one-
+#: interval grace would re-warn on precisely the deferral the cadence already
+#: handles on its own.
+#:
+#: NOT a push-failure bound: `_FAILURE_RECENCY_SECONDS` above bounds how old a
+#: push-failures.log LINE may be and still be quoted as the cause. This bounds
+#: how old the unpushed WORK may be before there is anything to report. A repo
+#: with a fresh failure logged but no commit older than this grace is still
+#: silent here -- the cadence has not yet had its second attempt.
+_CADENCE_GRACE_SECONDS = 2 * PUSH_CADENCE_INTERVAL_SECS + SWEEP_TOTAL_CEILING_SECS
+
 _LOG_TS_RE = re.compile(r"^\[([^\]]+)\]")
 
 
@@ -938,9 +968,22 @@ def emit_auto_push_health(repo_root: Path) -> str:
     upstream = f"origin/{branch}"
     if _git(["rev-parse", "--verify", upstream], repo_root) is None:
         return ""
-    unpushed_raw = _git(["rev-list", "--count", f"{upstream}..HEAD"], repo_root) or "0"
-    unpushed = int(unpushed_raw) if unpushed_raw.isdigit() else 0
-    if unpushed == 0:
+    # One spawn carries both facts this signal needs: the line count is the
+    # unpushed count, and the LAST line is the oldest unpushed commit -- the
+    # age the cadence grace is measured against. Measuring the newest commit
+    # instead would let a busy repo that has genuinely failed to publish for
+    # hours reset its own clock with every fresh commit.
+    log = _git(["log", "--format=%ct", f"{upstream}..HEAD"], repo_root)
+    if not log:
+        return ""
+    lines = log.splitlines()
+    unpushed = len(lines)
+    now = time.time()
+    try:
+        oldest_committed_at = int(lines[-1])
+    except ValueError:
+        oldest_committed_at = 0
+    if oldest_committed_at and (now - oldest_committed_at) < _CADENCE_GRACE_SECONDS:
         return ""
 
     # Defect 1 (2026-08-20 dispatch), migrated 2026-08-30 (overengineering-
@@ -950,7 +993,6 @@ def emit_auto_push_health(repo_root: Path) -> str:
     # (`_hold_window`) was gravestoned by C8, so nothing writes it any more
     # and the read always came back empty -- the distinction is gone with
     # the write side. Report from the live signal instead: push-failures.log.
-    now = time.time()
     lastclass = ""
     logf = resolve_git_common_dir(repo_root) / "push-failures.log"
     if logf.is_file() and logf.stat().st_size > 0:
