@@ -171,6 +171,94 @@ def test_reserved_name_is_not_derived_even_with_the_entrypoint_present(tmp_path)
     )
 
 
+def test_cut_over_to_native_door_defers_for_a_static_family_owned_name():
+    """Defect 2's regression pin. `_cut_over_to_native_door` must be able to
+    say "do nothing, a static family already serves this name" as something
+    OTHER than plain `None` -- `None` alone means "write the Python pair",
+    which is wrong for a name a static family owns. This asserts the
+    dedicated sentinel, not merely a falsy return, so a future refactor that
+    quietly folds the two meanings back into one `None` fails loudly here."""
+    result = substrate._cut_over_to_native_door(
+        "foo", Path("unused"), False,
+        engine_root=None,
+        static_family_names=frozenset({"foo"}),
+    )
+    assert result is substrate._STATIC_FAMILY_ALREADY_SERVED
+    assert result is not None, (
+        "a static-family-owned name must not collapse to the same None the "
+        "doorless-fallback case returns -- the caller cannot tell them apart."
+    )
+
+
+def test_write_agent_helper_forwarders_does_not_overwrite_a_static_family_shim(tmp_path):
+    """Defect 2, at the write-loop caller. Reproduces finding 1's unstamped-
+    root branch from this module's docstring directly: a name that is both
+    static-family-owned (passed in `static_family_names`) and present in the
+    derived agent-helper map must not get its file replaced by the doorless
+    Python-forwarder fallback."""
+    bin_dst = tmp_path / "bin"
+    bin_dst.mkdir()
+    family_file = bin_dst / "foo"
+    family_file.write_text("FAMILY-OWNED-SHIM\n", encoding="utf-8")
+
+    resolved = substrate._write_agent_helper_forwarders(
+        {"foo": "foo"}, bin_dst, False,
+        engine_root=None,
+        static_family_names=frozenset({"foo"}),
+    )
+
+    assert resolved == [], (
+        "a static-family-owned name must produce no write-surface entry -- "
+        "nothing was written for it this call."
+    )
+    assert family_file.read_text(encoding="utf-8") == "FAMILY-OWNED-SHIM\n", (
+        "the doorless fallback overwrote a static-family-owned path with a "
+        "Python forwarder body -- this is finding 1's collision from the "
+        "module docstring, unstamped-root branch."
+    )
+
+
+def test_remove_superseded_python_forwarders_exempts_static_family_names(tmp_path):
+    """Defect 1's regression pin. On a successful cutover, the kill must not
+    remove a static-family-owned name's bare/.cmd files -- finding 1's
+    stamped-root branch from this module's docstring: `door_install` has no
+    knowledge of family membership, so the exemption must be a set the
+    caller passes down, not something this function looks up itself."""
+    bin_dst = tmp_path
+    cmd = bin_dst / "foo.cmd"
+    bare = bin_dst / "foo"
+    cmd.write_text("@echo off\r\n", encoding="utf-8")
+    bare.write_text("FAMILY-OWNED\n", encoding="utf-8")
+
+    removed = door_install.remove_superseded_python_forwarders(
+        bin_dst, "foo", exempt_names=frozenset({"foo"})
+    )
+
+    assert removed == [], "an exempt name's files must not be reported as removed"
+    assert cmd.exists(), "a static-family-exempt name lost its .cmd file to the kill"
+    assert bare.exists(), "a static-family-exempt name lost its bare file to the kill"
+
+
+def test_remove_superseded_python_forwarders_still_removes_without_exemption(tmp_path):
+    """Control for the test above: an ordinary (non-exempt) cut-over name's
+    superseded pair is still removed -- the exemption must not have widened
+    into a global no-op."""
+    bin_dst = tmp_path
+    cmd = bin_dst / "foo.cmd"
+    cmd.write_text("@echo off\r\n", encoding="utf-8")
+    if os.name == "nt":
+        bare = bin_dst / "foo"
+        bare.write_text("stale trampoline\n", encoding="utf-8")
+
+    removed = door_install.remove_superseded_python_forwarders(bin_dst, "foo")
+
+    assert not cmd.exists(), "an ordinary cut-over name's .cmd must still be removed"
+    if os.name == "nt":
+        assert not (bin_dst / "foo").exists(), (
+            "an ordinary cut-over name's bare file must still be removed on Windows"
+        )
+
+
 def test_only_windows_separates_the_image_from_the_ch_family_shim(tmp_path):
     """Why the two platforms are not symmetric. `named_forwarder_path` takes
     `.exe` on Windows and NO suffix on POSIX (it branches on `sys.platform`;

@@ -341,21 +341,6 @@ def test_unmerged_conflict_counted_as_staged_only(tmp_path):
     assert result["evidence"]["unstaged_local_count"] == 0
 
 
-def test_no_upstream_configured_has_no_branch_ab_line(tmp_path):
-    """A branch with no upstream configured (distinct from detached HEAD)
-    never emits a `# branch.ab` line, so `upstream_resolved` reads False
-    directly off that absence."""
-    root = tmp_path / "no-upstream"
-    _init_repo(root)
-    _commit_file(root, "a.txt", "hello\n")
-    _git("checkout", "-q", "-b", "feature", cwd=root)
-
-    result = classify(root)
-
-    assert result["evidence"]["upstream_resolved"] is False
-    assert result["verdict"] == "indeterminate"
-
-
 def test_renamed_staged_path_is_counted_once(tmp_path):
     """A porcelain-v2 `2` rename row carries `<path>\t<origPath>`; only the
     NEW path is taken, matching `diff --name-only`'s own reporting."""

@@ -876,7 +876,9 @@ def remove_shadowing_ps1_sibling(bin_dst: Path, name: str) -> Optional[Path]:
     return None
 
 
-def remove_superseded_python_forwarders(bin_dst: Path, name: str) -> "list[Path]":
+def remove_superseded_python_forwarders(
+    bin_dst: Path, name: str, *, exempt_names: "frozenset[str]" = frozenset()
+) -> "list[Path]":
     """Removes the Python forwarder pair a cut-over `name` no longer needs
     (C5 kill, PM ruling 2026-08-27). Once a native door image exists for
     `name`, its Python-trampoline forwarders are not merely outranked, they
@@ -899,6 +901,19 @@ def remove_superseded_python_forwarders(bin_dst: Path, name: str) -> "list[Path]
     a stray `.cmd` (never generated on POSIX, but cheap to sweep if an
     earlier cross-platform install left one) is removable there.
 
+    `exempt_names` -- STATIC-FAMILY OWNERSHIP, PASSED DOWN NOT LOOKED UP
+    (DR-365, "ruling 2 governs every managed launcher class"). A name a
+    static bin family owns (e.g. `claude-home`, written by `ch_family`
+    before the agent-helper loop runs) has a bare/`.cmd` pair that is NOT
+    this kill's superseded Python trampoline -- it is that family's own
+    file, and deleting it strips the family of its install. This module
+    does not import `coordinator_core.install.substrate` to look up family
+    membership itself (that would create a dependency this module does not
+    otherwise have); the caller (`substrate._cut_over_to_native_door`)
+    passes the exempt set down instead. Defaults to the empty set so every
+    existing caller is unaffected. A name in this set is left untouched
+    entirely -- neither candidate below is even considered for it.
+
     Non-raising, idempotent, best-effort: returns the paths actually
     removed. Mirrors `remove_shadowing_ps1_sibling`'s posture -- a failure
     to clear a superseded forwarder must not un-succeed the native install
@@ -912,7 +927,11 @@ def remove_superseded_python_forwarders(bin_dst: Path, name: str) -> "list[Path]
       - Does NOT run for a name whose native install did not succeed. The
         caller gates on that: a doorless root keeps its Python pair, which
         IS the doorless-fallback path and is not collateral of this kill.
+      - Does NOT remove anything for a name in `exempt_names` -- that name's
+        bare/`.cmd` files belong to a static bin family, not to this kill.
     """
+    if name in exempt_names:
+        return []
     removed = []
     candidates = [Path(bin_dst) / f"{name}.cmd"]
     if sys.platform == "win32":

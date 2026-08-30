@@ -240,6 +240,12 @@ same rule that excludes every other gate module in this tree) -- inherited, not 
 module does not repeat `test_no_unbatched_per_item_git_spawn.py`'s own loud self-scan sentinel
 because it does not re-implement `_discover_scope_files`, it imports the one copy that already
 carries that guard.
+
+ASSERTION-MESSAGE RULE (overengineering-review, 2026-08-30, Finding 2): a cluster-total assertion
+message states how to RE-DERIVE THE CURRENT number, and only the current number. It does not carry
+a prior chunk's superseded derivation alongside it -- git already holds every earlier value and the
+arithmetic that produced it. When a total moves again, replace the derivation; do not append a
+second stratum under it.
 """
 
 from __future__ import annotations
@@ -1318,43 +1324,8 @@ _UNCOUNTED_MEASURED_UNREACHED: dict[tuple[str, str], str] = {}
 #: (this dict's reason for existing) into "and cannot silently grow more of them either." It
 #: does not close any (op, site) pair recorded here -- the reasoning below stays live and true.
 _CLUSTER_D2_OPEN_DISPOSITION: dict[str, tuple[tuple[str, str, str, int], ...]] = {
-    "deliverable.cascade_terminal": (
-        ("coordinator_core/hooks/auto_push.py", "_run_git", "<dynamic>", 0),
-        ("coordinator_core/hooks/auto_push.py", "push_once", "git", 0),
-        ("coordinator_core/hooks/auto_push.py", "_is_ancestor", "git", 0),
-        ("coordinator_core/hooks/auto_push.py", "_invoke_cockpit_publish", "<dynamic>", 0),
-        ("coordinator_core/hooks/auto_push.py", "_detach_and_run", "<dynamic>", 0),
-    ),
-    "fleet.migrate_handoff_vocabulary": (
-        ("coordinator_core/hooks/auto_push.py", "_run_git", "<dynamic>", 0),
-        ("coordinator_core/hooks/auto_push.py", "push_once", "git", 0),
-        ("coordinator_core/hooks/auto_push.py", "_is_ancestor", "git", 0),
-        ("coordinator_core/hooks/auto_push.py", "_invoke_cockpit_publish", "<dynamic>", 0),
-        ("coordinator_core/hooks/auto_push.py", "_detach_and_run", "<dynamic>", 0),
-    ),
-    "handoff.archive_transition": (
-        ("coordinator_core/hooks/auto_push.py", "_run_git", "<dynamic>", 0),
-        ("coordinator_core/hooks/auto_push.py", "push_once", "git", 0),
-        ("coordinator_core/hooks/auto_push.py", "_is_ancestor", "git", 0),
-        ("coordinator_core/hooks/auto_push.py", "_invoke_cockpit_publish", "<dynamic>", 0),
-        ("coordinator_core/hooks/auto_push.py", "_detach_and_run", "<dynamic>", 0),
-    ),
-    "handoff.transition": (
-        ("coordinator_core/hooks/auto_push.py", "_run_git", "<dynamic>", 0),
-        ("coordinator_core/hooks/auto_push.py", "push_once", "git", 0),
-        ("coordinator_core/hooks/auto_push.py", "_is_ancestor", "git", 0),
-        ("coordinator_core/hooks/auto_push.py", "_invoke_cockpit_publish", "<dynamic>", 0),
-        ("coordinator_core/hooks/auto_push.py", "_detach_and_run", "<dynamic>", 0),
-    ),
     "invoke.from_argv": (
         ("coordinator_core/ops/ceremony/detached_spawn.py", "spawn_detached", "<dynamic>", 0),
-    ),
-    "memo.transition": (
-        ("coordinator_core/hooks/auto_push.py", "_run_git", "<dynamic>", 0),
-        ("coordinator_core/hooks/auto_push.py", "push_once", "git", 0),
-        ("coordinator_core/hooks/auto_push.py", "_is_ancestor", "git", 0),
-        ("coordinator_core/hooks/auto_push.py", "_invoke_cockpit_publish", "<dynamic>", 0),
-        ("coordinator_core/hooks/auto_push.py", "_detach_and_run", "<dynamic>", 0),
     ),
     "workday.drain_pending_push": (
         ("coordinator_core/hooks/auto_push.py", "_run_git", "<dynamic>", 0),
@@ -1371,16 +1342,7 @@ _CLUSTER_D2_OPEN_DISPOSITION: dict[str, tuple[tuple[str, str, str, int], ...]] =
 #: sensitivity (this file's own registry tests already carry that dependency; this one does not
 #: need to).
 _CLUSTER_D2_OPEN_ENTRYPOINTS: dict[str, tuple[str, str]] = {
-    "deliverable.cascade_terminal": ("coordinator_core/ops/deliverable_cascade.py", "_handler"),
-    "fleet.migrate_handoff_vocabulary": (
-        "coordinator_core/ops/fleet/migrate_handoff_vocabulary.py", "_handler",
-    ),
-    "handoff.archive_transition": (
-        "coordinator_core/ops/handoff_archive_transition.py", "_handler",
-    ),
-    "handoff.transition": ("coordinator_core/ops/handoff_transition.py", "_handler"),
     "invoke.from_argv": ("coordinator_core/ops/invoke_from_argv.py", "_invoke_from_argv"),
-    "memo.transition": ("coordinator_core/ops/memo_transition.py", "_handler"),
     "workday.drain_pending_push": (
         "coordinator_core/ops/workday_drain_pending_push.py", "_handler",
     ),
@@ -1453,19 +1415,16 @@ def test_cluster_d2_open_disposition_matches_live_measurement():
         "_CLUSTER_D2_OPEN_DISPOSITION has drifted from the live tree's own cluster reachability "
         "(re-derive and update the dict, do not silently widen or narrow it):\n" + "\n".join(mismatches)
     )
-    assert total_pairs == 30, (
+    assert total_pairs == 5, (
         f"_CLUSTER_D2_OPEN_DISPOSITION now totals {total_pairs} (op, site) pairs, not the "
-        "30 left after the 2026-08-30 rot sweep: ceremony.post_commit_tail (5 pairs) and "
+        "5 left after 5ae46cc1b9 (a peer's own Kira pass) removed the auto_push reach entirely: deliverable.cascade_terminal, fleet.migrate_handoff_vocabulary, handoff.archive_transition, handoff.transition and memo.transition each measured live=[] and left this dict outright. Prior to that, 30 was left after the 2026-08-30 rot sweep: ceremony.post_commit_tail (5 pairs) and "
         "handoff.reconcile_close_terminal (5 pairs) were both removed from every table in this "
         "file, as was session.warm_start (1 pair, ops/session/warm_start.py deleted outright), "
         "file once neither resolved to a live op -- post_commit_tail.py survives but registers "
         "nothing, and handoff_reconcile_close_terminal.py is gone from the tree; neither key "
-        "appears in ops/_registry_map.py. 41 - 5 - 5 - 1 = 30, every pair attributed. Prior note: "
-        "41 expected after queue.close's (5 pairs) and ceremony.wsc_tail's (8 pairs) kills "
-        "removed their rows from the EM-measured 59 this chunk's own brief named, and "
-        "workday.drain_pending_push lost its _invoke_cockpit_publish site (-1, live tree "
-        "re-derivation) -- update this constant deliberately if the shift is real and "
-        "understood, never to silence a drift you have not traced."
+        "appears in ops/_registry_map.py. 41 - 5 - 5 - 1 = 30, every pair attributed. Update "
+        "this constant deliberately if the shift is real and understood, never to silence a "
+        "drift you have not traced."
     )
 
     for op_key in _CLUSTER_D2_OPEN_DISPOSITION:
@@ -1551,7 +1510,6 @@ _CLUSTER_D3_OPEN_DISPOSITION: dict[str, tuple[tuple[str, str, str, int], ...]] =
         ("coordinator_core/dag.py", "_git_path_ever_tracked", "git", 0),
         ("coordinator_core/git/run.py", "run_git", "git", 0),
         ("coordinator_core/ops/ceremony/git_native.py", "_git._invoke", "<dynamic>", 0),
-        ("coordinator_core/session/scope.py", "_git_run", "git", 0),
     ),
     "distill.apply_disposal": (
         ("coordinator_core/dag.py", "_git_path_ever_tracked", "git", 0),
@@ -1636,7 +1594,6 @@ _CLUSTER_D3_OPEN_DISPOSITION: dict[str, tuple[tuple[str, str, str, int], ...]] =
         ("coordinator_core/git/run.py", "run_git", "git", 0),
         ("coordinator_core/ops/ceremony/git_native.py", "_git._invoke", "<dynamic>", 0),
         ("coordinator_core/ops/ceremony/git_native.py", "_hash_object_stdin_bytes", "<dynamic>", 0),
-        ("coordinator_core/session/scope.py", "_git_run", "git", 0),
     ),
     "orientation.regenerate_cache": (
         ("coordinator_core/git/repo_root.py", "_spawn_rev_parse", "git", 0),
@@ -1796,9 +1753,9 @@ def test_cluster_d3_open_disposition_matches_live_measurement():
         "_CLUSTER_D3_OPEN_DISPOSITION has drifted from the live tree's own cluster reachability "
         "(re-derive and update the dict, do not silently widen or narrow it):\n" + "\n".join(mismatches)
     )
-    assert total_pairs == 65, (
+    assert total_pairs == 63, (
         f"_CLUSTER_D3_OPEN_DISPOSITION now totals {total_pairs} (op, site) pairs, not the "
-        "65 left after the 2026-08-30 rot sweep. Two reductions, both traced pair-by-pair "
+        "63: 5ae46cc1b9 also dropped session/scope.py::_git_run from deliverable.cascade_terminal and memo.transition (65 -> 63). Before that, 65 was left after the 2026-08-30 rot sweep. Two reductions, both traced pair-by-pair "
         "against the revision that set 79 (63cd18de01). FIRST, four pairs had already left "
         "without this constant moving, which is why it was red before the sweep: "
         "ceremony.session_instructions (-1), eol.census (-1), eol.repair (-1) and "
@@ -1811,18 +1768,8 @@ def test_cluster_d3_open_disposition_matches_live_measurement():
         "handoffs and handoff.archive_transition each stopped reaching dag.py::_git_path_ever_"
         "tracked (-2): the function still exists but now has no caller outside dag.py itself, "
         "the same narrowing that made the former op's static pin of 5 slack. 75 - 8 - 2 = 65. "
-        "Superseded note: "
-        "79 was this chunk's own live re-derivation measured (2026-08-26, D6): fleet."
-        "archive_paper_trail/fleet.archive_queue_entry/fleet.archive_release_accumulator/"
-        "fleet.archive_terminal_sizings/fleet.prune_closed_bugs/fleet.reap_integrated_findings/"
-        "fleet.reap_unintegrated_findings each now reach a git_native.py::_git._invoke <dynamic> "
-        "site alongside their existing session/scope.py::_git_run site, added to this dict per "
-        "the live tree's own per-op comparison above (no mismatches once added). The prior "
-        "hand-carried narrative in this docstring (77, derived from 110 minus a chain of named "
-        "kills/routing changes through 2026-08-25) was never re-verified against a passing "
-        "mismatch check before this chunk -- the live total re-derived here, 79, is the number "
-        "this ratchet now holds; update it deliberately if the shift is real and understood, "
-        "never to silence a drift you have not traced."
+        "Update this constant deliberately if the shift is real and understood, never to "
+        "silence a drift you have not traced."
     )
 
     for op_key in _CLUSTER_D3_OPEN_DISPOSITION:
@@ -2333,22 +2280,9 @@ def test_cluster_d5_open_disposition_matches_live_measurement():
         f"_CLUSTER_D5_OPEN_DISPOSITION now totals {total_pairs} (op, site) pairs, not the "
         "38 left after the 2026-08-30 rot sweep dropped handoff.reconcile_close_terminal's "
         "single pair -- the op is deleted from the tree and absent from ops/_registry_map.py, "
-        "so its row could only ever read a missing file. 39 - 1 = 38. Superseded note: "
-        "39 was expected after ceremony.session_instructions's own kill (2026-08-27: a peer deleted "
-        "coordinator_core/ops/ceremony/session_instructions.py outright at 6aaab6925, but the op's "
-        "NAME survived in four string-keyed tables in this file, so this test read a missing file "
-        "and three tests went red on one cause) dropped its 3 pairs "
-        "(branch_resolution.py::_git_run, resolver.py::_run_git, session_attribution.py::_git_run) "
-        "from both this dict and _CLUSTER_D5_OPEN_ENTRYPOINTS (42 -> 39), after "
-        "ceremony.wsc_tail/completion.reconcile_commits/fleet."
-        "archive_completed_plans's kills dropped their entrypoint and disposition entries from "
-        "the prior 49, (2026-08-25, G7 routing) deliverable.cascade_terminal lost its "
-        "execute_plan_assemble/row_spans.py::_run_git site once that function stopped calling "
-        "subprocess.run directly (49 -> 44), and handoff.reconcile_open's own kill (C2b/C6/C9, "
-        "the op deleted outright) dropped its 2 pairs (archive_stamp.py::_run_git, "
-        "reconcile/commit_reality.py::_git) from both this dict and _CLUSTER_D5_OPEN_ENTRYPOINTS "
-        "(44 -> 42) -- update this constant deliberately if the shift is real and "
-        "understood, never to silence a drift you have not traced."
+        "so its row could only ever read a missing file. 39 - 1 = 38. Update this constant "
+        "deliberately if the shift is real and understood, never to silence a drift you have "
+        "not traced."
     )
 
     for op_key in _CLUSTER_D5_OPEN_DISPOSITION:
@@ -6003,6 +5937,11 @@ def _measure_static_spawn_counts(op_names, entrypoints) -> dict[str, int]:
 #: transcribed here without this file's own re-derivation, which is what these two entries are.
 #: Both pinned at their freshly measured 1.
 _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
+    # Enrolled 2026-08-30 (second reconciliation pass): both entered the live
+    # registry mid-close from concurrent peer work, measured at their live
+    # reachable-site counts.
+    "baton_assemble.apply": 6,
+    "baton_assemble.brief": 5,
     # --- Raised 2026-08-30, cause identified before the raise (this dict's own
     # rule: a raised pin is a budget increase and needs the same evidence any
     # other one does). Two peer changes, not five independent regressions:
@@ -6011,22 +5950,10 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     #   the reachable path of every op that reaches auto_push -- hence the
     #   identical +2 on fleet.migrate_handoff_vocabulary, handoff.transition,
     #   memo.transition and workday.drain_pending_push.
-    #   push.outstanding's 3->4 raise: NO ESTABLISHED CAUSE (integrator
-    #   correction, review `coordinatorcode-reviewer.a637bcc18cac79d26`, Finding
-    #   2). Two attributions were offered and neither survives checking. First,
-    #   `35d8884230` -- but `git show 35d8884230 --name-only` never touches
-    #   ops/post_coverage_status.py; that commit is a pure module split moving
-    #   `push_with_retry` from commit_pipeline.py into ops/ceremony/push.py, and
-    #   the `post_coverage_status` call via `_recover_rule_violation_reject` was
-    #   already reachable from `push_outstanding` through `push_with_retry`
-    #   *before* the split. Second, an earlier attribution to `2a801281e4` --
-    #   that commit adds no such reference either. The pin stays at 4 because 4
-    #   is today's measured live count; only the causal story was unsupported.
-    #   Open question, not yet run: whether the pre-split count of 3 was itself
-    #   stale (the static walker undercounting across the pre-split module
-    #   boundary) or the +1 has some other real cause. Re-derive by measuring
-    #   push.outstanding's reachable-site count at 35d8884230^ vs 35d8884230
-    #   with this file's own walker before recording a cause here.
+    #   push.outstanding's 3->4 raise: pinned at 4, today's measured live count,
+    #   cause unattributed -- full investigation narrative in
+    #   state/bug-backlog/2026-08-30-the-spawn-ratchet-is-red-at-head-in-four-
+    #   36f76f41cdf5.yaml (update_2026_08_30 section (1) and closing_note).
     # This is a reachability count, not execution evidence (see the ceiling
     # test's own docstring), so these raises record that the ops CAN reach more
     # sites -- not that they spend more processes per call.
@@ -6045,18 +5972,19 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     # once-per-checkout archive index build. Its plan's prime exit criterion is
     # <=200ms and <=1 spawn, and that RUNTIME guarantee is asserted
     # independently by housekeeping/tests/test_brightline.py (green), not by
-    # this pin. The 13 counts what the call graph can reach through
+    # this pin. The pin (13 when measured 2026-08-30, 6 after 5ae46cc1b9 removed the
+# auto_push reach) counts what the call graph can reach through
     # archive_and_commit -- the auto_push and warm.skew machinery it does not
     # execute -- so raising an alarm about "13 spawns" from this row alone is a
     # misreading; go to the brightline test for what it actually costs.
     "ceremony.commit_v2": 1,
     "fleet.archive_actioned_memos": 4,
     "git.maintenance": 1,
-    "housekeeping.cycle": 13,
+    "housekeeping.cycle": 6,
     "session.safe_commit_offer": 1,
     "plugin_health.sentinel": 26,
-    "fleet.migrate_handoff_vocabulary": 13,
-    "handoff.transition": 13,
+    "fleet.migrate_handoff_vocabulary": 6,
+    "handoff.transition": 6,
     "fleet.reap_integrated_findings": 9,
     "fleet.reap_unintegrated_findings": 9,
     # 4 -> 5, 2026-08-27: the value arrived via a concurrent peer commit (76c5cf07b,
@@ -6074,7 +6002,7 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     "fleet.archive_terminal_sizings": 3,
     "warm_guard.evaluate": 10,
     "distill.apply_disposal": 9,
-    "memo.transition": 11,
+    "memo.transition": 3,
     "merge_assemble.apply": 1,
     "cruft_sweep.run": 8,
     "memo.send": 2,
@@ -6244,10 +6172,6 @@ _STATIC_SPAWN_COUNT_OVER_BUDGET_THRESHOLD = 8
 #: composition cost now named here.
 _STATIC_SPAWN_COUNT_OVER_BUDGET: dict[str, int] = {
     "plugin_health.sentinel": 26,
-    "fleet.migrate_handoff_vocabulary": 13,
-    "handoff.transition": 13,
-    "housekeeping.cycle": 13,
-    "memo.transition": 11,
     "warm_guard.evaluate": 10,
     "distill.apply_disposal": 9,
     "fleet.reap_integrated_findings": 9,

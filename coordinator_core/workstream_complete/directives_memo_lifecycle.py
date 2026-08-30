@@ -720,7 +720,7 @@ def classify_session_authored_files(
 #: entries`; `251ff57703` deleted that subcommand the same day, having already
 #: retired the OTHER producer of the same argv (`d-close-tail-args`) — this one
 #: was missed and outlived the parser it fed by one commit. The consumer chain
-#: died before either: K-046 deleted `coordinator/bin/wsc-tail.py` on
+#: died before either: gravestone: wsc-tail.py — K-046 deleted `coordinator/bin/wsc-tail.py` on
 #: 2026-08-23 (`c07062c99`). Nothing replaced it and nothing needs to; the
 #: `deleted_paths`/`kept_entries` decisions keys go with it. NOT to be confused
 #: with `build_deletion_blocks_check_directive` (`__init__.py`), which fronts

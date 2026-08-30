@@ -77,7 +77,7 @@ import tempfile
 from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import FrozenSet, List, Optional, Tuple
+from typing import FrozenSet, List, Optional, Tuple, Union
 
 from coordinator_core import machine_resolver
 from coordinator_core._settings_home import machine_local_dir, settings_home
@@ -1267,12 +1267,80 @@ def _door_eligible_forwarder_names() -> "frozenset[str]":
     return frozenset(n for n in names if isinstance(n, str))
 
 
+# Sentinel distinguishing "no door to cut over to, caller must write the
+# Python pair" (plain `None`) from "this name is already served by a static
+# bin family (e.g. `ch_family`'s `claude-home`) -- caller must write
+# NOTHING, not even the Python pair" (this object). Both are falsy-shaped
+# non-Path returns from `_cut_over_to_native_door`, which is exactly why a
+# bare `is None` check can no longer stand in for "no native image was
+# written" -- see that function's own docstring for the two-meaning split
+# this sentinel exists to make explicit rather than implicit in a comment
+# (ruling 2, DR-365: ONE PATH, ONE OWNER).
+#
+# TYPED, not a bare `object()`. `Union[Path, None, object]` collapses to
+# `object` for a type checker, so it accepts every value and warns on
+# nothing -- an annotation that reads as a guarantee and provides none. The
+# whole point of this sentinel is that a caller who forgets the `is` check
+# writes a Python forwarder over a static family's file, which is the exact
+# bug this return shape exists to prevent. A named class makes that a
+# checkable signature rather than a convention.
+class _StaticFamilyAlreadyServed:
+    """Return marker: a static bin family already owns this name's file(s),
+    so the caller must do NOTHING for it -- not a cutover, and not the
+    doorless Python-pair fallback `None` asks for.
+
+    DISCRIMINATE WITH `is`, NEVER WITH TRUTHINESS. This instance is truthy,
+    so `if _cut_over_to_native_door(...)` reads it as a successful cutover;
+    a falsy `__bool__` would make it indistinguishable from `None` instead.
+    Neither is a discriminator -- there is no truthiness convention that
+    separates all three returns, which is why the contract is an identity
+    check. `forwarder_self_heal.py` currently tests this call for truthiness
+    and is safe only because it never passes `static_family_names` (so this
+    value cannot arise there) and only ever acts on names ABSENT from
+    `bin_dst`, which a static-family name never is. Passing the set in there
+    without converting that test to `is` would silently reintroduce the
+    conflation."""
+
+    __slots__ = ()
+
+
+_STATIC_FAMILY_ALREADY_SERVED = _StaticFamilyAlreadyServed()
+
+
 def _cut_over_to_native_door(
-    name: str, bin_dst: Path, check_only: bool, *, engine_root: Optional[Path]
-) -> Optional[Path]:
-    """Attempts the C5 cutover for one door-eligible `name`, returning the
-    native image path on success or `None` when this name must stay on its
-    Python forwarder pair.
+    name: str,
+    bin_dst: Path,
+    check_only: bool,
+    *,
+    engine_root: Optional[Path],
+    static_family_names: "frozenset[str]" = frozenset(),
+) -> "Union[Path, None, _StaticFamilyAlreadyServed]":
+    """Attempts the C5 cutover for one door-eligible `name`, returning:
+
+      - the native image `Path` on a successful cutover;
+      - `None` when this name has no door to cut over to and the caller
+        must write the ordinary Python forwarder pair (the doorless
+        fallback);
+      - `_STATIC_FAMILY_ALREADY_SERVED` when `name` is in
+        `static_family_names` -- a static bin family (e.g. `ch_family`'s
+        `claude-home`) already owns this name's file(s), and the caller
+        must do NOTHING for it, not even fall back to the Python pair.
+
+    THE TWO-MEANING SPLIT THIS SENTINEL EXISTS FOR (ruling 2, DR-365: ONE
+    PATH, ONE OWNER). `None` used to be the sole non-Path return and the
+    caller (`_write_agent_helper_forwarders`) treated any non-`None` -- er,
+    any non-Path-having -- return the same way: "write the Python pair".
+    That is correct for the doorless-root case (there genuinely is no
+    forwarder yet) and WRONG for a static-family-owned name (the family's
+    file already IS this name's forwarder; writing a Python trampoline over
+    it costs the family its exec bit / overwrites its own body). The two
+    cases share no other distinguishing feature at the caller, so they need
+    two distinguishable return shapes, not one `Optional[Path]`. Callers
+    MUST check `is _STATIC_FAMILY_ALREADY_SERVED` before falling back to a
+    Python-pair write on any non-Path result.
+
+    Static-family membership is checked FIRST, before `engine_root` is even
+    consulted -- an already-served name needs no door lookup at all.
 
     THE KILL (PM ruling 2026-08-27). C5 originally wrote the native image
     ADDITIVELY, leaving the `.py`/`.cmd` pair in place as unreachable dead
@@ -1283,13 +1351,21 @@ def _cut_over_to_native_door(
     The pair is now REMOVED on a successful cutover, and -- the half that
     keeps this safe -- simply never written in the first place, so a
     cut-over name costs one native install instead of three writes and a
-    delete.
+    delete. `remove_superseded_python_forwarders` is passed
+    `static_family_names` too (as `exempt_names`), defense-in-depth against
+    ever deleting a static family's own bare/`.cmd` files -- unreachable in
+    this function's own control flow (a static-owned name already returned
+    above), but that function has no other caller-independent way to know
+    the same thing.
 
-    `None` IS THE FALLBACK SIGNAL, NOT AN ERROR. A root that cannot supply
-    a door (no engine stamp) returns `None` here, and the caller then
-    writes the ordinary Python pair for that name. That is the doorless
-    fallback preserved intact -- the kill removes a superseded artifact,
+    `None` IS *A* FALLBACK SIGNAL, NOT THE ONLY ONE, AND NOT AN ERROR. A
+    root that cannot supply a door (no engine stamp) returns `None` here,
+    and the caller then writes the ordinary Python pair for that name --
+    the doorless fallback, preserved intact for every name NOT already
+    served by a static family. The kill removes a superseded artifact,
     never the only route to the engine."""
+    if name in static_family_names:
+        return _STATIC_FAMILY_ALREADY_SERVED
     if engine_root is None:
         return None
     native_dst = _write_native_door_forwarder(name, bin_dst, check_only, engine_root=engine_root)
@@ -1297,7 +1373,9 @@ def _cut_over_to_native_door(
         return native_dst
     from coordinator_core.install import door_install
 
-    door_install.remove_superseded_python_forwarders(bin_dst, name)
+    door_install.remove_superseded_python_forwarders(
+        bin_dst, name, exempt_names=static_family_names
+    )
     return native_dst
 
 
@@ -3405,6 +3483,7 @@ def _write_agent_helper_forwarders(
     *,
     engine_root: "Optional[Path]" = None,
     resolver_module: str = _AGENT_RESOLVER_MODULE,
+    static_family_names: "frozenset[str]" = frozenset(),
 ) -> "list[WriteSurfaceEntry]":
     """Step 3b's forwarder-write loop proper, extracted out of
     ``_install_bin_resolvers`` so a second caller (the missing-forwarder
@@ -3478,6 +3557,19 @@ def _write_agent_helper_forwarders(
     So the gate has nothing left to protect and the ~46ms-per-call
     interpreter trampoline it protected is gone with it.
 
+    ``static_family_names`` -- names a static bin family already owns (e.g.
+    ``ch_family``'s ``claude-home``), passed to ``_cut_over_to_native_door``
+    so it can return its ``_STATIC_FAMILY_ALREADY_SERVED`` sentinel for them.
+    This loop MUST check for that sentinel before falling through to the
+    Python-pair write below -- see ``_cut_over_to_native_door``'s own
+    docstring for why ``None`` alone can no longer stand for "write
+    nothing here". Defaults to the empty set, so a caller that never opts in
+    (the self-heal path, which does not import or pass this) keeps its prior
+    behaviour unchanged. Currently every name this set could exempt is still
+    listed in ``_AGENT_HELPER_RESERVED_NAMES`` and therefore never reaches
+    ``agent_helper_target_map`` in the first place -- this parameter is inert
+    until that reservation is lifted, by design (DR-365, ruling 2).
+
     ``engine_root`` stays a ``None``-defaulted keyword-only parameter for the
     self-heal caller. A name whose cutover returns ``None`` -- a root
     carrying no engine stamp, so there is no door to install -- falls through
@@ -3518,7 +3610,12 @@ def _write_agent_helper_forwarders(
         agent_helper_resolved: "list[WriteSurfaceEntry]" = []
         for f, target in sorted(agent_helper_target_map.items()):
             try:
-                native_dst = _cut_over_to_native_door(f, bin_dst, check_only, engine_root=engine_root)
+                native_dst = _cut_over_to_native_door(
+                    f, bin_dst, check_only, engine_root=engine_root,
+                    static_family_names=static_family_names,
+                )
+                if native_dst is _STATIC_FAMILY_ALREADY_SERVED:
+                    continue
                 if native_dst is not None:
                     agent_helper_resolved.append(WriteSurfaceEntry(kind="file-path", path=str(native_dst)))
                     continue
@@ -3543,7 +3640,12 @@ def _write_agent_helper_forwarders(
     with held_lock(bin_dst, holder_label="install-substrate-forwarders"):
         for f, target in sorted(agent_helper_target_map.items()):
             try:
-                native_dst = _cut_over_to_native_door(f, bin_dst, check_only, engine_root=engine_root)
+                native_dst = _cut_over_to_native_door(
+                    f, bin_dst, check_only, engine_root=engine_root,
+                    static_family_names=static_family_names,
+                )
+                if native_dst is _STATIC_FAMILY_ALREADY_SERVED:
+                    continue
                 if native_dst is not None:
                     agent_helper_resolved.append(WriteSurfaceEntry(kind="file-path", path=str(native_dst)))
                     native_written.add(f)
@@ -3696,6 +3798,7 @@ def _install_live_source_tree_forwarders(
         only_live, bin_dst, check_only,
         engine_root=None,
         resolver_module=resolver_src.stem,
+        static_family_names=_static_bin_family_names(claude_klabauter_root_resolved),
     )
     print(
         f"[install-substrate] live-source-tree forwarders: {len(only_live)} name(s) "
@@ -3886,6 +3989,7 @@ def _install_bin_resolvers(
     agent_helper_resolved = _write_agent_helper_forwarders(
         agent_helper_target_map, bin_dst, check_only,
         engine_root=claude_klabauter_root_resolved,
+        static_family_names=_static_bin_family_names(claude_klabauter_root_resolved),
     )
     if not check_only:
         resolution_journal.record_resolution(

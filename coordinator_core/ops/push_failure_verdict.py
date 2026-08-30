@@ -82,7 +82,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import List, Optional
+from typing import List, NamedTuple, Optional
 
 from coordinator_core.git.git_dir import resolve_git_common_dir, resolve_git_dir
 from coordinator_core.ipc import register_op
@@ -112,13 +112,10 @@ _TS_RE = re.compile(r"^\[(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z)\]")
 _STAGED_SAMPLE_LIMIT = 20
 
 
-def _split_nonempty_lines(stdout: str) -> List[str]:
-    return [line for line in stdout.splitlines() if line.strip()]
-
-
-class _StatusProbe:
-    """One `git status --porcelain=v2 --branch` spawn, parsed into every
-    index/worktree/upstream signal `classify` needs.
+class _StatusProbe(NamedTuple):
+    """Every index/worktree/upstream signal `classify` needs, parsed from one
+    `git status --porcelain=v2 --branch` spawn and returned by value once
+    `_status_probe` has finished parsing it.
 
     NEGATIVE SPEC — why one spawn and not the four this replaced. Each of
     `diff --cached --name-only`, `diff --name-only`, `rev-parse --git-dir`
@@ -132,20 +129,17 @@ class _StatusProbe:
     readability; the spawn count IS the contract.
     """
 
-    __slots__ = ("staged", "unstaged", "ahead", "behind", "upstream_resolved")
-
-    def __init__(self) -> None:
-        self.staged: Optional[List[str]] = None
-        self.unstaged: Optional[List[str]] = None
-        self.ahead: Optional[int] = None
-        self.behind: Optional[int] = None
-        self.upstream_resolved: bool = False
+    staged: Optional[List[str]]
+    unstaged: Optional[List[str]]
+    ahead: Optional[int]
+    behind: Optional[int]
+    upstream_resolved: bool
 
 
 def _status_probe(repo_root: Path) -> _StatusProbe:
     """Parse `git status --porcelain=v2 --branch` into a `_StatusProbe`.
 
-    A git failure (not a repo, unreadable tree) leaves `staged`/`unstaged`
+    A git failure (not a repo, unreadable tree) returns `staged`/`unstaged`
     as None and `upstream_resolved` False — exactly the shape the previous
     per-probe `None` returns folded into, so `classify`'s indeterminate
     legs are unchanged.
@@ -166,16 +160,20 @@ def _status_probe(repo_root: Path) -> _StatusProbe:
 
     `X` is the index status and `Y` the worktree status; `.` means clean.
     """
-    probe = _StatusProbe()
     result = _git(
         ["status", "--porcelain=v2", "--branch", "--untracked-files=no"],
         cwd=repo_root,
     )
     if not result.ok:
-        return probe
+        return _StatusProbe(
+            staged=None, unstaged=None, ahead=None, behind=None, upstream_resolved=False
+        )
 
     staged: List[str] = []
     unstaged: List[str] = []
+    ahead: Optional[int] = None
+    behind: Optional[int] = None
+    upstream_resolved = False
     for line in result.stdout.splitlines():
         if not line:
             continue
@@ -183,12 +181,12 @@ def _status_probe(repo_root: Path) -> _StatusProbe:
             parts = line[len("# branch.ab ") :].split()
             if len(parts) == 2:
                 try:
-                    probe.ahead = int(parts[0])
-                    probe.behind = -int(parts[1])
+                    ahead = int(parts[0])
+                    behind = -int(parts[1])
                 except ValueError:
                     continue
                 else:
-                    probe.upstream_resolved = True
+                    upstream_resolved = True
             continue
         marker = line[:2]
         if marker not in ("1 ", "2 ", "u "):
@@ -242,9 +240,10 @@ def _status_probe(repo_root: Path) -> _StatusProbe:
         if xy[1] != ".":
             unstaged.append(path)
 
-    probe.staged = staged
-    probe.unstaged = unstaged
-    return probe
+    return _StatusProbe(
+        staged=staged, unstaged=unstaged, ahead=ahead, behind=behind,
+        upstream_resolved=upstream_resolved,
+    )
 
 
 def _merge_head_present(repo_root: Path) -> bool:
@@ -277,7 +276,7 @@ def _incoming_files(repo_root: Path) -> Optional[List[str]]:
     result = _git(["diff", "--name-only", "HEAD...@{u}"], cwd=repo_root)
     if not result.ok:
         return None
-    return _split_nonempty_lines(result.stdout)
+    return [line for line in result.stdout.splitlines() if line.strip()]
 
 
 def _push_failures_log_evidence(repo_root: Path) -> tuple:

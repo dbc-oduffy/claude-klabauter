@@ -80,7 +80,24 @@ _BASELINE = Path(__file__).resolve().parent / "dead_artifact_citation_baseline.j
 #: currently runs.
 _SCANNED_ROOTS = ("coordinator_core", "coordinator/bin")
 
-_GRAVESTONE_TOKEN = "GRAVESTONE NOTICE"
+#: Per-CITATION opt-out. A module that must keep naming a corpse writes this
+#: token on the same line, or anywhere in the contiguous comment block the
+#: citation sits in, naming the artifact: ``gravestone: wsc-tail.py``.
+#:
+#: This replaced a whole-FILE ``GRAVESTONE NOTICE`` exemption on 2026-08-30, the
+#: day both landed. Kira measured that exemption suppressing ZERO pairs across
+#: the two files carrying it — a permanent unaudited escape hatch invented in the
+#: same session, for the same files, that turned out not to need it. Its first
+#: real customer arrived the same afternoon and argued the opposite way: a peer
+#: (`90ee922ddd`) added exemplary past-tense prose recording that
+#: `coordinator/bin/wsc-tail.py` died at K-046, and this gate flagged it, because
+#: the gate is name-based and declines to sniff tense. A whole file is too coarse
+#: a thing to silence for one correct sentence; the marker is per-citation so the
+#: silence is exactly as wide as the claim it covers.
+_GRAVESTONE_MARKER = "gravestone:"
+
+#: Regex word boundary, named so the alternation above reads as prose.
+BOUND = r"\b"
 
 
 def _retired_artifacts() -> dict[str, str]:
@@ -129,16 +146,55 @@ def _citations() -> frozenset:
     better informed.
     """
     dead = _retired_artifacts()
+    if not dead:
+        return frozenset()
+    #: ONE alternation, not one pass per dead name. The first cut ran 28 separate
+    #: regex sweeps over every file and took 14.3s; a gate slow enough to be worth
+    #: skipping is a gate that gets skipped.
+    alternation = "|".join(re.escape(name) for name in sorted(dead))
+    pattern = re.compile(BOUND + "(?:" + alternation + ")" + BOUND)
     found = set()  # memoised by the decorator: both tests share one tree walk
     for path in _live_production_modules():
         text = path.read_text(encoding="utf-8", errors="replace")
-        if _GRAVESTONE_TOKEN in text:
-            continue
         rel = path.relative_to(_REPO_ROOT).as_posix()
-        for basename in dead:
-            if re.search(r"\b" + re.escape(basename) + r"\b", text):
-                found.add((rel, basename))
+        for match in pattern.finditer(text):
+            basename = match.group(0)
+            if _marker_covers(text, match.start(), basename):
+                continue
+            found.add((rel, basename))
     return frozenset(found)
+
+
+def _marker_covers(text: str, index: int, basename: str) -> bool:
+    """True when a ``gravestone: <basename>`` marker governs the citation at
+    ``index``.
+
+    Scope is the citation's own line plus the contiguous run of comment lines
+    around it — the block a reader takes in as one annotation. Deliberately not
+    the whole file (see ``_GRAVESTONE_MARKER``) and deliberately not a fixed line
+    window, which would silently stop covering an annotation someone later
+    reflows.
+    """
+    lines = text.splitlines()
+    line_no = text.count(chr(10), 0, index)
+
+    def _is_comment(i: int) -> bool:
+        return 0 <= i < len(lines) and lines[i].lstrip().startswith("#")
+
+    lo = hi = line_no
+    while _is_comment(lo - 1):
+        lo -= 1
+    while _is_comment(hi + 1):
+        hi += 1
+    block = chr(10).join(lines[lo : hi + 1])
+    if _GRAVESTONE_MARKER not in block:
+        return False
+    #: The marker must NAME the artifact it silences. A bare `gravestone:` would
+    #: re-create the blanket exemption this replaced, one block at a time.
+    for raw in block.split(_GRAVESTONE_MARKER)[1:]:
+        if basename in raw.split(chr(10))[0]:
+            return True
+    return False
 
 
 def _baseline() -> set:
