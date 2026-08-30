@@ -118,6 +118,41 @@ def test_diff_written_to_expected_path(tmp_path: Path) -> None:
     assert result["empty"] is False
 
 
+def test_colliding_slice_id_refuses_rather_than_overwriting(tmp_path: Path) -> None:
+    # A slice id is a filename: a generic one collides with whatever peer
+    # froze it first, and on a shared worktree that file is often tracked.
+    # An unconditional write destroyed their evidence silently.
+    _init_repo(tmp_path)
+    sha1 = _commit(tmp_path, "a.txt", "line one\n", "add a.txt")
+    sha2 = _commit(tmp_path, "a.txt", "line one\nline two\n", "extend a.txt")
+    sha3 = _commit(tmp_path, "b.txt", "peer content\n", "add b.txt")
+
+    first = freeze_diff(tmp_path, f"{sha1}..{sha2}", "wave-1")
+    assert first["error"] is None
+    frozen = _diffs_dir(tmp_path) / "wave-1.diff"
+    original = frozen.read_text()
+
+    second = freeze_diff(tmp_path, f"{sha2}..{sha3}", "wave-1")
+
+    assert second["error"] is not None
+    assert "wave-1" in second["error"]
+    assert second["diff_path"] is None
+    assert frozen.read_text() == original
+
+
+def test_identical_refreeze_under_same_slice_id_is_idempotent(tmp_path: Path) -> None:
+    _init_repo(tmp_path)
+    sha1 = _commit(tmp_path, "a.txt", "line one\n", "add a.txt")
+    sha2 = _commit(tmp_path, "a.txt", "line one\nline two\n", "extend a.txt")
+
+    first = freeze_diff(tmp_path, f"{sha1}..{sha2}", "wave-1")
+    second = freeze_diff(tmp_path, f"{sha1}..{sha2}", "wave-1")
+
+    assert first["error"] is None
+    assert second["error"] is None
+    assert second["diff_path"] == first["diff_path"]
+
+
 def test_head_sha_matches_freeze_time_head(tmp_path: Path) -> None:
     _init_repo(tmp_path)
     sha1 = _commit(tmp_path, "a.txt", "line one\n", "add a.txt")
@@ -157,14 +192,31 @@ def test_pathspec_narrows_output(tmp_path: Path) -> None:
 
 
 def test_empty_diff_is_valid_outcome(tmp_path: Path) -> None:
+    # An empty diff over a range that DOES name commits stays a valid
+    # outcome. This used to assert it via "HEAD..HEAD", which
+    # `_zero_commit_range_error` now refuses outright (2c510a2857) — a
+    # zero-commit range is a malformed request, not an empty result, and
+    # the two must not be asserted by the same case.
     _init_repo(tmp_path)
-    _commit(tmp_path, "a.txt", "line one\n", "add a.txt")
+    sha1 = _commit(tmp_path, "a.txt", "line one\n", "add a.txt")
+    sha2 = _commit(tmp_path, "a.txt", "line one\nline two\n", "extend a.txt")
 
-    result = freeze_diff(tmp_path, "HEAD..HEAD", "empty-diff")
+    result = freeze_diff(tmp_path, f"{sha1}..{sha2}", "empty-diff", paths=["b.txt"])
 
     assert result["error"] is None
     assert result["empty"] is True
     assert Path(result["diff_path"]).read_text() == ""
+
+
+def test_zero_commit_range_refuses(tmp_path: Path) -> None:
+    _init_repo(tmp_path)
+    _commit(tmp_path, "a.txt", "line one\n", "add a.txt")
+
+    result = freeze_diff(tmp_path, "HEAD..HEAD", "zero-commit")
+
+    assert result["error"] is not None
+    assert "ZERO commits" in result["error"]
+    assert result["diff_path"] is None
 
 
 @pytest.mark.parametrize("bad_slice_id", ["../escape", "sub/dir", "back\\slash"])

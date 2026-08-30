@@ -728,12 +728,42 @@ def claim_held_by_me(
 
     ``claim_dir`` is REQUIRED — empty/missing raises ValueError (mirrors the
     bash ``${1:?claim_dir required}``).
+
+    FAILS CLOSED UNDER A WARM DISPATCH THAT CARRIED NO IDENTITY (AC7,
+    docs/plans/2026-08-30-the-c-door-sends-the-callers-session-identity.md).
+    This is the claim MUTEX: its ``True`` is what tells a caller "you already
+    hold this, proceed", so identity here is an anti-forgery input and not a
+    label. Inside the resident warm server ``os.environ`` names whoever
+    SPAWNED it, which means every session that server goes on to serve
+    resolves the SAME id — so three sessions dialling the same claim would
+    each be told they hold it, and the mutex would admit all three at once
+    while looking correct to every one of them. That is worse than refusing:
+    a mutex that grants on a stranger's id is not a degraded mutex, it is an
+    absent one.
+
+    So when ``in_warm_served_request()`` is true and nothing was carried, the
+    answer is ``False`` — "not yours", never "yours by ambient default". The
+    caller's own not-held path (re-claim, contend, or report) is the correct
+    and recoverable outcome; a false ``True`` is not recoverable, because the
+    work lands before anyone can see it was misattributed.
+
+    Cold is untouched, and deliberately so: there ``os.environ`` IS the
+    caller's own environment, so the env tiers are the right source and
+    refusing would break every cold release and takeover. An explicitly
+    passed ``my_sid`` also short-circuits this entirely — a caller that has
+    already resolved identity under its own rules is trusted with it, which
+    is the same contract the TOCTOU note above describes.
     """
     if not claim_dir:
         raise ValueError("claim_dir required")
     my = my_sid or ""
     if not my:
-        my = core.resolve_session_id(cwd)
+        if core.in_warm_served_request():
+            my = core.carried_session_id()
+            if not my:
+                return False
+        else:
+            my = core.resolve_session_id(cwd)
     p = Path(claim_dir)
     if (p / "session_id").is_file():
         try:

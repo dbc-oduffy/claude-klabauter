@@ -128,15 +128,17 @@ import coordinator_core.ops.handoff_author_fork  # noqa: F401
 import coordinator_core.ops.handoff_phase_stamp  # noqa: F401
 import coordinator_core.ops.handoff_archive_transition  # noqa: F401
 
-# d6's door since 2026-08-28. Same REGISTRATION-TRIGGER role as the imports
-# above, and load-bearing for the same reason: `_invoke_op_in_process` resolves
-# out of `coordinator_core.ipc`'s registry, which is empty for a module never
-# imported. `handoff_archive_transition` above stays imported alongside it --
-# `handoff.housekeeping` reaches that module's `_handler` as a LIBRARY for its
-# targeted-transition leg, so the module must load either way; what changed is
-# that its OP KEY is no longer resolved here (it is suspended, and resolving it
-# is what raised `OpSuspendedError` and left every predecessor un-superseded).
-import coordinator_core.ops.handoff_housekeeping  # noqa: F401
+# d6's door since 2026-08-28, repointed 2026-08-30 (C8,
+# docs/plans/2026-08-29-the-housekeeping-cycle-stops-committing.md) onto the
+# rebuilt cycle's own op boundary. Same REGISTRATION-TRIGGER role as the
+# imports above, and load-bearing for the same reason: `_invoke_op_in_process`
+# resolves out of `coordinator_core.ipc`'s registry, which is empty for a
+# module never imported. `handoff_archive_transition` above stays imported
+# alongside it -- `housekeeping.cycle` reaches that module's `_handler` as a
+# LIBRARY for its targeted-transition leg, so the module must load either way.
+# `handoff.housekeeping`'s own op key stays dead (kill means kill forever, PM
+# 2026-08-23) -- this import no longer resolves it.
+import coordinator_core.housekeeping.cycle  # noqa: F401
 
 # `handoff.transition` (verb="claim") is the single writer d6's ledger
 # reconcile delegates its re-stamp to (`_reconcile_claim_from_ledger`). The
@@ -743,16 +745,19 @@ def _dispatch_handoff_supersede_predecessor(args: list[str], repo_root: Path) ->
     successor> and archives it (git mv to archive/handoffs/YYYY-MM/ + commit),
     all in ONE call.
 
-    ROUTED THROUGH `handoff.housekeeping` SINCE 2026-08-28, and the rewire is
-    the whole point of the change rather than a refactor.
+    ROUTED THROUGH `handoff.housekeeping` SINCE 2026-08-28 (and repointed onto
+    `housekeeping.cycle` 2026-08-30, C8,
+    docs/plans/2026-08-29-the-housekeeping-cycle-stops-committing.md), and the
+    rewire is the whole point of the change rather than a refactor.
     `handoff.archive_transition` is in `SUSPENDED_OPS`, so `get_op_handler`
     refused it before it was ever composed and this directive degraded on every
     single `/handoff` in the fleet -- every continuation baton's predecessor
-    left non-terminal, which is the PM-quoted d6 outage. `handoff.housekeeping`
+    left non-terminal, which is the PM-quoted d6 outage. `housekeeping.cycle`
     is the live door over the same surviving compute: it reaches
-    `handoff_archive_transition._handler` as a LIBRARY (its op key stays dead --
-    kill means kill forever, PM 2026-08-23) and returns that op's result
-    verbatim under `transition`. Governing plan:
+    `handoff_archive_transition._handler` as a LIBRARY (both `handoff.housekeeping`
+    and `handoff.archive_transition`'s own op keys stay dead -- kill means kill
+    forever, PM 2026-08-23) and returns that op's result verbatim under
+    `transition`. Governing plan:
     `docs/plans/2026-08-27-one-corpus-read-or-the-housekeeping-job-dies-a-
     fourth-time.md`, chunk C5.
 
@@ -956,7 +961,7 @@ def _dispatch_handoff_supersede_predecessor(args: list[str], repo_root: Path) ->
 
     try:
         housekeeping = _invoke_op_in_process(
-            "handoff.housekeeping",
+            "housekeeping.cycle",
             {
                 # The corpus legs are deliberately OFF. This directive runs
                 # inside `apply()`'s transaction, mid-`/handoff`, and its remit

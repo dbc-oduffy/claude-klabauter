@@ -6835,11 +6835,13 @@ def build_completeness_checklist(fm: dict[str, Any], artifact_path: str) -> dict
 # (`hash-object`) + compare" MECHANICAL step to `gates.execution_stamp_match`
 # — this is that mapping's engine-side computation. Fires on any artifact
 # carrying an `execution_authorized_sha` directly, or a `## Plan to Execute`
-# body pointer to a plan that carries one. `stale-bookkeeping` promotes to a
+# body pointer to a plan that carries one. `unstampable` promotes to a
 # tier-1 re-stamp `directives[]` entry; `stale-substantive` stays a tier-3
 # `judgment_points[]` entry (`recommendation: null`) — this module pre-tags
 # the diff's shape, it never adjudicates whether the underlying scope change
-# is an acceptable one.
+# is an acceptable one. `stale-bookkeeping` promotes NOTHING: the stamp is
+# correct and only its ratification fields moved, so it is reported and the
+# comparison base is left where the PM actually authorized.
 #
 # Negative-spec: does NOT invent a second hash algorithm. `_frontmatter_body_
 # text`/`_git_hash_object_stdin` below now DELEGATE to the shared
@@ -7152,7 +7154,21 @@ def compute_execution_stamp_match(
     delta_class = _classify_stamp_delta(repo_root, stamp_commit, target_rel_path)
     if delta_class == "bookkeeping":
         verdict = "stale-bookkeeping"
-        next_move = f"Re-stamp execution_authorized_sha on {target_rel_path} to {computed_sha} and proceed."
+        # NOT a re-stamp instruction, deliberately. Every changed line since
+        # `stamp_commit` is a ratification field, a `**Status:**` line, or
+        # blank -- by construction, nothing a re-authorization could be about.
+        # Re-stamping re-syncs the hash to a body whose only change WAS the
+        # hash, and it advances `stamp_commit`, so the next check diffs from a
+        # later base and the accumulated drift a later substantive edit must
+        # stand out against is thrown away. Leaving the stamp pinned at the
+        # real authorization is what keeps `stale-substantive` meaningful.
+        next_move = (
+            f"Authorization stands on {target_rel_path} — proceed WITHOUT re-stamping. "
+            "Every line changed since the stamp commit is a ratification field, a "
+            "`**Status:**` line, or blank; re-stamping would only re-sync the hash to a "
+            "body whose sole change was the hash, and would move the comparison base "
+            "forward so a later substantive edit is measured against less history."
+        )
     else:
         verdict = "stale-substantive"
         next_move = (
@@ -7173,11 +7189,17 @@ def compute_execution_stamp_match(
 
 
 def build_execution_stamp_directive(execution_stamp_match: dict[str, Any], target_path: str) -> dict[str, Any]:
-    """The tier-1 re-stamp `directives[]` entry for `stale-bookkeeping`/
-    `unstampable` (AC18) — unconditional: the engine has already
-    established the delta is bookkeeping-only (or that the recorded value
-    never reproduced at all), so re-stamping is mechanical, not a call left
-    to the EM. `restamp-execution-sha` is a registered verb on
+    """The tier-1 re-stamp `directives[]` entry for `unstampable` (AC18) —
+    unconditional: the engine has already established the recorded value
+    never reproduced the canonical recipe even at its own stamp commit, so
+    re-stamping repairs a broken record and is mechanical, not a call left
+    to the EM.
+
+    Negative spec: `stale-bookkeeping` no longer reaches this builder. That
+    stamp is CORRECT, merely older than some ratification-field edits, and
+    re-stamping it writes only more ratification fields — bookkeeping again
+    on the next check. See the tier-split comment at the `brief()` call
+    site. `restamp-execution-sha` is a registered verb on
     `archive-stamp-cli`'s dispatch table (`apply.py::_dispatch_archive_stamp_
     cli`, wired by chunk C9) — dispatching this directive re-stamps the
     target's `execution_sha` frontmatter field via a locked read-modify-
@@ -7944,13 +7966,29 @@ def brief(
         directives = directives + completeness["directives"]
         judgment_points = judgment_points + completeness["judgment_points"]
 
-        # AC18 — the pre-tagged tier split: `stale-bookkeeping`/`unstampable`
-        # promote to an unconditional re-stamp directive; `stale-substantive`
-        # stays a judgment point the EM (and PM) resolves. `match` and a
-        # `None` hit contribute neither.
+        # AC18 — the pre-tagged tier split: `unstampable` promotes to an
+        # unconditional re-stamp directive; `stale-substantive` stays a
+        # judgment point the EM (and PM) resolves. `match` and a `None` hit
+        # contribute neither.
+        #
+        # `stale-bookkeeping` contributes NEITHER, and that is the change of
+        # 2026-08-30 (state/improvement-queue/2026-08-30-stamp-execution-
+        # authorization-when-it-is-229d05bbdadd.yaml). It used to promote the
+        # same re-stamp directive as `unstampable`, and the two are not the
+        # same thing: `unstampable` is a recorded value that never reproduced
+        # even at its own stamp commit -- a broken record a re-stamp repairs.
+        # `stale-bookkeeping` is a stamp that is CORRECT and merely older than
+        # some ratification-field edits, and a re-stamp of it writes only more
+        # ratification fields, which classify as bookkeeping again on the next
+        # check. Four firings in one close, one commit each, all reaching the
+        # same verdict in the same words (overengineering review, 2026-08-30)
+        # -- the control was transcribing rather than detecting. See
+        # `compute_execution_stamp_match`'s `stale-bookkeeping` arm for why
+        # holding `stamp_commit` at the real authorization strictly improves
+        # detection rather than trading it away.
         if execution_stamp_match is not None and execution_stamp_target is not None:
             stamp_verdict = execution_stamp_match["verdict"]
-            if stamp_verdict in ("stale-bookkeeping", "unstampable"):
+            if stamp_verdict == "unstampable":
                 directives.append(
                     build_execution_stamp_directive(execution_stamp_match, execution_stamp_target)
                 )

@@ -88,9 +88,41 @@ _VALIDATION_MESSAGES = {
 # unconditionally, so a body opening with a heading emitted the heading as the summary).
 _HEADING_RE = re.compile(r"^#{1,6}(\s|$)")
 
-# HTML-comment-only lines (memo.draft's own placeholder body opens with these) are
-# also not prose — skip them for the same reason as headings.
-_HTML_COMMENT_ONLY_RE = re.compile(r"^<!--.*-->$")
+# HTML comments (memo.draft's own placeholder body is nothing but these) are not
+# prose — dropped for the same reason as headings.
+#
+# Matched SPANNING lines, deliberately. The predicate this replaced was anchored
+# per-line (`^<!--.*-->$`), so it only ever recognized a comment opened and closed
+# on one line — and every block in `memo_draft._BODY_PLACEHOLDER` past the first
+# spans several. Their interior lines therefore survived as "prose": that is how a
+# memo delivered to DoE-claude on 2026-08-19 carried a truncated draft warning in
+# `summary:` over a body with no prose in it at all. Comments are stripped whole,
+# before the line walk, so an unterminated `<!--` swallows the rest of the body
+# rather than leaking its tail.
+_HTML_COMMENT_BLOCK_RE = re.compile(r"<!--.*?(?:-->|\Z)", re.DOTALL)
+
+
+def _prose_lines(body: str) -> list[str]:
+    """`body`'s prose lines — comments stripped whole, blanks and ATX headings
+    dropped. The shared basis of `derive_prose_summary` and `has_prose_body`,
+    so "what a summary may be derived from" and "what counts as a written
+    memo" can never answer this question differently."""
+    decommented = _HTML_COMMENT_BLOCK_RE.sub("", body)
+    return [
+        stripped
+        for line in decommented.splitlines()
+        if (stripped := line.strip())
+        and not _HEADING_RE.match(stripped)
+    ]
+
+
+def has_prose_body(body: str) -> bool:
+    """True iff ``body`` carries at least one line of actual prose.
+
+    False for an empty body, and for one that is nothing but `memo.draft`'s
+    placeholder comment blocks — the shape that must never reach a receiver.
+    """
+    return bool(_prose_lines(body))
 
 # First-sentence boundary: '.', '!', or '?' followed by whitespace or end-of-string.
 _SENTENCE_END_RE = re.compile(r"^(.*?[.!?])(\s|$)")
@@ -109,15 +141,7 @@ def derive_prose_summary(body: str) -> str:
     Returns "" when body has no surviving prose line (mirrors the prior
     all-blank-body fallback in memo_send._compose_memo / DoE's _derive_summary).
     """
-    for line in body.splitlines():
-        stripped = line.strip()
-        if not stripped:
-            continue
-        if _HEADING_RE.match(stripped):
-            continue
-        if _HTML_COMMENT_ONLY_RE.match(stripped):
-            continue
-
+    for stripped in _prose_lines(body):
         m = _SENTENCE_END_RE.match(stripped)
         candidate = m.group(1) if m else stripped
         if len(candidate) <= _SUMMARY_MAX_CHARS:

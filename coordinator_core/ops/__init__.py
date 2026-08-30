@@ -138,12 +138,10 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ("coordinator_core.ops.fleet.work_state", 'registers "fleet.work_state"'),
     ("coordinator_core.ops.fleet.record_history", 'registers "fleet.record_history"'),
     ("coordinator_core.ops.fleet.archive_terminal_handoffs", 'registers "fleet.archive_completed_handoffs"'),
-    ("coordinator_core.ops.handoff_housekeeping", 'registers "handoff.housekeeping"'),
-    # The rebuilt cycle that replaces it. Both are listed during the repoint:
-    # `handoff.housekeeping`'s key is still classified and still has three live
-    # callers, and dropping either entry before the other's callers move would
-    # leave a classified op absent from the registry (the drift guard in
-    # authz/tests/test_authz_contract.py fails exactly that way).
+    # `handoff.housekeeping` (and the `handoff_housekeeping.py` / `handoff_reconcile.py`
+    # modules that carried it) is deleted outright — the repoint landed and C7's
+    # replacement below is the only door. Kill means kill forever (PM 2026-08-23).
+    ("coordinator_core.housekeeping.cycle", 'registers "housekeeping.cycle"'),
     ("coordinator_core.ops.fleet.capability_index", 'registers "fleet.aggregate_capability_index"'),
     ("coordinator_core.ops.fleet.sweep_status", 'registers "fleet.archive_sweep_status"'),
     ("coordinator_core.ops.fleet.archive_actioned_memos", 'registers "fleet.archive_actioned_memos"'),

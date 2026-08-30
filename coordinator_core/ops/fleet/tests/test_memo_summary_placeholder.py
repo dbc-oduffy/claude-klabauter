@@ -7,12 +7,64 @@ Spec backlink: pln-memo-summary-cap-warn-at-draft-8246d3 § C1
 
 from __future__ import annotations
 
+from coordinator_core.ops.fleet.memo_draft import _BODY_PLACEHOLDER
 from coordinator_core.ops.fleet._memo_summary import (
     SUMMARY_PLACEHOLDER,
     _SUMMARY_MAX_CHARS,
+    derive_prose_summary,
+    has_prose_body,
     is_placeholder_summary,
     validate_explicit_summary,
 )
+
+
+# ---------------------------------------------------------------------------
+# has_prose_body / multi-line comment stripping
+#
+# Regression, DoE-claude 2026-08-30: a memo reached them as frontmatter plus
+# four empty comment blocks, `summary:` holding a fragment of the draft warning
+# itself. Two causes, both here: the comment predicate was anchored per-line so
+# multi-line blocks leaked their interiors as "prose", and nothing on the send
+# path ever asked whether the body had prose in it at all.
+# ---------------------------------------------------------------------------
+
+def test_draft_placeholder_body_has_no_prose():
+    assert has_prose_body(_BODY_PLACEHOLDER) is False
+
+
+def test_draft_placeholder_body_derives_no_summary():
+    # The interior of a spanning comment must never become a memo's summary.
+    assert derive_prose_summary(_BODY_PLACEHOLDER) == ""
+
+
+def test_empty_and_blank_bodies_have_no_prose():
+    assert has_prose_body("") is False
+    assert has_prose_body("\n\n   \n") is False
+
+
+def test_heading_only_body_has_no_prose():
+    assert has_prose_body("# A heading\n\n## Another\n") is False
+
+
+def test_multi_line_comment_interior_is_not_prose():
+    body = "<!-- opening line\n     interior line that is not prose\n     closing -->\n"
+    assert has_prose_body(body) is False
+
+
+def test_unterminated_comment_does_not_leak_its_tail():
+    # An unterminated `<!--` swallows the rest of the body rather than leaking
+    # everything after it as prose.
+    assert has_prose_body("<!-- opened and never closed\nstill inside\n") is False
+
+
+def test_prose_after_a_spanning_comment_is_found():
+    body = "<!-- a note\n     spanning lines -->\n\nThe actual ask. More after it.\n"
+    assert has_prose_body(body) is True
+    assert derive_prose_summary(body) == "The actual ask."
+
+
+def test_prose_body_is_prose():
+    assert has_prose_body("A memo with something in it.\n") is True
 
 
 def test_placeholder_is_exactly_99_chars():

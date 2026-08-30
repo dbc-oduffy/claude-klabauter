@@ -1410,6 +1410,27 @@ async def _resync_main_index_for_moves(
     its own spike before anyone attempts it.  Finish the commit; do not keep
     paying git to clean up after it, and do not simply stop cleaning up.
 
+    SPIKE PRE-EMPTED, MEASURED 2026-08-30 -- read this before opening it, and
+    note it argues AGAINST the retirement at this index size.  The trade is not
+    "one spawn for free": a MINIMAL Python parse of this repo's index (36,401
+    entries, 5.3MB) costs 15.6ms decoding NAMES ALONE, with no mode/sha/stat
+    decode, no extension handling and no write.  A real implementation carries
+    all of that plus re-serialisation, so it lands far above the spawn it
+    removes -- and it lands in the WRONG BUDGET.  The spawn's 75-98ms is CHILD
+    cpu, which `time.process_time()` does not count and the scheduler can place
+    on another core; an in-process rewrite is our own process time, inside the
+    caller's budget.  Worse, git's index is ONE FILE REWRITTEN WHOLE: updating
+    40 moved paths re-serialises all 36,401 entries, so the cost is fixed by
+    index SIZE, not by move count, and it is paid holding `index.lock` -- the
+    single file every one of ~50 peers touches.  That converts a parallel cost
+    into a serialised one, fleet-wide.
+
+    We fight spawns because process creation is taxed on Windows, not because a
+    spawn is bad in itself (PM, 2026-08-30).  Removing one by taking on a larger
+    cost elsewhere is a regression wearing the spawn-count metric as a disguise.
+    What would reopen this: a materially smaller index, or a git index format
+    permitting partial rewrite.  Neither is true today.
+
     Path-scoped index-from-HEAD restore (2026-08-11, C2; batched 2026-08-19,
     amplification burn-down C4) — ONE call for the ENTIRE batch of moved files,
     not one call per move:

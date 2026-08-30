@@ -1619,7 +1619,26 @@ def _record_self_reported_touches(result: object, sid_cwd: Optional[str]) -> obj
         from coordinator_core.session import core as _session_core
         from coordinator_core.session import scope as _scope
 
-        sid = _session_core.resolve_session_id(sid_cwd)
+        # AC8 (docs/plans/2026-08-30-the-c-door-sends-the-callers-session-
+        # identity.md) - this resolution MINTS: the id chosen here names the
+        # session dir a touch record is written into, so a wrong id does not
+        # merely mislabel a read, it creates an entry under a session that did
+        # not do the work and leaves the session that did with none. Inside a
+        # warm dispatch `os.environ` belongs to whoever spawned the server, so
+        # degrading to it files every served session's touches under one
+        # stranger - self-consistently, which is why nothing downstream can
+        # spot it.
+        #
+        # Warm therefore takes tier 0 alone and, carrying nothing, declines to
+        # mint. That lands on the SAME arm the unresolvable case already used
+        # ("no claim, op still succeeds"), so the failure direction is the one
+        # this seam already chose deliberately: under-declaration, never a
+        # false claim (see the `_SCOPE_TOUCH_PATHS_KEY` contract comment).
+        # Cold is untouched - `os.environ` there is the caller's own.
+        if _session_core.in_warm_served_request():
+            sid = _session_core.carried_session_id()
+        else:
+            sid = _session_core.resolve_session_id(sid_cwd)
         if not sid:
             return result  # no resolvable session -> no claim, op still succeeds
 
@@ -2930,6 +2949,25 @@ def _spawn_count_or_none() -> Optional[int]:
         return None
 
 
+def _clock_resolution_ms_or_none() -> Optional[float]:
+    """Discovered `time.process_time()` tick, in ms, or ``None``.
+
+    Function-local import, `try/except`-wrapped -- identical discipline to
+    `_spawn_count_or_none` and `_telemetry_sid` above, and for the same
+    reason: `ipc.py` carries a documented negative spec that telemetry never
+    appears in its top-level import closure (see `_spawn_count_or_none`'s own
+    docstring for the pinning test). Delegates the actual discovery --
+    including its memoization -- to `op_latency.process_clock_resolution_ms`
+    rather than re-deriving it here.
+    """
+    try:
+        from coordinator_core.telemetry.op_latency import process_clock_resolution_ms
+
+        return process_clock_resolution_ms()
+    except Exception:
+        return None
+
+
 def _spawn_delta(start: Optional[int], end: Optional[int]) -> Optional[int]:
     """Spawns between two readings, or ``None`` if either end is unavailable.
 
@@ -2979,6 +3017,18 @@ def record_op_process_time(
     never-breaks-dispatch contract (an invalid label costs one
     lower-confidence row, never a peer's op).
 
+    Every row also states two things a reader cannot otherwise recover from
+    `process_ms` alone (C1, docs/plans/2026-08-29-a-zero-is-under-one-tick-
+    not-unmeasured.md): `clock_resolution_ms`, the platform's empirically
+    discovered `time.process_time()` tick (`None` if discovery failed --
+    never a hard-coded guess, since the fleet floor is a MacBook whose tick
+    differs from this Windows box's), and `spawns_counted`, an explicit bool
+    stating whether this call passed a `spawns` figure at all. Without the
+    latter, `process_ms: 0.0` with no `spawns` key is ambiguous between
+    "under one tick" and "nothing measured"; `spawns_counted: False` names
+    the second case directly rather than leaving a reader to infer it from
+    key absence.
+
     Never raises -- same fail-open contract as every other telemetry call on
     this hot path (`record_op_started` / `record_op_latency` above).
     """
@@ -2998,12 +3048,16 @@ def record_op_process_time(
             "kind": "process_time",
             "corr_id": corr_id,
             "caller": caller,
+            "clock_resolution_ms": _clock_resolution_ms_or_none(),
+            "spawns_counted": spawns is not None,
         }
         # The brightline's second axis, omitted rather than zero-filled when the
         # caller did not measure it: a missing `spawns` key means "not counted
         # here", while `0` is the substantive claim that this op spawned nothing.
         # A reader that cannot tell those apart re-runs the 2026-08-23 sweep's
-        # own mistake of reading an absent figure as a measured one.
+        # own mistake of reading an absent figure as a measured one. Kept
+        # alongside `spawns_counted` above, never replaced by it: the boolean
+        # names the ambiguity, the (optional) integer still carries the count.
         if spawns is not None:
             entry["spawns"] = spawns
         _write_entry(entry, repo_root)

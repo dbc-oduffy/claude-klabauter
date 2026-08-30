@@ -514,6 +514,71 @@ def new_correlation_id() -> str:
     return f"{os.getpid()}-{time.perf_counter_ns()}"
 
 
+#: Cached after first discovery -- `time.process_time()`'s tick is a fixed
+#: OS/HW property for the lifetime of a process, so re-measuring it on every
+#: `record_op_process_time` call would tax the dispatch hot path for a
+#: constant. `None` until discovered; stays `None` forever if discovery
+#: could not complete (never guessed, never hard-coded).
+_PROCESS_CLOCK_RESOLUTION_MS: Optional[float] = None
+
+#: Bounds the busy-wait discovery loop below so a platform where
+#: `process_time()` never advances (a stub clock, a sandboxed CI runner)
+#: degrades to `None` instead of spinning forever -- same never-breaks-
+#: dispatch contract as every other function in this module.
+_CLOCK_DISCOVERY_MAX_SPINS = 2_000_000
+
+
+def process_clock_resolution_ms() -> Optional[float]:
+    """Empirically discovered tick size of ``time.process_time()``, in ms.
+
+    ``time.get_clock_info("process_time").resolution`` is NOT trustworthy on
+    Windows: CPython reports the underlying API's nominal 100ns FILETIME
+    unit, not `GetProcessTimes`'s own observed granularity -- which this
+    module's own sink shows is 15.625 ms (1/64 s) in practice. Across the
+    `kind: process_time` population, every one of ~104 distinct non-zero
+    values is an exact multiple of 15.625 ms
+    (docs/plans/2026-08-29-a-zero-is-under-one-tick-not-unmeasured.md
+    § Problem). Trusting the reported constant would hard-code the wrong
+    figure for the very platform it claims to describe -- and the fleet
+    floor is a MacBook, where the real tick differs again. So this discovers
+    the tick empirically rather than assume either platform's number:
+    busy-poll `time.process_time()` until it advances, and record that one
+    observed delta.
+
+    Computed once per process and memoized in `_PROCESS_CLOCK_RESOLUTION_MS`
+    -- the tick does not change during a process's lifetime, so every call
+    after the first is a plain module-global read with no measurement cost.
+    The one-time discovery cost is real (up to one tick's worth of spinning,
+    ~15.625 ms on this platform) and is paid once per process, not once per
+    op -- cheap next to the interpreter-boot cost every cold process already
+    pays, and never paid at all by a warm long-lived process after its first
+    op.
+
+    Returns ``None`` (never raises, never guesses) if the clock never
+    advances within `_CLOCK_DISCOVERY_MAX_SPINS` iterations -- an
+    undiscoverable resolution is honestly unmeasured, matching this module's
+    `spawns`-omission convention: a null field is "not counted", never "0".
+    """
+    global _PROCESS_CLOCK_RESOLUTION_MS
+    if _PROCESS_CLOCK_RESOLUTION_MS is not None:
+        return _PROCESS_CLOCK_RESOLUTION_MS
+    try:
+        start = time.process_time()
+        spins = 0
+        while spins < _CLOCK_DISCOVERY_MAX_SPINS:
+            now = time.process_time()
+            if now != start:
+                delta_ms = (now - start) * 1000.0
+                if delta_ms > 0:
+                    _PROCESS_CLOCK_RESOLUTION_MS = delta_ms
+                    return delta_ms
+                start = now
+            spins += 1
+    except Exception:
+        pass
+    return None
+
+
 def _write_entry(entry: dict, repo_root: Optional[Path]) -> None:
     """Shared append body for both row kinds: resolve sink, encode, atomic-append.
 

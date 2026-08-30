@@ -131,6 +131,12 @@ _RATIFIED_SUSPENSIONS = frozenset({
     # time (PROCESS_BAR_MS), not this module's 2000ms wall-clock occupancy bar --
     # see test_every_entry_carries_its_measured_evidence, which now reads both
     # axes. Six carry wall-clock-only evidence and say so in their own rows.
+    # --- the brightline kill of the one job, plan 2026-08-29-the-housekeeping-
+    # cycle-stops-committing (C9). Same gravestone shape as the fourteen below:
+    # module and all four registration entries deleted in the same commit that
+    # added the row, so the refusal stays loud. Its successor housekeeping.cycle
+    # is live and does the same job at 109.4ms.
+    "handoff.housekeeping",
     "ceremony.post_commit_tail",
     "write_surface.emit_manifest",
     "deliverable.cascade_terminal",

@@ -944,6 +944,36 @@ class RepoRelativeNonDocsCitationTests(unittest.TestCase):
         code, findings, excluded, unresolved = self._run()
         self.assertEqual(code, 0, msg=findings)
 
+    def test_word_ending_in_templates_is_not_matched(self):
+        # `ci-templates/` merely ENDS in `templates` -- a substring match on
+        # the bare alternative would misparse it as a doctrine citation to a
+        # directory nobody named (code-reviewer Finding 1).
+        self.fixture.write_corpus_file("doc.md", "See ci-templates/foo.md.\n")
+        code, findings, excluded, unresolved = self._run()
+        self.assertEqual(code, 0, msg=findings)
+        self.assertEqual(findings, [])
+
+    def test_word_ending_in_pipelines_is_not_matched(self):
+        self.fixture.write_corpus_file("doc.md", "See azure-pipelines/foo.md.\n")
+        code, findings, excluded, unresolved = self._run()
+        self.assertEqual(code, 0, msg=findings)
+        self.assertEqual(findings, [])
+
+    def test_word_ending_in_snippets_is_not_matched(self):
+        self.fixture.write_corpus_file("doc.md", "See custom_snippets/foo.md.\n")
+        code, findings, excluded, unresolved = self._run()
+        self.assertEqual(code, 0, msg=findings)
+        self.assertEqual(findings, [])
+
+    def test_dotless_extension_run_on_is_not_a_citation(self):
+        # `docs/wiki/foo.mdx` backtracks to `.md` with no intervening dot --
+        # the lookahead must reject a bare following alnum too, not only
+        # dot+alnum (code-reviewer Finding 2).
+        self.fixture.write_corpus_file("doc.md", "See docs/wiki/foo.mdx for details.\n")
+        code, findings, excluded, unresolved = self._run()
+        self.assertEqual(code, 0, msg=findings)
+        self.assertEqual(findings, [])
+
 
 class InProcessResolveRepoPathTests(unittest.TestCase):
     """`_resolve_repo_path_shortname` must resolve via an in-process import

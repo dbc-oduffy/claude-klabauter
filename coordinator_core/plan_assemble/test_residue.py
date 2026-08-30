@@ -157,6 +157,97 @@ def test_absent_route_resolves_to_default_route_plan(
 
 
 # ---------------------------------------------------------------------------
+# 2026-08-30 — a sizing object's own `route:` outranks DEFAULT_ROUTE, and an
+# explicit flag that disagrees with it is loud rather than silent.
+# ---------------------------------------------------------------------------
+
+
+def _write_sizing_object(tmp_path: Path, route: str, name: str = "sizing.yaml") -> Path:
+    path = tmp_path / name
+    path.write_text(
+        "schema: sizing-object\n"
+        'name: "fixture"\n'
+        f"route: {route}\n"
+        "status: routed\n",
+        encoding="utf-8",
+    )
+    return path
+
+
+def test_absent_route_reads_the_sizing_objects_own_route(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The defect DoE measured 2026-08-30: an object that had already resolved
+    itself to `spec-dispatch` was silently re-resolved to `plan`, which runs
+    the full terminal (and its Opus plan review) that the S lane exists to
+    skip. No `--route` is passed here — the object's own field must win."""
+    content_root = _make_residue_dir(tmp_path)
+    _patch_content_root(monkeypatch, content_root)
+    sizing = _write_sizing_object(tmp_path, "spec-dispatch")
+
+    result = brief(sizing_object_path=sizing)
+
+    assert result["artifact"]["route"] == "spec-dispatch"
+    assert result["gates"]["triage"]["route"] == {"route": "spec-dispatch"}
+    assert "route_mismatch" not in result["decisions"]
+
+
+def test_absent_route_still_defaults_when_object_states_no_usable_route(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Step 1b: `DEFAULT_ROUTE` survives untouched wherever the object does
+    not narrow the route. `shape` is a legal SIZING route but not a legal
+    residue route, so it must not be smuggled through the widened step 1."""
+    content_root = _make_residue_dir(tmp_path)
+    _patch_content_root(monkeypatch, content_root)
+
+    no_route = tmp_path / "no-route.yaml"
+    no_route.write_text("schema: sizing-object\nstatus: routed\n", encoding="utf-8")
+    out_of_enum = _write_sizing_object(tmp_path, "shape", name="shape.yaml")
+    unparseable = tmp_path / "bad.yaml"
+    unparseable.write_text("this: [is: not: valid\n", encoding="utf-8")
+
+    for obj in (no_route, out_of_enum, unparseable):
+        result = brief(sizing_object_path=obj)
+        assert result["artifact"]["route"] == DEFAULT_ROUTE, obj.name
+
+    assert brief()["artifact"]["route"] == DEFAULT_ROUTE
+
+
+def test_explicit_route_wins_over_the_object_but_records_the_mismatch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+) -> None:
+    """Contract step 2 is untouched — an explicit flag still wins. What it may
+    no longer do is disagree silently."""
+    content_root = _make_residue_dir(tmp_path)
+    _patch_content_root(monkeypatch, content_root)
+    sizing = _write_sizing_object(tmp_path, "spec-dispatch")
+
+    result = brief(explicit_route="plan", sizing_object_path=sizing)
+    captured = capsys.readouterr()
+
+    assert result["artifact"]["route"] == "plan"
+    assert result["decisions"]["route_mismatch"] == {
+        "sizing_object_route": "spec-dispatch",
+        "explicit_route": "plan",
+    }
+    assert "disagrees" in captured.err
+
+
+def test_explicit_route_agreeing_with_the_object_records_no_mismatch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    content_root = _make_residue_dir(tmp_path)
+    _patch_content_root(monkeypatch, content_root)
+    sizing = _write_sizing_object(tmp_path, "spec-dispatch")
+
+    result = brief(explicit_route="spec-dispatch", sizing_object_path=sizing)
+
+    assert result["artifact"]["route"] == "spec-dispatch"
+    assert "route_mismatch" not in result["decisions"]
+
+
+# ---------------------------------------------------------------------------
 # AC-3 — illegal --route values raise RouteUsageError before any disk
 # access, never a silent fallthrough or inference.
 # ---------------------------------------------------------------------------

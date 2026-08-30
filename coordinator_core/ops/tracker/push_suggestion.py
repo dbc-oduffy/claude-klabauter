@@ -198,6 +198,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from coordinator_core.ipc import register_op
+from coordinator_core.session import core as _session_core
 from coordinator_core.ops.ceremony.git_native import check_ignore
 from coordinator_core.ops.emit._slug import machine_slug
 from coordinator_core.ops.fleet._common import (
@@ -494,15 +495,40 @@ def _delivery_commit_message(rel_path: str) -> str:
 
     A delivery lands a file in a repo whose operators did not run anything;
     without trailers they cannot tell which session or deliverable put it
-    there. `Session-Id` is read from the environment rather than resolved, so
-    it is omitted rather than guessed when absent.
+    there. `Session-Id` is OMITTED rather than guessed when nothing resolves --
+    an absent trailer is recoverable, a confidently wrong one is not, because
+    the receiving repo holds no second attribution key to check it against.
+
+    Identity resolves CARRIED-FIRST (`session.core.carried_session_id()`, tier 0
+    alone), falling back to `resolve_session_id` only when nothing was carried.
+    This op is warm-reachable -- `@register_op("tracker.push_suggestion")`
+    reaches here through `_deliver_envelope` -> `_commit_envelope` -- and inside
+    a resident warm server `os.environ` names whoever SPAWNED the server, not the
+    session being served, so the previous raw env read stamped a foreign session
+    onto a commit in a repo this session does not own. Cold, nothing is carried
+    and the ambient environment IS the caller's own, so the fallback is correct
+    there and unchanged. C2, docs/plans/2026-08-30-the-c-door-sends-the-callers-
+    session-identity.md; pinned by `coordinator_core/tests/
+    test_warm_identity_env_reads.py`'s COHORT.
+
+    The previous read was also SINGLE-TIER (`CLAUDE_SESSION_ID` alone) where
+    every sibling resolver walks the full `SESSION_ENV_PRECEDENCE` ladder, so a
+    session carrying only `COORDINATOR_SESSION_ID` or `CLAUDE_CODE_SESSION_ID`
+    got no trailer at all -- the same two-disagreeing-copies defect that
+    constant's own docstring records. Resolving through the canonical accessors
+    rather than naming a var here closes both.
     """
     lines = [
         f"cross-repo: deliver sovereign-tracker event {rel_path}",
         "",
         f"Deliverable-Id: {_DELIVERABLE_ID}",
     ]
-    session_id = os.environ.get("CLAUDE_SESSION_ID", "").strip()
+    session_id = _session_core.carried_session_id().strip()
+    if not session_id:
+        try:
+            session_id = (_session_core.resolve_session_id() or "").strip()
+        except (OSError, ValueError):
+            session_id = ""
     if session_id:
         lines.append(f"Session-Id: {session_id}")
     return "\n".join(lines)

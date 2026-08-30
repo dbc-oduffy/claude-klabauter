@@ -87,9 +87,13 @@ def _dispatch_brief(rest: list[str]) -> int:
     [--sizing-object <path>]` — read-only, prints the bare decision object
     as JSON on stdout.
 
-    `--route`, when absent, resolves to `residue.DEFAULT_ROUTE` (`"plan"`)
-    — see `residue.brief`'s `explicit_route` param and the module's
-    `--route RESOLUTION CONTRACT` docstring.
+    `--route`, when absent, resolves to the route the supplied
+    `--sizing-object` states about itself, and only falls back to
+    `residue.DEFAULT_ROUTE` (`"plan"`) when no object narrows it (amended
+    2026-08-30). An explicit `--route` still wins over the object, but a
+    disagreement is reported on stderr and in `decisions.route_mismatch`
+    rather than echoed back as fact — see `residue.brief`'s `explicit_route`
+    param and the module's `--route RESOLUTION CONTRACT` docstring.
 
     `--plan`/`--sizing-object` are both optional and independent of
     `--route`. Per the plan-assemble wave-2 predicates seam

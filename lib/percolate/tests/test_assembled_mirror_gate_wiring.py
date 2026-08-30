@@ -39,12 +39,18 @@ publish = _load_publish_module()
 
 
 class _ResolvedTargetStub:
-    """Minimal stand-in for `publish.ResolvedTarget` -- only `.name`, the
-    one field `dispatch_end_of_run_assembled_mirror_gate` reads off
-    `rows_by_repo_root`."""
+    """Minimal stand-in for `publish.ResolvedTarget` -- `.name` (read by
+    `dispatch_end_of_run_assembled_mirror_gate` for exemption lookup) and
+    `.source_dir` (read by the same function to build the source-root list
+    it now passes to `find_modules_missing_tests` for the C6 coverage
+    WARN). `source_dir` defaults to a throwaway path -- these tests assert
+    on the pass/refuse verdict, never on coverage-WARN content, so any
+    walkable-or-not path is sufficient; `find_modules_missing_tests`
+    tolerates a nonexistent root (`Path.rglob` yields nothing)."""
 
-    def __init__(self, name):
+    def __init__(self, name, source_dir=None):
         self.name = name
+        self.source_dir = source_dir if source_dir is not None else Path("does-not-exist")
 
 
 def _write_collectable_tree(root: Path) -> None:

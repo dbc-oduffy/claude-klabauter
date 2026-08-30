@@ -476,6 +476,13 @@ def _no_console_passthrough_kwargs() -> dict:
 # Slug regex — mirrors cross-repo-memo's _TOPIC_SLUG_RE.
 _SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9\-]*$")
 
+#: Legal `kind:` values for a cross-repo memo. Mirrors
+#: `coordinator_core/ops/fleet/_outbox_frontmatter_rules.VALID_KINDS` and
+#: `_memo_compose._VALID_KINDS` -- the scaffolder must refuse exactly what the
+#: sender would, and in the same words. `ack` is deliberately absent:
+#: acknowledgement is receipt-state, not a kind.
+_MEMO_KINDS = ("ask", "consult", "fyi", "proposal")
+
 # Slice ID regex — allows uppercase because slice IDs like "Z", "A", "B1" are common in wave-maps.
 _SLICE_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9\-]*$")
 
@@ -3381,7 +3388,7 @@ def _scaffold_roadmap_seed(
     return "\n".join(lines)
 
 
-def _scaffold_memo(title: str, to: str, topic: str, from_id: str) -> str:
+def _scaffold_memo(title: str, to: str, topic: str, from_id: str, kind: str) -> str:
     """Generate validator-clean memo frontmatter + placeholder body.
 
     Uses memo_compose.compose_frontmatter (the shared lib) to emit the
@@ -3408,6 +3415,12 @@ def _scaffold_memo(title: str, to: str, topic: str, from_id: str) -> str:
     # only calls _derive_summary when summary=None); switching to compose_memo (full-doc composer)
     # removes the manual frontmatter+body concat and eliminates the dead parameter entirely.
     explicit_summary = title[:_SUMMARY_MAX_CHARS]
+    # `draft=True` + an explicit `kind` (2026-08-30): the scaffold's whole job
+    # is to produce something `memo.send` will accept. It previously emitted
+    # `status: open` and no `kind`, which `ops/fleet/_outbox_frontmatter_rules`
+    # rejects on both counts -- so every scaffolded memo needed hand-repair in
+    # three places (this, plus the repo-root path, fixed in
+    # `_default_output_path`) before it could be sent.
     return _memo_compose(
         from_id=from_id,
         title=title,
@@ -3415,6 +3428,8 @@ def _scaffold_memo(title: str, to: str, topic: str, from_id: str) -> str:
         topic=topic,
         body=placeholder_body,
         summary=explicit_summary,
+        kind=kind,
+        draft=True,
     )
 
 
@@ -3534,6 +3549,45 @@ def _scaffold_plan(
         "#     baseline_output:",
         "#     baseline_ref:",
         "#     expected_when_true:             # NEW in 2.8.0 — do not omit",
+        # Fleet brightlines — emitted LIVE, deliberately not commented out like
+        # the `prime_exit_criterion` block directly above. That block is
+        # conditionally owed (read-side keyed on `estimate.tshirt` M/L/XL, which
+        # scaffold time cannot know), so a live stub there would declare a
+        # criterion no sizing asked for. These four are owed by every plan
+        # unconditionally, and a commented block would leave each plan born
+        # without the brightlines its close-out is gated on — the defect this
+        # emitter had from plan.schema.json 2.10.0 until now.
+        #
+        # Row text is byte-parity with the other producer of this block, DoE's
+        # `coordinator/templates/plans/plan.md.tmpl`. The slug set is closed by
+        # the schema's `brightline` enum plus one `contains` branch per slug: a
+        # fifth brightline arrives as a vendored schema bump, never as an edit
+        # here alone.
+        "gated_exit_criteria:",
+        "  - brightline: work-proportionate-to-question",
+        "    statement: >-",
+        "      <REPLACE: what evidence at close-out shows the delivered work matches the size of the",
+        "      question — not more, not less.>",
+        "    met: false",
+        "  - brightline: multi-os-first-class",
+        "    statement: >-",
+        "      <REPLACE: what evidence at close-out shows macOS, Windows, and Linux are all first-class —",
+        "      nothing works on one host and breaks on another.>",
+        "    met: false",
+        "  - brightline: no-single-machine-assumptions",
+        "    statement: >-",
+        "      <REPLACE: what evidence at close-out shows no hardcoded paths or single-machine/single-user",
+        "      assumptions were introduced.>",
+        "    met: false",
+        "  - brightline: work-vs-question-ratio",
+        "    statement: >-",
+        "      <REPLACE: for every function or corpus-scale value this plan introduces, name the bounded",
+        "      question it answers — an act to discharge (cite the function/value and its question), never",
+        "      a disposition to assert (\"proportionate\" alone does not discharge this row).>",
+        "    met: false",
+        "  # `met` starts false and is flipped only by the session writing exit_criterion_met — see",
+        "  # coordinator/docs/wiki/writing-plans.md § Gated Exit Criteria (Fleet Brightlines) and",
+        "  # coordinator/docs/wiki/coordinator-tripwires/brightlines-are-gated-not-remembered.md.",
         "---",
         "",
         f"# {title}",
@@ -4989,7 +5043,8 @@ def _default_output_path(
       handoff/spinoff/recovery -> state/handoffs/YYYY-MM-DD-<slug>.md
       roadmap-baton  -> state/handoffs/YYYY-MM-DD_000000_roadmap-<stub_id>.md
                          (HHMMSS=000000 fallback; use --out to supply the full path at runtime)
-      memo             -> YYYY-MM-DD-<topic>.md  (local draft, not in cross-repo/inbox/)
+      memo             -> state/memo-outbox/<topic>.md  (the draft path memo.send
+                          resolves a topic to; never cross-repo/inbox/, which is delivery)
       plan             -> docs/plans/YYYY-MM-DD-<slug>.md
       decision         -> docs/decisions/<dr_id>-<slug>.md  (dr_id allocated by
                           _allocate_dr_number before this call — never a DR-XXX
@@ -5022,8 +5077,16 @@ def _default_output_path(
         id_slug = stub_id if stub_id else _slug_from_title(title)
         return os.path.join("state", "handoffs", f"{today}_000000_roadmap-{id_slug}.md")
     elif doc_type == "memo":
+        # `state/memo-outbox/<topic>.md` — the ONE path `memo.send` looks a draft
+        # up by, and the shape `cross-repo-memo draft` already produces. This
+        # used to return a bare `{today}-{slug}.md`, which landed the draft in
+        # the REPO ROOT under a name `memo.send <topic>` cannot resolve: wrong
+        # directory and wrong filename in one default, so every scaffolded memo
+        # had to be moved and renamed by hand before it could be sent. No date
+        # prefix — `memo.send` keys on the bare topic slug (see
+        # `ops/fleet/memo_send.py :: _OUTBOX_DIRNAME` and its module docstring).
         slug = topic if topic else _slug_from_title(title)
-        return f"{today}-{slug}.md"
+        return os.path.join("state", "memo-outbox", f"{slug}.md")
     elif doc_type == "plan":
         slug = _slug_from_title(title)
         return os.path.join("docs", "plans", f"{today}-{slug}.md")
@@ -5188,6 +5251,18 @@ Spec backlink (workflow): pln-workflow-skeleton-stamper-maki-adab0d
         help=(
             "(memo) Filename slug for the memo. Lowercase alphanumeric + dashes. "
             "Required for --type memo."
+        ),
+    )
+    parser.add_argument(
+        "--kind",
+        default=None,
+        metavar="KIND",
+        choices=None,  # validated by hand so the error names the enum in one voice
+        help=(
+            "(memo) Memo kind, required for --type memo. One of: "
+            + ", ".join(_MEMO_KINDS)
+            + ". Not defaulted: an fyi silently scaffolded as an ask changes "
+            "what the receiver owes."
         ),
     )
     parser.add_argument(
@@ -5811,6 +5886,25 @@ def main(argv: "list[str] | None" = None) -> int:
             return 1
         if not args.topic:
             print("error: --topic is required for --type memo.", file=sys.stderr)
+            return 1
+        # `kind` is required at SCAFFOLD time, the earliest and cheapest point
+        # to say so: memo.draft requires it and memo.send refuses a draft
+        # without it, so a kindless scaffold only defers the same refusal to
+        # after the author has written the body. Not defaulted -- silently
+        # calling an fyi an `ask` changes what the receiver owes.
+        if not args.kind:
+            print(
+                f"error: --kind is required for --type memo "
+                f"(one of: {', '.join(_MEMO_KINDS)}).",
+                file=sys.stderr,
+            )
+            return 1
+        if args.kind not in _MEMO_KINDS:
+            print(
+                f"error: --kind {args.kind!r} is not valid "
+                f"(must be one of: {', '.join(_MEMO_KINDS)}).",
+                file=sys.stderr,
+            )
             return 1
         # Security: guard --to with the same slug allowlist as --topic.
         # The --to value is interpolated into an HTML comment in the memo scaffold body
@@ -6511,6 +6605,7 @@ def main(argv: "list[str] | None" = None) -> int:
         )
     elif doc_type == "memo":
         content = _scaffold_memo(
+            kind=args.kind,
             title=title,
             to=args.to,
             topic=args.topic,

@@ -69,12 +69,14 @@ _LEGACY_KEYS = (
     "handoff.reconcile_open",
     "handoff.archive_transition",
     "session.sweep_consumed_handoffs",
+    "handoff.housekeeping",
 )
 
-#: The one live key. Named as a literal rather than read off
-#: `handoff_housekeeping.OP_KEY`, so a rename of the op does not silently
-#: rename what this guard asserts.
-_LIVE_KEY = "handoff.housekeeping"
+#: The one live key. Named as a literal rather than read off the op module's
+#: own `OP_KEY`, so a rename of the op does not silently rename what this
+#: guard asserts. It was `handoff.housekeeping` until that job was itself
+#: killed under the brightline and replaced by the cycle.
+_LIVE_KEY = "housekeeping.cycle"
 
 #: The archival leg, as a module path and the attribute that IS the leg.
 _LEG_MODULE = "coordinator_core.ops.handoff_archive_transition"
@@ -82,10 +84,12 @@ _LEG_ATTR = "_handler"
 
 #: The ONE job, and the only production module permitted to reach the leg
 #: directly. `coordinator_core/archive_stamp.py` was the third door onto this
-#: compute until 2026-08-28 and was redirected through `handoff.housekeeping`
-#: in this plan's C4; if it reappears below, the redirect has been reverted.
+#: compute until 2026-08-28 and was redirected through the one job in the
+#: predecessor plan's C4; if it reappears below, the redirect has been
+#: reverted. The permitted module is the cycle now that
+#: `ops/handoff_housekeeping.py` is deleted.
 _PERMITTED_DIRECT_IMPORTERS = frozenset({
-    "coordinator_core/ops/handoff_housekeeping.py",
+    "coordinator_core/housekeeping/cycle.py",
 })
 
 #: Production trees only. Test modules legitimately import the leg to exercise
@@ -250,9 +254,9 @@ def test_the_live_key_resolves_to_the_one_job_s_own_handler() -> None:
     outlived its test, a second implementation. Identity is what ties the
     dispatchable name to the composition the sibling suites test.
     """
-    from coordinator_core.ops import handoff_housekeeping
+    from coordinator_core.housekeeping import cycle
 
-    assert ipc.get_op_handler(_LIVE_KEY) is handoff_housekeeping._handler
+    assert ipc.get_op_handler(_LIVE_KEY) is cycle._handler
 
 
 # --- (c) the reachable-leg set, asserted by call graph ----------------------

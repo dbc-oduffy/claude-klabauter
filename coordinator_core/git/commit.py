@@ -300,11 +300,15 @@ def _cas_target(repo: Union[str, Path]) -> Optional[Tuple[Path, str]]:
     return common, ref_rel
 
 
+_REQUIRED = object()
+
+
 def commit_paths(
-    repo: Union[str, Path],
-    paths: Sequence[str],
-    message: str,
+    repo: Union[str, Path] = _REQUIRED,  # type: ignore[assignment]
+    paths: Sequence[str] = _REQUIRED,  # type: ignore[assignment]
+    message: str = _REQUIRED,  # type: ignore[assignment]
     *,
+    repo_root: Union[str, Path, None] = None,
     deleted_paths: Sequence[str] = (),
     supplied_blobs: Optional[Mapping[str, str]] = None,
     prefer_staged: Sequence[str] = (),
@@ -333,7 +337,44 @@ def commit_paths(
     `coordinator/bin/coordinator-safe-commit.py`) -- every other caller
     commits paths it authored itself in the same pass, so there is nothing
     a widened default could preserve, only stale blobs it could newly hide.
+
+    WHY `repo_root` IS ACCEPTED AS AN ALIAS FOR `repo`. This function is the
+    sanctioned leg-1 route for the dispatched committer, whose call block
+    lives in a doc claude-klabauter does not own (`agents/git-commit-agent.md`,
+    `snippets/scoped-commit-route.md` -- both name the parameter
+    `repo_root`). A `TypeError` here does not read to that agent as "wrong
+    keyword": it reads as *leg 1 is unavailable*, and it drops to the plain
+    `git commit -- <paths>` fallback, which the subagent commit guard then
+    denies -- so an entire dispatched workflow halts at its commit phase with
+    both legs apparently dead. Every emitted plan wave is gated behind that
+    phase. `repo_root` is also the name `ops/dispatch_emit/emit.py` uses for
+    the same value throughout, so the collision is systemic rather than one
+    doc's typo. Accepting it costs a branch and removes the halt; the correct
+    path is made reachable rather than the wrong one walled off. Supplying
+    both is a caller confusion, not a shorthand, and still raises.
+
+    `paths` is likewise optional so a deletion-only commit -- documented as
+    legal ("at least one of `paths` / `deleted_paths`") -- reaches the empty-
+    pathspec refusal below on its own terms instead of a missing-argument
+    `TypeError` the caller reads the same wrong way.
     """
+    if repo is _REQUIRED:
+        if repo_root is None:
+            raise TypeError(
+                "commit_paths() missing the repo root: pass it positionally, "
+                "as `repo=`, or as the alias `repo_root=`"
+            )
+        repo = repo_root
+    elif repo_root is not None:
+        raise TypeError(
+            "commit_paths() got both `repo` and its alias `repo_root` -- pass "
+            "one; they name the same value and disagreeing is a caller bug"
+        )
+    if paths is _REQUIRED:
+        paths = ()
+    if message is _REQUIRED:
+        raise TypeError("commit_paths() missing required argument: 'message'")
+
     root = Path(repo)
     gitdir = resolve_git_dir(repo)
     supplied = dict(supplied_blobs or {})

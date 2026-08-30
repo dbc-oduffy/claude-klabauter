@@ -521,6 +521,28 @@ SUSPENDED_OPS: Dict[str, Dict[str, object]] = {
         "note": "Closest to the line of the process-measured rows; 250.0 > 200.",
         "spinoff": None,
     },
+    "handoff.housekeeping": {
+        "measured": {"max_ms": 2046.9, "p50_ms": 2046.9, "n": 1, "unit": "process_ms"},
+        "note": (
+            "The job that replaced the three keys above, killed on the same bar "
+            "they were. 2046.9ms process at entry=op:handoff.housekeeping over a "
+            "fixture carrying the real corpus's shape, against a 200ms criterion "
+            "-- 10x, and the same order as the audit's independently measured "
+            "~2300ms. Measured by the plan's own falsifier at baseline_ref "
+            "bcfe23e13, which is the same instrument that reports 109.4ms for "
+            "the successor. A GRAVESTONE, not a suspension: the module and all "
+            "four registration entries were deleted in f4b9e53f5, so this row "
+            "is a name with no code behind it, keeping the refusal loud rather "
+            "than letting it degrade to METHOD_NOT_FOUND."
+        ),
+        "fallback": (
+            "housekeeping.cycle does the same job -- it takes the same close/"
+            "transition/cap parameters and returns the transition leg's result "
+            "verbatim, so a caller's own predicates are unchanged."
+        ),
+        "successor_live": True,
+        "spinoff": None,
+    },
     "review_trail.write": {
         "measured": {"max_ms": 212.5, "p50_ms": 212.5, "n": 1, "unit": "process_ms_cold"},
         "note": (
@@ -604,11 +626,19 @@ SUSPENDED_OPS: Dict[str, Dict[str, object]] = {
         "note": "Module deleted outright; no non-test importers.",
         "disposition": (
             "gravestone -- job was 'close out a handoff whose work already "
-            "landed, then file it'. Module deleted outright, no importers. "
-            "A near-identical job already survives elsewhere in this table "
-            "as one third of the handoff-housekeeping family (handoff."
-            "reconcile_open et al.) -- the requirement lands there, not by "
-            "this row coming back."
+            "landed, then file it'. Module deleted outright, no importers "
+            "(re-verified at HEAD 2026-08-30). CORRECTED 2026-08-30: this "
+            "row previously sent the requirement to the handoff-housekeeping "
+            "family (handoff.reconcile_open et al.), which is itself CUT "
+            "(K-057/K-108) with its carrier modules deleted -- a pointer to "
+            "nothing. The job's two legs land on live surfaces instead: the "
+            "close leg on handoff.transition action 'close' (archive-stamp-cli "
+            "close-handoff --reason displaced, the same _close internal the "
+            "deleted op composed), the filing leg on "
+            "coordinator_core/housekeeping/cycle.py steps D+E via "
+            "ops/fleet/_common.py::archive_and_commit. What died is the "
+            "composite, not the job; the absence costs one extra call and "
+            "makes no answer wrong. Full requirement test: kill-ledger K-025."
         ),
         "spinoff": None,
     },

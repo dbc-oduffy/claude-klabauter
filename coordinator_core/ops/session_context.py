@@ -19,6 +19,10 @@ two disagreeing copies caused):
     3. ``CLAUDE_CODE_SESSION_ID`` env var.
     4. Returns ``None`` if not resolved.
 
+Under a warm-served request (``session.core.in_warm_served_request()``) the env
+tiers are SKIPPED entirely and only the carried per-request identity (tier 0) is
+consulted — see the negative-spec entry below.
+
 Negative-spec:
     - Do NOT call ``liveness.resolve_live_session_ids()`` — that function returns a
       ``FrozenSet`` of ALL live sessions (a liveness probe), NOT the current session
@@ -91,6 +95,22 @@ def resolve_current_session_id(worktree_root: Optional[Path] = None) -> Optional
           ``review_trail_write.py`` module docstring for the rationale (simplified
           sentinel read; daemon context always supplies session_id via env so that tier
           is never reached in practice).
+        - Do NOT let a warm-served request reach the environment tiers. Inside a
+          warm dispatch this process's ``os.environ`` belongs to whoever spawned
+          the resident server, not to the session being served, so degrading to it
+          attributes a stranger's id to another session's claim, fork, ledger row,
+          or memo — the same defect `git/commit_trailers._resolve_session_id`
+          refuses at its own attribution site (dafc5df926). Reproduced live on
+          2026-08-30: `cs_claim_handoff` through the warm `.exe` door stamped the
+          server owner's id into `claimed_by` while the caller's environment named
+          a different session. Warm therefore resolves from tier 0 alone and
+          returns None when the caller carried nothing; every caller here already
+          treats None as "session unknown" and fails loud or omits the field. An
+          absent id is recoverable, a confidently wrong one is not — no reader can
+          tell it from a genuine one. Cold is untouched: ``os.environ`` there IS
+          the caller's own.
     """
+    if _session_core.in_warm_served_request():
+        return _session_core.carried_session_id() or None
     sid = _session_core.resolve_session_id()
     return sid or None

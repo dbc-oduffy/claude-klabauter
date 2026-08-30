@@ -130,3 +130,95 @@ def test_runtime_import_closure_gate_can_actually_fail(tmp_path):
         "mutation did not reproduce a forbidden import -- the gate's fail "
         "path cannot be trusted until this reproduces red"
     )
+
+
+# ---------------------------------------------------------------------------
+# COORDINATOR_ENGINE_ROOT override pin.
+#
+# Spec backlink: state/lessons/2026-08-30-run-target-in-process-still-loads-
+# the-published-engine.yaml -- `entry_point_shim._import_engine_module`
+# resolves via `cc_invoke._resolve_claude_klabauter_root()`'s pointer/registry ladder,
+# which has no self-location rung and so returns the PUBLISHED MIRROR by
+# default. `COORDINATOR_ENGINE_ROOT` is the one rung that outranks it
+# (engine_bootstrap.py `_resolve_engine_root` rung 1). This pins that
+# override so a future change to the ladder's rung order breaks this test
+# instead of the next session's worktree verification silently testing the
+# mirror again.
+#
+# Negative-spec: does NOT assert anything about `resolve_engine_root
+# (script_file)` (a DIFFERENT resolver, LOCATOR axis, self-location-first) --
+# the lesson's whole point is that resolver is not proof of anything about
+# `_import_engine_module`'s DISPATCH-axis ladder.
+# ---------------------------------------------------------------------------
+
+_ENGINE_ROOT_OVERRIDE_PROBE = textwrap.dedent(
+    """
+    import json
+    import sys
+    sys.path.insert(0, {lib_dir!r})
+    import entry_point_shim
+    mod = entry_point_shim._import_engine_module("coordinator_core.pickup_assemble")
+    resolved_root = entry_point_shim._cc_invoke_resolve_claude_klabauter_root()()
+    print(json.dumps({{"module_file": mod.__file__, "resolved_root": resolved_root}}))
+    """
+)
+
+
+def _probe_engine_root_override(cwd: Path, env: dict) -> dict:
+    proc = subprocess.run(
+        [sys.executable, "-c", _ENGINE_ROOT_OVERRIDE_PROBE.format(lib_dir=str(_LIB_DIR))],
+        cwd=str(cwd),
+        capture_output=True,
+        text=True,
+        timeout=30,
+        env=env,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    assert proc.returncode == 0, (
+        f"engine-root override probe failed: rc={proc.returncode}\n"
+        f"stdout={proc.stdout}\nstderr={proc.stderr}"
+    )
+    return json.loads(proc.stdout)
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_import_engine_module_honours_coordinator_engine_root(tmp_path):
+    """`_import_engine_module` (and, via the same `_cc_invoke_resolve_claude_klabauter_root()`
+    primitive, `_merge_assemble_dispatch`'s identical ladder call) must bind
+    the engine named by `COORDINATOR_ENGINE_ROOT`, not whatever the pointer-
+    file/registry ladder would otherwise answer.
+
+    Run from a scratch `cwd` OUTSIDE this checkout (never the repo's own
+    directory) so a self-location rung cannot accidentally supply the right
+    answer for the wrong reason -- the override must be doing the work.
+    """
+    import os
+
+    scratch_cwd = tmp_path / "outside_checkout"
+    scratch_cwd.mkdir()
+
+    env_with_override = dict(os.environ)
+    env_with_override["COORDINATOR_ENGINE_ROOT"] = str(_REPO_ROOT)
+    with_override = _probe_engine_root_override(scratch_cwd, env_with_override)
+
+    assert with_override["resolved_root"] == str(_REPO_ROOT), (
+        f"COORDINATOR_ENGINE_ROOT={_REPO_ROOT!s} did not win the ladder -- "
+        f"resolved {with_override['resolved_root']!r} instead"
+    )
+    assert Path(with_override["module_file"]).resolve().is_relative_to(_REPO_ROOT.resolve()), (
+        f"coordinator_core.pickup_assemble imported from "
+        f"{with_override['module_file']!r}, not under {_REPO_ROOT!s} -- "
+        "COORDINATOR_ENGINE_ROOT was set but not honoured"
+    )
+
+    env_without_override = dict(os.environ)
+    env_without_override.pop("COORDINATOR_ENGINE_ROOT", None)
+    without_override = _probe_engine_root_override(scratch_cwd, env_without_override)
+
+    assert without_override["resolved_root"] != str(_REPO_ROOT), (
+        "the no-override baseline also resolved to this checkout -- the test "
+        "cannot tell an honoured override from a coincidence; rerun from a "
+        "box where the pointer/registry ladder answers something else, or "
+        "adjust the scratch cwd"
+    )

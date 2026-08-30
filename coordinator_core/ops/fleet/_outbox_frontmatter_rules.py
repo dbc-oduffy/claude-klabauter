@@ -57,7 +57,26 @@ import re
 #: Required outbox-draft frontmatter fields. `summary`'s KEY must be present
 #: (value may be empty at draft time — filled in by `memo.compose`); every
 #: other field must be present AND non-empty.
-OUTBOX_REQUIRED_FIELDS = ("title", "from", "to", "created", "status", "delivery_mode", "summary")
+#: `kind` is REQUIRED on a DRAFT (added 2026-08-30). It was absent from this
+#: tuple while `memo.send` refused any draft lacking it and `memo.draft`
+#: required it at authoring time — so the field was simultaneously optional
+#: and mandatory depending on which check a sender reached first, which cost
+#: a real sender four refusals to compose one memo. This is the OUTBOX
+#: (draft) contract only: the DELIVERED corpus stays lenient per DEC-1
+#: (`contract/emit_memo_schema`), which deliberately excludes `kind` to avoid
+#: retroactively invalidating existing memos. Draft-time strictness and
+#: delivered-time leniency are not in tension — one governs what a sender may
+#: newly author, the other what a reader must accept.
+OUTBOX_REQUIRED_FIELDS = (
+    "title",
+    "from",
+    "to",
+    "created",
+    "status",
+    "delivery_mode",
+    "summary",
+    "kind",
+)
 
 #: Mirrors the canonical `kind` enum in `coordinator/bin/lib/schema.js:2131`
 #: (validKinds).
@@ -157,7 +176,7 @@ def validate_outbox_frontmatter(fm: dict) -> list[str]:
     if kind is not None and kind not in VALID_KINDS:
         errors.append(
             f"kind {kind!r} is not a valid enum value "
-            f"(must be one of: {', '.join(VALID_KINDS)}; absent is also valid). "
+            f"(must be one of: {', '.join(VALID_KINDS)}). "
             f"Note: 'ack' is not a kind — acknowledgement is receipt-state."
         )
     errors.extend(

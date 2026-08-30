@@ -105,7 +105,7 @@ from coordinator_core.ops.fleet._memo_resolver import (
     resolve_receiver_inbox as _resolve_receiver_inbox,
     suggest_nearest_receiver as _suggest_nearest_receiver,
 )
-from coordinator_core.ops.fleet._memo_summary import is_placeholder_summary
+from coordinator_core.ops.fleet._memo_summary import has_prose_body, is_placeholder_summary
 from coordinator_core.ops.session_context import resolve_current_session_id
 
 _LOG = logging.getLogger(__name__)
@@ -316,8 +316,9 @@ def _compose_delivered_content(
     """Compose the delivered (status: open) memo content from a draft's
     parsed frontmatter + body. Returns (content, error) — exactly one non-None.
 
-    Required fields on the draft: title, from, to, kind, summary (or a
-    derivable prose body when summary is the memo.draft placeholder ruler).
+    Required fields on the draft: title, from, to, kind, a body with prose in
+    it, and summary (or a derivable prose body when summary is the memo.draft
+    placeholder ruler).
     """
     title = fm.get("title")
     from_id = fm.get("from")
@@ -326,6 +327,23 @@ def _compose_delivered_content(
     summary = fm.get("summary")
     if is_placeholder_summary(summary):
         summary = None  # let _compose_memo derive from body
+
+    if not has_prose_body(body):
+        # A scaffold composed and never written back. On 2026-08-19 one
+        # reached DoE-claude as frontmatter plus four empty comment blocks,
+        # `summary:` holding a fragment of the draft warning itself; the four
+        # items its title advertised existed nowhere and had to be re-sent.
+        # Every OTHER required-field check here is a shape check the sender
+        # cannot have meant to fail — this one is the memo's entire content,
+        # and it was the only one not being made. Refuse at the last step
+        # before an O_EXCL write into someone else's repo, which is the last
+        # point at which refusing is still cheap: past it the receiver holds
+        # a memo whose own title promises content it does not carry.
+        return None, (
+            "memo.send: draft body carries no prose — it is empty, or still "
+            "memo.draft's placeholder comments. Write the body via "
+            "memo.compose, then send."
+        )
 
     for field_name, value in (("title", title), ("from", from_id), ("to", to), ("kind", kind)):
         if not value or not isinstance(value, str):

@@ -1,4 +1,4 @@
-"""d6 unwraps `handoff.housekeeping`, and keys on the transition's own verdict.
+"""d6 unwraps `housekeeping.cycle`, and keys on the transition's own verdict.
 
 Governing plan:
 `docs/plans/2026-08-27-one-corpus-read-or-the-housekeeping-job-dies-a-fourth-time.md`,
@@ -8,8 +8,11 @@ What broke, and what this module holds shut. `_dispatch_handoff_supersede_predec
 called `handoff.archive_transition`, which is in `SUSPENDED_OPS` — so `get_op_handler`
 refused before the op was composed and the directive degraded on every `/handoff` in
 the fleet, leaving every continuation baton's predecessor non-terminal. That is the
-PM-quoted d6 outage. The rewire points d6 at `handoff.housekeeping`, which reaches the
-same surviving compute as a library while the killed key stays dead.
+PM-quoted d6 outage. The rewire points d6 at `housekeeping.cycle`, which reaches the
+same surviving compute as a library while the killed key stays dead. It named
+`handoff.housekeeping` until that job was itself killed under the brightline and this
+call site was repointed onto its replacement (plan
+`2026-08-29-the-housekeeping-cycle-stops-committing.md`, chunk C8).
 
 The rewire adds ONE layer — housekeeping returns the transition op's result under a
 `transition` key — and that layer is where a silent regression would live. d6's fail
@@ -65,7 +68,7 @@ def _seed(tmp_path: Path) -> None:
 
 def _housekeeping_returning(transition: dict | None, **envelope):
     """A stand-in for `_invoke_op_in_process` that records what d6 asked for and
-    answers in `handoff.housekeeping`'s real envelope shape."""
+    answers in `housekeeping.cycle`'s real envelope shape."""
     seen: dict = {}
 
     def _fake(op_name, params, repo_root):
@@ -87,7 +90,7 @@ def _housekeeping_returning(transition: dict | None, **envelope):
 
 
 class TestTheOpItAsksFor:
-    def test_d6_calls_handoff_housekeeping_and_never_the_suspended_key(
+    def test_d6_calls_the_housekeeping_cycle_and_never_the_suspended_key(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """The whole point of the rewire. `handoff.archive_transition` is suspended;
@@ -101,7 +104,7 @@ class TestTheOpItAsksFor:
             [_PRED_REL, _SUCCESSOR_REL, _SUCCESSOR_REL], tmp_path
         )
 
-        assert seen["op_name"] == "handoff.housekeeping"
+        assert seen["op_name"] == "housekeeping.cycle"
 
     def test_the_transition_is_a_supersede_naming_this_runs_successor(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -221,7 +224,7 @@ class TestTheUnwrap:
 def test_the_in_process_seam_dispatches_a_sync_handler() -> None:
     """`_invoke_op_in_process` used to `asyncio.run(handler(...))` unconditionally,
     which raises `ValueError: a coroutine was expected` on a sync op. That was
-    latent until d6 pointed at one: `handoff.housekeeping` is sync at its op
+    latent until d6 pointed at one: `housekeeping.cycle` is sync at its op
     boundary, as are `fleet.archive_terminal_handoffs` and
     `session.sweep_consumed_handoffs`.
 
@@ -229,7 +232,7 @@ def test_the_in_process_seam_dispatches_a_sync_handler() -> None:
     at its own first check and touches no disk — the assertion is that the call
     returns a dict at all rather than raising on the await."""
     result = ba_apply._invoke_op_in_process(
-        "handoff.housekeeping", {"cap": 0}, Path.cwd()
+        "housekeeping.cycle", {"cap": 0}, Path.cwd()
     )
 
     assert isinstance(result, dict)

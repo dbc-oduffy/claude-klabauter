@@ -75,6 +75,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import tempfile
 from pathlib import Path
 from typing import List, Optional, Sequence, Union
 
@@ -133,7 +134,24 @@ def _resolve_session_id(git_dir: str) -> str:
     own `_resolve_session_id` (that script cannot cheaply import
     `coordinator_core` on its hot commit-hook path) -- this function,
     delegating to `core.resolve_session_id`, is that mirror's source of
-    truth; a change here must be mirrored there too."""
+    truth; a change here must be mirrored there too. The warm-served branch
+    below needs NO mirror: that hook script runs in the committing session's
+    own cold process and is never served by the warm server, so
+    `in_warm_served_request()` is False there by construction.
+
+    WARM-SERVED CALLS DO NOT REACH THE ENVIRONMENT TIERS. Inside a warm
+    dispatch this process's `os.environ` belongs to whoever spawned the
+    server, not to the session being served, so degrading to it stamps a
+    stranger's id into another session's commit -- measured across three
+    repos on 2026-08-29 (`state/bug-backlog/2026-08-29-the-warm-door-s-exe-
+    route-stamps-the-ser-47373b19c77e.yaml`). Warm therefore resolves from
+    tier 0 alone and returns EMPTY when the caller carried nothing, which
+    `compute_missing_trailer_args` turns into an omitted trailer. An absent
+    Session-Id is recoverable and honest; a confidently wrong one is neither,
+    and is what made the 2026-08-29 window unusable as an attribution key.
+    Cold is untouched: `os.environ` there IS the caller's own."""
+    if _session_core.in_warm_served_request():
+        return _session_core.carried_session_id()
     return _session_core.resolve_session_id()
 
 
@@ -1246,3 +1264,96 @@ def format_trailers_in_process(message: bytes, trailers: Sequence[str]) -> bytes
             tail = "".join(suffix)
 
     return (body + tail).encode("utf-8", errors="surrogateescape")
+
+
+def apply_missing_trailers(
+    message: str,
+    cwd: Union[str, Path],
+    paths: Optional[Sequence[str]] = None,
+    *,
+    session_id_override: Optional[str] = None,
+) -> str:
+    """Return `message` with every resolvable-and-missing Session-Id /
+    Deliverable-Id trailer appended -- the shared attach point every commit
+    ROUTE (hook-driven `git commit`, and any hook-bypassing mechanism such as
+    `ceremony.commit_v2`) is meant to call so both land the same two
+    trailers under the same resolution ladder, rather than each route
+    reimplementing (and inevitably diverging on) its own copy.
+
+    Pure orchestration over what this module already exposes:
+    `compute_missing_trailer_args` decides WHAT is missing and resolvable
+    (never guesses, see its own docstring); `can_format_trailers_in_process`
+    / `format_trailers_in_process` apply it in-process for the byte-identity-
+    verified envelope; a `git interpret-trailers` spawn (via the shared
+    `git.run.run_git` seam) is the fallback for the narrow out-of-envelope
+    shapes (a `#` comment line) that in-process formatting does not attempt --
+    same split `git_native.py::_apply_trailers` already uses for the hook-
+    driven route, restated here rather than imported (this module owns no
+    dependency on `ops.ceremony.*`).
+
+    `compute_missing_trailer_args` reads its idempotency check off a FILE
+    (mirroring the `prepare-commit-msg` hook's own on-disk contract), so this
+    function stages `message` into a throw-away temp file to reuse that
+    logic unchanged rather than forking a second, text-only copy of the
+    idempotency scan.
+
+    Returns `message` UNCHANGED when nothing is resolvable, nothing is
+    missing, or (fail-safe) the `git interpret-trailers` fallback itself
+    fails to run -- never raises, matching every other function in this
+    module's degrade-gracefully contract. A caller must not treat an
+    unchanged return as an error.
+    """
+    fd, msg_path = tempfile.mkstemp(prefix="commit-trailers-stage-")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
+            handle.write(message)
+        try:
+            trailer_args = compute_missing_trailer_args(
+                msg_path, cwd, paths=paths, session_id_override=session_id_override
+            )
+        except Exception:
+            # Degrade-gracefully, same contract every resolver in this
+            # module already honors -- a trailer problem must never block a
+            # commit or corrupt the message it was asked to augment.
+            return message
+    finally:
+        try:
+            os.unlink(msg_path)
+        except OSError:
+            pass
+
+    if not trailer_args:
+        return message
+
+    values = trailer_values_from_argv(trailer_args)
+    raw = message.encode("utf-8", errors="surrogateescape")
+
+    if can_format_trailers_in_process(raw):
+        return format_trailers_in_process(raw, values).decode(
+            "utf-8", errors="surrogateescape"
+        )
+
+    from coordinator_core.git.run import run_git
+
+    fd2, apply_path = tempfile.mkstemp(prefix="commit-trailers-apply-")
+    try:
+        with os.fdopen(fd2, "wb") as handle:
+            handle.write(raw)
+        result = run_git(
+            [
+                "interpret-trailers",
+                "--no-divider",
+                "--in-place",
+                *trailer_args,
+                apply_path,
+            ],
+            cwd=str(cwd),
+        )
+        if not result.ok:
+            return message
+        return Path(apply_path).read_text(encoding="utf-8", errors="surrogateescape")
+    finally:
+        try:
+            os.unlink(apply_path)
+        except OSError:
+            pass

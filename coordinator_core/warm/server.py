@@ -548,7 +548,9 @@ def _run_dispatch(msg: dict, *, session_id: Optional[str] = None) -> dict:
     _spawn_start = _spawn_count_or_none()
     _caller = "coordinator_core.warm.server._run_dispatch"
     try:
-        with per_request_state(session_id=session_id, diagnostics=diagnostics):
+        with per_request_state(
+            session_id=session_id, diagnostics=diagnostics, warm_served=True
+        ):
             with contextlib.redirect_stdout(_handler_stdout), contextlib.redirect_stderr(_handler_stderr):
                 response = asyncio.run(dispatch_message(msg, caller=_caller))
     finally:
@@ -656,7 +658,9 @@ def _pool_dispatch_worker(msg: dict, session_id: Optional[str]) -> dict:
     _spawn_start = _spawn_count_or_none()
     _caller = "coordinator_core.warm.server._pool_dispatch_worker"
     try:
-        with per_request_state(session_id=session_id, diagnostics=diagnostics):
+        with per_request_state(
+            session_id=session_id, diagnostics=diagnostics, warm_served=True
+        ):
             with contextlib.redirect_stdout(_handler_stdout), contextlib.redirect_stderr(_handler_stderr):
                 response = asyncio.run(dispatch_message(msg, caller=_caller))
     finally:

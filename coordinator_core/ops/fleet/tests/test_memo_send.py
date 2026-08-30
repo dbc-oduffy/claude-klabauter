@@ -206,6 +206,36 @@ class TestMissingDraft:
         result = _memo_send({"dry_run": False, "topic": "bad-topic"}, repo_root=sender_repo)
         assert result["exit_code"] == 1
 
+    def test_draft_with_no_prose_body_is_refused(self, tmp_path, monkeypatch, capsys):
+        # Regression, DoE-claude 2026-08-19: a scaffold composed and never
+        # written back was delivered as frontmatter plus empty comment blocks,
+        # its title advertising four items the body did not carry. Refuse at
+        # the last step before the write into someone else's repo.
+        sender_repo = _make_sender_git_repo(tmp_path)
+        claude_home = _make_claude_home(tmp_path, {})
+        monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
+        outbox = sender_repo / "state" / "memo-outbox"
+        outbox.mkdir(parents=True)
+        (outbox / "bodyless.md").write_text(
+            '---\n'
+            'title: "Four items from one incident"\n'
+            'from: "claude-klabauter-em"\n'
+            'to: "example-retrieval-repo-em"\n'
+            'kind: "ask"\n'
+            'summary: "Four items, ranked by cost."\n'
+            '---\n\n'
+            "<!-- Compose your memo body here (memo.compose), then deliver it\n"
+            "     via memo.send. -->\n"
+            "<!-- a second block, also spanning lines,\n"
+            "     with nothing but guidance inside it -->\n",
+            encoding="utf-8",
+        )
+        result = _memo_send({"dry_run": False, "topic": "bodyless"}, repo_root=sender_repo)
+        assert result["exit_code"] == 1
+        assert "no prose" in capsys.readouterr().err
+        # Nothing was written into the receiver's tree.
+        assert result["acted"] == []
+
 
 # ---------------------------------------------------------------------------
 # dry_run preview

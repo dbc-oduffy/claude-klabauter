@@ -49,6 +49,7 @@ imported into the op process yet only ever executes in a hook process.
 from __future__ import annotations
 
 import ast
+import re
 from pathlib import Path
 
 import pytest
@@ -68,11 +69,20 @@ SESSION_ENV_NAMES = frozenset(
 #: each — which is why each verdict below names the path that decided it rather than
 #: the intuition that suggested it.
 COHORT: dict[str, tuple[bool, str]] = {
-    "coordinator_core/ops/review_trail_write.py": (
+    "coordinator_core/ops/tracker/push_suggestion.py": (
         False,
-        "Warm-reachable: the registered op `review_trail.write`. Identity is an "
-        "input to `_guard_foreign_session_range`'s anti-forgery decision, so a "
-        "spawner's id here REFUSES a session's own commits. Fixed f716ee01a.",
+        "Warm-reachable: the registered op `tracker.push_suggestion`. Reached from "
+        "its `@register_op` handler via `_deliver_envelope` -> `_commit_envelope` -> "
+        "`_delivery_commit_message`, which STAMPS the resolved id as a `Session-Id:` "
+        "trailer on a commit it lands in a repo THIS session does not own. A "
+        "spawner's id there is the plan's own defect shape, one repo further out: "
+        "the receiving operators have no other attribution key and cannot tell a "
+        "wrong trailer from a genuine one. Triaged and adopted 2026-08-30 (C2/AC4, "
+        "docs/plans/2026-08-30-the-c-door-sends-the-callers-session-identity.md). "
+        "The read was also single-tier (`CLAUDE_SESSION_ID` alone), so a session "
+        "carrying only `COORDINATOR_SESSION_ID` or `CLAUDE_CODE_SESSION_ID` got no "
+        "trailer at all -- the ladder-disagreement defect `SESSION_ENV_PRECEDENCE`'s "
+        "own docstring records, in a third copy.",
     ),
     "coordinator_core/baton_assemble/__init__.py": (
         False,
@@ -127,6 +137,29 @@ COHORT: dict[str, tuple[bool, str]] = {
         "`check(payload)`, which `preuse-write-dispatch.py` calls through "
         "`write_guards.engine.evaluate_payload_json` in the hook's own process. That "
         "engine registers no op. The backlog's 'likely cold-only' guess holds here.",
+    ),
+}
+
+#: Cohort members whose module was DELETED outright, with the commit that did it.
+#: `test_cohort_member_exists` exists because an entry naming a file that is not
+#: there is an inert ratchet -- but the remedy it names ("re-triage the code at its
+#: new home") assumes there IS a new home, and sometimes the answer is that the
+#: capability was killed. Moving the entry here rather than dropping it keeps both
+#: honesty properties the COHORT map has: the verdict survives as a written record,
+#: and `test_gravestoned_members_stay_gone` re-fires the moment the path comes back,
+#: so a resurrection re-enters triage instead of landing silently outside the ratchet.
+GRAVESTONED: dict[str, str] = {
+    "coordinator_core/ops/review_trail_write.py": (
+        "DELETED at ae9607e410 (2026-08-29, 'C3: Delete review_trail.write writer "
+        "module and all dependent CLIs and tests'). Was warm-reachable as the "
+        "registered op `review_trail.write`, where identity fed "
+        "`_guard_foreign_session_range`'s anti-forgery decision; fixed f716ee01a "
+        "before the module was killed. No successor module carries the read -- "
+        "`ops/emit/sections/review_trail.py` is the emit-side reader and names no "
+        "session-identity env var, and `ops/ceremony/tail_ops.py` performs no call "
+        "against the op. Verdict recorded 2026-08-30 (C2, docs/plans/2026-08-30-"
+        "the-c-door-sends-the-callers-session-identity.md); the ratchet had been "
+        "red on this entry since the delete."
     ),
 }
 
@@ -320,6 +353,92 @@ def test_ladder_read_exemptions_are_live_and_reasoned() -> None:
         f"ladder exemptions without a substantive label-only rationale: {thin} — a ladder "
         "walk is exempt only when it labels an already-resolved identity, never when it "
         "selects one."
+    )
+
+
+#: C2 (docs/plans/2026-08-30... the-c-door-sends-the-callers-session-identity):
+#: sites where `session.core.resolve_session_id` was blending tier-0
+#: (warm-carried) and tiers 1-3 (ambient env) behind one anti-forgery
+#: self-exclusion check. `resolve_session_id` already tries the bound
+#: `session_identity_override` ContextVar first, so this is not a raw-env-read
+#: defect the COHORT/`_session_env_reads` scan above would catch — it is a
+#: source-shape ratchet that the call site EXPLICITLY prefers
+#: `carried_session_id()` (self-documenting the anti-forgery intent, and
+#: resilient to a future change to `resolve_session_id`'s own tier order),
+#: rather than resting the whole guarantee on that one function's internals.
+#: Each entry names the enclosing function and why self-exclusion identity is
+#: an anti-forgery input there (mirrors `cs_action_memo`'s own REFUSE-on-
+#: mismatch shape — see this module's docstring).
+CARRIED_IDENTITY_PREFERENCE_SITES: dict[str, tuple[str, ...]] = {
+    "coordinator_core/pickup_assemble/__init__.py": (
+        "compute_liveness_signal",
+        "_primary_held_disposition",
+    ),
+}
+
+
+@pytest.mark.parametrize("rel", sorted(CARRIED_IDENTITY_PREFERENCE_SITES))
+def test_self_exclusion_sites_prefer_carried_session_id(rel: str) -> None:
+    """Each named self-exclusion function must call `carried_session_id()`
+    before it can fall back to `resolve_session_id` — the composed
+    prefer-carried-else-resolve shape this ratchet's C2 entry pins. A site
+    that regresses to a bare `resolve_session_id(...)` call with no
+    `carried_session_id()` preference silently loses the explicit anti-
+    forgery preference this test exists to hold in place.
+    """
+    tree = ast.parse((REPO_ROOT / rel).read_text(encoding="utf-8"))
+    func_names = CARRIED_IDENTITY_PREFERENCE_SITES[rel]
+    found = {name: False for name in func_names}
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name in func_names:
+            for inner in ast.walk(node):
+                if (
+                    isinstance(inner, ast.Call)
+                    and isinstance(inner.func, ast.Attribute)
+                    and inner.func.attr == "carried_session_id"
+                ):
+                    found[node.name] = True
+    missing = [name for name, ok in found.items() if not ok]
+    assert missing == [], (
+        f"{rel}: {missing} no longer call `carried_session_id()` — this "
+        "self-exclusion identity check must prefer the warm-carried caller "
+        "identity over resolve_session_id's ambient-env degrade (C2, "
+        "the-c-door-sends-the-callers-session-identity)."
+    )
+
+
+@pytest.mark.parametrize("rel", sorted(GRAVESTONED))
+def test_gravestoned_members_stay_gone(rel: str) -> None:
+    """A gravestoned path that exists again is an untriaged warm-identity site.
+
+    The inverse of `test_cohort_member_exists`: that test catches a COHORT entry
+    whose file vanished, this one catches a killed module coming back at its old
+    path outside the cohort. Either way the ratchet is asserting over something
+    other than what its verdict describes, which is the one failure mode this
+    file's docstring says the allowlist must never encode.
+    """
+    assert not (REPO_ROOT / rel).is_file(), (
+        f"{rel} exists again but is gravestoned, not triaged: {GRAVESTONED[rel]}"
+        "\n\n"
+        "Re-triage it and move the entry back into COHORT with a fresh reachability "
+        "verdict -- do not leave it here, and do not add it to COHORT without one."
+    )
+
+
+def test_gravestone_verdicts_name_the_deleting_commit() -> None:
+    """A gravestone is a claim about a delete and must cite it.
+
+    Same honesty rule as `test_cold_only_verdicts_carry_a_reason`: an entry parked
+    here with a placeholder reason retires a ratchet member on nobody's authority.
+    """
+    thin = [
+        rel
+        for rel, reason in GRAVESTONED.items()
+        if not re.search(r"DELETED at [0-9a-f]{7,40}", reason) or len(reason) < 80
+    ]
+    assert thin == [], (
+        f"gravestones without a cited deleting commit: {thin} -- name the sha that "
+        "removed the module and why no successor carries the read."
     )
 
 

@@ -1131,11 +1131,22 @@ def _write_native_forwarder_manifest(dst_dir: Path, names: "set[str]") -> None:
 # committed artifact C2's census populates from its `door-eligible` bucket
 # (both the op-equivalent and warm-loadable axes pass) -- this module reads
 # it back as installed-forwarder NAMES, never re-derives eligibility itself.
-# A name in this set gets an ADDITIVE native `.exe`-direct forwarder
-# alongside its existing `.py`/`.cmd` pair (never a replacement of them on
-# Windows -- see `door_install.named_forwarder_path`'s own docstring for why
-# the old pair becomes unreachable dead weight rather than a live shadow);
-# on POSIX the native image lands at the SAME bare-name path the Python
+# A name in this set gets a native `.exe`-direct forwarder that REPLACES its
+# `.py`/`.cmd` pair on Windows -- the pair is never written, and any pair left
+# by an earlier install is removed on a successful cutover. See
+# `_cut_over_to_native_door`, "THE KILL (PM ruling 2026-08-27)", for why: the
+# retained `.cmd` is wrong-if-reached, not merely outranked.
+# This comment described the SUPERSEDED additive shape until 2026-08-30 --
+# "alongside its existing .py/.cmd pair (never a replacement of them on
+# Windows)" -- which was true of C5 as first written and false from the
+# 2026-08-27 ruling onward. It is corrected here rather than deleted because
+# a reader who has to reconcile it against `_cut_over_to_native_door` 30 lines
+# below is the exact reader this file's density is meant to serve, and one of
+# the two had to stop lying. CONSEQUENCE WORTH KNOWING, not a defect in this
+# module: a cut-over name has NO `.cmd` sibling, so any doctrine still
+# instructing a PowerShell caller to invoke `<name>.cmd` through the call
+# operator is stale for every door-eligible name.
+# On POSIX the native image lands at the SAME bare-name path the Python
 # forwarder already occupies, an intentional overwrite, not a collision.
 _DOOR_ELIGIBLE_ALLOWLIST_PATH = (
     Path(__file__).resolve().parents[1] / "ops" / "warm_entrypoint_allowlist.json"

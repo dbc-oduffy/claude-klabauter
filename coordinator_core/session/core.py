@@ -999,6 +999,69 @@ _SESSION_ID_OVERRIDE: "ContextVar[Optional[str]]" = ContextVar(
 )
 
 
+#: Whether the current in-process call is being served by the warm server,
+#: bound via `warm_served_request` for the life of one dispatch. Distinct from
+#: `_SESSION_ID_OVERRIDE` and NOT derivable from it: a warm request whose door
+#: sent no `_session_id` leaves that ContextVar unset, which is byte-identical
+#: to a cold invocation — and the two need OPPOSITE answers. Cold, `os.environ`
+#: IS the caller's own; warm, it belongs to whoever spawned the server. Without
+#: this flag every consumer of an unresolvable identity has to guess which case
+#: it is in, and the guess that preserves cold behaviour is the one that
+#: misattributes warm work.
+_WARM_SERVED_REQUEST: "ContextVar[bool]" = ContextVar(
+    "coordinator_core_warm_served_request", default=False
+)
+
+
+@contextlib.contextmanager
+def warm_served_request(active: bool = True) -> Iterator[None]:
+    """Mark the enclosed dispatch as warm-served, Token/reset-scoped.
+
+    Bound by `warm.entry_seam.per_request_state`'s `warm_served` parameter,
+    whose only production setters are `warm.server`'s two dispatch sites. A
+    cold invocation never opens it, so `in_warm_served_request()` stays
+    `False` for every existing caller and nothing about cold behaviour moves.
+
+    `active=False` binds the flag OFF explicitly rather than not binding at
+    all — used by a warm-side caller that must run a nested block under cold
+    semantics, and by tests pinning the negative case. Nesting is safe: the
+    Token is reset in a `finally` regardless of how the block exits.
+    """
+    token = _WARM_SERVED_REQUEST.set(bool(active))
+    try:
+        yield
+    finally:
+        _WARM_SERVED_REQUEST.reset(token)
+
+
+def in_warm_served_request() -> bool:
+    """True when this call is running inside a warm-server dispatch.
+
+    The discriminator for the one question `carried_session_id()` cannot
+    answer on its own: an empty carried id means "the caller did not send
+    one", and what to DO about that is opposite in the two contexts.
+
+    Cold (`False`): `resolve_session_id()`'s environment tiers are the
+    caller's own environment and are the right answer — degrading to them is
+    correct, and refusing instead would break every cold commit and every
+    cold op that stamps identity.
+
+    Warm (`True`): those same tiers belong to whoever spawned the server. A
+    consumer that degrades to them there stamps a stranger — the defect this
+    whole seam exists to close (`state/bug-backlog/2026-08-29-the-warm-door-
+    s-exe-route-stamps-the-ser-47373b19c77e.yaml`, measured across three
+    repos). A warm caller holding an empty `carried_session_id()` must OMIT
+    the identity, never substitute the ambient one.
+
+    Deliberately NOT folded into `carried_session_id()`'s return value: that
+    accessor answers "what did the caller carry", one question with one
+    honest answer, and overloading it with "and where am I" is how a resolver
+    grows a second blended tier of exactly the kind
+    `resolve_session_id`'s own docstring warns about.
+    """
+    return bool(_WARM_SERVED_REQUEST.get())
+
+
 @contextlib.contextmanager
 def session_identity_override(sid: Optional[str]) -> Iterator[None]:
     """Bind the CALLER's session id for the duration of one in-process

@@ -1346,7 +1346,11 @@ _SWEEP_CAP = 150
 
 def _call_handoff_archive_transition(handoff_path: str, params: dict) -> dict:
     """Composes the 4-mode archive-transition compute, THROUGH
-    `handoff.housekeeping` since 2026-08-28.
+    `housekeeping.cycle` (was `handoff.housekeeping`, repointed 2026-08-30 per
+    `docs/plans/2026-08-29-the-housekeeping-cycle-stops-committing.md` chunk C8 —
+    `handoff.housekeeping`'s op key stays dead, kill means kill forever, PM
+    2026-08-23; `housekeeping.cycle` is the live door over the same surviving
+    compute).
 
     Routed, not rewritten. This used to import
     `handoff_archive_transition._handler` by name and `asyncio.run` it directly,
@@ -1384,7 +1388,7 @@ def _call_handoff_archive_transition(handoff_path: str, params: dict) -> dict:
     worktree, repo_root = _resolve_repo_root_for(hpath)
     if worktree is None or repo_root is None:
         return {"exit_code": 1, "error": f"could not resolve git worktree for {handoff_path}"}
-    from coordinator_core.ops.handoff_housekeeping import _handler as _housekeeping_handler
+    from coordinator_core.housekeeping.cycle import _handler as _housekeeping_handler
 
     housekeeping = _housekeeping_handler(
         {

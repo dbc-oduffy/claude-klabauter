@@ -76,7 +76,7 @@ import contextlib
 import contextvars
 from typing import Any, Iterator, List, Optional
 
-from coordinator_core.session.core import session_identity_override
+from coordinator_core.session.core import session_identity_override, warm_served_request
 from coordinator_core.session.declared_writes import collecting
 
 __all__ = [
@@ -157,6 +157,7 @@ def per_request_state(
     *,
     session_id: Optional[str] = None,
     diagnostics: Optional[List[str]] = None,
+    warm_served: bool = False,
 ) -> Iterator[List[str]]:
     """Open one request's worth of explicit, Token/reset-scoped state.
 
@@ -187,8 +188,18 @@ def per_request_state(
     for the duration of the block — the third axis (see the DIAGNOSTIC-axis
     note above). Omitted/`None` binds no sink, so `emit_diagnostic` stays a
     no-op and a caller that does not ask for diagnostics is unaffected.
+
+    `warm_served` is the fourth axis: True marks the block as running inside
+    a warm-server dispatch (`session.core.in_warm_served_request()`). It is a
+    SEPARATE axis from `session_id` on purpose, because the case that needs
+    it is precisely the one where `session_id` is absent — a request served
+    warm through a door that sent no `_session_id` leaves the identity
+    ContextVar unset, which is indistinguishable from a cold invocation, and
+    the two want opposite fallbacks. Defaults False, so `cli_entry`'s cold
+    call site (the only other production caller) is unaffected; the two warm
+    dispatch sites in `warm.server` pass True.
     """
-    with session_identity_override(session_id):
+    with warm_served_request(warm_served), session_identity_override(session_id):
         with collecting(into) as declared:
             if diagnostics is None:
                 yield declared

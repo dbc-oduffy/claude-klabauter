@@ -69,11 +69,16 @@ from coordinator_core.git.commit import (
     commit_paths,
     hash_worktree_blobs_via_spawn,
 )
+from coordinator_core.git.commit_trailers import apply_missing_trailers
 from functools import partial
 from coordinator_core.git.git_dir import resolve_git_common_dir
 from coordinator_core.git.git_objects import _read_object
 from coordinator_core.git.git_state import read_tree_spine
 from coordinator_core.ipc import register_op
+from coordinator_core.ops.ceremony.commit_gates import (
+    carry_gate,
+    op_scope_coverage_gate,
+)
 from coordinator_core.ops.fleet._common import check_repo_root, main_worktree_root
 from coordinator_core.write_guards.guard_class_relay import (
     detect_class_transition,
@@ -240,6 +245,87 @@ def _guard_class_relay_step(
     return {"transitions": transitions, "skips": skips}
 
 
+def _pre_commit_gates(
+    worktree_root: Path, paths: list, deleted_paths: list
+) -> Optional[str]:
+    """Run the gates `run_commit_pipeline` ran before landing, returning a
+    refusal string or None. TWO of its four, and the omissions are the point.
+
+    `run_commit_pipeline` ran four; C3 repointed every caller onto this op,
+    which ran none, and the resulting capability drop was filed as a P1
+    (`the-commit-v2-route-runs-none-of-the-fou`). The spike that P1 asked for
+    measured all four in this exact call shape:
+    docs/research/spike-verdicts/2026-08-30-what-the-four-commit-gates-actually-cost.md.
+    All four together cost 71.6ms at one path and 99.0ms at 35, with ZERO
+    process spawns, so the budget objection the P1 anticipated never applied --
+    the brightline is about process creation, and these create none.
+
+    WHY `deletion_block_gate` IS NOT HERE, and it is not an oversight or a
+    budget call. It is the cheapest of the four to justify dropping and the
+    most expensive mistake to include. Its Assertion-3 refuses a commit whose
+    IN-SCOPE staged deletions are not accounted for by a "Step 2.67" block in
+    the commit body -- a `workstream-complete` CEREMONY convention, not a
+    general commit convention. `run_commit_pipeline` was the ceremony
+    committer and could assume it; `ceremony.commit_v2` is the general
+    committer every session and the dispatchable `git-commit-agent` route
+    through, and cannot. Measured against this repo's own history before
+    wiring: 346 of the last 400 commits delete a path and NONE carries a Step
+    2.67 block, so reinstating it here would have refused roughly 86% of this
+    repo's commits across every concurrent session. Verified it genuinely
+    fires rather than no-oping in this shape -- a staged deletion in scope
+    with an ordinary message returns passed=False -- so this is a real
+    exclusion, not a gate that would have sat inert.
+
+    That check still HAS a live home on the ceremony path it was written for:
+    `commit_gates.main()`, reached by
+    `coordinator/bin/check-workstream-complete-deletion-blocks`. What it lost
+    in the repoint was an in-commit caller on the ceremony route, and putting
+    it on the general route is not the way to give it one back.
+
+    WHY `dirty_tree_gate` IS NOT HERE EITHER, and this one is redundancy
+    rather than blast radius. DR-227's vacuity argument already proves that
+    for a SCOPED caller the only case-(c) member reachable at all is an
+    unstaged deletion -- an in-scope path with an index entry whose worktree
+    file has vacated. Through THIS op that path does not survive to the gate:
+    `commit_paths` reads every non-deleted member's bytes to build the tree
+    and refuses with `cannot read <path>` before anything lands. The axis is
+    already covered, louder and earlier, by the committer itself.
+
+    It is also the one that could not be made cheap. Its scoped branch calls
+    `read_index` unscoped -- 35.16ms of the ~40ms it costs -- and the obvious
+    swap to `parse_index_identity` (1.95-3.91ms, and what `commit_paths`
+    already uses) does NOT preserve behaviour: `read_index` raises
+    `IndexParseError` on an unmerged index and `parse_index_identity` does
+    not, so the swap would silently turn a mid-merge-conflict refusal into a
+    pass -- the exact regression this gate's own F1 code-review finding
+    exists to prevent. Reinstating it as written would also put this op over
+    `PROCESS_TIME_TARGET_MS` (50.0), the standing budget its own gate asserts.
+
+    What remains -- `carry_gate` and `op_scope_coverage_gate` -- is free
+    (0.00ms and 2.60ms worst-case, zero spawns), needs no message convention,
+    and catches two things nothing else on this route catches: a staged
+    handoff whose `carried_items` declare undeclared state, and a registry-map
+    change registering an op with no scope coverage.
+    """
+    gate_paths = list(paths) + list(deleted_paths)
+    if not gate_paths:
+        return None
+
+    # Named explicitly rather than read off `gate.__name__`: the refusal text
+    # is what the caller acts on, and a decorated, wrapped, or patched gate
+    # would otherwise report itself as `<lambda>` at exactly the moment
+    # somebody needs to know which gate refused.
+    for name, gate in (
+        ("carry_gate", carry_gate),
+        ("op_scope_coverage_gate", op_scope_coverage_gate),
+    ):
+        outcome = gate(worktree_root, gate_paths)
+        if not outcome.passed:
+            return f"{name}: " + "; ".join(outcome.diagnostics[:5])
+
+    return None
+
+
 def _error(message: str, **extra: object) -> dict:
     """Build the structured-error result envelope for this op.
 
@@ -335,6 +421,24 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     guard_paths = _guard_module_paths(raw_paths, raw_deleted)
     pre_commit_guard_sources = (
         _pre_commit_guard_sources(worktree_root, guard_paths) if guard_paths else {}
+    )
+
+    # Gates run BEFORE the commit lands -- they are refusals, and a refusal
+    # after the fact is not one. Contrast `_guard_class_relay_step` below,
+    # which runs after and is forbidden from failing the commit.
+    gate_refusal = _pre_commit_gates(worktree_root, raw_paths, raw_deleted)
+    if gate_refusal is not None:
+        return _error(gate_refusal)
+
+    # Attach Session-Id / Deliverable-Id (whichever are resolvable and not
+    # already present) via the shared applier -- this route lands via
+    # `commit_paths`' `commit-tree` plumbing, which fires NO git hooks
+    # (`prepare-commit-msg` included), so this call is this route's ONLY
+    # attach point (docs/dispatch-briefs/.../C3.md; commit_trailers.py
+    # module docstring). Never blocks: `apply_missing_trailers` degrades to
+    # `message` unchanged on any resolution failure.
+    message = apply_missing_trailers(
+        message, worktree_root, list(raw_paths) + list(raw_deleted)
     )
 
     try:

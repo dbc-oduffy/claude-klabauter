@@ -223,12 +223,20 @@ _AUTHORITATIVE_PRECEDENCE_RE = re.compile(
     r"\bauthoritative\b\s+where\b(?:(?!\.).){0,80}?\bdisagree\b", re.IGNORECASE
 )
 
-# A reference to ANOTHER memo, beyond a directly-cited basename (already
-# captured in `loci` via `_LOCUS_RE`'s `.md` extension): an `in_reply_to`-style
-# citation, or an explicit "the earlier/previous/prior/other memo" phrase.
+# A reference to ANOTHER memo that names no basename at all — the generic
+# "the earlier/previous/prior/other memo" phrase, and nothing else.
+#
+# The literal token `in_reply_to` was an arm of this pattern until 2026-08-30,
+# so a memo whose frontmatter carried a real `in_reply_to:` matched here and
+# was then paired by `_nearest_earlier_same_sender` — date proximity, no
+# topical link whatsoever — while the frontmatter naming the actual thread sat
+# unread two fields away. The op held the answer and discarded it, and the
+# pair it guessed instead was promoted to the TOP-ranked basis. `in_reply_to:`
+# is now resolved from its own frontmatter value (`_declared_in_reply_to`) and
+# never routes to the proximity fallback; a value that does not resolve inside
+# the open pile yields NO candidate rather than a nearest-dated substitute.
 _MEMO_REFERENCE_PHRASE_RE = re.compile(
-    r"\bin_reply_to\b"
-    r"|\b(?:the\s+)?(?:earlier|previous|prior|other|that)\s+memo\b",
+    r"\b(?:the\s+)?(?:earlier|previous|prior|other|that)\s+memo\b",
     re.IGNORECASE,
 )
 
@@ -399,14 +407,44 @@ def _space_key(frontmatter: dict, path: Path) -> tuple[str, bool]:
     return stem, False
 
 
+def _reference_basename(reference: str) -> str:
+    """The basename form a memo reference is matched by, `.md` suffix assured.
+
+    `supersedes:` and `in_reply_to:` are authored in every root the corpus
+    admits -- a bare basename, a repo-relative `cross-repo/inbox/<name>.md`,
+    a `state/memo-outbox/sent/<name>.md`, and absolute POSIX paths from
+    another machine's checkout. The record index these resolve against is
+    keyed on basenames (`_cited_loci`'s own reason), so a reference carrying
+    ANY directory prefix missed every key and the declaration was dropped
+    without a trace -- taking with it the `declared` basis that would have
+    outranked a prose-guessed pairing for the same memo.
+    """
+    name = reference.strip().replace("\\", "/").rsplit("/", 1)[-1]
+    return name if name.endswith(".md") else f"{name}.md"
+
+
 def _declared_supersedes(frontmatter: dict) -> list[str]:
-    """Normalize `supersedes:` to a list of references, string or list form."""
+    """Normalize `supersedes:` to a list of basename references (see
+    `_reference_basename` for why the authored path root is discarded)."""
     raw = frontmatter.get("supersedes")
     if isinstance(raw, str) and raw.strip():
-        return [raw.strip()]
+        return [_reference_basename(raw)]
     if isinstance(raw, list):
-        return [entry.strip() for entry in raw if isinstance(entry, str) and entry.strip()]
+        return [
+            _reference_basename(entry)
+            for entry in raw
+            if isinstance(entry, str) and entry.strip()
+        ]
     return []
+
+
+def _declared_in_reply_to(frontmatter: dict) -> Optional[str]:
+    """The basename `in_reply_to:` names, or None when the key is absent or
+    carries no usable value."""
+    raw = frontmatter.get("in_reply_to")
+    if isinstance(raw, str) and raw.strip():
+        return _reference_basename(raw)
+    return None
 
 
 def _cited_loci(title: str, body: str) -> set[str]:
@@ -495,24 +533,45 @@ def _self_declared_candidates(records: list[dict], seen_pairs: set[frozenset[str
 
     Fires for a same-sender (newer, older) pair when the newer memo's
     title+body matches a supersession phrase pattern (AC2) AND names the
-    older memo concretely (AC5): either by citing its basename directly
-    (already captured in `loci`), or via a generic "the previous/earlier
-    memo" phrase resolved to the unique nearest earlier same-sender memo.
-    Ambiguous references — a citation matching more than one same-sender
-    memo's basename — are skipped rather than guessed, and a generic
-    "the previous memo" phrase only resolves when exactly one same-sender
-    earlier memo exists to be it (see `_nearest_earlier_same_sender`); see
-    the precision-over-recall commentary at `_SUPERSEDING_VERB_RE`.
+    older memo concretely (AC5), resolved in strictly descending order of
+    evidence: a directly-cited basename (already captured in `loci`), then
+    the memo's own `in_reply_to:` frontmatter, then — only when neither
+    exists — a generic "the previous/earlier memo" phrase resolved to the
+    unique nearest earlier same-sender memo. Ambiguous references — a
+    citation matching more than one same-sender memo's basename — are
+    skipped rather than guessed, and the generic phrase only resolves when
+    exactly one same-sender earlier memo exists to be it (see
+    `_nearest_earlier_same_sender`); see the precision-over-recall
+    commentary at `_SUPERSEDING_VERB_RE`.
 
-    Ranked above both `declared` and `same-sender-same-locus` (AC3): this
-    function runs FIRST in `_supersession_candidates`, so it claims a pair in
-    `seen_pairs` before either of the other passes sees it.
+    A memo carrying `supersedes:` NEVER enters this pass at all. Ranking
+    `self-declared` above `declared` is about which INFERENCE to trust when
+    the sender left the field empty — it was never a licence for prose to
+    overrule the sender's own structured statement of the same fact, which
+    is what the unconditional version of this pass did (see the `continue`
+    on `_declared_supersedes` below).
+
+    Ranked above `declared` and `same-sender-same-locus` (AC3) for the memos
+    it does still cover: this function runs FIRST in
+    `_supersession_candidates`, so it claims a pair in `seen_pairs` before
+    either of the other passes sees it.
     """
     candidates: list[dict] = []
     all_names = {record["path"].name: record for record in records}
 
     for newer in records:
         if not _has_supersession_phrase(newer["text"]):
+            continue
+        if _declared_supersedes(newer["frontmatter"]):
+            # The memo states in its own frontmatter what it supersedes. That
+            # is the sender's structured claim about the very question this
+            # pass infers from prose, so prose does not get to answer it: the
+            # memo is yielded to the `declared` pass rather than claiming its
+            # pair in `seen_pairs` against a target the body merely implies.
+            # Without this, a memo declaring `supersedes: A` whose prose also
+            # trips the phrase pattern was emitted against a different memo B
+            # at the TOP-ranked basis — the shape DoE-claude reported on
+            # 2026-08-30, where a klabauter memo resolved to the wrong target.
             continue
         older = None
         cited = [
@@ -521,15 +580,29 @@ def _self_declared_candidates(records: list[dict], seen_pairs: set[frozenset[str
             if name in newer["loci"] and record is not newer
         ]
         cited_same_sender = [r for r in cited if r["sender"] == newer["sender"]]
+        reply_target = _declared_in_reply_to(newer["frontmatter"])
         if len(cited_same_sender) == 1:
             older = cited_same_sender[0]
+        elif reply_target is not None:
+            # A declared thread outranks every inference below it, and its
+            # ABSENCE from the open pile is an answer too: the thread it names
+            # is archived, or was never received here, so there is no open
+            # pair to offer. Never fall through to proximity from here.
+            older = all_names.get(reply_target)
+            if older is newer:
+                older = None
         elif not cited and _MEMO_REFERENCE_PHRASE_RE.search(newer["text"]):
-            # No basename citation at all (any sender) — only THEN fall back
-            # to the generic "the previous memo" resolution. A citation that
-            # named a different sender's memo is not evidence for guessing a
-            # same-sender pairing instead.
+            # No basename citation at all (any sender), and no declared
+            # thread — only THEN fall back to the generic "the previous memo"
+            # resolution. A citation that named a different sender's memo is
+            # not evidence for guessing a same-sender pairing instead.
             older = _nearest_earlier_same_sender(newer, records)
         if older is None:
+            continue
+        if older["sender"] != newer["sender"]:
+            # `in_reply_to` crosses senders routinely — a reply names the memo
+            # it answers — and a cross-sender pair is a correspondence edge,
+            # not a supersession: nobody supersedes someone else's memo.
             continue
         if not newer["created_known"] or not older["created_known"]:
             continue
@@ -615,8 +688,7 @@ def _supersession_candidates(records: list[dict]) -> list[dict]:
 
     for record in records:
         newer_name = record["path"].name
-        for reference in _declared_supersedes(record["frontmatter"]):
-            ref_name = reference if reference.endswith(".md") else f"{reference}.md"
+        for ref_name in _declared_supersedes(record["frontmatter"]):
             older = by_basename.get(ref_name)
             if older is None or older["path"].name == newer_name:
                 # A declared reference pointing outside the OPEN pile is not a

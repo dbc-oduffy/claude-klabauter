@@ -103,12 +103,15 @@ blind to a shipped module whose test silently did not ship alongside it
 (measured 2026-08-28: a fix published while its two new test files did
 not) — tests participate in no import closure, so neither the deny-list
 filter nor C1's closure gate can see the absence. `find_modules_missing_
-tests` walks the same assembled tree a second pass and reports, per
-shipped first-party module, whether a same-stem test file shipped with
-it. WARN, never refuse: plenty of modules legitimately have no test, and
-a hard gate here would be un-landable on day one. See that function's own
-docstring for the matching rule and `format_test_coverage_warning` for
-the denominator-carrying render.
+tests` walks the assembled tree AND the source tree it was assembled
+from, and reports only the subjects whose test exists in the source but
+did not ship — a module that never had a test anywhere is not reported
+(comparing the mirror against itself, as an earlier version of this
+function did, conflated the two and made the WARN print ~80% of the
+tree on every round). WARN, never refuse: this remains a WARN even
+though the reported set should now normally be zero. See that function's
+own docstring for the matching rule and `format_test_coverage_warning`
+for the denominator-carrying, capped render.
 """
 
 from __future__ import annotations
@@ -120,6 +123,7 @@ import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Iterable
 
 MARKER_EXPRESSION = "not cadence and not pending_fix and not designed_red"
 """The tree's own documented fast-tier marker expression (parent plan's
@@ -463,19 +467,91 @@ def _test_subject_stem(stem: str) -> str:
     return stem
 
 
-def find_modules_missing_tests(tree_root: "Path | str") -> ModuleTestCoverageReport:
+def _is_vendored_path(path: Path) -> bool:
+    """True iff any component of `path` marks it as third-party dependency
+    source rather than a subject this gate's coverage question is about.
+
+    This gate answers "did a module WE ship leave its own test behind" —
+    a vendored dependency (a venv's copy of `numpy`, `torch`, `pytest`
+    itself, ...) is neither a subject we own nor one whose tests we would
+    ever land alongside it, so it belongs in neither `examined_count` nor
+    `missing`. Left unfiltered (measured 2026-08-29 against the live
+    claude-klabauter<->klabauter pair): 53778 of the assembled mirror's 57754 `.py`
+    files sit under a vendored tree, so an unfiltered `examined_count` is
+    ~93% other people's code, and every stem-collision false positive in
+    `missing` traced back to that same vendored population (e.g. a venv's
+    `setup.py`/`terminal.py`/`manifest.py` coincidentally sharing a stem
+    with an unrelated `test_<stem>.py` living in claude-klabauter's own source
+    tree) — a denominator and a WARN list neither one describes the
+    payload this gate exists to check.
+
+    Deliberately NOT delegated to `percolate/ignore.py`'s
+    `PercolateIgnoreMatcher`: that module matches a `.percolate-ignore`
+    FILE's patterns against publish-payload inclusion (a different,
+    file-driven, security-load-bearing question — see its own module
+    docstring), not a hardcoded "is this a dependency tree" predicate: no
+    `.percolate-ignore` is guaranteed to exist for an arbitrary tree_root/
+    source_root this function is asked to walk. A component-name check is
+    the smallest correct mechanism for the specific two shapes this gate
+    needs to exclude.
+
+    Matches ANY path component named exactly `site-packages`, or any
+    component whose name STARTS WITH `.fleet-env` (the fleet's own
+    generated-venv naming convention carries a trailing per-run suffix,
+    e.g. `.fleet-env.gen-72332-47c78a42/` — a startswith check catches
+    every instance, an exact-match check would not)."""
+    for part in path.parts:
+        if part == "site-packages":
+            return True
+        if part.startswith(".fleet-env"):
+            return True
+    return False
+
+
+def _test_stems_under(root: Path) -> "set[str]":
+    """Walk `root` and return the set of subject stems that have a test
+    file somewhere under it, matched the same STEM-not-adjacency way
+    `find_modules_missing_tests` matches within a single tree (see that
+    function's docstring). Vendored paths (`_is_vendored_path`) are
+    excluded from the walk — a vendored test file must never make a
+    vendored (or first-party, via stem collision) subject look covered
+    or missing."""
+    stems: set[str] = set()
+    for py_file in root.rglob("*.py"):
+        if _is_vendored_path(py_file):
+            continue
+        stem = py_file.stem
+        if _is_test_file(stem):
+            stems.add(_test_subject_stem(stem))
+    return stems
+
+
+def find_modules_missing_tests(
+    tree_root: "Path | str", source_root: "Path | str | Iterable[Path | str]"
+) -> ModuleTestCoverageReport:
     """Walk every `.py` file physically inside `tree_root` (the assembled,
     POST-SYNC mirror — same tree, same walk shape `find_import_closure_
     violations` uses over a restricted row) and report, for each SHIPPED
-    first-party module, whether a corresponding test file shipped
-    alongside it. This is klabauter#3's exact inverse: C1/C2 catch a
-    module a test still reaches for after it was dropped; this catches a
-    module that shipped while ITS test did not (parent plan body, "a fix
-    published to the mirror while its two new test files did not,
-    silently").
+    first-party module, whether that module's test STAYED HOME: its test
+    file exists in `source_root` (the pre-sync SOURCE tree the mirror was
+    assembled from) but did not ship alongside it in `tree_root`. This is
+    klabauter#3's exact inverse: C1/C2 catch a module a test still reaches
+    for after it was dropped; this catches a module that shipped while ITS
+    test did not (parent plan body, "a fix published to the mirror while
+    its two new test files did not, silently").
+
+    Comparing `tree_root` against ITSELF (an earlier version of this
+    function) conflates two different claims: "this module's test stayed
+    home" (a real, actionable percolate-payload gap) and "this module
+    never had a test anywhere" (true of the large majority of any
+    repository's modules, and not this gate's business). Reading `source_
+    root` as the ground truth for "does a test exist at all" is what keeps
+    the two apart — a module absent from `source_test_stems` never had a
+    test to leave behind, and is never reported regardless of whether it
+    has one in `tree_root`.
 
     Matching is by STEM, not by directory adjacency, deliberately —
-    `test_foo.py` counts as `foo.py`'s test wherever in `tree_root` it
+    `test_foo.py` counts as `foo.py`'s test wherever in either tree it
     landed. The assembled mirror routinely ships a module and its test at
     different depths (row `coordinator_core` ships `foo.py` at the tree
     root while its test lives under `tests/`), and a directory-adjacency
@@ -484,26 +560,41 @@ def find_modules_missing_tests(tree_root: "Path | str") -> ModuleTestCoverageRep
     asks "does some test file's stem name this module", not "does this
     exact directory contain one".
 
+    `examined_count` still counts SHIPPED subjects in `tree_root` (the
+    same denominator the pre-C6-inverse-fix version reported) — this
+    function still answers "of what shipped, how many left their test
+    behind", not "how many source modules have tests". `__init__.py` and
+    `conftest.py` are excluded from that population: neither is a
+    "module" with an independently-expected test file by convention, and
+    counting them would inflate `missing` with entries no author would
+    ever action.
+
     WARN, never refuse — this function returns a report, not a
     pass/fail verdict; a hard gate here would be un-landable on day one
     (parent plan C6 body, "plenty of modules legitimately have no test").
-    `__init__.py` and `conftest.py` are excluded from the examined
-    population: neither is a "module" with an independently-expected test
-    file by convention, and counting them would inflate `missing` with
-    entries no author would ever action.
 
     A file that fails to parse its own STEM (impossible — stems come from
     `Path.stem`, never from source content) is not a concern here; unlike
     `find_import_closure_violations`, this function never reads file
-    CONTENTS, only names, so it has no `SyntaxError` case to skip."""
-    tree_root = Path(tree_root)
-    py_files = sorted(tree_root.rglob("*.py"))
+    CONTENTS, only names, so it has no `SyntaxError` case to skip.
 
-    test_stems: set[str] = set()
-    for py_file in py_files:
-        stem = py_file.stem
-        if _is_test_file(stem):
-            test_stems.add(_test_subject_stem(stem))
+    Vendored paths (`_is_vendored_path` — a `site-packages` or
+    `.fleet-env*` path component) are excluded from BOTH `tree_root` and
+    every `source_root`, in both the examined population and the test-stem
+    lookup: this gate answers a question about the payload WE ship, and a
+    third-party dependency is neither a subject we own nor one whose tests
+    we would ever land, on either side of the comparison."""
+    tree_root = Path(tree_root)
+    if isinstance(source_root, (str, Path)):
+        source_roots = [Path(source_root)]
+    else:
+        source_roots = [Path(root) for root in source_root]
+    py_files = sorted(p for p in tree_root.rglob("*.py") if not _is_vendored_path(p))
+
+    assembled_test_stems = _test_stems_under(tree_root)
+    source_test_stems: "set[str]" = set()
+    for root in source_roots:
+        source_test_stems |= _test_stems_under(root)
 
     examined_count = 0
     missing: list[str] = []
@@ -512,10 +603,20 @@ def find_modules_missing_tests(tree_root: "Path | str") -> ModuleTestCoverageRep
         if _is_test_file(stem) or stem in _NON_SUBJECT_STEMS:
             continue
         examined_count += 1
-        if stem not in test_stems:
+        if stem in source_test_stems and stem not in assembled_test_stems:
             missing.append(py_file.relative_to(tree_root).as_posix())
 
     return ModuleTestCoverageReport(examined_count=examined_count, missing=tuple(sorted(missing)))
+
+
+_MAX_LISTED_MISSING = 50
+"""Cap on paths printed by `format_test_coverage_warning`. `report.missing`
+is now source-vs-mirror "test stayed home" entries, not the whole
+never-had-a-test population — the set this function prints should
+normally be zero or near it (a real, actionable percolate-payload gap
+per entry), but a cap still guards against a genuinely large sync
+failure flooding the log the way the never-had-a-test census used to
+unconditionally."""
 
 
 def format_test_coverage_warning(report: ModuleTestCoverageReport) -> str:
@@ -523,13 +624,28 @@ def format_test_coverage_warning(report: ModuleTestCoverageReport) -> str:
     refusal. Always states the denominator (`examined_count`) alongside
     the count, per the parent plan's "0 modules missing tests" abstention
     warning: a caller that prints only `missing_count` cannot distinguish
-    a clean tree from one this function never walked."""
-    return (
+    a clean tree from one this function never walked.
+
+    `report.missing` now names subjects whose test exists in the SOURCE
+    tree but did not ship with the assembled mirror — a shipped-test-left-
+    behind gap, not "this module never had a test" (see `find_modules_
+    missing_tests`'s docstring for why those are no longer conflated).
+    The full list still prints, capped at `_MAX_LISTED_MISSING` with an
+    elision count stated rather than silently dropped — this set should
+    normally be zero or near it, so a cap is a guard against a genuine
+    sync failure, not an expected steady-state truncation."""
+    lines = [
         "assembled-mirror-gate: WARN — "
-        f"{report.missing_count} module(s) missing a test, "
-        f"over {report.examined_count} module(s) examined"
-        + ("\n" + "\n".join(f"  - {path}" for path in report.missing) if report.missing else "")
-    )
+        f"{report.missing_count} module(s) shipped without the test their "
+        f"source carries, over {report.examined_count} module(s) examined"
+    ]
+    if report.missing:
+        shown = report.missing[:_MAX_LISTED_MISSING]
+        lines.extend(f"  - {path}" for path in shown)
+        elided = report.missing_count - len(shown)
+        if elided > 0:
+            lines.append(f"  ... and {elided} more (elided)")
+    return "\n".join(lines)
 
 
 def format_refusal(result: MirrorCollectionResult) -> str:

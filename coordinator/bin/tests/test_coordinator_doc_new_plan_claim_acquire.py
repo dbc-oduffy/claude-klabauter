@@ -185,7 +185,7 @@ class NonPlanDocTypeTakesNoPlanClaimTest(unittest.TestCase):
             memo_out = repo / "custom-memo.md"
             result = _run_cli(
                 repo, memo_out, "Plan claim non-plan doc type", doc_type="memo",
-                extra_args=["--to", "peer-em", "--topic", "test"],
+                extra_args=["--to", "peer-em", "--topic", "test", "--kind", "fyi"],
             )
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertTrue(memo_out.exists())

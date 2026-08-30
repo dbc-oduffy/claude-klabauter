@@ -49,6 +49,7 @@ def _write_memo(
     created: str = "2026-07-20",
     space: str | None = None,
     supersedes: str | list[str] | None = None,
+    in_reply_to: str | None = None,
     body: str = "Some body text.\n",
     title: str = "A memo",
 ) -> Path:
@@ -69,6 +70,8 @@ def _write_memo(
     elif isinstance(supersedes, list):
         lines.append("supersedes:")
         lines.extend(f'  - "{entry}"' for entry in supersedes)
+    if in_reply_to is not None:
+        lines.append(f'in_reply_to: "{in_reply_to}"')
     lines.append("---")
     path = inbox / name
     path.write_text("\n".join(lines) + "\n\n" + body, encoding="utf-8")
@@ -343,9 +346,11 @@ class TestSupersessionCandidates:
         cands = _by_kind(_build_candidates(inbox, 10, 7, TODAY), "supersession_candidate")
         assert cands == []
 
-    def test_self_declared_ranks_above_declared_and_locus(self, tmp_path):
-        # AC3 — when all three bases could theoretically apply to the same
-        # pair, self-declared wins and the pair is emitted exactly once.
+    def test_declared_beats_prose_when_the_sender_filled_the_field(self, tmp_path):
+        # AC3 — when all three bases could apply to the same pair, the pair is
+        # emitted exactly once. The winning basis is `declared`, not
+        # `self-declared`: `supersedes:` is the sender's own structured answer
+        # to the question the prose pass infers, so prose does not overrule it.
         inbox = tmp_path / "inbox"
         inbox.mkdir()
         _write_memo(
@@ -359,7 +364,130 @@ class TestSupersessionCandidates:
         )
         cands = _by_kind(_build_candidates(inbox, 10, 7, TODAY), "supersession_candidate")
         assert len(cands) == 1
-        assert cands[0]["basis"] == "self-declared"
+        assert cands[0]["basis"] == "declared"
+        assert cands[0]["newer"] == "2026-07-25-a-em-new.md"
+        assert cands[0]["older"] == "2026-07-20-a-em-old.md"
+
+    def test_prose_never_retargets_a_memo_that_declared_supersedes(self, tmp_path):
+        # Regression, DoE-claude 2026-08-30: a memo declaring `supersedes: A`
+        # whose prose also trips the phrase pattern used to be paired against
+        # a DIFFERENT memo B by the self-declared pass, which ran first and
+        # claimed the pair at the top-ranked basis. The declared target is the
+        # only one that may be emitted for such a memo.
+        inbox = tmp_path / "inbox"
+        inbox.mkdir()
+        _write_memo(
+            inbox, "2026-07-18-a-em-real-target.md", sender="a-em",
+            created="2026-07-18", body="The contract.\n",
+        )
+        _write_memo(
+            inbox, "2026-07-22-a-em-decoy.md", sender="a-em",
+            created="2026-07-22", body="Something else entirely.\n",
+        )
+        _write_memo(
+            inbox, "2026-07-25-a-em-new.md", sender="a-em", created="2026-07-25",
+            supersedes="cross-repo/inbox/2026-07-18-a-em-real-target.md",
+            body="Superseding 2026-07-22-a-em-decoy.md as I read it.\n",
+        )
+        cands = _by_kind(_build_candidates(inbox, 10, 7, TODAY), "supersession_candidate")
+        by_newer = [c for c in cands if c["newer"] == "2026-07-25-a-em-new.md"]
+        assert [(c["older"], c["basis"]) for c in by_newer] == [
+            ("2026-07-18-a-em-real-target.md", "declared")
+        ]
+
+    def test_declared_supersedes_resolves_through_a_path_form_reference(self, tmp_path):
+        # Regression, DoE-claude 2026-08-30: `supersedes:` is authored with
+        # every root the corpus admits. A reference carrying any directory
+        # prefix used to miss the basename-keyed index entirely, dropping the
+        # declaration — and with it the basis that outranks a prose guess.
+        for i, reference in enumerate((
+            "cross-repo/inbox/2026-07-20-a-em-old.md",
+            "state/memo-outbox/sent/2026-07-20-a-em-old.md",
+            # abs-path-ok: fixture data, not a citation — a foreign-host
+            # absolute root is one of the four shapes `supersedes:` is
+            # authored in across the live corpus, and is the case the
+            # basename normalization exists to survive.
+            "/Users/x/repo/cross-repo/inbox/2026-07-20-a-em-old.md",
+            "2026-07-20-a-em-old.md",
+        )):
+            inbox = tmp_path / f"inbox-{i}"
+            inbox.mkdir()
+            _write_memo(
+                inbox, "2026-07-20-a-em-old.md", sender="a-em",
+                created="2026-07-20", body="The original.\n",
+            )
+            _write_memo(
+                inbox, "2026-07-25-a-em-new.md", sender="a-em",
+                created="2026-07-25", supersedes=reference,
+                body="A follow-up with no supersession prose.\n",
+            )
+            cands = _by_kind(
+                _build_candidates(inbox, 10, 7, TODAY), "supersession_candidate"
+            )
+            assert [(c["basis"], c["older"]) for c in cands] == [
+                ("declared", "2026-07-20-a-em-old.md")
+            ], reference
+
+    def test_in_reply_to_resolves_its_own_thread_not_the_nearest_date(self, tmp_path):
+        # Regression, DoE-claude 2026-08-30: `in_reply_to` was matched as a
+        # bare token in prose and then resolved by date proximity, so a memo
+        # naming thread A was paired with whatever same-sender memo happened
+        # to be nearest in time. The frontmatter value is the answer.
+        inbox = tmp_path / "inbox"
+        inbox.mkdir()
+        _write_memo(
+            inbox, "2026-07-10-a-em-thread.md", sender="a-em",
+            created="2026-07-10", body="The thread being answered.\n",
+        )
+        _write_memo(
+            inbox, "2026-07-24-a-em-nearest.md", sender="a-em",
+            created="2026-07-24", body="An unrelated concurrent thread.\n",
+        )
+        _write_memo(
+            inbox, "2026-07-25-a-em-new.md", sender="a-em", created="2026-07-25",
+            in_reply_to="2026-07-10-a-em-thread.md",
+            body="Superseding the earlier memo on this.\n",
+        )
+        cands = _by_kind(_build_candidates(inbox, 10, 7, TODAY), "supersession_candidate")
+        self_declared = [c for c in cands if c["basis"] == "self-declared"]
+        assert [(c["newer"], c["older"]) for c in self_declared] == [
+            ("2026-07-25-a-em-new.md", "2026-07-10-a-em-thread.md")
+        ]
+
+    def test_unresolvable_in_reply_to_emits_nothing_rather_than_a_substitute(self, tmp_path):
+        # The declared thread is archived or was never received here. Its
+        # absence is an answer — there is no open pair to offer — and must
+        # NOT fall through to the nearest-dated same-sender memo.
+        inbox = tmp_path / "inbox"
+        inbox.mkdir()
+        _write_memo(
+            inbox, "2026-07-24-a-em-nearest.md", sender="a-em",
+            created="2026-07-24", body="An unrelated concurrent thread.\n",
+        )
+        _write_memo(
+            inbox, "2026-07-25-a-em-new.md", sender="a-em", created="2026-07-25",
+            in_reply_to="2026-07-01-a-em-already-archived.md",
+            body="Superseding the earlier memo on this.\n",
+        )
+        cands = _by_kind(_build_candidates(inbox, 10, 7, TODAY), "supersession_candidate")
+        assert [c for c in cands if c["basis"] == "self-declared"] == []
+
+    def test_in_reply_to_across_senders_is_not_a_supersession(self, tmp_path):
+        # A reply names the memo it answers, routinely across senders. That is
+        # a correspondence edge — nobody supersedes someone else's memo.
+        inbox = tmp_path / "inbox"
+        inbox.mkdir()
+        _write_memo(
+            inbox, "2026-07-10-b-em-their-ask.md", sender="b-em",
+            created="2026-07-10", body="Their ask.\n",
+        )
+        _write_memo(
+            inbox, "2026-07-25-a-em-new.md", sender="a-em", created="2026-07-25",
+            in_reply_to="2026-07-10-b-em-their-ask.md",
+            body="Superseding the earlier memo on this.\n",
+        )
+        cands = _by_kind(_build_candidates(inbox, 10, 7, TODAY), "supersession_candidate")
+        assert cands == []
 
     def test_ambiguous_basename_citation_is_skipped(self, tmp_path):
         # Precision-over-recall: a memo whose body cites TWO different

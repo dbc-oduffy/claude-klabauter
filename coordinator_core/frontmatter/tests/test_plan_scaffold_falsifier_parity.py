@@ -152,10 +152,23 @@ class TemplateMirrorParityTest(unittest.TestCase):
             for f in template["frontmatter"]["fields"]
             if f.get("kind") == "literal"
         ]
+        # Token-scoped, NOT substring-scoped on `statement:`. A bare
+        # `statement:` stopped being falsifier-specific when the live
+        # `gated_exit_criteria` rows landed (2026-08-30, plan.schema.json
+        # 2.10.0's block, test_plan_scaffold_brightline_parity.py): those rows
+        # carry an UNcommented `statement: >-` by design, and matching on the
+        # bare token turned this assertion red against a correct template.
+        falsifier_tokens = (
+            "prime_exit_criterion",
+            "falsifier",
+            "derived_from:",
+            "baseline_",
+            "expected_when_true",
+        )
         falsifier_block = [
-            fl for fl in fm_lines if "prime_exit_criterion" in fl or "falsifier" in fl
-            or "statement:" in fl or "derived_from:" in fl or "baseline_" in fl
-            or "expected_when_true" in fl or fl.strip().startswith("#     how:")
+            fl for fl in fm_lines
+            if any(tok in fl for tok in falsifier_tokens)
+            or fl.strip().startswith("#     how:")
         ]
         self.assertTrue(falsifier_block, "no falsifier-related literal lines found in template")
         for fl in falsifier_block:

@@ -159,6 +159,29 @@ this blitz actually produced:
     quotes a shape from memory or an older version; the live schema on disk
     disagrees.
 
+Two checks run BEFORE any verdict. A verify pass that skips them does not
+return fewer answers -- it returns confident wrong ones, under the stamp
+that makes a finding trusted:
+  - ALREADY-ANSWERED, NOT JUST ACCURATE. Whether a claim is true and
+    whether its ask is still open are different questions, and the second
+    one decides whether anyone dispatches. Glob BOTH sides' archives --
+    `cross-repo/archive/`, `state/memo-outbox/sent/`, the completions
+    record -- for a later memo, resend, or commit that discharges the ask.
+    An accurate claim whose ask is already discharged is REFUTED for
+    dispatch purposes; name the artifact that closed it.
+  - ABSENCE IS ONLY EVIDENCE FROM THE RIGHT DIRECTORY. Before reporting
+    anything missing, name the directory it would be in if it existed and
+    confirm you looked there. "Not in the peer's `inbox/`" is not "never
+    delivered" -- an actioned memo necessarily LEAVES the inbox, so an
+    inbox-only sweep reads every successful delivery as a loss. Same shape
+    catches a stale directory mistaken for a live queue.
+
+A manifest is a snapshot, not the tree. Peer sessions archive memos mid-run
+on a shared worktree. Before filing a moved or missing memo as a producer
+defect, compare the archival commit timestamp against this manifest's
+assemble time -- earlier means you raced the archive, not that a producer
+dropped anything.
+
 Report: CONFIRMED or REFUTED per finding/route, with your basis, appended as
 a "Verification" section to the same report file at `{report_path}`. Do not
 edit any memo; do not flip any lifecycle field.

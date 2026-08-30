@@ -2,13 +2,18 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://coordinator.local/schemas/plan.schema.json",
   "x-schema-name": "plan",
-  "x-schema-version": "2.10.0",
-  "x-bump-class": "top-level-array-additive",
-  "x-bump-note": "2.9.0 -> 2.10.0 adds top-level `gated_exit_criteria`: the fleet brightlines as a machine-readable, enum-constrained list on the plan artifact, replacing their prior sole existence as prose in `coordinator/skills/workstream-complete/SKILL.md`. `met` is flipped on the existing `exit_criterion_met` close-out path -- deliberately no second enforcement path. top-level-array-additive: a plan omitting the key still validates, so no existing plan is invalidated; what changes is that a plan CARRYING the key is now validated rather than free-text. HOLDING, and stacked on 2.9.0's unreleased hold -- but for its own reason, not 2.9.0's: unconditional x-schema-version holding is scoped to nested-field-additive/enum-value-additive/major, NOT to top-level-array-additive, which is non-holding only where a declared-tolerant consumer set exists. No structural or version-envelope tolerance is declared for claude-klabauter's vendored copy, so this reverts to bilateral sequencing and holds anyway (docs/wiki/schema-version-gate.md) -- merge-to-main and production emit are held until claude-klabauter re-vendors or confirms plan.schema.json is not in their mirrored set. 2.9.0's notification (cross-repo/inbox/2026-08-27-doe-claude-em-plan-schema-2-9-0-nested-field-additive) is unanswered; 2.10.0 owes its own. PRIOR: 2.8.0 -> 2.9.0 defines the falsifier promotion fields execute-plan \u00a7 Phase 4 already instructs an EM to write: `promoted_to` (the test path a graduated falsifier becomes a regression pin at), or `promotion: not-applicable` with a `promotion_reason`. The falsifier object is `additionalProperties: false`, so a plan recording either shape failed validation against 2.8.0. The two branches are mutually exclusive and `promotion_reason` is dependent-required on `promotion`; promotability stays a record, never a gate on the stamp. HOLDING: nested-field-additive is unconditionally holding on the x-schema-version axis (docs/wiki/schema-version-gate.md) -- merge-to-main and production emit are held until claude-klabauter re-vendors or confirms plan.schema.json is not in their mirrored set. Notified 2026-08-27: cross-repo/inbox/2026-08-27-doe-claude-em-plan-schema-2-9-0-nested-field-additive.md.",
+  "x-schema-version": "2.12.0",
+  "x-bump-class": "nested-field-additive",
+  "x-bump-note": "2.11.0 -> 2.12.0 adds `promotion`/`promotion_reason`/`promoted_to` to `exit_criterion_met` (`additionalProperties: false` had rejected all three): four independently-authored plans record falsifier-promotion fate inside the close-out assertion object using this vocabulary, converged on by separate sessions with none of them able to author it into the schema themselves. `promotion` is a plain enum over the two attested values (`not-applicable`, `partial`) rather than an invented closed set; `promoted_to` mirrors the sibling field already on `prime_exit_criterion.falsifier`. Deliberately does NOT add `promotion_note` — a fourth plan's one-off synonym for `promotion_reason`, folded into that plan's own body instead of blessed as a second schema key. nested-field-additive: a plan omitting the keys still validates; a plan CARRYING them is now validated rather than rejected. HOLDING per the same x-schema-version-axis rule as 2.9.0/2.10.0/2.11.0 (docs/wiki/schema-version-gate.md) until claude-klabauter re-vendors. PRIOR: 2.10.0 -> 2.11.0 adds the `spun_off` key to `grouping_approvals`, so a governed plan's spun-off rows carry recorded PM assent like its deferred and ruled-out ones (docs/decisions/DR-183-every-non-coded-exit-from-a-plan-row-needs-pm-approval.md). nested-field-additive: a plan omitting the key still validates, so no existing plan is invalidated; a plan CARRYING it is now validated rather than rejected by `additionalProperties: false`. The key can only be authored here — claude-klabauter's `test_plan_schema_matches_doe_head_and_homes_grouping_approvals` is byte-parity against DoE HEAD with no tolerance escape, so their tree structurally cannot originate it. HOLDING, and stacked on 2.10.0's hold: nested-field-additive is unconditionally holding on the x-schema-version axis (docs/wiki/schema-version-gate.md) — merge-to-main and production emit are held until claude-klabauter re-vendors. Their re-vendor is requested and awaited (cross-repo/inbox/2026-08-29-claude-klabauter-em-dr-183-correction-claude-klabauter-is-not-blocked.md). PRIOR: 2.9.0 -> 2.10.0 adds top-level `gated_exit_criteria`: the fleet brightlines as a machine-readable, enum-constrained list on the plan artifact, replacing their prior sole existence as prose in `coordinator/skills/workstream-complete/SKILL.md`. `met` is flipped on the existing `exit_criterion_met` close-out path -- deliberately no second enforcement path. top-level-array-additive: a plan omitting the key still validates, so no existing plan is invalidated; what changes is that a plan CARRYING the key is now validated rather than free-text. HOLDING, and stacked on 2.9.0's unreleased hold -- but for its own reason, not 2.9.0's: unconditional x-schema-version holding is scoped to nested-field-additive/enum-value-additive/major, NOT to top-level-array-additive, which is non-holding only where a declared-tolerant consumer set exists. No structural or version-envelope tolerance is declared for claude-klabauter's vendored copy, so this reverts to bilateral sequencing and holds anyway (docs/wiki/schema-version-gate.md) -- merge-to-main and production emit are held until claude-klabauter re-vendors or confirms plan.schema.json is not in their mirrored set. 2.9.0's notification (cross-repo/inbox/2026-08-27-doe-claude-em-plan-schema-2-9-0-nested-field-additive) is unanswered; 2.10.0 owes its own. PRIOR: 2.8.0 -> 2.9.0 defines the falsifier promotion fields execute-plan § Phase 4 already instructs an EM to write: `promoted_to` (the test path a graduated falsifier becomes a regression pin at), or `promotion: not-applicable` with a `promotion_reason`. The falsifier object is `additionalProperties: false`, so a plan recording either shape failed validation against 2.8.0. The two branches are mutually exclusive and `promotion_reason` is dependent-required on `promotion`; promotability stays a record, never a gate on the stamp. HOLDING: nested-field-additive is unconditionally holding on the x-schema-version axis (docs/wiki/schema-version-gate.md) -- merge-to-main and production emit are held until claude-klabauter re-vendors or confirms plan.schema.json is not in their mirrored set. Notified 2026-08-27: cross-repo/inbox/2026-08-27-doe-claude-em-plan-schema-2-9-0-nested-field-additive.md.",
   "applies_to": "docs/plans/*.md",
   "description": "Plan frontmatter schema. The active-execution value is 'executing', NOT the intuitive 'execution'. 'implemented' means work is done on the working branch — whether it merged to main is tracked in completion log + handoff deployment_state, NOT here.",
   "type": "object",
-  "required": ["title", "created", "author", "status"],
+  "required": [
+    "title",
+    "created",
+    "author",
+    "status"
+  ],
   "properties": {
     "title": {
       "type": "string",
@@ -25,7 +30,17 @@
     },
     "status": {
       "type": "string",
-      "enum": ["draft", "reviewed", "approved", "executing", "landed", "implemented", "deferred", "abandoned", "superseded"],
+      "enum": [
+        "draft",
+        "reviewed",
+        "approved",
+        "executing",
+        "landed",
+        "implemented",
+        "deferred",
+        "abandoned",
+        "superseded"
+      ],
       "description": "Lifecycle state. Common slip: active-execution value is 'executing', NOT 'execution'. 'landed' sits between 'executing' and 'implemented': every chunk's code is on the branch, but not every spine row has reached a disposition yet. It is NOT terminal — a plan in 'landed' still has outstanding row-level work to close out before it can move to 'implemented'."
     },
     "branch": {
@@ -54,8 +69,12 @@
     },
     "predecessor_handoff": {
       "anyOf": [
-        { "type": "string" },
-        { "type": "null" }
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
       ],
       "description": "The handoff that spawned this plan (distinct from parent_plan). Nullable, for the same reason sizing_object is: an explicit null is the sanctioned 'this plan has no resolvable predecessor handoff' answer — a forced declaration rather than an omission, which is what makes the absence checkable. Written with an inline reason naming why (target never authored, or archived-then-pruned). 42 rows were set this way on 2026-08-14; the disposition ledger is state/audits/2026-08-13-predecessor-handoff-fk-disposition.md. A non-null value is expected to resolve on disk, literally or archive-relative — the FK is archive-agnostic by design and readers resolve archive-relative (docs/decisions/DR-159-predecessor-handoff-fk-is-archive-agnostic-by-design.md), so a value resolving only under archive/ is correct, not broken. Referential integrity is enforced by coordinator/tests/test_archive_handoff_referrer_guard.py."
     },
@@ -65,25 +84,49 @@
     },
     "source_memo": {
       "anyOf": [
-        { "type": "string" },
-        { "type": "array", "items": { "type": "string" } }
+        {
+          "type": "string"
+        },
+        {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
       ],
       "description": "Cross-repo memo(s) that initiated this plan. May be a single path or a list."
     },
     "scope": {
       "anyOf": [
-        { "type": "string" },
-        { "type": "array", "items": { "type": "string" } }
+        {
+          "type": "string"
+        },
+        {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
       ],
       "description": "In-scope items for this plan (list-of-string preferred; legacy string values accepted)."
     },
     "agent_sessions": {
       "type": "array",
-      "items": { "type": "string" },
+      "items": {
+        "type": "string"
+      },
       "description": "Sessions that executed this plan. Runtime-appended by append-plan-session.sh after a successful plan claim (execute-plan Phase 1.5 Step 0); NOT scaffolded onto new plans. Each entry is the encoded string \"<session_id>|<status>|<created_at>\": session_id is UUID-shaped (contains no '|'); status is an OPEN string ('working' at the Phase-0 fire point, not a closed enum); created_at is ISO-8601 UTC. All three fields are non-empty at write time — consumers must NOT use `IFS='|' read -ra` if a future field could be empty (read -ra silently drops trailing empty fields). Append-only: never rewrite or reorder peer entries."
     },
     "deliverable_id": {
-      "anyOf": [{"type": "string", "pattern": "^dlv-(?!placeholder-replace-with)[0-9a-zA-Z][0-9a-zA-Z.-]*$"}, {"type": "null"}],
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^dlv-(?!placeholder-replace-with)[0-9a-zA-Z][0-9a-zA-Z.-]*$"
+        },
+        {
+          "type": "null"
+        }
+      ],
       "description": "Durable deliverable join key. Minted once at the earliest artifact and carried verbatim by every downstream artifact. dlv-<stub_id> for roadmap-stub origins; dlv-<slug>-<6hex> for standalone plan origins. Cross-field rule enforces 'dlv-' prefix when non-null. Null for pre-backfill plans. Spec backlink: claude-klabauter:pln-fleet-deliverable-spine-identity-and-facets-2b331c § D1"
     },
     "sizing_object": {
@@ -99,40 +142,98 @@
       "description": "FK to the sizing-object (state/sizings/<id>.yaml) that routed this plan through coordinator:sizing. Optional and nullable in this schema; the requirement is enforced READ-SIDE in claude-klabauter (coordinator_core/ops/assert_plan_sizing_citation.py), never here. A plan created on/after 2026-08-06 must carry EITHER a resolving state/sizings/<id>.yaml path OR an explicit null — explicit null is the sanctioned 'no sizing object' answer, a forced declaration rather than a bypass, which is what makes the absence checkable at all. Plans created before that cutoff are permanently exempt and must NOT be backfilled: the large majority of the on-disk corpus predates the convention, and requiring it of them would invalidate the corpus. When present, the referenced file is expected to resolve on disk. Frontmatter-only: this field is never read from plan BODY prose, and no check compares its value against the plan's problem restatement — a body-scanning or intent-matching variant is out of scope by design (it fires on a plan that legitimately documents an absent or reworded citation). Bilaterally mirrored with claude-klabauter's vendored copy; originating request: state/memo-outbox/sent/plan-sizing-citation-unenforced-at-write-time.md."
     },
     "plan_id": {
-      "anyOf": [{"type": "string"}, {"type": "null"}],
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
       "description": "Stable non-path plan identity (pln-<slug>-<6hex>). Minted by coordinator-doc-new at plan creation time. Allows the board to join on a stable key independent of file path/rename. Distinct from deliverable_id (which spans the full deliverable chain). Spec backlink: claude-klabauter:pln-fleet-deliverable-spine-identity-and-facets-2b331c § D3"
     },
     "initiative": {
-      "anyOf": [{"type": "string"}, {"type": "null"}],
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
       "description": "FK to the initiative entity (state/initiatives/<id>.yaml). Nullable — not all work belongs to a named initiative. Cross-field rule enforces non-empty string when non-null. Spec backlink: claude-klabauter:pln-fleet-deliverable-spine-identity-and-facets-2b331c § D2"
     },
     "caption": {
-      "anyOf": [{"type": "string"}, {"type": "null"}],
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
       "description": "One-sentence business-legible outcome line. NOT an engineering title or filename — authored for CEO-board legibility. Optional; authored at creation time."
     },
     "status_reason": {
-      "anyOf": [{"type": "string"}, {"type": "null"}],
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
       "description": "Free-text one-liner explaining the current plan status (e.g. 'deferred — blocked on cockpit reader-first gate'). Optional authored field; carried into the cockpit emission as a product-legibility facet."
     },
     "owner": {
-      "anyOf": [{"type": "string"}, {"type": "null"}],
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
       "description": "Authoring workstream or EM identifier. Nullable; carried forward from the earliest artifact for the deliverable."
     },
     "suggested_priority": {
-      "enum": ["urgent", "high", "medium", "low"],
+      "enum": [
+        "urgent",
+        "high",
+        "medium",
+        "low"
+      ],
       "description": "Advisory execution-priority signal an EM may attach to this plan at authoring time. Optional (not nullable — absence already covers 'no suggestion'; a redundant null representation was reviewed out, see Finding 4 / review-integrator). Enum is the priority-ledger domain (priority-ledger.schema.json's urgent|high|medium|low|none) MINUS 'none' — an EM has no reason to author an explicit clear; absence of the field already covers that case. Advisory only: the PM-owned priority ledger (state/priority-ledger/) is the authoritative tier and lives on a deliberately separate surface — this field never overrides it, and that separation (not memory) is what keeps 'advisory never overrides authoritative' structural. Do NOT add a pm_priority field to this frontmatter to compensate; the tier split is the point. NEGATIVE-SPEC: no inherited_from / priority_predecessor field is permitted on this frontmatter either — priority does not chain plan-to-plan. No backfill of pre-existing plans, consistent with the handoff schema's origin_* no-backfill policy."
     },
     "provisional_until": {
-      "anyOf": [{ "type": "string", "format": "date" }, { "type": "null" }],
+      "anyOf": [
+        {
+          "type": "string",
+          "format": "date"
+        },
+        {
+          "type": "null"
+        }
+      ],
       "description": "Expiry date (YYYY-MM-DD) for a decision this plan stages but does not yet execute — e.g. a ratification, a second stage of a two-stage rollout, or a hold pending a future condition. `revisit_by` is an accepted synonym key (same semantics, same format); a plan carries one or the other, never both. Read by the outstanding-provisional-decisions ceremony check (`coordinator/docs/wiki/provisional-decision-expiry.md`) against every non-terminal-status plan (`status` not in implemented/deferred/abandoned/superseded) — a date on or before today with the plan still non-terminal is surfaced as expired. Motivating case: the 2026-07-13 adopt spec's stage-2 ratification sat unexecuted for 13 days with nothing tracking that it was owed (archive/specs/2026-07/2026-07-13-doe-auto-reconcile-adopt.md). Optional; null/absent for plans that stage no provisional decision. Spec backlink: pln-push-side-write-discipline-for-05c30d § D1b."
     },
     "revisit_by": {
-      "anyOf": [{ "type": "string", "format": "date" }, { "type": "null" }],
+      "anyOf": [
+        {
+          "type": "string",
+          "format": "date"
+        },
+        {
+          "type": "null"
+        }
+      ],
       "description": "Synonym key for `provisional_until` — same semantics, same format, same consumer. Use whichever name reads more naturally at the call site (`revisit_by` for a park_note-style hold; `provisional_until` for a staged-decision expiry); a plan sets at most one of the two. See `provisional_until` for the full description."
     },
     "tasks": {
       "type": "array",
-      "items": { "$ref": "https://coordinator.local/schemas/plan-tasks.schema.json" },
+      "items": {
+        "$ref": "https://coordinator.local/schemas/plan-tasks.schema.json"
+      },
       "description": "NOT a frontmatter key — the ## Tasks task-spine lives BODY-RESIDENT in a single fenced ```yaml plan-tasks``` code block directly under the ## Tasks heading (parser-locate rule: exactly one such block; zero or >1 is a defined error). This 'tasks' property exists to WIRE the per-row shape (schemas/plan-tasks.schema.json) into the plan schema family for validators that parse the fenced block's YAML list and want the item schema, per the canonical body-resident-machine-block pattern (docs/wiki/canonical-artifact-shapes.md § Addressable-Section Convention, rule 4 — cf. the ## Session Ledger precedent in handoffs). Full authoring contract: docs/wiki/writing-plans.md § Machine-Parseable Task Spine. Spec backlink: pln-full-coverage-planning-posture-bca96f § C1."
     },
     "execution_authorized_by": {
@@ -166,7 +267,9 @@
     },
     "review_signals": {
       "type": "array",
-      "items": { "type": "string" },
+      "items": {
+        "type": "string"
+      },
       "uniqueItems": true,
       "description": "Selects which reviewers this plan needs, forward — distinct from `reviewer`, which records who already approved it, backward. Values are not enumerated here by design — the vocabulary is `coordinator/contract/review-signals.json`, and membership is enforced by the contract's parity test plus the frontmatter write guard where a coordinator engine is installed."
     },
@@ -185,7 +288,10 @@
     "prime_exit_criterion": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["statement", "derived_from"],
+      "required": [
+        "statement",
+        "derived_from"
+      ],
       "description": "The plan-level falsifiable exit criterion — 'what is true of the tree when this plan has delivered', outcome-shaped per goal.schema.json's vocabulary. Deliberately NO `source`/provenance enum: a self-declared provenance flag is the unfalsifiable shape this plan (pln-plan-goal-as-a-first-class-exit-criterion) exists to remove. Provenance is instead `derived_from`, a LINK a reader can open and compare against, never an assertion. PROPORTIONALITY (enforced READ-SIDE, the same locus as `sizing_object`'s own cross-document requirement, never structurally in this file because `estimate.tshirt` lives in the external sizing-object document, not here): `falsifier` is REQUIRED only when the plan's `sizing_object` resolves to `estimate.tshirt` M/L/XL. At size S (spec-dispatch posture) a plan carries `statement`+`derived_from` only, no falsifier. XS never scaffolds a plan at all, so this object never appears. XXL routes to prime-exit-criterion-setting/roadmap, not a single plan; its obligation is discharged per-child-plan. The size carve-out keys ONLY on `estimate.tshirt` through `sizing_object` — never on an EM-set field, and never on plain field optionality: the shape below still marks `falsifier` absent from THIS object's own `required` array (JSON Schema cannot condition on a sibling document's content), but a plan sized M+ with no `falsifier` and no `falsifier_exemption` fails the read-side check even though it validates here. Do not read the schema-level optionality as the plan's own gate.",
       "properties": {
         "statement": {
@@ -200,11 +306,23 @@
         "falsifier": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["how", "baseline_output", "baseline_ref", "expected_when_true"],
+          "required": [
+            "how",
+            "baseline_output",
+            "baseline_ref",
+            "expected_when_true"
+          ],
           "dependentRequired": {
-            "promotion": ["promotion_reason"]
+            "promotion": [
+              "promotion_reason"
+            ]
           },
-          "not": {"required": ["promoted_to", "promotion"]},
+          "not": {
+            "required": [
+              "promoted_to",
+              "promotion"
+            ]
+          },
           "description": "The plan-time-authored observation distinguishing the prime exit criterion being true from false, with its baseline captured BEFORE any work — authored by someone with no stake yet in the answer. This is NOT a typed cell and is NOT bound to the AC table: it is one observation per plan, EM-chosen free form (a command, a query, a measurement, a named manual observation), judged by a human reading the re-run against a stated pass condition, never a script's exit code or a `grep:`/`pytest:`/`sh:` typed cell. It is NOT the retired acceptance oracle: it is categorically different on five axes (cardinality, typing, chooser, judge, target artifact); see `docs/wiki/coordinator-tripwires/tripwire-registry/acceptance-oracle-gate-retired.md` for the retired mechanism this must not be reshaped back into, and do not 'improve' this field into a typed cell or delete it as a revival of that retirement. Mutually exclusive with `falsifier_exemption` — a prime exit criterion carries at most one of the two.",
           "properties": {
             "how": {
@@ -244,7 +362,10 @@
         "falsifier_exemption": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["class", "admission"],
+          "required": [
+            "class",
+            "admission"
+          ],
           "description": "The NAMED escape hatch for an M+ prime exit criterion genuinely un-falsifiable-by-observation — pure doctrine/schema edits where 'run it and watch it fail' is contrived (this plan is itself in that class; see its own § This plan's own falsifier). Distinct from, and never a substitute for, the size carve-out: the size carve-out is a rule about which PLANS the instrument suits (keyed on `estimate.tshirt`), this is a rule about which M+ CRITERIA resist any instrument, and the two do not merge — a plan cannot claim exemption from `falsifier` by pointing at its size, nor claim the size carve-out by pointing at this exemption. NEVER `falsifier: optional`: this object exists precisely so optionality is never reopened as the way out. Mutually exclusive with `falsifier`.",
           "properties": {
             "class": {
@@ -260,7 +381,10 @@
         }
       },
       "not": {
-        "required": ["falsifier", "falsifier_exemption"]
+        "required": [
+          "falsifier",
+          "falsifier_exemption"
+        ]
       }
     },
     "gated_exit_criteria": {
@@ -268,15 +392,63 @@
       "description": "The fleet brightlines, discharged as a machine-readable field on the plan artifact the executor holds rather than remembered from a doctrine page. Scaffolded in full by `coordinator/templates/plans/plan.md.tmpl`; a row is never deleted because it seems inapplicable, its `statement` is narrowed instead. Deliberately NOT a repeated `prime_exit_criterion`-shaped object: a full falsifier per brightline is per-item spawn amplification for a check that is almost always a direct read, so this stays a light three-field row and `prime_exit_criterion.falsifier` stays the one-per-plan heavy instrument. Deliberately NOT an `## Acceptance Criteria` table row either — that table is optional, reviewer-facing prose and is never mechanically gated, so a brightline landed there would be present but not gated, which is the exact failure this field exists to close.",
       "minItems": 1,
       "allOf": [
-        { "contains": { "properties": { "brightline": { "const": "work-proportionate-to-question" } }, "required": ["brightline"] } },
-        { "contains": { "properties": { "brightline": { "const": "multi-os-first-class" } }, "required": ["brightline"] } },
-        { "contains": { "properties": { "brightline": { "const": "no-single-machine-assumptions" } }, "required": ["brightline"] } },
-        { "contains": { "properties": { "brightline": { "const": "work-vs-question-ratio" } }, "required": ["brightline"] } }
+        {
+          "contains": {
+            "properties": {
+              "brightline": {
+                "const": "work-proportionate-to-question"
+              }
+            },
+            "required": [
+              "brightline"
+            ]
+          }
+        },
+        {
+          "contains": {
+            "properties": {
+              "brightline": {
+                "const": "multi-os-first-class"
+              }
+            },
+            "required": [
+              "brightline"
+            ]
+          }
+        },
+        {
+          "contains": {
+            "properties": {
+              "brightline": {
+                "const": "no-single-machine-assumptions"
+              }
+            },
+            "required": [
+              "brightline"
+            ]
+          }
+        },
+        {
+          "contains": {
+            "properties": {
+              "brightline": {
+                "const": "work-vs-question-ratio"
+              }
+            },
+            "required": [
+              "brightline"
+            ]
+          }
+        }
       ],
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["brightline", "statement", "met"],
+        "required": [
+          "brightline",
+          "statement",
+          "met"
+        ],
         "properties": {
           "brightline": {
             "type": "string",
@@ -303,7 +475,9 @@
     "exit_criterion_met": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["asserted"],
+      "required": [
+        "asserted"
+      ],
       "description": "Written once, at close-out, by the EM — the assertion half of the prime-exit-criterion pair. `asserted: false` is a legitimate, first-class outcome (the plan is Phase-5-halted, not `implemented`); what is forbidden is the field's absence. Not bound to the AC table — see `prime_exit_criterion.falsifier`'s description for the acceptance-oracle distinction, which applies identically here.",
       "properties": {
         "asserted": {
@@ -325,7 +499,10 @@
         },
         "falsifier_verdict": {
           "type": "string",
-          "enum": ["pass", "fail"],
+          "enum": [
+            "pass",
+            "fail"
+          ],
           "description": "The re-run's verdict: whether `falsifier_output` matches `prime_exit_criterion.falsifier.expected_when_true`. The gate refuses the stamp unless this is `pass`. Written beside `falsifier_output`, never inferred by a downstream reader from the raw output alone."
         },
         "prose": {
@@ -335,16 +512,40 @@
         "reason": {
           "type": "string",
           "description": "REQUIRED when `asserted: false`. What is not true of HEAD yet, and where the remainder is routed."
+        },
+        "promotion": {
+          "type": "string",
+          "enum": [
+            "not-applicable",
+            "partial"
+          ],
+          "description": "Whether the falsifier (`prime_exit_criterion.falsifier`) graduated into the standing test suite at close-out. NOT A SECOND HOME for `prime_exit_criterion.falsifier.promotion` -- that field is a PLAN-TIME up-front declaration (const \"not-applicable\" only, authored before the work exists, for a falsifier known in advance to resist graduation), while this field is the CLOSE-OUT record of what actually happened, which can only be known after execution and is why \"partial\" exists only here. Same plan-time/close-out pairing this schema already uses for `falsifier.how`/`exit_criterion_met.falsifier_output` and `falsifier.expected_when_true`/`exit_criterion_met.falsifier_verdict` -- one field authored before the work, its paired field recording the outcome after. NEGATIVE-SPEC: records the falsifier's fate, never the plan's own status -- `asserted` remains the sole authority on whether the exit criterion was met. \"not-applicable\" is the falsifier staying a standalone re-run, never entering the suite; \"partial\" is some but not all of it graduating. Held to the observed vocabulary only -- do not widen this enum on spec; a plan whose falsifier promoted in full has no attested value here yet."
+        },
+        "promotion_reason": {
+          "type": "string",
+          "description": "Why the falsifier was or was not promoted into the standing suite — what graduated, what didn't, and why. Paired with `promotion`; free text rather than enumerated because the reasoning is the point."
+        },
+        "promoted_to": {
+          "type": "string",
+          "description": "The test path the falsifier (or the promoted portion of it) graduated into, when `promotion` is \"partial\". A path, not a description -- PAIRS WITH, never duplicates, `prime_exit_criterion.falsifier.promoted_to`: the falsifier-side field records a full a-priori graduation target chosen at plan-write time (before the work exists), this field records the actual close-out outcome, which may differ or may not be knowable until the falsifier is re-run. See `promotion`'s description for the plan-time/close-out pairing pattern this follows."
         }
       },
       "allOf": [
         {
           "if": {
-            "properties": { "asserted": { "const": false } },
-            "required": ["asserted"]
+            "properties": {
+              "asserted": {
+                "const": false
+              }
+            },
+            "required": [
+              "asserted"
+            ]
           },
           "then": {
-            "required": ["reason"]
+            "required": [
+              "reason"
+            ]
           }
         }
       ]
@@ -352,11 +553,20 @@
     "grouping_approvals": {
       "type": "object",
       "additionalProperties": false,
-      "description": "$comment: BLOCK PRESENCE IS THE WHOLE GOVERNED/LEGACY DISCRIMINATOR. A plan's frontmatter carrying this key at all makes the plan GOVERNED; a plan with no such key is LEGACY and keeps the existing per-row `pm_approved` gate unchanged. There is deliberately NO schema_version conjunct anywhere in this discriminator — do not add one. Presence-only is not taken bare, though: a GOVERNED plan whose `grouping_approvals` block is malformed, or that lacks the grouping a closed row needs, FAILS LOUD (schema violation here, plus the hard authorization check in schema_validate.py's check_plan_tasks_grouping_approval) — it does NOT silently degrade to legacy treatment. `additionalProperties: false` and `required: [\"status\"]` on each block (below) are what make a malformed block a structural violation rather than something that reads as merely absent. Groupings are DERIVED from each task-spine row's `disposition` and never stored separately: do <- open/coded; spun_off <- spun_off; defer <- backlogged; ruled_out <- wont_do. `spun_off` was split out of `defer` and relaxed by DoE's five-exits ruling (state/memo-outbox/sent/plan-tasks-five-exits-ruling.md, landed in claude-klabauter at f55daf8b9): moving a row to another plan drops no work, so it needs no PM ratification, while `backlogged` and `wont_do` do drop work and stay PM-gated. Plan-level approval is the SUM of the block statuses, COMPUTED at read time — never stored as a fourth rollup field (a stored rollup would be a second home for a derivable truth, and the two would drift). Mirrors claude-klabauter's vendored shape in coordinator_core/frontmatter/schemas/plan-tasks.schema.json (`$defs.grouping_approval_block`) — do not diverge from that spelling. Spec backlink: pln-pm-approved-gets-falsifiable-p-00737d § C1.",
+      "description": "$comment: BLOCK PRESENCE IS THE WHOLE GOVERNED/LEGACY DISCRIMINATOR. A plan's frontmatter carrying this key at all makes the plan GOVERNED; a plan with no such key is LEGACY and keeps the existing per-row `pm_approved` gate unchanged. There is deliberately NO schema_version conjunct anywhere in this discriminator — do not add one. Presence-only is not taken bare, though: a GOVERNED plan whose `grouping_approvals` block is malformed, or that lacks the grouping a closed row needs, FAILS LOUD (schema violation here, plus the hard authorization check in schema_validate.py's check_plan_tasks_grouping_approval) — it does NOT silently degrade to legacy treatment. `additionalProperties: false` and `required: [\"status\"]` on each block (below) are what make a malformed block a structural violation rather than something that reads as merely absent. Groupings are DERIVED from each task-spine row's `disposition` and never stored separately: do <- open/coded; spun_off <- spun_off; defer <- backlogged; ruled_out <- wont_do. Every grouping except `do` is PM-gated: `spun_off`, `defer` and `ruled_out` each need an approved block before their rows may close. NOT-YET-ENFORCED-FOR-`spun_off`: this key is declarable here, but the authorization predicate that reads it (claude-klabauter's `check_plan_tasks_grouping_approval`) does not scan `spun_off` until claude-klabauter re-vendors this file and widens its GOVERNED-leg set. Until then a `spun_off` row on a governed plan still closes with no PM turn -- declare the block, do not assume the gate. Moving a row to another plan is ratified like dropping one, because nothing leaving the corpus is not the same as nothing leaving the plan — a row spun off on the EM's own say-so lets a plan close having shipped less than it committed to, with no PM turn anywhere in the sequence. What differs between them is the ARGUMENT required, not the assent: `case_against` is asked only of `backlogged`/`wont_do`, which drop work outright; approving a move and arguing against a drop are different asks. Plan-level approval is the SUM of the block statuses, COMPUTED at read time — never stored as a fourth rollup field (a stored rollup would be a second home for a derivable truth, and the two would drift). Mirrors claude-klabauter's vendored shape in coordinator_core/frontmatter/schemas/plan-tasks.schema.json (`$defs.grouping_approval_block`) — do not diverge from that spelling. Spec backlink: pln-pm-approved-gets-falsifiable-p-00737d § C1.",
       "properties": {
-        "do": { "$ref": "#/$defs/grouping_approval_block" },
-        "defer": { "$ref": "#/$defs/grouping_approval_block" },
-        "ruled_out": { "$ref": "#/$defs/grouping_approval_block" }
+        "do": {
+          "$ref": "#/$defs/grouping_approval_block"
+        },
+        "spun_off": {
+          "$ref": "#/$defs/grouping_approval_block"
+        },
+        "defer": {
+          "$ref": "#/$defs/grouping_approval_block"
+        },
+        "ruled_out": {
+          "$ref": "#/$defs/grouping_approval_block"
+        }
       }
     }
   },
@@ -364,29 +574,46 @@
     "grouping_approval_block": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["status"],
-      "description": "One grouping_approvals grouping's approval state (do | defer | ruled_out). `pending` is the default, unapproved state. `approved` requires a non-empty `pm_utterance` (the PM's verbatim reasoning — testimonial, never backfilled/inferred) and a `digest` matching `sha256:<hex>` (a fresh recomputation over the CURRENT spine membership for this grouping — see schema_validate.py's compute_grouping_digest for the exact recipe). The `sha256:` prefix is load-bearing, never bare 40-hex hash: a membership digest names nothing in any git object store, so a bare-hex value would look like (and invite confusion with) a git object id, when the only valid operation on it is recompute-and-compare. `additionalProperties: false` plus `required: [\"status\"]` mean an unrecognized key or a missing `status` is a schema violation, not something that silently reads as an absent/legacy block.",
+      "required": [
+        "status"
+      ],
+      "description": "One grouping_approvals grouping's approval state (do | spun_off | defer | ruled_out). `pending` is the default, unapproved state. `approved` requires a non-empty `pm_utterance` (the PM's verbatim reasoning — testimonial, never backfilled/inferred) and a `digest` matching `sha256:<hex>` (a fresh recomputation over the CURRENT spine membership for this grouping — see schema_validate.py's compute_grouping_digest for the exact recipe). The `sha256:` prefix is load-bearing, never bare 40-hex hash: a membership digest names nothing in any git object store, so a bare-hex value would look like (and invite confusion with) a git object id, when the only valid operation on it is recompute-and-compare. `additionalProperties: false` plus `required: [\"status\"]` mean an unrecognized key or a missing `status` is a schema violation, not something that silently reads as an absent/legacy block.",
       "properties": {
         "status": {
           "type": "string",
-          "enum": ["pending", "approved"],
+          "enum": [
+            "pending",
+            "approved"
+          ],
           "default": "pending"
         },
         "approver": {
-          "type": ["string", "null"],
+          "type": [
+            "string",
+            "null"
+          ],
           "description": "Who approved this grouping (PM identity/handle). Null while pending."
         },
         "approved_at": {
-          "type": ["string", "null"],
+          "type": [
+            "string",
+            "null"
+          ],
           "format": "date",
           "description": "Date this grouping was approved (YYYY-MM-DD). Null while pending."
         },
         "pm_utterance": {
-          "type": ["string", "null"],
+          "type": [
+            "string",
+            "null"
+          ],
           "description": "The PM's verbatim reasoning for approving this grouping. REQUIRED non-empty when status: approved (see allOf below). Never synthesized or backfilled — a grouping's assent is testimonial, not mechanically derivable from disk state."
         },
         "digest": {
-          "type": ["string", "null"],
+          "type": [
+            "string",
+            "null"
+          ],
           "pattern": "^sha256:[0-9a-f]{64}$",
           "description": "sha256:<hex> membership digest over the sorted set of (row id, disposition) pairs for the rows currently in this grouping, and nothing else. REQUIRED when status: approved (see allOf below). Row order, row body prose, section rendering, other frontmatter fields, and whitespace/YAML-style differences are all NOT covered."
         }
@@ -395,11 +622,20 @@
         {
           "$comment": "Cross-field rule: status: approved requires non-empty pm_utterance and a well-formed digest. Presence-only / non-hard-failing at THIS schema layer — the hard truthiness/freshness check (does the digest match a FRESH recomputation? is pm_utterance non-empty, not just present?) is schema_validate.py's job (check_plan_tasks_grouping_approval), not this file's.",
           "if": {
-            "properties": { "status": { "const": "approved" } },
-            "required": ["status"]
+            "properties": {
+              "status": {
+                "const": "approved"
+              }
+            },
+            "required": [
+              "status"
+            ]
           },
           "then": {
-            "required": ["pm_utterance", "digest"]
+            "required": [
+              "pm_utterance",
+              "digest"
+            ]
           }
         }
       ]
@@ -408,18 +644,32 @@
   "allOf": [
     {
       "if": {
-        "required": ["provisional_until"],
+        "required": [
+          "provisional_until"
+        ],
         "properties": {
-          "provisional_until": { "not": { "type": "null" } }
+          "provisional_until": {
+            "not": {
+              "type": "null"
+            }
+          }
         }
       },
       "then": {
         "not": {
           "allOf": [
-            { "required": ["revisit_by"] },
+            {
+              "required": [
+                "revisit_by"
+              ]
+            },
             {
               "properties": {
-                "revisit_by": { "not": { "type": "null" } }
+                "revisit_by": {
+                  "not": {
+                    "type": "null"
+                  }
+                }
               }
             }
           ]

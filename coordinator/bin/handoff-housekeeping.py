@@ -136,7 +136,7 @@ def main(argv: "list[str] | None" = None) -> int:
             print(f"  {getattr(move, 'candidate_id', move)}")
         return 0
 
-    from coordinator_core.ops.handoff_housekeeping import _handler
+    from coordinator_core.housekeeping.cycle import _handler
 
     result = _handler({"cap": cap, "close": close}, common_dir)
 

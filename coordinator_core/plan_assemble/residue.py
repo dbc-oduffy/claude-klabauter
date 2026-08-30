@@ -50,16 +50,34 @@ a segment must additionally appear in. A segment's own frontmatter is its
 registration; this module discovers segments purely by listing the
 directory.
 
-`--route RESOLUTION CONTRACT` (implemented exactly, not improvised) — ONE
-step, not a ladder, and there is no inference of any kind:
-  1. `explicit_route` is `None`                    -> resolved_route =
-     `DEFAULT_ROUTE` (`"plan"`). Not an error, not a judgment point, not an
-     inference from any artifact — the caller simply did not narrow it.
+`--route RESOLUTION CONTRACT` (implemented exactly, not improvised). Still
+no INFERENCE of any kind — reading a route the sizing lobby wrote down is
+not inference, and amended 2026-08-30 so that step 1 stops defaulting past
+a stated fact:
+  1. `explicit_route` is `None` and a `sizing_object_path` states a `route:`
+     in `EXPLICIT_ROUTES`             -> resolved_route = that route.
+  1b. `explicit_route` is `None` and no object states a usable route
+                                       -> resolved_route = `DEFAULT_ROUTE`
+     (`"plan"`). Not an error, not a judgment point — the caller did not
+     narrow it and nothing on disk narrows it either. This is the ONLY
+     surviving default, and it is unreachable whenever 1 applies.
   2. `explicit_route` is one of `EXPLICIT_ROUTES`   -> resolved_route =
-     explicit_route.
+     explicit_route. An explicit flag ALWAYS wins over the object; what it
+     may not do is disagree silently — a disagreement is reported on stderr
+     and lands in `decisions.route_mismatch` (see `_route_from_sizing_
+     object` and `brief`).
   3. otherwise                                      -> `RouteUsageError`,
      raised BEFORE any disk access (content root, residue directory) is
-     touched.
+     touched — `_resolve_route` still runs first, so an out-of-enum value
+     never reaches the sizing read.
+
+WHY 1 CHANGED. `plan` as a blanket default silently outranked objects that
+had already resolved themselves to `spec-dispatch`, and the resulting
+`full_terminal` runs the Opus plan review the S lane exists to skip. The
+error ran one way only — toward the expensive terminal, on the surface whose
+purpose is to be cheap — and the caller was told `route: "plan"` as fact.
+The negative-spec below already asserted the principle ("the route is a fact
+the sizing lobby already resolved and wrote to disk"); step 1 now honours it.
 
 `gates` ASSEMBLY (chunk C13) — the wave-2 predicate producers this module
 composes, and where each namespace's rows land:
@@ -163,8 +181,11 @@ Spec backlink: pln-plan-assemble-admits-instead-o-e441e3, chunk C2
 """
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 from typing import Any, Optional, Union
+
+from coordinator_core.frontmatter.schema_validate import parse_yaml
 
 from coordinator_core.contract.decision_object.envelope import (
     build_envelope,
@@ -237,6 +258,42 @@ def _residue_dir(content_root: Path) -> Path:
     """Resolve the one true residue directory relative to *content_root*:
     ``<content-root>/skills/plan/residue``."""
     return content_root / _RESIDUE_SEGMENT_DIR
+
+
+def _route_from_sizing_object(
+    sizing_object_path: Optional[Union[str, Path]]
+) -> Optional[str]:
+    """The `route:` a sizing object states about itself, or `None`.
+
+    `None` covers every not-a-usable-answer case identically — no object
+    supplied, unreadable, unparseable, no `route:` key, or a value outside
+    `EXPLICIT_ROUTES` (`shape`/`roadmap`/`pm-decision` are legal sizing
+    routes but not legal residue routes, and must not be smuggled in here;
+    widening the residue route set is explicitly out of contract).
+
+    Best-effort and silent by construction: this only ever supplies a
+    DEFAULT, so a failure to read degrades to `DEFAULT_ROUTE` — the exact
+    pre-2026-08-30 behaviour — rather than failing a call that would
+    otherwise have succeeded. Parsing mirrors
+    `PredicateContext.from_paths`'s own sizing read (`parse_yaml`, dict-or-
+    nothing) rather than introducing a second parser for the same file.
+    """
+    if sizing_object_path is None:
+        return None
+    try:
+        text = Path(sizing_object_path).read_text(encoding="utf-8")
+    except OSError:
+        return None
+    try:
+        parsed = parse_yaml(text)
+    except Exception:
+        return None
+    if not isinstance(parsed, dict):
+        return None
+    candidate = parsed.get("route")
+    if isinstance(candidate, str) and candidate in EXPLICIT_ROUTES:
+        return candidate
+    return None
 
 
 def _resolve_route(explicit_route: Optional[str]) -> str:
@@ -576,6 +633,43 @@ def brief(
     """
     resolved_route = _resolve_route(explicit_route)
 
+    # THE OBJECT KNOWS ITS OWN ROUTE (2026-08-30). The contract's step 1 —
+    # absent `--route` resolves to `DEFAULT_ROUTE` — was written for a call
+    # with no sizing object in hand, and this module's own negative-spec
+    # already states the principle it violated: "the route is a fact the
+    # sizing lobby already resolved and wrote to disk, not one this module
+    # infers". Reading that fact is not inference; defaulting past it was.
+    #
+    # The cost of the silent default runs one way only. A `spec-dispatch`
+    # object silently resolved to `plan` gets `full_terminal` and the Opus
+    # plan review the S lane exists to skip — the expensive direction, on a
+    # surface whose whole purpose is to be cheap. Measured (DoE, 2026-08-30):
+    # `brief --sizing-object <spec-dispatch object>` returned
+    # `artifact.route: "plan"`, `terminal_table.result: "full_terminal"`;
+    # passing `--route spec-dispatch` by hand returned `light_terminal`.
+    #
+    # An EXPLICIT `--route` still wins — a caller may deliberately override,
+    # and that is step 2 of the contract, untouched. What it may no longer do
+    # is disagree silently: the mismatch lands in `decisions` and on stderr.
+    # Step 3 (an out-of-enum explicit value) is likewise untouched, and still
+    # raises before any disk access, because `_resolve_route` runs first.
+    object_route = _route_from_sizing_object(sizing_object_path)
+    route_mismatch: Optional[dict[str, str]] = None
+    if object_route is not None:
+        if explicit_route is None:
+            resolved_route = object_route
+        elif object_route != resolved_route:
+            route_mismatch = {
+                "sizing_object_route": object_route,
+                "explicit_route": resolved_route,
+            }
+            print(
+                f"plan-assemble residue: --route {resolved_route!r} disagrees "
+                f"with the sizing object's own route {object_route!r} "
+                f"({sizing_object_path}); honouring the explicit flag",
+                file=sys.stderr,
+            )
+
     # Predicates were requested when either path is supplied — this is the
     # ONLY thing that decides whether a zero-segment/missing-directory
     # condition fail-louds (wave-1 shape) or is reported in-band (wave-2
@@ -644,6 +738,8 @@ def brief(
     decisions: dict[str, Any] = {
         "residue_dir": residue_dir.relative_to(content_root).as_posix()
     }
+    if route_mismatch is not None:
+        decisions["route_mismatch"] = route_mismatch
     if residue_error is not None:
         decisions["residue_unavailable"] = str(residue_error)
         narration = (

@@ -28,10 +28,21 @@ fails outright, which is the whole argument upstream's #7280 already made.
 Usage:
     check-doctrine-citations.py --corpus <dir> [--corpus <dir> ...]
         [--tree NAME=PATH ...] [--no-default-trees]
+        [--consumer-root PATH] [--plugin-root PATH]
 
 Exit 0: every citation found resolved to exactly one tree (or none were
   found). Exit 1: at least one citation is unresolvable or ambiguous — every
   offending citation is named, once, with its source file and the reason.
+
+`--consumer-root PATH` answers the question this tool exists for: not
+"does this citation resolve given the whole map" but "does it resolve from
+where the agent actually stands." A citation is reported dead-from-consumer
+when its literal text (prefix + core path) does not exist under PATH, but
+DOES exist in a DoE tree — the 21-across-11-unique-paths bucket the spike
+measured, and the list C4's memo carries downstream.
+
+`--plugin-root PATH` overrides the `plugin_root` default tree entry, which a
+`${CLAUDE_PLUGIN_ROOT}/`-anchored citation resolves against.
 
 Illustrative forms (a glob metacharacter, a `{...}` template slot, a literal
 `YYYY-MM-DD-` or `path/to/` segment, or an `<...>` angle placeholder) are
@@ -41,22 +52,6 @@ these out for the same reason: folding them into the dangling bucket
 inflated it by ~40%, and at that false-positive rate the lint gets
 suppressed rather than trusted. Excluded citations are counted and reported
 in the summary line so the exclusion stays visible.
-
-`--consumer-root PATH` answers the question this tool exists for: not
-"does this citation resolve given the whole map" but "does it resolve from
-where the agent actually stands." A citation is reported dead-from-consumer
-when its literal text (prefix + core path) does not exist under PATH, but
-DOES exist in a DoE tree — the 21-across-11-unique-paths bucket the spike
-measured, and the list C4's memo carries downstream.
-
-Usage:
-    check-doctrine-citations.py --corpus <dir> [--corpus <dir> ...]
-        [--tree NAME=PATH ...] [--no-default-trees]
-        [--consumer-root PATH]
-
-Exit 0: every citation found resolved to exactly one tree (or none were
-  found). Exit 1: at least one citation is unresolvable or ambiguous — every
-  offending citation is named, once, with its source file and the reason.
 
 Negative-spec: does NOT spawn a subprocess per citation or per file (a single
 `os.walk` + in-process regex scan of the corpus, and at most one
@@ -74,15 +69,23 @@ non-zero exit, even with zero citation findings, rather than degrading to a
 false-clean scan of whatever trees happened to resolve. Does NOT perform a
 real filesystem `..` traversal when checking a `../../`-prefixed citation
 against `--consumer-root` (P-nit fix) — such a citation always falls
-through to the DoE-tree check instead of an unsafe path join.
+through to the DoE-tree check instead of an unsafe path join. Does NOT scan
+`tests/fixtures/` directories (an artifact read as an oracle, not a
+doctrine citation a session is meant to follow) or any file other than
+`*.md`/`*.template` — narrower than a bare `*` glob, wide enough to catch
+every markdown-shaped template file.
 
-Anchoring supersedes existence (2026-08-29 correction): the rule worth
-enforcing is not "does this bare `docs/...` citation happen to resolve" but
-"is this citation anchored at all". A citation with NO explicit root anchor
-(`_CITATION_RE`'s `prefix` group empty) is reported `unanchored` — the
-PRIMARY finding class — regardless of whether it resolves uniquely on the
-machine running the lint; eight filenames now collide between DoE's tree and
-Claude-klabauter's own (`baton-lifecycle.md`, `cockpit-contract.md`, `code-review.md`,
+A dated incident narrative belongs in the commit message. The docstring
+carries the invariant the incident established, and names the commit only
+where a reader would otherwise re-litigate the decision.
+
+Anchoring supersedes existence: the rule worth enforcing is not "does this
+bare `docs/...` citation happen to resolve" but "is this citation anchored
+at all". A citation with NO explicit root anchor (`_CITATION_RE`'s `prefix`
+group empty) is reported `unanchored` — the PRIMARY finding class —
+regardless of whether it resolves uniquely on the machine running the lint;
+eight filenames now collide between DoE's tree and claude-klabauter's own
+(`baton-lifecycle.md`, `cockpit-contract.md`, `code-review.md`,
 `cross-repo.md`, `guard-messaging.md`, `test-infrastructure.md`,
 `write-confinement.md`, `plans/INDEX.md`), so a bare citation resolving
 cleanly here can resolve to different content wherever else it is read, with
@@ -91,70 +94,31 @@ existence-checking remains the SECONDARY class, run only against citations
 that already carry an explicit anchor (`coordinator/`, `~/.claude/`,
 `${CLAUDE_PLUGIN_ROOT}/`, `../../`, a bare `/`).
 
-`${CLAUDE_PLUGIN_ROOT}/` misparse (2026-08-29 fix, false-positive class):
-`${CLAUDE_PLUGIN_ROOT}/docs/wiki/foo.md` is a harness-expanded,
-cwd-independent plugin-install-root anchor — the CORRECT anchored form, not
-a broken one. The prior `_CITATION_RE` had no alternative for the literal
-`${CLAUDE_PLUGIN_ROOT}/` text, so the engine's leftmost-match search instead
-matched the bare `/` immediately before `docs/` (the `}` boundary of the
-variable expansion), misreporting a deliberately-anchored citation as a
-"leading slash absolute" or unresolvable one. Fixed by giving
-`${CLAUDE_PLUGIN_ROOT}/` its own alternative in `_CITATION_RE`'s prefix
-group, mapped through `_PREFIX_TREE_MAP` to a dedicated `plugin_root` tree,
-resolvable via `--plugin-root PATH` or the `plugin_root` default tree entry.
+Recognized anchor forms and matching boundaries: `${CLAUDE_PLUGIN_ROOT}/` is
+a harness-expanded, cwd-independent plugin-install-root anchor — a CORRECT
+anchored form with its own `_CITATION_RE` alternative, mapped through
+`_PREFIX_TREE_MAP` to a dedicated `plugin_root` tree (resolvable via
+`--plugin-root PATH` or the `plugin_root` default tree entry). The bare
+`snippets/`, `pipelines/`, and `templates/` core alternatives (alongside the
+`docs/{wiki,decisions,plans,problems,research}/` ones) are the only
+non-`docs/` classes recognized — the doc-bearing directories an agent is
+told to READ; `hooks/`, `bin/`, `state/` and friends name code and data
+paths, where matching an incidental mention would trade a silent skip for
+noise. A `(?<![\\w-])` lookbehind gates the whole core alternation so a path
+segment merely ending in one of those words (`custom_snippets/foo.md`,
+`ci-templates/bar.md`) is never mistaken for a citation. The core also
+refuses a `.md` immediately followed by a further extension segment (a
+`(?!\\.?[A-Za-z0-9])` negative lookahead) — `templates/CLAUDE.md.tmpl` and
+`docs/wiki/foo.mdx` both name something other than the document, so neither
+backtracks to a truncated `.md` match; ordinary trailing punctuation
+(`docs/wiki/x.md.`, `..., x.md,`) still terminates a citation correctly.
+
 Negative-spec gotcha: `${CLAUDE_PLUGIN_ROOT}` resolves to the plugin INSTALL
 directory, not the repo root — for a marketplace source of `./plugin` that
 is `<repo>/plugin`, not `<repo>/`; DoE-claude's own shipped citations resolve
 it against the `coordinator/` subtree, which is why the default `plugin_root`
 tree entry mirrors `doe_coordinator` rather than the bare repo root. Do NOT
 assume plugin root == repo root elsewhere.
-
-`tests/fixtures/` exclusion (2026-08-29): a path an artifact reads as an
-oracle, not a doctrine citation a session is meant to follow, does not
-belong in the scanned corpus at all — `_iter_corpus_files` prunes any
-directory literally named `fixtures` directly under a directory literally
-named `tests` (both os.walk pruning via `dirs[:] = []` and a file-level
-skip), narrower than excluding all of `tests/` so a genuine doctrine
-citation embedded in test prose is still scanned.
-
-`.template` corpus widening (2026-08-29 fix, silent-skip class): the
-corpus glob scanned only `*.md`, so `skills/repo-setup/templates/
-README.md.template` — a markdown template written verbatim into a
-consumer repo's README at repo-setup time — was never opened, and its
-line-8 citation was invisible to this lint despite landing in someone
-else's tree. Surveyed DoE-claude's `coordinator/{commands,skills,agents}`
-trees: every non-`.md` file under those trees is `.yaml`/`.tsx`/`.ts`/
-`.json`/`.mjs`/`.gitignore`/`.css` (code/config, correctly excluded) except
-the 7 files under `skills/repo-setup/templates/*.template` — all markdown
-prose (`CLAUDE.md.template`, `README.md.template`, `exec-summary.md.
-template`, `lessons.md.template`, and three `project-type-block.*.
-template` snippet fragments), none binary, none code. `_iter_corpus_files`
-now yields both `*.md` and `*.template` — narrower than a bare `*` glob
-(which would pull in the `.tsx`/`.ts`/`.json` siblings), wide enough to
-catch every markdown-shaped template file in the surveyed trees.
-
-Non-`docs/` citation classes (2026-08-30 fix, silent-skip class): a
-`snippets/`, `pipelines/`, or `templates/` citation resolves only with
-cwd = the citing repo's root, exactly like a bare `docs/wiki/...` one, and
-`_CITATION_RE`'s core matched `docs/<section>/...` alone — so the whole
-class was invisible and every scan reported clean on text it had never
-matched. Raised by doe-claude-em (2026-08-30 memo `doctrine-citation-form-
-is-claude-plugin-root`, 40 sites in `coordinator/{commands,skills,agents}`).
-The widening is deliberately those three directories and no more: they are
-the doc-bearing ones an agent is told to READ. `hooks/`, `bin/`, `state/`
-and friends name code and data paths, where an incidental mention is not a
-doctrine citation and matching it would trade a silent skip for noise.
-
-Extension boundary (2026-08-30, same change, false-positive class): the core
-now refuses a `.md` immediately followed by a further extension segment
-(a negative lookahead for a dot followed by an alphanumeric, immediately
-after the `.md`). `templates/CLAUDE.md.tmpl` names a TEMPLATE, not the
-document — without the boundary the greedy core backtracks to `.md` and
-reports a dead citation to a file nobody ever wrote, which is exactly what
-fired on DoE-claude's `commands/install.md:175` render-template invocation.
-Deliberately narrower than a whitespace boundary: ordinary trailing sentence
-punctuation (`docs/wiki/x.md.`, `..., x.md,`) must still terminate a
-citation.
 """
 from __future__ import annotations
 
@@ -183,8 +147,8 @@ _PREFIX_TREE_MAP: dict[str, str] = {
 
 _CITATION_RE = re.compile(
     r"""(?P<prefix>coordinator/|~/\.claude/|\$\{CLAUDE_PLUGIN_ROOT\}/|\.\./\.\./|(?:^|(?<=\s))/)?
-        (?P<core>(?:docs/(?:wiki|decisions|plans|problems|research)|snippets|pipelines|templates)/[^\s\)\]"'<>]+\.md)
-        (?!\.[A-Za-z0-9])
+        (?P<core>(?<![\w-])(?:docs/(?:wiki|decisions|plans|problems|research)|snippets|pipelines|templates)/[^\s\)\]"'<>]+\.md)
+        (?!\.?[A-Za-z0-9])
     """,
     re.VERBOSE,
 )

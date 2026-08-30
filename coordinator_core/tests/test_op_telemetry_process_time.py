@@ -528,6 +528,112 @@ def test_caller_module_prefers_spec_name_over_dunder_name_for_a_main_frame():
         op_latency_mod.sys._getframe = original_getframe
 
 
+# --- C1: clock resolution stamping and the spawn-count-present flag -------
+# (2026-08-29-a-zero-is-under-one-tick-not-unmeasured)
+
+
+def test_process_time_row_carries_a_discovered_clock_resolution(tmp_path, monkeypatch):
+    """`clock_resolution_ms` is a real discovered figure, never absent and
+    never a hard-coded platform constant -- see
+    `op_latency.process_clock_resolution_ms`'s own docstring for why the
+    reported `time.get_clock_info` value cannot be trusted on Windows."""
+    common_dir = _fake_common_dir(tmp_path)
+    monkeypatch.setattr("coordinator_core.lifecycle.git_common_dir", lambda repo_root: common_dir)
+    from coordinator_core.telemetry import op_latency
+
+    monkeypatch.setattr(op_latency, "_PROCESS_CLOCK_RESOLUTION_MS", None)
+
+    ipc.record_op_process_time(
+        op="ping",
+        process_ms=1.0,
+        measurement_scope=ipc.MEASUREMENT_SCOPE_PER_OP_PROCESS,
+        source_path="pool_worker",
+        t_start=1.0,
+        repo_root=tmp_path,
+    )
+
+    entries = _read_entries(_sink(common_dir))
+    resolution = entries[0]["clock_resolution_ms"]
+    assert resolution is None or resolution > 0.0
+
+
+def test_spawns_counted_true_when_spawns_passed(tmp_path, monkeypatch):
+    common_dir = _fake_common_dir(tmp_path)
+    monkeypatch.setattr("coordinator_core.lifecycle.git_common_dir", lambda repo_root: common_dir)
+
+    ipc.record_op_process_time(
+        op="ping",
+        process_ms=0.0,
+        measurement_scope=ipc.MEASUREMENT_SCOPE_PER_OP_PROCESS,
+        source_path="pool_worker",
+        t_start=1.0,
+        repo_root=tmp_path,
+        spawns=0,
+    )
+
+    entries = _read_entries(_sink(common_dir))
+    assert entries[0]["spawns"] == 0
+    assert entries[0]["spawns_counted"] is True
+
+
+def test_spawns_counted_false_and_spawns_key_absent_when_not_passed(tmp_path, monkeypatch):
+    """A null `spawns` reads as 'not counted', never as a substantive zero --
+    the whole defect C1 exists to close. `spawns_counted: False` names it
+    explicitly rather than leaving a reader to infer it from key absence."""
+    common_dir = _fake_common_dir(tmp_path)
+    monkeypatch.setattr("coordinator_core.lifecycle.git_common_dir", lambda repo_root: common_dir)
+
+    ipc.record_op_process_time(
+        op="ping",
+        process_ms=0.0,
+        measurement_scope=ipc.MEASUREMENT_SCOPE_PER_OP_PROCESS,
+        source_path="warm_server",
+        t_start=1.0,
+        repo_root=tmp_path,
+    )
+
+    entries = _read_entries(_sink(common_dir))
+    assert "spawns" not in entries[0]
+    assert entries[0]["spawns_counted"] is False
+
+
+def test_process_clock_resolution_ms_never_raises_and_memoizes(monkeypatch):
+    from coordinator_core.telemetry import op_latency
+
+    monkeypatch.setattr(op_latency, "_PROCESS_CLOCK_RESOLUTION_MS", None)
+
+    first = op_latency.process_clock_resolution_ms()
+    assert first is None or first > 0.0
+    # Memoized -- a second call returns the same object/value without
+    # re-measuring.
+    second = op_latency.process_clock_resolution_ms()
+    assert second == first
+
+
+def test_process_clock_resolution_ms_never_raises_on_a_broken_clock(monkeypatch):
+    from coordinator_core.telemetry import op_latency
+
+    monkeypatch.setattr(op_latency, "_PROCESS_CLOCK_RESOLUTION_MS", None)
+
+    def _boom():
+        raise RuntimeError("clock exploded")
+
+    monkeypatch.setattr(op_latency.time, "process_time", _boom)
+    assert op_latency.process_clock_resolution_ms() is None
+
+
+def test_clock_resolution_ms_or_none_never_raises(monkeypatch):
+    """`ipc._clock_resolution_ms_or_none` degrades to None on any failure --
+    same fail-open discipline as `_spawn_count_or_none`/`_telemetry_sid`."""
+    import coordinator_core.telemetry.op_latency as op_latency
+
+    def _boom():
+        raise RuntimeError("discovery exploded")
+
+    monkeypatch.setattr(op_latency, "process_clock_resolution_ms", _boom)
+    assert ipc._clock_resolution_ms_or_none() is None
+
+
 def test_caller_module_falls_back_to_dunder_name_when_spec_is_absent():
     """A frame with no `__spec__` at all (e.g. code executed via `exec`, or
     an older/synthetic frame) must still resolve via the plain `__name__`

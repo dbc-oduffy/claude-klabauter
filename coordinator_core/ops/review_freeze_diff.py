@@ -170,6 +170,14 @@ def freeze_diff(
                     means "no restriction" (matches the CLI's `--paths` with
                     zero values behaving identically to omitting the flag).
 
+    Negative-spec: does NOT overwrite an existing frozen diff whose content
+    differs. A slice id is a filename, so a generic one (`ceremony-artifacts`,
+    `slice-1`) collides with whatever peer froze it first — and on a shared
+    worktree that peer's file is often tracked, so an unconditional write
+    destroys their frozen evidence with nothing erroring and nothing logged.
+    A colliding freeze is a structured error naming both the id and the path;
+    a re-freeze producing byte-identical content is idempotent and allowed.
+
     Returns:
         On success: {"diff_path": str, "head_sha_path": str, "head_sha": str,
                      "empty": bool, "error": None}
@@ -206,6 +214,13 @@ def freeze_diff(
     diffs_dir.mkdir(parents=True, exist_ok=True)
     diff_path = diffs_dir / f"{slice_id}.diff"
     sha_path = diffs_dir / f"{slice_id}.head.sha"
+
+    if diff_path.exists() and diff_path.read_text(encoding="utf-8") != diff_result.stdout:
+        return _error(
+            f"slice_id '{slice_id}' already names a frozen diff at {diff_path} with different "
+            "content — a slice id is a filename, and a generic one collides with whatever peer "
+            "froze it first. Re-freeze under a slice id that names this range."
+        )
 
     diff_path.write_text(diff_result.stdout, encoding="utf-8", newline="\n")
     sha_path.write_text(head_sha + "\n", encoding="utf-8", newline="\n")

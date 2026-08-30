@@ -8014,3 +8014,112 @@ class TestGateNotesAdvisoryAtPickupBrief:
 
         gate_notes = result.decision_object["gates"]["gate_notes"]
         assert gate_notes == {"present": True, "text": "held for review", "passed": None}
+
+
+# ---------------------------------------------------------------------------
+# `stale-bookkeeping` promotes NO re-stamp directive
+# (state/improvement-queue/2026-08-30-stamp-execution-authorization-when-it-is-
+#  229d05bbdadd.yaml — the control was transcribing rather than detecting:
+#  four firings in one close, one commit each, all the same verdict.)
+# ---------------------------------------------------------------------------
+
+
+def _seed_self_stamped_handoff(repo: Path, name: str, sha: str | None = None) -> Path:
+    """A handoff carrying its OWN `execution_authorized_sha` — the
+    no-pointer fallback branch of `compute_execution_stamp_match`, which
+    reaches the same gate shape as a `## Plan to Execute` pointer without
+    a second file. Pass `sha` to bake a value that never reproduces
+    (the `unstampable` fixture); omit it for a correct stamp."""
+    path = repo / "state" / "handoffs" / name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fm_template = (
+        f'title: "Test Handoff {name}"\n'
+        "created: 2026-01-01\n"
+        "branch: work/test/2026-01-01\n"
+        "status: open\n"
+        'predecessor: "none"\n'
+        "deployment_state: active\n"
+        "execution_authorized_by: \"PM (Test)\"\n"
+        "execution_authorized_at: 2026-01-01\n"
+        "execution_authorized_sha: PENDING\n"
+    )
+    body = "# Handoff\n\nBody.\n"
+    template_text = f"---\n{fm_template}---\n\n{body}"
+    # `execution_authorized_sha` is frontmatter, which the body hash excludes,
+    # so one pass over the template yields the sha the final text will carry.
+    stamped = sha or _canonical_body_sha(repo, template_text)
+    path.write_text(template_text.replace("PENDING", stamped), encoding="utf-8")
+    _git(repo, "add", str(path.relative_to(repo)))
+    _git(repo, "commit", "-m", f"stamp {name}")
+    return path
+
+
+def _append_bookkeeping_line(repo: Path, path: Path) -> None:
+    """A body edit whose every changed line classifies as bookkeeping —
+    moves the body sha (so the stamp reads stale) without touching target,
+    scope, or acceptance criteria."""
+    path.write_text(
+        path.read_text(encoding="utf-8") + "**Status:** shipped\n", encoding="utf-8"
+    )
+    _git(repo, "add", str(path.relative_to(repo)))
+    _git(repo, "commit", "-m", "bookkeeping-only body edit")
+
+
+class TestStaleBookkeepingPromotesNoRestamp:
+    """A bookkeeping-only delta leaves the authorization standing and the
+    comparison base where the PM set it. Re-stamping there wrote only more
+    ratification fields — which classify as bookkeeping again on the next
+    check — while advancing `stamp_commit`, so each firing measured a later
+    substantive edit against less history."""
+
+    def test_bookkeeping_delta_next_move_does_not_instruct_a_restamp(self, tmp_path):
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        path = _seed_self_stamped_handoff(repo, "h-bookkeeping.md")
+        _append_bookkeeping_line(repo, path)
+
+        rel = path.relative_to(repo).as_posix()
+        fm = pa._parse_fm_dict(pa.split_frontmatter(path.read_text(encoding="utf-8")).fm_text)
+        hit = pa.compute_execution_stamp_match(repo, fm, rel)
+
+        assert hit is not None
+        gate, _target = hit
+        assert gate["verdict"] == "stale-bookkeeping"
+        assert gate["delta_class"] == "bookkeeping"
+        assert "WITHOUT re-stamping" in gate["next_move"]
+        assert "Re-stamp execution_authorized_sha" not in gate["next_move"]
+
+    def test_bookkeeping_delta_emits_no_restamp_directive(self, tmp_path, monkeypatch):
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        path = _seed_self_stamped_handoff(repo, "h-bookkeeping-brief.md")
+        _append_bookkeeping_line(repo, path)
+
+        monkeypatch.setattr(pa._liveness, "session_live", lambda sid, cwd=None: False)
+        monkeypatch.setattr(pa._liveness, "claim_held_by_me", lambda *a, **k: False)
+
+        result = pa.brief(path.relative_to(repo).as_posix(), repo_root=repo, decisions={})
+        do = result.decision_object
+
+        assert do["gates"]["execution_stamp_match"]["verdict"] == "stale-bookkeeping", (
+            "fixture did not reach the bookkeeping arm — gate was: "
+            f"{do['gates'].get('execution_stamp_match')}"
+        )
+        assert "d-stamp" not in {d["id"] for d in do["directives"]}
+
+    def test_unstampable_still_emits_the_restamp_directive(self, tmp_path, monkeypatch):
+        """The negative control: `unstampable` is a recorded value that never
+        reproduced at all — a broken record a re-stamp repairs — and keeps
+        the directive the bookkeeping arm just lost."""
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        path = _seed_self_stamped_handoff(repo, "h-unstampable.md", sha="0" * 40)
+
+        monkeypatch.setattr(pa._liveness, "session_live", lambda sid, cwd=None: False)
+        monkeypatch.setattr(pa._liveness, "claim_held_by_me", lambda *a, **k: False)
+
+        result = pa.brief(path.relative_to(repo).as_posix(), repo_root=repo, decisions={})
+        do = result.decision_object
+
+        assert do["gates"]["execution_stamp_match"]["verdict"] == "unstampable"
+        assert "d-stamp" in {d["id"] for d in do["directives"]}

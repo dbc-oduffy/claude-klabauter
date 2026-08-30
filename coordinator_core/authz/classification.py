@@ -408,20 +408,12 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #   D2-5 (no remote route): DR-215 retired the UDS/HTTP transport outright;
     #     no HTTP route was ever added, negative-spec in archive_terminal_handoffs.py.
     "fleet.archive_completed_handoffs": OpClass.MUTATING,
-    # handoff.housekeeping — MUTATING: closes finished handoffs, git-mv files
-    # them into archive/handoffs/, and lands one commit for the set. The ONE
-    # job replacing the three suspended legs (handoff.reconcile_open,
-    # handoff.archive_transition, session.sweep_consumed_handoffs).
-    "handoff.housekeeping": OpClass.MUTATING,
-    # housekeeping.cycle — MUTATING, and the SAME job as handoff.housekeeping
-    # above: the rebuilt cycle (coordinator_core/housekeeping/cycle.py) clears
-    # finished gates, files terminal handoffs into archive/handoffs/, and lands
-    # one commit for the set through fleet/_common.py :: archive_and_commit.
-    # Admitted to DR-211 § D1's sanctioned-writer list by DR-384. Classified
-    # here from the day it registers rather than the day its first caller is
-    # repointed: an op reachable through the registry with no classification is
-    # the gap this table exists to close, and both keys are live during the
-    # repoint.
+    # housekeeping.cycle — MUTATING: the rebuilt cycle
+    # (coordinator_core/housekeeping/cycle.py) clears finished gates, files
+    # terminal handoffs into archive/handoffs/, and lands one commit for the
+    # set through fleet/_common.py :: archive_and_commit. Admitted to DR-211
+    # § D1's sanctioned-writer list by DR-384. `handoff.housekeeping` — the
+    # job this replaced — is deleted; kill means kill forever (PM 2026-08-23).
     "housekeeping.cycle": OpClass.MUTATING,
     # fleet.aggregate_capability_index — MUTATING, same single-derived-feed-file shape
     # as strategic.emit: it reads every registered sibling's authored capability
@@ -3764,27 +3756,14 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #      A directory listing plus one stat per entry; git_common_dir resolves by
     #      pure-Python upward walk, so not even a spawn.
     "session.audit_unreapable": OpClass.COMPUTE_ONLY,
-    # handoff.reconcile_open — DELIBERATELY LEFT UNCLASSIFIED, and this comment is the
-    # reason, so the next person to run the quad check does not "fix" it the way this
-    # one first did. The op was CUT by the 200ms sweep (5,546ms CPU) and is dead:
-    # nothing imports coordinator_core/ops/handoff_reconcile.py any more, so its
-    # module-level register_op() never fires at runtime and coordinator-invoke cannot
-    # reach the op. It surfaces as a quad violation only because
-    # check_registration_quad()'s discovery does a full pkgutil walk that imports every
-    # module on disk, including dead ones — the violation is an artifact of the probe,
-    # not a reachable op missing its paperwork.
-    #
-    # Classifying it, or adding it to OP_MODULE_MAP/_OP_KEY_SCOPE/_EAGER_OP_MODULES,
-    # RESURRECTS it: the eager-list entry is exactly the import that makes register_op
-    # fire again. CLAUDE.md's kill bar is explicit that kill means kill forever, and
-    # test_occupancy_scan.py::test_classify_liveness_three_known_answers pins the op at
-    # Liveness.DEAD with the same warning in its own words ("if any future edit
-    # re-imports it, this goes red and the message is 'the cut is incomplete'").
-    #
-    # The real remaining work is completing the cut — deleting the dangling
-    # register_op("handoff.reconcile_open", _handler) line, and the module with it if
-    # nothing else needs it. That is the cut's owner's call, not a drive-by edit from a
-    # quad-check green-up.
+    # handoff.reconcile_open — the op was CUT by the 200ms sweep (5,546ms CPU) and is
+    # dead. `coordinator_core/ops/handoff_reconcile.py` (the module that carried its
+    # surviving compute as a library, reached only by the now-also-deleted
+    # `handoff_housekeeping.py`) was deleted outright once C7's replacement
+    # (`coordinator_core/housekeeping/cycle.py`) proved out — kill means kill forever
+    # (PM 2026-08-23); this key never comes back and neither does that module. Do not
+    # classify it, and do not add it to OP_MODULE_MAP/_OP_KEY_SCOPE/_EAGER_OP_MODULES —
+    # there is no module left for such an entry to import.
     # fleet.mode_set / fleet.mode_show — the fleet-scoped settings plane's human-invoked
     # half (ops/fleet/mode_control.py; plan 2026-08-28-the-fleet-gets-one-file-and-the-
     # floor-moves-to-the-reader § C4). The pair splits across the class line because one
