@@ -17,6 +17,15 @@ which the door rightly declines to read as proof of non-dispatch, so it emits
 -32004 and fails rather than degrading; cold, `door.c :: fall_through` spawns
 the same absent path.
 
+C1 addendum (docs/plans/2026-08-30-twenty-one-bin-names-reach-the-door-or-
+are-thoroughly-dead.md): a KILLED op (`.py` deleted from both trees, not
+merely publish-excluded) reads as the same "no `.py` HERE" shape this file's
+predicate tests already cover, and `launcher_is_installable` therefore
+cannot tell it apart from the extensionless twelve. The tests below pin the
+separate, roster- and manifest-independent mechanism
+(`_sweep_orphaned_agent_helpers`'s `_KILLED_OP_ORPHAN_NAMES` match) that
+actually retires a killed op's stale image.
+
 SO THEY GET NO LAUNCHER (PM ruling 2026-08-29, on `publish`: "we shouldn't
 need a publish.exe nor a publish.cmd"). Under ONE ENTRYPOINT PER PLATFORM the
 door image is the only launcher a name gets -- no `.cmd` is written for any
@@ -180,6 +189,48 @@ def test_a_name_with_no_py_twin_in_either_tree_keeps_its_launcher(tmp_path, caps
 
     assert dest is not None and dest.exists()
     assert "no launcher installed" not in capsys.readouterr().err
+
+
+def test_a_killed_op_image_is_reaped_by_the_orphan_sweep_even_without_manifest_membership(monkeypatch, tmp_path):
+    """C1, docs/plans/2026-08-30-twenty-one-bin-names-reach-the-door-or-are-
+    thoroughly-dead.md: `coordinator-write-review-trail`,
+    `list-review-trail-records`, and `repair-empty-review-trail-ranges`
+    were killed under K-068 -- `.py` deleted from both trees -- which is
+    exactly the shape `launcher_is_installable` cannot distinguish from the
+    extensionless twelve (see that function's docstring). A killed op's
+    stale image therefore is never reaped by the per-name install loop, and
+    may never have been recorded in the native-forwarder manifest at all
+    (dropped from the roster before C0's manifest fix landed, or written by
+    an install that predates the manifest entirely). The sweep's killed-op
+    name match (condition 0b) must reap it anyway -- roster- and
+    manifest-independent."""
+    monkeypatch.delenv("COORDINATOR_DISABLE_MACHINE_MUTATION", raising=False)
+    bin_dst = tmp_path / "bin"
+    bin_dst.mkdir()
+    stale = bin_dst / "repair-empty-review-trail-ranges.exe"
+    stale.write_bytes(b"MZ-a-killed-ops-image")
+
+    substrate._sweep_orphaned_agent_helpers(bin_dst, {}, {}, check_only=False)
+
+    assert not stale.exists()
+
+
+def test_a_killed_op_image_check_only_reports_but_does_not_remove(tmp_path):
+    """`check_only` stays read-only across every identification path here,
+    including the killed-op one -- a probe must not mutate."""
+    bin_dst = tmp_path / "bin"
+    bin_dst.mkdir()
+    stale = bin_dst / "list-review-trail-records.exe"
+    stale.write_bytes(b"MZ-a-killed-ops-image")
+
+    raised = False
+    try:
+        substrate._sweep_orphaned_agent_helpers(bin_dst, {}, {}, check_only=True)
+    except substrate.SubstrateFatalError:
+        raised = True
+
+    assert raised
+    assert stale.exists()
 
 
 def test_the_canonical_door_is_never_removed_as_stale(tmp_path):

@@ -1514,7 +1514,9 @@ def drop(
 
     PUT-DOWN CLEARS, REPARK LEAVES (C7 Part A design point): `drop` is the
     put-down path and always reverts the frontmatter claim-stamp
-    (`claimed_by`/`picked_up_by`) back to unclaimed. Repark
+    (`claimed_by`/`claimed_at`) back to unclaimed. `picked_up_by` is NOT
+    among them and survives the drop — the enumeration above read
+    `picked_up_by` until 2026-08-30 and overstated the primitive. Repark
     (`handoff_transition._repark`) is a DIFFERENT verb this function never
     calls — it deliberately leaves the stamp intact so the claim hands
     onward. Nothing here needs to special-case repark; it simply is not
@@ -1595,11 +1597,16 @@ def drop(
             # No frontmatter stamp was ever written for a brief-stage claim
             # — nothing here for a holder gate to protect. Lock-release only,
             # unchanged.
-            release_artifact(class_, basename, cwd=str(root))
+            # `release_artifact` is itself holder-gated and NO-OPs for a
+            # non-holder, so a hardcoded `"released": True` here claims a
+            # write that did not happen — the same report/ground-truth family
+            # the holder gate below fixes, on the one arm that gate exempts.
+            # Report what the primitive actually returned.
+            _released = release_artifact(class_, basename, cwd=str(root))
             return APPLY_EXIT_OK, {
                 "class": class_,
                 "basename": basename,
-                "released": True,
+                "released": bool(_released),
                 "unclaimed": None,
                 "claim_stage": CLAIM_STAGE_BRIEF,
                 "commit_sha": None,

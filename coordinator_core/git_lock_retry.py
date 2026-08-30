@@ -73,6 +73,36 @@ LOCK_CONTENTION_SIGNATURES = (
     "Another git process seems to be running",
 )
 
+#: Substrings that identify a `.git/refs/...` compare-and-swap contention
+#: failure -- a PEER SESSION'S commit holding a ref lock across its whole
+#: commit (hooks included), not a stale `index.lock` file. Observed live
+#: this session, 2026-08-30, on work/machine-a/2026-08-18to30: eight
+#: consecutive scoped `git commit` invocations failed under peer load,
+#: seven of the eight with `cannot lock ref 'HEAD': is at <sha> but
+#: expected <sha>` and only one with the index wording above -- i.e. this
+#: is the DOMINANT contention shape on this tree, not a rare second case.
+#: A separate tuple rather than folding this wording into
+#: `LOCK_CONTENTION_SIGNATURES`: a ref lock is a different file, a
+#: different git subsystem, and a different hold duration than an index
+#: lock, and collapsing the two would leave that constant's name assert
+#: something narrower than its contents.
+REF_LOCK_CONTENTION_SIGNATURES = (
+    "cannot lock ref",
+)
+
+#: `cannot lock ref` is ALSO what git prints for a remote push rejection
+#: (`hooks/auto_push.py`'s class) on the exact same "refs/heads/<branch>"
+#: wording a local ref race produces -- a narrower substring cannot tell
+#: these apart, only the line git prefixes the remote form with can. A
+#: local ref race wants this module's immediate bounded retry; a remote
+#: rejection wants `hooks/auto_push.py`'s own seconds-scale ladder, and
+#: neither is the other's mechanism. Belt-and-braces today: no push path
+#: routes through this helper, so this exclusion is currently inert -- a
+#: fact about the current call-site list, not a property of the
+#: predicate, and it is what keeps the predicate honest the day a push
+#: path is wired here.
+_REMOTE_REJECTION_MARKER = "[remote rejected]"
+
 #: Default bounded retry policy: 1 initial attempt + 7 retries (8 total),
 #: exponential backoff (seconds, slept BEFORE attempts 2..8) starting at
 #: 0.1s and doubling to a 1.0s cap: (0.1, 0.2, 0.4, 0.8, 1.0, 1.0, 1.0).
@@ -109,9 +139,17 @@ DEFAULT_BACKOFF_SCHEDULE_S = (0.1, 0.2, 0.4, 0.8, 1.0, 1.0, 1.0)
 
 
 def is_lock_contention(stderr: str) -> bool:
-    """True iff `stderr` names a `.git/index.lock` contention failure —
-    the only class of failure `run_with_lock_retry` retries."""
-    return any(sig in stderr for sig in LOCK_CONTENTION_SIGNATURES)
+    """True iff `stderr` names a `.git/index.lock` OR `.git/refs/...`
+    contention failure — a peer session genuinely mid-write, not a stale
+    lock file to reap and not a remote push rejection (excluded below even
+    though it shares the ref wording) — the only classes of failure
+    `run_with_lock_retry` retries. Returns a bool only, never which class
+    matched: callers ask one question, retry or not."""
+    if any(sig in stderr for sig in LOCK_CONTENTION_SIGNATURES):
+        return True
+    if _REMOTE_REJECTION_MARKER in stderr:
+        return False
+    return any(sig in stderr for sig in REF_LOCK_CONTENTION_SIGNATURES)
 
 
 _ResultT = TypeVar("_ResultT")

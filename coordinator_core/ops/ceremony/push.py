@@ -733,15 +733,16 @@ def _head_already_reached_upstream(
     an edge case. Every session on this box drives the SAME worktree and the
     SAME branch, so a peer's push carries our commits with it. Our own push
     then rejects non-fast-forward for a range that is already on the remote,
-    and the ladder below would answer that with a `rebase --onto` -- which
-    `_rebase_onto_fetched_ref` refuses outright, because at the 50-70
-    concurrent-session load norm a peer always has something uncommitted in
-    the tree. The result was a `failed` push reporting "rebase recovery
-    cannot run: worktree has uncommitted changes" for work that was already
-    published, with no path to a correct answer that did not involve
-    committing or stashing a peer's files -- the shared-tree move doctrine
-    forbids outright. Checked HERE, before the rebase, so nothing needs the
-    worktree to be clean and no peer's files are touched to answer it.
+    and the ladder below would answer that with a rebase -- object-database
+    work plus an index/worktree update this branch does not need at all, for
+    a range the remote already carries. Checked HERE, before either rebase
+    route, so the cheap answer is reached first: a peer's push carrying our
+    commits is the DOMINANT shape on this box, not an edge case, and two
+    reads beat a replay that would land a no-op. (Until 2026-08-30 this was
+    also the ONLY correct answer available on a dirty tree, because
+    `_rebase_onto_fetched_ref` refused outright there; it now routes the
+    dirty case to `_replay_onto_fetched_ref`, so this check is a cost
+    optimisation rather than the last exit before a dead end.)
 
     Cost order, cheapest arm first:
       1. ZERO SPAWNS -- HEAD's sha (read off `.git/HEAD` plus the loose ref
@@ -769,7 +770,121 @@ def _head_already_reached_upstream(
     return False
 
 
-def _rebase_onto_fetched_ref(worktree_root: Path, upstream_ref: str) -> Tuple[int, str]:
+_REPLAY_UPDATE_RE = re.compile(r"^update\s+(\S+)\s+([0-9a-f]{7,64})\s+([0-9a-f]{7,64})\s*$")
+
+
+def _replay_onto_fetched_ref(
+    worktree_root: Path, upstream_ref: str, branch: Optional[str]
+) -> Tuple[int, str]:
+    """Replay THIS session's own commit range onto `upstream_ref` on a DIRTY
+    shared worktree -- the recovery `git rebase --onto` cannot perform,
+    because it insists on checking the result out and the tree on this box is
+    essentially never clean.
+
+    WHY A REBASE IS NOT AVAILABLE HERE, and why "just push anyway" is not the
+    answer either. A non-fast-forward reject means the remote carries commits
+    this branch does not. Publishing ours without taking theirs would either
+    drop their work (a force push) or republish our commits under fresh shas
+    on every subsequent attempt (pushing a locally-computed tip while leaving
+    local refs behind) -- the second quietly accumulates duplicates on the
+    remote. The only correct answer is the rebase; what has to change is the
+    part of it that demands a pristine tree.
+
+    Three steps, three spawns, paid only on a reject that already cost a
+    network leg:
+
+      1. `git replay --ref-action=print --onto <upstream> <merge-base>..
+         <branch-ref>` computes the replayed chain entirely in the object
+         database. It reads neither index nor working tree, so peer edits are
+         not its concern; it writes no ref either (see
+         `git_native.replay_onto_print` for why `--ref-action=print` is
+         load-bearing rather than cosmetic).
+      2. `git read-tree -m -u <old> <new>` materializes the difference into
+         the shared index and worktree. Only paths that differ between the
+         two trees are touched; a path that differs AND is locally modified,
+         staged, or shadowed by an untracked file makes git refuse the whole
+         operation and write nothing. So the outcomes are exactly two: the
+         replay lands with no peer's work disturbed, or it declines having
+         disturbed nothing -- never a peer's file overwritten, never a
+         `git stash`.
+      3. `git update-ref <branch-ref> <new> <old>` moves the branch, with
+         git's own compare-and-swap against the tip step 1 read, so a peer
+         committing in the gap makes git refuse rather than silently discard
+         that commit.
+
+    ROLLBACK between 2 and 3 is mandatory, not defensive garnish: a
+    successful read-tree with a failed ref move leaves the index describing
+    `new` while HEAD still names `old`, which every reader of this tree --
+    a peer's scoped commit included -- sees as a large staged diff it did not
+    make. The reverse read-tree restores the status quo ante; a rollback that
+    itself fails is reported in the returned reason, because at that point
+    the tree needs a human, and saying so is the only honest move.
+
+    Returns `(exit_code, reason)` on the same contract as
+    `_rebase_onto_fetched_ref`: `0` means the branch now sits on top of the
+    fetched upstream and the caller may re-push. Every failure arm leaves
+    index, worktree and refs exactly as it found them.
+    """
+    if not branch:
+        return 1, "replay recovery cannot run: no branch resolved to move (detached HEAD)"
+    branch_ref = f"refs/heads/{branch}"
+
+    mb_result = git_native.merge_base(worktree_root, "HEAD", upstream_ref)
+    if not mb_result.ok or not mb_result.stdout.strip():
+        reason = condense_git_diagnostic(mb_result.stderr) or "merge-base failed"
+        return mb_result.returncode or 1, f"git merge-base: {reason}"
+    merge_base_sha = mb_result.stdout.strip()
+
+    replay_result = git_native.replay_onto_print(
+        worktree_root, upstream_ref, merge_base_sha, branch_ref
+    )
+    if not replay_result.ok:
+        reason = (
+            condense_git_diagnostic(replay_result.stderr)
+            or condense_git_diagnostic(replay_result.stdout)
+            or f"exit_code={replay_result.returncode}"
+        )
+        return replay_result.returncode or 1, f"git replay: {reason}"
+
+    match = _REPLAY_UPDATE_RE.match(replay_result.stdout.strip())
+    if match is None or match.group(1) != branch_ref:
+        # An empty or unparseable plan is INDETERMINATE, never "nothing to
+        # do": reporting success here would send the caller into a re-push of
+        # a range the remote already rejected, which loops.
+        return 1, (
+            "git replay: no usable ref-update plan for "
+            f"{branch_ref} ({replay_result.stdout.strip()!r})"
+        )
+    new_sha, old_sha = match.group(2), match.group(3)
+
+    read_tree_result = git_native.read_tree_merge_update(worktree_root, old_sha, new_sha)
+    if not read_tree_result.ok:
+        reason = condense_git_diagnostic(read_tree_result.stderr) or "read-tree refused"
+        return read_tree_result.returncode or 1, (
+            f"replay recovery declined, nothing touched: {reason}"
+        )
+
+    update_result = git_native.update_ref(worktree_root, branch_ref, new_sha, old_sha)
+    if not update_result.ok:
+        reason = condense_git_diagnostic(update_result.stderr) or "update-ref refused"
+        rollback = git_native.read_tree_merge_update(worktree_root, new_sha, old_sha)
+        if not rollback.ok:
+            rollback_reason = (
+                condense_git_diagnostic(rollback.stderr) or "read-tree rollback failed"
+            )
+            return update_result.returncode or 1, (
+                f"git update-ref: {reason}; AND the index/worktree rollback failed "
+                f"({rollback_reason}) -- this worktree now has a staged diff nobody "
+                "authored and needs a human"
+            )
+        return update_result.returncode or 1, f"git update-ref: {reason}"
+
+    return 0, ""
+
+
+def _rebase_onto_fetched_ref(
+    worktree_root: Path, upstream_ref: str, branch: Optional[str] = None
+) -> Tuple[int, str]:
     """Rebase THIS session's own commit range onto the freshly-fetched `upstream_ref`.
 
     Scoping is load-bearing: computes `merge-base(HEAD, upstream_ref)` BEFORE
@@ -782,28 +897,32 @@ def _rebase_onto_fetched_ref(worktree_root: Path, upstream_ref: str) -> Tuple[in
     On a rebase failure, aborts the half-applied rebase so the working tree
     is left clean for the caller.
 
-    Dirty-worktree pre-check (2026-08-07 fix): `git rebase --onto` refuses
-    outright on a dirty worktree, and on a shared-fleet box the worktree is
-    essentially never clean (peer sessions churn state ledgers
-    continuously) -- so the rebase recovery always failed, surfacing only
-    an opaque `git rebase: <raw git stderr>` that named the SYMPTOM (a
-    rebase refusal), not the actual, distinctly-diagnosable CAUSE (dirty
-    worktree). Detected here, BEFORE attempting the rebase, via
-    `git_native.status_porcelain()` (the same native seam
-    `commit_gates.dirty_tree_gate` already uses for this exact question --
-    never a raw `git status` shell-out). A porcelain check that itself
-    fails to run (indeterminate) falls through to the ordinary rebase
-    attempt below rather than guessing dirty/clean -- the pre-existing
-    rebase-failure path still covers that case, just without this
-    pre-check's more specific reason.
+    Dirty-worktree route (2026-08-30, superseding the 2026-08-07 refusal):
+    `git rebase --onto` refuses outright on a dirty worktree, and on a
+    shared-fleet box the worktree is essentially never clean (peer sessions
+    churn state ledgers continuously). The 2026-08-07 fix detected that here
+    and returned a distinctly-diagnosable refusal -- accurate, and still a
+    push that never happened, for the ordinary state of this box rather than
+    an edge case. PM ruling 2026-08-30: publishing must not require a
+    pristine tree. So the dirty case now ROUTES to
+    `_replay_onto_fetched_ref` (a worktree-free replay plus a two-way
+    read-tree that touches no peer's file), and only the clean case takes
+    the `git rebase --onto` path below. Detection is unchanged --
+    `git_native.status_porcelain()`, the same native seam
+    `commit_gates.dirty_tree_gate` already uses for this exact question,
+    never a raw `git status` shell-out. A porcelain check that itself fails
+    to run (indeterminate) still falls through to the ordinary rebase
+    attempt below rather than guessing dirty/clean.
+
+    `branch` is the caller's ALREADY-RESOLVED branch name (`auto_push.
+    resolve_branch`, zero spawns in the ordinary case) -- passed down rather
+    than re-resolved so the replay route names the same ref the push leg
+    itself will name. `None` reaches the replay route as "no branch to move",
+    which it reports rather than guesses.
     """
     status_result = git_native.status_porcelain(worktree_root)
     if status_result.ok and status_result.stdout.strip():
-        return (
-            1,
-            "rebase recovery cannot run: worktree has uncommitted changes "
-            "(git rebase --onto refuses on a dirty worktree)",
-        )
+        return _replay_onto_fetched_ref(worktree_root, upstream_ref, branch)
 
     mb_result = git_native.merge_base(worktree_root, "HEAD", upstream_ref)
     if not mb_result.ok:
@@ -1367,7 +1486,9 @@ def push_with_retry(
                 ),
             )
 
-        rebase_exit_code, rebase_reason = _rebase_onto_fetched_ref(root, upstream_info.abbrev)
+        rebase_exit_code, rebase_reason = _rebase_onto_fetched_ref(
+            root, upstream_info.abbrev, branch
+        )
         if rebase_exit_code != 0:
             last_reason = rebase_reason
             last_exit_code = rebase_exit_code

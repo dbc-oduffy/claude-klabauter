@@ -184,3 +184,31 @@ def test_preflight_prompt_does_not_treat_a_clean_path_as_a_refusal():
     assert "blocked" in lowered
     for cause in ("claim", "ignore", "guard"):
         assert cause in lowered
+
+
+def test_commit_prompt_tells_the_agent_to_read_no_delta():
+    """The dispatched committer is the reader that cannot see the warning.
+
+    `coordinator-safe-commit` prints `commit_v2`'s warnings to stderr, but a
+    workflow commit agent calls `commit_paths` IN-PROCESS and never crosses
+    that surface -- the emitted brief is the only thing standing between it
+    and the fact. It commits unattended and reports one line the orchestrating
+    EM takes as delivery, so a declared path that contributed nothing is
+    invisible unless the brief names the field. DoE-claude's `874cf35dd`
+    (five paths declared, four landed, the fifth the point of the commit)
+    happened on this path, not at a terminal.
+    """
+    call = _commit_agent_call(["plan.md", "a.py"], "Commit wave 1", 0, ["C1"])
+    assert "no_delta" in call
+    assert "contributed nothing" in call
+
+
+def test_no_delta_is_reported_above_the_success_token_not_instead_of_it():
+    """A partial commit is legitimate and must still report landed.
+
+    The emitted halt-check regexes the token line under `/m`, so the no-delta
+    lines have to go ABOVE it -- an instruction that displaced the token would
+    halt a run whose commit landed, which is the expensive direction.
+    """
+    call = _commit_agent_call(["a.py"], "Commit wave 1", 0, ["C1"])
+    assert call.index("no_delta") < call.index("COMMIT-LANDED")

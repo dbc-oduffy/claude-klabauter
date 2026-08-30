@@ -2476,6 +2476,20 @@ _PLAN_TASKS_CODED_SHA_RE = re.compile(r'^[0-9a-f]{7,40}$')
 # narrowing the same enum.
 _PLAN_TASKS_PM_APPROVAL_GATED_DISPOSITIONS = frozenset({'backlogged', 'wont_do'})
 
+# The GOVERNED leg's own set, widened for `spun_off` on 2026-08-30 when
+# plan.schema.json 2.13.0 was vendored and brought `grouping_approvals.
+# spun_off` with it (DR-183's claude-klabauter half, unblocked by that key arriving).
+# Deliberately a SECOND set rather than one widened in place: the legacy
+# per-row `pm_approved` leg above stays `{'backlogged', 'wont_do'}`, because
+# widening it retroactively invalidates 16 `spun_off` rows across 10 legacy
+# plans written correctly under DoE's 2026-08-05 relaxation, with no repair
+# short of forging assent. A governed plan has opted into the block contract
+# by carrying the key, so it can author a `spun_off` block; a legacy plan
+# cannot. See `check_plan_tasks_grouping_approval`'s docstring.
+_PLAN_TASKS_GOVERNED_PM_APPROVAL_GATED_DISPOSITIONS = frozenset(
+    {'backlogged', 'wont_do', 'spun_off'}
+)
+
 
 def _is_single_repo_relative_path(ref: str) -> bool:
     """True if `ref` looks like a single repo-relative path.
@@ -3323,25 +3337,25 @@ def check_plan_tasks_grouping_approval(source: str) -> ErrorDict | None:
       2. that block's recorded `digest` equals a FRESH recomputation over
          the plan's current spine membership for that grouping.
 
-    `spun_off` is NOT gated here, and as of 2026-08-29 that is no longer a
-    policy choice. DR-183 reverses the 2026-08-05 ruling ("the EM self-issues
-    it now") and re-gates `spun_off`. The gate cannot be built from this repo:
-    `spun_off` occupies its own grouping (C3), and `grouping_approvals`
-    declares only `do`/`defer`/`ruled_out` under `additionalProperties: false`,
-    so widening `_PLAN_TASKS_PM_APPROVAL_GATED_DISPOSITIONS` today rejects
-    every governed plan with a `spun_off` row and offers its author no remedy —
-    approving the grouping is impossible, authoring the block is a schema
-    violation. The fourth key cannot originate here either: plan.schema.json is
-    vendored byte-for-byte and `check_schema_drift` enforces that parity with
-    no pin or tolerance escape, so DoE-claude authors and bumps it and claude-klabauter
-    re-vendors.
+    `spun_off` IS gated here as of 2026-08-30, when plan.schema.json 2.13.0
+    was vendored carrying `grouping_approvals.spun_off` — the fourth key DR-183
+    (2026-08-29) waited on, reversing the 2026-08-05 ruling that "the EM
+    self-issues it now". Until that key existed the gate could not be built:
+    `spun_off` occupies its own grouping (C3), `grouping_approvals` declared
+    only `do`/`defer`/`ruled_out` under `additionalProperties: false`, and
+    gating it then would have rejected every governed plan with a `spun_off`
+    row with no author-side remedy — approving the grouping impossible,
+    authoring the block itself a schema violation. The key could not originate
+    here either: plan.schema.json is vendored byte-for-byte and
+    `check_schema_drift` enforces that parity with no pin or tolerance escape,
+    so DoE-claude authored and bumped it and claude-klabauter re-vendored.
 
-    Sequence, once the key lands: re-vendor, then widen the GOVERNED gate
-    only — `spun_off` joins the set this check scans, and
+    The widen is GOVERNED-only: `spun_off` joins the set this check scans
+    (`_PLAN_TASKS_GOVERNED_PM_APPROVAL_GATED_DISPOSITIONS`), while
     `_PLAN_TASKS_PM_APPROVAL_GATED_DISPOSITIONS` (the LEGACY per-row
     `pm_approved` leg in `_cf_plan_tasks_disposition_shape`) stays
-    `{'backlogged', 'wont_do'}`. That is deliberately not one set widened in
-    one place; see the note on the two sets below.
+    `{'backlogged', 'wont_do'}`. That is deliberately two sets, not one set
+    widened in one place; see the note on them above.
 
     WHY THE LEGACY LEG DOES NOT WIDEN. DoE's DR-183 ask included the legacy
     branch (plan-tasks.schema.json `allOf[5]`), and taking it would
@@ -3413,7 +3427,7 @@ def check_plan_tasks_grouping_approval(source: str) -> ErrorDict | None:
 
     for row in rows:
         disposition = _plan_tasks_row_disposition(row)
-        if disposition not in _PLAN_TASKS_PM_APPROVAL_GATED_DISPOSITIONS:
+        if disposition not in _PLAN_TASKS_GOVERNED_PM_APPROVAL_GATED_DISPOSITIONS:
             continue
 
         row_id = row.get('id', '?')

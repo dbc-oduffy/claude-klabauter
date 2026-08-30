@@ -30,6 +30,9 @@ from __future__ import annotations
 
 import importlib.machinery
 import importlib.util
+import json
+import os
+import sys
 from pathlib import Path
 
 import pytest
@@ -53,6 +56,12 @@ def _load_real_disposition_module():
     bare test process has no business needing. This is the same source file the
     ceremony loads; only the locating step differs."""
     bin_dir = Path(__file__).resolve().parents[3] / "coordinator" / "bin"
+    # `resolve_disposition` bootstraps `lib`/`cc_invoke`, which live beside the
+    # script rather than in any installed package — the ceremony's own loader gets
+    # them via operator config, which a bare test process has no business needing.
+    for entry in (bin_dir, bin_dir / "lib"):
+        if str(entry) not in sys.path:
+            sys.path.insert(0, str(entry))
     loader = importlib.machinery.SourceFileLoader(
         "wsc_session_disposition_identity", str(bin_dir / "wsc-session-disposition.py")
     )
@@ -177,3 +186,148 @@ def test_refusal_is_not_a_transport_failure() -> None:
 
     assert not issubclass(SessionIdentityUnresolved, TransportFailure)
     assert not issubclass(TransportFailure, SessionIdentityUnresolved)
+
+
+# ---------------------------------------------------------------------------
+# The instrument: which input named the session, and under which pid
+# ---------------------------------------------------------------------------
+#
+# `state/bug-backlog/2026-08-30-close-ceremony-clis-resolve-a-live-peer-
+# b558b27c74e7.yaml` asks for this in its `proposed_action` — "make the resolution
+# path report which input it read ... and under which pid, so a mis-resolution is
+# visible at the point it happens instead of three gates downstream". The tests
+# above pin that the WRONG input can no longer be read; these pin that the input
+# actually read is reported, on the success path as well as the failure path.
+
+
+def test_source_is_reported_for_a_cold_env_resolution(
+    disposition_module, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _clear_session_env(monkeypatch)
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", CALLER)
+    resolved = disposition_module.resolve_session_id_with_source(Path("."))
+    assert resolved.session_id == CALLER
+    assert resolved.source == "CLAUDE_CODE_SESSION_ID"
+    assert resolved.warm is False
+    assert resolved.pid == os.getpid()
+
+
+def test_source_names_the_precedence_winner_not_merely_a_holder(
+    disposition_module, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Two vars holding DIFFERENT ids: the label must name the one that won, or it
+    is not provenance — it is a guess that happens to be right whenever the ladder
+    is unambiguous, which is exactly when nobody needs it."""
+    _clear_session_env(monkeypatch)
+    monkeypatch.setenv("COORDINATOR_SESSION_ID", CALLER)
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", ENGINE_OWNER)
+    resolved = disposition_module.resolve_session_id_with_source(Path("."))
+    assert (resolved.session_id, resolved.source) == (CALLER, "COORDINATOR_SESSION_ID")
+
+
+def test_carried_identity_is_reported_as_carried_even_when_env_agrees(
+    disposition_module, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A carried id that coincidentally matches an env var is still CARRIED. Under
+    warm the environment is not a lower-precedence source, it is a source about a
+    different process — reporting it would be true about this process and false
+    about the resolution."""
+    _clear_session_env(monkeypatch)
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", CALLER)
+    with warm_served_request(True), session_identity_override(CALLER):
+        resolved = disposition_module.resolve_session_id_with_source(Path("."))
+    assert (resolved.session_id, resolved.source, resolved.warm) == (CALLER, "carried", True)
+
+
+def test_the_incident_is_legible_in_the_record(
+    disposition_module, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The shape the filing EM had to infer from unfamiliar deliverable ids: a warm
+    request that carried nothing, resolving under the SERVER's pid. `unresolved`
+    plus `warm=True` is the whole diagnosis, at the point it happens."""
+    _clear_session_env(monkeypatch)
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", ENGINE_OWNER)
+    with warm_served_request(True):
+        resolved = disposition_module.resolve_session_id_with_source(Path("."))
+    assert resolved.session_id == ""
+    assert resolved.source == "unresolved"
+    assert resolved.warm is True
+
+
+def test_legacy_em_sid_is_reported_under_its_own_name(
+    disposition_module, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`em_sid` is not in `SESSION_ENV_PRECEDENCE`, so `session.core` cannot label
+    it and would report `resolved-source-unaccounted`. The bin script folds its own
+    tier into the record instead — one provenance answer, not two to reconcile."""
+    _clear_session_env(monkeypatch)
+    monkeypatch.setenv("em_sid", CALLER)
+    resolved = disposition_module.resolve_session_id_with_source(Path("."))
+    assert (resolved.session_id, resolved.source) == (CALLER, "em_sid")
+
+
+def test_the_refusal_names_the_input_it_read(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The refusal is the one message an operator sees when this goes wrong; it
+    carries the record rather than making them go and ask for it."""
+    _clear_session_env(monkeypatch)
+    monkeypatch.setattr(wsc, "_load_session_disposition_module", _load_real_disposition_module)
+    with warm_served_request(True):
+        with pytest.raises(wsc.SessionIdentityUnresolved) as excinfo:
+            wsc.compute_session_shape_gate(tmp_path)
+    message = str(excinfo.value)
+    assert "source='unresolved'" in message
+    assert "warm=True" in message
+    assert f"pid={os.getpid()}" in message
+
+
+def test_provenance_rides_the_gate_on_the_SUCCESS_path(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The load-bearing one. On the day of the incident resolution SUCCEEDED — at
+    naming the wrong session — so provenance that only appeared on failure would
+    have been silent. `gates.session_shape.sid_source` is emitted beside the id it
+    describes, every time.
+    """
+    _clear_session_env(monkeypatch)
+    monkeypatch.setenv("COORDINATOR_SESSION_ID", CALLER)
+    monkeypatch.setattr(wsc, "_load_session_disposition_module", _load_real_disposition_module)
+    gate = wsc.compute_session_shape_gate(tmp_path)
+    assert gate.sid == CALLER
+    assert gate.sid_source == {
+        "source": "COORDINATOR_SESSION_ID",
+        "warm": False,
+        "pid": os.getpid(),
+    }
+
+
+def test_a_legacy_em_sid_close_is_warned_about_but_not_refused(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """`em_sid` is exported by a SHELL, not by the harness, so it outlives the
+    session that set it and no ratchet scans for it — the one surviving way a cold
+    close can silently key itself to a session that ended. Advisory, never a
+    refusal: it names a real session, and is correct whenever the exporting shell
+    is this one.
+    """
+    _clear_session_env(monkeypatch)
+    monkeypatch.setenv("em_sid", CALLER)
+    monkeypatch.setattr(wsc, "_load_session_disposition_module", _load_real_disposition_module)
+    gate = wsc.compute_session_shape_gate(tmp_path)
+    assert gate.sid == CALLER
+    assert gate.sid_source["source"] == "em_sid"
+    assert any("legacy `em_sid`" in d for d in gate.diagnostics), gate.diagnostics
+
+
+def test_the_gate_stays_json_serialisable_with_provenance_on_it(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """`SessionShapeGate` is emitted into the decision envelope via `_asdict()`.
+    A provenance field that cannot be serialised would surface as a broken brief,
+    not as a missing one."""
+    _clear_session_env(monkeypatch)
+    monkeypatch.setenv("CLAUDE_SESSION_ID", CALLER)
+    monkeypatch.setattr(wsc, "_load_session_disposition_module", _load_real_disposition_module)
+    gate = wsc.compute_session_shape_gate(tmp_path)
+    assert json.loads(json.dumps(gate._asdict()))["sid_source"]["source"] == "CLAUDE_SESSION_ID"

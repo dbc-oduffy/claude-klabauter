@@ -51,6 +51,7 @@ commit. See state/kill-ledger.md.
 from __future__ import annotations
 
 import contextvars
+import functools
 import ntpath
 import os
 import shutil
@@ -93,6 +94,7 @@ from coordinator_core.git.git_state import (
     head_blobs as _git_state_head_blobs,
     head_sha as _git_state_head_sha,
     head_tree_sha as _git_state_head_tree_sha,
+    index_read_cache_scope,
     read_index,
     read_index_stat_identity,
     read_tree_spine,
@@ -3551,6 +3553,35 @@ def _commit_scoped_private_index(
     # as an open C3 gap for `post_commit_tail.py`/`consumed_handoff_stamp.py`
     # to pick up as their own dispatch, each resolving its own committing
     # sid the way its own call site already knows how to.
+def _within_one_index_read(func):
+    """Serve every non-`fresh` `read_index()` inside one `func` call from the
+    first such read, via `git_state.index_read_cache_scope()`.
+
+    `.git/index` is 5.2MB in this repo and `read_index` parses it in pure
+    Python; `commit_scoped` read it four separate times per call
+    (`_index_blobs`, `_v2_state_records_chunked`, `_commit_scoped_private_
+    index`, plus `git_index.scoped_status`'s own scoped parse), which is
+    ~250ms of the ~300ms `memo.send` was measured spending -- for three
+    paths. Nothing between those reads mutates the shared index: both
+    branches land through `_commit_scoped_private_index`, which builds its
+    tree under a redirected `GIT_INDEX_FILE` and never writes the shared
+    one, and the single read that must observe a peer's write at a precise
+    instant -- `_agree_branch_cas_refusal`'s re-observation -- already asks
+    for `fresh=True`, which the scope is defined to bypass.
+
+    Negative-spec: the scope opens and closes with ONE call. It is not a
+    process-lifetime cache and never spans two commits -- a second
+    `commit_scoped` reads the index afresh, exactly as before.
+    """
+    @functools.wraps(func)
+    def _wrapper(*args, **kwargs):
+        with index_read_cache_scope():
+            return func(*args, **kwargs)
+
+    return _wrapper
+
+
+@_within_one_index_read
 def commit_scoped(
     paths: Sequence[str],
     msg_file: Union[str, Path],
@@ -5006,7 +5037,18 @@ def commit_authored_content(
     # Bound 5 -- replay the post-commit auto-push; only after a
     # successful CAS, mirroring the trailer replay's own "replay what
     # the hook would have done" precedent.
-    _replay_post_commit_auto_push(root)
+    #
+    # `path_list` is this entrypoint's own single `normalized` path (DR-344
+    # kill-bar work, 2026-08-30): C4 of docs/plans/2026-08-26-the-commit-op-
+    # stops-asking-git-eleven-times.md migrated `commit_scoped`'s two callers
+    # and left this one on the `path_list=None` leg, where
+    # `auto_push._release_claims_for_head` spends a `git show --name-only
+    # HEAD` (measured 166ms of a 465ms `memo.transition claim`) relearning the
+    # one path this function has held since its first line, plus a
+    # `git status --porcelain` clean-check `--no-claim-release` then skips.
+    _replay_post_commit_auto_push(
+        root, [normalized], attributed_session_id,
+    )
 
     # C11 (state/lessons/2026-08-18-a-ruling-applied-at-one-door-leaves-
     # the-siblings-unswept-7c3e1f9a4d22.yaml): this entrypoint is one of
@@ -5481,3 +5523,81 @@ def rev_list_count(cwd: Union[str, Path], range_spec: str) -> GitResult:
     landed push actually push".
     """
     return _git(["rev-list", "--count", range_spec], cwd=cwd)
+
+
+def replay_onto_print(
+    cwd: Union[str, Path], upstream_ref: str, merge_base_sha: str, branch_ref: str
+) -> GitResult:
+    """`git replay --ref-action=print --onto <upstream_ref> <merge_base>..<branch_ref>`
+    — the worktree-free half of the push ladder's diverged-branch recovery.
+
+    `git rebase --onto` needs a clean worktree because it checks the result
+    out; on this fleet's shared worktree a peer always has something
+    uncommitted, so that recovery could never run (see
+    `push._replay_onto_fetched_ref` for the full account). `git replay`
+    computes the replayed chain entirely in the object database — it reads
+    neither the index nor the working tree — so a dirty tree is not its
+    concern at all.
+
+    `--ref-action=print` is LOAD-BEARING, not cosmetic: git's own default for
+    `replay` is `update`, which writes the new tip straight into the branch
+    ref and leaves the index and working tree describing the OLD tip — a
+    silently desynchronized shared worktree, which on this fleet is the worst
+    outcome available. Printing hands the caller `update <ref> <new> <old>`
+    on stdout and updates nothing, so the caller can materialize the change
+    into the worktree first (`read_tree_merge_update`) and move the ref only
+    once that succeeded.
+
+    A git too old to know the subcommand exits non-zero with its own usage
+    diagnostic; the caller reads that as "recovery unavailable" and reports
+    the push failure it would have reported before this path existed.
+    """
+    return _git(
+        [
+            "replay",
+            "--ref-action=print",
+            "--onto",
+            upstream_ref,
+            f"{merge_base_sha}..{branch_ref}",
+        ],
+        cwd=cwd,
+    )
+
+
+def read_tree_merge_update(cwd: Union[str, Path], old_sha: str, new_sha: str) -> GitResult:
+    """`git read-tree -m -u <old_sha> <new_sha>` — two-way merge of the
+    index and working tree from one commit's tree to another's, WITHOUT the
+    clean-tree precondition a checkout imposes.
+
+    THE REFUSAL IS THE FEATURE. Files that differ between the two trees are
+    updated; files that do not are left exactly as they are, uncommitted peer
+    edits and staged peer entries included. If a path that differs between
+    the trees is locally modified, staged, or shadowed by an untracked file,
+    git refuses the whole operation (`Entry '<path>' not uptodate. Cannot
+    merge.` / `Untracked working tree file '<path>' would be overwritten by
+    merge.`) and writes NOTHING — index and worktree are left byte-identical
+    to before the call. That is precisely the guarantee that makes this
+    usable on a worktree a dozen peer sessions are writing to: the only two
+    outcomes are "landed, nobody else's work touched" and "declined, nothing
+    touched at all".
+
+    Callers MUST move the branch ref (`update_ref`) immediately after a
+    successful call and roll this back if that fails — between the two, the
+    index describes `new_sha` while HEAD still names `old_sha`, which reads
+    as a large staged diff to anything that looks at the tree.
+    """
+    return _git(["read-tree", "-m", "-u", old_sha, new_sha], cwd=cwd)
+
+
+def update_ref(
+    cwd: Union[str, Path], ref: str, new_sha: str, old_sha: str
+) -> GitResult:
+    """`git update-ref <ref> <new_sha> <old_sha>` — compare-and-swap ref move.
+
+    `old_sha` is git's own expected-current-value argument, never optional
+    here: on a shared worktree a peer can commit between the moment a caller
+    read the tip and the moment it writes one, and an unconditional ref write
+    would silently discard that commit. Supplying it makes git refuse the
+    update instead.
+    """
+    return _git(["update-ref", ref, new_sha, old_sha], cwd=cwd)

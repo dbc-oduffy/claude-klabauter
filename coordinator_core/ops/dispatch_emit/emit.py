@@ -849,6 +849,20 @@ _PROVENANCE_HEADING = (
     "triple to read, and `run_commit_pipeline` no longer exists -- a "
     "`ModuleNotFoundError` importing it is a stale reference in whatever "
     "told you to call it, never evidence the route is unavailable."
+    "\n\nTHE SHA IS NOT THE WHOLE OUTCOME -- READ `.no_delta` TOO. A "
+    "non-empty `CommitOutcome.no_delta` names paths YOU DECLARED that "
+    "contributed nothing, because their bytes already matched HEAD. The "
+    "commit is real and the sha is real; those paths are simply not in it. "
+    "The usual cause is a hook or a peer having committed that path moments "
+    "before you, and the path that goes missing is disproportionately the "
+    "one the wave existed to deliver -- a plan `.md` already committed by a "
+    "status-transition hook is the measured case (DoE-claude `874cf35dd`: "
+    "five paths declared, four landed, and the fifth was the point). "
+    "Reporting only the sha there reports delivery of something you did not "
+    "deliver. Name every `no_delta` path in your report, ABOVE the success "
+    "token line, and say it did not land in this commit. This is a REPORT, "
+    "never a refusal: a commit that delivers some of its pathspec is "
+    "legitimate and must still be reported landed."
     "\n\nA `TypeError` ON THE CALL IS A WRONG KEYWORD, NOT AN ABSENT ROUTE. "
     "The repo argument is `repo` (positional-or-keyword), NOT `repo_root`; "
     "the signature is "
@@ -970,6 +984,10 @@ def _commit_agent_call(
     static_prompt = (
         f"Commit wave {index + 1}'s work. Pathspec: [{', '.join(pathspec)}]."
         f"{subject_rule}"
+        f" If `CommitOutcome.no_delta` comes back non-empty, list those paths"
+        f" first and say they contributed nothing to this commit -- they are"
+        f" paths you declared that were already at HEAD, and reporting only"
+        f" the sha would report them as delivered."
         f" When (and ONLY when) the commit has landed, end your report with"
         f" the line '{_COMMIT_LANDED_TOKEN} <sha>'. If you refuse, or the"
         f" commit does not land for any reason, do NOT emit that line —"
@@ -1023,11 +1041,32 @@ def _commit_halt_gate(commit_var: str, phase_title: str) -> str:
     neither proves a commit landed, and this gate only ever asserts the
     positive.
     """
+    # The recovery text is the whole point of the halt: an operator who
+    # cannot act on it re-emits, and a re-emit is the ONE move that loses
+    # work silently -- `spine_read` correctly drops the chunks that already
+    # landed, so the second script is narrower and is indistinguishable on
+    # disk from one always meant to be partial (doe-claude-em cross-repo
+    # memo, 2026-08-30). Naming the resume call here is what puts the
+    # correct move in front of the EM at the moment they need it.
+    #
+    # Editing the call is NOT optional advice: resume serves the longest
+    # UNCHANGED prefix of agent() calls from cache, so relaunching this
+    # script untouched replays this phase's cached refusal and halts again
+    # at the same gate.
     reason = (
         f"{phase_title} did not land a commit -- halting before the next wave "
-        "writes over uncommitted work. Commit this wave's pathspec, then "
-        "re-emit and fire a fresh run: resumeFromRunId replays this phase's "
-        "cached refusal without re-running it."
+        "writes over uncommitted work. RECOVERY IS RESUME, NEVER RE-EMIT: a "
+        "second emit re-reads the spine, which correctly excludes the chunks "
+        "that DID land, so the new script is silently narrower than this one "
+        "(tripwire A-SECOND-EMIT-AFTER-A-PARTIAL-RUN-NARROWS-SILENTLY). "
+        "To resume: commit this wave's pathspec yourself, then EDIT this "
+        "phase's commit-agent step in the persisted script -- an unchanged call "
+        "is served from cache and replays this same refusal -- and relaunch "
+        "Workflow({scriptPath, resumeFromRunId}). Both values are in the tool "
+        "result that launched this run; every earlier phase is cached and is "
+        "not re-paid. resumeFromRunId is same-session-only: if that session "
+        "is gone, a re-emit is the remaining move, but expect a narrower "
+        "script and verify the dropped waves are exactly the ones that landed."
     )
     # The test is an ANCHORED match on a whole line, never a substring.
     # Measured 2026-08-21: a bare `.includes(token)` fails OPEN. Subagents may
@@ -1042,9 +1081,25 @@ def _commit_halt_gate(commit_var: str, phase_title: str) -> str:
     # Requiring the token at line start AND a real 7-40 hex sha after it means
     # a quotation cannot satisfy the gate: the instruction text carries the
     # literal placeholder `<sha>`, not a sha, and appears mid-sentence.
+    #
+    # The optional `[*_]{0,2}` runs are NOT a relaxation of that anchoring --
+    # they are the measured shape of a report that DID commit. Census of 378
+    # commit-agent outcomes across 653 workflow journals (2026-08-30, see
+    # state/audits/2026-08-30-what-the-commit-halts-actually-were.md): of 18
+    # halts, FOUR were reports whose token line read `**COMMIT-LANDED <sha>**`.
+    # All four of those commits are in this repo's history (5e4a76ea70,
+    # ca1ccc6019, 5eb6df2ece, ae9607e410) -- the runs were killed AFTER their
+    # work had landed. At 22% that is the single largest halt class, and each
+    # one is a re-fire the operator paid for nothing.
+    #
+    # Emphasis cannot reopen the 2026-08-21 fail-open, because what closed it
+    # was the hex-sha requirement, not the absence of asterisks: the
+    # instruction every commit agent is holding while it writes carries the
+    # literal placeholder `<sha>`, which is not hex however it is decorated.
     return (
         f"  if (!{commit_var} || "
-        f"!/^{_COMMIT_LANDED_TOKEN} +[0-9a-f]{{7,40}} *$/m.test(String({commit_var}))) {{\n"
+        f"!/^[*_]{{0,2}}{_COMMIT_LANDED_TOKEN}[*_]{{0,2}} +[*_]{{0,2}}"
+        f"[0-9a-f]{{7,40}}[*_]{{0,2}} *$/m.test(String({commit_var}))) {{\n"
         f"    return {{ halted: {_js_string_literal(reason)} + "
         f'" Agent report: " + String({commit_var} ?? "agent returned null") }};\n'
         "  }"

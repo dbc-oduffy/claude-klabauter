@@ -3553,7 +3553,7 @@ def _scaffold_plan(
         # the `prime_exit_criterion` block directly above. That block is
         # conditionally owed (read-side keyed on `estimate.tshirt` M/L/XL, which
         # scaffold time cannot know), so a live stub there would declare a
-        # criterion no sizing asked for. These four are owed by every plan
+        # criterion no sizing asked for. These five are owed by every plan
         # unconditionally, and a commented block would leave each plan born
         # without the brightlines its close-out is gated on — the defect this
         # emitter had from plan.schema.json 2.10.0 until now.
@@ -3561,7 +3561,7 @@ def _scaffold_plan(
         # Row text is byte-parity with the other producer of this block, DoE's
         # `coordinator/templates/plans/plan.md.tmpl`. The slug set is closed by
         # the schema's `brightline` enum plus one `contains` branch per slug: a
-        # fifth brightline arrives as a vendored schema bump, never as an edit
+        # further brightline arrives as a vendored schema bump, never as an edit
         # here alone.
         "gated_exit_criteria:",
         "  - brightline: work-proportionate-to-question",
@@ -3584,6 +3584,13 @@ def _scaffold_plan(
         "      <REPLACE: for every function or corpus-scale value this plan introduces, name the bounded",
         "      question it answers — an act to discharge (cite the function/value and its question), never",
         "      a disposition to assert (\"proportionate\" alone does not discharge this row).>",
+        "    met: false",
+        "  - brightline: right-not-merely-working",
+        "    statement: >-",
+        "      The delivered code is efficient and elegant — right, not merely working.",
+        "      <REPLACE: for every surface this plan delivers, name the simpler or cheaper shape",
+        "      considered and rejected, and why the delivered one is right — not merely working.",
+        "      Portability stays multi-os-first-class's row, never this one's.>",
         "    met: false",
         "  # `met` starts false and is flipped only by the session writing exit_criterion_met — see",
         "  # coordinator/docs/wiki/writing-plans.md § Gated Exit Criteria (Fleet Brightlines) and",
@@ -3657,6 +3664,22 @@ def _scaffold_plan(
         "  body: |",
         "    Optional multi-line detail.",
         "```",
+        "",
+        "## Exit criteria — verification",
+        "",
+        "The plan is finished when, and only when:",
+        "",
+        "1. `<REPLACE: python -m pytest <this plan's own targeted test paths>>` is green — the targeted",
+        "   tests for this plan's own surface, never the repo's fast tier or full suite.",
+        "2. <REPLACE: the plan's acceptance oracle, named and run — or \"none — no acceptance oracle in",
+        "   play,\" a positive claim, not an omission.>",
+        "3. <REPLACE: any further plan-specific exit steps, e.g. gated_exit_criteria rows carrying",
+        "   close-out evidence and flipping met: true.>",
+        "",
+        "The repo's fast tier and full suite are **never** a criterion for this plan — not the prime exit",
+        "criterion, not a gated exit criterion, not a chunk's test surface, and not a plan deliverable.",
+        "They are EM-owned, run only at the wave boundary or cadence gate, and running either proves",
+        "nothing about this plan.",
         "",
     ]
     return "\n".join(lines)

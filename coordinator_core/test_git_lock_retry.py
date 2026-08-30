@@ -21,6 +21,7 @@ class TestIsLockContention:
         [
             "fatal: Unable to create '.git/index.lock': File exists.",
             "error: Another git process seems to be running in this repository...",
+            "fatal: cannot lock ref 'HEAD': is at 825568a57e764d3962f60f5750672975d1c6f07a but expected 4d0e45aec5f86d98cf7311338ac47aabadef25d2",
         ],
     )
     def test_lock_shaped_stderr_is_recognized(self, stderr):
@@ -33,6 +34,7 @@ class TestIsLockContention:
             "fatal: pathspec 'x' did not match any files",
             "hook declined to commit",
             "",
+            "! [remote rejected] work/machine-a/2026-08-18to30 -> work/machine-a/2026-08-18to30 (cannot lock ref 'refs/heads/work/machine-a/2026-08-18to30': is at 825568a57e764d3962f60f5750672975d1c6f07a but expected 4d0e45aec5f86d98cf7311338ac47aabadef25d2)",
         ],
     )
     def test_non_lock_stderr_is_not_recognized(self, stderr):
@@ -68,6 +70,28 @@ class TestRunWithLockRetry:
             calls.append(1)
             if len(calls) == 1:
                 return _result(128, "fatal: Unable to create '.git/index.lock': File exists.")
+            return _result(0)
+
+        result = git_lock_retry.run_with_lock_retry(invoke)
+
+        assert result.returncode == 0
+        assert len(calls) == 2
+        assert sleeps == [git_lock_retry.DEFAULT_BACKOFF_SCHEDULE_S[0]]
+
+    def test_ref_lock_contention_then_success_completes_and_retries_exactly_once(self, monkeypatch):
+        sleeps: list[float] = []
+        monkeypatch.setattr(git_lock_retry.time, "sleep", lambda s: sleeps.append(s))
+        calls = []
+
+        def invoke():
+            calls.append(1)
+            if len(calls) == 1:
+                return _result(
+                    128,
+                    "fatal: cannot lock ref 'HEAD': is at "
+                    "825568a57e764d3962f60f5750672975d1c6f07a but expected "
+                    "4d0e45aec5f86d98cf7311338ac47aabadef25d2",
+                )
             return _result(0)
 
         result = git_lock_retry.run_with_lock_retry(invoke)

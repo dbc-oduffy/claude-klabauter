@@ -115,7 +115,7 @@ class ScaffoldEmitsLiveBrightlineRowsTest(unittest.TestCase):
             sizing_object="state/sizings/example.yaml",
             problem_set="my-ratified-slug",
         )
-        self.assertEqual(4, len(fields["gated_exit_criteria"]))
+        self.assertEqual(5, len(fields["gated_exit_criteria"]))
 
 
 class SlugSetMatchesVendoredSchemaTest(unittest.TestCase):

@@ -101,10 +101,10 @@ auto-reconcile-must-fire-not-surface-e1e90e): the PM's "a shipped blocker's id
 comes out of every dependent's blocked_by the moment it ships" — cascade-
 clearing PROMPTLY rather than only on C5's cadence backstop. For the SAME
 `stamped` set the deliverable-cascade leg above already reads, this leg calls
-`ops.handoff_children.blocked_by_dependents` per newly-shipped baton and
-fires `handoff.transition`'s `gate-cascade-clear` verb (C1's MOVE-not-drop
-writer) once per live dependent whose `blocked_by` names that baton.
-`blocked_by_dependents` is TRI-STATE — its own "indeterminate" (a non-empty
+`ops.handoff_children.blocked_by_dependents_many` ONCE for the whole stamped
+set and fires `handoff.transition`'s `gate-cascade-clear` verb (C1's
+MOVE-not-drop writer) once per live dependent whose `blocked_by` names that
+baton. That resolver is TRI-STATE — its own "indeterminate" (a non-empty
 `scan_errors`, or an unresolvable candidate identifier) is fail-closed-and-
 logged here, never read as "no dependents": silently declining a fan-out
 because a scan hiccuped is how a shipped-blocker wall survives. Exactly THREE
@@ -114,23 +114,26 @@ live state does not clear the gate — classify as a named skip; every other
 error (validation failure, lock timeout, malformed frontmatter, a usage
 error) propagates into `failed`, never silently swallowed as a no-op.
 
-COST (part (c) of the chunk body): `blocked_by_dependents` walks the full
-live+archive handoff corpus once per stamped baton, and `_gate_cascade_clear`
+COST (part (c) of the chunk body): the fan-out resolution walks the full
+live+archive handoff corpus ONCE per tail invocation — not once per stamped
+baton. The corpus walk and its `blocked_by` normalisation are
+candidate-independent, so `blocked_by_dependents_many` hoists them out of the
+per-candidate loop and leaves a set lookup behind; a tail that stamps five
+batons pays one walk, not five. Measured against this repo's own live corpus
+on 2026-08-18: `state/handoffs/*.md` = 142, `archive/handoffs/**/*.md` = 444,
+`archive/completed/**/*.md` = 440 — a ~1026-file walk, run synchronously on
+the commit hot path `ipc.py::_timeout_for` bounds, at the
+50-70-concurrent-session load norm (`docs/wiki/machine-load-norm.md`) this
+plan is sized against.
+
+What the walk does NOT cover is the write side: `_gate_cascade_clear`
 re-resolves each blocker id against LIVE disk a second time per call (its own
 act-time re-verification guard against the shared-worktree carry-forward-
-laundering race — Anti-scope: that re-resolution is NOT cached here). Chosen
-option: (ii) BOUND the per-tail fan-out
-(`_MAX_GATE_CASCADE_DEPENDENTS_PER_STAMPED`) with the remainder left in
-`blocked_by` — untouched, not dropped — for C5's cadence backstop to clear on
-its own pass. Measured against this repo's own live corpus on 2026-08-18:
-`state/handoffs/*.md` = 142, `archive/handoffs/**/*.md` = 444,
-`archive/completed/**/*.md` = 440 — a ~1026-file walk per stamped baton, run
-synchronously on the commit hot path `ipc.py::_timeout_for` bounds, at the
-50-70-concurrent-session load norm (`docs/wiki/machine-load-norm.md`) this
-plan is sized against. An unbounded fan-out multiplies that corpus-sized walk
-by every live dependent of every stamped baton in ONE tail call; bounding it
-caps a single tail's worst case to a small, known multiple of one corpus
-walk regardless of how many dependents a baton accumulates.
+laundering race — Anti-scope: that re-resolution is NOT cached here), so the
+per-dependent cost is still linear in the fan-out. Chosen option: (ii) BOUND
+the per-tail fan-out (`_MAX_GATE_CASCADE_DEPENDENTS_PER_STAMPED`) with the
+remainder left in `blocked_by` — untouched, not dropped — for C5's cadence
+backstop to clear on its own pass.
 
 Negative-spec (hard-won):
   - Does NOT acquire any ceremony-wide serialization lock — see HARD
@@ -160,22 +163,40 @@ Negative-spec (hard-won):
     dispatch-fragility footgun this repo's conventions warn about.
   - Does NOT reimplement `_gate_cascade_clear`'s MOVE-not-drop write, its
     reverse-dependents resolution, or its act-time re-verification (C3) —
-    composes `ops.handoff_children.blocked_by_dependents` (read-only) and
+    composes `ops.handoff_children.blocked_by_dependents_many` (read-only) and
     dispatches the SAME `handoff.transition` op every other caller of
     `gate-cascade-clear` uses. A second writer of `no_longer_blocked_by`
     here is exactly the disagreement this repo's two-writers-must-agree
     precedent (C1) exists to prevent.
-  - Does NOT treat `blocked_by_dependents`'s `"indeterminate"` state as
+  - Does NOT treat the fan-out resolver's `"indeterminate"` state as
     `"none"` — see "Third leg (C3)" above. Both fail-closed-and-log; neither
     silently declines the fan-out as if there were nothing to clear.
   - Does NOT cache `_gate_cascade_clear`'s act-time re-resolution, and does
     NOT widen the per-tail fan-out bound past a measured, named option — see
     "Third leg (C3)" § COST above.
+  - Does NOT run `git log --grep`, or any other trailer/history scan, to
+    find the sha to fold — `committed_sha` is already a required `run()`
+    parameter (spike verdict constraint 1, module section "Completion-entry
+    commit-ledger fold").
+  - Does NOT re-derive `d-complete-entry`'s entry path (chain-slug
+    idempotency guard, LoE computation, today's-date filename derivation) —
+    `completion_entry_path` is caller-supplied, exactly as
+    `directives_completion.py`'s own negative-spec forbids a second
+    derivation of that guard.
+  - Does NOT acquire a lock for the completion-entry fold — same HARD
+    CONSTRAINT as the rest of this module (see top of docstring); this leg
+    is the sole in-process caller of its own entry-path rewrite, so no
+    concurrent-writer hazard exists to serialize against.
+  - Does NOT widen `resolve_chain_commits` or any chain-widening helper
+    back into existence — `completion_ops.py`'s own docstring forbids
+    resurrecting them, and this leg never reads git history at all.
 """
 
 from __future__ import annotations
 
 import logging
+import os
+import re
 import sys
 import tempfile
 from contextlib import nullcontext
@@ -186,9 +207,13 @@ from typing import Any, Awaitable, Callable, Optional
 from coordinator_core.dag import _read_meta
 from coordinator_core.ipc import get_op_handler, register_op
 from coordinator_core.op_budget_suspension import OpSuspendedError
+from coordinator_core.ops._path_guard import contained_path
 from coordinator_core.ops.ceremony import consumed_handoff_stamp
-from coordinator_core.ops.handoff_children import blocked_by_dependents
+from coordinator_core.ops.completion_ops import _parse_existing_commits
+from coordinator_core.ops.handoff_children import blocked_by_dependents_many
 from coordinator_core.ops.ceremony.push import (
+    _PUSH_MODES_SUPPRESSING_POST_COMMIT_HOOK,
+    PUSH_MODE_NEVER,
     PUSH_MODE_SYNC,
     PUSH_STATUS_DECLINED,
     PUSH_STATUS_FAILED,
@@ -238,11 +263,12 @@ OP_GATE_CASCADE_CLEAR = "handoff.transition:gate-cascade-clear"
 #: the number of live dependents cascade-cleared per stamped baton, per tail
 #: invocation. A dependent past this cap is left in `blocked_by` (untouched,
 #: not dropped) for C5's cadence backstop (`handoff.reconcile_open` on
-#: `boot_sweep`) to clear on its own pass. Deliberately small: this repo's
-#: own live corpus measured 2026-08-18 at ~1026 handoff files
-#: (`state/handoffs/` + `archive/handoffs/` + `archive/completed/`), one full
-#: walk of which `blocked_by_dependents` performs per stamped baton, on the
-#: synchronous commit hot path, at the 50-70-concurrent-session load norm.
+#: `boot_sweep`) to clear on its own pass. Deliberately small: each dependent
+#: costs a `_gate_cascade_clear` call that re-resolves its blocker ids against
+#: LIVE disk (module docstring "Third leg (C3)" § COST), on the synchronous
+#: commit hot path, at the 50-70-concurrent-session load norm. The corpus walk
+#: itself is NOT what this bounds — that is hoisted to once per tail by
+#: `blocked_by_dependents_many`.
 _MAX_GATE_CASCADE_DEPENDENTS_PER_STAMPED = 5
 
 
@@ -793,7 +819,8 @@ async def _run_gate_cascade_clear(
 ) -> dict:
     """C3's third leg: for each handoff `stamp_and_ship` just flipped to
     `deployment_state: shipped` (a relpath in ``stamped``), resolve its LIVE
-    dependents via `ops.handoff_children.blocked_by_dependents` and fire
+    dependents via `ops.handoff_children.blocked_by_dependents_many`
+    (one corpus walk for the whole stamped set) and fire
     `handoff.transition`'s `gate-cascade-clear` verb once per dependent whose
     `blocked_by` names it — see module docstring "Third leg (C3)" for the
     full design rationale (fail-closed indeterminate handling, the three
@@ -831,12 +858,16 @@ async def _run_gate_cascade_clear(
             "failed": failed,
         }
 
-    for relpath in stamped:
-        candidate_abs = worktree_root / relpath
-        # blocked_by_dependents walks the full live+archive corpus per call
-        # (module docstring § COST) — off the event loop, same hygiene
-        # rationale as this module's own `_to_thread_commit_and_push`.
-        result = await asyncio.to_thread(blocked_by_dependents, str(candidate_abs), worktree_root)
+    # ONE corpus walk for the whole stamped set (module docstring § COST) —
+    # off the event loop, same hygiene rationale as this module's own
+    # `_to_thread_commit_and_push`.
+    candidate_keys = [str(worktree_root / relpath) for relpath in stamped]
+    fan_out = await asyncio.to_thread(
+        blocked_by_dependents_many, candidate_keys, worktree_root
+    )
+
+    for relpath, candidate_key in zip(stamped, candidate_keys):
+        result = fan_out[candidate_key]
         state = result.get("state")
 
         if state == "indeterminate":
@@ -882,7 +913,7 @@ async def _run_gate_cascade_clear(
             if not matched_ids:
                 # A concurrent writer (another session, or this tail's own
                 # earlier iteration over a shared blocker) already cleared
-                # this edge between blocked_by_dependents' enumeration read
+                # this edge between the fan-out resolver's enumeration read
                 # and this re-read. Not an error.
                 skipped.append(f"{OP_GATE_CASCADE_CLEAR}:{dep_path}:no-longer-blocked-on-reread")
                 continue
@@ -929,6 +960,325 @@ async def _run_gate_cascade_clear(
                 failed.append(f"{OP_GATE_CASCADE_CLEAR}:{dep_path}: {error_message}")
 
     return {"acted": acted, "skipped": skipped, "failed": failed}
+
+
+# ---------------------------------------------------------------------------
+# Completion-entry commit-ledger fold (2026-08-30 spike verdict:
+# docs/research/spike-verdicts/2026-08-30-the-completion-entrys-commit-
+# ledger-folds-at-the-event.md). Appends THIS pass's own `committed_sha`
+# into an already-written completion entry's `commits:` YAML list, at
+# post-commit time, inside this tail -- never a corpus re-walk, never a
+# `git log --grep` lookup (the sha is already a required `run()` param).
+# `completion.reconcile_commits` (killed 2026-08-23, K-054) swept every
+# entry after the fact at up to 7.9s wall/26-of-26-breach; this fold
+# touches exactly the ONE entry named by its caller, at the moment the
+# commit that should be folded into it lands.
+# ---------------------------------------------------------------------------
+
+#: Label for this leg's skip/fail strings — mirrors `OP_CLOSE_ORIGIN_STUB`'s
+#: use as a string prefix, not a registered op name (this leg composes no
+#: standalone op; see module docstring "Design" in the spike verdict).
+OP_COMPLETION_ENTRY_FOLD = "completion.commit_ledger_fold"
+
+#: The two allowed roots a caller-supplied entry path may resolve under —
+#: mirrors `completion_ops._flip_to_released_handler`'s own dual-root
+#: allow-list (`docs/plans/` / `archive/completed/`). A path escaping both
+#: is refused rather than written, even though this leg is soft-fail —
+#: writing outside these roots is never the status-quo-ante residue a
+#: soft-fail is supposed to preserve.
+_FOLD_ALLOWED_ROOT_SUFFIXES: tuple[tuple[str, ...], ...] = (
+    ("docs", "plans"),
+    ("archive", "completed"),
+)
+
+
+def _resolve_fold_entry_path(worktree_root: Path, entry_path: str) -> Optional[Path]:
+    """Resolve and contain a caller-supplied completion-entry path against
+    this worktree's `docs/plans/` and `archive/completed/` roots -- the
+    same two roots `completion.flip_to_released` already confines its own
+    writes to. Returns `None` (never raises) on an empty path, an
+    unresolvable path, or one that escapes both roots -- the caller treats
+    that as a clean skip, not a failure to diagnose.
+    """
+    if not entry_path:
+        return None
+    candidate = Path(entry_path)
+    if not candidate.is_absolute():
+        candidate = worktree_root / candidate
+    allowed_roots = [worktree_root.joinpath(*suffix) for suffix in _FOLD_ALLOWED_ROOT_SUFFIXES]
+    return contained_path(candidate, allowed_roots)
+
+
+def _apply_commit_fold(content: str, sha: str) -> tuple[str, bool]:
+    """Content-additive append of ``sha`` into the frontmatter ``commits:``
+    YAML list -- handles both shapes a completion entry ships with today
+    (`coordinator_complete_entry.py`'s ``commits: []`` and
+    `ceremony/completion_entry.py`'s ``commits: []  # fill via
+    completion.reconcile_commits (Step 2.6.8)``), plus any already-
+    populated flow- or block-style list left by an earlier fold pass.
+
+    Reuses `completion_ops`'s own `commits:` shape regexes/parsing (never a
+    second, drifting parser) — mirrors `_parse_existing_commits`'s exact
+    flow/block/any-other-shape discrimination so this write agrees with
+    what `completion.flip_to_released` will later read back.
+
+    Returns ``(content, False)`` unchanged when ``sha`` is already present
+    (idempotent no-op — the caller never fires a commit for a no-op).
+    Raises ``ValueError`` on a frontmatter shape this module cannot safely
+    rewrite (no ``commits:`` key at all, or one matching neither the flow
+    nor the block regex) — the caller catches this and soft-fails, per the
+    spike verdict's constraint 6.
+    """
+    from coordinator_core.ops.completion_ops import (
+        _COMMITS_ANY_RE,
+        _COMMITS_BLOCK_RE,
+        _COMMITS_FLOW_RE,
+        _split_flow_items,
+    )
+
+    if sha in _parse_existing_commits(content):
+        return content, False
+
+    lines = content.splitlines(keepends=False)
+    fence_idxs = [i for i, line in enumerate(lines) if line == "---"]
+    if len(fence_idxs) < 2:
+        raise ValueError("malformed frontmatter: fewer than two '---' fence lines")
+    fm_start, fm_end = fence_idxs[0], fence_idxs[1]
+
+    for i in range(fm_start + 1, fm_end):
+        line = lines[i]
+        flow = _COMMITS_FLOW_RE.match(line)
+        if flow:
+            items = _split_flow_items(flow.group(1))
+            items.append(sha)
+            rendered = ", ".join(f'"{item}"' for item in items)
+            lines[i] = f"commits: [{rendered}]"
+            return "\n".join(lines) + "\n", True
+
+        if _COMMITS_BLOCK_RE.match(line):
+            j = i + 1
+            insert_at = i + 1
+            while j < fm_end:
+                if re.match(r"^\s+-\s", lines[j]):
+                    insert_at = j + 1
+                    j += 1
+                    continue
+                if re.match(r"^[a-zA-Z]", lines[j]):
+                    break
+                j += 1
+            lines = lines[:insert_at] + [f'  - "{sha}"'] + lines[insert_at:]
+            return "\n".join(lines) + "\n", True
+
+        if _COMMITS_ANY_RE.match(line):
+            raise ValueError(
+                f"unrecognized commits: shape in frontmatter — refusing to fold: {line!r}"
+            )
+
+    raise ValueError("no commits: key found in frontmatter")
+
+
+def _fold_sha_into_entry_on_disk(entry_path: Path, sha: str) -> bool:
+    """Atomic temp-write + `os.replace` of ``entry_path`` with ``sha``
+    appended to its `commits:` list — same content-additive-in-place
+    discipline as `completion_ops.append_plan_session`'s no-repo-root
+    fallback branch (DR-216 D2(iii)/D3), and, per this leg's HARD
+    CONSTRAINT (module docstring), NO file lock: `post_commit_tail.run()`
+    is the sole in-process caller of this leg, invoked once per landed
+    ceremony commit -- there is no concurrent-writer hazard on the SAME
+    entry path within one process the way a JSON-RPC-exposed op has to
+    guard against.
+
+    Returns `True` when a real rewrite happened, `False` on an idempotent
+    no-op (the sha was already present). Raises whatever
+    `_apply_commit_fold`/file I/O raises -- the caller (`_run_completion_
+    entry_fold`) is the soft-fail boundary, not this function.
+    """
+    text = entry_path.read_text(encoding="utf-8")
+    new_text, changed = _apply_commit_fold(text, sha)
+    if not changed:
+        return False
+
+    dir_path = entry_path.parent
+    fd, tmp_path = tempfile.mkstemp(dir=str(dir_path), suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="") as fh:
+            fh.write(new_text)
+        os.replace(tmp_path, str(entry_path))
+    except Exception:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
+    return True
+
+
+def _compose_completion_fold_message(entry_relpath: str, committed_sha: str) -> str:
+    """Compose the fold follow-up commit's message body -- sibling to
+    `_compose_origin_stub_close_message`, same one-line-plus-blank-plus-
+    path shape."""
+    return (
+        f"ceremony: fold commit into completion entry commits list "
+        f"(sha={committed_sha})\n\n- {entry_relpath}\n"
+    )
+
+
+def _run_completion_entry_fold(
+    worktree_root: Path,
+    entry_path: str,
+    committed_sha: str,
+    push_mode: str = PUSH_MODE_SYNC,
+) -> dict:
+    """Fold `committed_sha` into the completion entry named by
+    ``entry_path``'s `commits:` YAML list, then land that one-file rewrite
+    in its own scoped commit. Synchronous — the caller
+    (`_to_thread_completion_entry_fold`) is the `asyncio.to_thread` hop;
+    this function itself runs the blocking FS + git work, mirroring
+    `_commit_and_push_origin_stub_close`'s own split.
+
+    Soft-fail contract (spike verdict constraint 6, module docstring):
+    EVERY exception this function could raise -- a missing/unreadable
+    entry, a frontmatter shape `_apply_commit_fold` refuses, a commit
+    failure -- is caught by the caller and folded into `failed`, never
+    propagated past `run()`. A stale `commits:` list is the status quo
+    ante; this leg can only improve on it, never regress a ceremony that
+    otherwise succeeded.
+
+    Idempotent by sha membership (constraint 4): a second fold pass over
+    the SAME entry with the SAME sha already present is a clean no-op --
+    no rewrite, no commit, recorded as `skipped`.
+
+    Returns a tail_ops-shaped `{acted, skipped, failed}` dict.
+    """
+    resolved = _resolve_fold_entry_path(worktree_root, entry_path)
+    if resolved is None:
+        return {
+            "acted": [],
+            "skipped": [f"{OP_COMPLETION_ENTRY_FOLD}:unresolvable-or-uncontained-entry-path"],
+            "failed": [],
+        }
+
+    try:
+        changed = _fold_sha_into_entry_on_disk(resolved, committed_sha)
+    except Exception as exc:  # noqa: BLE001 -- soft-fail, never raise past this tail step
+        _LOG.warning(
+            "post_commit_tail: completion-entry commit-ledger fold failed for %s: %s",
+            resolved, exc,
+        )
+        return {
+            "acted": [],
+            "skipped": [],
+            "failed": [f"{OP_COMPLETION_ENTRY_FOLD}: {exc}"],
+        }
+
+    if not changed:
+        return {
+            "acted": [],
+            "skipped": [f"{OP_COMPLETION_ENTRY_FOLD}:already-present"],
+            "failed": [],
+        }
+
+    entry_relpath = resolved.relative_to(worktree_root).as_posix()
+    message = _compose_completion_fold_message(entry_relpath, committed_sha)
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=".txt", delete=False, encoding="utf-8"
+    ) as fh:
+        fh.write(message)
+        msg_path = fh.name
+    try:
+        commit_result = commit_scoped(
+            [entry_relpath],
+            msg_path,
+            worktree_root,
+            # `push.py`'s own set, not a local `== PUSH_MODE_SYNC`: this leg
+            # takes `PUSH_MODE_NEVER` from the close ceremony (which runs its
+            # own `push.outstanding` afterwards), and that mode suppresses the
+            # post-commit hook too -- letting it fire would spend a second
+            # push on work the caller is about to publish anyway.
+            suppress_post_commit_auto_push=(
+                push_mode in _PUSH_MODES_SUPPRESSING_POST_COMMIT_HOOK
+            ),
+        )
+    finally:
+        try:
+            Path(msg_path).unlink()
+        except OSError:
+            pass
+
+    if not commit_result.ok:
+        return {
+            "acted": [],
+            "skipped": [],
+            "failed": [f"{OP_COMPLETION_ENTRY_FOLD}: git commit failed: {commit_result.stderr}"],
+        }
+
+    if push_mode == PUSH_MODE_SYNC:
+        push_outcome = push_with_retry(worktree_root, budget_secs=CEREMONY_PUSH_BUDGET_SECS)
+        push_status = derive_push_status(push_outcome)
+        if push_status == PUSH_STATUS_FAILED:
+            reason = push_outcome.message or "; ".join(push_outcome.failed) or "unknown push failure"
+            return {
+                "acted": [entry_relpath],
+                "skipped": [],
+                "failed": [f"{OP_COMPLETION_ENTRY_FOLD}: git push failed: {reason}"],
+            }
+        if push_status in (PUSH_STATUS_DECLINED, PUSH_STATUS_NO_REMOTE, PUSH_STATUS_UNCONFIRMED):
+            return {
+                "acted": [entry_relpath],
+                "skipped": [f"{OP_COMPLETION_ENTRY_FOLD}:push:{push_status}"],
+                "failed": [],
+            }
+
+    return {"acted": [entry_relpath], "skipped": [], "failed": []}
+
+
+def fold_completion_entry_commit(
+    worktree_root: Path,
+    entry_path: str,
+    committed_sha: str,
+    *,
+    push_mode: str = PUSH_MODE_NEVER,
+) -> dict:
+    """The completion-entry commit-ledger fold, as a seam a SYNCHRONOUS
+    caller outside this module can reach.
+
+    Why this exists rather than `run()`: `run()` composes five post-commit
+    legs and is `async`, and its only live caller is `/execute-plan`'s
+    close-out. The close ceremony that actually WRITES completion entries
+    (`workstream_complete.apply`) is synchronous, reaches none of the other
+    four legs, and — until this seam — had no way to fold its own commit into
+    the entry `d-complete-entry` had just written. The fold therefore shipped
+    dead: `run()` folded a supplied path correctly and nothing supplied one,
+    so every completion entry's `commits:` list stayed empty. This is the one
+    remaining wire.
+
+    Defaults to `PUSH_MODE_NEVER` because that is what the close ceremony
+    needs: it runs its own `push.outstanding` tail immediately afterwards
+    (`apply._run_push_outstanding_tail`), which publishes this commit along
+    with everything else the pass landed. Passing `PUSH_MODE_SYNC` here would
+    buy a second push of the same work.
+
+    Soft-fail and idempotency are `_run_completion_entry_fold`'s own
+    contract, unchanged and not re-implemented here — a `{acted, skipped,
+    failed}` dict either way, never a raise.
+    """
+    return _run_completion_entry_fold(worktree_root, entry_path, committed_sha, push_mode)
+
+
+async def _to_thread_completion_entry_fold(
+    worktree_root: Path,
+    entry_path: str,
+    committed_sha: str,
+    push_mode: str,
+) -> dict:
+    """`asyncio.to_thread` wrapper around `_run_completion_entry_fold` --
+    split out for the same event-loop-hygiene reason as
+    `_to_thread_commit_and_push`."""
+    import asyncio
+
+    return await asyncio.to_thread(
+        _run_completion_entry_fold, worktree_root, entry_path, committed_sha, push_mode
+    )
 
 
 async def _to_thread_commit_and_push(
@@ -978,6 +1328,12 @@ class PostCommitTailOutcome:
     gate_cascade_clear_result: dict = field(
         default_factory=lambda: {"acted": [], "skipped": [], "failed": []}
     )
+    #: 2026-08-30 completion-entry commit-ledger fold — tail_ops-shaped
+    #: `{acted, skipped, failed}`, same shape the other three legs carry.
+    #: See module section "Completion-entry commit-ledger fold".
+    completion_entry_fold_result: dict = field(
+        default_factory=lambda: {"acted": [], "skipped": [], "failed": []}
+    )
 
 
 async def run(
@@ -995,6 +1351,7 @@ async def run(
     cascade_handler: Optional[Callable[[dict, Path], Awaitable[dict]]] = None,
     delivery_proof: Optional[dict] = None,
     gate_cascade_clear_handler: Optional[Callable[[dict, Path], Awaitable[dict]]] = None,
+    completion_entry_path: Optional[str] = None,
 ) -> PostCommitTailOutcome:
     """Compose steps 5c (post-commit consumed-handoff stamp+ship), 5d
     (origin-stub close), and C6b's second trigger (deliverable cascade) into
@@ -1021,16 +1378,26 @@ async def run(
     is resolved here via `get_op_handler(OP_HANDOFF_TRANSITION)`, folding a
     future `OpSuspendedError` into the same not-registered skip (see the
     call site's own comment), so existing callers that predate C3 need no
-    call-site change either.
+    call-site change either. `completion_entry_path` (2026-08-30, module
+    section "Completion-entry commit-ledger fold") is OPTIONAL -- the sha
+    THIS pass just committed is already a required param above (constraint
+    1 of the spike verdict: no `git log --grep` lookup on this path); the
+    entry path is the one piece this leg cannot derive itself (`apply.py`'s
+    `{d-complete-entry.entry_path}` token substitution is the sanctioned
+    resolver, and this function's own negative-spec below forbids
+    re-deriving it). `None` (every existing call site) is a clean skip, not
+    a failure.
 
-    All four steps run unconditionally in sequence -- a stamp+ship exception
-    propagates BEFORE origin-stub close, the deliverable cascade, or the
-    gate-cascade-clear fan-out ever run (matches the pre-extraction inline
-    sequencing exactly: a crash mid-stamp on the fresh pass must leave the
-    origin stub untouched, recovered only on the AC18-resumed re-invoke). An
-    origin-stub-close failure, a deliverable-cascade failure, or a gate-
-    cascade-clear failure, by contrast, is caught and soft-failed inside its
-    own helper -- none of the three propagates past this function.
+    All five steps run unconditionally in sequence -- a stamp+ship exception
+    propagates BEFORE origin-stub close, the deliverable cascade, the
+    gate-cascade-clear fan-out, or the completion-entry fold ever run
+    (matches the pre-extraction inline sequencing exactly: a crash mid-stamp
+    on the fresh pass must leave the origin stub untouched, recovered only
+    on the AC18-resumed re-invoke). An origin-stub-close failure, a
+    deliverable-cascade failure, a gate-cascade-clear failure, or a
+    completion-entry-fold failure, by contrast, is caught and soft-failed
+    inside its own helper -- none of the four propagates past this
+    function.
     """
     with _measure(timing, "stamp_and_ship"):
         stamp_outcome = await consumed_handoff_stamp.post_commit_stamp_and_ship(
@@ -1111,11 +1478,28 @@ async def run(
         resolved_gate_cascade_clear_handler,
     )
 
+    # 2026-08-30 completion-entry commit-ledger fold (spike verdict, module
+    # section "Completion-entry commit-ledger fold"): a clean skip, not a
+    # failed leg, when the caller has no entry path to give — every existing
+    # call site (`close_out_and_stamp._reach_post_commit_tail_stub_close`)
+    # predates this leg and passes none.
+    if completion_entry_path:
+        completion_entry_fold_result = await _to_thread_completion_entry_fold(
+            worktree_root, completion_entry_path, committed_sha, push_mode
+        )
+    else:
+        completion_entry_fold_result = {
+            "acted": [],
+            "skipped": [f"{OP_COMPLETION_ENTRY_FOLD}:no-entry-path-supplied"],
+            "failed": [],
+        }
+
     return PostCommitTailOutcome(
         stamp_outcome=stamp_outcome,
         origin_stub_result=origin_stub_result,
         deliverable_cascade_result=deliverable_cascade_result,
         gate_cascade_clear_result=gate_cascade_clear_result,
+        completion_entry_fold_result=completion_entry_fold_result,
     )
 
 

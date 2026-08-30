@@ -36,12 +36,12 @@ This module inverts both properties, per K-064's own returns-when spec:
   - No lock of any kind. Nothing here serializes another commit, queue write,
     or ceremony write behind it.
 
-Measured cost of the spawning leg: ~25ms wall, 1 process, k=6, on a commit
-carrying three `.cmd` paths (2026-08-30). That is process CREATION, not query
-work -- it matches `CLAUDE.md`'s own `git --version` 25.3ms floor almost
-exactly, so the count of paths in the batch is nearly free and the count of
-SPAWNS is the whole budget. Against the 200ms per-commit bar this leaves ~8x
-headroom, and against the 500ms brightline ~20x.
+Budget measurement (spawn count, wall time, headroom against the 200ms/500ms
+bars) lives in `docs/reference/eol-drift-detection.md`, which the close-out
+keeps current -- a dated figure in this docstring would go stale silently.
+<!-- Review: overengineering-reviewer (Kira) -- collapsed the dated
+measured-cost paragraph to a doc pointer; structural claims above are kept
+as spec, not measurement. -->
 
 WHY `w/` IS THE TRUTH SOURCE AND NO FILE IS READ TO DETECT. `git ls-files
 --eol` reports the working tree's actual line ending in its `w/` field. Reading
@@ -87,7 +87,7 @@ _BYTES_FOR = {"lf": b"\n", "crlf": b"\r\n"}
 #: (`text eol=crlf`), which is why the path is taken off the tab rather than
 #: off a field count. Under `-z` git NUL-terminates records and does NOT
 #: C-quote unusual paths, so `.*` is safe for the tail.
-_RECORD = re.compile(r"^i/(\S+)\s+w/(\S+)\s+attr/(.*?)\s*\t(.*)$", re.DOTALL)
+_RECORD = re.compile(r"^i/(\S*)\s+w/(\S*)\s+attr/(.*?)\s*\t(.*)$", re.DOTALL)
 
 _DECLARED = re.compile(r"\beol=(\w+)")
 
@@ -186,7 +186,13 @@ def find_declared_eol_drift(
         declared = declaration.group(1)
         if declared not in _REPAIRABLE_DECLARATIONS:
             continue
-        if worktree_eol in (declared, "none"):
+        # "-text" and "" both mean git's own binary-content heuristic (or an
+        # unset worktree eolinfo) is in play, in which case check-in
+        # normalization does NOT touch the bytes -- there is no checkout
+        # filter run to be "byte-identical to" for those states, so treating
+        # either as repairable drift would let this module rewrite bytes
+        # git itself would leave alone. Review finding 2, 2026-08-30.
+        if worktree_eol in (declared, "none", "-text", ""):
             continue
         drifts.append(Drift(path=path, declared=declared, on_disk=worktree_eol))
     return drifts
@@ -198,21 +204,13 @@ def repair_declared_eol_drift(
     """Rewrite each drifted file's line endings to its declaration. Returns the
     paths actually repaired, in the order given.
 
-    WHY REPAIRING IS SAFE HERE, AND WHY IT IS NOT A CONTENT CHANGE. The bytes
-    written are exactly the bytes git's own checkout filter would produce for
-    that declaration, and check-in normalization maps both the before and the
-    after to the SAME index blob -- so a commit taken across this repair
-    carries identical content either way. K-062 fixed its live `.cmd` this
-    way by hand and observed precisely that: "no commit resulted: the
-    corrected working copy hashes identically to the index". The repair
-    restores the state the next checkout would establish anyway; it does not
-    invent one.
-
-    WHY REPAIR RATHER THAN WARN. A warning is the "declaration nobody reads"
-    problem this whole requirement opens with, one level up -- and the
-    north star (`CLAUDE.md`) asks for the artifact that discharges a rule, not
-    for the operator to remember. The caller still reports what was repaired;
-    seeing it is not what makes it correct.
+    SAFETY PROPERTY. For a worktree eolinfo this module treats as drift (i.e.
+    excluding `"none"`, `"-text"`, and `""`, and excluding any symlinked
+    target), check-in normalization maps the drifted and repaired bytes to
+    the SAME index blob, so a commit taken across the repair carries
+    identical content either way -- see `docs/reference/eol-drift-detection.md`
+    for the full argument and K-062's observed data point ("no commit
+    resulted: the corrected working copy hashes identically to the index").
 
     Never raises. A file that cannot be read or written is skipped and omitted
     from the return -- the caller reports the drift it could not fix rather
@@ -225,6 +223,16 @@ def repair_declared_eol_drift(
         if want is None:
             continue
         target = root / drift.path
+        # `.gitattributes` matches by pathname, not object type -- a tracked
+        # SYMLINK can match an `eol=` pattern, and `Path.read_bytes`/
+        # `write_bytes` follow a symlink transparently on both POSIX and
+        # Windows. Skip before reading: this checks the target path itself,
+        # not a symlinked PARENT directory component, so a symlinked ancestor
+        # directory is not covered -- a cheap `is_symlink()` here closes the
+        # direct-target case without a stat walk up the path on this hot
+        # path. Review finding 3, 2026-08-30.
+        if target.is_symlink():
+            continue
         try:
             raw = target.read_bytes()
         except OSError:

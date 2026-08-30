@@ -158,3 +158,140 @@ def test_handoff_id_form_also_resolves(tmp_path: Path):
     assert evidence[0]["status"] == "resolved"
     assert evidence[0]["deployment_state"] == "in_flight"
     assert evidence[0]["holder"] == "session-xyz"
+
+
+BLOCKER_FM = (
+    'title: "Blocker"\n'
+    "created: 2026-01-01\n"
+    "status: open\n"
+    'stub_id: "sat-06"\n'
+    "deployment_state: shipped\n"
+)
+
+
+def test_scalar_blocked_by_is_one_id_not_one_id_per_character(tmp_path: Path):
+    # A `str` is iterable, so an unguarded loop resolves it per CHARACTER --
+    # 'sat-06' becoming six blockers named 's','a','t','-','0','6', and a
+    # recommendation naming characters. The schema declares a list but nothing
+    # enforces that at read time, so this function is the place that must not
+    # trust it. Found by the criterion-only reader at 6f146d4d06.
+    repo = tmp_path
+    _write_handoff(repo / "state" / "handoffs" / "sat-06.md", BLOCKER_FM)
+
+    evidence = pa.compute_gate_blocker_evidence(repo, "sat-06")
+
+    assert len(evidence) == 1, f"scalar iterated per character: {evidence!r}"
+    assert evidence[0]["id"] == "sat-06"
+    assert evidence[0]["status"] == "resolved"
+    assert evidence[0]["deployment_state"] == "shipped"
+
+
+def test_scan_incomplete_when_a_corpus_root_is_unreadable(tmp_path: Path, monkeypatch):
+    # Directory-level unreadable subtree — `collect_live_handoff_paths`
+    # raising `OSError` is the shape `_build_blocker_index` already
+    # catches and threads into `scan_errors`. Monkeypatched rather than
+    # `os.chmod`-based: `os.chmod` does not remove read access on Windows
+    # (this repo runs Windows as a first-class host), which would silently
+    # no-op the permission trick and pass for the wrong reason (Review:
+    # code-reviewer — Finding 2).
+    import coordinator_core.reconcile.handoff_corpus as hc
+
+    repo = tmp_path
+    (repo / "state" / "handoffs").mkdir(parents=True)
+
+    def _raise(_root):
+        raise OSError("simulated: permission denied")
+
+    monkeypatch.setattr(hc, "collect_live_handoff_paths", _raise)
+
+    index, scan_errors = hc._build_blocker_index(repo)
+    assert scan_errors != []
+    assert index == {}
+
+    evidence = pa.compute_gate_blocker_evidence(repo, ["some-id"])
+    assert evidence[0]["status"] == "scan_incomplete"
+    assert evidence[0]["resolved"] is False
+
+
+def test_scan_incomplete_when_a_single_record_file_is_unreadable(tmp_path: Path, monkeypatch):
+    # File-granularity unreadable record — a directory-level walk finds
+    # `path`, but reading it fails (locked/permission-denied). This must
+    # come back `scan_incomplete`, never `unresolvable` — the exact gap
+    # Finding 1 closed (`_frontmatter_head_bytes` now returns `None` on a
+    # read failure instead of silently treating the file as carrying no
+    # id). Monkeypatched at `_frontmatter_head_bytes` itself rather than
+    # `os.chmod`, for the same Windows reason as the test above.
+    import coordinator_core.reconcile.handoff_corpus as hc
+
+    repo = tmp_path
+    path = _write_handoff(repo / "state" / "handoffs" / "locked.md", BLOCKER_FM)
+
+    real_head_bytes = hc._frontmatter_head_bytes
+
+    def _flaky_head_bytes(p: Path):
+        if p == path:
+            return None
+        return real_head_bytes(p)
+
+    monkeypatch.setattr(hc, "_frontmatter_head_bytes", _flaky_head_bytes)
+
+    index, scan_errors = hc._build_blocker_index(repo)
+    assert scan_errors != []
+    assert index.get("sat-06") is None  # the id never made it into the index
+
+    evidence = pa.compute_gate_blocker_evidence(repo, ["sat-06"])
+    assert evidence[0]["status"] == "scan_incomplete"
+    assert evidence[0]["resolved"] is False
+
+
+def test_scan_incomplete_when_the_indexed_file_fails_at_resolve_time(tmp_path: Path, monkeypatch):
+    # The id resolves through the (successfully-built) index — some other
+    # unrelated subtree failed to scan — but the specific file this id
+    # names has become unreadable by the time `compute_gate_blocker_
+    # evidence` re-reads it. `dag._read_meta` swallows the `OSError`
+    # itself (`except Exception: return {}`), so this call site re-probes
+    # with its own direct read to tell "unreadable" apart from "malformed
+    # YAML" (Review: code-reviewer — Finding 1) — this must land
+    # `scan_incomplete`, never `unresolvable`.
+    import coordinator_core.pickup_assemble as pa_mod
+
+    repo = tmp_path
+    path = _write_handoff(repo / "state" / "handoffs" / "sat-06.md", BLOCKER_FM)
+
+    real_read_meta = pa_mod.dag._read_meta
+
+    def _flaky_read_meta(file_path: str):
+        if Path(file_path) == path.resolve():
+            return {}
+        return real_read_meta(file_path)
+
+    monkeypatch.setattr(pa_mod.dag, "_read_meta", _flaky_read_meta)
+
+    real_read_bytes = Path.read_bytes
+
+    def _flaky_read_bytes(self: Path):
+        if self == path:
+            raise OSError("simulated: permission denied")
+        return real_read_bytes(self)
+
+    monkeypatch.setattr(Path, "read_bytes", _flaky_read_bytes)
+
+    evidence = pa.compute_gate_blocker_evidence(repo, ["sat-06"])
+    assert evidence[0]["status"] == "scan_incomplete"
+    assert evidence[0]["resolved"] is False
+
+
+def test_unparsed_flow_list_text_is_malformed_not_a_bracketed_id(tmp_path: Path):
+    # The Anti-scope case: `roadmap_link_stubs._as_list` would return
+    # `['[sat-06]']` here, inventing an id nothing can ever match and reporting
+    # it as an ordinary missing blocker. Text that still looks like an unparsed
+    # list is malformed input and says so, rather than resolving a bracket.
+    repo = tmp_path
+    _write_handoff(repo / "state" / "handoffs" / "sat-06.md", BLOCKER_FM)
+
+    evidence = pa.compute_gate_blocker_evidence(repo, "[sat-06]")
+
+    assert len(evidence) == 1
+    assert evidence[0]["id"] == "[sat-06]"
+    assert evidence[0]["status"] == "unresolvable"
+    assert evidence[0]["resolved"] is False

@@ -260,13 +260,52 @@ def resolve_session_id(_repo_root: Path) -> str:
     rather than let it silently resolve "single-session" (the same
     false-clean failure mode the sentinel removal fixed, reached by a
     different route)."""
+    return resolve_session_id_with_source(_repo_root).session_id
+
+
+#: `resolve_session_id_with_source(...).source` for the legacy `em_sid` tier.
+#: Its own value rather than a `SESSION_ENV_PRECEDENCE` member because it is
+#: not in that ladder: nothing else in the fleet reads it, no ratchet scans
+#: for it, and a shell that exported it for one session keeps exporting it for
+#: the next — so it is the one remaining way a COLD close can silently key
+#: itself to a session that ended. `compute_session_shape_gate` raises a
+#: diagnostic on it for exactly that reason.
+SOURCE_LEGACY_EM_SID = "em_sid"
+
+
+def resolve_session_id_with_source(_repo_root=None):
+    """`resolve_session_id`, plus WHICH INPUT named the session and under
+    which pid — a `session.core.SessionIdResolution`.
+
+    The instrument `state/bug-backlog/2026-08-30-close-ceremony-clis-resolve-
+    a-live-peer-b558b27c74e7.yaml` asks for, at the site that row was filed
+    against. That row's own account of the failure is three gates each
+    reporting a locally-true fact about a session nobody had named out loud:
+    `gates.review_receipt` looked under a peer's `state/subagent-share/`
+    directory and truthfully found no receipt, `landed_reconciliation` and
+    `open_spine_row_worklist` truthfully found no governing plan. Every one
+    of those was keyed on an id the ceremony never printed and never sourced.
+    A reader could only catch it, as the filing EM did, by recognising
+    unfamiliar deliverable ids further downstream.
+
+    Everything except the legacy tier is `session.core`'s to answer, and is
+    NOT re-derived here — this function's whole job is to fold the one tier
+    that lives at this site into that record, so a caller reads one
+    provenance answer rather than reconciling two. See
+    `SOURCE_LEGACY_EM_SID`.
+    """
     core = _session_core()
     if core.in_warm_served_request():
-        return core.attributable_session_id() or ""
+        return core.attributable_session_id_with_source()
     legacy = os.environ.get("em_sid", "")
     if legacy:
-        return legacy
-    return core.attributable_session_id() or ""
+        return core.SessionIdResolution(
+            session_id=legacy,
+            source=SOURCE_LEGACY_EM_SID,
+            warm=False,
+            pid=os.getpid(),
+        )
+    return core.attributable_session_id_with_source()
 
 
 # ---------------------------------------------------------------------------

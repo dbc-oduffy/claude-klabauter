@@ -3,21 +3,13 @@ held for this process's lifetime, not be released microseconds after it wins.
 
 Spec backlink: state/dispatch-briefs/2026-08-30-the-warm-restart-stops-being-a-deny/C1.md
 
-WHY THIS FILE EXISTS. `main()` used to call `_winapi.CloseHandle(handle)`
-immediately after `election.elect()` won, under a comment claiming "this
-process's lifetime, not an open handle, is what a competitor's own
-`ElectionLost` check observes." That is wrong about Win32 named-pipe
-semantics: `FILE_FLAG_FIRST_PIPE_INSTANCE` exclusion is a property of a LIVE
-PIPE INSTANCE, not of the electing process. Closing the handle releases the
-pipe name back to the OS, so the next `CreateNamedPipe` for the same name
-succeeds as a fresh first instance -- collapsing the exclusion window from
-process-lifetime to the microseconds between `elect()` and the close.
-Measured on this box 2026-08-30: up to 9 concurrent HTTP listeners, 92 of 131
-lifetimes serving zero requests.
-
-The fix holds the won handle on `_ServerContext` and closes it only in
-`ctx_shutdown` (alongside the existing ownership-checked `unlink_discovery`)
-or on the credential-refusal `return 3` exit path.
+WHY THIS FILE EXISTS. Closing the won election handle right after
+`election.elect()` wins releases the pipe name back to the OS, so a third
+election against the same name succeeds immediately -- see `main()`'s
+comment at the `elect()` call site (`supervisor.py`) for the full Win32
+argument and the measured figures. The fix holds the handle on
+`_ServerContext` and closes it only in `ctx_shutdown` or on the
+credential-refusal `return 3` exit path.
 
 NEGATIVE SPEC -- what these tests deliberately do NOT assert:
   * NOT that a lost election is an error -- `test_main_exits_zero_and_
@@ -66,24 +58,6 @@ def test_holding_the_won_handle_excludes_a_second_election(tmp_path: Path) -> No
         import _winapi
 
         _winapi.CloseHandle(handle)
-
-
-@pytestmark_win
-def test_closing_the_handle_releases_the_exclusion_documenting_the_old_bug(tmp_path: Path) -> None:
-    """Documents the OLD behaviour this chunk removes: closing the handle
-    right after winning collapses the exclusion window to nothing, so a
-    THIRD election against the same name succeeds once the first handle is
-    closed -- exactly the shape that produced 9 concurrent listeners."""
-    skew.write_engine_stamp(tmp_path, "sha-single-instance-release")
-    name = supervisor.supervisor_pipe_name(tmp_path)
-
-    import _winapi
-
-    handle = election.elect(name)
-    _winapi.CloseHandle(handle)  # the old, defective early-close
-
-    second_handle = election.elect(name)  # now succeeds -- the pipe name was released
-    _winapi.CloseHandle(second_handle)
 
 
 # ---------------------------------------------------------------------------

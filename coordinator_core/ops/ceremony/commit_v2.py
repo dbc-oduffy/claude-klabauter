@@ -65,6 +65,7 @@ from typing import Optional
 
 from coordinator_core.git.commit import (
     CommitRefused,
+    NothingToCommit,
     FilterUnsupported,
     commit_paths,
     hash_worktree_blobs_via_spawn,
@@ -467,10 +468,25 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     # provably content-neutral -- check-in normalization maps the drifted and
     # repaired files to the same blob -- so there is nothing for an operator to
     # adjudicate and nothing a refusal would protect.
-    eol_drifts = find_declared_eol_drift(worktree_root, raw_paths)
-    eol_repaired = (
-        repair_declared_eol_drift(worktree_root, eol_drifts) if eol_drifts else []
-    )
+    # A repair-side exception is a worse defect than the drift it looks for
+    # (NEGATIVE SPEC, `eol_declared` module docstring) -- neither function is
+    # documented to raise, but nothing upstream of this line guarantees it,
+    # so this is wrapped rather than trusted. Review finding 1, 2026-08-30.
+    # `prefer_staged` paths are excluded: that parameter exists precisely
+    # because the caller wants the INDEX content committed while deliberately
+    # leaving the working tree diverged (see `worktree_over_staged` below).
+    # Repairing those bytes anyway overrides a deliberate operator choice,
+    # even though it would not change what lands. Review finding 5, 2026-08-30.
+    try:
+        prefer_staged_set = set(raw_prefer_staged)
+        eol_candidates = [p for p in raw_paths if p not in prefer_staged_set]
+        eol_drifts = find_declared_eol_drift(worktree_root, eol_candidates)
+        eol_repaired = (
+            repair_declared_eol_drift(worktree_root, eol_drifts) if eol_drifts else []
+        )
+    except Exception:
+        eol_drifts = []
+        eol_repaired = []
 
     # Attach Session-Id / Deliverable-Id (whichever are resolvable and not
     # already present) via the shared applier -- this route lands via
@@ -492,6 +508,14 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             prefer_staged=raw_prefer_staged,
             blob_fallback=partial(hash_worktree_blobs_via_spawn, cwd=worktree_root),
         )
+    except NothingToCommit as exc:
+        # Distinguished from the other refusals in the SAME envelope, not a
+        # new one: `committed: False` plus the message is what makes it
+        # legible to a human reading one line, and the flag is what lets a
+        # caller that legitimately expects a possible no-op (a follow-up
+        # commit after `memo.send` already committed its own receipt) tell
+        # "already done" from "failed" without parsing prose.
+        return _error(str(exc), nothing_to_commit=True)
     except (CommitRefused, FilterUnsupported) as exc:
         return _error(str(exc))
 
@@ -516,6 +540,21 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             f"committed worktree content for {len(outcome.worktree_over_staged)} "
             f"path(s) whose index held different content: {paths}. "
             "Pass prefer_staged to commit the staged content instead."
+        )
+
+    if outcome.no_delta:
+        # The k-of-N face of the zero-delta bug, and it belongs in `warnings`
+        # for the same reason the divergence above does: the caller named
+        # these paths and they are not in the commit, which is indistinguish-
+        # able from delivery on the success line alone. Bounded at five like
+        # every other join in this envelope.
+        paths = ", ".join(outcome.no_delta[:5])
+        if len(outcome.no_delta) > 5:
+            paths += ", ..."
+        warnings.append(
+            f"{len(outcome.no_delta)} of {len(raw_paths) + len(raw_deleted)} "
+            f"declared path(s) contributed nothing -- already at HEAD: {paths}. "
+            "If you expected a change there, it landed elsewhere or never landed."
         )
 
     # Reported, not because reporting is what fixes it -- the repair above did
@@ -545,6 +584,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         "sha": outcome.sha,
         "staged_preferred": list(outcome.staged_preferred),
         "worktree_over_staged": list(outcome.worktree_over_staged),
+        "no_delta": list(outcome.no_delta),
         "warnings": warnings,
         "guard_class_relay": guard_class_relay,
     }

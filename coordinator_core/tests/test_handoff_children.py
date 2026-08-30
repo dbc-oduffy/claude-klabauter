@@ -866,6 +866,194 @@ class TestBlockedByDependents:
         )
         assert result["error"] is not None
 
+class TestBlockedByDependentsMany:
+    """`blocked_by_dependents_many` — the batched resolver the singular one
+    delegates to. One corpus walk for N candidates, same verdicts.
+
+    The hoist exists because `post_commit_tail`'s gate-cascade-clear leg asked
+    the singular resolver once per stamped baton, paying a full live+archive
+    corpus walk per candidate for an answer that is candidate-independent up to
+    one set membership test.
+    """
+
+    def test_batched_verdicts_match_the_singular_resolver(self, worktree: Path) -> None:
+        """Per-candidate parity: every verdict a batch returns is the verdict
+        the singular resolver returns for that same candidate alone."""
+        from coordinator_core.ops.handoff_children import (
+            blocked_by_dependents,
+            blocked_by_dependents_many,
+        )
+
+        handoff_dir = worktree / "state" / "handoffs"
+        with_dep = _write_handoff_fm(
+            handoff_dir / "many-with-dep.md",
+            {"stub_id": "many-01", "status": "open"},
+        )
+        without_dep = _write_handoff_fm(
+            handoff_dir / "many-without-dep.md",
+            {"stub_id": "many-02", "status": "open"},
+        )
+        terminal_only = _write_handoff_fm(
+            handoff_dir / "many-terminal-only.md",
+            {"stub_id": "many-03", "status": "open"},
+        )
+        _write_handoff_fm(
+            handoff_dir / "many-referrer.md",
+            {"stub_id": "many-ref", "status": "open", "blocked_by": ["many-01"]},
+        )
+        _write_handoff_fm(
+            handoff_dir / "many-terminal-referrer.md",
+            {"stub_id": "many-term", "status": "superseded", "blocked_by": ["many-03"]},
+        )
+        no_identifier = _write_handoff_fm(
+            handoff_dir / "many-no-id.md",
+            {"status": "open"},
+        )
+
+        candidates = [with_dep, without_dep, terminal_only, no_identifier]
+        batched = blocked_by_dependents_many(candidates, worktree)
+
+        assert set(batched) == {str(c) for c in candidates}, (
+            f"every candidate must get a reply, keyed exactly as passed; got "
+            f"{sorted(batched)!r}"
+        )
+        for candidate in candidates:
+            singular = blocked_by_dependents(candidate, worktree)
+            _assert_five_key_shape(batched[str(candidate)])
+            assert batched[str(candidate)] == singular, (
+                f"batched verdict for {candidate} diverges from the singular "
+                f"resolver: {batched[str(candidate)]!r} != {singular!r}"
+            )
+
+        assert batched[str(with_dep)]["state"] == "dependents"
+        assert batched[str(without_dep)]["state"] == "none"
+        assert batched[str(terminal_only)]["state"] == "none"
+        assert batched[str(no_identifier)]["state"] == "indeterminate"
+
+    def test_walks_the_corpus_once_for_many_candidates(
+        self, worktree: Path, monkeypatch
+    ) -> None:
+        """The hoist itself: N candidates cost ONE
+        `_collect_all_handoffs_for_gate_index` call, not N."""
+        from coordinator_core.ops import handoff_children
+        from coordinator_core.reconcile import handoff_corpus
+
+        handoff_dir = worktree / "state" / "handoffs"
+        candidates = [
+            _write_handoff_fm(
+                handoff_dir / f"walk-candidate-{n}.md",
+                {"stub_id": f"walk-{n}", "status": "open"},
+            )
+            for n in range(4)
+        ]
+        _write_handoff_fm(
+            handoff_dir / "walk-referrer.md",
+            {"stub_id": "walk-ref", "status": "open", "blocked_by": ["walk-0", "walk-2"]},
+        )
+
+        real_collect = handoff_corpus._collect_all_handoffs_for_gate_index
+        calls = 0
+
+        def _counting_collect(*args, **kwargs):
+            nonlocal calls
+            calls += 1
+            return real_collect(*args, **kwargs)
+
+        monkeypatch.setattr(
+            handoff_corpus, "_collect_all_handoffs_for_gate_index", _counting_collect
+        )
+
+        result = handoff_children.blocked_by_dependents_many(candidates, worktree)
+
+        assert calls == 1, (
+            f"{len(candidates)} candidates must cost exactly one corpus walk; "
+            f"got {calls}"
+        )
+        assert result[str(candidates[0])]["state"] == "dependents"
+        assert result[str(candidates[1])]["state"] == "none"
+        assert result[str(candidates[2])]["state"] == "dependents"
+        assert result[str(candidates[3])]["state"] == "none"
+
+    def test_no_identifier_candidate_does_not_contaminate_its_siblings(
+        self, worktree: Path
+    ) -> None:
+        """Blast radius: an unresolvable candidate is indeterminate ALONE —
+        its siblings still get real verdicts off the shared walk."""
+        from coordinator_core.ops.handoff_children import blocked_by_dependents_many
+
+        handoff_dir = worktree / "state" / "handoffs"
+        no_identifier = _write_handoff_fm(
+            handoff_dir / "sibling-no-id.md",
+            {"status": "open"},
+        )
+        resolvable = _write_handoff_fm(
+            handoff_dir / "sibling-resolvable.md",
+            {"stub_id": "sibling-01", "status": "open"},
+        )
+        referrer = _write_handoff_fm(
+            handoff_dir / "sibling-referrer.md",
+            {"stub_id": "sibling-ref", "status": "open", "blocked_by": ["sibling-01"]},
+        )
+
+        result = blocked_by_dependents_many([no_identifier, resolvable], worktree)
+
+        assert result[str(no_identifier)]["state"] == "indeterminate"
+        assert result[str(resolvable)]["state"] == "dependents", (
+            f"an unresolvable sibling must not fail the whole batch closed; "
+            f"got {result[str(resolvable)]!r}"
+        )
+        assert str(referrer.resolve()) in result[str(resolvable)]["dependents"]
+
+    def test_malformed_blocked_by_on_the_candidate_itself_is_still_skipped(
+        self, worktree: Path
+    ) -> None:
+        """Semantic pin on the hoist: the singular resolver skips a corpus node
+        that IS the candidate BEFORE reading its `blocked_by`, so a malformed
+        `blocked_by` on the candidate's own file cannot make that candidate
+        indeterminate. Hoisting the corpus normalisation out of the candidate
+        loop must not quietly widen that."""
+        from coordinator_core.ops.handoff_children import (
+            blocked_by_dependents,
+            blocked_by_dependents_many,
+        )
+
+        handoff_dir = worktree / "state" / "handoffs"
+        handoff_dir.mkdir(parents=True, exist_ok=True)
+        self_malformed = handoff_dir / "self-malformed.md"
+        self_malformed.write_text(
+            "---\n"
+            "stub_id: self-malformed\n"
+            "status: open\n"
+            "blocked_by:\n"
+            "  a: 1\n"
+            "---\n\n"
+            "Body.\n",
+            encoding="utf-8",
+        )
+        _write_handoff_fm(
+            handoff_dir / "self-malformed-referrer.md",
+            {
+                "stub_id": "self-malformed-ref",
+                "status": "open",
+                "blocked_by": ["self-malformed"],
+            },
+        )
+
+        batched = blocked_by_dependents_many([self_malformed], worktree)[str(self_malformed)]
+
+        assert batched == blocked_by_dependents(self_malformed, worktree)
+        assert batched["state"] == "dependents", (
+            f"the candidate's OWN malformed blocked_by is skipped before it is "
+            f"read; expected state=='dependents', got {batched!r}"
+        )
+
+    def test_empty_candidate_list_does_no_work(self, worktree: Path) -> None:
+        """No candidates, no corpus walk, empty dict — not an error."""
+        from coordinator_core.ops.handoff_children import blocked_by_dependents_many
+
+        assert blocked_by_dependents_many([], worktree) == {}
+
+
 class TestBlockedByDependentsOp:
     """`handoff.blocked_by_dependents` — registered op wrapper around
     `blocked_by_dependents` (PIN-1 registration, cross-repo/inbox/2026-08-02-

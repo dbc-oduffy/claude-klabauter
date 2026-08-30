@@ -720,6 +720,22 @@ def _self_stable_pid_start_epoch() -> Optional[int]:
         return None
 
 
+def _release_election_handle(handle: Optional[Any]) -> None:
+    """Best-effort `_winapi.CloseHandle(handle)`, the one release sequence
+    for the won election lock -- called from `_ServerContext.ctx_shutdown`
+    and from `main()`'s credential-refusal `return 3` path. See `main()`'s
+    comment at the `elect()` call for why the handle is held rather than
+    closed immediately after winning."""
+    if handle is None:
+        return
+    import _winapi
+
+    try:
+        _winapi.CloseHandle(handle)
+    except Exception:  # noqa: BLE001 -- best-effort close of a won lock
+        pass
+
+
 class _ServerContext:
     """Boot-scoped supervisor state: the in-flight counter every request
     handler shares, and the shutdown wiring `warm.lifecycle` needs. Mirrors
@@ -852,14 +868,8 @@ class _ServerContext:
         # process owned is gone -- a competitor that wins the election the
         # instant it is released must never find a stale record naming a
         # pid that is already exiting.
-        if self._election_handle is not None:
-            import _winapi
-
-            try:
-                _winapi.CloseHandle(self._election_handle)
-            except Exception:  # noqa: BLE001 -- best-effort close of a won lock
-                pass
-            self._election_handle = None
+        _release_election_handle(self._election_handle)
+        self._election_handle = None
 
     def stop(self) -> None:
         lifecycle.begin_shutdown(
@@ -1429,12 +1439,7 @@ def main() -> int:
         # The won election handle is released here too -- this process is
         # exiting without ever serving, so holding the lock past this return
         # would strand the election against a process that is already gone.
-        import _winapi
-
-        try:
-            _winapi.CloseHandle(handle)
-        except Exception:  # noqa: BLE001 -- best-effort close on a refusal exit
-            pass
+        _release_election_handle(handle)
         return 3
 
     httpd = ThreadingHTTPServer(("127.0.0.1", 0), _NotYetBound)

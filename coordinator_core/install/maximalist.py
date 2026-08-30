@@ -470,7 +470,7 @@ def _collect_writer_declarations(
     repo_root: Path,
 ) -> "tuple[Dict[str, WriteSurfaceDeclaration], List[str]]":
     """Discover every writer's `WriteSurfaceDeclaration`, keyed by
-    `writer_id`, by delegating to `write_surface_manifest`'s public
+    `writer_id`, by delegating to `write_surface_discovery`'s public
     `discover_declarations` seam (shared AST-scan discovery) rather than
     re-deriving a second writer roster — C4's brief is explicit that
     hand-listing writers here would recreate the exact staleness class the
@@ -489,17 +489,15 @@ def _collect_writer_declarations(
     precisely the "did not report" vs. "nothing to remove" collapse the
     design note's negative spec forbids (see
     docs/research/2026-08-06-install-receipt-persistence-design.md).
-    The prior docstring here claimed `write_surface_manifest`'s own
-    emission op surfaces this loudly -- true of THAT op, but that is a
-    separate, not-guaranteed-to-run command that never fires as part of
-    `_build_and_persist_receipt`; this fix makes the failure loud on THIS
-    path instead of relying on an unrelated call site.
+    An older docstring here deferred loudness to `write_surface.emit_manifest`,
+    a separate command that never fired as part of `_build_and_persist_receipt`
+    and has since been gravestoned outright; the failure is loud on THIS path
+    instead of relying on an unrelated call site.
 
-    The first module to claim a given `writer_id` wins (matches the
-    manifest's own first-claim precedent) since this function only needs
-    ONE declaration per writer to drive receipt derivation.
+    The first module to claim a given `writer_id` wins, since this function
+    only needs ONE declaration per writer to drive receipt derivation.
     """
-    from coordinator_core.ops.write_surface_manifest import discover_declarations
+    from coordinator_core.install.write_surface_discovery import discover_declarations
 
     declarations, failures = discover_declarations(repo_root)
     failed_ids: List[str] = []

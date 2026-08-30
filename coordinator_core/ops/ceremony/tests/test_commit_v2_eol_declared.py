@@ -140,7 +140,16 @@ def test_a_correct_launcher_commits_with_no_warning(tmp_path):
 
 def test_a_detector_failure_never_fails_the_commit(tmp_path, monkeypatch):
     """NEGATIVE SPEC. This check is a repair on a commit path, and a repair
-    that can fail a commit is a worse defect than the drift it looks for."""
+    that can fail a commit is a worse defect than the drift it looks for.
+
+    Against the unwrapped handler this raises `RuntimeError` straight out of
+    `_handler` and the commit never lands -- confirmed by inspection of the
+    pre-fix code (no try/except around the two EOL calls), which is exactly
+    what review finding 1 flagged: this test previously asserted
+    `pytest.raises(RuntimeError)`, pinning the bug as the spec. The fix wraps
+    both calls and degrades to no drift/no repair on any exception, so the
+    commit must succeed here and carry no EOL warning.
+    """
     repo = _repo(tmp_path)
     (repo / "run.cmd").write_bytes(b"@echo off\necho changed\n")
 
@@ -149,5 +158,31 @@ def test_a_detector_failure_never_fails_the_commit(tmp_path, monkeypatch):
 
     monkeypatch.setattr(commit_v2, "repair_declared_eol_drift", boom)
 
-    with pytest.raises(RuntimeError):
-        _call(repo, {"paths": ["run.cmd"], "message": "launcher: edit"})
+    result = _call(repo, {"paths": ["run.cmd"], "message": "launcher: edit"})
+
+    assert result["committed"] is True
+    assert result["warnings"] == []
+
+
+def test_repair_skips_a_prefer_staged_path_even_when_drifted(tmp_path):
+    """`prefer_staged` means the caller deliberately wants the INDEX content
+    committed while leaving the working tree diverged -- the repair must not
+    rewrite that file's bytes anyway, even though doing so would not change
+    what lands (review finding 5)."""
+    repo = _repo(tmp_path)
+    (repo / "run.cmd").write_bytes(b"@echo off\necho changed\n")
+    _git(["add", "--", "run.cmd"], repo)
+    (repo / "run.cmd").write_bytes(b"@echo off\necho worktree edit\n")
+
+    result = _call(
+        repo,
+        {
+            "paths": ["run.cmd"],
+            "message": "launcher: edit",
+            "prefer_staged": ["run.cmd"],
+        },
+    )
+
+    assert result["committed"] is True
+    assert not any("run.cmd" in w for w in result["warnings"])
+    assert b"\r\n" not in (repo / "run.cmd").read_bytes()

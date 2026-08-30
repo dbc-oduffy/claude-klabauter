@@ -256,7 +256,7 @@ _BLOCKER_INDEX_HEAD_BYTES = 4096
 _BLOCKER_ID_LINE_RE = re.compile(rb"^(?:stub_id|handoff_id):[ \t]*(.*?)[ \t]*$", re.MULTILINE)
 
 
-def _frontmatter_head_bytes(path: Path) -> bytes:
+def _frontmatter_head_bytes(path: Path) -> Optional[bytes]:
     """Read `path`'s frontmatter HEAD — from the opening `---` fence up to
     (excluding) the closing `---` fence — truncated-read at
     `_BLOCKER_INDEX_HEAD_BYTES` with a full-file fallback when the closing
@@ -265,15 +265,32 @@ def _frontmatter_head_bytes(path: Path) -> bytes:
     The truncated read is the measured-fast path (see
     `_BLOCKER_INDEX_HEAD_BYTES`'s docstring); the fallback makes the 4096-byte
     constant SELF-CORRECTING rather than silently wrong for an oversized
-    frontmatter block — zero files hit this fallback on today's corpus, but
-    an id embedded past the truncation point must still resolve, not
-    silently vanish into `unresolvable` (dispatch brief C2).
+    frontmatter block — 4 of 1202 live+archived records (measured directly,
+    Review: overengineering-reviewer, Finding 5) do not close their
+    frontmatter within 4096 bytes and take this fallback TODAY, not zero.
+    That is the argument FOR keeping the fallback, not against it: an id
+    embedded past the truncation point must still resolve, not silently
+    vanish into `unresolvable` (dispatch brief C2).
+
+    Returns `None` on the initial `open`/`read` failing with `OSError` —
+    a locked or permission-denied FILE, distinct from `b""` (a real,
+    readable, empty file). The caller threads `None` into `scan_errors`
+    rather than reading a locked file as "carries no id", which is the
+    same corpus-scan-failure hazard `scan_errors` already tracks at
+    directory granularity, reopened here at file granularity (Review:
+    code-reviewer — Finding 1, verdict BLOCKED on
+    2026-08-30-the-gate-brief-reads-a-list-where-the-record-wrote-one). A
+    later `OSError` on the full-file fallback read is NOT re-raised as a
+    scan error: the truncated head already read successfully, so the
+    fallback failing only means the file grew/vanished between the two
+    reads — falling back to the (possibly-fenceless) head already read is
+    honest, not a silent absence.
     """
     try:
         with open(path, "rb") as fh:
             head = fh.read(_BLOCKER_INDEX_HEAD_BYTES)
     except OSError:
-        return b""
+        return None
     idx = head.find(b"\n---", 4)
     if idx != -1:
         return head[:idx]
@@ -321,11 +338,15 @@ def _build_blocker_index(repo_root: Path) -> "tuple[Dict[str, List[Path]], List[
     Built over `collect_live_handoff_paths(repo_root)` for the live half and
     `_walk_archive_md_files` for the archived half — never `rglob`, which
     silently swallows `PermissionError` while walking (see
-    `_walk_archive_md_files`'s own docstring). An unreadable subtree is
-    surfaced in `scan_errors` rather than read as a silent absence
-    indistinguishable from "the id does not exist" — the exact
-    dangling-ref hazard the 2026-08-08 PM ruling dissolved (dispatch brief
-    C2, see C3).
+    `_walk_archive_md_files`'s own docstring). An unreadable subtree — OR a
+    single unreadable file inside an otherwise-scannable directory (a
+    handoff another session is mid-write/locked on, routine rather than a
+    corner case at the stated 50-70 concurrent-session load norm; see
+    `_frontmatter_head_bytes`) — is surfaced in `scan_errors` rather than
+    read as a silent absence indistinguishable from "the id does not
+    exist" — the exact dangling-ref hazard the 2026-08-08 PM ruling
+    dissolved (dispatch brief C2, see C3; file-granularity gap closed per
+    Review: code-reviewer — Finding 1).
 
     Root set MIRRORS the act-time resolver's own two roots
     (`handoff_transition.py :: _resolve_blocker_deployment_state`), which is
@@ -349,6 +370,15 @@ def _build_blocker_index(repo_root: Path) -> "tuple[Dict[str, List[Path]], List[
 
     def _index_file(path: Path) -> None:
         head = _frontmatter_head_bytes(path)
+        if head is None:
+            # A directory-level walk found `path`, but reading it failed
+            # (locked/permission-denied) — the exact per-FILE instance of
+            # the "unreadable subtree" hazard `scan_errors` already tracks
+            # at directory granularity (Review: code-reviewer — Finding 1).
+            # A blocker id that only this file names must come back
+            # `scan_incomplete`, never a silent `unresolvable`.
+            scan_errors.append(f"{path}: unreadable (frontmatter head read failed)")
+            return
         for blocker_id in _blocker_ids_in_head(head):
             index.setdefault(blocker_id, []).append(path)
 

@@ -373,6 +373,10 @@ from coordinator_core.bash_guards.bump_foreign_repo_write import (
 from coordinator_core.bash_guards.bump_outside_repo_write import (
     check_bump_outside_repo_write as _check_bump_outside_repo_write,
 )
+from coordinator_core.bash_guards.write_claim_record import (
+    record_write_claims as _record_write_claims,
+)
+from coordinator_core.git.repo_root import show_toplevel as _show_toplevel
 from coordinator_core.bash_guards.guard_inprocess_search import (
     check as _check_inprocess_search,
     MATCHERS as _matchers_inprocess_search,
@@ -1201,6 +1205,74 @@ def _session_advisory_already_fired(
         return False
 
 
+def _is_hard_deny_result(result: Union[Dict[str, Any], List[Dict[str, Any]], None]) -> bool:
+    """Same predicate `_evaluate_payload_json_budgeted`'s own loop computes
+    per-envelope as `_is_hard_deny_envelope` (that function, ``out``/``_hso``
+    local vars) -- re-expressed here against the CALL's final result rather
+    than an in-loop candidate, since a genuine hard-deny is always the
+    single ``Dict`` returned immediately (never folded into the
+    ``collect_advisories`` list -- see that function's own docstring)."""
+    if not isinstance(result, dict):
+        return False
+    _hso = result.get("hookSpecificOutput")
+    return isinstance(_hso, dict) and _hso.get("permissionDecision") == "deny"
+
+
+def _record_bash_write_claims(
+    raw: str, result: Union[Dict[str, Any], List[Dict[str, Any]], None]
+) -> None:
+    """C1 (docs/plans/2026-08-30-a-bash-write-reaches-the-ledger-that-
+    decides-what-gets-committed.md): fire ``write_claim_record.
+    record_write_claims`` for THIS same PreToolUse call, from the ONE seam
+    that sees every exit ``_evaluate_payload_json_budgeted`` can take --
+    unlike that function's own post-chain ``return (_collected or
+    None)...``, reached only when no guard produced an envelope at all,
+    which would miss the advisory-allow case (``cat-heredoc-write-advise``)
+    this recorder exists for.
+
+    Re-parses ``raw`` independently rather than threading cmd/session_id/cwd
+    out of the budgeted call: that function's positional signature is a
+    cross-plane contract (see ``evaluate_payload_json``'s own docstring,
+    feature-detected by DoE's caller) and must not grow an internal-only
+    return channel. The parse mirrors ``_evaluate_payload_json_budgeted``'s
+    own read of these three fields exactly (``payload``/``tool_input``/
+    ``session_id``/``cwd``), so a payload it accepts is read identically
+    here. ``root`` is resolved via ``git.repo_root.show_toplevel`` -- a
+    walk, never a spawn (see that function's own docstring) -- rather than
+    re-deriving a repo-root convention of this module's own.
+
+    Fails toward doing nothing: any parse failure here, and
+    ``record_write_claims`` itself, are swallowed -- this function must
+    never raise into its caller and must never influence the verdict
+    already decided.
+    """
+    try:
+        payload = json.loads(raw) if raw else None
+        if not isinstance(payload, dict):
+            return
+        tool_input = payload.get("tool_input")
+        if not isinstance(tool_input, dict):
+            tool_input = {}
+        cmd = tool_input.get("command") or ""
+        if not isinstance(cmd, str):
+            cmd = ""
+        session_id = payload.get("session_id") or ""
+        if not isinstance(session_id, str):
+            session_id = ""
+        cwd = payload.get("cwd") or ""
+        if not isinstance(cwd, str):
+            cwd = ""
+        if not cmd or not session_id:
+            return
+        cmd = cmd.replace("\r", "")
+        root = _show_toplevel(cwd or None)
+        if not root:
+            return
+        _record_write_claims(cmd, session_id, root, denied=_is_hard_deny_result(result))
+    except Exception:  # noqa: BLE001 -- recording must never affect the verdict
+        return
+
+
 def evaluate_payload_json(
     raw: str,
     policy_file: Optional[str] = None,
@@ -1236,7 +1308,7 @@ def evaluate_payload_json(
     """
     _dc._arm_git_probe_deadline()
     try:
-        return _evaluate_payload_json_budgeted(
+        result = _evaluate_payload_json_budgeted(
             raw,
             policy_file,
             host_is_windows,
@@ -1246,6 +1318,8 @@ def evaluate_payload_json(
         )
     finally:
         _dc._disarm_git_probe_deadline()
+    _record_bash_write_claims(raw, result)
+    return result
 
 
 def _evaluate_payload_json_budgeted(

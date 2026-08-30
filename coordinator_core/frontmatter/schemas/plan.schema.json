@@ -2,9 +2,9 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://coordinator.local/schemas/plan.schema.json",
   "x-schema-name": "plan",
-  "x-schema-version": "2.12.0",
-  "x-bump-class": "nested-field-additive",
-  "x-bump-note": "2.11.0 -> 2.12.0 adds `promotion`/`promotion_reason`/`promoted_to` to `exit_criterion_met` (`additionalProperties: false` had rejected all three): four independently-authored plans record falsifier-promotion fate inside the close-out assertion object using this vocabulary, converged on by separate sessions with none of them able to author it into the schema themselves. `promotion` is a plain enum over the two attested values (`not-applicable`, `partial`) rather than an invented closed set; `promoted_to` mirrors the sibling field already on `prime_exit_criterion.falsifier`. Deliberately does NOT add `promotion_note` — a fourth plan's one-off synonym for `promotion_reason`, folded into that plan's own body instead of blessed as a second schema key. nested-field-additive: a plan omitting the keys still validates; a plan CARRYING them is now validated rather than rejected. HOLDING per the same x-schema-version-axis rule as 2.9.0/2.10.0/2.11.0 (docs/wiki/schema-version-gate.md) until claude-klabauter re-vendors. PRIOR: 2.10.0 -> 2.11.0 adds the `spun_off` key to `grouping_approvals`, so a governed plan's spun-off rows carry recorded PM assent like its deferred and ruled-out ones (docs/decisions/DR-183-every-non-coded-exit-from-a-plan-row-needs-pm-approval.md). nested-field-additive: a plan omitting the key still validates, so no existing plan is invalidated; a plan CARRYING it is now validated rather than rejected by `additionalProperties: false`. The key can only be authored here — claude-klabauter's `test_plan_schema_matches_doe_head_and_homes_grouping_approvals` is byte-parity against DoE HEAD with no tolerance escape, so their tree structurally cannot originate it. HOLDING, and stacked on 2.10.0's hold: nested-field-additive is unconditionally holding on the x-schema-version axis (docs/wiki/schema-version-gate.md) — merge-to-main and production emit are held until claude-klabauter re-vendors. Their re-vendor is requested and awaited (cross-repo/inbox/2026-08-29-claude-klabauter-em-dr-183-correction-claude-klabauter-is-not-blocked.md). PRIOR: 2.9.0 -> 2.10.0 adds top-level `gated_exit_criteria`: the fleet brightlines as a machine-readable, enum-constrained list on the plan artifact, replacing their prior sole existence as prose in `coordinator/skills/workstream-complete/SKILL.md`. `met` is flipped on the existing `exit_criterion_met` close-out path -- deliberately no second enforcement path. top-level-array-additive: a plan omitting the key still validates, so no existing plan is invalidated; what changes is that a plan CARRYING the key is now validated rather than free-text. HOLDING, and stacked on 2.9.0's unreleased hold -- but for its own reason, not 2.9.0's: unconditional x-schema-version holding is scoped to nested-field-additive/enum-value-additive/major, NOT to top-level-array-additive, which is non-holding only where a declared-tolerant consumer set exists. No structural or version-envelope tolerance is declared for claude-klabauter's vendored copy, so this reverts to bilateral sequencing and holds anyway (docs/wiki/schema-version-gate.md) -- merge-to-main and production emit are held until claude-klabauter re-vendors or confirms plan.schema.json is not in their mirrored set. 2.9.0's notification (cross-repo/inbox/2026-08-27-doe-claude-em-plan-schema-2-9-0-nested-field-additive) is unanswered; 2.10.0 owes its own. PRIOR: 2.8.0 -> 2.9.0 defines the falsifier promotion fields execute-plan § Phase 4 already instructs an EM to write: `promoted_to` (the test path a graduated falsifier becomes a regression pin at), or `promotion: not-applicable` with a `promotion_reason`. The falsifier object is `additionalProperties: false`, so a plan recording either shape failed validation against 2.8.0. The two branches are mutually exclusive and `promotion_reason` is dependent-required on `promotion`; promotability stays a record, never a gate on the stamp. HOLDING: nested-field-additive is unconditionally holding on the x-schema-version axis (docs/wiki/schema-version-gate.md) -- merge-to-main and production emit are held until claude-klabauter re-vendors or confirms plan.schema.json is not in their mirrored set. Notified 2026-08-27: cross-repo/inbox/2026-08-27-doe-claude-em-plan-schema-2-9-0-nested-field-additive.md.",
+  "x-schema-version": "2.13.0",
+  "x-bump-class": "major",
+  "x-bump-note": "2.12.0 -> 2.13.0 adds the `right-not-merely-working` brightline to `gated_exit_criteria`'s enum and fifth `contains` branch: a gated row now requires the delivered code be efficient and elegant — right, not merely working — discharged by naming, per surface delivered, the simpler or cheaper shape considered and rejected and why the delivered one is right (portability stays `multi-os-first-class`'s row, not this one's). major (closed vocabulary, `test_bump_class_vocabulary_is_closed` pins it): the new fifth `contains` branch makes the `right-not-merely-working` row MANDATORY on every `gated_exit_criteria` array, so a plan that validated under 2.12.0 with only the four prior brightline rows no longer validates under 2.13.0 — the additive invariant (\"every document valid under the prior version still validates\") does not hold, exactly as a newly-required field would break it. UNCONDITIONALLY HOLDING on its own reason, not stacked on a now-discharged hold: 2.9.0/2.10.0 are DISCHARGED per cross-repo/archive/2026-08-29-claude-klabauter-em-the-schema-hold-lifts-and-nine-more-answers.md, so this bump inherits no live hold from them. It is `major`, which is unconditionally holding on the x-schema-version axis regardless of any prior discharge (docs/wiki/schema-version-gate.md) — merge-to-main and production emit are held until claude-klabauter re-vendors. Landing this row is a default-on advisory warning on every plan write until claude-klabauter re-vendors — recorded here as an accepted cost, not a defect. LIVE DRIFT (unrelated to this bump, carried forward from 2.11.0/2.12.0, not yet re-vendored): `grouping_approvals`/`$defs.grouping_approval_block` and `exit_criterion_met`'s promotion fields (`promotion`/`promotion_reason`/`promoted_to`). PRIOR: 2.10.0 -> 2.11.0 adds the `spun_off` key to `grouping_approvals`, so a governed plan's spun-off rows carry recorded PM assent like its deferred and ruled-out ones (docs/decisions/DR-183-every-non-coded-exit-from-a-plan-row-needs-pm-approval.md). The key can only be authored here — claude-klabauter's `test_plan_schema_matches_doe_head_and_homes_grouping_approvals` is byte-parity against DoE HEAD with no tolerance escape, so their tree structurally cannot originate it. PRIOR: 2.9.0 -> 2.10.0 adds top-level `gated_exit_criteria`: the fleet brightlines as a machine-readable, enum-constrained list on the plan artifact, replacing their prior sole existence as prose in `coordinator/skills/workstream-complete/SKILL.md`. `met` is flipped on the existing `exit_criterion_met` close-out path -- deliberately no second enforcement path. PRIOR: 2.8.0 -> 2.9.0 defines the falsifier promotion fields execute-plan § Phase 4 already instructs an EM to write: `promoted_to` (the test path a graduated falsifier becomes a regression pin at), or `promotion: not-applicable` with a `promotion_reason`. The two branches are mutually exclusive and `promotion_reason` is dependent-required on `promotion`; promotability stays a record, never a gate on the stamp.",
   "applies_to": "docs/plans/*.md",
   "description": "Plan frontmatter schema. The active-execution value is 'executing', NOT the intuitive 'execution'. 'implemented' means work is done on the working branch — whether it merged to main is tracked in completion log + handoff deployment_state, NOT here.",
   "type": "object",
@@ -390,7 +390,6 @@
     "gated_exit_criteria": {
       "type": "array",
       "description": "The fleet brightlines, discharged as a machine-readable field on the plan artifact the executor holds rather than remembered from a doctrine page. Scaffolded in full by `coordinator/templates/plans/plan.md.tmpl`; a row is never deleted because it seems inapplicable, its `statement` is narrowed instead. Deliberately NOT a repeated `prime_exit_criterion`-shaped object: a full falsifier per brightline is per-item spawn amplification for a check that is almost always a direct read, so this stays a light three-field row and `prime_exit_criterion.falsifier` stays the one-per-plan heavy instrument. Deliberately NOT an `## Acceptance Criteria` table row either — that table is optional, reviewer-facing prose and is never mechanically gated, so a brightline landed there would be present but not gated, which is the exact failure this field exists to close.",
-      "minItems": 1,
       "allOf": [
         {
           "contains": {
@@ -439,6 +438,18 @@
               "brightline"
             ]
           }
+        },
+        {
+          "contains": {
+            "properties": {
+              "brightline": {
+                "const": "right-not-merely-working"
+              }
+            },
+            "required": [
+              "brightline"
+            ]
+          }
         }
       ],
       "items": {
@@ -456,14 +467,15 @@
               "work-proportionate-to-question",
               "multi-os-first-class",
               "no-single-machine-assumptions",
-              "work-vs-question-ratio"
+              "work-vs-question-ratio",
+              "right-not-merely-working"
             ],
             "description": "A fixed slug. The enum is the mechanism: an ad-hoc slug is how a brightline becomes a freehand row nothing gates. A new brightline is a plan chunk that extends this enum and the template together, never a plan-local addition."
           },
           "statement": {
             "type": "string",
             "minLength": 1,
-            "description": "Authored at plan-write time: what evidence at close-out would show this brightline held for THIS plan's delivered work. Same falsifiable-sentence discipline as `prime_exit_criterion.statement`, scoped to one brightline. `work-vs-question-ratio` is discharged by naming, per function or corpus-scale value the plan introduces, the bounded question it answers — an act, never the bare disposition \"proportionate\"."
+            "description": "Authored at plan-write time: what evidence at close-out would show this brightline held for THIS plan's delivered work. Same falsifiable-sentence discipline as `prime_exit_criterion.statement`, scoped to one brightline. `work-vs-question-ratio` is discharged by naming, per function or corpus-scale value the plan introduces, the bounded question it answers — an act, never the bare disposition \"proportionate\". `right-not-merely-working` is discharged by naming, per surface delivered, the simpler or cheaper shape considered and rejected and why the delivered one is right — never portability, which stays `multi-os-first-class`'s row."
           },
           "met": {
             "type": "boolean",

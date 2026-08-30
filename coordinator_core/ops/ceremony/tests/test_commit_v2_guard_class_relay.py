@@ -262,6 +262,7 @@ def test_commit_semantics_unchanged_by_relay_step(tmp_path):
         "sha",
         "staged_preferred",
         "worktree_over_staged",
+        "no_delta",
         "warnings",
         "guard_class_relay",
     }

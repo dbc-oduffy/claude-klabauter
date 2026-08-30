@@ -16,9 +16,12 @@ for work that had already reached the remote, with no correct way forward
 that did not involve committing or stashing a peer's files.
 
 Negative-spec: these tests do NOT assert that a genuinely diverged HEAD is
-papered over. `test_genuine_divergence_still_reports_the_dirty_rebase_refusal`
-is the counterweight -- when our commits are NOT on the remote, the dirty
-worktree is still a real blocker and must still be reported as one.
+papered over. The counterweights are the two `..._divergence...` tests below:
+when our commits are NOT on the remote the recovery must actually rebase them
+(2026-08-30 PM ruling: publishing does not require a pristine tree, so the
+dirty case replays rather than refusing), and when a peer's uncommitted edit
+sits on a path that replay would have to overwrite, the recovery must DECLINE
+having touched nothing -- never overwrite it, never stash it.
 """
 
 from __future__ import annotations
@@ -154,11 +157,29 @@ def test_head_is_ancestor_of_upstream_after_reject_is_landed_by_peer(tmp_path, m
     assert outcome.failed == []
 
 
-def test_genuine_divergence_still_reports_the_dirty_rebase_refusal(tmp_path, monkeypatch):
-    """The counterweight: our commit is NOT on the remote and the tree is
-    dirty. That is a real blocker and must still be reported as one -- this
-    fix narrows the rebase path, it does not silence it."""
+def _advance_the_remote(tmp_path: Path, repo: Path, filename: str, body: str) -> None:
+    """Land a commit on the remote that this worktree does not have, via a
+    second clone -- the genuine-divergence input, as opposed to a faked
+    reject. `repo` is left unfetched so its next push really is rejected."""
+    other = tmp_path / f"other-{filename}"
+    _git(["clone", "-q", str(tmp_path / "origin.git"), str(other)], tmp_path)
+    _git(["config", "user.email", "t@t.example"], other)
+    _git(["config", "user.name", "t"], other)
+    _git(["checkout", "-q", "work/x"], other)
+    (other / filename).write_text(body, encoding="utf-8")
+    _git(["add", "--", filename], other)
+    _git(["commit", "-q", "-m", f"remote-only: {filename}"], other)
+    _git(["push", "-q", "origin", "work/x"], other)
+
+
+def test_genuine_divergence_on_a_dirty_tree_replays_and_lands(tmp_path):
+    """The 2026-08-30 ruling, pinned: our commit is NOT on the remote, the
+    remote has moved, and the tree is dirty with a peer's uncommitted file.
+    The push must LAND -- a dirty tree is the standing state of this box, not
+    a reason to stop publishing -- and the peer's file must come through
+    untouched."""
     repo = _init_repo_with_upstream(tmp_path)
+    _advance_the_remote(tmp_path, repo, "upstream-only.txt", "landed elsewhere")
 
     (repo / "ours.txt").write_text("unpublished work", encoding="utf-8")
     _git(["add", "--", "ours.txt"], repo)
@@ -166,15 +187,39 @@ def test_genuine_divergence_still_reports_the_dirty_rebase_refusal(tmp_path, mon
 
     _dirty_the_tree_with_a_peers_file(repo)
 
-    push_calls: list = []
-    _reject_then_never_again(monkeypatch, push_calls)
+    outcome = push_mod.push_with_retry(repo)
+
+    assert outcome.failed == [], outcome.failed
+    assert outcome.exit_code == 0
+    # Our commit reached the remote, and the remote-only commit reached us.
+    assert _git(["rev-list", "--count", "origin/work/x..HEAD"], repo).strip() == "0"
+    assert (repo / "upstream-only.txt").read_text(encoding="utf-8") == "landed elsewhere"
+    # The peer's uncommitted file is exactly as they left it.
+    assert (repo / "peer-scratch.txt").read_text(encoding="utf-8") == "a peer is mid-edit"
+
+
+def test_divergence_over_a_peers_uncommitted_edit_declines_touching_nothing(tmp_path):
+    """The counterweight to the ruling: when the replay would have to
+    overwrite a path a peer is mid-edit on, it must DECLINE -- reporting the
+    failure, leaving that peer's bytes, the index and the branch ref exactly
+    as it found them. Never a stash, never an overwrite."""
+    repo = _init_repo_with_upstream(tmp_path)
+    _advance_the_remote(tmp_path, repo, "README.md", "rewritten on the remote")
+
+    (repo / "ours.txt").write_text("unpublished work", encoding="utf-8")
+    _git(["add", "--", "ours.txt"], repo)
+    _git(["commit", "-q", "-m", "ours, not on the remote"], repo)
+
+    head_before = _git(["rev-parse", "HEAD"], repo).strip()
+    (repo / "README.md").write_text("a peer is mid-edit here", encoding="utf-8")
 
     outcome = push_mod.push_with_retry(repo)
 
     assert outcome.exit_code != 0
-    assert outcome.skipped == []
     assert outcome.failed
-    assert "uncommitted changes" in outcome.failed[0]
+    assert "nothing touched" in outcome.failed[0], outcome.failed
+    assert (repo / "README.md").read_text(encoding="utf-8") == "a peer is mid-edit here"
+    assert _git(["rev-parse", "HEAD"], repo).strip() == head_before
 
 
 def test_head_already_reached_upstream_is_false_when_is_ancestor_cannot_answer(

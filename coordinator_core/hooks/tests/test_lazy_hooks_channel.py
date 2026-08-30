@@ -74,11 +74,12 @@ Negative-spec:
     not an execution proof, per AC3's own text.
   - Does NOT chase `test_op_module_map_matches_live_registry`'s pre-existing
     `distill.curate_clusters` / `memo.fate_backfill` / `updatedocs.gates` gap
-    or `test_op_key_scope_table_covers_all_registered_ops`'s pre-existing
-    `write_surface.emit_manifest` gap — both predate this chunk and are
-    unrelated to hooks; (a) treats either gap closing (by a concurrent
-    session) as a pass, and only fails if a NEW, non-allow-listed op joins
-    the failing set — never for someone else fixing a pre-existing bug.
+    — it predates this chunk and is unrelated to hooks; (a) treats that gap
+    closing (by a concurrent session) as a pass, and only fails if a NEW,
+    non-allow-listed op joins the failing set — never for someone else fixing
+    a pre-existing bug. The sibling `_OP_KEY_SCOPE` allow-list is now EMPTY:
+    its one entry, `write_surface.emit_manifest`, closed when that op was
+    gravestoned, so the guard below is unconditional.
   - (e)'s failure injection targets `_eager_import_all()` directly in a
     dedicated subprocess with a spoofed `_EAGER_HOOK_MODULES` entry; it does
     NOT prove the same resilience through the live `ipc.dispatch_message`
@@ -111,12 +112,14 @@ _LAZY_OPS_ENV_KEY = "COORDINATOR_CORE_LAZY_OPS"
 
 # Pinned at HEAD (2026-08-06) via a direct scoped run of each guard, predating
 # this chunk and unrelated to it (registry_map_sync: OP_MODULE_MAP omissions
-# for three unrelated ops; dispatch_message: an _OP_KEY_SCOPE omission for a
-# fourth unrelated op). See this file's module docstring, property (a).
+# for three unrelated ops). See this file's module docstring, property (a).
 _KNOWN_PREEXISTING_MODULE_MAP_GAP = frozenset(
     {"distill.curate_clusters", "memo.fate_backfill", "updatedocs.gates"}
 )
-_KNOWN_PREEXISTING_OP_KEY_SCOPE_GAP = frozenset({"write_surface.emit_manifest"})
+#: EMPTY on purpose, and staying that way unless a NEW gap is pinned with its
+#: own dated evidence. Its sole entry, `write_surface.emit_manifest`, was not
+#: fixed — the op was gravestoned, taking its unscoped key with it.
+_KNOWN_PREEXISTING_OP_KEY_SCOPE_GAP: frozenset[str] = frozenset()
 
 
 def _clean_env(**overrides: str) -> dict[str, str]:
@@ -243,8 +246,8 @@ def _extract_quoted_op_names(text: str) -> set[str]:
     to the guard's exact message wording.
 
     Excludes tokens containing '...' — pytest's assertion-rewrite diff
-    truncates long reprs (e.g. "'write_surfa...mit_manifest'" alongside the
-    untruncated "'write_surface.emit_manifest'" in the same output), and a
+    truncates long reprs (e.g. "'distill.cur...te_clusters'" alongside the
+    untruncated "'distill.curate_clusters'" in the same output), and a
     truncated fragment is never a real op key.
     """
     return {
@@ -301,9 +304,9 @@ def test_op_module_map_parity_guard_gains_no_new_gap_from_this_chunk() -> None:
 
 def test_op_key_scope_guard_gains_no_new_gap_from_this_chunk() -> None:
     """(a) — ipc `_OP_KEY_SCOPE` coverage drift guard, same tolerant shape as
-    the OP_MODULE_MAP guard above: a green run (someone else closed the
-    pre-existing `write_surface.emit_manifest` gap) is fine; a red run is
-    only fine if every failing op is in the known-preexisting allow-list."""
+    the OP_MODULE_MAP guard above. Its allow-list is now empty (the one entry
+    left with the gravestoned op that owned it), so a green run is the
+    expected outcome and any failing op is a real gap."""
     proc = subprocess.run(
         [
             sys.executable, "-m", "pytest",

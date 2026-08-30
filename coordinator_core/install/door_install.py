@@ -655,6 +655,19 @@ def launcher_is_installable(engine_root: Path, name: str) -> bool:
     separates "deliberately not shipped" from "never resolvable in the first
     place" -- the second is someone else's open row, not this function's to
     act on.
+
+    A THIRD population reads as case 2 above but is neither live nor
+    someone else's open row: a KILLED op (K-068) whose `.py` was deleted
+    from both trees returns True here, same as the extensionless twelve --
+    this predicate cannot distinguish "never had one" from "used to have
+    one and was deliberately killed". That is correct for THIS function
+    (a killed op's image is additive-installer-invisible either way, since
+    this predicate only gates the per-name install loop's write/keep
+    decision) but means a killed op's stale image is never reaped through
+    this path. `_sweep_orphaned_agent_helpers`'s killed-op-name
+    identification (C1, `_KILLED_OP_ORPHAN_NAMES` in `substrate.py`) is the
+    roster- and predicate-independent mechanism that actually retires it --
+    do not expect this predicate to also do that job.
     """
     if not (_GENERATOR_BIN_DIR / f"{name}.py").is_file():
         return True

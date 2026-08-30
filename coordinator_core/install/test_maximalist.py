@@ -1828,7 +1828,7 @@ def test_writer_discovery_failure_is_loud_and_recorded_unreported(stub_env, monk
     writer discovery must WARN loudly and be folded into
     `unreported_writer_ids`, never vanish from receipt coverage silently."""
     monkeypatch.delenv("COORDINATOR_DISABLE_MACHINE_MUTATION", raising=False)
-    from coordinator_core.ops import write_surface_manifest as _wsm_module
+    from coordinator_core.install import write_surface_discovery as _wsm_module
 
     monkeypatch.setattr(
         _wsm_module,

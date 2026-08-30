@@ -140,6 +140,42 @@ class CommitOutcome(NamedTuple):
     #: those would make the safe default unusable. Free to compute -- the
     #: staged identity and the worktree blob are both already in hand.
     worktree_over_staged: Tuple[str, ...] = ()
+    #: Declared paths that contributed NOTHING to this commit -- their bytes
+    #: already matched HEAD (or, for a `deleted_paths` member, HEAD already
+    #: lacked them). The commit is real and legitimate; these paths are not
+    #: in it because there was nothing of theirs to put there.
+    #:
+    #: The k-of-N counterpart to `NothingToCommit`'s N-of-N. A caller that
+    #: names five paths and gets four has lost the same thing an empty commit
+    #: loses -- a path it believes it delivered -- and the usual cause is a
+    #: hook or a peer having already committed that path moments earlier
+    #: (DoE-claude's `874cf35dd`, where the plan `.md` the commit existed for
+    #: was the missing one). NOT a refusal: a partial commit is legitimate and
+    #: refusing it would break every ordinary scoped commit over a pathspec
+    #: that is mostly unchanged.
+    #:
+    #: A FIELD IS NOT A SIGNAL (`commit_v2`'s own note). This one is only
+    #: honest because `ceremony.commit_v2` raises it into `warnings` and
+    #: `coordinator-safe-commit` prints it beside the sha -- a caller that
+    #: must already suspect the bug to know to read the field reproduces the
+    #: bug.
+    no_delta: Tuple[str, ...] = ()
+
+
+class NothingToCommit(CommitRefused):
+    """The assembled tree is byte-identical to HEAD's -- this commit would
+    change zero files. Refused rather than landed, and it is `CommitRefused`
+    so nothing was written: no object, no ref move, no index write.
+
+    WHY A REFUSAL AND NOT A FIELD. The success line is the only signal most
+    callers have, and a zero-delta commit reported as `committed sha=<x>`
+    reads as delivery to every one of them. That cost a real review pass:
+    `ffcebec80` in DoE-claude reported an applied twelve-finding
+    review-integration that had not landed, and it had to be re-authored from
+    context. A new `CommitOutcome` field would have been just as invisible --
+    a caller must already suspect the bug to know to read it, which is the
+    bug. `git commit` itself refuses this without `--allow-empty`; this route
+    now agrees. Deliberate marker commits opt in via `allow_empty=True`."""
 
 
 class FilterUnsupported(CommitRefused):
@@ -329,6 +365,7 @@ def commit_paths(
     supplied_blobs: Optional[Mapping[str, str]] = None,
     prefer_staged: Sequence[str] = (),
     prefer_deliberate_stage: bool = False,
+    allow_empty: bool = False,
     blob_fallback: Optional[Callable[[Sequence[str]], Mapping[str, str]]] = None,
     restrict_to_session: object = None,
 ) -> CommitOutcome:
@@ -337,7 +374,8 @@ def commit_paths(
     Raises `CommitRefused` without writing anything on: an empty pathspec (an
     empty pathspec to `git commit` commits the WHOLE INDEX, so it is refused
     here rather than defaulted), a directory in `paths`, an unresolvable CAS
-    ref, or a lost CAS race.
+    ref, a lost CAS race, or a tree identical to HEAD's (`NothingToCommit`,
+    unless `allow_empty=True` -- see that class).
 
     `prefer_deliberate_stage` (DR-379): a caller-declared opt-in, DEFAULT
     FALSE, that turns the already-computed `worktree_over_staged` set from a
@@ -552,6 +590,46 @@ def commit_paths(
             else:
                 worktree_over_staged.append(p)
 
+    # THE DELTA PASS, off the spine already in hand -- no extra spawn, no
+    # extra object read, and it runs BEFORE any tree is written, so the
+    # refusal below leaves nothing behind. `assembled` is final at this point:
+    # `prefer_deliberate_stage` above is the last thing that can substitute
+    # into it, and its substitutions are exactly the ones that can turn a
+    # would-be delta back into a no-op.
+    #
+    # Compared entry-for-entry rather than root-tree-to-root-tree because the
+    # latter needs the rewrite the refusal is meant to precede. The comparison
+    # is exact: `assembled`'s values are the same `(mode, sha)` tuples
+    # `_rewrite_head_spine` splices into the spine.
+    #
+    # EVERY path is checked, not just enough of them to prove one differs. The
+    # early exit was cheaper and threw away the k-of-N answer: a commit where
+    # four of five declared paths changed is a REAL commit and must land, but
+    # the caller named five and got four, and the fifth is exactly as
+    # invisible as an all-empty commit was. DoE-claude's `874cf35dd` is the
+    # worked case -- five paths, four landed, and the plan `.md` that was the
+    # point of the commit contributed nothing because a status-transition hook
+    # had already committed it moments earlier. Same failure as the empty
+    # commit, one notch narrower, and the loop was already computing the fact
+    # per path before discarding it.
+    no_delta = []
+    for p, val in assembled.items():
+        head_dir, _, head_name = p.rpartition("/")
+        head_entry = spine.get(head_dir, {}).get(head_name)
+        if val is _ABSENT:
+            if head_entry is None:
+                no_delta.append(p)
+        elif head_entry == val:
+            no_delta.append(p)
+
+    if not allow_empty and len(no_delta) == len(assembled):
+        raise NothingToCommit(
+            f"nothing to commit -- all {len(assembled)} path(s) already "
+            "match HEAD. Refused: a commit with no diff reports as "
+            "delivery to every caller reading the success line. Pass "
+            "allow_empty=True for a deliberate marker commit."
+        )
+
     filled = _synthesize_absent_spine_dirs(spine, assembled)
     if filled is not None:
         spine = filled
@@ -599,6 +677,7 @@ def commit_paths(
         sha=commit_sha,
         staged_preferred=tuple(staged_preferred),
         worktree_over_staged=tuple(worktree_over_staged),
+        no_delta=tuple(no_delta),
     )
 
 

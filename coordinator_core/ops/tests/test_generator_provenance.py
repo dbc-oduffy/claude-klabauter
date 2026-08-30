@@ -222,7 +222,7 @@ def run():
 def test_known_writer_with_no_generates_is_named_undeclared_by_ast_sweep(tmp_path):
     _write(
         tmp_path,
-        "bin/write_surface_manifest.py",
+        "bin/emit_receipt_manifest.py",
         """
 import json
 
@@ -233,10 +233,10 @@ def run():
     )
 
     records = discover_generators(tmp_path)
-    matches = [r for r in records if r.generator == "bin/write_surface_manifest.py"]
+    matches = [r for r in records if r.generator == "bin/emit_receipt_manifest.py"]
     assert len(matches) == 1
     assert matches[0].verdict == Verdict.UNDECLARED
-    assert "write_surface_manifest.py" in matches[0].detail
+    assert "emit_receipt_manifest.py" in matches[0].detail
 
 
 # A hand-picked sample of real known-writer modules OUTSIDE the C2 five, so

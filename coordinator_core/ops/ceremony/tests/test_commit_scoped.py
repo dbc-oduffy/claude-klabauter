@@ -909,24 +909,35 @@ def test_ac13_post_commit_auto_push_replayed_after_successful_cas(tmp_path, monk
     _git(["add", "--", "file.txt"], repo)
     _git(["commit", "-q", "-m", "baseline"], repo)
 
-    calls: list[Path] = []
+    calls: list[tuple] = []
     monkeypatch.setattr(
-        git_native, "_replay_post_commit_auto_push", lambda root: calls.append(Path(root))
+        git_native,
+        "_replay_post_commit_auto_push",
+        lambda root, path_list=None, sid=None: calls.append((Path(root), path_list, sid)),
     )
     msg_file = _write_msg(tmp_path)
 
-    result = git_native.commit_authored_content("file.txt", "NEW\n", msg_file, repo)
+    result = git_native.commit_authored_content(
+        "file.txt", "NEW\n", msg_file, repo, attributed_session_id="sess-ac13"
+    )
 
     assert result.ok, result.stderr
     assert len(calls) == 1
-    assert calls[0] == repo
+    assert calls[0][0] == repo
+    # The replay is handed this entrypoint's own single path and already-resolved
+    # committing identity, so `auto_push` does not spawn `git show --name-only HEAD`
+    # to relearn a path this function has held since its first line.
+    assert calls[0][1] == ["file.txt"]
+    assert calls[0][2] == "sess-ac13"
 
 
 def test_ac13_post_commit_auto_push_not_replayed_on_failure(tmp_path, monkeypatch):
     repo = real_git_repo(tmp_path)
     calls: list[Path] = []
     monkeypatch.setattr(
-        git_native, "_replay_post_commit_auto_push", lambda root: calls.append(Path(root))
+        git_native,
+        "_replay_post_commit_auto_push",
+        lambda root, path_list=None, sid=None: calls.append(Path(root)),
     )
     msg_file = _write_msg(tmp_path)
 

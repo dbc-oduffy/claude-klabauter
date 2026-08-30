@@ -76,24 +76,34 @@ def _drift_to_lf(repo, name="run.cmd"):
 
 
 def test_executable_paths_selects_only_the_declared_classes():
+    """Also covers the data-file exclusion case: K-019's labour census found
+    ALL 43 historical violations on data files under scratch dirs
+    (`state/review-slices/`, `state/subagent-share/`) and zero on
+    executables. Selecting them would re-adopt exactly the noise the census
+    measured; the baton's anti-scope names it by hand.
+    <!-- Review: overengineering-reviewer (Kira) -- folded in
+    test_data_files_are_never_selected, subsumed by this assertion. -->
+    """
     picked = executable_paths(
-        ["a.cmd", "b.ps1", "c.sh", "d.bat", "e.py", "f.md", "g.diff", "h.patch"]
+        [
+            "a.cmd",
+            "b.ps1",
+            "c.sh",
+            "d.bat",
+            "e.py",
+            "f.md",
+            "g.diff",
+            "h.patch",
+            "state/review-slices/x.diff",
+            "state/subagent-share/y.patch",
+            "z.sha",
+        ]
     )
     assert picked == ["a.cmd", "b.ps1", "c.sh", "d.bat"]
 
 
 def test_executable_paths_is_case_insensitive_and_deduplicates():
     assert executable_paths(["A.CMD", "A.CMD", "b.Ps1"]) == ["A.CMD", "b.Ps1"]
-
-
-def test_data_files_are_never_selected():
-    """K-019's labour census found ALL 43 historical violations on data files
-    under scratch dirs and zero on executables. Selecting them would re-adopt
-    exactly the noise the census measured; the baton's anti-scope names it.
-    """
-    assert executable_paths(
-        ["state/review-slices/x.diff", "state/subagent-share/y.patch", "z.sha"]
-    ) == []
 
 
 def test_no_executable_in_the_commit_spawns_nothing(repo, monkeypatch):
@@ -272,3 +282,67 @@ def test_suffix_tuple_is_the_executable_classes_only():
     census that scoped it is cited in the module. Pinned so it cannot drift
     silently."""
     assert EXECUTABLE_SUFFIXES == (".cmd", ".ps1", ".sh", ".bat")
+
+
+# --------------------------------------------------------------------------
+# Review findings 2, 3, 4, 6, 2026-08-30.
+# --------------------------------------------------------------------------
+
+
+def test_binary_autodetected_file_is_not_treated_as_drift(tmp_path):
+    """A `w/-text` file (git's own binary-content heuristic under
+    `text=auto`) is not repairable drift: check-in normalization does not
+    touch such a file, so this module rewriting its bytes would corrupt
+    content git itself leaves alone (review finding 2)."""
+    root = tmp_path / "b"
+    root.mkdir()
+    _git(root, "init", "-q", ".")
+    _git(root, "config", "user.email", "t@t")
+    _git(root, "config", "user.name", "t")
+    (root / ".gitattributes").write_bytes(b"*.cmd text=auto eol=crlf\n")
+    (root / "run.cmd").write_bytes(b"\x00binary\x00payload\x00\n")
+    _git(root, "add", ".gitattributes", "run.cmd")
+    _git(root, "commit", "-qm", "init")
+
+    eol_field = _git_out(root, "ls-files", "--eol", "run.cmd")
+    assert "w/-text" in eol_field, "fixture must actually elicit -text from git"
+
+    assert find_declared_eol_drift(root, ["run.cmd"]) == []
+
+
+def test_a_tracked_symlink_is_never_repaired(repo):
+    """A tracked symlink matching an `eol=` pattern must never be read/written
+    through -- `Path.read_bytes`/`write_bytes` follow it transparently, which
+    is an arbitrary-file-write risk if such a path were ever classified as
+    drifted (review finding 3)."""
+    link = repo / "launch.cmd"
+    target = repo / "outside.txt"
+    target.write_bytes(b"do not touch")
+    try:
+        link.symlink_to(target)
+    except OSError:
+        pytest.skip("symlink creation unavailable (needs Developer Mode/elevation on Windows)")
+
+    _git(repo, "add", "launch.cmd")
+    _git(repo, "commit", "-qm", "add symlinked launcher")
+
+    drift = Drift(path="launch.cmd", declared="crlf", on_disk="lf")
+    assert repair_declared_eol_drift(repo, [drift]) == []
+    assert target.read_bytes() == b"do not touch"
+
+
+def test_record_regex_matches_a_blank_i_or_w_field():
+    """`git ls-files --eol` can legitimately report a blank `i/`/`w/` token;
+    the record regex must still match rather than silently dropping the
+    line to 'no finding' (review finding 4)."""
+    from coordinator_core.git.eol_declared import _RECORD
+
+    record = "i/ w/lf attr/text eol=lf\tsome/path.sh"
+    match = _RECORD.match(record)
+    assert match is not None
+    assert match.groups() == ("", "lf", "text eol=lf", "some/path.sh")
+
+    record_blank_w = "i/lf w/ attr/text eol=lf\tsome/path.sh"
+    match2 = _RECORD.match(record_blank_w)
+    assert match2 is not None
+    assert match2.groups() == ("lf", "", "text eol=lf", "some/path.sh")

@@ -1437,7 +1437,7 @@ def _extract_dict_str_keys(source: str, var_name: str, *, filename: str) -> Opti
     arbitrary module-level code (both modules are otherwise side-effect-free today,
     but this gate must not depend on that staying true forever, and `_registry_map.py`'s
     own docstring states it must never import an op module itself) -- so this reads the
-    literal dict AST instead, exactly as `write_surface_manifest._declares_write_surface`
+    literal dict AST instead, exactly as `write_surface_discovery._declares_write_surface`
     already does for a narrower "does this bind a name" question.
 
     Returns `None` (never an empty set as a substitute) when `var_name` is not bound to
@@ -1478,7 +1478,7 @@ def _extract_dict_str_keys(source: str, var_name: str, *, filename: str) -> Opti
         # Dict[str, str] = {...}` are both type-annotated module-level
         # bindings (`ast.AnnAssign`), not bare `ast.Assign` -- both real
         # tables use this form, so this must check both node types (mirrors
-        # `write_surface_manifest._declares_write_surface`'s own
+        # `write_surface_discovery._declares_write_surface`'s own
         # `Assign`-then-`AnnAssign` pair for the same reason).
         if isinstance(node, ast.Assign):
             for target in node.targets:

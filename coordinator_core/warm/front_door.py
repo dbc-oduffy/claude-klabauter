@@ -46,13 +46,34 @@ opposite verdicts: another instance of THIS SAME front door already won
 (ordinary, expected, defer) -- or some OTHER process is squatting the fixed
 port (a foreign holder, a stale artefact, a misconfigured neighbour). The
 distinction is health-probed, never assumed: GET the existing holder's
-`supervisor.HEALTH_PATH` and read the JSON body for this module's own
+`supervisor.HEALTH_PATH` and read the JSON body for the
 `door_protocol_version` marker (AC4a). A recognizable body -> `ElectionLost`
-(ordinary defer, "lost to ourselves"). Anything else -- no answer, a timeout, a
+(ordinary defer). Anything else -- no answer, a timeout, a
 non-2xx status, a malformed body, or a body missing the marker -- is a
 `ForeignHolderError`: an explicit, loudly-typed state that must never be read
 as "no listener" (a silent fall-through) nor as an ordinary lost election (a
 silent defer to a process that is not us).
+
+THE MARKER IS A CONFORMANCE CLAIM, NOT A SELF-IDENTIFICATION (2026-08-30). The
+branch above once read "lost to ourselves", and that phrasing was wrong about
+the only box either repo runs on. `FIXED_PORT` is not this module's to win by
+default -- its value was taken FROM DoE's `http_hook_forwarder` (see
+`FIXED_PORT`'s own comment), which has held the seat continuously and serves
+the same job: accept a hook fire, reach a warm listener. Measured by
+doe-claude-em 2026-08-30 on a door that could never win: the forwarder holds
+`47623`, answers `501` to `GET`, and so probed as a FOREIGN holder -- which
+would have made a registered `ensure_front_door` caller spawn one doomed door
+per session across ~30 concurrent sessions.
+
+So the succession is named rather than left implicit: publishing
+`door_protocol_version` asserts *"the holder implements the front-door hook
+transport at protocol version N"*, NOT *"the holder is a process running this
+module"*. A conforming non-door holder is an ORDINARY `ElectionLost`, and
+`ensure_front_door` correctly becomes a no-op on a healthy box. What a holder
+must actually serve to make that claim truthfully is pinned in
+`docs/reference/hook-seam-warm-reach-contract.md` § The fixed-port succession
+and by `tests/test_front_door_succession_contract.py`; the claim is load-
+bearing precisely because nothing else stops a squatter publishing the marker.
 
 DOOR PROTOCOL VERSION (AC4a). A hand-bumped integer, deliberately distinct from
 the skew/engine token (`skew.compute_client_token`), which rotates on EVERY
@@ -261,11 +282,17 @@ def is_own_door_health_payload(payload: Any) -> bool:
     """True iff `payload` (already-parsed JSON) carries a recognizable
     `door_protocol_version` marker.
 
+    The name says "own" and means CONFORMING, not same-process -- see the
+    module docstring's "THE MARKER IS A CONFORMANCE CLAIM" section. The
+    holder on every box either repo runs today is DoE's
+    `http_hook_forwarder`, not an instance of this module, and it is a
+    legitimate ordinary-defer holder rather than a foreign one.
+
     Deliberately permissive on the marker's INTEGER VALUE -- any int, not
     only the current `DOOR_PROTOCOL_VERSION` -- because a successor
     generation publishing a bumped version must still be recognized as an
-    existing front door (AC4's "lost to ourselves" branch), never misread
-    as a foreign process. Discriminating "is this version acceptable" is a
+    existing holder (AC4's ordinary-defer branch), never misread as a
+    foreign process. Discriminating "is this version acceptable" is a
     separate question (AC4a's yield-on-lower-version path), not this one.
     """
     if not isinstance(payload, dict):

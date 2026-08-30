@@ -20,7 +20,7 @@ from coordinator_core.install.write_surface import (
     WriteSurfaceEntry,
     validate,
 )
-from coordinator_core.ops.write_surface_manifest import _flatten_declaration
+from coordinator_core.install.write_surface_discovery import _flatten_declaration
 
 
 def test_all_eight_kinds_present_and_exact() -> None:
@@ -209,7 +209,6 @@ def test_unset_group_does_not_change_emitted_manifest_entry_keys() -> None:
         "effect",
         "reason",
         "discovered_by",
-        "discovered_by_normalized",
         "validation_errors",
     }
     assert "unset_group" not in flattened[0]

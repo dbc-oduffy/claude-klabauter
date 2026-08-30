@@ -80,6 +80,24 @@ def _defer_digest(tasks_yaml: str = _ONE_DEFER) -> str:
     return compute_grouping_digest(_rows(tasks_yaml), 'defer')
 
 
+def _spun_off_block(tasks_yaml: str) -> str:
+    """An approved `spun_off` grouping block, digest fresh over `tasks_yaml`.
+
+    Needed by every governed fixture carrying a `spun_off` row since
+    2026-08-30: that disposition joined the GOVERNED gate when
+    plan.schema.json 2.13.0 brought the fourth grouping key (DR-183).
+    """
+    digest = compute_grouping_digest(_rows(tasks_yaml), 'spun_off')
+    return (
+        "  spun_off:\n"
+        "    status: approved\n"
+        "    approver: pm\n"
+        "    approved_at: 2026-07-29\n"
+        "    pm_utterance: 'yes, cut C2 - it is its own plan'\n"
+        f"    digest: '{digest}'\n"
+    )
+
+
 def _governed_fm(
     *,
     grouping: str = 'defer',
@@ -248,18 +266,18 @@ class TestPredicate:
         assert error['field'] == 'grouping_approvals.defer.digest'
         assert 'sha256:' in error['hint']
 
-    def test_spun_off_exempt_from_grouping_approval_even_when_unapproved(self):
-        """Named regression pin for DoE's 2026-08-05 ruling (C3/C8): a
-        governed plan with a closed `spun_off` row and NO `spun_off`
-        grouping_approvals block at all (and no `defer` approval covering
-        it either) must still admit — `spun_off` occupies its own C3
-        grouping that carries no `grouping_approvals` schema key, so the
-        predicate must never gate it, in contrast to `test_absent_block_
-        for_that_grouping_rejects` above for a genuinely gated disposition.
+    def test_spun_off_without_its_grouping_block_is_refused(self):
+        """Named regression pin for DR-183 as landed 2026-08-30: a governed
+        plan with a closed `spun_off` row and NO `spun_off` grouping_approvals
+        block is refused, the same as any other PM-gated disposition whose
+        block is absent (`test_absent_block_for_that_grouping_rejects` above).
 
-        Review: code-reviewer (Finding 1) — this coverage was claimed by
-        C8's commit message ("governed spun_off exemption") but did not
-        exist as a named test anywhere before this.
+        This test asserted the OPPOSITE until plan.schema.json 2.13.0 was
+        vendored: DoE's 2026-08-05 ruling exempted `spun_off`, and the gate
+        could not have been built anyway while `grouping_approvals` declared
+        no fourth key to approve. DR-183 (2026-08-29) reversed the ruling and
+        the key's arrival unblocked the GOVERNED half; the legacy per-row
+        `pm_approved` leg deliberately did not widen with it.
         """
         tasks = (
             "- id: C1\n"
@@ -273,7 +291,9 @@ class TestPredicate:
         # Deliberately no `spun_off` (or `defer`) block in grouping_approvals.
         fm = "schema_version: '1.2.0'\ngrouping_approvals:\n  do:\n    status: pending\n"
         source = _plan(tasks, frontmatter=fm)
-        assert check_plan_tasks_grouping_approval(source) is None
+        error = check_plan_tasks_grouping_approval(source)
+        assert error is not None
+        assert error['field'] == 'grouping_approvals.spun_off'
 
     def test_coded_never_gated(self):
         """A shipped row is evidence of work done, not a scope decision.
@@ -326,7 +346,11 @@ class TestPredicate:
             "  disposition_detail: PM said this belongs in its own plan\n"
             "  disposition_ref: docs/plans/2026-07-29-other.md\n"
         )
-        source = _plan(tasks, frontmatter=_governed_fm(digest=_defer_digest(tasks)))
+        source = _plan(
+            tasks,
+            frontmatter=_governed_fm(digest=_defer_digest(tasks))
+            + _spun_off_block(tasks),
+        )
         assert check_plan_tasks_source(source) is None
 
     def test_approved_grouping_is_not_sufficient_without_detail(self):
@@ -341,7 +365,11 @@ class TestPredicate:
             "  disposition: spun_off\n"
             "  disposition_ref: docs/plans/2026-07-29-other.md\n"
         )
-        source = _plan(tasks, frontmatter=_governed_fm(digest=_defer_digest(tasks)))
+        source = _plan(
+            tasks,
+            frontmatter=_governed_fm(digest=_defer_digest(tasks))
+            + _spun_off_block(tasks),
+        )
         # The predicate itself is satisfied...
         assert check_plan_tasks_grouping_approval(source) is None
         # ...but the combined source-scoped door still refuses the row.
@@ -566,46 +594,31 @@ class TestGateIsReachable:
 
 
 
-class TestSpunOffGateIsBlockedOnTheFourthGroupingKey:
+class TestSpunOffGateIsLiveOnTheFourthGroupingKey:
     """DR-183 (2026-08-29) re-gates `spun_off`, reversing the 2026-08-05
-    five-exits relaxation. It cannot be enforced from this repo yet, and the
-    reason is structural rather than a matter of anyone getting round to it.
+    five-exits relaxation. Its claude-klabauter half landed 2026-08-30, when
+    plan.schema.json 2.13.0 was vendored and brought
+    `grouping_approvals.spun_off` — the fourth key the gate structurally
+    needed. Before it, gating `spun_off` rejected every governed plan
+    carrying such a row with no author-side remedy: approving the grouping
+    was impossible and authoring the block was itself a schema violation.
 
-    `spun_off` derives its own grouping (`_PLAN_TASKS_GROUPING_BY_DISPOSITION`),
-    but `grouping_approvals` declares only `do`/`defer`/`ruled_out` under
-    `additionalProperties: false`. Widening
-    `_PLAN_TASKS_PM_APPROVAL_GATED_DISPOSITIONS` today would reject every
-    governed plan carrying a `spun_off` row with NO author-side remedy:
-    approving the grouping is impossible, and authoring the block is itself a
-    schema violation.
-
-    The fix is a fourth key, and it cannot originate here. plan.schema.json is
-    vendored byte-for-byte from DoE-claude and
-    `TestDriftCheck::test_plan_schema_matches_doe_head_and_homes_grouping_approvals`
-    enforces that parity with no pin or tolerance escape. DoE authors the key
-    and bumps; claude-klabauter re-vendors via `bin/claude-klabauter-revendor-schema.py`; only then
-    does the GOVERNED gate widen.
-
-    SCOPE OF THAT WIDEN, decided 2026-08-29: governed only. The legacy per-row
-    leg (`_PLAN_TASKS_PM_APPROVAL_GATED_DISPOSITIONS`, read by
-    `_cf_plan_tasks_disposition_shape`) stays `{'backlogged', 'wont_do'}`,
-    though DoE's ask included it. Widening it retroactively invalidates 16
-    `spun_off` rows across 10 legacy plans, 7 of them live, written correctly
-    under the 2026-08-05 relaxation; the only repair is forging `pm_approved:
-    true` on rows nobody approved. The contract's own migration model already
-    settles this — a plan joins by acquiring the block, and "authoring the
-    block IS the migration event" — so every affected plan is pre-contract by
-    construction and DR-183 binds forward.
-
-    These two tests are the tripwire for that sequence. The first fails the
-    moment the key arrives, which is the signal to do the claude-klabauter half; the
-    second is the assertion that must be INVERTED, not deleted, when it does.
+    SCOPE OF THE WIDEN, decided 2026-08-29 and honoured here: governed only.
+    The legacy per-row leg (`_PLAN_TASKS_PM_APPROVAL_GATED_DISPOSITIONS`,
+    read by `_cf_plan_tasks_disposition_shape`) stays
+    `{'backlogged', 'wont_do'}`, though DoE's ask included it. Widening it
+    retroactively invalidates 16 `spun_off` rows across 10 legacy plans,
+    7 of them live, written correctly under the 2026-08-05 relaxation; the
+    only repair is forging `pm_approved: true` on rows nobody approved. The
+    contract's own migration model settles it — a plan joins by acquiring
+    the block, and "authoring the block IS the migration event" — so every
+    affected plan is pre-contract by construction and DR-183 binds forward.
     """
 
-    def test_the_fourth_grouping_key_has_not_arrived_yet(self):
-        """Fails (deliberately, loudly) once DoE lands the key and claude-klabauter
-        re-vendors — at which point DR-183's claude-klabauter half is unblocked and this
-        test's job is done. A green here means the widen is still blocked."""
+    def test_the_fourth_grouping_key_has_arrived(self):
+        """The vendored schema declares the key the governed widen rests on.
+        A red here means a re-vendor dropped it and the widen below is
+        gating rows whose approval block can no longer be authored."""
         import json
         from pathlib import Path
 
@@ -616,22 +629,18 @@ class TestSpunOffGateIsBlockedOnTheFourthGroupingKey:
             'properties'
         ]['grouping_approvals']
 
-        assert 'spun_off' not in blocks['properties'], (
-            "plan.schema.json now declares a spun_off grouping_approvals key -- "
-            "DR-183's claude-klabauter half is UNBLOCKED. Widen "
-            "_PLAN_TASKS_PM_APPROVAL_GATED_DISPOSITIONS to include 'spun_off', "
-            'invert the companion test below, and delete this one. Widen the '
-            'GOVERNED gate ONLY: _PLAN_TASKS_PM_APPROVAL_GATED_DISPOSITIONS '
-            "stays {'backlogged', 'wont_do'} so the 16 legacy spun_off rows "
-            'under docs/plans/ are not retroactively invalidated -- see this '
-            "class's docstring for why that is the contract's own migration "
-            'model rather than a carve-out.'
+        assert 'spun_off' in blocks['properties'], (
+            'plan.schema.json no longer declares a spun_off grouping_approvals '
+            'key, but the GOVERNED gate still scans spun_off rows -- a '
+            'governed plan with such a row now has no authorable remedy. '
+            'Re-vendor from DoE HEAD, or narrow '
+            '_PLAN_TASKS_GOVERNED_PM_APPROVAL_GATED_DISPOSITIONS back.'
         )
 
-    def test_a_governed_plan_with_a_spun_off_row_passes_ungated_today(self):
-        """Current, correct behaviour: `spun_off` is not PM-gated, so a governed
-        plan whose only closed row is `spun_off` passes with no spun_off
-        approval block. INVERT this when the widen lands; do not delete it."""
+    def test_a_governed_plan_with_a_spun_off_row_needs_its_grouping_approved(self):
+        """The inversion of the pre-2026-08-30 test: `spun_off` is PM-gated on
+        a governed plan, so one whose only closed row is `spun_off` fails
+        without an approved `spun_off` block."""
         tasks = (
             "- id: C1\n"
             "  disposition: spun_off\n"
@@ -639,4 +648,18 @@ class TestSpunOffGateIsBlockedOnTheFourthGroupingKey:
             "  disposition_detail: 'moved to its own plan'\n"
         )
         source = _plan(tasks, frontmatter=_governed_fm())
-        assert check_plan_tasks_grouping_approval(source) is None
+        error = check_plan_tasks_grouping_approval(source)
+        assert error is not None
+        assert error['field'] == 'grouping_approvals.spun_off'
+
+    def test_the_legacy_per_row_leg_did_not_widen(self):
+        """Governed-only, per DR-183's scope call: the legacy `pm_approved`
+        set stays two-valued so the 16 legacy `spun_off` rows are not
+        retroactively invalidated."""
+        from coordinator_core.frontmatter.schema_validate import (
+            _PLAN_TASKS_PM_APPROVAL_GATED_DISPOSITIONS,
+        )
+
+        assert _PLAN_TASKS_PM_APPROVAL_GATED_DISPOSITIONS == frozenset(
+            {'backlogged', 'wont_do'}
+        )

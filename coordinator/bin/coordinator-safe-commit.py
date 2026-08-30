@@ -566,12 +566,37 @@ def do_pathspec(args: "Args") -> None:
         print(f"ERROR: ceremony.commit_v2: {exc}", file=sys.stderr)
         sys.exit(1)
 
+    if result.get("nothing_to_commit"):
+        # SEPARATED FROM THE GENERIC REFUSAL because the two need opposite
+        # things from the reader. A generic refusal says the route failed; this
+        # says the route worked and there was nothing there -- which, when the
+        # caller believed it had just written something, means the write is the
+        # thing that did not land. That is the sentence a session took at face
+        # value from `committed sha=` and lost a twelve-finding review pass to.
+        print(
+            "NOTHING TO COMMIT: every named path already matches HEAD -- no "
+            "commit was made and HEAD is unmoved. If you expected a change, "
+            "your edit never landed.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
     if not result.get("committed"):
         print(
             f"ERROR: ceremony.commit_v2 did not commit: {result.get('error') or result}",
             file=sys.stderr,
         )
         sys.exit(1)
+
+    # WARNINGS PRINT BESIDE THE SHA, and their absence here was half of the
+    # zero-delta bug rather than a cosmetic gap: `ceremony.commit_v2` has
+    # raised structured warnings for a while -- passed-over staged bytes,
+    # repaired line endings, and now declared paths that contributed nothing
+    # -- and this helper dropped every one of them on the floor, leaving
+    # `committed sha=` as the whole of what a caller saw. A fact returned to a
+    # surface that does not print it is not reported.
+    for warning in result.get("warnings") or ():
+        print(f"WARNING: {warning}", file=sys.stderr)
 
     print(f"committed sha={result.get('sha')}", file=sys.stderr)
 

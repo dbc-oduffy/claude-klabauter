@@ -2384,3 +2384,122 @@ def test_apply_close_commit_failure_escalates_success_to_partial_mutation(
 
     assert report["close_commit"]["commit_failed"] is True
     assert exit_code == int(ws_apply.WorkstreamApplyExitCode.PARTIAL_MUTATION)
+
+
+# ---------------------------------------------------------------------------
+# Completion-entry commit-ledger fold wiring (2026-08-30). The fold itself
+# lives in `ops/ceremony/post_commit_tail.py` and is tested there; what these
+# tests pin is the WIRE, which is the half that was missing — the fold shipped
+# taking a caller-supplied entry path that no caller supplied, so it never ran
+# once and every completion entry's `commits:` list stayed empty. The seam is
+# this module: `d-complete-entry` prints the entry path here, and the close
+# commit produces the sha here.
+# ---------------------------------------------------------------------------
+
+
+_ENTRY_REL = "archive/completed/2026-08/2026-08-30-entry.md"
+
+
+def _brief_with_complete_entry(monkeypatch: pytest.MonkeyPatch, stdout: str) -> None:
+    """A one-directive brief whose CLI stands in for `coordinator-complete-
+    entry`, honouring the same contract the real one does: the entry path on
+    the first line of stdout."""
+
+    def entry_main(argv: list[str]) -> int:
+        print(stdout, end="")
+        return 0
+
+    modules = {"coordinator-complete-entry": _fake_module(entry_main, "fake_entry")}
+    monkeypatch.setattr(ws_apply, "_load_cli_module", lambda cli_name: modules[cli_name])
+    monkeypatch.setattr(
+        ws_apply,
+        "brief",
+        lambda decisions=None: {
+            "directives": [_directive("d-complete-entry", "coordinator-complete-entry")],
+            "judgment_points": [],
+            "decisions": decisions or {},
+            "artifact": {"path": "X:/nonexistent-worktree"},
+        },
+    )
+
+
+def _capture_fold(monkeypatch: pytest.MonkeyPatch, calls: list) -> None:
+    """Patches the FOLD ITSELF (`post_commit_tail`'s public seam), never
+    `_run_completion_entry_fold` — the gate this module owns lives inside
+    that wrapper, and patching over it would leave these tests asserting
+    against their own stub."""
+    from coordinator_core.ops.ceremony import post_commit_tail
+
+    monkeypatch.setattr(
+        post_commit_tail,
+        "fold_completion_entry_commit",
+        lambda root, entry_path, sha, **kw: calls.append((entry_path, sha))
+        or {"acted": [entry_path], "skipped": [], "failed": []},
+    )
+    monkeypatch.setattr(ws_apply, "_run_push_outstanding_tail", lambda root: {})
+
+
+def test_execute_directives_surfaces_the_completion_entry_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The path is a runtime value — today's date plus a chain-slug
+    idempotency guard that can resolve to an entry filed under a different
+    date entirely — so it is read off the CLI's own stdout, never re-derived.
+    Only the first line: the CLI's contract is `print(entry_path)`, and
+    anything after it is prose."""
+    _brief_with_complete_entry(monkeypatch, f"{_ENTRY_REL}\nResidue: some prose\n")
+    monkeypatch.setattr(ws_apply, "_run_close_commit_tail", lambda *a, **kw: None)
+    monkeypatch.setattr(ws_apply, "_run_push_outstanding_tail", lambda root: {})
+
+    _, report = ws_apply.apply(decisions={})
+
+    assert report["completion_entry_path"] == _ENTRY_REL
+
+
+def test_apply_folds_the_landed_close_commit_sha_into_the_completion_entry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The wire, end to end through `apply()`: the entry path `d-complete-
+    entry` printed and the sha the close commit landed reach the fold
+    together."""
+    _brief_with_complete_entry(monkeypatch, f"{_ENTRY_REL}\n")
+    monkeypatch.setattr(
+        ws_apply,
+        "_run_close_commit_tail",
+        lambda *a, **kw: {"attempted": True, "commit_failed": False, "committed_sha": "abc1234"},
+    )
+    calls: list = []
+    _capture_fold(monkeypatch, calls)
+
+    _, report = ws_apply.apply(decisions={})
+
+    assert calls == [(_ENTRY_REL, "abc1234")]
+    assert report["completion_entry_fold"]["acted"] == [_ENTRY_REL]
+
+
+def test_apply_does_not_fold_when_the_close_commit_landed_no_sha(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Nothing to fold, and folding anyway would write a `commits:` list
+    naming a commit that does not exist — so the step reports nothing rather
+    than an empty attempt."""
+    _brief_with_complete_entry(monkeypatch, f"{_ENTRY_REL}\n")
+    monkeypatch.setattr(
+        ws_apply,
+        "_run_close_commit_tail",
+        lambda *a, **kw: {"attempted": False, "skipped": "close-commit:no-subject"},
+    )
+    calls: list = []
+    _capture_fold(monkeypatch, calls)
+
+    _, report = ws_apply.apply(decisions={})
+
+    assert calls == []
+    assert "completion_entry_fold" not in report
+
+
+def test_completion_entry_fold_is_a_no_op_without_a_path_or_a_sha() -> None:
+    """The gate itself, directly: both halves are required, and a missing
+    one is `None` (step did not run), never an attempted fold."""
+    assert ws_apply._run_completion_entry_fold("X:/nonexistent", None, "abc1234") is None
+    assert ws_apply._run_completion_entry_fold("X:/nonexistent", _ENTRY_REL, None) is None

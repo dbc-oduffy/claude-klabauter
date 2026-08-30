@@ -4840,8 +4840,9 @@ def _resume_pending_unification(root: Path) -> bool:
             f"{stamped_parents} are stamped continued_into {successor!r}, "
             "but that successor does not resolve on disk — a prior run's "
             "parent-stamp loop failed part way and its scaffold was "
-            "compensated away. Claims are untouched. Re-stamp or clear the "
-            "parents' continued_into before picking up again."
+            "compensated away. Claims are untouched. Recover by running "
+            f"`pickup-assemble drop` on {stamped_parents} to release each "
+            "leg's ledger claim, then pick up again."
         )
 
     _finish_unification_claims(root, stamped_parents, successor)
@@ -6220,9 +6221,13 @@ def compute_gate_blocker_evidence(
         nothing in a FULLY-scanned corpus ("fix the reference, not the
         blocker"); `ambiguous` is a genuine cross-family collision
         surviving the chain collapse (more than one surviving head);
-        `scan_incomplete` means a corpus root could not be read, so
-        absence here is NOT proof the id does not exist; `resolved` is the
-        one-head, fully-scanned case.
+        `scan_incomplete` means a corpus root — or a single record FILE
+        the blocker index found but could not read (locked/permission-
+        denied; `dag._read_meta`'s own `except Exception: return {}`
+        cannot tell that apart from malformed YAML, so this loop re-probes
+        with its own read — Review: code-reviewer, Finding 1) — could not
+        be read, so absence here is NOT proof the id does not exist;
+        `resolved` is the one-head, fully-scanned case.
       - `resolved`: bool — `True` only for `status == "resolved"`.
       - `deployment_state` / `holder`: the surviving head's own fields
         (`None` when not `resolved`).
@@ -6248,6 +6253,31 @@ def compute_gate_blocker_evidence(
     """
     if not blocked_by:
         return []
+
+    # A `str` here is iterable, so an unguarded loop resolves it PER CHARACTER:
+    # `'sat-06'` becomes six `unresolvable` blockers named 's','a','t','-','0','6'
+    # and a recommendation naming characters. `brief`'s own caller reads typed
+    # frontmatter so it hands a real list, but this function is public and the
+    # schema's list declaration is not enforced at read time -- the one place that
+    # must not trust it is here. NOT `roadmap_link_stubs._as_list`: that returns
+    # `['[sat-06]']` for flow-list TEXT, inventing a bracketed id, which is the
+    # failure this plan's Anti-scope names. A bare scalar is one id; anything that
+    # still looks like unparsed list text is malformed, and says so.
+    if isinstance(blocked_by, str):
+        raw = blocked_by.strip()
+        if raw.startswith("[") or raw.endswith("]"):
+            return [
+                {
+                    "id": raw,
+                    "status": "unresolvable",
+                    "resolved": False,
+                    "deployment_state": None,
+                    "holder": None,
+                    "holder_address": None,
+                    "holder_live": None,
+                }
+            ]
+        blocked_by = [raw]
 
     from coordinator_core.reconcile.gate_eval import collapse_to_chain_heads
     from coordinator_core.reconcile.handoff_corpus import _build_blocker_index
@@ -6276,16 +6306,36 @@ def compute_gate_blocker_evidence(
             continue
 
         records: list[dict[str, Any]] = []
+        unreadable = False
         for path in paths:
             meta = dag._read_meta(str(path))
             if not meta:
+                # `dag._read_meta` is `except Exception: return {}` — it
+                # cannot itself distinguish an OSError (locked/permission-
+                # denied file) from malformed/undecodable YAML, and its
+                # contract is not widened here for its other callers
+                # (Review: code-reviewer — Finding 1). This call site
+                # re-probes with its own direct read to tell the two
+                # apart: a read failure is the exact per-FILE instance of
+                # the "unreadable subtree" hazard `scan_incomplete` exists
+                # to signal, so it must come back `scan_incomplete`, never
+                # a silent `unresolvable`. A readable-but-unparseable file
+                # (malformed YAML, no frontmatter block) is a genuinely
+                # broken record, not a scan failure — it is left out of
+                # `records` exactly as before.
+                try:
+                    path.read_bytes()
+                except OSError:
+                    unreadable = True
                 continue
             meta = dict(meta)
             meta["_path"] = str(path)
             records.append(meta)
 
         if not records:
-            entry["status"] = "scan_incomplete" if scan_incomplete else "unresolvable"
+            entry["status"] = (
+                "scan_incomplete" if (scan_incomplete or unreadable) else "unresolvable"
+            )
             results.append(entry)
             continue
 
@@ -6383,8 +6433,19 @@ def compute_gate_check_recommendation(blockers: list[dict[str, Any]]) -> dict[st
             "rationale": f"Every blocked_by id resolved terminal: {named}.",
         }
 
+    # Review: code-reviewer — Finding 3: `scan_incomplete` blockers fold
+    # into `non_terminal` (failing closed is correct — an unreadable
+    # record must not read as cleared), but they are not a confirmed-open
+    # fact the way a genuinely `not resolved`/non-terminal blocker is.
+    # Splitting the wording keeps the EM from misreading "the engine
+    # could not check this one" as "verified still blocking" — the
+    # disposition vocabulary itself (`cleared`/`not-cleared`/`unresolved`)
+    # is unchanged; only the rationale clause for this subset differs.
+    unchecked = [b for b in non_terminal if b.get("status") == "scan_incomplete"]
+    confirmed_open = [b for b in non_terminal if b.get("status") != "scan_incomplete"]
+
     parts: list[str] = []
-    for blocker in non_terminal:
+    for blocker in confirmed_open:
         state = blocker.get("deployment_state") or blocker.get("status")
         holder_bit = ""
         if blocker.get("holder"):
@@ -6392,9 +6453,18 @@ def compute_gate_check_recommendation(blockers: list[dict[str, Any]]) -> dict[st
             if blocker.get("holder_address"):
                 holder_bit += f" at {blocker['holder_address']}"
         parts.append(f"{blocker.get('stub_id', '<unknown>')} ({state}{holder_bit})")
+
+    clauses: list[str] = []
+    if parts:
+        clauses.append("Still open: " + "; ".join(parts) + ".")
+    if unchecked:
+        unchecked_ids = ", ".join(str(b.get("stub_id", "<unknown>")) for b in unchecked)
+        clauses.append(
+            f"Could not be checked (scan_incomplete, treated as not-cleared): {unchecked_ids}."
+        )
     return {
         "disposition": "not-cleared",
-        "rationale": "Still open: " + "; ".join(parts) + ".",
+        "rationale": " ".join(clauses),
     }
 
 
@@ -8210,13 +8280,14 @@ def brief(
             # for. See `compute_gate_blocker_evidence`'s docstring for the
             # four-way resolved/unresolvable/ambiguous/scan_incomplete
             # answer shape.
-            gate_check["blocked_by_resolved"] = compute_gate_blocker_evidence(
-                root, typed_meta.get("blocked_by")
-            )
-            # C3 — `gate_check["blockers"]` is the falsifier/EM-facing
-            # rename of `blocked_by_resolved`'s per-id entries (`id` ->
-            # `stub_id`), and the input `compute_gate_check_recommendation`
-            # reads to build `jgate`'s recommendation below.
+            # C3 — `gate_check["blockers"]` is the falsifier/EM-facing shape
+            # (`id` -> `stub_id`), and the input `compute_gate_check_
+            # recommendation` reads to build `jgate`'s recommendation below.
+            # Review: overengineering-reviewer, Finding 1 — this used to be
+            # assigned twice under two names (`blocked_by_resolved` then a
+            # renamed `blockers`); the first name had no reader anywhere in
+            # the repo, so it is gone and `compute_gate_blocker_evidence`'s
+            # result is renamed directly into `blockers`.
             gate_check["blockers"] = [
                 {
                     "stub_id": entry["id"],
@@ -8227,7 +8298,7 @@ def brief(
                     "holder_address": entry["holder_address"],
                     "holder_live": entry["holder_live"],
                 }
-                for entry in gate_check["blocked_by_resolved"]
+                for entry in compute_gate_blocker_evidence(root, typed_meta.get("blocked_by"))
             ]
             # C7 enrichment — reads ONLY this record's own `gate_evidence`
             # field (no corpus walk); see `compute_gate_shipped_blocker_

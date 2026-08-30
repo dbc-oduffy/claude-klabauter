@@ -7,14 +7,14 @@ Purpose: chunk C7's mechanical half. The page
 (`docs/wiki/uninstall-agentic-judgment.md`) carries uninstall's *judgment* prose
 deliberately — how to weigh a surface, when to stop, what to tell the operator —
 but the *facts* (which keys, which paths, which markers) live exactly once, in the
-write-surface manifest (`write_surface.emit_manifest`) and the install receipt. If
+write-surface declarations (`write_surface_discovery`) and the install receipt. If
 the page ever lists a real key/path/marker, it becomes a third hand-maintained copy
 of those facts and rots the way the copy that motivated this whole plan did
 (Anti-scope: "Do not let the wiki page enumerate surfaces").
 
 Design, per the dispatch brief — KIND-KEYED, not literal-set membership:
 
-  A literal-set test (collect every literal string the manifest happens to emit
+  A literal-set test (collect every literal string the declarations happen to carry
   today, assert none appear) is false-green on every SHAPE-declaring writer: a
   `ShapedClause` entry contributes a TEMPLATE with a placeholder
   (e.g. ``"repos.<derived-key>"``), never a concrete literal, so a page that
@@ -22,7 +22,7 @@ Design, per the dispatch brief — KIND-KEYED, not literal-set membership:
   precisely the writers whose enumeration risk is highest, since their surface is
   computed rather than fixed in source.
 
-  Instead this test derives one RECOGNIZER REGEX per manifest entry, keyed off the
+  Instead this test derives one RECOGNIZER REGEX per declared entry, keyed off the
   entry's declared `kind`:
 
     - key-shaped kinds (`git-config-key`, `machine-local-key`, `os-env-var`,
@@ -56,13 +56,28 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-import coordinator_core.ops  # noqa: F401 — populates _REGISTRY (write_surface.emit_manifest)
 from coordinator_core.install.write_surface import ABSENT_ON_LEGACY_INSTALLS
-from coordinator_core.ops import write_surface_manifest as wsm
-
-PAGE_PATH = (
-    Path(__file__).resolve().parents[3] / "docs" / "wiki" / "uninstall-agentic-judgment.md"
+from coordinator_core.install.write_surface_discovery import (
+    _flatten_declaration,
+    discover_declarations,
 )
+
+REPO_ROOT = Path(__file__).resolve().parents[3]
+PAGE_PATH = REPO_ROOT / "docs" / "wiki" / "uninstall-agentic-judgment.md"
+
+
+def _declared_entries() -> list[dict]:
+    """Every declared entry from every discovered writer, flattened.
+
+    Replaces the `write_surface.emit_manifest` op this test used to dispatch
+    through: the op was gravestoned for having no consumer, and the shape
+    this test needs was never the op — it was the declarations underneath.
+    Discovery failures are ignored here on purpose: a writer this scan cannot
+    import contributes no surface values, so it cannot make the page scan
+    pass for the wrong reason. `test_declared_entries_span_multiple_kinds`
+    below is what fails closed if discovery collapses wholesale."""
+    declarations, _failures = discover_declarations(REPO_ROOT)
+    return [e for decl in declarations.values() for e in _flatten_declaration(decl)]
 
 # Kind -> which entry field(s) carry a scannable surface fact for that kind.
 _KEY_KINDS = {"git-config-key", "machine-local-key", "os-env-var", "structured-file-key"}
@@ -75,7 +90,7 @@ _MARKER_KINDS = {"rc-block", "hook-gate-region"}
 # ours. That reasoning was true when written and false within the day: both
 # paths became genuinely declared surfaces once `setup-github-auth-1password`
 # and `shell_rc_guard` declared theirs, and `test_allowlist_entries_carry_a_
-# reason_and_are_not_manifest_values` caught the collision.
+# reason_and_are_not_declared_values` caught the collision.
 #
 # An allowlist entry is a standing claim about the world, not a local
 # annotation — it keeps asserting itself long after whoever wrote it stopped
@@ -89,7 +104,7 @@ _ALLOWLIST: dict[str, str] = {}
 # as carrying template placeholders on a SHAPED entry (e.g. `key="repos.<derived-
 # key>"`) — `<...>` there means "any concrete instance of this shape". A marker
 # (`begin_marker`/`end_marker`) is never templated even on a shaped entry (see the
-# manifest: a `rc-block`'s markers are fixed literal comment text regardless of
+# declarations: a `rc-block`'s markers are fixed literal comment text regardless of
 # form) and MUST be treated as a literal, not scanned for placeholder syntax —
 # some marker text legitimately contains its own angle brackets (e.g.
 # `"<!-- coordinator:posture:start -->"`), which would be misread as a
@@ -105,7 +120,7 @@ def _placeholder_pattern(value: str) -> str | None:
     no such placeholder and round-trips to a literal, word-bounded match.
 
     Returns None when the value is ENTIRELY a placeholder with no literal
-    skeleton at all (e.g. "<manifest-declared-path>") — such a value carries no
+    skeleton at all (e.g. "<declared-path>") — such a value carries no
     specific text to recognize, and wildcarding the whole thing would just match
     any word in the page, which is a false-positive generator, not a check.
     """
@@ -148,9 +163,8 @@ def _candidate_values(entry: dict) -> list[tuple[str, bool]]:
 
 
 def _recognizers() -> dict[str, re.Pattern[str]]:
-    manifest = wsm.build_manifest()
     recognizers: dict[str, re.Pattern[str]] = {}
-    for entry in manifest["entries"]:
+    for entry in _declared_entries():
         for value, templated in _candidate_values(entry):
             if value in _ALLOWLIST or value in recognizers:
                 continue
@@ -158,17 +172,17 @@ def _recognizers() -> dict[str, re.Pattern[str]]:
             if pattern_src is None:
                 continue
             recognizers[value] = re.compile(pattern_src)
-    assert recognizers, "expected at least one recognizer derived from the manifest"
+    assert recognizers, "expected at least one recognizer derived from the declarations"
     return recognizers
 
 
-def test_manifest_is_nonempty_and_spans_multiple_kinds():
-    # Sanity precondition for the rest of this module: if the manifest is ever
+def test_declared_entries_span_multiple_kinds():
+    # Sanity precondition for the rest of this module: if the declared set is ever
     # empty or collapses to one kind, the scan below would trivially pass for
     # the wrong reason (nothing to recognize), not because the page is clean.
-    manifest = wsm.build_manifest()
-    kinds = {e.get("kind") for e in manifest["entries"] if e.get("kind")}
-    assert len(manifest["entries"]) >= 20
+    entries = _declared_entries()
+    kinds = {e.get("kind") for e in entries if e.get("kind")}
+    assert len(entries) >= 20
     assert _KEY_KINDS & kinds
     assert _PATH_KINDS | _MARKER_KINDS & kinds
 
@@ -184,21 +198,21 @@ def test_page_enumerates_no_declared_write_surface():
 
     assert not hits, (
         "docs/wiki/uninstall-agentic-judgment.md enumerates declared write-surface "
-        f"value(s) it must not name: {hits!r}. Point at the manifest/receipt by "
+        f"value(s) it must not name: {hits!r}. Point at the declaration/receipt by "
         "name instead of pasting the value."
     )
 
 
-def test_allowlist_entries_carry_a_reason_and_are_not_manifest_values():
-    manifest_values = {
+def test_allowlist_entries_carry_a_reason_and_are_not_declared_values():
+    declared_values = {
         value
-        for entry in wsm.build_manifest()["entries"]
+        for entry in _declared_entries()
         for value, _templated in _candidate_values(entry)
     }
     for value, reason in _ALLOWLIST.items():
         assert reason.strip(), f"allowlist entry {value!r} has no reason"
-        assert value not in manifest_values, (
-            f"allowlisted value {value!r} collides with an actual declared manifest "
+        assert value not in declared_values, (
+            f"allowlisted value {value!r} collides with an actual declared surface "
             "value — remove it from the allowlist, it must be scanned for real"
         )
 
@@ -208,9 +222,8 @@ def test_recognizer_scan_actually_fails_closed_on_an_injected_surface(tmp_path):
     # declared surface spliced in, and confirm the same scan goes RED against
     # it. A green enumeration test that has never been seen to fail is worth
     # very little (dispatch brief's own verification requirement).
-    manifest = wsm.build_manifest()
     injected_entry = next(
-        e for e in manifest["entries"] if e.get("kind") == "git-config-key" and e.get("key")
+        e for e in _declared_entries() if e.get("kind") == "git-config-key" and e.get("key")
     )
     injected_value = injected_entry["key"]
 

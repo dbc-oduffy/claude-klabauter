@@ -13,8 +13,8 @@ nothing as `Verdict.UNDECLARED` BY NAME rather than silently skipping them.
 AC1 — discovery is by write behaviour, parsed from the AST, never a
 filename-family match (`emit|generat|regenerat`-style name matching hits
 roughly sixty non-test modules against about five real declarations, and
-misses real emitters like `write_surface_manifest.py`,
-`render_template_tree.py`, `deliverable_ledger_write.py`; its survival
+misses real emitters like `render_template_tree.py` and
+`deliverable_ledger_write.py`; its survival
 response is `GENERATES = []` pasted everywhere, the forbidden
 hand-maintained registry respelled as boilerplate). A module is a generator
 iff its source contains a write to a repo-relative path: `Path.write_text`,

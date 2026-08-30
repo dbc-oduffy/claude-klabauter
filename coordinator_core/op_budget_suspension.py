@@ -515,7 +515,10 @@ SUSPENDED_OPS: Dict[str, Dict[str, object]] = {
             "manifest in a lockstep test; that was checked at DoE 042963e67 "
             "(work/machine-a/2026-08-22) and is STALE — every hit there is archive "
             "prose, a sent memo, or a sizing marked CLEARED 2026-08-06. No live "
-            "consumer, in either repo."
+            "consumer, in either repo. 2026-08-30: the module is deleted "
+            "too -- the emission half went with the op, and its "
+            "writer-discovery scan survives in the install package as "
+            "write_surface_discovery."
         ),
         "disposition": (
             "gravestone -- job was 'publish a machine-readable list of the "
@@ -641,6 +644,14 @@ SUSPENDED_OPS: Dict[str, Dict[str, object]] = {
             "(threaded through commit_v2's params) — nothing infers it, and "
             "index-differs-from-worktree is explicitly NOT the discriminator "
             "(git/commit.py invariant 1: equally true of an ordinary unstaged edit). "
+            "RESOLVED 2026-08-30, and the paragraph above states the trigger "
+            "WRONGLY: the losing arm needs a STALE STAGE (index differing from "
+            "HEAD, which commit_scoped reads as a deliberate partial stage), not "
+            "merely a staged path -- a reproduction built on the also-staged "
+            "framing passes against the broken code. memo.send, the one caller "
+            "with measured damage, now commits worktree bytes via commit_paths, "
+            "and prefer_deliberate_stage (DR-379) is the declared opt-in for "
+            "callers where a third party's partial stage can genuinely exist. "
             "state/bug-backlog/2026-08-27-commit-v2-cutover-silently-flips-whose-c-"
             "09cf57f3b909.yaml."
         ),

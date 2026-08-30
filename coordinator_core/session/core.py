@@ -37,7 +37,7 @@ import tempfile
 from contextvars import ContextVar
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterator, Mapping, Optional
+from typing import Iterator, Mapping, NamedTuple, Optional
 
 from coordinator_core.git.repo_root import git_common_dir, show_toplevel
 
@@ -1154,12 +1154,17 @@ def attributable_session_id(cwd: Optional[str] = None) -> str:
     fall back to `resolve_session_id()` directly on an empty return, which
     would reinstate the blend below.
 
-    <!-- Review: overengineering-reviewer (finding 2) — this two-line policy
-    (`if in_warm_served_request(): return carried_session_id()`) was written
-    out independently at five production sites (`git/commit_trailers.py`,
-    `ipc.py`, `ops/session_context.py`, `ops/tracker/push_suggestion.py`,
-    `session/liveness.py`) as of 2026-08-30; this accessor is the single
-    place that policy now lives. -->
+    <!-- Review: overengineering-reviewer (finding 2) — this warm/cold policy
+    was written out independently at five production sites
+    (`git/commit_trailers.py`, `ipc.py`, `ops/session_context.py`,
+    `ops/tracker/push_suggestion.py`, `session/liveness.py`) as of
+    2026-08-30; this accessor is the single place that policy now lives. -->
+
+    The policy itself now lives one level down, in
+    `attributable_session_id_with_source`, which this function is a thin
+    accessor over. One resolution, two return shapes: a caller that only
+    needs the id keeps calling this, and a caller that must REPORT where the
+    id came from calls that. Never two implementations of the same ladder.
 
     WHY: inside a warm, long-lived server `os.environ` belongs to whoever
     SPAWNED the process, not to the session currently being served — it is
@@ -1178,9 +1183,113 @@ def attributable_session_id(cwd: Optional[str] = None) -> str:
     `resolve_session_id` (see its own docstring) and is accepted here
     purely so a caller passing one through today keeps doing so unchanged.
     """
-    if in_warm_served_request():
-        return carried_session_id()
-    return resolve_session_id(cwd)
+    return attributable_session_id_with_source(cwd).session_id
+
+
+#: `SessionIdResolution.source` when the id came from the per-request identity
+#: the CALLER carried across the wire (tier 0). The only legitimate source
+#: inside a warm-served request.
+SOURCE_CARRIED = "carried"
+
+#: `SessionIdResolution.source` when nothing named the session. Distinguished
+#: from an env-var source so a reader can tell "the door sent no identity"
+#: from "the identity is X" — an absent id is recoverable, and saying so is
+#: the whole point of reporting the source.
+SOURCE_UNRESOLVED = "unresolved"
+
+#: `SessionIdResolution.source` when an id WAS resolved but no known input
+#: holds it. Unreachable through today's `resolve_session_id`, whose only
+#: tiers are the tier-0 ContextVar and `SESSION_ENV_PRECEDENCE` — kept as a
+#: distinct value rather than folded into `SOURCE_UNRESOLVED` because the two
+#: say opposite things about whether a session was named, and a future tier
+#: added to `resolve_session_id` without a matching label arm here should
+#: surface as "I cannot account for this id", never as "no id".
+SOURCE_UNACCOUNTED = "resolved-source-unaccounted"
+
+
+class SessionIdResolution(NamedTuple):
+    """WHICH INPUT named this session, and under which process — the
+    instrument `state/bug-backlog/2026-08-30-close-ceremony-clis-resolve-a-
+    live-peer-b558b27c74e7.yaml` asks for in its `proposed_action`: "make the
+    resolution path report which input it read (env, registry file, claim
+    record, ambient process walk) and under which pid, so a mis-resolution is
+    visible at the point it happens instead of three gates downstream."
+
+    That row was filed after a close ceremony built itself on a live peer and
+    three separate gates reported facts about that peer's directories,
+    commits and plans — each report locally true and globally wrong, none of
+    them naming the id they were keyed on or where it came from. The EM
+    caught it by recognising unfamiliar deliverable ids. This record is what
+    that EM should have been able to read instead.
+
+    `pid` is this process's, not the session's. Under a warm dispatch that is
+    the SERVER's pid, which is exactly the fact worth seeing: an id sourced
+    from an env var under a pid that is not the caller's own is the defect's
+    signature.
+    """
+
+    #: The resolved id, or "" when nothing named the session.
+    session_id: str
+    #: `SOURCE_CARRIED`, a member of `SESSION_ENV_PRECEDENCE`, the legacy
+    #: `em_sid` when a caller resolved through that tier, or
+    #: `SOURCE_UNRESOLVED`.
+    source: str
+    #: Whether this resolution ran inside a warm-served dispatch, i.e.
+    #: whether `os.environ` belonged to the caller at all.
+    warm: bool
+    #: The pid of the process that performed the resolution.
+    pid: int
+
+
+def attributable_session_id_with_source(
+    cwd: Optional[str] = None,
+) -> SessionIdResolution:
+    """`attributable_session_id`, plus the provenance of the answer.
+
+    Same resolution, reported rather than merely returned — this is the
+    instrument, and `attributable_session_id` is now the thin accessor over
+    it, so there is exactly ONE resolution and the label can never drift from
+    the value it describes. That drift is a real failure mode and not a
+    hypothetical: `SESSION_ENV_PRECEDENCE`'s own docstring records a
+    break-class defect caused by two copies of this ladder disagreeing, and
+    `test_warm_identity_env_reads.LADDER_READ_EXEMPTIONS` blesses exactly one
+    ladder walk in the tree — `handoff_correct_body._resolve_session_id_with_
+    source` — on the strict condition that it derives a LABEL for an
+    already-resolved identity and never selects one. This function is built
+    to that same standard: the value comes from `carried_session_id()` /
+    `resolve_session_id()` first, and the loop below only asks which var
+    happens to hold it.
+
+    WARM BRANCH FIRST, and it is not a shortcut. Under a warm dispatch the
+    environment is not merely a lower-precedence source, it is a source about
+    a DIFFERENT process — so a carried id is reported as `SOURCE_CARRIED`
+    even in the case where an env var coincidentally holds the same string.
+    Reporting that case as an env source would be a true statement about this
+    process and a false one about the resolution.
+    """
+    warm = in_warm_served_request()
+    pid = os.getpid()
+    if warm:
+        carried = carried_session_id()
+        return SessionIdResolution(
+            session_id=carried,
+            source=SOURCE_CARRIED if carried else SOURCE_UNRESOLVED,
+            warm=True,
+            pid=pid,
+        )
+    sid = resolve_session_id(cwd)
+    if not sid:
+        return SessionIdResolution("", SOURCE_UNRESOLVED, False, pid)
+    # Label derivation only — `sid` is already resolved above. The tier-0
+    # ContextVar is checked first because `resolve_session_id` consults it
+    # first, and a cold caller inside an explicitly opened identity scope
+    # (the assemble CLIs do this) must not be reported as an env read.
+    if _SESSION_ID_OVERRIDE.get() == sid:
+        return SessionIdResolution(sid, SOURCE_CARRIED, False, pid)
+    for var in SESSION_ENV_PRECEDENCE:
+        if os.environ.get(var, "") == sid:
+            return SessionIdResolution(sid, var, False, pid)
+    return SessionIdResolution(sid, SOURCE_UNACCOUNTED, False, pid)
 
 
 def resolve_session_id(cwd: Optional[str] = None) -> str:

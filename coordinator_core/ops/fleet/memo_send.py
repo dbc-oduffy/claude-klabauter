@@ -18,10 +18,16 @@ three-write requirement:
   2. Sender: move `state/memo-outbox/<topic>.md` -> `sent/`, deriving the
      sent-copy's `status: sent` / `sent_at:` / `delivered_to:` stamp from
      the draft's OWN frontmatter (never re-authored).
-  3. Sender commit: one `commit_scoped` call over the three sender-side
-     paths (new `sent/` file, deleted outbox original, appended ledger row)
-     — one `git add` pathspec covers all three (Anti-scope § 6: a bare
-     `git commit -- <path>` cannot stage the new `sent/` file alone).
+  3. Sender commit: one `git.commit.commit_paths` call over the three
+     sender-side paths (new `sent/` file, deleted outbox original, appended
+     ledger row) — zero git spawns, and it commits WORKTREE bytes. That
+     second property is load-bearing, not incidental: the sent-ledger is a
+     fleet-shared bounded ring (`_SENT_LEDGER_MAX_ROWS`) whose worktree copy
+     `locked_rmw` keeps as the union of every session's appends, while a
+     staged blob for it goes
+     stale the moment a peer appends. `commit_scoped`, which this replaced,
+     committed the STAGED blob and so replayed stale ledger snapshots — see
+     the call site's own note for the 2026-08-30 measurement.
 
 Ordering is load-bearing: the receiver-side commit lands BEFORE the sender's
 receipt is written. A receipt for an undelivered memo is a lie; an
@@ -71,8 +77,9 @@ import json
 import logging
 import os
 import tempfile
+from functools import partial
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, NamedTuple, Optional
 
 from coordinator_core.frontmatter.primitives import (
     insert_fm_field,
@@ -85,6 +92,13 @@ from coordinator_core.frontmatter.schema_validate import (
     parse_frontmatter,
     validate_memo_cross_fields,
 )
+from coordinator_core.git.commit import (
+    CommitRefused,
+    FilterUnsupported,
+    commit_paths,
+    hash_worktree_blobs_via_spawn,
+)
+from coordinator_core.git.commit_trailers import apply_missing_trailers
 from coordinator_core.ipc import register_op
 from coordinator_core.locked_write import LockTimeout, locked_rmw
 from coordinator_core.ops.ceremony import git_native
@@ -186,6 +200,32 @@ _KNOWN_PARAM_KEYS = frozenset({"dry_run", "topic"})
 _OUTBOX_DIRNAME = ("state", "memo-outbox")
 _SENT_SUBDIRNAME = ("state", "memo-outbox", "sent")
 _SENT_LEDGER_FILENAME = "sent-ledger.jsonl"
+
+#: Rows the sent-ledger retains. It is a BOUNDED RING, not a record of
+#: truth: the newest row evicts the oldest, so the file's size and the cost
+#: of appending to it are constant instead of tracking every memo this fleet
+#: has ever sent. At 2,405 rows / 725KB (2026-08-30) each send read the file
+#: whole, rewrote it whole, then hashed and zlib-compressed it whole to add
+#: one line -- ~100ms of memo.send's ~125ms, growing without limit.
+#:
+#: WHAT SURVIVES EVICTION, so nothing here is load-bearing for a record.
+#: The durable record of a send is threefold and none of it lives in this
+#: file: the delivered memo in the receiver's own tree, the delivery commit
+#: in the receiver's history, and this repo's own never-evicted
+#: `state/memo-outbox/sent/<topic>.md` copy. The one production reader that
+#: treated a row as a permanent registration --
+#: `fact_contract_gate.engine_gap_marker.memo_exists` -- now falls through
+#: to that sent copy (`_sent_copy_has`), so an evicted row cannot turn a
+#: registered engine-gap ask into rot. A new reader that needs history
+#: older than this window must read one of those three, never widen this.
+#:
+#: 250 rows is ~2.5 days at this fleet's 2026-08 rate (~92 sends/day) and
+#: ~120KB at the current ~470B/row -- sized for the question this file is
+#: actually asked ("did my send land"), which is same-day. Raising it costs
+#: linearly on EVERY send, in a file read, rewritten, hashed and compressed
+#: whole each time; a reader needing a longer window should take one of the
+#: three durable records above instead of paying for it here.
+_SENT_LEDGER_MAX_ROWS = 250
 _SENT_LEDGER_RELPATH = "/".join((*_OUTBOX_DIRNAME, _SENT_LEDGER_FILENAME))
 
 # Generator-provenance: writes+commits into a registry-enumerated RECEIVER
@@ -417,6 +457,17 @@ def _ledger_row(
         "delivery_commit_sha": delivery_commit_sha,
         "sent_by": sent_by,
     }
+
+
+class _SenderCommit(NamedTuple):
+    """The sender-side receipt commit's outcome, in the two fields the
+    envelope below reads. `commit_paths` signals failure by raising and
+    success by returning a `CommitOutcome`, so the two arms are normalised
+    here rather than at each of the four read sites."""
+
+    ok: bool
+    sha: Optional[str]
+    stderr: str
 
 
 def _write_msg_file(text: str) -> Path:
@@ -657,7 +708,23 @@ def _memo_send(params: dict, repo_root=None) -> dict:
     appended_line = json.dumps(row, ensure_ascii=False) + "\n"
 
     def _mutate(old_text: str) -> str:
-        return old_text + appended_line
+        """Append this send's row, evicting the oldest rows past
+        `_SENT_LEDGER_MAX_ROWS`.
+
+        Safe to trim HERE and only here: `locked_rmw` holds the
+        cross-process exclusive lock across this whole read-modify-write, so
+        the text being trimmed is the union of every completed append and no
+        peer can be mid-append inside it (see the commit call's own
+        WORKTREE-BYTES note below for why that union is what gets
+        committed).
+
+        Rows are re-emitted rather than sliced out of `old_text` so a file
+        left without a trailing newline -- by a truncated write, or a hand
+        edit -- cannot silently glue this row onto the last one.
+        """
+        rows = [line for line in old_text.splitlines() if line.strip()]
+        kept = rows[-(_SENT_LEDGER_MAX_ROWS - 1):] if _SENT_LEDGER_MAX_ROWS > 1 else []
+        return "".join(line + "\n" for line in kept) + appended_line
 
     ledger_path.parent.mkdir(parents=True, exist_ok=True)
     try:
@@ -679,41 +746,64 @@ def _memo_send(params: dict, repo_root=None) -> dict:
 
     sent_relpath = "/".join((*_SENT_SUBDIRNAME, f"{topic}.md"))
     outbox_relpath = "/".join((*_OUTBOX_DIRNAME, f"{topic}.md"))
-    sender_msg_file = _write_msg_file(
+    sender_message = apply_missing_trailers(
         f"memo.send: {topic} delivered to {to}\n\n"
-        f"Moves the outbox draft to sent/ and appends the sent-ledger row.\n"
+        f"Moves the outbox draft to sent/ and appends the sent-ledger row.\n",
+        sender_worktree,
+        [sent_relpath, _SENT_LEDGER_RELPATH, outbox_relpath],
     )
-    # THE OUTBOX PATH GOES IN THE PATHSPEC ONLY IF HEAD KNOWS IT.
-    # It is listed so the MOVE's deletion leg gets staged -- but a draft staged
-    # by `memo.draft` and sent straight away was never committed, so after the
-    # move that path is both gone from disk and unknown to git. Git then fails
-    # the WHOLE commit with "pathspec ... did not match any file(s) known to
-    # git", the receipt never lands, and the sent/ copy plus ledger row sit
-    # staged-but-uncommitted. That is the documented canonical workflow
+    # THE OUTBOX PATH IS NAMED ONLY IF HEAD KNOWS IT.
+    # It is named so the MOVE's deletion leg lands -- but a draft staged by
+    # `memo.draft` and sent straight away was never committed, so after the
+    # move that path is both gone from disk and unknown to git, and naming it
+    # fails the WHOLE commit: the receipt never lands and the sent/ copy plus
+    # ledger row sit uncommitted. That is the documented canonical workflow
     # (draft -> send), so this fired on the first two real sends, 2026-08-25.
     #
     # `_head_entry_for` answers "is this in HEAD?" from the in-process tree
-    # spine, so the check costs ZERO extra git spawns and the op stays at its
-    # measured 3 (AC5 budget <= 4). An untracked draft has no deletion to
-    # stage, so dropping it from the pathspec loses nothing.
-    sender_pathspec = [sent_relpath, _SENT_LEDGER_RELPATH]
-    if git_native._head_entry_for(sender_worktree, outbox_relpath) is not None:
-        sender_pathspec.insert(1, outbox_relpath)
+    # spine, so the check costs ZERO git spawns. An untracked draft has no
+    # deletion to land, so dropping it loses nothing.
+    sender_deleted = (
+        [outbox_relpath]
+        if git_native._head_entry_for(sender_worktree, outbox_relpath) is not None
+        else []
+    )
 
+    # WORKTREE BYTES, NOT THE STAGED BLOB, AND THAT IS THE WHOLE POINT HERE.
+    # `_SENT_LEDGER_RELPATH` is fleet-shared: every sending session appends
+    # its row to the same file (a bounded ring -- see
+    # `_SENT_LEDGER_MAX_ROWS`), and the `locked_rmw` above
+    # holds a cross-process exclusive lock across the read-modify-write, so
+    # the WORKTREE copy is always the union of every completed append. The
+    # staged blob is not: an index entry for this path goes stale the moment
+    # a peer appends, and `commit_scoped` -- which this call replaces --
+    # commits the STAGED blob. Measured on this tree 2026-08-30: ten
+    # consecutive memo.send commits landed the byte-identical stale blob
+    # b2a5f7d9d (2376 rows) while every one of their parents held a richer
+    # one, so each row appended in between vanished from HEAD, the sender's
+    # own included. Committing the worktree commits the union, and this arm
+    # then cannot drop a peer's row.
+    #
+    # `prefer_staged` is deliberately NOT passed: naming the ledger there
+    # selects the losing arm. `prefer_deliberate_stage` stays False for the
+    # neighbouring reason its own contract gives -- the other two paths are
+    # authored by this pass, so there is no third party's partial stage to
+    # preserve, only stale blobs a widened default could hide.
+    # state/bug-backlog/2026-08-27-commit-v2-cutover-silently-flips-whose-c-
+    # 09cf57f3b909.yaml
     try:
-        # commit_scoped chooses its own safe mechanism and computes trailers
-        # itself (interpret-trailers) — unlike commit_authored_new_file,
-        # this is a same-tree commit, so the normal trailer machinery
-        # applies. One `add` pathspec covers all three paths (Anti-scope §6:
-        # `git commit -- <path>` alone cannot stage a brand-new file).
-        sender_commit = git_native.commit_scoped(
-            sender_pathspec, sender_msg_file, sender_worktree,
+        outcome = commit_paths(
+            sender_worktree,
+            [sent_relpath, _SENT_LEDGER_RELPATH],
+            sender_message,
+            deleted_paths=sender_deleted,
+            blob_fallback=partial(
+                hash_worktree_blobs_via_spawn, cwd=sender_worktree
+            ),
         )
-    finally:
-        try:
-            sender_msg_file.unlink()
-        except OSError:
-            pass
+        sender_commit = _SenderCommit(True, outcome.sha, "")
+    except (CommitRefused, FilterUnsupported) as exc:
+        sender_commit = _SenderCommit(False, None, str(exc))
 
     acted_item = {
         "id": str(target_file),

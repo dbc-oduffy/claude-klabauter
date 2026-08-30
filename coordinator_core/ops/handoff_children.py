@@ -143,7 +143,7 @@ import asyncio
 import logging
 import os
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
 from coordinator_core.archival import _is_terminal_or_archived_child, reverse_membership
 from coordinator_core.dag import (
@@ -473,6 +473,10 @@ def blocked_by_dependents(
     "`blocked_by_dependents`" section for the full design rationale (surface
     correction, import discipline, composed primitives).
 
+    Singular front door for `blocked_by_dependents_many`, which carries the
+    resolver's whole body; a caller holding more than one candidate must use
+    that one directly rather than looping here (see its docstring for why).
+
     Args:
         candidate_path: Absolute or resolvable path of the handoff whose
                          dependents are being resolved.
@@ -495,29 +499,81 @@ def blocked_by_dependents(
                      below) — non-empty only when state=="indeterminate".
         error:       str or None; non-None only when state=="indeterminate".
     """
+    key = str(candidate_path)
+    return blocked_by_dependents_many([candidate_path], worktree_root, exclude)[key]
+
+
+def blocked_by_dependents_many(
+    candidate_paths: "Sequence[str | Path]",
+    worktree_root: Path,
+    exclude: Optional[List[str]] = None,
+) -> Dict[str, Dict[str, Any]]:
+    """``{candidate: five-key reply}`` for many candidates over ONE corpus pass.
+
+    Same question, same guards, same verdicts as `blocked_by_dependents` —
+    this exists because that resolver is candidate-independent right up to its
+    `entry in identifiers` comparison, so asking it N times pays N full walks
+    of the live+archive handoff corpus to answer something that needs one. The
+    corpus walk (`_collect_all_handoffs_for_gate_index`) and the per-node
+    `blocked_by` normalisation are hoisted out of the candidate loop and an
+    id -> holders index is built once; what remains per candidate is a set
+    lookup per resolved identifier.
+
+    Keys of the returned dict are the candidate values EXACTLY as passed in
+    (``str()``-ed, not resolved), so a caller can index straight back with the
+    path it supplied. Every candidate gets a reply.
+
+    Fail-closed exactly as the singular resolver, and with the same blast
+    radius: a candidate with no resolvable identifier is indeterminate ALONE,
+    while an unscannable subtree or a malformed `blocked_by` in the corpus is
+    a whole-corpus condition and marks every candidate that could see it
+    indeterminate. "Could see it" is not a hedge — the singular resolver skips
+    a corpus node that IS the candidate (or is excluded) before it ever looks
+    at that node's `blocked_by`, so a malformed `blocked_by` on the
+    candidate's own file cannot make that candidate indeterminate. The
+    per-candidate filter below preserves that exactly.
+
+    `_is_terminal_or_archived_child` results are memoised across candidates:
+    the predicate reads frontmatter, and two candidates sharing a dependent
+    must not re-read it.
+    """
     # Function-local imports — see module docstring's IMPORT DISCIPLINE note.
     from coordinator_core.reconcile.handoff_corpus import _collect_all_handoffs_for_gate_index
 
-    candidate_abs = str(Path(candidate_path).resolve())
+    replies: Dict[str, Dict[str, Any]] = {}
+    if not candidate_paths:
+        return replies
+
     exclude_abs: Set[str] = {str(Path(p).resolve()) for p in (exclude or [])}
 
-    candidate_meta = _read_meta(candidate_abs) or {}
-    identifiers = sorted(
-        {
-            v
-            for v in (
-                candidate_meta.get("stub_id"),
-                candidate_meta.get("id"),
-                candidate_meta.get("handoff_id"),
-            )
-            if isinstance(v, str) and v
-        }
-    )
-    if not identifiers:
-        return _blocked_by_indeterminate(
-            "candidate has no resolvable identifier (stub_id/id/handoff_id): "
-            f"{candidate_abs}"
+    # Pass 1 — per-candidate identity resolution. A candidate with no
+    # resolvable id is decided here and never reaches the corpus.
+    pending: List[Tuple[str, str, List[str]]] = []  # (key, candidate_abs, identifiers)
+    for candidate_path in candidate_paths:
+        key = str(candidate_path)
+        candidate_abs = str(Path(candidate_path).resolve())
+        candidate_meta = _read_meta(candidate_abs) or {}
+        identifiers = sorted(
+            {
+                v
+                for v in (
+                    candidate_meta.get("stub_id"),
+                    candidate_meta.get("id"),
+                    candidate_meta.get("handoff_id"),
+                )
+                if isinstance(v, str) and v
+            }
         )
+        if not identifiers:
+            replies[key] = _blocked_by_indeterminate(
+                "candidate has no resolvable identifier (stub_id/id/handoff_id): "
+                f"{candidate_abs}"
+            )
+            continue
+        pending.append((key, candidate_abs, identifiers))
+
+    if not pending:
+        return replies
 
     # Adapter: collect_live_handoff_paths (ops/fleet/_common.py), called by
     # _collect_all_handoffs_for_gate_index for the live-set half of its walk,
@@ -528,30 +584,35 @@ def blocked_by_dependents(
     try:
         all_handoffs, scan_errors = _collect_all_handoffs_for_gate_index(worktree_root)
     except OSError as exc:
-        return _blocked_by_indeterminate(
-            "enumeration incomplete — cannot rule out a live blocked_by dependent "
-            f"under an unscannable subtree: {getattr(exc, 'filename', worktree_root)}: {exc}",
-            identifiers=identifiers,
-            scan_errors=[f"{getattr(exc, 'filename', worktree_root)}: {exc}"],
-        )
+        detail = f"{getattr(exc, 'filename', worktree_root)}: {exc}"
+        for key, _candidate_abs, identifiers in pending:
+            replies[key] = _blocked_by_indeterminate(
+                "enumeration incomplete — cannot rule out a live blocked_by dependent "
+                f"under an unscannable subtree: {detail}",
+                identifiers=identifiers,
+                scan_errors=[detail],
+            )
+        return replies
 
     if scan_errors:
-        return _blocked_by_indeterminate(
-            "enumeration incomplete — cannot rule out a live blocked_by dependent "
-            "under an unscannable subtree: " + "; ".join(scan_errors),
-            identifiers=identifiers,
-            scan_errors=scan_errors,
-        )
+        for key, _candidate_abs, identifiers in pending:
+            replies[key] = _blocked_by_indeterminate(
+                "enumeration incomplete — cannot rule out a live blocked_by dependent "
+                "under an unscannable subtree: " + "; ".join(scan_errors),
+                identifiers=identifiers,
+                scan_errors=scan_errors,
+            )
+        return replies
 
-    dependents: Set[str] = set()
-    malformed_scan_errors: List[str] = []
+    # Pass 2 — ONE walk of the corpus, candidate-independent: normalise each
+    # node's `blocked_by` and index it by the ids it names.
+    holders_by_id: Dict[str, Set[str]] = {}
+    malformed: List[Tuple[str, str]] = []  # (holder_abs, scan_error message)
     for h in all_handoffs:
         h_path = h.get("_path")
         if not h_path:
             continue
         h_abs = str(Path(h_path).resolve())
-        if h_abs == candidate_abs or h_abs in exclude_abs:
-            continue
 
         blocked_by = h.get("blocked_by")
         if isinstance(blocked_by, str):
@@ -563,61 +624,89 @@ def blocked_by_dependents(
             # candidate" — silently `continue`-ing past it fails OPEN,
             # against this resolver's own stated tri-state intent. Accumulate
             # it and force state="indeterminate" below instead.
-            malformed_scan_errors.append(
-                f"{h_abs}: blocked_by has unexpected type "
-                f"{type(blocked_by).__name__!r} (expected str/list/tuple)"
+            malformed.append(
+                (
+                    h_abs,
+                    f"{h_abs}: blocked_by has unexpected type "
+                    f"{type(blocked_by).__name__!r} (expected str/list/tuple)",
+                )
             )
             continue
         if blocked_by is None:
             continue
 
-        matched = False
         for entry in blocked_by:
             if not isinstance(entry, str) or not entry:
                 continue
             # Review: code-reviewer (nit, Finding 6) — an `id_index.get(entry)`
-            # fallback here was removed as unreachable dead code: `identifiers`
-            # (checked below) and `id_index` (built by `_index_by_id` over
+            # fallback here was removed as unreachable dead code: a candidate's
+            # `identifiers` and `id_index` (built by `_index_by_id` over
             # `all_handoffs`) are both keyed from the exact same
             # `_read_meta`-sourced `stub_id`/`id`/`handoff_id` fields —
             # `_collect_all_handoffs_for_gate_index` populates each entry via
             # `_read_meta(path)` directly (same primitive `identifiers` is
             # built from for the candidate), so any `entry` that would resolve
-            # through `id_index` back to the candidate is, by construction,
-            # already a member of `identifiers` and matches on the line below.
-            if entry in identifiers:
-                matched = True
-                break
-        if not matched:
+            # through `id_index` back to a candidate is, by construction,
+            # already a member of that candidate's `identifiers` and matches
+            # on the keyed lookup below.
+            holders_by_id.setdefault(entry, set()).add(h_abs)
+
+    terminal_cache: Dict[str, bool] = {}
+
+    def _terminal(h_abs: str) -> bool:
+        cached = terminal_cache.get(h_abs)
+        if cached is None:
+            cached = _is_terminal_or_archived_child(h_abs)
+            terminal_cache[h_abs] = cached
+        return cached
+
+    # Pass 3 — per candidate, set lookups only.
+    for key, candidate_abs, identifiers in pending:
+        # A malformed node the singular resolver would have skipped BEFORE
+        # reading its `blocked_by` (the candidate itself, or an excluded
+        # path) must not make this candidate indeterminate.
+        visible_malformed = [
+            msg
+            for h_abs, msg in malformed
+            if h_abs != candidate_abs and h_abs not in exclude_abs
+        ]
+        if visible_malformed:
+            replies[key] = _blocked_by_indeterminate(
+                "enumeration incomplete — cannot rule out a live blocked_by "
+                "dependent: " + "; ".join(visible_malformed),
+                identifiers=identifiers,
+                scan_errors=visible_malformed,
+            )
             continue
 
-        if _is_terminal_or_archived_child(h_abs):
-            continue
-        dependents.add(h_abs)
+        dependents: Set[str] = set()
+        for identifier in identifiers:
+            for h_abs in holders_by_id.get(identifier, ()):
+                if h_abs == candidate_abs or h_abs in exclude_abs:
+                    continue
+                if h_abs in dependents:
+                    continue
+                if _terminal(h_abs):
+                    continue
+                dependents.add(h_abs)
 
-    if malformed_scan_errors:
-        return _blocked_by_indeterminate(
-            "enumeration incomplete — cannot rule out a live blocked_by "
-            "dependent: " + "; ".join(malformed_scan_errors),
-            identifiers=identifiers,
-            scan_errors=malformed_scan_errors,
-        )
-
-    if dependents:
-        return {
-            "state": "dependents",
-            "dependents": sorted(dependents),
-            "identifiers": identifiers,
-            "scan_errors": [],
-            "error": None,
-        }
-    return {
-        "state": "none",
-        "dependents": [],
-        "identifiers": identifiers,
-        "scan_errors": [],
-        "error": None,
-    }
+        if dependents:
+            replies[key] = {
+                "state": "dependents",
+                "dependents": sorted(dependents),
+                "identifiers": identifiers,
+                "scan_errors": [],
+                "error": None,
+            }
+        else:
+            replies[key] = {
+                "state": "none",
+                "dependents": [],
+                "identifiers": identifiers,
+                "scan_errors": [],
+                "error": None,
+            }
+    return replies
 
 
 # ---------------------------------------------------------------------------

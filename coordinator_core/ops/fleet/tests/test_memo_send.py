@@ -37,6 +37,7 @@ from coordinator_core.ops.fleet.memo_send import (
     _KNOWN_PARAM_KEYS,
     _MODE,
     _SENT_LEDGER_FILENAME,
+    _SENT_LEDGER_MAX_ROWS,
     _memo_send,
     _validate_send_params,
 )
@@ -517,18 +518,16 @@ class TestNoReceiverHooksFire:
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
         _write_draft(sender_repo, "receipt-fails", track=False)
 
-        real_commit_scoped = git_native.commit_scoped
+        def _failing_commit_paths(worktree, *a, **kw):
+            # Fail ONLY the sender-side receipt. The receiver-side delivery
+            # commit goes through a different function entirely
+            # (`commit_authored_new_file`), which is the ordering this op
+            # guarantees, so this needs no worktree discrimination.
+            # `commit_paths` signals failure by RAISING `CommitRefused`, not
+            # by returning a falsy outcome, so the simulation raises.
+            raise memo_send_module.CommitRefused("fatal: simulated receipt failure")
 
-        def _failing_commit_scoped(pathspec, msg_file, worktree, *a, **kw):
-            # Fail ONLY the sender-side receipt; the receiver-side delivery
-            # commit must still land, which is the ordering this op guarantees.
-            if worktree == sender_repo:
-                return SimpleNamespace(
-                    ok=False, stderr="fatal: simulated receipt failure", sha=None
-                )
-            return real_commit_scoped(pathspec, msg_file, worktree, *a, **kw)
-
-        monkeypatch.setattr(git_native, "commit_scoped", _failing_commit_scoped)
+        monkeypatch.setattr(memo_send_module, "commit_paths", _failing_commit_paths)
 
         result = _memo_send(
             {"dry_run": False, "topic": "receipt-fails"}, repo_root=sender_repo
@@ -729,4 +728,198 @@ class TestRegistration:
     def test_mutates_declaration_matches_deleted_originals_contract(self):
         assert memo_send_module.MUTATES == [
             "state/memo-outbox/sent-ledger.jsonl", "cross-repo/inbox/*.md",
+        ]
+
+
+# ---------------------------------------------------------------------------
+# The sent-ledger is fleet-shared and append-only: HEAD must gain the peer's
+# rows, never replay a stale staged snapshot
+# ---------------------------------------------------------------------------
+
+class TestSharedLedgerCommitsTheWorktreeUnion:
+    def test_a_stale_staged_ledger_blob_is_not_committed_over_the_worktree(
+        self, tmp_path, monkeypatch
+    ):
+        """A stale INDEX entry for the sent-ledger must not decide what lands.
+
+        `state/memo-outbox/sent-ledger.jsonl` is fleet-shared -- every
+        sending session on this box appends its own row to the one file
+        (a bounded ring, see `TestLedgerIsABoundedRing`), under
+        `locked_rmw`'s cross-process lock, so the WORKTREE copy is always
+        the union of every completed append. An index entry for it is
+        the opposite: it freezes at whatever a peer staged and goes stale the
+        instant anybody else appends.
+
+        `commit_scoped`, which this op used until 2026-08-30, reads a staged
+        blob DIFFERING FROM HEAD as a deliberate partial stage and preserves
+        it. That is correct for a hand-staged hunk and wrong for this file:
+        measured on the live tree that day, ten consecutive memo.send commits
+        landed the byte-identical stale blob b2a5f7d9d (2376 rows) while every
+        one of their parents held a richer one, so HEAD lost each row appended
+        in between -- the sender's own included, since its append never reached
+        the commit either.
+
+        Asserting on HEAD's bytes rather than on which function was called is
+        deliberate -- the defect is a content outcome, and a call-shape
+        assertion would pass against any future route that reintroduced it.
+        """
+        sender_repo = _make_sender_git_repo(tmp_path)
+        receiver_repo = _make_receiver_git_repo(tmp_path)
+        claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": receiver_repo})
+        monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
+        _write_draft(sender_repo, "ledger-union", track=False)
+
+        ledger = sender_repo / "state" / "memo-outbox" / _SENT_LEDGER_FILENAME
+        ledger.parent.mkdir(parents=True, exist_ok=True)
+
+        def _rows(*topics: str) -> str:
+            return "".join(
+                json.dumps({"topic": t, "to": "peer-em"}) + "\n" for t in topics
+            )
+
+        # HEAD carries two rows...
+        ledger.write_text(_rows("first", "second"), encoding="utf-8", newline="\n")
+        _git(sender_repo, "add", "state/memo-outbox/sent-ledger.jsonl")
+        _git(sender_repo, "commit", "-m", "peer: two ledger rows")
+
+        # ...and the INDEX is left pinned to an OLDER one-row blob. This is the
+        # live shape, and the discriminator matters: `commit_scoped` reads a
+        # staged blob that differs from HEAD as a DELIBERATE partial stage and
+        # preserves it, which is right for a hand-staged hunk and catastrophic
+        # for a shared append-only ledger. An index that merely differs from
+        # the WORKTREE is an ordinary unstaged edit and takes the safe branch,
+        # which is why a naive reproduction of this bug passes against the
+        # broken code.
+        ledger.write_text(_rows("first"), encoding="utf-8", newline="\n")
+        _git(sender_repo, "add", "state/memo-outbox/sent-ledger.jsonl")
+
+        # A concurrent peer appends to the worktree, as `locked_rmw` does --
+        # so the worktree, and only the worktree, holds the union.
+        ledger.write_text(
+            _rows("first", "second", "peer-appended-meanwhile"),
+            encoding="utf-8", newline="\n",
+        )
+
+        staged_blob = subprocess.run(
+            ["git", "ls-files", "-s", "state/memo-outbox/sent-ledger.jsonl"],
+            cwd=str(sender_repo), capture_output=True, text=True, check=True,
+        ).stdout.split()[1]
+
+        result = _memo_send(
+            {"dry_run": False, "topic": "ledger-union"}, repo_root=sender_repo
+        )
+        assert result["acted"][0]["sender_committed"] is True, result
+
+        head_ledger = subprocess.run(
+            ["git", "show", "HEAD:state/memo-outbox/sent-ledger.jsonl"],
+            cwd=str(sender_repo), capture_output=True, text=True, check=True,
+        ).stdout
+        head_topics = [
+            json.loads(line)["topic"]
+            for line in head_ledger.splitlines() if line.strip()
+        ]
+
+        assert "peer-appended-meanwhile" in head_topics, (
+            "the peer's appended row was dropped from HEAD -- the commit took "
+            f"the stale staged blob {staged_blob[:9]} instead of the worktree "
+            "union, which is the arm that destroyed rows on the live tree"
+        )
+        assert "second" in head_topics, head_topics
+        assert "ledger-union" in head_topics, (
+            "this send's own row is missing -- the append landed in the "
+            f"worktree but never reached HEAD: {head_topics}"
+        )
+
+
+class TestLedgerIsABoundedRing:
+    """The sent-ledger retains `_SENT_LEDGER_MAX_ROWS` rows, newest wins."""
+
+    def _send_with_ledger(self, tmp_path, monkeypatch, existing_rows: int):
+        sender_repo = _make_sender_git_repo(tmp_path)
+        receiver_repo = _make_receiver_git_repo(tmp_path)
+        claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": receiver_repo})
+        monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
+        _write_draft(sender_repo, "ring-topic")
+
+        ledger = sender_repo / "state" / "memo-outbox" / _SENT_LEDGER_FILENAME
+        ledger.parent.mkdir(parents=True, exist_ok=True)
+        ledger.write_text(
+            "".join(
+                json.dumps({"topic": f"old-{i}", "to": "peer-em"}) + "\n"
+                for i in range(existing_rows)
+            ),
+            encoding="utf-8",
+            newline="\n",
+        )
+
+        result = _memo_send(
+            {"dry_run": False, "topic": "ring-topic"}, repo_root=sender_repo
+        )
+        assert result["exit_code"] == 0, result
+        rows = [
+            json.loads(line)
+            for line in ledger.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+        return rows
+
+    def test_an_overfull_ledger_is_trimmed_to_the_cap(self, tmp_path, monkeypatch):
+        """Oldest rows go, the cap holds, and this send's row is the newest.
+
+        Asserted on WHICH rows survived, not just the count: a trim that
+        kept the cap by dropping the newest rows would satisfy a length
+        check and lose exactly the receipts anybody looks the file up for.
+        """
+        rows = self._send_with_ledger(
+            tmp_path, monkeypatch, existing_rows=_SENT_LEDGER_MAX_ROWS + 40
+        )
+
+        assert len(rows) == _SENT_LEDGER_MAX_ROWS
+        assert rows[-1]["topic"] == "ring-topic"
+        # 40 surplus rows plus one evicted to make room for this send.
+        assert rows[0]["topic"] == "old-41", rows[0]
+        assert not any(r["topic"] == "old-0" for r in rows)
+
+    def test_an_under_cap_ledger_keeps_every_row(self, tmp_path, monkeypatch):
+        """Below the cap the ring evicts NOTHING -- the bound is a ceiling,
+        not a target to shrink toward."""
+        rows = self._send_with_ledger(tmp_path, monkeypatch, existing_rows=3)
+
+        assert len(rows) == 4
+        assert [r["topic"] for r in rows[:3]] == ["old-0", "old-1", "old-2"]
+        assert rows[-1]["topic"] == "ring-topic"
+
+    def test_a_missing_trailing_newline_does_not_glue_two_rows(
+        self, tmp_path, monkeypatch
+    ):
+        """A truncated write or hand edit leaves no trailing newline; the
+        next append must not land on the same line and corrupt both rows."""
+        sender_repo = _make_sender_git_repo(tmp_path)
+        receiver_repo = _make_receiver_git_repo(tmp_path)
+        claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": receiver_repo})
+        monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
+        _write_draft(sender_repo, "no-newline-topic")
+
+        ledger = sender_repo / "state" / "memo-outbox" / _SENT_LEDGER_FILENAME
+        ledger.parent.mkdir(parents=True, exist_ok=True)
+        ledger.write_text(
+            json.dumps({"topic": "truncated-row", "to": "peer-em"}),
+            encoding="utf-8",
+            newline="\n",
+        )
+
+        result = _memo_send(
+            {"dry_run": False, "topic": "no-newline-topic"}, repo_root=sender_repo
+        )
+        assert result["exit_code"] == 0, result
+
+        lines = [
+            line
+            for line in ledger.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+        assert len(lines) == 2, lines
+        assert [json.loads(line)["topic"] for line in lines] == [
+            "truncated-row",
+            "no-newline-topic",
         ]

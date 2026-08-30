@@ -1140,10 +1140,78 @@ def test_commit_gate_halts_on_null_and_on_a_tokenless_report():
     # a returning-but-tokenless report is a refusal that still produced prose.
     # Neither proves a commit landed, so both must fail the same way.
     script = compose_script(_two_wave_fixture(), name="wf", description="two waves")
-    assert (
-        "if (!commitWave1Results || "
-        "!/^COMMIT-LANDED +[0-9a-f]{7,40} *$/m.test(String(commitWave1Results)))"
-    ) in script
+    assert "if (!commitWave1Results || " in script
+    assert "test(String(commitWave1Results)))" in script
+
+    gate = _emitted_gate(script)
+    assert not gate.search("the commit agent declined; nothing landed\n")
+    assert not gate.search("")
+
+
+def _emitted_gate(script: str):
+    """Compile the gate exactly as emitted, so these tests pin BEHAVIOUR.
+
+    Asserting the regex source verbatim turns every one of these into a
+    spelling test: widening the token line to tolerate markdown emphasis
+    (2026-08-30) broke assertions that had no opinion about what the gate
+    actually accepts. What must not regress is which reports pass.
+    """
+    emitted = re.search(r"!/(\^[^/]*)/m\.test", script)
+    assert emitted, "commit gate is no longer an anchored regex test"
+    return re.compile(emitted.group(1).replace("\\ ", " "), re.M)
+
+
+def test_commit_gate_accepts_the_token_line_wrapped_in_markdown_emphasis():
+    """A bolded token line is a report that COMMITTED. Measured, not supposed.
+
+    Census of 378 commit-agent outcomes across 653 workflow journals
+    (2026-08-30, state/audits/2026-08-30-what-the-commit-halts-actually-were.md):
+    of 18 halts, four were reports reading `**COMMIT-LANDED <sha>**`. All four
+    shas are in this repo's history -- 5e4a76ea70, ca1ccc6019, 5eb6df2ece,
+    ae9607e410 -- so the gate killed four runs AFTER their work had landed.
+    At 22% that is the largest single halt class, and each one cost the
+    operator a resume or a re-emit for nothing: the "workflow after workflow
+    against one plan" the PM reported.
+
+    Agents write reports in markdown and emphasise the line they were told
+    matters. The gate is the artifact that has to tolerate that; a prompt
+    asking them not to would be "the operator remembers" wearing a subagent.
+    """
+    script = compose_script(_two_wave_fixture(), name="wf", description="two waves")
+    gate = _emitted_gate(script)
+
+    # The measured shapes, verbatim from the journals.
+    assert gate.search("**COMMIT-LANDED 5e4a76ea706dd35cc1045f22708f20d64b0d9a91**")
+    assert gate.search("**COMMIT-LANDED ca1ccc601968ecc57398a523bf13b24ebca6f98e**")
+    assert gate.search(
+        "prose above\n**COMMIT-LANDED ae9607e4104eab49951e22153b2cd78ecbba2108**\n"
+    )
+    # And the undecorated form the contract has always named.
+    assert gate.search("COMMIT-LANDED 5eb6df2ece10cac6f0af23b6f5ceef820eaad17c\n")
+
+
+def test_markdown_emphasis_does_not_reopen_the_quoting_fail_open():
+    """Widening for emphasis must not re-admit a refusal that quotes the token.
+
+    What closed the 2026-08-21 fail-open is the hex-sha requirement, not the
+    absence of asterisks -- so a refusal stays refused however it decorates
+    the instruction it is quoting back. This is the assertion that makes the
+    widening safe rather than merely convenient.
+    """
+    script = compose_script(_two_wave_fixture(), name="wf", description="two waves")
+    gate = _emitted_gate(script)
+
+    assert not gate.search("**COMMIT-LANDED <sha>**")
+    assert not gate.search("__COMMIT-LANDED <sha>__")
+    assert not gate.search(
+        "Attempted per the brief, which said to end the report with the line "
+        "'**COMMIT-LANDED <sha>**'. Guard denied; did not land.\n"
+    )
+    # A sha mid-sentence is still not a token line, decorated or not.
+    assert not gate.search(
+        "I would have written **COMMIT-LANDED ca1ccc601968ecc57398a523bf13b24ebca6f98e** "
+        "had the guard allowed it.\n"
+    )
 
 
 def test_commit_gate_is_not_defeated_by_a_refusal_that_quotes_the_token():
@@ -1160,12 +1228,8 @@ def test_commit_gate_is_not_defeated_by_a_refusal_that_quotes_the_token():
     pins the discriminator, not the spelling: an anchored whole-line match with
     a real sha.
     """
-    import re
-
     script = compose_script(_two_wave_fixture(), name="wf", description="two waves")
-    emitted = re.search(r"!/(\^COMMIT-LANDED[^/]*)/m\.test", script)
-    assert emitted, "commit gate is no longer an anchored regex test"
-    gate = re.compile(emitted.group(1).replace("\\ ", " "), re.M)
+    gate = _emitted_gate(script)
 
     # The verbatim shape of the refusal that defeated the old gate.
     quoting_refusal = (
@@ -1194,6 +1258,40 @@ def test_commit_gate_names_resume_path_not_just_the_failure():
     # continue after clearing the cause.
     script = compose_script(_two_wave_fixture(), name="wf", description="two waves")
     assert "resumeFromRunId" in script
+
+
+def test_commit_gate_halt_text_forbids_the_re_emit_and_names_the_resume_call():
+    """The halt used to instruct the exact move that loses work.
+
+    Measured by doe-claude-em (2026-08-30): a commit-phase halt ends the whole
+    emitted run, and a re-emit is the reachable recovery for an EM who no
+    longer holds the run id. `spine_read`'s closed-disposition exclusion then
+    correctly drops the chunks that DID land, and the narrowed one-wave `.mjs`
+    on disk is indistinguishable from one always meant to be partial -- the
+    "workflow after workflow against one plan" the PM saw. Nothing refuses and
+    nothing warns, so the halt STRING is the only surface that can put the
+    correct move in front of the EM at the moment they need it.
+
+    Pinned here rather than at the reason constant because only what reaches
+    the emitted script changes an operator's behaviour.
+    """
+    script = compose_script(_two_wave_fixture(), name="wf", description="two waves")
+
+    assert "RECOVERY IS RESUME, NEVER RE-EMIT" in script
+    assert "A-SECOND-EMIT-AFTER-A-PARTIAL-RUN-NARROWS-SILENTLY" in script
+    # The literal call, not just the parameter name -- an EM reading `resume
+    # via resumeFromRunId` still has to work out what to type.
+    assert "Workflow({scriptPath, resumeFromRunId})" in script
+    # Resume serves the longest UNCHANGED prefix from cache, so relaunching
+    # this script untouched replays the refusal and re-halts. A recovery text
+    # that omits the edit sends the operator round the same loop once more.
+    assert "an unchanged call" in script and "served from cache" in script
+    # And the same-session-only limit, or the instruction is a dead end for
+    # exactly the EM who most needs it.
+    assert "same-session-only" in script
+
+    errors = [f for f in run_checks(script) if f.severity is Severity.ERROR]
+    assert errors == []
 
 
 def test_every_commit_phase_gets_its_own_uniquely_named_gate():

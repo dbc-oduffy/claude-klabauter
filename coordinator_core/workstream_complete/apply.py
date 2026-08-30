@@ -490,6 +490,14 @@ def _invoke_cli_main(module: ModuleType, args: list[str]) -> tuple[int, str, str
 #: Deliberately closed to exactly these three fields: a future producer
 #: field beyond `entry_path`/`landed`/`argv` is a deliberate, reviewed
 #: addition to this regex, never a silently-broadened catch-all.
+#: `directives_completion.build_complete_entry_directive`'s own id. The
+#: completion-entry fold (`apply()`'s close-commit tail) reads this
+#: directive's captured stdout for the entry path it must fold into --
+#: `coordinator-complete-entry.py`'s single-line `print(entry_path)`
+#: contract, the same one the `{d-complete-entry.entry_path}` arg token
+#: was built on.
+_COMPLETE_ENTRY_DIRECTIVE_ID = "d-complete-entry"
+
 _ARG_TOKEN_RE = re.compile(r"\{([A-Za-z0-9_-]+)\.(entry_path|landed|argv)\}")
 
 #: The whole-arg shape `.argv` requires — anchored so an `.argv` token
@@ -1090,6 +1098,18 @@ def _execute_directives(
         "results": results,
     }
 
+    # The one `stdout_by_id` value that outlives this function. `apply()`'s
+    # close-commit tail folds the sha it lands into the completion entry
+    # `d-complete-entry` just wrote, and that entry's path is knowable only at
+    # runtime (today's date, plus a chain-slug idempotency guard that may
+    # resolve to an entry under a different date entirely) -- which is why the
+    # CLI prints it and why nothing here re-derives it. Named explicitly
+    # rather than exporting the whole accumulator: `stdout_by_id` carries
+    # every directive's captured output, and a report is not the place for it.
+    completion_entry_stdout = (stdout_by_id.get(_COMPLETE_ENTRY_DIRECTIVE_ID) or "").strip()
+    if completion_entry_stdout:
+        report["completion_entry_path"] = completion_entry_stdout.splitlines()[0].strip()
+
     if failed and landed:
         return int(WorkstreamApplyExitCode.PARTIAL_MUTATION), report
     if failed:
@@ -1215,6 +1235,49 @@ def _run_close_commit_tail(
         "integrity_breach": result.integrity_breach,
         "diagnostics": list(result.diagnostics),
     }
+
+
+def _run_completion_entry_fold(
+    worktree_root: "Union[Path, str]",
+    entry_path: Optional[str],
+    committed_sha: Optional[str],
+) -> Optional[dict[str, Any]]:
+    """Fold the sha this pass just committed into the `commits:` list of the
+    completion entry `d-complete-entry` wrote earlier in the SAME pass.
+
+    THE DEFECT THIS CLOSES: the fold itself has existed in
+    `ops/ceremony/post_commit_tail.py` since 2026-08-30 and has never once
+    run. It takes a caller-supplied entry path -- deliberately, because that
+    path is a runtime value guarded by a chain-slug idempotency check nothing
+    else may re-derive -- and no caller supplied one. `/execute-plan`'s
+    close-out, the only live caller of that module's `run()`, writes no
+    completion entry and so has no path to pass. THIS pass does: the entry
+    was written minutes earlier by a directive whose CLI prints its path on
+    stdout, and `_execute_directives` now carries that line out on the report.
+    So the two halves are joined here, at the one seam where both the entry
+    path and the sha are in hand.
+
+    Placed AFTER `_run_close_commit_tail` and BEFORE
+    `_run_push_outstanding_tail`, and gated -- unlike either of those -- on
+    that commit having actually landed: without a sha there is nothing to
+    fold, and folding a sha the ceremony failed to produce would write a
+    commits list naming a commit that does not exist. Running before the push
+    tail is what lets the fold's own follow-up commit publish in the same
+    pass rather than waiting for the next session's push.
+
+    Returns `None` when there is nothing to attempt (no entry path, no
+    landed sha) -- nothing is folded into the report in that case, matching
+    `_run_close_commit_tail`'s own shape for a step that did not run. The
+    fold never raises: soft-fail is `post_commit_tail`'s own contract for
+    this leg (a stale `commits:` list is the status quo ante, so this step
+    can only improve on it), and a failure surfaces as a `failed` entry in
+    the returned dict, never as a downgraded exit code for a ceremony whose
+    commit landed."""
+    if not entry_path or not committed_sha:
+        return None
+    from coordinator_core.ops.ceremony.post_commit_tail import fold_completion_entry_commit
+
+    return fold_completion_entry_commit(Path(worktree_root), entry_path, committed_sha)
 
 
 def _run_push_outstanding_tail(worktree_root: "Union[Path, str]") -> dict[str, Any]:
@@ -1419,6 +1482,19 @@ def apply(*, decisions: Optional[dict[str, Any]] = None) -> tuple[int, dict[str,
                     WorkstreamApplyExitCode.SUCCESS
                 ):
                     exit_code = int(WorkstreamApplyExitCode.PARTIAL_MUTATION)
+
+            # The completion-entry commit-ledger fold -- see
+            # `_run_completion_entry_fold`'s own docstring for why this seam
+            # is where the entry path and the sha first exist together, and
+            # why it sits between the commit and the push rather than after
+            # both.
+            fold_report = _run_completion_entry_fold(
+                worktree_root,
+                report.get("completion_entry_path"),
+                (close_commit_report or {}).get("committed_sha"),
+            )
+            if fold_report is not None:
+                report["completion_entry_fold"] = fold_report
 
             # C4b (2026-08-25): the push leg `run_close_commit` itself never
             # attempts (push_mode=PUSH_MODE_NEVER, hard constraints 5/6) --

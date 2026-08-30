@@ -911,7 +911,7 @@ async def _fake_gcc_applied(params: dict, repo_root: Path) -> dict:
 
 
 def test_run_gate_cascade_clear_fires_once_per_live_dependent(monkeypatch, tmp_path):
-    """End-to-end against real files (no mocking of `blocked_by_dependents`
+    """End-to-end against real files (no mocking of the fan-out resolver
     itself) -- proves the matched-blocker-id intersection logic, not just the
     fan-out plumbing."""
     _write_gcc_handoff(tmp_path, "state/handoffs/shipped.md", ids={"stub_id": "stub-a"})
@@ -968,13 +968,16 @@ def test_run_gate_cascade_clear_indeterminate_fails_closed_never_reads_as_no_dep
     monkeypatch.setattr(consumed_handoff_stamp, "post_commit_stamp_and_ship", _fake_stamp)
     monkeypatch.setattr(
         m,
-        "blocked_by_dependents",
-        lambda candidate, worktree, exclude=None: {
-            "state": "indeterminate",
-            "dependents": [],
-            "identifiers": [],
-            "scan_errors": ["state/handoffs: PermissionError"],
-            "error": "enumeration incomplete",
+        "blocked_by_dependents_many",
+        lambda candidates, worktree, exclude=None: {
+            str(c): {
+                "state": "indeterminate",
+                "dependents": [],
+                "identifiers": [],
+                "scan_errors": ["state/handoffs: PermissionError"],
+                "error": "enumeration incomplete",
+            }
+            for c in candidates
         },
     )
 
@@ -1016,13 +1019,16 @@ def test_run_gate_cascade_clear_classifies_three_named_mutate_abort_shapes_as_sk
     monkeypatch.setattr(consumed_handoff_stamp, "post_commit_stamp_and_ship", _fake_stamp)
     monkeypatch.setattr(
         m,
-        "blocked_by_dependents",
-        lambda candidate, worktree, exclude=None: {
-            "state": "dependents",
-            "dependents": ["dep-1", "dep-2", "dep-3", "dep-4"],
-            "identifiers": ["stub-a"],
-            "scan_errors": [],
-            "error": None,
+        "blocked_by_dependents_many",
+        lambda candidates, worktree, exclude=None: {
+            str(c): {
+                "state": "dependents",
+                "dependents": ["dep-1", "dep-2", "dep-3", "dep-4"],
+                "identifiers": ["stub-a"],
+                "scan_errors": [],
+                "error": None,
+            }
+            for c in candidates
         },
     )
     monkeypatch.setattr(
@@ -1083,13 +1089,16 @@ def test_run_gate_cascade_clear_bounds_fan_out_per_stamped_baton(monkeypatch, tm
     monkeypatch.setattr(consumed_handoff_stamp, "post_commit_stamp_and_ship", _fake_stamp)
     monkeypatch.setattr(
         m,
-        "blocked_by_dependents",
-        lambda candidate, worktree, exclude=None: {
-            "state": "dependents",
-            "dependents": list(dependents),
-            "identifiers": ["stub-a"],
-            "scan_errors": [],
-            "error": None,
+        "blocked_by_dependents_many",
+        lambda candidates, worktree, exclude=None: {
+            str(c): {
+                "state": "dependents",
+                "dependents": list(dependents),
+                "identifiers": ["stub-a"],
+                "scan_errors": [],
+                "error": None,
+            }
+            for c in candidates
         },
     )
     monkeypatch.setattr(m, "_read_meta", lambda path: {"blocked_by": ["stub-a"]})
@@ -1135,13 +1144,16 @@ def test_run_gate_cascade_clear_handler_defaults_to_get_op_handler_when_not_inje
     monkeypatch.setattr(consumed_handoff_stamp, "post_commit_stamp_and_ship", _fake_stamp)
     monkeypatch.setattr(
         m,
-        "blocked_by_dependents",
-        lambda candidate, worktree, exclude=None: {
-            "state": "dependents",
-            "dependents": ["dep-1"],
-            "identifiers": ["stub-a"],
-            "scan_errors": [],
-            "error": None,
+        "blocked_by_dependents_many",
+        lambda candidates, worktree, exclude=None: {
+            str(c): {
+                "state": "dependents",
+                "dependents": ["dep-1"],
+                "identifiers": ["stub-a"],
+                "scan_errors": [],
+                "error": None,
+            }
+            for c in candidates
         },
     )
     monkeypatch.setattr(m, "_read_meta", lambda path: {"blocked_by": ["stub-a"]})
@@ -1207,13 +1219,16 @@ def test_run_gate_cascade_clear_failure_does_not_propagate(monkeypatch, tmp_path
     monkeypatch.setattr(consumed_handoff_stamp, "post_commit_stamp_and_ship", _fake_stamp)
     monkeypatch.setattr(
         m,
-        "blocked_by_dependents",
-        lambda candidate, worktree, exclude=None: {
-            "state": "dependents",
-            "dependents": ["dep-1"],
-            "identifiers": ["stub-a"],
-            "scan_errors": [],
-            "error": None,
+        "blocked_by_dependents_many",
+        lambda candidates, worktree, exclude=None: {
+            str(c): {
+                "state": "dependents",
+                "dependents": ["dep-1"],
+                "identifiers": ["stub-a"],
+                "scan_errors": [],
+                "error": None,
+            }
+            for c in candidates
         },
     )
     monkeypatch.setattr(m, "_read_meta", lambda path: {"blocked_by": ["stub-a"]})
