@@ -2847,6 +2847,84 @@ def _release_claims_for_head(repo_root: str) -> None:
         pass
 
 
+def _ref_sha(common_dir, ref: str):
+    """`<sha>` for `ref` under `common_dir`, loose file first then
+    `packed-refs`, or `None`. Spawn-free: two file reads at most.
+
+    Same one-hop resolution `git_state.head_sha` performs for HEAD's target,
+    generalised to any full refname because the comparand this module needs
+    (`refs/remotes/origin/<branch>`) is not reachable through that function.
+    Not folded back into `git_state`: this is a private read for the gate
+    below, and widening a shared reader for one caller is how that module's
+    three-valued contracts grow a fourth dimension.
+    """
+    try:
+        sha = (common_dir / ref).read_text(encoding="utf-8").strip()
+        if sha:
+            return sha
+    except OSError:
+        pass
+    try:
+        packed_text = (common_dir / "packed-refs").read_text(encoding="utf-8")
+    except OSError:
+        return None
+    for line in packed_text.splitlines():
+        if not line or line[0] in "#^":
+            continue
+        sha, _, ref_name = line.partition(" ")
+        if ref_name == ref:
+            return sha
+    return None
+
+
+def _push_would_be_a_noop(repo_root: str, branch: str) -> bool:
+    """True iff `refs/heads/<branch>` and `refs/remotes/origin/<branch>`
+    already resolve to the same sha, so a push has nothing to send.
+
+    WHY THIS EXISTS. Without it `main()` reaches `_detach_and_run` on EVERY
+    commit to a `work/*` branch, and that leg is a `subprocess.Popen` of a
+    FRESH PYTHON INTERPRETER on Windows (`spawn_detached_push`'s docstring
+    explains why it cannot fork: the engine is threaded asyncio and
+    fork-from-threaded is a known deadlock class). The child then resolves
+    refs, finds nothing outstanding, and exits -- so the box paid an
+    interpreter start to learn what two file reads answer. DR-344 is explicit
+    that "an interpreter start ahead of warmth is break-class", and this one
+    sits on the commit hot path every route in the repo passes through.
+
+    The parent-side cost hides this: the Popen detaches in ~7ms, so the spawn
+    is invisible to parent-CPU accounting and can escape a job object
+    entirely (`benchmarks/process_time.py`'s AC9 note: job accounting
+    "silently excludes any process a misbehaving child manages to launch
+    OUTSIDE the job"). An instrument reading 7ms while the box starts an
+    interpreter is why this went unmeasured.
+
+    FAIL-OPEN, in the spawn direction. Every uncertain state returns False and
+    the respawn happens exactly as before: no remote-tracking ref (never
+    pushed), an unreadable ref, an unborn branch, a `None` from either read.
+    The gate only ever suppresses a spawn it can PROVE is redundant -- a false
+    positive is a silently unpushed commit, the precise failure the auto-push
+    health signal exists to catch, while a false negative costs one
+    interpreter start, which is what happens unconditionally today.
+
+    STALENESS IS NOT A HAZARD, in either direction. If the remote moved ahead
+    and the remote-tracking ref is stale, the two shas differ and we spawn
+    (correct: a push is genuinely owed, and the child owns the
+    non-fast-forward outcome). If they are equal, this side has nothing local
+    to send whatever the remote has done since -- push sends local commits and
+    there are none. This function never claims the branch is up to date with
+    the remote, only that this side has nothing to offer it.
+    """
+    try:
+        from coordinator_core.git.git_state import resolve_git_common_dir
+
+        common_dir = resolve_git_common_dir(repo_root)
+        local = _ref_sha(common_dir, "refs/heads/" + branch)
+        remote = _ref_sha(common_dir, "refs/remotes/origin/" + branch)
+    except Exception:
+        return False
+    return bool(local) and local == remote
+
+
 def main(argv: list[str] | None = None) -> int:
     """Entrypoint. ALWAYS returns 0 -- auto-push must never block a commit.
 
@@ -2928,6 +3006,13 @@ def main(argv: list[str] | None = None) -> int:
             async_mode = not bool(os.environ.get(_ENV_SYNC))
 
         if async_mode:
+            # Spawn-free redundancy gate ahead of the respawn -- see
+            # `_push_would_be_a_noop`. Only the async leg is gated: the
+            # synchronous leg pays no interpreter start, so there is
+            # nothing to save there and skipping it would change that
+            # caller's contract rather than its cost.
+            if _push_would_be_a_noop(repo_root, branch):
+                return 0
             _detach_and_run(repo_root, branch)
         else:
             run_push_with_retry(repo_root, branch)

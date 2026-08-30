@@ -8033,9 +8033,9 @@ def check_heredoc_repo_write_advise(
             return _advisory(
                 (
                     "Advisory: this heredoc writes `%s`, a path inside this repo. "
-                    "Writes through Bash aren't recorded as touched (DR-258), "
-                    "so safe-commit-offer will drop it from this session's commit. "
-                    "Use the Write tool."
+                    "This write is recorded and will be in this session's commit "
+                    "(DR-258 § Amendment 2026-08-30); a path this command does not "
+                    "name is not."
                     % rel
                 )
                 + (" %s" % _hd_note if _hd_note else "")

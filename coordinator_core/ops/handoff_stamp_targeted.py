@@ -120,6 +120,7 @@ without that module's per-call `housekeeping.cycle` fan-in).
 from __future__ import annotations
 
 import asyncio
+import sys
 from pathlib import Path
 from typing import Optional
 
@@ -321,6 +322,55 @@ def ship_stamp_only(
             f"supplied to this 'stamp_only' call for {rel_id}"
         )
 
+    # No-sha resolution (C1 item 6, the common `archive-stamp-cli
+    # ship-handoff` shape). `handoff_archive_transition._handler`'s
+    # `do_stamp_only` block calls `stamp_shipped_in` for EVERY stamp_only
+    # call, not only the `--sha` ones: `allow_branch_tip_fallback=False`
+    # withholds the branch-tip guess, it does not withhold scope-path
+    # derivation. Resolving here rather than skipping is what keeps a bare
+    # `ship-handoff` stamping at all — without it the Position A refusal
+    # below fires on every no-sha call and the deployment_state flip never
+    # lands (8 tests in `test_archive_stamp.py` prove it).
+    #
+    # Function-local import: `archive_stamp` imports THIS module (C4's
+    # repoint), so a module-level import would close the cycle.
+    #
+    # This leg spawns git and costs far more than the sha-supplied path's
+    # budget — that is the contract's price, not a defect in this module.
+    derived_pre_value: Optional[str] = None
+    derived_stamp_ran = False
+    if stamp_sha is None:
+        from coordinator_core.archive_stamp import stamp_shipped_in
+        from coordinator_core.ops.handoff_archive_transition import _current_shipped_in
+
+        derived_pre_value = _current_shipped_in(contained)
+        outcome = stamp_shipped_in(
+            str(contained),
+            kind=stamp_kind,
+            allow_branch_tip_fallback=False,
+            sha=None,
+            force=False,
+        )
+        if outcome.exit_code != 0:
+            # Uniform transport-failure envelope, reproduced from the
+            # `do_stamp_only` twin verbatim — the underlying validation
+            # reason is never surfaced in the envelope there either.
+            warnings.append(
+                f"stamp_shipped_in exited {outcome.exit_code} for {rel_id} "
+                "— stamp transport failure"
+            )
+            out = _err(
+                f"stamp transport failure for {rel_id}: stamp_shipped_in "
+                f"exited {outcome.exit_code} — --stamp-only aborted, "
+                "nothing else mutated by this call; retry once the "
+                "underlying failure is resolved (pass --sha to retry with "
+                "an explicit override once resolved, if appropriate)"
+            )
+            out["stamped"] = False
+            out["warnings"] = warnings
+            return out
+        derived_stamp_ran = True
+
     stamp_mutate = None
     stamp_state: Optional[dict] = None
     if stamp_sha is not None:
@@ -357,7 +407,7 @@ def ship_stamp_only(
             handoff_path_raw, _final_stamp_value(stamp_sha), stamp_kind, force=force
         )
 
-    ship_mutate, ship_state = build_ship_mutate(handoff_path_raw)
+    ship_mutate, _ = build_ship_mutate(handoff_path_raw)
 
     def _mutate(old_text: str) -> str:
         text = old_text
@@ -366,6 +416,12 @@ def ship_stamp_only(
             raise MutateAbort(f"no valid YAML frontmatter block in: {handoff_path_raw}")
         before_shipped_in = read_fm_field_unquoted(before_split.fm_text, "shipped_in")
         before_shipped_in = None if before_shipped_in in (None, "null", "") else before_shipped_in
+        if derived_stamp_ran:
+            # The no-sha leg above already wrote shipped_in in its own locked
+            # pass, so this closure's on-disk read is the POST-stamp value.
+            # AC7's before/after comparison has to straddle that write, or a
+            # freshly-derived stamp reads as "retained prior value".
+            before_shipped_in = derived_pre_value
 
         if stamp_mutate is not None:
             text = stamp_mutate(text)
@@ -451,6 +507,21 @@ def ship_stamp_only(
         out["stamped"] = stamped_holder["value"]
         out["warnings"] = warnings
         return out
+
+    if stamp_state is not None and stamp_state["replaced"][0]:
+        # Provenance-repair reporting, reproduced from
+        # `archive_stamp.stamp_shipped_in`'s own force-replace branch. The
+        # 2026-07-22 incident (a sibling ship-handoff stamping a concurrent
+        # peer's sha) is why a force-overwrite has to name the value it
+        # destroyed on stderr — the caller-visible record that the repair
+        # happened at all. Emitted after `locked_rmw` returns, never inside
+        # the mutate closure, which a lock retry can run more than once.
+        assert stamp_sha is not None
+        print(
+            f"stamp_shipped_in: force-replaced shipped_in for {handoff_path_raw} "
+            f"(was {stamp_state['prior_value'][0]!r}, now {stamp_sha[:8]})",
+            file=sys.stderr,
+        )
 
     return {
         "exit_code": 0,

@@ -66,15 +66,8 @@ def test_holding_the_won_handle_excludes_a_second_election(tmp_path: Path) -> No
 # ---------------------------------------------------------------------------
 
 
-class _FakeHandle:
-    def __init__(self) -> None:
-        self.closed = False
-
-
 @pytestmark_win
 def test_ctx_shutdown_closes_the_election_handle_it_was_given(monkeypatch: pytest.MonkeyPatch) -> None:
-    from coordinator_core.warm import skew as skew_mod
-
     class _FakeHttpd:
         def shutdown(self) -> None:
             pass

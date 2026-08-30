@@ -188,6 +188,7 @@ _GOLDEN_SNAPSHOT = json.loads(
 "nudge_prose_queue_append": ["advisory", ["Write", "Edit", "MultiEdit"], 170],
 "nudge_prose_queue_creation": ["advisory", ["Write"], 119],
 "nudge_sentinel_retained_review_sidecar": ["advisory", ["Write", "Edit", "MultiEdit", "NotebookEdit"], 76],
+"nudge_session_display_name_as_identifier": ["advisory", ["Write", "Edit", "MultiEdit"], 221],
 "nudge_shell_shaped_spawn": ["advisory", ["Write", "Edit", "MultiEdit"], 190],
 "nudge_tasks_state_folder_split": ["advisory", ["Write", "Edit", "MultiEdit", "NotebookEdit"], 140],
 "nudge_terminal_artifact_edit": ["advisory", ["Write", "Edit", "MultiEdit", "NotebookEdit"], 150],

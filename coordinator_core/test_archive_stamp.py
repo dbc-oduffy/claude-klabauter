@@ -2316,7 +2316,7 @@ class TestChainArchiveHandoff:
         relayed the op's own `exit_code:0` verbatim (the op's git-mv-failure
         branch is deliberately non-fatal), making a genuinely failed move
         indistinguishable from success at this wrapper's own rc."""
-        import coordinator_core.ops.handoff_archive_transition as hat
+        import coordinator_core.ops.fleet._common as fleet_common
 
         repo = tmp_path / "repo"
         _init_repo(repo)
@@ -2331,7 +2331,14 @@ class TestChainArchiveHandoff:
                 [{"candidate_id": moves[0].candidate_id, "reason": "simulated ref-lock contention"}],
             )
 
-        monkeypatch.setattr(hat, "archive_and_commit", _boom_archive_and_commit)
+        # Patched on `ops.fleet._common`, the definition site, rather than on
+        # `handoff_archive_transition`'s module-level re-binding: chain now
+        # resolves `archive_and_commit` through a function-local import in
+        # `ops/handoff_stamp_targeted.py`, which a patch on the old module's
+        # attribute never intercepts. Patching the definition site covers both
+        # routes; patching the re-binding silently no-ops on this one, and the
+        # test then asserts against a move that really succeeded.
+        monkeypatch.setattr(fleet_common, "archive_and_commit", _boom_archive_and_commit)
 
         import io
         import contextlib

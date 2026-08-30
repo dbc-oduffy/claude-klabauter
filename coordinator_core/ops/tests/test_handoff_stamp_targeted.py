@@ -318,14 +318,26 @@ def test_sha_quoting_scientific_notation(tmp_path):
 def test_budget_zero_spawns_and_under_2ms_warm(tmp_path, monkeypatch):
     """C2's own budget assertion (governing plan's prime exit criterion, part
     a): <=2ms process time, 0 git spawns, warm — module already imported at
-    collection time above, so this call pays no first-import cost. Repo/
+    collection time above, so these calls pay no first-import cost. Repo/
     fixture setup (git init/commit) happens BEFORE the spawn counter and
     timer are installed, matching the falsifier's own "measured warm"
     convention (docs/plans/2026-08-30-the-stamp-stops-paying-for-a-sweep-
-    that.falsifier.py)."""
+    that.falsifier.py).
+
+    Negative spec — do NOT time a single call. `time.process_time()`
+    quantizes to the scheduler tick (measured 15.625ms on Windows,
+    `time.get_clock_info` notwithstanding), so a single sub-2ms call reads
+    as either 0.0 or 15.625ms and the assertion passes or fails on tick
+    alignment rather than on cost. Amortizing over N fresh records puts the
+    per-call figure two orders of magnitude above the quantum. Each record
+    is seeded fresh because a re-stamp takes the idempotent-skip branch,
+    which is not the path under budget."""
     repo = _make_git_repo(tmp_path)
-    hpath = _seed_handoff(repo, "2026-01-02-l.md")
     repo_root = repo / ".git"
+    iterations = 64
+    hpaths = [
+        _seed_handoff(repo, f"2026-01-02-l{i:02d}.md") for i in range(iterations)
+    ]
 
     calls = {"run": 0, "popen": 0}
     real_run = subprocess.run
@@ -343,14 +355,25 @@ def test_budget_zero_spawns_and_under_2ms_warm(tmp_path, monkeypatch):
     monkeypatch.setattr(subprocess, "Popen", _counting_popen)
 
     start = time.process_time()
-    result = ship_stamp_only(str(hpath), repo_root, sha="abc123def456", kind="ship-commit")
-    elapsed_ms = (time.process_time() - start) * 1000.0
+    results = [
+        ship_stamp_only(str(hpath), repo_root, sha="abc123def456", kind="ship-commit")
+        for hpath in hpaths
+    ]
+    total_ms = (time.process_time() - start) * 1000.0
+    per_call_ms = total_ms / iterations
 
-    assert result["exit_code"] == 0, result
+    for result in results:
+        assert result["exit_code"] == 0, result
     assert calls["run"] == 0, f"expected 0 subprocess.run spawns, got {calls['run']}"
     assert calls["popen"] == 0, f"expected 0 subprocess.Popen spawns, got {calls['popen']}"
-    assert elapsed_ms <= 2.0, (
-        f"ship_stamp_only exceeded the 2ms warm process-time budget: {elapsed_ms:.4f}ms"
+    assert total_ms > 0.0, (
+        "process_time did not advance across "
+        f"{iterations} calls — the measurement is below the clock quantum "
+        "and this assertion proves nothing; raise iterations"
+    )
+    assert per_call_ms <= 2.0, (
+        "ship_stamp_only exceeded the 2ms warm process-time budget: "
+        f"{per_call_ms:.4f}ms per call ({total_ms:.4f}ms over {iterations})"
     )
 
 

@@ -226,6 +226,21 @@ _SENT_LEDGER_FILENAME = "sent-ledger.jsonl"
 #: whole each time; a reader needing a longer window should take one of the
 #: three durable records above instead of paying for it here.
 _SENT_LEDGER_MAX_ROWS = 250
+
+#: The OTHER half of the bound, and the half that bites in most repos.
+#: claude-klabauter and DoE-claude are two halves of one delivery system and send
+#: constantly, so the row cap above evicts for them every few days. Almost
+#: every other repo sends a handful of memos a month: 250 rows there is not
+#: 2.5 days, it is a year or more, and a row cap alone would leave those
+#: ledgers unbounded in TIME while looking bounded. A rare sender's file
+#: stays small either way -- what an age bound buys is that nothing left in
+#: it is old enough to be mistaken for current.
+#:
+#: Applied only to rows carrying a parseable `sent_at`; a row without one is
+#: left to the row cap rather than dropped on a field it never had (rows
+#: predating the field, and any hand-written line). Both bounds run on every
+#: append, so neither can be the one that quietly stopped applying.
+_SENT_LEDGER_MAX_AGE_DAYS = 30
 _SENT_LEDGER_RELPATH = "/".join((*_OUTBOX_DIRNAME, _SENT_LEDGER_FILENAME))
 
 # Generator-provenance: writes+commits into a registry-enumerated RECEIVER
@@ -470,6 +485,39 @@ class _SenderCommit(NamedTuple):
     stderr: str
 
 
+def _row_is_older_than_cutoff(line: str, cutoff: datetime.datetime) -> bool:
+    """True iff this ledger line carries a `sent_at` older than `cutoff`.
+
+    UNDATABLE ROWS ARE NEVER EVICTED BY AGE -- a line that is not JSON, or
+    carries no `sent_at`, or carries one this cannot parse, returns False
+    and lives until the row cap reaches it. Dropping a row for failing to
+    prove its own age would delete the oldest rows in the file (the ones
+    predating the field) on the first append after this shipped, which is
+    the opposite of what an age bound is for.
+
+    `sent_at` is written by `_ledger_row` as `%Y-%m-%dT%H:%M:%SZ`. Parsed
+    with `fromisoformat` after swapping the `Z`, which Python's parser did
+    not accept before 3.11 and this repo's floor is 3.11; a value in any
+    other shape is undatable by the rule above, not an error.
+    """
+    try:
+        row = json.loads(line)
+    except json.JSONDecodeError:
+        return False
+    if not isinstance(row, dict):
+        return False
+    sent_at = row.get("sent_at")
+    if not isinstance(sent_at, str) or not sent_at:
+        return False
+    try:
+        stamp = datetime.datetime.fromisoformat(sent_at.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    if stamp.tzinfo is None:
+        stamp = stamp.replace(tzinfo=datetime.timezone.utc)
+    return stamp < cutoff
+
+
 def _write_msg_file(text: str) -> Path:
     fd, name = tempfile.mkstemp(prefix="memo-send-msg-", suffix=".txt")
     try:
@@ -706,6 +754,9 @@ def _memo_send(params: dict, repo_root=None) -> dict:
         sent_by=sent_by,
     )
     appended_line = json.dumps(row, ensure_ascii=False) + "\n"
+    cutoff = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(
+        days=_SENT_LEDGER_MAX_AGE_DAYS
+    )
 
     def _mutate(old_text: str) -> str:
         """Append this send's row, evicting the oldest rows past
@@ -721,8 +772,13 @@ def _memo_send(params: dict, repo_root=None) -> dict:
         Rows are re-emitted rather than sliced out of `old_text` so a file
         left without a trailing newline -- by a truncated write, or a hand
         edit -- cannot silently glue this row onto the last one.
+
+        Both bounds apply, age first: the row cap governs a prolific sender
+        (claude-klabauter/DoE), the age cap governs every other repo, and which one
+        bites is a property of the repo, never of this code.
         """
         rows = [line for line in old_text.splitlines() if line.strip()]
+        rows = [line for line in rows if not _row_is_older_than_cutoff(line, cutoff)]
         kept = rows[-(_SENT_LEDGER_MAX_ROWS - 1):] if _SENT_LEDGER_MAX_ROWS > 1 else []
         return "".join(line + "\n" for line in kept) + appended_line
 

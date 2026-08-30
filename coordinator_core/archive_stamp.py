@@ -1345,49 +1345,91 @@ _SWEEP_CAP = 150
 
 
 def _call_handoff_archive_transition(handoff_path: str, params: dict) -> dict:
-    """Composes the 4-mode archive-transition compute, THROUGH
-    `housekeeping.cycle` (was `handoff.housekeeping`, repointed 2026-08-30 per
-    `docs/plans/2026-08-29-the-housekeeping-cycle-stops-committing.md` chunk C8 —
-    `handoff.housekeeping`'s op key stays dead, kill means kill forever, PM
-    2026-08-23; `housekeeping.cycle` is the live door over the same surviving
-    compute).
+    """Composes the archive-transition compute for one named handoff — the
+    targeted, zero-corpus-read path for the three modes
+    `coordinator_core.ops.handoff_stamp_targeted` implements (`stamp_only`,
+    `chain`, `supersede`), falling back to the sweep-coupled
+    `housekeeping.cycle` door ONLY for `stamp_shipped`, the one mode that
+    module does not implement (plan C1/C2: C2 implements ship/stamp_only
+    only; C3 implements chain/supersede; `stamp_shipped` — `cs_ship_handoff
+    (archive=True)` — was never in either chunk's scope).
 
-    Routed, not rewritten. This used to import
-    `handoff_archive_transition._handler` by name and `asyncio.run` it directly,
-    which bypassed `get_op_handler`, the suspension table, and anything the
-    housekeeping job composes or its timing gates measure — so the one job had
-    three doors and this was the third. It is now the same door as d6's, which
-    is what makes "one job" true rather than merely stated. Governing plan:
-    `docs/plans/2026-08-27-one-corpus-read-or-the-housekeeping-job-dies-a-fourth-
-    time.md`, chunk C4.
+    Repointed 2026-08-30 per
+    `docs/plans/2026-08-30-the-stamp-stops-paying-for-a-sweep-that.md` chunk
+    C4. Was, until this change, routed THROUGH `housekeeping.cycle` (itself a
+    2026-08-30 repoint of the dead `handoff.housekeeping` op key — kill means
+    kill forever, PM 2026-08-23) for every mode, paying that cycle's
+    corpus-wide `read_live_corpus`/`open_index`/`compute_terminal_set` scan
+    on every single-record call — see the governing plan's Problem section
+    for the measured cost (373ms p50) and why the fused sweep could not even
+    archive anything on this path once `ed95dd5f80`'s worktree-dirty rail
+    landed (0 of 400 terminal targets moved across 70 calls).
 
     THE RETURN SHAPE IS UNCHANGED, and that is load-bearing rather than
     incidental. Every caller here — `cs_ship_handoff`, `cs_chain_archive_handoff`,
     `cs_supersede_archive_handoff`, and DoE's `archive-stamp-cli` behind them —
     keys on the transition op's own `exit_code`/`retained`/`moved`/`message`/
-    `retain_reason`/`warnings`. `handoff.housekeeping` returns that dict verbatim
-    under `transition`, and this function unwraps it, so not one of those
-    predicates moves. A re-shaped envelope here would break all of them at once
-    and none of them loudly.
+    `retain_reason`/`warnings`. `handoff_stamp_targeted`'s three functions
+    reproduce `handoff_archive_transition._handler`'s own envelope
+    byte-for-byte per mode (see that module's own docstrings), so not one of
+    those predicates moves. `coordinator_core.tests.
+    test_stamp_verbs_stay_off_the_sweep` is this repoint's own contract test,
+    diffing the returned envelope against the pre-change (`housekeeping.cycle`)
+    path for the same inputs.
 
-    WHAT DOES CHANGE: the sweep now runs on the same call. That is the point —
-    `cs_ship_handoff(archive=False)`'s own docstring says the file "stays in
-    state/handoffs/ for the async sweep", and the async sweep is what died. It is
-    no longer async and no longer elsewhere; the handoff this verb just made
-    terminal gets filed by the same invocation. `close=False` because these verbs
-    stamp one named handoff and have no business running a fleet-wide reconcile
-    pass on their caller's behalf.
+    WHAT DOES NOT CHANGE for `stamp_only`/`chain`/`supersede`: the archival
+    sweep no longer runs on these calls at all (it never usefully could — see
+    above) — `stamp_only` already left the file in `state/handoffs/` for the
+    cadence step (`handoff-housekeeping`, per the 2026-08-27 PM ruling,
+    already runs at `workday_complete`/`workweek_complete`); `chain`/
+    `supersede` still move the file themselves, via `handoff_stamp_targeted`'s
+    own `archive_and_commit` call, never via the cycle's sweep.
 
-    A housekeeping refusal that happens BEFORE the transition is composed (an
-    unresolvable worktree, a bad cap) comes back with `transition: None`. That is
-    relayed as housekeeping's own error dict rather than an empty one, because
-    every caller prints `result["error"]` and a bare `{}` would have them report
+    A `stamp_shipped` call takes the unchanged fallback path: a housekeeping
+    refusal that happens BEFORE the transition is composed (an unresolvable
+    worktree, a bad cap) comes back with `transition: None`, relayed as
+    housekeeping's own error dict rather than an empty one, because every
+    caller prints `result["error"]` and a bare `{}` would have them report
     "unknown error" for a cause this function was told.
     """
     hpath = Path(handoff_path)
     worktree, repo_root = _resolve_repo_root_for(hpath)
     if worktree is None or repo_root is None:
         return {"exit_code": 1, "error": f"could not resolve git worktree for {handoff_path}"}
+
+    mode = params.get("mode")
+
+    if mode == "stamp_only":
+        from coordinator_core.ops.handoff_stamp_targeted import ship_stamp_only
+
+        return ship_stamp_only(
+            handoff_path,
+            repo_root,
+            sha=params.get("sha"),
+            kind=params.get("kind"),
+            force=bool(params.get("force", False)),
+        )
+
+    if mode == "chain":
+        from coordinator_core.ops.handoff_stamp_targeted import chain_archive_handoff
+
+        return asyncio.run(chain_archive_handoff(handoff_path, repo_root))
+
+    if mode == "supersede":
+        from coordinator_core.ops.handoff_stamp_targeted import supersede_archive_handoff
+
+        return asyncio.run(
+            supersede_archive_handoff(
+                handoff_path,
+                repo_root,
+                continued_into=params.get("continued_into", ""),
+                sha=params.get("sha"),
+                kind=params.get("kind"),
+                force=bool(params.get("force", False)),
+            )
+        )
+
+    # stamp_shipped — not in C2/C3's scope; unchanged sweep-coupled fallback.
     from coordinator_core.housekeeping.cycle import _handler as _housekeeping_handler
 
     housekeeping = _housekeeping_handler(

@@ -102,6 +102,55 @@ def test_shutdown_still_unlinks_discovery_when_the_flush_fails(tmp_path: Path, m
     assert supervisor.read_discovery(root) is None
 
 
+def test_shutdown_releases_election_handle_when_unlink_discovery_times_out(tmp_path: Path, monkeypatch):
+    """Code-review Finding 2 (P1, `af8098f63b08968e3`): `unlink_discovery`'s
+    owner-checked branch wraps read-then-unlink in `locked_write.held_lock`,
+    which raises `LockTimeout` on contention past its own timeout -- reachable
+    at this repo's stated 50-70 concurrent-session load norm. Before the fix,
+    that exception escaped `unlink_discovery` uncaught, and `ctx_shutdown` had
+    no `try/finally`, so it aborted before `_release_election_handle` ran --
+    permanently leaking the won election handle (unrecoverable without a
+    process kill, per the module's own election-lock comment). This pins the
+    end-to-end property: `ctx_shutdown` must still release the handle when
+    `unlink_discovery` hits lock contention, regardless of which of the two
+    fix layers (the `LockTimeout` swallow inside `unlink_discovery`, or
+    `ctx_shutdown`'s own `try/finally`) is doing the work at the moment."""
+    root = _stamped(tmp_path)
+    ctx = _ctx(root)
+    sentinel_handle = object()
+    ctx._election_handle = sentinel_handle
+    supervisor.write_discovery(
+        port=1,
+        pid=os.getpid(),
+        stable_pid_start_epoch=0,
+        engine_sha="x",
+        engine_root=root,
+    )
+
+    # PATH-SCOPED, not blanket -- same idiom as
+    # `test_shutdown_still_unlinks_discovery_when_the_flush_fails`: fail only
+    # the discovery record's own lock, and let every other `held_lock` caller
+    # (write_discovery, telemetry) take the real one.
+    _real_held_lock = supervisor.locked_write.held_lock
+
+    def _held_lock(path, *a, **k):
+        if Path(path).name == supervisor.DISCOVERY_FILENAME:
+            raise supervisor.locked_write.LockTimeout("simulated contention")
+        return _real_held_lock(path, *a, **k)
+
+    monkeypatch.setattr(supervisor.locked_write, "held_lock", _held_lock)
+
+    released = []
+    monkeypatch.setattr(
+        supervisor, "_release_election_handle", lambda handle: released.append(handle)
+    )
+
+    ctx.ctx_shutdown()
+
+    assert released == [sentinel_handle]
+    assert ctx._election_handle is None
+
+
 def _rows(path: Path) -> list:
     import json
 

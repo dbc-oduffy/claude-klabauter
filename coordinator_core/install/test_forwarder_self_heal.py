@@ -244,3 +244,74 @@ class TestSelfHealIsSilentOnEveryPath:
 
         assert out.getvalue() == ""
         assert err.getvalue() == ""
+
+
+class TestSwallowedFailureIsRecorded:
+    """The swallow stays; the SILENCE ABOUT IT no longer extends to disk.
+
+    Silence to the operator was implemented as silence to everyone: the
+    captured output was discarded and the exception dropped, leaving a
+    function that writes to a shared install surface and, on failure, leaves
+    no evidence on the machine that it ran. See `_record_failure`'s own
+    docstring for the 2026-08-30 incident that cost.
+    """
+
+    @staticmethod
+    def _ledger(settings_home):
+        from coordinator_core.install import forwarder_self_heal as mod
+
+        return Path(settings_home).joinpath(*mod._FAILURE_LEDGER_RELATIVE)
+
+    def test_clean_run_writes_no_ledger(self, monkeypatch, tmp_path):
+        from coordinator_core.install import forwarder_self_heal as mod
+
+        monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))
+        monkeypatch.setattr(mod, "_self_heal_forwarders_inner", lambda: None)
+
+        mod.self_heal_forwarders()
+
+        assert not self._ledger(tmp_path).exists()
+
+    def test_raising_run_records_exception_traceback_and_captured_output(
+        self, monkeypatch, tmp_path
+    ):
+        import json
+
+        from coordinator_core.install import forwarder_self_heal as mod
+
+        monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))
+
+        def _boom():
+            print("[install-substrate] mid-write noise")
+            raise PermissionError(13, "Access is denied")
+
+        monkeypatch.setattr(mod, "_self_heal_forwarders_inner", _boom)
+
+        assert mod.self_heal_forwarders() is None
+
+        ledger = self._ledger(tmp_path)
+        row = json.loads(ledger.read_text(encoding="utf-8").strip())
+        assert "PermissionError" in row["exception"]
+        assert "_boom" in row["traceback"]
+        assert "mid-write noise" in row["captured_stdout"]
+        assert row["pid"] and row["at"]
+
+    def test_a_ledger_that_cannot_be_written_still_never_raises(
+        self, monkeypatch, tmp_path
+    ):
+        """An instrument that can fail a session boot is worse than none."""
+        from coordinator_core.install import forwarder_self_heal as mod
+
+        monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))
+        monkeypatch.setattr(
+            mod, "_self_heal_forwarders_inner", lambda: (_ for _ in ()).throw(RuntimeError("x"))
+        )
+
+        def _no_settings_home():
+            raise RuntimeError("settings-home unresolvable")
+
+        monkeypatch.setattr(
+            "coordinator_core._settings_home.settings_home", _no_settings_home
+        )
+
+        assert mod.self_heal_forwarders() is None

@@ -3291,3 +3291,137 @@ def test_main_does_not_release_when_the_coordinator_path_suppressed_it(monkeypat
 
     assert auto_push.main([]) == 0
     assert released == []
+
+
+# ---------------------------------------------------------------------------
+# _push_would_be_a_noop -- the spawn-free gate ahead of the interpreter respawn
+# ---------------------------------------------------------------------------
+
+_SHA_A = "a" * 40
+_SHA_B = "b" * 40
+
+
+def _write_ref(common_dir, ref, sha):
+    p = common_dir / ref
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(sha, encoding="utf-8")
+
+
+@pytest.fixture
+def _common_dir(monkeypatch, tmp_path):
+    from coordinator_core.git import git_state
+
+    monkeypatch.setattr(git_state, "resolve_git_common_dir", lambda root: tmp_path)
+    return tmp_path
+
+
+def test_noop_gate_true_when_local_and_remote_refs_match(_common_dir):
+    _write_ref(_common_dir, "refs/heads/wip", _SHA_A)
+    _write_ref(_common_dir, "refs/remotes/origin/wip", _SHA_A)
+    assert auto_push._push_would_be_a_noop(str(_common_dir), "wip") is True
+
+
+def test_noop_gate_false_when_local_is_ahead(_common_dir):
+    _write_ref(_common_dir, "refs/heads/wip", _SHA_A)
+    _write_ref(_common_dir, "refs/remotes/origin/wip", _SHA_B)
+    assert auto_push._push_would_be_a_noop(str(_common_dir), "wip") is False
+
+
+def test_noop_gate_fails_open_when_never_pushed(_common_dir):
+    _write_ref(_common_dir, "refs/heads/wip", _SHA_A)
+    assert auto_push._push_would_be_a_noop(str(_common_dir), "wip") is False
+
+
+def test_noop_gate_fails_open_on_unborn_branch(_common_dir):
+    assert auto_push._push_would_be_a_noop(str(_common_dir), "wip") is False
+
+
+def test_noop_gate_fails_open_when_common_dir_read_raises(monkeypatch, tmp_path):
+    from coordinator_core.git import git_state
+
+    def _boom(root):
+        raise OSError("no common dir")
+
+    monkeypatch.setattr(git_state, "resolve_git_common_dir", _boom)
+    assert auto_push._push_would_be_a_noop(str(tmp_path), "wip") is False
+
+
+def test_noop_gate_reads_packed_refs_when_loose_refs_absent(_common_dir):
+    lines = [
+        "# pack-refs with: peeled fully-peeled sorted",
+        _SHA_A + " refs/heads/wip",
+        _SHA_A + " refs/remotes/origin/wip",
+    ]
+    (_common_dir / "packed-refs").write_text(chr(10).join(lines), encoding="utf-8")
+    assert auto_push._push_would_be_a_noop(str(_common_dir), "wip") is True
+
+
+def test_noop_gate_skips_comment_and_peeled_lines_in_packed_refs(_common_dir):
+    lines = [
+        "# pack-refs with: peeled fully-peeled sorted",
+        _SHA_B + " refs/tags/v1",
+        "^" + _SHA_A,
+        _SHA_A + " refs/heads/wip",
+        _SHA_B + " refs/remotes/origin/wip",
+    ]
+    (_common_dir / "packed-refs").write_text(chr(10).join(lines), encoding="utf-8")
+    assert auto_push._push_would_be_a_noop(str(_common_dir), "wip") is False
+
+
+def test_noop_gate_prefers_the_loose_ref_over_packed_refs(_common_dir):
+    # A stale packed-refs entry must not decide the gate when a loose ref exists.
+    _write_ref(_common_dir, "refs/heads/wip", _SHA_B)
+    _write_ref(_common_dir, "refs/remotes/origin/wip", _SHA_A)
+    lines = [_SHA_A + " refs/heads/wip", _SHA_A + " refs/remotes/origin/wip"]
+    (_common_dir / "packed-refs").write_text(chr(10).join(lines), encoding="utf-8")
+    assert auto_push._push_would_be_a_noop(str(_common_dir), "wip") is False
+
+
+def _stub_main_preamble(monkeypatch, tmp_path):
+    """Same idiom as the respawn-loop guard test above: a real repo_root
+    on disk plus a stubbed `_run_git`, so `main()` reaches the async leg
+    without touching git."""
+    (tmp_path / ".git").mkdir(exist_ok=True)
+    monkeypatch.setattr(auto_push, "resolve_branch", lambda root: "work/foo")
+    monkeypatch.setattr(auto_push, "branch_gate", lambda b: (True, None))
+    monkeypatch.setattr(auto_push, "_release_claims_for_head", lambda root: None)
+    return str(tmp_path)
+
+
+def test_main_skips_the_interpreter_respawn_when_push_would_be_a_noop(
+    monkeypatch, tmp_path
+):
+    detach_calls = []
+    monkeypatch.setattr(
+        auto_push, "_detach_and_run", lambda *a, **k: detach_calls.append(a)
+    )
+    repo_root = _stub_main_preamble(monkeypatch, tmp_path)
+    monkeypatch.setattr(auto_push, "_push_would_be_a_noop", lambda root, b: True)
+
+    assert auto_push.main(["--repo-root", repo_root]) == 0
+    assert detach_calls == []
+
+
+def test_main_still_respawns_when_the_gate_declines(monkeypatch, tmp_path):
+    detach_calls = []
+    monkeypatch.setattr(
+        auto_push, "_detach_and_run", lambda *a, **k: detach_calls.append(a)
+    )
+    repo_root = _stub_main_preamble(monkeypatch, tmp_path)
+    monkeypatch.setattr(auto_push, "_push_would_be_a_noop", lambda root, b: False)
+
+    assert auto_push.main(["--repo-root", repo_root]) == 0
+    assert len(detach_calls) == 1
+
+
+def test_sync_leg_is_not_gated(monkeypatch, tmp_path):
+    # --no-async pays no interpreter start, so the gate must not touch it.
+    pushed = []
+    monkeypatch.setattr(
+        auto_push, "run_push_with_retry", lambda root, b, **k: pushed.append(b)
+    )
+    repo_root = _stub_main_preamble(monkeypatch, tmp_path)
+    monkeypatch.setattr(auto_push, "_push_would_be_a_noop", lambda root, b: True)
+
+    assert auto_push.main(["--no-async", "--repo-root", repo_root]) == 0
+    assert pushed == ["work/foo"]

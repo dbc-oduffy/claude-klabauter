@@ -272,6 +272,26 @@ def resolve_session_id(_repo_root: Path) -> str:
 #: diagnostic on it for exactly that reason.
 SOURCE_LEGACY_EM_SID = "em_sid"
 
+#: `resolve_session_id_with_source(...).source` when the ENGINE COPY this CLI
+#: is calling predates provenance reporting. Says "nobody asked" rather than
+#: naming an input, because none was read: the id is correct, its provenance
+#: is simply not available from that copy. Distinct from `unresolved` (no id
+#: at all) and from `resolved-source-unaccounted` (the engine reported and
+#: could not account for it) -- three different facts, three values.
+SOURCE_UNREPORTED_OLD_ENGINE = "unreported-engine-predates-provenance"
+
+
+class _FallbackResolution(NamedTuple):
+    """Structural stand-in for `session.core.SessionIdResolution` when the
+    engine copy does not define it. Same four fields in the same order, so
+    every reader (`compute_session_shape_gate`, this module's own callers)
+    is indifferent to which one it got."""
+
+    session_id: str
+    source: str
+    warm: bool
+    pid: int
+
 
 def resolve_session_id_with_source(_repo_root=None):
     """`resolve_session_id`, plus WHICH INPUT named the session and under
@@ -295,17 +315,47 @@ def resolve_session_id_with_source(_repo_root=None):
     `SOURCE_LEGACY_EM_SID`.
     """
     core = _session_core()
+    with_source = getattr(core, "attributable_session_id_with_source", None)
+    record = getattr(core, "SessionIdResolution", None)
+    if with_source is None or record is None:
+        # SPLIT-COPY DEGRADE, and it is load-bearing, not defensive padding.
+        # This bin script and the engine it calls are DIFFERENT COPIES on this
+        # box: `.cmd`/`.exe` both resolve the engine from the published
+        # klabauter mirror while the CLI runs from the repo tree, so a
+        # provenance accessor that landed here has not landed there until a
+        # publish round. Calling it unguarded took the whole close ceremony
+        # down through the cold door -- an AttributeError inside `brief`'s
+        # structural backstop, hit the first time this ran for real. The
+        # resolution itself needs no new engine surface, so degrade to it and
+        # report the provenance as unavailable rather than inventing one.
+        return _FallbackResolution(
+            session_id=_resolve_session_id_engine_only(core),
+            source=SOURCE_UNREPORTED_OLD_ENGINE,
+            warm=bool(core.in_warm_served_request()),
+            pid=os.getpid(),
+        )
     if core.in_warm_served_request():
-        return core.attributable_session_id_with_source()
+        return with_source()
     legacy = os.environ.get("em_sid", "")
     if legacy:
-        return core.SessionIdResolution(
+        return record(
             session_id=legacy,
             source=SOURCE_LEGACY_EM_SID,
             warm=False,
             pid=os.getpid(),
         )
-    return core.attributable_session_id_with_source()
+    return with_source()
+
+
+def _resolve_session_id_engine_only(core) -> str:
+    """The id alone, through whichever accessor this engine copy has.
+
+    `attributable_session_id` is the warm/cold-correct one and is what every
+    current engine carries; the `resolve_session_id` arm is for a copy older
+    than that accessor too, where blending is the pre-existing behaviour and
+    refusing outright would break every close against it."""
+    accessor = getattr(core, "attributable_session_id", None) or core.resolve_session_id
+    return accessor() or ""
 
 
 # ---------------------------------------------------------------------------

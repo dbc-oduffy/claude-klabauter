@@ -715,15 +715,29 @@ def compute_session_shape_gate(repo_root: Path) -> SessionShapeGate:
     `single-session` and reads downstream as a clean close.
     """
     mod = _load_session_disposition_module()
-    resolved = mod.resolve_session_id_with_source(repo_root)
-    sid = resolved.session_id
-    sid_source = {"source": resolved.source, "warm": resolved.warm, "pid": resolved.pid}
+    # The mirror of the bin script's own engine-copy degrade: that module is
+    # loaded BY PATH from whichever tree `claude_klabauter_bin` resolves to, so it can
+    # be OLDER than this engine just as easily as newer. `getattr` in both
+    # directions, matching how `detection` is read below.
+    with_source = getattr(mod, "resolve_session_id_with_source", None)
+    if with_source is None:
+        sid = mod.resolve_session_id(repo_root)
+        sid_source = None
+    else:
+        resolved = with_source(repo_root)
+        sid = resolved.session_id
+        sid_source = {
+            "source": resolved.source,
+            "warm": resolved.warm,
+            "pid": resolved.pid,
+        }
     if not sid:
         raise SessionIdentityUnresolved(
             "/workstream-complete cannot identify the calling session, so it will not "
             "build a close ceremony that would be attributed to whichever session the "
             "engine happens to name. Resolution reported "
-            f"source={resolved.source!r} warm={resolved.warm} pid={resolved.pid}. "
+            f"source={(sid_source or {}).get('source', 'unavailable')!r} "
+            f"warm={(sid_source or {}).get('warm')} pid={(sid_source or {}).get('pid')}. "
             "Warm: the request carried no identity (the door sent no _session_id); "
             "cold: no tier of em_sid/COORDINATOR_SESSION_ID/CLAUDE_SESSION_ID/"
             "CLAUDE_CODE_SESSION_ID resolved. Re-run through the cold door, or set "
@@ -732,7 +746,7 @@ def compute_session_shape_gate(repo_root: Path) -> SessionShapeGate:
     resolution = mod.resolve_disposition(repo_root, sid)
     disposition, consumed_handoff, diagnostics, consumed_handoff_paths = resolution
     detection = dict(getattr(resolution, "detection", None) or {})
-    if resolved.source == _LEGACY_EM_SID_SOURCE:
+    if (sid_source or {}).get("source") == _LEGACY_EM_SID_SOURCE:
         # The one surviving way a COLD close can key itself to a session that
         # already ended: `em_sid` is exported by a shell, not by the harness,
         # so it outlives the session that set it and no ratchet scans for it.

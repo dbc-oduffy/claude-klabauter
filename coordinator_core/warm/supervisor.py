@@ -374,7 +374,12 @@ def unlink_discovery(
     owner_pid: Optional[int] = None,
 ) -> None:
     """Best-effort remove the discovery file -- mirrors `breadcrumb.
-    unlink_breadcrumb`'s never-raises contract.
+    unlink_breadcrumb`'s never-raises contract. The owner-checked branch
+    below additionally swallows `locked_write.LockTimeout`: contention on
+    `held_lock` past its own timeout is reachable at this repo's stated
+    50-70 concurrent-session load norm, and letting it escape would abort
+    `_ServerContext.ctx_shutdown` before `_release_election_handle` runs,
+    permanently leaking the won election handle. Never raises, full stop.
 
     `owner_pid` makes the unlink OWNERSHIP-CHECKED, exactly as
     `breadcrumb.unlink_breadcrumb` and `election.unlink_if_owned` already
@@ -407,16 +412,23 @@ def unlink_discovery(
         # the caller's own stale one. `write_discovery` already takes this
         # same lock for every write, so holding it here serialises against
         # every writer rather than only the read.
-        with locked_write.held_lock(path, holder_label="warm.supervisor"):
-            record = read_discovery(engine_root)
-            if record is None:
-                return
-            if record.get("pid") != owner_pid:
-                return
-            try:
-                path.unlink()
-            except OSError:
-                pass
+        try:
+            with locked_write.held_lock(path, holder_label="warm.supervisor"):
+                record = read_discovery(engine_root)
+                if record is None:
+                    return
+                if record.get("pid") != owner_pid:
+                    return
+                try:
+                    path.unlink()
+                except OSError:
+                    pass
+        except locked_write.LockTimeout:
+            # Review: code-reviewer -- contention past `held_lock`'s own
+            # timeout must not escape this never-raises contract; a caller
+            # (`ctx_shutdown`) relying on that contract to reach its own
+            # handle release must not see this branch raise.
+            pass
         return
     try:
         path.unlink()
@@ -857,19 +869,30 @@ class _ServerContext:
 
     def ctx_shutdown(self) -> None:
         self._skew_watchdog_stop.set()
-        # Before the discovery unlink, matching `warm.server`'s own step-3
-        # ordering: `flush` never raises, so it cannot cost the unlink, and a
-        # row written first is a row that survives a crash between the two.
-        self.telemetry.flush(engine_root=self.engine_root)
-        # Ownership-checked: an orphaned or superseded listener exiting must
-        # not delete the LIVE listener's record. See `unlink_discovery`.
-        unlink_discovery(self.engine_root, owner_pid=os.getpid())
-        # Release the election lock LAST, after the discovery record this
-        # process owned is gone -- a competitor that wins the election the
-        # instant it is released must never find a stale record naming a
-        # pid that is already exiting.
-        _release_election_handle(self._election_handle)
-        self._election_handle = None
+        # Review: code-reviewer (Finding 2) -- `telemetry.flush` and
+        # `unlink_discovery` are each best-effort/never-raises BY CONTRACT,
+        # but the handle release must not sit downstream of either one's
+        # ABILITY to raise: this failure mode is unrecoverable (a leaked
+        # election handle wedges the pipe name for process lifetime), so
+        # defence-in-depth here is correct even after fixing the root cause
+        # at `unlink_discovery`'s own `LockTimeout` swallow.
+        try:
+            # Before the discovery unlink, matching `warm.server`'s own
+            # step-3 ordering: `flush` never raises, so it cannot cost the
+            # unlink, and a row written first is a row that survives a
+            # crash between the two.
+            self.telemetry.flush(engine_root=self.engine_root)
+            # Ownership-checked: an orphaned or superseded listener exiting
+            # must not delete the LIVE listener's record. See
+            # `unlink_discovery`.
+            unlink_discovery(self.engine_root, owner_pid=os.getpid())
+        finally:
+            # Release the election lock LAST, after the discovery record
+            # this process owned is gone -- a competitor that wins the
+            # election the instant it is released must never find a stale
+            # record naming a pid that is already exiting.
+            _release_election_handle(self._election_handle)
+            self._election_handle = None
 
     def stop(self) -> None:
         lifecycle.begin_shutdown(
@@ -1442,12 +1465,24 @@ def main() -> int:
         _release_election_handle(handle)
         return 3
 
-    httpd = ThreadingHTTPServer(("127.0.0.1", 0), _NotYetBound)
-    version_state = skew.ServerVersionState(root)
+    # Review: code-reviewer (Finding 1) -- between the credential check
+    # passing and `ctx` being successfully constructed, `handle` is owned
+    # by nothing: `ThreadingHTTPServer` can raise on bind failure,
+    # `skew.ServerVersionState` can raise, and `_ServerContext.__init__`
+    # can raise inside `_compute_engine_token` or the telemetry
+    # constructor. `except BaseException`, not `Exception` -- a
+    # `KeyboardInterrupt`/`SystemExit` mid-construction leaks the handle
+    # exactly as permanently as any other exception here.
+    try:
+        httpd = ThreadingHTTPServer(("127.0.0.1", 0), _NotYetBound)
+        version_state = skew.ServerVersionState(root)
 
-    _declare_execution_route()
+        _declare_execution_route()
 
-    ctx = _ServerContext(httpd=httpd, engine_root=root, version_state=version_state, election_handle=handle)
+        ctx = _ServerContext(httpd=httpd, engine_root=root, version_state=version_state, election_handle=handle)
+    except BaseException:
+        _release_election_handle(handle)
+        raise
     httpd.RequestHandlerClass = _make_handler(ctx)
 
     port = httpd.server_address[1]
@@ -1468,9 +1503,13 @@ def main() -> int:
     # is not the idle watchdog `warm.server` runs. Started after the
     # discovery write so a poll landing before the first write sees this
     # context's own `engine_token`, never a torn boot sequence.
-    threading.Thread(target=ctx._skew_watchdog_loop, daemon=True, name="warm-http-skew-watchdog").start()
-
+    # Review: code-reviewer (Finding 3) -- `try:` moved up to cover the
+    # thread start too: `ctx` already owns the election handle by this
+    # point, and `threading.Thread(...).start()` can raise `RuntimeError`
+    # under resource exhaustion, which must not leak the handle any more
+    # than a `serve_forever()` failure would.
     try:
+        threading.Thread(target=ctx._skew_watchdog_loop, daemon=True, name="warm-http-skew-watchdog").start()
         httpd.serve_forever()
     finally:
         ctx.ctx_shutdown()

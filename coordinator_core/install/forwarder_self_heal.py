@@ -75,6 +75,7 @@ drift incident, 2026-08-14).
 from __future__ import annotations
 
 import sys
+import traceback
 from pathlib import Path
 
 
@@ -110,10 +111,75 @@ def self_heal_forwarders() -> None:
     import contextlib
     import io
 
+    out, err = io.StringIO(), io.StringIO()
     try:
-        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
             _self_heal_forwarders_inner()
-    except Exception:
+    except Exception as exc:  # noqa: BLE001 -- the swallow IS the contract; see below
+        _record_failure(exc, out.getvalue(), err.getvalue())
+        return
+
+
+#: Failure ledger this module appends to when its swallowed work raises.
+#: Under `<settings-home>/state/`, never the repo: this writes on a machine
+#: whose engine may be any clone, and the failure is a property of the BOX.
+_FAILURE_LEDGER_RELATIVE = ("state", "forwarder-self-heal-failures.jsonl")
+
+
+def _record_failure(exc: BaseException, captured_stdout: str, captured_stderr: str) -> None:
+    """Appends one JSON line describing a swallowed self-heal failure.
+
+    WHY THIS EXISTS, AND WHY IT IS A FILE RATHER THAN A PRINT. The swallow
+    above is deliberate and stays -- a session must not fail to start because
+    a convenience refresh could not run, and the PM ruling this module
+    implements ("don't warn about it, just install it") forbids putting the
+    advisory back on the boot path. But silence-to-the-operator was
+    implemented as silence-to-EVERYONE: the captured stdout/stderr was
+    discarded and the exception dropped with a bare `return`, leaving a
+    function that WRITES TO A SHARED INSTALL SURFACE and, on failure, leaves
+    no evidence anywhere on the machine that it ran at all.
+
+    That is not a hypothetical cost. On 2026-08-30 the installed door image
+    at `<settings-home>/bin/` was replaced without its provenance sidecar or
+    engine-root sidecar being updated alongside it -- a partial write of the
+    exact shape a failure part-way through `door_install.install_door` would
+    leave. Four separate instruments (both sidecars' mtimes, every session
+    transcript on the box, and the NTFS USN journal) were unable to name the
+    writer, because this path is the one door-touching caller on a session
+    boot that produces no output, no log, and no exit code. The provenance
+    defect itself is fixed elsewhere (`build.py :: write_provenance`'s
+    `image_sha256`); this closes the attribution gap that made it
+    unhuntable.
+
+    Costs nothing on the clean path: no ledger write happens unless the work
+    actually raised, which is the overwhelmingly common case's opposite. Any
+    failure to write the ledger is itself swallowed -- an instrument that can
+    fail a session boot is worse than no instrument.
+    """
+    import json
+    import os
+    import time
+
+    try:
+        from coordinator_core._settings_home import settings_home
+
+        ledger = Path(settings_home()).joinpath(*_FAILURE_LEDGER_RELATIVE)
+        ledger.parent.mkdir(parents=True, exist_ok=True)
+        row = {
+            "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "pid": os.getpid(),
+            "session_id": os.environ.get("CLAUDE_CODE_SESSION_ID") or None,
+            "cwd": os.getcwd(),
+            "exception": repr(exc),
+            "traceback": "".join(
+                traceback.format_exception(type(exc), exc, exc.__traceback__)
+            )[-4000:],
+            "captured_stdout": captured_stdout[-2000:],
+            "captured_stderr": captured_stderr[-2000:],
+        }
+        with ledger.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(row, sort_keys=True) + "\n")
+    except Exception:  # noqa: BLE001 -- an instrument must never fail a boot
         return
 
 

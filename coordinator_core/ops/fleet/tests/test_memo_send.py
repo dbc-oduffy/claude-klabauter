@@ -22,6 +22,7 @@ CLAUDE_HOME monkeypatched for machine-local registry isolation.
 
 from __future__ import annotations
 
+import datetime
 import json
 import subprocess
 from pathlib import Path
@@ -37,6 +38,7 @@ from coordinator_core.ops.fleet.memo_send import (
     _KNOWN_PARAM_KEYS,
     _MODE,
     _SENT_LEDGER_FILENAME,
+    _SENT_LEDGER_MAX_AGE_DAYS,
     _SENT_LEDGER_MAX_ROWS,
     _memo_send,
     _validate_send_params,
@@ -923,3 +925,82 @@ class TestLedgerIsABoundedRing:
             "truncated-row",
             "no-newline-topic",
         ]
+
+
+class TestLedgerIsBoundedInTimeToo:
+    """The row cap alone leaves a RARE sender's ledger unbounded in time.
+
+    claude-klabauter and DoE-claude send constantly, so 250 rows is ~2.5 days here and
+    the row cap is the bound that bites. Every other repo sends a handful a
+    month, where 250 rows is a year or more -- these tests are that repo's,
+    not ours.
+    """
+
+    def _send_over(self, tmp_path, monkeypatch, rows):
+        sender_repo = _make_sender_git_repo(tmp_path)
+        receiver_repo = _make_receiver_git_repo(tmp_path)
+        claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": receiver_repo})
+        monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
+        _write_draft(sender_repo, "age-topic")
+
+        ledger = sender_repo / "state" / "memo-outbox" / _SENT_LEDGER_FILENAME
+        ledger.parent.mkdir(parents=True, exist_ok=True)
+        ledger.write_text(
+            "".join(json.dumps(r) + "\n" for r in rows),
+            encoding="utf-8",
+            newline="\n",
+        )
+
+        result = _memo_send(
+            {"dry_run": False, "topic": "age-topic"}, repo_root=sender_repo
+        )
+        assert result["exit_code"] == 0, result
+        return [
+            json.loads(line)
+            for line in ledger.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+
+    @staticmethod
+    def _stamp(days_ago):
+        moment = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(
+            days=days_ago
+        )
+        return moment.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    def test_a_quiet_repos_stale_rows_age_out_well_under_the_row_cap(
+        self, tmp_path, monkeypatch
+    ):
+        """Three rows, nowhere near 250, and the old ones still go."""
+        rows = self._send_over(
+            tmp_path,
+            monkeypatch,
+            [
+                {"topic": "last-year", "sent_at": self._stamp(400)},
+                {"topic": "last-quarter", "sent_at": self._stamp(90)},
+                {"topic": "just-inside", "sent_at": self._stamp(_SENT_LEDGER_MAX_AGE_DAYS - 1)},
+            ],
+        )
+
+        assert [r["topic"] for r in rows] == ["just-inside", "age-topic"], rows
+
+    def test_a_row_that_cannot_prove_its_age_is_kept(self, tmp_path, monkeypatch):
+        """Rows predating `sent_at`, and any hand-written line, are the
+        OLDEST rows in a real ledger. Evicting them for failing to prove
+        their age would empty the file on the first append after this
+        shipped -- the row cap is what reaches them."""
+        rows = self._send_over(
+            tmp_path,
+            monkeypatch,
+            [
+                {"topic": "no-sent-at-field", "to": "peer-em"},
+                {"topic": "unparseable-stamp", "sent_at": "last Tuesday"},
+                {"topic": "ancient", "sent_at": self._stamp(400)},
+            ],
+        )
+
+        assert [r["topic"] for r in rows] == [
+            "no-sent-at-field",
+            "unparseable-stamp",
+            "age-topic",
+        ], rows

@@ -331,3 +331,108 @@ def test_the_gate_stays_json_serialisable_with_provenance_on_it(
     monkeypatch.setattr(wsc, "_load_session_disposition_module", _load_real_disposition_module)
     gate = wsc.compute_session_shape_gate(tmp_path)
     assert json.loads(json.dumps(gate._asdict()))["sid_source"]["source"] == "CLAUDE_SESSION_ID"
+
+
+# ---------------------------------------------------------------------------
+# Split-copy degrade — this bin script and the engine it calls are two copies
+# ---------------------------------------------------------------------------
+#
+# Found the hard way: the FIRST real `/workstream-complete` after the instrument
+# landed died with `module 'coordinator_core.session.core' has no attribute
+# 'attributable_session_id_with_source'`, inside `brief`'s structural backstop.
+# Both doors resolve the ENGINE from the published klabauter mirror while running
+# the CLI from the repo tree, so an accessor that lands here does not exist there
+# until a publish round — and an unguarded call takes the whole close ceremony
+# down for every session on the box, not just the one that changed it.
+#
+# The provenance is a nicety; the RESOLUTION is not. These pin that a copy skew
+# in either direction costs the provenance and never the close.
+
+
+def test_an_engine_without_provenance_still_resolves_the_session(
+    disposition_module, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The engine copy predates `attributable_session_id_with_source`."""
+    _clear_session_env(monkeypatch)
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", CALLER)
+
+    real_core = disposition_module._session_core()
+
+    class _OldEngine:
+        attributable_session_id = staticmethod(real_core.attributable_session_id)
+        resolve_session_id = staticmethod(real_core.resolve_session_id)
+        in_warm_served_request = staticmethod(real_core.in_warm_served_request)
+
+    monkeypatch.setattr(disposition_module, "_session_core", lambda: _OldEngine)
+    resolved = disposition_module.resolve_session_id_with_source(Path("."))
+    assert resolved.session_id == CALLER
+    assert resolved.source == "unreported-engine-predates-provenance"
+    assert resolved.warm is False
+
+
+def test_an_engine_without_even_the_warm_accessor_still_resolves(
+    disposition_module, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """One rung older still: no `attributable_session_id` either. Blending is
+    that copy's pre-existing behaviour, and refusing would break every close
+    against it — the degrade may not be stricter than the copy it degrades to."""
+    _clear_session_env(monkeypatch)
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", CALLER)
+
+    real_core = disposition_module._session_core()
+
+    class _OlderEngine:
+        resolve_session_id = staticmethod(real_core.resolve_session_id)
+        in_warm_served_request = staticmethod(real_core.in_warm_served_request)
+
+    monkeypatch.setattr(disposition_module, "_session_core", lambda: _OlderEngine)
+    assert disposition_module.resolve_session_id_with_source(Path(".")).session_id == CALLER
+
+
+def _pre_provenance_bin_module():
+    """A stand-in for a bin script predating `resolve_session_id_with_source`.
+
+    Built as a stand-in rather than by deleting the attribute off the real
+    module: that module's `resolve_session_id` DELEGATES to the provenance
+    function, so removing the one leaves the other raising `NameError` — a
+    shape no released copy of this file ever had, and a test that would then
+    pin a failure mode that cannot occur.
+    """
+    real = _load_real_disposition_module()
+
+    class _OldBinModule:
+        resolve_session_id = staticmethod(
+            lambda repo_root=None: real._session_core().attributable_session_id() or ""
+        )
+        resolve_disposition = staticmethod(real.resolve_disposition)
+
+    return _OldBinModule
+
+
+def test_an_older_bin_script_costs_provenance_not_the_close(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Skew the other way: this engine, a bin script that predates the
+    provenance function. `sid_source` is absent; the gate still computes."""
+    _clear_session_env(monkeypatch)
+    monkeypatch.setenv("COORDINATOR_SESSION_ID", CALLER)
+    monkeypatch.setattr(
+        wsc, "_load_session_disposition_module", lambda: _pre_provenance_bin_module()
+    )
+    gate = wsc.compute_session_shape_gate(tmp_path)
+    assert gate.sid == CALLER
+    assert gate.sid_source is None
+
+
+def test_the_refusal_survives_an_older_bin_script(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The hard stop must not depend on the provenance it likes to quote."""
+    _clear_session_env(monkeypatch)
+    monkeypatch.setattr(
+        wsc, "_load_session_disposition_module", lambda: _pre_provenance_bin_module()
+    )
+    with warm_served_request(True):
+        with pytest.raises(wsc.SessionIdentityUnresolved) as excinfo:
+            wsc.compute_session_shape_gate(tmp_path)
+    assert "source='unavailable'" in str(excinfo.value)

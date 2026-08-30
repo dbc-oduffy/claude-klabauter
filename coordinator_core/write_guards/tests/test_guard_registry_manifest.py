@@ -70,6 +70,7 @@ _EXPECTED_GUARD_NAMES = frozenset(
         "nudge_prose_queue_append",
         "nudge_prose_queue_creation",
         "nudge_sentinel_retained_review_sidecar",
+        "nudge_session_display_name_as_identifier",
         "nudge_shell_shaped_spawn",
         "nudge_tasks_state_folder_split",
         "nudge_terminal_artifact_edit",
