@@ -832,6 +832,9 @@ def main(argv: list[str] | None = None) -> int:
         # that shells out to this CLI (coordinator-harvest-deferrals.py)
         # only ever branches on `returncode != 0`, never on the specific
         # code, so a distinct exit code would buy no caller anything today.
+        # foreign-identity: SUBJECT — names which prerequisite checkout (claude-klabauter,
+        # not e.g. DoE-claude) failed to resolve, context the appended {exc} resolver
+        # diagnostic needs to be actionable; reachable from any repo via routine lesson capture.
         print(
             f"warn: coordinator-lesson-promote: claude-klabauter root unresolvable — "
             f"skipping central lessons-outbox write: {exc}",

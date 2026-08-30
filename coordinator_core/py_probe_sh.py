@@ -95,6 +95,9 @@ def _sh_double_quote_escape(value: str) -> str:
 
 
 def baked_python_lines(var: str = "_py") -> str:
+    # foreign-identity: OUT-OF-CLASS — the "claude-klabauter-59" citation at
+    # line 143 below is prose inside this function's docstring, not
+    # agent-facing rendered runtime text (per C6 brief note on this site)
     """Return POSIX-sh source assigning a BAKED interpreter path to `<var>`,
     instead of walking `$PATH` at hook-run time.
 

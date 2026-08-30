@@ -170,6 +170,132 @@ def test_the_warm_flag_unwinds_so_a_later_cold_claim_check_is_unaffected(
 
 
 # ---------------------------------------------------------------------------
+# AC7 residual -- the two pickup_assemble callers that omit `my_sid`
+#
+# AC7 closed the mutex itself. It left `claim_held_by_me`'s two callers in
+# `pickup_assemble` still calling it bare, so a session that had ALREADY
+# resolved its identity (an explicit `--session-id`, or an id carried over
+# the wire) and entered `apply_base.session_identity()` with it was told it
+# did not hold its own claim -- `pickup-assemble apply --session-id <mine>`
+# self-denying on a claim recorded under exactly that id.
+# ---------------------------------------------------------------------------
+
+
+def _pickup_claim_dir(repo: Path, class_: str, basename: str, holder: str) -> Path:
+    d = repo / ".git" / "coordinator-sessions" / f"{class_}-claims" / basename
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "session_id").write_text(holder, encoding="utf-8")
+    (d / "stage").write_text("apply" + chr(10), encoding="utf-8")
+    return d
+
+
+def test_compute_claim_grant_honours_the_identity_its_caller_scoped(
+    tmp_path, ambient_is_the_server_owner
+):
+    """The residual defect, in one assertion.
+
+    The claim is held by `_CALLER`, the caller entered `session_identity`
+    with `_CALLER`, and the ambient environment names the server owner.
+    Pre-fix `compute_claim_grant` called `claim_held_by_me` bare, the mutex
+    correctly refused the ambient id, and the session was denied its own
+    claim.
+    """
+    import coordinator_core.pickup_assemble as pa
+    from coordinator_core.contract import apply_base
+
+    repo = tmp_path / "repo"
+    (repo / "state" / "handoffs").mkdir(parents=True, exist_ok=True)
+    _pickup_claim_dir(repo, "handoff", "h1.md", _CALLER)
+
+    with session_core.warm_served_request():
+        with apply_base.session_identity(_CALLER):
+            grant = pa.compute_claim_grant(
+                repo, "handoff", "h1.md", "state/handoffs/h1.md", cwd=str(repo)
+            )
+
+    assert grant["held_by_self"] is True, (
+        "a session that resolved its own identity and scoped it was refused "
+        "its own claim -- `pickup-assemble apply --session-id <mine>` "
+        "self-denies on exactly this path"
+    )
+    assert grant["verdict"] == "granted"
+
+
+def test_claim_already_self_held_honours_the_identity_its_caller_scoped(
+    tmp_path, ambient_is_the_server_owner
+):
+    """The same residual at the second caller.
+
+    `_claim_already_self_held` gates `apply`'s idempotent same-session
+    re-entry; refusing here makes a re-apply re-invoke `claim_artifact`,
+    which rejects a same-session memo reclaim by design and raises.
+    """
+    import coordinator_core.pickup_assemble as pa
+    from coordinator_core.contract import apply_base
+
+    repo = tmp_path / "repo"
+    repo.mkdir(parents=True, exist_ok=True)
+    _pickup_claim_dir(repo, "memo", "m1.md", _CALLER)
+
+    with session_core.warm_served_request():
+        with apply_base.session_identity(_CALLER):
+            held = pa._claim_already_self_held(repo, "memo", "m1.md")
+
+    assert held is True
+
+
+def test_pickup_callers_still_fail_closed_with_nothing_scoped(
+    tmp_path, ambient_is_the_server_owner
+):
+    """Fail-closed is not relaxed -- only widened to admit a caller that
+    resolved identity itself.
+
+    No `session_identity` scope is entered, the claim is recorded under the
+    SERVER OWNER, and the ambient environment says this process IS the
+    server owner. That is the fixture AC7 exists for, and both callers must
+    still refuse. If this goes red, the `my_sid` threading has reintroduced
+    the ambient grant through the parameter meant to close it.
+    """
+    import coordinator_core.pickup_assemble as pa
+
+    repo = tmp_path / "repo"
+    (repo / "state" / "handoffs").mkdir(parents=True, exist_ok=True)
+    _pickup_claim_dir(repo, "handoff", "h1.md", _SERVER_OWNER)
+    _pickup_claim_dir(repo, "memo", "m1.md", _SERVER_OWNER)
+
+    with session_core.warm_served_request():
+        grant = pa.compute_claim_grant(
+            repo, "handoff", "h1.md", "state/handoffs/h1.md", cwd=str(repo)
+        )
+        held = pa._claim_already_self_held(repo, "memo", "m1.md")
+
+    assert grant["held_by_self"] is False
+    assert held is False
+
+
+def test_cold_pickup_callers_still_recognise_their_own_claim(
+    tmp_path, ambient_is_the_server_owner
+):
+    """Cold is the case where the environment IS the caller -- unchanged.
+
+    No scope, no warm flag: both callers must still resolve off the ambient
+    environment exactly as they did before.
+    """
+    import coordinator_core.pickup_assemble as pa
+
+    repo = tmp_path / "repo"
+    (repo / "state" / "handoffs").mkdir(parents=True, exist_ok=True)
+    _pickup_claim_dir(repo, "handoff", "h1.md", _SERVER_OWNER)
+    _pickup_claim_dir(repo, "memo", "m1.md", _SERVER_OWNER)
+
+    grant = pa.compute_claim_grant(
+        repo, "handoff", "h1.md", "state/handoffs/h1.md", cwd=str(repo)
+    )
+    assert grant["held_by_self"] is True
+    assert pa._claim_already_self_held(repo, "memo", "m1.md") is True
+
+
+# ---------------------------------------------------------------------------
 # AC8 -- the touch-record mint
 # ---------------------------------------------------------------------------
 

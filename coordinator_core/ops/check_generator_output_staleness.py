@@ -404,6 +404,7 @@ def compute_vendored_pair_staleness(peer_repo_root: Path, pair: VendoredPair) ->
         return {"artifact": pair.artifact, "verdict": Verdict.UNSTAMPED, "detail": detail}
 
     sha = stamp["sha"]
+    # foreign-identity: SUBJECT — provenance cite; the DoE-claude SHA/commit reference is the payload of the message (audit row 29)
     cite = f"DoE-claude@{sha}"
 
     if stamp["dirty"]:
@@ -450,6 +451,7 @@ def compute_vendored_staleness() -> dict[str, dict[str, Any]]:
     """
     peer_root = resolve_peer_repo_path()
     if peer_root is None:
+        # foreign-identity: SUBJECT — provenance cite; the DoE-claude SHA/commit reference is the payload of the message (audit row 29)
         return {
             "<DoE-claude clone unresolved>": {
                 "artifact": None,
@@ -460,6 +462,7 @@ def compute_vendored_staleness() -> dict[str, dict[str, Any]]:
 
     results: dict[str, dict[str, Any]] = {}
     for pair in VENDORED_PAIRS:
+        # foreign-identity: SUBJECT — provenance cite; the DoE-claude SHA/commit reference is the payload of the message (audit row 29)
         results[f"DoE-claude:{pair.artifact}"] = compute_vendored_pair_staleness(peer_root, pair)
     return results
 

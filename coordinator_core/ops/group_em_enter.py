@@ -30,11 +30,22 @@ DEGRADE, NEVER RAISE. Each leg's own exception is caught HERE (not inside
 the leg module, which is untouched) and reported as `null` for that key
 plus a `<key>_error` sibling string, via the shared `_leg` write helper
 (overengineering review finding 9: the four legs used to repeat this
-result-write by hand). Two independent legs, not four: nomination is
-independent of the roster; digest and baseline both consume the roster
-leg's output and fan out to three keys total, so a raising roster leg
-cascades -- digest and baseline both go `null` too, each carrying
-`"roster-leg-failed"` rather than their own exception text. This mirrors
+result-write by hand). THREE independent legs, not four and not two:
+nomination stands alone; baseline consumes the peer ENUMERATION; only
+digest consumes the roster leg's output. So a raising roster leg cascades
+to digest ALONE -- digest goes `null` carrying `"roster-leg-failed"` rather
+than its own exception text, while nomination and baseline still populate.
+A failing ENUMERATION is the wider blast radius: it takes roster and
+baseline together, and digest after roster.
+
+  Corrected 2026-08-30. This paragraph previously said digest AND baseline
+  both cascade from the roster, which was true of the code as written and
+  wrong as a design. Baseline was being fed the classified roster, so
+  `exited` meant "stopped being a paused candidate" -- a peer that resumed
+  work, or that the classifier simply failed to reach a verdict on, was
+  reported as having left. Baseline now diffs the enumeration directly.
+
+This mirrors
 `session.peer_roster`'s own degrade-not-raise discipline (that op relies on
 `peer_roster.build_roster`'s internal degrade; this op applies the same
 per-leg degrade at this composition layer, with the roster dependency named
@@ -142,11 +153,13 @@ def _run_nomination(repo_root: str, caller_session_id: str) -> tuple[Optional[di
         return None, _leg_error(exc)
 
 
-def _run_roster(repo_root: str, caller_session_id: str) -> tuple[Optional[list], Optional[str]]:
+def _run_roster(
+    repo_root: str, caller_session_id: str, agents: Optional[list] = None
+) -> tuple[Optional[list], Optional[str]]:
     try:
         return (
             group_em_read_pass.build_candidate_roster(
-                repo_root, caller_session_id_value=caller_session_id
+                repo_root, agents=agents, caller_session_id_value=caller_session_id
             ),
             None,
         )
@@ -166,16 +179,33 @@ def _run_digest(
 
 
 def _run_baseline(
-    repo_root: str, roster: Optional[list], caller_session_id: str
+    repo_root: str, agents: Optional[list], caller_session_id: str
 ) -> tuple[Optional[dict], Optional[str]]:
-    if roster is None:
-        return None, "roster-leg-failed"
+    """Diff the ENUMERATED PEER SET -- never the candidate roster.
+
+    The population this leg tracks is "every peer session in this repo", not
+    "the peers currently eligible to be nudged". Feeding it the roster (as
+    this leg did until 2026-08-30) makes `exited` mean "stopped being a
+    paused candidate", so a peer that merely resumed work is reported as
+    having left, and a peer the reader failed to classify this tick is
+    reported as having left twice over. Both were observed: the roster
+    oscillated 0 -> 3 -> 0 across three ticks while only ONE of the three
+    sessions had actually gone away.
+
+    `state` carries the live harness status, so a busy -> idle transition
+    lands in the diff's `changed` list. That transition is the signal a Group
+    EM is watching for; deriving `state` from the roster's paused-verdict
+    instead made it unobservable.
+    """
+    if agents is None:
+        return None, "enumeration-leg-failed"
     try:
         repo_key = group_em_nomination.repo_key(repo_root)
+        peers = group_em_read_pass.enumerate_repo_peers(agents, caller_session_id)
         current_peers = {
-            verdict["session_id"]: {"state": verdict.get("state"), "reason": verdict.get("reason")}
-            for verdict in roster
-            if isinstance(verdict.get("session_id"), str)
+            peer["sessionId"]: {"state": peer.get("status"), "reason": None}
+            for peer in peers
+            if isinstance(peer.get("sessionId"), str)
         }
         return (
             group_em_baseline.diff_and_persist(
@@ -255,15 +285,26 @@ def _group_em_enter(params: dict, repo_root: Optional[Path] = None) -> dict:
         # for the consumer. See module docstring § PAYLOAD SHAPE ON REFUSAL.
         return result
 
-    _leg(result, "roster", _run_roster(target_root, caller_session_id))
+    # ONE enumeration, two consumers. The roster leg classifies it down to
+    # nudge candidates; the baseline leg diffs it whole. Fetching twice would
+    # bill the box twice for the same read and let the two legs disagree about
+    # who exists within a single tick.
+    try:
+        agents: Optional[list] = group_em_read_pass.fetch_live_agents(Path(target_root))
+    except Exception:  # noqa: BLE001
+        agents = None
+
+    _leg(result, "roster", _run_roster(target_root, caller_session_id, agents))
     roster = result["roster"]
 
     _leg(result, "digest", _run_digest(target_root, roster, caller_session_id))
 
+    # Baseline does NOT consume the roster, so a roster-leg failure does not
+    # cascade here -- it consumes the enumeration directly.
     _leg(
         result,
         "baseline",
-        _run_baseline(target_root, roster, caller_session_id)
+        _run_baseline(target_root, agents, caller_session_id)
         if caller_session_id
         else (None, "no-caller-session-id"),
     )

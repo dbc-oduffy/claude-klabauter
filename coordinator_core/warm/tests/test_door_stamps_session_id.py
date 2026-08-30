@@ -53,7 +53,27 @@ pytestmark = [
     pytest.mark.skipif(os.name != "nt", reason="door.exe is a Windows binary"),
 ]
 
-_SESSION_ID_FIELD = "_session_id"
+#: C1b (docs/plans/2026-08-30-every-op-runs-in-the-callers-environment.md)
+#: retired the bare envelope-level `_session_id` string in favour of ONE
+#: `_caller` object whose fields are `warm.caller_context.CallerContext`
+#: serialised -- with NO deprecated alias, `_serve_line` reading `_caller`
+#: only (door.c's own C1b note). This module kept asserting the retired key
+#: and went red the moment the rename landed; two of its assertions
+#: (`_session_id not in ...`) went FALSE-GREEN instead, which is the worse
+#: half. Asserted here through the object, one accessor, so a future rename
+#: breaks in one place.
+_CALLER_FIELD = "_caller"
+_SESSION_ID_KEY = "session_id"
+
+
+def _stamped_session_id(request: dict):
+    """The caller session id as it reaches `_serve_line`, or None if the door
+    stamped no identity at all -- absence, never an empty string
+    (`test_no_resolvable_identity_stamps_nothing_and_still_serves`)."""
+    caller = request.get(_CALLER_FIELD)
+    if not isinstance(caller, dict):
+        return None
+    return caller.get(_SESSION_ID_KEY)
 
 #: Shaped like a real session id because `session.core.session_identity_override`
 #: gates on UUID shape and binds nothing for a value that fails it -- a test
@@ -108,7 +128,7 @@ def test_the_door_stamps_the_session_its_caller_is(tmp_path: Path) -> None:
 
     request, _ = _exchange(root, {"CLAUDE_CODE_SESSION_ID": _CALLER_SID})
 
-    assert request[_SESSION_ID_FIELD] == _CALLER_SID
+    assert _stamped_session_id(request) == _CALLER_SID
 
 
 def test_the_stamp_is_the_callers_id_and_never_the_servers(tmp_path: Path) -> None:
@@ -120,8 +140,8 @@ def test_the_stamp_is_the_callers_id_and_never_the_servers(tmp_path: Path) -> No
 
     request, _ = _exchange(root, {"CLAUDE_CODE_SESSION_ID": _CALLER_SID})
 
-    assert request.get(_SESSION_ID_FIELD) != _OTHER_SID
-    assert request.get(_SESSION_ID_FIELD) == _CALLER_SID
+    assert _stamped_session_id(request) != _OTHER_SID
+    assert _stamped_session_id(request) == _CALLER_SID
 
 
 def test_precedence_matches_the_resolver_the_door_stands_in_for(tmp_path: Path) -> None:
@@ -141,7 +161,7 @@ def test_precedence_matches_the_resolver_the_door_stands_in_for(tmp_path: Path) 
         },
     )
 
-    assert request[_SESSION_ID_FIELD] == _CALLER_SID
+    assert _stamped_session_id(request) == _CALLER_SID
 
 
 def test_a_lower_rung_is_read_when_the_higher_ones_are_unset(tmp_path: Path) -> None:
@@ -152,7 +172,7 @@ def test_a_lower_rung_is_read_when_the_higher_ones_are_unset(tmp_path: Path) -> 
 
     request, _ = _exchange(root, {"CLAUDE_CODE_SESSION_ID": _CALLER_SID})
 
-    assert request[_SESSION_ID_FIELD] == _CALLER_SID
+    assert _stamped_session_id(request) == _CALLER_SID
 
 
 def test_an_empty_value_falls_through_to_the_next_rung(tmp_path: Path) -> None:
@@ -166,7 +186,7 @@ def test_an_empty_value_falls_through_to_the_next_rung(tmp_path: Path) -> None:
         {"COORDINATOR_SESSION_ID": "", "CLAUDE_CODE_SESSION_ID": _CALLER_SID},
     )
 
-    assert request[_SESSION_ID_FIELD] == _CALLER_SID
+    assert _stamped_session_id(request) == _CALLER_SID
 
 
 def test_the_stamp_is_envelope_level_not_an_op_param(tmp_path: Path) -> None:
@@ -178,7 +198,8 @@ def test_the_stamp_is_envelope_level_not_an_op_param(tmp_path: Path) -> None:
 
     request, _ = _exchange(root, {"CLAUDE_CODE_SESSION_ID": _CALLER_SID})
 
-    assert _SESSION_ID_FIELD not in request["params"]
+    assert _CALLER_FIELD not in request["params"]
+    assert _SESSION_ID_KEY not in request["params"]
 
 
 def test_no_resolvable_identity_stamps_nothing_and_still_serves(tmp_path: Path) -> None:
@@ -192,6 +213,6 @@ def test_no_resolvable_identity_stamps_nothing_and_still_serves(tmp_path: Path) 
 
     request, proc = _exchange(root, None)
 
-    assert _SESSION_ID_FIELD not in request
+    assert _stamped_session_id(request) is None
     assert proc.returncode == 0
     assert proc.stdout == "pong\n"

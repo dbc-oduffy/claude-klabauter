@@ -762,6 +762,91 @@ def _mode_allows_write(mode_literal: str) -> bool:
     return any(c in content for c in "wax")
 
 
+#: `NAME = Path("literal")` / `NAME = pathlib.Path("literal")` / `NAME =
+#: open("literal", <mode>)` -- the single-assignment binding that
+#: `_bound_literal_paths` resolves write receivers against. Scoped to ONE
+#: body; never carried across heredocs.
+_PY_BIND_PATH_RE = re.compile(
+    r"^[ 	]*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(?:\w+\s*\.\s*)?Path\(\s*"
+    + _PY_QUOTED_LITERAL
+    + r"\s*\)",
+    re.MULTILINE,
+)
+
+#: Any OTHER assignment to a name (`NAME =`, `NAME +=`, `for NAME in`,
+#: `with ... as NAME`, `NAME, x =`). A name matching this anywhere in the
+#: body beyond its single `_PY_BIND_PATH_RE` binding is DROPPED rather than
+#: resolved -- "never a guess" applies to rebinding exactly as it applies to
+#: a variable receiver.
+_PY_REBIND_RE = re.compile(
+    r"^[ 	]*(?:for\s+([A-Za-z_][A-Za-z0-9_]*)\s+in\b"
+    r"|([A-Za-z_][A-Za-z0-9_]*)\s*(?:[-+*/|&^]|//|\*\*|>>|<<)?=(?!=)"
+    r"|.*\bas\s+([A-Za-z_][A-Za-z0-9_]*)\s*:)",
+    re.MULTILINE,
+)
+
+#: `NAME.write_text(` / `NAME.write_bytes(` -- a write through a bound
+#: receiver. The receiver is resolved by `_bound_literal_paths`; an
+#: unresolvable name still yields nothing, unchanged.
+_PY_BOUND_WRITE_RE = re.compile(
+    r"(?<![A-Za-z0-9_.])([A-Za-z_][A-Za-z0-9_]*)\s*\.\s*(?:write_text|write_bytes)\("
+)
+
+#: `NAME.open(<mode>)` through a bound receiver -- mode-checked like
+#: `_PY_DOT_OPEN_RE`.
+_PY_BOUND_OPEN_RE = re.compile(
+    r"(?<![A-Za-z0-9_.])([A-Za-z_][A-Za-z0-9_]*)\s*\.\s*open\(\s*"
+    + _PY_QUOTED_LITERAL
+)
+
+
+def _bound_literal_paths(text: str) -> dict:
+    """Names bound EXACTLY ONCE, in `text`, to a `Path("<literal>")` call --
+    the closed local shape that lets a write through a bound receiver resolve
+    to a literal path.
+
+    Why this is not a widening of the closed set (2026-08-30, cross-repo ask
+    `cross-repo/inbox/2026-08-30-doe-claude-em-interpreter-write-sink-misses-
+    the-bound-receiver.md`): `p = Path(lit)` followed by `p.write_text(...)`
+    is the READ-MODIFY-WRITE idiom. You must bind the path to edit a file in
+    place, so every in-place edit carried a variable receiver and the whole
+    `_PY_*` family dropped out -- the bump was close to absent for exactly the
+    accidental population the 2026-08-14 interpreter-body reversal was
+    ratified to cover. Confirmed live: three files were written into a sibling
+    repo's tree through a `python - <<PY` heredoc with no bump, while the
+    `git checkout` to revert them was correctly refused.
+
+    Single-assignment ONLY, and that is the whole safety argument. A name
+    rebound anywhere in the same body (`_PY_REBIND_RE`, which counts `for`
+    targets and `as` bindings, not just `=`) is dropped entirely rather than
+    resolved to its first value -- the module's "never a guess" rule applies
+    to rebinding exactly as it applies to a bare variable. No dataflow, no
+    scope analysis, no cross-body carry.
+
+    Negative-spec: NOT an evasion enumeration. This resolves ONE shape whose
+    binding and use both sit in the same body in plain sight; a caller who
+    computes a path, branches on it, or passes it through a function still
+    yields nothing, unchanged and deliberately.
+    """
+    bound: dict = {}
+    for m in _PY_BIND_PATH_RE.finditer(text):
+        name = m.group(1)
+        if name in bound:
+            bound[name] = None
+            continue
+        bound[name] = m.group(2)[1:-1]
+
+    binding_spans = {
+        (m.group(1), m.start()) for m in _PY_BIND_PATH_RE.finditer(text)
+    }
+    for m in _PY_REBIND_RE.finditer(text):
+        name = m.group(1) or m.group(2) or m.group(3)
+        if name in bound and (name, m.start()) not in binding_spans:
+            bound[name] = None
+
+    return {k: v for k, v in bound.items() if v}
+
+
 def _python_write_targets_in_text(text: str) -> List[str]:
     """Scan `text` (a heredoc body or an inline `-c` payload string) for the
     CLOSED set of Python write shapes this plan ratifies -- see this
@@ -789,6 +874,20 @@ def _python_write_targets_in_text(text: str) -> List[str]:
 
     for m in _PY_SHUTIL_RE.finditer(text):
         targets.append(m.group(1)[1:-1])
+
+    # Bound-receiver writes, resolved against single-assignment literal
+    # bindings in this SAME body -- see `_bound_literal_paths`.
+    bound = _bound_literal_paths(text)
+    if bound:
+        for m in _PY_BOUND_WRITE_RE.finditer(text):
+            resolved = bound.get(m.group(1))
+            if resolved:
+                targets.append(resolved)
+
+        for m in _PY_BOUND_OPEN_RE.finditer(text):
+            resolved = bound.get(m.group(1))
+            if resolved and _mode_allows_write(m.group(2)):
+                targets.append(resolved)
 
     return targets
 

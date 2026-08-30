@@ -1917,6 +1917,9 @@ def _cf_initiative_non_empty(fm: dict) -> ErrorDict | None:
 
 
 def _cf_execution_stamp_required(fm: dict) -> ErrorDict | None:
+    # foreign-identity: OUT-OF-CLASS — the "DoE-claude coordinator/bin/lib/schema.js"
+    # citation below is a port-provenance note inside this function's docstring,
+    # not agent-facing rendered runtime text
     """H-CROSS-EXEC-1: handoff_phase=execution requires the full FOUR-field
     execution-authorization stamp (execution_authorized_{by,at,sha,note}), all
     present-and-non-empty — the plan-execute-session-split.md pinned contract.
@@ -1969,6 +1972,9 @@ _HANDOFF_PHASE_KINDS = frozenset({'session-handoff'}) | _ROADMAP_BATON_KINDS
 
 
 def _cf_handoff_phase_kind_gate(fm: dict) -> ErrorDict | None:
+    # foreign-identity: OUT-OF-CLASS — the "DoE-claude coordinator/bin/lib/schema.js"
+    # citation below is a port-provenance note inside this function's docstring,
+    # not agent-facing rendered runtime text
     """H-CROSS-EXEC-2: handoff_phase PRESENT (either 'continuation' or 'execution')
     requires kind: session-handoff OR canonical kind: roadmap-baton —
     handoff_phase is the preparation axis declared on those kinds, not a field

@@ -53,6 +53,24 @@ def _isolated_state_dir(tmp_path, monkeypatch):
     yield
 
 
+@pytest.fixture(autouse=True)
+def _installed_workflow_watch_launcher(tmp_path, monkeypatch):
+    """Provision a settings-home `bin/workflow-watch` for the module under test.
+
+    `_check_workflow_monitor_arm_sync` names the watcher by its ABSOLUTE
+    installed launcher path and stays SILENT when that launcher is not on
+    disk, so without this fixture every emission test would assert against ""
+    on a box whose settings home has not been reinstalled since the launcher
+    was added -- a green suite that proves only that the advisory is off.
+    `test_stays_silent_when_no_launcher_is_installed` opts back out.
+    """
+    bin_dir = tmp_path / "settings-home" / "bin"
+    bin_dir.mkdir(parents=True)
+    (bin_dir / "workflow-watch").write_text("stub launcher", encoding="utf-8")
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "settings-home"))
+    yield str(bin_dir / "workflow-watch")
+
+
 
 
 SESSION = "test-session-wf-monitor"
@@ -398,7 +416,11 @@ def _launch_transcript(tmp_path, dirname="sub agents", session_name="my session.
 def _emitted_args(advisory):
     command = re.search(r'command="(.*?)", timeout_ms', advisory).group(1)
     argv = shlex.split(command)
-    return dict(zip(argv[3::2], argv[4::2]))
+    # argv[0] is the absolute launcher path; flag/value pairs follow it. The
+    # earlier slice started at 3 because the command opened with the three
+    # tokens `python3 -m coordinator_core.workflow_watch`, a form that only
+    # ran inside the engine's own environment.
+    return dict(zip(argv[1::2], argv[2::2]))
 
 
 def test_emitted_paths_survive_a_posix_shell_and_resolve(tmp_path):
@@ -545,3 +567,63 @@ def test_portable_arg_rejects_each_unsafe_character():
     for bad in ('a"b', 'a$b', 'a`b', 'a\nb'):
         assert pad._portable_arg(bad) is None, bad
     assert pad._portable_arg('C:\\Users\\a b\\x.jsonl') == '"C:/Users/a b/x.jsonl"'
+
+
+def test_command_names_the_installed_launcher_not_a_bare_dash_m(tmp_path, _installed_workflow_watch_launcher):
+    """The emitted command must be runnable from a CONSUMER repo.
+
+    Regression pin for
+    cross-repo/inbox/2026-08-30-doe-claude-em-workflow-watch-command-is-unrunnable-outside-the-engine.md
+    (example-retrieval-repo-em via doe-claude-em): the command was composed as a literal
+    `python3 -m coordinator_core.workflow_watch`, which exits 1 with
+    `ModuleNotFoundError: No module named 'coordinator_core'` anywhere the
+    engine is not already importable. The hook emitting it runs IN the engine's
+    environment, so no test and no emitter-side check could see the failure --
+    only the EM who pasted it, after the advisory's imperative wording had
+    already talked them out of their own monitor.
+    """
+    transcript = _write_transcript(tmp_path, _async_launched_record(transcript_dir=str(tmp_path)))
+    advisory = pad._check_workflow_monitor_arm_sync(SESSION, transcript, "Workflow")
+    command = re.search(r'command="(.*?)", timeout_ms', advisory).group(1)
+    argv = shlex.split(command)
+
+    assert "python3" not in command
+    assert "-m" not in argv
+    assert argv[0] == _installed_workflow_watch_launcher.replace("\\", "/")
+    assert os.path.isabs(argv[0])
+
+
+def test_stays_silent_when_no_launcher_is_installed(tmp_path, monkeypatch):
+    """No launcher on disk => no advisory, rather than a second broken command.
+
+    A command naming a launcher that was never provisioned fails
+    command-not-found, which an EM reads as "this watcher does not exist" —
+    indistinguishable from the ModuleNotFoundError it replaced. Silence is
+    recoverable; the EM keeps their own monitor.
+    """
+    empty_home = tmp_path / "empty-settings-home"
+    (empty_home / "bin").mkdir(parents=True)
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(empty_home))
+
+    transcript = _write_transcript(tmp_path, _async_launched_record(transcript_dir=str(tmp_path)))
+    assert pad._check_workflow_monitor_arm_sync(SESSION, transcript, "Workflow") == ""
+
+
+def test_sentinel_is_not_written_when_the_launcher_is_missing(tmp_path, monkeypatch):
+    """Silence must be RETRYABLE — a later reinstall has to be able to fire.
+
+    The sentinel is written last precisely so an early-exit leaves nothing
+    behind; if the missing-launcher branch wrote one, the advisory would stay
+    suppressed for that task id forever, including after the launcher landed.
+    """
+    empty_home = tmp_path / "empty-settings-home-2"
+    (empty_home / "bin").mkdir(parents=True)
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(empty_home))
+
+    transcript = _write_transcript(tmp_path, _async_launched_record(transcript_dir=str(tmp_path)))
+    pad._check_workflow_monitor_arm_sync(SESSION, transcript, "Workflow")
+
+    sentinel = pad._workflow_monitor_sentinel_path(
+        tempfile.gettempdir(), SESSION, "task-abc"
+    )
+    assert not os.path.isfile(sentinel)

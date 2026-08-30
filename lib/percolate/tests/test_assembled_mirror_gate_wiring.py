@@ -261,5 +261,85 @@ class TestLoadAssembledMirrorGateExemptions:
         assert all(name and reason.strip() for name, reason in exemptions.items())
 
 
+class TestCoverageLegHonoursRatifiedDenials:
+    """The coverage WARN leg must not report a test the row DELIBERATELY denies.
+
+    `assembled_mirror_gate` is mechanism-only and says so: it "does not itself
+    read `setup/publish-allowlist-declarations.yaml` or any exemption ledger --
+    that wiring is `coordinator/bin/publish.py`'s job (C3)". The refusal path
+    got its ledger; the coverage leg never got its filter, so every round
+    warned about `ops/tests/test_sizing_spike_verdict.py` -- a denial dated
+    2026-08-14 (dc3eb5cb9) with a written reason -- as though it were an
+    accidental payload gap.
+    """
+
+    @staticmethod
+    def _row(allowlist: str):
+        class _Row:
+            def __init__(self, allowlist: str) -> None:
+                self.allowlist = allowlist
+
+        return _Row(allowlist)
+
+    def test_denied_test_is_not_reported_as_missing(self):
+        from percolate.assembled_mirror_gate import ModuleTestCoverageReport
+
+        coverage = ModuleTestCoverageReport(
+            examined_count=1674,
+            missing=("coordinator_core/ops/sizing_spike_verdict.py",),
+        )
+        rows = [self._row("ops,!ops/tests/test_sizing_spike_verdict.py")]
+
+        filtered = publish._drop_ratified_test_denials(coverage, rows)
+
+        assert filtered.missing == ()
+        assert filtered.examined_count == 1674, "denominator must survive the filter"
+
+    def test_undenied_gap_still_reported(self):
+        """The filter must not become a blanket mute -- a real gap survives."""
+        from percolate.assembled_mirror_gate import ModuleTestCoverageReport
+
+        coverage = ModuleTestCoverageReport(
+            examined_count=2,
+            missing=(
+                "coordinator_core/ops/sizing_spike_verdict.py",
+                "coordinator_core/ops/really_missing.py",
+            ),
+        )
+        rows = [self._row("ops,!ops/tests/test_sizing_spike_verdict.py")]
+
+        filtered = publish._drop_ratified_test_denials(coverage, rows)
+
+        assert filtered.missing == ("coordinator_core/ops/really_missing.py",)
+
+    def test_denial_only_silences_the_subject_it_names(self):
+        """Matching is by derived `test_<stem>.py`, never a prefix or substring.
+
+        A denial of `test_foo.py` must not silence `foo_helper.py`, whose
+        derived test name is `test_foo_helper.py`.
+        """
+        from percolate.assembled_mirror_gate import ModuleTestCoverageReport
+
+        coverage = ModuleTestCoverageReport(
+            examined_count=2,
+            missing=("pkg/foo.py", "pkg/foo_helper.py"),
+        )
+        rows = [self._row("pkg,!pkg/tests/test_foo.py")]
+
+        filtered = publish._drop_ratified_test_denials(coverage, rows)
+
+        assert filtered.missing == ("pkg/foo_helper.py",)
+
+    def test_no_denials_returns_report_unchanged(self):
+        from percolate.assembled_mirror_gate import ModuleTestCoverageReport
+
+        coverage = ModuleTestCoverageReport(
+            examined_count=3, missing=("pkg/a.py",)
+        )
+        rows = [self._row("pkg")]
+
+        assert publish._drop_ratified_test_denials(coverage, rows) is coverage
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-q"]))

@@ -588,6 +588,10 @@ def cmd_working_repo_registration(argv: list[str]) -> int:
     expected = _REPO_ROOT
 
     if identity != "claude-klabauter":
+        # foreign-identity: NOT-REACHABLE — the session-start hot path calls only the
+        # bare (fix=False) form via readers_health_reaper.py; this fix-branch print only
+        # fires when an operator deliberately runs `working-repo-registration --fix`,
+        # never from ambient session boot in a third repo.
         if fix:
             print(
                 "working-repo-registration --fix: SKIP — this repo's identity resolved as "

@@ -173,14 +173,24 @@ def collecting_diagnostics(into: Optional[List[str]] = None) -> Iterator[List[st
 # process no concurrent request shares (C2's process-pool isolation), never
 # because this helper trusts its caller's word for free.
 #
-# `CLAUDE_PID` is popped whenever `isolated`, on the SAME terms as the two
-# lower-tier session vars, even though no carried pid is ever set here: this
-# server process's own `CLAUDE_PID` names whoever spawned it, and
-# `harness_registry.self_record()` resolves through that name with no other
-# discriminator -- left in place it attributes an isolated dispatch's own
-# self-classification to the spawner, the identical misattribution shape
-# `COORDINATOR_SESSION_ID` closes. Popping never fabricates a value; it only
-# refuses to let a stranger's pid answer on this dispatch's behalf.
+# `CLAUDE_PID` is borrowed whenever `isolated`, on the SAME terms as the two
+# lower-tier session vars: this server process's own `CLAUDE_PID` names
+# whoever spawned it, and `harness_registry.self_record()` resolves through
+# that name with no other discriminator -- left in place it attributes an
+# isolated dispatch's own self-classification to the spawner, the identical
+# misattribution shape `COORDINATOR_SESSION_ID` closes. When the request
+# carries the CALLER's own pid (`caller_context.CallerContext.pid`, on the
+# wire since C1b) that value is SET here, which is what actually closes the
+# three `self_record()` defects
+# `state/audits/2026-08-30-warm-identity-cohort-sweep.md` names; when it does
+# not, the name is popped and nothing is fabricated -- popping only refuses
+# to let a stranger's pid answer on this dispatch's behalf.
+#
+# The carried pid is re-validated as a decimal digit string before it is
+# bound, for the same reason `session_id` is re-validated against
+# `_UUID_RE`: a caller-supplied value that fails its own shape gate must be
+# treated as "no carried identity" on this axis, never mirrored into
+# `os.environ` where every ambient reader downstream would trust it.
 # ---------------------------------------------------------------------------
 _ENV_LOWER_TIER_SESSION_NAMES = ("CLAUDE_SESSION_ID", "CLAUDE_CODE_SESSION_ID")
 _ENV_TOP_TIER_SESSION_NAME = "COORDINATOR_SESSION_ID"
@@ -190,7 +200,9 @@ _ENV_BORROWED_NAMES = _ENV_ALL_SESSION_NAMES + (_ENV_CLAUDE_PID_NAME,)
 
 
 @contextlib.contextmanager
-def _environ_identity_borrow(session_id: Optional[str], isolated: bool) -> Iterator[None]:
+def _environ_identity_borrow(
+    session_id: Optional[str], isolated: bool, caller_pid: Optional[str] = None
+) -> Iterator[None]:
     """Mirror the caller's carried identity into `os.environ` for the life
     of one ISOLATED dispatch, restored in a `finally` regardless of how the
     block exits.
@@ -206,6 +218,14 @@ def _environ_identity_borrow(session_id: Optional[str], isolated: bool) -> Itera
     than trusted as already-valid: a caller-supplied value that failed that
     gate must be treated as "no carried identity" on this axis too, or the
     two axes could disagree about whether an identity was carried at all.
+
+    `caller_pid` is the calling process's own id as carried on the wire
+    (`caller_context.CallerContext.pid`). Bound to `CLAUDE_PID` when it is a
+    decimal digit string; absent, `None`, or any other shape pops the name
+    instead, which is the pre-existing behaviour and never a fabricated
+    value. Its own axis rather than a field of `session_id` because
+    `harness_registry.self_record()` keys off the pid alone, so a request
+    carrying one and not the other must still close the defect it can.
     """
     if not isolated:
         yield
@@ -221,7 +241,10 @@ def _environ_identity_borrow(session_id: Optional[str], isolated: bool) -> Itera
         else:
             for name in _ENV_ALL_SESSION_NAMES:
                 os.environ.pop(name, None)
-        os.environ.pop(_ENV_CLAUDE_PID_NAME, None)
+        if caller_pid is not None and str(caller_pid).isdigit():
+            os.environ[_ENV_CLAUDE_PID_NAME] = str(caller_pid)
+        else:
+            os.environ.pop(_ENV_CLAUDE_PID_NAME, None)
         yield
     finally:
         for name, value in saved.items():
@@ -238,6 +261,7 @@ def per_request_state(
     session_id: Optional[str] = None,
     diagnostics: Optional[List[str]] = None,
     warm_served: Optional[bool] = None,
+    caller_pid: Optional[str] = None,
     isolated: bool,
 ) -> Iterator[List[str]]:
     """Open one request's worth of explicit, Token/reset-scoped state.
@@ -288,6 +312,15 @@ def per_request_state(
     inherit-on-absent, and that divergence is what forced
     `reentrant_dispatch` to re-thread the outer flag by hand. -->
 
+    `caller_pid` is the fifth axis: the CALLING process's own id, carried on
+    the wire since C1b and mirrored into `CLAUDE_PID` for the block's
+    duration under `isolated=True` only (`_environ_identity_borrow`, same
+    `finally` restore as the session names). It is what `harness_registry.
+    self_record()` -- which keys off the pid and not off the session id --
+    needs in order to classify an isolated dispatch as the CALLER rather than
+    as the engine owner. Omitted/`None` pops the name, the behaviour every
+    caller had before this axis existed.
+
     `isolated` is a REQUIRED keyword-only argument, with no default: every
     call site must declare its own execution shape rather than inheriting a
     silently-safe one. `True` means this dispatch owns a process no
@@ -314,7 +347,7 @@ def per_request_state(
     else:
         warm_scope = warm_served_request(bool(warm_served))
     with warm_scope, session_identity_override(session_id):
-        with _environ_identity_borrow(session_id, isolated):
+        with _environ_identity_borrow(session_id, isolated, caller_pid):
             with collecting(into) as declared:
                 if diagnostics is None:
                     yield declared

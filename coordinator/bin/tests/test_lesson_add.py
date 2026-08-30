@@ -566,7 +566,7 @@ def test_delegation_carries_the_served_session_not_the_servers_spawner(monkeypat
         unittest.mock.patch.object(_cli_mod, "_dedup_check", return_value=[]),
         unittest.mock.patch("subprocess.run", return_value=mock_result) as mock_run,
     ):
-        with per_request_state(session_id=caller, warm_served=True):
+        with per_request_state(session_id=caller, warm_served=True, isolated=True):
             _invoke()
 
     child_env = mock_run.call_args.kwargs["env"]

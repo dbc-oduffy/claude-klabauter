@@ -962,18 +962,48 @@ def _parse_log_timestamp(line: str) -> Optional[datetime]:
 
 
 def emit_auto_push_health(repo_root: Path) -> str:
+    """One line naming work this repo is holding that nothing is going to
+    publish on its own, or "" when there is nothing to say.
+
+    THREE OUTSTANDING-WORK CLASSES, not one (2026-08-30). Until this revision
+    the two below `work/*`-with-an-upstream returned "" and reported NOTHING,
+    ever -- which is the loudest failure mode a health signal has, because an
+    empty section reads as "checked, fine" rather than "not checked":
+
+      * NO UPSTREAM -- the branch has never been pushed at all. `warm.push_
+        cadence` publishes through `push_outstanding`, which compares HEAD to
+        an upstream ref that does not exist, so the whole branch is outstanding
+        and unreported. Measured on this box: one repo carrying a 5-hour-old
+        branch that had never left the machine.
+      * NON-`work/*` BRANCH -- `hooks.auto_push.branch_gate` publishes `work/*`
+        only, deliberately (this function does NOT relitigate that policy). But
+        a repo sitting on `main` therefore accumulates commits no automation
+        will ever take, and said so nowhere. Measured: three repos, 4 commits
+        each, 5 hours old.
+
+    NEGATIVE SPEC: this reports; it never pushes and never widens what the
+    cadence is willing to publish. The remedy string is the operator's, because
+    on both classes above the correct action is a decision (adopt an upstream,
+    or move the work to a `work/*` branch), not a retry."""
     branch = _git(["rev-parse", "--abbrev-ref", "HEAD"], repo_root) or "unknown"
-    if not branch.startswith("work/"):
+    # Detached HEAD has no branch to publish and no upstream to name; `origin/
+    # HEAD` would otherwise resolve and make this report against the remote's
+    # default branch, which is not what the tree is sitting on.
+    if branch in ("unknown", "HEAD"):
         return ""
     upstream = f"origin/{branch}"
-    if _git(["rev-parse", "--verify", upstream], repo_root) is None:
-        return ""
+    has_upstream = _git(["rev-parse", "--verify", upstream], repo_root) is not None
     # One spawn carries both facts this signal needs: the line count is the
     # unpushed count, and the LAST line is the oldest unpushed commit -- the
     # age the cadence grace is measured against. Measuring the newest commit
     # instead would let a busy repo that has genuinely failed to publish for
     # hours reset its own clock with every fresh commit.
-    log = _git(["log", "--format=%ct", f"{upstream}..HEAD"], repo_root)
+    #
+    # With no upstream there is no ref to diff against, so "outstanding" is
+    # everything unreachable from ANY remote ref -- which is also the honest
+    # answer for a branch whose upstream was never created.
+    rev_range = [f"{upstream}..HEAD"] if has_upstream else ["HEAD", "--not", "--remotes"]
+    log = _git(["log", "--format=%ct", *rev_range], repo_root)
     if not log:
         return ""
     lines = log.splitlines()
@@ -985,6 +1015,19 @@ def emit_auto_push_health(repo_root: Path) -> str:
         oldest_committed_at = 0
     if oldest_committed_at and (now - oldest_committed_at) < _CADENCE_GRACE_SECONDS:
         return ""
+
+    if not has_upstream:
+        return (
+            f"- ⚠ {unpushed} unpushed commit(s) on `{branch}` — no upstream; the push "
+            f"cadence has no ref to compare and never publishes this branch. "
+            f"Adopt one: git push -u origin {branch}"
+        )
+    if not branch.startswith("work/"):
+        return (
+            f"- ⚠ {unpushed} unpushed commit(s) on `{branch}` — the push cadence publishes "
+            f"`work/*` only, so nothing will publish this branch. "
+            f"Push it: git push origin {branch}"
+        )
 
     # Defect 1 (2026-08-20 dispatch), migrated 2026-08-30 (overengineering-
     # reviewer finding 2): this used to distinguish "auto-push is

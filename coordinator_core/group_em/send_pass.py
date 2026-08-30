@@ -84,6 +84,17 @@ DEFAULT_COOLDOWN_SECONDS = 3600
 #: Rate ceiling: the most entries one digest may carry, whatever the roster
 #: size. A digest at the ceiling is reported truncated rather than silently
 #: cut, so the Group EM knows the population exceeded it.
+#:
+#: `truncated` IS REDUNDANT AND STAYS. Overengineering review (Kira, finding 6,
+#: 2026-08-30) is correct that it is derivable -- it is exactly
+#: `eligible_before_ceiling > len(entries)`, and the per-peer `rate-ceiling`
+#: rows in `suppressed` carry strictly more information than either scalar.
+#: EM ruling: keep all three. These payload keys are a NEGOTIATED CROSS-REPO
+#: SURFACE, frozen with doe-claude-em at sha 7b0b827f; the DoE-side consumer
+#: reads them, so trimming one here is a contract break, not a cleanup. The
+#: finding's own suggested_fix says so and defers the call to the EM against
+#: the contract memo. Revisit only by renegotiating the contract with that
+#: consumer, never by a local tidy-up.
 DEFAULT_MAX_ENTRIES = 5
 
 _SEND_LOG_FILENAME = "group-em-send-log.jsonl"

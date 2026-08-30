@@ -87,7 +87,15 @@ def test_each_leg_degrades_independently(tmp_path, monkeypatch):
     }
 
 
-def test_roster_failure_degrades_digest_and_baseline_too(tmp_path, monkeypatch):
+def test_roster_failure_degrades_digest_but_not_baseline(tmp_path, monkeypatch):
+    """Digest cascades from the roster; baseline does NOT.
+
+    Baseline consumes the peer ENUMERATION, not the classified roster, so a
+    classifier failure must not blind the spawn/exit diff. Until 2026-08-30
+    baseline was fed the roster and this test asserted it cascaded too --
+    which is what let a roster that oscillated 0 -> 3 -> 0 be reported as
+    three spawns followed by three exits when only one session had left.
+    """
     monkeypatch.setattr(gee.group_em_read_pass, "caller_session_id", lambda: "caller-sid-3")
 
     def _boom(*a, **k):
@@ -106,9 +114,51 @@ def test_roster_failure_degrades_digest_and_baseline_too(tmp_path, monkeypatch):
     assert "roster_error" in result
     assert result["digest"] is None
     assert result["digest_error"] == "roster-leg-failed"
-    assert result["baseline"] is None
-    assert result["baseline_error"] == "roster-leg-failed"
+    assert result["baseline"] is not None
+    assert "baseline_error" not in result
     assert result["nomination"]["claimed"] is True
+
+
+def test_baseline_tracks_the_peer_set_not_the_candidate_roster(tmp_path, monkeypatch):
+    """A peer that stops being a nudge candidate has not exited.
+
+    The regression this pins: `_run_baseline` used to build `current_peers`
+    from the roster, so a peer dropping out of the PAUSED candidate set --
+    by resuming work, or by the classifier failing to reach a verdict --
+    was reported under `exited`.
+    """
+    monkeypatch.setattr(gee.group_em_read_pass, "caller_session_id", lambda: "caller-sid-4")
+    monkeypatch.setattr(
+        gee.group_em_nomination,
+        "claim",
+        lambda *a, **k: {"claimed": True, "holder": "caller-sid-4", "superseded_incumbent": None},
+    )
+
+    agents = [
+        {"sessionId": "peer-busy", "status": "busy", "cwd": str(tmp_path)},
+        {"sessionId": "peer-idle", "status": "idle", "cwd": str(tmp_path)},
+    ]
+    monkeypatch.setattr(gee.group_em_read_pass, "fetch_live_agents", lambda *a, **k: agents)
+    # Roster admits ONLY the idle peer as a candidate; the busy one is not a
+    # candidate but is emphatically still present.
+    monkeypatch.setattr(
+        gee.group_em_read_pass,
+        "build_candidate_roster",
+        lambda *a, **k: [{"session_id": "peer-idle", "state": "PAUSED", "candidate": True}],
+    )
+
+    first = gee._group_em_enter({"repo_root": str(tmp_path)})
+    assert first["baseline"]["first_tick"] is True
+
+    # Second tick: the idle peer picks work back up. It leaves the roster, but
+    # it has NOT exited -- and its state transition is what the diff reports.
+    agents[1]["status"] = "busy"
+    monkeypatch.setattr(gee.group_em_read_pass, "build_candidate_roster", lambda *a, **k: [])
+
+    second = gee._group_em_enter({"repo_root": str(tmp_path)})
+    assert second["baseline"]["exited"] == []
+    assert second["baseline"]["spawned"] == []
+    assert second["baseline"]["changed"] == ["peer-idle"]
 
 
 def test_live_incumbent_refusal_stops_before_digest(tmp_path, monkeypatch):

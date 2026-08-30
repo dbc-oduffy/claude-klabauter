@@ -477,8 +477,7 @@ def _seed_machine_local_registry(confirm: bool, non_interactive: bool) -> None:
 # clone -- a legitimate lighter-weight shape").
 #
 # Advisory, never fail-closed: this step WARNS and continues on any failure
-# (git unavailable, dirty claude-klabauter tree failing publish's own dirty-tree gate,
-# publish.py exiting non-zero) -- C1 ships and is verified BEFORE C4 removes
+# (git unavailable, publish.py exiting non-zero) -- C1 ships and is verified BEFORE C4 removes
 # the unstamped fallback (Hard constraint 3), so a failure here must not
 # brick the rest of first-run/setup.py.
 # NOT a member of the `install` timeout family, and it must never be moved

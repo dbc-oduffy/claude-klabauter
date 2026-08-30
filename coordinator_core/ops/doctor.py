@@ -292,11 +292,13 @@ def _check_sibling_resolution() -> Layer:
         claude_klabauter_root = coordinator_engine_root()
     except RuntimeError as exc:
         status = "broken"
+        # foreign-identity: NOT-REACHABLE — doctor op, never invoked by a example-retrieval-repo EM (audit row 1)
         findings.append(Finding("broken", f"claude-klabauter root did not resolve: {exc}"))
         claude_klabauter_root = None
     else:
         if not os.path.isdir(os.path.join(claude_klabauter_root, "coordinator_core")):
             status = "broken"
+            # foreign-identity: NOT-REACHABLE — doctor op, never invoked by a example-retrieval-repo EM (audit row 2)
             findings.append(
                 Finding(
                     "broken",
@@ -310,6 +312,7 @@ def _check_sibling_resolution() -> Layer:
     doe_root = coordinator_doe_root()
     if not doe_root:
         status = "broken"
+        # foreign-identity: NOT-REACHABLE — doctor op, never invoked by a example-retrieval-repo EM (audit row 3)
         findings.append(
             Finding(
                 "broken",
@@ -320,6 +323,7 @@ def _check_sibling_resolution() -> Layer:
         )
     elif not os.path.isfile(os.path.join(doe_root, "coordinator", "hooks", "hooks.json")):
         status = "broken"
+        # foreign-identity: NOT-REACHABLE — doctor op, never invoked by a example-retrieval-repo EM (audit row 3)
         findings.append(
             Finding(
                 "broken",
@@ -469,6 +473,7 @@ def _check_hook_registration() -> Layer:
         findings.extend(doc_findings)
     else:
         statuses.append("unknown")
+        # foreign-identity: NOT-REACHABLE — doctor op, never invoked by a example-retrieval-repo EM (audit row 1/whole-file basis)
         findings.append(Finding("broken", "hooks.json: cannot check — DoE-claude root unresolved."))
 
     settings_path = _config_dir() / "settings.json"
@@ -563,6 +568,7 @@ def _fix_bare_hook_commands(fix_report: List[str]) -> None:
 
     doe_root = coordinator_doe_root()
     if not doe_root:
+        # foreign-identity: NOT-REACHABLE — doctor op, never invoked by a example-retrieval-repo EM (audit row 1/whole-file basis)
         fix_report.append("--fix: skipped hooks.json wrap — DoE-claude root unresolved.")
         return
 
@@ -818,7 +824,6 @@ def _fix_stale_hook_generations(fix_report: List[str]) -> None:
 
     entry = {
         "prepare-commit-msg": getattr(ghi, "ensure_prepare_commit_msg_hook", None),
-        "post-commit": getattr(ghi, "ensure_post_commit_hook", None),
     }
     # Hold the emitter's own directory on sys.path for the WHOLE sweep. The
     # installer lazy-imports siblings out of `coordinator/bin/lib` while it

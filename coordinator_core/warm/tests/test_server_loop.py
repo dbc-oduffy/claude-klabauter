@@ -906,6 +906,65 @@ def test_run_dispatch_itself_binds_the_given_session_id(monkeypatch):
     assert session_core.resolve_session_id() != session_b  # unwound after the call
 
 
+def test_run_dispatch_itself_binds_the_carried_caller_pid(monkeypatch):
+    """The wire-to-seam leg the pid axis needs, and the one that was missing:
+    C1b put `CallerContext.pid` on the wire and C3 built the env borrow, but
+    no test crossed both, so the seam popped `CLAUDE_PID` and never set it
+    for a full evening (state/bug-backlog/2026-08-30-the-warm-seam-pops-
+    claude-pid-but-never-6eb63e46643b.yaml). Exercises the REAL
+    `_run_dispatch`; only its leaf `ipc.dispatch_message` is replaced, so the
+    threading from `caller.pid` to `per_request_state(caller_pid=...)` is
+    production code."""
+    import os as _os
+
+    from coordinator_core import ipc
+
+    monkeypatch.setenv("CLAUDE_PID", "424242")
+
+    async def _fake_dispatch_message(msg, *, caller=None):
+        return {"jsonrpc": "2.0", "id": msg["id"], "result": _os.environ.get("CLAUDE_PID")}
+
+    monkeypatch.setattr(ipc, "dispatch_message", _fake_dispatch_message)
+
+    from coordinator_core.warm.caller_context import resolve_caller_context
+
+    response = server._run_dispatch(
+        {"jsonrpc": "2.0", "id": "1", "method": "noop", "params": {}},
+        caller=resolve_caller_context({"session_id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", "pid": "90210"}),
+        isolated=True,
+    )
+    assert response["result"] == "90210"
+    assert _os.environ["CLAUDE_PID"] == "424242"  # unwound after the call
+
+
+def test_pool_dispatch_worker_binds_the_carried_caller_pid(monkeypatch):
+    """Same contract at the OTHER production dispatch site -- the pool worker
+    target, which is where every real warm request lands
+    (`_ServerContext._pool_dispatch`). `harness_registry.self_record()` reads
+    `CLAUDE_PID` ambiently, so this is the binding that decides whether an
+    isolated dispatch classifies itself as the caller or as the engine
+    owner."""
+    import os as _os
+
+    from coordinator_core import ipc
+
+    monkeypatch.setenv("CLAUDE_PID", "424242")
+
+    async def _fake_dispatch_message(msg, *, caller=None):
+        return {"jsonrpc": "2.0", "id": msg["id"], "result": _os.environ.get("CLAUDE_PID")}
+
+    monkeypatch.setattr(ipc, "dispatch_message", _fake_dispatch_message)
+
+    from coordinator_core.warm.caller_context import resolve_caller_context
+
+    response = server._pool_dispatch_worker(
+        {"jsonrpc": "2.0", "id": "1", "method": "noop", "params": {}},
+        resolve_caller_context({"session_id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", "pid": "90210"}),
+    )
+    assert response["result"] == "90210"
+    assert _os.environ["CLAUDE_PID"] == "424242"
+
+
 def test_serve_line_with_no_carried_identity_strips_rather_than_falls_back(monkeypatch):
     """No-identity, isolated (C3 supersedes this test's pre-C3 fall-back
     expectation): a request that carries no `_caller` at all (older

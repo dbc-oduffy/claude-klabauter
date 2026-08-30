@@ -114,6 +114,74 @@ def test_restore_unwinds_even_when_the_block_raises(monkeypatch):
     assert os.environ["CLAUDE_PID"] == "424242"
 
 
+def test_carried_pid_isolated_binds_the_callers_pid(monkeypatch):
+    """The defect state/bug-backlog/2026-08-30-the-warm-seam-pops-claude-pid-
+    but-never-6eb63e46643b.yaml names: the wire has carried
+    `CallerContext.pid` since C1b, but the seam only ever POPPED the name, so
+    `harness_registry.self_record()` resolved neither the caller nor the
+    engine owner. Carried, it must resolve the CALLER."""
+    _set_spawner_env(monkeypatch)
+
+    with per_request_state(
+        session_id=_CALLER, caller_pid="90210", warm_served=True, isolated=True
+    ):
+        assert os.environ["CLAUDE_PID"] == "90210"
+        assert os.environ["COORDINATOR_SESSION_ID"] == _CALLER
+
+    assert os.environ["CLAUDE_PID"] == "424242"
+
+
+def test_carried_pid_binds_on_its_own_axis_without_a_session_id(monkeypatch):
+    """`self_record()` keys off the pid alone, so a request carrying one and
+    not the other still closes the defect it can -- the two axes are
+    independent, not a single carried-identity flag."""
+    _set_spawner_env(monkeypatch)
+
+    with per_request_state(caller_pid="90210", warm_served=True, isolated=True):
+        assert os.environ["CLAUDE_PID"] == "90210"
+        for name in _SESSION_NAMES:
+            assert name not in os.environ
+
+    assert os.environ["CLAUDE_PID"] == "424242"
+
+
+@pytest.mark.parametrize("bad", ["", "not-a-pid", "-1", "12a", " 42"])
+def test_non_digit_carried_pid_pops_rather_than_binds(monkeypatch, bad):
+    """Same fail-safe direction as the non-UUID session id: a value that
+    fails its own shape gate is "no carried identity" on this axis, never
+    mirrored into `os.environ` where every ambient reader would trust it."""
+    _set_spawner_env(monkeypatch)
+
+    with per_request_state(caller_pid=bad, warm_served=True, isolated=True):
+        assert "CLAUDE_PID" not in os.environ
+
+    assert os.environ["CLAUDE_PID"] == "424242"
+
+
+def test_carried_pid_not_isolated_leaves_os_environ_untouched(monkeypatch):
+    """The `BrokenProcessPool` fallback shares this process with every other
+    in-flight connection -- a pid written there would answer for all of
+    them."""
+    _set_spawner_env(monkeypatch)
+    before = dict(os.environ)
+
+    with per_request_state(caller_pid="90210", warm_served=True, isolated=False):
+        assert dict(os.environ) == before
+
+    assert dict(os.environ) == before
+
+
+def test_carried_pid_restore_unwinds_even_when_the_block_raises(monkeypatch):
+    _set_spawner_env(monkeypatch)
+
+    with pytest.raises(RuntimeError):
+        with per_request_state(caller_pid="90210", warm_served=True, isolated=True):
+            assert os.environ["CLAUDE_PID"] == "90210"
+            raise RuntimeError("boom")
+
+    assert os.environ["CLAUDE_PID"] == "424242"
+
+
 def test_isolated_is_a_required_keyword_only_argument():
     with pytest.raises(TypeError):
         per_request_state()  # type: ignore[call-arg]

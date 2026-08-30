@@ -1461,6 +1461,7 @@ def _maybe_relevant(text: str) -> bool:
     return any(marker in text for marker in _CHEAP_MARKERS)
 
 
+# foreign-identity: OUT-OF-CLASS — docstring, not agent-facing rendered text
 def scan_repo(root: Path) -> List[Finding]:
     """Scan every tracked file under `root` (any git repo -- this module is
     not DoE-claude-specific) and return all `Finding`s. Never raises on a

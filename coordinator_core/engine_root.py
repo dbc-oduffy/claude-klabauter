@@ -357,6 +357,9 @@ def _load_shim() -> types.ModuleType:
         # `python -O`/PYTHONOPTIMIZE, degrading this fail-loud check to an
         # unguarded AttributeError two lines below; an explicit raise
         # survives an optimized run.
+        # foreign-identity: SUBJECT — root-resolution failure, broadly reachable;
+        # remedy names the checkout (claude-klabauter) that must exist (audit row 4,
+        # engine_root.py:362, shim-path leg)
         raise RuntimeError(
             f"coordinator_engine_root_with_class: could not build an import spec "
             f"for shim at '{_SHIM_PATH}' — broken or partial claude-klabauter checkout."

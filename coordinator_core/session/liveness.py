@@ -754,25 +754,18 @@ def claim_held_by_me(
     already resolved identity under its own rules is trusted with it, which
     is the same contract the TOCTOU note above describes.
 
-    KNOWN CONSEQUENCE for the two callers that omit ``my_sid``
-    (``pickup_assemble.compute_claim_grant`` and
-    ``pickup_assemble._claim_already_self_held``), surfaced by code review
-    2026-08-30 and recorded rather than silently absorbed. Under a warm
-    dispatch carrying no identity they now see ``False`` where the ambient
-    read could previously return ``True`` -- reachable only when the claim's
-    recorded holder happens to BE the server's spawner, since any other
-    holder already compared unequal. ``_claim_already_self_held`` exists to
-    keep a same-session ``apply`` re-entry from re-invoking
-    ``claims.claim_artifact`` (which rejects a same-session reclaim for the
-    memo class and raises), so in that narrow case the re-entry now raises
-    instead of short-circuiting.
-
-    That is the ACCEPTED direction, not an oversight. A re-entry that raises
-    is loud, immediate and recoverable; a mutex that grants on a stranger's
-    id is silent, self-consistent, and lands the work before anyone can see
-    it was misattributed. Threading a resolved ``my_sid`` from the caller is
-    the fix that removes the tradeoff -- tracked, not done here, because
-    those call sites belong to a peer's live workstream.
+    The two ``pickup_assemble`` callers (``compute_claim_grant`` and
+    ``_claim_already_self_held``) DO thread a resolved ``my_sid``, via
+    ``pickup_assemble._explicitly_scoped_session_id`` -- the contextvar an
+    enclosing ``apply_base.session_identity()`` scope set, never an
+    ``os.environ`` read. Without it a session that had ALREADY resolved its
+    own identity (an explicit ``--session-id``, or one carried over the wire)
+    was refused its own claim under warm serve, because the only identity
+    this function could see was the server owner's: `pickup-assemble apply
+    --session-id <mine>` self-denied on a claim recorded under exactly that
+    id. The refusal below is unchanged for a caller that carried nothing --
+    the threading widens who can be RECOGNISED, never what an unidentified
+    caller is granted.
     """
     if not claim_dir:
         raise ValueError("claim_dir required")

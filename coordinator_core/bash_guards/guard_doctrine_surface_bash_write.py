@@ -176,7 +176,7 @@ doctrine-cut-and-refill-gate.md § C7a (DoE-claude)
 from __future__ import annotations
 
 import re
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from coordinator_core.bash_guards._tool_names import COMMAND_TOOL_NAMES
 
@@ -472,6 +472,65 @@ def _strip_heredoc_bodies(text: str) -> str:
         out.append(line[: match.end()])
         out.append(line[term_match.start():])
     return "\n".join(out)
+
+
+#: A heredoc whose delimiter is QUOTED (``<<'PY'``, ``<<"PY"``). The quoting is
+#: the whole point: the shell performs NO expansion inside such a body -- no
+#: parameter expansion, no command substitution -- so a ``$(`` or a backtick
+#: there is inert text by the shell's own contract, not a substitution the
+#: guard is declining to analyse. `_HEREDOC_START_RE`'s own group 1 is
+#: OPTIONAL and matches the unquoted form too; this pattern requires it.
+_HEREDOC_QUOTED_START_RE = re.compile(r"<<-?\s*(['\"])([A-Za-z_][A-Za-z0-9_]*)\1")
+
+
+def _quoted_heredoc_bodies(text: str) -> "list[str]":
+    """The BODY of every QUOTED-delimiter heredoc in ``text``.
+
+    Consumed by point 3's indirection leg alone (see
+    `_lies_in_a_quoted_heredoc_body`), never by any write-marker leg: a body
+    that genuinely writes a governed surface still denies through
+    `_has_write_marker_for_point3` and `_has_stdin_program_var_write`, both
+    of which run over these same bytes untouched.
+
+    Deliberately NOT keyed on `_STDIN_PROGRAM_RE`: the quoting alone is what
+    makes shell indirection markers inert, whether the body is a program on
+    stdin (``python - <<'PY'``) or data (``cat <<'EOF' > out``). An UNQUOTED
+    heredoc is excluded exactly because the shell DOES expand its body.
+    """
+    bodies: "list[str]" = []
+    lines = text.split("\n")
+    idx = 0
+    while idx < len(lines):
+        line = lines[idx]
+        match = _HEREDOC_QUOTED_START_RE.search(line)
+        idx += 1
+        if not match:
+            continue
+        terminator = match.group(2)
+        scan = idx
+        while scan < len(lines) and lines[scan].strip() != terminator:
+            scan += 1
+        if scan < len(lines):
+            body = "\n".join(lines[idx:scan])
+            idx = scan + 1
+            if body:
+                bodies.append(body)
+    return bodies
+
+
+def _lies_in_a_quoted_heredoc_body(segment: str, bodies: "Sequence[str]") -> bool:
+    """Is this whole segment nothing but text from inside a quoted heredoc?
+
+    Containment, not overlap: a segment straddling the heredoc's introducing
+    line and its body is not contained in any body, so the introducing line's
+    own markers keep their full force. An empty/whitespace segment is never
+    treated as inert -- it carries no mention either way, and answering True
+    for it would be a claim about nothing.
+    """
+    stripped = segment.strip()
+    if not stripped:
+        return False
+    return any(stripped in body for body in bodies)
 
 
 _STDIN_PROGRAM_RE = re.compile(
@@ -1035,6 +1094,7 @@ def is_denied_bash_write(cmd: str, identifiers_lower: Tuple[str, ...]) -> bool:
         return False
 
     segments = _split_top_level_segments(cmd)
+    quoted_heredoc_bodies = _quoted_heredoc_bodies(cmd)
 
     stripped_cmd = _strip_heredoc_bodies(cmd)
     stripped_segments = _split_top_level_segments(stripped_cmd)
@@ -1061,7 +1121,11 @@ def is_denied_bash_write(cmd: str, identifiers_lower: Tuple[str, ...]) -> bool:
             or _is_interpreter_read_shape(segment, identifiers_lower)
         ):
             continue
-        if _has_write_marker_for_point3(segment, identifiers_lower) or _has_indirection_marker(segment):
+        if _has_write_marker_for_point3(segment, identifiers_lower):
+            return True
+        if not _lies_in_a_quoted_heredoc_body(
+            segment, quoted_heredoc_bodies
+        ) and _has_indirection_marker(segment):
             return True
 
     return False

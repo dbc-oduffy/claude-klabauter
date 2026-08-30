@@ -606,6 +606,9 @@ def check_fleet_reachability(
 
     resolved_doe_root = doe_root if doe_root is not None else _resolve_doe_root()
     if resolved_doe_root is None:
+        # foreign-identity: NOT-REACHABLE — plugin_health fleet delete-safety
+        # gate, operator/gate-invoked, not ambient to a example-retrieval-repo EM (audit
+        # row 22, fleet_reachability.py:612,642)
         return FleetReachabilityResult(
             ok=True,
             skipped=True,

@@ -5,17 +5,11 @@ pair coordinator-ensure-post-commit-hook / coordinator-ensure-prepare-commit-msg
 Exposes two entrypoint functions, each idempotent, self-healing, and always
 returning 0 (a session-boot / commit-time helper must never block).
 
-POST-COMMIT NO LONGER PUSHES (2026-08-30, C7 of docs/plans/2026-08-30-who-
-pushes-and-when.md). `ensure_post_commit_hook` installs a pure `#!/bin/sh`
-no-op: it never probes an interpreter, never resolves `coordinator-auto-push`,
-never execs anything. Ordinary commits no longer spawn a Python interpreter
-to push themselves from the installed hook; publish steps and merge-to-main
-still push immediately via their own paths, and an ordinary commit reaches
-the remote through the periodic reconciler instead. The hook stays installed
-(never removed outright) purely so `_HOOK_GEN_STAMP` can detect and rewrite a
-stale, still-pushing body on self-heal sweeps. The "via python, NEVER via
-bash" invariant below binds `ensure_prepare_commit_msg_hook` only now — the
-post-commit hook retains no invocation of any kind for it to bind to.
+POST-COMMIT INSTALLER REMOVED (2026-08-30, C7 of docs/plans/2026-08-30-the-
+Cockpit-publish-rejoins-the-push-that-survived.md). `ensure_post_commit_hook`
+and its no-op-body machinery are gone — see the gravestone comment at their
+former location, above `ensure_prepare_commit_msg_hook`. The "via python,
+NEVER via bash" invariant below binds `ensure_prepare_commit_msg_hook` only.
 
 Load-bearing Windows change vs. the bash predecessors: the INSTALLED hook bodies
 these write into .git/hooks/ no longer depend on `bash`. A Windows box running git
@@ -448,20 +442,17 @@ def _shim_body(
     chunk-id subject, and such a session sets one of these vars by definition.
 
     `invoke_line` is the final line that runs the resolved target via "$_PY" —
-    both hooks now `exec` synchronously at the shell level; any async self-detach
-    (post-commit's coordinator-auto-push) is owned by the invoked Python, not the shim.
+    the hook `exec`s synchronously at the shell level.
 
     `skip_env`, when supplied, names an environment variable whose presence
     (set AND non-empty) means the caller is publishing this commit itself —
     the shim exits 0 immediately, AHEAD of `baked_python_lines`' interpreter
     probe, so a sole-publisher commit pays zero interpreter-resolution cost.
-    Per-hook, not global: `ensure_post_commit_hook` is the only caller passing
-    this in this chunk (`COORDINATOR_AUTO_PUSH_SUPPRESS_FOR_SYNC_PUSH`, already
-    set on every engine sync/never commit by `git_native._sole_publisher_env`
-    — no new mechanism). Fail-open (the whole safety story): absent or empty,
-    the guard line is not even emitted, and the full body runs unchanged.
-    Never generalize this into a "skip all hooks" flag — that is the
-    hooksPath redirect wearing a disguise.
+    Per-hook, not global: `ensure_prepare_commit_msg_hook` passes its own
+    (`COORDINATOR_TRAILERS_ALREADY_APPLIED`). Fail-open (the whole safety
+    story): absent or empty, the guard line is not even emitted, and the
+    full body runs unchanged. Never generalize this into a "skip all hooks"
+    flag — that is the hooksPath redirect wearing a disguise.
 
     The shell fallback chain (settings-home forwarder → baked SCRIPT →
     .doe-root pointer → engine-repo-bin candidate → marketplace) means
@@ -744,7 +735,7 @@ def _git_root() -> Optional[str]:
     (`repo_identity.resolve_checked_repo_root`).
 
     Classification: READER (AC10). This is a self-heal default (`root=None`
-    in `ensure_post_commit_hook`/`ensure_prepare_commit_msg_hook`/`_ensure_hook`)
+    in `ensure_prepare_commit_msg_hook`/`_ensure_hook`)
     that installs/repairs a hook into whichever repo the resolved root names —
     a hook installer "must never fail loudly enough to block a commit" (see
     this module's own docstring), so on MISMATCH — positive evidence the cwd
@@ -909,170 +900,19 @@ def _ensure_hook(
 # Public entrypoints.
 # ---------------------------------------------------------------------------
 
-#: Non-comment marker line identifying OUR post-commit no-op body/append
-#: block. A `:` (sh no-op builtin) statement, not a `#` comment, because
-#: `_marker_in_noncomment` — the currency/routed-form detector shared with
-#: `ensure_prepare_commit_msg_hook` — deliberately never matches inside a
-#: comment (F3 guard, see that helper's docstring): a marker that could only
-#: ever appear in a comment would never be recognized as "ours" on a second
-#: run, and every install would re-append forever. Distinct from the retired
-#: `"coordinator-auto-push"` marker text on purpose: this hook no longer
-#: names that script anywhere in its own body.
-_POST_COMMIT_NOOP_MARKER = "coordinator-post-commit-noop"
-
-
-def _post_commit_noop_body() -> str:
-    """Fresh-install / self-heal body for .git/hooks/post-commit.
-
-    A pure `#!/bin/sh` no-op — no interpreter probe, no `coordinator-auto-push`
-    resolution, no invocation of anything. See this module's own docstring
-    (POST-COMMIT NO LONGER PUSHES) for why the hook stays installed rather
-    than being removed outright, and `_HOOK_GEN_STAMP`'s generation-11 comment
-    for why bumping the stamp is what makes an already-pushing installed hook
-    get rewritten to this shape rather than certified current forever.
-    """
-    return (
-        "#!/bin/sh\n"
-        "# coordinator post-commit hook — installed by git_hook_install.\n"
-        "# Auto-push retired (2026-08-30, docs/plans/2026-08-30-who-pushes-and-\n"
-        "# when.md): this hook no longer spawns a python interpreter to push a\n"
-        "# commit. Publish steps and merge-to-main push immediately via their own\n"
-        "# paths; an ordinary commit reaches the remote through the periodic\n"
-        "# reconciler instead. This hook is intentionally a no-op.\n"
-        f"{_hook_gen_stamp_line()}\n"
-        f": {_POST_COMMIT_NOOP_MARKER}\n"
-        "exit 0\n"
-    )
-
-
-def _post_commit_append_block(header: str) -> str:
-    """Marker-absent append block for a foreign post-commit hook chain.
-
-    Same START/END-marker convention as `_append_block` (see
-    `_append_markers`), but with nothing left to invoke: the `:` no-op line
-    preserves detectability (`_marker_in_noncomment`, see
-    `_POST_COMMIT_NOOP_MARKER`'s own comment) without splicing a python or
-    interpreter dependency into someone else's hook chain. Caller appends its
-    own `" || true\\n{end_marker}"` tail, matching `_append_block`'s contract.
-    """
-    start_marker, _end_marker = _append_markers(header)
-    return f"\n{start_marker}\n: {_POST_COMMIT_NOOP_MARKER}"
-
-
-def ensure_post_commit_hook(
-    bin_dir: str,
-    root: Optional[str] = None,
-    outcome: Optional[List[str]] = None,
-) -> int:
-    """Install/repair .git/hooks/post-commit → a pure no-op.
-
-    See this module's own docstring (POST-COMMIT NO LONGER PUSHES,
-    2026-08-30 C7 of docs/plans/2026-08-30-who-pushes-and-when.md). This hook
-    no longer resolves or invokes `coordinator-auto-push` — or anything else
-    — so `bin_dir` is accepted only for call-site/signature compatibility
-    with `ensure_prepare_commit_msg_hook` and the fleet driver
-    (`ensure_hooks_fleet` calls both `ensure_*` entrypoints identically) and
-    is otherwise unused.
-
-    Reimplements `_ensure_hook`'s four-way classification directly rather
-    than delegating to it: `_ensure_hook` gates every call on
-    `_helper_present(coord_bin, script_name)` (a "skipped-no-helper" no-op
-    when the target executable is missing), which is the correct gate for a
-    hook that invokes something and the wrong gate for one that invokes
-    nothing — this hook has no helper to be present or absent. `root`/
-    `outcome` keep the same contract as `_ensure_hook`'s (see its docstring)
-    for caller compatibility (`ensure_hooks_fleet`, the CLI entrypoint).
-    """
-    def _note(state: str) -> int:
-        if outcome is not None:
-            outcome.append(state)
-        return 0
-
-    if root is None:
-        root = _git_root()
-    if not root:
-        return _note("skipped-no-root")
-
-    header = "coordinator post-commit (auto-push retired)"
-    # Review (coordinator:code-reviewer, slice 3, Finding 1): every
-    # post-commit hook installed before this header rename appended under
-    # the LEGACY header below, via `_append_block(header="coordinator
-    # auto-push (crash insurance)", ...)`. Those on-disk bodies do not
-    # disappear when the header string changes, and the `_HOOK_GEN_STAMP`
-    # 10 -> 11 bump is what forces exactly this function to re-classify
-    # every one of them fleet-wide. Checking only the NEW header's start
-    # marker misses that shape entirely, falls through to the
-    # `_marker_in_noncomment(..., "coordinator-auto-push")` branch below,
-    # finds no `_hook_gen_stamp_line()` (append-form bodies never carry it),
-    # and whole-file-rewrites the hook — silently deleting the foreign
-    # prefix the append was spliced onto. Both header strings must be
-    # recognized as append-form indefinitely; git history for this file
-    # shows no other header was ever used for the post-commit hook (only
-    # `ensure_prepare_commit_msg_hook` used a different header,
-    # "coordinator Session-Id trailer injection", which is a different hook
-    # file and irrelevant here).
-    legacy_header = "coordinator auto-push (crash insurance)"
-    hook_path = os.path.join(root, ".git", "hooks", "post-commit")
-    fresh = _post_commit_noop_body()
-    start_marker, end_marker = _append_markers(header)
-    legacy_start_marker, legacy_end_marker = _append_markers(legacy_header)
-
-    if not os.path.exists(hook_path):
-        os.makedirs(os.path.dirname(hook_path), exist_ok=True)
-        _atomic_write(hook_path, fresh)
-        _chmod_x(hook_path)
-        return _note("installed-absent")
-
-    body = _read(hook_path)
-
-    if _has_line(body, start_marker) or _has_line(body, legacy_start_marker):
-        # Append-form body (ours, possibly spliced onto a foreign chain),
-        # under either the current or the legacy header. Never eligible for
-        # the whole-file rewrite branch below — same "refuse to guess"
-        # principle as `_ensure_hook`'s own docstring.
-        active_start, active_end = (
-            (start_marker, end_marker)
-            if _has_line(body, start_marker)
-            else (legacy_start_marker, legacy_end_marker)
-        )
-        if not _has_line(body, active_end):
-            print(
-                f"[git_hook_install] WARNING: {hook_path} carries a coordinator "
-                f"append block ('{active_start}') installed before the "
-                "end-marker convention existed, so its extent cannot be "
-                "identified safely — leaving it untouched. Remove the stale "
-                "block by hand to pick up current fixes.",
-                file=sys.stderr,
-            )
-            _chmod_x(hook_path)
-            return _note("left-legacy-append-form")
-        _chmod_x(hook_path)
-        return _note("left-append-form")
-
-    # Whole-file shim host: either our current no-op form, or a historical
-    # push-invoking shape (any generation before 11, which still names
-    # "coordinator-auto-push" somewhere in code). Both markers are checked so
-    # an old pushing body is recognized as OURS (and rewritten) rather than
-    # falling through to the marker-absent/foreign branch and getting our
-    # no-op block appended alongside a live push invocation.
-    if _marker_in_noncomment(body, _POST_COMMIT_NOOP_MARKER) or _marker_in_noncomment(
-        body, "coordinator-auto-push"
-    ):
-        first_line = body.splitlines()[0] if body else ""
-        if first_line == "#!/bin/sh" and _has_line(body, _hook_gen_stamp_line()):
-            _chmod_x(hook_path)
-            return _note("already-current")
-        _atomic_write(hook_path, fresh)
-        _chmod_x(hook_path)
-        return _note("rewritten-stale")
-
-    # Marker absent (foreign hook, or none of ours) → append the no-op
-    # marker, preserving the existing chain, so a future run can recognize
-    # this hook as already visited.
-    append = _post_commit_append_block(header) + f" || true\n{end_marker}"
-    _atomic_write(hook_path, body + append + "\n")
-    _chmod_x(hook_path)
-    return _note("appended")
+# GRAVESTONE (2026-08-30, C7 of docs/plans/2026-08-30-the-cockpit-publish-
+# rejoins-the-push-that-survived.md): `ensure_post_commit_hook`,
+# `_post_commit_noop_body`, `_post_commit_append_block`, and
+# `_POST_COMMIT_NOOP_MARKER` (plus the fleet-driver row that called the
+# installer) are deleted. They existed only to install/self-heal a
+# permanent `#!/bin/sh` no-op body whose sole job was overwriting any
+# still-pushing shim installed on a box that had not yet turned over. PM
+# ruling on that date: this is the only box, and a direct check found no
+# installed post-commit hook anywhere left in the pushing form — the
+# overwrite target no longer exists, so the horizon is zero. The
+# `.git/hooks/post-commit` files already installed on this box are inert
+# (`exit 0`, no invocation of anything) and are left in place; only the
+# installer that maintained them is gone.
 
 
 def ensure_prepare_commit_msg_hook(
@@ -1095,23 +935,17 @@ def ensure_prepare_commit_msg_hook(
     header = "coordinator Session-Id trailer injection"
     invoke = 'exec "$_PY" "$SCRIPT" "$@"'
     # C2 (docs/dispatch-briefs/2026-08-25-the-engine-commits-without-re-
-    # entering-itself/C2.md): a DIFFERENT `skip_env` value from
-    # `ensure_post_commit_hook`'s `COORDINATOR_AUTO_PUSH_SUPPRESS_FOR_SYNC_
-    # PUSH` (AC11 pins the emitted body carries no reference to that other
-    # var) -- set ONLY by `git_native._trailer_sentinel_env()`, ONLY
-    # immediately after `_apply_trailers` returns with no error on
-    # `commit_scoped`'s agree branch. See that function's own docstring for
-    # why nowhere else may set it.
+    # entering-itself/C2.md): `skip_env` here is set ONLY by
+    # `git_native._trailer_sentinel_env()`, ONLY immediately after
+    # `_apply_trailers` returns with no error on `commit_scoped`'s agree
+    # branch. See that function's own docstring for why nowhere else may
+    # set it.
     fresh = _shim_body(
         coord_bin,
         script,
         invoke,
         bin_dir=bin_dir,
         skip_env="COORDINATOR_TRAILERS_ALREADY_APPLIED",
-        # The no-session backstop. NOT passed by `ensure_post_commit_hook`:
-        # auto-push is the SOLE PUBLISHER on a non-engine commit and must run
-        # precisely when no session exists, so the same gate there would
-        # silently stop pushing the commits most in need of it.
         skip_if_all_unset=SESSION_ENV_PRECEDENCE,
     )
     _start_marker, end_marker = _append_markers(header)
@@ -1232,8 +1066,8 @@ def _is_coordinator_worktree(root: str) -> bool:
 
 
 def ensure_hooks_fleet(bin_dir: str) -> int:
-    """Install/repair both coordinator hooks in EVERY registered repo, and say
-    what changed. Always returns 0.
+    """Install/repair the coordinator prepare-commit-msg hook in EVERY
+    registered repo, and say what changed. Always returns 0.
 
     The defect this closes (2026-08-08): the per-day self-heal added to
     `/workday-start` — itself the replacement for the boot hook killed by the
@@ -1279,7 +1113,6 @@ def ensure_hooks_fleet(bin_dir: str) -> int:
             continue
         for label, fn in (
             ("prepare-commit-msg", ensure_prepare_commit_msg_hook),
-            ("post-commit", ensure_post_commit_hook),
         ):
             states: List[str] = []
             fn(bin_dir, root=root, outcome=states)

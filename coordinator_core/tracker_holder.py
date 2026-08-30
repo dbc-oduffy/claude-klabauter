@@ -261,6 +261,9 @@ def _claude_klabauter_source_tree() -> Path:
     """
     value = registry_get(_CLAUDE_KLABAUTER_SOURCE_TREE_KEY)
     if not value:
+        # foreign-identity: SUBJECT — same shape as state_root.py:223; remedy
+        # names the live checkout (claude-klabauter) the reader must point at
+        # (audit row 19)
         raise RuntimeError(
             "cannot check the holder brightline: the machine-local registry "
             f"has no '{_CLAUDE_KLABAUTER_SOURCE_TREE_KEY}' entry, so claude-klabauter's own source "

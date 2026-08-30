@@ -178,6 +178,7 @@ def compute_check_addressee_candidate(self_root: Path, to: str) -> dict:
         if central_ids is None:
             central_ids = read_central_receiver_ids()
         if central_check_id in central_ids:
+            # foreign-identity: NOT-REACHABLE — fleet memo op, operator-invoked, not ambient (audit row 26)
             note = (
                 f"receiver {to!r} is a central receiver id "
                 f"(identity.centralReceiverIds) that resolves to the DoE-claude "

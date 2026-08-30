@@ -125,6 +125,7 @@ from coordinator_core.git.git_objects import (
 from coordinator_core.contract.apply_base import (
     OutOfRepoPath,
     assert_in_repo_root,
+    current_session_env,
 )
 from coordinator_core.contract.decision_object.judgment import (
     build_judgment_point as _shared_build_judgment_point,
@@ -3406,6 +3407,34 @@ def _claim_grant_denied_live_reason(
     return f"held by {holder_display} — live ({basis_note}: {inner}) — may be a stale claim"
 
 
+def _explicitly_scoped_session_id() -> str:
+    """The session id an enclosing ``apply_base.session_identity()`` scope
+    resolved under its OWN rules, or ``""`` when no such scope is active.
+
+    ``liveness.claim_held_by_me`` fails closed inside a warm-served request
+    that carried no identity: ``os.environ`` there names whoever SPAWNED the
+    server, so granting a mutex on it would admit every session that server
+    serves. That refusal is correct and is not relaxed here. What it cannot
+    see on its own is a caller which HAS already resolved identity — an
+    explicit ``--session-id``, or a carried id — and entered
+    ``session_identity()`` with it. ``claim_held_by_me``'s documented
+    contract admits exactly that caller through ``my_sid``, and this is the
+    accessor that supplies it.
+
+    NEGATIVE SPEC — contextvar only, never an ``os.environ`` fallback. The
+    fallback is the very read the warm refusal exists to reject, and adding
+    it here would reintroduce the ambient grant through the parameter meant
+    to close it. No active scope yields ``""``, which leaves
+    ``claim_held_by_me`` on its own unchanged resolution path.
+    """
+    scoped = current_session_env()
+    for value in scoped.values():
+        value = (value or "").strip()
+        if value:
+            return value
+    return ""
+
+
 def compute_claim_grant(
     repo_root: Path,
     class_: str,
@@ -3528,7 +3557,9 @@ def compute_claim_grant(
     stage = _claims.claim_stage(claims_dir)
 
     try:
-        self_holder = _liveness.claim_held_by_me(str(claims_dir), cwd=cwd_str)
+        self_holder = _liveness.claim_held_by_me(
+            str(claims_dir), my_sid=_explicitly_scoped_session_id(), cwd=cwd_str
+        )
     except (OSError, ValueError):
         self_holder = False
 
@@ -3922,7 +3953,9 @@ def _claim_already_self_held(repo_root: Path, class_: str, basename: str) -> boo
     if not claims_dir.is_dir():
         return False
     try:
-        return _liveness.claim_held_by_me(str(claims_dir), cwd=str(repo_root))
+        return _liveness.claim_held_by_me(
+            str(claims_dir), my_sid=_explicitly_scoped_session_id(), cwd=str(repo_root)
+        )
     except (OSError, ValueError):
         return False
 

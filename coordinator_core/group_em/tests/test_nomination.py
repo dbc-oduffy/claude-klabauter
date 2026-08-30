@@ -15,6 +15,7 @@ import pytest
 
 from coordinator_core.group_em import nomination
 from coordinator_core.session import harness_registry
+from coordinator_core.session import liveness as _liveness
 
 
 @pytest.fixture
@@ -68,7 +69,9 @@ def test_record_names_another_live_does_not_claim(repo_root, record_dir, monkeyp
 
     monkeypatch.setattr(nomination, "session_live", lambda sid: True)
     monkeypatch.setattr(
-        harness_registry, "lookup", lambda sid: pytest.fail("must not be needed when live")
+        _liveness,
+        "_cached_registry_lookup",
+        lambda sid: pytest.fail("must not be needed when live"),
     )
 
     result = nomination.claim(repo_root, "sid-challenger", directory=record_dir)
@@ -92,7 +95,7 @@ def test_record_names_another_no_registry_record_does_not_claim(repo_root, recor
     nomination.claim(repo_root, "sid-incumbent", directory=record_dir)
 
     monkeypatch.setattr(nomination, "session_live", lambda sid: False)
-    monkeypatch.setattr(harness_registry, "lookup", lambda sid: None)
+    monkeypatch.setattr(_liveness, "_cached_registry_lookup", lambda sid: None)
 
     result = nomination.claim(repo_root, "sid-challenger", directory=record_dir)
 
@@ -121,7 +124,7 @@ def test_record_names_another_pid_not_running_auto_replaces(repo_root, record_di
         pid = 999999
 
     monkeypatch.setattr(nomination, "session_live", lambda sid: False)
-    monkeypatch.setattr(harness_registry, "lookup", lambda sid: _Row())
+    monkeypatch.setattr(_liveness, "_cached_registry_lookup", lambda sid: _Row())
 
     result = nomination.claim(repo_root, "sid-challenger", directory=record_dir)
 
@@ -219,6 +222,35 @@ def test_is_live_never_reads_a_recorded_pid(repo_root, record_dir, monkeypatch):
     assert result.live_reason == "live"
     # Only the session_id was passed through -- never anything pid-shaped.
     assert seen_args == ["sid-x"]
+
+
+def test_is_live_consults_registry_at_most_once_per_call(repo_root, record_dir, monkeypatch):
+    """Finding 8 (overengineering-reviewer): `is_live` must not read the harness registry
+    twice to answer one question -- `session_live`'s own Source-0 check and the not-live
+    reason label must share ONE registry consult, not two independent `snapshot()` scans.
+    Forces `_liveness`'s TTL cache to be genuinely cold (never populated by `session_live`
+    for this sid) and counts calls into `harness_registry.snapshot` -- the ONE scan
+    `harness_registry.lookup`/`_cached_registry_lookup` are both defined over.
+    """
+    nomination.claim(repo_root, "sid-incumbent", directory=record_dir)
+
+    # Force the TTL cache cold so this run's single scan is attributable to this call only.
+    monkeypatch.setattr(_liveness, "_registry_snapshot_cache", None)
+    monkeypatch.setattr(_liveness, "_registry_snapshot_cache_at", None)
+
+    scan_calls = []
+    real_snapshot = harness_registry.snapshot
+
+    def _counting_snapshot():
+        scan_calls.append(1)
+        return real_snapshot()
+
+    monkeypatch.setattr(harness_registry, "snapshot", _counting_snapshot)
+
+    record = nomination.read_record(repo_root, record_dir)
+    nomination.is_live(record)
+
+    assert len(scan_calls) == 1
 
 
 def test_built_record_never_carries_a_pid_field(repo_root, record_dir):

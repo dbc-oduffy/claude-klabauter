@@ -640,6 +640,7 @@ def _resolve_candidate(
         return candidate
 
     if to.strip().lower() in _read_central_receiver_ids():
+        # foreign-identity: NOT-REACHABLE — fleet memo op, operator-invoked, not ambient (audit row 26)
         return {
             "id": to,
             "receiver": to,

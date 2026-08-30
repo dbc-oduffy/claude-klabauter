@@ -879,6 +879,9 @@ def uninstall_remove_shim() -> bool:
             # it must NOT be swapped for registry/settings-home resolution. A mismatch
             # fails closed either way: false negative re-strips a hand-edited block,
             # false positive refuses and prints manual-removal instructions.
+            # foreign-identity: NOT-REACHABLE — uninstall CLI, user-invoked
+            # deliberately, not ambient to a third-repo session (audit row 7,
+            # uninstall_legs.py:882-883)
             expected_claude_bin = f"{home}/X/DoE-claude/coordinator/bin/claude-doe"
             expected_repo = f"{home}/X/DoE-claude"
             expected_line = (

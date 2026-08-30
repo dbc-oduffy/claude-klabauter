@@ -191,7 +191,6 @@ _LEGACY_UNVERIFIED_ENTRYPOINTS = frozenset({
     "coordinator-configure-git.py",
     "coordinator-current-branch.py",
     "coordinator-doctor-sentinel.py",
-    "coordinator-ensure-post-commit-hook.py",
     "coordinator-ensure-prepare-commit-msg-hook.py",
     "coordinator-initiative.py",
     "coordinator-prepare-commit-msg.py",

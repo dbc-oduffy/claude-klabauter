@@ -948,6 +948,36 @@ def _workflow_monitor_sentinel_path(tmpdir: str, session_id: str, task_id: str) 
     return os.path.join(tmpdir, f"workflow-monitor-armed-{session_id}-{task_id}")
 
 
+def _workflow_watch_launcher() -> str | None:
+    """Absolute path to the installed `workflow-watch` launcher, or None.
+
+    Windows installs one native launcher image per generator-known name as
+    `<name>.exe`; POSIX installs the bare extensionless name. Both are probed
+    regardless of host, because a settings home synced between a Mac and a
+    Windows box carries both images and only one of them is the runnable one
+    here -- probing on-disk existence rather than on `os.name` is what makes
+    this correct on whichever platform is actually running.
+
+    Returns None when neither is present. The caller emits NOTHING in that
+    case: a command naming a launcher that is not installed fails
+    command-not-found, which reads to an EM as "this watcher does not exist"
+    rather than "reinstall the settings home".
+    """
+    try:
+        from coordinator_core._settings_home import settings_home
+
+        bin_dir = settings_home() / "bin"
+    except Exception:
+        return None
+    for candidate in (bin_dir / "workflow-watch.exe", bin_dir / "workflow-watch"):
+        try:
+            if candidate.is_file():
+                return str(candidate)
+        except OSError:
+            continue
+    return None
+
+
 def _check_workflow_monitor_arm_sync(session_id: str, transcript_path: str, tool_name: str) -> str:
     """One-time-per-task advisory: names the exact `Monitor(...)` call to arm
     against a just-launched harness `Workflow` background run.
@@ -1070,7 +1100,36 @@ def _check_workflow_monitor_arm_sync(session_id: str, transcript_path: str, tool
     # before exiting 1. That is silent, and it is the exact "outlives the run"
     # failure this check exists to remove. A path containing a space breaks the
     # unquoted form in any shell, on any host.
-    formatted = [_portable_arg(v) for v in (transcript_path, journal_path, task_id)]
+    # The watcher is named by the ABSOLUTE settings-home launcher path, never
+    # as `python3 -m coordinator_core.workflow_watch`. The bare `-m` form
+    # resolves only where `coordinator_core` is already importable -- the
+    # engine's own environment, which is where THIS hook runs, which is
+    # precisely why the emitted command's failure was invisible to the code
+    # emitting it. In a consumer repo the EM pasted it and got
+    # `ModuleNotFoundError: No module named 'coordinator_core'`, exit 1, after
+    # the advisory's imperative wording had already talked them out of their own
+    # monitor -- and a dead watcher and a quiet run look identical. The launcher
+    # (coordinator/bin/workflow-watch.py, forwarded into <settings-home>/bin/)
+    # self-resolves the engine, so the command runs from any repo, any cwd.
+    # Absolute-path-through-the-launcher is the one sanctioned resolution
+    # (DoE-claude coordinator/snippets/resolve-coordinator-bin.md).
+    # cross-repo/inbox/2026-08-30-doe-claude-em-workflow-watch-command-is-unrunnable-outside-the-engine.md
+    watcher_path = _workflow_watch_launcher()
+    if watcher_path is None:
+        # Silence, not a command naming a launcher that is not on disk. An
+        # uninstalled/partially-migrated settings home would otherwise turn one
+        # broken command into another, and the EM cannot tell the two apart.
+        # Same posture as the unquotable-path branch below.
+        print(
+            "postuse_advisory_dispatch: workflow_monitor_arm found no "
+            "workflow-watch launcher under the settings home -- staying silent "
+            "rather than emitting a command that cannot run. Reinstall via "
+            "scripts/setup.py to provision it.",
+            file=sys.stderr,
+        )
+        return ""
+
+    formatted = [_portable_arg(v) for v in (watcher_path, transcript_path, journal_path, task_id)]
     if any(arg is None for arg in formatted):
         print(
             "postuse_advisory_dispatch: workflow_monitor_arm cannot emit a "
@@ -1079,9 +1138,9 @@ def _check_workflow_monitor_arm_sync(session_id: str, transcript_path: str, tool
             file=sys.stderr,
         )
         return ""
-    q_transcript, q_journal, q_task = formatted
+    q_watcher, q_transcript, q_journal, q_task = formatted
     monitor_command = (
-        "python3 -m coordinator_core.workflow_watch"
+        f"{q_watcher}"
         f" --transcript {q_transcript}"
         f" --journal {q_journal}"
         f" --task-id {q_task}"

@@ -34,9 +34,12 @@ NEGATIVE SPEC -- what this deliberately does NOT do:
     by a past writer is only ever confirmed via the harness's own session registry, joined on
     `session_id` -- here that join is `coordinator_core.session.liveness.session_live`, which
     already performs the registry-first, `stable_pid_alive`-confirmed check this module would
-    otherwise have to reimplement. `harness_registry.lookup` is consulted ONLY to distinguish the
+    otherwise have to reimplement. The SAME TTL-cached registry read `session_live` already
+    performed (`session.liveness._cached_registry_lookup`) is consulted ONLY to distinguish the
     two not-live reasons (`no_registry_record` vs `pid_not_running`) for the report -- never as
-    an input to the liveness verdict itself.
+    an input to the liveness verdict itself. Deliberately NOT a second, uncached
+    `harness_registry.lookup` (== a second full `snapshot()` glob-and-parse of the registry
+    directory): see `is_live`'s own docstring (Review: overengineering-reviewer, Finding 8).
 
   - The record MUST NOT carry a `pid`, for the same reason. See `_build_record`.
 
@@ -64,7 +67,7 @@ from pathlib import Path
 from typing import Optional
 
 from coordinator_core._settings_home import settings_home
-from coordinator_core.session import harness_registry
+from coordinator_core.session import liveness as _liveness
 from coordinator_core.session.liveness import session_live
 
 SCHEMA_VERSION = 1
@@ -170,7 +173,27 @@ def is_live(record: dict) -> LivenessResult:
     The verdict itself comes from `coordinator_core.session.liveness.session_live`, which
     performs the registry-first, `stable_pid_alive`-confirmed check on `session_id` alone --
     the record's own `session_id` field is the only thing read here, never a `pid`.
-    `harness_registry.lookup` is consulted ONLY to attach the not-live reason for the report.
+
+    Registry consultation, SINGLY (Review: overengineering-reviewer, Finding 8): the naive
+    shape here would call `harness_registry.lookup(session_id)` a SECOND time, purely to label
+    the not-live case -- but `lookup` is `snapshot().get(sid)` (`harness_registry.snapshot`'s
+    own docstring: "Parse every `sessions/*.json` once... The ONE directory scan this module
+    performs"), i.e. a second full glob-and-parse of the registry directory on top of the one
+    `session_live` already performed via its own Source-0 read. Neither of `liveness`'s two
+    existing verdict-carrying public surfaces fits as a drop-in replacement without a real
+    behaviour change: `live_session_verdicts` is a whole-corpus scan keyed to an on-disk
+    sessions directory (not this record's bare `session_id`) and reports a different basis
+    vocabulary ("layer1"/"layer2"/"unknown"), not the `no_registry_record`/`pid_not_running`
+    distinction `claim`'s five-case table branches on; `session_verdict` re-reads the registry
+    itself (its own `harness_registry.lookup` call), so swapping in a second module-level
+    function would still be two reads, not one. Instead, this reuses the exact TTL-cached
+    accessor (`session.liveness._cached_registry_lookup`, 2s TTL) that `session_live` itself
+    just called for this same `session_id` moments earlier -- so on the normal path this
+    resolves from the already-warm cache rather than re-scanning the registry directory, while
+    returning the identical `RegistryRecord | None` shape `harness_registry.lookup` would have.
+    This never substitutes for `session_live`'s own verdict (Layer 1/Layer 2 beyond the
+    registry are untouched) -- it is consulted ONLY to attach the not-live reason for the
+    report, exactly as before.
     """
     session_id = str(record.get("session_id") or "")
     if not session_id:
@@ -178,7 +201,7 @@ def is_live(record: dict) -> LivenessResult:
     live = session_live(session_id)
     if live:
         return LivenessResult(True, "live")
-    row = harness_registry.lookup(session_id)
+    row = _liveness._cached_registry_lookup(session_id)
     if row is None:
         return LivenessResult(False, "no_registry_record")
     return LivenessResult(False, "pid_not_running")
@@ -271,6 +294,14 @@ def claim(
 
     `repo_root_str` is normalised (resolved to an absolute path) before use, matching the
     reference's own `_normalised_repo_root`.
+
+    `peer_name` and `nominated_by` are write-side-only fields (Review: overengineering-reviewer,
+    Finding 9, nit): neither is read by any branch of the five-case decision above -- claiming,
+    refusing, and replacing all turn on `session_id` and `is_live`'s verdict alone. They exist
+    here purely for on-disk format parity with `DoE-claude:coordinator/bin/group-em-
+    nomination.py`, the OTHER writer of this same record shape (module docstring, line 1) --
+    dropping them would desync the two writers' record shape even though this reader never
+    consumes them. Do not "clean them up" as unused.
     """
     repo_root = str(Path(repo_root_str).resolve())
     existing = read_record(repo_root, directory)

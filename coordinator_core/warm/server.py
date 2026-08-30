@@ -500,11 +500,15 @@ def _run_dispatch(msg: dict, *, caller: Optional[CallerContext] = None, isolated
     over the wire as the request's top-level `_caller` object and popped
     and resolved into a `warm.caller_context.CallerContext` by `_serve_line`
     before this call -- docs/plans/2026-08-30-every-op-runs-in-the-callers-
-    environment.md § C1b), has its `session_id` bound for the duration of
-    the dispatch via `per_request_state`'s own `session_id` parameter -- see
-    that seam's docstring for the full identity-attribution defect this
-    closes. `None` (no identity carried) is a no-op bind, reproducing
-    today's server-resolves-its-own-env behaviour exactly.
+    environment.md § C1b), has its `session_id` AND its `pid` bound for the
+    duration of the dispatch via `per_request_state`'s own `session_id` /
+    `caller_pid` parameters -- see that seam's docstring for the full
+    identity-attribution defect this closes. Two parameters rather than one
+    because `harness_registry.self_record()` keys off the pid alone, so a
+    session-id-only bind leaves the three defects
+    `state/audits/2026-08-30-warm-identity-cohort-sweep.md` enumerates
+    standing. `None` (no identity carried) is a no-op bind on both axes,
+    reproducing today's server-resolves-its-own-env behaviour exactly.
 
     `isolated` (C3, defaults `False`) is threaded straight through to
     `entry_seam.per_request_state`'s own required `isolated` argument. This
@@ -566,9 +570,14 @@ def _run_dispatch(msg: dict, *, caller: Optional[CallerContext] = None, isolated
     _spawn_start = _spawn_count_or_none()
     _caller_route = "coordinator_core.warm.server._run_dispatch"
     session_id = caller.session_id if caller is not None else None
+    caller_pid = caller.pid if caller is not None else None
     try:
         with per_request_state(
-            session_id=session_id, diagnostics=diagnostics, warm_served=True, isolated=isolated
+            session_id=session_id,
+            caller_pid=caller_pid,
+            diagnostics=diagnostics,
+            warm_served=True,
+            isolated=isolated,
         ):
             with contextlib.redirect_stdout(_handler_stdout), contextlib.redirect_stderr(_handler_stderr):
                 response = asyncio.run(dispatch_message(msg, caller=_caller_route))
@@ -684,9 +693,14 @@ def _pool_dispatch_worker(msg: dict, caller: Optional[CallerContext]) -> dict:
     _spawn_start = _spawn_count_or_none()
     _caller_route = "coordinator_core.warm.server._pool_dispatch_worker"
     session_id = caller.session_id if caller is not None else None
+    caller_pid = caller.pid if caller is not None else None
     try:
         with per_request_state(
-            session_id=session_id, diagnostics=diagnostics, warm_served=True, isolated=True
+            session_id=session_id,
+            caller_pid=caller_pid,
+            diagnostics=diagnostics,
+            warm_served=True,
+            isolated=True,
         ):
             with contextlib.redirect_stdout(_handler_stdout), contextlib.redirect_stderr(_handler_stderr):
                 response = asyncio.run(dispatch_message(msg, caller=_caller_route))

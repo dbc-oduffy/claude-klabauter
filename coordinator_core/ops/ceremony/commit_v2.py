@@ -86,10 +86,15 @@ from coordinator_core.ops.ceremony.commit_gates import (
     op_scope_coverage_gate,
 )
 from coordinator_core.ops.fleet._common import check_repo_root, main_worktree_root
+from coordinator_core.session import core as session_core
+from coordinator_core.session import scope as session_scope
 from coordinator_core.write_guards.guard_class_relay import (
     detect_class_transition,
     stage_class_transition_memo,
 )
+import logging
+
+_LOG = logging.getLogger(__name__)
 
 #: Prefix filter for the guard-class-relay step below (C2 of
 #: docs/plans/2026-08-29-a-guard-class-flip-announces-itself.md). ONLY paths
@@ -249,6 +254,42 @@ def _guard_class_relay_step(
         skips.append(f"skip: guard_class_relay step: {exc!r}")
 
     return {"transitions": transitions, "skips": skips}
+
+
+def _release_committed_claims_step(worktree_root: Path, released: list) -> None:
+    """Runs AFTER `commit_paths` has already landed the commit -- like
+    `_guard_class_relay_step`, this step cannot refuse, delay, or fail it
+    (NEGATIVE SPEC). Releases this session's own `T` claims on `released`
+    (the exact `raw_paths + raw_deleted` this commit covered) via
+    `session_scope.release_committed_claims`, so the default committer no
+    longer leaves the claim ledger growing monotonically underneath it
+    (docs/dispatch-briefs/2026-08-30-the-default-committer-releases-its-
+    claims/C1.md).
+
+    `sid` comes from `session_core.resolve_session_id`, which can resolve to
+    the SPAWNING session's identity inside the resident warm server (env
+    tiers 1-3) rather than the true caller's -- the same exposure
+    `detached_render_commit.py` and `post_commit_tail.py` already carry
+    through the same function; not a new class introduced here, and the
+    transport fix is routed separately. An empty/unresolvable sid is
+    skipped explicitly (never guessed), and any exception here is caught
+    and degraded to a debug log -- the claim is simply RETAINED, which is
+    the safe residue: it never turns an already-landed commit into a
+    reported failure.
+    """
+    if not released:
+        return
+    try:
+        sid = session_core.resolve_session_id(str(worktree_root))
+        if sid:
+            session_scope.release_committed_claims(
+                sid, released, cwd=str(worktree_root)
+            )
+    except Exception:
+        _LOG.debug(
+            "commit_v2: release_committed_claims failed post-commit; "
+            "claim(s) retained", exc_info=True,
+        )
 
 
 def _pre_commit_gates(
@@ -577,6 +618,14 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     guard_class_relay = _guard_class_relay_step(
         worktree_root, guard_paths, pre_commit_guard_sources, outcome.sha,
         repo_root=repo_root,
+    )
+
+    # Same post-commit region, same negative spec: cannot refuse, delay, or
+    # fail the already-landed commit. Release set is the paths THIS commit
+    # actually covered -- raw_paths + raw_deleted, including outcome.no_delta
+    # members (the caller named them and their bytes are at HEAD).
+    _release_committed_claims_step(
+        worktree_root, list(raw_paths) + list(raw_deleted)
     )
 
     return {

@@ -491,6 +491,7 @@ def _resolve_doe_claude_target(target: str) -> Optional[str]:
         return None
 
     if _canon(toplevel) != canon_doe_root:
+        # foreign-identity: NOT-REACHABLE — install-time-only pre-commit hook installer, deliberately invoked, not ambient to a example-retrieval-repo EM (same basis as audit rows 6/11/12)
         print(f"{_PROG}: not DoE-claude ({toplevel}) — skipping.", file=sys.stderr)
         return None
     return toplevel
