@@ -84,7 +84,7 @@ import re
 from pathlib import Path
 from typing import List, Optional
 
-from coordinator_core.git.git_dir import resolve_git_common_dir
+from coordinator_core.git.git_dir import resolve_git_common_dir, resolve_git_dir
 from coordinator_core.ipc import register_op
 from coordinator_core.ops.ceremony.git_native import GitResult, _git
 
@@ -116,64 +116,120 @@ def _split_nonempty_lines(stdout: str) -> List[str]:
     return [line for line in stdout.splitlines() if line.strip()]
 
 
-def _staged_files(repo_root: Path) -> Optional[List[str]]:
-    """`git diff --cached --name-only` — staged paths, or None on a git
-    failure (never raises; folded into `indeterminate` by the caller).
+class _StatusProbe:
+    """One `git status --porcelain=v2 --branch` spawn, parsed into every
+    index/worktree/upstream signal `classify` needs.
+
+    NEGATIVE SPEC — why one spawn and not the four this replaced. Each of
+    `diff --cached --name-only`, `diff --name-only`, `rev-parse --git-dir`
+    and `rev-list --left-right --count @{u}...HEAD` cost a process, and on
+    Windows process creation (not the query) is the bill: measured here at
+    36-162ms each, 546ms for the set, against a 500ms brightline and a
+    200ms per-process ceiling. `--porcelain=v2 --branch` answers staged,
+    unstaged, ahead, behind and upstream-resolved from a single machine-
+    readable stream, and MERGE_HEAD is a file test the private gitdir
+    already answers without git. Do not split these back apart for
+    readability; the spawn count IS the contract.
     """
-    result = _git(["diff", "--cached", "--name-only"], cwd=repo_root)
-    if not result.ok:
-        return None
-    return _split_nonempty_lines(result.stdout)
+
+    __slots__ = ("staged", "unstaged", "ahead", "behind", "upstream_resolved")
+
+    def __init__(self) -> None:
+        self.staged: Optional[List[str]] = None
+        self.unstaged: Optional[List[str]] = None
+        self.ahead: Optional[int] = None
+        self.behind: Optional[int] = None
+        self.upstream_resolved: bool = False
 
 
-def _unstaged_local_files(repo_root: Path) -> Optional[List[str]]:
-    """`git diff --name-only` — unstaged working-tree modifications to
-    TRACKED files (untracked files are deliberately excluded — this
-    discriminator is about the caller's own in-progress edits to files git
-    already knows, not the whole untracked surface)."""
-    result = _git(["diff", "--name-only"], cwd=repo_root)
+def _status_probe(repo_root: Path) -> _StatusProbe:
+    """Parse `git status --porcelain=v2 --branch` into a `_StatusProbe`.
+
+    A git failure (not a repo, unreadable tree) leaves `staged`/`unstaged`
+    as None and `upstream_resolved` False — exactly the shape the previous
+    per-probe `None` returns folded into, so `classify`'s indeterminate
+    legs are unchanged.
+
+    Line shapes consumed (git's own porcelain-v2 grammar):
+      `# branch.ab +<ahead> -<behind>`  — emitted ONLY with an upstream, so
+          its presence IS the upstream-resolved signal.
+      `1 <XY> ...<path>`               — ordinary change.
+      `2 <XY> ...<path>	<origPath>`   — rename/copy; the NEW path is taken,
+          matching `diff --name-only`'s own reporting of a rename.
+      `u <XY> ...<path>`               — unmerged; counted as staged, which
+          is what `diff --cached --name-only` did with it.
+      `? `/`! `                        — untracked/ignored. Never emitted:
+          `--untracked-files=no` suppresses the untracked scan outright,
+          which is both faster (it is the expensive half of `status` on a
+          large tree) and exactly right — the `diff` probes this replaced
+          never saw untracked paths either.
+
+    `X` is the index status and `Y` the worktree status; `.` means clean.
+    """
+    probe = _StatusProbe()
+    result = _git(
+        ["status", "--porcelain=v2", "--branch", "--untracked-files=no"],
+        cwd=repo_root,
+    )
     if not result.ok:
-        return None
-    return _split_nonempty_lines(result.stdout)
+        return probe
+
+    staged: List[str] = []
+    unstaged: List[str] = []
+    for line in result.stdout.splitlines():
+        if not line:
+            continue
+        if line.startswith("# branch.ab "):
+            parts = line[len("# branch.ab ") :].split()
+            if len(parts) == 2:
+                try:
+                    probe.ahead = int(parts[0])
+                    probe.behind = -int(parts[1])
+                except ValueError:
+                    continue
+                else:
+                    probe.upstream_resolved = True
+            continue
+        marker = line[:2]
+        if marker not in ("1 ", "2 ", "u "):
+            continue
+        fields = line.split(" ", 2)
+        if len(fields) < 3:
+            continue
+        xy = fields[1]
+        if len(xy) != 2:
+            continue
+        # Path is the final space-delimited field for `1`/`u`; for a `2`
+        # rename row the trailing `	<origPath>` is stripped first.
+        rest = fields[2]
+        path = rest.split("	", 1)[0].rsplit(" ", 1)[-1]
+        if not path:
+            continue
+        if xy[0] != ".":
+            staged.append(path)
+        if xy[1] != ".":
+            unstaged.append(path)
+
+    probe.staged = staged
+    probe.unstaged = unstaged
+    return probe
 
 
 def _merge_head_present(repo_root: Path) -> bool:
     """Whether MERGE_HEAD exists in THIS worktree's private gitdir.
 
-    Resolved via `git rev-parse --git-dir` (not `resolve_git_common_dir`) —
-    MERGE_HEAD is worktree-local state, present only in the private gitdir
-    of the worktree where the merge was attempted, matching this op's
-    `show_top` scope-verdict for every other signal it reads.
+    Resolved via `resolve_git_dir` (the PRIVATE per-worktree gitdir, not
+    `resolve_git_common_dir`) — MERGE_HEAD is worktree-local state, present
+    only in the gitdir of the worktree where the merge was attempted,
+    matching this op's `show_top` scope-verdict for every other signal it
+    reads. `resolve_git_dir` returns what `git rev-parse --git-dir` reports
+    without spawning it (see its own docstring), so this file test costs no
+    process — the spawn it replaces was ~95ms of the op's old 546ms.
     """
-    git_dir_result = _git(["rev-parse", "--git-dir"], cwd=repo_root)
-    if not git_dir_result.ok:
-        return False
-    git_dir_raw = git_dir_result.stdout.strip()
-    if not git_dir_raw:
-        return False
-    git_dir = Path(git_dir_raw)
-    if not git_dir.is_absolute():
-        git_dir = repo_root / git_dir
-    return (git_dir / "MERGE_HEAD").exists()
-
-
-def _upstream_ahead_behind(repo_root: Path) -> Optional[tuple]:
-    """`git rev-list --left-right --count @{u}...HEAD` -> (ahead, behind), or
-    None when no upstream is configured / detached HEAD / not a repo. Output
-    shape is `"<behind>\\t<ahead>"` (left = @{u}, right = HEAD)."""
-    result = _git(
-        ["rev-list", "--left-right", "--count", "@{u}...HEAD"], cwd=repo_root
-    )
-    if not result.ok:
-        return None
-    parts = result.stdout.strip().split()
-    if len(parts) != 2:
-        return None
     try:
-        behind, ahead = int(parts[0]), int(parts[1])
-    except ValueError:
-        return None
-    return ahead, behind
+        return (resolve_git_dir(repo_root) / "MERGE_HEAD").exists()
+    except OSError:
+        return False
 
 
 def _incoming_files(repo_root: Path) -> Optional[List[str]]:
@@ -212,24 +268,24 @@ def classify(repo_root: Path) -> dict:
     """Compute the five-state verdict + evidence for `repo_root` (a resolved
     worktree root). Pure read; see module docstring for the classification
     order and each state's discriminator."""
-    staged = _staged_files(repo_root)
-    unstaged = _unstaged_local_files(repo_root)
+    probe = _status_probe(repo_root)
+    staged = probe.staged
+    unstaged = probe.unstaged
     merge_head_present = _merge_head_present(repo_root)
-    ahead_behind = _upstream_ahead_behind(repo_root)
     log_count, log_newest = _push_failures_log_evidence(repo_root)
 
-    upstream_resolved = ahead_behind is not None
-    ahead: Optional[int]
-    behind: Optional[int]
-    if ahead_behind is not None:
-        ahead, behind = ahead_behind
-    else:
-        ahead, behind = None, None
+    upstream_resolved = probe.upstream_resolved
+    ahead: Optional[int] = probe.ahead
+    behind: Optional[int] = probe.behind
 
+    # `incoming` is read ONLY inside the `if staged:` leg below, so an EMPTY
+    # staged set must not pay for it: that spawn was ~162ms bought to fill an
+    # evidence field no clean-index verdict consults. `staged is not None`
+    # (the prior guard) was true for `[]` and spent it every time.
     incoming: Optional[List[str]] = None
     staged_incoming_overlap: Optional[int] = None
     staged_unstaged_overlap: Optional[int] = None
-    if staged is not None and upstream_resolved:
+    if staged and upstream_resolved:
         incoming = _incoming_files(repo_root)
         if incoming is not None:
             staged_set = set(staged)

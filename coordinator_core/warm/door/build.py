@@ -174,13 +174,36 @@ def write_provenance(
     precisely the safety classification, so the complete set is the one to
     read. Keeping both is the compatible move; silently narrowing
     `door_c_sha256` to mean "all sources" would break the comparisons that
-    already exist."""
+    already exist.
+
+    `image_sha256` -- THE FIELD THIS RECORD LACKED UNTIL 2026-08-30, AND WHY
+    THAT WAS A DEFECT, NOT AN OMISSION. Every field above describes this
+    build's INPUTS; none describes its OUTPUT. That meant a provenance
+    sidecar could never be checked against the binary sitting beside it --
+    not by a tool, not by a person -- because the one fact that would let a
+    reader confirm "this record is still describing THIS file" was never
+    recorded. A sidecar copied alongside a stale binary (or a binary
+    rewritten in place by some OTHER writer after the sidecar was last
+    written) then reads as authoritative when it is not: on 2026-08-30 a
+    sibling repo's EM read exactly such a sidecar, correctly derived that
+    the door it described predated a shipped fix, and sent a cross-repo
+    memo asking for a rebuild that had already happened -- the installed
+    binary's mtime/ctime were hours newer than the sidecar's, but nothing in
+    the sidecar itself said so. See
+    `state/bug-backlog/2026-08-30-installed-door-provenance-sidecar-describes-a-binary-that-is-not-there.yaml`
+    for the full incident. `image_sha256` closes that gap: it is the
+    sha256 of `output_exe` itself, taken after the binary is fully written
+    to disk, so a verifier (human or `door_install.verify_installed_
+    provenance`) can hash the binary next to the sidecar and compare
+    against a field the record actually carries, rather than trusting an
+    mtime that `copy2` routinely preserves from a much older source."""
     provenance = {
         "door_c_sha256": _sha256_file(source_path),
         "sources": {
             path.name: _sha256_file(path)
             for path in (source_path, _CORE_SOURCE, _CORE_HEADER)
         },
+        "image_sha256": _sha256_file(output_exe),
         "compiler": kind,
         "compiler_version": _compiler_version(kind, compiler_path),
         "built_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),

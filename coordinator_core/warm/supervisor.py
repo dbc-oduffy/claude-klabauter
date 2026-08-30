@@ -788,7 +788,12 @@ class _ServerContext:
         # the pipe transport alone. `transport=` tags these rows so the two
         # populations stay separable rather than merging into one denominator
         # (see `telemetry.ServerTelemetry.__init__`).
-        self.telemetry = telemetry.ServerTelemetry(transport="http")
+        # Computed BEFORE the telemetry object so every row this life flushes
+        # carries the generation that served it; see `_compute_engine_token`.
+        self.engine_token = self._compute_engine_token()
+        self.telemetry = telemetry.ServerTelemetry(
+            transport="http", engine_token=self.engine_token
+        )
         self.version_state = version_state
         self.server_sha = version_state.server_sha
         # `dispatch` overrides `_serve_line`'s own default (`_run_dispatch`) -- production
@@ -796,7 +801,6 @@ class _ServerContext:
         # `GUARD_OP_NAME` names (`warm_guard.evaluate`, `ops/warm_guard_evaluate.py`) so
         # it can drive a chosen verdict without running the full guard chain.
         self.dispatch = dispatch
-        self.engine_token = self._compute_engine_token()
         self._skew_watchdog_stop = threading.Event()
 
     def _compute_engine_token(self) -> Optional[str]:

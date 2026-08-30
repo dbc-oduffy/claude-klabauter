@@ -52,6 +52,13 @@ _WRITER_MODULES = (
     # listed here, which is exactly the escape the docstring above warns
     # about: it ran outside this file's subprocess litter-guard.
     "coordinator_core/warm/tests/test_server_loop.py",
+    # Added 2026-08-30 with C1's single-instance probe. It calls
+    # `write_discovery` to stand up a first listener's record and prove the
+    # second `main()` neither binds nor overwrites it, so it is a writer by
+    # construction. Registered on this guard's first run against it, which is
+    # this guard working as designed rather than an oversight being papered
+    # over.
+    "coordinator_core/warm/tests/test_http_listener_is_single_instance.py",
     # Added 2026-08-26 with the door credential (AC17). Registered on this
     # guard's first run against it, as intended: the module stands up a real
     # door and vouches for a real listener, so it writes a discovery record.

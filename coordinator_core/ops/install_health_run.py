@@ -36,9 +36,9 @@ Dual-anchor discovery (2026-07-22, closes the plugin_root-coupling defect):
   `_write_agent_forwarder` cmd-twin source repoint).
 
 Native leg registry (`_NATIVE_LEGS`) — no globbing for claude-klabauter-owned legs:
-  All four claude-klabauter-owned legs (`ensure_python3_exe_shim`,
+  All five claude-klabauter-owned legs (`ensure_python3_exe_shim`,
   `check_windows_ssh_binary`, `seed_skill_overrides`,
-  `check_bareword_path_provisioning`) run UNCONDITIONALLY in `main()`,
+  `check_bareword_path_provisioning`, `check_door_provenance`) run UNCONDITIONALLY in `main()`,
   in-process, via an explicit registry — never discovered through
   a `bin/install-health/*.sh` glob-and-basename-intercept, and never
   requiring a bash veneer front door. This collapses the prior two-tier
@@ -112,6 +112,7 @@ from pathlib import Path
 from typing import List, Optional
 
 from coordinator_core._settings_home import settings_home
+from coordinator_core.install import door_install
 from coordinator_core.install._shared import env_overlay
 from coordinator_core.install.shell_rc_guard import write_path_entry_guard_blocks
 from coordinator_core.install.wrapper_onto_path import _on_path as _bin_dst_on_path
@@ -161,6 +162,10 @@ _NATIVE_LEGS = [
     (
         "check-bareword-path-provisioning",
         lambda plugin_root, claude_klabauter_root: check_bareword_path_provisioning(plugin_root, claude_klabauter_root),
+    ),
+    (
+        "check-door-provenance",
+        lambda plugin_root, claude_klabauter_root: check_door_provenance(plugin_root, claude_klabauter_root),
     ),
 ]
 
@@ -277,6 +282,57 @@ def check_bareword_path_provisioning(plugin_root: str, claude_klabauter_root: st
         )
 
     return 1 if failures else 0
+
+
+def check_door_provenance(plugin_root: str, claude_klabauter_root: str) -> int:
+    """Native install-health leg asserting the installed door's provenance
+    sidecar still describes the binary sitting beside it.
+
+    Delegates entirely to `door_install.verify_installed_provenance` -- see
+    that function's own docstring for why the record's `image_sha256`
+    field is the oracle rather than mtime. This leg only translates its
+    five-way verdict into this module's print register and return code:
+
+      - `"ok"` -> 0.
+      - `"mismatch"` -> 1, printing both hashes plus a runnable
+        remediation (`python scripts/setup.py`, never a slash command --
+        cold-path remediation must name a runnable script).
+      - `"unrecorded"` -> 0, NOTE only. A sidecar written before
+        `image_sha256` existed cannot be checked, and failing every box
+        whose door predates this change would fail the fleet, not the
+        defect.
+      - `"absent"` -> 1. A door with no readable provenance at all is
+        unverifiable, and that unverifiability IS the defect this leg
+        exists to catch.
+      - `"no-door"` -> 0, NOTE only. The door install is advisory in
+        `scripts/setup.py`; its absence is a different leg's concern, not
+        this one's failure.
+    """
+    del plugin_root, claude_klabauter_root
+
+    bin_dst = settings_home() / "bin"
+    verdict = door_install.verify_installed_provenance(bin_dst)
+
+    if verdict.status == "ok":
+        print(f"[door-provenance] {verdict.detail}")
+        return 0
+    if verdict.status == "unrecorded":
+        print(f"[door-provenance] NOTE: {verdict.detail}")
+        return 0
+    if verdict.status == "no-door":
+        print(f"[door-provenance] NOTE: {verdict.detail}")
+        return 0
+    if verdict.status == "mismatch":
+        print(f"[door-provenance] FAIL: {verdict.detail}", file=sys.stderr)
+        print(
+            "[door-provenance] remediation: run `python scripts/setup.py` "
+            "to reinstall the door and its provenance sidecar together",
+            file=sys.stderr,
+        )
+        return 1
+    # "absent"
+    print(f"[door-provenance] FAIL: {verdict.detail}", file=sys.stderr)
+    return 1
 
 
 def _default_plugin_root(script_path: Optional[str]) -> str:

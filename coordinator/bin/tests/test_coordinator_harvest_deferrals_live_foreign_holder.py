@@ -104,13 +104,36 @@ def _handoff(tmp_path: Path, name: str, claimed_by: str, deployment_state: str, 
     return p
 
 
+def _pin_closing_session(monkeypatch, sid: str) -> None:
+    """Pin the id `_refuse_if_live_foreign_holder` compares the claim against.
+
+    BOTH names, deliberately. The guard moved from `resolve_session_id` to
+    `attributable_session_id` on 2026-08-30 (the warm branch must not degrade to the
+    engine owner's environment), and this test suite runs the claude-klabauter CLI against the
+    PUBLISHED klabauter engine, so during a publish-lag window the two trees disagree
+    about which one the guard calls. Pinning both is correct against either.
+
+    `cwd=None` is not decoration: `attributable_session_id(cwd)` forwards its argument
+    to `resolve_session_id(cwd)`, so a zero-arg stub raises TypeError inside the
+    guard's own `except Exception` — which resolves the sid to None and PROCEEDS. The
+    guard would then be silently disabled and this test would fail against a correct
+    implementation.
+    """
+    monkeypatch.setattr(
+        "coordinator_core.session.core.resolve_session_id", lambda cwd=None: sid
+    )
+    monkeypatch.setattr(
+        "coordinator_core.session.core.attributable_session_id", lambda cwd=None: sid
+    )
+
+
 def test_live_foreign_holder_refuses_no_harvest_dispatch(harvest_mod, tmp_path, monkeypatch, capsys):
     plan = _plan(tmp_path, "peer-plan.md")
     _handoff(tmp_path, "peer-handoff.md", "peer-sid-live", "in_flight", "dlv-peer-plan-abc123")
 
     monkeypatch.setattr(harvest_mod, "_repo_root", lambda: str(tmp_path))
     monkeypatch.setattr("coordinator_core.session.liveness.session_live", lambda sid, cwd=None: sid == "peer-sid-live")
-    monkeypatch.setattr("coordinator_core.session.core.resolve_session_id", lambda: "closing-sid")
+    _pin_closing_session(monkeypatch, "closing-sid")
 
     called = {"harvest": False}
     monkeypatch.setattr(harvest_mod, "_harvest", lambda *a, **kw: called.__setitem__("harvest", True))
@@ -130,7 +153,7 @@ def test_self_held_proceeds(harvest_mod, tmp_path, monkeypatch, capsys):
 
     monkeypatch.setattr(harvest_mod, "_repo_root", lambda: str(tmp_path))
     monkeypatch.setattr("coordinator_core.session.liveness.session_live", lambda sid, cwd=None: True)
-    monkeypatch.setattr("coordinator_core.session.core.resolve_session_id", lambda: "closing-sid")
+    _pin_closing_session(monkeypatch, "closing-sid")
 
     rc = harvest_mod.main(["--plan", str(plan), "--dry-run"])
     out = capsys.readouterr().out
@@ -144,7 +167,7 @@ def test_dead_holder_proceeds(harvest_mod, tmp_path, monkeypatch, capsys):
 
     monkeypatch.setattr(harvest_mod, "_repo_root", lambda: str(tmp_path))
     monkeypatch.setattr("coordinator_core.session.liveness.session_live", lambda sid, cwd=None: False)
-    monkeypatch.setattr("coordinator_core.session.core.resolve_session_id", lambda: "closing-sid")
+    _pin_closing_session(monkeypatch, "closing-sid")
 
     rc = harvest_mod.main(["--plan", str(plan), "--dry-run"])
     out = capsys.readouterr().out
@@ -158,7 +181,7 @@ def test_terminal_deployment_state_proceeds(harvest_mod, tmp_path, monkeypatch, 
 
     monkeypatch.setattr(harvest_mod, "_repo_root", lambda: str(tmp_path))
     monkeypatch.setattr("coordinator_core.session.liveness.session_live", lambda sid, cwd=None: True)
-    monkeypatch.setattr("coordinator_core.session.core.resolve_session_id", lambda: "closing-sid")
+    _pin_closing_session(monkeypatch, "closing-sid")
 
     rc = harvest_mod.main(["--plan", str(plan), "--dry-run"])
     out = capsys.readouterr().out
@@ -171,7 +194,7 @@ def test_ambiguous_zero_handoffs_proceeds(harvest_mod, tmp_path, monkeypatch, ca
 
     monkeypatch.setattr(harvest_mod, "_repo_root", lambda: str(tmp_path))
     monkeypatch.setattr("coordinator_core.session.liveness.session_live", lambda sid, cwd=None: True)
-    monkeypatch.setattr("coordinator_core.session.core.resolve_session_id", lambda: "closing-sid")
+    _pin_closing_session(monkeypatch, "closing-sid")
 
     rc = harvest_mod.main(["--plan", str(plan), "--dry-run"])
     out = capsys.readouterr().out
@@ -186,7 +209,7 @@ def test_ambiguous_multiple_handoffs_proceeds(harvest_mod, tmp_path, monkeypatch
 
     monkeypatch.setattr(harvest_mod, "_repo_root", lambda: str(tmp_path))
     monkeypatch.setattr("coordinator_core.session.liveness.session_live", lambda sid, cwd=None: True)
-    monkeypatch.setattr("coordinator_core.session.core.resolve_session_id", lambda: "closing-sid")
+    _pin_closing_session(monkeypatch, "closing-sid")
 
     rc = harvest_mod.main(["--plan", str(plan), "--dry-run"])
     out = capsys.readouterr().out

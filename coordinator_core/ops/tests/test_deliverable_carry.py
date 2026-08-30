@@ -191,3 +191,71 @@ def test_terminal_does_not_mean_the_chain_is_finished_and_the_gate_still_mints(t
     )
 
     assert resolve_session_chain_deliverable_id(read_frontmatter_field, str(handoff)) is None
+
+
+# --- session-chain tier: the sizing-object gate (2026-08-30) ----------------
+#
+# Spec backlink: docs/plans/2026-08-30-drop-releases-a-claim-it-never-held.md
+#                chunk C4; docs/wiki/deliverable-id.md § "Sizing-object
+#                negative spec"
+
+
+def test_sizing_object_doc_type_declines_a_live_chain(tmp_path):
+    """A sizing object is the front door for a NOVEL ask — co-membership in
+    whatever baton the session happens to be holding is not evidence the
+    sizing belongs to that chain. Even a held handoff that would otherwise
+    carry (live, non-terminal, has a deliverable_id) must be declined when
+    the artifact being scaffolded is a sizing object."""
+    handoff = tmp_path / "handoff.md"
+    _write_frontmatter(
+        handoff,
+        status="claimed",
+        deployment_state="in-progress",
+        deliverable_id="dlv-unrelated-baton-fff666",
+    )
+
+    assert (
+        resolve_session_chain_deliverable_id(
+            read_frontmatter_field, str(handoff), doc_type="sizing-object"
+        )
+        is None
+    )
+
+
+def test_sizing_object_gate_fires_before_touching_the_chain_path(tmp_path):
+    """The gate must decline on `doc_type` alone, before any read of
+    `chain_artifact_path` — proven by passing a path that does not exist at
+    all (a real chain-path check would degrade to None too, but for the
+    wrong reason; this pins the ORDER, not just the outcome)."""
+    missing_path = str(tmp_path / "does-not-exist.md")
+
+    assert (
+        resolve_session_chain_deliverable_id(
+            read_frontmatter_field, missing_path, doc_type="sizing-object"
+        )
+        is None
+    )
+
+
+def test_non_sizing_doc_type_is_unaffected_by_the_gate(tmp_path):
+    """Negative control: any other `doc_type` (including the default `None`,
+    the pre-existing call sites' behaviour) leaves the tier's normal
+    carry-on-a-live-chain outcome untouched."""
+    handoff = tmp_path / "handoff.md"
+    _write_frontmatter(
+        handoff,
+        status="claimed",
+        deployment_state="in-progress",
+        deliverable_id="dlv-live-chain-ggg777",
+    )
+
+    assert (
+        resolve_session_chain_deliverable_id(
+            read_frontmatter_field, str(handoff), doc_type="handoff"
+        )
+        == "dlv-live-chain-ggg777"
+    )
+    assert (
+        resolve_session_chain_deliverable_id(read_frontmatter_field, str(handoff))
+        == "dlv-live-chain-ggg777"
+    )

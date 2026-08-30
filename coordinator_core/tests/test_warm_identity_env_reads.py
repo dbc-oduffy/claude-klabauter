@@ -84,6 +84,25 @@ COHORT: dict[str, tuple[bool, str]] = {
         "trailer at all -- the ladder-disagreement defect `SESSION_ENV_PRECEDENCE`'s "
         "own docstring records, in a third copy.",
     ),
+    "coordinator/bin/wsc-session-disposition.py": (
+        False,
+        "Warm-reachable, and the first cohort member OUTSIDE coordinator_core — which "
+        "is exactly why it escaped: `workstream_complete.compute_session_shape_gate` "
+        "loads this bin script BY PATH and calls `resolve_session_id` in-process, so a "
+        "registered-op call graph reaches it while no scan of the package could see "
+        "it. Its read was also its own fourth copy of the ladder "
+        "(em_sid/CLAUDE_SESSION_ID/CLAUDE_CODE_SESSION_ID, missing "
+        "COORDINATOR_SESSION_ID) -- the disagreement defect SESSION_ENV_PRECEDENCE's "
+        "docstring records. Triaged and adopted 2026-08-30 from a LIVE reproduction, "
+        "not from inspection: session 56043240-f71b-447a-bf56-4ee49f92ab33 ran "
+        "`workstream-complete-assemble.exe brief` through the warm door and got a "
+        "ceremony keyed to live peer 1189eead-f3eb-4c54-a790-236258043b0d, whose six "
+        "deliverables and archived baton `apply` would have credited to this session's "
+        "close. Cold `.cmd`, same tree, same minute, resolved correctly. "
+        "state/bug-backlog/2026-08-30-close-ceremony-clis-resolve-a-live-peer-"
+        "b558b27c74e7.yaml. `em_sid` survives as a cold-only legacy tier: this ratchet "
+        "does not govern that name, and the warm branch does not read it.",
+    ),
     "coordinator_core/baton_assemble/__init__.py": (
         False,
         "Warm-reachable: the registered op `handoff.correct_body` imports "

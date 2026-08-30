@@ -81,11 +81,21 @@ def test_shutdown_still_unlinks_discovery_when_the_flush_fails(tmp_path: Path, m
         engine_sha="x",
         engine_root=root,
     )
-    monkeypatch.setattr(
-        telemetry.locked_write,
-        "held_lock",
-        lambda *a, **k: (_ for _ in ()).throw(OSError("disk full")),
-    )
+    # THE PATCH MUST BE PATH-SCOPED, not blanket. `telemetry.locked_write` and
+    # `supervisor.locked_write` are the SAME module object, and since C1 took
+    # `held_lock` around `unlink_discovery`'s read-then-unlink (closing that
+    # TOCTOU), a blanket patch breaks the very unlink this test asserts still
+    # happens -- the test would fail for its own instrumentation rather than
+    # for the ordering property it exists to pin. Fail only the telemetry
+    # ledger's own lock, and let every other path take the real one.
+    _real_held_lock = telemetry.locked_write.held_lock
+
+    def _held_lock(path, *a, **k):
+        if Path(path).name == "telemetry.jsonl":
+            raise OSError("disk full")
+        return _real_held_lock(path, *a, **k)
+
+    monkeypatch.setattr(telemetry.locked_write, "held_lock", _held_lock)
 
     ctx.ctx_shutdown()
 

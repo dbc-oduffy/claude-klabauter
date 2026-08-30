@@ -67,6 +67,7 @@ import sys
 from pathlib import Path
 from typing import Optional
 
+from coordinator_core.install import door_install
 from coordinator_core.install.door_install import BARE_FORWARDER_NAME, DOOR_INSTALLED_NAME, is_door_installed
 from coordinator_core.install.substrate import _write_agent_forwarder
 from coordinator_core.warm.door import build as door_build
@@ -139,8 +140,12 @@ def _provenance_path(bin_dst: Path) -> Path:
     """Same naming convention `install_door()` writes under: the installed
     exe's own name plus a `.provenance.json` suffix, e.g.
     `coordinator-invoke.exe.provenance.json` on Windows or
-    `coordinator-invoke.provenance.json` on POSIX."""
-    return bin_dst / (DOOR_INSTALLED_NAME + ".provenance.json")
+    `coordinator-invoke.provenance.json` on POSIX.
+
+    Delegates to `door_install.installed_provenance_path` -- that module
+    now owns the one derivation of this path; this was previously an
+    independent copy of the identical one-line logic."""
+    return door_install.installed_provenance_path(bin_dst)
 
 
 def _reemit_fallback_forwarder(bin_dst: Path) -> "list[Path]":

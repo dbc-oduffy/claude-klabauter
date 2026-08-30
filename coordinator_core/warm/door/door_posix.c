@@ -163,6 +163,11 @@ extern char **environ;
  * `str(Path(engine_root).resolve())` -- UTF-8, no BOM. */
 #define ENGINE_ROOT_SIDECAR_FILENAME "door.engine-root.txt"
 
+/* Must equal door.c's `DOOR_DEFAULT_ENTRYPOINT_W` (minus the wide-string
+ * prefix) -- the one name this file ever compares the resolved basename
+ * against, used only when basename resolution itself failed. */
+#define DOOR_DEFAULT_ENTRYPOINT "coordinator-invoke"
+
 /* Debug/advanced override, checked before the sidecar. Same contract as
  * door.c's: the value is used VERBATIM and must already be
  * `Path(...).resolve()`-canonical, because this file performs no path
@@ -351,6 +356,58 @@ static int get_own_directory(char *out, size_t out_size) {
     memcpy(out, exe_path, dir_len);
     out[dir_len] = '\0';
     return 1;
+}
+
+/* `g_own_basename_ok` is 0 until `resolve_own_basename()` (called once, near
+ * the top of `main()`) succeeds -- mirrors door.c's `g_own_basename_w`/
+ * `g_own_basename_ok` pair exactly, same source-of-truth reasoning: the
+ * running executable's own path via the SAME OS primitive `get_own_
+ * directory()` already trusts (`_NSGetExecutablePath`+`realpath` on macOS,
+ * `/proc/self/exe` on Linux), never `argv[0]` (spoofable via PATH/relative
+ * lookup). On the rare failure of that primitive (genuine OS doubt),
+ * `fall_through` falls back to `DOOR_DEFAULT_ENTRYPOINT` -- the pre-C0
+ * hardcoded name -- so a resolution failure degrades to old behaviour
+ * rather than refusing outright. */
+static char g_own_basename[PATH_MAX];
+static int g_own_basename_ok = 0;
+
+/* Fills `g_own_basename` with this running image's own basename, WITHOUT any
+ * extension stripped (POSIX binaries installed under these names carry no
+ * `.exe` suffix to strip, unlike door.c's Windows twin). Called once from
+ * `main()`, before the warm/cold branch splits, so every fallback in this
+ * file resolves against the SAME basename regardless of which branch reaches
+ * it. */
+static void resolve_own_basename(void) {
+    char exe_path[PATH_MAX];
+
+#if defined(__APPLE__)
+    char raw[PATH_MAX];
+    uint32_t raw_size = (uint32_t)sizeof(raw);
+    if (_NSGetExecutablePath(raw, &raw_size) != 0) return;
+    if (realpath(raw, exe_path) == NULL) return;
+#else
+    ssize_t n = readlink("/proc/self/exe", exe_path, sizeof(exe_path) - 1);
+    if (n <= 0 || (size_t)n >= sizeof(exe_path) - 1) return;
+    exe_path[n] = '\0';
+#endif
+
+    char *last_sep = strrchr(exe_path, '/');
+    const char *name_start = last_sep ? last_sep + 1 : exe_path;
+    size_t name_len = strlen(name_start);
+    if (name_len == 0 || name_len >= sizeof(g_own_basename)) return;
+
+    memcpy(g_own_basename, name_start, name_len);
+    g_own_basename[name_len] = '\0';
+    g_own_basename_ok = 1;
+}
+
+/* The basename `fall_through`'s cold script path resolves against -- SAME
+ * single resolution door.c's `door_entrypoint_basename()` performs, ported
+ * here to close finding 3 (`door_posix.c :: fall_through` previously
+ * formatted `coordinator-invoke.py` as a literal, not basename-aware at
+ * all). Never NULL. */
+static const char *door_entrypoint_basename(void) {
+    return g_own_basename_ok ? g_own_basename : DOOR_DEFAULT_ENTRYPOINT;
 }
 
 /* Reads the sidecar's single line and trims trailing whitespace (an
@@ -810,10 +867,52 @@ static int fall_through(int argc, char **argv, const char *engine_root) {
         return 1;
     }
 
+    /* THE NAME-AWARE COLD LEG, TWO-CANDIDATE, `.py` FIRST -- parity with
+     * door.c's own cold leg and with the Python-side `_resolve_entrypoint_
+     * script` (coordinator_core/ops/invoke_from_argv.py). Resolves against
+     * THIS image's own basename (`door_entrypoint_basename()`), never the
+     * hardcoded `coordinator-invoke.py` literal this file used before
+     * (finding 3): on POSIX `named_forwarder_path` places the installed
+     * image AT the bare name, so any of the twelve installed there would
+     * otherwise overwrite the working extensionless script and fall through
+     * into `coordinator-invoke.py`'s argument grammar with no refusal --
+     * silent mis-dispatch. For a door installed under the default name this
+     * is byte-identical to the pre-C0 path (BACKWARD COMPATIBILITY IS AN
+     * AC). For any other name with neither candidate present, FAIL CLOSED:
+     * refuse outright, no process spawned, rather than substituting a
+     * different CLI's grammar. */
+    const char *entrypoint_basename = door_entrypoint_basename();
+
     char script_path[PATH_MAX];
     int n = snprintf(script_path, sizeof(script_path),
-                     "%s/coordinator/bin/coordinator-invoke.py", root);
+                     "%s/coordinator/bin/%s.py", root, entrypoint_basename);
     if (n < 0 || (size_t)n >= sizeof(script_path)) return 1;
+
+    char extensionless_path[PATH_MAX];
+    int ext_n = snprintf(extensionless_path, sizeof(extensionless_path),
+                          "%s/coordinator/bin/%s", root, entrypoint_basename);
+    if (ext_n < 0 || (size_t)ext_n >= sizeof(extensionless_path)) return 1;
+
+    struct stat script_st;
+    int py_ok = (stat(script_path, &script_st) == 0) && S_ISREG(script_st.st_mode);
+    if (!py_ok) {
+        struct stat ext_st;
+        int ext_ok = (stat(extensionless_path, &ext_st) == 0) && S_ISREG(ext_st.st_mode);
+        if (ext_ok) {
+            memcpy(script_path, extensionless_path, sizeof(script_path));
+        } else {
+            fprintf(stderr,
+                "door: this image is named %s, and no matching coordinator/bin "
+                "CLI exists at %s or %s -- refusing to fall through to a "
+                "different CLI's argument grammar rather than mis-dispatching "
+                "silently. Remediation: install a coordinator/bin/%s.py (or "
+                "extensionless coordinator/bin/%s) for this name, or reinstall "
+                "the door under a name that already has one.\n",
+                entrypoint_basename, script_path, extensionless_path,
+                entrypoint_basename, entrypoint_basename);
+            return 1;
+        }
+    }
 
     /* argv[0] is replaced by the interpreter, argv[1] by the script, and
      * the caller's argv[1:] follows -- exactly what door.c's command line
@@ -901,6 +1000,13 @@ int main(int argc, char **argv) {
      * a signal death exits without falling through AND without emitting an
      * envelope, which is the one outcome no caller can interpret. */
     signal(SIGPIPE, SIG_IGN);
+
+    /* Resolved once, unconditionally, before any branch splits -- see
+     * `resolve_own_basename`'s own comment. Every `fall_through` call in
+     * this file reads `door_entrypoint_basename()`, so it must be populated
+     * regardless of which branch below is the one that ultimately falls
+     * through. */
+    resolve_own_basename();
 
     /* ---- 0. engine root -- resolved at runtime, never baked for socket
      * derivation. On failure `engine_root` stays NULL, which `fall_through`

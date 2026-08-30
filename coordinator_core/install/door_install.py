@@ -131,11 +131,13 @@ docs/plans/2026-08-26-every-forwarder-that-can-reach-the-door-does.md).
 from __future__ import annotations
 
 import argparse
+import hashlib
+import json
 import os
 import shutil
 import sys
 from pathlib import Path
-from typing import Optional
+from typing import NamedTuple, Optional
 
 from coordinator_core.warm.door import build as door_build
 from coordinator_core.warm.engine_root import is_engine_root
@@ -145,6 +147,9 @@ __all__ = [
     "DOOR_INSTALLED_NAME",
     "install_door",
     "is_door_installed",
+    "installed_provenance_path",
+    "verify_installed_provenance",
+    "ProvenanceVerdict",
     "rebuild_and_verify_prebuilt",
     "named_forwarder_path",
     "install_named_forwarder",
@@ -223,6 +228,88 @@ def is_door_installed(bin_dst: Path) -> bool:
     dest_exe = bin_dst / DOOR_INSTALLED_NAME
     dest_sidecar = bin_dst / door_build.SIDECAR_FILENAME
     return dest_exe.exists() and dest_sidecar.exists()
+
+
+def installed_provenance_path(bin_dst: Path) -> Path:
+    """The provenance sidecar path `install_door()` writes/copies its
+    provenance record to: `DOOR_INSTALLED_NAME` plus a `.provenance.json`
+    suffix, e.g. `coordinator-invoke.exe.provenance.json` on Windows.
+
+    Named once so the naming convention exists in exactly one place --
+    `door_uninstall.py :: _provenance_path` used to derive this identical
+    path independently; it now delegates here instead of carrying a second,
+    driftable copy of the same one-line derivation."""
+    return Path(bin_dst) / (DOOR_INSTALLED_NAME + ".provenance.json")
+
+
+class ProvenanceVerdict(NamedTuple):
+    """Result of `verify_installed_provenance()` -- `status` is one of
+    `"no-door"`, `"absent"`, `"unrecorded"`, `"mismatch"`, `"ok"` (see that
+    function's own docstring); `detail` is a human-readable explanation."""
+
+    status: str
+    detail: str
+
+
+def verify_installed_provenance(bin_dst: Path) -> ProvenanceVerdict:
+    """Checks the installed door binary's ACTUAL bytes against the hash its
+    own provenance sidecar claims for them -- the only check that can catch
+    a sidecar describing a binary that is no longer there.
+
+    WHY THE RECORD'S OWN FIELD IS THE ORACLE, NOT MTIME. `shutil.copy2`
+    preserves the SOURCE file's mtime across a copy, so an installed
+    sidecar's mtime routinely predates the install that placed it there --
+    that staleness-that-looks-like-freshness is exactly what made a stale
+    sidecar read as plausible on 2026-08-30 (see `build.py ::
+    write_provenance`'s `image_sha256` paragraph for the full incident).
+    mtime answers "when was this file last written", never "does this file
+    still describe the binary beside it" -- only a content hash recorded
+    IN the sidecar and re-derived FROM the binary can answer that.
+
+    Five statuses, deliberately not collapsed into a bool:
+      - `"no-door"` -- no installed door binary at
+        `bin_dst / DOOR_INSTALLED_NAME`. Nothing to verify.
+      - `"absent"` -- door present, sidecar missing, unreadable, or not
+        valid JSON.
+      - `"unrecorded"` -- sidecar present and parseable but carries no
+        `image_sha256` (a record written before this field existed). This
+        CANNOT be checked, and is reported as such -- it must never be
+        read as a pass.
+      - `"mismatch"` -- `image_sha256` present and differs from the
+        installed binary's actual sha256. `detail` names both hashes and
+        both paths, so a reader never has to re-derive either by hand.
+      - `"ok"` -- they match.
+    """
+    bin_dst = Path(bin_dst)
+    dest_exe = bin_dst / DOOR_INSTALLED_NAME
+    if not dest_exe.exists():
+        return ProvenanceVerdict("no-door", f"no door binary at {dest_exe}")
+
+    provenance_path = installed_provenance_path(bin_dst)
+    try:
+        record = json.loads(provenance_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        return ProvenanceVerdict(
+            "absent", f"sidecar missing or unreadable at {provenance_path}: {exc}"
+        )
+
+    recorded = record.get("image_sha256")
+    if not recorded:
+        return ProvenanceVerdict(
+            "unrecorded",
+            f"{provenance_path} carries no image_sha256 -- predates image "
+            "hashing and cannot be checked against the installed binary",
+        )
+
+    actual = hashlib.sha256(dest_exe.read_bytes()).hexdigest()
+    if actual != recorded:
+        return ProvenanceVerdict(
+            "mismatch",
+            f"installed binary {dest_exe} hashes to {actual}, but its "
+            f"sidecar {provenance_path} records image_sha256={recorded}",
+        )
+
+    return ProvenanceVerdict("ok", f"{dest_exe} matches its recorded image_sha256")
 
 
 def claim_bare_name(bin_dst: Path) -> "list[Path]":
@@ -341,14 +428,44 @@ def install_door(bin_dst: Path, engine_root: Path, *, check_only: bool = False) 
 
     bin_dst.mkdir(parents=True, exist_ok=True)
 
+    dest_provenance = installed_provenance_path(bin_dst)
+
     if _PREBUILT_DOOR_EXE.exists():
         shutil.copy2(_PREBUILT_DOOR_EXE, dest_exe)
         print(f"[door-install] copied prebuilt {_PREBUILT_DOOR_EXE} -> {dest_exe}")
         if _PREBUILT_PROVENANCE.exists():
-            shutil.copy2(_PREBUILT_PROVENANCE, dest_exe.parent / (dest_exe.name + ".provenance.json"))
+            shutil.copy2(_PREBUILT_PROVENANCE, dest_provenance)
+        else:
+            # A missing prebuilt sidecar next to a present prebuilt exe used
+            # to be a SILENT skip while the exe copy above is unconditional
+            # -- that asymmetry is exactly how a destination keeps a stale
+            # record: the binary changes, nothing tells the sidecar to. A
+            # record describing a different binary is worse than no record
+            # at all, so any pre-existing destination sidecar is removed
+            # rather than left to misdescribe the binary this call just
+            # installed.
+            print(
+                f"[door-install] WARNING: no prebuilt provenance at "
+                f"{_PREBUILT_PROVENANCE} -- installing without one",
+                file=sys.stderr,
+            )
+            try:
+                dest_provenance.unlink()
+            except FileNotFoundError:
+                pass
     else:
         door_build.build(engine_root, output=dest_exe)
         print(f"[door-install] no prebuilt found -- compiled fresh at {dest_exe}")
+
+    if dest_provenance.exists():
+        verdict = verify_installed_provenance(bin_dst)
+        if verdict.status == "mismatch":
+            raise DoorInstallError(
+                "door_install: the committed prebuilt exe and its committed "
+                f"provenance sidecar disagree with each other: {verdict.detail}"
+            )
+        if verdict.status == "unrecorded":
+            print(f"[door-install] NOTE: {verdict.detail}")
 
     # `door_build.build()`'s own sidecar write (compiled-fresh branch)
     # already targets `dest_exe`'s directory, so this is only load-

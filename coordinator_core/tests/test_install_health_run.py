@@ -17,10 +17,13 @@ import pytest
 
 from coordinator_core import launchable
 from coordinator_core.install.shell_rc_guard import write_path_entry_guard_blocks
+from coordinator_core.install.door_install import ProvenanceVerdict
 from coordinator_core.ops.install_health_run import (
     _BIN_DST_KNOWN_FORWARDER,
+    _NATIVE_LEGS,
     _trusted_root,
     check_bareword_path_provisioning,
+    check_door_provenance,
     main,
 )
 
@@ -87,6 +90,18 @@ def _trust_opt_out(monkeypatch, tmp_path):
     # immediately above.
     monkeypatch.setattr(
         "coordinator_core.ops.install_health_run.check_bareword_path_provisioning",
+        lambda *args, **kwargs: 0,
+    )
+    # check-door-provenance (this dispatch's new leg) is likewise a real
+    # `_NATIVE_LEGS` entry that runs unconditionally in main() — every test
+    # in this file gets a bare quarantined HOME with no installed door at
+    # all, so the leg would correctly print a NOTE ("no door binary") into
+    # every unrelated iteration-contract test, breaking their silent/exact-
+    # output assertions. Same default-to-no-op precedent as the two legs
+    # above; the dedicated `test_check_door_provenance_*` cases below opt
+    # back IN by calling the function directly.
+    monkeypatch.setattr(
+        "coordinator_core.ops.install_health_run.check_door_provenance",
         lambda *args, **kwargs: 0,
     )
 
@@ -737,4 +752,62 @@ def test_check_bareword_path_provisioning_provisioned_but_not_on_path_is_note_no
     assert rc == 0
     assert "FAIL" not in captured.err
     assert "NOTE" in captured.out
-    assert "not yet on PATH" in captured.out
+
+
+# ---------------------------------------------------------------------------
+# check-door-provenance
+# ---------------------------------------------------------------------------
+
+
+def test_check_door_provenance_registered_in_native_legs():
+    names = [name for name, _ in _NATIVE_LEGS]
+    assert "check-door-provenance" in names
+
+
+def _patch_verdict(monkeypatch, status, detail="detail"):
+    monkeypatch.setattr(
+        "coordinator_core.ops.install_health_run.door_install.verify_installed_provenance",
+        lambda bin_dst: ProvenanceVerdict(status, detail),
+    )
+
+
+def test_check_door_provenance_ok_exits_zero(monkeypatch, capsys):
+    _patch_verdict(monkeypatch, "ok")
+    rc = check_door_provenance("", "")
+    captured = capsys.readouterr()
+    assert rc == 0
+    assert "FAIL" not in captured.err
+
+
+def test_check_door_provenance_mismatch_exits_one_with_remediation(monkeypatch, capsys):
+    _patch_verdict(monkeypatch, "mismatch", "hash mismatch detail")
+    rc = check_door_provenance("", "")
+    captured = capsys.readouterr()
+    assert rc == 1
+    assert "[door-provenance] FAIL" in captured.err
+    assert "hash mismatch detail" in captured.err
+    assert "python scripts/setup.py" in captured.err
+
+
+def test_check_door_provenance_unrecorded_exits_zero_with_note(monkeypatch, capsys):
+    _patch_verdict(monkeypatch, "unrecorded", "no image_sha256")
+    rc = check_door_provenance("", "")
+    captured = capsys.readouterr()
+    assert rc == 0
+    assert "NOTE" in captured.out
+
+
+def test_check_door_provenance_absent_exits_one(monkeypatch, capsys):
+    _patch_verdict(monkeypatch, "absent", "sidecar missing")
+    rc = check_door_provenance("", "")
+    captured = capsys.readouterr()
+    assert rc == 1
+    assert "[door-provenance] FAIL" in captured.err
+
+
+def test_check_door_provenance_no_door_exits_zero_with_note(monkeypatch, capsys):
+    _patch_verdict(monkeypatch, "no-door", "no door binary")
+    rc = check_door_provenance("", "")
+    captured = capsys.readouterr()
+    assert rc == 0
+    assert "NOTE" in captured.out

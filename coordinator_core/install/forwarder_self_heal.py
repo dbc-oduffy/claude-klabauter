@@ -124,6 +124,7 @@ def _self_heal_forwarders_inner() -> None:
         _derive_agent_helper_target_map,
         _cut_over_to_native_door,
         _write_agent_forwarder,
+        _union_native_forwarder_manifest,
     )
     from coordinator_core.engine_root import coordinator_engine_root_with_class
 
@@ -163,6 +164,7 @@ def _self_heal_forwarders_inner() -> None:
     if not missing:
         return
 
+    native_written: "set[str]" = set()
     try:
         with held_lock(bin_dst, holder_label="forwarder-self-heal", timeout=2.0):
             for name, target in sorted(missing.items()):
@@ -172,12 +174,19 @@ def _self_heal_forwarders_inner() -> None:
                     if _cut_over_to_native_door(
                         name, bin_dst, False, engine_root=door_root
                     ) is not None:
+                        native_written.add(name)
                         continue
                 # Doorless root: the bare Python forwarder is all that can be
                 # written. Correct on POSIX, and on Windows it is the same
                 # degraded shape the installer leaves for an unstamped root --
                 # not bare-name resolvable, and not papered over with a `.cmd`.
                 _write_agent_forwarder(name, bin_dst / name, False, target=target)
+            # Read-union-write, under the SAME held_lock this loop already
+            # holds -- see `_union_native_forwarder_manifest`'s docstring for
+            # why this must be a union and not `substrate.py`'s full-install
+            # overwrite writer: this loop only ever sees the names missing
+            # THIS invocation, never the complete set.
+            _union_native_forwarder_manifest(bin_dst, native_written)
     except LockTimeout:
         return
 

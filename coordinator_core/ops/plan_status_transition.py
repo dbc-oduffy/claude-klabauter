@@ -884,7 +884,7 @@ def _refuse_if_live_foreign_holder(plan_path: Path, worktree_root: Path, closing
     or handoff-less session, which is not this incident's shape.
     """
     from coordinator_core.lifecycle_constants import HANDOFF_TERMINAL_DEPLOYMENT
-    from coordinator_core.session.core import resolve_session_id
+    from coordinator_core.session.core import attributable_session_id
     from coordinator_core.session.liveness import session_live
 
     plan_deliverable_id = None
@@ -918,10 +918,23 @@ def _refuse_if_live_foreign_holder(plan_path: Path, worktree_root: Path, closing
         return None
 
     try:
-        resolved_closing_sid = closing_sid or resolve_session_id()
+        resolved_closing_sid = closing_sid or attributable_session_id()
     except Exception:
         resolved_closing_sid = None
-    if resolved_closing_sid is None or claimed_by == resolved_closing_sid:
+    if not resolved_closing_sid or claimed_by == resolved_closing_sid:
+        # `attributable_session_id`, not `resolve_session_id`: this guard's
+        # whole job is to compare a foreign claim against THIS session, and
+        # inside the warm server the env tiers `resolve_session_id` degrades
+        # to name whoever spawned the engine. Measured 2026-08-30 —
+        # `coordinator-harvest-deferrals` through the warm door told the
+        # observing session its OWN claim was foreign, naming a live peer as
+        # "this session"; the mirror case is a genuine foreign claim
+        # matching the server owner's id and the guard staying silent over
+        # it. Empty (a warm request that carried no identity) falls through
+        # to proceed, unchanged from the pre-existing `None` behaviour: this
+        # guard fires only on a POSITIVELY-established live foreign holder,
+        # per its own docstring, and blocking on absence of evidence would
+        # wedge every session the door cannot identify.
         return None
 
     if not session_live(claimed_by, cwd=str(worktree_root)):
@@ -1271,9 +1284,9 @@ def _stamp_implemented(opts: _Opts) -> int:
         if override_reason is not None:
             from datetime import datetime, timezone
 
-            from coordinator_core.session.core import resolve_session_id
+            from coordinator_core.session.core import attributable_session_id
 
-            override_by = resolve_session_id() or "unknown-session"
+            override_by = attributable_session_id() or "unknown-session"
             override_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
             fm_text = insert_fm_field(fm_text, "status_override_at", override_at, after_key="status")
             fm_text = insert_fm_field(fm_text, "status_override_reason", override_reason, after_key="status")
@@ -1792,9 +1805,9 @@ def _stamp_reopened(opts: _Opts) -> int:
 
         from datetime import datetime, timezone
 
-        from coordinator_core.session.core import resolve_session_id
+        from coordinator_core.session.core import attributable_session_id
 
-        reopened_by = resolve_session_id() or "unknown-session"
+        reopened_by = attributable_session_id() or "unknown-session"
         reopened_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
         fm_text = replace_fm_field(split.fm_text, "status", "landed")
@@ -2268,9 +2281,9 @@ def _stamp_review_verified(opts: _Opts) -> int:
 
         from datetime import datetime, timezone
 
-        from coordinator_core.session.core import resolve_session_id
+        from coordinator_core.session.core import attributable_session_id
 
-        verified_by = resolve_session_id() or "unknown-session"
+        verified_by = attributable_session_id() or "unknown-session"
         verified_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
         fm_text = split.fm_text

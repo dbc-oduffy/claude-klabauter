@@ -4871,9 +4871,41 @@ def _unify_into_successor(root: Path, verdict: dict[str, Any]) -> str:
     anyway (it is what proves the mint actually landed, and raises when no
     parent leg shows `continued_into`), so handing it back spares every
     caller a second archive-aware walk over the same parents to recompute a
-    value already known here."""
+    value already known here.
+
+    PARENT-READINESS PRECONDITION, checked BEFORE the mint (C2,
+    docs/plans/2026-08-30-drop-releases-a-claim-it-never-held.md): the real
+    `baton_assemble.apply.apply` mints and COMMITS the successor before its
+    own d6 stamp loop runs, so a post-mint discovery that a parent leg will
+    never take a `continued`/`continued_into` stamp (the one below, kept as
+    a genuine-race guard) always leaves a committed mint behind it — the
+    exact split-state defect this chunk exists to close. `apply`'s own d6
+    handler (`_dispatch_handoff_supersede_predecessor`) degrades (does not
+    raise) when a predecessor is not claimed-or-shipped, per DR-242 — so
+    that degraded leg never gets `continued_into` set, which is precisely
+    what `claimed_or_shipped_at_path` can already tell us from the parents'
+    OWN frontmatter, unresolved-race-free, before `apply` is ever called.
+    Raising here instead of minting means a caller that hits this never has
+    a commit to clean up."""
+    from coordinator_core.archival import claimed_or_shipped_at_path
     from coordinator_core.baton_assemble.apply import apply as _baton_assemble_apply
     from coordinator_core.contract import apply_base as _apply_base
+
+    parents = _unification_parents(verdict.get("held") or {})
+    unready = [
+        parent_path
+        for parent_path in parents
+        if not claimed_or_shipped_at_path(
+            str(_resolve_lineage_artifact_path(root, parent_path) or (root / parent_path))
+        )
+    ]
+    if unready:
+        raise RuntimeError(
+            "baton unification precondition failed: parent leg(s) "
+            f"{unready} are not claimed-or-shipped, so baton_assemble.apply's "
+            "d6 stamp would degrade rather than stamp continued_into -- "
+            f"refusing to mint (held={verdict.get('held')})"
+        )
 
     exit_code, report = _baton_assemble_apply(
         "handoff", "", session_id=None, repo_root=root, decisions=None, title=None
@@ -4884,7 +4916,6 @@ def _unify_into_successor(root: Path, verdict: dict[str, Any]) -> str:
             f"(exit_code={exit_code}, held={verdict.get('held')}): {report!r}"
         )
 
-    parents = _unification_parents(verdict.get("held") or {})
     successor: Optional[str] = None
     for parent_path in parents:
         successor = _continued_into_target(root, parent_path)
@@ -4893,7 +4924,9 @@ def _unify_into_successor(root: Path, verdict: dict[str, Any]) -> str:
     if not successor:
         raise RuntimeError(
             "baton unification: mint reported success but no parent leg "
-            f"shows continued_into (parents={parents})"
+            f"shows continued_into (parents={parents}) -- the precondition "
+            "above passed, so this is a genuine race (claim state changed "
+            "between the check and the mint), not the ordinary degrade case"
         )
 
     _finish_unification_claims(root, parents, successor)

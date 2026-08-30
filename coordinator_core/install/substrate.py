@@ -1126,6 +1126,36 @@ def _write_native_forwarder_manifest(dst_dir: Path, names: "set[str]") -> None:
                 pass
 
 
+def _union_native_forwarder_manifest(dst_dir: Path, written_names: "set[str]") -> None:
+    """Read-union-write: add ``written_names`` to whatever the manifest
+    already records, then persist the union -- the manifest-update shape a
+    PARTIAL writer (one that only ever writes a subset of names in a single
+    invocation) must use instead of ``_write_native_forwarder_manifest``'s
+    overwrite-with-complete-set contract.
+
+    ``_write_native_forwarder_manifest`` is correct for the full-install
+    loop, which iterates every name in ``agent_helper_target_map`` every
+    run and can therefore safely treat "not written this run" as "no
+    longer native" (its own docstring's condition 2). ``forwarder_self_heal``
+    is not that caller: it writes only the handful of names missing THIS
+    invocation, so calling the overwrite writer with just those names would
+    silently drop manifest-protection for every other name already on
+    record -- the exact defect this function exists to avoid. Callers doing
+    a partial write MUST call this instead of
+    ``_write_native_forwarder_manifest`` directly.
+
+    Best-effort, matching the writer it wraps: a read or write failure here
+    degrades to "the sweep can't see this invocation's native forwarders
+    via the manifest", never a self-heal failure. Caller is expected to
+    hold `held_lock` on ``dst_dir`` already (self-heal takes it before
+    calling this), so the read-union-write is race-safe against a
+    concurrent full install's overwrite of the same file."""
+    if not written_names:
+        return
+    current = _read_native_forwarder_manifest(dst_dir)
+    _write_native_forwarder_manifest(dst_dir, current | written_names)
+
+
 # DOOR-ELIGIBLE BUCKET CUTOVER (C5, docs/plans/2026-08-26-every-forwarder-
 # that-can-reach-the-door-does.md). `warm_entrypoint_allowlist.json` is the
 # committed artifact C2's census populates from its `door-eligible` bucket

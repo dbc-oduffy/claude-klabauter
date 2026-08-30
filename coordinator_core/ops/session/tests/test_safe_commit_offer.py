@@ -1182,6 +1182,52 @@ class TestHandler:
         ).stdout
         assert "a.py" in status  # NOT committed
 
+    def test_dry_run_names_dirty_paths_no_session_claims(self, tmp_path):
+        """The shape doe-claude-em reported three times (2026-08-18, -21, -30):
+        a session whose whole working set was written through Bash carries no
+        claim, so the offer answered `safe_paths: 0, excluded: 0` over a tree
+        with real modifications -- byte-identical to a clean tree.
+
+        The bucket that names them existed since 2026-08-29 but only on the
+        COMMIT path, i.e. only after the decision it informs was already taken.
+        This asserts the inspection path names it too, and that naming is all
+        it does: the path stays out of `safe_paths` (never adopted) and stays
+        uncommitted.
+        """
+        repo = _make_repo(tmp_path)
+        core.init("mine", cwd=str(repo))
+        (repo / "written-by-a-heredoc.py").write_text("x")
+
+        out = safe_commit_offer._handler(
+            {"session_id": "mine", "cwd": str(repo), "dry_run": True}
+        )
+
+        assert out["safe_paths"] == []
+        assert out["excluded"] == []
+        assert out["reconciliation"]["reconciled"] is True
+        assert "written-by-a-heredoc.py" in out["reconciliation"]["unclaimed"]
+        assert "written-by-a-heredoc.py" in out["rendered"]
+        assert "unclaimed-and-dirty: 1" in out["rendered"]
+
+    def test_dry_run_does_not_call_a_claimed_path_unclaimed(self, tmp_path):
+        """The subtraction that keeps the bucket honest: a dirty path this
+        session DOES claim is its own work awaiting commit, not an adoption
+        candidate. Folding the two together is what would make the enumeration
+        unsafe to hand `--include-orphans`.
+        """
+        repo = _make_repo(tmp_path)
+        core.init("mine", cwd=str(repo))
+        (repo / "claimed.py").write_text("a")
+        (repo / "unclaimed.py").write_text("b")
+        scope.touch("mine", "claimed.py", cwd=str(repo))
+
+        out = safe_commit_offer._handler(
+            {"session_id": "mine", "cwd": str(repo), "dry_run": True}
+        )
+
+        assert out["safe_paths"] == ["claimed.py"]
+        assert out["reconciliation"]["unclaimed"] == ["unclaimed.py"]
+
     # designed_red: blocked on the `ceremony.scoped_git_commit` op SUSPENSION
     # (coordinator_core/op_budget_suspension.py, PM ruling 2026-08-21: measured
     # max 150021ms against a 2000ms bar). NOT the attribution kill -- that was

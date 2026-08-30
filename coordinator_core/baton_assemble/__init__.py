@@ -2602,48 +2602,107 @@ def resolve_lineage(
                 if _provenance_predecessor_handoff not in ("none", None, "")
                 else None
             )
-            try:
-                predecessor, _ledger_additional, _ledger_degraded = (
-                    _resolve_held_handoff_for_session(root)
-                )
-            except ValueError as exc:
-                predecessor = None
-                predecessor_id = None
-                lineage["plan_ledger_no_claim"] = str(exc)
-                lineage["predecessor_ordering_degraded"] = False
-            else:
-                lineage["predecessor_ordering_degraded"] = _ledger_degraded
-                _ledger_extra_paths = list(_ledger_additional)
-                predecessor_path = Path(predecessor)
-                if not predecessor_path.is_absolute():
-                    predecessor_path = root / predecessor
-                if not predecessor_path.is_file():
-                    # Review: coordinatorcode-reviewer-c2d43fc7 Finding 1 --
-                    # the ledger's returned basename may already have moved to
-                    # `archive/handoffs/` (`_resolve_held_handoff_for_session`'s
-                    # own reason for existing); route it through the same
-                    # archive-aware fail-loud resolution
-                    # `_resolve_additional_predecessor_paths` already applies
-                    # to its own entries, rather than letting
-                    # `_read_frontmatter`'s missing-path silence starve
-                    # `predecessor_id` and defeat
-                    # `_resolved_predecessor_canonical_kind`'s own roadmap-baton
-                    # gate for an archived predecessor.
-                    predecessor_path = _resolve_qualified_path_or_raise(predecessor, root, kind)
-                    # Reflect the resolved (possibly archived) location back
-                    # onto `predecessor` itself -- it feeds `lineage["predecessor"]`
-                    # a few lines below, which is in turn what
-                    # `_resolved_predecessor_canonical_kind` (C3's roadmap-baton
-                    # gate) and `predecessor_is_live` resolve against. Leaving
-                    # `predecessor` as the stale ledger basename here would fix
-                    # `predecessor_id` while still handing C3's gate a path that
-                    # fails its own `is_file()` check.
-                    try:
-                        predecessor = predecessor_path.relative_to(root).as_posix()
-                    except ValueError:
-                        predecessor = str(predecessor_path)
+            # Leg 1 (this chunk, C6): the plan's OWN declared
+            # `predecessor_handoff`/`predecessor` field wins outright when it
+            # resolves to a file on disk -- an author-asserted edge is
+            # descent evidence on its own (same reasoning
+            # `deliverable_carry.py :: resolve_explicit_predecessor_
+            # deliverable_id`'s docstring gives for treating an explicit
+            # `predecessor_path` as stronger than a session-held claim).
+            # Before this fix the ledger-held handoff below was consulted
+            # UNCONDITIONALLY, discarding this declaration even when it
+            # named a real file -- the defect this plan's problem statement
+            # names.
+            _declared_predecessor_path: Optional[Path] = None
+            if lineage["predecessor_handoff"]:
+                _declared_candidate = Path(lineage["predecessor_handoff"])
+                if not _declared_candidate.is_absolute():
+                    _declared_candidate = root / lineage["predecessor_handoff"]
+                if _declared_candidate.is_file():
+                    _declared_predecessor_path = _declared_candidate
+            if _declared_predecessor_path is not None:
+                predecessor_path = _declared_predecessor_path
+                try:
+                    predecessor = predecessor_path.relative_to(root).as_posix()
+                except ValueError:
+                    predecessor = str(predecessor_path)
                 predecessor_fm = _read_frontmatter(predecessor_path)
                 predecessor_id = _fm_field(predecessor_fm, "handoff_id")
+                lineage["predecessor_ordering_degraded"] = False
+            else:
+                try:
+                    predecessor, _ledger_additional, _ledger_degraded = (
+                        _resolve_held_handoff_for_session(root)
+                    )
+                except ValueError as exc:
+                    predecessor = None
+                    predecessor_id = None
+                    lineage["plan_ledger_no_claim"] = str(exc)
+                    lineage["predecessor_ordering_degraded"] = False
+                else:
+                    predecessor_path = Path(predecessor)
+                    if not predecessor_path.is_absolute():
+                        predecessor_path = root / predecessor
+                    if not predecessor_path.is_file():
+                        # Review: coordinatorcode-reviewer-c2d43fc7 Finding 1 --
+                        # the ledger's returned basename may already have moved to
+                        # `archive/handoffs/` (`_resolve_held_handoff_for_session`'s
+                        # own reason for existing); route it through the same
+                        # archive-aware fail-loud resolution
+                        # `_resolve_additional_predecessor_paths` already applies
+                        # to its own entries, rather than letting
+                        # `_read_frontmatter`'s missing-path silence starve
+                        # `predecessor_id` and defeat
+                        # `_resolved_predecessor_canonical_kind`'s own roadmap-baton
+                        # gate for an archived predecessor.
+                        predecessor_path = _resolve_qualified_path_or_raise(
+                            predecessor, root, kind
+                        )
+                    predecessor_fm = _read_frontmatter(predecessor_path)
+                    # Leg 2 (C6): a ledger-held handoff is only accepted as
+                    # this plan's predecessor when it ACTUALLY shares lineage
+                    # with the plan -- its own `governing_plan` names this
+                    # plan (`artifact_path`), or it carries the same
+                    # `deliverable_id` this plan resolved above. Holding a
+                    # claim is bookkeeping, not an attestation (DR-294,
+                    # extended here to the predecessor edge the same way C4
+                    # extends it to sizing objects) -- an unrelated baton the
+                    # session merely happens to be holding must not be
+                    # wired in as descent.
+                    _held_governing_plan = _fm_field(predecessor_fm, "governing_plan")
+                    _held_deliverable_id = _fm_field(predecessor_fm, "deliverable_id")
+                    _shares_governing_plan = bool(_held_governing_plan) and (
+                        _repo_relative_posix(_held_governing_plan, root)
+                        == _repo_relative_posix(artifact_path, root)
+                    )
+                    _shares_deliverable_id = bool(deliverable_id) and (
+                        _held_deliverable_id == deliverable_id
+                    )
+                    if _shares_governing_plan or _shares_deliverable_id:
+                        lineage["predecessor_ordering_degraded"] = _ledger_degraded
+                        _ledger_extra_paths = list(_ledger_additional)
+                        # Reflect the resolved (possibly archived) location back
+                        # onto `predecessor` itself -- it feeds `lineage["predecessor"]`
+                        # a few lines below, which is in turn what
+                        # `_resolved_predecessor_canonical_kind` (C3's roadmap-baton
+                        # gate) and `predecessor_is_live` resolve against. Leaving
+                        # `predecessor` as the stale ledger basename here would fix
+                        # `predecessor_id` while still handing C3's gate a path that
+                        # fails its own `is_file()` check.
+                        try:
+                            predecessor = predecessor_path.relative_to(root).as_posix()
+                        except ValueError:
+                            predecessor = str(predecessor_path)
+                        predecessor_id = _fm_field(predecessor_fm, "handoff_id")
+                    else:
+                        # Leg 3: the held claim shares no lineage with this
+                        # plan -- an absent predecessor is the correct value
+                        # for a plan descending from a sizing object, not a
+                        # gap to fill by guessing which unrelated baton the
+                        # session happens to hold.
+                        predecessor = None
+                        predecessor_id = None
+                        lineage["predecessor_ordering_degraded"] = False
         else:
             predecessor = _fm_field(fm, "predecessor_handoff") or _fm_field(fm, "predecessor")
             predecessor_id = None

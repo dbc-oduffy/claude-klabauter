@@ -232,3 +232,78 @@ def test_double_invocation_is_idempotent(tmp_path):
     second = classify(clone)
 
     assert first == second
+
+
+def _count_git_spawns(monkeypatch, repo: Path) -> tuple[int, dict]:
+    """Run `classify` counting every `_git` spawn it makes."""
+    import coordinator_core.ops.push_failure_verdict as pv
+
+    spawns: list[list[str]] = []
+    original = pv._git
+
+    def _spy(args, *a, **kw):
+        spawns.append(list(args))
+        return original(args, *a, **kw)
+
+    monkeypatch.setattr(pv, "_git", _spy)
+    result = classify(repo)
+    return len(spawns), result
+
+
+def test_clean_index_costs_exactly_one_git_spawn(tmp_path, monkeypatch):
+    """A clean index answers from ONE `git status --porcelain=v2` spawn.
+
+    This is the op's contract, not an incidental win: it replaced four
+    spawns (two `diff`s, `rev-parse --git-dir`, `rev-list`) measured at
+    546ms total against a 500ms brightline and a 200ms per-process
+    ceiling. `_incoming_files` must stay behind the `if staged:` guard —
+    with an empty index its result is read by no verdict.
+    """
+    _origin, clone = _clone_with_upstream(tmp_path)
+
+    count, result = _count_git_spawns(monkeypatch, clone)
+
+    assert count == 1, f"clean index should cost one spawn, made {count}"
+    assert result["verdict"] == "indeterminate"
+
+
+def test_staged_index_costs_at_most_two_git_spawns(tmp_path, monkeypatch):
+    """A non-empty index adds exactly ONE spawn — the incoming-files diff
+    that discriminates `half_applied_merge` from `peer_staged`. Nothing
+    else may re-enter the process budget."""
+    origin, clone = _clone_with_upstream(tmp_path)
+    _push_extra_commits_and_fetch(origin, clone, ["incoming1.txt"])
+
+    (clone / "mine.txt").write_text("my own unrelated staged file\n")
+    _git("add", "mine.txt", cwd=clone)
+
+    count, result = _count_git_spawns(monkeypatch, clone)
+
+    assert count == 2, f"staged index should cost two spawns, made {count}"
+    assert result["verdict"] == "peer_staged"
+
+
+def test_untracked_files_are_excluded_from_both_sets(tmp_path):
+    """`--untracked-files=no` suppresses the untracked scan; an untracked
+    file must therefore count as neither staged nor unstaged — the same
+    blindness the `diff` probes this replaced had."""
+    _origin, clone = _clone_with_upstream(tmp_path)
+    (clone / "untracked.txt").write_text("never added\n")
+
+    result = classify(clone)
+
+    assert result["evidence"]["staged_count"] == 0
+    assert result["evidence"]["unstaged_local_count"] == 0
+
+
+def test_renamed_staged_path_is_counted_once(tmp_path):
+    """A porcelain-v2 `2` rename row carries `<path>\t<origPath>`; only the
+    NEW path is taken, matching `diff --name-only`'s own reporting."""
+    _origin, clone = _clone_with_upstream(tmp_path)
+    existing = next(p for p in clone.iterdir() if p.is_file() and p.name != ".git")
+    _git("mv", existing.name, "renamed.txt", cwd=clone)
+
+    result = classify(clone)
+
+    assert result["evidence"]["staged_count"] == 1
+    assert result["evidence"]["staged_sample"] == ["renamed.txt"]

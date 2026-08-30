@@ -10,6 +10,8 @@ Spec backlink: state/dispatch-briefs/2026-08-22-warm-engine-and-door-install-fro
 
 from __future__ import annotations
 
+import hashlib
+import json
 import sys
 
 import pytest
@@ -165,3 +167,104 @@ def test_check_only_never_removes_shadowing_ps1_sibling(tmp_path):
     door_install.install_door(bin_dst, engine_root, check_only=True)
 
     assert shadow.exists()
+
+
+# ---------------------------------------------------------------------------
+# verify_installed_provenance -- five statuses
+# ---------------------------------------------------------------------------
+
+
+def test_verify_installed_provenance_no_door(tmp_path):
+    bin_dst = tmp_path / "bin"
+    bin_dst.mkdir()
+    verdict = door_install.verify_installed_provenance(bin_dst)
+    assert verdict.status == "no-door"
+
+
+def test_verify_installed_provenance_absent_sidecar(tmp_path):
+    bin_dst = tmp_path / "bin"
+    bin_dst.mkdir()
+    (bin_dst / door_install.DOOR_INSTALLED_NAME).write_bytes(b"door bytes")
+    verdict = door_install.verify_installed_provenance(bin_dst)
+    assert verdict.status == "absent"
+
+
+def test_verify_installed_provenance_unrecorded(tmp_path):
+    bin_dst = tmp_path / "bin"
+    bin_dst.mkdir()
+    (bin_dst / door_install.DOOR_INSTALLED_NAME).write_bytes(b"door bytes")
+    door_install.installed_provenance_path(bin_dst).write_text(
+        json.dumps({"door_c_sha256": "deadbeef"}), encoding="utf-8"
+    )
+    verdict = door_install.verify_installed_provenance(bin_dst)
+    assert verdict.status == "unrecorded"
+
+
+def test_verify_installed_provenance_mismatch(tmp_path):
+    bin_dst = tmp_path / "bin"
+    bin_dst.mkdir()
+    (bin_dst / door_install.DOOR_INSTALLED_NAME).write_bytes(b"door bytes")
+    door_install.installed_provenance_path(bin_dst).write_text(
+        json.dumps({"image_sha256": "0" * 64}), encoding="utf-8"
+    )
+    verdict = door_install.verify_installed_provenance(bin_dst)
+    assert verdict.status == "mismatch"
+    assert "0" * 64 in verdict.detail
+
+
+def test_verify_installed_provenance_ok(tmp_path):
+    bin_dst = tmp_path / "bin"
+    bin_dst.mkdir()
+    door_bytes = b"door bytes"
+    (bin_dst / door_install.DOOR_INSTALLED_NAME).write_bytes(door_bytes)
+    door_install.installed_provenance_path(bin_dst).write_text(
+        json.dumps({"image_sha256": hashlib.sha256(door_bytes).hexdigest()}),
+        encoding="utf-8",
+    )
+    verdict = door_install.verify_installed_provenance(bin_dst)
+    assert verdict.status == "ok"
+
+
+# ---------------------------------------------------------------------------
+# install_door -- prebuilt/sidecar disagreement and stale-sidecar removal
+# ---------------------------------------------------------------------------
+
+
+def test_install_door_raises_when_prebuilt_exe_and_sidecar_disagree(tmp_path, monkeypatch):
+    if not door_install._PREBUILT_DOOR_EXE.exists():
+        pytest.skip("no committed prebuilt door for this platform in this checkout")
+
+    engine_root = tmp_path / "engine"
+    _stamp_engine_root(engine_root)
+    bin_dst = tmp_path / "bin"
+
+    bad_provenance = tmp_path / "bad-provenance.json"
+    bad_provenance.write_text(json.dumps({"image_sha256": "0" * 64}), encoding="utf-8")
+    monkeypatch.setattr(door_install, "_PREBUILT_PROVENANCE", bad_provenance)
+
+    with pytest.raises(door_install.DoorInstallError):
+        door_install.install_door(bin_dst, engine_root)
+
+
+def test_install_door_removes_stale_destination_sidecar_when_no_prebuilt_sidecar(
+    tmp_path, monkeypatch
+):
+    if not door_install._PREBUILT_DOOR_EXE.exists():
+        pytest.skip("no committed prebuilt door for this platform in this checkout")
+
+    engine_root = tmp_path / "engine"
+    _stamp_engine_root(engine_root)
+    bin_dst = tmp_path / "bin"
+    bin_dst.mkdir()
+
+    stale_provenance = door_install.installed_provenance_path(bin_dst)
+    stale_provenance.write_text(
+        json.dumps({"image_sha256": "stale"}), encoding="utf-8"
+    )
+
+    missing_provenance = tmp_path / "missing-provenance.json"
+    monkeypatch.setattr(door_install, "_PREBUILT_PROVENANCE", missing_provenance)
+
+    door_install.install_door(bin_dst, engine_root)
+
+    assert not stale_provenance.exists()

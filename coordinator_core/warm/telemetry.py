@@ -541,6 +541,7 @@ class ServerTelemetry:
         *,
         clock: Callable[[], float] = time.monotonic,
         transport: Optional[str] = None,
+        engine_token: Optional[str] = None,
     ):
         # `transport` names which transport's life this row describes, and is
         # OMITTED from `snapshot()` when None. That default is what keeps the
@@ -552,9 +553,24 @@ class ServerTelemetry:
         # "the pipe server, or a row written before this field", and a reader
         # separating the two populations filters on the presence of this key
         # rather than inferring one.
+        # `engine_token` names WHICH ENGINE GENERATION this life served, and
+        # is OMITTED from `snapshot()` when None, on the identical contract as
+        # `transport` above -- absence means "a row written before this field",
+        # never "no token".
+        #
+        # WHY IT IS LOAD-BEARING RATHER THAN DECORATIVE: `supervisor_pipe_name`
+        # embeds `skew.compute_client_token(root)`, so an old-token and a
+        # new-token generation elect on DISTINCT pipe names and legitimately
+        # coexist during a stamp rotation's drain window. A concurrent-listener
+        # high-water taken across the whole file therefore counts that designed
+        # overlap as if it were orphaning, and can never fall to 1 no matter how
+        # correct the election is. Keying lifetimes by this field is what turns
+        # that census from an unfalsifiable global number into the per-generation
+        # one the single-instance property is actually about.
         self._lock = threading.Lock()
         self._clock = clock
         self._transport = transport
+        self._engine_token = engine_token
         self._started_monotonic = clock()
         self._served_count = 0
         self._warm_count = 0
@@ -645,6 +661,8 @@ class ServerTelemetry:
                 record["exit_detail"] = self._exit_detail
             if self._transport is not None:
                 record["transport"] = self._transport
+            if self._engine_token is not None:
+                record["engine_token"] = self._engine_token
             return record
 
     def flush(self, *, engine_root: Optional[Path] = None) -> None:

@@ -98,12 +98,17 @@ def write_provenance(output: Path, compiler_path: str, engine_root: Path) -> Pat
 
     Unlike `build.py :: write_provenance`, this does NOT underwrite a
     `--verify` rebuild-and-compare: see the module docstring on why no
-    reproducibility claim is made for this toolchain."""
+    reproducibility claim is made for this toolchain.
+
+    `image_sha256` -- same field, same reasoning as `build.py ::
+    write_provenance`'s own paragraph on why an input-only record cannot be
+    checked against the artifact beside it; not restated here."""
     provenance = {
         "sources": {
             path.name: hashlib.sha256(path.read_bytes()).hexdigest()
             for path in (*_SOURCES, _HEADER)
         },
+        "image_sha256": hashlib.sha256(output.read_bytes()).hexdigest(),
         "compiler": compiler_path,
         "compiler_version": _compiler_version(compiler_path),
         "built_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),

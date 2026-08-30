@@ -175,7 +175,7 @@ import subprocess
 from collections import OrderedDict
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import List, Literal, Optional, Sequence, Tuple, TypedDict
+from typing import AbstractSet, Any, List, Literal, Mapping, Optional, Sequence, Tuple, TypedDict
 
 from functools import partial
 
@@ -1399,7 +1399,45 @@ def _compute_residue(
     # `groups` override dropped it) is this session's own uncommitted work,
     # not an adoption candidate; folding the two together is what would make
     # the enumeration unsafe to hand `--include-orphans`.
-    mine_now = set(fresh_offer.get("safe_paths") or [])
+    reconciliation = _reconciliation_from(
+        worktree_root,
+        dirty=dirty,
+        committed_paths=committed_paths,
+        owned_paths=owned_paths,
+        peer_claimed=peer_claimed,
+        mine_now=set(fresh_offer.get("safe_paths") or []),
+    )
+    return buckets, reconciliation
+
+
+def _reconciliation_from(
+    worktree_root: str,
+    dirty: List[str],
+    committed_paths: "AbstractSet[str]",
+    owned_paths: "AbstractSet[str]",
+    peer_claimed: "Mapping[str, Any]",
+    mine_now: "AbstractSet[str]",
+) -> Reconciliation:
+    """The `Reconciliation` half, built from inputs the CALLER already read --
+    no git call and no claim read of its own, so it can serve both the
+    post-commit seam (`_compute_residue`) and the pre-commit `dry_run` seam
+    (`_reconcile_offer`) off ONE dirty read each. Shared deliberately: two
+    copies of this arithmetic is how the two seams would drift into naming
+    different files "unclaimed", and the whole point of the bucket is that an
+    operator can trust the name.
+
+    UNCLAIMED = dirty, and claimed by NO session -- this session included.
+    ``mine_now`` is subtracted because a dirty path this session DOES claim
+    (its commit group failed, the caller's own `groups` override dropped it,
+    or -- on the `dry_run` seam -- it simply has not been committed yet) is
+    this session's own work, not an adoption candidate; folding the two
+    together is what would make the enumeration unsafe to hand
+    ``--include-orphans``.
+
+    CLAIMED-BUT-ABSENT is stat-only, one ``exists()`` per claimed path, never
+    a walk and never a git call -- bounded by the claim count (small by
+    construction), not by the tree.
+    """
     unclaimed = sorted(
         path
         for path in dirty
@@ -1408,20 +1446,74 @@ def _compute_residue(
         and path not in peer_claimed
         and path not in mine_now
     )
-
-    # CLAIMED-BUT-ABSENT -- stat-only, one `os.path.exists` per claimed path,
-    # never a walk and never a git call. Bounded by the claim count (small by
-    # construction), not by the tree.
     claimed_absent = sorted(
         path for path in mine_now if not (Path(worktree_root) / path).exists()
     )
-
-    reconciliation: Reconciliation = {
+    return {
         "reconciled": True,
         "claimed_absent": claimed_absent,
         "unclaimed": unclaimed,
     }
-    return buckets, reconciliation
+
+
+def _reconcile_offer(
+    session_id: str,
+    offer: SafeCommitOffer,
+    worktree_root: Optional[str],
+) -> Reconciliation:
+    """`Reconciliation` for an offer that has NOT committed anything -- the
+    `dry_run` seam.
+
+    Exists because `dry_run` returned `compute_offer`'s answer verbatim, and
+    that answer reads claims and nothing else: a session whose whole working
+    set was written through Bash (a heredoc, a `>>` append, a `sed -i`) fires
+    no Write/Edit PostToolUse, carries no claim, and so inspected as
+    ``safe_paths: 0, excluded: 0`` -- indistinguishable from a clean tree,
+    with the dirty files nowhere in the answer. The bucket that names them
+    already existed (2026-08-29) but only on the COMMIT path, i.e. only after
+    the decision it informs was already taken. Reported by doe-claude-em
+    2026-08-30 as the third recorded occurrence.
+
+    REPORT-ONLY, exactly like its post-commit twin: the caller attaches this
+    to the returned envelope and never reads it back into a pathspec, so it
+    cannot widen what any ceremony commits. Nothing here is attributed to
+    this session -- see `Reconciliation.unclaimed`'s own contract.
+
+    Costs ONE `git status` (`_current_dirty_paths`) plus one claim-index read
+    on a path that previously took neither; it does not re-run
+    `compute_offer`, which the caller already holds and passes in. Measured
+    2026-08-30 on this repo's own worktree (65 dirty paths): 288ms end-to-end
+    for the whole `dry_run` handler, of which ~145ms is that one `git status`
+    and ~55ms the claim read -- under the 500ms bar, and one spawn.
+
+    Deliberately a SEPARATE function taking the offer as an argument, rather
+    than a dirty read added inside `compute_offer`: that read is exactly what
+    `compute_offer`'s `orphans` negative spec forbids, on the grounds that
+    "what belongs to me" and "what is dirty" are two different questions and
+    fusing them is what justified the 73-process shape. This is the caller
+    that "asks for it separately", the pre-commit twin of `_compute_residue`.
+    """
+    unchecked: Reconciliation = {
+        "reconciled": False,
+        "claimed_absent": [],
+        "unclaimed": [],
+    }
+    if not worktree_root:
+        return unchecked
+    owned_paths = {
+        e["path"]
+        for e in offer.get("excluded") or []
+        if str(e.get("reason", "")).startswith("owned by session")
+    }
+    peer_claimed = claim_index.commit_set(session_id, cwd=worktree_root).peers
+    return _reconciliation_from(
+        worktree_root,
+        dirty=_current_dirty_paths(worktree_root),
+        committed_paths=frozenset(),
+        owned_paths=owned_paths,
+        peer_claimed=peer_claimed,
+        mine_now=set(offer.get("safe_paths") or []),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -2316,8 +2408,12 @@ def _handler(params: dict, repo_root=None) -> dict:
     the ceremonies that call this op echo that text rather than re-derive it,
     and moving the rendering out would re-author it once per ceremony.
 
-    On a dry run, returns `{"dry_run": True, **offer}` with `rendered` naming
-    the safe-path count — never a commit.
+    On a dry run, returns `{"dry_run": True, "reconciliation": ..., **offer}`
+    — never a commit. `rendered` names THREE counts, not two: safe, excluded,
+    and dirty-but-claimed-by-nobody. That third one is what keeps `safe_paths:
+    0, excluded: 0` over a genuinely modified tree from reading as a clean
+    one — the routine answer for a session that wrote through a shell, which
+    fires no Write/Edit hook and so carries no claim. See `_reconcile_offer`.
 
     On an unresolvable session id or a usage error, returns an error envelope
     rather than raising: `{"error": str}` alongside empty result fields. The
@@ -2349,10 +2445,13 @@ def _handler(params: dict, repo_root=None) -> dict:
 
     if params.get("dry_run"):
         offer = compute_offer(session_id, cwd)
+        reconciliation = _reconcile_offer(
+            session_id, offer, core.git_root(cwd) or cwd or "."
+        )
         return {
             "dry_run": True,
-            "rendered": "DRY RUN — safe_paths: %d, excluded: %d"
-            % (len(offer["safe_paths"]), len(offer["excluded"])),
+            "rendered": _render_dry_run(offer, reconciliation),
+            "reconciliation": reconciliation,
             **offer,
         }
 
@@ -2376,6 +2475,44 @@ def _handler(params: dict, repo_root=None) -> dict:
         _log_failed_groups_diagnostic(worktree_root, session_id, report["failed_groups"])
 
     return {**report, "rendered": _render_report(report, worktree_root)}
+
+
+def _render_dry_run(offer: SafeCommitOffer, reconciliation: Reconciliation) -> str:
+    """The `dry_run` operator line. Names THREE buckets, not two: what this
+    session may commit, what is withheld as contested, and what is dirty under
+    nobody's claim.
+
+    The third one is why this function exists rather than an inline `%d/%d`
+    format. `safe_paths: 0, excluded: 0` over a tree with genuinely modified
+    files reads as "there is nothing here", and it is the routine answer for a
+    session that wrote through Bash -- the shape this fleet's own spawn-budget
+    doctrine steers agents toward. Naming the residue turns that into "N files
+    are dirty and nobody claims them", which is the difference between a silent
+    partial commit and a legible one.
+
+    Sample-bounded exactly like `_render_report`: the enumeration lives on the
+    returned `reconciliation.unclaimed`, and this line is the pointer at it.
+    """
+    line = "DRY RUN — safe_paths: %d, excluded: %d" % (
+        len(offer["safe_paths"]),
+        len(offer["excluded"]),
+    )
+    if not reconciliation.get("reconciled", False):
+        return line + ", unclaimed: unchecked (no worktree root this call)"
+    unclaimed = reconciliation.get("unclaimed") or []
+    line += ", unclaimed-and-dirty: %d" % len(unclaimed)
+    if unclaimed:
+        sample = unclaimed[:_RESIDUE_CLASS_SAMPLE_COUNT]
+        remaining = len(unclaimed) - len(sample)
+        tail = " (+%d more)" % remaining if remaining > 0 else ""
+        line += (
+            " — e.g. %s%s. NAMED, NOT ADOPTED: nothing here carries this "
+            "session's claim, and a file this session wrote through a shell "
+            "lands here rather than in safe_paths. Commit those by explicit "
+            "pathspec; the full list is on `reconciliation.unclaimed`."
+            % (", ".join(sample), tail)
+        )
+    return line
 
 
 def _error_envelope(message: str) -> dict:

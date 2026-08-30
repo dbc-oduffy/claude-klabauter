@@ -195,6 +195,7 @@ from coordinator_core.pickup_assemble import (
     split_artifact_args,
     validate_decisions_shape,
 )
+from coordinator_core.session import liveness as _liveness
 from coordinator_core.session.claims import (
     CLAIM_STAGE_APPLY,
     CLAIM_STAGE_BRIEF,
@@ -206,6 +207,7 @@ from coordinator_core.session.claims import (
     promote_claim_stage,
     release_artifact,
 )
+from coordinator_core.session.core import in_warm_served_request
 from coordinator_core.telemetry.composition_record import (
     flush_composition_record,
     make_fleet_budget,
@@ -1409,6 +1411,31 @@ def main_apply(argv: list[str]) -> int:
 # state.
 # ---------------------------------------------------------------------------
 
+def _recorded_claim_holder(claim_dir: Path) -> str:
+    """Best-effort human-readable name of `claim_dir`'s recorded holder, for
+    the non-holder drop refusal's `error` text ONLY — never used as a control-
+    flow input (`liveness.claim_held_by_me` is the sole holder predicate).
+    Session-id claim dirs report the recorded session id; legacy pid-only
+    dirs report `pid:<n>`; an unreadable/unrecognized dir reports
+    `"unknown"` rather than raising, since this is diagnostic text on an
+    already-decided refusal."""
+    sid_file = claim_dir / "session_id"
+    if sid_file.is_file():
+        try:
+            recorded = sid_file.read_text(encoding="utf-8").strip()
+        except OSError:
+            recorded = ""
+        return recorded or "unknown"
+    pid_file = claim_dir / "pid"
+    if pid_file.is_file():
+        try:
+            recorded_pid = pid_file.read_text(encoding="utf-8").strip()
+        except OSError:
+            recorded_pid = ""
+        return f"pid:{recorded_pid}" if recorded_pid else "unknown"
+    return "unknown"
+
+
 def drop(
     artifact_path: str,
     *,
@@ -1420,10 +1447,53 @@ def drop(
     never happened. Returns `(exit_code, report)` using the SAME exit-code
     contract `apply` pins (AC9g): `APPLY_EXIT_OK` on a clean drop,
     `APPLY_EXIT_TRANSPORT_FAIL` when the repo root/session id/artifact
-    itself cannot be resolved, `APPLY_EXIT_PARTIAL_MUTATION` when the claim
-    was released but the handoff-transition primitive itself reports failure
-    (a genuine primitive error, distinct from the ordinary not-yet-claimed
-    no-op it tolerates).
+    itself cannot be resolved, `APPLY_EXIT_CLAIM_DENIED` when the caller is
+    not the recorded holder of a stamped (non-brief-stage) claim — the SAME
+    exit code the cross-repo denial above already returns, so a non-holder
+    drop is a reason rather than a silent half-mutation (see the holder gate
+    below) — `APPLY_EXIT_PARTIAL_MUTATION` when the handoff/memo-transition
+    primitive itself reports failure (a genuine primitive error, distinct
+    from the ordinary not-yet-claimed no-op it tolerates).
+
+    HOLDER GATE (2026-08-30): before either composed primitive runs, and
+    before `_scoped_commit`, `drop` reads the claim ledger dir ONCE for a
+    non-brief-stage claim and trichotomizes: (i) the ledger dir is absent —
+    proceed (nothing to protect; this is the state a reaped or
+    crash-truncated session leaves behind, with a live frontmatter stamp
+    and no verb but this one able to clear it), (ii) `liveness.
+    claim_held_by_me` says this session is the recorded holder — proceed,
+    (iii) the dir is present and recorded as held by someone else — refuse
+    with `APPLY_EXIT_CLAIM_DENIED`, naming the recorded holder
+    (`docs/wiki/claim-conflict-deadlock.md`'s ruling: additive reporting,
+    never a loosened refusal). A bare `claim_held_by_me` call collapses (i)
+    and (iii) into one refusal and would orphan the frontmatter stamp
+    forever in case (i) — this is why the dir's existence is checked
+    separately rather than trusting the predicate's own `False` for
+    "absent" to mean "not mine" (it means both, indistinguishably).
+    `resolved_sid` is only passed to `claim_held_by_me` as `my_sid` when it
+    came from an explicit `--session-id` or a warm-carried identity;
+    otherwise the call omits `my_sid` so the predicate's own fail-closed
+    ambient-env path governs (an explicit `my_sid` would short-circuit that
+    guard, which is not warranted for the plain env-fallback case — see
+    `liveness.claim_held_by_me`'s own docstring). A brief-stage claim never
+    reaches this gate: no frontmatter stamp was ever written for it, so
+    there is nothing here for a holder gate to protect.
+
+    ORDERING (2026-08-30): `release_artifact`'s own docstring states an
+    ORDERING CONTRACT — the caller reverts the frontmatter stamp BEFORE
+    calling it, so a crash lands on the recoverable "open but claim-held"
+    state rather than the re-admitting one. The non-brief tail below now
+    calls the class inverse (`cs_unclaim_handoff`/`cs_release_memo_revert`)
+    FIRST and `release_artifact` second, matching that contract — `drop`
+    used to call them in the opposite order. `released` therefore reads
+    `False` on both `APPLY_EXIT_PARTIAL_MUTATION` returns (the class
+    inverse failed before `release_artifact` ever ran) and `True` only on
+    the terminal `APPLY_EXIT_OK`, replacing the prior hardcoded `True` on
+    every return regardless of what actually landed
+    (`state/lessons/2026-08-27-the-committer-reports-blocked-after-it-
+    committed.md`'s report/ground-truth family — this is the mirror-image
+    instance: claiming a mutation that did not happen, not denying one that
+    did).
 
     Never conditioned on `directives[].already_satisfied` or any other
     `apply`-side bookkeeping — `drop` recomputes nothing from a prior run and
@@ -1518,19 +1588,14 @@ def drop(
         # write) — turning an ordinary "briefed it, changed my mind" into a
         # partial-mutation exit. Widening `_unclaim` to tolerate that is NOT
         # the fix; not calling it is.
-        claim_is_brief_stage = (
-            claim_stage(
-                root / ".git" / "coordinator-sessions" / f"{class_}-claims" / basename
-            )
-            == CLAIM_STAGE_BRIEF
-        )
-
-        # `release_artifact` always returns True (no-op success on every
-        # non-holder / already-absent path — see its own docstring); nothing
-        # here branches on its return value.
-        release_artifact(class_, basename, cwd=str(root))
+        claims_dir = root / ".git" / "coordinator-sessions" / f"{class_}-claims" / basename
+        claim_is_brief_stage = claim_stage(claims_dir) == CLAIM_STAGE_BRIEF
 
         if claim_is_brief_stage:
+            # No frontmatter stamp was ever written for a brief-stage claim
+            # — nothing here for a holder gate to protect. Lock-release only,
+            # unchanged.
+            release_artifact(class_, basename, cwd=str(root))
             return APPLY_EXIT_OK, {
                 "class": class_,
                 "basename": basename,
@@ -1540,12 +1605,54 @@ def drop(
                 "commit_sha": None,
             }
 
+        # HOLDER GATE (2026-08-30) — ahead of both composed primitives and
+        # ahead of `_scoped_commit`. Read the ledger dir ONCE and trichotomize:
+        # (i) absent -> proceed (nothing to protect; this is the reaped/
+        # crash-truncated state this call exists to clear), (ii) held by me
+        # -> proceed, (iii) held by someone else -> refuse, naming the
+        # recorded holder. A bare `claim_held_by_me` call collapses (i) and
+        # (iii) into one refusal and would orphan the frontmatter stamp
+        # forever in case (i) — do not collapse them.
+        if claims_dir.is_dir():
+            # `resolved_sid` is only trustworthy as an explicit `my_sid` when
+            # it came from an explicit `--session-id` or a warm-carried
+            # identity; the plain ambient-env fallback must let
+            # `claim_held_by_me`'s own fail-closed path govern instead (see
+            # its docstring) — an explicit `my_sid` would short-circuit that
+            # guard, which is not warranted for the env-fallback case.
+            _sid_is_explicit_or_warm = bool(session_id) or in_warm_served_request()
+            if _sid_is_explicit_or_warm:
+                held_by_me = _liveness.claim_held_by_me(
+                    str(claims_dir), my_sid=resolved_sid, cwd=str(root)
+                )
+            else:
+                held_by_me = _liveness.claim_held_by_me(str(claims_dir), cwd=str(root))
+            if not held_by_me:
+                recorded_holder = _recorded_claim_holder(claims_dir)
+                return APPLY_EXIT_CLAIM_DENIED, {
+                    "reason": "drop_not_holder",
+                    "error": (
+                        f"{artifact_path_value}: claimed by {recorded_holder!r}, "
+                        "not this session — drop denied"
+                    ),
+                    "class": class_,
+                    "basename": basename,
+                    "released": False,
+                    "unclaimed": None,
+                }
+
         unclaimed: Optional[bool] = None
         # C13/DR-273 — memo release now commits its own terminal write; when
         # non-None this is the SHA that landed, used below as the fallback
         # `_scoped_commit` reports when its own pathspec-diff finds nothing
         # dirty (the write was already committed by cs_release_memo_revert).
         memo_op_commit_sha: Optional[str] = None
+        # ORDERING (2026-08-30): the class inverse runs BEFORE
+        # `release_artifact`, per `release_artifact`'s own ORDERING CONTRACT
+        # docstring — the caller reverts the frontmatter stamp first, so a
+        # crash lands on the recoverable "open but claim-held" state rather
+        # than the re-admitting one. `released` is `False` on both partial-
+        # mutation returns below because `release_artifact` has not run yet.
         if class_ == "handoff":
             resolved_handoff_path = _assert_in_repo_root(Path(artifact_path_value), root)
             unclaimed = _normalize_primitive_result(cs_unclaim_handoff(str(resolved_handoff_path)))
@@ -1554,7 +1661,7 @@ def drop(
                     "error": f"drop: cs_unclaim_handoff failed for {artifact_path_value}",
                     "class": class_,
                     "basename": basename,
-                    "released": True,
+                    "released": False,
                     "unclaimed": False,
                 }
         elif class_ == "memo":
@@ -1567,9 +1674,14 @@ def drop(
                     "error": f"drop: cs_release_memo_revert failed for {artifact_path_value}",
                     "class": class_,
                     "basename": basename,
-                    "released": True,
+                    "released": False,
                     "unclaimed": False,
                 }
+
+        # `release_artifact` always returns True (no-op success on every
+        # non-holder / already-absent path — see its own docstring); nothing
+        # here branches on its return value.
+        release_artifact(class_, basename, cwd=str(root))
 
         scoped_sha = _scoped_commit(root, artifact_path_value, class_, basename, ["drop"])
         commit_sha = scoped_sha if scoped_sha is not None else memo_op_commit_sha

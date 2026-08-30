@@ -206,9 +206,19 @@ def _resolve_entrypoint_script(entrypoint: str) -> Path:
 
       - MISSING SCRIPT stays a plain `ValueError` (-32603) and is NOT made
         fall-through-able. A door image whose `coordinator/bin/<name>.py`
-        does not exist is a broken install, not a warm-loadability question,
-        and spawning a cold interpreter to rediscover the same absence buys
-        an interpreter start to reach the identical failure.
+        nor its extensionless `coordinator/bin/<name>` sibling exists is a
+        broken install, not a warm-loadability question, and spawning a cold
+        interpreter to rediscover the same absence buys an interpreter start
+        to reach the identical failure.
+
+    THE EXTENSIONLESS FALLBACK EXISTS FOR PARITY WITH THE COLD LEG
+    (`door.c`/`door_posix.c` :: `fall_through`), NOT AS A NEW PREFERENCE.
+    `<entrypoint>.py` is tried FIRST and always wins when both exist — a name
+    that ships both a `.py` and an extensionless script keeps dispatching to
+    the `.py`, matching every prior caller's assumption. The extensionless
+    candidate is checked only when the `.py` is absent, and only a REGULAR
+    FILE at that path counts (a directory or symlink-to-directory at the
+    extensionless name is not a script and must not resolve).
     """
     if entrypoint not in _WARM_ENTRYPOINT_ALLOWLIST:
         raise EntrypointNotWarmLoadableError(
@@ -218,14 +228,20 @@ def _resolve_entrypoint_script(entrypoint: str) -> Path:
             f"runs this name cold instead"
         )
 
-    script = _ENGINE_ROOT / "coordinator" / "bin" / f"{entrypoint}.py"
-    if not script.is_file():
-        raise ValueError(
-            f"invoke.from_argv: no coordinator/bin CLI for entrypoint {entrypoint!r} "
-            f"(expected {script}) — refusing rather than substituting a different "
-            f"CLI's grammar"
-        )
-    return script
+    bin_dir = _ENGINE_ROOT / "coordinator" / "bin"
+    script = bin_dir / f"{entrypoint}.py"
+    if script.is_file():
+        return script
+
+    extensionless = bin_dir / entrypoint
+    if extensionless.is_file():
+        return extensionless
+
+    raise ValueError(
+        f"invoke.from_argv: no coordinator/bin CLI for entrypoint {entrypoint!r} "
+        f"(expected {script} or {extensionless}) — refusing rather than "
+        f"substituting a different CLI's grammar"
+    )
 
 
 

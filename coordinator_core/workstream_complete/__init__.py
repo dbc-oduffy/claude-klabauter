@@ -296,6 +296,24 @@ class TransportFailure(Exception):
     `pickup_assemble`'s own transport-failure contract."""
 
 
+class SessionIdentityUnresolved(Exception):
+    """Raised when `/workstream-complete` cannot name the session it is
+    closing. A SEPARATE class from `TransportFailure` on purpose: transport
+    failure says the resolver could not be reached, this says the resolver
+    was reached and answered "nobody" — and the two want different operator
+    text, because the second is the DESIGNED answer for a warm request that
+    carried no caller identity, not a broken install.
+
+    Deliberately not degraded to a diagnostic or an empty-sid ceremony. The
+    close ceremony keys every gate, directive and completion entry on the
+    resolved sid; an empty one classifies as `single-session` and reads
+    downstream as a clean close of a session that does not exist, which is
+    the false-clean shape KS-5 removed the fabricated-epoch fallback to
+    avoid. Fail loud here so the operator re-runs through a door that can
+    identify them, rather than shipping a close attributed to whoever
+    spawned the engine."""
+
+
 #: The full set of on-disk CLIs this module's `directives[]` may name
 #: (AC2/AC15c's phantom-verb guard). See the module docstring's "Consumes
 #: manifest" section for which submodule contributes each entry, and its
@@ -657,9 +675,28 @@ def _detector_c_attribution_is_uncorroborated(detection: dict[str, Any]) -> bool
 def compute_session_shape_gate(repo_root: Path) -> SessionShapeGate:
     """Steps 0 of `/workstream-complete`: resolve this session's id and
     chain-terminal-vs-single-session disposition via the ported detector
-    chain in `wsc-session-disposition.py`, folded into one gate fact."""
+    chain in `wsc-session-disposition.py`, folded into one gate fact.
+
+    Raises `SessionIdentityUnresolved` when the resolver cannot name the
+    calling session — the in-process twin of `_cmd_resolve`'s
+    `_SESSION_ID_UNRESOLVED` exit, which this path did not have and which is
+    why the 2026-08-30 mis-resolution reached `apply` unguarded (see
+    `wsc-session-disposition.resolve_session_id`'s own docstring for the
+    reproduction). Every gate, directive and completion entry below is keyed
+    on this one value; classifying against an empty sid resolves
+    `single-session` and reads downstream as a clean close.
+    """
     mod = _load_session_disposition_module()
     sid = mod.resolve_session_id(repo_root)
+    if not sid:
+        raise SessionIdentityUnresolved(
+            "/workstream-complete cannot identify the calling session, so it will not "
+            "build a close ceremony that would be attributed to whichever session the "
+            "engine happens to name. Warm: the request carried no identity (the door "
+            "sent no _session_id); cold: no tier of em_sid/COORDINATOR_SESSION_ID/"
+            "CLAUDE_SESSION_ID/CLAUDE_CODE_SESSION_ID resolved. Re-run through the cold "
+            "door, or set COORDINATOR_SESSION_ID to this session's own id."
+        )
     resolution = mod.resolve_disposition(repo_root, sid)
     disposition, consumed_handoff, diagnostics, consumed_handoff_paths = resolution
     detection = dict(getattr(resolution, "detection", None) or {})
@@ -4914,6 +4951,24 @@ def _main_brief(rest: list[str]) -> int:
 
     try:
         decision_object = brief(decisions)
+    except SessionIdentityUnresolved as exc:
+        # Ahead of the TransportFailure arm and of the structural backstop
+        # below, both of which would swallow this into a message telling the
+        # operator to check their git worktree — the one thing that is not
+        # wrong here.
+        print(f"workstream-complete-assemble: {exc}", file=sys.stderr)
+        failure = emit(
+            build_envelope(
+                narration=f"Refusing to compute a close ceremony: {exc}",
+                next_move=(
+                    "Re-run through the cold door "
+                    "(coordinator/bin/workstream-complete-assemble.cmd), or export "
+                    "COORDINATOR_SESSION_ID=<this session's id> and retry."
+                ),
+            )
+        )
+        print(json.dumps(dict(failure)))
+        return EXIT_BUSINESS_FAIL
     except TransportFailure as exc:
         print(f"workstream-complete-assemble: transport failure: {exc}", file=sys.stderr)
         failure = emit(

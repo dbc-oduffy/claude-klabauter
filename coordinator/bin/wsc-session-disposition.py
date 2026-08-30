@@ -182,11 +182,63 @@ _SESSION_ID_UNRESOLVED = 4
 # ---------------------------------------------------------------------------
 
 
+def _session_core():
+    """`coordinator_core.session.core`, imported plainly when it is already on the
+    path and via the engine bootstrap only when it is not.
+
+    Deliberately NOT `_bootstrap_engine_imports()` unconditionally. That function
+    pulls in `lib`/`cc_invoke` to LOCATE the engine, which is work
+    `resolve_session_id` does not need in either path that matters: the in-process
+    ceremony path has already imported `coordinator_core` to get here, and the
+    standalone CLI path has already bootstrapped by the time it resolves an id. The
+    fallback is for a caller that reaches this function before either — it costs a
+    failed import, once.
+    """
+    try:
+        from coordinator_core.session import core as _core
+    except ImportError:
+        _bootstrap_engine_imports()
+        from coordinator_core.session import core as _core
+    return _core
+
+
 def resolve_session_id(_repo_root: Path) -> str:
     """Resolve the current session id, first hit wins: the em_sid env var, then
-    CLAUDE_SESSION_ID, then CLAUDE_CODE_SESSION_ID, then a hex-timestamp
-    fallback (last 6 digits of the current epoch second, mirroring the
-    ported bash's `date +%s | tail -c 7 | head -c 6`).
+    the canonical `session.core.SESSION_ENV_PRECEDENCE` ladder
+    (COORDINATOR_SESSION_ID, CLAUDE_SESSION_ID, CLAUDE_CODE_SESSION_ID) —
+    both COLD only. Under a warm-served request only the CALLER's carried
+    identity counts, and an uncarried one resolves to "".
+
+    WARM SPLIT, and the incident that put it here (2026-08-30). This
+    resolver used to read `os.environ` unconditionally. Inside the resident
+    warm server that environment belongs to whoever SPAWNED the server, not
+    to the session being served, so `/workstream-complete` built its entire
+    ceremony on a stranger. Reproduced live: session
+    56043240-f71b-447a-bf56-4ee49f92ab33 ran
+    `workstream-complete-assemble.exe brief` (warm published door) and got
+    directives keyed to `--sid 1189eead-f3eb-4c54-a790-236258043b0d`, a
+    LIVE PEER; the same tree's cold `.cmd` door, seconds apart, resolved
+    56043240 correctly. `apply` on that brief would have written a
+    completion entry crediting the peer's six deliverables and their
+    archived baton to this session's close. Filed
+    `state/bug-backlog/2026-08-30-close-ceremony-clis-resolve-a-live-peer-
+    b558b27c74e7.yaml`.
+
+    Delegating to `session.core.attributable_session_id` is what closes it:
+    it reads the per-request ContextVar alone under warm (tier 0, the
+    identity the caller carried) and the env ladder alone when cold, where
+    `os.environ` IS the caller's own. `em_sid` is a legacy tier that ladder
+    has never carried, so it is consulted here — and, like the ladder,
+    ONLY on the cold branch; reading it warm would reinstate the same
+    ambient answer through the one var the canonical resolver does not
+    govern.
+
+    An empty return is the DESIGNED outcome for a warm request that carried
+    no identity, not a failure to try. Callers must fail loud on it rather
+    than classify: `_cmd_resolve` returns `_SESSION_ID_UNRESOLVED`, and
+    `workstream_complete.compute_session_shape_gate` raises. An absent id is
+    recoverable; a confidently wrong one is not, because no reader
+    downstream can tell it from a genuine one.
 
     `_repo_root` is unused by this env-var-only resolution — kept for call
     signature conformance with `_cmd_resolve`'s call site and this module's
@@ -208,11 +260,13 @@ def resolve_session_id(_repo_root: Path) -> str:
     rather than let it silently resolve "single-session" (the same
     false-clean failure mode the sentinel removal fixed, reached by a
     different route)."""
-    for var in ("em_sid", "CLAUDE_SESSION_ID", "CLAUDE_CODE_SESSION_ID"):
-        val = os.environ.get(var, "")
-        if val:
-            return val
-    return ""
+    core = _session_core()
+    if core.in_warm_served_request():
+        return core.attributable_session_id() or ""
+    legacy = os.environ.get("em_sid", "")
+    if legacy:
+        return legacy
+    return core.attributable_session_id() or ""
 
 
 # ---------------------------------------------------------------------------
@@ -1893,7 +1947,8 @@ def _cmd_resolve(args: argparse.Namespace) -> int:
         # instead.
         print(
             "wsc-session-disposition: session id could not be resolved via any tier "
-            "(em_sid/CLAUDE_SESSION_ID/CLAUDE_CODE_SESSION_ID) — refusing to classify "
+            "(warm: the caller carried no identity; cold: em_sid/COORDINATOR_SESSION_ID/"
+            "CLAUDE_SESSION_ID/CLAUDE_CODE_SESSION_ID) — refusing to classify "
             "chain-terminal disposition against an unidentified session (KS-5: the "
             "fabricated-epoch fallback that used to paper over this was removed as "
             "strictly worse than reporting unresolved)",

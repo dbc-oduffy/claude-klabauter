@@ -109,6 +109,12 @@ from coordinator_core.lifecycle_constants import HANDOFF_TERMINAL_DEPLOYMENT
 # only gate on this membership.
 _ROADMAP_STUB_KINDS = frozenset(kind_values_for_canonical("roadmap-baton"))
 
+# The `doc_type` literal `coordinator-doc-new.py` scaffolds a sizing object
+# under (`state/sizings/<date>-<slug>.yaml`, `schema: sizing-object`). Named
+# here rather than inlined at the one gate that checks it, matching this
+# module's convention of a named membership constant over a bare literal.
+_SIZING_OBJECT_DOC_TYPE = "sizing-object"
+
 
 class DroppedDeliverableJoinError(RuntimeError):
     """Raised when an active plan names no `deliverable_id` (absent field, unreadable
@@ -309,6 +315,8 @@ def resolve_explicit_predecessor_edge_deliverable_id(
 def resolve_session_chain_deliverable_id(
     read_frontmatter_field,
     chain_artifact_path: "str | None",
+    *,
+    doc_type: "str | None" = None,
 ) -> "str | None":
     """Session-chain discovery tier — carries `deliverable_id` off the
     handoff THIS session already holds a claim on, so an artifact authored
@@ -351,7 +359,36 @@ def resolve_session_chain_deliverable_id(
     Negative-spec: does NOT fire for a `kind: spinoff` baton. A spinoff
     mints its own id by PM ruling (2026-08-05) — the caller, which is the
     only place that knows the doc_type being scaffolded, is what enforces
-    that; this function has no doc_type to gate on and must not grow one.
+    that via `doc_type` below; this function must not grow a `kind` gate on
+    `chain_artifact_path` to cover spinoff too (the same false-merge shape
+    AC4b pins for the session-state-parent tier — see that function).
+
+    ``doc_type`` (keyword-only, defaults `None` — every pre-existing call
+    site that doesn't pass it is unaffected) is the type of the artifact
+    being scaffolded, not of `chain_artifact_path` — the two are always
+    different files. Gate (third fall-through, alongside the terminal-state
+    and absent-id gates above): `doc_type == "sizing-object"` declines and
+    falls through to mint-from-slug, unconditionally, before touching
+    `chain_artifact_path` at all.
+
+    This tier answers "what chain is this session authoring into" by
+    treating the session's held claim as the author declaring the answer —
+    sound for an artifact authored into a live chain. It is false for a
+    sizing object, which is BY CONSTRUCTION the front door for a novel ask:
+    an unsized ask is not co-membership in whatever baton the session
+    happens to be holding, and a sizing-object that legitimately carries no
+    `deliverable_id` of its own is the routing-time NORM, not a gap (see
+    `docs/wiki/deliverable-id.md` § "Sizing-object negative spec" and
+    DR-207 DD#1 / DR-250's earliest-artifact tiebreak, which "mint from its
+    own slug" applies at this tier: a sizing object is definitionally
+    upstream of any chain it might join, so it can never legitimately carry
+    a chain id it did not itself mint).
+
+    Observed live (2026-08-30): scaffolding a plan's own sizing object while
+    holding an unrelated baton stamped the sizing with that baton's
+    deliverable_id — one hop downstream of where the plan-tier `kind` check
+    already lives, silent because a wrong join key reads exactly like a
+    right one.
 
     THE LIVENESS GATE, and why it reads `deployment_state` rather than
     `status` (2026-08-28, filed from a session that closed one baton and
@@ -400,6 +437,17 @@ def resolve_session_chain_deliverable_id(
     author saying which chain they meant, which is a fact this tier cannot
     read off disk.
     """
+    if doc_type == _SIZING_OBJECT_DOC_TYPE:
+        print(
+            "deliverable_carry: session-chain tier — doc_type "
+            f"{doc_type!r} is a novel-ask front door, not co-membership in "
+            "whatever baton the session happens to be holding — declining "
+            "the held claim as a chain candidate, falling through to "
+            "mint-from-slug",
+            file=sys.stderr,
+        )
+        return None
+
     if not chain_artifact_path or not os.path.isfile(chain_artifact_path):
         return None
 

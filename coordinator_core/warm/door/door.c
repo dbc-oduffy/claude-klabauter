@@ -634,22 +634,49 @@ static int fall_through(int argc, wchar_t **wargv, const wchar_t *engine_root_w)
      * "THE COLD LEG IS PART OF THIS CHUNK" note). */
     const wchar_t *entrypoint_basename = door_entrypoint_basename();
 
+    /* TWO-CANDIDATE RESOLUTION, `.py` FIRST -- parity with the Python-side
+     * `_resolve_entrypoint_script` (coordinator_core/ops/invoke_from_argv.py).
+     * The extensionless candidate exists for names whose only shipped image
+     * is `coordinator/bin/<name>` with no `.py` sibling (the twelve); a name
+     * carrying both keeps dispatching to the `.py`, matching every existing
+     * caller's assumption. `GetFileAttributesExW` alone would treat a
+     * directory as present, so a directory attribute (`FILE_ATTRIBUTE_
+     * DIRECTORY`) is rejected at each candidate exactly like the Python
+     * side's `is_file()` check. */
     wchar_t script_path_w[MAX_PATH * 2];
     if (swprintf(script_path_w, MAX_PATH * 2,
                  L"%s\\coordinator\\bin\\%s.py", root, entrypoint_basename) < 0) {
         return 1;
     }
 
-    WIN32_FILE_ATTRIBUTE_DATA script_attrs;
-    if (!GetFileAttributesExW(script_path_w, GetFileExInfoStandard, &script_attrs)) {
-        fwprintf(stderr,
-            L"door: this image is named %s, and no matching coordinator/bin "
-            L"CLI exists at %s -- refusing to fall through to a different "
-            L"CLI's argument grammar rather than mis-dispatching silently. "
-            L"Remediation: install a coordinator/bin/%s.py for this name, or "
-            L"reinstall the door under a name that already has one.\n",
-            entrypoint_basename, script_path_w, entrypoint_basename);
+    wchar_t extensionless_path_w[MAX_PATH * 2];
+    if (swprintf(extensionless_path_w, MAX_PATH * 2,
+                 L"%s\\coordinator\\bin\\%s", root, entrypoint_basename) < 0) {
         return 1;
+    }
+
+    WIN32_FILE_ATTRIBUTE_DATA script_attrs;
+    int py_ok = GetFileAttributesExW(script_path_w, GetFileExInfoStandard, &script_attrs) &&
+                !(script_attrs.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY);
+
+    if (!py_ok) {
+        WIN32_FILE_ATTRIBUTE_DATA ext_attrs;
+        int ext_ok = GetFileAttributesExW(extensionless_path_w, GetFileExInfoStandard, &ext_attrs) &&
+                     !(ext_attrs.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY);
+        if (ext_ok) {
+            memcpy(script_path_w, extensionless_path_w, sizeof(script_path_w));
+        } else {
+            fwprintf(stderr,
+                L"door: this image is named %s, and no matching coordinator/bin "
+                L"CLI exists at %s or %s -- refusing to fall through to a "
+                L"different CLI's argument grammar rather than mis-dispatching "
+                L"silently. Remediation: install a coordinator/bin/%s.py (or "
+                L"extensionless coordinator/bin/%s) for this name, or reinstall "
+                L"the door under a name that already has one.\n",
+                entrypoint_basename, script_path_w, extensionless_path_w,
+                entrypoint_basename, entrypoint_basename);
+            return 1;
+        }
     }
 
     buf_t cmdline;
