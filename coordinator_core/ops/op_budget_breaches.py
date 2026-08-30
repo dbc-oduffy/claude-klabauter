@@ -69,17 +69,23 @@ from pathlib import Path
 from typing import List, Optional
 
 from coordinator_core.ipc import CallerFacingValidationError, register_op
+from coordinator_core.op_census.kill_ledger_inventory import KILL_LEDGER, LedgerAbsent, fate_entries
 from coordinator_core.op_census.timing import PROCESS_TIME_BAR_MS
 from coordinator_core.telemetry.op_latency import breach_summary, sink_generations
 
 __all__ = [
     "BRIGHTLINE_BUDGET_MS",
+    "DEAD_DIAL_LEDGER_ABSENT",
+    "DEAD_DIAL_LEDGER_OK",
+    "DEAD_DIAL_MIN_ATTEMPTS",
     "DEFAULT_TOP_N",
     "MAX_TAIL_BYTES",
     "MAX_TELEMETRY_ROWS",
     "PER_PROCESS_BAR_MS",
+    "TEST_CALLER_PREFIX",
     "TREND_WINDOW_LIMITED",
     "breach_report",
+    "dead_dial_findings",
     "headline_for",
 ]
 
@@ -137,6 +143,170 @@ PER_PROCESS_BAR_MS = 200.0
 #: support; an unqualified direction is the thing being deleted here, not the
 #: bound that made it unqualified.
 TREND_WINDOW_LIMITED = "window_limited"
+
+#: Minimum completed-and-all--32601 attempts before a "dead dial" is reported.
+#: Measured spread, not a guess: the motivating leak (`session.warm_start`,
+#: gravestoned twice, a SessionStart hook still dialling it) logged 73
+#: METHOD_NOT_FOUND completions over 33 hours; every other -32601-only op
+#: measured on this repo's current generation on 2026-08-30 (a human mistyping
+#: an op name at a CLI, or a test fixture dialling a name that never existed)
+#: topped out at 2. 10 sits with wide headroom above the human-typo ceiling and
+#: wide headroom below the machine-loop floor.
+#:
+#: Applied per op, summed across every caller — a leak split between two
+#: callers (e.g. a pool dispatcher and a CLI invoker) is still caught; see
+#: `dead_dial_findings`'s accumulator, keyed by `op` alone.
+#:
+#: Scope, stated plainly: this is a threshold on ONE bounded-tail read
+#: (`MAX_TAIL_BYTES`, current generation only — see module docstring's
+#: negative-spec), never on an op's true lifetime attempt count.
+#: `op_census.breaches` does not accumulate across generations or across
+#: separate invocations — doing so would mean a second sink read, which the
+#: negative-spec rules out and which would put a multi-generation parse (tens
+#: of MB) over DR-344's 500ms bar. At this sink's measured growth
+#: (`telemetry/log_rotation.py`, ~7.3MB/day against a 6MB tail), the real
+#: detection window is ~20 hours, not "a generation" and not "per-op
+#: lifetime". Reaching 10 inside that window needs a leak sustaining roughly
+#: >=0.5 dials/hour — both known leaks clear it comfortably (`session.
+#: warm_start` ~2.2/h, `ops.list` ~3.4/h), and a hook firing per session start
+#: on a ~50-session box clears it easily too.
+#:
+#: Accepted limit, not a bug: a leak slower than ~0.5/hour, or one that ends
+#: near a rotation boundary before accumulating 10 completions in a single
+#: tail window, will not fire here. Catching that shape would require reading
+#: rotated history, which this op deliberately does not do (see module
+#: docstring's negative-spec and the plan's Out of scope). A caller that needs
+#: to catch a slower leak is expected to poll `op_census.breaches`
+#: repeatedly and read this threshold as "10 in one window", never "10 ever".
+DEAD_DIAL_MIN_ATTEMPTS = 10
+
+#: Caller-module prefix excluded from dead-dial detection entirely — a test
+#: suite dialling a nonexistent op on purpose (`no.such.op`,
+#: `test.this_op_does_not_exist_anywhere`) is not a caller that needs fixing.
+#: The `caller` field is what separates a hook looping in production from a
+#: test fixture exercising the METHOD_NOT_FOUND path deliberately.
+TEST_CALLER_PREFIX = "coordinator_core.tests."
+
+#: `dead_dials.ledger_status` values. `LEDGER_ABSENT` is a distinguishable
+#: result from "the ledger was read and nothing qualified" — the published
+#: mirror ships `coordinator_core/` without claude-klabauter's `state/` corpus (see
+#: `kill_ledger_inventory`'s own docstring), and rendering that as an empty
+#: `findings` list would turn a published mirror into a silent all-clear.
+DEAD_DIAL_LEDGER_OK = "ok"
+DEAD_DIAL_LEDGER_ABSENT = "absent"
+
+
+def dead_dial_findings(entries: List[dict]) -> List[dict]:
+    """Ops whose every recent completed dial is `-32601 METHOD_NOT_FOUND` —
+    a caller still dialling a name the registry no longer serves (a
+    gravestoned op) or never served (a typo/synthetic test name).
+
+    Computed over `entries` already read by the caller — no second sink read
+    (see module docstring). Two discriminators keep this from firing on every
+    one-off typo, both applied BEFORE the all--32601 test: rows from a
+    `TEST_CALLER_PREFIX` caller are dropped first (a test fixture dialling a
+    nonexistent op on purpose is not a leak), then an op qualifies only once
+    its surviving completed-row count reaches `DEAD_DIAL_MIN_ATTEMPTS`.
+
+    Does not consult the kill ledger — `breach_report` joins each finding's
+    ledger fate afterward, so this function stays testable without a ledger
+    fixture and its output is unaffected by the ledger being absent.
+
+    Returns one dict per qualifying op:
+        {"op": str, "caller": str, "callers": {caller: count, ...},
+         "attempts": int, "first_seen": float, "last_seen": float}
+    ordered by `attempts` descending, then `op` ascending, for a deterministic
+    report. `caller` is the top caller by count (ties broken by encounter
+    order, i.e. whichever caller's row hit the sink first) — `callers` carries
+    the full per-caller breakdown so a tied or split-caller leak (e.g.
+    `ops.list` dialled 6/6 by two different callers) is never reduced to one
+    caller's name.
+    """
+    per_op: dict = {}
+    for row in entries:
+        if not isinstance(row, dict) or row.get("kind") != "complete":
+            continue
+        caller = row.get("caller")
+        if isinstance(caller, str) and caller.startswith(TEST_CALLER_PREFIX):
+            continue
+        op = row.get("op")
+        if not isinstance(op, str):
+            continue
+        t_start = row.get("t_start")
+        bucket = per_op.setdefault(
+            op,
+            {"attempts": 0, "all_method_not_found": True, "callers": {}, "first": None, "last": None},
+        )
+        bucket["attempts"] += 1
+        if row.get("error_code") != -32601:
+            bucket["all_method_not_found"] = False
+        if isinstance(caller, str):
+            bucket["callers"][caller] = bucket["callers"].get(caller, 0) + 1
+        if isinstance(t_start, (int, float)):
+            if bucket["first"] is None or t_start < bucket["first"]:
+                bucket["first"] = t_start
+            if bucket["last"] is None or t_start > bucket["last"]:
+                bucket["last"] = t_start
+
+    findings = []
+    for op, bucket in per_op.items():
+        if not bucket["all_method_not_found"]:
+            continue
+        if bucket["attempts"] < DEAD_DIAL_MIN_ATTEMPTS:
+            continue
+        callers = bucket["callers"]
+        top_caller = max(callers, key=lambda c: callers[c]) if callers else None
+        findings.append(
+            {
+                "op": op,
+                "caller": top_caller,
+                "callers": dict(callers),
+                "attempts": bucket["attempts"],
+                "first_seen": bucket["first"],
+                "last_seen": bucket["last"],
+            }
+        )
+    findings.sort(key=lambda f: (-f["attempts"], f["op"]))
+    return findings
+
+
+def _join_ledger_fate(findings: List[dict]) -> dict:
+    """Attach each finding's kill-ledger `Fate:` value(s) — the fact that
+    tells a reader "a gravestoned op is still being dialled" (fate DEAD)
+    apart from "somebody dialled a name that never existed" (no ledger
+    entry). Returns the `dead_dials` block; never mutates `findings`.
+
+    Zero findings still checks `KILL_LEDGER.is_file()` before labelling
+    `ledger_status` — an empty `findings` list here already means "the sink
+    had no qualifying rows" (`dead_dial_findings` never touches the ledger),
+    but the label must reflect whether the ledger itself exists, not merely
+    assert `ok` on a path that never looked."""
+    if not findings:
+        status = DEAD_DIAL_LEDGER_OK if KILL_LEDGER.is_file() else DEAD_DIAL_LEDGER_ABSENT
+        return {"ledger_status": status, "findings": []}
+
+    try:
+        entries = fate_entries()
+    except LedgerAbsent:
+        return {
+            "ledger_status": DEAD_DIAL_LEDGER_ABSENT,
+            "findings": [dict(f, fate=None) for f in findings],
+        }
+
+    fate_by_op: dict = {}
+    for entry in entries:
+        for key in entry.op_keys:
+            fate_by_op.setdefault(key, []).extend(entry.fate_values)
+
+    enriched = []
+    for f in findings:
+        values = fate_by_op.get(f["op"])
+        fate = None
+        if values:
+            unique = sorted(set(values))
+            fate = unique[0] if len(unique) == 1 else "/".join(unique)
+        enriched.append(dict(f, fate=fate))
+    return {"ledger_status": DEAD_DIAL_LEDGER_OK, "findings": enriched}
 
 
 def _tail_entries(path: Path, *, tail_bytes: int, max_rows: int):
@@ -284,6 +454,18 @@ def breach_report(
         "top_n": top_n,
     }
     summary["headline"] = headline_for(summary)
+    dead_dials = _join_ledger_fate(dead_dial_findings(entries))
+    dead_dials["min_attempts"] = DEAD_DIAL_MIN_ATTEMPTS
+    dead_dials["window"] = {
+        # Reuses `source`'s own bound machinery — never a parallel figure to
+        # drift from it. Tells a reader what the `min_attempts` count above
+        # was measured OVER: a single bounded-tail read of the current
+        # generation, not the op's lifetime. See DEAD_DIAL_MIN_ATTEMPTS's
+        # docstring for the ~20-hour/~0.5-per-hour arithmetic this implies.
+        "generation": sink_name,
+        "head_truncated": head_truncated,
+    }
+    summary["dead_dials"] = dead_dials
 
     handler_total_ms = (time.process_time() - handler_t0) * 1000.0
     summary["self_assessment"] = {

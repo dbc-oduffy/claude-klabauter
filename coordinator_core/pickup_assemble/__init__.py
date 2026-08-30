@@ -6060,13 +6060,50 @@ def compute_gate_shipped_blocker_evidence(
 ) -> Optional[dict[str, Any]]:
     """Narrow `jgate` evidence enrichment (plan 2026-08-08-the-engine-asks-
     for-facts-it-already-holds, chunk C7) — reads ONLY this handoff's own
-    `gate_evidence` frontmatter field (schema § `gate_evidence`), never a
-    corpus walk of sibling handoffs (live or archived, contract negative
-    spec 2). `gate_evidence` is authored directly onto THIS record by the
-    same hand that wrote `gate_dependency`/`blocked_by`, so reading it costs
-    nothing beyond the git read this module already performs elsewhere
+    `gate_evidence` frontmatter field (schema § `gate_evidence`).
+    `gate_evidence` is authored directly onto THIS record by the same hand
+    that wrote `gate_dependency`/`blocked_by`, so reading it costs nothing
+    beyond the git read this module already performs elsewhere
     (`compute_premise_checks`'s `sha` premise kind is the same shape, same
     `_run_git` choke point — never raises).
+
+    C7's original negative spec 2 — "never a corpus walk of sibling
+    handoffs (live or archived)" — is RETIRED as of plan
+    2026-08-30-the-gate-brief-reads-a-list-where-the-record-wrote-one,
+    chunk C3, in the same commit that adds the corpus walk this docstring
+    used to forbid. That bound was not an EM implementation detail; it was
+    a PM ruling on the 2026-08-08 spec
+    (`archive/specs/2026-08/2026-08-08-the-engine-asks-for-facts-it-
+    already-holds.md`, "C7 — PM ruled to dispatch; landed f794cf403097"),
+    narrowed to dissolve one named hazard: "the landed shape is narrower
+    than the row anticipated, and safer: `compute_gate_shipped_blocker_
+    evidence` reads only the current handoff's OWN `gate_evidence`
+    frontmatter — no corpus walk of sibling handoffs, live or archived.
+    That dissolves rather than manages the row's central hazard (passing
+    the live set alone would make every archived blocker read as a
+    dangling ref on every pickup fleet-wide): there was no set to pass."
+
+    Retiring the bound does not reopen that hazard, on both of its axes:
+    (1) `_build_blocker_index` (plan 2026-08-30, chunk C2) scans BOTH
+    `state/handoffs/` (live) and `archive/handoffs/` (recursive, archived)
+    into the same index, so an archived, already-shipped blocker id now
+    resolves to its record instead of reading as a dangling reference —
+    the "no set to pass" condition the 2026-08-08 ruling relied on no
+    longer holds, because C2 builds exactly that set, bounded and
+    byte-identical to the full-YAML index (measured, C2 body: 72-82ms at
+    4096 bytes vs 1005ms full-YAML, `missing_ids=0, extra_ids=0,
+    path_mismatch=0`). (2) C2's scan-error propagation (`scan_incomplete`)
+    distinguishes an unreadable subtree from "the record does not exist"
+    rather than silently degrading to `unresolvable` — the second reason
+    the hazard does not reopen (Review: staff-eng Finding 4: the actual
+    hole in this argument is the unreadable-subtree case, not the
+    archived-record case). This function itself is unchanged by the
+    retirement — it still reads only this record's own `gate_evidence`;
+    what changed is `compute_gate_blocker_evidence` (C2) and the
+    recommendation this evidence now composes with (C3, `gate_check
+    ["blockers"]` / `compute_gate_check_recommendation`), which DO walk
+    the corpus, deliberately, once per brief via the bounded index — never
+    per id.
 
     Returns evidence for the FIRST `legs[]` entry with `kind ==
     "commit-sha"` whose `ref` resolves via `git cat-file -e` in this repo,
@@ -6097,6 +6134,235 @@ def compute_gate_shipped_blocker_evidence(
         if result.returncode == 0:
             return {"leg_id": leg.get("leg_id", "<unknown>"), "sha": sha}
     return None
+
+
+#: Holder fields checked directly on a resolved blocker's own frontmatter
+#: dict, in priority order — mirrors `compute_liveness_signal`'s raw-scan
+#: fallback tuple (`claimed_by`, `consumed_by`, `picked_up_by`), the same
+#: three-field class-appropriate stamp this module already reads elsewhere.
+#: `_compute_gate_blocker_evidence` deliberately reads these directly off the
+#: already-parsed record rather than through `_resolve_ledger_first_holder`
+#: (which needs a live artifact_path + a second disk read to consult the
+#: claim ledger) — the dispatch brief pins "take the surviving head's
+#: already-parsed deployment_state and holder fields directly, no second
+#: YAML read".
+_BLOCKER_HOLDER_FIELDS = ("claimed_by", "consumed_by", "picked_up_by")
+
+
+def _blocker_holder(record: dict[str, Any]) -> Optional[str]:
+    for key in _BLOCKER_HOLDER_FIELDS:
+        value = record.get(key)
+        if value:
+            return str(value)
+    return None
+
+
+def compute_gate_blocker_evidence(
+    repo_root: Path, blocked_by: Optional[list[Any]]
+) -> list[dict[str, Any]]:
+    """C2 (plan 2026-08-30-the-gate-brief-reads-a-list-where-the-record-
+    wrote-one) — resolve EVERY id in an `awaiting_gate` handoff's
+    `blocked_by` list to a record, instead of handing the EM the bare id
+    list and making it hand-walk the handoff corpus to answer "has this
+    gate actually cleared?" (the memo this chunk answers, cross-repo/
+    inbox/2026-08-30-doe-claude-em-gate-check-names-blockers-but-resolves-
+    none.md).
+
+    One bounded index build (`reconcile.handoff_corpus._build_blocker_
+    index`) over the live+archived corpus, then a dict-hit lookup per id —
+    NOT a per-id corpus walk. On an index hit, every matching path's
+    frontmatter is read (`dag._read_meta`, cached) and the resulting record
+    dicts — each still carrying its own `_path` — are passed to
+    `reconcile.gate_eval.collapse_to_chain_heads` (the ratified primitive;
+    CONSUMED here, never re-implemented) to resolve the one `stub_id`/
+    `handoff_id` naming a whole continuation chain down to its surviving
+    head(s). The surviving head's already-parsed `deployment_state` and
+    holder fields are read directly off that dict — no second YAML read.
+
+    Returns one dict per `blocked_by` entry, in list order, each carrying:
+      - `id`: the blocker id as authored.
+      - `status`: one of `resolved` / `unresolvable` / `ambiguous` /
+        `scan_incomplete` — the four answers this chunk exists to
+        distinguish (dispatch brief): `unresolvable` is an id naming
+        nothing in a FULLY-scanned corpus ("fix the reference, not the
+        blocker"); `ambiguous` is a genuine cross-family collision
+        surviving the chain collapse (more than one surviving head);
+        `scan_incomplete` means a corpus root could not be read, so
+        absence here is NOT proof the id does not exist; `resolved` is the
+        one-head, fully-scanned case.
+      - `resolved`: bool — `True` only for `status == "resolved"`.
+      - `deployment_state` / `holder`: the surviving head's own fields
+        (`None` when not `resolved`).
+      - `holder_address` / `holder_live`: advisory, resolved via
+        `session.reachability.resolve_advisory_address` off the holder
+        session id — the same join `gates.competing_claim[].send_message_
+        address` already runs. `holder_live` is `True` only when an
+        address actually resolved; both are `None` when there is no
+        holder to resolve or the record was not `resolved`.
+
+    `scan_incomplete` is per-blocker (not a single whole-call flag): a
+    corpus scan error can leave SOME ids resolved (their matching path(s)
+    fully read despite an unrelated unreadable subtree) and others not —
+    each entry gets its own honest status rather than the whole list being
+    downgraded on one unrelated I/O failure. An id already found via an
+    index hit is `resolved`/`ambiguous` even when a scan error is present
+    elsewhere in the corpus: the failure to read some OTHER subtree cannot
+    retroactively make an already-successful hit uncertain.
+
+    Budget note (dispatch brief): adds ~80ms to a path that currently costs
+    ~9,400ms. Does not bring the brief under the 500ms brightline; why not
+    is out of this chunk's scope.
+    """
+    if not blocked_by:
+        return []
+
+    from coordinator_core.reconcile.gate_eval import collapse_to_chain_heads
+    from coordinator_core.reconcile.handoff_corpus import _build_blocker_index
+
+    index, scan_errors = _build_blocker_index(repo_root)
+    scan_incomplete = bool(scan_errors)
+
+    results: list[dict[str, Any]] = []
+    for raw_id in blocked_by:
+        blocker_id = str(raw_id)
+        entry: dict[str, Any] = {
+            "id": blocker_id,
+            "status": "unresolvable",
+            "resolved": False,
+            "deployment_state": None,
+            "holder": None,
+            "holder_address": None,
+            "holder_live": None,
+        }
+
+        paths = index.get(blocker_id)
+        if not paths:
+            if scan_incomplete:
+                entry["status"] = "scan_incomplete"
+            results.append(entry)
+            continue
+
+        records: list[dict[str, Any]] = []
+        for path in paths:
+            meta = dag._read_meta(str(path))
+            if not meta:
+                continue
+            meta = dict(meta)
+            meta["_path"] = str(path)
+            records.append(meta)
+
+        if not records:
+            entry["status"] = "scan_incomplete" if scan_incomplete else "unresolvable"
+            results.append(entry)
+            continue
+
+        heads = collapse_to_chain_heads(records)
+        if len(heads) > 1:
+            entry["status"] = "ambiguous"
+            results.append(entry)
+            continue
+
+        head = heads[0]
+        entry["status"] = "resolved"
+        entry["resolved"] = True
+        entry["deployment_state"] = head.get("deployment_state")
+        holder = _blocker_holder(head)
+        entry["holder"] = holder
+        if holder:
+            try:
+                from coordinator_core.session import reachability
+
+                address = reachability.resolve_advisory_address(holder)
+            except Exception:
+                address = ""
+            entry["holder_address"] = address or ""
+            entry["holder_live"] = bool(address)
+        results.append(entry)
+
+    return results
+
+
+def compute_gate_check_recommendation(blockers: list[dict[str, Any]]) -> dict[str, str]:
+    """C3 (plan 2026-08-30-the-gate-brief-reads-a-list-where-the-record-
+    wrote-one) — turn `gate_check["blockers"]` (the per-id resolution C2's
+    `compute_gate_blocker_evidence` produces, renamed to the `stub_id`
+    field this function and the falsifier read) into the `jgate`
+    `recommendation` the EM reads instead of hand-walking the handoff
+    corpus.
+
+    Always returns a non-null `{disposition, rationale}` — never `None` —
+    because there is always something to say about the blocker set, even
+    when that something is "nothing resolved" (dispatch brief: "nothing
+    resolvable -> `unresolved`, stated explicitly. An explicit `unresolved`
+    beats silence" — same reasoning C2's docstring already applies to its
+    own four-way status split). `disposition` is one of three values:
+
+      - `"cleared"` — every blocker in the list resolved AND its
+        `deployment_state` is terminal (`lifecycle_constants.
+        HANDOFF_TERMINAL_DEPLOYMENT`: shipped/abandoned/continued/closed).
+      - `"not-cleared"` — at least one blocker did not resolve, or
+        resolved to a non-terminal `deployment_state` — named individually
+        in the rationale, with the live holder's address when one is
+        known, so the EM does not have to re-open the blocker's own
+        record to see who is sitting on it.
+      - `"unresolved"` — the blocker list is empty, or none of its
+        entries resolved to a record at all — this is deliberately NOT one
+        of `jgate`'s two `dispositions` values (`cleared`/`not-cleared`):
+        `build_judgment_point`'s shared seam validates only that
+        `recommendation` is shaped `{disposition: str, rationale: str}`
+        (`contract/decision_object/judgment.py :: _validate_recommendation`),
+        never that its value names a live disposition, so this is not a
+        contract violation — it is the engine saying "I looked, and I
+        cannot tell" rather than defaulting silently to either pole.
+
+    This is a NARROWING read only (contract negative spec 1, `build_
+    gate_check_judgment_point`'s own docstring): the judgment point this
+    recommendation rides on is still emitted unconditionally and the EM
+    still resolves it by picking `cleared` or `not-cleared` itself — this
+    function's `"unresolved"` disposition is never one of the two choices
+    the EM is offered, only a note attached to the ask.
+    """
+    from coordinator_core.lifecycle_constants import HANDOFF_TERMINAL_DEPLOYMENT
+
+    if not blockers:
+        return {
+            "disposition": "unresolved",
+            "rationale": "gate_check.blockers is empty — no blocked_by id to resolve.",
+        }
+
+    resolved = [b for b in blockers if b.get("status") == "resolved"]
+    if not resolved:
+        ids = ", ".join(str(b.get("stub_id", "<unknown>")) for b in blockers)
+        return {
+            "disposition": "unresolved",
+            "rationale": f"None of blocked_by ids ({ids}) resolved to a record — cannot judge cleared/not-cleared.",
+        }
+
+    non_terminal = [
+        b
+        for b in blockers
+        if not (b.get("status") == "resolved" and b.get("deployment_state") in HANDOFF_TERMINAL_DEPLOYMENT)
+    ]
+    if not non_terminal:
+        named = ", ".join(f"{b.get('stub_id')} ({b.get('deployment_state')})" for b in blockers)
+        return {
+            "disposition": "cleared",
+            "rationale": f"Every blocked_by id resolved terminal: {named}.",
+        }
+
+    parts: list[str] = []
+    for blocker in non_terminal:
+        state = blocker.get("deployment_state") or blocker.get("status")
+        holder_bit = ""
+        if blocker.get("holder"):
+            holder_bit = f", held by {blocker['holder']}"
+            if blocker.get("holder_address"):
+                holder_bit += f" at {blocker['holder_address']}"
+        parts.append(f"{blocker.get('stub_id', '<unknown>')} ({state}{holder_bit})")
+    return {
+        "disposition": "not-cleared",
+        "rationale": "Still open: " + "; ".join(parts) + ".",
+    }
 
 
 #: Piece B guidance strings for `jgate`'s two dispositions (message
@@ -6152,7 +6418,7 @@ def build_gate_check_judgment_point(
     judgment_point`, above). The widened `gates.gate_check` bundle this
     evidence pointer resolves to now also carries `blocked_by`/
     `blocking_notes`/`gate_evidence` (see the `awaiting_gate` branch in
-    `_brief_for_artifact` that builds it) — `cleared` is answered directly
+    `brief` that builds it) — `cleared` is answered directly
     against the same two fields (`blocked_by`, `blocking_notes`) that a
     claim strands unless `gate-recheck` also runs (Piece A, this same
     disposition's `resolves` list)."""
@@ -7882,35 +8148,79 @@ def brief(
             # prose per schema (never resolver-read) — surfaced here only
             # so the EM sees what its own claim would orphan, same as
             # `blocked_by`.
+            # `blocked_by` and `gate_evidence` are read from the record's own
+            # TYPED frontmatter (`dag._read_meta`), not from `fm`
+            # (`_parse_fm_dict`): `_parse_fm_dict` types exactly three keys as
+            # lists (`_LIST_FIELD_KEYS`) and hands back every other key —
+            # including `blocked_by` (flow or block YAML list) and
+            # `gate_evidence` (a nested mapping) — as an unparsed string
+            # (`''` for `gate_evidence`, since it has no scalar form at all).
+            # Widening `_LIST_FIELD_KEYS`/`_parse_fm_dict` per-key was already
+            # rejected once for the identical need on this same record shape
+            # (`session/work_state.py :: build_work_state`, lines 444-452) —
+            # this re-reads the SAME already-open artifact through
+            # `dag._read_meta`, cached by (abs_path, sha256-content-hash), so
+            # it costs one cached read, not a corpus operation. Every other
+            # field in this branch still reads from `fm` unchanged.
+            typed_meta = dag._read_meta(str(root / artifact["path"]))
             gate_check = {
                 "gate_dependency": fm.get("gate_dependency"),
                 "aging_verdict": aging_verdict,
-                "blocked_by": fm.get("blocked_by"),
+                "blocked_by": typed_meta.get("blocked_by"),
                 "blocking_notes": fm.get("blocking_notes"),
-                "gate_evidence": fm.get("gate_evidence"),
+                "gate_evidence": typed_meta.get("gate_evidence"),
             }
+            # C2 (plan 2026-08-30-the-gate-brief-reads-a-list-where-the-
+            # record-wrote-one) — resolve every `blocked_by` id to its own
+            # record (deployment_state, holder, holder reachability) rather
+            # than handing the EM a bare id list to hand-walk the corpus
+            # for. See `compute_gate_blocker_evidence`'s docstring for the
+            # four-way resolved/unresolvable/ambiguous/scan_incomplete
+            # answer shape.
+            gate_check["blocked_by_resolved"] = compute_gate_blocker_evidence(
+                root, typed_meta.get("blocked_by")
+            )
+            # C3 — `gate_check["blockers"]` is the falsifier/EM-facing
+            # rename of `blocked_by_resolved`'s per-id entries (`id` ->
+            # `stub_id`), and the input `compute_gate_check_recommendation`
+            # reads to build `jgate`'s recommendation below.
+            gate_check["blockers"] = [
+                {
+                    "stub_id": entry["id"],
+                    "status": entry["status"],
+                    "resolved": entry["resolved"],
+                    "deployment_state": entry["deployment_state"],
+                    "holder": entry["holder"],
+                    "holder_address": entry["holder_address"],
+                    "holder_live": entry["holder_live"],
+                }
+                for entry in gate_check["blocked_by_resolved"]
+            ]
             # C7 enrichment — reads ONLY this record's own `gate_evidence`
             # field (no corpus walk); see `compute_gate_shipped_blocker_
-            # evidence`'s docstring for the narrowing rationale.
-            shipped_blocker = compute_gate_shipped_blocker_evidence(root, fm.get("gate_evidence"))
+            # evidence`'s docstring for the narrowing rationale (and its
+            # retirement note re: negative spec 2, C3).
+            shipped_blocker = compute_gate_shipped_blocker_evidence(root, typed_meta.get("gate_evidence"))
             if shipped_blocker is not None:
                 gate_check["shipped_blocker"] = shipped_blocker
-                gate_jp = build_gate_check_judgment_point(
-                    "gates.gate_check",
-                    ["d2", "d-gate-recheck"],
-                    recommendation={
-                        "disposition": "cleared",
-                        "rationale": (
-                            f"gate_evidence leg {shipped_blocker['leg_id']!r} names "
-                            f"commit-sha {shipped_blocker['sha']}, resolvable in this "
-                            "repo — the named blocker appears shipped."
-                        ),
-                    },
-                )
+                gate_recommendation = {
+                    "disposition": "cleared",
+                    "rationale": (
+                        f"gate_evidence leg {shipped_blocker['leg_id']!r} names "
+                        f"commit-sha {shipped_blocker['sha']}, resolvable in this "
+                        "repo — the named blocker appears shipped."
+                    ),
+                }
             else:
-                gate_jp = build_gate_check_judgment_point(
-                    "gates.gate_check", ["d2", "d-gate-recheck"]
-                )
+                # C3 — direct gate_evidence proof takes priority when
+                # present (positive, single-sha proof); otherwise fall
+                # back to the corpus-resolved `blockers[]` verdict (C2).
+                # Always additive, never a suppression (negative spec 1):
+                # `compute_gate_check_recommendation` never returns `None`.
+                gate_recommendation = compute_gate_check_recommendation(gate_check["blockers"])
+            gate_jp = build_gate_check_judgment_point(
+                "gates.gate_check", ["d2", "d-gate-recheck"], recommendation=gate_recommendation
+            )
             judgment_points.append(gate_jp)
         elif fm.get("deployment_state") == "shipped":
             # 2026-07-25 defect fix — a shipped handoff previously briefed as

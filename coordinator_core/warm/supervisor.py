@@ -368,10 +368,56 @@ def read_discovery(engine_root: Optional[Path] = None) -> Optional[dict]:
         time.sleep(_READ_RETRY_SLEEP_SECS)
 
 
-def unlink_discovery(engine_root: Optional[Path] = None) -> None:
+def unlink_discovery(
+    engine_root: Optional[Path] = None,
+    *,
+    owner_pid: Optional[int] = None,
+) -> None:
     """Best-effort remove the discovery file -- mirrors `breadcrumb.
-    unlink_breadcrumb`'s never-raises contract."""
+    unlink_breadcrumb`'s never-raises contract.
+
+    `owner_pid` makes the unlink OWNERSHIP-CHECKED, exactly as
+    `breadcrumb.unlink_breadcrumb` and `election.unlink_if_owned` already
+    are: the file is removed only if the record on disk still names that
+    pid. There is exactly ONE discovery file per clone and every winning
+    listener overwrites it at boot, so a departing listener is NOT
+    necessarily the listener the current record describes -- a superseded
+    generation exiting would otherwise delete its LIVE SUCCESSOR's record:
+
+        A boots (pid 1111)          -> discovery names 1111
+        publish; B boots (pid 2222) -> discovery names 2222, A's clobbered
+        A exits, unconditional unlink -> discovery GONE while B still serves
+
+    That is not hypothetical here. Measured 2026-08-30 on this box: up to 9
+    concurrent HTTP listeners, 92 of 131 lifetimes serving zero requests,
+    and death groups of 4-8 processes within one second -- every one of
+    those exits deleting the surviving listener's record. The next
+    `http_hook_forwarder._resolve_backend` then reads `None` and DENIES a
+    PreToolUse call the guard never evaluated.
+
+    `owner_pid=None` keeps the historical unconditional behaviour for
+    callers that genuinely own the file unambiguously; prefer passing it.
+    """
     path = discovery_path(engine_root)
+    if owner_pid is not None:
+        # Held across READ-THEN-UNLINK, closing the TOCTOU `4a6aeac9ed` left:
+        # an unlocked read followed by an unconditional unlink lets a
+        # successor's `write_discovery` land in the gap between them, and
+        # this call then deletes the SUCCESSOR's fresh record rather than
+        # the caller's own stale one. `write_discovery` already takes this
+        # same lock for every write, so holding it here serialises against
+        # every writer rather than only the read.
+        with locked_write.held_lock(path, holder_label="warm.supervisor"):
+            record = read_discovery(engine_root)
+            if record is None:
+                return
+            if record.get("pid") != owner_pid:
+                return
+            try:
+                path.unlink()
+            except OSError:
+                pass
+        return
     try:
         path.unlink()
     except OSError:
@@ -725,9 +771,14 @@ class _ServerContext:
         engine_root: Optional[Path],
         version_state: "skew.ServerVersionState",
         dispatch: Optional[Any] = None,
+        election_handle: Optional[Any] = None,
     ) -> None:
         self.httpd = httpd
         self.engine_root = engine_root
+        # The won election handle, held for this process's lifetime -- see
+        # `main()`'s own comment at the `elect()` call for why closing it
+        # early defeats the lock. Closed exactly once, in `ctx_shutdown`.
+        self._election_handle = election_handle
         self.in_flight = InFlightCounter()
         # THIS TRANSPORT HAD NO TELEMETRY AT ALL until 2026-08-26, so every
         # death on it -- including a listener outliving the clone it was
@@ -790,7 +841,21 @@ class _ServerContext:
         # ordering: `flush` never raises, so it cannot cost the unlink, and a
         # row written first is a row that survives a crash between the two.
         self.telemetry.flush(engine_root=self.engine_root)
-        unlink_discovery(self.engine_root)
+        # Ownership-checked: an orphaned or superseded listener exiting must
+        # not delete the LIVE listener's record. See `unlink_discovery`.
+        unlink_discovery(self.engine_root, owner_pid=os.getpid())
+        # Release the election lock LAST, after the discovery record this
+        # process owned is gone -- a competitor that wins the election the
+        # instant it is released must never find a stale record naming a
+        # pid that is already exiting.
+        if self._election_handle is not None:
+            import _winapi
+
+            try:
+                _winapi.CloseHandle(self._election_handle)
+            except Exception:  # noqa: BLE001 -- best-effort close of a won lock
+                pass
+            self._election_handle = None
 
     def stop(self) -> None:
         lifecycle.begin_shutdown(
@@ -826,8 +891,20 @@ class _ServerContext:
         """One watchdog poll: self-evict via `stop()` (this class's own
         `lifecycle.begin_shutdown` wiring, shared with every other trigger's
         single-shot guard) the first time `_token_is_stale()` is True. A
-        no-op otherwise."""
+        no-op otherwise.
+
+        RECORDS THE REASON BEFORE STOPPING, mirroring `warm.server::
+        _ServerContext._idle_tick`, which records before demoting for the
+        same reason: `stop()` -> `lifecycle.begin_shutdown` -> `ctx_shutdown`
+        flushes telemetry, so a reason set after `stop()` is never written.
+        Without this call every HTTP-transport skew eviction landed as
+        `exit_reason: null` -- 115 of 540 recorded lifetimes (21%) measured
+        2026-08-30, an entire census bucket reading as "unknown" when it was
+        this one path. Residual of `docs/research/2026-08-26-repo-warm-
+        succession-advisory.md` section 6, whose `ServerTelemetry` and
+        `transport` tag landed while this call did not."""
         if self._token_is_stale():
+            self.record_exit(telemetry.EXIT_REASON_SUPERSEDED)
             self.stop()
 
     def _skew_watchdog_loop(self) -> None:
@@ -1311,16 +1388,17 @@ def main() -> int:
 
     # The election handle is a pure LOCK here (module docstring's
     # per-machine-election bullet) -- never used as a transport, unlike
-    # `warm.server`'s own election handle. Closed immediately: the atomic
-    # first-instance win already happened, and this process's lifetime,
-    # not an open handle, is what a competitor's own `ElectionLost` check
-    # observes.
-    import _winapi
-
-    try:
-        _winapi.CloseHandle(handle)
-    except Exception:  # noqa: BLE001 -- best-effort close of a won lock
-        pass
+    # `warm.server`'s own election handle. HELD, NOT CLOSED, for the rest of
+    # this process's life: `FILE_FLAG_FIRST_PIPE_INSTANCE` exclusion is a
+    # property of a LIVE PIPE INSTANCE, not of the electing process, so
+    # closing this handle immediately after winning released the pipe name
+    # right back to the next `CreateNamedPipe` -- collapsing the exclusion
+    # window from process-lifetime to the microseconds between `elect` and
+    # the close. Measured: up to 9 concurrent listeners, 92 of 131 lifetimes
+    # serving 0 requests. The handle is closed only in `_ServerContext.
+    # ctx_shutdown` (alongside `unlink_discovery`) or on the credential-
+    # refusal `return 3` path below, so the lock is held for exactly this
+    # process's lifetime, matching the comment this replaces' original intent.
 
     from http.server import ThreadingHTTPServer
 
@@ -1344,6 +1422,15 @@ def main() -> int:
             f"[warm-http-supervisor] refusing to serve: {exc}",
             file=__import__("sys").stderr,
         )
+        # The won election handle is released here too -- this process is
+        # exiting without ever serving, so holding the lock past this return
+        # would strand the election against a process that is already gone.
+        import _winapi
+
+        try:
+            _winapi.CloseHandle(handle)
+        except Exception:  # noqa: BLE001 -- best-effort close on a refusal exit
+            pass
         return 3
 
     httpd = ThreadingHTTPServer(("127.0.0.1", 0), _NotYetBound)
@@ -1351,7 +1438,7 @@ def main() -> int:
 
     _declare_execution_route()
 
-    ctx = _ServerContext(httpd=httpd, engine_root=root, version_state=version_state)
+    ctx = _ServerContext(httpd=httpd, engine_root=root, version_state=version_state, election_handle=handle)
     httpd.RequestHandlerClass = _make_handler(ctx)
 
     port = httpd.server_address[1]

@@ -521,11 +521,6 @@ def new_correlation_id() -> str:
 #: could not complete (never guessed, never hard-coded).
 _PROCESS_CLOCK_RESOLUTION_MS: Optional[float] = None
 
-#: Bounds the busy-wait discovery loop below so a platform where
-#: `process_time()` never advances (a stub clock, a sandboxed CI runner)
-#: degrades to `None` instead of spinning forever -- same never-breaks-
-#: dispatch contract as every other function in this module.
-_CLOCK_DISCOVERY_MAX_SPINS = 2_000_000
 
 
 def process_clock_resolution_ms() -> Optional[float]:
@@ -540,43 +535,56 @@ def process_clock_resolution_ms() -> Optional[float]:
     (docs/plans/2026-08-29-a-zero-is-under-one-tick-not-unmeasured.md
     § Problem). Trusting the reported constant would hard-code the wrong
     figure for the very platform it claims to describe -- and the fleet
-    floor is a MacBook, where the real tick differs again. So this discovers
-    the tick empirically rather than assume either platform's number:
-    busy-poll `time.process_time()` until it advances, and record that one
-    observed delta.
+    floor is a MacBook, where the real tick differs again. So this reports the
+    tick empirically rather than assume either platform's number.
 
-    Computed once per process and memoized in `_PROCESS_CLOCK_RESOLUTION_MS`
-    -- the tick does not change during a process's lifetime, so every call
-    after the first is a plain module-global read with no measurement cost.
-    The one-time discovery cost is real (up to one tick's worth of spinning,
-    ~15.625 ms on this platform) and is paid once per process, not once per
-    op -- cheap next to the interpreter-boot cost every cold process already
-    pays, and never paid at all by a warm long-lived process after its first
-    op.
+    OBSERVED, NEVER PROBED -- and the difference is not a style choice. An
+    earlier shape busy-polled `time.process_time()` until it advanced and
+    recorded that delta. It was correct and it was a defect: `process_time`
+    advances only while the process BURNS CPU, so the poll must spin hot to
+    make progress, and one tick of spin (~15.625 ms here) landed on the
+    dispatch hot path of every cold process -- most callers are one-shot
+    (`invoke/__main__`, hook shims, pool workers), so "once per process" was
+    once per dispatch in the traffic shape that dominates. Project CLAUDE.md
+    § Load norm forbids exactly that: never build a mechanism that occupies a
+    box shared with ~50 peers. Note also why the obvious repair does not
+    work -- inserting a sleep to yield the CPU stops the clock advancing at
+    all, so the loop would spin to its own cap and return None every time.
 
-    Returns ``None`` (never raises, never guesses) if the clock never
-    advances within `_CLOCK_DISCOVERY_MAX_SPINS` iterations -- an
-    undiscoverable resolution is honestly unmeasured, matching this module's
+    So nothing is probed. `note_observed_process_ms` is fed each row's own
+    already-computed `process_ms` by `record_op_process_time`, and this
+    returns the smallest non-zero value this process has seen. On a quantized
+    clock that smallest non-zero observation IS the tick, reached for free
+    from measurements the caller was taking anyway: no spin, no added syscall,
+    no cache file, and nothing at all on the hot path beyond one comparison.
+
+    Returns ``None`` until this process has recorded a non-zero row -- an
+    unobserved resolution is honestly unmeasured, matching this module's
     `spawns`-omission convention: a null field is "not counted", never "0".
+    A consumer needing the tick for rows written before the first non-zero
+    observation derives it from the population instead (every non-zero value
+    in the sink is a multiple of it), which is what `op_adjudication` does.
+    """
+    return _PROCESS_CLOCK_RESOLUTION_MS
+
+
+def note_observed_process_ms(process_ms: Optional[float]) -> None:
+    """Fold one measured `process_ms` into this process's observed tick.
+
+    Called by `record_op_process_time` with the figure it just computed.
+    Keeps the smallest non-zero value seen: on a quantized clock that is the
+    tick itself. Never raises -- this sits on the dispatch hot path and a
+    telemetry refinement must never be able to break an op.
     """
     global _PROCESS_CLOCK_RESOLUTION_MS
-    if _PROCESS_CLOCK_RESOLUTION_MS is not None:
-        return _PROCESS_CLOCK_RESOLUTION_MS
     try:
-        start = time.process_time()
-        spins = 0
-        while spins < _CLOCK_DISCOVERY_MAX_SPINS:
-            now = time.process_time()
-            if now != start:
-                delta_ms = (now - start) * 1000.0
-                if delta_ms > 0:
-                    _PROCESS_CLOCK_RESOLUTION_MS = delta_ms
-                    return delta_ms
-                start = now
-            spins += 1
+        if process_ms is None or process_ms <= 0:
+            return
+        current = _PROCESS_CLOCK_RESOLUTION_MS
+        if current is None or process_ms < current:
+            _PROCESS_CLOCK_RESOLUTION_MS = float(process_ms)
     except Exception:
         pass
-    return None
 
 
 def _write_entry(entry: dict, repo_root: Optional[Path]) -> None:

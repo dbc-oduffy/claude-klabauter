@@ -1,4 +1,4 @@
-"""
+r"""
 coordinator_core.plugin_health.forwarder_drift — staleness probe for
 generated agent-helper bin/ forwarders. WARN-only for the UNCITED population;
 FAIL-LOUD for the CITED-but-missing population (see CITED-VS-UNCITED SPLIT
@@ -152,6 +152,36 @@ surface actually tells an agent to invoke it:
   stdout. The UNCITED population's exit code is unchanged at 0 — see
   Contract block above.
 
+EXTENSION axis (added 2026-08-30): the NAME axis asks whether an installed
+forwarder exists for a derived CLI name; the CONTENT axis (in the CLI
+trampoline, `coordinator/bin/check-forwarder-drift.py`) asks whether installed
+bytes match source. Neither asks the third question: does the EXTENSION a
+citing prompt surface tells an EM to type match what the install actually
+wrote? The 2026-08-27 door cutover made `<cli>.exe` the spelling for every
+settings-home CLI on Windows, retaining `.cmd` for only six pre-engine
+bootstrap resolvers (`claude-home`, `coordinator-settings-home`,
+`example-game-repo-control`, `machine-local`, `platform-localize`,
+`resolve-coordinator-clone`). Both existing axes stayed green through it:
+presence and byte-equality were still true for every installed file; only the
+extension named in doctrine was wrong. The failing invocation reports
+`command-not-found` naming the CLI, which reads as "this CLI does not exist"
+rather than "this CLI exists under a different spelling". This axis is scanned
+only via the Windows-specific Shape W citation shape
+(`$env:COORDINATOR_SETTINGS_HOME\bin\<name>`, see `_ENTRYPOINT_W_RE`) — the
+POSIX `${COORDINATOR_SETTINGS_HOME:-...}/bin/<name>` shape `_ENTRYPOINT_RE`
+matches has no notion of a Windows extension to get wrong. HOST GATE: the
+oracle for this axis is THIS machine's own settings-home/bin — a POSIX
+install writes extensionless launchers and no `.exe` at all, so a POSIX host
+would false-fire on every Shape W citation purely from how POSIX installs;
+Shape W is Windows-only by construction (its own rung 0 fires only on a
+PowerShell host), so only a Windows install can adjudicate it, and this axis
+degrades to a clean skip on any other host (see `_check_extension_axis`).
+Unlike the CONTENT axis (always advisory, never gates — see that function's
+docstring in the CLI trampoline), a non-empty `extension_mismatch` DOES gate
+`check-forwarder-drift.py`'s exit code, the same CITED-population fail-loud
+posture as `cited_missing` above: a live prompt surface telling an EM to type
+a path that cannot resolve is not expected transient lag.
+
 Forwarder identification is CONTENT-based (a fixed marker line every
 `_write_agent_forwarder`-generated file carries), not name-based:
 `_derive_agent_helper_target_map`'s exclusion/stem-dedup rules (reserved
@@ -253,6 +283,24 @@ _COMPAT_BIN_LABEL = "~/.claude/bin (legacy-mirror residue — compat producer re
 # module this was copied from).
 _ENTRYPOINT_RE = re.compile(r"\$\{COORDINATOR_SETTINGS_HOME:-.*?\}/bin/([A-Za-z0-9_.-]+)")
 
+# Shape W (rung 0 of DoE-claude's `coordinator/snippets/resolve-coordinator-bin.md`
+# precedence ladder) — PowerShell has no `${VAR:-default}` fallback syntax, so a
+# Windows-authored citation spells the settings-home bin/ lookup as
+# `$env:COORDINATOR_SETTINGS_HOME\bin\<name>` instead, a shape `_ENTRYPOINT_RE`
+# above is structurally incapable of matching (no `${...}`, no POSIX `/bin/`
+# separator guaranteed). Accepts either `\` or `/` as the separator since a doc
+# author may write either. See module docstring's EXTENSION axis section for
+# why this citation population, not the NAME axis' bare-name population,
+# is what makes the third axis possible: this citation retains the extension
+# the caller was actually told to type.
+_ENTRYPOINT_W_RE = re.compile(r"\$env:COORDINATOR_SETTINGS_HOME[\\/]bin[\\/]([A-Za-z0-9_.-]+)")
+
+# Extensions the extension axis treats as a plausible, strippable suffix when
+# splitting a cited spelling into (base, extension) — see `_check_extension_axis`.
+# Several CLI names legitimately contain dots (data-suffix style names) and must
+# not have an arbitrary trailing dot-segment treated as an extension.
+_PLAUSIBLE_EXTENSIONS = (".exe", ".cmd", ".ps1", ".py", ".sh")
+
 # Same five trees, same tests/fixtures exemption, as DoE-claude's
 # `coordinator/hooks/scripts/_prompt_surface_citations.py::PROMPT_SURFACE_DIRS`
 # — re-derived rather than imported for the same reason as `_ENTRYPOINT_RE`.
@@ -285,6 +333,21 @@ class ForwarderDriftResult:
     lines: List[str] = field(default_factory=list)
     stderr_lines: List[str] = field(default_factory=list)
     cited_missing: Dict[str, List[str]] = field(default_factory=dict)
+
+    # `extension_mismatch` (new — EXTENSION axis) is the third axis'
+    # machine-readable output: `{cited spelling (extension included): [citing
+    # site, ...]}` for every Shape W citation whose exact spelling is NOT
+    # installed at settings-home/bin, while a sibling with the same base name
+    # (a different extension) IS installed there. Same CITED population and
+    # same fail-loud posture as `cited_missing` above — a live prompt surface
+    # instructing an EM to invoke a path that cannot resolve, just caught on
+    # the extension rather than the presence axis. Empty in every other case:
+    # a clean/skip result, a non-Windows host (this axis' oracle is THIS
+    # machine's settings-home/bin — see `_check_extension_axis`), an
+    # unresolvable DoE-claude root, or a cited base name with no installed
+    # sibling at all (that gap is the NAME axis' `cited_missing` population,
+    # not this one's).
+    extension_mismatch: Dict[str, List[str]] = field(default_factory=dict)
 
 
 def _resolve_agent_bin() -> Optional[Path]:
@@ -348,20 +411,184 @@ def _cited_entrypoint_sites(doe_root: Path) -> Dict[str, List[str]]:
     return sites
 
 
+def _cited_shape_w_sites(doe_root: Path) -> Dict[str, List[str]]:
+    """{cited spelling verbatim, extension included (e.g. "app-session.cmd"):
+    [ "<rel-path-from-doe-root>:<line>", ... ]} for every Shape W citation
+    (`$env:COORDINATOR_SETTINGS_HOME\\bin\\<name>` / `/bin/<name>`) across the
+    same five DoE-claude prompt-surface trees `_cited_entrypoint_sites` scans,
+    with the same tests/fixtures exemption and the same best-effort per-file
+    `OSError` skip.
+
+    Keyed on the CITED SPELLING, extension included — unlike
+    `_cited_entrypoint_sites`'s bare-name key, the extension is the whole
+    subject of the EXTENSION axis this function feeds (see module docstring).
+
+    Trailing `.` characters are stripped from the capture: markdown prose
+    routinely ends a sentence immediately after a backtick-quoted path (e.g.
+    `` `...\\bin\\workweek-complete-brief.exe`. `` — the regex has no notion
+    of sentence boundaries, so the caller strips the artifact instead."""
+    sites: Dict[str, List[str]] = {}
+    for subdir in _DOE_PROMPT_SURFACE_SUBDIRS:
+        root_dir = doe_root / "coordinator" / subdir
+        if not root_dir.is_dir():
+            continue
+        for path in sorted(root_dir.rglob("*.md")):
+            try:
+                rel = path.relative_to(doe_root)
+            except ValueError:
+                continue
+            if _DOE_EXEMPT_PATH_SEGMENTS.intersection(rel.parts[:-1]):
+                continue
+            try:
+                text = path.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            for line_no, line in enumerate(text.split("\n"), start=1):
+                for match in _ENTRYPOINT_W_RE.finditer(line):
+                    spelling = match.group(1).rstrip(".")
+                    if not spelling:
+                        continue
+                    sites.setdefault(spelling, []).append(f"{rel.as_posix()}:{line_no}")
+    return sites
+
+
+def _split_cited_base(spelling: str) -> str:
+    """Strip a plausible extension (see `_PLAUSIBLE_EXTENSIONS`) from a cited
+    spelling to get its base name — used to find installed siblings under a
+    different extension. A trailing dot-segment that is NOT one of the
+    plausible extensions is left alone: several CLI names legitimately
+    contain dots and must not be truncated on an arbitrary suffix."""
+    for ext in _PLAUSIBLE_EXTENSIONS:
+        if spelling.endswith(ext):
+            return spelling[: -len(ext)]
+    return spelling
+
+
+def _is_windows_host() -> bool:
+    """Host predicate for the EXTENSION axis, factored out as a seam so a
+    test can select the POSIX branch without patching `os.name` globally —
+    pathlib reads `os.name` to choose its concrete Path class, so patching
+    it module-wide makes every subsequent Path operation on a Windows host
+    raise UnsupportedOperation."""
+    return os.name == "nt"
+
+
+def _check_extension_axis(
+    doe_root: Optional[Path], settings_bin: Path
+) -> "tuple[List[str], Dict[str, List[str]]]":
+    """EXTENSION axis (see module docstring) — does the extension a Shape W
+    citation tells an EM to type match what is actually installed at
+    settings-home/bin, for the exact base name it names?
+
+    HOST GATE, first and non-negotiable: this axis' oracle is THIS machine's
+    own settings-home/bin — a POSIX install writes extensionless launchers
+    (no `.exe` at all), so every Shape W citation would false-fire on a POSIX
+    host purely because of how POSIX installs, not because of any real
+    mismatch. Shape W is Windows-only by construction (rung 0 of the
+    precedence ladder fires only on a PowerShell host — see
+    `resolve-coordinator-bin.md`), so only a Windows install can adjudicate
+    it; a non-Windows host (or a caller unable to resolve DoE-claude, or a
+    `settings_bin` that isn't an installed directory) degrades to a clean
+    skip, never a fail — same never-raises contract as the rest of this
+    module.
+
+    Verdict per cited spelling, against the set of file names actually
+    present in `settings_bin`:
+      - cited spelling present verbatim -> OK (this is what keeps the six
+        legitimate pre-engine `.cmd` bootstrap resolvers green; the install
+        itself is the oracle, nothing here hardcodes that list).
+      - cited spelling absent, and no sibling of the same base name (base,
+        base.exe, base.cmd) is installed either -> not this axis' business;
+        that gap belongs to the NAME axis' `cited_missing` population (or is
+        prose that never names a real invocation at all, e.g. a wildcard
+        prefix) — skipped silently.
+      - cited spelling absent, but a sibling of the same base name IS
+        installed -> EXTENSION MISMATCH, recorded.
+    """
+    if not _is_windows_host():
+        return (
+            [f"[skip] {_PROG} (extension axis): non-Windows host — Shape W is a Windows-only citation shape, nothing to check here"],
+            {},
+        )
+    if doe_root is None:
+        return (
+            [f"[skip] {_PROG} (extension axis): DoE-claude root unresolvable — nothing to compare"],
+            {},
+        )
+    if not settings_bin.is_dir():
+        return (
+            [f"[skip] {_PROG} (extension axis): '{settings_bin}' does not exist — no install at this location yet"],
+            {},
+        )
+
+    installed_names = {entry.name for entry in settings_bin.iterdir() if entry.is_file()}
+    cited_sites = _cited_shape_w_sites(doe_root)
+
+    mismatch: Dict[str, List[str]] = {}
+    for spelling in sorted(cited_sites):
+        if spelling in installed_names:
+            continue
+        base = _split_cited_base(spelling)
+        siblings_present = any(
+            candidate in installed_names for candidate in (base, f"{base}.exe", f"{base}.cmd")
+        )
+        if not siblings_present:
+            continue
+        mismatch[spelling] = sorted(cited_sites[spelling])
+
+    if not mismatch:
+        return ([f"[ok] {_PROG} (extension axis): {len(cited_sites)} Shape W citation(s) checked, 0 extension mismatches"], {})
+
+    lines: List[str] = []
+    for spelling in sorted(mismatch):
+        base = _split_cited_base(spelling)
+        # `.exe` first, deliberately: on Windows the extensionless python
+        # forwarder sits beside the launcher, so a bare-`base` remedy would
+        # name the forwarder — which Shape W does not invoke (rung 0 names
+        # the `.exe` for every settings-home CLI, no per-CLI exception).
+        installed_spelling = next(
+            (candidate for candidate in (f"{base}.exe", f"{base}.cmd", base) if candidate in installed_names),
+            base,
+        )
+        sites_str = ", ".join(mismatch[spelling])
+        lines.append(
+            f"[warn] {_PROG} (extension axis): '{spelling}' is cited but settings-home/bin installs "
+            f"'{installed_spelling}' instead — rewrite the citation to '{installed_spelling}'. cited at: {sites_str}"
+        )
+    return lines, mismatch
+
+
 def _installed_forwarder_names(bin_dir: Path) -> Set[str]:
     """Content-based scan (see module docstring) — every regular, non-.cmd/
-    .ps1 file in `bin_dir` whose head carries `_FORWARDER_MARKER`."""
+    .ps1 file in `bin_dir` whose head carries `_FORWARDER_MARKER`.
+
+    The read is deliberately bounded to the first 512 BYTES (binary, matched
+    against the marker encoded as bytes), not a `Path.read_text()` slice: this
+    directory holds hundreds of multi-hundred-KB native launcher images (375
+    `.exe` forwarders averaging 173.5 KB on the machine this bound was
+    measured on), and `read_text()[:512]` still decodes the ENTIRE file before
+    discarding everything past the first 512 characters — ~63 MB read and
+    UTF-8-decoded per run, ~580ms of the ~720ms this function used to cost,
+    for information contained entirely in the first 62 bytes. Safety of the
+    512-byte window: `_FORWARDER_MARKER` is pure ASCII, and across all 390
+    marker-carrying files in the live install its maximum END offset is byte
+    62 — a 512-byte window has ~8x headroom, and because the marker is ASCII
+    the byte-window-vs-character-window distinction cannot bite. A future
+    edit back to `read_text()` is the regression this comment exists to
+    prevent."""
     if not bin_dir.is_dir():
         return set()
+    marker = _FORWARDER_MARKER.encode("utf-8")
     names: Set[str] = set()
     for entry in bin_dir.iterdir():
         if entry.is_dir() or entry.suffix in (".cmd", ".ps1"):
             continue
         try:
-            head = entry.read_text(encoding="utf-8", errors="ignore")[:512]
+            with open(entry, "rb") as fh:
+                head = fh.read(512)
         except OSError:
             continue
-        if _FORWARDER_MARKER in head:
+        if marker in head:
             names.add(entry.name)
     return names
 
@@ -485,8 +712,9 @@ def check_forwarder_drift(
     # `check_missing` is False only for the retired compat mirror — see
     # `_diff_one_location`'s docstring for why the derived-but-not-installed
     # direction is permanent, unactionable noise there.
+    resolved_settings_bin = settings_bin if settings_bin is not None else _resolve_settings_bin()
     locations = [
-        ("settings-home/bin", settings_bin if settings_bin is not None else _resolve_settings_bin(), True, cited_sites),
+        ("settings-home/bin", resolved_settings_bin, True, cited_sites),
         (_COMPAT_BIN_LABEL, compat_bin if compat_bin is not None else _resolve_compat_bin(), False, None),
     ]
 
@@ -507,7 +735,18 @@ def check_forwarder_drift(
         if not result.ok:
             any_drift = True
 
-    return ForwarderDriftResult(ok=not any_drift, lines=lines, stderr_lines=stderr_lines, cited_missing=cited_missing)
+    extension_lines, extension_mismatch = _check_extension_axis(resolved_doe_root, resolved_settings_bin)
+    lines.extend(extension_lines)
+    if extension_mismatch:
+        any_drift = True
+
+    return ForwarderDriftResult(
+        ok=not any_drift,
+        lines=lines,
+        stderr_lines=stderr_lines,
+        cited_missing=cited_missing,
+        extension_mismatch=extension_mismatch,
+    )
 
 
 def main(argv: List[str]) -> int:
@@ -517,13 +756,15 @@ def main(argv: List[str]) -> int:
         print(line)
     for line in result.stderr_lines:
         print(line, file=sys.stderr)
-    # Two-population split (see module docstring's CITED-VS-UNCITED SPLIT,
-    # amended 2026-08-12): a non-empty `cited_missing` is a live prompt
-    # surface instructing an EM to invoke something that cannot resolve —
-    # that is not the advisory, "expected transient lag" population the
-    # WARN-only contract was written for, so it gates. Every other outcome
-    # (uncited-only drift, orphan-only drift, skip, clean) stays exit 0.
-    return 1 if result.cited_missing else 0
+    # Two CITED populations gate the exit code (see module docstring's
+    # CITED-VS-UNCITED SPLIT and the EXTENSION axis section): a non-empty
+    # `cited_missing` (NAME axis) or `extension_mismatch` (EXTENSION axis) is
+    # a live prompt surface instructing an EM to invoke something that cannot
+    # resolve — that is not the advisory, "expected transient lag" population
+    # the WARN-only contract was written for, so it gates. Every other
+    # outcome (uncited-only drift, orphan-only drift, skip, clean) stays
+    # exit 0.
+    return 1 if (result.cited_missing or result.extension_mismatch) else 0
 
 
 @register_op("plugin_health.forwarder_drift")
@@ -536,12 +777,17 @@ async def _plugin_health_forwarder_drift(params: dict, repo_root=None) -> dict:
     plugin_health.drift / engine.drift).
 
     Returns {"ok": bool, "skipped": bool, "lines": [...], "stderr_lines": [...],
-    "cited_missing": {name: [site, ...]}}. `ok=False` means drift was found —
-    the caller decides what to do with that; this op itself never raises and
-    never signals a hard failure. `cited_missing` is the AC1 machine-readable
-    field (see `ForwarderDriftResult.cited_missing`'s docstring); non-empty
-    only for the cited-but-missing population, never for uncited/orphan
-    drift, a skip, or a clean result.
+    "cited_missing": {name: [site, ...]}, "extension_mismatch": {cited
+    spelling: [site, ...]}}. `ok=False` means drift was found — the caller
+    decides what to do with that; this op itself never raises and never
+    signals a hard failure. `cited_missing` is the AC1 machine-readable field
+    (see `ForwarderDriftResult.cited_missing`'s docstring); non-empty only for
+    the cited-but-missing (NAME axis) population, never for uncited/orphan
+    drift, a skip, or a clean result. `extension_mismatch` is the EXTENSION
+    axis' equivalent (see `ForwarderDriftResult.extension_mismatch`'s
+    docstring) — non-empty only when a Windows Shape W citation names an
+    extension that is not what settings-home/bin actually installed for that
+    base name; always empty on a non-Windows host.
     """
     del params
     result = check_forwarder_drift()
@@ -551,6 +797,7 @@ async def _plugin_health_forwarder_drift(params: dict, repo_root=None) -> dict:
         "lines": result.lines,
         "stderr_lines": result.stderr_lines,
         "cited_missing": result.cited_missing,
+        "extension_mismatch": result.extension_mismatch,
     }
 
 

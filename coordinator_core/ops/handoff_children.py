@@ -213,17 +213,24 @@ def _collect_handoff_paths(worktree_root: Path) -> "tuple[List[str], List[str]]"
         scan_errors  — human-readable strings, one per subtree that could not be
                        scanned (empty when both subtrees scanned cleanly).
 
-    NOTE: uses iterdir() / os.walk(onerror=...), NOT glob()/rglob("*.md") —
-    Path.glob()'s selector silently swallows PermissionError while walking
-    (verified: unreadable dir → glob() yields an empty iterator, no exception),
-    which made the previous `except OSError: pass` here dead code for the exact
-    permission-denied case it existed to guard (mirrors roadmap_dag.py's
-    `_collect_stub_paths` fix). This function is the enumeration behind this
-    op's archive/close safety gate: a live child sitting under an unreadable
-    subtree must never be silently indistinguishable from "candidate has no
-    children" — `_handoff_has_live_children` below now fails closed
-    (exit_code=2) rather than risk a false "safe to archive" verdict on
-    incomplete data.
+    NOTE: uses os.scandir(), NOT glob()/rglob("*.md") — Path.glob()'s selector
+    silently swallows PermissionError while walking (verified: unreadable dir →
+    glob() yields an empty iterator, no exception), which made the previous
+    `except OSError: pass` here dead code for the exact permission-denied case
+    it existed to guard (mirrors roadmap_dag.py's `_collect_stub_paths` fix).
+    scandir() raises OSError rather than swallowing it, same as the iterdir()/
+    os.walk() shape it replaces — the fail-closed contract below only holds
+    because the enumeration primitive itself never hides a permission error.
+    Descent tests `is_dir(follow_symlinks=False)` and files are confirmed with
+    `is_file()`, which together reproduce `os.walk(followlinks=False)`: a
+    symlinked directory is not descended into (a symlink cycle would otherwise
+    walk forever) and a broken `*.md` symlink is not enumerated as a handoff.
+    Both read the cached dirent and cost nothing beyond the scandir itself.
+    This function is the enumeration behind this op's archive/close safety
+    gate: a live child sitting under an unreadable subtree must never be
+    silently indistinguishable from "candidate has no children" —
+    `_handoff_has_live_children` below now fails closed (exit_code=2) rather
+    than risk a false "safe to archive" verdict on incomplete data.
     """
     paths: List[str] = []
     scan_errors: List[str] = []
@@ -232,7 +239,10 @@ def _collect_handoff_paths(worktree_root: Path) -> "tuple[List[str], List[str]]"
     state_dir = worktree_root / "state" / "handoffs"
     if state_dir.is_dir():
         try:
-            entries = list(state_dir.iterdir())
+            with os.scandir(state_dir) as it:
+                for entry in it:
+                    if entry.name.endswith(".md") and entry.is_file():
+                        paths.append(entry.path)
         except OSError as exc:
             _LOG.warning(
                 "handoff.has_live_children: cannot scan live handoff dir %s — %s; "
@@ -240,28 +250,27 @@ def _collect_handoff_paths(worktree_root: Path) -> "tuple[List[str], List[str]]"
                 state_dir, exc,
             )
             scan_errors.append(f"{state_dir}: {exc}")
-        else:
-            for p in entries:
-                if p.suffix == ".md" and p.is_file():
-                    paths.append(str(p.resolve()))
 
     # Archived handoffs: archive/handoffs/**/*.md (includes month-foldered subdirs)
     archive_dir = worktree_root / "archive" / "handoffs"
     if archive_dir.is_dir():
-        walk_errors: List[OSError] = []
-        for dirpath, _dirnames, filenames in os.walk(archive_dir, onerror=walk_errors.append):
-            for fn in filenames:
-                if fn.endswith(".md"):
-                    p = Path(dirpath) / fn
-                    if p.is_file():
-                        paths.append(str(p.resolve()))
-        for exc in walk_errors:
-            _LOG.warning(
-                "handoff.has_live_children: cannot scan archived handoff subtree %s — "
-                "%s; cannot rule out a live child under it",
-                getattr(exc, "filename", archive_dir), exc,
-            )
-            scan_errors.append(f"{getattr(exc, 'filename', archive_dir)}: {exc}")
+        stack: List[str] = [str(archive_dir)]
+        while stack:
+            current = stack.pop()
+            try:
+                with os.scandir(current) as it:
+                    for entry in it:
+                        if entry.is_dir(follow_symlinks=False):
+                            stack.append(entry.path)
+                        elif entry.name.endswith(".md") and entry.is_file():
+                            paths.append(entry.path)
+            except OSError as exc:
+                _LOG.warning(
+                    "handoff.has_live_children: cannot scan archived handoff subtree %s — "
+                    "%s; cannot rule out a live child under it",
+                    getattr(exc, "filename", current), exc,
+                )
+                scan_errors.append(f"{getattr(exc, 'filename', current)}: {exc}")
 
     return paths, scan_errors
 

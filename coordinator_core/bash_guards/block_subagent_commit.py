@@ -1149,7 +1149,7 @@ import posixpath
 import re
 import string
 from functools import lru_cache
-from typing import Any, Dict, Iterator, List, NamedTuple, Optional, Set, Tuple
+from typing import Any, Dict, Iterator, List, NamedTuple, Optional, Sequence, Set, Tuple
 
 from coordinator_core.bash_guards._command_tokenizer import (
     _skip_wrapper_own_argv as _skip_wrapper_own_argv_for_commit,
@@ -3384,10 +3384,11 @@ _COMMITTING_OP_NAMES = frozenset(
         # `run_commit_pipeline` onto `git.commit.commit_paths` directly (C3,
         # docs/plans/2026-08-29-the-push-subsystem-leaves-and-then-the-
         # pipeline-can-go.md), which is exactly the repoint that dropped it
-        # out of this set's coverage; `handoff.housekeeping` commits the
-        # whole archived set in one `fleet._common.archive_and_commit`.
+        # out of this set's coverage; `housekeeping.cycle` commits the
+        # whole archived set in one `fleet._common.archive_and_commit`. It
+        # replaced `handoff.housekeeping`, which was deleted with its module.
         "session.safe_commit_offer",         # ops/session/safe_commit_offer.py -- commit_paths(...)
-        "handoff.housekeeping",              # ops/handoff_housekeeping.py -- archive_and_commit(...)
+        "housekeeping.cycle",                # housekeeping/cycle.py -- archive_and_commit(...)
     }
 )
 _CEREMONY_INVOKE_MODULE = "coordinator_core.invoke"
@@ -6051,6 +6052,45 @@ def _git_commit_agent_may_commit(
     if resolved is None:
         return False, _LEG_NO_PATHSPEC
     paths, include_orphans = resolved
+    return _git_commit_agent_pathspec_permitted(
+        paths,
+        include_orphans,
+        git_root,
+        session_id,
+        cwd,
+        assert_paths_in_session_scope=assert_paths_in_session_scope,
+    )
+
+
+def _git_commit_agent_pathspec_permitted(
+    paths: "Sequence[str]",
+    include_orphans: bool,
+    git_root: str,
+    session_id: str,
+    cwd: Optional[str],
+    *,
+    assert_paths_in_session_scope,
+) -> "Tuple[bool, str]":
+    """Payload-shape-agnostic core of LEG 3, extracted (PURE MOTION, no logic
+    change) from `_git_commit_agent_may_commit` so a caller that already
+    holds a resolved `(paths, include_orphans)` pair -- rather than a raw
+    command string -- can consult the identical predicate. Command-string
+    parsing (LEG 1's `_command_is_single_segment`, LEG 2's `_resolve_git_
+    commit_agent_pathspec`) stays in `_git_commit_agent_may_commit`, which
+    calls this function immediately after resolving that pair; the ~5500
+    lines of tokenizing/unwrapping/AST-folding that produce `paths` are not
+    duplicated here because a seam already holding `paths` has no command
+    string to parse.
+
+    `assert_paths_in_session_scope` is threaded in as the already-resolved
+    callable (from `_import_assert_paths_in_session_scope()`) rather than
+    re-imported here, so this function makes the identical lazy-import-or-
+    fail-closed decision `_git_commit_agent_may_commit` already made, instead
+    of re-deriving it.
+
+    Returns `(allowed, deny_reason)` -- see `_git_commit_agent_may_commit`'s
+    own docstring for the full accounting of what `deny_reason` can hold.
+    """
     if not paths:
         return False, _LEG_NO_PATHSPEC
     if any(_pathspec_element_is_sweeping(p, git_root) for p in paths):
@@ -6085,7 +6125,7 @@ def _git_commit_agent_may_commit(
     # `_repo_relativize_pathspec` for why this grants nothing new and why an
     # out-of-repo absolute denies here instead of falling through to a
     # message that would name the wrong cause.
-    paths, absolute_out_of_repo = _repo_relativize_pathspec(paths, git_root)
+    paths, absolute_out_of_repo = _repo_relativize_pathspec(list(paths), git_root)
     if absolute_out_of_repo:
         return False, _LEG_ABSOLUTE_OUT_OF_REPO
     try:

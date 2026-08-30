@@ -69,6 +69,16 @@ LIVE_CORPUS_KEYS: Tuple[str, ...] = (
     "stub_id",
     "deployment_state",
     "blocked_by",
+    # Step D's claimed-by-live retention rail. `claimed_by` is the live
+    # name and `consumed_by` its RETIRED spelling -- `coverage.py ::
+    # _parse_handoff_consumed_by` is dual-tolerant with claimed_by winning,
+    # and this mirrors that precedence rather than inventing a second rule.
+    # Zero live records carry `consumed_by`; 30 of 298 carry `claimed_by`.
+    # Both cost nothing on this read: `head_scan` treats an absent key as
+    # absent, never as a decline, so a record without either pays no full
+    # parse for them.
+    "claimed_by",
+    "consumed_by",
 )
 
 #: Leg budget for this step, asserted independently per the plan's budget

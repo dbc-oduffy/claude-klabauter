@@ -91,24 +91,6 @@ def test_record_with_children_is_still_archivable():
     assert [e.path for e in entries] == [Path("has-children.md")]
 
 
-def test_record_with_live_claim_holder_is_not_archivable():
-    """A live claim holder IS a still-valid retention ground — a terminal
-    record currently held by a live claim is excluded from the terminal
-    set."""
-    held_path = Path("held.md")
-    free_path = Path("free.md")
-    records = {
-        held_path: _record("closed", claim_holder="peer-session"),
-        free_path: _record("closed"),
-    }
-
-    def claim_holder_live(path: Path, record: Dict[str, Any]) -> bool:
-        return path == held_path
-
-    entries = compute_terminal_set(records, cap=10, claim_holder_live=claim_holder_live)
-    assert [e.path for e in entries] == [free_path]
-
-
 def test_no_claim_holder_predicate_supplied_defaults_to_no_retention():
     records = {Path("a.md"): _record("closed")}
     entries = compute_terminal_set(records, cap=10)
@@ -169,3 +151,62 @@ def test_terminal_entry_carries_the_record_used_to_select_it():
     rec = _record("shipped", shipped_in="abc123")
     entries = compute_terminal_set({Path("a.md"): rec}, cap=10)
     assert entries[0] == TerminalEntry(path=Path("a.md"), record=rec)
+
+
+# ---------------------------------------------------------------------------
+# The `retained` exclusion hook — the rails the predecessor sweep carried
+# ---------------------------------------------------------------------------
+#
+# `compute_terminal_set` replaced `archive_terminal_handoffs :: plan_sweep`
+# as the thing that decides what gets archived, and reproduced its terminal-
+# state selection without its exclusion rails. `retained` is where they come
+# back. Found by C8's repoint turning nine `test_archive_stamp` tests red;
+# recorded in state/audits/2026-08-30-the-cycle-lost-the-sweeps-exclusion-
+# rails.md.
+
+
+class TestRetainedHook:
+    def test_a_retained_record_is_excluded_from_the_terminal_set(self) -> None:
+        """The rail's whole job. `retained` returning truthy keeps a record
+        that is otherwise perfectly terminal out of the batch."""
+        keep = Path("state/handoffs/dirty.md")
+        take = Path("state/handoffs/clean.md")
+        records = {
+            keep: _record("shipped"),
+            take: _record("shipped"),
+        }
+
+        entries = compute_terminal_set(
+            records, cap=10, retained=lambda path, record: path == keep
+        )
+
+        assert [e.path for e in entries] == [take]
+
+    def test_retention_is_applied_before_cap_slots(self) -> None:
+        """A retained record must cost a LATER candidate its slot, not shrink
+        the batch. Filtering after the cap would silently return fewer than
+        `cap` movable records while movable ones sat unswept — the sweep would
+        then need more cycles to drain a corpus than its own cap implies."""
+        retained_path = Path("state/handoffs/a-retained.md")
+        records = {
+            retained_path: _record("shipped"),
+            Path("state/handoffs/b.md"): _record("shipped"),
+            Path("state/handoffs/c.md"): _record("shipped"),
+        }
+
+        entries = compute_terminal_set(
+            records, cap=2, retained=lambda path, record: path == retained_path
+        )
+
+        assert len(entries) == 2
+        assert retained_path not in [e.path for e in entries]
+
+    def test_no_retained_predicate_retains_nothing(self) -> None:
+        """The default is the pre-existing behaviour, unchanged: `retained=None`
+        is not a rail that fails open, it is the absence of a rail."""
+        records = {Path("state/handoffs/x.md"): _record("shipped")}
+
+        entries = compute_terminal_set(records, cap=10, retained=None)
+
+        assert len(entries) == 1
+

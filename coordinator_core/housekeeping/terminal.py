@@ -87,17 +87,31 @@ def compute_terminal_set(
     records: Dict[Path, Dict[str, Any]],
     cap: int,
     *,
-    claim_holder_live: Optional[Callable[[Path, Dict[str, Any]], bool]] = None,
+    retained: Optional[Callable[[Path, Dict[str, Any]], bool]] = None,
 ) -> List[TerminalEntry]:
     """Step D: select the terminal set from `records` — the SAME dict step
     A produced, carrying whatever in-memory mutations step C's gate clears
     already applied — with zero file I/O of its own.
 
     A record qualifies when its `deployment_state` is one of
-    `TERMINAL_DEPLOYMENT_STATES` AND (`claim_holder_live` is None, or
-    `claim_holder_live(path, record)` returns falsy — no live claim holder
-    retains it). Live children are never consulted; there is no such
-    ground here (PM ruling 2026-08-28).
+    `TERMINAL_DEPLOYMENT_STATES` AND (`retained` is None, or
+    `retained(path, record)` returns falsy). Live children are never
+    consulted; there is no such ground here (PM ruling 2026-08-28).
+
+    ONE retention hook, not two. This carried a separate `claim_holder_live`
+    predicate of identical signature and semantics until 2026-08-30; a live
+    claim holder is one retention ground among several, not a category of
+    its own, and the caller was building both four lines apart. `retained`
+    is its strict superset.
+
+    `retained` is the general exclusion hook the predecessor sweep spent in
+    `archive_terminal_handoffs :: plan_sweep`'s own rails. The rail that
+    matters most to a caller is worktree-dirty: a record whose on-disk bytes
+    have diverged from HEAD must be RETAINED, never archived, because moving
+    and committing it either commits content nobody staged or dies on
+    `archive_and_commit`'s disk/HEAD drift refusal at act time. Both
+    exclusions are applied BEFORE `cap` slots, so a retained record costs a
+    later candidate its slot rather than silently shrinking the batch.
 
     `cap` bounds the number of entries returned, in `records`' own
     iteration order, mirroring the pseudocode's `[:cap]`. `cap` must be a
@@ -112,7 +126,7 @@ def compute_terminal_set(
     for path, record in records.items():
         if record.get("deployment_state") not in TERMINAL_DEPLOYMENT_STATES:
             continue
-        if claim_holder_live is not None and claim_holder_live(path, record):
+        if retained is not None and retained(path, record):
             continue
         entries.append(TerminalEntry(path=path, record=record))
         if len(entries) >= cap:

@@ -230,6 +230,58 @@ def test_warm_dispatch_with_no_carried_identity_mints_no_session_entry(
     )
 
 
+# ---------------------------------------------------------------------------
+# The cross-repo delivery trailer -- same gate, biggest blast radius
+# ---------------------------------------------------------------------------
+
+
+def _delivery_message():
+    from coordinator_core.ops.tracker import push_suggestion
+
+    return push_suggestion._delivery_commit_message("some/event.json")
+
+
+def test_cold_delivery_commit_still_carries_the_ambient_session_id(
+    ambient_is_the_server_owner,
+):
+    """Cold is the case where the environment IS the caller -- do not break it."""
+    assert f"Session-Id: {ambient_is_the_server_owner}" in _delivery_message()
+
+
+def test_warm_delivery_commit_with_no_carried_identity_omits_session_id(
+    ambient_is_the_server_owner,
+):
+    """The site with the WIDEST blast radius of the three, and the one that was
+    left ungated in the first pass (code-reviewer finding 1, 2026-08-30).
+
+    `tracker.push_suggestion` lands this commit in a repo THIS session does not
+    own. Its operators ran nothing and hold no second attribution key, so a
+    trailer naming a stranger is not a mislabel they can cross-check -- it is
+    the only thing they have. Carried-first alone did not close this: an
+    ungated fallback takes the identical branch for cold and for
+    warm-with-no-carry, which is the pre-fix behaviour under another spelling.
+    """
+    with session_core.warm_served_request():
+        msg = _delivery_message()
+    assert "Session-Id:" not in msg, (
+        "a warm-served cross-repo delivery stamped an identity nothing carried "
+        f"-- the value is the server owner's ({ambient_is_the_server_owner}), "
+        "landing in a repo that cannot tell it from a genuine one"
+    )
+    assert ambient_is_the_server_owner not in msg
+
+
+def test_warm_delivery_commit_carries_the_identity_it_was_given(
+    ambient_is_the_server_owner,
+):
+    """Fail-closed is not fail-always: a carried id still stamps, as itself."""
+    with session_core.warm_served_request():
+        with session_core.session_identity_override(_CALLER):
+            msg = _delivery_message()
+    assert f"Session-Id: {_CALLER}" in msg
+    assert ambient_is_the_server_owner not in msg
+
+
 def test_warm_dispatch_records_under_the_carried_identity(
     repo_with_a_touchable_file, ambient_is_the_server_owner
 ):

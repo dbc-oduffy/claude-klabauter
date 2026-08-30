@@ -571,7 +571,6 @@ def cmd_working_repo_registration(argv: list[str]) -> int:
     import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
     from coordinator_core.machine_resolver import registry_get
     from coordinator_core.win_portability import no_console_creationflags
-    from cli_shared import machine_local_impl, resolve_python
 
     fix = False
     for arg in argv:
@@ -629,7 +628,13 @@ def cmd_working_repo_registration(argv: list[str]) -> int:
             return 1
         return 0
 
-    # --fix from here down.
+    # --fix from here down. `cli_shared` is imported HERE, not at function top:
+    # the bare form above promises it never raises, and a top-level import of a
+    # module that needs coordinator/bin/lib bootstrapped onto sys.path breaks
+    # that promise on the orient path, where `readers_health_reaper.collect()`
+    # calls the bare form.
+    from cli_shared import machine_local_impl, resolve_python
+
     if matches:
         print(
             "working-repo-registration --fix: already correct — "
@@ -771,25 +776,68 @@ def _resolve_gitdir(repo_root: Path) -> Path | None:
     return gitdir
 
 
+def _strip_inline_comment(line: str) -> str:
+    """Strip a trailing `#`/`;` comment from a config line.
+
+    # Review: coordinator:overengineering-reviewer -- dropped a
+    # quote-tracking state machine that treated `#`/`;` inside double quotes
+    # as data, not a comment start. Unreachable for the one key this parser
+    # reads (`core.untrackedCache`, whose value space is git's boolean
+    # literals -- never a quoted string), and no fixture exercised the
+    # quoted branch. A straight scan for the first `#`/`;` is what this
+    # detector's actual input space needs."""
+    for i, ch in enumerate(line):
+        if ch in "#;":
+            return line[:i]
+    return line
+
+
 def _config_has_untracked_cache(text: str) -> bool:
-    """Text-level parse of a git config for `untrackedcache = true` under
-    `[core]`. Deliberately hand-rolled rather than shelling out to
-    `git config --get` -- see `cmd_git_perf_currency`'s NEGATIVE SPEC: this
-    reads the same fact `apply()` writes, never re-derives it from the index."""
+    """Text-level parse of a git config for `untrackedcache` under `[core]`.
+    Deliberately hand-rolled rather than shelling out to `git config --get`
+    -- see `cmd_git_perf_currency`'s NEGATIVE SPEC: this reads the same fact
+    `apply()` writes, never re-derives it from the index.
+
+    Mirrors real git config semantics on the axes that matter here:
+      - a bare key with no `=` (`untrackedCache` alone on a line) is git's
+        implicit-true form, same as `apply()`'s own `git config --get` read
+        normalizes it.
+      - `yes`/`on`/`1` are accepted spellings of true, normalized the same
+        way `git config --get` would.
+      - a trailing inline comment on the key/value or `[core]` header line
+        is stripped before comparison.
+      - LAST-WINS: git config resolves repeated keys (including across
+        duplicate `[core]` blocks) to the final occurrence in the file, so
+        this scans the whole file and keeps overwriting the result rather
+        than returning on the first match -- returning on the first match
+        would report `present` for a config whose FIRST `[core]` block says
+        true and whose LATER one says false, a false-`present` that would
+        silently leave that repo unswept forever (the opposite direction to
+        every other divergence in this parser, which only ever reports a
+        needless false-drift)."""
     in_core = False
+    result = False
     for raw_line in text.splitlines():
         line = raw_line.strip()
         if not line or line.startswith("#") or line.startswith(";"):
             continue
         if line.startswith("["):
-            header = line.lower()
+            header = _strip_inline_comment(line).strip().lower()
             in_core = header.startswith("[core]") or header.startswith("[core ")
             continue
-        if in_core and "=" in line:
-            k, _, v = line.partition("=")
+        if not in_core:
+            continue
+        content = _strip_inline_comment(line).strip()
+        if not content:
+            continue
+        if "=" in content:
+            k, _, v = content.partition("=")
             if k.strip().lower() == "untrackedcache":
-                return v.strip().lower() == "true"
-    return False
+                result = v.strip().lower() in ("true", "yes", "on", "1")
+        elif content.strip().lower() == "untrackedcache":
+            # Bare key, no `=` -- git's implicit-true form.
+            result = True
+    return result
 
 
 def _git_perf_config_key_status(repo_root: Path) -> bool | None:
@@ -855,33 +903,32 @@ def cmd_git_perf_currency(argv: list[str]) -> int:
         )
         return 1
 
+    # Review: coordinator:overengineering-reviewer -- was a second,
+    # hand-derived registry walk here (same helpers lookup, roots handling,
+    # sorted iteration, classify, mirror-skip, missing-line wording as
+    # apply_fleet's own, with nothing enforcing the two stayed in sync).
+    # Extracted into git_perf_config.iter_fleet_worktrees, consumed by both
+    # this detector and apply_fleet; only the per-worktree action differs.
     try:
-        helpers = git_perf_config._git_hook_install_registry_helpers()
+        walk = git_perf_config.iter_fleet_worktrees(_BIN_DIR)
     except Exception as exc:  # noqa: BLE001 — a health probe must never itself raise
-        return _unwalkable(f"registry helpers raised: {exc}")
-    if helpers is None:
-        return _unwalkable("git_hook_install registry helpers unavailable")
-    registry_repo_roots, classify_target = helpers
-
-    try:
-        roots = registry_repo_roots(str(_BIN_DIR))
-    except Exception as exc:  # noqa: BLE001
-        return _unwalkable(f"could not read the repo registry: {exc}")
-    if not roots:
+        return _unwalkable(f"registry walk raised: {exc}")
+    if not walk.ok:
+        if walk.reason == "helpers_unavailable":
+            return _unwalkable("git_hook_install registry helpers unavailable")
+        if walk.reason == "registry_error":
+            return _unwalkable(f"could not read the repo registry: {walk.detail}")
         return _unwalkable("no registered repos -- that is not the same fact as 'every repo is current'")
 
     missing: list[tuple[str, str]] = []
     drifted: list[tuple[str, str, str]] = []
-    for key, root in sorted(roots):
-        try:
-            kind = classify_target(root)
-        except Exception as exc:  # noqa: BLE001
-            drifted.append((key, root, f"could not classify: {exc}"))
-            continue
-        if kind == "mirror":
-            continue
+    for item in walk.items:
+        kind, key, root = item[0], item[1], item[2]
         if kind == "missing":
             missing.append((key, root))
+            continue
+        if kind == "error":
+            drifted.append((key, root, f"could not classify: {item[3]}"))
             continue
         status = _git_perf_config_key_status(Path(root))
         if status is None:

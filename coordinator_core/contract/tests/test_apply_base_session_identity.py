@@ -21,6 +21,10 @@ from types import SimpleNamespace
 from typing import Optional
 
 from coordinator_core.contract import apply_base
+from coordinator_core.session.core import (
+    session_identity_override,
+    warm_served_request,
+)
 
 
 def test_overlapping_session_identities_do_not_cross_contaminate():
@@ -166,3 +170,75 @@ def test_scoped_commit_mirrors_session_id_to_environ_only_around_run_git(tmp_pat
                 os.environ.pop(var, None)
             else:
                 os.environ[var] = value
+
+
+# ---------------------------------------------------------------------------
+# `resolve_explicit_session_id` — the warm arm.
+#
+# The sibling half of the same defect this file's first tests cover: identity
+# SET per-context was fixed at C6, identity READ was not. Under a warm dispatch
+# `os.environ` names whoever spawned the server, so the bare env walk this
+# resolver used to be handed a live peer's id to every door-routed assembler
+# `apply` and fed it straight into the repo-identity gate, an anti-forgery
+# input. Reproduced verbatim before the fix (the stand-in below uses the two
+# real session ids from
+# state/bug-backlog/2026-08-30-baton-assemble-apply-resolves-a-foreign-session-
+# identity.yaml): warm-served, caller carrying e2e739d9…, the resolver returned
+# a12e2a71… — the server owner's.
+# ---------------------------------------------------------------------------
+
+_SERVER_OWNER_SID = "a12e2a71-df13-414e-bfc7-bb4df5834a20"
+_CALLING_SESSION_SID = "e2e739d9-2d4c-4f0e-8acf-833388113035"
+
+
+def _with_server_owner_environ(monkeypatch):
+    """Stand in for the resident warm server's own environment: the id of
+    whoever won the last warm election, in every tier of the ladder."""
+    for var in apply_base.SESSION_ENV_READ_ORDER:
+        monkeypatch.setenv(var, _SERVER_OWNER_SID)
+
+
+def test_warm_served_apply_resolves_the_caller_not_the_server_owner(monkeypatch):
+    _with_server_owner_environ(monkeypatch)
+    with warm_served_request(True), session_identity_override(_CALLING_SESSION_SID):
+        assert apply_base.resolve_explicit_session_id(None) == _CALLING_SESSION_SID
+
+
+def test_warm_served_apply_fails_closed_when_the_caller_carried_nothing(monkeypatch):
+    """A door image that sends no `_session_id` leaves tier 0 empty. The
+    resolver must return None so its consumers refuse — never substitute the
+    ambient id, which is the misattribution the whole seam exists to close."""
+    _with_server_owner_environ(monkeypatch)
+    with warm_served_request(True):
+        assert apply_base.resolve_explicit_session_id(None) is None
+
+
+def test_explicit_session_id_still_wins_under_a_warm_dispatch(monkeypatch):
+    """`--session-id` is the caller stating identity outright; the warm arm
+    must not shadow it."""
+    _with_server_owner_environ(monkeypatch)
+    with warm_served_request(True), session_identity_override(_CALLING_SESSION_SID):
+        assert apply_base.resolve_explicit_session_id("explicit-id") == "explicit-id"
+
+
+def test_cold_resolution_is_unchanged_by_the_warm_arm(monkeypatch):
+    """Cold, `os.environ` IS the caller's own and the env walk is correct.
+    Nothing binds the warm flag on a cold invocation, so this is the arm every
+    existing consumer keeps."""
+    for var in apply_base.SESSION_ENV_READ_ORDER:
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv(apply_base.SESSION_ENV_READ_ORDER[-1], _CALLING_SESSION_SID)
+    assert apply_base.resolve_explicit_session_id(None) == _CALLING_SESSION_SID
+
+
+def test_cold_resolution_walks_the_ladder_in_precedence_order(monkeypatch):
+    for var in apply_base.SESSION_ENV_READ_ORDER:
+        monkeypatch.setenv(var, f"{var}-value")
+    expected = f"{apply_base.SESSION_ENV_READ_ORDER[0]}-value"
+    assert apply_base.resolve_explicit_session_id(None) == expected
+
+
+def test_cold_resolution_returns_none_with_no_identity_anywhere(monkeypatch):
+    for var in apply_base.SESSION_ENV_READ_ORDER:
+        monkeypatch.delenv(var, raising=False)
+    assert apply_base.resolve_explicit_session_id(None) is None

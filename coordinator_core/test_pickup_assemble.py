@@ -1263,6 +1263,43 @@ class TestAbsoluteArtifactPathForm:
         assert str(repo) in result.decision_object["error"]
         assert result.decision_object["artifact"]["classification"] == "ambiguous"
 
+    def test_relative_dotdot_traversal_refused(self, tmp_path):
+        """P1 regression (code review, 2026-08-30): `_repo_relative_artifact_
+        path` only validated containment for an ABSOLUTE input — a relative
+        `..` path was returned unchanged and never checked, so `brief()`
+        could read and classify a file one level above the repo root. Red
+        before the fix: the old code returned `artifact_path` unchanged for
+        any non-absolute input, and this file exists on disk one level up
+        from `repo`, so the pre-fix behaviour classified it instead of
+        raising `OutOfRepoPath`."""
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        outside = tmp_path / "outside-artifact.md"
+        outside.write_text("---\nstatus: open\n---\nbody\n", encoding="utf-8")
+
+        result = pa.brief("../outside-artifact.md", repo_root=repo)
+
+        assert result.exit_code == pa.EXIT_BUSINESS_FAIL
+        assert "error" in result.decision_object
+        assert result.decision_object["artifact"]["classification"] == "ambiguous"
+        assert result.decision_object["artifact"]["frontmatter"] == {}
+
+    def test_reanchor_repo_relative_still_resolves_after_traversal_fix(self, tmp_path):
+        """Companion to the traversal-refusal fix above: the `..`-component
+        check must not widen into rejecting the `/<repo-basename>/<rest>`
+        reanchor paste shape, which is relative-looking on Windows and
+        carries no `..` component at all."""
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        _seed_handoff(repo, "h1.md")
+
+        reanchor_form = f"/{repo.name}/state/handoffs/h1.md"
+        result = pa.brief(reanchor_form, repo_root=repo)
+
+        assert result.exit_code == pa.EXIT_OK
+        assert result.decision_object["artifact"]["classification"] == "handoff"
+        assert result.decision_object["artifact"]["path"] == "state/handoffs/h1.md"
+
 
 # ---------------------------------------------------------------------------
 # Prose-punctuation-tolerant path resolution (2026-07-27 incident):

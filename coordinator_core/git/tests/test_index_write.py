@@ -101,6 +101,37 @@ def test_lock_is_refused_never_stolen(tmp_path):
         index_write.splice_index(repo, {"seed.txt": index_write.ABSENT})
 
 
+def test_absolute_key_refused_before_writing(tmp_path):
+    """An absolute-path index key is refused, never normalized -- normalizing
+    would repeat the `git update-index --force-remove` trap of silently
+    retargeting the wrong entry. The index must be byte-identical afterwards:
+    the refusal happens before any bytes are written."""
+    repo = _repo(tmp_path)
+    before = (repo / ".git" / "index").read_bytes()
+    abs_key = str(repo / "seed.txt")
+
+    with pytest.raises(index_write.IndexWriteError):
+        index_write.splice_index(repo, {abs_key: index_write.ABSENT})
+
+    after = (repo / ".git" / "index").read_bytes()
+    assert after == before
+
+
+def test_drive_letter_key_refused_before_writing(tmp_path):
+    """A drive-letter-prefixed key (`X:/...`) is refused the same way a POSIX
+    absolute path is -- both are absolute pathspecs used verbatim as index
+    keys, the exact defect this guard exists to close."""
+    repo = _repo(tmp_path)
+    before = (repo / ".git" / "index").read_bytes()
+    drive_key = "X:/claude-klabauter/seed.txt"  # abs-path-ok: fixture string, not a filesystem citation
+
+    with pytest.raises(index_write.IndexWriteError):
+        index_write.splice_index(repo, {drive_key: index_write.ABSENT})
+
+    after = (repo / ".git" / "index").read_bytes()
+    assert after == before
+
+
 def test_scale_the_splice_does_not_rewrite_untouched_entries(tmp_path):
     """AC9 shape: splicing one path into a large index must leave every other
     entry byte-identical. Proven by comparing the raw entry region either
@@ -120,4 +151,56 @@ def test_scale_the_splice_does_not_rewrite_untouched_entries(tmp_path):
     after = (repo / ".git" / "index").read_bytes()
     # Every pre-existing name still present, and git still accepts the file.
     assert len(after) > len(before) - 64
+    _git(repo, "fsck", "--strict")
+
+
+def test_the_index_read_happens_under_the_lock(tmp_path):
+    """THE LOST UPDATE. The read is the base revision of a read-modify-write,
+    not a lookup: every untouched entry is copied verbatim from it. Read it
+    outside `.git/index.lock` and a peer commit landing between our read and
+    our write is silently reverted in the index -- and for a path the peer
+    ADDED that is not merely stale, it is a path in HEAD and absent from the
+    index, which real git renders as a staged deletion (`D `) of a file
+    sitting on disk, which any session's `git commit -a` then lands for real.
+
+    `IndexWriteLockBusy` does not close this on its own: it reports only that
+    a peer held the lock at the instant we tried to WRITE, which says nothing
+    about whether the snapshot we are about to write back is still current.
+    Holding the lock across the whole read-modify-write is what closes it, so
+    that invariant is what this pins -- oracled by real git refusing to touch
+    the index from inside our read window.
+    """
+    repo = _repo(tmp_path)
+    lock_path = repo / ".git" / "index.lock"
+    (repo / "ours.txt").write_text("ours\n", encoding="utf-8", newline="\n")
+    (repo / "peer.txt").write_text("peer\n", encoding="utf-8", newline="\n")
+
+    real_read_bytes = type(repo).read_bytes
+    observed = {}
+
+    def watch(self):
+        if self.name == "index" and "held" not in observed:
+            observed["held"] = lock_path.exists()
+            # Real git is the oracle: with the lock held it must refuse to
+            # stage anything, which is precisely what stops the peer commit
+            # from sliding into the window between our read and our write.
+            observed["peer_add_rc"] = _git(
+                repo, "add", "--", "peer.txt", check=False
+            ).returncode
+        return real_read_bytes(self)
+
+    blob = write_object(repo / ".git", b"blob", b"ours\n")
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(type(repo), "read_bytes", watch)
+        index_write.splice_index(repo, {"ours.txt": (0o100644, blob)})
+
+    assert observed.get("held") is True, (
+        "`.git/index` was read with no lock held -- the read-modify-write is "
+        "unserialised and a peer commit in that window is lost"
+    )
+    assert observed["peer_add_rc"] != 0, (
+        "real git staged a path while our splice was mid-read; the window "
+        "this test exists to close is open"
+    )
+    assert _status(repo).strip().splitlines()[0] == "A  ours.txt", _status(repo)
     _git(repo, "fsck", "--strict")

@@ -47,6 +47,22 @@ AND THE ONE THE OLD OP GOT FOR FREE FROM `git add`:
    newly-committed path reads `D ` (in HEAD, absent from index) plus `??`,
    an edited one reads `MM`. Measured, all three shapes. So this function
    splices the index itself, after the ref lands, via `index_write`.
+
+THE GUARDED SEAM (`coordinator_core.git.action_guard`, C2). This module used
+to consult nothing at all where `block_subagent_commit`'s dispatched-
+committer guard consults an ownership-scope predicate on the Bash-tool
+path -- verified at C2's own HEAD: no ownership check, no `dispatch_checks`
+import, no claim this seam existed. `commit_paths` now accepts `restrict_
+to_session` for exactly the leg that guard governs, and its contract is
+DELIBERATE: passing it ALWAYS denies today, because there is no non-
+cooperative identity channel reaching this op route (C2a, measured: zero
+occurrences of `agent_id`/`session_id`/`subagent` in this module or
+`ops/ceremony/commit_v2.py`). A caller-supplied value here would be exactly
+the fail-open substitution `action_guard.assert_noncooperative_identity_
+available` exists to refuse rather than trust -- see that function's own
+docstring. No caller passes this parameter today; it is the seam a future
+caller with a genuinely verified identity has to widen, rather than a
+reason to invent one.
 """
 
 from __future__ import annotations
@@ -314,6 +330,7 @@ def commit_paths(
     prefer_staged: Sequence[str] = (),
     prefer_deliberate_stage: bool = False,
     blob_fallback: Optional[Callable[[Sequence[str]], Mapping[str, str]]] = None,
+    restrict_to_session: object = None,
 ) -> CommitOutcome:
     """Commit exactly `paths` (+ remove `deleted_paths`). Zero git spawns.
 
@@ -357,7 +374,25 @@ def commit_paths(
     legal ("at least one of `paths` / `deleted_paths`") -- reaches the empty-
     pathspec refusal below on its own terms instead of a missing-argument
     `TypeError` the caller reads the same wrong way.
+
+    `restrict_to_session` -- see the module docstring's "THE GUARDED SEAM"
+    section. Left `None` by every caller today; passing anything else raises
+    `action_guard.CommitActionDenied` unconditionally, before any git object
+    is written, because this op route has no non-cooperative identity input
+    to verify a passed value against.
     """
+    if restrict_to_session is not None:
+        # LAZY IMPORT, not a module-level one: `action_guard` imports
+        # `coordinator_core.ops.session.scope_report`, which imports
+        # `safe_commit_offer`, which imports THIS module for `CommitRefused`/
+        # `CommitOutcome` -- a module-level import here is a circular import
+        # (measured: `ImportError: cannot import name 'CommitRefused' from
+        # partially initialized module`). Deferred to call time, same shape
+        # `block_subagent_commit._import_assert_paths_in_session_scope`
+        # already uses for the identical reason.
+        from coordinator_core.git import action_guard
+
+        action_guard.assert_noncooperative_identity_available(restrict_to_session)
     if repo is _REQUIRED:
         if repo_root is None:
             raise TypeError(
@@ -379,8 +414,8 @@ def commit_paths(
     gitdir = resolve_git_dir(repo)
     supplied = dict(supplied_blobs or {})
 
-    path_list = [p.replace("\\", "/") for p in paths]
-    delete_list = [p.replace("\\", "/") for p in deleted_paths]
+    path_list = [_index_key(root, p) for p in paths]
+    delete_list = [_index_key(root, p) for p in deleted_paths]
     if not path_list and not delete_list:
         raise CommitRefused(
             "empty pathspec -- refused, never defaulted: an empty pathspec "

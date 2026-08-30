@@ -1022,10 +1022,22 @@ def warm_served_request(active: bool = True) -> Iterator[None]:
     cold invocation never opens it, so `in_warm_served_request()` stays
     `False` for every existing caller and nothing about cold behaviour moves.
 
-    `active=False` binds the flag OFF explicitly rather than not binding at
-    all — used by a warm-side caller that must run a nested block under cold
-    semantics, and by tests pinning the negative case. Nesting is safe: the
-    Token is reset in a `finally` regardless of how the block exits.
+    `active` is passed by `per_request_state` only on its force-bind branch,
+    i.e. when its own `warm_served` axis carries an explicit `True`/`False`
+    rather than the `None` that means inherit. In the tree today that branch
+    is reached only with `True`, from `warm.server`'s two dispatch sites: no
+    caller passes `False`, because a cold invocation opens no scope at all
+    (`cli_entry` calls `per_request_state(declared)` with no `warm_served`,
+    which binds nothing and leaves the flag at its `False` default). The
+    parameter is therefore not an escape hatch and not speculative: it is the
+    only way to force COLD semantics inside an enclosing warm scope, which is
+    what makes the axis genuinely tri-state rather than a bare on-switch.
+    Nesting is safe either way: the Token is reset in a `finally` regardless
+    of how the block exits.
+    <!-- Review: overengineering-reviewer (finding 3) — the prior docstring
+    justified `active` by naming a warm-side nested-cold caller and negative
+    tests, neither of which exist; this replaces that with the actual live
+    caller. -->
     """
     token = _WARM_SERVED_REQUEST.set(bool(active))
     try:
@@ -1132,6 +1144,43 @@ def carried_session_id() -> str:
     avoid.
     """
     return _SESSION_ID_OVERRIDE.get() or ""
+
+
+def attributable_session_id(cwd: Optional[str] = None) -> str:
+    """The ONE resolution a mutating/attribution consumer should call:
+    tier 0 (`carried_session_id()`) alone under a warm dispatch, the full
+    env-tier chain (`resolve_session_id(cwd)`) otherwise. Empty string when
+    unresolved either way — callers gate on empty and refuse/omit, never
+    fall back to `resolve_session_id()` directly on an empty return, which
+    would reinstate the blend below.
+
+    <!-- Review: overengineering-reviewer (finding 2) — this two-line policy
+    (`if in_warm_served_request(): return carried_session_id()`) was written
+    out independently at five production sites (`git/commit_trailers.py`,
+    `ipc.py`, `ops/session_context.py`, `ops/tracker/push_suggestion.py`,
+    `session/liveness.py`) as of 2026-08-30; this accessor is the single
+    place that policy now lives. -->
+
+    WHY: inside a warm, long-lived server `os.environ` belongs to whoever
+    SPAWNED the process, not to the session currently being served — it is
+    ambient once, and the same value for every request the process ever
+    serves. A caller degrading to it on a warm request with no carried
+    identity therefore misattributes the CURRENT session's work to the
+    server's spawner, silently and identically for every such request —
+    the defect measured live across three repos
+    (`state/bug-backlog/2026-08-29-the-warm-door-s-exe-route-stamps-the-ser-
+    47373b19c77e.yaml`). Cold is untouched: there `os.environ` IS the
+    caller's own process, so the env-tier chain is the correct source, and
+    refusing instead would break every cold commit, claim, and touch-record.
+
+    `cwd` is forwarded to `resolve_session_id(cwd)` on the cold branch only
+    — that parameter is itself unused by every current tier of
+    `resolve_session_id` (see its own docstring) and is accepted here
+    purely so a caller passing one through today keeps doing so unchanged.
+    """
+    if in_warm_served_request():
+        return carried_session_id()
+    return resolve_session_id(cwd)
 
 
 def resolve_session_id(cwd: Optional[str] = None) -> str:

@@ -21,8 +21,6 @@ import importlib.util
 import io
 from pathlib import Path
 
-import pytest
-
 _BIN_DIR = Path(__file__).resolve().parent.parent
 
 
@@ -74,7 +72,7 @@ def test_key_present_everywhere_is_exit_zero(tmp_path, monkeypatch):
     _patch_helpers(
         monkeypatch,
         [("repos.a", str(repo_a)), ("repos.b", str(repo_b))],
-        lambda root: "worktree",
+        lambda _root: "worktree",
     )
 
     err = io.StringIO()
@@ -93,7 +91,7 @@ def test_key_absent_in_one_repo_is_exit_one_naming_it(tmp_path, monkeypatch):
     _patch_helpers(
         monkeypatch,
         [("repos.a", str(repo_a)), ("repos.b", str(repo_b))],
-        lambda root: "worktree",
+        lambda _root: "worktree",
     )
 
     err = io.StringIO()
@@ -111,7 +109,7 @@ def test_mirror_targets_are_skipped_silently(tmp_path, monkeypatch):
     _patch_helpers(
         monkeypatch,
         [("repos.mirror", str(repo_mirror))],
-        lambda root: "mirror",
+        lambda _root: "mirror",
     )
 
     err = io.StringIO()
@@ -127,7 +125,7 @@ def test_missing_targets_are_reported(tmp_path, monkeypatch):
     _patch_helpers(
         monkeypatch,
         [("repos.gone", missing_path)],
-        lambda root: "missing",
+        lambda _root: "missing",
     )
 
     err = io.StringIO()
@@ -157,7 +155,7 @@ def test_gitlink_file_is_resolved_via_commondir(tmp_path, monkeypatch):
     _patch_helpers(
         monkeypatch,
         [("repos.linked", str(worktree))],
-        lambda root: "worktree",
+        lambda _root: "worktree",
     )
 
     err = io.StringIO()
@@ -181,7 +179,7 @@ def test_unreadable_config_is_reported_not_silently_passed(tmp_path, monkeypatch
     _patch_helpers(
         monkeypatch,
         [("repos.broken", str(broken))],
-        lambda root: "worktree",
+        lambda _root: "worktree",
     )
 
     err = io.StringIO()
@@ -199,7 +197,7 @@ def test_bare_detector_is_zero_spawn(tmp_path, monkeypatch):
     _patch_helpers(
         monkeypatch,
         [("repos.a", str(repo_a))],
-        lambda root: "worktree",
+        lambda _root: "worktree",
     )
 
     def _forbidden(*args, **kwargs):
@@ -284,7 +282,7 @@ def test_registry_read_raising_is_not_reported_as_a_current_fleet(monkeypatch):
         def registry_repo_roots(_bin_dir):
             raise OSError("registry unreadable")
 
-        return registry_repo_roots, (lambda root: "worktree")
+        return registry_repo_roots, (lambda _root: "worktree")
 
     monkeypatch.setattr(gpc, "_git_hook_install_registry_helpers", _raising_helpers)
     rc, err = _run_bare()
@@ -293,7 +291,45 @@ def test_registry_read_raising_is_not_reported_as_a_current_fleet(monkeypatch):
 
 
 def test_empty_registry_is_explicit_not_success(monkeypatch):
-    _patch_helpers(monkeypatch, [], lambda root: "worktree")
+    _patch_helpers(monkeypatch, [], lambda _root: "worktree")
     rc, err = _run_bare()
     assert rc == 1
     assert "not the same fact as" in err
+
+
+# --- _config_has_untracked_cache parser axes -------------------------------
+#
+# Direct unit coverage of the four divergences the code review named against
+# real git config semantics: a bare implicit-true key, non-"true" boolean
+# spellings, a trailing inline comment, and (unlike the first three, which
+# are all safe-direction false-drift) duplicate `[core]` blocks -- where
+# first-match would report a false `present` for a config git itself would
+# resolve as absent. This last one is a correctness fix, not a robustness
+# nicety: it asserts the LAST block wins, mirroring git's own resolution.
+
+
+def test_bare_key_with_no_equals_is_implicit_true():
+    text = "[core]\n\tuntrackedCache\n"
+    assert _mod._config_has_untracked_cache(text) is True
+
+
+def test_yes_on_1_spellings_are_recognized_as_true():
+    for spelling in ("yes", "on", "1"):
+        text = f"[core]\n\tuntrackedCache = {spelling}\n"
+        assert _mod._config_has_untracked_cache(text) is True, spelling
+
+
+def test_trailing_inline_comment_on_value_is_stripped():
+    text = "[core]\n\tuntrackedCache = true ; comment\n"
+    assert _mod._config_has_untracked_cache(text) is True
+
+
+def test_duplicate_core_blocks_last_one_wins():
+    """git resolves a repeated key to its LAST occurrence, including across
+    duplicate `[core]` blocks (e.g. a manual edit appended below an existing
+    stanza). A first-match parser would report this config as `present`
+    when git itself -- and `apply()`'s own `git config --get` read -- would
+    resolve it as absent; that is a false `present`, the one divergence
+    direction worse than a needless false-drift re-sweep."""
+    text = "[core]\n\tuntrackedCache = true\n[core]\n\tuntrackedCache = false\n"
+    assert _mod._config_has_untracked_cache(text) is False

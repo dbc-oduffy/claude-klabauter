@@ -449,6 +449,41 @@ class TestInRepoPathBound:
                 ["claim-artifact", "handoff", "../escape.md"], repo
             )
 
+    @pytest.mark.skipif(os.name != "nt", reason="case-insensitive-fs behavior is Windows-only")
+    def test_nonexistent_differently_cased_path_is_case_corrected_not_misreported(self, tmp_path):
+        """Code review (2026-08-30) hypothesized a trap here: a correctly-
+        spelled-but-differently-cased absolute path to a NONEXISTENT file
+        would raise `OutOfRepoPath` ("outside repo root") where "not found"
+        is the true story, because `Path.resolve()` supposedly does not
+        case-correct a path segment that does not exist on disk.
+
+        Empirically, on this stack (Python 3.13, Windows/NTFS),
+        `Path.resolve()` DOES case-correct every EXISTING ancestor
+        directory regardless of whether the trailing segment(s) exist —
+        `GetFinalPathNameByHandleW`-backed resolution walks the existing
+        prefix and normalizes it to its on-disk casing, only leaving a
+        genuinely nonexistent TAIL segment's own casing untouched. Since
+        `repo_root` here is itself an existing, real directory, a
+        differently-cased absolute candidate under it resolves to the SAME
+        canonical prefix as `repo_root.resolve()`, and `assert_in_repo_root`
+        succeeds normally — no `OutOfRepoPath`, no misreport. This test
+        pins that ACTUAL behaviour (not the hypothesized one) so a future
+        Python/OS change to `resolve()`'s case-correction semantics is
+        caught as a conscious change rather than silent drift. Left
+        unresolved: whether an older Python, a different filesystem, or a
+        reparse-point/junction-backed repo root could still hit the
+        hypothesized trap — not reproduced here, not claimed absent
+        elsewhere."""
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+
+        mismatched_case_repo = Path(str(repo).upper() if repo.drive else repo.as_posix().upper())
+        nonexistent = mismatched_case_repo / "state" / "typo.md"
+
+        resolved = pa_apply._assert_in_repo_root(nonexistent, repo)
+
+        assert resolved == (repo / "state" / "typo.md").resolve()
+
 
 class TestConsumeHandoffDeprecatedAlias:
     """DR-084 verb rename: `apply()` itself only ever EMITS the canonical

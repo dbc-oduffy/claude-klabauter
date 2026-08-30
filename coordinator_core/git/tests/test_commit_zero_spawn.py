@@ -138,6 +138,55 @@ def test_deletion_zero_spawns_and_clean_status(tmp_path):
     assert _git(repo, "cat-file", "-e", f"{outcome.sha}:seed.txt", check=False).returncode != 0
 
 
+def test_absolute_pathspec_commits_repo_relative_not_a_drive_tree(tmp_path):
+    """An absolute pathspec must route through `_index_key` exactly like the
+    repo-relative spelling: same tree, no `X:`-style top-level entry, and the
+    spliced index keyed by the repo-relative name -- not the absolute string
+    used verbatim, which is the defect this test pins."""
+    repo = _repo(tmp_path)
+    (repo / "new.txt").write_text("new\n", encoding="utf-8", newline="\n")
+
+    outcome, spawns = _commit(repo, [str(repo / "new.txt")], "add new abs")
+
+    assert spawns == [], f"expected zero spawns, got {spawns}"
+    tree_names = _git(repo, "ls-tree", "HEAD").stdout
+    assert "new.txt" in tree_names, tree_names
+    assert not any(line.split()[-1].endswith(":") for line in tree_names.splitlines())
+    assert _git(repo, "show", "HEAD:new.txt").stdout == "new\n"
+    assert _git(repo, "status", "--porcelain").stdout.strip() == ""
+
+    from coordinator_core.git.git_index import parse_index_identity
+
+    identity = parse_index_identity(repo, wanted={"new.txt"})
+    assert "new.txt" in identity
+
+
+def test_absolute_deleted_paths_also_routed_through_index_key(tmp_path):
+    """`deleted_paths` was equally unrouted -- an absolute deletion pathspec
+    must resolve to the same repo-relative index key as the relative form."""
+    repo = _repo(tmp_path)
+    (repo / "seed.txt").unlink()
+
+    outcome, spawns = _commit(
+        repo, [], "remove seed abs", deleted_paths=[str(repo / "seed.txt")]
+    )
+
+    assert spawns == [], f"expected zero spawns, got {spawns}"
+    assert _git(repo, "status", "--porcelain").stdout.strip() == ""
+    assert _git(repo, "cat-file", "-e", f"{outcome.sha}:seed.txt", check=False).returncode != 0
+
+
+def test_pathspec_outside_repo_raises_commit_refused(tmp_path):
+    """A path that does not resolve under the repo root must refuse, not
+    silently commit against whatever name results."""
+    repo = _repo(tmp_path)
+    outside = tmp_path / "elsewhere.txt"
+    outside.write_text("nope\n", encoding="utf-8", newline="\n")
+
+    with pytest.raises(gcommit.CommitRefused):
+        gcommit.commit_paths(repo, [str(outside)], "should refuse")
+
+
 def test_lost_cas_race_refuses_and_writes_no_ref(tmp_path):
     """INVARIANT 2. If the ref moved under us, refuse -- never commit past a
     peer, and never retry silently on a tree built against the old HEAD."""

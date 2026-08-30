@@ -547,11 +547,23 @@ def read_discovery(engine_root: Optional[Path] = None) -> Optional[dict]:
         time.sleep(_READ_RETRY_SLEEP_SECS)
 
 
-def unlink_discovery(engine_root: Optional[Path] = None) -> None:
+def unlink_discovery(
+    engine_root: Optional[Path] = None,
+    *,
+    owner_pid: Optional[int] = None,
+) -> None:
     """Best-effort remove the discovery file -- teardown's other half
     (AC13, alongside releasing the binder claim by closing the listening
-    socket). Mirrors `supervisor.unlink_discovery`'s never-raises contract."""
+    socket). Mirrors `supervisor.unlink_discovery`'s never-raises contract
+    AND its ownership check -- read that docstring for the measured
+    failure this guard exists to stop."""
     path = discovery_path(engine_root)
+    if owner_pid is not None:
+        record = read_discovery(engine_root)
+        if record is None:
+            return
+        if record.get("pid") != owner_pid:
+            return
     try:
         path.unlink()
     except OSError:
@@ -1171,7 +1183,9 @@ class _FrontDoorContext:
             pass
 
     def ctx_shutdown(self) -> None:
-        unlink_discovery(self.engine_root)
+        # Ownership-checked: an orphaned or superseded listener exiting must
+        # not delete the LIVE listener's record. See `unlink_discovery`.
+        unlink_discovery(self.engine_root, owner_pid=os.getpid())
 
     def stop(self) -> None:
         lifecycle.begin_shutdown(

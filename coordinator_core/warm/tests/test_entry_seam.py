@@ -104,6 +104,36 @@ def test_reentrant_dispatch_scopes_declared_writes_per_call():
         assert outer == ["caller.txt"]
 
 
+def test_reentrant_dispatch_inherits_warm_served_from_the_outer_scope(monkeypatch):
+    """Regression for the reviewer-found P1: a nested `per_request_state()`
+    opened by `reentrant_dispatch` used to leave `warm_served` at its bare
+    `False` default regardless of the outer scope, so a handler reached
+    through path-3 re-entry from inside a warm-served dispatch would
+    resolve `in_warm_served_request()` as cold and degrade to the server
+    owner's ambient environment — the exact 2026-08-29 misattribution
+    defect (state/bug-backlog/2026-08-29-the-warm-door-s-exe-route-stamps-
+    the-ser-47373b19c77e.yaml), reintroduced for the nested call only.
+    """
+    from coordinator_core import ipc
+    from coordinator_core.session.core import in_warm_served_request
+
+    seen = {}
+
+    def _probe(params, repo_root=None):
+        seen["warm_served"] = in_warm_served_request()
+        return {"ok": True}
+
+    monkeypatch.setattr(ipc, "get_op_handler", lambda name: _probe)
+
+    with per_request_state(warm_served=True):
+        reentrant_dispatch("probe.warm_served", {})
+
+    assert seen["warm_served"] is True, (
+        "reentrant_dispatch must inherit the outer scope's warm_served flag, "
+        "not re-default it to False"
+    )
+
+
 def test_per_request_state_binds_the_given_session_id():
     with per_request_state(session_id="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"):
         assert resolve_session_id() == "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"

@@ -702,3 +702,124 @@ class TestShellCRescanAdvisoryFloor:
         hso = result["hookSpecificOutput"]
         assert hso["permissionDecision"] == "deny"
         assert "state/peer-in-flight.md" in hso["permissionDecisionReason"]
+
+
+class TestForceCheckoutWholeTree:
+    """`git checkout -f` discards every uncommitted modification in the tree
+    -- strictly MORE than the `git checkout .` this guard already denied.
+
+    Until 2026-08-30 only a literal `.` pathspec built an `affected` set, so
+    the larger clobber passed through silently while the smaller one was
+    blocked. `block_subagent_destructive_action` had been hardened for this
+    exact shape, but engages only after a subagent-identity check -- a
+    main-loop or EM session on a shared worktree reached nothing. Observed
+    live: a peer session destroyed ~40 files of in-flight work across this
+    tree, unrecoverable (no commit, no stash, no reflog for worktree state).
+    """
+
+    @pytest.mark.parametrize(
+        "flags",
+        [
+            "-f",
+            "--force",
+            "-f main",
+            "-fb throwaway",
+            "--force main",
+        ],
+    )
+    def test_force_checkout_denies_over_peer_work(
+        self, repo_with_peer_work: Path, flags: str
+    ) -> None:
+        result = check_destructive_git_revert(
+            "git -C %s checkout %s" % (repo_with_peer_work, flags)
+        )
+        assert result is not None, "force checkout must not pass silently"
+        assert "BLOCKED" in _deny_reason(result)
+
+    def test_force_with_explicit_pathspec_stays_scoped(
+        self, repo_with_peer_work: Path
+    ) -> None:
+        # `git checkout -f -- <paths>` IS scoped to those paths — narrower
+        # than force alone, and must not be widened to whole-tree. The
+        # pathspec named here is not the peer's file.
+        result = check_destructive_git_revert(
+            "git -C %s checkout -f -- some/other/path.py" % repo_with_peer_work
+        )
+        assert result is None
+
+    def test_force_dot_pathspec_still_denies(self, repo_with_peer_work: Path) -> None:
+        # The pre-existing dotspec leg is unchanged by the force widening.
+        result = check_destructive_git_revert(
+            "git -C %s checkout -f -- ." % repo_with_peer_work
+        )
+        assert result is not None
+
+    @pytest.mark.parametrize(
+        "cmd",
+        [
+            "checkout main",
+            "checkout -b feature",
+            "checkout HEAD~1",
+            "checkout -- app.py",
+        ],
+    )
+    def test_benign_checkout_shapes_stay_silent(
+        self, repo_with_peer_work: Path, cmd: str
+    ) -> None:
+        # The widening must not turn ordinary branch work into a deny: none
+        # of these discards uncommitted content in the whole tree.
+        result = check_destructive_git_revert(
+            "git -C %s %s" % (repo_with_peer_work, cmd)
+        )
+        assert result is None, cmd
+
+    def test_force_checkout_on_clean_tree_stays_silent(self, clean_repo: Path) -> None:
+        # Nothing to destroy is not a deny — the guard denies on demonstrated
+        # loss, never on the verb alone.
+        result = check_destructive_git_revert(
+            "git -C %s checkout -f" % clean_repo
+        )
+        assert result is None
+
+
+class TestForceSwitchWholeTree:
+    """`git switch -f <branch>` discards uncommitted work exactly as
+    `git checkout -f <branch>` does (`git switch -h`: "-f, --force ... throw
+    away local modifications"), and it is the spelling git's own docs steer
+    people toward -- but `switch` was absent from this guard's verb set
+    entirely until 2026-08-30, so every one of those invocations resolved to
+    no verb and returned before any oracle ran.
+    """
+
+    @pytest.mark.parametrize("flags", ["-f main", "--force main", "-f"])
+    def test_force_switch_denies_over_peer_work(
+        self, repo_with_peer_work: Path, flags: str
+    ) -> None:
+        result = check_destructive_git_revert(
+            "git -C %s switch %s" % (repo_with_peer_work, flags)
+        )
+        assert result is not None, "force switch must not pass silently"
+        assert "BLOCKED" in _deny_reason(result)
+
+    @pytest.mark.parametrize("cmd", ["switch main", "switch -c feature"])
+    def test_benign_switch_shapes_stay_silent(
+        self, repo_with_peer_work: Path, cmd: str
+    ) -> None:
+        result = check_destructive_git_revert(
+            "git -C %s %s" % (repo_with_peer_work, cmd)
+        )
+        assert result is None, cmd
+
+    def test_force_switch_on_clean_tree_stays_silent(self, clean_repo: Path) -> None:
+        result = check_destructive_git_revert("git -C %s switch -f main" % clean_repo)
+        assert result is None
+
+
+def test_every_verb_resolution_path_shares_one_verb_set() -> None:
+    """The verb set was three identical inline tuples, so a verb could be
+    added to one resolution path and silently missed in the other two -- the
+    shape that let `switch` be absent from all of them at once. Pin the
+    single constant instead."""
+    from coordinator_core.bash_guards.dispatch_checks import _GR_VERBS
+
+    assert set(_GR_VERBS) == {"checkout", "restore", "reset", "stash", "switch"}

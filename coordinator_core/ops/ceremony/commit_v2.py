@@ -70,6 +70,10 @@ from coordinator_core.git.commit import (
     hash_worktree_blobs_via_spawn,
 )
 from coordinator_core.git.commit_trailers import apply_missing_trailers
+from coordinator_core.git.eol_declared import (
+    find_declared_eol_drift,
+    repair_declared_eol_drift,
+)
 from functools import partial
 from coordinator_core.git.git_dir import resolve_git_common_dir
 from coordinator_core.git.git_objects import _read_object
@@ -452,6 +456,22 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     if gate_refusal is not None:
         return _error(gate_refusal)
 
+    # Declared-vs-actual EOL, for the executables THIS COMMIT touches -- the
+    # write-scoped v2 the eol family's deletion left owed (kill-ledger K-064's
+    # returns-when spec; `docs/reference/eol-drift-detection.md`). Filter-first
+    # like `guard_paths` above: a commit carrying no `.cmd`/`.ps1`/`.sh`/`.bat`
+    # spawns nothing and reads nothing.
+    #
+    # BEFORE the commit, not after, and NOT a refusal. Before, so the tree that
+    # lands already carries correct bytes. Not a refusal, because the repair is
+    # provably content-neutral -- check-in normalization maps the drifted and
+    # repaired files to the same blob -- so there is nothing for an operator to
+    # adjudicate and nothing a refusal would protect.
+    eol_drifts = find_declared_eol_drift(worktree_root, raw_paths)
+    eol_repaired = (
+        repair_declared_eol_drift(worktree_root, eol_drifts) if eol_drifts else []
+    )
+
     # Attach Session-Id / Deliverable-Id (whichever are resolvable and not
     # already present) via the shared applier -- this route lands via
     # `commit_paths`' `commit-tree` plumbing, which fires NO git hooks
@@ -496,6 +516,20 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             f"committed worktree content for {len(outcome.worktree_over_staged)} "
             f"path(s) whose index held different content: {paths}. "
             "Pass prefer_staged to commit the staged content instead."
+        )
+
+    # Reported, not because reporting is what fixes it -- the repair above did
+    # that -- but because a launcher's bytes changing under an operator is a
+    # fact they are owed. Bounded at five like the join above, same reason.
+    if eol_drifts:
+        shown = "; ".join(d.describe() for d in eol_drifts[:5])
+        if len(eol_drifts) > 5:
+            shown += "; ..."
+        unfixed = len(eol_drifts) - len(eol_repaired)
+        warnings.append(
+            f"repaired declared-vs-actual line endings on {len(eol_repaired)} of "
+            f"{len(eol_drifts)} executable path(s): {shown}."
+            + (f" {unfixed} could not be written." if unfixed else "")
         )
 
     # Step runs AFTER the commit has landed -- it cannot refuse, delay, or

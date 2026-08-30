@@ -84,7 +84,7 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
-from typing import Any, Dict, List, Tuple, Union
+from typing import Any, Dict, List, Optional, Set, Tuple, Union
 
 from coordinator_core.claim_state import handoff_claim_dir
 from coordinator_core.housekeeping import archive_index as archive_index_mod
@@ -97,11 +97,16 @@ from coordinator_core.housekeeping.gate_clear import (
     record_after_clear,
 )
 from coordinator_core.housekeeping.resolve import make_resolver
-from coordinator_core.housekeeping.terminal import TerminalEntry, compute_terminal_set
+from coordinator_core.housekeeping.terminal import (
+    TERMINAL_DEPLOYMENT_STATES,
+    TerminalEntry,
+    compute_terminal_set,
+)
 from coordinator_core.ipc import register_op
 from coordinator_core.lifecycle import git_common_dir, main_worktree_root
-from coordinator_core.liveness import cs_claim_holder_live
+from coordinator_core.liveness import cs_claim_holder_live, resolve_live_session_ids
 from coordinator_core.ops.fleet._common import Move, archive_and_commit, handoff_archive_dest
+from coordinator_core.ops.fleet.archive_terminal_handoffs import _dirty_handoff_relpaths
 
 PathLike = Union[str, Path]
 
@@ -110,6 +115,51 @@ PathLike = Union[str, Path]
 #: there, and this module's own scope is which records to OFFER to
 #: `evaluate_gate_clear`, not gate-clear's own internal vocabulary).
 _AWAITING_GATE = "awaiting_gate"
+
+
+def _record_claimant(record: Dict[str, Any]) -> str:
+    """The session id a record names as holding it, or `""`.
+
+    `claimed_by` wins over the retired `consumed_by`, mirroring
+    `coordinator_core.coverage :: _parse_handoff_consumed_by`'s own
+    dual-tolerant precedence rather than inventing a second rule. Reading
+    only `consumed_by` reads a name no live record carries -- 0 of 298 at
+    the time this was written, against 30 carrying `claimed_by` -- which is
+    a rail that cannot fire and a unit test that passes because its fixture
+    was authored from the same wrong field.
+    """
+    for key in ("claimed_by", "consumed_by"):
+        value = record.get(key)
+        if value:
+            return str(value).strip()
+    return ""
+
+
+def _transition_target_rel(worktree_root: Path, transition_params: Any) -> Set[str]:
+    """The repo-relative POSIX path of a targeted transition's own handoff, as
+    a set for `run(exclude=...)`. Empty when no transition ran, or when the
+    named path does not sit under this worktree -- an unresolvable name
+    excludes nothing rather than silently excluding everything.
+    """
+    if not isinstance(transition_params, dict):
+        return set()
+    named = transition_params.get("handoff_path")
+    if not named:
+        return set()
+    # `handoff_path` arrives REPO-RELATIVE from the real callers
+    # (`baton_assemble/apply.py` builds `repo_root / predecessor_path` from
+    # the same string). Resolving it bare would resolve against the process
+    # CWD, so on any caller whose CWD is not the worktree root the exclusion
+    # would silently match nothing -- a fail-OPEN on the one rail whose whole
+    # job is to stop the sweep touching another leg's handoff.
+    candidate = Path(named)
+    root = worktree_root.resolve()
+    if not candidate.is_absolute():
+        candidate = root / candidate
+    try:
+        return {candidate.resolve().relative_to(root).as_posix()}
+    except (ValueError, OSError):
+        return set()
 
 
 def _claim_holder_live_predicate(common_dir: Path):
@@ -171,7 +221,13 @@ def archive_terminal_batch(
     return asyncio.run(archive_and_commit(worktree_root, moves, subject))
 
 
-def run(repo_root: PathLike, cap: int, *, close: bool = True) -> Dict[str, Any]:
+def run(
+    repo_root: PathLike,
+    cap: int,
+    *,
+    close: bool = True,
+    exclude: Optional[Set[str]] = None,
+) -> Dict[str, Any]:
     """The assembled cycle — steps A through E in one synchronous call.
 
     Matches the falsifier's `fn(repo_root: str, cap: int) -> dict` contract
@@ -187,6 +243,16 @@ def run(repo_root: PathLike, cap: int, *, close: bool = True) -> Dict[str, Any]:
     could not land), `live_read_count` (C3's own read-count, asserted
     read-once by C7), and `scan_gaps` (C3's own directory-listing gaps,
     preserved rather than folded into an empty result).
+
+    `exclude` — repo-relative POSIX paths this sweep must not touch, because
+    something else in the same call already owns them. `_handler` passes the
+    targeted transition's own handoff. Without it the population sweep can
+    COMPLETE a move the transition failed to make: the transition's
+    git-mv-failure branch is deliberately non-fatal and returns exit_code 0,
+    so the call does not stop, and the sweep then archives the same record
+    through its own seam. `cs_chain_archive_handoff` verifies a move by
+    source-gone AND destination-present, which cannot tell whose move it was,
+    so a failed archival reads as a successful one.
     """
     root = Path(repo_root)
     common_dir = git_common_dir(root)
@@ -237,20 +303,73 @@ def run(repo_root: PathLike, cap: int, *, close: bool = True) -> Dict[str, Any]:
     # `close=False` is for a caller that has already closed records itself and
     # wants the sweep alone -- the gated list is still computed above so the
     # result shape does not change shape with the flag.
-    for path, record in (gated if close else []):
-        verdict = evaluate_gate_clear(record, resolver)
-        if not verdict.clears:
-            continue
-        result = apply_gate_clear(path, worktree_root)
-        if result.status == CONFLICT:
-            conflicts.append(str(path))
-            continue
-        records[path] = record_after_clear(record)
-        closed += 1
+    # A failed close pass must not eat the sweep -- the two are different
+    # kinds of failure, and the archival job is still worth doing when gate
+    # evaluation dies. It must not VANISH either: without `close_error` a
+    # caller cannot tell "nothing needed closing" from "the close pass died",
+    # and both render as closed=0. That pair of properties was asserted by
+    # `ops/tests/test_handoff_housekeeping.py`'s fusion-contract tests, which
+    # were deleted with their module before this module carried them.
+    close_error: Optional[str] = None
+    try:
+        for path, record in (gated if close else []):
+            verdict = evaluate_gate_clear(record, resolver)
+            if not verdict.clears:
+                continue
+            result = apply_gate_clear(path, worktree_root)
+            if result.status == CONFLICT:
+                conflicts.append(str(path))
+                continue
+            records[path] = record_after_clear(record)
+            closed += 1
+    except Exception as exc:  # noqa: BLE001 -- the sweep survives a close failure
+        close_error = f"{type(exc).__name__}: {exc}"
 
     # -- D. Terminal set, computed from step A + this cycle's own mutations. --
+    # The worktree-dirty rail is asked ONCE, over the terminal candidates only
+    # -- never the whole corpus. `_dirty_handoff_relpaths` answers from a
+    # scoped in-process index walk and falls back to a single scoped `git
+    # status --porcelain` only when that arm declines, so the normal path adds
+    # no spawn to the cycle's budget. It fails CLOSED: a git failure retains
+    # every candidate rather than sweeping them.
     claim_holder_live = _claim_holder_live_predicate(common_dir)
-    terminal_entries = compute_terminal_set(records, cap, claim_holder_live=claim_holder_live)
+    excluded = exclude or frozenset()
+    candidate_rels = sorted({
+        path.relative_to(worktree_root).as_posix()
+        for path, record in records.items()
+        if record.get("deployment_state") in TERMINAL_DEPLOYMENT_STATES
+    })
+    dirty_rels = _dirty_handoff_relpaths(worktree_root, candidate_rels)
+    # Read off the record step A already parsed -- the rail costs no I/O
+    # here, where the predecessor sweep paid a per-candidate file read.
+    # `claimed_by` is the live field; `consumed_by` is its retired spelling,
+    # tolerated at lower precedence exactly as `coverage.py ::
+    # _parse_handoff_consumed_by` does. `resolve_live_session_ids` is asked
+    # once, and only when some terminal candidate actually names a session.
+    live_sids = (
+        resolve_live_session_ids()
+        if any(
+            _record_claimant(record)
+            for record in records.values()
+            if record.get("deployment_state") in TERMINAL_DEPLOYMENT_STATES
+        )
+        else frozenset()
+    )
+
+    def _retained(path: Path, record: Dict[str, Any]) -> bool:
+        """Every ground on which a terminal record is NOT this sweep's to
+        file, in one predicate. A live claim holder is one such ground, not
+        a category of its own -- it had a second parameter of identical
+        shape on `compute_terminal_set` until 2026-08-30."""
+        rel = path.relative_to(worktree_root).as_posix()
+        if rel in excluded or rel in dirty_rels:
+            return True
+        if claim_holder_live(path, record):
+            return True
+        claimant = _record_claimant(record)
+        return bool(claimant) and claimant in live_sids
+
+    terminal_entries = compute_terminal_set(records, cap, retained=_retained)
 
     # -- E. One move + ONE commit. --------------------------------------
     subject = "housekeeping: archive {} terminal handoff(s)".format(len(terminal_entries))
@@ -269,6 +388,7 @@ def run(repo_root: PathLike, cap: int, *, close: bool = True) -> Dict[str, Any]:
 
     return {
         "closed": closed,
+        "close_error": close_error,
         "conflicts": conflicts,
         "archived": [item["id"] for item in acted],
         "failed": failed,
@@ -351,9 +471,20 @@ def _handler(params: Dict[str, Any], repo_root: Optional[Path] = None) -> Dict[s
             _handler as _transition_handler,
         )
 
-        transition_result = asyncio.run(
-            _transition_handler(dict(transition_params), common_dir)
-        )
+        try:
+            transition_result = asyncio.run(
+                _transition_handler(dict(transition_params), common_dir)
+            )
+        except Exception as exc:  # noqa: BLE001 -- a raising leg is a failed
+            # transition, not a traceback out of an op whose contract is an
+            # error dict. The old library call was reached through a caller
+            # that caught; reaching it through the op boundary is not licence
+            # to drop that.
+            return {
+                "exit_code": 1,
+                "error": f"transition raised: {type(exc).__name__}: {exc}",
+                "transition": None,
+            }
         if transition_result.get("exit_code") != 0:
             # Stop, do not sweep on: see the fail-posture note above.
             return {
@@ -362,7 +493,13 @@ def _handler(params: Dict[str, Any], repo_root: Optional[Path] = None) -> Dict[s
                 "transition": transition_result,
             }
 
-    result = run(main_worktree_root(common_dir), cap, close=bool(params.get("close", True)))
+    worktree_root = main_worktree_root(common_dir)
+    result = run(
+        worktree_root,
+        cap,
+        close=bool(params.get("close", True)),
+        exclude=_transition_target_rel(worktree_root, transition_params),
+    )
     result["exit_code"] = 0
     if transition_result is not None:
         result["transition"] = transition_result

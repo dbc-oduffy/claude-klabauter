@@ -467,3 +467,311 @@ def test_cited_missing_field_carries_sites_for_the_cited_set(tmp_path: Path, two
         "skills/workstream-complete/SKILL.md" in site
         for site in result.cited_missing["check-auto-memory-drained"]
     )
+
+
+def _write_shape_w_citation(doe_root: Path, skill_relpath: str, cited_spelling: str, sep: str = "\\") -> None:
+    """A Shape W (Windows PowerShell) settings-home entrypoint citation —
+    `$env:COORDINATOR_SETTINGS_HOME\\bin\\<cited_spelling>` — matching
+    `resolve-coordinator-bin.md`'s rung 0 form. ``sep`` lets a caller exercise
+    the `/`-separated variant too."""
+    path = doe_root / "coordinator" / skill_relpath
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "---\nname: fixture\n---\n\n"
+        "Run:\n\n"
+        "```powershell\n"
+        f'& "$env:COORDINATOR_SETTINGS_HOME{sep}bin{sep}{cited_spelling}" push.outstanding \'{{}}\'\n'
+        "```\n"
+    )
+
+
+def test_extension_mismatch_recorded_when_cmd_cited_but_exe_installed(tmp_path: Path, two_bin_dirs, monkeypatch):
+    settings_bin, compat_bin = two_bin_dirs
+    doe_root = tmp_path / "doe-claude"
+    settings_bin.mkdir(parents=True, exist_ok=True)
+    (settings_bin / "app-session.exe").write_text("stub")
+    _write_shape_w_citation(doe_root, "skills/app-session/SKILL.md", "app-session.cmd")
+    monkeypatch.setattr(fd, "_is_windows_host", lambda: True)
+
+    agent_bin = tmp_path / "empty-agent-bin"
+    agent_bin.mkdir(parents=True, exist_ok=True)
+    result = fd.check_forwarder_drift(settings_bin=settings_bin, compat_bin=compat_bin, agent_bin=agent_bin, doe_root=doe_root)
+
+    assert result.ok is False
+    assert set(result.extension_mismatch.keys()) == {"app-session.cmd"}
+    assert any("skills/app-session/SKILL.md" in site for site in result.extension_mismatch["app-session.cmd"])
+
+
+def test_main_exits_nonzero_on_extension_mismatch(tmp_path: Path, two_bin_dirs, monkeypatch):
+    settings_bin, compat_bin = two_bin_dirs
+    doe_root = tmp_path / "doe-claude"
+    settings_bin.mkdir(parents=True, exist_ok=True)
+    (settings_bin / "app-session.exe").write_text("stub")
+    _write_shape_w_citation(doe_root, "skills/app-session/SKILL.md", "app-session.cmd")
+    monkeypatch.setattr(fd, "_is_windows_host", lambda: True)
+    agent_bin = tmp_path / "empty-agent-bin"
+    agent_bin.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(fd, "_resolve_agent_bin", lambda: agent_bin)
+    monkeypatch.setattr(fd, "_resolve_settings_bin", lambda: settings_bin)
+    monkeypatch.setattr(fd, "_resolve_compat_bin", lambda: compat_bin)
+    monkeypatch.setattr(fd, "_resolve_doe_root", lambda: doe_root)
+
+    rc = fd.main([])
+
+    assert rc != 0
+
+
+def test_extension_clean_when_cited_spelling_matches_installed(tmp_path: Path, two_bin_dirs, monkeypatch):
+    settings_bin, compat_bin = two_bin_dirs
+    doe_root = tmp_path / "doe-claude"
+    settings_bin.mkdir(parents=True, exist_ok=True)
+    (settings_bin / "app-session.exe").write_text("stub")
+    _write_shape_w_citation(doe_root, "skills/app-session/SKILL.md", "app-session.exe")
+    monkeypatch.setattr(fd, "_is_windows_host", lambda: True)
+
+    agent_bin = tmp_path / "empty-agent-bin"
+    agent_bin.mkdir(parents=True, exist_ok=True)
+    result = fd.check_forwarder_drift(settings_bin=settings_bin, compat_bin=compat_bin, agent_bin=agent_bin, doe_root=doe_root)
+
+    assert result.extension_mismatch == {}
+
+
+def test_extension_clean_for_legitimate_cmd_survivor(tmp_path: Path, two_bin_dirs, monkeypatch):
+    """The six pre-engine bootstrap resolvers still ship as `.cmd` — a
+    citation of the installed spelling must stay clean, never hardcoding
+    that survivor list, letting the actual install be the oracle."""
+    settings_bin, compat_bin = two_bin_dirs
+    doe_root = tmp_path / "doe-claude"
+    settings_bin.mkdir(parents=True, exist_ok=True)
+    (settings_bin / "claude-home.cmd").write_text("stub")
+    _write_shape_w_citation(doe_root, "snippets/resolve-coordinator-bin.md", "claude-home.cmd")
+    monkeypatch.setattr(fd, "_is_windows_host", lambda: True)
+
+    agent_bin = tmp_path / "empty-agent-bin"
+    agent_bin.mkdir(parents=True, exist_ok=True)
+    result = fd.check_forwarder_drift(settings_bin=settings_bin, compat_bin=compat_bin, agent_bin=agent_bin, doe_root=doe_root)
+
+    assert result.extension_mismatch == {}
+
+
+def test_extension_axis_silent_when_no_sibling_installed_at_all(tmp_path: Path, two_bin_dirs, monkeypatch):
+    """A cited base name with NO installed sibling under any extension is the
+    NAME axis' `cited_missing` population, not this axis' — must not appear
+    in `extension_mismatch`."""
+    settings_bin, compat_bin = two_bin_dirs
+    doe_root = tmp_path / "doe-claude"
+    settings_bin.mkdir(parents=True, exist_ok=True)
+    (settings_bin / "unrelated.exe").write_text("stub")
+    _write_shape_w_citation(doe_root, "skills/percolate/SKILL.md", "percolate-push.cmd")
+    monkeypatch.setattr(fd, "_is_windows_host", lambda: True)
+
+    agent_bin = tmp_path / "empty-agent-bin"
+    agent_bin.mkdir(parents=True, exist_ok=True)
+    result = fd.check_forwarder_drift(settings_bin=settings_bin, compat_bin=compat_bin, agent_bin=agent_bin, doe_root=doe_root)
+
+    assert result.extension_mismatch == {}
+
+
+def test_extension_axis_skips_on_non_windows_host(tmp_path: Path, two_bin_dirs, monkeypatch):
+    settings_bin, compat_bin = two_bin_dirs
+    doe_root = tmp_path / "doe-claude"
+    settings_bin.mkdir(parents=True, exist_ok=True)
+    (settings_bin / "app-session.exe").write_text("stub")
+    _write_shape_w_citation(doe_root, "skills/app-session/SKILL.md", "app-session.cmd")
+    monkeypatch.setattr(fd, "_is_windows_host", lambda: False)
+
+    agent_bin = tmp_path / "empty-agent-bin"
+    agent_bin.mkdir(parents=True, exist_ok=True)
+    result = fd.check_forwarder_drift(settings_bin=settings_bin, compat_bin=compat_bin, agent_bin=agent_bin, doe_root=doe_root)
+
+    assert result.extension_mismatch == {}
+    assert any(
+        "[skip]" in line and "extension axis" in line and "non-Windows" in line for line in result.lines
+    )
+
+
+def test_extension_axis_skip_does_not_block_exit_zero_on_would_be_mismatch(tmp_path: Path, two_bin_dirs, monkeypatch):
+    settings_bin, compat_bin = two_bin_dirs
+    doe_root = tmp_path / "doe-claude"
+    settings_bin.mkdir(parents=True, exist_ok=True)
+    (settings_bin / "app-session.exe").write_text("stub")
+    _write_shape_w_citation(doe_root, "skills/app-session/SKILL.md", "app-session.cmd")
+    monkeypatch.setattr(fd, "_is_windows_host", lambda: False)
+    agent_bin = tmp_path / "empty-agent-bin"
+    agent_bin.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(fd, "_resolve_agent_bin", lambda: agent_bin)
+    monkeypatch.setattr(fd, "_resolve_settings_bin", lambda: settings_bin)
+    monkeypatch.setattr(fd, "_resolve_compat_bin", lambda: compat_bin)
+    monkeypatch.setattr(fd, "_resolve_doe_root", lambda: doe_root)
+
+    rc = fd.main([])
+
+    assert rc == 0
+
+
+def test_extension_axis_doe_root_unresolvable_is_empty_no_crash(tmp_path: Path, two_bin_dirs, monkeypatch):
+    settings_bin, compat_bin = two_bin_dirs
+    settings_bin.mkdir(parents=True, exist_ok=True)
+    (settings_bin / "app-session.exe").write_text("stub")
+    monkeypatch.setattr(fd, "_is_windows_host", lambda: True)
+
+    agent_bin = tmp_path / "empty-agent-bin"
+    agent_bin.mkdir(parents=True, exist_ok=True)
+    # A nonexistent path (not None) — passing None here would fall through to
+    # the real resolution ladder and pick up this machine's actual DoE-claude
+    # checkout, defeating the point of this test (an unresolvable doe_root).
+    result = fd.check_forwarder_drift(
+        settings_bin=settings_bin, compat_bin=compat_bin, agent_bin=agent_bin, doe_root=tmp_path / "no-doe-root"
+    )
+
+    assert result.extension_mismatch == {}
+
+
+def test_check_extension_axis_direct_none_doe_root_is_empty_no_crash(tmp_path: Path, monkeypatch):
+    """Direct unit coverage of `_check_extension_axis(doe_root=None, ...)` —
+    the actual "doe_root unresolvable" contract, exercised without routing
+    through `check_forwarder_drift`'s own doe_root=None fallback (which would
+    instead invoke the real resolution ladder)."""
+    settings_bin = tmp_path / "settings-bin"
+    settings_bin.mkdir(parents=True, exist_ok=True)
+    (settings_bin / "app-session.exe").write_text("stub")
+    monkeypatch.setattr(fd, "_is_windows_host", lambda: True)
+
+    lines, mismatch = fd._check_extension_axis(None, settings_bin)
+
+    assert mismatch == {}
+    assert any("[skip]" in line and "extension axis" in line for line in lines)
+
+
+def test_shape_w_citation_matched_with_forward_slash_separator(tmp_path: Path, two_bin_dirs, monkeypatch):
+    settings_bin, compat_bin = two_bin_dirs
+    doe_root = tmp_path / "doe-claude"
+    settings_bin.mkdir(parents=True, exist_ok=True)
+    (settings_bin / "app-session.exe").write_text("stub")
+    _write_shape_w_citation(doe_root, "skills/app-session/SKILL.md", "app-session.cmd", sep="/")
+    monkeypatch.setattr(fd, "_is_windows_host", lambda: True)
+
+    agent_bin = tmp_path / "empty-agent-bin"
+    agent_bin.mkdir(parents=True, exist_ok=True)
+    result = fd.check_forwarder_drift(settings_bin=settings_bin, compat_bin=compat_bin, agent_bin=agent_bin, doe_root=doe_root)
+
+    assert set(result.extension_mismatch.keys()) == {"app-session.cmd"}
+
+
+def test_installed_forwarder_names_matches_marker_despite_large_trailing_body(tmp_path: Path):
+    """Behavioural statement of "we read the head, not the file": a forwarder
+    whose marker sits on its first line, followed by ~1 MB of trailing bytes
+    (standing in for a real multi-hundred-KB native launcher image), is still
+    identified — the bounded read must not silently stop matching."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    path = bin_dir / "big-forwarder.exe"
+    with open(path, "wb") as fh:
+        fh.write(f"# coordinator-claude bin forwarder for big-forwarder\n".encode("utf-8"))
+        fh.write(b"x" * (1024 * 1024))
+
+    names = fd._installed_forwarder_names(bin_dir)
+
+    assert names == {"big-forwarder.exe"}
+
+
+def test_installed_forwarder_names_large_file_without_marker_is_excluded(tmp_path: Path):
+    """A large file that never carries the marker is not identified."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    path = bin_dir / "big-non-forwarder.exe"
+    with open(path, "wb") as fh:
+        fh.write(b"just a native launcher, no marker here\n")
+        fh.write(b"y" * (1024 * 1024))
+
+    names = fd._installed_forwarder_names(bin_dir)
+
+    assert names == set()
+
+
+def test_installed_forwarder_names_marker_after_window_boundary_is_excluded(tmp_path: Path):
+    """The 512-byte window is a deliberate boundary, not an accident: a marker
+    that appears only AFTER byte 512 must NOT be matched."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    path = bin_dir / "late-marker.exe"
+    with open(path, "wb") as fh:
+        fh.write(b"#" * 600)  # padding well past the 512-byte window
+        fh.write(b"\n# coordinator-claude bin forwarder for late-marker\n")
+
+    names = fd._installed_forwarder_names(bin_dir)
+
+    assert names == set()
+
+
+def test_installed_forwarder_names_handles_binary_first_bytes_without_raising(tmp_path: Path):
+    """Non-UTF-8/binary bytes in the first 512 bytes must not raise — matches
+    the old `errors="ignore"` best-effort posture: the scan completes and
+    simply does not match."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    path = bin_dir / "binary-garbage.exe"
+    with open(path, "wb") as fh:
+        fh.write(bytes(range(256)) * 2)  # includes invalid UTF-8 byte sequences
+
+    names = fd._installed_forwarder_names(bin_dir)
+
+    assert names == set()
+
+
+def test_installed_forwarder_names_still_excludes_cmd_and_ps1(tmp_path: Path):
+    """The existing `.cmd`/`.ps1` exclusion still holds under the bounded
+    binary-read implementation."""
+    bin_dir = tmp_path / "bin"
+    _write_forwarder(bin_dir, "real-forwarder.exe")
+    (bin_dir / "excluded.cmd").write_text(
+        "# coordinator-claude bin forwarder for excluded\n"
+    )
+    (bin_dir / "excluded.ps1").write_text(
+        "# coordinator-claude bin forwarder for excluded\n"
+    )
+
+    names = fd._installed_forwarder_names(bin_dir)
+
+    assert names == {"real-forwarder.exe"}
+
+
+def test_installed_forwarder_names_oserror_is_best_effort_skip(tmp_path: Path, monkeypatch):
+    """The `except OSError: continue` best-effort posture still holds — an
+    unreadable file is skipped, never a hard failure."""
+    bin_dir = tmp_path / "bin"
+    _write_forwarder(bin_dir, "ok-forwarder.exe")
+    _write_forwarder(bin_dir, "unreadable.exe")
+
+    real_open = open
+
+    def _flaky_open(path, mode="r", *args, **kwargs):
+        if "unreadable.exe" in str(path) and mode == "rb":
+            raise OSError("simulated permission error")
+        return real_open(path, mode, *args, **kwargs)
+
+    monkeypatch.setattr(fd, "open", _flaky_open, raising=False)
+
+    names = fd._installed_forwarder_names(bin_dir)
+
+    assert names == {"ok-forwarder.exe"}
+
+
+def test_shape_w_citation_trailing_period_is_stripped(tmp_path: Path, two_bin_dirs, monkeypatch):
+    settings_bin, compat_bin = two_bin_dirs
+    doe_root = tmp_path / "doe-claude"
+    settings_bin.mkdir(parents=True, exist_ok=True)
+    (settings_bin / "workweek-complete-brief.exe").write_text("stub")
+    path = doe_root / "coordinator" / "skills" / "workweek" / "SKILL.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "---\nname: fixture\n---\n\n"
+        "See `$env:COORDINATOR_SETTINGS_HOME\\bin\\workweek-complete-brief.cmd`.\n"
+    )
+    monkeypatch.setattr(fd, "_is_windows_host", lambda: True)
+
+    agent_bin = tmp_path / "empty-agent-bin"
+    agent_bin.mkdir(parents=True, exist_ok=True)
+    result = fd.check_forwarder_drift(settings_bin=settings_bin, compat_bin=compat_bin, agent_bin=agent_bin, doe_root=doe_root)
+
+    assert set(result.extension_mismatch.keys()) == {"workweek-complete-brief.cmd"}

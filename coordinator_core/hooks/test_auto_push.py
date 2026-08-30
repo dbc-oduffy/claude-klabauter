@@ -892,7 +892,11 @@ def test_log_failure_forensic_sidecar_lands_beside_log_in_non_plain_topology(tmp
 # Retry policy
 # ---------------------------------------------------------------------------
 
-def test_run_push_with_retry_ref_lock_retries_to_max_then_logs(monkeypatch, tmp_path):
+def test_run_push_with_retry_ref_lock_retries_to_per_class_budget_then_logs(monkeypatch, tmp_path):
+    # ref-lock gets its own per-class budget (DEC-1) -- MAX_ATTEMPTS is NOT
+    # what bounds this class any more, so this asserts _attempts_for("ref-lock")
+    # rather than the shared constant (regression guard: a literal here would
+    # silently pass even if the per-class table stopped being consulted).
     repo_root = str(tmp_path)
     (tmp_path / ".git").mkdir()
     monkeypatch.setenv(auto_push._ENV_NO_SLEEP, "1")
@@ -911,12 +915,50 @@ def test_run_push_with_retry_ref_lock_retries_to_max_then_logs(monkeypatch, tmp_
 
     auto_push.run_push_with_retry(repo_root, "work/foo")
 
-    assert call_count["n"] == auto_push.MAX_ATTEMPTS
+    expected_attempts = auto_push._attempts_for("ref-lock")
+    assert call_count["n"] == expected_attempts
     log_path = tmp_path / ".git" / "push-failures.log"
     assert log_path.exists()
     content = log_path.read_text()
-    assert f"after {auto_push.MAX_ATTEMPTS}" in content
+    assert f"after {expected_attempts}" in content
     assert "ref-lock" in content
+
+
+def test_attempts_for_ref_lock_is_a_per_class_override_not_max_attempts():
+    # Regression guard for DEC-1: ref-lock's budget must diverge from
+    # MAX_ATTEMPTS, not merely equal it by coincidence of today's constants.
+    assert auto_push._attempts_for("ref-lock") != auto_push.MAX_ATTEMPTS
+    assert auto_push._attempts_for("network") == auto_push.MAX_ATTEMPTS
+    assert auto_push._attempts_for("gh-transient") == auto_push.MAX_ATTEMPTS
+
+
+def test_backoff_seconds_ref_lock_cumulative_reach_exceeds_longest_observed_burst():
+    # Assert against the jitter FLOOR (random.uniform(0, 0.5) can be 0), not a
+    # sampled value -- otherwise this test is flaky by construction. The
+    # ceiling must clear the longer of the two observed bursts: doe-claude-em's
+    # 45s and this repo's own 70s (.git/push-failures.log, 2026-08-30, 29
+    # ref-lock ladders between 11:26:32Z and 11:27:42Z).
+    floor_total = sum(min(2 ** n, 30) for n in range(1, 7))
+    assert floor_total > 70
+    for n in range(1, 7):
+        floor = min(2 ** n, 30)
+        assert auto_push._backoff_seconds("ref-lock", n) >= floor
+
+
+def test_backoff_seconds_network_unchanged_envelope():
+    for n in range(1, 4):
+        low = 0.2 + n * 0.1
+        high = 0.7 + n * 0.1
+        value = auto_push._backoff_seconds("network", n)
+        assert low <= value <= high
+
+
+def test_backoff_seconds_gh_transient_unchanged_envelope():
+    for n in range(1, 4):
+        low = n * 2
+        high = n * 2 + 0.5
+        value = auto_push._backoff_seconds("gh-transient", n)
+        assert low <= value <= high
 
 
 def test_run_push_with_retry_non_fast_forward_exhausts_when_never_superseded(monkeypatch, tmp_path):
@@ -953,6 +995,10 @@ def test_run_push_with_retry_non_fast_forward_exhausts_when_never_superseded(mon
     auto_push.run_push_with_retry(repo_root, "work/foo")
 
     assert call_count["n"] == 1
+    # MAX_ATTEMPTS, deliberately, not `_attempts_for("non-fast-forward")`: this
+    # is DEC-1's independence guard. The non-FF poll budget is a fail-loud
+    # mechanism kept separate from the per-class RETRY table, so rebinding this
+    # bound to the table -- the obvious "simplification" -- must fail here.
     assert ancestor_calls["n"] == auto_push.MAX_ATTEMPTS
     log_path = tmp_path / ".git" / "push-failures.log"
     assert log_path.exists()

@@ -103,6 +103,30 @@ class TestEndOfRunAssembledMirrorGateLeg:
         )
         assert ok is True
 
+    def test_clean_tree_with_no_source_rows_skips_coverage_leg(self, tmp_path):
+        """P2 regression (code review, 2026-08-30): `rows_by_repo_root.get
+        (repo_root, [])` empty (no row keyed to this repo root) used to fall
+        back to `source_roots or [repo_root]` -- comparing the assembled
+        mirror against ITSELF, silently reinstating the exact source-vs-
+        mirror conflation this gate exists to kill. The coverage leg must
+        now abstain out loud instead of emitting a WARN it cannot stand
+        behind."""
+        import io
+
+        repo_root = tmp_path / "repo"
+        _write_collectable_tree(repo_root)
+        buf = io.StringIO()
+
+        ok = publish.dispatch_end_of_run_assembled_mirror_gate(
+            [repo_root], rows_by_repo_root={}, target_filtered=False, out=buf
+        )
+
+        assert ok is True
+        out = buf.getvalue()
+        assert "coverage leg: SKIPPED" in out
+        assert str(repo_root) in out
+        assert "assembled-mirror-gate: WARN" not in out
+
     def test_colliding_tree_with_no_exemption_is_fatal(self, tmp_path, monkeypatch, capsys):
         repo_root = tmp_path / "repo"
         _write_colliding_tree(repo_root)
@@ -221,13 +245,20 @@ class TestLoadAssembledMirrorGateExemptions:
         assert exemptions == {}
 
     def test_real_declarations_file_loads_without_raising(self):
-        """The actual `setup/publish-allowlist-declarations.yaml` this
-        chunk edited must parse and expose an (empty, at authoring time)
-        `assembled_mirror_gate_exemptions` list -- proves the new top-level
-        key does not collide with the existing `rows:` schema."""
+        """The actual `setup/publish-allowlist-declarations.yaml` must parse
+        and expose its `assembled_mirror_gate_exemptions` list -- proves the
+        top-level key does not collide with the existing `rows:` schema.
+
+        Asserted as shape, not as a fixed membership: the loader degrades a
+        malformed entry to silence (see its own docstring), so an empty dict
+        here is indistinguishable from an unreadable ledger. Every declared
+        entry carrying a non-empty reason is the property worth pinning --
+        the ledger's own comment requires a stated reason per row, and that
+        is what a silent degradation would drop."""
         real_path = _REPO_ROOT / "setup" / "publish-allowlist-declarations.yaml"
         exemptions = publish._load_assembled_mirror_gate_exemptions(real_path)
-        assert exemptions == {}
+        assert isinstance(exemptions, dict)
+        assert all(name and reason.strip() for name, reason in exemptions.items())
 
 
 if __name__ == "__main__":

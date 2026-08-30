@@ -14,6 +14,7 @@ Hence `transport`, present on HTTP rows and absent on pipe rows.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from coordinator_core.warm import skew, supervisor, telemetry
@@ -63,11 +64,22 @@ def test_context_flushes_a_row_on_shutdown(tmp_path: Path):
 
 def test_shutdown_still_unlinks_discovery_when_the_flush_fails(tmp_path: Path, monkeypatch):
     """`flush` sits BEFORE the discovery unlink, so it must not be able to cost
-    it. `flush` never raises by contract -- this holds the ordering to that."""
+    it. `flush` never raises by contract -- this holds the ordering to that.
+
+    The record names THIS process's pid because `ctx_shutdown`'s unlink is
+    ownership-checked (see `unlink_discovery`): a record naming a different pid
+    is a live successor's and is correctly left alone. That is a separate
+    property, pinned in `test_discovery_unlink_is_ownership_checked.py`; this
+    test is about flush-ordering only, so it owns the record it expects to
+    remove."""
     root = _stamped(tmp_path)
     ctx = _ctx(root)
     supervisor.write_discovery(
-        port=1, pid=1, stable_pid_start_epoch=0, engine_sha="x", engine_root=root
+        port=1,
+        pid=os.getpid(),
+        stable_pid_start_epoch=0,
+        engine_sha="x",
+        engine_root=root,
     )
     monkeypatch.setattr(
         telemetry.locked_write,

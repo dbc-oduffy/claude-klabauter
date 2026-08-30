@@ -61,10 +61,12 @@ from coordinator_core import ipc, op_budget_suspension
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
-#: The three keys the 200ms sweep killed for the cost of a corpus walk they
-#: CALLED rather than work they did. Kill means kill forever (PM 2026-08-23);
-#: none of them comes back, and the surviving computes are reached as libraries
-#: by the one job that replaced them.
+#: The keys this family has had killed. The first three went in the 200ms
+#: sweep, for the cost of a corpus walk they CALLED rather than work they did;
+#: `handoff.housekeeping` was the job that replaced them and went the same way
+#: on the same bar. Kill means kill forever (PM 2026-08-23); none of them comes
+#: back, and the surviving computes are reached as libraries by the one job
+#: that replaced them.
 _LEGACY_KEYS = (
     "handoff.reconcile_open",
     "handoff.archive_transition",

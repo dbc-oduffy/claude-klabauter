@@ -33,10 +33,12 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, TypeVar
 
 from coordinator_core.dag import _read_meta
+from coordinator_core.frontmatter.primitives import unquote_yaml_scalar
 from coordinator_core.lifecycle_constants import HANDOFF_TERMINAL_DEPLOYMENT
 from coordinator_core.ops.fleet._common import collect_live_handoff_paths
 
@@ -233,3 +235,156 @@ def _collect_all_handoffs_for_gate_index(
         scan_errors.extend(archive_scan_errors)
 
     return all_handoffs, scan_errors
+
+
+# ---------------------------------------------------------------------------
+# _build_blocker_index — C2 (plan 2026-08-30-the-gate-brief-reads-a-list-
+# where-the-record-wrote-one)
+# ---------------------------------------------------------------------------
+
+#: Bytes of a candidate file's HEAD read before falling back to a full read.
+#: Measured against the live 1165-record corpus (dispatch brief, C2): 72-82ms
+#: to build the index at this size vs. 1005ms for the equivalent full-YAML
+#: index, with `missing_ids=0, extra_ids=0, path_mismatch=0` — 8192/16384
+#: produce IDENTICAL output, so this is the measured floor, not a guess.
+_BLOCKER_INDEX_HEAD_BYTES = 4096
+
+#: `^(stub_id|handoff_id):` id lines, extracted from the (possibly truncated)
+#: frontmatter head. Trailing comments and empty/null id values do not occur
+#: in the corpus (measured 0 each, dispatch brief) — no further coercion is
+#: applied beyond `unquote_yaml_scalar` below.
+_BLOCKER_ID_LINE_RE = re.compile(rb"^(?:stub_id|handoff_id):[ \t]*(.*?)[ \t]*$", re.MULTILINE)
+
+
+def _frontmatter_head_bytes(path: Path) -> bytes:
+    """Read `path`'s frontmatter HEAD — from the opening `---` fence up to
+    (excluding) the closing `---` fence — truncated-read at
+    `_BLOCKER_INDEX_HEAD_BYTES` with a full-file fallback when the closing
+    fence is not found within that truncated head.
+
+    The truncated read is the measured-fast path (see
+    `_BLOCKER_INDEX_HEAD_BYTES`'s docstring); the fallback makes the 4096-byte
+    constant SELF-CORRECTING rather than silently wrong for an oversized
+    frontmatter block — zero files hit this fallback on today's corpus, but
+    an id embedded past the truncation point must still resolve, not
+    silently vanish into `unresolvable` (dispatch brief C2).
+    """
+    try:
+        with open(path, "rb") as fh:
+            head = fh.read(_BLOCKER_INDEX_HEAD_BYTES)
+    except OSError:
+        return b""
+    idx = head.find(b"\n---", 4)
+    if idx != -1:
+        return head[:idx]
+    if len(head) < _BLOCKER_INDEX_HEAD_BYTES:
+        # The whole file fit in the truncated read and still carries no
+        # closing fence — there is nothing more to fetch.
+        return head
+    try:
+        full = path.read_bytes()
+    except OSError:
+        return head
+    idx = full.find(b"\n---", 4)
+    if idx != -1:
+        return full[:idx]
+    return full
+
+
+def _blocker_ids_in_head(head: bytes) -> List[str]:
+    """Every `stub_id`/`handoff_id` value in a frontmatter head, unquoted.
+
+    MUST route the raw regex capture through `unquote_yaml_scalar` before use
+    as an index key — measured (dispatch brief C2): 625 of 653
+    `^stub_id:`/`^handoff_id:` lines in the live+archived corpus carry a
+    quoted value (`stub_id: "sat-06"`), and an unquoted key means 96% of
+    lookups resolve as `unresolvable`, the exact dangling-ref symptom C3
+    argues cannot happen.
+    """
+    ids: List[str] = []
+    for match in _BLOCKER_ID_LINE_RE.finditer(head):
+        raw = match.group(1).decode("utf-8", errors="replace").strip()
+        value = unquote_yaml_scalar(raw)
+        if value:
+            ids.append(value)
+    return ids
+
+
+def _build_blocker_index(repo_root: Path) -> "tuple[Dict[str, List[Path]], List[str]]":
+    """Return `({id: [Path, ...]}, scan_errors)` — a second, bounded
+    projection of the same live+archived handoff corpus
+    `_collect_all_handoffs_for_gate_index` walks, keyed by every
+    `stub_id`/`handoff_id` a record's frontmatter carries (a `stub_id` alone
+    names a whole continuation chain, so more than one path can share a key —
+    the caller, not this index, collapses that via `collapse_to_chain_heads`).
+
+    Built over `collect_live_handoff_paths(repo_root)` for the live half and
+    `_walk_archive_md_files` for the archived half — never `rglob`, which
+    silently swallows `PermissionError` while walking (see
+    `_walk_archive_md_files`'s own docstring). An unreadable subtree is
+    surfaced in `scan_errors` rather than read as a silent absence
+    indistinguishable from "the id does not exist" — the exact
+    dangling-ref hazard the 2026-08-08 PM ruling dissolved (dispatch brief
+    C2, see C3).
+
+    Root set MIRRORS the act-time resolver's own two roots
+    (`handoff_transition.py :: _resolve_blocker_deployment_state`), which is
+    why they are not simply `_collect_all_handoffs_for_gate_index`'s two
+    roots: `state/handoffs/` is walked NON-RECURSIVELY (its `.archive/`
+    sibling holds STALE copies of records that have already moved to
+    `archive/handoffs/` and must not be double-indexed against a live-looking
+    but superseded path), while `archive/handoffs/` is walked RECURSIVELY
+    (month-nested, `archive/handoffs/2026-08/...`). `archive/completed/`
+    (which `_collect_all_handoffs_for_gate_index` also walks, for its own
+    THREE independent consumers — see that function's docstring) carries
+    ZERO records with either id key today (measured, dispatch brief C2) and
+    is correctly omitted here — a blocker id can never resolve there, so
+    walking it would only cost time, never correctness.
+
+    Per-file cost: one bounded read (`_frontmatter_head_bytes`), not a full
+    YAML parse — see that function's docstring for the measured 4096-byte
+    floor. Per-id lookup after this index is built is a dict hit.
+    """
+    index: Dict[str, List[Path]] = {}
+
+    def _index_file(path: Path) -> None:
+        head = _frontmatter_head_bytes(path)
+        for blocker_id in _blocker_ids_in_head(head):
+            index.setdefault(blocker_id, []).append(path)
+
+    scan_errors: List[str] = []
+    live_dir = repo_root / "state" / "handoffs"
+    try:
+        live_paths = collect_live_handoff_paths(repo_root)
+    except OSError as exc:
+        _LOG.warning(
+            "handoff_corpus: cannot scan live handoff subtree %s for the "
+            "blocker index — %s; a blocked_by id naming a live record under "
+            "this subtree may fail to resolve (indistinguishable from 'that "
+            "blocker id does not exist' without this signal)",
+            live_dir, exc,
+        )
+        scan_errors.append(f"{live_dir}: {exc}")
+        live_paths = []
+    for path in live_paths:
+        _index_file(path)
+
+    archive_dir = repo_root / "archive" / "handoffs"
+
+    def _on_scan_error(exc: OSError) -> None:
+        _LOG.warning(
+            "handoff_corpus: cannot scan archived handoff subtree %s for the "
+            "blocker index — %s; a blocked_by id naming an archived record "
+            "under this subtree may fail to resolve (indistinguishable from "
+            "'that blocker id does not exist' without this signal)",
+            getattr(exc, "filename", archive_dir), exc,
+        )
+
+    def _on_file(path: Path) -> None:
+        _index_file(path)
+        return None
+
+    _, archive_scan_errors = _walk_archive_md_files(archive_dir, _on_file, _on_scan_error)
+    scan_errors.extend(archive_scan_errors)
+
+    return index, scan_errors

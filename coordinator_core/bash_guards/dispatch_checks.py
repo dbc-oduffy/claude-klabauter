@@ -3917,6 +3917,19 @@ def check_destructive_git_clean(
 # 5. check_destructive_git_revert -- block-destructive-git-revert.sh
 # ---------------------------------------------------------------------------
 
+#: The verbs this guard resolves, in the order it tries them. Hoisted from
+#: three identical inline tuples (2026-08-30) so a verb cannot be added to one
+#: resolution path and forgotten in the other two -- the shape that let
+#: `switch` be absent everywhere at once.
+#:
+#: `switch` joined the set on 2026-08-30: `git switch -f <branch>` discards
+#: every uncommitted modification exactly as `git checkout -f <branch>` does
+#: (confirmed via `git switch -h`: "-f, --force ... throw away local
+#: modifications"), and it is the spelling git's own docs now steer people
+#: toward. It carries no pathspec form at all -- `git restore` took that over
+#: -- so only the force leg below ever speaks for it.
+_GR_VERBS = ("checkout", "restore", "reset", "stash", "switch")
+
 _GR_BASE_RE = (
     r"^\s*((sudo|command|time|exec|nice|nohup|ionice|timeout|stdbuf|which|type)\s+|"
     r"env\s+(\S+=\S*\s+)*|[A-Za-z_][A-Za-z0-9_]*=\S*\s+)*(/\S*/)?git(\s+(-C\s+\S+|"
@@ -4123,7 +4136,7 @@ def _command_really_invokes(cmd: str, subcommand: str) -> bool:
 
 
 def _gr_is_revert_segment(seg: str) -> str:
-    """Returns matched verb ("checkout"/"restore"/"reset"/"stash") or ""."""
+    """Returns the matched verb (one of `_GR_VERBS`) or ""."""
     prev = None
     s = seg
     while s != prev:
@@ -4150,19 +4163,19 @@ def _gr_is_revert_segment(seg: str) -> str:
     # through as prose. Widened to `-[a-zA-Z]*c[a-zA-Z]*` (same tolerance as
     # `_BUNDLED_C_FLAG_RE` elsewhere in this file/package).
     if re.match(r"^(bash|sh|zsh|dash)\s+(\S+\s+)*-[a-zA-Z]*c[a-zA-Z]*(\s|$)|^eval(\s|$)", probe):
-        for verb in ("checkout", "restore", "reset", "stash"):
+        for verb in _GR_VERBS:
             if re.search(r"\bgit\b.*\b" + verb + r"\b", probe):
                 return verb
         return ""
 
     firstword = s.split(None, 1)[0] if s.split(None, 1) else ""
     if firstword in _RM_WRAPPER_WORDS:
-        for verb in ("checkout", "restore", "reset", "stash"):
+        for verb in _GR_VERBS:
             if re.search(r"\bgit\b.*\b" + verb + r"\b", s):
                 return verb
         return ""
 
-    for verb in ("checkout", "restore", "reset", "stash"):
+    for verb in _GR_VERBS:
         if re.search(_GR_BASE_RE + verb + r"\b", probe):
             return verb
     return ""
@@ -4238,7 +4251,7 @@ def _check_destructive_git_revert_full(
 
     if not _word_present(r"\bgit\b", cmd):
         return None, None
-    if not _word_present(r"\bcheckout\b|\brestore\b|\breset\b|\bstash\b", cmd):
+    if not _word_present(r"\bcheckout\b|\brestore\b|\breset\b|\bstash\b|\bswitch\b", cmd):
         return None, None
     if _override("COORDINATOR_OVERRIDE_GIT_REVERT", payload=hook_payload):
         return None, None
@@ -4374,7 +4387,7 @@ def _check_destructive_git_revert_full(
         rc = 0
         out = ""
 
-        if verb in ("checkout", "restore"):
+        if verb in ("checkout", "restore", "switch"):
             toks = after.split()
             dotspec = False
             seen_dashdash = False
@@ -4385,22 +4398,52 @@ def _check_destructive_git_revert_full(
                 if not tk.startswith("-") or seen_dashdash:
                     if tk.rstrip("/") == ".":
                         dotspec = True
-            if dotspec:
+            # A force flag with no `--` pathspec separator discards the WHOLE
+            # worktree -- `git checkout -f`, and `git checkout -f <branch>`,
+            # both throw away every uncommitted modification, which is
+            # strictly MORE than the `git checkout .` this leg already denies.
+            # Until 2026-08-30 only `dotspec` built an `affected` set, so the
+            # larger clobber fell through the guard silently while the smaller
+            # one was blocked. `block_subagent_destructive_action` had already
+            # been hardened for exactly this shape (its own docstring: "`git
+            # checkout -f` -- discards ALL uncommitted work; the pathspec/
+            # dashdash checkout deny only covered a strictly smaller
+            # clobber"), but that guard engages only after a subagent-identity
+            # check, so a main-loop or EM session -- which is what most
+            # sessions on a shared worktree are -- reached nothing.
+            #
+            # Gated on `not seen_dashdash` deliberately: `git checkout -f --
+            # <paths>` IS scoped to those paths, and the pre-existing pathspec
+            # handling above (including `-- .`) stays the only thing that
+            # speaks for it. Force plus an explicit pathspec is narrower than
+            # force alone, and must not be widened to whole-tree here.
+            force_whole_tree = (
+                verb in ("checkout", "switch")
+                and not seen_dashdash
+                and bool(
+                    re.search(r"(^|\s)(--force|-[a-zA-Z]*f[a-zA-Z]*)(\s|$)", after)
+                )
+            )
+            if dotspec or force_whole_tree:
                 has_staged = bool(re.search(r"(^|\s)(-[a-zA-Z]*S[a-zA-Z]*|--staged)(\s|$)", after))
                 has_worktree = bool(re.search(r"(^|\s)(-[a-zA-Z]*W[a-zA-Z]*|--worktree)(\s|$)", after))
                 if verb == "restore" and has_staged and not has_worktree:
                     continue
+                # Name the shape actually seen: `git checkout -f` reaches this
+                # oracle too now, and reporting it as `git checkout .` would
+                # describe a command the caller never typed.
+                shape = "git %s -f" % verb if force_whole_tree and not dotspec else "git %s ." % verb
                 rc, out = _memo_status_porcelain(git_cwd)
                 if rc == -1:
                     return _deny(
-                        "BLOCKED: 'git %s .' oracle (git status) timed "
+                        "BLOCKED: '%s' oracle (git status) timed "
                         "out (2 s) — cannot verify the revert is safe.\n\n"
                         "Safe path first — verify what would be discarded, "
                         "then preserve it:\n"
                         "  git status --porcelain\n"
                         '  git stash push -u -m "before-revert" -- <paths>   '
                         "# make it recoverable"
-                        % (verb,)
+                        % (shape,)
                         + ("\n\nAfter preserving the files, re-run. Or:\n%s" % _gr_hint if _gr_hint else "")
                     ), None
                 if rc != 0:

@@ -469,3 +469,63 @@ def test_the_vocabulary_is_derived_from_the_marker_tuples():
 
     for marker in k._LANDED_MARKERS + k._NON_CUT_MARKERS + k._WITHDRAWN_MARKERS:
         assert marker in k._DISPOSITION_VOCABULARY
+
+
+def _fate_entry(fate: str, *, key: str = "K-900", title: str = "`some.op`") -> str:
+    return (
+        f"## {key} — {title}\n\n"
+        f"- **Status:** CUT.\n"
+        f"- **Fate (2026-08-30):** {fate}\n\n"
+    )
+
+
+def test_fate_entries_carries_heading_keys_and_fate(tmp_path) -> None:
+    ledger = tmp_path / "kill-ledger.md"
+    ledger.write_text(_fate_entry("DEAD"), encoding="utf-8")
+    [entry] = kli.fate_entries(ledger)
+    assert entry.key == "K-900"
+    assert entry.op_keys == ["some.op"]
+    assert entry.fate_values == ["DEAD"]
+
+
+def test_fate_entries_never_reaches_live_op_names_or_classify(tmp_path, monkeypatch) -> None:
+    """The light accessor's whole point: it must not pay the eager op-package
+    import that `_live_op_names()`/`classify()` carry."""
+    ledger = tmp_path / "kill-ledger.md"
+    ledger.write_text(_fate_entry("LIVE"), encoding="utf-8")
+
+    def _boom():
+        raise AssertionError("fate_entries() must not call _live_op_names()")
+
+    monkeypatch.setattr(kli, "_live_op_names", _boom)
+    monkeypatch.setattr(kli, "classify", _boom)
+    kli.fate_entries(ledger)
+
+
+def test_fate_entries_on_a_missing_ledger_raises_not_returns_empty(tmp_path) -> None:
+    """Absence must be distinguishable from zero findings — a caller that cannot
+    `pytest.skip` (C2's detector) must not read `[]` as "no leak here"."""
+    missing = tmp_path / "does-not-exist" / "kill-ledger.md"
+    with pytest.raises(kli.LedgerAbsent):
+        kli.fate_entries(missing)
+
+
+def test_fate_entries_bare_key_reconciles_with_the_ledgers_own_ping_entry() -> None:
+    """`_OP_KEY` excludes digits deliberately (the regression oracle in
+    `test_kill_ledger_fate_is_current.py`), so a bare op name is hand-listed in
+    `_BARE_KEYS` rather than pattern-matched -- reconciled here against a
+    synthetic K-037-shaped entry rather than the real ledger, so this test does
+    not depend on K-037 staying at that heading forever."""
+    text = _fate_entry("LIVE", key="K-037", title="`ping`")
+    [entry] = kli.parse_ledger(text)
+    assert entry.op_keys == ["ping"]
+
+
+def test_fate_entries_excludes_file_paths_and_py_modules() -> None:
+    text = (
+        "## K-900 — `some.op` (see `ops/handoff_reconcile.py`)\n\n"
+        "- **Status:** CUT.\n"
+        "- **Fate (2026-08-30):** DEAD\n\n"
+    )
+    [entry] = kli.parse_ledger(text)
+    assert entry.op_keys == ["some.op"]

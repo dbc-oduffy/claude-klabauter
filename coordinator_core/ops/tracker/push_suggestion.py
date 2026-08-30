@@ -500,15 +500,26 @@ def _delivery_commit_message(rel_path: str) -> str:
     the receiving repo holds no second attribution key to check it against.
 
     Identity resolves CARRIED-FIRST (`session.core.carried_session_id()`, tier 0
-    alone), falling back to `resolve_session_id` only when nothing was carried.
-    This op is warm-reachable -- `@register_op("tracker.push_suggestion")`
+    alone). This op is warm-reachable -- `@register_op("tracker.push_suggestion")`
     reaches here through `_deliver_envelope` -> `_commit_envelope` -- and inside
     a resident warm server `os.environ` names whoever SPAWNED the server, not the
     session being served, so the previous raw env read stamped a foreign session
-    onto a commit in a repo this session does not own. Cold, nothing is carried
-    and the ambient environment IS the caller's own, so the fallback is correct
-    there and unchanged. C2, docs/plans/2026-08-30-the-c-door-sends-the-callers-
-    session-identity.md; pinned by `coordinator_core/tests/
+    onto a commit in a repo this session does not own.
+
+    The env fallback is GATED ON `in_warm_served_request()`, the same gate
+    `liveness.claim_held_by_me` (AC7) and `ipc._record_self_reported_touches`
+    (AC8) use, and for a stronger reason than either: those misattribute inside
+    a repo whose operators can at least cross-check them, while this one lands a
+    trailer in a repo that ran nothing and holds no second attribution key. A
+    warm dispatch that carried nothing therefore emits NO Session-Id. Carried-
+    first ALONE was not enough here -- an ungated fallback takes the identical
+    branch for cold and for warm-with-no-carry, which is the pre-fix behaviour
+    under a different spelling (code-reviewer finding 1, 2026-08-30).
+
+    Cold is untouched: nothing is carried, `in_warm_served_request()` is False,
+    and the ambient environment IS the caller's own, so the ladder is the right
+    source. C2, docs/plans/2026-08-30-the-c-door-sends-the-callers-session-
+    identity.md; pinned by `coordinator_core/tests/
     test_warm_identity_env_reads.py`'s COHORT.
 
     The previous read was also SINGLE-TIER (`CLAUDE_SESSION_ID` alone) where
@@ -523,12 +534,14 @@ def _delivery_commit_message(rel_path: str) -> str:
         "",
         f"Deliverable-Id: {_DELIVERABLE_ID}",
     ]
-    session_id = _session_core.carried_session_id().strip()
-    if not session_id:
-        try:
-            session_id = (_session_core.resolve_session_id() or "").strip()
-        except (OSError, ValueError):
-            session_id = ""
+    # Review: overengineering-reviewer (finding 2) — routed through the one
+    # shared accessor (session.core.attributable_session_id); the strip()
+    # and exception guard stay here, since the accessor itself makes no
+    # such contract and this site's `.strip()`/`except` shape is its own.
+    try:
+        session_id = (_session_core.attributable_session_id() or "").strip()
+    except (OSError, ValueError):
+        session_id = ""
     if session_id:
         lines.append(f"Session-Id: {session_id}")
     return "\n".join(lines)

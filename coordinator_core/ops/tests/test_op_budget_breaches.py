@@ -15,24 +15,40 @@ import json
 import pytest
 
 from coordinator_core.ipc import CallerFacingValidationError
+from coordinator_core.op_census.kill_ledger_inventory import LedgerAbsent
 from coordinator_core.ops import op_budget_breaches
 from coordinator_core.ops.op_budget_breaches import (
+    DEAD_DIAL_LEDGER_ABSENT,
+    DEAD_DIAL_LEDGER_OK,
+    DEAD_DIAL_MIN_ATTEMPTS,
     DEFAULT_TOP_N,
     breach_report,
+    dead_dial_findings,
     headline_for,
 )
 
 BASE_T = 1_755_000_000.0
 
 
-def _complete(op, elapsed_ms, *, outcome="ok", t_start=BASE_T):
-    return {
+def _complete(op, elapsed_ms, *, outcome="ok", t_start=BASE_T, caller=None, error_code=None):
+    row = {
         "kind": "complete",
         "op": op,
         "t_start": t_start,
         "elapsed_ms": elapsed_ms,
         "outcome": outcome,
     }
+    if caller is not None:
+        row["caller"] = caller
+    if error_code is not None:
+        row["error_code"] = error_code
+    return row
+
+
+def _method_not_found(op, *, caller, t_start=BASE_T):
+    """A completed `-32601 METHOD_NOT_FOUND` dial — the shape a caller still
+    naming a dead or nonexistent op writes to the sink."""
+    return _complete(op, 0.5, outcome="error", t_start=t_start, caller=caller, error_code=-32601)
 
 
 def test_registered_under_its_op_name():
@@ -266,3 +282,200 @@ def test_untruncated_read_still_reports_a_real_direction(tmp_path, monkeypatch):
     assert report["source"]["head_truncated"] is False
     for row in report["ops"]:
         assert row["trend"] != op_budget_breaches.TREND_WINDOW_LIMITED
+
+
+# ---------------------------------------------------------------------------
+# Dead-dial detection — a caller still dialling an op the registry no longer
+# (or never did) serve. Two directions, both required: the detector must fire
+# on the real incident shape and stay silent on this repo's real noise shape.
+# ---------------------------------------------------------------------------
+
+
+def _warm_start_incident_rows():
+    """Fixture rows shaped like `.git/coordinator-sessions/logs/op-latency.1.jsonl`
+    — the rotated generation holding the `session.warm_start` incident: 73
+    METHOD_NOT_FOUND completions over 33 hours from a looping SessionStart
+    hook, real-shaped with two attributed callers."""
+    rows = [
+        _method_not_found(
+            "session.warm_start", caller="coordinator_core.ipc.dispatch_from_hook", t_start=BASE_T + i
+        )
+        for i in range(70)
+    ]
+    rows += [
+        _method_not_found(
+            "session.warm_start", caller="coordinator_core.invoke.__main__", t_start=BASE_T + 1000 + i
+        )
+        for i in range(3)
+    ]
+    return rows
+
+
+def _current_generation_noise_rows():
+    """Fixture rows shaped like this repo's current `op-latency.jsonl` naive
+    matches: every one a human CLI typo (count <= 2, non-test caller) or a
+    test fixture dialling a synthetic name (test-prefixed caller). None must
+    survive the detector."""
+    return [
+        _method_not_found("ops.list", caller="coordinator_core.invoke.__main__", t_start=BASE_T),
+        _method_not_found("ops.list", caller="coordinator_core.invoke.__main__", t_start=BASE_T + 1),
+        _method_not_found(
+            "ceremony.run_commit_pipeline", caller="coordinator_core.invoke.__main__", t_start=BASE_T
+        ),
+        _method_not_found("engine.health", caller="coordinator_core.invoke.__main__", t_start=BASE_T),
+        _method_not_found("warm.status", caller="coordinator_core.invoke.__main__", t_start=BASE_T),
+        _method_not_found(
+            "no.such.op", caller="coordinator_core.tests.test_dispatch_message", t_start=BASE_T
+        ),
+        _method_not_found(
+            # Caller does NOT start with TEST_CALLER_PREFIX, so this row is
+            # excluded by the count threshold (1 < DEAD_DIAL_MIN_ATTEMPTS),
+            # not by caller-class filtering — the synthetic-looking op name
+            # is not what protects it here.
+            "test.this_op_does_not_exist_anywhere",
+            caller="coordinator_core.ipc.dispatch_from_hook",
+            t_start=BASE_T,
+        ),
+        _method_not_found(
+            "ceremony.scoped_git_commit",
+            caller="coordinator_core.tests.test_publish_lane_budget",
+            t_start=BASE_T,
+        ),
+    ]
+
+
+def test_fires_on_the_warm_start_incident_shape():
+    findings = dead_dial_findings(_warm_start_incident_rows())
+
+    assert [f["op"] for f in findings] == ["session.warm_start"]
+    assert findings[0]["attempts"] == 73
+    assert findings[0]["caller"] == "coordinator_core.ipc.dispatch_from_hook"
+    assert findings[0]["first_seen"] == BASE_T
+    assert findings[0]["last_seen"] == BASE_T + 1002
+
+
+def test_stays_silent_on_todays_real_noise_shape():
+    """Every one of this repo's current-generation naive -32601 matches —
+    four human CLI typos plus two test-fixture dials plus one test-caller
+    dial — is excluded, by count for the typos and by caller class for the
+    test dials."""
+    findings = dead_dial_findings(_current_generation_noise_rows())
+
+    assert findings == []
+
+
+def test_threshold_boundary():
+    below = [
+        _method_not_found("op.rare", caller="some.caller", t_start=BASE_T + i)
+        for i in range(DEAD_DIAL_MIN_ATTEMPTS - 1)
+    ]
+    at = [
+        _method_not_found("op.frequent", caller="some.caller", t_start=BASE_T + i)
+        for i in range(DEAD_DIAL_MIN_ATTEMPTS)
+    ]
+
+    assert dead_dial_findings(below) == []
+    assert [f["op"] for f in dead_dial_findings(at)] == ["op.frequent"]
+
+
+def test_test_caller_rows_are_excluded_even_past_the_count_threshold():
+    rows = [
+        _method_not_found("op.hammered_by_a_test", caller="coordinator_core.tests.some_module", t_start=BASE_T + i)
+        for i in range(DEAD_DIAL_MIN_ATTEMPTS + 5)
+    ]
+
+    assert dead_dial_findings(rows) == []
+
+
+def test_a_successful_completion_clears_the_op_even_with_many_failures():
+    rows = [
+        _method_not_found("op.mixed", caller="some.caller", t_start=BASE_T + i)
+        for i in range(DEAD_DIAL_MIN_ATTEMPTS + 5)
+    ]
+    rows.append(_complete("op.mixed", 5.0, caller="some.caller", t_start=BASE_T + 999))
+
+    assert dead_dial_findings(rows) == []
+
+
+def test_breach_report_joins_ledger_fate_for_a_dead_dial(monkeypatch):
+    """The `session.warm_start` case: the finding names the fate the ledger
+    records for the still-dialled op."""
+
+    class _FateEntry:
+        def __init__(self, key, title, op_keys, fate_values):
+            self.key, self.title, self.op_keys, self.fate_values = key, title, op_keys, fate_values
+
+    monkeypatch.setattr(
+        op_budget_breaches,
+        "fate_entries",
+        lambda: [_FateEntry("K-061", "`session.warm_start`", ["session.warm_start"], ["DEAD"])],
+    )
+
+    summary = breach_report(entries=_warm_start_incident_rows(), now=BASE_T)
+    dead_dials = summary["dead_dials"]
+
+    assert dead_dials["ledger_status"] == DEAD_DIAL_LEDGER_OK
+    assert dead_dials["findings"][0]["op"] == "session.warm_start"
+    assert dead_dials["findings"][0]["fate"] == "DEAD"
+
+
+def test_ledger_absent_is_a_distinguishable_result_not_an_empty_finding_list(monkeypatch):
+    """A published mirror without claude-klabauter's `state/` corpus must not read as
+    "no findings" — that would turn it into a silent all-clear."""
+
+    def _raise():
+        raise LedgerAbsent("no ledger here")
+
+    monkeypatch.setattr(op_budget_breaches, "fate_entries", lambda: _raise())
+
+    summary = breach_report(entries=_warm_start_incident_rows(), now=BASE_T)
+    dead_dials = summary["dead_dials"]
+
+    assert dead_dials["ledger_status"] == DEAD_DIAL_LEDGER_ABSENT
+    assert dead_dials["findings"][0]["op"] == "session.warm_start"
+    assert dead_dials["findings"][0]["fate"] is None
+
+
+def test_breach_report_reports_no_dead_dials_on_a_clean_population():
+    summary = breach_report(entries=[_complete("op.a", 12.0)], now=BASE_T)
+
+    assert summary["dead_dials"]["ledger_status"] == DEAD_DIAL_LEDGER_OK
+    assert summary["dead_dials"]["findings"] == []
+
+
+def test_empty_findings_with_an_absent_ledger_is_not_asserted_ok(monkeypatch):
+    """`ledger_status: "ok"` must reflect the ledger actually being present,
+    even when `dead_dial_findings` never touches it because there are zero
+    qualifying rows — a published mirror with no dead-dial findings must not
+    claim `ok` for a ledger it never looked at."""
+    monkeypatch.setattr(op_budget_breaches, "KILL_LEDGER", op_budget_breaches.KILL_LEDGER.parent / "no-such-kill-ledger.md")
+
+    summary = breach_report(entries=[_complete("op.a", 12.0)], now=BASE_T)
+
+    assert summary["dead_dials"]["ledger_status"] == DEAD_DIAL_LEDGER_ABSENT
+    assert summary["dead_dials"]["findings"] == []
+
+
+def test_split_caller_tie_reports_the_full_caller_breakdown():
+    """A 6/6 split-caller leak (the `ops.list` shape) must not lose the
+    non-selected caller — `callers` carries the full breakdown even though
+    `caller` picks one for the top-level field."""
+    rows = [
+        _method_not_found("ops.list", caller="coordinator_core.ops._pool_dispatch_worker", t_start=BASE_T + i)
+        for i in range(6)
+    ]
+    rows += [
+        _method_not_found("ops.list", caller="coordinator_core.invoke.__main__", t_start=BASE_T + 100 + i)
+        for i in range(6)
+    ]
+
+    findings = dead_dial_findings(rows)
+
+    assert [f["op"] for f in findings] == ["ops.list"]
+    finding = findings[0]
+    assert finding["attempts"] == 12
+    assert finding["callers"] == {
+        "coordinator_core.ops._pool_dispatch_worker": 6,
+        "coordinator_core.invoke.__main__": 6,
+    }
+    assert finding["caller"] in finding["callers"]

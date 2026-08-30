@@ -554,10 +554,15 @@ def test_process_time_row_carries_a_discovered_clock_resolution(tmp_path, monkey
 
     entries = _read_entries(_sink(common_dir))
     resolution = entries[0]["clock_resolution_ms"]
-    assert resolution is None or resolution > 0.0
+    # Pinned exactly, not `is None or > 0`: that weaker form passes identically
+    # against a permanently-None stub, so it could not tell a working observer
+    # from a broken one -- which is the only thing this test exists to check.
+    # 1.0 is this row's own process_ms and the first non-zero this process has
+    # seen, so it IS the observed tick; the row labels itself.
+    assert resolution == 1.0
 
 
-def test_spawns_counted_true_when_spawns_passed(tmp_path, monkeypatch):
+def test_spawns_key_present_when_spawns_passed(tmp_path, monkeypatch):
     common_dir = _fake_common_dir(tmp_path)
     monkeypatch.setattr("coordinator_core.lifecycle.git_common_dir", lambda repo_root: common_dir)
 
@@ -572,14 +577,16 @@ def test_spawns_counted_true_when_spawns_passed(tmp_path, monkeypatch):
     )
 
     entries = _read_entries(_sink(common_dir))
+    # A substantive zero: the op spawned nothing, and the key says so.
     assert entries[0]["spawns"] == 0
-    assert entries[0]["spawns_counted"] is True
 
 
-def test_spawns_counted_false_and_spawns_key_absent_when_not_passed(tmp_path, monkeypatch):
+def test_spawns_key_absent_when_not_passed(tmp_path, monkeypatch):
     """A null `spawns` reads as 'not counted', never as a substantive zero --
-    the whole defect C1 exists to close. `spawns_counted: False` names it
-    explicitly rather than leaving a reader to infer it from key absence."""
+    the whole defect C1 exists to close. Key ABSENCE is the signal: a reader
+    asks `"spawns" in row`, and no companion bool restates it (that flag was
+    removed on overengineering review, 2026-08-30 -- it duplicated exactly
+    this condition and nothing read it)."""
     common_dir = _fake_common_dir(tmp_path)
     monkeypatch.setattr("coordinator_core.lifecycle.git_common_dir", lambda repo_root: common_dir)
 
@@ -594,7 +601,6 @@ def test_spawns_counted_false_and_spawns_key_absent_when_not_passed(tmp_path, mo
 
     entries = _read_entries(_sink(common_dir))
     assert "spawns" not in entries[0]
-    assert entries[0]["spawns_counted"] is False
 
 
 def test_process_clock_resolution_ms_never_raises_and_memoizes(monkeypatch):
@@ -602,12 +608,30 @@ def test_process_clock_resolution_ms_never_raises_and_memoizes(monkeypatch):
 
     monkeypatch.setattr(op_latency, "_PROCESS_CLOCK_RESOLUTION_MS", None)
 
-    first = op_latency.process_clock_resolution_ms()
-    assert first is None or first > 0.0
-    # Memoized -- a second call returns the same object/value without
-    # re-measuring.
-    second = op_latency.process_clock_resolution_ms()
-    assert second == first
+    # Nothing observed yet, so nothing to report -- the reader never invents a
+    # tick, and never probes for one.
+    assert op_latency.process_clock_resolution_ms() is None
+
+    # It reports the SMALLEST non-zero observation, which on a quantized clock
+    # is the tick. Fed out of order deliberately: a later, larger measurement
+    # must not raise the reported resolution.
+    op_latency.note_observed_process_ms(31.25)
+    assert op_latency.process_clock_resolution_ms() == 31.25
+    op_latency.note_observed_process_ms(15.625)
+    assert op_latency.process_clock_resolution_ms() == 15.625
+    op_latency.note_observed_process_ms(46.875)
+    assert op_latency.process_clock_resolution_ms() == 15.625
+
+    # Zero and None are not observations: a sub-tick row carries no information
+    # about tick SIZE, and folding either in as a floor would report 0.0 as the
+    # resolution, which is the exact "unmeasured reads as measured" confusion
+    # this whole field exists to end.
+    op_latency.note_observed_process_ms(0.0)
+    op_latency.note_observed_process_ms(None)
+    assert op_latency.process_clock_resolution_ms() == 15.625
+
+    # The reader is pure -- repeated calls neither measure nor mutate.
+    assert op_latency.process_clock_resolution_ms() == 15.625
 
 
 def test_process_clock_resolution_ms_never_raises_on_a_broken_clock(monkeypatch):

@@ -47,7 +47,7 @@ import hashlib
 import os
 import struct
 from pathlib import Path
-from typing import Dict, Mapping, Optional, Sequence, Tuple, Union
+from typing import IO, Dict, Mapping, Optional, Tuple, Union
 
 from coordinator_core.git.git_dir import resolve_git_dir
 from coordinator_core.git.git_objects import _replace_with_retry
@@ -184,12 +184,62 @@ def splice_index(
     refusal like the two above, and callers must not treat it as one: this
     function is called after the ref swap, so the commit has already landed
     and only the index is stale. Retrying it commits the same work twice.
+
+    THE READ IS UNDER THE LOCK, AND THAT IS THE WHOLE POINT OF TAKING IT.
+    Every untouched entry is copied verbatim from the index this call read, so
+    the read is not a lookup -- it is the base revision of a read-modify-write
+    over state ~50 sessions share. Reading before acquiring the lock leaves the
+    classic lost update wide open: a peer commit landing between our read and
+    our write is silently reverted in the index, because our verbatim copy of
+    the older snapshot overwrites it. For a path the peer ADDED that is worse
+    than stale -- the path is in HEAD and absent from the index, which is
+    exactly the shape `git status` renders as a staged deletion (`D `) of a
+    file sitting on disk, and which a bare `git commit -a` by any session then
+    lands for real. `IndexWriteLockBusy` on its own does NOT close this: it
+    only reports that a peer held the lock at the instant we tried to write,
+    which says nothing about whether the snapshot we are about to write back
+    is still current. Holding the lock across read-modify-write is what closes
+    it. The cost is k `stat` calls inside the critical section (k = the paths
+    this commit touches, not the tree), which is why this is affordable at the
+    session count that makes it necessary.
     """
     gitdir = resolve_git_dir(repo)
     index_path = gitdir / "index"
     lock_path = gitdir / "index.lock"
     root = Path(repo)
 
+    try:
+        fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+    except FileExistsError as exc:
+        raise IndexWriteLockBusy(f"{lock_path} exists -- a peer holds the index") from exc
+
+    # `os.fdopen` here, not down on the write path: every refusal below is
+    # raised with the lock held, and on Windows an open descriptor on
+    # `index.lock` makes the `finally`'s unlink fail -- which would leave a
+    # refused call holding the lock against every peer for the life of the
+    # process. The `with` closes it on the refusal paths too; the write path
+    # closes it before the rename, which is what `os.replace` needs anyway.
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            _splice_locked(handle, root, index_path, lock_path, updates)
+    finally:
+        if lock_path.exists():
+            try:
+                lock_path.unlink()
+            except OSError:
+                pass
+
+
+def _splice_locked(
+    handle: IO[bytes],
+    root: Path,
+    index_path: Path,
+    lock_path: Path,
+    updates: Mapping[str, object],
+) -> None:
+    """The read-modify-write body of `splice_index`, run with `.git/index.lock`
+    already held and `handle` open on it. Split out so the lock's `finally`
+    cannot be separated from its acquisition by the length of the body."""
     try:
         raw = index_path.read_bytes()
     except FileNotFoundError:
@@ -215,7 +265,18 @@ def splice_index(
 
     replacements: Dict[bytes, Optional[bytes]] = {}
     for path, value in updates.items():
-        key = path.replace("\\", "/").encode("utf-8", "surrogateescape")
+        normalized = path.replace("\\", "/")
+        if normalized.startswith("/") or (
+            len(normalized) >= 2
+            and normalized[1] == ":"
+            and normalized[0].isalpha()
+        ):
+            raise IndexWriteError(
+                f"{path!r}: absolute path used as an index key -- refused "
+                "before writing, not normalized. An index key is always "
+                "repo-relative; the caller must resolve it first."
+            )
+        key = normalized.encode("utf-8", "surrogateescape")
         if value is ABSENT:
             replacements[key] = None
             continue
@@ -248,36 +309,30 @@ def splice_index(
     body += b"".join(entry_bytes for _, entry_bytes in out_entries)
     body += hashlib.sha1(body).digest()
 
-    try:
-        fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
-    except FileExistsError as exc:
-        raise IndexWriteLockBusy(f"{lock_path} exists -- a peer holds the index") from exc
-    try:
-        with os.fdopen(fd, "wb") as handle:
-            handle.write(body)
-        if not _replace_with_retry(lock_path, index_path):
-            # WAS UNWRAPPED, AND THAT BROKE THE DOCUMENTED CONTRACT. This
-            # function's own docstring promises `IndexWriteLockBusy` or
-            # `IndexWriteError`; the `try:` around this line carries only a
-            # `finally:`, so a Windows `PermissionError` escaped as neither and
-            # a caller written correctly against that contract still would not
-            # catch it. Captured at 2/200 with 12 concurrent committers.
-            #
-            # A LOST INDEX WRITE IS NOT A LOST COMMIT, and the distinction is
-            # the whole disposition here: `commit.py` splices the index AFTER
-            # the ref swap, deliberately (an index matching a commit that never
-            # landed is the same lie in the other direction), so reaching this
-            # line means the commit ALREADY LANDED. The failure leaves a stale
-            # index, not lost work, and the honest report says so rather than
-            # implying the commit failed.
-            raise IndexStaleAfterCommit(
-                f"{index_path} could not be updated -- a peer held it. The "
-                f"commit LANDED; only the shared index is stale. `git status` "
-                f"may misreport these paths until any index write refreshes it."
-            )
-    finally:
-        if lock_path.exists():
-            try:
-                lock_path.unlink()
-            except OSError:
-                pass
+    handle.write(body)
+    # Closed BEFORE the rename, not by the caller's `with` after it: Windows
+    # refuses `os.replace` on a source file that still has an open descriptor,
+    # so leaving this to the context manager turns every write into the
+    # `IndexStaleAfterCommit` path. The caller's `with` still closes it on the
+    # refusal paths; a second close is a no-op.
+    handle.close()
+    if not _replace_with_retry(lock_path, index_path):
+        # WAS UNWRAPPED, AND THAT BROKE THE DOCUMENTED CONTRACT. This
+        # function's own docstring promises `IndexWriteLockBusy` or
+        # `IndexWriteError`; the `try:` around this line carries only a
+        # `finally:`, so a Windows `PermissionError` escaped as neither and
+        # a caller written correctly against that contract still would not
+        # catch it. Captured at 2/200 with 12 concurrent committers.
+        #
+        # A LOST INDEX WRITE IS NOT A LOST COMMIT, and the distinction is
+        # the whole disposition here: `commit.py` splices the index AFTER
+        # the ref swap, deliberately (an index matching a commit that never
+        # landed is the same lie in the other direction), so reaching this
+        # line means the commit ALREADY LANDED. The failure leaves a stale
+        # index, not lost work, and the honest report says so rather than
+        # implying the commit failed.
+        raise IndexStaleAfterCommit(
+            f"{index_path} could not be updated -- a peer held it. The "
+            f"commit LANDED; only the shared index is stale. `git status` "
+            f"may misreport these paths until any index write refreshes it."
+        )

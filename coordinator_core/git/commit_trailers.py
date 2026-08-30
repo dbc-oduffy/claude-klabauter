@@ -150,9 +150,10 @@ def _resolve_session_id(git_dir: str) -> str:
     Session-Id is recoverable and honest; a confidently wrong one is neither,
     and is what made the 2026-08-29 window unusable as an attribution key.
     Cold is untouched: `os.environ` there IS the caller's own."""
-    if _session_core.in_warm_served_request():
-        return _session_core.carried_session_id()
-    return _session_core.resolve_session_id()
+    # Review: overengineering-reviewer (finding 2) — routed through the one
+    # shared accessor (session.core.attributable_session_id) rather than
+    # re-deriving the warm/cold branch here.
+    return _session_core.attributable_session_id()
 
 
 def _resolve_doe_root() -> str:

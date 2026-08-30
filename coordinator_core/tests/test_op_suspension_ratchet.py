@@ -113,6 +113,12 @@ _RATCHET_BAR_MS = 2000.0
 # 65bbe1323 on a properly measured cold case (1 spawn -> 0, 390.6ms -> 93.8ms import CPU)
 # and this frozenset was not pruned, leaving the guard red until 2026-08-22.
 _RATIFIED_SUSPENSIONS = frozenset({
+    # PM ruling 2026-08-30 ("2,242ms p50 over four samples -- this is enough to
+    # suspend"), applied to the two live ops sharing that shape. Evidence and the
+    # return condition are on each SUSPENDED_OPS entry; the adjudication is
+    # state/audits/2026-08-30-the-op-table-against-both-admission-criteria.md.
+    "session.reap_claims_for_repos",
+    "records.history",
     "session.boot_sweep",
     # hooks.cater_subagent_start — REINSTATED 65bbe1323, pruned here 2026-08-22.
     # fleet.archive_completed_handoffs — row REMOVED by PM ruling 2026-08-26 and
@@ -663,7 +669,7 @@ _AUDIT_PATH = (
     _REPO_ROOT
     / "state"
     / "audits"
-    / "2026-08-23-the-op-table-against-both-admission-criteria.md"
+    / "2026-08-30-the-op-table-against-both-admission-criteria.md"
 )
 
 #: EM-set at 10% (a RATIO of the audit's stamped total, not an absolute byte

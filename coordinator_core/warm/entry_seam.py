@@ -157,7 +157,7 @@ def per_request_state(
     *,
     session_id: Optional[str] = None,
     diagnostics: Optional[List[str]] = None,
-    warm_served: bool = False,
+    warm_served: Optional[bool] = None,
 ) -> Iterator[List[str]]:
     """Open one request's worth of explicit, Token/reset-scoped state.
 
@@ -195,11 +195,24 @@ def per_request_state(
     it is precisely the one where `session_id` is absent — a request served
     warm through a door that sent no `_session_id` leaves the identity
     ContextVar unset, which is indistinguishable from a cold invocation, and
-    the two want opposite fallbacks. Defaults False, so `cli_entry`'s cold
-    call site (the only other production caller) is unaffected; the two warm
-    dispatch sites in `warm.server` pass True.
+    the two want opposite fallbacks. Inherit-on-absent, matching this seam's
+    other three axes: `None` (the default) binds nothing and leaves the
+    outer scope's flag untouched, so `cli_entry`'s cold call site (the only
+    other production caller) and any nested re-entrant open both inherit the
+    enclosing scope's value with no action required; only an explicit
+    True/False forces the flag. The two warm dispatch sites in `warm.server`
+    pass `warm_served=True`.
+    <!-- Review: overengineering-reviewer (finding 1) — the prior
+    force-bind default (`False`) was the one axis on this seam that did not
+    inherit-on-absent, and that divergence is what forced
+    `reentrant_dispatch` to re-thread the outer flag by hand. -->
     """
-    with warm_served_request(warm_served), session_identity_override(session_id):
+    warm_scope: "contextlib.AbstractContextManager[object]"
+    if warm_served is None:
+        warm_scope = contextlib.nullcontext()
+    else:
+        warm_scope = warm_served_request(bool(warm_served))
+    with warm_scope, session_identity_override(session_id):
         with collecting(into) as declared:
             if diagnostics is None:
                 yield declared
@@ -447,5 +460,12 @@ def reentrant_dispatch(
             "handler must use ipc.dispatch_message instead"
         )
 
+    # `warm_served` now inherits-on-absent like this seam's other axes, so
+    # a bare open leaves the outer scope's flag untouched and a nested
+    # warm-served re-entrant call stays warm-served with no re-threading.
+    # <!-- Review: overengineering-reviewer (finding 1) — this used to
+    # import `in_warm_served_request` and re-thread it by hand to avoid a
+    # force-bind default silently re-defaulting a nested scope to cold;
+    # aligning the default on `per_request_state` removed the need. -->
     with per_request_state():
         return handler(params, repo_root=repo_root)

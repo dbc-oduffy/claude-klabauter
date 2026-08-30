@@ -753,17 +753,38 @@ def claim_held_by_me(
     passed ``my_sid`` also short-circuits this entirely — a caller that has
     already resolved identity under its own rules is trusted with it, which
     is the same contract the TOCTOU note above describes.
+
+    KNOWN CONSEQUENCE for the two callers that omit ``my_sid``
+    (``pickup_assemble.compute_claim_grant`` and
+    ``pickup_assemble._claim_already_self_held``), surfaced by code review
+    2026-08-30 and recorded rather than silently absorbed. Under a warm
+    dispatch carrying no identity they now see ``False`` where the ambient
+    read could previously return ``True`` -- reachable only when the claim's
+    recorded holder happens to BE the server's spawner, since any other
+    holder already compared unequal. ``_claim_already_self_held`` exists to
+    keep a same-session ``apply`` re-entry from re-invoking
+    ``claims.claim_artifact`` (which rejects a same-session reclaim for the
+    memo class and raises), so in that narrow case the re-entry now raises
+    instead of short-circuiting.
+
+    That is the ACCEPTED direction, not an oversight. A re-entry that raises
+    is loud, immediate and recoverable; a mutex that grants on a stranger's
+    id is silent, self-consistent, and lands the work before anyone can see
+    it was misattributed. Threading a resolved ``my_sid`` from the caller is
+    the fix that removes the tradeoff -- tracked, not done here, because
+    those call sites belong to a peer's live workstream.
     """
     if not claim_dir:
         raise ValueError("claim_dir required")
     my = my_sid or ""
     if not my:
-        if core.in_warm_served_request():
-            my = core.carried_session_id()
-            if not my:
-                return False
-        else:
-            my = core.resolve_session_id(cwd)
+        # Review: overengineering-reviewer (finding 2) — routed through the
+        # one shared accessor (session.core.attributable_session_id). The
+        # prior warm-empty early `return False` is redundant, not a
+        # behavior change: `bool(my) and recorded == my` below already
+        # evaluates False for an empty `my`, on both the warm and cold
+        # paths.
+        my = core.attributable_session_id(cwd)
     p = Path(claim_dir)
     if (p / "session_id").is_file():
         try:

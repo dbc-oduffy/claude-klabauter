@@ -1635,10 +1635,10 @@ def _record_self_reported_touches(result: object, sid_cwd: Optional[str]) -> obj
         # this seam already chose deliberately: under-declaration, never a
         # false claim (see the `_SCOPE_TOUCH_PATHS_KEY` contract comment).
         # Cold is untouched - `os.environ` there is the caller's own.
-        if _session_core.in_warm_served_request():
-            sid = _session_core.carried_session_id()
-        else:
-            sid = _session_core.resolve_session_id(sid_cwd)
+        # Review: overengineering-reviewer (finding 2) — routed through the
+        # one shared accessor (session.core.attributable_session_id) rather
+        # than re-deriving the warm/cold branch here.
+        sid = _session_core.attributable_session_id(sid_cwd)
         if not sid:
             return result  # no resolvable session -> no claim, op still succeeds
 
@@ -2949,20 +2949,32 @@ def _spawn_count_or_none() -> Optional[int]:
         return None
 
 
-def _clock_resolution_ms_or_none() -> Optional[float]:
+def _clock_resolution_ms_or_none(process_ms: Optional[float] = None) -> Optional[float]:
     """Discovered `time.process_time()` tick, in ms, or ``None``.
 
     Function-local import, `try/except`-wrapped -- identical discipline to
     `_spawn_count_or_none` and `_telemetry_sid` above, and for the same
     reason: `ipc.py` carries a documented negative spec that telemetry never
     appears in its top-level import closure (see `_spawn_count_or_none`'s own
-    docstring for the pinning test). Delegates the actual discovery --
-    including its memoization -- to `op_latency.process_clock_resolution_ms`
-    rather than re-deriving it here.
+    docstring for the pinning test). Delegates to
+    `op_latency.process_clock_resolution_ms` rather than re-deriving here.
+
+    `process_ms` is this row's own already-computed figure, folded into the
+    observed tick before it is read back. That ordering matters: the tick is
+    OBSERVED from real measurements rather than probed by a spin loop (see
+    `process_clock_resolution_ms`'s own docstring for why a probe was
+    break-class on this hot path), so a row can only carry a resolution once
+    some row has produced a non-zero one. Passing this row in first means the
+    very first non-zero measurement in a process labels itself, instead of
+    waiting for a second op that a one-shot process never runs.
     """
     try:
-        from coordinator_core.telemetry.op_latency import process_clock_resolution_ms
+        from coordinator_core.telemetry.op_latency import (
+            note_observed_process_ms,
+            process_clock_resolution_ms,
+        )
 
+        note_observed_process_ms(process_ms)
         return process_clock_resolution_ms()
     except Exception:
         return None
@@ -3017,17 +3029,20 @@ def record_op_process_time(
     never-breaks-dispatch contract (an invalid label costs one
     lower-confidence row, never a peer's op).
 
-    Every row also states two things a reader cannot otherwise recover from
-    `process_ms` alone (C1, docs/plans/2026-08-29-a-zero-is-under-one-tick-
-    not-unmeasured.md): `clock_resolution_ms`, the platform's empirically
-    discovered `time.process_time()` tick (`None` if discovery failed --
-    never a hard-coded guess, since the fleet floor is a MacBook whose tick
-    differs from this Windows box's), and `spawns_counted`, an explicit bool
-    stating whether this call passed a `spawns` figure at all. Without the
-    latter, `process_ms: 0.0` with no `spawns` key is ambiguous between
-    "under one tick" and "nothing measured"; `spawns_counted: False` names
-    the second case directly rather than leaving a reader to infer it from
-    key absence.
+    Every row also carries `clock_resolution_ms` (C1, docs/plans/2026-08-29-a-
+    zero-is-under-one-tick-not-unmeasured.md): the platform's observed
+    `time.process_time()` tick, `None` until this process has measured a
+    non-zero row -- never a hard-coded guess, since the fleet floor is a
+    MacBook whose tick differs from this Windows box's. It is what lets a
+    reader tell `process_ms: 0.0` meaning "under one tick" from "nothing
+    measured".
+
+    There is deliberately NO `spawns_counted` companion bool. It was written
+    and removed the same day (overengineering review, 2026-08-30): its value
+    was `spawns is not None`, evaluated one line above the conditional that
+    omits `spawns` on exactly that condition, so it restated key absence in a
+    second place with no reader consulting it. `"spawns" in row` is the same
+    fact, already true, and cannot fall out of sync with itself.
 
     Never raises -- same fail-open contract as every other telemetry call on
     this hot path (`record_op_started` / `record_op_latency` above).
@@ -3048,16 +3063,14 @@ def record_op_process_time(
             "kind": "process_time",
             "corr_id": corr_id,
             "caller": caller,
-            "clock_resolution_ms": _clock_resolution_ms_or_none(),
-            "spawns_counted": spawns is not None,
+            "clock_resolution_ms": _clock_resolution_ms_or_none(process_ms),
         }
         # The brightline's second axis, omitted rather than zero-filled when the
         # caller did not measure it: a missing `spawns` key means "not counted
         # here", while `0` is the substantive claim that this op spawned nothing.
         # A reader that cannot tell those apart re-runs the 2026-08-23 sweep's
-        # own mistake of reading an absent figure as a measured one. Kept
-        # alongside `spawns_counted` above, never replaced by it: the boolean
-        # names the ambiguity, the (optional) integer still carries the count.
+        # own mistake of reading an absent figure as a measured one. Key
+        # absence IS the signal -- it needs no companion flag restating it.
         if spawns is not None:
             entry["spawns"] = spawns
         _write_entry(entry, repo_root)

@@ -246,6 +246,79 @@ def test_staged_deletion_outside_scope_does_not_refuse(tmp_path: Path):
     assert _head(repo) != before
 
 
+def test_a_plain_rename_is_not_an_undeclared_deletion(tmp_path: Path):
+    """A renamed path's vacated SOURCE must not read as an undeclared deletion.
+
+    This is the behaviour that makes the gate usable rather than merely
+    correct: a rename vacates its source exactly the way a deletion does, so
+    the candidate pre-filter (undeclared AND absent from disk) admits it, and
+    only `_staged_deletions_and_renames_in_process`'s exact-(mode, sha) match
+    against the destination separates the two. Nothing else in the suite
+    exercises that separation through `_handler`, and a future change that
+    scoped the helper's index read differently would break it silently --
+    renames would start demanding a `deleted_paths` entry that names a file
+    the commit did not delete.
+    """
+    repo = _init_repo(tmp_path)
+    (repo / "before.md").write_text("stable content\n", encoding="utf-8")
+    _git(["add", "--", "before.md"], repo)
+    _git(["commit", "-q", "-m", "add before.md"], repo)
+
+    # A content-preserving rename, staged as git itself would stage one.
+    _git(["mv", "before.md", "after.md"], repo)
+    before = _head(repo)
+
+    result = _call(
+        repo,
+        {"paths": ["after.md"], "deleted_paths": [], "message": "rename, not a delete\n"},
+    )
+
+    assert result["committed"] is True, result
+    assert _head(repo) != before
+
+
+def test_an_unreadable_index_refuses_rather_than_passing(tmp_path: Path, monkeypatch):
+    """An index the gate cannot parse is a REFUSAL, never a silent pass.
+
+    `_staged_deletions_and_renames_in_process` raises `IndexParseError` on an
+    unmerged (mid-merge-conflict) index. The branch is genuinely reachable
+    even behind the candidate pre-filter -- `read_index` parses the WHOLE
+    index, so an unmerged entry anywhere in the tree raises, not only one
+    among this commit's candidates. It had no test; its `deletion_block_gate`
+    sibling has had one since the F1 code-review finding, and the property is
+    the same one: a read this gate cannot answer must fail closed.
+
+    Raised through the helper rather than by building a real conflicted
+    index: what is under test is the gate's posture toward an unparseable
+    read, not git's conflict machinery.
+    """
+    from coordinator_core.git.git_state import IndexParseError
+
+    repo = _init_repo(tmp_path)
+    other = repo / "other.md"
+    other.write_text("other\n", encoding="utf-8")
+    _git(["add", "--", "other.md"], repo)
+    _git(["commit", "-q", "-m", "add other"], repo)
+
+    _stage_delete(repo, "other.md")  # undeclared + absent => a real candidate
+    before = _head(repo)
+
+    def _raise(*a, **k):
+        raise IndexParseError("unmerged entry at stage 2")
+
+    monkeypatch.setattr(
+        "coordinator_core.ops.ceremony.commit_gates."
+        "_staged_deletions_and_renames_in_process",
+        _raise,
+    )
+
+    result = _call(repo, {"paths": ["other.md"], "message": "unreadable index\n"})
+
+    assert result["committed"] is False, result
+    assert "unreadable" in result["error"] or "unmerged" in result["error"]
+    assert _head(repo) == before
+
+
 def test_the_two_omitted_gates_stay_omitted():
     """Pins the omissions the spike measured. Re-adding either of these to
     `_pre_commit_gates` without revisiting that measurement is the regression

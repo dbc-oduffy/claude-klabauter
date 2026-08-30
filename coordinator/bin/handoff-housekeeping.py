@@ -1,4 +1,4 @@
-"""handoff-housekeeping.py — the warm door onto `handoff.housekeeping`.
+"""handoff-housekeeping.py — the warm door onto `housekeeping.cycle`.
 
 Purpose: one CLI for the ONE handoff-housekeeping job — close finished
 handoffs, file them into `archive/handoffs/`, sweep up consumed ones — so a
@@ -145,9 +145,21 @@ def main(argv: "list[str] | None" = None) -> int:
         return 1
 
     archived = result.get("archived") or []
-    closed = result.get("closed") or []
+    # `closed` is an INT from `housekeeping.cycle` (a count), where the
+    # retired `handoff.housekeeping` returned the list of cleared gates.
+    # `len()` on the int raises -- and `or []` hid it exactly when the corpus
+    # had nothing to close, so this read looked correct on a quiet run and
+    # crashed on the first run that actually cleared a gate.
+    closed = result.get("closed") or 0
     failed = result.get("failed") or []
-    print(f"closed {len(closed)}, archived {len(archived)}")
+    conflicts = result.get("conflicts") or []
+    print(f"closed {closed}, archived {len(archived)}")
+    if conflicts:
+        print(
+            f"handoff-housekeeping: {len(conflicts)} gate-clear(s) lost a race and were "
+            f"left for the next cycle",
+            file=sys.stderr,
+        )
     if result.get("close_error"):
         # A failed close pass reports zero closed handoffs, which reads exactly
         # like a corpus with nothing to close. Say which one it was.

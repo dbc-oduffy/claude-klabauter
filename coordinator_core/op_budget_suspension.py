@@ -304,6 +304,79 @@ SUSPENSION_BAR_MS = 2000.0
 # by carve-out: their max latencies (66-110ms) simply fit. A rule that needed an
 # exception for its own test fixtures would be the wrong rule.
 SUSPENDED_OPS: Dict[str, Dict[str, object]] = {
+    # -----------------------------------------------------------------------
+    # PM ruling 2026-08-30, on a thin-sample figure put to them directly:
+    # *"2,242ms p50 over four samples -- this is enough to suspend."* That
+    # overrides the n >= 30 threshold `OVER_BAR_OPS_PENDING_REMEDY`'s own
+    # governing plan set ("recording a thin (n < 30) figure AS a conviction is
+    # the failure this chunk exists to avoid"). The threshold was a drafting
+    # choice about evidentiary caution; the bar is the PM's, and they have ruled
+    # that an op over it on the conviction axis comes off the box while the
+    # sample is still thin, not after it has occupied the box long enough to
+    # earn n=30. Both entries below were UNADJUDICATED under the old threshold.
+    #
+    # The op the ruling was actually given on -- `ceremony.session_instructions`,
+    # p50 2,242.2ms over n=4 -- is NOT here: it was already killed 2026-08-27
+    # under DR-344 and is not registered, so its rows predate its removal and
+    # there is nothing left to suspend. The ruling is applied to the two ops
+    # that share its shape and are still live.
+    # → state/audits/2026-08-30-the-op-table-against-both-admission-criteria.md
+    "session.reap_claims_for_repos": {
+        "c2_citation": {
+            "route": None,
+            "confidence": "UNADJUDICATED",
+            "n": 4,
+            "p95_ms": 34265.6,
+            "window": "24h_production",
+            "t_start_min": "2026-08-27T17:33:42Z",
+            "t_start_max": "2026-08-30T12:19:32Z",
+            "verdict": "adjudicated",
+            "outcome": "suspended-on-pm-ruling",
+        },
+        "measured": {"max_ms": 34265.6, "p50_ms": 7.8, "n": 6},
+        "note": (
+            "p50 7.8ms against a 34,265.6ms max -- a tail, not a shape, and "
+            "n=6 cannot separate 'the worst op on the box' from an artifact. "
+            "Suspended anyway per the ruling above: an op that can occupy the "
+            "box for 34 seconds does not keep dispatching while we collect "
+            "samples. Sole caller is the CLI trampoline "
+            "`coordinator/bin/reap-claims-for-repos.py`, which now surfaces "
+            "the refusal."
+        ),
+        "disposition": (
+            "suspend, not gravestone -- the claim-reaping job is real and "
+            "nothing here shows the op is wrong, only that its tail is "
+            "unaffordable. Comes back on a re-measure with n >= 30 showing "
+            "max under the bar, per this table's standing rule."
+        ),
+        "spinoff": None,
+    },
+    "records.history": {
+        "c2_citation": {
+            "route": None,
+            "confidence": "EXACT",
+            "n": 30,
+            "p95_ms": 2062.5,
+            "window": "7d_production",
+            "t_start_min": "2026-08-27T16:12:12Z",
+            "t_start_max": "2026-08-30T12:19:31Z",
+            "verdict": "adjudicated",
+            "outcome": "suspended-on-pm-ruling",
+        },
+        "measured": {"max_ms": 2062.5, "p50_ms": 171.9, "n": 30},
+        "note": (
+            "2 of 30 in-window rows over the 2,000ms bar; p50 171.9ms is "
+            "under it but over DR-344's 200ms fix line. n=30 meets even the "
+            "strict threshold the ruling above relaxes, so this entry does "
+            "not rest on it. Sole caller is the CLI trampoline "
+            "`coordinator/bin/query-record-history.py`."
+        ),
+        "disposition": (
+            "suspend -- a read-only history query has no business holding the "
+            "box for two seconds. Comes back on a re-measure under the bar."
+        ),
+        "spinoff": None,
+    },
     "session.boot_sweep": {
         "c2_citation": {
             "route": "warm_server",
@@ -706,6 +779,26 @@ SUSPENDED_OPS: Dict[str, Dict[str, object]] = {
         "spinoff": None,
     },
     "handoff.housekeeping": {
+        "c2_citation": {
+            "route": "in_process",
+            "confidence": "SPAWNS-UNKNOWN",
+            "n": 2,
+            "p95_ms": 3000.0,
+            "window": "all_time",
+            "t_start_min": "2026-08-29T17:33:48Z",
+            "t_start_max": "2026-08-29T17:33:51Z",
+            "verdict": "unadjudicated",
+            "outcome": "re-affirmed",
+            "note": (
+                "n=2 is far under the n>=30 adjudicable floor, so this figure "
+                "convicts nothing on its own -- and it does not need to. The row "
+                "is a GRAVESTONE on DR-344's bar, and a gravestone is never "
+                "reinstated whatever a fresh figure says; the citation is "
+                "provenance, not a re-trial. Cited late relative to its siblings: "
+                "this entry landed from a peer's K-061 work after C3 had written "
+                "citations for the eighteen entries that existed at that point."
+            ),
+        },
         "measured": {"max_ms": 2046.9, "p50_ms": 2046.9, "n": 1, "unit": "process_ms"},
         "note": (
             "The job that replaced the three keys above, killed on the same bar "

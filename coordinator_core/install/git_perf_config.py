@@ -8,13 +8,24 @@ worktree, child-process CPU, k=5 x n=11
 
   core.untrackedCache   -50.0 ms p50 (-19%)   ADOPTED
   core.preloadIndex     -15.6 ms, inside noise -- `core.fscache` already covers it on Windows
-  index.version=4       +15.6 ms SLOWER -- shrinks the index 35%, pays for it in CPU on every read
-  feature.manyFiles     rejected by implication: it turns on index.version=4
+  index.version=4       NO RELIABLE EFFECT at this sample size -- not adopted for want of
+                        evidence, not because of it
+  feature.manyFiles     UNMEASURED warm -- not rejected
 
-A settings list is not a performance strategy. Three of the four obvious knobs
-do nothing or harm here, and the only way to know that was to measure each one
-warm. Do not add another setting to this module without a measurement in that
-audit's shape.
+RETRACTION (2026-08-29, `state/memo-outbox/sent/git-perf-index-version-claim-retracted.md`,
+lesson `state/lessons/2026-08-29-a-sequential-a-b-benchmark-measures-position-not-treatment.yaml`).
+This block previously read `index.version=4  +15.6 ms SLOWER` and rejected
+`feature.manyFiles` by implication. That +15.6 ms was a measurement-order artifact:
+a single sequential A->B with the treatment always second. Re-run A-B-A-B with the
+order permuted, the sign flips (v4 43.7 ms slower measured second, 25.0 ms faster
+measured first) and in both rounds the second-measured arm was slower whatever it
+contained. Anyone deciding about v4 or `feature.manyFiles` starts from no evidence,
+not from a rejection.
+
+A settings list is not a performance strategy. Two of the four obvious knobs do
+nothing here and two are unmeasured, and the only way to know either was to
+measure warm, with the arm order permuted. Do not add another setting to this
+module without a measurement in that audit's shape.
 
 WHY THIS IS PER-REPO AND NOT A GLOBAL STANZA. `core.untrackedCache` is not merely
 configuration -- the cache it enables lives INSIDE `.git/index`. Setting the
@@ -27,6 +38,10 @@ FLEET SWEEP. `apply()` is per-repo. `apply_fleet()` joins it to the same
 (`coordinator/bin/lib/git_hook_install.py`) uses for hooks, so every
 registered worktree gets this config, not only whichever one repo an
 installer happened to be invoked from -- see `apply_fleet`'s own docstring.
+`iter_fleet_worktrees()` is that enumeration, factored out so
+`workday-start-health-probes.py :: cmd_git_perf_currency` (a zero-spawn
+health-probe caller with no reason to apply anything) can walk the same
+fleet without re-deriving a second registry-enumeration scheme.
 
 NEGATIVE SPEC -- this module does not:
   - clobber a value someone has deliberately set to something else; a differing
@@ -158,6 +173,82 @@ def _git_hook_install_registry_helpers():
     return None
 
 
+class FleetWalkResult:
+    """Zero-spawn result of `iter_fleet_worktrees` -- the enumerate/classify/
+    skip-mirror/collect-missing half of a fleet walk, shared by `apply_fleet`
+    and `workday-start-health-probes.py :: cmd_git_perf_currency` so that walk
+    exists once rather than twice (see `iter_fleet_worktrees`'s docstring).
+
+    `ok=False` means the walk itself could not run -- `reason` is one of
+    `"helpers_unavailable"`, `"registry_error"` (with `detail` set to the
+    exception text) or `"no_roots"`. `ok=True` means `items` is populated:
+    each entry is `(kind, key, root)` for `kind in ("missing", "worktree")`,
+    or `(kind, key, root, detail)` for `kind == "error"` (classify_target
+    raised for that one root -- isolated per-item so one bad root cannot
+    discard the walk).
+    """
+
+    __slots__ = ("ok", "reason", "detail", "roots_count", "items")
+
+    def __init__(self, *, ok, reason=None, detail=None, roots_count=0, items=None):
+        self.ok = ok
+        self.reason = reason
+        self.detail = detail
+        self.roots_count = roots_count
+        self.items = items if items is not None else []
+
+
+def iter_fleet_worktrees(bin_dir: Path) -> "FleetWalkResult":
+    """Zero-spawn enumeration of every registered `worktree` repo, shared by
+    `apply_fleet` (which applies to each) and `cmd_git_perf_currency` (which
+    reads each `.git/config`) -- the only difference that was ever real
+    between the two callers. Neither `_registry_repo_roots` nor
+    `_classify_target` spawns a process; this function stays zero-spawn end
+    to end so the health-probe caller can run it inside the 500ms
+    `/workday-start` brightline.
+
+    `mirror` targets are silently, permanently skipped -- see
+    `_classify_target`'s own docstring. `missing` targets (a registry entry
+    whose path is gone or was never a git repo) are surfaced as `"missing"`
+    items, because that is a broken registry entry, not a healthy no-op.
+    `classify_target` raising for one root is isolated into an `"error"`
+    item rather than aborting the walk, so one bad registry entry cannot
+    discard the results already collected for the roots before it.
+
+    Never raises: an unresolvable helper import or an unreadable registry
+    both degrade to `ok=False` rather than propagating.
+    """
+    helpers = _git_hook_install_registry_helpers()
+    if helpers is None:
+        return FleetWalkResult(ok=False, reason="helpers_unavailable")
+
+    registry_repo_roots, classify_target = helpers
+
+    try:
+        roots = registry_repo_roots(str(bin_dir))
+    except Exception as exc:  # defensive: registry I/O must never abort install
+        return FleetWalkResult(ok=False, reason="registry_error", detail=str(exc))
+
+    if not roots:
+        return FleetWalkResult(ok=False, reason="no_roots")
+
+    items: List[tuple] = []
+    for key, root in sorted(roots):
+        try:
+            kind = classify_target(root)
+        except Exception as exc:
+            items.append(("error", key, root, str(exc)))
+            continue
+        if kind == "mirror":
+            continue
+        if kind == "missing":
+            items.append(("missing", key, root))
+            continue
+        items.append(("worktree", key, root))
+
+    return FleetWalkResult(ok=True, roots_count=len(roots), items=items)
+
+
 def apply_fleet(bin_dir: Path, *, dry_run: bool = False) -> List[str]:
     """Apply `core.untrackedCache` to every registered `worktree` repo on this machine.
 
@@ -194,58 +285,61 @@ def apply_fleet(bin_dir: Path, *, dry_run: bool = False) -> List[str]:
     PATH) all degrade to a report line -- the per-repo loop body is wrapped so
     one bad repo cannot discard the report already accumulated for the repos
     before it. This is an install-time sweep, never a gate.
+
+    REUSES `iter_fleet_worktrees` for the enumerate/classify/skip-mirror/
+    collect-missing half; only the per-worktree action (`apply()`) and this
+    function's own report wording are its own.
     """
     report: List[str] = []
 
-    helpers = _git_hook_install_registry_helpers()
-    if helpers is None:
-        report.append(
-            "advisory: git_hook_install registry helpers unavailable -- "
-            "configured nothing fleet-wide (per-repo apply() still ran wherever "
-            "its own caller invoked it directly)."
-        )
-        return report
-
-    registry_repo_roots, classify_target = helpers
-
-    try:
-        roots = registry_repo_roots(str(bin_dir))
-    except Exception as exc:  # defensive: registry I/O must never abort install
-        report.append(f"advisory: could not read repo registry ({exc}) -- configured nothing fleet-wide.")
-        return report
-
-    if not roots:
-        report.append(
-            "found no registered repos -- configured nothing; this is not the "
-            "same fact as 'every repo is current'."
-        )
+    walk = iter_fleet_worktrees(bin_dir)
+    if not walk.ok:
+        if walk.reason == "helpers_unavailable":
+            report.append(
+                "advisory: git_hook_install registry helpers unavailable -- "
+                "configured nothing fleet-wide (per-repo apply() still ran wherever "
+                "its own caller invoked it directly)."
+            )
+        elif walk.reason == "registry_error":
+            report.append(
+                f"advisory: could not read repo registry ({walk.detail}) -- configured nothing fleet-wide."
+            )
+        else:  # no_roots
+            report.append(
+                "found no registered repos -- configured nothing; this is not the "
+                "same fact as 'every repo is current'."
+            )
         return report
 
     applied_repos = 0
-    for key, root in sorted(roots):
+    for item in walk.items:
+        kind, key, root = item[0], item[1], item[2]
+        if kind == "missing":
+            report.append(f"missing  {key} -> {root} (registry entry unreachable, not a git repo)")
+            continue
+        if kind == "error":
+            # Review: coordinator:code-reviewer -- classify_target() is not
+            # wrapped by apply()'s own returncode handling for a raise from
+            # subprocess.run itself (e.g. FileNotFoundError if git is absent
+            # from PATH). Isolated per-repo (inside iter_fleet_worktrees) so
+            # one bad repo degrades to a FAILED line instead of losing the
+            # whole report.
+            report.append(f"FAILED  {key}: {item[3]}")
+            continue
         try:
-            kind = classify_target(root)
-            if kind == "mirror":
-                continue
-            if kind == "missing":
-                report.append(f"missing  {key} -> {root} (registry entry unreachable, not a git repo)")
-                continue
             applied_repos += 1
             for line in apply(Path(root), dry_run=dry_run):
                 report.append(f"{key}: {line}")
         except Exception as exc:
-            # Review: coordinator:code-reviewer -- classify_target()/apply()
-            # are not wrapped by apply()'s own returncode handling for a raise
-            # from subprocess.run itself (e.g. FileNotFoundError if git is
-            # absent from PATH). Left unguarded, that raise would propagate
-            # out of apply_fleet and discard every report line accumulated
-            # for repos before this one. Isolated per-repo so one bad repo
-            # degrades to a FAILED line instead of losing the whole report.
+            # apply() itself is not expected to raise (it wraps its own git
+            # calls via CompletedProcess/returncode), but isolated the same
+            # way as classify_target above so one bad repo cannot discard the
+            # report already accumulated for the repos before it.
             report.append(f"FAILED  {key}: {exc}")
             continue
 
     report.append(
-        f"fleet summary: swept {len(roots)} registered repo(s), applied to {applied_repos} worktree(s)."
+        f"fleet summary: swept {walk.roots_count} registered repo(s), applied to {applied_repos} worktree(s)."
     )
     return report
 

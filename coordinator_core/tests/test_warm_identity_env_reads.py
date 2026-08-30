@@ -163,6 +163,33 @@ GRAVESTONED: dict[str, str] = {
     ),
 }
 
+#: The cohort's frozen floor. Every ratchet test below is
+#: `parametrize("rel", sorted(COHORT))`-scoped, so a member deleted from that dict
+#: is not reported as missing -- it simply stops being checked, and the file goes on
+#: passing. `GRAVESTONED` keeps a KILLED member honest, but nothing made removal go
+#: through it: a live, still-warm-reachable entry could be dropped outright and the
+#: ratchet would silently shrink. That is the same "untriaged population
+#: masquerading as reviewed" failure this module's docstring warns about, reached by
+#: subtraction instead of by a false verdict (code-reviewer finding 6, 2026-08-30).
+#:
+#: A member leaves this floor exactly one way: its module is deleted and it moves to
+#: `GRAVESTONED`, which `test_cohort_floor_is_covered` accepts as coverage. Adding
+#: members is unconstrained -- the floor is a minimum, never a fixed list.
+_COHORT_FLOOR: frozenset = frozenset(
+    {
+        "coordinator_core/baton_assemble/__init__.py",
+        "coordinator_core/ops/handoff_correct_body.py",
+        "coordinator_core/hooks/track_touched_files.py",
+        "coordinator_core/orient_assemble/readers_clean_ops.py",
+        "coordinator_core/session/claims.py",
+        "coordinator_core/ops/check_em_environment.py",
+        "coordinator_core/ops/dispatch_shape_classify.py",
+        "coordinator_core/write_guards/block_subagent_plan_body_write.py",
+        "coordinator_core/ops/review_trail_write.py",
+        "coordinator_core/ops/tracker/push_suggestion.py",
+    }
+)
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -439,6 +466,26 @@ def test_gravestone_verdicts_name_the_deleting_commit() -> None:
     assert thin == [], (
         f"gravestones without a cited deleting commit: {thin} -- name the sha that "
         "removed the module and why no successor carries the read."
+    )
+
+
+def test_cohort_floor_is_covered() -> None:
+    """No triaged member may leave the ratchet except by being gravestoned.
+
+    The other tests here all iterate `COHORT`, so they cannot see a member that
+    is no longer in it. This one names the floor explicitly and asks the
+    complementary question: is every path we have ever triaged still accounted
+    for, either as a live cohort entry or as a cited gravestone?
+    """
+    accounted = set(COHORT) | set(GRAVESTONED)
+    dropped = sorted(_COHORT_FLOOR - accounted)
+    assert dropped == [], (
+        f"triaged warm-identity members silently dropped from the ratchet: {dropped}"
+        "\n\n"
+        "A member leaves COHORT only by being deleted from the repo and moved to "
+        "GRAVESTONED with the sha that removed it. Removing the line outright does "
+        "not narrow the ratchet's claim, it narrows what the ratchet CHECKS while "
+        "the docstring goes on claiming the member is triaged."
     )
 
 

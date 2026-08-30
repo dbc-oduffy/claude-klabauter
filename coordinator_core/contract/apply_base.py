@@ -517,8 +517,48 @@ def resolve_explicit_session_id(
     *,
     env_read_order: tuple[str, ...] = SESSION_ENV_READ_ORDER,
 ) -> Optional[str]:
+    """The session id every mutating assembler `apply()` attributes its run to:
+    an explicit caller-supplied id, else the identity the CALLER carried under a
+    warm dispatch, else this process's own environment.
+
+    The warm arm is not an optimization, it is the correctness of the whole
+    function. Under the resident warm server `os.environ` names whoever SPAWNED
+    the server, not the session being served — so the bare env walk this used to
+    be returned a live PEER's id to every door-routed `apply`, self-consistently
+    and into `repo_identity_gate.compute_repo_identity_gate`, an anti-forgery
+    input. Measured 2026-08-30 (abs-path-ok: verbatim captured op output — the
+    root IS the evidence): `baton-assemble.exe apply handoff <plan>` refused with
+    `sid=a12e2a71… session_root=X:\\DoE-claude verdict=MISMATCH` for a call
+    made by a claude-klabauter session, leaving that session unable to author a
+    handoff by the one sanctioned route
+    (`state/bug-backlog/2026-08-30-baton-assemble-apply-resolves-a-foreign-session-identity.yaml`).
+    Intermittent only because it names whichever session won the last warm
+    election; `COORDINATOR_WARM=0` does not clear it, because `door.c` reads no
+    such switch and dials the server regardless.
+
+    Warm with nothing carried returns `None` — FAIL CLOSED, matching
+    `session.core.carried_session_id`'s stated contract ("callers gate on empty
+    and REFUSE") and this function's own long-standing refusal of an ambient
+    tier-4 sentinel. Every consumer already turns `None` into a transport
+    refusal, which is the correct outcome: an `apply` that cannot name its own
+    session must not mutate lineage under a stranger's.
+
+    Cold is byte-identical to before: nothing binds the warm flag, so the env
+    walk below is reached exactly as it always was, and there `os.environ` IS the
+    caller's own. `session.core.attributable_session_id` is the same policy for
+    consumers that resolve through `resolve_session_id`; this function cannot
+    delegate to it because `env_read_order` is a per-consumer ladder and the
+    tier-4 sentinel `resolve_session_id` may reach is refused here by design.
+    """
     if session_id:
         return session_id
+    # Imported at call time: `session.core` reaches back into this package's
+    # importers, and `apply_base` is imported at module scope by five assembler
+    # `apply` modules that ops register handlers from.
+    from coordinator_core.session.core import carried_session_id, in_warm_served_request
+
+    if in_warm_served_request():
+        return carried_session_id() or None
     for env_var in env_read_order:
         val = os.environ.get(env_var, "").strip()
         if val:

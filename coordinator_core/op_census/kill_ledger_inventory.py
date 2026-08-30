@@ -110,6 +110,62 @@ _OP_NAME = re.compile(r"`([a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+)`")
 #: one in the ledger, and it would be invisible to `_OP_NAME` above.
 _BARE_OP_NAME = re.compile(r"^`([a-z][a-z0-9_]*)`$")
 
+#: Heading-level op-KEY extraction for the Fate accessor (`fate_entries` /
+#: `FateEntry`) — a distinct concern from `_OP_NAME`/`_BARE_OP_NAME` above, which
+#: pick the SINGLE op a K-entry is "about" for `classify()`. A heading can name
+#: several op keys (a multi-key cut), and the Fate line is a claim about ALL of
+#: them, so this extraction returns every key, not one.
+#:
+#: Reconciled from the two pre-existing regexes rather than merged with
+#: `_OP_NAME`: this one is deliberately narrower — no digits — matching
+#: `test_kill_ledger_fate_is_current.py`'s original `_OP_KEY`, which is the
+#: regression oracle this module must not silently loosen. `_OP_NAME` allows
+#: `[a-z0-9_]` (digits) because some `**What:**`-field ops carry them; the
+#: heading-only Fate check never needed that width and widening it here would
+#: change which ops the existing test asserts over — the exact silent-merge
+#: risk this module's own docstring warns against.
+_OP_KEY = re.compile(r"`([a-z_]+(?:\.[a-z_]+)+)`")
+
+#: Bare (undotted) op keys that headings name without a dot. Kept explicit
+#: rather than pattern-matched, same rationale as `test_kill_ledger_fate_is_
+#: current.py`'s original `_BARE_KEYS`: a bare lowercase word in backticks is
+#: far more often a function or a field than an op. Keyed by `K-<n>` (the
+#: `LedgerEntry.key` a range entry is expanded to), not by the range heading.
+_BARE_KEYS = {"K-037": ["ping"]}
+
+#: One `**Fate (YYYY-MM-DD):** <VALUE>` line per entry body, matched per-line
+#: (not MULTILINE `re.search`, to mirror the test's original line-by-line scan
+#: exactly — a body with more than one matching line is a ledger defect the
+#: caller should see as `len(fate_values) != 1`, not one this regex resolves).
+_FATE = re.compile(r"^- \*\*Fate \(\d{4}-\d{2}-\d{2}\):\*\* (LIVE|DEAD|OPEN|NOT-AN-OP|MIXED)\b")
+
+
+class LedgerAbsent(FileNotFoundError):
+    """Raised by `fate_entries()` when the ledger file does not exist on disk.
+
+    A distinguishable result, not an empty list — the published mirror ships
+    `coordinator_core/` without claude-klabauter's `state/` corpus (see this module's own
+    docstring), so a non-test caller (`op_census.breaches`, C2) that cannot use
+    `pytest.skip` must be able to tell "no corpus here" apart from "corpus read,
+    zero findings". Rendering absence as `[]` would turn a published mirror into
+    a silent all-clear — exactly the failure this module's CONTESTED population
+    exists to refuse elsewhere.
+    """
+
+
+@dataclass
+class FateEntry:
+    """One `## K-` entry's heading-level op keys and its `Fate:` line(s) —
+    the ~15-line question `test_kill_ledger_fate_is_current.py` asked
+    privately, now answered once for every caller. Deliberately narrower than
+    `LedgerEntry`: no `classify()` fields, so building this list never touches
+    `_live_op_names()` or the eager op-package import that guards."""
+
+    key: str
+    title: str
+    op_keys: List[str]
+    fate_values: List[str]
+
 _LANDED_MARKERS = (
     "landed",
     "removed",
@@ -166,6 +222,11 @@ class LedgerEntry:
     breaks_text: str
     returns_when_text: str
     body_chars: int
+    #: Heading-level op keys and Fate line(s) — populated unconditionally by
+    #: `parse_ledger`, consumed by `fate_entries()`. See `_op_keys_for` /
+    #: `_fate_values_for` for why these are distinct from `op_name` above.
+    op_keys: List[str] = field(default_factory=list)
+    fate_values: List[str] = field(default_factory=list)
     population: str = "UNCLASSIFIED"
     op_live: Optional[bool] = None
     op_suspended: bool = False
@@ -238,6 +299,19 @@ def _status_text(body: str, *, limit: int = 260) -> str:
     return " ".join((lead.group(1).strip() + " " + lead.group(2)).split())[:limit]
 
 
+def _op_keys_for(key: str, title: str) -> List[str]:
+    """Every op key a `## K-` heading names, for `fate_entries()` — see `_OP_KEY`
+    for why this is a distinct extraction from `_op_name_for` below."""
+    keys = [k for k in _OP_KEY.findall(title) if "/" not in k and not k.endswith(".py")]
+    keys += _BARE_KEYS.get(key, [])
+    return keys
+
+
+def _fate_values_for(body: str) -> List[str]:
+    """Every `**Fate (...):** <VALUE>` line in an entry's body, in order."""
+    return [m.group(1) for m in (_FATE.match(line) for line in body.split("\n")) if m]
+
+
 def _op_name_for(title: str, body: str) -> Optional[str]:
     """The op a K-entry is about, or None for entries that name a function or a
     mechanism rather than a registered op."""
@@ -275,11 +349,13 @@ def parse_ledger(text: str) -> List[LedgerEntry]:
         if not matched:  # pragma: no cover - the split guarantees the shape
             raise ValueError(f"unparseable kill-ledger heading: {heading!r}")
         number = int(matched.group(1))
+        key = f"K-{matched.group(1)}"
+        title = matched.group(2).strip()
         entries.append(
             LedgerEntry(
                 number=number,
-                key=f"K-{matched.group(1)}",
-                title=matched.group(2).strip(),
+                key=key,
+                title=title,
                 status_text=_status_text(body, limit=260),
                 op_name=_op_name_for(matched.group(2), body),
                 cost_text=_field(body, "Cost", "Measured cost", limit=260),
@@ -292,6 +368,8 @@ def parse_ledger(text: str) -> List[LedgerEntry]:
                     limit=260,
                 ),
                 body_chars=len(body),
+                op_keys=_op_keys_for(key, title),
+                fate_values=_fate_values_for(body),
             )
         )
     return entries
@@ -314,6 +392,7 @@ def _expand_range_entry(matched: "re.Match[str]", body: str) -> List[LedgerEntry
     )
     body_chars = len(body)
     op_by_number = {int(n): op for n, op in _RANGE_ROW_OP.findall(body)}
+    fate_values = _fate_values_for(body)
     return [
         LedgerEntry(
             number=number,
@@ -325,8 +404,29 @@ def _expand_range_entry(matched: "re.Match[str]", body: str) -> List[LedgerEntry
             breaks_text=breaks_text,
             returns_when_text=returns_when_text,
             body_chars=body_chars,
+            op_keys=_op_keys_for(f"K-{number}", title),
+            fate_values=fate_values,
         )
         for number in range(start, end + 1)
+    ]
+
+
+def fate_entries(ledger_path: Path = KILL_LEDGER) -> List[FateEntry]:
+    """Heading op keys plus `Fate:` line(s) for every `## K-` entry — the light
+    accessor over `parse_ledger`. Reaches `parse_ledger` only: never
+    `_live_op_names()`, never `classify()`, so a caller under a process-time
+    budget (C2's `op_census.breaches`) never pays this module's eager op-package
+    import.
+
+    Raises `LedgerAbsent` — never returns `[]` — when `ledger_path` does not
+    exist. See `LedgerAbsent` for why that distinction is load-bearing."""
+    if not ledger_path.is_file():
+        raise LedgerAbsent(f"{ledger_path} does not exist")
+    text = ledger_path.read_text(encoding="utf-8")
+    entries = parse_ledger(text)
+    return [
+        FateEntry(key=e.key, title=e.title, op_keys=e.op_keys, fate_values=e.fate_values)
+        for e in entries
     ]
 
 
