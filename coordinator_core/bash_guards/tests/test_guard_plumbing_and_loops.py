@@ -490,8 +490,10 @@ class TestVerbatimHeadTailAlternativeIsRealAndEquivalent:
     """
 
     def _run(self, cmd):
-        return subprocess.run(
-            cmd, shell=True, capture_output=True, text=True, check=True, **no_console_creationflags()
+        return subprocess.run(  # popup-intentional-last-resort: shell=True spawns a
+            # cmd.exe intermediary that CREATE_NO_WINDOW does not suppress; the
+            # STARTUPINFO route is a separate, wider fix (review: code-reviewer).
+            cmd, shell=True, capture_output=True, text=True, check=True
         ).stdout
 
     def _alternative_stdout(self, original_cmd):

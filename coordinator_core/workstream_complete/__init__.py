@@ -411,10 +411,15 @@ _RESOLVER_BACKED_OUT_OF_SCOPE_IDS: frozenset[str] = frozenset(
 
 
 #: The free-value `decisions` keys THIS module's own `brief()` body reads
-#: directly, rather than delegating to a `directives_*` builder. Same role as
-#: a submodule's `FREE_VALUE_KEYS` and named identically so the AC3 one-oracle
-#: rule covers this module too — a key read here but absent from this tuple is
-#: a key no caller can discover from the template, which is the whole defect
+#: directly, rather than delegating to a `directives_*` builder, plus keys
+#: `apply.py`'s own body reads directly outside any directive builder
+#: (Review: coordinator:code-reviewer, Finding 1, 2026-08-30 — widening
+#: `test_every_decisions_key_read_is_declared` past `directives_*.py` to also
+#: scan `apply.py` surfaced `no_commit_row_dispositions` as exactly such a
+#: read with nowhere else declared). Same role as a submodule's
+#: `FREE_VALUE_KEYS` and named identically so the AC3 one-oracle rule covers
+#: this module too — a key read here but absent from this tuple is a key no
+#: caller can discover from the template, which is the whole defect
 #: `decisions_template` exists to close.
 #:
 #: `review_partition` is the load-bearing member: it carries the review slice
@@ -431,6 +436,7 @@ FREE_VALUE_KEYS: tuple[str, ...] = (
     "flags",
     "gross_loc",
     "msg_file",
+    "no_commit_row_dispositions",
     "orientation_cache_exists",
     "pinboard_note",
     "review_partition",

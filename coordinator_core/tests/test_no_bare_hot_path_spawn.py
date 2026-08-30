@@ -86,12 +86,20 @@ negative-spec convention rather than left silent, same reasoning as
     which under `shell=True` on Windows is `cmd.exe`, not the ultimate
     command — the flag is real but does not, by itself, prove the whole
     chain is console-free. A repo-wide AST sweep at 2026-08-30 (see this
-    commit) found ZERO test-tree call sites combining `shell=True` with a
-    creationflags-shaped kwarg, so there is nothing to list by
-    `(relpath, lineno)` yet. Left named rather than silent so the next
-    `shell=True`-carrying test fixture that also reaches for
-    `no_console_creationflags()` gets a human decision instead of a
-    false-green pass.
+    commit) originally found ZERO test-tree call sites combining `shell=True`
+    with a creationflags-shaped kwarg; a later review pass on the same day
+    (code-reviewer, Finding 1) found this claim already falsified by four
+    sites this same session had added — `test_bx16_apostrophe_quote_
+    safety.py`, `test_bx16_grep_dialect_fidelity.py`,
+    `test_bx16_multiprobe_and_headtail_rewrite.py`, and
+    `test_guard_plumbing_and_loops.py` — where the ineffective splat was
+    dropped and each site tagged `# popup-intentional-last-resort` instead
+    (the STARTUPINFO route the primitive's own docstring names is a wider
+    fix, deliberately not made here). As of that correction there are again
+    zero test-tree sites combining `shell=True` with a creationflags-shaped
+    kwarg. Left named rather than silent so the next `shell=True`-carrying
+    test fixture that also reaches for `no_console_creationflags()` gets a
+    human decision instead of a false-green pass.
 
 Definition of "bare" (per plan C6 body): a subprocess spawn call with no
 `creationflags=` keyword and no double-star kwargs splat that resolves to

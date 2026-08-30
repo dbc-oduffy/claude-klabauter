@@ -107,8 +107,10 @@ def _run_real(cmd: str, timeout: float = 10.0) -> str:
         , **no_console_creationflags())
     else:
         result = subprocess.run(
+            # popup-intentional-last-resort: shell=True spawns a cmd.exe
+            # intermediary that CREATE_NO_WINDOW does not suppress; the
+            # STARTUPINFO route is a separate, wider fix (review: code-reviewer).
             cmd, shell=True, capture_output=True, text=True, timeout=timeout,
-            **no_console_creationflags(),
         )
     return result.stdout
 

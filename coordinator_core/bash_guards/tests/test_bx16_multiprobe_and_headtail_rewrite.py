@@ -97,8 +97,10 @@ def _run_shell(command: str) -> str:
         )
     else:
         result = subprocess.run(
+            # popup-intentional-last-resort: shell=True spawns a cmd.exe
+            # intermediary that CREATE_NO_WINDOW does not suppress; the
+            # STARTUPINFO route is a separate, wider fix (review: code-reviewer).
             command, shell=True, capture_output=True, text=True, timeout=10,
-            **no_console_creationflags(),
         )
     return result.stdout
 

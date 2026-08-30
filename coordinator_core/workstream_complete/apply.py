@@ -1226,9 +1226,10 @@ def _run_close_commit_tail(
             # `empty_consumed_set` flag had no reader; this one is read by
             # `apply()`'s own report, below). `resolve_ship_stamp_candidates`
             # always executes whenever a commit is being attempted at all.
-            ship_outcome = directives_commit_tail.ShipStampOutcome(
-                stamped_paths=(), skipped_paths=(), attempted=0, diagnostics=()
-            )
+            # Review: coordinator:code-reviewer (Finding 3, 2026-08-30) --
+            # shared constant instead of a second inline construction, so the
+            # two sites cannot drift on field values.
+            ship_outcome = directives_commit_tail.EMPTY_SHIP_STAMP_OUTCOME
     if kwargs is None:
         # A SKIP IS REPORTED, NEVER SILENT (2026-08-27). This used to return
         # `None`, and `apply()` then folded nothing into the report at all: a

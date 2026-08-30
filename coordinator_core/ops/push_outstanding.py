@@ -443,14 +443,23 @@ def push_outstanding(
     # outcome, so it doubles as the landed-push predicate here.
     if outcome.exit_code == 0 and outcome.pushed_range is not None:
         cockpit_script = _cockpit_publish_script(str(root))
-        if cockpit_script is not None:
+        publish_budget = _remaining_or_none(publish_deadline)
+        # Negative spec: a non-positive remainder means the ladder consumed the
+        # whole budget, so there is nothing left to bound the publish WITH --
+        # skip it rather than hand `subprocess` a <=0 timeout, which raises
+        # `TimeoutExpired` before the child is ever waited on. The publish is
+        # advisory and the next cadence tick retries it; starting one it cannot
+        # bound is what the remaining-budget clause exists to prevent. C5's
+        # cadence budget (6.0s) reaches this far more often than the
+        # interactive 12.0s ladder ever did.
+        if cockpit_script is not None and publish_budget is not None and publish_budget > 0:
             old_sha, _, new_sha = outcome.pushed_range.partition("..")
             _maybe_publish_cockpit_contract(
                 str(root),
                 cockpit_script,
                 old_sha or None,
                 new_sha or None,
-                timeout_secs=_remaining_or_none(publish_deadline),
+                timeout_secs=publish_budget,
             )
 
     _record_arm_latency(_ARM_NETWORK, arm_t_start, root)

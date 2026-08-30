@@ -1066,6 +1066,8 @@ _KEY_SUBJECT = "subject"
 _KEY_PROSE = "prose"
 _KEY_STAGE_PATHS = "stage_paths"
 _KEY_GOVERNING_PLAN_SLUG = "governing_plan_slug"
+_KEY_DELIVERABLE_ID = "deliverable_id"
+_KEY_ATTRIBUTED_SESSION_ID = "attributed_session_id"
 
 #: This chunk's own decisions-key vocabulary (no prior key named this).
 _KEY_HANDOFF_DISPOSITIONS = "handoff_dispositions"
@@ -1078,6 +1080,15 @@ FREE_VALUE_KEYS: tuple[str, ...] = (
     _KEY_PROSE,
     _KEY_STAGE_PATHS,
     _KEY_GOVERNING_PLAN_SLUG,
+    # Review: coordinator:code-reviewer (Finding 1, 2026-08-30) -- widening
+    # the undeclared-key guard past `directives_*.py` to also scan `apply.py`
+    # surfaced these two as pre-existing, genuinely undeclared reads in
+    # `_resolve_close_commit_kwargs` (apply.py). Both are caller-supplied
+    # `decisions[...]` facts this module's own arg-builder already consumes;
+    # declaring them here is the same fix the `handoff_dispositions` incident
+    # above already made for this exact blind spot.
+    _KEY_DELIVERABLE_ID,
+    _KEY_ATTRIBUTED_SESSION_ID,
     # `handoff_dispositions` is caller-supplied by design (see its own note
     # below: the delivery sha is "resolved by the caller ... never derived
     # here"), which makes declaring it here the whole difference between a
@@ -1412,6 +1423,15 @@ class ShipStampOutcome(NamedTuple):
     diagnostics: tuple[str, ...]
 
 
+#: The "ran, found nothing" sentinel value -- a module-level constant so the
+#: two callers needing it (`apply.py`'s own no-candidates branch, any future
+#: one) cannot drift on field values by hand-constructing this shape
+#: separately. Review: coordinator:code-reviewer (Finding 3, 2026-08-30).
+EMPTY_SHIP_STAMP_OUTCOME = ShipStampOutcome(
+    stamped_paths=(), skipped_paths=(), attempted=0, diagnostics=()
+)
+
+
 def _held_handoff_basenames(worktree_root: "Union[Path, str]", session_id: str) -> "list[str]":
     """This session's own held handoff-claim basenames — reuses
     `session.claims.list_claims_by_session_checked` (the SAME claim-record
@@ -1441,6 +1461,19 @@ def resolve_ship_stamp_candidates(
 
     Returns `[]` (never raises) for a falsy `session_id` or an empty/absent
     `decisions["handoff_dispositions"]` — both are "nothing to do", not an
+    error. Review: coordinator:code-reviewer (Finding 4, 2026-08-30) — these
+    two early-outs collapse to the same `[]`, so a caller cannot distinguish
+    "no session_id was ever resolved" from "session_id present but nothing to
+    ship" from this return value alone. Currently latent, not live: this
+    module's only caller (`apply.py :: _run_close_commit_tail`, via
+    `_resolve_close_commit_kwargs`) already refuses to reach this call at all
+    when `sid` is falsy, so the first branch never fires in practice. Left
+    unsplit deliberately — nothing today reads the distinction, and adding a
+    signal for a caller that doesn't guard on `sid` is speculative until one
+    exists. A future caller that skips that guard gets an ambiguous `[]`
+    rather than a distinguishing signal; that caller should either add its
+    own `sid` guard first (matching this module's only current caller) or
+    split this function's return shape to disambiguate at that point.
     error."""
     if not session_id:
         return []

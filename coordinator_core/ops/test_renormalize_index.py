@@ -36,12 +36,15 @@ pytestmark = [
 
 
 def _git(cwd, *args, **kwargs):
+    # Review: code-reviewer Finding 3 -- caller kwargs win over the helper's
+    # own suppression instead of colliding on a shared key (e.g. creationflags).
+    run_kwargs = {**no_console_creationflags(), **kwargs}
     return subprocess.run(
         ["git", "-C", str(cwd), *args],
         capture_output=True,
         text=True,
         check=False,
-        **kwargs, **no_console_creationflags(),
+        **run_kwargs,
     )
 
 

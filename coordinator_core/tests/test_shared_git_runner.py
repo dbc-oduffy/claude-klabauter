@@ -499,7 +499,6 @@ _GRANDFATHERED_RUNNER_MODULES: frozenset[str] = frozenset(
         "coordinator/bin/merge-recovery-and-tag-cut.py",
         "coordinator/bin/merge-release-notes-derive.py",
         "coordinator/bin/percolate-full-payload-proof.py",
-        "coordinator/bin/percolate-gate.py",
         "coordinator/bin/percolate-push.py",
         "coordinator/bin/percolate-round.py",
         "coordinator/bin/probe-prereq.py",
@@ -654,7 +653,6 @@ _GRANDFATHERED_RUNNER_MODULES: frozenset[str] = frozenset(
         "coordinator_core/reconcile/ac27_differential_oracle.py",
         "coordinator_core/reconcile/commit_reality.py",
         "coordinator_core/review_assemble/residue.py",
-        "coordinator_core/session/scope.py",
         "coordinator_core/session/shape.py",
         "coordinator_core/session_attribution.py",
         "coordinator_core/subagent_sandbox/engine.py",
@@ -754,7 +752,7 @@ _GRANDFATHERED_DIALS: frozenset = frozenset(
 #: all. Lowering either is free and is the point; raising either is the
 #: deliberate, reviewable act of arguing that the tree needs one more private
 #: git runner than it had yesterday.
-_PINNED_RUNNER_CEILING = 194
+_PINNED_RUNNER_CEILING = 192
 _PINNED_DIAL_CEILING = 68
 
 
