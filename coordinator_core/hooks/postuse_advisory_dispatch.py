@@ -90,15 +90,40 @@ def _tempfile():
     return tempfile
 
 
-def _shlex():
-    """Function-local accessor for the `shlex` module.
+#: Characters with no single form that both cmd.exe and a POSIX shell read
+#: literally. `$` and backtick still expand INSIDE POSIX double quotes; a double
+#: quote closes the quoting in both; a newline ends the command outright.
+_ARG_UNSAFE_CHARS = '"$`\n\r'
 
-    Same discipline as `_tempfile` above and for the same reason: this module
-    is a PostToolUse hook, so eager imports are paid on every tool call in
-    every session, not only when the one check that needs them fires.
+
+def _portable_arg(value: str) -> str | None:
+    """One argument that BOTH cmd.exe and a POSIX shell tokenize identically,
+    or None when no such form exists for this value.
+
+    `shlex.quote` was wrong here. It emits POSIX single-quote syntax, which is
+    meaningful only to a POSIX shell -- on a Windows-first repo that is a
+    POSIX-only primitive, and it worked only because the harness happened to
+    pipe this command through bash on the one box it was measured on. An
+    undocumented harness detail is not a portability argument.
+
+    The portable form is a double-quoted path with FORWARD slashes:
+      - cmd.exe honours double quotes, and normalisation leaves it no
+        backslash to treat as an escape.
+      - A POSIX shell honours double quotes and never sees a backslash to eat,
+        which was the original corruption (a Windows path arriving as C:Users).
+      - Windows path APIs and Python's os module both accept forward slashes,
+        so the receiving watcher is unaffected.
+
+    Returns None for a value carrying a character that cannot be made safe in
+    both shells at once. The caller then emits NOTHING. A silent advisory is
+    recoverable; a subtly wrong command line that aims a watcher at the wrong
+    path is not, and neither is one that lets a filename interpolate a shell
+    expression.
     """
-    import shlex
-    return shlex
+    normalized = str(value).replace('\\', '/')
+    if any(ch in normalized for ch in _ARG_UNSAFE_CHARS):
+        return None
+    return '"' + normalized + '"'
 
 #: Generator-provenance declaration: every durable-state write in this
 #: module (advisory-hook-state-<sid>.json, rt-bark-once-<sid>,
@@ -112,12 +137,15 @@ GENERATES: list = []
 # This is NOT one of our tunables — it is a fixed cost/attention ceiling
 # Anthropic applies on the 1M window (observed 2026-07-13, unchanged since),
 # decoupled from window size. It is why the red band in
-# _check_context_pressure_sync sits at 47% and not 50%: on a 1M window a flat
-# 50% coincides EXACTLY with this ceiling (500_000 tokens), firing the warning
+# _check_context_pressure_sync sits below 50%: on a 1M window a flat 50%
+# coincides EXACTLY with this ceiling (500_000 tokens), firing the warning
 # level with the cut instead of ahead of it and defeating the whole point of a
 # pre-emptive advisory — a handoff needs runway to compose before an
-# involuntary, lossy auto-compaction lands. 47% leaves ~30K tokens of that
-# runway. Referenced by comment rather than by arithmetic: the bands are
+# involuntary, lossy auto-compaction lands. The band sat at 47 until
+# 2026-08-30, when auto-compaction was observed firing at 47 in practice —
+# level with the cut again, one rung down. PM ruling 2026-08-30 moved it to
+# 45, which leaves ~50K tokens of runway. Referenced by comment rather than by
+# arithmetic: the bands are
 # PM-set percentages, not values derived from this constant, and deriving them
 # from it would silently move them if Anthropic moves the ceiling.
 # ---------------------------------------------------------------------------
@@ -307,7 +335,7 @@ def _check_context_pressure_sync(session_id: str, transcript_path: str) -> str:
 
     Phase 2: Throttled (5 min) threshold warnings, sidecar-sourced.
         Two bands and only two: 40% of window (orange — consider a handoff if
-        the work cannot close in ~5% more) and 47% (red — handoff now, ahead of
+        the work cannot close in ~5% more) and 45% (red — handoff now, ahead of
         compaction). Nothing fires below 40, and a session with no usable
         reading gets silence, not an escalating UNKNOWN notice.
 
@@ -460,7 +488,7 @@ def _check_context_pressure_sync(session_id: str, transcript_path: str) -> str:
     # SELECTOR ONLY — never an off switch. No value of this key returns "" here
     # where the function would otherwise return advisory text; it only picks
     # which non-empty variant fires (see mode_resolution module docstring).
-    # Scope, since PM ruling 2026-08-29: this key governs the 47 band ONLY. The
+    # Scope, since PM ruling 2026-08-29: this key governs the red band ONLY. The
     # 40 band is informational for every session regardless, so there is no
     # variant left there to select — see that branch's own comment.
     # Cost: one stat + one small json.loads via read_fleet_mode() on this hot
@@ -521,19 +549,22 @@ def _check_context_pressure_sync(session_id: str, transcript_path: str) -> str:
     #
     # 40 — ORANGE. "Consider a handoff if this work cannot close within about
     #      another 5% of window." An orientation signal, not an instruction.
-    # 47 — RED. "Go to handoff now, before compaction takes the choice away."
+    # 45 — RED. "Go to handoff now, before compaction takes the choice away."
     #
-    # Why 47 and not 50 on the 1M tier: auto-compaction fires at a fixed
+    # Why 45 and not 50 on the 1M tier: auto-compaction fires at a fixed
     # ~500K tokens there (_AUTO_COMPACT_CEILING_TOKENS_1M), so a 50% trigger
     # coincides EXACTLY with the cut instead of landing ahead of it, and a
-    # handoff needs runway to compose. 47% of 1M is ~470K — the last point
-    # with enough headroom left to write one.
+    # handoff needs runway to compose. Why not 47, which this band was until
+    # 2026-08-30: auto-compaction was observed firing at 47 in practice, so 47
+    # fired level with the cut it exists to pre-empt — the same failure mode as
+    # 50, one rung down. PM ruling 2026-08-30: 45% of 1M is ~450K, which
+    # restores the runway.
     #
     # NOTHING fires below 40. No checkpoint prompts, no "consider wrapping",
     # no informational heads-up at 15/20/25%. That is the PM ruling, stated as
     # a floor rather than a default: a check added here that fires under 40
     # violates it no matter how quiet its wording.
-    if display_pct >= 47 and transcript_hash not in cp_state.get("critical_fired", []):
+    if display_pct >= 45 and transcript_hash not in cp_state.get("critical_fired", []):
         _mark_advisory_fired(cp_state, transcript_hash, critical=True)
         _save_advisory_state(tmpdir, session_id, cp_state)
         # The autonomous variant REPLACES the recommendation rather than
@@ -572,23 +603,25 @@ def _check_context_pressure_sync(session_id: str, transcript_path: str) -> str:
     if display_pct >= 40 and transcript_hash not in cp_state.get("advisory_fired", []):
         _mark_advisory_fired(cp_state, transcript_hash, critical=False)
         _save_advisory_state(tmpdir, session_id, cp_state)
-        # PM ruling 2026-08-29: 40 is INFORMATIONAL, 47 is STANDARD. The two
+        # PM ruling 2026-08-29: 40 is INFORMATIONAL, the red band is STANDARD.
+        # The two
         # bands were never the same kind of signal, and the mode key was doing
         # the wrong job by flipping both together. 40 is an orientation reading
         # -- "you are here, checkpoint so this is resumable" -- and there is no
         # posture, autonomous or not, in which the right response to it is to
-        # stop and hand off; the earlier wording recommended exactly that. 47
-        # keeps the hard call above, because that is the last band with runway
-        # to compose a handoff.
+        # stop and hand off; the earlier wording recommended exactly that. The
+        # red band keeps the hard call above, because that is the last band
+        # with runway to compose a handoff.
         #
         # `compaction_warnings` and `autonomous_run` are deliberately NOT read
         # in this branch: with 40 informational for everyone there is nothing
-        # left here for either to select between. The key still governs 47.
+        # left here for either to select between. The key still governs the
+        # red band.
         return (
             f"CONTEXT PRESSURE — INFORMATIONAL: ~{display_pct}% of window"
             f" used{age_note}, measured from the harness's own context_window"
             f" block. Checkpoint state to disk at the next natural boundary so"
-            f" the run is resumable. The hard call comes at 47%."
+            f" the run is resumable. The hard call comes at 45%."
         )
 
     _save_advisory_state(tmpdir, session_id, cp_state)
@@ -864,25 +897,6 @@ def _check_first_agent_dispatch_sync(session_id: str, tool_name: str) -> str:
     if os.path.isfile(sentinel):
         return ""
 
-    try:
-        with open(sentinel, "w", encoding="utf-8", newline="\n") as fh:
-            fh.write(str(int(time.time())))
-    except Exception:
-        # Sentinel unwritable — fail open toward silence this call rather than
-        # raising or emitting an advisory whose one-time firing can't be
-        # recorded. Review: code-reviewer (Finding 3) — if open() succeeded
-        # but write() raised mid-write (e.g. disk full), the sentinel file
-        # already exists on disk, and every later call in this session would
-        # see it and stay silent forever. Best-effort remove it (swallow any
-        # error from the remove itself, keeping this path fail-open) so a
-        # later Agent dispatch in the same session can retry the write and
-        # actually fire once.
-        try:
-            os.remove(sentinel)
-        except Exception:
-            pass
-        return ""
-
     return (
         "COORDINATOR SIDECAR ADVISORY: coordinator-themed subagents write their"
         " full findings to a sidecar file on disk as part of their design, not"
@@ -954,7 +968,12 @@ def _check_workflow_monitor_arm_sync(session_id: str, transcript_path: str, tool
     try:
         from coordinator_core.workflow_watch.tail import TailReader
 
-        text = TailReader(transcript_path).poll()
+        # Review: overengineering-reviewer (F1) — a fresh TailReader starts
+        # at offset 0, so an unseeded construction here reads the ENTIRE
+        # session transcript on every Workflow PostToolUse event. This call
+        # site takes exactly one snapshot (no repeated polling), so
+        # seek_to_tail bounds the read to the trailing window instead.
+        text = TailReader(transcript_path, seek_to_tail=True).poll()
     except Exception:
         return ""
     if not text:
@@ -966,8 +985,31 @@ def _check_workflow_monitor_arm_sync(session_id: str, transcript_path: str, tool
     for candidate in _ASYNC_LAUNCH_RE.finditer(text):
         match = candidate
     if match is None:
+        # Breadcrumb, not silence. Every other failure path in this module
+        # surfaces through _text_or_breadcrumb; a regex that stopped matching
+        # because the harness reordered or nested these fields would otherwise be
+        # indistinguishable from "no Workflow was launched" -- forever, with no
+        # signal. (Review: code-reviewer slice 2.)
+        print(
+            "postuse_advisory_dispatch: workflow_monitor_arm found no "
+            "async_launched record in the transcript tail -- if a Workflow did "
+            "launch, _ASYNC_LAUNCH_RE no longer matches the harness record shape",
+            file=sys.stderr,
+        )
         return ""
     if match.group("task_type") != "local_workflow":
+        # "Last match wins" assumes the most recent async_launched record is this
+        # tool call's own launch. A concurrent background dispatch of another
+        # taskType landing later in the same tail window would shadow it, and the
+        # real launch sits moments earlier, unseen. Name it rather than returning
+        # empty as though nothing happened.
+        print(
+            "postuse_advisory_dispatch: workflow_monitor_arm saw taskType="
+            f"{match.group('task_type')!r}"
+            " nearest the tail, not local_workflow -- a concurrent dispatch may "
+            "have shadowed this Workflow's own launch record",
+            file=sys.stderr,
+        )
         return ""
 
     task_id = match.group("task_id")
@@ -990,43 +1032,33 @@ def _check_workflow_monitor_arm_sync(session_id: str, transcript_path: str, tool
     if os.path.isfile(sentinel):
         return ""
 
-    try:
-        with open(sentinel, "w", encoding="utf-8", newline="\n") as fh:
-            fh.write(str(int(time.time())))
-    except Exception:
-        # Sentinel unwritable — fail open toward silence this call rather than
-        # raising or emitting an advisory whose one-time firing can't be
-        # recorded. Mirrors _check_first_agent_dispatch_sync's partial-write
-        # discipline: best-effort remove so a later Workflow launch with the
-        # same task id in this session can retry the write and actually fire.
-        try:
-            os.remove(sentinel)
-        except Exception:
-            pass
-        return ""
-
     # The watcher's own wall-clock cap default (coordinator_core.workflow_watch,
     # C1b) is the single source of truth for this number — the emitted
     # timeout_ms below MUST be the same number as workflow_watch's own --cap
-    # default, derived once in one place, so the two cannot drift apart. This
-    # check imports it rather than re-stating it as a literal; if the constant
-    # is unavailable (C1b not yet landed, or renamed), fail open to silence
-    # rather than guess a number that could disagree with the watcher's own
-    # enforced cap.
-    try:
-        from coordinator_core.workflow_watch import (
-            DEFAULT_CAP_MS as cap_ms,
-            DEFAULT_CAP_SECONDS as cap_seconds,
-        )
-    except Exception:
-        return ""
+    # default, derived once in one place, so the two cannot drift apart.
+    # Imported here, not at module scope. Unconditional -- there is no
+    # ImportError branch to fossilize a chunk boundary (review:
+    # overengineering-reviewer #4) -- but function-local, because this is a
+    # PostToolUse hook: a module-scope import is paid on EVERY tool call in
+    # every session, while this constant is read only when tool_name ==
+    # "Workflow". Measured at 7.8ms cumulative (python -X importtime), most
+    # of it render.py pulling json. Same discipline as _tempfile above.
+    from coordinator_core.workflow_watch import DEFAULT_CAP_MS, DEFAULT_CAP_SECONDS
+
+    cap_ms = DEFAULT_CAP_MS
+    cap_seconds = DEFAULT_CAP_SECONDS
 
     # `transcriptDir` as the harness emits it ALREADY ends in the run id
     # (observed: .../subagents/workflows/wf_<id>). Appending run_id again
     # yields .../wf_<id>/wf_<id>/journal.jsonl, a path that never exists —
     # the watcher would then render nothing at all. Append only when the
     # directory does not already name the run, so both shapes resolve.
-    if os.path.basename(transcript_dir.rstrip("/\\")) == run_id:
+    # Case-insensitive: Windows filesystems are case-preserving but
+    # case-insensitive, so a segment differing only in case is the SAME
+    # directory. A case-sensitive compare there would append run_id a second
+    # time and name a path that never exists -- the exact failure this
+    # conditional exists to prevent. (Review: code-reviewer slice 2.)
+    if os.path.basename(transcript_dir.rstrip("/\\")).lower() == run_id.lower():
         journal_path = os.path.join(transcript_dir, "journal.jsonl")
     else:
         journal_path = os.path.join(transcript_dir, run_id, "journal.jsonl")
@@ -1037,15 +1069,52 @@ def _check_workflow_monitor_arm_sync(session_id: str, transcript_path: str, tool
     # before exiting 1. That is silent, and it is the exact "outlives the run"
     # failure this check exists to remove. A path containing a space breaks the
     # unquoted form in any shell, on any host.
-    quote = _shlex().quote
+    formatted = [_portable_arg(v) for v in (transcript_path, journal_path, task_id)]
+    if any(arg is None for arg in formatted):
+        print(
+            "postuse_advisory_dispatch: workflow_monitor_arm cannot emit a "
+            "shell-safe command for these paths -- staying silent rather than "
+            "emitting one that would tokenize differently per shell",
+            file=sys.stderr,
+        )
+        return ""
+    q_transcript, q_journal, q_task = formatted
     monitor_command = (
         "python3 -m coordinator_core.workflow_watch"
-        f" --transcript {quote(transcript_path)}"
-        f" --journal {quote(journal_path)}"
-        f" --task-id {quote(task_id)}"
+        f" --transcript {q_transcript}"
+        f" --journal {q_journal}"
+        f" --task-id {q_task}"
         " --poll-interval 1"
         f" --cap {cap_seconds}"
     )
+
+    # Sentinel LAST, after the advisory is fully composed. Written before
+    # composition it is a point of no return: anything raising after it -- the
+    # import, the path arithmetic, the quoting -- would leave the sentinel on
+    # disk while the caller got nothing, and every later Workflow PostToolUse
+    # for the same task id would then short-circuit on os.path.isfile() and stay
+    # silent forever. The handler's return_exceptions=True makes that failure
+    # invisible, so the suppression would be permanent AND undiagnosed.
+    # _check_first_agent_dispatch_sync can write early because only a static
+    # string follows it; this leg cannot. (Review: code-reviewer slice 2, P1.)
+    try:
+        with open(sentinel, "w", encoding="utf-8", newline="\n") as fh:
+            fh.write(str(int(time.time())))
+    except Exception:
+        # Sentinel unwritable — fail open toward silence this call rather than
+        # raising or emitting an advisory whose one-time firing can't be
+        # recorded. Review: code-reviewer (Finding 3) — if open() succeeded
+        # but write() raised mid-write (e.g. disk full), the sentinel file
+        # already exists on disk, and every later call in this session would
+        # see it and stay silent forever. Best-effort remove it (swallow any
+        # error from the remove itself, keeping this path fail-open) so a
+        # later Agent dispatch in the same session can retry the write and
+        # actually fire once.
+        try:
+            os.remove(sentinel)
+        except Exception:
+            pass
+        return ""
 
     return (
         "WORKFLOW MONITOR: this Workflow run is watched by a background hook"

@@ -2102,6 +2102,7 @@ def _scaffold_handoff(
     gated_predicate: str | None = None,
     deliverable_ids: list[str] | None = None,
     plan_ids: list[str] | None = None,
+    carried_items: list[dict] | None = None,
 ) -> str:
     """Generate validator-clean handoff frontmatter + canonical section skeleton.
 
@@ -2473,6 +2474,27 @@ def _scaffold_handoff(
     if plan_ids is not None:
         lines.append("plan_ids:")
         lines.extend(f"  - {_yaml_quote(_entry)}" for _entry in plan_ids)
+    # carried_items (multi-baton fan-in carry, DR-388's sibling stub): pure
+    # carry-through of an already-vetted item dict (see baton_assemble's own
+    # `resolve_lineage` union, which only ever hands this a `disposition:
+    # carried` item, deduped by carry_id) -- this scaffolder does not
+    # re-validate the gate, it only emits what it is handed, same
+    # optional-omit convention as deliverable_ids/plan_ids above (omitted
+    # entirely when None, never `[]`).
+    if carried_items is not None:
+        lines.append("carried_items:")
+        for _item in carried_items:
+            lines.append(f"  - carry_id: {_yaml_quote(_item['carry_id'])}")
+            lines.append(f"    description: {_yaml_quote(_item['description'])}")
+            lines.append(f"    disposition: {_yaml_quote(_item['disposition'])}")
+            if _item.get("disposition_detail"):
+                lines.append(
+                    f"    disposition_detail: {_yaml_quote(_item['disposition_detail'])}"
+                )
+            if _item.get("first_seen_handoff_id"):
+                lines.append(
+                    f"    first_seen_handoff_id: {_yaml_quote(_item['first_seen_handoff_id'])}"
+                )
     _authoring_session = _resolve_session_id()
     if _authoring_session != "em-unknown":
         # Readable-name annotation (2026-08-20 extension): the id above is a
@@ -5715,6 +5737,25 @@ Spec backlink (workflow): pln-workflow-skeleton-stamper-maki-adab0d
         ),
     )
     parser.add_argument(
+        "--carried-items",
+        dest="carried_items",
+        action="append",
+        default=None,
+        metavar="JSON",
+        help=(
+            "(handoff ONLY) Repeatable, one carried_items[] entry per occurrence, "
+            "each a JSON object with keys carry_id/description/disposition and "
+            "optionally disposition_detail/first_seen_handoff_id -- NOT comma-"
+            "joined, same rationale as --deliverable-ids. Carried as-is verbatim: "
+            "never re-derived or gate-checked here (the caller, "
+            "baton_assemble.resolve_lineage, already filtered to open/'carried' "
+            "items and deduped by carry_id before handing them to this flag). "
+            "Emitted as a YAML block sequence (carried_items:) ONLY when this "
+            "flag is supplied at all; omitted entirely (not [], not null) when "
+            "not supplied."
+        ),
+    )
+    parser.add_argument(
         "--predecessor-id",
         dest="predecessor_id",
         default=None,
@@ -6551,17 +6592,25 @@ def main(argv: "list[str] | None" = None) -> int:
     # fail-loud for every other --type rather than silently dropped (same
     # cross-repo/inbox/2026-08-18-example-retrieval-repo-em-doc-new-silently-drops-
     # type-inapplicable-flags.md precedent).
-    if (args.deliverable_ids or args.plan_ids) and doc_type != "handoff":
+    if (args.deliverable_ids or args.plan_ids or args.carried_items) and doc_type != "handoff":
         if args.deliverable_ids:
             _bad_flag = "--deliverable-ids"
-        else:
+        elif args.plan_ids:
             _bad_flag = "--plan-ids"
+        else:
+            _bad_flag = "--carried-items"
         print(
             f"coordinator-doc-new: {_bad_flag} is not accepted for --type {doc_type}. "
-            "--deliverable-ids and --plan-ids are handoff-only fields.",
+            "--deliverable-ids, --plan-ids, and --carried-items are handoff-only fields.",
             file=sys.stderr,
         )
         return 1
+
+    _parsed_carried_items: list[dict] | None = None
+    if args.carried_items is not None:
+        import json as _json
+
+        _parsed_carried_items = [_json.loads(_raw) for _raw in args.carried_items]
 
     # Generate scaffold content.
     if doc_type == "handoff":
@@ -6582,6 +6631,7 @@ def main(argv: "list[str] | None" = None) -> int:
             gated_predicate=args.gated_predicate,
             deliverable_ids=args.deliverable_ids,
             plan_ids=args.plan_ids,
+            carried_items=_parsed_carried_items,
         )
     elif doc_type == "recovery":
         content = _scaffold_recovery(

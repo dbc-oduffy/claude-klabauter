@@ -160,6 +160,24 @@ def apply(repo: Path, *, dry_run: bool = False) -> List[str]:
 # repo, including manual ones and future ones no coordinator code authors --
 # not only the daily/weekly tiers the ceremony drives.
 #
+# THE TWO-WRITER ROLLOUT WINDOW, mirrored from configure_git._SETTINGS's own
+# comment on `gc.auto`: `coordinator_core.ops.configure_git` writes `gc.auto=0`
+# on a separate invocation path from this module's `apply()`/`apply_fleet()`.
+# A repo can sit with `gc.auto=0` already written and these three maintenance
+# keys still at git's defaults (`maintenance.auto` true, `prefetch.enabled`
+# true) until this module's sweep reaches it -- an installer ordering where
+# configure_git's Phase 1 runs before the fleet-sweep phase in
+# `maximalist.py`, or a repo-setup-onboarded worktree awaiting its first
+# fleet sweep. In that window `git maintenance run --auto`, including the
+# network-touching `prefetch` task, keeps firing unconstrained. WHAT CLOSES
+# IT: the daily workday-start ceremony's `git-perf-currency` health probe
+# (`orient_assemble.readers_health_reaper :: _read_git_perf_currency`) --
+# its `--fix` path calls `apply_fleet` in-process, which reaches these three
+# keys via `apply()` on every registered worktree. The window is bounded to
+# "until the next workday-start ceremony run," not indefinite; it is not
+# transactional, and co-locating the two writers into one op is a design
+# change beyond this module's scope.
+#
 # UNINSTALL DISPOSITION, stated rather than left silent: none of the three are
 # unset on uninstall, and that is deliberate. git's compiled defaults
 # (maintenance.strategy unset, maintenance.auto true, prefetch enabled) resume

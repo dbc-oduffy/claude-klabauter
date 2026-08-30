@@ -1986,9 +1986,19 @@ def _reach_post_commit_tail_stub_close(
     `post_commit_tail.run()`'s OTHER composed step
     (`consumed_handoff_stamp.post_commit_stamp_and_ship`) a documented,
     side-effect-free no-op here -- this ceremony has no WSC session id and
-    owns no consumed-handoff set of its own, and stamping consumed handoffs
-    is `ceremony.wsc_tail`'s job, not this one's. Only the origin-stub-close
-    leg is a genuine reach target for this ceremony.
+    owns no consumed-handoff set of its own. Only the origin-stub-close leg
+    is a genuine reach target for this ceremony.
+
+    ~~and stamping consumed handoffs is `ceremony.wsc_tail`'s job, not this
+    one's.~~ **Struck 2026-08-30.** That deferral named an owner that stopped
+    existing: K-046 deleted `ceremony.wsc_tail` on 2026-08-23 (`c07062c99`).
+    Nothing inherited the job. Because THIS is the only live call site of
+    `post_commit_tail.run()`, and it hardcodes `chain_terminal=False`,
+    `post_commit_stamp_and_ship` now has ZERO reachable invocations anywhere
+    in the tree -- the suppression above is correct for this ceremony and is
+    simultaneously the whole reason the consumed-handoff ship-stamp never
+    fires for anyone. Keep the `False`; it is not this ceremony's job. The
+    missing owner is kill-ledger K-046's standing requirement.
 
     `initial_consumed=[]` -- this ceremony resolves no consumed handoffs of
     its own; the plan path alone (via `governing_plan_slug`) is the join

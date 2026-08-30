@@ -3974,6 +3974,27 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #   5. Persistent state changes observable across process boundaries?       Yes.
     # Spec: docs/plans/2026-08-26-merges-directives-stop-starting-interpreters.md § C6
     "merge_assemble.apply": OpClass.MUTATING,
+
+    # baton_assemble.apply — MUTATING: `coordinator_core.baton_assemble.
+    # ops::_baton_assemble_apply` is a thin adapter over `baton_assemble.
+    # apply.apply()`, which recomputes the brief and dispatches its
+    # directives[] through a closed CLI table that scaffolds/stamps handoff
+    # and spinoff artifacts, writes the durable claim ledger, and archives
+    # predecessors — real, persistent mutation.
+    # DR-208 five-question affirmation:
+    #   1. Writes, deletes, or reorders any state file, queue, or git object?   Yes.
+    #      Scaffolds/stamps handoff and spinoff files, archives predecessors.
+    #   2. Writes into rag's relational store?                                  No.
+    #   3. Opens any file for write (including sentinel creation)?              Yes.
+    #      Claim ledger writes, archive-transition file moves.
+    #   4. Mutates shared mutable state outside its own module?                 Yes.
+    #      The claim ledger and archived handoffs are cross-process state.
+    #   5. Persistent state changes observable across process boundaries?       Yes.
+    # baton_assemble.brief — read-only: `_baton_assemble_brief` is a thin
+    # adapter over `baton_assemble.brief()`, whose own docstring states it
+    # "mutates nothing" (single-shot decision-object computation).
+    "baton_assemble.apply": OpClass.MUTATING,
+    "baton_assemble.brief": OpClass.COMPUTE_ONLY,
 })
 
 

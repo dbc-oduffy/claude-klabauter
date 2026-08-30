@@ -1,6 +1,6 @@
 """A receipt must be stamped with the reviewer's TYPE, never a dispatch label.
 
-Both eligibility checks (`_is_delegate_reviewer`, `_is_review_integrator`)
+Both eligibility checks (`_is_close_receipt_reviewer`, `_is_review_integrator`)
 read `agent_type` AND `subagent_type`, because which one carries the persona
 is not fixed across callers. The stamp beneath them read only `agent_type`.
 For a NAMED (Agent-teams teammate) dispatch that field holds the teammate's
@@ -24,10 +24,10 @@ from __future__ import annotations
 
 import pytest
 
-from coordinator_core.reviewer_vocabulary import DELEGATE_REVIEWERS
+from coordinator_core.reviewer_vocabulary import CLOSE_RECEIPT_REVIEWERS, DELEGATE_REVIEWERS
 from coordinator_core.subagent_sandbox.provision_report import (
     _INTEGRATOR_AGENT_TYPE,
-    _is_delegate_reviewer,
+    _is_close_receipt_reviewer,
     _receipt_agent_type,
 )
 
@@ -37,7 +37,7 @@ def test_a_named_dispatch_stamps_the_type_not_the_label():
     the name `the Staff Engineer-gate`."""
     agent_type, subagent_type = "patrik-gate", "coordinator:staff-eng"
 
-    assert _is_delegate_reviewer(agent_type, subagent_type), (
+    assert _is_close_receipt_reviewer(agent_type, subagent_type), (
         "eligibility already resolved this correctly — only the stamp was wrong"
     )
     assert (
@@ -92,3 +92,30 @@ def test_the_integrator_receipt_has_the_same_resolution():
         )
         == "coordinator:review-integrator"
     )
+
+
+def test_close_floor_reviewer_resolves_and_stamps_a_receipt():
+    """C2: the close-floor's own mandatory reviewer (`overengineering-reviewer`)
+    is a `CLOSE_RECEIPT_REVIEWERS` member but NOT a `DELEGATE_REVIEWERS` one —
+    eligibility must be checked against the wider set, or Kira's sidecar never
+    gets a `review_receipt:` block at all."""
+    agent_type, subagent_type = "coordinator:overengineering-reviewer", ""
+
+    assert "overengineering-reviewer" not in DELEGATE_REVIEWERS, (
+        "the close-floor reviewer must stay OUT of the delegate set — this "
+        "test would be vacuous if it were already a member"
+    )
+    assert _is_close_receipt_reviewer(agent_type, subagent_type)
+    assert (
+        _receipt_agent_type(agent_type, subagent_type, CLOSE_RECEIPT_REVIEWERS)
+        == "coordinator:overengineering-reviewer"
+    )
+
+
+def test_a_non_reviewer_teammate_name_stamps_nothing():
+    """A plain named teammate that is neither a delegate reviewer, the
+    close-floor reviewer, nor the integrator must not be treated as
+    receipt-eligible at all."""
+    agent_type, subagent_type = "archive-guard", ""
+
+    assert not _is_close_receipt_reviewer(agent_type, subagent_type)

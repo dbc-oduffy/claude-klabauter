@@ -324,8 +324,32 @@
     },
     {
       "module": "coordinator_core/orient_assemble/readers_health_reaper.py",
+      "directive_id": "d-git-perf-currency",
+      "cli": "workday-start-health-probes",
+      "unresolved": true,
+      "unaccepted": [],
+      "undeclared_required": []
+    },
+    {
+      "module": "coordinator_core/orient_assemble/readers_health_reaper.py",
+      "directive_id": "d-hook-currency",
+      "cli": "workday-start-health-probes",
+      "unresolved": true,
+      "unaccepted": [],
+      "undeclared_required": []
+    },
+    {
+      "module": "coordinator_core/orient_assemble/readers_health_reaper.py",
       "directive_id": "d-claude-klabauter-bin-sentinel",
       "cli": "workday-start-health-probes",
+      "unresolved": true,
+      "unaccepted": [],
+      "undeclared_required": []
+    },
+    {
+      "module": "coordinator_core/orient_assemble/readers_health_reaper.py",
+      "directive_id": "d-reaper-orphaned-handoffs",
+      "cli": "reap-orphaned-in-flight-handoffs",
       "unresolved": true,
       "unaccepted": [],
       "undeclared_required": []
@@ -548,6 +572,14 @@
     },
     {
       "module": "coordinator_core/workstream_complete/directives_review.py",
+      "directive_id": "d-close-coverage-advisory",
+      "cli": "",
+      "unresolved": true,
+      "unaccepted": [],
+      "undeclared_required": []
+    },
+    {
+      "module": "coordinator_core/workstream_complete/directives_review.py",
       "directive_id": "d-freeze-and-dispatch-review-partition-integrator",
       "cli": "fan-out-integrator",
       "unresolved": true,
@@ -558,6 +590,14 @@
       "module": "coordinator_core/workstream_complete/directives_review.py",
       "directive_id": "d-run-review-brightline-gate",
       "cli": "review-brightline-gate",
+      "unresolved": true,
+      "unaccepted": [],
+      "undeclared_required": []
+    },
+    {
+      "module": "coordinator_core/workstream_complete/directives_review.py",
+      "directive_id": "d-write-review-trail",
+      "cli": "coordinator-write-review-trail",
       "unresolved": true,
       "unaccepted": [],
       "undeclared_required": []

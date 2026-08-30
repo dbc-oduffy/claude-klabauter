@@ -199,6 +199,7 @@ from coordinator_core.warm import (
     election,
     idle,
     lifecycle,
+    push_cadence,
     settings_home_claim,
     skew,
     telemetry,
@@ -1063,6 +1064,7 @@ def _serve_line(
     mark_invocation: Callable[[], None] = idle.mark_invocation,
     record_invocation: Callable[[bool], None] = lambda warm: None,
     record_exit: Callable[..., None] = lambda reason, detail=None: None,
+    record_served_repo: Callable[[Any], None] = lambda repo_root: None,
 ) -> None:
     """Process one request frame for one connection: write exactly one
     response frame (or delegate that write to `warm.skew.evict_on_skew`'s
@@ -1109,6 +1111,18 @@ def _serve_line(
     `warm.telemetry`; `record_exit` records why this server is about to
     exit, called before `drain` on the skew path so `_ctx_shutdown`'s later
     `telemetry.flush()` observes the reason.
+
+    `record_served_repo` is called, once per request that carries one, with
+    the envelope's own `_origin_worktree` (`ipc.resolve_request_repo`) --
+    this is `warm.push_cadence`'s THE REPO SET derivation: the set of repos
+    a server has actually served is built from exactly this call, never
+    from a disk scan. Resolved here (before `dispatch`, zero spawns, an
+    in-process read of the already-parsed envelope) rather than inside
+    `_run_dispatch`/`_pool_dispatch_worker`, so it is recorded identically
+    whether this request runs in-process or in a pool worker process --
+    `_pool_dispatch_worker` runs in a SEPARATE process and cannot write
+    back into this server's own served-repo set. A request naming no
+    worktree (a central/`none`-scoped op) records nothing.
     """
     mark_invocation()
     released = False
@@ -1191,6 +1205,18 @@ def _serve_line(
             return
 
     try:
+        from coordinator_core.ipc import resolve_request_repo
+
+        origin_repo = resolve_request_repo(msg)
+    except Exception:  # noqa: BLE001 -- recording the served repo must never fail a caller
+        origin_repo = None
+    if origin_repo is not None:
+        try:
+            record_served_repo(origin_repo)
+        except Exception:  # noqa: BLE001 -- see above
+            pass
+
+    try:
         response = dispatch(msg, session_id=caller_session_id)
     except Exception as exc:  # noqa: BLE001 -- never fail the caller, see module docstring
         response = {
@@ -1214,6 +1240,7 @@ def _handle_connection(
     mark_invocation: Callable[[], None] = idle.mark_invocation,
     record_invocation: Callable[[bool], None] = lambda warm: None,
     record_exit: Callable[..., None] = lambda reason, detail=None: None,
+    record_served_repo: Callable[[Any], None] = lambda repo_root: None,
     already_entered: bool = False,
 ) -> None:
     """One connection's request/response lifecycle, run on its own thread.
@@ -1271,6 +1298,7 @@ def _handle_connection(
             mark_invocation=mark_invocation,
             record_invocation=record_invocation,
             record_exit=record_exit,
+            record_served_repo=record_served_repo,
         )
     finally:
         _exit_once()
@@ -1416,6 +1444,14 @@ class _ServerContext:
         self._listening = True
         self._stopped = threading.Event()
         self._idle_watchdog_stop = threading.Event()
+        # `warm.push_cadence`'s THE REPO SET: every distinct worktree root
+        # this server has actually served (`_serve_line`'s
+        # `record_served_repo`), never a disk scan. A `dict` preserves
+        # first-served order (Python 3.7+) purely for deterministic test
+        # output -- iteration order carries no other meaning here, every
+        # sweep visits the whole set.
+        self._served_repos_lock = threading.Lock()
+        self._served_repos: "dict[Path, None]" = {}
         # Lazily constructed -- see `_ensure_dispatch_pool`. Left `None`
         # until a real worker thread actually dispatches through it, so a
         # test that constructs a `_ServerContext` (or even starts the
@@ -1453,6 +1489,23 @@ class _ServerContext:
 
     def record_invocation(self, warm: bool) -> None:
         self.telemetry.record_invocation(warm=warm)
+
+    def record_served_repo(self, repo_root: Any) -> None:
+        """Record one more envelope-carried worktree root into this
+        server's served-repo set -- `warm.push_cadence.on_idle_tick`'s
+        `served_repos` callable (bound via `self.served_repos`) reads this
+        set live on every sweep tick.
+        """
+        with self._served_repos_lock:
+            self._served_repos[Path(repo_root)] = None
+
+    def served_repos(self) -> list:
+        """A snapshot list of every worktree root recorded so far -- a
+        live read at call time, never a value captured once at boot, per
+        `warm.push_cadence.ServedReposFn`'s own contract.
+        """
+        with self._served_repos_lock:
+            return list(self._served_repos.keys())
 
     def record_exit(self, reason: str, detail: Optional[str] = None) -> None:
         self.telemetry.record_exit(reason, detail)
@@ -1650,6 +1703,29 @@ class _ServerContext:
             in_flight_count=self.in_flight,
             ctx_shutdown=self._ctx_shutdown,
         )
+        # `warm.push_cadence`'s cadence counter, on this SAME tick -- see
+        # that module's HOST section. Placed AFTER `demote_if_idle` so a
+        # tick that actually demotes never runs a sweep of its own here
+        # (the process has already `os._exit`ed inside `begin_shutdown` by
+        # the time control would reach this line): the idle-tick sweep and
+        # the mandatory exit-path sweep (`_final_sweep`, wired via
+        # `lifecycle.set_final_sweep_hook`) are deliberately two disjoint
+        # code paths, never double-invoked for the same tick.
+        push_cadence.on_idle_tick(served_repos=self.served_repos)
+
+    def _final_sweep(self) -> None:
+        """The mandatory final sweep (`warm.push_cadence` module docstring,
+        `warm.lifecycle._run_tail`'s own docstring) -- registered once, at
+        boot, as `lifecycle`'s final-sweep hook, so it runs on EVERY exit
+        path through `_run_tail` (idle demotion, skew eviction, operator
+        request, degraded self-stop) regardless of which entry point fired.
+        Bounded by `push_cadence.EXIT_SWEEP_CEILING_SECS`, tighter than the
+        idle-tick sweep's own ceiling -- see that constant's docstring for
+        why an unbounded exit sweep is worse than an unbounded idle-tick one.
+        """
+        push_cadence.sweep_repos(
+            self.served_repos(), total_ceiling_secs=push_cadence.EXIT_SWEEP_CEILING_SECS
+        )
 
     def _idle_watchdog_loop(self) -> None:
         """Runs on its OWN thread, independent of the accept loop -- the
@@ -1701,6 +1777,7 @@ class _ServerContext:
         them are counted in `InFlightCounter`, so a pool of unconnected
         listeners can never stall the drain wait.
         """
+        lifecycle.set_final_sweep_hook(self._final_sweep)
         self._start_worker_pool()
         self._start_pending_listener_pool(first_handle)
         threading.Thread(target=self._idle_watchdog_loop, daemon=True).start()
@@ -1731,6 +1808,7 @@ class _ServerContext:
         docstring's DRAIN SEMANTICS names is transport-independent, and
         this method changes only what sits on its far side.
         """
+        lifecycle.set_final_sweep_hook(self._final_sweep)
         self._start_worker_pool()
         self._start_acceptor_pool(listen_socket)
         threading.Thread(target=self._idle_watchdog_loop, daemon=True).start()
@@ -1863,6 +1941,7 @@ class _ServerContext:
                     dispatch=self._pool_dispatch,
                     record_invocation=self.record_invocation,
                     record_exit=self.record_exit,
+                    record_served_repo=self.record_served_repo,
                     already_entered=True,
                 )
             except Exception as exc:  # noqa: BLE001 -- see docstring: a dead worker is a permanent capacity loss, not a single lost response

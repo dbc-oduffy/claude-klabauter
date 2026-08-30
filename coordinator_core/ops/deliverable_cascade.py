@@ -23,7 +23,7 @@ NEVER the `plan:` pointer (1 of 80 live handoffs carries it; C12 retires it). Th
 plain string-equality on `deliverable_id`.
 
 Second target kind (C2, this chunk): a CLOSED kind-descriptor (`_KindDescriptor`,
-`_KIND_DESCRIPTORS`) parameterises `_collect_live_candidates` over corpus dir,
+`_KIND_DESCRIPTORS`) parameterises `_collect_live_candidates_for_kind` over corpus dir,
 record reader, lifecycle field/terminal-value set, validator schema, and the
 DR-263 predicate-leg policy table. Two kinds are registered: `handoff`
 (default, this section's description, byte-for-byte unchanged) and `sizing`
@@ -295,7 +295,7 @@ def _read_sizing_meta(file_path: str) -> dict:
     whole-document YAML file (see module docstring "Measured in the spike"), a
     sizing-object IS the entire document with no fences. This reader RAISES on
     a parse failure or a non-mapping result rather than swallowing it, so
-    `_collect_live_candidates`'s sizing-kind path (AC6a) can route the failure
+    `_collect_live_candidates_for_kind`'s sizing-kind path (AC6a) can route the failure
     into `scan_incomplete`/`unreadable` instead of a silent empty-candidate
     zero — the same silent-zero-match hazard the spike measured, reached by a
     different door (a malformed record, not a wrong `base_dir`).
@@ -309,7 +309,7 @@ def _read_sizing_meta(file_path: str) -> dict:
 
 # ---------------------------------------------------------------------------
 # Kind descriptor (AC5, AC6, AC6a, AC11) — the CLOSED, per-target-kind shape
-# `_collect_live_candidates` (this chunk) and C3's per-kind write sides key
+# `_collect_live_candidates_for_kind` (this chunk) and C3's per-kind write sides key
 # off. Per the plan's own restated shape (§ "Restating the shape honestly"),
 # this is THREE things, not two: the corpus/reader/lifecycle-field shape the
 # read side parameterises over, PLUS a predicate-leg POLICY TABLE (AC11) —
@@ -464,20 +464,6 @@ def _claimant(candidate_path: Path, repo_root: Path) -> Optional[str]:
 # ---------------------------------------------------------------------------
 # Candidate collection — state/handoffs/*.md only (live, flat; see module docstring)
 # ---------------------------------------------------------------------------
-
-
-def _collect_live_candidates(worktree_root: Path, deliverable_id: str) -> tuple[List[dict], bool]:
-    """Byte-for-byte-compatible 2-tuple wrapper over `_collect_live_candidates_for_kind`,
-    fixed to the handoff kind (this function's own pre-existing, only behaviour before
-    this chunk). Preserved under its original name/signature because
-    `coordinator_core.ops.cascade_backstop_sweep` — outside this chunk's scope — calls
-    it directly and unpacks exactly two values; the parameterised (AC5/AC6/AC6a) form
-    lives under a new name below so that caller is unaffected by this chunk.
-    """
-    matches, scan_incomplete, _unreadable = _collect_live_candidates_for_kind(
-        worktree_root, deliverable_id, kind=_HANDOFF_KIND
-    )
-    return matches, scan_incomplete
 
 
 def _collect_live_candidates_for_kind(

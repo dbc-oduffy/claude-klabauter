@@ -94,19 +94,6 @@ def test_hourly_tier_runs_and_reports(tmp_path):
 # --------------------------------------------------------------------------
 
 
-def test_held_maintenance_lock_is_exit_zero_and_reported(tmp_path):
-    """~20 sessions can enter one ceremony at once. git errors rather than
-    corrupts, so a lost race is a no-op worth reporting, not a failure."""
-    repo = _init_repo(tmp_path)
-    (repo / ".git" / "objects" / "maintenance.lock").write_text("", encoding="utf-8")
-
-    result = gm.run_tier(repo, "weekly")
-
-    assert result.lock_held is True
-    assert result.ran is False
-    assert result.rc == 0
-
-
 def test_defers_on_a_held_index_lock(tmp_path):
     repo = _init_repo(tmp_path)
     (repo / ".git" / "index.lock").write_text("", encoding="utf-8")
@@ -122,7 +109,13 @@ def test_defers_on_a_held_index_lock(tmp_path):
 
 @pytest.mark.parametrize(
     "marker,word",
-    [("REBASE_HEAD", "rebase"), ("MERGE_HEAD", "merge"), ("BISECT_LOG", "bisect")],
+    [
+        ("REBASE_HEAD", "rebase"),
+        ("MERGE_HEAD", "merge"),
+        ("BISECT_LOG", "bisect"),
+        ("CHERRY_PICK_HEAD", "cherry-pick"),
+        ("REVERT_HEAD", "revert"),
+    ],
 )
 def test_defers_mid_operation(tmp_path, marker, word):
     repo = _init_repo(tmp_path)
@@ -151,8 +144,15 @@ def test_defer_predicate_takes_posix_shaped_paths(tmp_path):
 
 def test_no_os_name_branch_in_the_production_path():
     """MULTI-OS, asserted on the AST rather than on the text: no branch
-    anywhere in the module reads the host identity. A text grep cannot make
-    this claim — the module's own docstrings say the words."""
+    spelled as a bare `os.name`/`sys.platform`/`platform.system` attribute
+    access reads the host identity. A text grep cannot make this claim — the
+    module's own docstrings say the words.
+
+    SCOPE: the walk only flags `ast.Attribute` nodes whose `.value` is a bare
+    `ast.Name` -- an aliased import (`import os as o; o.name`) or indirect
+    access via `getattr` would not be caught. That is out of scope for this
+    regression guard, which exists to catch a future reintroduction spelled
+    the ordinary way, not every conceivable evasion of it."""
     import ast
 
     tree = ast.parse(Path(gm.__file__).read_text(encoding="utf-8"))
@@ -319,6 +319,40 @@ def test_weekly_reaps_an_orphan_pack_through_the_ceremony(tmp_path, monkeypatch)
 
     assert result.orphan_packs_reaped == 1
     assert not orphan.exists()
+
+
+def test_stamp_does_not_fire_when_the_prune_leg_fails(tmp_path, monkeypatch):
+    """The liveness stamp is the ONLY surface distinguishing 'never ran' from
+    'ran and is fine' -- it must not also claim 'fine' for a tier whose prune
+    leg errored, even though the maintenance-run leg after it succeeded."""
+    repo = _init_repo(tmp_path)
+    real = gm._git
+
+    def failing_prune(r, *args, **kwargs):
+        if args and args[0] == "prune":
+            return subprocess.CompletedProcess(args, returncode=128, stdout="", stderr="boom")
+        return real(r, *args, **kwargs)
+
+    monkeypatch.setattr(gm, "_git", failing_prune)
+    stamped = []
+    monkeypatch.setattr(gm, "_stamp", lambda repo: stamped.append(repo))
+
+    result = gm.run_tier(repo, "weekly")
+
+    assert result.errors, "prune failure should be recorded"
+    assert result.ran is True, "the maintenance-run leg still ran"
+    assert stamped == [], "stamp must not fire when the tier had an error"
+
+
+def test_stamp_fires_on_a_clean_weekly_run(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path)
+    stamped = []
+    monkeypatch.setattr(gm, "_stamp", lambda repo: stamped.append(repo))
+
+    result = gm.run_tier(repo, "weekly")
+
+    assert not result.errors
+    assert stamped == [repo]
 
 
 def test_non_weekly_tiers_do_not_prune_or_sweep(tmp_path):

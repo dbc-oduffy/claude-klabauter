@@ -6391,6 +6391,15 @@ def check_validate_commit(
                 # record, import error): an unprovable state stays
                 # unprovable, never promoted to a refusal.
                 _own_content_hashes: Dict[str, str] = {}
+                # This session's own LIVE claims, read before `compute_scope`
+                # subtracts anything. `my_scope` is `own − ⋃(LIVE peers' claims
+                # ∩ dirty)`, so a path this session genuinely recorded still
+                # falls through to the foreign-owner arm below the moment a live
+                # peer also claims it. Without this set that arm can only say
+                # "not in this session's touch list", which is FALSE in exactly
+                # the case whose printed remedy cannot work — recording the path
+                # again lands it straight back in the subtracted set.
+                _own_claimed_paths: set = set()
                 if my_scope is not None:
                     try:
                         from coordinator_core.session import touch_record as _touch_record_mod
@@ -6400,6 +6409,11 @@ def check_validate_commit(
                         _own_projection = _touch_record_mod.project_live_claims(
                             _own_sink, cwd=_cwd
                         )
+                        _own_claimed_paths = {
+                            _path
+                            for _path, _event in _own_projection.claims.items()
+                            if _event.session_id == session_id
+                        }
                         _own_content_hashes = {
                             _path: _event.content_hash
                             for _path, _event in _own_projection.claims.items()
@@ -6408,6 +6422,7 @@ def check_validate_commit(
                         }
                     except Exception:
                         _own_content_hashes = {}
+                        _own_claimed_paths = set()
 
                 # C6b item 2 (2026-08-27-a-pathspec-is-not-a-scope): a staged
                 # file that no longer exists ANYWHERE on disk AND was never
@@ -6603,6 +6618,24 @@ def check_validate_commit(
 
                     if scope_strict and not compute_scope_raised and _owner_is_provable:
                         _record_scope_event("deny", _warned_paths)
+                        if staged_file in _own_claimed_paths:
+                            # CONTESTED, not unclaimed. Say so, and do NOT print
+                            # the record-it-as-touched remedy: this session
+                            # already recorded it and contention subtracted it
+                            # anyway, so that sentence teaches its reader that
+                            # the remedy does not work (measured live
+                            # 2026-08-30 — the author unstaged and abandoned
+                            # three of the close's own artifacts).
+                            return _deny(
+                                "BLOCKED (strict scope): %s is claimed by BOTH "
+                                "this session and %s, and a live peer's claim "
+                                "wins — recording it again will not clear this.\n\n"
+                                "Unstage it (git restore --staged %s). If this "
+                                "session is the real author, the peer's claim is "
+                                "what has to go: it is this session's write "
+                                "recorded under the wrong id, not a peer edit."
+                                % (staged_file, owner_sentence, staged_file)
+                            )
                         return _deny(
                             "BLOCKED (strict scope): %s is staged but not in "
                             "this session's touch list — owned by %s.\n\n"

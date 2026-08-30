@@ -406,6 +406,27 @@ _VALID_QUEUE_SCOPES = ("project", "central")
 
 _SUBPROCESS_TIMEOUT_SECS = 30
 
+
+def _child_identity_env() -> dict:
+    """The environment both spawns below must run under, never the inherited one.
+
+    Each `cmd` here names a MUTATING, touch-recording CLI. Inherited identity
+    vars name whoever spawned the process this one runs inside — the warm
+    server's own spawner when a ceremony reaches this code in-process — so the
+    child files its writes under a live peer and the author's later commit is
+    refused on a provably-foreign owner. See
+    `session.core.subprocess_identity_env` for the measured instance and for
+    why an unresolvable identity strips the vars rather than inheriting them.
+
+    Import is call-time: `_bootstrap_engine()` has run by the time either
+    caller reaches its spawn, and module scope here stays engine-free.
+    """
+    _bootstrap_engine()
+    from coordinator_core.session.core import subprocess_identity_env
+
+    return subprocess_identity_env()
+
+
 # Write-seam env-override names — MUST mirror the write seams' own resolution
 # precedence exactly (see _candidate_search_dirs' write-seam-parity comment
 # below for the failure mode this guards against).
@@ -1100,7 +1121,13 @@ def _run_queue_append(row: dict, key: str, dry_run: bool) -> bool:
         cmd.extend(["--case-against", str(case_against)])
 
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=_SUBPROCESS_TIMEOUT_SECS)
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=_SUBPROCESS_TIMEOUT_SECS,
+            env=_child_identity_env(),
+        )
     except subprocess.TimeoutExpired:
         print(
             f"error: coordinator-harvest-deferrals: coordinator-queue-append timed out "
@@ -1172,7 +1199,13 @@ def _run_lesson_promote(row: dict, key: str, dry_run: bool) -> bool:
     ]
 
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=_SUBPROCESS_TIMEOUT_SECS)
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=_SUBPROCESS_TIMEOUT_SECS,
+            env=_child_identity_env(),
+        )
     except subprocess.TimeoutExpired:
         print(
             f"error: coordinator-harvest-deferrals: coordinator-lesson-promote timed out "

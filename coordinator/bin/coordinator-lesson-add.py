@@ -387,9 +387,21 @@ def main(argv: "list[str] | None" = None) -> int:
         cmd += ["--how-to-apply", args.how_to_apply]
 
     from coordinator_core.win_portability import no_console_creationflags, no_console_passthrough_kwargs
+    from coordinator_core.session.core import subprocess_identity_env
 
+    # `env=` is not optional here. This CLI is a CONSUMES_MANIFEST member that
+    # `workstream_complete.apply` loads and runs IN-PROCESS -- inside the warm
+    # server when the ceremony came through the warm door. The child below is
+    # the one leg that leaves that process, and an inherited environment names
+    # the server's spawner, so `coordinator-queue-append` cold-resolved a live
+    # peer and filed this session's lesson under it (backlog
+    # 2026-08-30-the-warm-engine-touch-records-a-session-9c5555208afd).
+    # `subprocess_identity_env` carries the caller's resolved id across the
+    # boundary, and STRIPS the identity vars when there is none to carry --
+    # see its own docstring for why inheritance is never the fallback.
     result = subprocess.run(
         cmd,
+        env=subprocess_identity_env(),
         **no_console_passthrough_kwargs(),
     )
     return result.returncode

@@ -836,3 +836,61 @@ def test_normalize_arrow_dialects_refuses_to_clobber_existing_backup(tmp_path):
 
     assert backup_path.read_text(encoding="utf-8") == prior_backup_content
     assert log_path.read_text(encoding="utf-8") == ARROW_DIALECT_FIXTURE
+
+
+# ---------------------------------------------------------------------------
+# `(run: <id>)`-tailed arrow rows are out of scope and must be refused, not migrated
+# (doe-claude-em memo, 2026-08-30: 780/1437 rows corrupted with rows_skipped == 0)
+# ---------------------------------------------------------------------------
+
+_TAILED_ROW = (
+    "- archive/specs/2026-03/2026-03-08-agent-hierarchy-design.md -> DISTILLED "
+    "(harvested; superseded by the hierarchy guide this run) (run: 2026-07-19-synth)"
+)
+
+
+def test_normalize_arrow_dialects_skips_row_that_already_has_a_run_tail(tmp_path):
+    log_path = tmp_path / "distillation-log.md"
+    log_path.write_text(
+        "## Run 2026-07-19-synth\n"
+        f"{_TAILED_ROW}\n"
+        "- archive/specs/tailless.md -> DISTILLED (harvested; folded into wiki guide)\n",
+        encoding="utf-8",
+    )
+
+    result = normalize_arrow_dialects_log(log_path)
+
+    assert result.rows_skipped == 1
+    assert result.rows_rewritten == 1
+    assert "already carries a '(run: <id>)' tail" in result.skipped[0].reason
+    assert result.skipped[0].line == 2
+
+
+def test_normalize_arrow_dialects_leaves_run_tailed_row_byte_identical(tmp_path):
+    log_path = tmp_path / "distillation-log.md"
+    log_path.write_text(
+        "## Run 2026-07-19-synth\n"
+        f"{_TAILED_ROW}\n"
+        "- archive/specs/tailless.md -> DISTILLED (harvested; folded into wiki guide)\n",
+        encoding="utf-8",
+    )
+
+    normalize_arrow_dialects_log(log_path)
+
+    lines = log_path.read_text(encoding="utf-8").splitlines()
+    assert lines[1] == _TAILED_ROW
+    # the corruption shape the memo reported: fate swallowing the original tail and a
+    # second one appended, which `_row_round_trips` cannot detect
+    assert "(run: 2026-07-19-synth (run: 2026-07-19-synth)" not in lines[1]
+
+
+def test_normalize_arrow_dialects_all_rows_run_tailed_refuses_to_write(tmp_path):
+    log_path = tmp_path / "distillation-log.md"
+    original = f"## Run 2026-07-19-synth\n{_TAILED_ROW}\n"
+    log_path.write_text(original, encoding="utf-8")
+
+    with pytest.raises(NoArrowDialectRowsError):
+        normalize_arrow_dialects_log(log_path)
+
+    assert log_path.read_text(encoding="utf-8") == original
+    assert not log_path.with_name(log_path.name + ".arrow-dialect-backup").exists()

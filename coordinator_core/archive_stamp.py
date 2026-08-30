@@ -1726,102 +1726,126 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def _record_human_claimant_best_effort(target_path: str, worktree: Path) -> None:
-    """C8: additive claim-time stamp of the OPERATING HUMAN, beside
-    `picked_up_by`/`claimed_by` (which keep carrying the SESSION id,
-    unchanged — liveness and the claim ledger still key on those).
+def _record_claimant_identity_best_effort(
+    target_path: str, worktree: Path, anchor_field: str, claimant_sid: str
+) -> None:
+    """Claim-time stamp of the OPERATING HUMAN and the claiming SESSION's harness
+    identity, beside the `claimed_by`/`picked_up_by` UUID, which stays the durable
+    identity and is unchanged.
 
-    PM ruling, 2026-08-19 (one-box-one-human): the claiming session resolves
-    the operating human at the moment it claims, exactly as C4 does at the
-    creation door (`resolve_operating_person().get("github")`, the same
-    resolution `minted_by` uses) — authored, never derived, and never
-    resolved inside a sweep. Do NOT use `machine_resolver.compute_contributor`
-    here — that is a differently-derived, differently-shaped "contributor
-    slug" (env var / machine-registry / email-derived, with an "unknown"
-    fallback) that is NOT this axis's value space; see this chunk's brief.
+    <!-- Review: overengineering-reviewer (Kira), 2026-08-30 — folded from a sibling
+    function (`_record_human_claimant_best_effort`, C8) that ran as its own
+    lock-and-RMW pass over the same file one line BEFORE this one; same guard, same
+    mutate shape, same insert-when-absent rule, same `locked_rmw` call. `human_claimant`
+    is now one more row in this function's `fields` list, one lock, one RMW. -->
 
-    Best-effort and non-fatal, mirroring `_record_pickup_best_effort`'s own
-    contract: an unresolvable operating human, or any write failure, leaves
-    `human_claimant` unset rather than aborting the caller's claim. Inserted
-    ONLY when absent — a claim record already carrying `human_claimant` (e.g.
-    idempotent re-claim by the same session) is left untouched, never
-    re-stamped or overwritten.
-    """
-    slug = resolve_operating_person().get("github")
-    if not slug:
-        return
-    try:
-        repo_root = _git_common_dir(worktree)
-        if repo_root is None:
-            return
+    `human_claimant` (C8, PM ruling 2026-08-19, one-box-one-human): the claiming
+    session resolves the operating human at the moment it claims, exactly as C4 does at
+    the creation door (`resolve_operating_person().get("github")`, the same resolution
+    `minted_by` uses) — authored, never derived, and never resolved inside a sweep. Do
+    NOT use `machine_resolver.compute_contributor` here — that is a differently-derived,
+    differently-shaped "contributor slug" (env var / machine-registry / email-derived,
+    with an "unknown" fallback) that is NOT this axis's value space. `human_claimant`
+    anchors on `picked_up_by` on BOTH the handoff and memo claim paths — this is
+    unrelated to `anchor_field`, which only governs where the session-identity fields
+    below land, and is preserved exactly as the pre-fold code anchored it.
 
-        def _mutate(old_text: str) -> str:
-            split = split_frontmatter(old_text)
-            if split is None:
-                raise MutateAbort(f"no parseable YAML frontmatter in {target_path}")
-            fm_text = split.fm_text
-            if read_fm_field(fm_text, "human_claimant") is not None:
-                return old_text
-            fm_text = insert_fm_field(fm_text, "human_claimant", slug, "picked_up_by", numeric_quoting=True)
-            return rebuild(split, fm_text)
-
-        locked_rmw(Path(target_path), _mutate, repo_root=repo_root)
-    except Exception as exc:  # noqa: BLE001 — best-effort, must never abort the caller
-        print(
-            f"_record_human_claimant_best_effort: WARNING — human_claimant not "
-            f"recorded for {target_path} ({exc}); non-fatal",
-            file=sys.stderr,
-        )
-
-
-def _record_claimant_identity_best_effort(target_path: str, worktree: Path, anchor_field: str) -> None:
-    """Claim-time stamp of the claiming SESSION's harness identity — `claimed_by_name`
-    (the peer label) and `claimed_by_address` (its `SendMessage` socket) — beside the
-    `claimed_by`/`picked_up_by` UUID, which stays the durable identity and is unchanged.
-
-    PM ruling, 2026-08-30. Closes a real gap the UUID alone cannot: while the claimant
-    is LIVE, `session.resolve_address` already answers "who holds this baton" and no
-    stamp is needed; once it EXITS its registry record is gone and the UUID resolves to
-    `not_reachable/no-live-record`, leaving a claimed, in-flight baton whose owner
-    cannot even be named. Observed on
+    `claimed_by_name` (the harness peer label) — PM ruling, 2026-08-30. Closes a real
+    gap the UUID alone cannot: while the claimant is LIVE, `session.resolve_address`
+    already answers "who holds this baton" and no stamp is needed; once it EXITS its
+    registry record is gone and the UUID resolves to `not_reachable/no-live-record`,
+    leaving a claimed, in-flight baton whose owner cannot even be named. Observed on
     `state/handoffs/2026-08-30-ceremony-driven-git-maintenance.md`.
 
-    `claimed_by_address` IS NOT A SEND TARGET, and narrows rather than reverses
-    `session.work_state._resolve_send_message_addresses`' negative-spec ("must never be
-    persisted and reused past the instant it was computed... a dead socket can be reused
-    by an unrelated LATER session"). That hazard is real and unmitigated by the stamp
-    alone, so the field is written for FORENSICS and STALENESS DETECTION only. A caller
-    that wants to message the claimant MUST re-resolve `claimed_by` through
-    `reachability.resolve_address` and send to THAT; a stamped address matching the
-    re-resolved one means the original claimant is still live, and a mismatch (or a
-    `not_reachable`) means the stamp is stale and the socket may now belong to an
-    unrelated session. Comparing the two is the only sanctioned read.
+    FORENSIC ONLY, never a routing key: harness peer labels are recycled across
+    sessions, so this names who claimed the baton and is not safe to send to. A caller
+    that wants to message the claimant re-resolves `claimed_by` through
+    `reachability.resolve_address` and sends to what THAT returns.
+
+    <!-- Review: overengineering-reviewer (Kira), 2026-08-30 — a sibling
+    `claimed_by_address` field (the claimant's `SendMessage` socket) was written here and
+    is now REMOVED. It had zero consumers tree-wide, including the abandoned-claim
+    orientation signal shipped in the same session, which reads `claimed_by_name` and
+    skips the address. The rationale for persisting it was that a stamped address could
+    be compared against a fresh `resolve_address(claimed_by)` to detect staleness — but
+    that resolve decides both branches on its own (live record means live,
+    `not_reachable` means gone), so the stamped operand contributed no information. It
+    reversed `session.work_state._resolve_send_message_addresses`' negative-spec ("must
+    never be persisted and reused past the instant it was computed... a dead socket can
+    be reused by an unrelated LATER session") for nothing. Do not reintroduce it without
+    a consumer that a bare UUID cannot serve. -->
 
     Resolution is `harness_registry.self_record()` — the O(1) leg, one registry-record
     `read_text`, no `snapshot()` scan and no spawn, so this adds nothing measurable to
     the claim path.
 
-    Best-effort and non-fatal, mirroring `_record_human_claimant_best_effort`'s contract:
-    an unresolvable record, a record carrying neither field (the harness omits
-    `messagingSocketPath` whenever its cross-session-inbox gate is off), or any write
-    failure leaves the fields unset rather than aborting the caller's claim. Each field
-    is inserted ONLY when absent and only when its value is non-empty — an idempotent
-    re-claim by the same session never re-stamps or overwrites.
+    **Resolution is keyed on `claimant_sid`, never on the ambient environment.** This
+    field describes WHO HOLDS THE BATON, and the only thing that knows that is the same
+    id being written to `claimed_by`/`picked_up_by`. `harness_registry.self_record()`
+    keys on `CLAUDE_PID` read from the environment; inside a warm server that environment
+    belongs to whichever session STARTED the server, not to the caller it is serving, so
+    an ambient resolution answers a question nobody asked and answers it confidently.
+    Ungated it produced a record whose id was right and whose name pointed at an
+    uninvolved live peer — a wrong answer to "who holds this baton" that reads exactly
+    like a right one. Reported cross-repo by doe-claude-em 2026-08-30 and reproduced
+    same-repo on that memo's own claim stamp.
+
+    Two legs, cheapest first, and the SECOND is what makes this correct rather than
+    merely safe:
+
+    1. `self_record()` — one registry-record `read_text`, no `glob`, no spawn. Its
+       `(sessionId, record)` return exists so a caller can make exactly this trust check
+       (see its own docstring). When that `sessionId` IS `claimant_sid`, the O(1) answer
+       is also the right one and the cold path pays nothing new.
+    2. Otherwise `harness_registry.lookup(claimant_sid)` — `snapshot()`'s single
+       directory scan, keyed on the claimant rather than on a pid. Measured 1.56ms
+       process time over 19 records on 2026-08-30, far inside the brightline and paid
+       ONLY on the leg where the O(1) answer was wrong. Merely omitting here would be a
+       fail-safe, not a fix: it would leave the field absent on every warm-served claim,
+       which is most of them on this box, retiring the capability the field exists for —
+       naming a claimant whose session has since exited.
+
+    Best-effort and non-fatal throughout: an unresolvable operating human, an
+    unresolvable registry record, a record carrying no `name`, or any write failure
+    leaves the corresponding field(s) unset rather than aborting the caller's claim.
+    Each field is inserted ONLY when absent and only when its value is non-empty — an
+    idempotent re-claim by the same session never re-stamps or overwrites either
+    field.
     """
+    try:
+        slug = resolve_operating_person().get("github")
+    except Exception:  # noqa: BLE001 — best-effort; see this function's own contract
+        # Review: code-reviewer 2026-08-30 P1. This call sat ahead of every
+        # try/except, so a raising resolver propagated out of a function whose
+        # docstring promises it never aborts the caller's claim -- and both call
+        # sites invoke it as the LAST statement after the transition has already
+        # landed on disk, so the claim was written and the caller still raised.
+        # Pre-existing in the pre-fold `_record_human_claimant_best_effort`; the
+        # fold is what put it in scope to close.
+        slug = None
     try:
         from coordinator_core.session import harness_registry
 
         parsed = harness_registry.self_record()
     except Exception:  # noqa: BLE001 — best-effort; a registry read failure is not a claim failure
-        return
-    if parsed is None:
-        return
-    _sid, record = parsed
-    fields = [
-        ("claimed_by_name", record.name),
-        ("claimed_by_address", record.messaging_socket_path),
-    ]
-    if not any(value for _key, value in fields):
+        parsed = None
+    if parsed is not None and parsed[0] == claimant_sid:
+        record = parsed[1]
+    else:
+        try:
+            from coordinator_core.session import harness_registry
+
+            record = harness_registry.lookup(claimant_sid)
+        except Exception:  # noqa: BLE001 — best-effort; a registry read is not a claim
+            record = None
+
+    fields: list[tuple[str, str, str]] = []
+    if slug:
+        fields.append(("human_claimant", slug, "picked_up_by"))
+    if record is not None:
+        if record.name:
+            fields.append(("claimed_by_name", record.name, anchor_field))
+    if not fields:
         return
     try:
         repo_root = _git_common_dir(worktree)
@@ -1833,12 +1857,10 @@ def _record_claimant_identity_best_effort(target_path: str, worktree: Path, anch
             if split is None:
                 raise MutateAbort(f"no parseable YAML frontmatter in {target_path}")
             fm_text = split.fm_text
-            for key, value in fields:
-                if not value:
-                    continue
+            for key, value, anchor in fields:
                 if read_fm_field(fm_text, key) is not None:
                     continue
-                fm_text = insert_fm_field(fm_text, key, value, anchor_field, numeric_quoting=True)
+                fm_text = insert_fm_field(fm_text, key, value, anchor, numeric_quoting=True)
             return rebuild(split, fm_text)
 
         locked_rmw(Path(target_path), _mutate, repo_root=repo_root)
@@ -2014,8 +2036,7 @@ def cs_claim_handoff(handoff_path: str, *, return_result: bool = False) -> "int 
 
     _record_pickup_best_effort(handoff_path, worktree, sid)
     _record_session_goal_best_effort(handoff_path, worktree, sid)
-    _record_human_claimant_best_effort(handoff_path, worktree)
-    _record_claimant_identity_best_effort(handoff_path, worktree, "claimed_by")
+    _record_claimant_identity_best_effort(handoff_path, worktree, "claimed_by", sid)
     return result if return_result else 0
 
 
@@ -2063,8 +2084,7 @@ def cs_claim_memo_stamp(memo_path: str, *, return_result: bool = False) -> "int 
     if rc != 0:
         print(f"cs_claim_memo_stamp: {result.get('error', 'unknown error')}", file=sys.stderr)
     elif worktree is not None:
-        _record_human_claimant_best_effort(memo_path, worktree)
-        _record_claimant_identity_best_effort(memo_path, worktree, "picked_up_by")
+        _record_claimant_identity_best_effort(memo_path, worktree, "picked_up_by", sid)
     return result if return_result else rc
 
 

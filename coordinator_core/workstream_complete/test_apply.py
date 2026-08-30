@@ -87,15 +87,15 @@ def test_cli_dispatch_keys_exactly_match_consumes_manifest() -> None:
 
 
 def test_legacy_convert2_names_are_a_subset_of_the_manifest() -> None:
-    """Three of the four CLI names the plan body originally pinned by hand
-    are still individually correct `CONSUMES_MANIFEST` members — just not an
-    exhaustive dispatch boundary any more. (`wsc-tail` was the fourth; it
-    was removed from the manifest in the ceremony.wsc_tail kill,
-    2026-08-23.)"""
+    """Two of the four CLI names the plan body originally pinned by hand are
+    still individually correct `CONSUMES_MANIFEST` members — just not an
+    exhaustive dispatch boundary any more. (`wsc-tail` was the third to go,
+    removed from the manifest in the ceremony.wsc_tail kill, 2026-08-23;
+    `wsc-close` the fourth, 2026-08-30, when its last directive emitter went
+    with `wsc-close tail-args`.)"""
     legacy = {
         "wsc-coverage-gate-runner",
         "check-workstream-complete-deletion-blocks",
-        "wsc-close",
     }
     assert legacy <= set(CONSUMES_MANIFEST)
     assert legacy <= set(ws_apply._CLI_DISPATCH)
@@ -558,10 +558,10 @@ def test_execute_directives_partial_mutation_when_some_land_some_fail(
     def failing_main(argv: list[str]) -> int:
         return 1
 
-    modules = {"wsc-close": _fake_module(ok_main, "fake_ok"), "check-machine-local-regeneratability": _fake_module(failing_main, "fake_fail")}
+    modules = {"wsc-coverage-gate-runner": _fake_module(ok_main, "fake_ok"), "check-machine-local-regeneratability": _fake_module(failing_main, "fake_fail")}
     monkeypatch.setattr(ws_apply, "_load_cli_module", lambda cli_name: modules[cli_name])
 
-    directives = [_directive("d_ok", "wsc-close"), _directive("d_fail", "check-machine-local-regeneratability")]
+    directives = [_directive("d_ok", "wsc-coverage-gate-runner"), _directive("d_fail", "check-machine-local-regeneratability")]
     exit_code, report = ws_apply._execute_directives(directives, [], {})
 
     assert report["landed"] == ["d_ok"]
@@ -584,10 +584,10 @@ def test_execute_directives_one_failure_does_not_block_other_ready_directives(
         order.append("ok")
         return 0
 
-    modules = {"check-machine-local-regeneratability": _fake_module(failing_main, "fake_fail"), "wsc-close": _fake_module(ok_main, "fake_ok")}
+    modules = {"check-machine-local-regeneratability": _fake_module(failing_main, "fake_fail"), "wsc-coverage-gate-runner": _fake_module(ok_main, "fake_ok")}
     monkeypatch.setattr(ws_apply, "_load_cli_module", lambda cli_name: modules[cli_name])
 
-    directives = [_directive("d_fail", "check-machine-local-regeneratability"), _directive("d_ok", "wsc-close")]
+    directives = [_directive("d_fail", "check-machine-local-regeneratability"), _directive("d_ok", "wsc-coverage-gate-runner")]
     ws_apply._execute_directives(directives, [], {})
 
     assert order == ["fail", "ok"]
@@ -1643,7 +1643,9 @@ def test_idempotence_table_directive_ids_are_still_emitted_by_their_builders() -
         # `build_*_directive` function at all.
         "directives_memo_lifecycle.py": [
             ("d-flip-memo-status", True),
-            ("d-emit-deletion-blocks", False),
+            # d-emit-deletion-blocks removed 2026-08-30 with `wsc-close
+            # tail-args` (251ff57703); its builder is gone from the module,
+            # so the table must stop naming it.
         ],
         "directives_review.py": [
             ("d-run-review-brightline-gate", False),
@@ -1735,14 +1737,14 @@ def test_best_effort_directive_alone_reaches_success_not_partial_mutation(
         return 3
 
     modules = {
-        "wsc-close": _fake_module(ok_main, "fake_ok"),
+        "wsc-coverage-gate-runner": _fake_module(ok_main, "fake_ok"),
         "coordinator-fold-execution-record": _fake_module(degraded_main, "fake_degraded"),
     }
     monkeypatch.setattr(ws_apply, "_load_cli_module", lambda cli_name: modules[cli_name])
 
     degraded_directive = _directive("d_degraded", "coordinator-fold-execution-record")
     degraded_directive["best_effort"] = True
-    directives = [_directive("d_ok", "wsc-close"), degraded_directive]
+    directives = [_directive("d_ok", "wsc-coverage-gate-runner"), degraded_directive]
     exit_code, report = ws_apply._execute_directives(directives, [], {})
 
     assert report["landed"] == ["d_ok"]
@@ -1838,14 +1840,14 @@ def test_best_effort_dispatch_exception_lands_in_degraded_not_failed(
         return 0
 
     modules = {
-        "wsc-close": _fake_module(ok_main, "fake_ok"),
+        "wsc-coverage-gate-runner": _fake_module(ok_main, "fake_ok"),
         "freeze-review-diff": _fake_module(raising_main, "fake_raising"),
     }
     monkeypatch.setattr(ws_apply, "_load_cli_module", lambda cli_name: modules[cli_name])
 
     degraded_directive = _directive("d-emit-cadence", "freeze-review-diff")
     degraded_directive["best_effort"] = True
-    directives = [_directive("d-run-wsc-tail", "wsc-close"), degraded_directive]
+    directives = [_directive("d-run-wsc-tail", "wsc-coverage-gate-runner"), degraded_directive]
     exit_code, report = ws_apply._execute_directives(directives, [], {})
 
     assert report["failed"] == []
@@ -1869,12 +1871,12 @@ def test_non_best_effort_dispatch_exception_still_reports_partial_mutation(
         return 0
 
     modules = {
-        "wsc-close": _fake_module(ok_main, "fake_ok"),
+        "wsc-coverage-gate-runner": _fake_module(ok_main, "fake_ok"),
         "freeze-review-diff": _fake_module(raising_main, "fake_raising"),
     }
     monkeypatch.setattr(ws_apply, "_load_cli_module", lambda cli_name: modules[cli_name])
 
-    directives = [_directive("d_ok", "wsc-close"), _directive("d_raising", "freeze-review-diff")]
+    directives = [_directive("d_ok", "wsc-coverage-gate-runner"), _directive("d_raising", "freeze-review-diff")]
     exit_code, report = ws_apply._execute_directives(directives, [], {})
 
     assert report["degraded"] == []
@@ -1915,7 +1917,7 @@ def test_already_satisfied_producer_registers_empty_stdout_for_landed_token(
     modules = {"coordinator-fold-execution-record": _fake_module(consumer_main, "fake_consumer")}
     monkeypatch.setattr(ws_apply, "_load_cli_module", lambda cli_name: modules[cli_name])
 
-    producer = _directive("d-run-wsc-tail", "wsc-close", already_satisfied=True)
+    producer = _directive("d-run-wsc-tail", "wsc-coverage-gate-runner", already_satisfied=True)
     consumer = _directive(
         "d-emit-cadence",
         "coordinator-fold-execution-record",
@@ -1980,7 +1982,7 @@ def test_execute_directives_repro_from_plan_dispatch_message(
         return 3
 
     modules = {
-        "wsc-close": _fake_module(ok_tail_main, "fake_tail"),
+        "wsc-coverage-gate-runner": _fake_module(ok_tail_main, "fake_tail"),
         "coordinator-fold-execution-record": _fake_module(failing_cadence_main, "fake_cadence"),
     }
     monkeypatch.setattr(ws_apply, "_load_cli_module", lambda cli_name: modules[cli_name])
@@ -1992,7 +1994,7 @@ def test_execute_directives_repro_from_plan_dispatch_message(
         depends_on="d-run-wsc-tail",
     )
     cadence_directive["best_effort"] = True
-    directives = [_directive("d-run-wsc-tail", "wsc-close"), cadence_directive]
+    directives = [_directive("d-run-wsc-tail", "wsc-coverage-gate-runner"), cadence_directive]
 
     exit_code, report = ws_apply._execute_directives(directives, [], {})
 

@@ -4113,9 +4113,8 @@ def commit_scoped(
         # `commit-tree`/`update-ref` ladder -- neither fires any git hook,
         # so (unlike the old real `git commit` here) there is no
         # `prepare-commit-msg`/`post-commit` to rely on OR to stand down;
-        # `suppress_post_commit_auto_push` is honoured below via the same
-        # explicit `_replay_post_commit_auto_push` call the diverged branch
-        # already uses, not via any flag threaded into the landing call.
+        # per-commit push replay was deleted (C6 of docs/plans/2026-08-30-
+        # who-pushes-and-when.md) -- publish is now the caller's own concern.
         existing = [p for p in path_list if (root / p).exists()]
         deleted = [p for p in path_list if p not in existing]
         # `worktree_deleted` is what makes `deleted` MEAN deleted. Without it
@@ -4132,8 +4131,6 @@ def commit_scoped(
             attributed_session_id=attributed_session_id,
             worktree_deleted=set(deleted),
         )
-        if result.ok and not suppress_post_commit_auto_push:
-            _replay_post_commit_auto_push(root, path_list, attributed_session_id)
         return result
 
     diverged_set = set(diverged)
@@ -4144,27 +4141,6 @@ def commit_scoped(
         attributed_session_id=attributed_session_id,
         mode_only_paths=mode_delta_paths,
     )
-    # This branch lands via `commit-tree`/`update-ref`, which fire NO hooks --
-    # so unlike the agree branch above there is no `post-commit` to stand down
-    # OR to rely on, and the flag is meaningless here except as the caller's
-    # answer to "am I publishing this myself?".
-    #
-    # `suppress_post_commit_auto_push=True` means the caller IS the sole
-    # publisher (`push_mode="sync"`, which pushes synchronously right after
-    # this returns) -- replaying here would make two publishers race one tip,
-    # the 2026-07-30 false negative `_sole_publisher_env` exists to prevent.
-    #
-    # False means the caller is NOT publishing and expects the hook to. On the
-    # agree branch that is true for free; here nothing fires, so without this
-    # replay the commit lands and is stranded local forever while the op
-    # reports `push_state="deferred"` -- "queued for background push" with no
-    # queue behind it. `_replay_post_commit_auto_push`'s own docstring names
-    # this failure ("a commit landed this way that never replays this hook
-    # never pushes"); it was wired for `commit_authored_content` and never
-    # for this path, which went unnoticed only because `run_commit_pipeline`
-    # used to push synchronously on EVERY mode and covered it incidentally.
-    if result.ok and not suppress_post_commit_auto_push:
-        _replay_post_commit_auto_push(root, path_list, attributed_session_id)
     return result
 
 
@@ -4272,97 +4248,6 @@ def _drop_trailer_arg(trailer_args: List[str], trailer_name: str) -> List[str]:
         kept.append(flag)
         i += 1
     return kept
-
-
-def _replay_post_commit_auto_push(
-    root: Union[str, Path],
-    path_list: Optional[Sequence[str]] = None,
-    attributed_session_id: Optional[str] = None,
-) -> None:
-    """Replay `coordinator-auto-push` (`post-commit`) after a successful
-    `commit_authored_content()` CAS -- DR-272 § 2.4 Bound 2, "MUST be
-    replayed" (unlike `pre-commit`, which that same bound EXEMPTS for this
-    entrypoint alone; see the record for the exemption's exact scope).
-    `commit-tree`/`update-ref` fire none of `pre-commit`, `prepare-commit-
-    msg`, `commit-msg`, `post-commit` -- a commit landed this way that never
-    replays this hook never pushes, which is a silent divergence the auto-
-    push health signal would report as lag with no attributable cause.
-
-    Invoked exactly as the installed `post-commit` hook itself invokes
-    `coordinator-auto-push` -- no extra flags beyond `--repo-root`, so
-    `async_mode` resolves to the hook's own default (detached background
-    push), not a synchronous one this function waits on.
-
-    Best-effort, mirroring `auto_push.main()`'s own contract: that function
-    already never raises (broad internal `except Exception`, always returns
-    0), but the import itself is wrapped too, so a stripped-down install
-    missing the `hooks` package cannot turn a successful commit into a
-    raised exception here.
-
-    Honest limit, stated per DR-272 § 2.4 Bound 2's own instruction: hook
-    replay after plumbing-only commit machinery is THIS REPO'S OWN CALL --
-    the mechanism spike found no primary source of practitioners doing this.
-
-    `path_list` (C4, docs/plans/2026-08-26-the-commit-op-stops-asking-git-
-    eleven-times.md): when given, this call's own caller ALREADY knows which
-    paths just landed -- `commit_scoped()`'s two callers below pass their own
-    `path_list` straight through. Releasing those claims IN-PROCESS here
-    (via `session.scope.release_committed_claims`, the same call
-    `auto_push._release_claims_for_head` would otherwise reach) retires the
-    `git show --name-only HEAD` that helper spends to relearn the same
-    paths, and `--no-claim-release` then tells `auto_push.main()` to skip
-    its own redundant `git status --porcelain` clean-check leg too -- see
-    that flag's own comment in `auto_push.main` and
-    `_release_claims_for_head`'s "CORRECTED 2026-08-26" paragraph, which
-    names this exact caller. `attributed_session_id`, when given, is the
-    caller's own already-resolved committing-session identity (mirrors
-    `commit_scoped`'s own docstring for that parameter) and takes precedence
-    over a blind `session_core.resolve_session_id()` read of this process's
-    env, for the same reason `commit_scoped` prefers it for its `Session-Id:`
-    trailer.
-
-    `path_list=None` preserves the prior behavior unchanged: `auto_push.main()`
-    runs its own `_release_claims_for_head` fallback, exactly as before. No
-    caller in this module takes that leg any more --- `commit_authored_content`
-    was migrated 2026-08-30 and now passes its own single `normalized` path
-    plus `attributed_session_id`, so the default survives for an out-of-module
-    or future caller that genuinely does not know its paths, not as a live
-    arm.
-
-    Fail-open, like `_release_claims_for_head` itself: any failure in the
-    in-process release falls through to the unmigrated path (no
-    `--no-claim-release`), so `auto_push.main()`'s own fallback release still
-    runs rather than leaving the claim stuck `T` forever.
-    """
-    argv = ["--repo-root", str(root)]
-    if path_list:
-        try:
-            from coordinator_core.session import core as _session_core
-            from coordinator_core.session import scope as _session_scope
-
-            sid = attributed_session_id or _session_core.resolve_session_id(str(root))
-            paths = [p for p in path_list if p]
-            if sid and paths:
-                # Releases only paths that are CLEAN in the worktree, and is
-                # structurally incapable of releasing a peer's claim -- see
-                # `release_committed_claims`'s own docstring for both
-                # properties. Same clean-check `_release_claims_for_head`
-                # itself relies on; this call does not relax it.
-                _session_scope.release_committed_claims(sid, paths, cwd=str(root))
-            argv.append("--no-claim-release")
-        except Exception:
-            # Never let a diagnostic here become the thing that blocks the
-            # commit auto-push replays after -- fall through to the
-            # unmigrated leg so `auto_push.main()`'s own fallback release
-            # still runs.
-            argv = ["--repo-root", str(root)]
-
-    try:
-        from coordinator_core.hooks import auto_push
-
-        auto_push.main(argv)
-    except Exception:
-        pass
 
 
 #: The tree algebra proper (`_ABSENT`, `_write_tree_level`,
@@ -4776,9 +4661,10 @@ def commit_authored_content(
       4. Compare-and-swap `update-ref`, failing loud with a distinctive
          diagnostic when HEAD moved concurrently -- identical shape to
          `_commit_scoped_private_index`'s own CAS.
-      5. Hook effects replayed per DR-272 § 2.4 Bound 2 -- trailers (below)
-         and post-commit auto-push (`_replay_post_commit_auto_push`, called
-         only after a successful CAS). `pre-commit` is EXEMPTED for commits
+      5. Hook effects replayed per DR-272 § 2.4 Bound 2 -- trailers (below).
+         Post-commit auto-push replay was deleted (C6 of docs/plans/
+         2026-08-30-who-pushes-and-when.md); publish is the caller's own
+         concern now. `pre-commit` is EXEMPTED for commits
          issued through this entrypoint, bounded to single-path,
          caller-supplied-content commits exactly as built here -- widening
          this entrypoint's contract (multi-path, worktree-sourced content,
@@ -5045,25 +4931,9 @@ def commit_authored_content(
         cwd=root,
     )
 
-    # Bound 5 -- replay the post-commit auto-push; only after a
-    # successful CAS, mirroring the trailer replay's own "replay what
-    # the hook would have done" precedent.
-    #
-    # `path_list` is this entrypoint's own single `normalized` path (DR-344
-    # kill-bar work, 2026-08-30): C4 of docs/plans/2026-08-26-the-commit-op-
-    # stops-asking-git-eleven-times.md migrated `commit_scoped`'s two callers
-    # and left this one on the `path_list=None` leg, where
-    # `auto_push._release_claims_for_head` spends a `git show --name-only
-    # HEAD` (measured 166ms of a 465ms `memo.transition claim`) relearning the
-    # one path this function has held since its first line, plus a
-    # `git status --porcelain` clean-check `--no-claim-release` then skips.
-    #
-    # The suppression predicate is `_sole_publisher_env`'s own, read directly
-    # rather than through the env marker -- see this function's docstring.
-    if not _deferred_publisher_active.get():
-        _replay_post_commit_auto_push(
-            root, [normalized], attributed_session_id,
-        )
+    # Bound 5 -- post-commit auto-push replay deleted (C6 of docs/plans/
+    # 2026-08-30-who-pushes-and-when.md): no per-commit push replay through
+    # this entrypoint any more; publish is the caller's own concern.
 
     # C11 (state/lessons/2026-08-18-a-ruling-applied-at-one-door-leaves-
     # the-siblings-unswept-7c3e1f9a4d22.yaml): this entrypoint is one of

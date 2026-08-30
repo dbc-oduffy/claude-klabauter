@@ -557,6 +557,12 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
         "advertised-but-absent op reads to the annotation guard as a name "
         "committed ahead of its op.",
     ),
+    (
+        "coordinator_core.baton_assemble.ops",
+        'registers "baton_assemble.brief", "baton_assemble.apply" — making '
+        "baton_assemble reachable through the warm engine (previously served "
+        'only via the COLD entry_point_shim "baton-assemble" forwarder).',
+    ),
 ]
 
 # module dotted-path -> the exception raised the last time we tried to import

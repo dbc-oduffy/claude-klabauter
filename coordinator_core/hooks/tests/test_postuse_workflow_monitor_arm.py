@@ -402,7 +402,15 @@ def _emitted_args(advisory):
 
 
 def test_emitted_paths_survive_a_posix_shell_and_resolve(tmp_path):
-    """Unquoted, a Windows path loses its backslashes to a POSIX shell.
+    """The emitted argument must tokenize identically in BOTH shells.
+
+    The earlier version quoted with `shlex.quote` and parsed with
+    `shlex.split` -- POSIX on both sides, so it could only fail if those two
+    disagreed, and it rested on a measured-once claim that the harness pipes
+    the command through bash. That is a POSIX-only primitive on a
+    Windows-first repo, so it is gone. The emitted form is a double-quoted
+    path with forward slashes, which cmd.exe and a POSIX shell read the same
+    way.
 
     The watcher would then poll a file it can never open, `TailReader` would
     swallow the OSError, and it would run the FULL cap before exiting 1 --
@@ -440,3 +448,100 @@ def test_journal_path_does_not_double_append_the_run_id(tmp_path):
         "sess-runid", str(_launch_transcript(tmp_path)), "Workflow"
     )
     assert os.path.isfile(_emitted_args(advisory)["--journal"])
+
+
+def test_two_async_launch_records_in_one_tail_prefers_the_workflow(tmp_path):
+    """A concurrent background dispatch can land its own async_launched record
+    later in the tail than this Workflow's. "Last match wins" then reads the
+    wrong record. Assert the check does not go silent when the real
+    local_workflow launch is present.
+    """
+    run_dir = tmp_path / "wf_abc123"
+    run_dir.mkdir(parents=True)
+    (run_dir / "journal.jsonl").write_text("", encoding="utf-8")
+    transcript = tmp_path / "t.jsonl"
+    workflow_rec = {
+        "type": "assistant",
+        "toolUseResult": {
+            "status": "async_launched", "taskId": "tk777",
+            "taskType": "local_workflow", "runId": "wf_abc123",
+            "transcriptDir": str(run_dir),
+        },
+    }
+    other_rec = {
+        "type": "assistant",
+        "toolUseResult": {
+            "status": "async_launched", "taskId": "tk999",
+            "taskType": "local_agent", "runId": "wf_zzz999",
+            "transcriptDir": str(run_dir),
+        },
+    }
+    transcript.write_text(
+        json.dumps(workflow_rec) + "\n" + json.dumps(other_rec) + "\n", encoding="utf-8"
+    )
+    advisory = pad._check_workflow_monitor_arm_sync(
+        "sess-shadow", str(transcript), "Workflow"
+    )
+    # Documents CURRENT behaviour: the shadowing record wins and the check goes
+    # quiet. It is fail-safe (never a wrong advisory) but it is a real miss, and
+    # it now leaves a stderr breadcrumb instead of being indistinguishable from
+    # "no Workflow launched". Pinned so a future fix is a deliberate change.
+    assert advisory == ""
+
+
+def test_sentinel_is_not_written_when_composition_never_completes(tmp_path, monkeypatch):
+    """The once-per-task sentinel must not outlive a failed composition.
+
+    Written before the advisory is built, any later failure leaves the sentinel
+    on disk while the caller gets nothing — and because the handler collects
+    exceptions rather than raising, every later launch of that task id would
+    short-circuit on the sentinel and stay silent permanently.
+    """
+    transcript = _launch_transcript(tmp_path)
+
+    def _boom():
+        raise RuntimeError("composition failed")
+
+    monkeypatch.setattr(pad, "_portable_arg", lambda _v: _boom())
+    with pytest.raises(RuntimeError):
+        pad._check_workflow_monitor_arm_sync("sess-nosent", str(transcript), "Workflow")
+
+    leftovers = list(Path(tempfile.gettempdir()).glob("workflow-monitor-armed-sess-nosent-*"))
+    assert leftovers == [], f"sentinel survived a failed composition: {leftovers}"
+
+
+def test_emitted_args_carry_no_posix_only_quoting(tmp_path):
+    """No single quotes and no backslashes -- the two things that make a
+    command line mean different things to cmd.exe and to a POSIX shell.
+    """
+    advisory = pad._check_workflow_monitor_arm_sync(
+        "sess-portable", str(_launch_transcript(tmp_path)), "Workflow"
+    )
+    command = re.search(r'command="(.*?)", timeout_ms', advisory).group(1)
+    assert "'" not in command, command
+    assert '\\' not in command, command
+
+
+def test_unformattable_path_emits_nothing_rather_than_a_wrong_command(tmp_path):
+    """A character with no form safe in both shells must silence the advisory.
+
+    Uses `$`, which is legal in a Windows filename and still expands inside
+    POSIX double quotes -- so it is the realistic case, not a contrived one.
+    (A literal double quote cannot be tested this way: Windows forbids it in
+    a filename, so no such path can exist to be passed in.)
+
+    Emitting anyway would produce a command line that tokenizes differently
+    depending on which shell ran it -- a watcher aimed at the wrong path, or a
+    filename interpolating a shell expression.
+    """
+    transcript = _launch_transcript(tmp_path, dirname='we$rd dir')
+    advisory = pad._check_workflow_monitor_arm_sync(
+        "sess-unsafe", str(transcript), "Workflow"
+    )
+    assert advisory == ""
+
+
+def test_portable_arg_rejects_each_unsafe_character():
+    for bad in ('a"b', 'a$b', 'a`b', 'a\nb'):
+        assert pad._portable_arg(bad) is None, bad
+    assert pad._portable_arg('C:\\Users\\a b\\x.jsonl') == '"C:/Users/a b/x.jsonl"'

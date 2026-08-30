@@ -41,10 +41,21 @@ brightline. This module does NOT set that key and must not — `git_perf_config`
 owns it, per-repo, once at install. This module only measures under the bar once
 it is set.
 
-EXIT 0 AND REPORT when `<objects>/maintenance.lock` is held. Roughly twenty
-sessions can enter one ceremony at once on this box; git errors rather than
-corrupts, so a lost race is a no-op worth REPORTING, not a failure worth
-failing.
+NO `maintenance.lock` GATE HERE, BY MEASUREMENT, NOT OVERSIGHT. An earlier
+version of this module polled `<common>/objects/maintenance.lock` (and, per
+review, `<common>/maintenance.lock` was the other candidate) before running,
+on the theory that `git maintenance run` takes such a lock and a peer holding
+it means a lost race worth reporting rather than failing. Direct measurement
+against git 2.55.0.windows.5 (n=1 machine; a future git version could differ)
+found this false at both candidate paths: holding a file at either location
+does not stop `git maintenance run` (`--task=commit-graph` or
+`--schedule=weekly`) from running anyway, leaving both files untouched, and 8
+concurrent `git maintenance run --schedule=weekly` invocations against one
+repo all exited 0 with no lock-related stderr. The gate never fired and the
+concurrency it claimed to arbitrate is git's own to arbitrate, not ours — so
+the check, the result field, and the report branch were deleted rather than
+pointed at a corrected path. No replacement locking mechanism was added: the
+measurement says none is needed.
 
 DEFER AND REPORT — do not run, do not fail — on a live `.git/index.lock`, an
 in-progress rebase/merge/bisect, or unmerged index entries. A ceremony boundary
@@ -137,14 +148,13 @@ TIERS = tuple(_TIER_ARGV)
 
 @dataclass
 class MaintenanceResult:
-    """One tier invocation's outcome. `deferred` and `lock_held` are both
-    exit-0 outcomes that did no work — a caller reading only the exit code
-    cannot tell them from a successful run, which is why they are reported."""
+    """One tier invocation's outcome. `deferred` is an exit-0 outcome that did
+    no work — a caller reading only the exit code cannot tell it from a
+    successful run, which is why it is reported."""
 
     tier: str
     ran: bool = False
     deferred: Optional[str] = None
-    lock_held: bool = False
     pruned: bool = False
     orphan_packs_reaped: int = 0
     orphan_packs_skipped: int = 0
@@ -181,6 +191,11 @@ def _orphan_pack_candidates(pack_dir: Path) -> List[Path]:
     machinery produces, so widening here admits no new class of file. A matcher
     that accepted only one would silently leave the other's garbage on disk
     forever, which is the exact failure this reaper exists to prevent.
+
+    Confirmed only against git 2.55.0.windows.5 (n=1 machine) -- git's
+    temp-pack naming has changed across releases historically, so this is a
+    measured-here claim, not a guarantee across every git version in the
+    fleet.
     """
     if not pack_dir.is_dir():
         return []
@@ -231,6 +246,22 @@ def sweep_orphan_packs(
 
     Gates 2 and 3 are what actually separate an orphan from an in-flight
     repack. Gate 1 alone is a coin flip; all three are load-bearing.
+
+    NAMED RESIDUAL SCOPE CUT, not a closed race: the 600s margin in gate 2 is
+    sized against a BUSY writer that keeps bumping mtime throughout its run --
+    it says nothing about an idle-but-still-open one. A legitimate repack that
+    stalls on I/O (disk contention, a throttled/suspended process) for over
+    600s without touching the file, and stays stalled through the one
+    re-sample window, passes both gates 2 and 3 while the writer still holds
+    an open handle. On POSIX the unlink does not corrupt the live inode, but
+    it does remove the directory entry the writer's own rename-into-place step
+    will target, so the in-flight repack silently fails or produces no visible
+    artifact. On Windows the open-handle unlink more likely raises `OSError`
+    (caught into `failed`), which fails loud rather than silent, but that is
+    platform-dependent behavior, not a designed guarantee. An open-handle
+    check before unlinking would close this, but is OS-specific and racy in
+    its own right; this is an accepted scope cut, not a race believed already
+    closed.
 
     ONE STABILITY WINDOW PER SWEEP, NEVER ONE PER FILE. The whole candidate set
     is sampled, the window is waited ONCE, then the whole set is re-sampled. At
@@ -328,10 +359,17 @@ def defer_reason(repo: Path, git_dir: Path) -> Optional[str]:
     """
     if (git_dir / "index.lock").exists():
         return "index.lock is held -- a peer is mid-commit"
+    # Review: coordinator:code-reviewer (Finding 3) -- a clean, in-progress
+    # `cherry-pick --no-commit`/`revert --no-commit` leaves CHERRY_PICK_HEAD/
+    # REVERT_HEAD present with a clean index and no unmerged entries, which
+    # was invisible to every check here even though it is the same class of
+    # mid-operation state the other markers exist to catch.
     for marker, what in (
         ("REBASE_HEAD", "rebase"),
         ("MERGE_HEAD", "merge"),
         ("BISECT_LOG", "bisect"),
+        ("CHERRY_PICK_HEAD", "cherry-pick"),
+        ("REVERT_HEAD", "revert"),
     ):
         if (git_dir / marker).exists():
             return f"{what} in progress ({marker} present)"
@@ -341,7 +379,7 @@ def defer_reason(repo: Path, git_dir: Path) -> Optional[str]:
     return None
 
 
-def run_tier(repo: Path, tier: str) -> MaintenanceResult:
+def run_tier(repo: Path, tier: Optional[str]) -> MaintenanceResult:
     """Run one maintenance tier against `repo`."""
     if tier not in _TIER_ARGV:
         result = MaintenanceResult(tier=tier)
@@ -359,13 +397,6 @@ def run_tier(repo: Path, tier: str) -> MaintenanceResult:
     common = Path(common_raw) if common_raw else git_dir
     if not common.is_absolute():
         common = (repo / common).resolve()
-
-    # THE LOST RACE IS A NO-OP, NOT A FAILURE. Checked before the defer
-    # predicate's spawn, so ~20 sessions entering one ceremony pay one
-    # `exists()` each rather than one `ls-files` each.
-    if (common / "objects" / "maintenance.lock").exists():
-        result.lock_held = True
-        return result
 
     reason = defer_reason(repo, git_dir)
     if reason is not None:
@@ -402,7 +433,13 @@ def run_tier(repo: Path, tier: str) -> MaintenanceResult:
         result.errors.append(f"{' '.join(_TIER_ARGV[tier])} failed rc={proc.returncode}: {proc.stderr.strip()}")
         return result
     result.ran = True
-    _stamp(repo)
+    # Review: coordinator:code-reviewer (Finding 4) -- stamping unconditionally
+    # here made a clean run and a run with a failed prune leg indistinguishable
+    # on the liveness store, defeating _stamp's own stated purpose. Gate on
+    # `errors` accumulated so far (the prune leg, at this point) so the stamp
+    # means what its docstring claims.
+    if not result.errors:
+        _stamp(repo)
 
     if tier != "weekly":
         return result
@@ -450,9 +487,6 @@ def _report(result: MaintenanceResult) -> None:
         for err in result.errors:
             print(f"{_PREFIX}: {err}", file=sys.stderr)
         return
-    if result.lock_held:
-        print(f"{_PREFIX}: {result.tier} skipped -- maintenance.lock held by a peer", file=sys.stderr)
-        return
     if result.deferred:
         print(f"{_PREFIX}: {result.tier} deferred -- {result.deferred}", file=sys.stderr)
         return
@@ -498,7 +532,6 @@ async def _git_maintenance(params: dict, repo_root: Optional[Path] = None) -> di
         "tier": result.tier,
         "ran": result.ran,
         "deferred": result.deferred,
-        "lock_held": result.lock_held,
         "pruned": result.pruned,
         "orphan_packs_reaped": result.orphan_packs_reaped,
         "errors": result.errors,

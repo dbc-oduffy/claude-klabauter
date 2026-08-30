@@ -1,8 +1,12 @@
 """
-coordinator_core.tests.test_archive_stamp_human_claimant — C8 coverage for
-`archive_stamp._record_human_claimant_best_effort`, the claim-time stamp of
-the OPERATING HUMAN (via `resolve_operating_person().get("github")`) written
-beside `picked_up_by`/`claimed_by` on both the memo claim path
+coordinator_core.tests.test_archive_stamp_human_claimant — C8 coverage for the
+`human_claimant` row of `archive_stamp._record_claimant_identity_best_effort`
+(folded 2026-08-30 from the former standalone
+`_record_human_claimant_best_effort` — Review: overengineering-reviewer
+(Kira), same lock-and-RMW pass as `claimed_by_name`/`claimed_by_address`
+now), the claim-time stamp of the OPERATING HUMAN (via
+`resolve_operating_person().get("github")`) written beside
+`picked_up_by`/`claimed_by` on both the memo claim path
 (`cs_claim_memo_stamp`) and the handoff claim path (`cs_claim_handoff`).
 
 PM ruling, 2026-08-19 (one-box-one-human): the claiming session resolves the
@@ -28,8 +32,6 @@ that is NOT this axis's value space.
 """
 from __future__ import annotations
 
-import os
-import subprocess
 from pathlib import Path
 from typing import Optional
 
@@ -40,42 +42,15 @@ import coordinator_core.ops.memo_transition  # noqa: F401 — @register_op side 
 import coordinator_core.ops.session.record_pickup  # noqa: F401 — @register_op side effect
 
 import coordinator_core.archive_stamp as arstamp
+from coordinator_core.tests._fixtures import init_repo as _init_repo
+from coordinator_core.tests._fixtures import run_git as _git
 
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
 ]
 
-_GIT_ENV = {
-    **os.environ,
-    "GIT_AUTHOR_NAME": "test",
-    "GIT_AUTHOR_EMAIL": "t@t",
-    "GIT_COMMITTER_NAME": "test",
-    "GIT_COMMITTER_EMAIL": "t@t",
-}
-
 _DEFAULT_TEST_SESSION_ID = "22222222-2222-2222-2222-222222222222"
-
-
-def _git(repo: Path, *args: str) -> subprocess.CompletedProcess:
-    return subprocess.run(
-        ["git", "-C", str(repo), *args],
-        capture_output=True,
-        text=True,
-        env=_GIT_ENV,
-        timeout=15,
-        stdin=subprocess.DEVNULL,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),  # popup-safe-env-suppressed
-    )
-
-
-def _init_repo(repo: Path) -> None:
-    repo.mkdir(parents=True, exist_ok=True)
-    _git(repo, "init")
-    _git(repo, "config", "commit.gpgsign", "false")
-    (repo / "README.md").write_text("init\n", encoding="utf-8")
-    _git(repo, "add", "README.md")
-    _git(repo, "commit", "-m", "init")
 
 
 def _seed_memo(repo: Path, name: str, status: str, extra: str = "") -> Path:

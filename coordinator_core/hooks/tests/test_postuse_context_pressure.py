@@ -18,7 +18,7 @@ The model under test, in full:
     < 40%   nothing
     >= 40%  INFORMATIONAL — checkpoint so the run is resumable; no handoff
                             recommendation (PM ruling 2026-08-29)
-    >= 47%  HANDOFF NOW — ahead of the fixed ~500K auto-compaction ceiling
+    >= 45%  HANDOFF NOW — ahead of the fixed ~500K auto-compaction ceiling
     no usable reading  — silence, on every fire, for the whole session
 
 Negative-spec:
@@ -36,7 +36,7 @@ Negative-spec:
       politely-worded one — reverts a PM ruling; see
       test_no_emission_below_the_orange_band and
       test_unmeasured_never_escalates_however_many_fires.
-    - The bands are 40 and 47 as literals. They are not derived from
+    - The bands are 40 and 45 as literals. They are not derived from
       _AUTO_COMPACT_CEILING_TOKENS_1M, and a test that recomputes them from it
       would pass while the shipped numbers drifted.
 """
@@ -205,13 +205,13 @@ def test_forty_percent_fires_informational_and_never_recommends_handoff():
     text = _check(session_id)
     assert "CONTEXT PRESSURE — INFORMATIONAL" in text
     assert "~42% of window used" in text
-    assert "47%" in text
+    assert "45%" in text
     assert "/handoff" not in text
     assert "ADVISORY" not in text
 
 
-@pytest.mark.parametrize("pct", [40, 43, 46])
-def test_orange_band_spans_forty_to_fortysix(pct):
+@pytest.mark.parametrize("pct", [40, 42, 44])
+def test_orange_band_spans_forty_to_fortyfour(pct):
     session_id = f"session-orange-{pct}"
     _write_sidecar(session_id, pct)
     text = _check(session_id)
@@ -229,24 +229,32 @@ def test_advisory_barks_once():
 
 
 # ---------------------------------------------------------------------------
-# The red band — 47%.
+# The red band — 45%.
 # ---------------------------------------------------------------------------
 
 
-def test_fortyseven_percent_fires_handoff_now():
+def test_fortyfive_percent_fires_handoff_now():
     session_id = "session-red"
-    _write_sidecar(session_id, 47)
+    _write_sidecar(session_id, 45)
     text = _check(session_id)
     assert "CONTEXT PRESSURE — HANDOFF NOW" in text
-    assert "~47% of window used" in text
+    assert "~45% of window used" in text
     assert "/handoff" in text
 
 
+def test_fortyseven_is_inside_the_red_band_not_its_edge():
+    """The band moved off 47 on 2026-08-30 because auto-compaction was observed
+    firing there — 47 must now read as already-past the call, not as the call."""
+    session_id = "session-red-47"
+    _write_sidecar(session_id, 47)
+    assert "HANDOFF NOW" in _check(session_id)
+
+
 def test_red_band_fires_below_the_auto_compaction_ceiling():
-    """47% of a 1M window is ~470K, ahead of the fixed ~500K ceiling — the
+    """45% of a 1M window is ~450K, ahead of the fixed ~500K ceiling — the
     whole reason the red band is not at 50."""
     ceiling = pad._AUTO_COMPACT_CEILING_TOKENS_1M
-    assert 47 * 1_000_000 // 100 < ceiling
+    assert 45 * 1_000_000 // 100 < ceiling
 
 
 def test_critical_suppresses_a_later_advisory_for_the_same_session():
@@ -324,7 +332,8 @@ class TestAutonomousSentinelSuppressesTheRecommendation:
         # No "Autonomous run" assertion here any more: since the 2026-08-29
         # ruling this band is informational for EVERY session, so its text is
         # mode-neutral by design and naming the sentinel would be a claim the
-        # band does not make. The mode clause is asserted at 47, where it is
+        # band does not make. The mode clause is asserted in the red band,
+        # where it is
         # actually selected -- see TestModeClauseNamesOnlyWhatIsTrue.
 
     def test_critical_band_carries_no_handoff_recommendation(self, tmp_path, monkeypatch):
@@ -347,7 +356,7 @@ class TestAutonomousSentinelSuppressesTheRecommendation:
     def test_without_the_sentinel_only_the_critical_band_recommends_handoff(self):
         """The other half of the branch, as the 2026-08-29 ruling leaves it.
 
-        47 without a sentinel still says HANDOFF NOW -- that is the band the
+        45 without a sentinel still says HANDOFF NOW -- that is the band the
         mode key governs and the suppression this class is about. 40 no longer
         recommends anything to anyone, sentinel or not, so asserting a
         recommendation there would re-pin the behaviour the ruling removed.
@@ -381,19 +390,19 @@ def test_fractional_percentage_rounds_to_match_the_status_line():
     _write_sidecar("session-round-down", 39.4)
     assert _check("session-round-down") == ""
 
-    _write_sidecar("session-round-red", 46.6)
+    _write_sidecar("session-round-red", 44.6)
     assert "HANDOFF NOW" in _check("session-round-red")
 
 
 def test_half_values_use_bankers_rounding_on_both_surfaces():
-    """`round()` is half-to-even in Python, so 46.5 renders 46 and stays in the
+    """`round()` is half-to-even in Python, so 44.5 renders 44 and stays in the
     orange band. Pinned rather than corrected: the statusline uses the same
     `round()`, so the terminal and the advisory agree on the odd case too, and
     agreement is what the boundary needs. Changing one surface to half-up
     without the other reintroduces exactly the mismatch this pair fixes."""
-    _write_sidecar("session-half-even", 46.5)
+    _write_sidecar("session-half-even", 44.5)
     text = _check("session-half-even")
-    assert "~46% of window used" in text
+    assert "~44% of window used" in text
     assert "HANDOFF NOW" not in text
 
 
@@ -425,7 +434,7 @@ def _under_fleet_informational(monkeypatch) -> None:
 
 
 class TestModeClauseNamesOnlyWhatIsTrue:
-    """The 47 band's informational text opens with a mode clause, and which
+    """The red band's informational text opens with a mode clause, and which
     clause it opens with is decided by WHICH side selected the variant.
 
     The defect this pins: the text was written for the session-scoped sentinel

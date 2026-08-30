@@ -324,13 +324,15 @@ def _bare_agent_type(value: str) -> str:
     return bare if sep else value
 
 
-def _is_delegate_reviewer(agent_type: str, subagent_type: str) -> bool:
+def _is_close_receipt_reviewer(agent_type: str, subagent_type: str) -> bool:
     """True iff either resolved label's bare form is a member of the closed
-    delegate-reviewer vocabulary -- checked against BOTH labels, mirroring
-    ``_provision``'s own eligibility test just above (``agent_type in
-    policy.report_sidecar or subagent_type in policy.report_sidecar``), since
-    which of the two carries the reviewer-shaped value is not fixed across
-    callers.
+    close-receipt-reviewer vocabulary (``CLOSE_RECEIPT_REVIEWERS`` -- the
+    delegate-reviewer set plus the close-floor's own mandatory reviewer,
+    see ``reviewer_vocabulary.py``'s module docstring) -- checked against
+    BOTH labels, mirroring ``_provision``'s own eligibility test just above
+    (``agent_type in policy.report_sidecar or subagent_type in
+    policy.report_sidecar``), since which of the two carries the
+    reviewer-shaped value is not fixed across callers.
 
     Reads the vocabulary from ``ops.reviewer_vocabulary``, a stdlib-only leaf,
     NOT from ``ops.review_trail_write`` which re-exports it (C9). Both spell the
@@ -347,18 +349,18 @@ def _is_delegate_reviewer(agent_type: str, subagent_type: str) -> bool:
     that in turn reach back into ``coordinator_core.hooks``/
     ``coordinator_core.subagent_sandbox`` -- the same reason
     ``subagent_review_mark.py::_is_reviewer`` gives for its own local import."""
-    from coordinator_core.reviewer_vocabulary import DELEGATE_REVIEWERS as _DELEGATE_REVIEWERS
+    from coordinator_core.reviewer_vocabulary import CLOSE_RECEIPT_REVIEWERS as _CLOSE_RECEIPT_REVIEWERS
 
     return bool(
-        (agent_type and _bare_agent_type(agent_type) in _DELEGATE_REVIEWERS)
-        or (subagent_type and _bare_agent_type(subagent_type) in _DELEGATE_REVIEWERS)
+        (agent_type and _bare_agent_type(agent_type) in _CLOSE_RECEIPT_REVIEWERS)
+        or (subagent_type and _bare_agent_type(subagent_type) in _CLOSE_RECEIPT_REVIEWERS)
     )
 
 
 #: Single-quote-doubling is the one YAML scalar quoting style this module
 #: needs and the cheapest to get right by hand -- stdlib-only, no PyYAML
 #: dependency on this cold, fleet-wide PreToolUse-Agent hook path (see
-#: module docstring's fail-open framing and ``_is_delegate_reviewer``'s own
+#: module docstring's fail-open framing and ``_is_close_receipt_reviewer``'s own
 #: reviewer_vocabulary-leaf rationale for why a heavier import is a defect
 #: here, not a style choice).
 def _yaml_quoted_scalar(value: str) -> str:
@@ -382,7 +384,7 @@ def _yaml_quoted_scalar(value: str) -> str:
 #: frontmatter (never a sibling file, never a close-time write) -- dispatch
 #: session id, agent id, agent type, and a UTC timestamp, under a key
 #: distinguishable per receipt kind (``review_receipt``/``integrator_receipt``
-#: -- see ``_is_delegate_reviewer``/``_is_review_integrator`` below for the
+#: -- see ``_is_close_receipt_reviewer``/``_is_review_integrator`` below for the
 #: mutually-exclusive callers). C4 (constraint 8, AC2b) joins this against
 #: the covering baton's claim window with a plain directory listing +
 #: frontmatter read; nothing here resolves a baton or touches
@@ -466,7 +468,7 @@ def _receipt_agent_type(agent_type: str, subagent_type: str, vocabulary) -> str:
     """The label to STAMP into a receipt: whichever of the two resolves to a
     member of `vocabulary`, preferring `agent_type` when both do.
 
-    WHY THIS EXISTS. `_is_delegate_reviewer`/`_is_review_integrator` check
+    WHY THIS EXISTS. `_is_close_receipt_reviewer`/`_is_review_integrator` check
     BOTH labels because which one carries the persona is not fixed across
     callers -- but the stamp beneath them wrote raw `agent_type`, so a
     dispatch detected via `subagent_type` was stamped with whatever
@@ -504,7 +506,7 @@ def _receipt_agent_type(agent_type: str, subagent_type: str, vocabulary) -> str:
 def _is_review_integrator(agent_type: str, subagent_type: str) -> bool:
     """True iff either resolved label's bare form is the review-integrator
     persona -- checked against BOTH labels, mirroring
-    ``_is_delegate_reviewer``'s own both-labels check just above, since
+    ``_is_close_receipt_reviewer``'s own both-labels check just above, since
     which of the two carries the persona value is not fixed across callers."""
     return bool(
         (agent_type and _bare_agent_type(agent_type) == _INTEGRATOR_AGENT_TYPE)
@@ -1366,24 +1368,24 @@ def _provision(payload: Dict[str, Any], policy_path: Optional[str], cwd: Optiona
 
     # AC1: stamp the review receipt on an eligible reviewer's OWN sidecar,
     # at dispatch, before the very first write -- see _splice_review_receipt
-    # and _is_delegate_reviewer's docstrings above. Never applied to the
+    # and _is_close_receipt_reviewer's docstrings above. Never applied to the
     # plan-derivable branch above (its four emitters are not delegate
     # reviewers) and never a second write -- one compose, one write, exactly
     # as AC12b's dispatch-leg budget measures.
     # AC2: the review-integrator counterpart, same seam, distinguishable
     # block/key (see _splice_integrator_receipt's docstring) -- mutually
     # exclusive with the branch above by construction (_INTEGRATOR_AGENT_TYPE
-    # is not a member of _DELEGATE_REVIEWERS), so an elif costs nothing over
-    # a second independent `if` while making that exclusivity explicit.
+    # is not a member of CLOSE_RECEIPT_REVIEWERS), so an elif costs nothing
+    # over a second independent `if` while making that exclusivity explicit.
     # The stamped type is RESOLVED (`_receipt_agent_type`), not raw: the two
     # eligibility checks read both labels, so the stamp has to as well or a
     # dispatch admitted via `subagent_type` gets stamped with `agent_type`'s
     # unrelated value -- for a named dispatch, the teammate's own name, which
     # no reader can credit. See `_receipt_agent_type`'s docstring.
-    if _is_delegate_reviewer(agent_type, subagent_type):
-        from coordinator_core.reviewer_vocabulary import DELEGATE_REVIEWERS
+    if _is_close_receipt_reviewer(agent_type, subagent_type):
+        from coordinator_core.reviewer_vocabulary import CLOSE_RECEIPT_REVIEWERS
 
-        stamped_type = _receipt_agent_type(agent_type or "", subagent_type or "", DELEGATE_REVIEWERS)
+        stamped_type = _receipt_agent_type(agent_type or "", subagent_type or "", CLOSE_RECEIPT_REVIEWERS)
         doc_text = _splice_review_receipt(doc_text, str(session_id), agent_id or "", stamped_type, spawned_at)
     elif _is_review_integrator(agent_type, subagent_type):
         stamped_type = _receipt_agent_type(

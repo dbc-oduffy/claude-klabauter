@@ -8066,3 +8066,96 @@ class TestRoadmapBatonDeclinesD6PerPredecessor:
         assert not any(jp_id.endswith("-roadmap-baton-decline") for jp_id in jp_ids), (
             f"C10: no roadmap-baton decline may be surfaced -- got jp ids {jp_ids!r}"
         )
+
+
+class TestFanInCarriedItemsBlockedVisibility:
+    """`blocked` rows survive the fan-in carry union; `closed`/`spun_off` do not.
+
+    `closed` terminated in place and `spun_off` names its own successor baton
+    in `disposition_detail`, so each leaves a reachable trace once its prior
+    archives. `blocked` leaves none -- it is an item still open on an external
+    dependency, and `handoff.schema.json` requires it to "remain visible and
+    explicit rather than silently re-carried". Dropping it at the hop hides
+    that dependency the moment the prior archives, which is the one failure
+    the disposition exists to prevent.
+    """
+
+    @staticmethod
+    def _seed_handoff_claim(repo_root: Path, session_id: str, basename: str, claimed_at: str) -> None:
+        claims_dir = repo_root / ".git" / "coordinator-sessions" / "handoff-claims" / basename
+        claims_dir.mkdir(parents=True, exist_ok=True)
+        (claims_dir / "session_id").write_text(session_id, encoding="utf-8")
+        (claims_dir / "claimed_at").write_text(claimed_at, encoding="utf-8")
+        (claims_dir / "stage").write_text("apply", encoding="utf-8")
+
+    @staticmethod
+    def _carried_items_lines(rows: "list[tuple[str, str, str]]") -> "list[str]":
+        lines = ["carried_items:"]
+        for carry_id, disposition, detail in rows:
+            lines.append(f"  - carry_id: {carry_id}")
+            lines.append(f'    description: "row {carry_id}"')
+            lines.append(f"    disposition: {disposition}")
+            if detail:
+                lines.append(f'    disposition_detail: "{detail}"')
+        return lines
+
+    def test_blocked_row_carries_and_closed_and_spun_off_do_not(self, tmp_path, monkeypatch):
+        _init_repo(tmp_path)
+        primary = _write_artifact(
+            tmp_path / "state" / "handoffs" / "2026-07-20-fanin-carry-primary.md",
+            ["deliverable_id: DEL-CARRY-1", "handoff_id: hnd-fanin-carry-pri-1c3d01"]
+            + self._carried_items_lines(
+                [
+                    ("cf-still-open-aa0001", "carried", ""),
+                    ("cf-needs-a-windows-box-aa0002", "blocked", "no Windows host in CI"),
+                    ("cf-done-here-aa0003", "closed", "fixed in 088bfe0121"),
+                ]
+            ),
+        )
+        extra = _write_artifact(
+            tmp_path / "state" / "handoffs" / "2026-07-20-fanin-carry-extra.md",
+            ["deliverable_id: DEL-CARRY-2", "handoff_id: hnd-fanin-carry-ext-1c3d02"]
+            + self._carried_items_lines(
+                [
+                    ("cf-forked-off-aa0004", "spun_off", "state/handoffs/2026-08-02-spun.md"),
+                    ("cf-peer-repo-landing-aa0005", "blocked", "waits on DoE-claude re-vendor"),
+                ]
+            ),
+        )
+        self._seed_handoff_claim(
+            tmp_path, "sid-fanin-carry", primary.name, "2026-07-20T09:00:00Z"
+        )
+        self._seed_handoff_claim(
+            tmp_path, "sid-fanin-carry", extra.name, "2026-07-20T10:00:00Z"
+        )
+        monkeypatch.setenv("CLAUDE_SESSION_ID", "sid-fanin-carry")
+
+        decision = ba.brief("handoff", "", repo_root=tmp_path).decision_object
+        lineage = decision["artifact"]["lineage"]
+
+        assert lineage["predecessor"] == primary.relative_to(tmp_path).as_posix()
+        assert lineage["additional_predecessors"] == [extra.relative_to(tmp_path).as_posix()]
+
+        carried = lineage.get("carried_items") or []
+        by_id = {row["carry_id"]: row for row in carried}
+
+        assert "cf-still-open-aa0001" in by_id
+        assert "cf-needs-a-windows-box-aa0002" in by_id, (
+            "a `blocked` row on the primary predecessor must stay visible on the "
+            "successor -- archiving the prior is exactly when the external "
+            "dependency would otherwise vanish"
+        )
+        assert "cf-peer-repo-landing-aa0005" in by_id, (
+            "a `blocked` row reached through a fan-in leg must carry too"
+        )
+        assert "cf-done-here-aa0003" not in by_id
+        assert "cf-forked-off-aa0004" not in by_id
+
+        assert by_id["cf-needs-a-windows-box-aa0002"]["disposition"] == "blocked", (
+            "injection is visibility, never a re-open: the disposition and its "
+            "detail carry through unchanged"
+        )
+        assert (
+            by_id["cf-needs-a-windows-box-aa0002"]["disposition_detail"]
+            == "no Windows host in CI"
+        )

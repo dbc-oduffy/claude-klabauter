@@ -11,6 +11,23 @@ resolve-coordinator-clone.cmd, claude-home.cmd) are therefore NOT covered
 by this guard -- they are a distinct writer family with their own
 primary-path shape, out of scope for this test on purpose.
 
+That exclusion was never ratified for any of the five names individually
+(DR-365 condemns exactly this shape), and it remains unratified. It was
+briefly narrowed to four on 2026-08-30 -- `claude-home` removed, on the
+premise that C5 had stopped `_CH_FAMILY_FILES` emitting `claude-home.cmd`.
+That cutover was backed out the same day (two writers of one
+`<settings-home>/bin/claude-home` path; see
+`test_static_families_reach_the_door.py`'s module docstring), the `.cmd`
+entry came back, and so did this name. THE GUARD FOLLOWS THE GENERATOR AND
+NEVER LEADS IT: do not narrow this list again until `_CH_FAMILY_FILES`
+actually stops writing the entry. The remaining four are routed to their
+owning repos by memo and are not this test's to widen.
+
+`example-game-repo-control` was never a member of this list at all. Unlike the other
+five it was not an unratified exclusion -- it was simply never considered.
+Recorded because those are different defects and only the first is what
+DR-365 condemns.
+
 Worded PRIMARY PATH, deliberately, not a flat "never starts an
 interpreter": the door itself degrades to that name's own Python CLI on a
 warm miss, by PM ruling (DR-367, "cold succeeds, loudly") -- a flat

@@ -10,6 +10,7 @@
     "append-integrator-dispositions",
     "append-plan-session",
     "archive-paper-trail",
+    "archive-session-scope",
     "archive-stamp-cli",
     "assert-cwd",
     "assert-no-dangling-plan-backlinks",

@@ -358,7 +358,14 @@ class SessionIdentityUnresolved(Exception):
 CONSUMES_MANIFEST: tuple[str, ...] = (
     "wsc-coverage-gate-runner",
     "check-workstream-complete-deletion-blocks",
-    "wsc-close",
+    # "wsc-close" was REMOVED from this manifest 2026-08-30. Its last
+    # directive emitter (`d-emit-deletion-blocks`) went with `wsc-close
+    # tail-args` (251ff57703); `archive-session`, its only other subcommand,
+    # is dispatched by a DoE-side SessionEnd hook and never by this assembly.
+    # The CLI is alive -- this module simply no longer consumes it, and a
+    # manifest row nothing emits is the dead census row
+    # `test_every_manifest_entry_is_named_by_at_least_one_directive` exists
+    # to catch.
     "coordinator-lesson-add",
     "coordinator-queue-append",
     "archive-stamp-cli",
@@ -1474,13 +1481,11 @@ def build_directives(
     if classify_directive is not None:
         directives.append(classify_directive)
 
-    # -- Step 2.67 (C2c): Deleted/Kept structured blocks --
-    if decisions.get("deleted_paths") or decisions.get("kept_entries"):
-        directives.append(
-            directives_memo_lifecycle.build_deletion_blocks_directive(
-                decisions.get("deleted_paths"), decisions.get("kept_entries")
-            )
-        )
+    # -- Step 2.67 (C2c)'s `d-emit-deletion-blocks` was REMOVED here
+    # (2026-08-30): it emitted `wsc-close tail-args` argv, and `251ff57703`
+    # deleted that subcommand — see the removal note in
+    # `directives_memo_lifecycle.py`. The op-side deletion-block gate that
+    # actually enforces the blocks is unaffected.
 
     # -- Step 3/3.5/3.6 (C2e): commit-tail keystone through cadence --
     # `d-close-tail-args` / `d-run-wsc-tail` / `d-release-plan-claim` were
@@ -1964,7 +1969,7 @@ _LEG_A_TERMINAL_PLAN_STATUS = frozenset(
 # requires at least one COUNTING receipt: a sidecar under this session's own
 # `state/subagent-share/<sid>/` directory whose `agent_type` frontmatter
 # (namespace-stripped) names a `coordinator_core.reviewer_vocabulary.
-# DELEGATE_REVIEWERS` member, whose `lead_session_id` matches this baton's
+# CLOSE_RECEIPT_REVIEWERS` member, whose `lead_session_id` matches this baton's
 # session id, whose `spawned_at` timestamp falls inside this baton's claim
 # window (`claimed_at` -> now — AC2b), and whose BODY is non-empty (AC5:
 # non-empty is the whole content test, never a judgment on quality).
@@ -2066,7 +2071,7 @@ def _compute_review_receipt_gate(
     counts iff it carries a `review_receipt:` BLOCK — the one the dispatch
     seam splices in (`provision_report._splice_review_receipt`) — and that
     block satisfies (a) `agent_type` (namespace-stripped) names a
-    `reviewer_vocabulary.DELEGATE_REVIEWERS` member, (b) `session_id` equals
+    `reviewer_vocabulary.CLOSE_RECEIPT_REVIEWERS` member, (b) `session_id` equals
     `sid`, (c) `stamped_at` resolves neither strictly before `claimed_at`
     (when both parse) nor strictly after now, and (d) the sidecar's body
     (post-frontmatter text) is non-blank (AC5). Missing, blank, unreadable,
@@ -2097,14 +2102,14 @@ def _compute_review_receipt_gate(
             ),
         )
 
-    from coordinator_core.reviewer_vocabulary import DELEGATE_REVIEWERS
+    from coordinator_core.reviewer_vocabulary import CLOSE_RECEIPT_REVIEWERS
 
     sidecar_dir = root / "state" / "subagent-share" / sid
     no_receipt_detail = (
         f"no counting review receipt for session {sid!r} under "
         f"{sidecar_dir.as_posix()} (missing, blank, wrong agent type, or "
         "outside the claim window) — dispatch a reviewer "
-        "(coordinator_core.reviewer_vocabulary.DELEGATE_REVIEWERS) and let it "
+        "(coordinator_core.reviewer_vocabulary.CLOSE_RECEIPT_REVIEWERS) and let it "
         f"finish before reaching status: {target_status!r}"
     )
     if not sidecar_dir.is_dir():
@@ -2167,7 +2172,7 @@ def _compute_review_receipt_gate(
                 continue
 
             bare = receipt_agent_type.rpartition(":")[2] if ":" in receipt_agent_type else receipt_agent_type
-            if bare not in DELEGATE_REVIEWERS:
+            if bare not in CLOSE_RECEIPT_REVIEWERS:
                 continue
             if reviewer_hit is None:
                 reviewer_hit = candidate.as_posix()

@@ -199,11 +199,43 @@ def _status_probe(repo_root: Path) -> _StatusProbe:
         xy = fields[1]
         if len(xy) != 2:
             continue
-        # Path is the final space-delimited field for `1`/`u`; for a `2`
-        # rename row the trailing `	<origPath>` is stripped first.
         rest = fields[2]
-        path = rest.split("	", 1)[0].rsplit(" ", 1)[-1]
+        # Path extraction is bounded by the EXACT fixed-field count per row
+        # kind (git's own porcelain-v2 grammar), never a delimiter search --
+        # git does NOT quote a path merely for containing a space, so an
+        # unbounded `rsplit(" ", 1)` silently truncated "my file.txt" to
+        # "file.txt". Field counts verified against `git status
+        # --porcelain=v2` output generated in a throwaway repo, not taken
+        # on trust from documentation.
+        if marker == "1 ":
+            # sub, mH, mI, mW, hH, hI -- 6 fixed fields before the path.
+            parts = rest.split(" ", 6)
+            if len(parts) < 7:
+                continue
+            path = parts[6]
+        elif marker == "u ":
+            # sub, m1, m2, m3, mW, h1, h2, h3 -- 8 fixed fields before path.
+            parts = rest.split(" ", 8)
+            if len(parts) < 9:
+                continue
+            path = parts[8]
+        else:  # marker == "2 "
+            # sub, mH, mI, mW, hH, hI, X<score> -- 7 fixed fields, then
+            # "<path>\t<origPath>"; only the NEW path is taken, matching
+            # `diff --name-only`'s own reporting of a rename.
+            parts = rest.split(" ", 7)
+            if len(parts) < 8:
+                continue
+            path = parts[7].split("	", 1)[0]
         if not path:
+            continue
+        if marker == "u ":
+            # An unmerged/conflicted row is counted as staged ONLY, never
+            # unstaged -- `merge_head_present` is the separate, correct
+            # conflict signal; a conflicted path landing in BOTH sets would
+            # defeat `_HALF_APPLIED_MAX_UNSTAGED_OVERLAP == 0` and could
+            # suppress a genuine half_applied_merge verdict.
+            staged.append(path)
             continue
         if xy[0] != ".":
             staged.append(path)
@@ -228,7 +260,11 @@ def _merge_head_present(repo_root: Path) -> bool:
     """
     try:
         return (resolve_git_dir(repo_root) / "MERGE_HEAD").exists()
-    except OSError:
+    except (OSError, ValueError):
+        # `resolve_git_dir` reads the `.git` pointer file as UTF-8; a
+        # non-UTF-8 pointer file raises `UnicodeDecodeError` (a `ValueError`
+        # subclass), not `OSError` -- caught here too so this module's
+        # "never raises" negative-spec holds for that degradation as well.
         return False
 
 

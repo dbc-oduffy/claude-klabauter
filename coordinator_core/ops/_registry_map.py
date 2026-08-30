@@ -335,6 +335,8 @@ OP_MODULE_MAP: Dict[str, str] = {
     "session_baton.promote":                  "coordinator_core.ops.session_baton_promote",
     "warm_guard.evaluate":                     "coordinator_core.ops.warm_guard_evaluate",
     "merge_assemble.apply":                    "coordinator_core.merge_assemble.ops",
+    "baton_assemble.brief":                    "coordinator_core.baton_assemble.ops",
+    "baton_assemble.apply":                    "coordinator_core.baton_assemble.ops",
 }
 
 

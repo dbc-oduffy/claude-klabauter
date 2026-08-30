@@ -309,6 +309,120 @@ def _parse_edge_kinds(raw: object) -> Optional[Set[str]]:
 # ---------------------------------------------------------------------------
 
 
+def _is_archive_resident_path(p: str) -> bool:
+    """Whether `p` sits under an `archive/handoffs/` segment.
+
+    The index is built over non-archive nodes only, while membership is
+    still judged against the FULL live+archive path list — archive-resident
+    referencers are dropped by `_is_terminal_or_archived_child`, never by
+    omission from the index.
+
+    <!-- Review: coordinator:overengineering-reviewer — lifted from two
+    byte-identical nested copies. -->
+    """
+    parts = Path(p).parts
+    return any(
+        parts[i] == "archive" and parts[i + 1] == "handoffs"
+        for i in range(len(parts) - 1)
+    )
+
+
+def _allowed_candidate_roots(worktree_root: Path) -> List[Path]:
+    """The two roots a candidate path must resolve under.
+
+    This op's live set spans both live and archived handoffs (Review:
+    op-family path-containment sweep, 2026-07-08 —
+    docs/problems/2026-07-08-op-family-path-containment-investigation.md § 4).
+    `exclude` is never resolved to a read, so it is NOT guarded.
+    """
+    return [
+        worktree_root / "state" / "handoffs",
+        worktree_root / "archive" / "handoffs",
+    ]
+
+
+def _resolve_candidate(candidate: str, allowed_roots: List[Path]) -> Tuple[Optional[str], Optional[str]]:
+    """(absolute path, None) for a candidate inside `allowed_roots` and present
+    on disk; (None, error message) otherwise. Both failures are fail-closed
+    conditions — never "no children".
+    """
+    resolved = contained_path(Path(candidate), allowed_roots)
+    if resolved is None:
+        return None, f"candidate escapes state/handoffs or archive/handoffs: {candidate}"
+    candidate_abs = str(resolved)
+    if not os.path.isfile(candidate_abs):
+        return None, f"candidate not found on disk: {candidate}"
+    return candidate_abs, None
+
+
+async def _enumerate_live_set(worktree_root: Path) -> Tuple[List[str], Optional[str]]:
+    """(live_paths, None), or ([], error message) for either whole-corpus
+    fail-closed condition.
+
+    An unscannable subtree could be hiding a live child, which would make
+    `referenced` falsely False (safe-to-archive) on whatever partial set was
+    readable — the same posture as the empty-live-set guard, applied to the
+    "we couldn't fully look" case rather than the "we looked and found
+    nothing" case. Neither is decidable per candidate, so a caller answering
+    many candidates marks them ALL indeterminate on this error.
+    """
+    live_paths, scan_errors = await asyncio.to_thread(_collect_handoff_paths, worktree_root)
+    if scan_errors:
+        return [], (
+            "enumeration incomplete — cannot rule out a live child under an "
+            "unscannable subtree: " + "; ".join(scan_errors)
+        )
+    if not live_paths:
+        return [], (
+            "empty live set: cannot determine children "
+            "(handoff-has-live-children.sh:196-199 fail-closed guard)"
+        )
+    return live_paths, None
+
+
+async def _build_index(
+    worktree_root: Path,
+    live_paths: List[str],
+    metas: Optional[Dict[str, dict]] = None,
+) -> Tuple[Optional[dict], Optional[str]]:
+    """(reverse-edge index, None) over the NON-archived nodes of `live_paths`,
+    or (None, error message) — an unbuildable index decides nothing.
+
+    Index only the non-archived nodes. `reverse_membership` drops every
+    archive-resident child afterwards via `_is_terminal_or_archived_child`
+    rule 1, which is a POSITIVE, unconditional path-segment exclusion — it is
+    not one of that predicate's fail-closed branches, so an archived node can
+    never survive into the returned live set no matter what its frontmatter
+    says or whether it can be read at all. Indexing them is therefore pure
+    work for an answer that is discarded: 951 nodes indexed to decide over
+    235. Measured 172ms -> 31ms, with zero verdict differences across all 235
+    candidates in this corpus — corroboration, not the argument; the argument
+    is that rule 1 cannot fail open. Rules 2 and 3 (terminal status /
+    deployment_state) are NOT pre-filtered here: those ARE the fail-closed
+    branches, and they stay where they are.
+
+    `live_paths` itself is still what callers pass to `reverse_membership`,
+    so its empty-set fail-closed guard still judges the true corpus.
+
+    `metas`, when supplied, is a pre-read `{abspath: frontmatter}` lookup with
+    per-missing-path `_read_meta` fallback inside `build_reverse_edge_index`
+    itself — a path absent from `metas` is not decided in `metas`'s favour,
+    it is just read normally.
+    """
+    index_set = [p for p in live_paths if not _is_archive_resident_path(p)]
+    try:
+        index = await asyncio.to_thread(
+            build_reverse_edge_index,
+            index_set,
+            str(worktree_root / "state" / "handoffs"),
+            None,
+            metas,
+        )
+    except Exception as exc:  # noqa: BLE001
+        return None, f"unbuildable reverse-edge index: {exc}"
+    return index, None
+
+
 async def has_live_children_many(
     candidates: List[str],
     repo_root: Optional[Path] = None,
@@ -353,64 +467,27 @@ async def has_live_children_many(
         return {c: 2 for c in candidates}
 
     worktree_root = main_worktree_root(repo_root)
-    allowed_roots = [
-        worktree_root / "state" / "handoffs",
-        worktree_root / "archive" / "handoffs",
-    ]
+    allowed_roots = _allowed_candidate_roots(worktree_root)
 
-    live_paths, scan_errors = await asyncio.to_thread(_collect_handoff_paths, worktree_root)
-    # Both are whole-corpus conditions: no candidate can be decided under them.
-    if scan_errors or not live_paths:
+    # Both guards inside `_enumerate_live_set` are whole-corpus conditions:
+    # no candidate can be decided under them.
+    live_paths, corpus_error = await _enumerate_live_set(worktree_root)
+    if corpus_error is not None:
         return {c: 2 for c in candidates}
 
-    # Index only the NON-archived nodes. `reverse_membership` drops every
-    # archive-resident child afterwards via `_is_terminal_or_archived_child`
-    # rule 1, which is a POSITIVE, unconditional path-segment exclusion — it
-    # is not one of that predicate's fail-closed branches, so an archived node
-    # can never survive into the returned live set no matter what its
-    # frontmatter says or whether it can be read at all. Indexing them is
-    # therefore pure work for an answer that is discarded: 951 nodes indexed
-    # to decide over 235. Measured 172ms -> 31ms, with zero verdict
-    # differences across all 235 candidates in this corpus — which is
-    # corroboration, not the argument; the argument is that rule 1 cannot
-    # fail open.
-    #
-    # Same consecutive-parts test rule 1 uses, deliberately NOT a substring
-    # match — a repo literally named "archive" would false-match one (that
-    # predicate's own comment, and its F2 review note about non-conventional
-    # archive shapes, apply verbatim here because this filter must agree with
-    # it exactly). Rules 2 and 3 (terminal status / deployment_state) are NOT
-    # pre-filtered here: those ARE the fail-closed branches, and they stay
-    # where they are.
-    #
-    # `live_paths` itself is still passed to reverse_membership below, so its
-    # empty-set fail-closed guard still judges the true corpus.
-    def _archive_resident(p: str) -> bool:
-        parts = Path(p).parts
-        return any(
-            parts[i] == "archive" and parts[i + 1] == "handoffs"
-            for i in range(len(parts) - 1)
-        )
-
-    index_set = [p for p in live_paths if not _archive_resident(p)]
-    try:
-        index = await asyncio.to_thread(
-            build_reverse_edge_index,
-            index_set,
-            str(worktree_root / "state" / "handoffs"),
-        )
-    except Exception:  # noqa: BLE001 — an unbuildable index decides nothing
+    index, index_error = await _build_index(worktree_root, live_paths)
+    if index_error is not None:
         return {c: 2 for c in candidates}
 
     codes: Dict[str, int] = {}
     for candidate in candidates:
-        resolved = contained_path(Path(candidate), allowed_roots)
-        if resolved is None or not os.path.isfile(str(resolved)):
+        candidate_abs, candidate_error = _resolve_candidate(candidate, allowed_roots)
+        if candidate_error is not None:
             codes[candidate] = 2
             continue
         try:
             children = reverse_membership(
-                str(resolved), live_paths, edge_kinds=edge_kinds, index=index
+                candidate_abs, live_paths, edge_kinds=edge_kinds, index=index
             )
         except Exception:  # noqa: BLE001
             codes[candidate] = 2
@@ -452,7 +529,7 @@ async def has_live_children_from_metas(
 
     Composes `has_live_children_many`'s already-decided shape rather than
     reinventing it: same containment guard, same fail-closed empty/scan-error
-    live-set guard, same `_archive_resident` index-set split (index built over
+    live-set guard, same `_is_archive_resident_path` index-set split (index built over
     non-archive paths only; `reverse_membership` still judges against the
     FULL live set, so archive-resident referencers are still excluded via
     `_is_terminal_or_archived_child`, never by omission from the index).
@@ -478,50 +555,20 @@ async def has_live_children_from_metas(
     parsed_edge_kinds = _parse_edge_kinds(edge_kinds)
 
     worktree_root = main_worktree_root(repo_root)
-    allowed_roots = [
-        worktree_root / "state" / "handoffs",
-        worktree_root / "archive" / "handoffs",
-    ]
 
-    resolved_candidate = contained_path(Path(candidate), allowed_roots)
-    if resolved_candidate is None:
-        return _indeterminate(
-            f"candidate escapes state/handoffs or archive/handoffs: {candidate}"
-        )
-    candidate_abs = str(resolved_candidate)
-    if not os.path.isfile(candidate_abs):
-        return _indeterminate(f"candidate not found on disk: {candidate}")
+    candidate_abs, candidate_error = _resolve_candidate(
+        candidate, _allowed_candidate_roots(worktree_root)
+    )
+    if candidate_error is not None:
+        return _indeterminate(candidate_error)
 
-    live_paths, scan_errors = await asyncio.to_thread(_collect_handoff_paths, worktree_root)
-    if scan_errors:
-        return _indeterminate(
-            "enumeration incomplete — cannot rule out a live child under an "
-            "unscannable subtree: " + "; ".join(scan_errors)
-        )
-    if not live_paths:
-        return _indeterminate(
-            "empty live set: cannot determine children "
-            "(handoff-has-live-children.sh:196-199 fail-closed guard)"
-        )
+    live_paths, corpus_error = await _enumerate_live_set(worktree_root)
+    if corpus_error is not None:
+        return _indeterminate(corpus_error)
 
-    def _archive_resident(p: str) -> bool:
-        parts = Path(p).parts
-        return any(
-            parts[i] == "archive" and parts[i + 1] == "handoffs"
-            for i in range(len(parts) - 1)
-        )
-
-    index_set = [p for p in live_paths if not _archive_resident(p)]
-    try:
-        index = await asyncio.to_thread(
-            build_reverse_edge_index,
-            index_set,
-            str(worktree_root / "state" / "handoffs"),
-            None,
-            metas,
-        )
-    except Exception as exc:  # noqa: BLE001 — an unbuildable index decides nothing
-        return _indeterminate(f"unbuildable reverse-edge index: {exc}")
+    index, index_error = await _build_index(worktree_root, live_paths, metas)
+    if index_error is not None:
+        return _indeterminate(index_error)
 
     try:
         children = reverse_membership(
@@ -948,13 +995,6 @@ async def _handoff_has_live_children(params: dict, repo_root: Optional[Path] = N
         exit_code 1 → referenced=False → safe to archive
         exit_code 2 → error/indeterminate → fail-closed, treat as do-not-archive
     """
-    # asyncio deferred to first use here (not module scope) — this is the only function
-    # in the module touching the asyncio namespace at runtime; a module-scope
-    # `import asyncio` dragged asyncio.base_events (~7ms) into every eager op import
-    # even for callers that never invoke handoff.has_live_children. Spec:
-    # docs/plans/2026-07-24-canonical-resolution-engine.md task W0-1.
-    import asyncio
-
     # ------------------------------------------------------------------
     # 1. Parse + validate params
     # ------------------------------------------------------------------
@@ -979,43 +1019,18 @@ async def _handoff_has_live_children(params: dict, repo_root: Optional[Path] = N
             "no repo_root resolved — _origin_worktree missing from request"
         )
 
-    # Containment (Review: op-family path-containment sweep, 2026-07-08): candidate
-    # MUST resolve under state/handoffs/ or archive/handoffs/ — this op's live-set
-    # spans both (see docs/problems/2026-07-08-op-family-path-containment-investigation.md
-    # § 4). `exclude` is never resolved to a read, so it is NOT guarded here.
-    allowed_roots = [
-        worktree_root / "state" / "handoffs",
-        worktree_root / "archive" / "handoffs",
-    ]
-    resolved_candidate = contained_path(Path(candidate), allowed_roots)
-    if resolved_candidate is None:
-        return _indeterminate(f"candidate escapes state/handoffs or archive/handoffs: {candidate}")
-    candidate_abs = str(resolved_candidate)
-    if not os.path.isfile(candidate_abs):
-        return _indeterminate(f"candidate not found on disk: {candidate}")
-
-    live_paths, scan_errors = await asyncio.to_thread(_collect_handoff_paths, worktree_root)
+    candidate_abs, candidate_error = _resolve_candidate(
+        candidate, _allowed_candidate_roots(worktree_root)
+    )
+    if candidate_error is not None:
+        return _indeterminate(candidate_error)
 
     # --- Tier 2 (behaviour change -- PM sign-off required) ---
-    # Fail-closed on an unscannable subtree — a live child could be sitting
-    # under it, which would make `referenced` falsely False (safe-to-archive)
-    # if we silently proceeded on whatever partial set we could read. This is
-    # the same fail-closed posture as the empty-live-set guard just below,
-    # applied to the "we couldn't fully look" case rather than the "we looked
-    # and found nothing" case.
-    if scan_errors:
-        return _indeterminate(
-            "enumeration incomplete — cannot rule out a live child under an "
-            "unscannable subtree: " + "; ".join(scan_errors)
-        )
+    # Both of `_enumerate_live_set`'s guards are fail-closed; see its docstring.
+    live_paths, corpus_error = await _enumerate_live_set(worktree_root)
+    if corpus_error is not None:
+        return _indeterminate(corpus_error)
     # --- end Tier 2 ---
-
-    # Fail-closed on empty live set — mirrors the bash oracle's fail-closed guard
-    if not live_paths:
-        return _indeterminate(
-            "empty live set: cannot determine children "
-            "(handoff-has-live-children.sh:196-199 fail-closed guard)"
-        )
 
     # ------------------------------------------------------------------
     # 3. Reverse-membership check via archival.reverse_membership

@@ -322,7 +322,14 @@ class TestFanInLegsAreNeverFatal:
         cwd-bug pin -- fan-in legs never reach `resolve_deliverable_and_
         initiative` at all now, so its cwd-relative `os.path.isfile` probe is
         unreachable from here; not chdir-ing just avoids depending on a cwd
-        this test has no reason to control."""
+        this test has no reason to control.
+
+        DR-388 (2026-08-30): the agreed carrying-rung id is no longer what
+        lands on the successor once a fan-in leg is present -- a fan-in
+        successor mints its OWN fresh deliverable_id by construction rather
+        than carrying the agreeing rungs' id verbatim. `agreed_id` is still
+        asserted into `deliverable_ids[]` (the union), just not onto the
+        singular `deliverable_id` field anymore."""
         session_id = "sid-fan-in-nonfatal"
         monkeypatch.setenv("CLAUDE_SESSION_ID", session_id)
         agreed_id = self._seed_fan_in(tmp_path, session_id)
@@ -333,7 +340,12 @@ class TestFanInLegsAreNeverFatal:
             jp for jp in decision["judgment_points"]
             if jp["id"] == "j-divergent-deliverable-id"
         ]
-        assert decision["artifact"]["lineage"]["deliverable_id"] == agreed_id
+        lineage = decision["artifact"]["lineage"]
+        assert lineage["deliverable_id"] != agreed_id, (
+            "DR-388: a fan-in successor mints fresh, it does not carry the "
+            "agreeing rungs' id verbatim"
+        )
+        assert agreed_id in (lineage.get("deliverable_ids") or [])
         assert decision["directives"]
 
     def test_every_leg_survives_in_lineage(self, tmp_path, monkeypatch):

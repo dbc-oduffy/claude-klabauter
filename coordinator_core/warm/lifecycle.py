@@ -83,6 +83,8 @@ __all__ = [
     "begin_shutdown",
     "drain_and_exit",
     "reset_shutdown_guard_for_test",
+    "set_final_sweep_hook",
+    "reset_final_sweep_hook_for_test",
 ]
 
 # Retired SINGLETON_BLOCKING_ACQUIRE_TIMEOUT_SECS used DISPATCH_TIMEOUT_SECS
@@ -95,6 +97,39 @@ _DRAIN_POLL_INTERVAL_SECS = 0.05
 
 _guard_lock = threading.Lock()
 _shutdown_entered = False
+
+#: The mandatory final-sweep hook (`warm.push_cadence`'s C4), run inside
+#: `_run_tail` above `exit_fn` -- see that function's own docstring. A
+#: zero-arg callable with no return value, or `None` (the default) when no
+#: caller has registered one. Registered as a settable module-level hook
+#: rather than threaded through `begin_shutdown`/`drain_and_exit`'s own
+#: kwargs because `warm.idle.demote_if_idle` (out of this chunk's writable
+#: scope) calls `begin_shutdown` internally with a fixed kwarg set this
+#: module cannot widen without editing `idle.py` -- a hook registered here,
+#: read by BOTH entry points' shared tail, reaches the idle-demotion exit
+#: path without idle.py needing to know this module exists.
+_final_sweep_hook_lock = threading.Lock()
+_final_sweep_hook: Optional[Callable[[], None]] = None
+
+
+def set_final_sweep_hook(hook: Optional[Callable[[], None]]) -> None:
+    """Register (or clear, with `None`) the final-sweep hook every shutdown
+    sequence runs, once, above `exit_fn` -- see the module-level docstring
+    on `_final_sweep_hook` for why this is a settable hook rather than a
+    `begin_shutdown`/`drain_and_exit` kwarg. `warm.server._ServerContext`
+    binds this once at boot to its own live served-repo sweep; nothing else
+    in this module ever calls it.
+    """
+    global _final_sweep_hook
+    with _final_sweep_hook_lock:
+        _final_sweep_hook = hook
+
+
+def reset_final_sweep_hook_for_test() -> None:
+    """Test-only: clear the registered hook so a fresh test starts from
+    "nothing registered". Never called by production code.
+    """
+    set_final_sweep_hook(None)
 
 
 def _try_enter_once() -> bool:
@@ -166,10 +201,25 @@ def _run_tail(
     """Steps 2-4, shared by both entry points below. AST-pinned by
     `test_drain_exit_order.py`: must call `exit_fn` (defaulting to
     `os._exit`) as its last action and must never call `sys.exit`.
+
+    A registered final-sweep hook (`set_final_sweep_hook`) runs after
+    `ctx_shutdown()` and before `exit_fn`, on EVERY path through this
+    function regardless of which entry point (`begin_shutdown` or
+    `drain_and_exit`) reached it -- this is what makes the cadence's
+    "always sweep before the box goes quiet" bound non-vacuous for idle
+    demotion and superseded-generation retirement, not merely for skew
+    eviction. Swallows any exception the hook raises: a sweep failure must
+    never prevent `exit_fn` from running.
     """
     ceiling = _drain_ceiling_secs() if drain_ceiling_secs is None else drain_ceiling_secs
     _wait_for_drain(in_flight_count, ceiling_secs=ceiling)
     ctx_shutdown()
+    hook = _final_sweep_hook
+    if hook is not None:
+        try:
+            hook()
+        except Exception:  # noqa: BLE001 -- a sweep failure must not block exit
+            pass
     exit_fn(0)
 
 

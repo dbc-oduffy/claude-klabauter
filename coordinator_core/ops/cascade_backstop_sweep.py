@@ -45,7 +45,7 @@ contract):
     event, not only a live one).
 
 For each DISTINCT `deliverable_id` collected from those sources, this op
-re-runs C6's own `_collect_live_candidates` + `_predicate_refusal` against
+re-runs C6's own `_collect_live_candidates_for_kind` + `_predicate_refusal` against
 `state/handoffs/` (dry-run — no write attempted for any outcome) and reports
 every candidate that CLEARS the predicate as a divergence: a live handoff that
 the real cascade would advance today, had it fired. A candidate the predicate
@@ -83,7 +83,7 @@ NEGATIVE-SPEC:
     any kind. A caller wanting the real cascade to run calls
     `deliverable.cascade_terminal` (or the real trigger) directly — this op
     is never a substitute entrypoint for it.
-  - Does NOT re-implement `_collect_live_candidates` or `_predicate_refusal`
+  - Does NOT re-implement `_collect_live_candidates_for_kind` or `_predicate_refusal`
     — both are imported from `deliverable_cascade` and called exactly as C6
     itself calls them, so a future change to the predicate is automatically
     picked up here with no parallel edit.
@@ -104,7 +104,8 @@ from coordinator_core.frontmatter.primitives import read_fm_field, split_frontma
 from coordinator_core.ipc import register_op
 from coordinator_core.lifecycle_constants import HANDOFF_TERMINAL_DEPLOYMENT
 from coordinator_core.ops.deliverable_cascade import (
-    _collect_live_candidates,
+    _HANDOFF_KIND,
+    _collect_live_candidates_for_kind,
     _predicate_refusal,
 )
 from coordinator_core.ops.fleet._common import main_worktree_root
@@ -289,12 +290,27 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     divergences: list[dict[str, Any]] = []
     scan_incomplete = False
 
+    # Leg (b) of `_predicate_refusal` answers from an index built over the
+    # collect scan's own frontmatter rather than re-walking the whole
+    # live+archived corpus per candidate — the collapse
+    # `deliverable_cascade._handler` already makes (see that module's C1
+    # note). A sweep pays that per-candidate cost across EVERY deliverable_id,
+    # so the uncollapsed shape is strictly worse here than at the single-target
+    # cascade it was measured on.
     for did in sorted(all_ids):
-        candidates, incomplete = _collect_live_candidates(worktree_root, did)
+        corpus_metas: dict[str, dict] = {}
+        candidates, incomplete, _unreadable = _collect_live_candidates_for_kind(
+            worktree_root, did, kind=_HANDOFF_KIND, metas_out=corpus_metas
+        )
         if incomplete:
             scan_incomplete = True
         for candidate in candidates:
-            refusal = await _predicate_refusal(candidate["path"], candidate["fm"], repo_root)
+            refusal = await _predicate_refusal(
+                candidate["path"],
+                candidate["fm"],
+                repo_root,
+                corpus_metas=corpus_metas,
+            )
             if refusal is None:
                 divergences.append(
                     {

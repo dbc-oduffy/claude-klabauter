@@ -1121,6 +1121,7 @@ def _dispatch_baton_stamp_carried_ids(args: list[str], repo_root: Path) -> dict[
     file_rel: Optional[str] = None
     deliverable_ids: list[str] = []
     plan_ids: list[str] = []
+    carried_items: list[dict[str, Any]] = []
     governing_plan: Optional[str] = None
     i = 0
     while i < len(args):
@@ -1133,6 +1134,10 @@ def _dispatch_baton_stamp_carried_ids(args: list[str], repo_root: Path) -> dict[
             deliverable_ids.append(arg.split("=", 1)[1])
         elif arg.startswith("--plan-ids="):
             plan_ids.append(arg.split("=", 1)[1])
+        elif arg.startswith("--carried-items="):
+            import json as _json
+
+            carried_items.append(_json.loads(arg.split("=", 1)[1]))
         elif arg.startswith("--governing-plan="):
             # R5 (2026-08-21, rebuild-the-three-ceremony-assemblers plan C5):
             # a SCALAR carrier, unlike `--deliverable-ids`/`--plan-ids`
@@ -1210,6 +1215,42 @@ def _dispatch_baton_stamp_carried_ids(args: list[str], repo_root: Path) -> dict[
             # MEASURED docstring note.
             fm = fm.replace(f"{key}: \n", f"{key}:\n", 1)
             _state["stamped"].append(key)
+
+        if carried_items:
+            import yaml as _yaml
+
+            existing_block = read_fm_nested_field(fm, "carried_items")
+            if existing_block is not None:
+                parsed = _yaml.safe_load(f"carried_items:\n{existing_block}") or {}
+                existing_entries = list(parsed.get("carried_items") or [])
+                if existing_entries == carried_items:
+                    pass
+                else:
+                    raise MutateAbort(
+                        f"baton-stamp-carried-ids: {target_abs} already carries "
+                        f"carried_items={existing_entries!r}, which does not match "
+                        f"this run's resolved union {carried_items!r} -- refusing "
+                        "to silently overwrite; resolve by hand"
+                    )
+            else:
+                _ci_lines: list[str] = []
+                for _item in carried_items:
+                    _ci_lines.append(f"  - carry_id: {_quote(_item['carry_id'])}")
+                    _ci_lines.append(f"    description: {_quote(_item['description'])}")
+                    _ci_lines.append(f"    disposition: {_quote(_item['disposition'])}")
+                    if _item.get("disposition_detail"):
+                        _ci_lines.append(
+                            f"    disposition_detail: {_quote(_item['disposition_detail'])}"
+                        )
+                    if _item.get("first_seen_handoff_id"):
+                        _ci_lines.append(
+                            "    first_seen_handoff_id: "
+                            f"{_quote(_item['first_seen_handoff_id'])}"
+                        )
+                raw_block = "\n" + "\n".join(_ci_lines)
+                fm = insert_fm_field_raw(fm, "carried_items", raw_block, after_key=None)
+                fm = fm.replace("carried_items: \n", "carried_items:\n", 1)
+                _state["stamped"].append("carried_items")
 
         # R5 governing_plan -- a SCALAR stamp, not a block sequence, so it takes
         # `insert_fm_field`'s own quoting/anchoring (never the raw block path

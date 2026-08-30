@@ -4758,7 +4758,8 @@ def archive(sid: str, cwd: Optional[str] = None) -> bool:
     Also clears the write-confinement bump's settings-home anchor record for
     ``sid`` (docs/plans/2026-08-03-write-bump-anchor-outside-the-guarded-repo.md
     AC12) — this is the live seam DoE's real ``SessionEnd`` hook actually calls
-    (via ``coordinator/bin/wsc-close.py archive-session``), so the settings-home
+    (via ``coordinator/bin/archive-session-scope.py archive-session``, named
+    ``wsc-close.py`` until 2026-08-30), so the settings-home
     anchor's session-ephemera cleanup is anchored here rather than in
     ``sweep_stale_markers``, which has no production caller. Exact-``sid``
     match, no prefix matching — a different record from ``_write_bump_marker.py``'s

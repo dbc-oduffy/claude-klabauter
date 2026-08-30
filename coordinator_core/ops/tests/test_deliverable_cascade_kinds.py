@@ -793,27 +793,6 @@ def test_handoff_kind_end_to_end_still_advances_unchanged(tmp_path, monkeypatch)
     assert read_fm_field(split.fm_text, "deployment_state") == "shipped"
 
 
-def test_handoff_kind_two_tuple_wrapper_still_used_by_backstop_sweep(tmp_path):
-    """`_collect_live_candidates` (the 2-tuple wrapper) stays byte-for-byte
-    equivalent to the handoff leg of the parameterised form — proves
-    `cascade_backstop_sweep.py`'s direct caller is unaffected by this
-    chunk's parameterisation."""
-    repo = tmp_path / "repo"
-    _init_repo(repo)
-    _seed_handoff(repo, "20260101-h.md", deliverable_id="dlv-wrapper-0")
-
-    matches_2tuple, scan_incomplete_2tuple = cascade_mod._collect_live_candidates(
-        repo, "dlv-wrapper-0"
-    )
-    matches_3tuple, scan_incomplete_3tuple, unreadable = cascade_mod._collect_live_candidates_for_kind(
-        repo, "dlv-wrapper-0", kind=cascade_mod._HANDOFF_KIND
-    )
-
-    assert len(matches_2tuple) == len(matches_3tuple) == 1
-    assert scan_incomplete_2tuple == scan_incomplete_3tuple == False
-    assert unreadable == []
-
-
 # ---------------------------------------------------------------------------
 # AC7 end-to-end gap (named in C4, closed here per the plan's C6 assignment)
 # ---------------------------------------------------------------------------

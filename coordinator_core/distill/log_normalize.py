@@ -130,8 +130,15 @@ the count of candidate data-row lines (`- <path> -> ...`) in the file. "Migrated
 covers BOTH a row rewritten from an arrow dialect AND an already-canonical row left
 unchanged (both are present, accounted-for, canonical output); "skipped" covers a
 candidate row occurring before any `## Run` header, one whose dialect this module does not
-recognize, or one whose rendered form fails `_common.parse_distillation_log` round-trip —
-each routed to `skipped` with a reason, never dropped from the count.
+recognize, one that already carries a `(run: <id>)` tail (`_ARROW_DIALECT_RUN_TAIL_RE` —
+outside this module's dialect scope, and undetectable by the round-trip check), or one
+whose rendered form fails `_common.parse_distillation_log` round-trip — each routed to
+`skipped` with a reason, never dropped from the count.
+
+Scope, stated as a refusal rather than a wider regex: the three dialects above are
+TAIL-LESS. A row that already ends `(run: <id>)` is a fourth shape this module does not
+migrate, and it is refused up front instead of being handled — see
+`_ARROW_DIALECT_RUN_TAIL_RE` for why the round-trip invariant (4) is blind to it.
 
 Hard constraint: this normalizer only ever operates on the single `log_path` its caller
 passes in-process — it has no cross-repo reach and never opens, walks, or writes any path
@@ -571,7 +578,30 @@ migration"):
 `token` distinguishes the three cases case-sensitively (no case-folding). A line already
 in canonical shape is matched by `_common._ROW_RE` FIRST by the caller and never reaches
 this pattern (its disposition-then-comma grammar cannot match an arrow-dialect line, so
-there is no ordering ambiguity between the two)."""
+there is no ordering ambiguity between the two).
+
+`rest` is `.*` and therefore also swallows a trailing `(run: <id>)` if the input dialect
+carries one — which none of the three above does. `_ARROW_DIALECT_RUN_TAIL_RE` is the
+precondition that keeps such a row OUT of this pattern's migration path; see its own
+docstring."""
+
+_ARROW_DIALECT_RUN_TAIL_RE = re.compile(r"\(run:\s*\S+\s*\)\s*$")
+"""Detects a `(run: <id>)` tail already present in an arrow-dialect row's captured
+`rest`. Such a row is NOT one of the three dialects this normalizer was written for
+(all three are tail-less, per `_ARROW_DIALECT_ROW_RE`), and migrating it corrupts the
+row silently: `rest` swallows the existing tail into the fate, `render_row` appends a
+second one, and `_row_round_trips` still passes because `_common._ROW_RE`'s non-greedy
+fate anchors on the LAST `(run: ...)` — so the guard compares a corrupt row against a
+re-render of the same corrupt row. The round-trip check cannot see corruption that
+lands INSIDE the field it round-trips; only this precondition can. Reported by
+doe-claude-em against `2c510a2857b3` after 780 of 1437 rows were mangled on a copy with
+`rows_skipped: 0`
+(`cross-repo/inbox/2026-08-30-doe-claude-em-arrow-normalizer-mangles-two-paren-rows.md`).
+
+Negative-spec: this is scoping, not repair — a tailed row is routed to `skipped` with a
+reason and left byte-identical, never rewritten by a smarter regex. `skipped: 0` on a
+file this module cannot safely handle is the dangerous outcome, because the sanctioned
+recovery for a non-canonical append-only ledger is "run the normalizer"."""
 
 
 def _arrow_dialect_fate(token: str, rest: str) -> str:
@@ -678,6 +708,22 @@ def normalize_arrow_dialects_log(log_path: Path) -> NormalizeResult:
                 SkippedRow(
                     line=line_no,
                     reason=f"unrecognized arrow-shaped row: {line!r}",
+                )
+            )
+            continue
+
+        rest_raw = dialect_match.group("rest").strip()
+        if _ARROW_DIALECT_RUN_TAIL_RE.search(rest_raw):
+            skipped.append(
+                SkippedRow(
+                    line=line_no,
+                    reason=(
+                        "arrow-shaped row already carries a '(run: <id>)' tail — not one "
+                        "of the three tail-less dialects this normalizer migrates; "
+                        "migrating it would fold the existing tail into the fate and "
+                        "append a second one, which the round-trip check cannot detect "
+                        f"(row={line!r})"
+                    ),
                 )
             )
             continue

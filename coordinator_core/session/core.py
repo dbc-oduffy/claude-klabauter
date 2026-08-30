@@ -37,7 +37,7 @@ import tempfile
 from contextvars import ContextVar
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterator, Mapping, NamedTuple, Optional
+from typing import Dict, Iterator, Mapping, NamedTuple, Optional
 
 from coordinator_core.git.repo_root import git_common_dir, show_toplevel
 
@@ -1144,6 +1144,70 @@ def carried_session_id() -> str:
     avoid.
     """
     return _SESSION_ID_OVERRIDE.get() or ""
+
+
+def subprocess_identity_env(
+    base: Optional[Mapping[str, str]] = None,
+    cwd: Optional[str] = None,
+) -> Dict[str, str]:
+    """The environment a CHILD PROCESS must be spawned with so it resolves
+    THIS caller's session identity — never the ambient one it would inherit.
+
+    WHY THIS EXISTS. A process boundary drops the two sources that make
+    `attributable_session_id` correct under a warm dispatch: the tier-0
+    identity ContextVar and the warm-served flag are both process-local, so
+    a child spawned from inside a warm-served request sees neither. What it
+    DOES inherit is `os.environ` — which, inside the resident server, names
+    whoever SPAWNED that server. The child then cold-resolves a live PEER's
+    id and files this session's writes under it, self-consistently, with
+    nothing downstream able to spot it.
+
+    Measured live 2026-08-30: `coordinator-lesson-add`, running in-process
+    inside a warm-served `workstream-complete-assemble apply`, spawned
+    `coordinator-queue-append` with the inherited environment. The child
+    wrote `state/lessons/...yaml`, then touch-recorded it under peer
+    8f4cecbf-8ae6-4be9-bb3a-c7aa1b0a63d2 while the authoring session was
+    a73e6ebf-3a04-472c-80f6-5b38c7cd9889. The strict-scope commit guard then
+    refused the author's own commit on that provably-foreign owner — the
+    engine wrote the file and then would not let its author commit it.
+    `state/bug-backlog/2026-08-30-the-warm-engine-touch-records-a-session-
+    9c5555208afd.yaml`.
+
+    Two outcomes, and the second is the load-bearing one:
+
+      * identity resolvable — every member of `SESSION_ENV_PRECEDENCE` is set
+        to it, so the child's own env walk lands on the caller's id whichever
+        tier it happens to read.
+      * identity UNresolvable — every member is REMOVED. The child then
+        resolves nothing and declines to claim, which is the failure
+        direction this whole seam already chose deliberately
+        (`ipc._record_self_reported_touches`: under-declaration, never a
+        false claim). Leaving the vars in place would hand the child the
+        stranger, which is the defect itself.
+
+    Returns a NEW dict — `base` (default `os.environ`) is never mutated, so
+    this is safe to call from concurrent requests inside one warm server. The
+    contrast is `contract.apply_base._mirror_session_env_for_subprocess`,
+    which mutates and restores the real `os.environ` around one spawn: that
+    shape is sound only in a single-request process and must not be copied
+    here.
+
+    Negative-spec:
+        Do NOT read `os.environ` for the identity — that read is the defect.
+        The id comes from `attributable_session_id`, the one accessor that
+        knows warm from cold.
+        Do NOT degrade an unresolvable identity to inheritance. An absent
+        claim is recoverable; a claim filed under a live peer blocks that
+        peer and the author both.
+    """
+    env: Dict[str, str] = dict(os.environ if base is None else base)
+    sid = attributable_session_id(cwd)
+    for var in SESSION_ENV_PRECEDENCE:
+        if sid:
+            env[var] = sid
+        else:
+            env.pop(var, None)
+    return env
 
 
 def attributable_session_id(cwd: Optional[str] = None) -> str:

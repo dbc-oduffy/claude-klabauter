@@ -441,36 +441,20 @@ def _run_ac7_timing(root, monkeypatch):
     record_write_claims("echo warm > warm.py", f"{_SESSION_ID}-warmup", root, denied=False)
     spawned.clear()
 
-    # Best-of-5, not one sample: a single 20-append pass over real disk I/O
-    # is thin enough (single-digit ms) that ordinary OS scheduling noise can
-    # swing it past a fixed budget on an otherwise-compliant implementation
-    # -- the SAME noise-mitigation discipline
-    # `test_commit_op_wallclock_budget.py::_wallclock_samples` already uses
-    # for this repo's other real-I/O process-time budgets (percentile over
-    # k samples, never a single reading). Minimum-of-N, not mean or
-    # percentile, because N is small (5) and the question here is "can the
-    # recorder run this corpus in budget at all", which the best observed
-    # run answers directly -- noise can only push a sample UP, never make a
-    # genuinely slow implementation look fast on every one of 5 tries.
-    # CORRECTED at close-out, and the first correction was wrong. This
-    # went red at 5.643ms; the obvious read was scheduling noise, so the
-    # sample count went 5 -> 9. It went red again, at 5.372ms and
-    # 5.175ms, roughly one run in two -- and a min-of-9 that lands within
-    # 8% of its budget half the time is not noise, it is a budget set at
-    # the measured cost with no headroom at all. 20 commands x ~0.25ms of
-    # real appends IS ~5ms; the 5ms figure was never a bound, it was the
-    # answer. Raised to 20ms (1ms/command), which still sits ~500x inside
-    # this repo's 500ms end-to-end process bar and leaves the criterion
-    # able to catch what it exists to catch: a spawn, a directory walk,
-    # or a corpus-scale read sneaking onto this path. The 0.639ms/call
-    # reference is an END-TO-END guard call on the real repo and was never
-    # this loop's unit -- comparing the two is what made 5ms look
-    # generous. Wall clock stays the instrument on purpose: these are real
-    # disk appends and process_time cannot see the wait being budgeted.
-    # Min-of-9 stays: it is what makes a wall-clock reading sound on a box
-    # whose documented load norm is dozens of concurrent sessions.
+    # Min-of-3 over real disk appends, against a 20ms (1ms/command) bound.
+    # Both numbers are measured, not derived: 12 passes on this repo ran
+    # min 5.41 / median 6.08 / max 9.48ms, and the worst min-of-3 across
+    # disjoint triples was 7.57ms -- so the bound carries ~2.6x margin over
+    # the worst sampled reading, not the 4x a bare min-vs-bound comparison
+    # suggests. It replaced a 5ms bound that WAS the measured cost and went
+    # red about one run in two.
+    #
+    # `assert not spawned` is what catches a subprocess. The wall-clock leg
+    # is a coarse tripwire for the other two regression shapes, and it does
+    # trip: injecting one directory walk per command costs 546ms measured,
+    # 27x the bound. It is not a tight budget and is not meant to be.
     best_ms = None
-    for _ in range(9):
+    for _ in range(3):
         start = time.perf_counter()
         for i, cmd in enumerate(_AC7_CORPUS):
             record_write_claims(cmd, f"{_SESSION_ID}-{i}", root, denied=False)
@@ -481,6 +465,6 @@ def _run_ac7_timing(root, monkeypatch):
     assert not spawned, f"record_write_claims must never spawn a subprocess: {spawned}"
     assert best_ms < 20.0, (
         f"recorder cost over a {len(_AC7_CORPUS)}-command corpus was "
-        f"{best_ms:.3f}ms (best of 9), over the 20ms budget "
+        f"{best_ms:.3f}ms (best of 3), over the 20ms budget "
         "(reference: 0.639ms/call end-to-end measured on the real repo)"
     )

@@ -212,6 +212,7 @@ from coordinator_core.orientation.hook_cancellation_signal import emit_hook_canc
 from coordinator_core.orientation.warm_health_signal import emit_warm_engine_health
 from coordinator_core.orientation.budget_breach_signal import emit_budget_breaches
 from coordinator_core.orientation.expired_grant_signal import emit_expired_grants
+from coordinator_core.orientation.abandoned_claim_signal import emit_abandoned_claims
 from coordinator_core.ops.ceremony.detached_spawn import (
     advance_failures_cursor,
     clear_failures_log,  # noqa: F401 — reset primitive, re-exported for callers
@@ -1241,6 +1242,7 @@ def _render_cache(
     warm_engine_line: str,
     budget_breach_line: str,
     expired_grant_lines: str,
+    abandoned_claim_lines: str,
     housekeeping_lines: List[str],
     pinboard_final: str,
 ) -> str:
@@ -1294,6 +1296,9 @@ def _render_cache(
 
     if expired_grant_lines:
         parts.append("\n## Expired grants\n" + expired_grant_lines + "\n")
+
+    if abandoned_claim_lines:
+        parts.append("\n## Abandoned claims\n" + abandoned_claim_lines + "\n")
 
     if housekeeping_lines:
         parts.append("\n## Housekeeping\n" + "\n".join(housekeeping_lines) + "\n")
@@ -1379,6 +1384,7 @@ def build_cache(
     warm_engine_line = emit_warm_engine_health()
     budget_breach_line = emit_budget_breaches(repo_root)
     expired_grant_lines = emit_expired_grants(repo_root)
+    abandoned_claim_lines = emit_abandoned_claims(repo_root)
     housekeeping_lines = _emit_housekeeping(repo_root)
 
     pinboard_final = ""
@@ -1408,6 +1414,7 @@ def build_cache(
         warm_engine_line=warm_engine_line,
         budget_breach_line=budget_breach_line,
         expired_grant_lines=expired_grant_lines,
+        abandoned_claim_lines=abandoned_claim_lines,
         housekeeping_lines=housekeeping_lines,
         pinboard_final=pinboard_final,
     )
@@ -1570,8 +1577,21 @@ once already).
 # Never truncated -- small by construction, load-bearing for orientation.
 _CACHE_PROTECTED_SECTIONS = frozenset({
     "Branch", "Rechecks due ≤7 days", "Pinboard", "Budget breaches",
-    "Expired grants",
+    "Expired grants", "Abandoned claims",
 })
+# "Abandoned claims" is PROTECTED on the same ground as the two below it, with
+# the one difference that decides it: this section is multi-line where they are
+# one, so "small by construction" has to be enforced rather than assumed. It is
+# -- `abandoned_claim_signal._MAX_NAMED` caps the enumeration at five named
+# batons plus a header and an "and N more" tail, seven lines whatever the corpus
+# does, and the section is absent entirely when every claimed baton's claimant
+# resolves. It renders ONLY when a baton reads `status: claimed` while its
+# claiming session is gone from the registry, which is a defect report, and it
+# exists because exactly that state went unnoticed across 31 batons until a
+# cross-repo peer asked who owned one and nothing on the box could answer.
+# Trimming it largest-first on a crowded box would reproduce that silence on the
+# busiest days, which are the days a stalled baton costs the most.
+# → coordinator_core.orientation.abandoned_claim_signal
 # "Expired grants" is PROTECTED on the same ground as "Budget breaches" above:
 # it renders ONLY when a PM grant has actually passed its own deferred_until
 # (emit_expired_grants), which makes it a defect report -- an expired grant is

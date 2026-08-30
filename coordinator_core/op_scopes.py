@@ -1483,6 +1483,16 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # root and silently fall back to each function's own `resolve_repo_root()`
     # (a real git-command probe against ambient cwd) on every call.
     "merge_assemble.apply":                      "show_top",
+    # "show_top" — baton_assemble reachability chunk (parallels merge_assemble
+    # C6 immediately above): both ops receive an already-resolved worktree
+    # root and forward it straight through as `brief()`/`apply()`'s own
+    # `repo_root=` keyword; the claim ledger, handoff/spinoff artifacts, and
+    # archive transitions they read/write are genuinely per-worktree. "none"
+    # would drop the resolved root and silently fall back to each function's
+    # own `resolve_repo_root()` (a real git-command probe against ambient
+    # cwd) on every call.
+    "baton_assemble.brief":                      "show_top",
+    "baton_assemble.apply":                      "show_top",
     # fleet.mode_set / fleet.mode_show — "none", and exact rather than defaulted: the
     # record these ops read and write lives under `_settings_home.settings_home()`, which
     # session/fleet_mode.py resolves with no repo input at all. Neither handler accepts

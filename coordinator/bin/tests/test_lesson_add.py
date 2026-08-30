@@ -513,3 +513,62 @@ def test_no_retired_transport():
         assert pattern not in source, (
             f"retired transport pattern '{pattern}' must not appear in coordinator-lesson-add"
         )
+
+
+# ---------------------------------------------------------------------------
+# Child identity — the delegation must not hand the child an inherited id
+#
+# This CLI is a CONSUMES_MANIFEST member that `workstream_complete.apply` loads
+# and runs IN-PROCESS, which puts it inside the warm server whenever the
+# ceremony came through the warm door. The delegation below is the one leg that
+# leaves that process, and an inherited environment names the SERVER's spawner
+# rather than the session being served: measured live 2026-08-30, the child
+# wrote a lesson and touch-recorded it under a live peer, after which the
+# strict-scope guard refused the author's own commit
+# (state/bug-backlog/2026-08-30-the-warm-engine-touch-records-a-session-
+# 9c5555208afd.yaml).
+# ---------------------------------------------------------------------------
+
+
+def test_delegation_passes_an_explicit_child_environment():
+    """The spawn must be given `env=` — inheritance is the defect itself."""
+    mock_result = unittest.mock.MagicMock()
+    mock_result.returncode = 0
+
+    with (
+        unittest.mock.patch.object(_cli_mod, "_dedup_check", return_value=[]),
+        unittest.mock.patch("subprocess.run", return_value=mock_result) as mock_run,
+    ):
+        _invoke()
+
+    assert "env" in mock_run.call_args.kwargs, (
+        "coordinator-queue-append must be spawned with an explicit env; without "
+        "one it inherits the warm server's identity vars and files this "
+        "session's writes under the server's spawner"
+    )
+
+
+def test_delegation_carries_the_served_session_not_the_servers_spawner(monkeypatch):
+    """Warm: the env names a peer, the request names its caller — the caller wins."""
+    from coordinator_core.session import core as _session_core
+    from coordinator_core.warm.entry_seam import per_request_state
+
+    caller = "a73e6ebf-3a04-472c-80f6-5b38c7cd9889"
+    spawner = "8f4cecbf-8ae6-4be9-bb3a-c7aa1b0a63d2"
+    for var in _session_core.SESSION_ENV_PRECEDENCE:
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("CLAUDE_SESSION_ID", spawner)
+
+    mock_result = unittest.mock.MagicMock()
+    mock_result.returncode = 0
+
+    with (
+        unittest.mock.patch.object(_cli_mod, "_dedup_check", return_value=[]),
+        unittest.mock.patch("subprocess.run", return_value=mock_result) as mock_run,
+    ):
+        with per_request_state(session_id=caller, warm_served=True):
+            _invoke()
+
+    child_env = mock_run.call_args.kwargs["env"]
+    for var in _session_core.SESSION_ENV_PRECEDENCE:
+        assert child_env.get(var) == caller, f"{var} must name the served session"

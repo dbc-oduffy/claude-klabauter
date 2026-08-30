@@ -137,25 +137,28 @@ class _SpawnCounter:
         self.argvs = []
 
     def __enter__(self):
-        self._run, self._popen = subprocess.run, subprocess.Popen
+        self._popen = subprocess.Popen
         counter = self
 
-        def run_spy(*a, **k):
-            if a:
-                counter.argvs.append(a[0])
-            return counter._run(*a, **k)
-
+        # Review: coordinator:code-reviewer (Finding 5) -- patch Popen ONLY.
+        # subprocess.run() resolves subprocess.Popen as a module-global
+        # lookup internally, so patching both double-counts every call that
+        # goes through run() (one argv appended by the run_spy wrapper, a
+        # second by the PopenSpy it constructs). Latent in this session: a
+        # verb reported 6 spawns when the true figure was 3, traced back to
+        # this exact double-count. subprocess.run always constructs a Popen,
+        # so counting at the Popen layer alone is sufficient and correct.
         class PopenSpy(counter._popen):  # type: ignore[misc,valid-type]
             def __init__(self, *a, **k):
                 if a:
                     counter.argvs.append(a[0])
                 super().__init__(*a, **k)
 
-        subprocess.run, subprocess.Popen = run_spy, PopenSpy
+        subprocess.Popen = PopenSpy
         return self
 
     def __exit__(self, *exc):
-        subprocess.run, subprocess.Popen = self._run, self._popen
+        subprocess.Popen = self._popen
         return False
 
 
@@ -174,6 +177,10 @@ def test_stamp_only_never_reaches_corpus_walk_call_sites(tmp_path, monkeypatch):
         result = _call_handoff_archive_transition(path, params)
 
     assert result["exit_code"] == 0, result
+    # Review: coordinator:code-reviewer (Finding 4) -- exit_code==0 alone
+    # passes for a no-op refusal path; assert the stamp itself happened.
+    assert result["stamped"] is True, result
+    assert "shipped_in:" in Path(path).read_text(encoding="utf-8")
     assert counter.argvs == [], f"expected zero git spawns for ship-handoff, got {counter.argvs}"
 
 
@@ -263,4 +270,8 @@ def test_ship_handoff_spawns_zero_git(tmp_path):
         result = _call_handoff_archive_transition(path, params)
 
     assert result["exit_code"] == 0, result
+    # Review: coordinator:code-reviewer (Finding 4) -- exit_code==0 alone
+    # passes for a no-op refusal path; assert the stamp itself happened.
+    assert result["stamped"] is True, result
+    assert "shipped_in:" in Path(path).read_text(encoding="utf-8")
     assert counter.argvs == [], f"expected zero git spawns, got {counter.argvs}"

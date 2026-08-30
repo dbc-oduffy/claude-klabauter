@@ -18,12 +18,19 @@ Spec backlink: docs/plans/2026-08-30-the-op-route-stops-being-the-unguarded-defa
 from __future__ import annotations
 
 import subprocess
-import time
 
 import pytest
 
-from coordinator_core.git import action_guard
+# Import order matters here: `commit.py` lazy-imports `action_guard` inside
+# function bodies specifically because `action_guard` -> `scope_report` ->
+# `safe_commit_offer` -> `commit.py` is circular if `action_guard` loads
+# before `commit.py` finishes defining `CommitRefused`/`CommitOutcome`
+# (see `commit.py`'s own module docstring). Import `gcommit` first so this
+# test file never exercises an import order production code doesn't use.
 from coordinator_core.git import commit as gcommit
+from coordinator_core.git import action_guard
+from coordinator_core.git.commit import CommitDeniedByActionGuard, CommitRefused
+from coordinator_core.ops.session import scope_report
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -57,9 +64,42 @@ def test_a_sweeping_pathspec_is_denied_with_no_restrict_to_session(repo):
     the shape-check predicate rather than the earlier is-a-directory refusal
     -- a test that only asserted the happy path would still pass on a
     reverted change; this one fails if the default-path call to `assert_
-    pathspec_shape_permitted` is removed."""
-    with pytest.raises(action_guard.CommitActionDenied):
+    pathspec_shape_permitted` is removed.
+
+    Asserts `CommitDeniedByActionGuard`, the exception `action_guard`
+    raises directly for a shape deny (review: overengineering-reviewer
+    Finding 7, 2026-08-30 -- collapsed from a separate `action_guard`-owned
+    exception `commit_paths` used to catch and re-raise). A `CommitRefused`
+    subclass, so every existing caller's
+    `except (CommitRefused, FilterUnsupported)` still catches a
+    pathspec-shape deny."""
+    with pytest.raises(CommitDeniedByActionGuard):
         gcommit.commit_paths(repo_root=repo, paths=["-A"], message="sweep")
+
+
+def test_a_sweeping_pathspec_deny_is_also_caught_by_except_commit_refused(repo):
+    """PINS THE PROPERTY THE P1 FIX BOUGHT: `CommitDeniedByActionGuard` is a
+    `CommitRefused` subclass, so every existing `commit_paths` caller's
+    `except (CommitRefused, FilterUnsupported)` keeps catching a
+    pathspec-shape deny with no edit to those five call sites. A future
+    refactor that detached `CommitDeniedByActionGuard` from `CommitRefused`
+    would silently un-buy this and reintroduce Finding 1 (an uncaught deny
+    surfacing as an unhandled exception) -- this test reds first."""
+    with pytest.raises(CommitRefused):
+        gcommit.commit_paths(repo_root=repo, paths=["-A"], message="sweep")
+
+
+def test_a_sweeping_pathspec_deny_surfaces_as_commit_refused_with_reason(repo):
+    """FINDING 1 REGRESSION: a sweeping pathspec must surface to a caller as
+    `CommitRefused` (the exception every known `commit_paths` caller already
+    catches) while still carrying the guard's deny reason verbatim, proving
+    the guard actually fired rather than some unrelated `CommitRefused`
+    being raised first."""
+    with pytest.raises(CommitRefused) as excinfo:
+        gcommit.commit_paths(repo_root=repo, paths=["-A"], message="sweep")
+
+    reason = str(excinfo.value)
+    assert reason, "the raised CommitRefused must carry the guard's deny reason"
 
 
 def test_an_ordinary_pathspec_still_commits_with_no_restrict_to_session(repo):
@@ -72,13 +112,21 @@ def test_an_ordinary_pathspec_still_commits_with_no_restrict_to_session(repo):
 
 def test_default_path_never_reaches_the_ownership_leg(monkeypatch, repo):
     """ACCEPTANCE CRITERION: `assert_paths_in_session_scope` is NOT reached
-    on the default path. Spies on the module-level binding
-    `action_guard.assert_paths_in_session_scope` and asserts it is never
-    called for an ordinary default-path commit -- proving the "ownership-
-    leg-free" claim rather than merely asserting it in prose."""
+    on the default path. Spies on the ownership predicate's own
+    module-level binding (`coordinator_core.ops.session.scope_report.
+    assert_paths_in_session_scope`) and asserts it is never called for an
+    ordinary default-path commit -- proving the "ownership-leg-free" claim
+    rather than merely asserting it in prose.
+
+    Structural note: `action_guard.assert_pathspec_shape_permitted` calls
+    `block_subagent_commit._pathspec_shape_permitted` directly (review:
+    overengineering-reviewer Finding 8, 2026-08-30) -- a function that never
+    imports or threads `assert_paths_in_session_scope` at all, so this spy
+    proves the ownership leg is structurally unreachable on this path, not
+    merely unexercised by this call's inputs."""
     calls = []
     monkeypatch.setattr(
-        action_guard,
+        scope_report,
         "assert_paths_in_session_scope",
         lambda *a, **k: calls.append((a, k)) or (True, ""),
     )
@@ -88,9 +136,8 @@ def test_default_path_never_reaches_the_ownership_leg(monkeypatch, repo):
 
     assert calls == [], (
         "the default commit_paths() path reached assert_paths_in_session_"
-        "scope -- it must consult only the sweeping/orphan/out-of-repo legs "
-        "via strict_ownership=False, never the ownership leg, with no "
-        "restrict_to_session supplied"
+        "scope -- it must consult only the sweeping/orphan/out-of-repo shape "
+        "legs, never the ownership leg"
     )
 
 
@@ -106,8 +153,10 @@ def test_assert_pathspec_shape_permitted_takes_no_session_id_parameter():
 
 def test_zero_new_process_spawns_for_a_representative_commit(repo, monkeypatch):
     """DR-344: the predicate is a pure in-process call. Spies on
-    `subprocess.run`/`Popen` to prove `commit_paths` spawns nothing extra
-    for an ordinary, non-sweeping pathspec on the default path."""
+    `subprocess.run` to prove `commit_paths` spawns nothing extra via it
+    for an ordinary, non-sweeping pathspec on the default path. Does not
+    cover a hypothetical `subprocess.Popen` call site -- none exists on
+    this path today, but this test would not catch one being added."""
     spawned = []
     real_run = subprocess.run
 
@@ -225,30 +274,11 @@ def test_residual_axis_prefer_deliberate_stage_substitutes_staged_bytes(repo):
         "this is the named residual, characterized rather than fixed here"
     )
 
-
-def test_measured_process_time_for_the_default_path_call(repo, capsys):
-    """Records cold-import and warm-call process time separately, per the
-    chunk brief's instruction to report both rather than a combined total.
-    Not a hard performance assertion (host-dependent) -- a recorded
-    measurement, printed for the chunk report."""
-    import importlib
-    import sys
-
-    for mod in ("coordinator_core.bash_guards.block_subagent_commit",):
-        sys.modules.pop(mod, None)
-
-    t0 = time.process_time()
-    importlib.import_module("coordinator_core.bash_guards.block_subagent_commit")
-    cold_import_s = time.process_time() - t0
-
-    (repo / "d.txt").write_text("d\n", encoding="utf-8", newline="\n")
-    t1 = time.process_time()
-    gcommit.commit_paths(repo_root=repo, paths=["d.txt"], message="warm call")
-    warm_call_s = time.process_time() - t1
-
-    print(
-        f"C2 measured: cold-import block_subagent_commit={cold_import_s * 1000:.3f}ms, "
-        f"warm commit_paths call={warm_call_s * 1000:.3f}ms"
-    )
-    assert cold_import_s >= 0.0
-    assert warm_call_s >= 0.0
+# test_measured_process_time_for_the_default_path_call was deleted here
+# (review-integrator, Finding 4): its only assertions were
+# `>= 0.0` on a `time.process_time()` delta, which is tautologically true
+# regardless of what commit_paths() does -- it could never fail and
+# provided no regression protection. This repo measures process time and
+# spawn count as a matter of discipline (DR-344), but a measurement wants
+# a printed/recorded number in a benchmark, not a vacuously-passing pytest
+# slot under `pytest.mark.cadence`.

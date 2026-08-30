@@ -5,12 +5,19 @@ coordinator/bin/coordinator-configure-git (DOE-PORT bin-entrypoint variant).
 Purpose: applies coordinator's git-config hardening to a repo — five content-neutral,
 idempotent settings, three of them machine-wide and Windows-only:
 
-1. `gc.autoDetach false`: git's default auto-gc/maintenance DETACHES into a background
-   process on Git-for-Windows, and that detached child is the likely concurrent
-   handle-holder that blocks a commit's `index.lock` cleanup under concurrent-EM
-   sessions. Setting autoDetach=false makes auto-gc run SYNCHRONOUSLY in the foreground
-   of the triggering command, eliminating the "lock outlived the process that created
-   it" race while preserving automatic repacking.
+1. `gc.auto=0`: git's default auto-gc/maintenance DETACHES into a background process
+   on Git-for-Windows, and that detached child is the likely concurrent handle-holder
+   that blocks a commit's `index.lock` cleanup under concurrent-EM sessions. The
+   predecessor of this setting, `gc.autoDetach false`, tried to fix that by making
+   auto-gc run SYNCHRONOUSLY in the foreground instead — but on a box sharing one
+   worktree across ~50 sessions that turned into RACING foreground repacks, the
+   mechanism that produced 1.1 GB of orphaned `.tmp-*-pack-*` pack bodies. `gc.auto=0`
+   removes the producer instead of reshaping it: auto-gc is turned OFF outright, not
+   moved to the foreground and not run synchronously by anything. The maintenance job
+   this setting used to do automatically is now done deliberately instead, from a
+   ceremony, by `coordinator_core.ops.git_maintenance`. See `_SETTINGS`'s own inline
+   comment for the `maintenance.autoDetach` fallback coupling this key also governs,
+   and for the two-writer rollout window that coupling creates.
 
 2. `core.checkStat minimal`: Git-for-Windows records nanosecond mtimes in the index, but
    NTFS reports them back at coarser precision, and the default `checkStat` also
@@ -110,6 +117,27 @@ _SETTINGS: tuple[GitSetting, ...] = (
     # detachment too, not only auto-gc. That coupling is why removing it is safe
     # ONLY alongside git_perf_config.apply()'s maintenance.auto=false — without
     # that key, dropping this one hands auto-maintenance back its git default.
+    #
+    # THE TWO-WRITER ROLLOUT WINDOW, named rather than left implicit: this op
+    # (`configure_git`) and `git_perf_config.apply()`/`apply_fleet()` are separate
+    # ops on separate invocation paths — nothing here makes them transactional or
+    # co-invoked. A repo can therefore sit with `gc.auto=0` written and
+    # `maintenance.auto`/`maintenance.prefetch.enabled` still at git's defaults
+    # (true/enabled): an already-registered worktree that ran this op via
+    # `repo-setup` but has not yet had a `git_perf_config` sweep land, or an
+    # installer ordering where this op's Phase 1 write precedes the later
+    # fleet-sweep phase in `maximalist.py`. In that window `git maintenance
+    # run --auto`-triggered tasks, including network-touching `prefetch`, keep
+    # firing unconstrained — the exact state this key's own coupling comment
+    # calls unsafe. WHAT CLOSES IT: `orient_assemble.readers_health_reaper
+    # :: _read_git_perf_currency`, wired into the daily workday-start ceremony,
+    # detects fleet drift on `core.untrackedCache` currency and its `--fix` path
+    # runs `git_perf_config.apply_fleet` in-process, which also carries the three
+    # maintenance keys (`_apply_maintenance_keys`) — so the window is bounded to
+    # "until the next workday-start ceremony run on this machine," not
+    # indefinite drift. It is not zero, and it is not transactional; it is a
+    # same-day bound, which is why this is documented rather than fixed here —
+    # co-locating the two writers is a design change beyond this key's scope.
     GitSetting(key="gc.auto", value="0"),
     # scope="global" per doe-claude-em's ruling (Ask 1, ruled (a)) in
     # cross-repo/inbox/2026-08-07-doe-claude-em-configure-git-per-key-scope-ruled-a.md,

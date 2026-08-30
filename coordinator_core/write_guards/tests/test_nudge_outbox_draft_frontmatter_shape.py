@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import pytest
 
+from coordinator_core.ops.fleet._outbox_frontmatter_rules import OUTBOX_REQUIRED_FIELDS
 from coordinator_core.write_guards import nudge_outbox_draft_frontmatter_shape as guard
 
 _VALID_DRAFT = (
@@ -65,18 +66,6 @@ class TestFires:
         text = _advisory_text(result)
         assert "status must be 'draft'" in text
 
-    def test_fires_on_write_missing_kind(self, tmp_path):
-        d = _outbox_dir(tmp_path)
-        target = d / "some-topic.md"
-        result = guard.check(
-            _payload(
-                "Write",
-                {"file_path": str(target), "content": _VALID_DRAFT.replace("kind: fyi\n", "")},
-            )
-        )
-        text = _advisory_text(result)
-        assert "'kind' missing" in text
-
     def test_fires_on_edit_flipping_status_to_open(self, tmp_path):
         d = _outbox_dir(tmp_path)
         target = d / "some-topic.md"
@@ -112,15 +101,19 @@ class TestFires:
         text = _advisory_text(result)
         assert "status must be 'draft'" in text
 
-    def test_fires_on_missing_required_field(self, tmp_path):
+    @pytest.mark.parametrize("field", OUTBOX_REQUIRED_FIELDS)
+    def test_fires_on_missing_required_field(self, tmp_path, field):
         d = _outbox_dir(tmp_path)
         target = d / "some-topic.md"
-        broken = _VALID_DRAFT.replace('title: "a memo"\n', "")
+        line = next(
+            l for l in _VALID_DRAFT.splitlines(keepends=True) if l.startswith(f"{field}:")
+        )
+        broken = _VALID_DRAFT.replace(line, "")
         result = guard.check(
             _payload("Write", {"file_path": str(target), "content": broken})
         )
         text = _advisory_text(result)
-        assert "title" in text
+        assert f"'{field}' missing" in text
 
 
 class TestSilent:

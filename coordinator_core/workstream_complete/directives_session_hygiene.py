@@ -172,7 +172,7 @@ stays internally consistent and reviewable in one read:
      cadence` (directives_commit_tail.py); `d-fold-execution-
      observations` (directives_completion.py); lesson-capture entries
      (directives_lessons_plan.py build_lesson_capture_directives);
-     `d-flip-memo-status` entries, `d-emit-deletion-blocks`
+     `d-flip-memo-status` entries
      (directives_memo_lifecycle.py); `d-run-review-brightline-gate`,
      per-slice `d-freeze-and-
      dispatch-review-partition-*`, `d-freeze-and-dispatch-review-

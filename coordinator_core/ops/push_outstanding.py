@@ -147,6 +147,7 @@ installed hook, the same "correctness first" default as arm 3 above.
 from __future__ import annotations
 
 import os
+import time
 from pathlib import Path
 from typing import Optional, Sequence, Union
 
@@ -161,6 +162,38 @@ from coordinator_core.ops.ceremony.push import (
 )
 
 __all__ = ["push_outstanding"]
+
+#: C2 -- the wire op name `push.outstanding` is NOT renamed (four DoE-owned
+#: surfaces reach it by memo; renaming would break every historical census
+#: row instead of separating the two populations under it). Each arm instead
+#: gets its OWN telemetry identity, recorded as a sibling row alongside the
+#: dispatch chokepoint's own `push.outstanding` row -- 842 `ok` rows measured
+#: on the live sink show two populations under one name (479 under 50ms, 363
+#: over 500ms), and no percentile computed over that name describes either.
+_ARM_NOOP = "push.outstanding.noop"
+_ARM_NETWORK = "push.outstanding.network"
+
+
+def _record_arm_latency(arm_op: str, t_start: float, root: Path) -> None:
+    """Emit one telemetry row identifying which arm of `push_outstanding`
+    just ran, at `arm_op` (`_ARM_NOOP`/`_ARM_NETWORK`) -- never the wire op
+    name itself. Best-effort and silent on any failure, matching
+    `record_op_latency`'s own "never breaks dispatch" contract: a census
+    losing one row is acceptable, an outstanding-push decision failing
+    because telemetry raised is not.
+    """
+    try:
+        from coordinator_core.telemetry.op_latency import record_op_latency
+
+        record_op_latency(
+            op=arm_op,
+            t_start=t_start,
+            elapsed_ms=(time.time() - t_start) * 1000.0,
+            outcome="ok",
+            repo_root=root,
+        )
+    except Exception:
+        pass
 
 #: `.gitattributes`, repo-root only -- this predicate answers "can this
 #: repo's push range carry an LFS-tracked path at all", not the precise
@@ -359,6 +392,7 @@ def push_outstanding(
     (C2, zero spawns).
     """
     root = Path(worktree_root)
+    arm_t_start = time.time()
 
     branch = head_branch(root)
     current_sha = head_sha(root) if branch is not None else None
@@ -367,6 +401,7 @@ def push_outstanding(
     if branch is not None and current_sha is not None:
         upstream_sha = _upstream_sha(root, branch)
         if upstream_sha is not None and upstream_sha == current_sha:
+            _record_arm_latency(_ARM_NOOP, arm_t_start, root)
             return PushOutcome(exit_code=0, skipped=["push:nothing-outstanding"])
 
     lfs_note: list[str] = []
@@ -384,6 +419,7 @@ def push_outstanding(
     )
     if lfs_note:
         outcome.skipped.extend(lfs_note)
+    _record_arm_latency(_ARM_NETWORK, arm_t_start, root)
     return outcome
 
 

@@ -42,23 +42,42 @@ Negative spec — what this module must never grow:
   can silently reintroduce the 34.4ms this extraction removed, and the caller
   that pays it is a hook nobody profiles. If something here needs a helper,
   inline it.
-- **No second, diverging reviewer set.** Consumers reuse ``DELEGATE_REVIEWERS``
-  by name. Three independent copies of "what counts as a reviewer" drifting
-  apart is the failure this module was extracted to make impossible, not a
-  freedom it grants.
+- **No second, diverging reviewer set — meaning no independent copy that can
+  drift, not no second name.** Two questions live here, and they are not the
+  same question: "does this dispatch arm commit credit?" is
+  ``DELEGATE_REVIEWERS``, read by ``review_trail_write``, ``receipt_credit.py``,
+  and ``hooks/subagent_review_mark.py``; "does this dispatch get a close-time
+  review receipt at all?" is ``CLOSE_RECEIPT_REVIEWERS``, read by
+  ``provision_report`` when deciding whether to stamp a sidecar at dispatch,
+  and by ``workstream_complete._compute_review_receipt_gate`` when deciding
+  whether a close may reach ``status: implemented``. The
+  prohibition this module was extracted to enforce is independent copies of
+  the SAME question drifting apart — three hand-maintained literals for "what
+  counts as a delegate reviewer" disagreeing with each other. A second,
+  *derived* set answering a *different* question is not that failure:
+  ``CLOSE_RECEIPT_REVIEWERS`` is spelled as ``DELEGATE_REVIEWERS | {...}`` in
+  this same module, in one expression, so it cannot independently drift —
+  edit the base set and the derived set follows by construction.
 - **No move into a package with a non-trivial ``__init__``.** See the table
   above: the same file under ``ops/`` costs 7x more and breaches the bound.
 - **No logic.** Data only. A predicate belongs with its caller, where the
   namespace-stripping convention that caller uses is visible.
 
-Membership is load-bearing twice over, and the second one is easy to miss:
-admitting an agent type here admits it to ``review_trail_write``'s ``reviewer``
-enum AND arms a durable ``commit_ledger.store.mark_reviewed`` write for that
-agent type. Kept as ONE set deliberately — ``coverage.py`` credits on the
-record's ``kind``, never on reviewer identity, and ``reviewed_by`` stores the
-reviewer's NAME, so a consumer that wants to weigh a ``staff-ux`` pass
-differently from a ``staff-eng`` one already has the data to. Splitting the sets
-would buy a maintained divergence against a consumer that does not exist.
+Membership in ``DELEGATE_REVIEWERS`` is load-bearing twice over, and the
+second one is easy to miss: admitting an agent type HERE admits it to
+``review_trail_write``'s ``reviewer`` enum AND arms a durable
+``commit_ledger.store.mark_reviewed`` write for that agent type — this set
+decides commit credit. Admitting a name to ``CLOSE_RECEIPT_REVIEWERS``
+instead does neither: it only widens who gets a review receipt stamped at
+dispatch and who therefore satisfies the close-time floor, with no
+commit-credit consequence: its two consumers (``provision_report`` at
+dispatch, ``workstream_complete`` at close) ask only whether a review RAN
+for this session, never whose commits are covered. Do not add a name to
+``DELEGATE_REVIEWERS`` to make it a required
+close-time reviewer — that arms credit it should not have; add it to
+``CLOSE_RECEIPT_REVIEWERS`` (or, if it should also carry commit credit, to
+``DELEGATE_REVIEWERS``, which ``CLOSE_RECEIPT_REVIEWERS`` then inherits for
+free).
 
 Pinned by ``coordinator_core/ops/tests/test_review_trail_write.py ::
 test_delegate_reviewers_arms_the_commit_ledger_mark``, which reads the name
@@ -86,3 +105,11 @@ DELEGATE_REVIEWERS = frozenset(
         "ubt-compile",
     }
 )
+
+#: The set of agent types whose dispatch counts toward the close-time review
+#: receipt floor. Derived from ``DELEGATE_REVIEWERS``, never re-spelled — see
+#: the module docstring's "No second, diverging reviewer set" passage for why
+#: a derived superset does not reintroduce the drift hazard that passage
+#: forbids. Adding a name here does NOT arm commit credit; adding a name to
+#: ``DELEGATE_REVIEWERS`` does.
+CLOSE_RECEIPT_REVIEWERS = DELEGATE_REVIEWERS | {"overengineering-reviewer"}

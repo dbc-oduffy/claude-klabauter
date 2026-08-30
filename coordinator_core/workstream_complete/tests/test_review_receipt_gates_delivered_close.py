@@ -629,3 +629,72 @@ def test_integrator_receipt_is_reported_but_never_required(monkeypatch, tmp_path
         repo_root=tmp_path,
     )["gates"]["review_receipt"]
     assert gate_b["blocks"] is True
+
+
+# ---------------------------------------------------------------------------
+# C3 (docs/plans/2026-08-30-the-close-time-review-floor-excludes-its-mandatory-
+# reviewer.md): the gate reads `CLOSE_RECEIPT_REVIEWERS`, not
+# `DELEGATE_REVIEWERS` — so Kira (`coordinator:overengineering-reviewer`), the
+# one reviewer the PM mandates on EVERY close, is able to satisfy the floor
+# she is stamped a receipt for. `DELEGATE_REVIEWERS` alone would leave this
+# gate refusing the only reviewer a `single-session` close is allowed to
+# dispatch (the plan's own problem statement) -- these three cases pin that
+# fix, and only that fix: session-id and blank-body still block identically
+# for a Kira sidecar as for any other.
+# ---------------------------------------------------------------------------
+
+_KIRA_TYPE = "coordinator:overengineering-reviewer"
+
+
+def test_kira_only_sidecar_with_valid_receipt_clears_the_gate(monkeypatch, tmp_path):
+    _patch_gate(monkeypatch, _gate())
+    _write_clean_plan(tmp_path, "kira-only-plan")
+    _write_sidecar(
+        tmp_path,
+        _SID,
+        agent_type=_KIRA_TYPE,
+        body="## Findings\n\nNo overengineering found.\n",
+    )
+
+    decision_object = wsc.brief(
+        decisions={"governing_plan_slug": "kira-only-plan", "subject": "x"}, repo_root=tmp_path
+    )
+
+    review_receipt_gate = decision_object["gates"]["review_receipt"]
+    assert review_receipt_gate["blocks"] is False
+
+    jp_ids = {jp["id"] for jp in decision_object["judgment_points"]}
+    assert "jp-review-receipt-block-stamp" not in jp_ids
+    assert "jp-review-receipt-block-stamp" not in _depends_on(_stamp_directive(decision_object))
+
+
+def test_kira_sidecar_with_foreign_session_id_still_blocks(monkeypatch, tmp_path):
+    _patch_gate(monkeypatch, _gate())
+    _write_clean_plan(tmp_path, "kira-foreign-sid-plan")
+    # The sidecar lives under THIS session's own directory (as a real dispatch
+    # would place it), but the receipt block's own `session_id` names a
+    # foreign session -- (b)'s check, distinct from the directory-listing
+    # miss the plain-`is_dir()` branch above already covers.
+    sidecar_dir = tmp_path / "state" / "subagent-share" / _SID
+    sidecar_dir.mkdir(parents=True, exist_ok=True)
+    sidecar_path = sidecar_dir / f"{_KIRA_TYPE.replace(':', '')}.deadbeef02.md"
+    doc = (
+        f"---\nstatus: complete\nagent_type: {_KIRA_TYPE}\nlead_session_id: {_SID}\n"
+        "commits: []\n---\n\n## Findings\n\nNo overengineering found.\n"
+    )
+    doc = provision_report._splice_review_receipt(
+        doc, "some-other-session-id", "deadbeef02", _KIRA_TYPE, "2026-08-27T13:00:00+00:00"
+    )
+    sidecar_path.write_text(doc, encoding="utf-8")
+
+    decision_object = wsc.brief(
+        decisions={"governing_plan_slug": "kira-foreign-sid-plan", "subject": "x"},
+        repo_root=tmp_path,
+    )
+
+    review_receipt_gate = decision_object["gates"]["review_receipt"]
+    assert review_receipt_gate["blocks"] is True
+
+    jp_ids = {jp["id"] for jp in decision_object["judgment_points"]}
+    assert "jp-review-receipt-block-stamp" in jp_ids
+    assert "jp-review-receipt-block-stamp" in _depends_on(_stamp_directive(decision_object))

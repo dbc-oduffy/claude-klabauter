@@ -1,0 +1,368 @@
+"""coordinator_core.warm.push_cadence -- the bounded push cadence that
+replaces the per-commit detached push.
+
+Spec backlink: docs/plans/2026-08-30-who-pushes-and-when.md § C4
+
+WHAT THIS REPLACES. `git_native`'s commit path used to spawn a fresh
+`python.exe` per commit (`hooks/auto_push.py::_detach_and_run`) to push the
+commit it just made. That per-commit detach is what C6/C7 delete; this
+module is the named, bounded guarantee that makes deleting it safe -- every
+commit still reaches the remote, just on a 600s cadence instead of
+immediately.
+
+HOST: the warm engine's existing idle watchdog thread
+(`warm.server._ServerContext._idle_watchdog_loop`), already polling every
+`warm.server._IDLE_WATCHDOG_POLL_SECS` (5.0s) independent of the accept
+loop. `on_idle_tick` is a counter on that EXISTING tick -- not a second
+thread, not a job queue. `PUSH_CADENCE_INTERVAL_SECS` (600) is strictly
+under `warm.idle.DEFAULT_IDLE_MINUTES` (15 * 60 = 900s) so the cadence
+always gets at least one shot before the server would otherwise demote.
+
+SYNCHRONOUS, ON PURPOSE (DR-329, docs/decisions/DR-329-push-runs-on-a-
+cadence-not-on-every-commit.md). No detached child, no new process, no new
+thread: a detach costs +130ms CPU and +7 procs fleet-wide to save ~64ms of
+one session's wall, a net loss under DR-344 (process time, never wall
+clock) at the 50-70-session load norm. The sweep runs inline on the
+watchdog thread and returns before the next tick.
+
+THE REPO SET is derived from what THIS server has actually served -- never
+a disk scan, never a hardcoded path. `warm.server._ServerContext` records
+each request's envelope-carried repo root (`ipc.resolve_request_repo`) as
+it is served; `on_idle_tick`'s `served_repos` callable is that recorded
+set. A server that has served zero requests for repo R never sweeps R --
+safe only because a server's own final sweep (the exit-path leg wired via
+`set_final_sweep_hook`/`warm.lifecycle._run_tail`) fires on every exit,
+including superseded-generation retirement, so the predecessor's
+unpushed-at-handoff state is swept before the predecessor actually exits.
+
+SWEEP COST BUDGET. Serial over every served repo -- N x push, not one push.
+Each repo's own push is bounded by `push_with_retry`'s existing
+`PUSH_RETRY_BUDGET_SECS` ladder deadline (reused here unmodified, not
+duplicated); the whole sweep additionally stops taking on new repos once
+`SWEEP_TOTAL_CEILING_SECS` has elapsed, so one wedged repo cannot make the
+sweep itself the next unbounded-shutdown-hang class this plan exists to
+retire. `EXIT_SWEEP_CEILING_SECS` is tighter than the idle-tick ceiling: an
+unbounded exit-path sweep directly lengthens warm-restart latency
+(`lifecycle.begin_shutdown`'s docstring -- a same-token successor cannot
+bind until the whole shutdown sequence completes), where the idle-tick
+sweep merely delays the NEXT tick by the same amount, against a
+900s-default idle deadline it cannot itself extend (`should_demote` is
+evaluated before this module ever runs, never after).
+
+THE SWEEP'S UNIT is the served WORKTREE ROOT, not the git COMMON dir --
+`push_outstanding` resolves HEAD off the worktree, matching every other
+cadence-surface caller. A commit made in a linked worktree this server has
+never itself served sits outside the bound with no signal; this is an
+accepted exposure (named here, not closed by this module), the same shape
+as the pre-existing "uncommitted work" and "~10 minutes of committed work"
+accepts this plan already carries.
+
+CONCURRENT SWEEPS ACROSS RESIDENT GENERATIONS. `warm.idle`'s own docstring
+records three resident generations off one publish inside one observed
+hour; every one of them derives repo R into its own served set and sweeps
+it on its own 600s tick, so two sweeps can race `push_outstanding` on one
+shared branch. `_acquire_sweep_lock`/`_release_sweep_lock` serialize via a
+per-repo lockfile in the git COMMON dir (shared across every worktree and
+every resident generation of this engine) with PID-liveness-checked
+stale-holder takeover, mirroring the idiom `coordinator_core.session.
+day_branch_cut_lock` already uses for an unrelated tree-wide mutex -- NOT
+the auto_push pending-record holder claim, which this plan removes the
+only writer of (`_write_pending_record` is reachable only from
+`_hold_window`, itself reachable only from `auto_push.main()`) and must
+not be resurrected as an arbitration mechanism. A second concurrent
+sweeper DECLINES (returns without pushing) rather than racing.
+
+FEEDS THE FAILURE DETECTOR. `push_with_retry`/`push_outstanding` never call
+`auto_push.log_failure` -- that file's only two writers sit on the path
+C6/C7 delete, and the Stop-time push-failure detector
+(`runtime-tripwire-em-check.py::_check_push_failures`, DoE-claude) reads
+`.git/push-failures.log` written only by `log_failure`. A declined/failed
+sweep push records a row through `log_failure` directly so the detector
+does not go quiet on exactly the failures the cadence now owns.
+
+INHERITS THE DRAIN. `drain_pending_push(repo_root)` runs before
+`push_outstanding` on every swept repo -- the regression this whole module
+exists to prevent is losing `drain_pending_push`'s only "for free" call
+site (the per-commit detached respawn `run_push_with_retry`'s own head
+used to reach). What the drain actually buys here is documented on
+`drain_pending_push` itself: the dead-ref record path, pending-record
+cleanup, and the retry ladder's forensic trail -- `push_outstanding`'s own
+outstanding-work decision does not depend on it (it compares HEAD to the
+upstream ref directly), so the bound this module names is not itself
+contingent on the drain succeeding.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import threading
+import time
+from pathlib import Path
+from typing import Callable, Iterable, List, Optional, Union
+
+from coordinator_core.git.git_dir import resolve_git_common_dir
+from coordinator_core.git.git_state import head_branch
+from coordinator_core.hooks.auto_push import drain_pending_push, log_failure
+from coordinator_core.ops.ceremony.push import PUSH_RETRY_BUDGET_SECS
+from coordinator_core.ops.push_outstanding import push_outstanding
+from coordinator_core.session import core as session_core
+
+__all__ = [
+    "PUSH_CADENCE_INTERVAL_SECS",
+    "SWEEP_TOTAL_CEILING_SECS",
+    "EXIT_SWEEP_CEILING_SECS",
+    "ServedReposFn",
+    "on_idle_tick",
+    "sweep_repos",
+    "reset_cadence_for_test",
+]
+
+#: Strictly under `warm.idle.DEFAULT_IDLE_MINUTES * 60` (900s) -- see module
+#: docstring's HOST section for why that ordering matters.
+PUSH_CADENCE_INTERVAL_SECS = 600.0
+
+#: The idle-tick sweep's own ceiling: generous, since delaying the NEXT
+#: watchdog tick by this much still leaves ample room under the 900s idle
+#: deadline it never extends.
+SWEEP_TOTAL_CEILING_SECS = 60.0
+
+#: The exit-path sweep's ceiling is tighter than the idle-tick one -- an
+#: unbounded exit sweep directly lengthens warm-restart latency (module
+#: docstring's SWEEP COST BUDGET section).
+EXIT_SWEEP_CEILING_SECS = 15.0
+
+#: A zero-arg callable returning the repos (worktree roots) this server has
+#: actually served, in the order first served. `on_idle_tick`'s caller
+#: (`warm.server._ServerContext`) binds this to a live read of its own
+#: recorded set, never a snapshot taken at boot.
+ServedReposFn = Callable[[], Iterable[Union[str, Path]]]
+
+_cadence_lock = threading.Lock()
+_last_sweep_monotonic: Optional[float] = None
+
+_SWEEP_LOCK_NAME = "coordinator-push-cadence-sweep.json"
+#: Generous headroom over one repo's own `push_with_retry` ladder deadline
+#: -- a live sweep should never be mistaken for stale mid-push.
+_SWEEP_LOCK_HOLD_SECS = PUSH_RETRY_BUDGET_SECS + 10.0
+#: Grace past `hold_until` before a peer calls a still-recorded holder
+#: stale, mirroring `coordinator_core.session.day_branch_cut_lock`'s own
+#: constant of the same name.
+_SWEEP_LOCK_STALE_GRACE_SECS = 60.0
+
+
+def reset_cadence_for_test() -> None:
+    """Test-only: clear the module-level cadence clock. Never called by
+    production code -- a real server ticks continuously for its whole life
+    and never wants to "forget" the last sweep time.
+    """
+    global _last_sweep_monotonic
+    with _cadence_lock:
+        _last_sweep_monotonic = None
+
+
+def _sweep_due(*, clock: Callable[[], float], interval_secs: float) -> bool:
+    """True once every `interval_secs` of ticks, false otherwise -- the
+    counter-on-an-existing-tick this module's docstring names. The FIRST
+    tick after boot or a test reset primes the clock and does not itself
+    sweep (there is nothing to have accumulated yet in the time between
+    server boot and the first tick); every tick after that fires once
+    `interval_secs` has actually elapsed since the last sweep (or since
+    priming), never before.
+    """
+    global _last_sweep_monotonic
+    now = clock()
+    with _cadence_lock:
+        last = _last_sweep_monotonic
+        if last is None:
+            _last_sweep_monotonic = now
+            return False
+        if now - last < interval_secs:
+            return False
+        _last_sweep_monotonic = now
+        return True
+
+
+# ---------------------------------------------------------------------------
+# Per-repo sweep lock -- serializes concurrent sweeps across resident
+# generations sharing one git common dir. See module docstring's
+# CONCURRENT SWEEPS section.
+# ---------------------------------------------------------------------------
+
+
+def _sweep_lock_path(repo_root: Union[str, Path]) -> Path:
+    return resolve_git_common_dir(repo_root) / _SWEEP_LOCK_NAME
+
+
+def _holder_alive(pid) -> Optional[bool]:
+    if not isinstance(pid, int):
+        return None
+    try:
+        return session_core.pid_alive(pid)
+    except Exception:  # noqa: BLE001 -- unknown liveness is not a verdict
+        return None
+
+
+def _sweep_lock_is_stale(record: dict, now: float) -> bool:
+    if _holder_alive(record.get("holder_pid")) is False:
+        return True
+    hold_until = record.get("hold_until")
+    return isinstance(hold_until, (int, float)) and now > hold_until + _SWEEP_LOCK_STALE_GRACE_SECS
+
+
+def _try_create_sweep_lock(path: Path, payload: dict) -> bool:
+    try:
+        fd = os.open(str(path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+    except OSError:
+        return False
+    try:
+        os.write(fd, json.dumps(payload).encode("utf-8"))
+    finally:
+        os.close(fd)
+    return True
+
+
+def _read_sweep_lock(path: Path) -> Optional[dict]:
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    try:
+        record = json.loads(text)
+    except ValueError:
+        return None
+    return record if isinstance(record, dict) else None
+
+
+def _acquire_sweep_lock(
+    repo_root: Union[str, Path], *, now: Optional[float] = None, pid: Optional[int] = None
+) -> bool:
+    """True iff this process now owns the sweep lock for `repo_root` -- a
+    second concurrent sweeper (any resident generation) sees an unexpired
+    record here and declines (returns False) rather than racing
+    `push_outstanding` on the same branch.
+    """
+    now = time.time() if now is None else now
+    pid = os.getpid() if pid is None else pid
+    path = _sweep_lock_path(repo_root)
+    payload = {"holder_pid": pid, "hold_until": now + _SWEEP_LOCK_HOLD_SECS}
+
+    if _try_create_sweep_lock(path, payload):
+        return True
+
+    record = _read_sweep_lock(path)
+    if record is None or _sweep_lock_is_stale(record, now):
+        try:
+            path.unlink()
+        except OSError:
+            pass
+        return _try_create_sweep_lock(path, payload)
+    return False
+
+
+def _release_sweep_lock(repo_root: Union[str, Path], *, pid: Optional[int] = None) -> None:
+    """Best-effort release -- never raises, and never releases a foreign
+    holder's record (a stale-but-foreign record is left for the next
+    acquirer's own takeover check, not unlinked here).
+    """
+    pid = os.getpid() if pid is None else pid
+    path = _sweep_lock_path(repo_root)
+    record = _read_sweep_lock(path)
+    if record is not None and record.get("holder_pid") != pid:
+        return
+    try:
+        path.unlink()
+    except OSError:
+        pass
+
+
+# ---------------------------------------------------------------------------
+# Failure-detector feed -- see module docstring's FEEDS THE FAILURE DETECTOR.
+# ---------------------------------------------------------------------------
+
+
+def _feed_failure_detector(repo_root: Union[str, Path], outcome) -> None:
+    branch = head_branch(Path(repo_root)) or "<unknown>"
+    if outcome.failed:
+        first_err = "; ".join(outcome.failed)
+        err_class = "sweep-failed"
+    else:
+        first_err = "; ".join(outcome.unconfirmed)
+        err_class = "sweep-unconfirmed"
+    try:
+        log_failure(str(repo_root), branch, "cadence-sweep", err_class, 1, first_err, "")
+    except Exception:  # noqa: BLE001 -- feeding the detector must never raise
+        pass
+
+
+def _sweep_one(repo_root: Union[str, Path], *, per_repo_deadline: float) -> None:
+    """Drain, then push, exactly one repo -- declining outright if another
+    sweeper already holds this repo's lock. `per_repo_deadline` is accepted
+    for documentation symmetry with the module's SWEEP COST BUDGET section;
+    the actual per-repo bound is enforced by `push_with_retry`'s own
+    `PUSH_RETRY_BUDGET_SECS`-keyed ladder deadline inside `push_outstanding`
+    itself, not re-implemented here.
+    """
+    del per_repo_deadline
+    root = Path(repo_root)
+    if not _acquire_sweep_lock(root):
+        return
+    try:
+        try:
+            drain_pending_push(str(root))
+        except Exception:  # noqa: BLE001 -- the sweep must not die on drain
+            pass
+        try:
+            outcome = push_outstanding(root)
+        except Exception:  # noqa: BLE001 -- a sweep push must never raise
+            return
+        if outcome.failed or outcome.unconfirmed:
+            _feed_failure_detector(root, outcome)
+    finally:
+        _release_sweep_lock(root)
+
+
+def sweep_repos(
+    repos: Iterable[Union[str, Path]],
+    *,
+    per_repo_deadline: float = PUSH_RETRY_BUDGET_SECS,
+    total_ceiling_secs: float = SWEEP_TOTAL_CEILING_SECS,
+    clock: Callable[[], float] = time.monotonic,
+) -> None:
+    """Sweep every repo in `repos`, serially, stopping (without pushing to
+    any remaining repo) once `total_ceiling_secs` has elapsed since this
+    call started -- see module docstring's SWEEP COST BUDGET. Never raises:
+    every per-repo step is already caught inside `_sweep_one`.
+    """
+    deadline = clock() + total_ceiling_secs
+    seen: List[Path] = []
+    for repo in repos:
+        if clock() >= deadline:
+            break
+        root = Path(repo)
+        if root in seen:
+            continue
+        seen.append(root)
+        _sweep_one(root, per_repo_deadline=per_repo_deadline)
+
+
+def on_idle_tick(
+    *,
+    served_repos: ServedReposFn,
+    clock: Callable[[], float] = time.monotonic,
+    interval_secs: float = PUSH_CADENCE_INTERVAL_SECS,
+    total_ceiling_secs: float = SWEEP_TOTAL_CEILING_SECS,
+    sweep_fn: Callable[..., None] = sweep_repos,
+) -> bool:
+    """Call on every idle-watchdog tick (`warm.server._ServerContext.
+    _idle_tick`). Runs a sweep, synchronously, on THIS thread, iff at least
+    `interval_secs` have elapsed since the last sweep (or since the first
+    tick this process ever saw) -- never before, never on a second thread.
+
+    Returns True iff a sweep ran this tick, so a caller/test can observe
+    cadence timing without depending on `sweep_fn`'s own side effects.
+    """
+    if not _sweep_due(clock=clock, interval_secs=interval_secs):
+        return False
+    sweep_fn(served_repos(), total_ceiling_secs=total_ceiling_secs, clock=clock)
+    return True

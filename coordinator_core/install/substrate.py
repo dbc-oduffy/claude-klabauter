@@ -1024,7 +1024,14 @@ def _agent_cmd_dest_name(name: str) -> str:
 # requires the name be absent from `_static_bin_family_names()` (every
 # other family's complete, statically-known name set) before treating a
 # legacy-marker file as sweepable — see that function's docstring.
-_AGENT_FORWARDER_MARKER = "from _resolve_claude_klabauter import exec_cli"
+# The resolver module a generated forwarder imports, named ONCE so the marker
+# below and `_write_agent_forwarder`'s emitted body cannot drift apart, and so
+# `percolate`'s rename map rewrites both together (this token carries the repo
+# name; see `_AGENT_FORWARDER_MARKER_RE` below). It is the DEFAULT, not the
+# only value: a dual-tree box installs a second forwarder cohort bound to the
+# LIVE SOURCE tree's resolver -- see `_install_live_source_tree_forwarders`.
+_AGENT_RESOLVER_MODULE = "_resolve_claude_klabauter"
+_AGENT_FORWARDER_MARKER = f"from {_AGENT_RESOLVER_MODULE} import exec_cli"
 
 # SWEEP-SIDE identification of the extensionless Python forwarder family is
 # resolver-name-AGNOSTIC, and deliberately NOT `_AGENT_FORWARDER_MARKER`
@@ -1631,7 +1638,14 @@ def _agent_cmd_raw_cmdline_block(target: str) -> str:
     )
 
 
-def _write_agent_forwarder(name: str, dst: Path, check_only: bool, *, target: str) -> None:
+def _write_agent_forwarder(
+    name: str,
+    dst: Path,
+    check_only: bool,
+    *,
+    target: str,
+    resolver_module: str = _AGENT_RESOLVER_MODULE,
+) -> None:
     """Naked-Python forwarder that resolves and execs the claude-klabauter-resident
     CLI at ``<claude-klabauter-live-root>/coordinator/bin/<target>``, per the ratified
     resolve-claude-klabauter-bin contract (DoE-claude
@@ -1714,7 +1728,7 @@ def _write_agent_forwarder(name: str, dst: Path, check_only: bool, *, target: st
     install, on Windows, which CLAUDE.md treats as the primary platform."""
     content = f"""#!/usr/bin/env python3
 # coordinator-claude bin forwarder for {name} — resolves claude-klabauter's
-# `coordinator/bin/` directory via the co-located `_resolve_claude_klabauter.py`
+# `coordinator/bin/` directory via the co-located `{resolver_module}.py`
 # shim (the ratified resolve-claude-klabauter-bin contract, DoE-claude
 # coordinator/snippets/resolve-claude-klabauter-bin.md) and execs `{target}` there.
 # Regenerated verbatim on every install run — do not hand-edit.
@@ -1723,7 +1737,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-{_AGENT_FORWARDER_MARKER}  # noqa: E402
+from {resolver_module} import exec_cli  # noqa: E402
 
 exec_cli("{target}")
 """
@@ -1821,15 +1835,65 @@ exec_cli("{target}")
 # also has no equivalent defect: its shim reaches the Python wrapper, which
 # ``os.execv``s claude in place — a genuine process replacement, adding no
 # intermediate process at all.
+#
+# ``claude-home`` is reserved on POSIX ONLY (C5, docs/plans/2026-08-30-
+# twenty-one-bin-names-reach-the-door-or-are-thoroughly-dead.md) — the
+# thoroughly-dead.md). `coordinator/bin/claude-home.py` now exists, so the
+# plain directory scan below WOULD derive it as an ordinary agent-helper
+# name if it were not reserved. It stays reserved on EVERY platform, and the
+# C5 cutover is NOT shipped -- an attempt to gate this reservation to POSIX
+# only was backed out the same day, on two findings that killed it:
+#
+#   1. TWO WRITERS, ONE PATH. `ch_family` writes extensionless `claude-home`
+#      on every platform, including Windows, and runs BEFORE the helper
+#      loop. Un-reserving the name makes that loop a second writer of the
+#      same `<settings-home>/bin/claude-home` path, and both its branches
+#      take ch_family's files: on an UNSTAMPED root (the common case)
+#      `_cut_over_to_native_door` returns None and the fallback overwrites
+#      the shim with an extensionless Python forwarder, losing its exec bit
+#      (`test_install_substrate_uninstall_legs.py ::
+#      test_substrate_run_success_path_dual_anchor_populated_tree` catches
+#      this); on a STAMPED root the cutover calls
+#      `door_install.remove_superseded_python_forwarders`, which on Windows
+#      DELETES bare `claude-home` and `claude-home.cmd` outright -- it has
+#      no static-family exemption and no knowledge another family owns them.
+#   2. RETIRING THE `.cmd` LEAVES NO NATIVE-WINDOWS LEG ON AN UNSTAMPED
+#      ROOT. An earlier version of this comment claimed the helper loop
+#      "writes a `.cmd` right back"; that was FALSE and is retracted.
+#      `_cut_over_to_native_door` runs FIRST and `continue`s on success, so
+#      the Python pair is never written for a cut-over name, and
+#      `_write_agent_cmd_forwarder` was deleted 2026-08-29 (gravestone
+#      below) -- no `.cmd` is generated for any derived name. The real
+#      hazard is the inverse: the fallback's extensionless forwarder is not
+#      PATHEXT-executable in cmd or PowerShell, so retiring
+#      `claude-home.cmd` drops the name off native-Windows PATH entirely on
+#      every unstamped install.
+#
+# OWNERSHIP RULE, ruled 2026-08-30 (eng-director) -- ONE PATH, ONE OWNER.
+# The name was never the unit of ownership; the path is.
+# `<settings-home>/bin/claude-home` belongs to `ch_family` forever, on both
+# platforms (the POSIX leg, and the Windows git-bash leg -- cmd and
+# PowerShell cannot execute an extensionless file, so it is already inert
+# on native Windows and the `.cmd` is what runs there).
+# `<settings-home>/bin/claude-home.exe` belongs to the door, Windows only.
+# The name therefore STAYS reserved here, and a Windows cutover is an
+# explicit door-only write of the `.exe` that touches nothing else --
+# un-reservation buys the cutover, the fallback and the removal sweep as one
+# bundle, and only the first is wanted. Prerequisites, both defects in their
+# own right: a static-family exemption in
+# `remove_superseded_python_forwarders`, and cutover-or-defer in
+# `_cut_over_to_native_door`. POSIX stays with `ch_family` under the same
+# rule (there the image path IS the shim path), independently of the
+# uncompiled `door_posix.c` P2 row.
 _AGENT_HELPER_RESERVED_NAMES = frozenset(
     {
         "machine-local",
-        "claude-home",
         "resolve-coordinator-clone",
         "coordinator-settings-home",
         "platform-localize",
     }
     | ({"claude-doe"} if os.name == "nt" else set())
+    | {"claude-home"}
 )
 
 # Non-CLI data/doc file extensions that can appear alongside real CLIs in
@@ -3103,6 +3167,17 @@ def _resolve_agent_cmd_dest_collisions(agent_helper_target_map: "dict[str, str]"
 # tuples that USED to live here (all three sourced from `ml_bin`, DoE's
 # `templates/bin/`) are now declared in that manifest instead — see
 # `_load_bin_templates_manifest` above and `_install_bin_resolvers` below.
+# C5 (docs/plans/2026-08-30-twenty-one-bin-names-reach-the-door-or-are-
+# thoroughly-dead.md) retired the `.cmd` entry: `coordinator/bin/
+# claude-home.py` now exists, making `claude-home` door-eligible, and the
+# Windows leg cuts over to the native door image via the generic
+# agent-helper derivation instead (see `_AGENT_HELPER_RESERVED_NAMES`'s
+# OS-gated `claude-home` membership below). `"claude-home"` (the
+# extensionless POSIX shim) and `"_claude_home.py"` (the implementation)
+# stay — POSIX does NOT cut over (see that constant's comment), and both
+# names are still needed: the sweep-protection membership `_static_bin_
+# family_names()` provides against `_sweep_orphaned_agent_helpers`, and the
+# POSIX shim itself.
 _CH_FAMILY_FILES = (
     ("claude-home", True), ("_claude_home.py", False), ("claude-home.cmd", False),
 )
@@ -3329,6 +3404,7 @@ def _write_agent_helper_forwarders(
     check_only: bool,
     *,
     engine_root: "Optional[Path]" = None,
+    resolver_module: str = _AGENT_RESOLVER_MODULE,
 ) -> "list[WriteSurfaceEntry]":
     """Step 3b's forwarder-write loop proper, extracted out of
     ``_install_bin_resolvers`` so a second caller (the missing-forwarder
@@ -3447,7 +3523,10 @@ def _write_agent_helper_forwarders(
                     agent_helper_resolved.append(WriteSurfaceEntry(kind="file-path", path=str(native_dst)))
                     continue
                 py_dst = bin_dst / f
-                _write_agent_forwarder(f, py_dst, check_only, target=target)
+                _write_agent_forwarder(
+                    f, py_dst, check_only, target=target,
+                    resolver_module=resolver_module,
+                )
                 agent_helper_resolved.append(WriteSurfaceEntry(kind="file-path", path=str(py_dst)))
             except OSError as exc:
                 failed.append((f, exc))
@@ -3470,7 +3549,10 @@ def _write_agent_helper_forwarders(
                     native_written.add(f)
                     continue
                 py_dst = bin_dst / f
-                _write_agent_forwarder(f, py_dst, check_only, target=target)
+                _write_agent_forwarder(
+                    f, py_dst, check_only, target=target,
+                    resolver_module=resolver_module,
+                )
                 agent_helper_resolved.append(WriteSurfaceEntry(kind="file-path", path=str(py_dst)))
             except OSError as exc:
                 failed.append((f, exc))
@@ -3517,6 +3599,109 @@ def _report_agent_helper_forwarder_summary(
             print(f"[install-substrate]   FAILED {name}: {exc}", file=sys.stderr)
     else:
         print(f"[install-substrate] agent-helper forwarders: {written} written, 0 failed of {total}")
+
+
+def _live_source_tree_resolver(live_source_root: Path) -> "Optional[Path]":
+    """The live source tree's own resolver module, found by SHAPE rather than
+    by name.
+
+    ``percolate``'s rename map rewrites both the directory and the module
+    basename on publish, so neither spelling is a constant this module can
+    hardcode and still have work from both trees -- the running image knows
+    only its OWN spelling (``_AGENT_RESOLVER_MODULE``), which is precisely the
+    wrong one when the running image is the mirror and the tree being scanned
+    is the source. The shape is stable across every rename: one
+    ``coordinator/lib/resolve-*/`` directory holding one ``_resolve_*.py``.
+
+    Returns ``None`` -- never raises, and never guesses -- when the tree does
+    not present exactly that shape. The caller treats that as "this box has
+    nothing extra to install", which is the same no-op as a single-tree box.
+    """
+    lib = live_source_root / "coordinator" / "lib"
+    if not lib.is_dir():
+        return None
+    found = sorted(
+        candidate
+        for family in sorted(lib.glob("resolve-*"))
+        if family.is_dir()
+        for candidate in sorted(family.glob("_resolve_*.py"))
+    )
+    return found[0] if len(found) == 1 else None
+
+
+def _install_live_source_tree_forwarders(
+    bin_dst: Path,
+    claude_klabauter_root_resolved: Path,
+    agent_helper_target_map: "dict[str, str]",
+    check_only: bool,
+) -> "frozenset[str]":
+    """Install the LIVE SOURCE tree's resolver plus a forwarder for every CLI
+    only that tree can serve, and return the names to protect from the sweep.
+
+    Only ever does anything on a DUAL-TREE box -- an authoring machine where
+    the engine being run (``claude_klabauter_root_resolved``) is the published mirror
+    while a separate live source checkout also exists. ``engine_source_root()``
+    returns ``None`` on an ordinary consumer install, where there is one tree,
+    the mirror's ``coordinator/bin/`` is not a subset of anything, and this
+    function is a no-op.
+
+    The two writes are a pair and neither works alone: a forwarder naming a
+    resolver module that is not installed beside it dies with
+    ``ModuleNotFoundError``, and a resolver installed with no forwarder naming
+    it is dead weight the manifest prune will reap. The forwarders are written
+    with ``engine_root=None`` deliberately -- a native door image is cut
+    against the RUNNING engine's root, which cannot serve these targets;
+    the bare-Python forwarder resolving through the live tree's own resolver
+    is the only shape that works.
+
+    Returns the installed-name set for ``_sweep_orphaned_agent_helpers``'s
+    ``extra_protected_names``. Names are returned even when a write was
+    skipped or this is a ``check_only`` run: protection must not depend on
+    having just written the file, or a run that no-ops on an up-to-date
+    forwarder would hand it to the sweep.
+    """
+    live_source_root = engine_source_root()
+    if not live_source_root or Path(live_source_root) == claude_klabauter_root_resolved:
+        return frozenset()
+    live_root = Path(live_source_root)
+    live_bin = live_root / "coordinator" / "bin"
+    resolver_src = _live_source_tree_resolver(live_root)
+    if not live_bin.is_dir() or resolver_src is None:
+        return frozenset()
+
+    live_map = _derive_agent_helper_target_map(live_bin)
+    protected = frozenset(
+        set(live_map)
+        | set(_resolve_agent_cmd_dest_collisions(live_map).values())
+        # The resolver module itself rides along in this set so ONE return
+        # value declares the whole cohort to `all_current_names`. It is inert
+        # as sweep protection (`_sweep_orphaned_agent_helpers` skips every
+        # `_`-prefixed entry outright) but load-bearing against clause 14:
+        # without it the manifest prune reaps the resolver as a name this run
+        # no longer installs, which is exactly how it was reaped on 2026-08-30.
+        | {resolver_src.name}
+    )
+    only_live = {
+        name: target
+        for name, target in live_map.items()
+        if name not in agent_helper_target_map
+    }
+    if not only_live:
+        return protected
+
+    _install_one(
+        resolver_src, bin_dst / resolver_src.name, False, "resolve-live-source", check_only,
+    )
+    _write_agent_helper_forwarders(
+        only_live, bin_dst, check_only,
+        engine_root=None,
+        resolver_module=resolver_src.stem,
+    )
+    print(
+        f"[install-substrate] live-source-tree forwarders: {len(only_live)} name(s) "
+        f"the running engine cannot serve, bound to {resolver_src.name} -> {live_bin}"
+    )
+    return protected
 
 
 def _install_bin_resolvers(
@@ -3593,7 +3778,7 @@ def _install_bin_resolvers(
         raise SubstrateFatalError(
             "install-substrate: could not resolve an absolute Python "
             "interpreter to bake into the static bin-resolver shims "
-            "(machine-local.cmd, claude-home.cmd, coordinator-settings-home.cmd, "
+            "(machine-local.cmd, coordinator-settings-home.cmd, "
             "platform-localize.cmd, resolve-coordinator-clone.cmd). Remediation: "
             "ensure python.exe (or the 'py' launcher) is discoverable on PATH, "
             "then re-run coordinator:install."
@@ -3724,19 +3909,26 @@ def _install_bin_resolvers(
     # class alive, since a mirror-built image looked for a resolver basename
     # no installed forwarder carried).
     #
-    # So the sweep's write set must be every name EITHER tree can serve, not
-    # just the tree this run happens to be executing from. `engine_source_root()`
-    # returns None on an ordinary consumer install -- one tree, so the subset
-    # cannot differ and there is nothing to add.
-    live_source_root = engine_source_root()
-    live_tree_protected: "frozenset[str]" = frozenset()
-    if live_source_root and Path(live_source_root) != claude_klabauter_root_resolved:
-        live_bin = Path(live_source_root) / "coordinator" / "bin"
-        if live_bin.is_dir():
-            live_map = _derive_agent_helper_target_map(live_bin)
-            live_tree_protected = frozenset(
-                set(live_map) | set(_resolve_agent_cmd_dest_collisions(live_map).values())
-            )
+    # So the write set must be every name EITHER tree can serve, not just the
+    # tree this run happens to be executing from -- and PROTECTING those names
+    # is not enough on its own. Protection keeps an existing forwarder alive;
+    # it cannot install one, and it cannot keep the live tree's resolver module
+    # alive either (`rm_family` installs only the resolver belonging to
+    # `claude_klabauter_root_resolved`, so a mirror run installs `_resolve_claude_
+    # klabauter.py` and the manifest prune reaps `_resolve_claude_klabauter.py` as a name
+    # no longer in `current_names`). Both are required, because the mirror's
+    # resolver CANNOT stand in: the rename map rewrites its registry key along
+    # with its basename, so its live-working-tree rung resolves to the MIRROR,
+    # and a publisher-only target is by construction absent there. Measured
+    # 2026-08-30: forwarders rewritten against the published resolver failed
+    # for all ten `PUBLISHER_ONLY_TARGETS`, each reporting its target missing
+    # under a "resolved live-working-tree root" that was the mirror path.
+    #
+    # `engine_source_root()` returns None on an ordinary consumer install --
+    # one tree, so the subset cannot differ and this whole block is skipped.
+    live_tree_protected = _install_live_source_tree_forwarders(
+        bin_dst, claude_klabauter_root_resolved, agent_helper_target_map, check_only,
+    )
 
     _sweep_orphaned_agent_helpers(
         bin_dst, agent_helper_target_map, agent_cmd_dest_map, check_only,
@@ -3802,6 +3994,7 @@ def _install_bin_resolvers(
         | set(agent_helper_target_map) | set(agent_cmd_dest_map.values())
         | native_forwarder_filenames
         | {SITEPACKAGES_POINTER_NAME}
+        | live_tree_protected
     )
     _prune_orphaned_static_bin_names(bin_dst, all_current_names, check_only)
 
@@ -4743,7 +4936,9 @@ WRITE_SURFACE = WriteSurfaceDeclaration(
             ),
         ),
         # Clause 10 — the claude-home family: a STATIC, hand-maintained
-        # 3-entry tuple (`_CH_FAMILY_FILES`), sourced from claude-klabauter's own
+        # 2-entry tuple (`_CH_FAMILY_FILES` — the `.cmd` entry retired by C5,
+        # docs/plans/2026-08-30-twenty-one-bin-names-reach-the-door-or-are-
+        # thoroughly-dead.md), sourced from claude-klabauter's own
         # `coordinator/lib/claude-home/` (NOT DoE's `templates/bin/`, so
         # deliberately out of `bin-templates-manifest.py`/clauses 7-9 by
         # construction — see `_CH_FAMILY_FILES`'s own comment). Genuinely

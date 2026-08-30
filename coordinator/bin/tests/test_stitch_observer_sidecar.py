@@ -16,7 +16,7 @@ Coverage (this file, added for the heading+placeholder corruption fix):
     into the marker-mismatch LEAK branch and returned 1 instead of stitching.
 
 Module import: stitch-observer-sidecar.py is a hyphenated filename, loaded by
-file path (same idiom as test_wsc_close.py in this same tests/ dir).
+file path (same idiom as test_archive_session_scope.py in this same tests/ dir).
 
 Spec backlink: cross-repo/inbox/2026-08-11-example-retrieval-repo-em-stitch-observer-
 sidecar-corrupts-on-heading-plus-placeholder.md

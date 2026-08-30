@@ -2028,6 +2028,32 @@ class TestHandoffTransitionWrappers:
 # ---------------------------------------------------------------------------
 
 class TestShipHandoff:
+    def test_stamp_only_empty_handoff_path_refuses_with_mode_in_envelope(self, tmp_path):
+        """A missing `handoff_path` must refuse through the SAME envelope shape
+        every other refusal uses, carrying `mode` so a caller can tell which
+        transition refused.
+
+        Coverage gap closed at workstream-complete: `chain` had this case, and
+        `stamp_only` did not. It went unnoticed because the deleted
+        `handoff_stamp_targeted` module documented the equivalent gap as a
+        strict-xfail, and deleting that module retired the xfail without
+        retiring the gap -- moot is not the same as fixed."""
+        import asyncio
+
+        from coordinator_core.ops.handoff_archive_transition import _handler
+
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+
+        result = asyncio.run(
+            _handler({"handoff_path": "", "mode": "stamp_only"}, repo / ".git")
+        )
+
+        assert result["exit_code"] != 0, result
+        assert result["mode"] == "stamp_only", result
+        assert "handoff_path" in (result.get("error") or result.get("message") or "")
+
+
     def test_default_flips_deployment_state_and_stamps_without_moving(self, tmp_path):
         repo = tmp_path / "repo"
         _init_repo(repo)

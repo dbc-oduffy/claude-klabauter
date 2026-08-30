@@ -42,8 +42,8 @@ def test_every_consumes_manifest_member_is_allowlisted() -> None:
 
 
 def test_resolve_cli_happy_path_still_resolves() -> None:
-    path = wsc_apply._resolve_cli("wsc-close")
-    assert path.exists() or path.name in ("wsc-close.py", "wsc-close")
+    path = wsc_apply._resolve_cli("wsc-coverage-gate-runner")
+    assert path.exists() or path.name in ("wsc-coverage-gate-runner.py", "wsc-coverage-gate-runner")
 
 
 def test_resolve_cli_unrecognized_name_raises_before_dispatch() -> None:
@@ -59,7 +59,7 @@ def test_resolve_cli_reaches_nothing_when_control_denies(
     membership check in `_CLI_DISPATCH` alone must not be sufficient."""
     monkeypatch.setattr(apply_base, "ASSEMBLER_DISPATCHABLE", types.MappingProxyType({}))
     with pytest.raises(ApplyBaseUnrecognizedDirective, match="dispatchable set"):
-        wsc_apply._resolve_cli("wsc-close")
+        wsc_apply._resolve_cli("wsc-coverage-gate-runner")
 
 
 def test_load_cli_module_denial_reaches_no_module_load(
@@ -71,8 +71,8 @@ def test_load_cli_module_denial_reaches_no_module_load(
     a module — no partial dispatch side effect."""
     monkeypatch.setattr(apply_base, "ASSEMBLER_DISPATCHABLE", types.MappingProxyType({}))
     with pytest.raises(ApplyBaseUnrecognizedDirective):
-        wsc_apply._load_cli_module("wsc-close")
-    assert "wsc-close" not in wsc_apply._LOADED_MODULES
+        wsc_apply._load_cli_module("wsc-coverage-gate-runner")
+    assert "wsc-coverage-gate-runner" not in wsc_apply._LOADED_MODULES
 
 
 def test_admission_pre_pass_refuses_whole_run_before_any_directive_dispatches(
@@ -85,7 +85,7 @@ def test_admission_pre_pass_refuses_whole_run_before_any_directive_dispatches(
     variant would prove nothing about whole-run pre-validation, since a
     per-directive halt would already refuse it."""
     directives = [
-        {"id": "d1", "cli": "wsc-close", "args": []},
+        {"id": "d1", "cli": "wsc-coverage-gate-runner", "args": []},
         {"id": "d2", "cli": "not-a-real-cli-name", "args": []},
     ]
     exit_code, report = wsc_apply._execute_directives(directives, [], {}, repo_root=tmp_path)

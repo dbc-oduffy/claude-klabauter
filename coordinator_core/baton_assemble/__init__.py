@@ -2867,6 +2867,78 @@ def resolve_lineage(
             + [_field_for(_extra, "origin_plan_id") for _extra in _extra_paths_for_union]
         )
 
+        # `carried_items` fan-in carry (sizing 2026-08-30-multi-baton-
+        # pickup-mints-a-successor-bat, `injection_rule`): union over the
+        # primary predecessor plus every fan-in leg, ROWS ONLY -- never
+        # prose. Identity is `carry_id`: the same id appearing on two priors
+        # de-duplicates to ONE row (first-seen order: primary, then fan-in
+        # legs in their finalized order), while two DIFFERENT ids with
+        # identical description text stay two separate rows. Rows whose
+        # disposition is `"carried"` or `"blocked"` are injected;
+        # `closed`/`spun_off` are not. `closed` terminated in place and
+        # `spun_off` names its own successor baton in `disposition_detail`,
+        # so both leave a reachable trace once this prior archives --
+        # `blocked` leaves NONE: it is an item still open on an external
+        # dependency, and the schema requires it to "remain visible and
+        # explicit rather than silently re-carried". Dropping it at the hop
+        # makes that dependency invisible the moment the prior archives,
+        # which is the one failure the disposition exists to prevent. It is
+        # injected with its disposition UNCHANGED -- visibility, never a
+        # re-open; the successor re-declares its state like any other row.
+        # `handoff_carry_gate._TERMINAL_DISPOSITIONS` is not the same axis:
+        # that set means "requires a disposition_detail", not "is
+        # discharged", so including `blocked` here splits no contract. A
+        # leg with no readable `carried_items` (absent field, unparseable
+        # frontmatter, or a shape `handoff_carry_gate.read_carried_items`
+        # itself refuses) contributes nothing and is never fatal here --
+        # d7's own gate already covers the PRIMARY predecessor's shape
+        # before this ever runs; a fan-in leg's malformed carried_items is
+        # the same "drop, don't crash" posture `_deliverable_id_for` already
+        # takes on this exact leg list.
+        _carried_items_paths = [lineage.get("predecessor")] + list(_extra_paths_for_union)
+        _carried_items_seen: set[str] = set()
+        _carried_items_union: list[dict[str, Any]] = []
+        for _ci_path in _carried_items_paths:
+            if not _ci_path:
+                continue
+            _ci_candidate = Path(_ci_path)
+            _ci_abs = _ci_candidate if _ci_candidate.is_absolute() else root / _ci_candidate
+            if not _ci_abs.is_file():
+                continue
+            try:
+                from coordinator_core.ops.handoff_carry_gate import (
+                    read_carried_items as _read_carried_items,
+                )
+
+                _ci_items = _read_carried_items(str(_ci_abs))
+            except Exception:
+                continue
+            for _ci_item in _ci_items:
+                if not isinstance(_ci_item, dict):
+                    continue
+                if _ci_item.get("disposition") not in ("carried", "blocked"):
+                    continue
+                _ci_id = _ci_item.get("carry_id")
+                if not _ci_id or not isinstance(_ci_id, str) or _ci_id in _carried_items_seen:
+                    continue
+                _carried_items_seen.add(_ci_id)
+                _carried_items_union.append(_ci_item)
+        lineage["carried_items"] = _carried_items_union or None
+
+        # DR-388 (2026-08-30, PM ruling): a fan-in successor (2+
+        # predecessors) mints a BRAND NEW deliverable_id by construction,
+        # never one carried or reused from any rung -- deliberate, narrow
+        # departure from DR-207 DD#1, scoped to N>1 only. Fired AFTER the
+        # `deliverable_ids`/`plan_ids` unions above so those carriers still
+        # name the priors' own real ids for traceability -- the fresh mint
+        # is the successor's own identity, not a fourth entry unioned into
+        # `deliverable_ids`. Single-predecessor carry-verbatim (DD#1) is
+        # untouched: this fires only when a real fan-in leg is present.
+        if lineage.get("additional_predecessors"):
+            _fan_in_mint_slug = title or Path(lineage["output_path"]).stem
+            lineage["deliverable_id"], _ = _mint_deliverable_id(slug=_fan_in_mint_slug)
+            lineage["discovery"] = "fan-in-mint"
+
         # Replay resumption (2026-07-29): pin `output_path` to the successor a
         # prior attempt already recorded on THIS predecessor, rather than
         # letting `_compute_fresh_output_path` disambiguate away from it and
@@ -3676,6 +3748,8 @@ def _build_directives(
         d1_args.append(f"--deliverable-ids={_deliverable_id}")
     for _plan_id in lineage.get("plan_ids") or []:
         d1_args.append(f"--plan-ids={_plan_id}")
+    for _carried_item in lineage.get("carried_items") or []:
+        d1_args.append(f"--carried-items={json.dumps(_carried_item, sort_keys=True)}")
 
     # d7 -- precondition gate, not a post-step: composes
     # `coordinator_core.ops.handoff_carry_gate.evaluate_gate` (in-process, via
@@ -3773,12 +3847,16 @@ def _build_directives(
     # orphan case -- rather than stranding a predecessor archived-as-continued
     # into a successor missing its ids.
     d1b_directive: Optional[dict[str, Any]] = None
-    if d1_already_satisfied and (lineage.get("deliverable_ids") or lineage.get("plan_ids")):
+    if d1_already_satisfied and (
+        lineage.get("deliverable_ids") or lineage.get("plan_ids") or lineage.get("carried_items")
+    ):
         _d1b_args = ["--file", d1_out]
         for _deliverable_id in lineage.get("deliverable_ids") or []:
             _d1b_args.append(f"--deliverable-ids={_deliverable_id}")
         for _plan_id in lineage.get("plan_ids") or []:
             _d1b_args.append(f"--plan-ids={_plan_id}")
+        for _carried_item in lineage.get("carried_items") or []:
+            _d1b_args.append(f"--carried-items={json.dumps(_carried_item, sort_keys=True)}")
         d1b_directive = {
             "id": "d1b",
             "cli": "baton-stamp-carried-ids",

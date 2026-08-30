@@ -305,10 +305,10 @@ def test_one_name_write_failure_is_fatal_and_named_in_the_summary(tmp_path, caps
 
     real_writer = substrate._write_agent_forwarder
 
-    def _flaky_writer(name, py_dst, check_only, *, target):
+    def _flaky_writer(name, py_dst, check_only, *, target, **kwargs):
         if name == "cross-repo-memo":
             raise PermissionError(13, "boom -- simulated WinError 32")
-        return real_writer(name, py_dst, check_only, target=target)
+        return real_writer(name, py_dst, check_only, target=target, **kwargs)
 
     monkeypatch.setattr(substrate, "_write_agent_forwarder", _flaky_writer)
     with pytest.raises(substrate.SubstrateFatalError) as excinfo:

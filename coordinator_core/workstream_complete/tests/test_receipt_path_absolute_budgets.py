@@ -64,7 +64,7 @@ from coordinator_core.benchmarks.process_time import batched_process_time_ms
 from coordinator_core.subagent_sandbox.engine import load_policy, resolve_git_root
 from coordinator_core.subagent_sandbox.provision_report import (
     _build_doc_text,
-    _is_delegate_reviewer,
+    _is_close_receipt_reviewer,
     _provision,
     _splice_review_receipt,
 )
@@ -197,11 +197,11 @@ _MODULES_BASELINE_ARGV = [
         "import json, sys\n"
         "before = set(sys.modules)\n"
         "from coordinator_core.subagent_sandbox.provision_report import (\n"
-        "    _build_doc_text, _is_delegate_reviewer,\n"
+        "    _build_doc_text, _is_close_receipt_reviewer,\n"
         ")\n"
         "after_import = set(sys.modules)\n"
         "doc = _build_doc_text('coordinator:executor', '2026-01-01T00:00:00Z', None, lead_session_id='sid')\n"
-        "_is_delegate_reviewer('coordinator:executor', '')\n"
+        "_is_close_receipt_reviewer('coordinator:executor', '')\n"
         "print(json.dumps(sorted(set(sys.modules) - before)))\n"
     ),
 ]
@@ -213,10 +213,10 @@ _MODULES_RECEIPT_ARGV = [
         "import json, sys\n"
         "before = set(sys.modules)\n"
         "from coordinator_core.subagent_sandbox.provision_report import (\n"
-        "    _build_doc_text, _is_delegate_reviewer, _splice_review_receipt,\n"
+        "    _build_doc_text, _is_close_receipt_reviewer, _splice_review_receipt,\n"
         ")\n"
         "doc = _build_doc_text('coordinator:code-reviewer', '2026-01-01T00:00:00Z', None, lead_session_id='sid')\n"
-        "if _is_delegate_reviewer('coordinator:code-reviewer', ''):\n"
+        "if _is_close_receipt_reviewer('coordinator:code-reviewer', ''):\n"
         "    doc = _splice_review_receipt(doc, 'sid', 'agent-1', 'coordinator:code-reviewer', '2026-01-01T00:00:00Z')\n"
         "print(json.dumps(sorted(set(sys.modules) - before)))\n"
     ),
@@ -243,7 +243,7 @@ def _run_modules_probe(argv) -> "set[str]":
 def test_dispatch_leg_receipt_splice_imports_nothing_new():
     """AC12b(i): the receipt path (a delegate-reviewer dispatch, which
     reaches `_splice_review_receipt`) must import no module that a
-    non-reviewer eligible dispatch (which reaches `_is_delegate_reviewer`
+    non-reviewer eligible dispatch (which reaches `_is_close_receipt_reviewer`
     and stops there, per `_provision`'s own unconditional call to it on
     every eligible dispatch) does not already load. Measured as a set
     difference in two fresh interpreters, never inspected by reading the
@@ -298,7 +298,7 @@ def test_dispatch_leg_receipt_splice_issues_zero_subprocess_spawns():
         doc = _build_doc_text(
             REVIEWER_TYPE, "2026-01-01T00:00:00Z", None, lead_session_id="sid"
         )
-        assert _is_delegate_reviewer(REVIEWER_TYPE, "")
+        assert _is_close_receipt_reviewer(REVIEWER_TYPE, "")
         _splice_review_receipt(doc, "sid", "agent-1", REVIEWER_TYPE, "2026-01-01T00:00:00Z")
 
     assert calls == [], (

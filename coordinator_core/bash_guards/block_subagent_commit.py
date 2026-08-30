@@ -583,7 +583,7 @@ to be refused by the op one line later).
 
 Fixed instead by MIRRORING the invocation's own flag: ``_resolve_git_
 commit_agent_pathspec`` (and the two per-spelling extractors it calls,
-``_extract_invoke_scoped_git_commit_paths`` /
+``_extract_invoke_commit_v2_paths``, and the since-deleted
 ``_extract_trampoline_scoped_git_commit_paths``) now return
 ``(paths, include_orphans)`` together, reading the SAME text each already
 scans for the pathspec -- the JSON params dict's ``include_orphans`` key
@@ -3394,6 +3394,72 @@ _COMMITTING_OP_NAMES = frozenset(
 _CEREMONY_INVOKE_MODULE = "coordinator_core.invoke"
 _PYTHON_INTERPRETER_NAMES = ("python3", "python")
 
+#: The INSTALLED, on-PATH door to the same `coordinator_core.invoke.__main__.
+#: main` entrypoint the `-m` module spelling reaches -- `coordinator/bin/
+#: coordinator-invoke.py`, forwarded into the settings-home `bin/` by
+#: substrate's agent-helper forwarder derivation. It parses `sys.argv`
+#: identically (that trampoline hands off without touching argv), so
+#: `coordinator-invoke <op> '<json>'` and `python3 -m coordinator_core.invoke
+#: <op> '<json>'` are the SAME invocation in two spellings.
+#:
+#: Added 2026-08-30, and this was a live BYPASS on the deny side, not a
+#: tidy-up: `_tokens_reach_committing_op_after_python` recognized only the
+#: `-m` spelling, so any subagent could reach every op in
+#: `_COMMITTING_OP_NAMES` -- `ceremony.commit_v2` included -- through the
+#: door that is actually on PATH, and this guard would never fire. The `-m`
+#: spelling is additionally the one an agent CANNOT use without a sys.path
+#: prologue (`coordinator_core` lives in the engine clone, off a bare
+#: interpreter's path), so the guard recognized only the spelling that does
+#: not work and missed the one that does. Both matchers walk the same
+#: `_invoke_op_token_indices` now, so a future head spelling cannot land on
+#: one side only.
+_COORDINATOR_INVOKE_BINARY = "coordinator-invoke"
+
+
+def _invoke_op_token_indices(tokens: list) -> "Iterator[int]":
+    """Yield the index of the ``<op>`` positional for every
+    ``coordinator_core.invoke`` invocation in ``tokens``, in BOTH spellings:
+
+      - ``[wrapper/env...] python[3] [-flags] -m coordinator_core.invoke <op>``
+      - ``[wrapper/env...] coordinator-invoke <op>``
+
+    Shared by the deny matcher (``_tokens_reach_committing_op_after_python``)
+    and the allow-side extractor (``_extract_invoke_commit_v2_paths``) so the
+    two can never disagree about what an invocation IS -- they differ only in
+    what they do with the op name they find.
+
+    The python-token scan is a full-array walk rather than a position-0 check
+    (mirroring ``_tokens_reach_commit_after_git``), so a wrapper or
+    env-assignment prefix needs no separate peeling step. The
+    ``coordinator-invoke`` head, by contrast, IS peeled
+    (``_peeled_effective_tokens``) and then boundary-matched at the head only:
+    that binary is not a token that can legitimately appear mid-command the
+    way an interpreter can.
+    """
+    peeled = _peeled_effective_tokens(tokens)
+    if peeled and _token_matches_binary(peeled[0], _COORDINATOR_INVOKE_BINARY):
+        op_idx = _first_positional_after_invoke_module(peeled, 1)
+        if op_idx is not None:
+            yield op_idx, peeled
+    n = len(tokens)
+    for start in range(n):
+        if not any(
+            _token_matches_binary(tokens[start], name)
+            for name in _PYTHON_INTERPRETER_NAMES
+        ):
+            continue
+        i = start + 1
+        while i < n and tokens[i] != "-m" and tokens[i].startswith("-"):
+            i += 1
+        if i >= n or tokens[i] != "-m":
+            continue
+        i += 1
+        if i >= n or tokens[i] != _CEREMONY_INVOKE_MODULE:
+            continue
+        op_idx = _first_positional_after_invoke_module(tokens, i + 1)
+        if op_idx is not None:
+            yield op_idx, tokens
+
 #: ``coordinator_core.invoke``'s own optional flags that may precede the
 #: ``<op>`` positional (see ``coordinator_core/invoke/__main__.py::
 #: _build_arg_parser`` for the authoritative flag surface this set is
@@ -3441,44 +3507,22 @@ def _first_positional_after_invoke_module(tokens: list, start: int) -> Optional[
 
 
 def _tokens_reach_committing_op_after_python(tokens: list) -> bool:
-    """Token walk, mirroring ``_tokens_reach_commit_after_git``'s own
-    full-segment-scan shape: for every token that boundary-matches the
-    ``python3`` or ``python`` binary (``_token_matches_binary`` -- bare,
-    ``.exe``-suffixed, case-folded, or an absolute/path-prefixed spelling),
-    walk forward past a run of Python's own leading global flags
-    (``-u``, ``-B``, ``-O``, ``-I``, ...; no argument-consuming flag needs
-    special-casing here since we stop looking the moment a non-flag token
-    or ``-m`` appears) looking for the literal ``-m`` flag, then require the
-    module argument to be exactly ``coordinator_core.invoke``, then resolve
-    the first POSITIONAL after the module name (flag-tolerant --
-    ``_first_positional_after_invoke_module``, hole (b) fix) and check it
-    against ``_COMMITTING_OP_NAMES`` (hole (a) fix -- any committing op
-    name, not just ``ceremony.scoped_git_commit``). A full-array scan (not
-    a position-0-only check) means a preceding wrapper/env-assignment
-    prefix (``env FOO=1 python3 -m ...``, ``timeout 30 python3 -m ...``)
-    needs no separate peeling step -- the loop simply finds the
-    ``python``/``python3`` token wherever it sits in the segment, exactly
-    like the sibling ``git``-commit walk already does for a preceding
-    wrapper.
+    """True if any ``coordinator_core.invoke`` invocation in ``tokens``
+    names a member of ``_COMMITTING_OP_NAMES`` -- resolving the invocation
+    via ``_invoke_op_token_indices``, which covers BOTH spellings (the
+    on-PATH ``coordinator-invoke`` door and the ``python3 -m
+    coordinator_core.invoke`` module form) and both wrapper/env-prefixed
+    variants of each. Checked against ``_COMMITTING_OP_NAMES`` (hole (a)
+    fix -- any committing op name, not just ``ceremony.scoped_git_commit``)
+    at the first POSITIONAL after the invoke identity (flag-tolerant --
+    ``_first_positional_after_invoke_module``, hole (b) fix).
+
+    The name says "after_python" for its callers' sake and is now narrower
+    than what it does; the `coordinator-invoke` spelling it also covers was
+    a live bypass until 2026-08-30 (see `_COORDINATOR_INVOKE_BINARY`).
     """
-    n = len(tokens)
-    for start in range(n):
-        if not any(
-            _token_matches_binary(tokens[start], name)
-            for name in _PYTHON_INTERPRETER_NAMES
-        ):
-            continue
-        i = start + 1
-        while i < n and tokens[i] != "-m" and tokens[i].startswith("-"):
-            i += 1
-        if i >= n or tokens[i] != "-m":
-            continue
-        i += 1
-        if i >= n or tokens[i] != _CEREMONY_INVOKE_MODULE:
-            continue
-        i += 1
-        op_idx = _first_positional_after_invoke_module(tokens, i)
-        if op_idx is not None and tokens[op_idx] in _COMMITTING_OP_NAMES:
+    for op_idx, seq in _invoke_op_token_indices(tokens):
+        if seq[op_idx] in _COMMITTING_OP_NAMES:
             return True
     return False
 
@@ -5399,58 +5443,56 @@ def _prefilter_mentions_commit(cmd: str) -> bool:
 #     here. ---
 
 
-def _extract_invoke_scoped_git_commit_paths(
+def _extract_invoke_commit_v2_paths(
     seg_tokens: list,
 ) -> Optional[Tuple[List[str], bool]]:
-    """LEG 2 (the ``python3 -m coordinator_core.invoke ceremony.scoped_git_
-    commit ...`` spelling) + LEG 3's raw pathspec extraction, combined: find
-    a genuine ``ceremony.scoped_git_commit`` invocation (mirroring
-    ``_tokens_reach_committing_op_after_python``'s python-token/``-m``/
-    module-name/flag-tolerant-positional walk, but requiring the op to be
-    EXACTLY ``ceremony.scoped_git_commit`` -- not any member of
-    ``_COMMITTING_OP_NAMES`` -- since only this op takes an explicit
-    pathspec at all) and return ``(paths, include_orphans)`` -- ``paths``
-    parsed from the JSON params positional's ``paths`` key, and
-    ``include_orphans`` from that SAME parsed dict's ``include_orphans`` key
-    (``bool(parsed.get("include_orphans", False))``, mirroring exactly how
-    ``ceremony.scoped_git_commit._handler`` itself reads the flag off the
-    wire params -- see that module's docstring; this is the JSON-body
-    spelling, there is no separate CLI-flag form for this invocation shape).
-    2026-08-04 (F0 fix): previously this function returned ``paths`` alone
-    and the caller hard-coded ``allow_orphans=True`` regardless of whether
-    the invocation actually asked for it -- now the caller mirrors the
-    invocation's own opt-in instead.
+    """LEG 2 (a `coordinator_core.invoke ceremony.commit_v2` invocation, in
+    EITHER spelling -- the on-PATH ``coordinator-invoke`` door or the
+    ``python3 -m coordinator_core.invoke`` module form) + LEG 3's raw
+    pathspec extraction, combined: walk ``_invoke_op_token_indices`` (the
+    same walk the deny matcher uses, so the two cannot disagree about what
+    an invocation IS), require the op to be EXACTLY ``ceremony.commit_v2``
+    -- not any member of ``_COMMITTING_OP_NAMES``, since only this op takes
+    an explicit pathspec at all -- and return
+    ``(paths, include_orphans)``: ``paths`` is
+    the JSON params positional's ``paths`` array CONCATENATED with its
+    ``deleted_paths`` array -- a deletion is exactly as scope-bearing as a
+    write, `ceremony.commit_v2` accepts a commit carrying only deletions,
+    and an unconcatenated read would hand LEG 3 a pathspec smaller than the
+    one the sink lands. ``include_orphans`` is always ``False``: that op has
+    no orphan-adoption parameter at all (``ops/ceremony/commit_v2.py ::
+    _handler`` reads ``paths``/``deleted_paths``/``message``/
+    ``prefer_staged`` and nothing else), so SC-DR-022's gate has nothing to
+    read here and no key an invocation could set to move it.
+
+    2026-08-30 repoint: this leg matched ``ceremony.scoped_git_commit``,
+    which is DELETED rather than suspended -- it went over the brightline,
+    and ``coordinator_core/ops/ceremony/scoped_git_commit.py`` does not
+    exist at HEAD. A leg keyed to a route nothing can invoke permits
+    nothing, which is how the guard came to deny every route its own
+    messages named. Repointed onto the live dispatchable committer
+    (`coordinator/agents/git-commit-agent.md` § Leg 1): the same argv walk
+    over a different op name, reading the same JSON positional. NOT a
+    widening -- the extracted pathspec goes through every LEG 3 check
+    unchanged, and the ``python -c`` payload spelling this guard refuses to
+    unwrap on the allow side stays unread (see ``_resolve_git_commit_agent_
+    pathspec``).
 
     Returns ``None`` when no such invocation is found in ``seg_tokens``, OR
     when a matched invocation's pathspec is not determinable from argv text
     at all -- ``--params-file`` (the payload lives in a file/stdin this
     guard cannot read), unparseable JSON, a non-object payload, or a
-    ``paths`` value that is not a JSON array. The caller treats this
-    identically to "no explicit pathspec was given" (deny) -- AC6's
-    absent-pathspec case, not a distinct outcome.
+    ``paths``/``deleted_paths`` value that is present but not a JSON array.
+    The caller treats this identically to "no explicit pathspec was given"
+    (deny) -- AC6's absent-pathspec case, not a distinct outcome.
     """
-    n = len(seg_tokens)
-    for start in range(n):
-        if not any(
-            _token_matches_binary(seg_tokens[start], name)
-            for name in _PYTHON_INTERPRETER_NAMES
-        ):
+    for op_idx, seq in _invoke_op_token_indices(seg_tokens):
+        if seq[op_idx] != "ceremony.commit_v2":
             continue
-        i = start + 1
-        while i < n and seg_tokens[i] != "-m" and seg_tokens[i].startswith("-"):
-            i += 1
-        if i >= n or seg_tokens[i] != "-m":
-            continue
-        i += 1
-        if i >= n or seg_tokens[i] != _CEREMONY_INVOKE_MODULE:
-            continue
-        i += 1
-        op_idx = _first_positional_after_invoke_module(seg_tokens, i)
-        if op_idx is None or seg_tokens[op_idx] != "ceremony.scoped_git_commit":
-            continue
+        n = len(seq)
         j = op_idx + 1
         while j < n:
-            tok = seg_tokens[j]
+            tok = seq[j]
             if tok.startswith("-"):
                 flag_name = tok.split("=", 1)[0]
                 if flag_name == "--params-file":
@@ -5468,68 +5510,57 @@ def _extract_invoke_scoped_git_commit_paths(
                 return None
             if not isinstance(parsed, dict):
                 return None
-            paths = parsed.get("paths")
-            if not isinstance(paths, list):
+            paths = parsed.get("paths", [])
+            deleted = parsed.get("deleted_paths", [])
+            if not isinstance(paths, list) or not isinstance(deleted, list):
                 return None
-            return [str(p) for p in paths], bool(parsed.get("include_orphans", False))
+            return [str(p) for p in list(paths) + list(deleted)], False
         return None
     return None
 
 
-def _extract_trampoline_scoped_git_commit_paths(
-    seg_tokens: list,
-) -> Optional[Tuple[List[str], bool]]:
-    """LEG 2 (the ``scoped-git-commit(.cmd)?`` trampoline spelling) + LEG
-    3's raw pathspec extraction, combined: peel wrapper/env/assignment/
-    ``python3``-prefix noise via ``_peeled_effective_tokens`` (the same
-    peel ``_first_effective_token`` uses, minus its head-token collapse),
-    confirm the resulting head token boundary-matches
-    ``_SCOPED_GIT_COMMIT_BINARY`` specifically (NOT the wider
-    ``_COMMIT_HELPER_BINARY_NAMES`` set -- ``coordinator-safe-commit`` takes
-    no pathspec argument at all and must always deny, per AC6), then return
-    ``(paths, include_orphans)`` -- ``paths`` is every token after the CLI's
-    own required ``--`` separator (see ``coordinator/bin/scoped-git-commit``'s
-    ``_parse_args`` -- everything after ``--`` is the pathspec, never a
-    flag), and ``include_orphans`` is whether the literal ``--include-orphans``
-    token appears BEFORE that separator (the only spelling
-    ``_parse_args`` recognizes -- no ``=value`` form, and a token after
-    ``--`` is a path, not a flag, so this scan is bounded to ``rest[:sep_idx]``
-    deliberately, not the whole token list). 2026-08-04 (F0 fix): previously
-    this function returned ``paths`` alone and the caller hard-coded
-    ``allow_orphans=True`` regardless of whether the invocation actually
-    carried this flag.
-
-    Returns ``None`` when the head token is not this binary, or no ``--``
-    separator is present (an unscoped/malformed invocation this CLI itself
-    rejects with a usage error at runtime -- AC6's absent-pathspec case).
-    """
-    tokens = _peeled_effective_tokens(seg_tokens)
-    if not tokens:
-        return None
-    head = tokens[0]
-    rest = tokens[1:]
-    if head == "python3" and rest:
-        head, rest = rest[0], rest[1:]
-    if not _token_matches_binary(head, _SCOPED_GIT_COMMIT_BINARY):
-        return None
-    if "--" not in rest:
-        return None
-    sep_idx = rest.index("--")
-    include_orphans = "--include-orphans" in rest[:sep_idx]
-    return _pathspec_tokens_before_redirection(rest[sep_idx + 1 :]), include_orphans
-
+#: GRAVESTONE -- `_extract_trampoline_scoped_git_commit_paths` (deleted
+#: 2026-08-30). It was the allow-side leg for the `scoped-git-commit(.cmd)?`
+#: trampoline: peel wrapper noise, match `_SCOPED_GIT_COMMIT_BINARY`, read
+#: everything after the CLI's own `--` as the pathspec. The binary it
+#: recognized no longer exists anywhere on the install chain --
+#: `coordinator/bin/scoped-git-commit` is gone with the op it fronted, and
+#: the settings-home launchers `test_deny_prose_never_routes_to_the_retired_
+#: scoped_git_commit_launcher` was written against fail helper-missing
+#: (exit 127). An allow leg that can only match an uninvocable binary grants
+#: nothing; it survived because it existed, and it made the allow surface
+#: read as three routes when only one was live.
+#:
+#: The DENY side is untouched and stays that way: `_SCOPED_GIT_COMMIT_
+#: BINARY` remains in `_COMMIT_HELPER_BINARY_NAMES`, so an invocation of
+#: that name is still detected and still denied. Deleting detection of a
+#: retired binary is a different (and wrong) change from deleting the
+#: allowance for it.
 
 #: 2026-08-22 PM ruling (`op_budget_suspension.py`'s `ceremony.scoped_git_
-#: commit` row, REINSTATEMENT + Negative-spec passages): while that op is
+#: commit` row, REINSTATEMENT + Negative-spec passages): while that op was
 #: suspended, "plain `git commit`; the prepare-commit-msg hook attaches
-#: Deliverable-Id" is the row's own named ``fallback`` -- "A SANCTIONED
+#: Deliverable-Id" was the row's own named ``fallback`` -- "A SANCTIONED
 #: FALLBACK IS NOT A BYPASS". Before this leg existed, `coordinator:git-
 #: commit-agent`'s ONLY recognized shapes were the `ceremony.scoped_git_
 #: commit` invoke-module spelling and the `scoped-git-commit` trampoline
 #: (LEG 2/3 above) -- so a dispatched agent following the ruling's own
 #: prescribed fallback (`git commit -- <path>...`) fell through to `_LEG_NO_
 #: PATHSPEC` every time, deadlocked between a suspended op and a guard that
-#: could not recognise its own sanctioned escape. This leg teaches the guard
+#: could not recognise its own sanctioned escape.
+#:
+#: 2026-08-30: THE WORD "FALLBACK" NO LONGER DESCRIBES THIS LEG, and reading
+#: it as a fallback is what kept the real defect invisible for a week. The
+#: op it was a fallback FOR is deleted, not suspended, and the trampoline
+#: leg beside it is deleted too -- so between 2026-08-25 and this change,
+#: this "fallback" was the only leg in the module that could clear anything
+#: at all, while every agent-facing message named one of the two dead
+#: routes. It is now one of exactly TWO co-equal first-class legs, beside
+#: `_extract_invoke_commit_v2_paths`. Keep both named, together, in every
+#: message: a single-route allow surface with a multi-route message set is
+#: the shape that produced the field denial.
+#:
+#: This leg teaches the guard
 #: that ONE additional shape, scoped exactly as narrowly as the trampoline
 #: leg already is: a bare ``git ... commit`` chain (walked the same way
 #: `_tokens_reach_commit_after_git` walks git global options, so `git -C x
@@ -5547,8 +5578,9 @@ def _extract_trampoline_scoped_git_commit_paths(
 #: leg only ever fires for `agent_type == _GIT_COMMIT_AGENT_TYPE` (LEG 1,
 #: `check()`'s own gate, unchanged).
 def _extract_plain_git_commit_paths(seg_tokens: list) -> Optional[Tuple[List[str], bool]]:
-    """LEG 4 (the sanctioned plain-``git commit`` fallback for a suspended
-    ``ceremony.scoped_git_commit``): peel wrapper/env/assignment/``python3``-
+    """LEG 4 (the sanctioned plain-``git commit`` shape -- once a fallback
+    for a suspended ``ceremony.scoped_git_commit``, now one of the two
+    first-class legs; see the note above): peel wrapper/env/assignment/``python3``-
     prefix noise via ``_peeled_effective_tokens`` (same peel LEG 2/3 use),
     confirm the resulting head token boundary-matches the ``git`` binary
     itself (NOT a member of ``_COMMIT_HELPER_BINARY_NAMES`` -- this leg is
@@ -5699,8 +5731,8 @@ def _command_is_single_segment(cmd: str) -> bool:
     top level (one segment, containing text LEG 2's own matchers cannot
     parse into a ``ceremony.scoped_git_commit`` invocation, since the
     python-interpreter/``-m``/module-name walk requires those as LITERAL,
-    unquoted, top-level tokens -- see ``_extract_invoke_scoped_git_commit_
-    paths``), so LEG 2 fails and the whole command denies via the ordinary
+    unquoted, top-level tokens -- see ``_extract_invoke_commit_v2_paths``),
+    so LEG 2 fails and the whole command denies via the ordinary
     path already, independent of this precondition. Confirmed by inspection
     this session, not by assumption.
     """
@@ -5712,27 +5744,46 @@ def _command_is_single_segment(cmd: str) -> bool:
 
 
 def _resolve_git_commit_agent_pathspec(cmd: str) -> Optional[Tuple[List[str], bool]]:
-    """Scan every ``;``/``&``/``|``-delimited segment of ``cmd`` for a
-    genuine ``ceremony.scoped_git_commit`` invocation (either spelling), OR
-    (2026-08-22) the sanctioned plain-``git commit`` fallback that row names
-    while it is suspended, and return ``(paths, include_orphans)`` on the
-    first match -- extracted together by whichever of
-    ``_extract_invoke_scoped_git_commit_paths`` / ``_extract_trampoline_
-    scoped_git_commit_paths`` / ``_extract_plain_git_commit_paths`` matched,
-    never re-derived by a second pass over ``cmd`` (F0 fix, 2026-08-04: the
-    invocation's own ``--include-orphans``/``"include_orphans": true`` opt-in
-    is read from the SAME scan that already extracts the pathspec -- the
-    plain-``git`` leg has no such opt-in and always returns ``False``).
-    Returns ``None`` when no matching invocation is found anywhere in
-    ``cmd``, OR ``cmd`` itself is unparseable.
+    """Scan every ``;``/``&``/``|``-delimited segment of ``cmd`` for one of
+    the TWO shapes a `coordinator:git-commit-agent` may commit through, and
+    return ``(paths, include_orphans)`` on the first match -- extracted by
+    whichever of ``_extract_invoke_commit_v2_paths`` / ``_extract_plain_git_
+    commit_paths`` matched, never re-derived by a second pass over ``cmd``.
 
-    Deliberately does NOT unwrap ``sh -c``/``python -c`` payloads the way
-    the three deny-side matchers do -- the allow predicate this feeds is the
-    one deliberate allow-path widening in this module, so it stays
+    The two shapes, and they are the WHOLE allow surface:
+
+      1. ``python3 -m coordinator_core.invoke ceremony.commit_v2 '{...}'``
+         -- the live dispatchable committer, its pathspec read out of the
+         JSON positional's ``paths`` + ``deleted_paths``.
+      2. ``git [global-opts] commit ... -- <path>...`` -- a literal ``--``
+         separator required, no ``-a``/``-A``/``--all``.
+
+    Both must be spelled as literal, unquoted, top-level argv, because this
+    function deliberately does NOT unwrap ``sh -c``/``python -c`` payloads
+    the way the deny-side matchers do -- the allow predicate this feeds is
+    the one deliberate allow-path widening in this module, so it stays
     conservative by construction: an indirected invocation this scan misses
     simply falls through to the ordinary deny path (still correct, since
     denying is always the safe direction here), rather than gaining a wider
-    ALLOW surface than the four legs strictly require.
+    ALLOW surface than the legs strictly require. THE COST OF THAT CHOICE IS
+    REAL AND MUST BE PAID IN THE MESSAGES, NOT ABSORBED SILENTLY: an
+    in-process ``from coordinator_core.git.commit import commit_paths`` call
+    inside a ``python -c`` payload -- functionally the same commit as shape
+    1 -- is unreadable here and therefore denied. Every agent-facing message
+    in this module must name shape 1 or 2 and nothing else; naming a route
+    this function cannot read is the 2026-08-30 defect, not a wording nit
+    (see ``_GIT_COMMIT_AGENT_DENY_REASON``).
+
+    ``include_orphans`` is ``False`` for both shapes -- neither has an
+    orphan-adoption opt-in to mirror (the 2026-08-04 F0 mirroring fix
+    concerned ``ceremony.scoped_git_commit``, deleted since). The
+    ``(paths, include_orphans)`` pair shape is kept because
+    ``_git_commit_agent_pathspec_permitted`` and ``action_guard``'s
+    ``assert_pathspec_shape_permitted`` share it, and SC-DR-022's gate stays
+    armed for a future shape that does carry one.
+
+    Returns ``None`` when no matching invocation is found anywhere in
+    ``cmd``, OR ``cmd`` itself is unparseable.
     """
     tokens = _tokenize_full_command(cmd)
     if tokens is None:
@@ -5740,10 +5791,7 @@ def _resolve_git_commit_agent_pathspec(cmd: str) -> Optional[Tuple[List[str], bo
     for seg_tokens in _segments_from_tokens(tokens):
         if not seg_tokens:
             continue
-        result = _extract_invoke_scoped_git_commit_paths(seg_tokens)
-        if result is not None:
-            return result
-        result = _extract_trampoline_scoped_git_commit_paths(seg_tokens)
+        result = _extract_invoke_commit_v2_paths(seg_tokens)
         if result is not None:
             return result
         result = _extract_plain_git_commit_paths(seg_tokens)
@@ -5831,6 +5879,15 @@ def _pathspec_element_is_sweeping(path: Any, git_root: str) -> bool:
     files denies on the ownership leg regardless of this function's lexical
     blindness; the residual above is real but does not, by itself, grant an
     unscoped commit.
+
+    THIS MITIGATION DOES NOT APPLY TO `_pathspec_shape_permitted` (review:
+    coordinator:code-reviewer Finding 2, 2026-08-30; overengineering-reviewer
+    Finding 8, 2026-08-30): `action_guard.assert_pathspec_shape_permitted`,
+    the `commit_paths()` default-path seam, calls the shape-only legs
+    directly and never reaches `assert_paths_in_session_scope` at all. On
+    that path, a symlink-to-root pathspec element has no second gate at
+    all; the residual described above is real risk there, not merely-
+    hoped-for mitigation.
     """
     if not isinstance(path, str):
         return True
@@ -6062,35 +6119,26 @@ def _git_commit_agent_may_commit(
     )
 
 
-def _git_commit_agent_pathspec_permitted(
+def _pathspec_shape_permitted(
     paths: "Sequence[str]",
     include_orphans: bool,
     git_root: str,
-    session_id: str,
-    cwd: Optional[str],
-    *,
-    assert_paths_in_session_scope=None,
-    strict_ownership: bool = True,
 ) -> "Tuple[bool, str]":
-    """Payload-shape-agnostic core of LEG 3, extracted (PURE MOTION, no logic
-    change) from `_git_commit_agent_may_commit` so a caller that already
-    holds a resolved `(paths, include_orphans)` pair -- rather than a raw
-    command string -- can consult the identical predicate. Command-string
-    parsing (LEG 1's `_command_is_single_segment`, LEG 2's `_resolve_git_
-    commit_agent_pathspec`) stays in `_git_commit_agent_may_commit`, which
-    calls this function immediately after resolving that pair; the ~5500
-    lines of tokenizing/unwrapping/AST-folding that produce `paths` are not
-    duplicated here because a seam already holding `paths` has no command
-    string to parse.
+    """The shape-only legs of LEG 3: sweeping pathspec, SC-DR-022 orphan
+    adoption, and out-of-repo absolute element. None of these need a
+    caller identity -- `action_guard.assert_pathspec_shape_permitted`
+    calls this directly, with no ownership leg reachable through it at
+    all.
 
-    `assert_paths_in_session_scope` is threaded in as the already-resolved
-    callable (from `_import_assert_paths_in_session_scope()`) rather than
-    re-imported here, so this function makes the identical lazy-import-or-
-    fail-closed decision `_git_commit_agent_may_commit` already made, instead
-    of re-deriving it.
+    Extracted (review: overengineering-reviewer Finding 8, 2026-08-30) out
+    of `_git_commit_agent_pathspec_permitted`, which already ran these
+    three legs first and the ownership leg last -- a mechanical split, not
+    a refactor. Removes the `strict_ownership` flag and the `""`/`None`
+    placeholder `session_id`/`cwd` arguments `action_guard` used to pass
+    only to have them skipped.
 
-    Returns `(allowed, deny_reason)` -- see `_git_commit_agent_may_commit`'s
-    own docstring for the full accounting of what `deny_reason` can hold.
+    Returns `(allowed, deny_reason)` -- `deny_reason` is one of the
+    `_LEG_*` sentinels, or `""` on allow.
     """
     if not paths:
         return False, _LEG_NO_PATHSPEC
@@ -6126,20 +6174,51 @@ def _git_commit_agent_pathspec_permitted(
     # `_repo_relativize_pathspec` for why this grants nothing new and why an
     # out-of-repo absolute denies here instead of falling through to a
     # message that would name the wrong cause.
-    paths, absolute_out_of_repo = _repo_relativize_pathspec(list(paths), git_root)
+    _, absolute_out_of_repo = _repo_relativize_pathspec(list(paths), git_root)
     if absolute_out_of_repo:
         return False, _LEG_ABSOLUTE_OUT_OF_REPO
-    if not strict_ownership:
-        # SANCTIONED NARROWING (not a new predicate): the sweeping/orphan/
-        # out-of-repo legs above are shape-only checks that need no caller
-        # identity. The ownership leg below (`assert_paths_in_session_scope`)
-        # DOES need a verified `session_id`, and fails closed on an empty
-        # one -- calling it on a route with no verified identity would deny
-        # every such commit outright, while accepting a caller-supplied
-        # `session_id` here would launder an unverified identity into the
-        # ownership check. Neither is acceptable, so `strict_ownership=False`
-        # returns ALLOW here, before `session_id` is ever read.
-        return True, ""
+    return True, ""
+
+
+def _git_commit_agent_pathspec_permitted(
+    paths: "Sequence[str]",
+    include_orphans: bool,
+    git_root: str,
+    session_id: str,
+    cwd: Optional[str],
+    *,
+    assert_paths_in_session_scope=None,
+) -> "Tuple[bool, str]":
+    """Payload-shape-agnostic core of LEG 3, extracted (PURE MOTION, no logic
+    change) from `_git_commit_agent_may_commit` so a caller that already
+    holds a resolved `(paths, include_orphans)` pair -- rather than a raw
+    command string -- can consult the identical predicate. Command-string
+    parsing (LEG 1's `_command_is_single_segment`, LEG 2's `_resolve_git_
+    commit_agent_pathspec`) stays in `_git_commit_agent_may_commit`, which
+    calls this function immediately after resolving that pair; the ~5500
+    lines of tokenizing/unwrapping/AST-folding that produce `paths` are not
+    duplicated here because a seam already holding `paths` has no command
+    string to parse.
+
+    `assert_paths_in_session_scope` is threaded in as the already-resolved
+    callable (from `_import_assert_paths_in_session_scope()`) rather than
+    re-imported here, so this function makes the identical lazy-import-or-
+    fail-closed decision `_git_commit_agent_may_commit` already made, instead
+    of re-deriving it.
+
+    The shape-only legs (sweeping pathspec, SC-DR-022 orphan adoption,
+    out-of-repo absolute element) are `_pathspec_shape_permitted`, called
+    first; this function's own remaining job is the ownership leg
+    (`assert_paths_in_session_scope`), always consulted here -- unlike
+    `_pathspec_shape_permitted`, which never reaches it.
+
+    Returns `(allowed, deny_reason)` -- see `_git_commit_agent_may_commit`'s
+    own docstring for the full accounting of what `deny_reason` can hold.
+    """
+    allowed, reason = _pathspec_shape_permitted(paths, include_orphans, git_root)
+    if not allowed:
+        return False, reason
+    paths, _ = _repo_relativize_pathspec(list(paths), git_root)
     try:
         # `allow_orphans=False`, KEYWORD-form (keyword-only on
         # `assert_paths_in_session_scope`'s own signature, so a future
@@ -6181,11 +6260,45 @@ def _git_commit_agent_pathspec_permitted(
 #: again. Verdict logic (`_git_commit_agent_may_commit`, `check()`) is
 #: UNCHANGED by this correction -- text only.
 _GIT_COMMIT_AGENT_DENY_REASON = (
-    "BLOCKED: git-commit-agent commits only via a non-sweeping, in-scope "
-    "pathspec -- use instead: `ceremony.commit_v2` with an explicit `paths` "
-    "list (no `.`, `-A`, globs, ancestors); deletions go in `deleted_paths`. "
-    "Already used that form? Check scope, not argv."
+    "BLOCKED: git-commit-agent commits in two shapes only, each with a "
+    "non-sweeping in-scope pathspec -- use instead: "
+    "`coordinator-invoke ceremony.commit_v2 "
+    "'{\"paths\":[\"a.py\"],\"message\":\"subj\"}'` or "
+    "`git commit -m <subj> -- <path>...`, naming each path "
+    "(no `.`, `-A`, globs, ancestors). Used one already? "
+    "Check scope, not argv."
 )
+
+#: 2026-08-30: this message used to name `ceremony.commit_v2` as the route to
+#: use. `_resolve_git_commit_agent_pathspec` -- the allow-side recognizer this
+#: same message steers the reader toward -- cannot read that route: it matches
+#: `ceremony.scoped_git_commit` (both spellings) and the plain-`git commit`
+#: leg, and NOTHING else, and it deliberately does not unwrap `python -c`
+#: payloads on the allow side. So an agent that obeyed this message verbatim
+#: was denied again, at `_LEG_NO_PATHSPEC`, and the leg message then sent it to
+#: a THIRD route. Observed in the field the same day: a dispatched
+#: `coordinator:git-commit-agent` invoked `coordinator_core.git.commit.
+#: commit_paths` (the route its own brief mandates), was denied here, read
+#: "use `git commit ... -- <paths>`", and correctly refused to re-spell a
+#: denied call -- so a green chunk went uncommitted. A guard that names a
+#: route it will itself deny is a defect independent of whether the verdict is
+#: right (same principle as the 2026-08-04 incident recorded below).
+#:
+#: `ceremony.scoped_git_commit` is not merely suspended, it is DELETED (over
+#: the brightline; `coordinator_core/ops/ceremony/scoped_git_commit.py` does
+#: not exist at HEAD), which left `_extract_plain_git_commit_paths` as the
+#: only extractor that could still match a live route -- so the first pass at
+#: this correction (text-only, same day) pointed every message at that one
+#: shape. That was the right message for the recognizer AS IT STOOD and the
+#: wrong end state: it converged the guard on plain `git commit` while
+#: `coordinator/agents/git-commit-agent.md` § Leg 1 mandates the op, leaving
+#: doctrine and enforcement pointing opposite ways with the agent in between.
+#: The second pass fixed the RECOGNIZER instead -- `_extract_invoke_commit_
+#: v2_paths` repointed off the deleted op onto `ceremony.commit_v2`, the dead
+#: trampoline leg deleted -- so the messages now name TWO shapes, both of
+#: which the allow side can actually read. The verdict-logic change is that
+#: repoint; these message constants stay in lockstep with it BY RULE, pinned
+#: by `test_deny_message_names_only_recognizable_routes`.
 
 #: The deny message for `_PAYLOAD_LEG_PYTHON_STRING_LITERALS` -- reached
 #: when the ONLY text that matched a commit shape was the synthetic argv
@@ -6270,10 +6383,12 @@ _GIT_COMMIT_AGENT_LEG_MESSAGES = {
         "inspected -- do not re-check."
     ),
     _LEG_NO_PATHSPEC: (
-        "BLOCKED: git-commit-agent found no `--`-separated pathspec here -- "
-        "use `git commit -m <subj> -- <path>...`. Any invocation "
-        "without `--` (including `--help`) lands here; path scope was never "
-        "checked."
+        "BLOCKED: git-commit-agent found no readable pathspec here -- use "
+        "instead: `coordinator-invoke ceremony.commit_v2 "
+        "'{\"paths\":[\"a.py\"],\"message\":\"subj\"}'` or "
+        "`git commit -m <subj> -- <path>...`. An in-process `commit_paths` "
+        "call, or any argv this guard cannot read as one of those two, "
+        "lands here; path scope was never checked."
     ),
     _LEG_SWEEPING_PATHSPEC: (
         "BLOCKED: git-commit-agent rejected a SWEEPING pathspec element -- "

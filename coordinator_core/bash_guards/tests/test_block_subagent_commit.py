@@ -1401,7 +1401,7 @@ def test_git_commit_agent_scoped_git_commit_params_file_form_denies(monkeypatch)
     """
     _gca_denies(
         monkeypatch,
-        "python3 -m coordinator_core.invoke ceremony.scoped_git_commit "
+        "python3 -m coordinator_core.invoke ceremony.commit_v2 "
         "--params-file /tmp/p.json",
     )
 
@@ -1432,7 +1432,7 @@ def test_git_commit_agent_scoped_git_commit_params_file_form_denies(monkeypatch)
 def test_git_commit_agent_ac14_sweeping_pathspec_forms_deny(monkeypatch, sweeping_element):
     _gca_denies(
         monkeypatch,
-        'scoped-git-commit -m "msg" --repo /repo -- %s' % sweeping_element,
+        'git commit -m "msg" -- %s' % sweeping_element,
     )
 
 
@@ -1442,7 +1442,7 @@ def test_git_commit_agent_one_sweeping_element_among_others_denies(monkeypatch):
     """
     _gca_denies(
         monkeypatch,
-        'scoped-git-commit -m "msg" --repo /repo -- src/foo.py .',
+        'git commit -m "msg" -- src/foo.py .',
     )
 
 
@@ -1450,13 +1450,13 @@ def test_git_commit_agent_one_sweeping_element_among_others_denies(monkeypatch):
 
 
 def test_git_commit_agent_scoped_git_commit_trampoline_explicit_pathspec_allows(monkeypatch):
-    _gca_allows(monkeypatch, 'scoped-git-commit -m "msg" --repo /repo -- src/foo.py')
+    _gca_allows(monkeypatch, 'git commit -m "msg" -- src/foo.py')
 
 
 def test_git_commit_agent_scoped_git_commit_invoke_explicit_pathspec_allows(monkeypatch):
     _gca_allows(
         monkeypatch,
-        "python3 -m coordinator_core.invoke ceremony.scoped_git_commit "
+        "python3 -m coordinator_core.invoke ceremony.commit_v2 "
         "'{\"worktree_root\": \"/repo\", \"paths\": [\"src/foo.py\"], \"message\": \"x\"}'",
     )
 
@@ -1464,7 +1464,7 @@ def test_git_commit_agent_scoped_git_commit_invoke_explicit_pathspec_allows(monk
 def test_git_commit_agent_scoped_git_commit_multiple_non_sweeping_paths_allows(monkeypatch):
     _gca_allows(
         monkeypatch,
-        'scoped-git-commit -m "msg" --repo /repo -- src/foo.py docs/bar.md',
+        'git commit -m "msg" -- src/foo.py docs/bar.md',
     )
 
 
@@ -1478,7 +1478,7 @@ def test_git_commit_agent_allow_branch_is_gated_by_may_commit_helper(monkeypatch
     _git_commit_agent_setup(monkeypatch)
     monkeypatch.setattr(guard, "_git_commit_agent_may_commit", lambda *a, **k: (False, ""))
     payload = _payload(
-        'scoped-git-commit -m "msg" --repo /repo -- src/foo.py',
+        'git commit -m "msg" -- src/foo.py',
         agent_type=_GIT_COMMIT_AGENT_TYPE,
     )
     result = guard.check(payload)
@@ -1505,7 +1505,7 @@ def test_git_commit_agent_chained_second_committing_segment_denies(monkeypatch):
     """
     _gca_denies(
         monkeypatch,
-        'scoped-git-commit -m "msg" --repo /repo -- src/foo.py ; '
+        'git commit -m "msg" -- src/foo.py ; '
         'git commit -a -m "sweep everything"',
     )
 
@@ -1514,7 +1514,7 @@ def test_git_commit_agent_chained_and_second_committing_segment_denies(monkeypat
     """EM repro #3: same shape, chained via ``&&``."""
     _gca_denies(
         monkeypatch,
-        'scoped-git-commit -m "msg" --repo /repo -- src/foo.py && '
+        'git commit -m "msg" -- src/foo.py && '
         'git commit -a -m "sweep everything"',
     )
 
@@ -1525,14 +1525,14 @@ def test_git_commit_agent_chained_semicolon_git_add_dash_capital_a_denies(monkey
     """
     _gca_denies(
         monkeypatch,
-        'scoped-git-commit -m "msg" --repo /repo -- src/foo.py ; git add -A',
+        'git commit -m "msg" -- src/foo.py ; git add -A',
     )
 
 
 def test_git_commit_agent_chained_or_second_committing_segment_denies(monkeypatch):
     _gca_denies(
         monkeypatch,
-        'scoped-git-commit -m "msg" --repo /repo -- src/foo.py || '
+        'git commit -m "msg" -- src/foo.py || '
         'git commit -a -m "sweep everything"',
     )
 
@@ -1544,7 +1544,7 @@ def test_git_commit_agent_chained_pipe_second_segment_denies(monkeypatch):
     """
     _gca_denies(
         monkeypatch,
-        'scoped-git-commit -m "msg" --repo /repo -- src/foo.py | '
+        'git commit -m "msg" -- src/foo.py | '
         'git commit -a -m "sweep everything"',
     )
 
@@ -1559,7 +1559,7 @@ def test_git_commit_agent_semicolon_inside_quoted_message_still_allows(monkeypat
     """
     _gca_allows(
         monkeypatch,
-        'scoped-git-commit -m "fix; cleanup" --repo /repo -- src/foo.py',
+        'git commit -m "fix; cleanup" -- src/foo.py',
     )
 
 
@@ -1578,20 +1578,20 @@ def test_git_commit_agent_shell_wrapped_compound_payload_denies(monkeypatch):
     """
     _gca_denies(
         monkeypatch,
-        'sh -c "scoped-git-commit -m msg --repo /repo -- src/foo.py ; '
+        'sh -c "git commit -m msg -- src/foo.py ; '
         'git commit -a -m sweep"',
     )
 
 
 def test_command_is_single_segment_true_for_ordinary_scoped_commit():
     assert guard._command_is_single_segment(
-        'scoped-git-commit -m "msg" --repo /repo -- src/foo.py'
+        'git commit -m "msg" -- src/foo.py'
     ) is True
 
 
 def test_command_is_single_segment_false_for_semicolon_chain():
     assert guard._command_is_single_segment(
-        'scoped-git-commit -m "msg" -- src/foo.py ; git commit -a -m sweep'
+        'git commit -m "msg" -- src/foo.py ; git commit -a -m sweep'
     ) is False
 
 
@@ -1608,16 +1608,16 @@ def test_command_is_single_segment_false_for_spaced_ampersand_redirect_chain():
     stay True; that pair is the whole point.
     """
     assert guard._command_is_single_segment(
-        'scoped-git-commit -m "msg" -- src/foo.py & >/dev/null git commit -a -m sweep'
+        'git commit -m "msg" -- src/foo.py & >/dev/null git commit -a -m sweep'
     ) is False
     assert guard._command_is_single_segment(
-        'scoped-git-commit -m "msg" -- src/foo.py &>/dev/null'
+        'git commit -m "msg" -- src/foo.py &>/dev/null'
     ) is True
 
 
 def test_command_is_single_segment_true_for_quoted_semicolon():
     assert guard._command_is_single_segment(
-        'scoped-git-commit -m "fix; cleanup" -- src/foo.py'
+        'git commit -m "fix; cleanup" -- src/foo.py'
     ) is True
 
 
@@ -1643,16 +1643,16 @@ def test_command_is_single_segment_true_for_trailing_stderr_redirect():
     command and must not make an ordinary invocation read as compound.
     """
     assert guard._command_is_single_segment(
-        'scoped-git-commit -m "msg" --repo /repo -- src/foo.py 2>&1'
+        'git commit -m "msg" -- src/foo.py 2>&1'
     ) is True
 
 
 def test_command_is_single_segment_true_for_fd_dup_and_file_redirects():
     for cmd in (
-        'scoped-git-commit -m "msg" -- src/foo.py >&2',
-        'scoped-git-commit -m "msg" -- src/foo.py &>/tmp/out.log',
-        'scoped-git-commit -m "msg" -- src/foo.py 2>/dev/null',
-        'scoped-git-commit -m "msg" -- src/foo.py 2>&-',
+        'git commit -m "msg" -- src/foo.py >&2',
+        'git commit -m "msg" -- src/foo.py &>/tmp/out.log',
+        'git commit -m "msg" -- src/foo.py 2>/dev/null',
+        'git commit -m "msg" -- src/foo.py 2>&-',
     ):
         assert guard._command_is_single_segment(cmd) is True, cmd
 
@@ -1662,7 +1662,7 @@ def test_command_is_single_segment_false_for_background_after_redirect():
     after a redirection still bounds a second segment.
     """
     assert guard._command_is_single_segment(
-        'scoped-git-commit -m "msg" -- src/foo.py 2>&1 & git commit -a -m sweep'
+        'git commit -m "msg" -- src/foo.py 2>&1 & git commit -a -m sweep'
     ) is False
 
 
@@ -1673,7 +1673,7 @@ def test_git_commit_agent_trailing_stderr_redirect_still_allows(monkeypatch):
     """
     _gca_allows(
         monkeypatch,
-        'scoped-git-commit -m "msg" --repo /repo -- src/foo.py 2>&1',
+        'git commit -m "msg" -- src/foo.py 2>&1',
     )
 
 
@@ -1682,10 +1682,10 @@ def test_redirection_target_is_not_treated_as_a_pathspec_element():
     so they must not be handed to the ownership-scope check as paths.
     """
     assert guard._resolve_git_commit_agent_pathspec(
-        'scoped-git-commit -m "msg" -- src/foo.py > /tmp/out.log'
+        'git commit -m "msg" -- src/foo.py > /tmp/out.log'
     ) == (["src/foo.py"], False)
     assert guard._resolve_git_commit_agent_pathspec(
-        'scoped-git-commit -m "msg" -- src/foo.py 2>&1'
+        'git commit -m "msg" -- src/foo.py 2>&1'
     ) == (["src/foo.py"], False)
 
 
@@ -1698,10 +1698,10 @@ def test_pathspec_token_after_a_mid_pathspec_redirect_is_still_checked():
     form and the fd-duplication form.
     """
     assert guard._resolve_git_commit_agent_pathspec(
-        'scoped-git-commit -m "msg" -- foo.py > /tmp/out.log bar.py'
+        'git commit -m "msg" -- foo.py > /tmp/out.log bar.py'
     ) == (["foo.py", "bar.py"], False)
     assert guard._resolve_git_commit_agent_pathspec(
-        'scoped-git-commit -m "msg" -- foo.py 2>&1 bar.py'
+        'git commit -m "msg" -- foo.py 2>&1 bar.py'
     ) == (["foo.py", "bar.py"], False)
 
 
@@ -1716,7 +1716,7 @@ def test_compound_command_denial_does_not_blame_the_pathspec(monkeypatch):
     """
     result = _gca_denies(
         monkeypatch,
-        'scoped-git-commit -m "msg" --repo /repo -- src/foo.py ; '
+        'git commit -m "msg" -- src/foo.py ; '
         'git commit -a -m "sweep everything"',
     )
     reason = result["hookSpecificOutput"]["permissionDecisionReason"]
@@ -1783,7 +1783,7 @@ def test_ac15_backpointer_leg_alone_insufficient_denies(monkeypatch):
     never the disk-read backpointer leg.
     """
     _git_commit_agent_setup(monkeypatch, subagent_type=_GIT_COMMIT_AGENT_TYPE)
-    payload = _payload('scoped-git-commit -m "msg" --repo /repo -- src/foo.py', agent_type=None)
+    payload = _payload('git commit -m "msg" -- src/foo.py', agent_type=None)
     result = guard.check(payload)
     assert result is not None
     assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
@@ -1812,7 +1812,7 @@ def test_ac19_named_teammate_dispatch_denies(monkeypatch):
     """
     _git_commit_agent_setup(monkeypatch, subagent_type=_GIT_COMMIT_AGENT_TYPE)
     payload = _payload(
-        'scoped-git-commit -m "msg" --repo /repo -- src/foo.py', agent_type="sam"
+        'git commit -m "msg" -- src/foo.py', agent_type="sam"
     )
     result = guard.check(payload)
     assert result is not None
@@ -1830,7 +1830,7 @@ def test_ac8_other_subagent_type_scoped_commit_still_denies(monkeypatch):
     """
     _git_commit_agent_setup(monkeypatch, subagent_type=_SUBAGENT_TYPE)
     payload = _payload(
-        'scoped-git-commit -m "msg" --repo /repo -- src/foo.py',
+        'git commit -m "msg" -- src/foo.py',
         agent_type=_SUBAGENT_TYPE,
     )
     result = guard.check(payload)
@@ -1845,7 +1845,7 @@ def test_ac8_unresolved_effective_type_path_still_denies(monkeypatch):
     """
     _git_commit_agent_setup(monkeypatch, subagent_type="")
     payload = _payload(
-        'scoped-git-commit -m "msg" --repo /repo -- src/foo.py', agent_type=None
+        'git commit -m "msg" -- src/foo.py', agent_type=None
     )
     result = guard.check(payload)
     assert result is not None
@@ -1864,7 +1864,7 @@ def test_landing_order_safety_scope_import_unavailable_denies(monkeypatch):
     _git_commit_agent_setup(monkeypatch)
     monkeypatch.setattr(guard, "_import_assert_paths_in_session_scope", lambda: None)
     payload = _payload(
-        'scoped-git-commit -m "msg" --repo /repo -- src/foo.py',
+        'git commit -m "msg" -- src/foo.py',
         agent_type=_GIT_COMMIT_AGENT_TYPE,
     )
     result = guard.check(payload)
@@ -1879,7 +1879,7 @@ def test_landing_order_safety_git_root_unresolvable_denies(monkeypatch):
     """
     _git_commit_agent_setup(monkeypatch, git_root=None)
     payload = _payload(
-        'scoped-git-commit -m "msg" --repo /repo -- src/foo.py',
+        'git commit -m "msg" -- src/foo.py',
         agent_type=_GIT_COMMIT_AGENT_TYPE,
     )
     result = guard.check(payload)
@@ -1894,7 +1894,7 @@ def test_ownership_scope_rejection_denies(monkeypatch):
     """
     _gca_denies(
         monkeypatch,
-        'scoped-git-commit -m "msg" --repo /repo -- src/foo.py',
+        'git commit -m "msg" -- src/foo.py',
         scope_result=(False, "not owned by this session"),
     )
 
@@ -1911,7 +1911,7 @@ def test_ownership_scope_exception_denies(monkeypatch):
 
     monkeypatch.setattr(guard, "_import_assert_paths_in_session_scope", lambda: _raises)
     payload = _payload(
-        'scoped-git-commit -m "msg" --repo /repo -- src/foo.py',
+        'git commit -m "msg" -- src/foo.py',
         agent_type=_GIT_COMMIT_AGENT_TYPE,
     )
     result = guard.check(payload)
@@ -2036,7 +2036,7 @@ def test_ownership_leg_denial_names_path_and_classification(monkeypatch):
     )
     result = _gca_denies(
         monkeypatch,
-        'scoped-git-commit -m "msg" --repo /repo -- orphan.py',
+        'git commit -m "msg" -- orphan.py',
         scope_result=(False, scope_reason),
     )
     reason = result["hookSpecificOutput"]["permissionDecisionReason"]
@@ -2057,7 +2057,7 @@ def test_ownership_leg_denial_names_peer_claim(monkeypatch):
     )
     result = _gca_denies(
         monkeypatch,
-        'scoped-git-commit -m "msg" --repo /repo -- shared.py',
+        'git commit -m "msg" -- shared.py',
         scope_result=(False, scope_reason),
     )
     reason = result["hookSpecificOutput"]["permissionDecisionReason"]
@@ -2093,7 +2093,7 @@ def test_ownership_leg_denial_names_indeterminate_classification(monkeypatch):
     )
     result = _gca_denies(
         monkeypatch,
-        'scoped-git-commit -m "msg" --repo /repo -- a.py',
+        'git commit -m "msg" -- a.py',
         scope_result=(False, scope_reason),
     )
     reason = result["hookSpecificOutput"]["permissionDecisionReason"]
@@ -2105,30 +2105,27 @@ def test_ownership_leg_denial_names_indeterminate_classification(monkeypatch):
     assert "Already used that form?" not in reason
 
 
-def test_include_orphans_from_an_agent_denies_before_the_ownership_leg(monkeypatch):
-    """SUPERSEDED SUBJECT (SC-DR-022, 2026-08-04). This test previously pinned
-    that a `--include-orphans` invocation reaching the ownership leg with a
-    failed positive-evidence gate surfaced the `include_orphans ignored`
-    classification in its deny prose.
+def test_include_orphans_from_an_agent_denies_before_the_ownership_leg():
+    """SC-DR-022's leg, pinned at the PREDICATE rather than through argv
+    (2026-08-30). Neither live allow shape carries an orphan-adoption
+    opt-in -- `ceremony.commit_v2` has no such parameter and plain `git
+    commit` has no such concept -- so `_resolve_git_commit_agent_pathspec`
+    can no longer produce `include_orphans=True`, and this leg has no argv
+    spelling left to exercise it through.
 
-    That scenario is now unreachable on the dispatched-agent path BY
-    CONSTRUCTION: the flag is refused before the ownership helper is ever
-    consulted, so no classification it could return can be threaded. The
-    original subject is not deleted-because-inconvenient -- it is dead code
-    for this leg, and the surviving claim is the earlier denial itself.
-
-    The `include_orphans ignored` classification remains live for OPERATOR
-    invocations at the sink; it is `scope_report`'s own contract to pin, not
-    this guard's.
+    That is a reason to test it directly, NOT a reason to delete it: the
+    same `_pathspec_shape_permitted` is called by `action_guard.assert_
+    pathspec_shape_permitted` (the `commit_paths()` in-process seam), whose
+    `include_orphans` argument is caller-supplied, and the gate must stay
+    armed for any future shape that carries one. Pinned so a later change
+    reintroducing an opt-in cannot land with the refusal quietly gone.
     """
-    result = _gca_denies(
-        monkeypatch,
-        'scoped-git-commit -m "msg" --repo /repo --include-orphans -- a.py',
-        scope_result=(False, "unused -- the helper must never be reached"),
-    )
-    reason = result["hookSpecificOutput"]["permissionDecisionReason"]
-    assert "RELAY" in reason
-    assert "include_orphans ignored" not in reason
+    allowed, reason = guard._pathspec_shape_permitted(["a.py"], True, "/repo")
+    assert allowed is False
+    assert reason == guard._LEG_AGENT_ORPHAN_ADOPTION
+    message = guard._GIT_COMMIT_AGENT_LEG_MESSAGES[reason]
+    assert "RELAY" in message
+    assert "include_orphans ignored" not in message
 
 
 def test_git_commit_agent_sweeping_element_denies_before_ownership_leg_even_reached(
@@ -2156,7 +2153,7 @@ def test_git_commit_agent_sweeping_element_denies_before_ownership_leg_even_reac
     calls = _git_commit_agent_setup(monkeypatch, scope_result=(True, ""))
     result = guard.check(
         _payload(
-            'scoped-git-commit -m "msg" --repo /repo -- src/foo.py .',
+            'git commit -m "msg" -- src/foo.py .',
             agent_type=_GIT_COMMIT_AGENT_TYPE,
         )
     )
@@ -2197,7 +2194,7 @@ def test_git_commit_agent_trampoline_without_include_orphans_flag_passes_false(
     calls = _git_commit_agent_setup(monkeypatch)
     guard.check(
         _payload(
-            'scoped-git-commit -m "msg" --repo /repo -- src/foo.py',
+            'git commit -m "msg" -- src/foo.py',
             agent_type=_GIT_COMMIT_AGENT_TYPE,
         )
     )
@@ -2205,47 +2202,60 @@ def test_git_commit_agent_trampoline_without_include_orphans_flag_passes_false(
     assert calls[0]["allow_orphans"] is False
 
 
-def test_git_commit_agent_trampoline_with_include_orphans_flag_is_denied(
+def test_git_commit_agent_retired_trampoline_denies_and_never_reaches_ownership(
     monkeypatch,
 ):
-    """SC-DR-022 (2026-08-04): `--include-orphans` from a DISPATCHED agent is
-    refused outright -- adoption is an operator's answer, not an agent's.
+    """The `scoped-git-commit` trampoline is no longer an allow shape at all
+    (2026-08-30): its binary is gone from `coordinator/bin` and its
+    settings-home launchers fail helper-missing, so
+    `_extract_trampoline_scoped_git_commit_paths` was deleted -- see that
+    gravestone in the guard module.
 
-    Supersedes the prior `…_passes_true` pin, which asserted the flag was
-    mirrored through. Mirroring stays correct for what it defended against
-    (a guard granting unilaterally what the sink refused); it was never a
-    judgment about WHO was asking, and this leg only runs for a dispatched
-    subagent.
-
-    The ownership helper must never be REACHED -- an agent that got a quiet
-    strict-mode refusal instead would read the stock orphan message, which
-    advertises the very re-invocation this forbids, and loop on it.
+    Both halves pinned here. It DENIES (an uninvocable binary is not a
+    route), and the ownership helper is never reached, so nothing about this
+    shape can reach a scope decision it could not have acted on anyway.
+    Detection of the binary on the DENY side is untouched and pinned
+    separately in `test_subagent_commit_prefilter_and_flags.py`.
     """
     calls = _git_commit_agent_setup(monkeypatch)
-    guard.check(
+    result = guard.check(
         _payload(
             'scoped-git-commit -m "msg" --repo /repo --include-orphans -- src/foo.py',
             agent_type=_GIT_COMMIT_AGENT_TYPE,
         )
     )
+    assert result is not None
+    assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
     assert calls == []
 
 
-def test_git_commit_agent_invoke_module_include_orphans_true_is_denied(monkeypatch):
-    """The `coordinator_core.invoke ceremony.scoped_git_commit` JSON-body
-    spelling of the same prohibition -- `"include_orphans": true` is refused
-    identically, so the ruling cannot be evaded by changing spelling.
+def test_git_commit_agent_invoke_module_include_orphans_key_is_inert(monkeypatch):
+    """An `"include_orphans": true` key in a `ceremony.commit_v2` payload is
+    INERT, and must be read that way rather than as an opt-in to refuse.
+
+    That op has no such parameter (`ops/ceremony/commit_v2.py :: _handler`
+    reads `paths`/`deleted_paths`/`message`/`prefer_staged` and nothing
+    else), so the key changes nothing about what would be committed. The
+    guard therefore passes `allow_orphans=False` to the ownership leg and
+    lets that leg decide -- exactly as if the key were absent. Denying on
+    the key instead would name a cause that does not exist: the invocation
+    is not asking for adoption, it is carrying a key the sink ignores.
+
+    The SC-DR-022 refusal itself is unchanged and pinned directly at
+    `_pathspec_shape_permitted` -- see
+    `test_include_orphans_from_an_agent_denies_before_the_ownership_leg`.
     """
     calls = _git_commit_agent_setup(monkeypatch)
     guard.check(
         _payload(
-            "python3 -m coordinator_core.invoke ceremony.scoped_git_commit "
+            "python3 -m coordinator_core.invoke ceremony.commit_v2 "
             '\'{"worktree_root": "/repo", "paths": ["src/foo.py"], "message": "x", '
             '"include_orphans": true}\'',
             agent_type=_GIT_COMMIT_AGENT_TYPE,
         )
     )
-    assert calls == []
+    assert len(calls) == 1
+    assert calls[0]["allow_orphans"] is False
 
 
 def test_agent_orphan_adoption_deny_tells_the_agent_to_relay_not_re_invoke(
@@ -2272,7 +2282,7 @@ def test_git_commit_agent_invoke_module_without_include_orphans_key_passes_false
     calls = _git_commit_agent_setup(monkeypatch)
     guard.check(
         _payload(
-            "python3 -m coordinator_core.invoke ceremony.scoped_git_commit "
+            "python3 -m coordinator_core.invoke ceremony.commit_v2 "
             '\'{"worktree_root": "/repo", "paths": ["src/foo.py"], "message": "x"}\'',
             agent_type=_GIT_COMMIT_AGENT_TYPE,
         )
@@ -2300,7 +2310,7 @@ def test_ownership_leg_denial_still_within_prose_cap_budget(monkeypatch):
     )
     result = _gca_denies(
         monkeypatch,
-        'scoped-git-commit -m "msg" --repo /repo -- %s' % long_path,
+        'git commit -m "msg" -- %s' % long_path,
         scope_result=(False, scope_reason),
     )
     reason = result["hookSpecificOutput"]["permissionDecisionReason"]
@@ -2422,7 +2432,7 @@ class TestRealOwnershipScopeWiring:
         _session_scope.touch("mine", "a.py", cwd=str(repo))
 
         payload = _real_scope_payload(
-            'scoped-git-commit -m "msg" --repo %s -- a.py' % repo, repo, "mine"
+            'git commit -m "msg" -- a.py', repo, "mine"
         )
         result = guard.check(payload)
         assert result is None, f"expected ALLOW, got deny: {result!r}"
@@ -2436,7 +2446,7 @@ class TestRealOwnershipScopeWiring:
         _session_scope.touch("other", "shared.py", cwd=str(repo))
 
         payload = _real_scope_payload(
-            'scoped-git-commit -m "msg" --repo %s -- shared.py' % repo, repo, "mine"
+            'git commit -m "msg" -- shared.py', repo, "mine"
         )
         result = guard.check(payload)
         assert result is not None
@@ -2460,7 +2470,7 @@ class TestRealOwnershipScopeWiring:
         (sdir / "started_at").write_text("2000-01-01T00:00:00Z")
 
         payload = _real_scope_payload(
-            'scoped-git-commit -m "msg" --repo %s -- a.py' % repo, repo, "mine"
+            'git commit -m "msg" -- a.py', repo, "mine"
         )
         result = guard.check(payload)
         assert result is None, f"expected ALLOW (self-liveness is not gated), got deny: {result!r}"
@@ -2483,7 +2493,7 @@ class TestRealOwnershipScopeWiring:
         (repo / "orphan.py").write_text("o")
 
         payload = _real_scope_payload(
-            'scoped-git-commit -m "msg" --repo %s -- orphan.py' % repo, repo, "mine"
+            'git commit -m "msg" -- orphan.py', repo, "mine"
         )
         result = guard.check(payload)
         assert result is not None, "expected DENY: no --include-orphans in the invocation"
@@ -2512,15 +2522,26 @@ class TestRealOwnershipScopeWiring:
         (sdir / "started_at").write_text("2000-01-01T00:00:00Z")
         (repo / "orphan.py").write_text("o")
 
+        # 2026-08-30: respelled onto a LIVE allow shape. The invocation this
+        # used to carry (`scoped-git-commit ... --include-orphans`) can no
+        # longer reach any leg -- the trampoline is deleted and no live shape
+        # carries an adoption opt-in -- so keeping it would have pinned a
+        # deny produced by an unparseable route rather than by the claim
+        # under test. Spelled as the sanctioned plain-`git commit`, the
+        # refusal now comes from the OWNERSHIP leg on a real repo: an
+        # unclaimed orphan is not this session's to commit, with or without
+        # a flag to ask for it.
         payload = _real_scope_payload(
-            'scoped-git-commit -m "msg" --repo %s --include-orphans -- orphan.py' % repo,
+            'git commit -m "msg" -- orphan.py',
             repo,
             "mine",
         )
         result = guard.check(payload)
         assert result is not None, "expected DENY: an agent may not adopt orphans"
         assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
-        assert "RELAY" in result["hookSpecificOutput"]["permissionDecisionReason"]
+        reason = result["hookSpecificOutput"]["permissionDecisionReason"]
+        assert "denied on path scope" in reason
+        assert "orphan.py" in reason
 
     def test_git_commit_agent_peer_claimed_path_still_denies_with_orphans_allowed(
         self, tmp_path
@@ -2579,7 +2600,7 @@ class TestRealOwnershipScopeWiring:
         _session_scope.touch("other", "shared.py", cwd=str(repo))
 
         payload = _real_scope_payload(
-            'scoped-git-commit -m "msg" --repo %s -- shared.py' % repo,
+            'git commit -m "msg" -- shared.py',
             repo,
             "mine",
         )
@@ -2594,7 +2615,7 @@ class TestRealOwnershipScopeWiring:
         (repo / "a.py").write_text("a")
 
         payload = _real_scope_payload(
-            'scoped-git-commit -m "msg" --repo %s -- a.py' % repo, repo, ""
+            'git commit -m "msg" -- a.py', repo, ""
         )
         result = guard.check(payload)
         assert result is not None
@@ -2641,16 +2662,20 @@ class TestRealOwnershipScopeWiring:
         # fast-exit) records no claim in touched.txt at all.
         (repo / "bash_authored.py").write_text("authored via Bash/CLI")
 
+        # Respelled onto a live allow shape for the same reason as the
+        # orphan test above -- the deny must come from the mixed-authorship
+        # pathspec, not from a route the guard can no longer parse.
         payload = _real_scope_payload(
-            'scoped-git-commit -m "msg" --repo %s --include-orphans -- '
-            "edited.py bash_authored.py" % repo,
+            'git commit -m "msg" -- edited.py bash_authored.py',
             repo,
             "mine",
         )
         result = guard.check(payload)
         assert result is not None, "expected DENY: an agent may not adopt orphans"
         assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
-        assert "RELAY" in result["hookSpecificOutput"]["permissionDecisionReason"]
+        reason = result["hookSpecificOutput"]["permissionDecisionReason"]
+        assert "denied on path scope" in reason
+        assert "bash_authored.py" in reason
 
 
 # --- In-repo ABSOLUTE pathspec elements: the ownership leg's path-FORM gap ---
@@ -2727,7 +2752,7 @@ def test_git_commit_agent_in_repo_absolute_pathspec_reaches_ownership_relativize
     calls = _git_commit_agent_setup(monkeypatch, scope_result=(True, ""))
     result = guard.check(
         _payload(
-            'scoped-git-commit -m "msg" -- %s/src/foo.py' % _FAKE_REPO_ROOT,
+            'git commit -m "msg" -- %s/src/foo.py' % _FAKE_REPO_ROOT,
             agent_type=_GIT_COMMIT_AGENT_TYPE,
         )
     )
@@ -2747,7 +2772,7 @@ def test_git_commit_agent_out_of_repo_absolute_denies_before_the_ownership_leg(
     calls = _git_commit_agent_setup(monkeypatch, scope_result=(True, ""))
     result = guard.check(
         _payload(
-            'scoped-git-commit -m "msg" -- /elsewhere/foo.py',
+            'git commit -m "msg" -- /elsewhere/foo.py',
             agent_type=_GIT_COMMIT_AGENT_TYPE,
         )
     )
@@ -2756,3 +2781,161 @@ def test_git_commit_agent_out_of_repo_absolute_denies_before_the_ownership_leg(
     assert reason == guard._GIT_COMMIT_AGENT_LEG_MESSAGES[guard._LEG_ABSOLUTE_OUT_OF_REPO]
     assert "path scope was never checked" in reason
     assert calls == []
+
+
+# --- The never-again pin for 2026-08-30's defect ---------------------------
+# The guard denied every route its own messages named: two of the three
+# allow-side extractors keyed on `ceremony.scoped_git_commit`, deleted over
+# the brightline, while `_GIT_COMMIT_AGENT_DENY_REASON` sent the agent to
+# `ceremony.commit_v2` -- which no extractor could read. A dispatched
+# `coordinator:git-commit-agent` obeyed the message verbatim, was denied
+# again, and a green chunk went uncommitted.
+#
+# Prose review cannot catch that: both halves read as correct in isolation,
+# and the drift is between two files nobody diffs together. So the check is
+# mechanical -- the route names in the messages are derived from the
+# extractors themselves, not restated by hand here.
+
+
+def _recognizer_op_names():
+    """The op literals the allow-side extractors actually compare against,
+    read out of their own source. Derived, never restated -- a hand-copied
+    list here would drift exactly the way the messages did.
+    """
+    import inspect
+    import re
+
+    source = inspect.getsource(guard._extract_invoke_commit_v2_paths)
+    return set(re.findall(r'"(ceremony\.[a-z_0-9]+)"', source))
+
+
+def test_both_canonical_routes_the_messages_name_actually_resolve():
+    """Each shape an agent-facing message tells a denied agent to use must
+    come back from `_resolve_git_commit_agent_pathspec` with its pathspec
+    read -- the single fact whose absence caused the incident.
+    """
+    invoke = guard._resolve_git_commit_agent_pathspec(
+        "python3 -m coordinator_core.invoke ceremony.commit_v2 "
+        '\'{"paths": ["src/foo.py"], "message": "x"}\''
+    )
+    assert invoke == (["src/foo.py"], False)
+
+    # The spelling the messages actually name -- the installed, on-PATH door.
+    # It is the only one an agent can run without a sys.path prologue, so a
+    # recognizer that reads the `-m` form alone reads the form that does not
+    # work and misses the one that does.
+    door = guard._resolve_git_commit_agent_pathspec(
+        "coordinator-invoke ceremony.commit_v2 "
+        '\'{"paths": ["src/foo.py"], "message": "x"}\''
+    )
+    assert door == (["src/foo.py"], False)
+
+    plain = guard._resolve_git_commit_agent_pathspec(
+        'git commit -m "subj" -- src/foo.py'
+    )
+    assert plain == (["src/foo.py"], False)
+
+
+def test_deny_message_names_only_recognizable_routes():
+    """No agent-facing message may name an op the recognizer does not key
+    on. Renaming the op in `_extract_invoke_commit_v2_paths` without
+    updating the messages fails here rather than in the field.
+    """
+    live = _recognizer_op_names()
+    assert live, "the invoke extractor names no op at all"
+
+    messages = [guard._GIT_COMMIT_AGENT_DENY_REASON] + list(
+        guard._GIT_COMMIT_AGENT_LEG_MESSAGES.values()
+    )
+    import re
+
+    for text in messages:
+        for named in re.findall(r"ceremony\.[a-z_0-9]+", text):
+            assert named in live, (
+                "an agent-facing message routes a denied agent to %r, which "
+                "no allow-side extractor recognizes -- it would be denied "
+                "again. Live routes: %s" % (named, sorted(live))
+            )
+
+
+def test_deleted_scoped_git_commit_op_is_named_by_no_allow_leg():
+    """`ceremony.scoped_git_commit` is DELETED, not suspended -- its module
+    does not exist at HEAD. An allow leg keyed to it permits nothing, which
+    is how the allow surface came to read as three routes with one live.
+
+    Scoped to the ALLOW side deliberately: `_COMMITTING_OP_NAMES` still
+    carries the name so an invocation of it is still DETECTED and denied,
+    and widening this pin to the module would forbid that detection.
+    """
+    assert guard._resolve_git_commit_agent_pathspec(
+        "python3 -m coordinator_core.invoke ceremony.scoped_git_commit "
+        '\'{"paths": ["src/foo.py"], "message": "x"}\''
+    ) is None
+    assert guard._resolve_git_commit_agent_pathspec(
+        'scoped-git-commit -m "subj" -- src/foo.py'
+    ) is None
+    assert not hasattr(guard, "_extract_trampoline_scoped_git_commit_paths")
+
+
+def test_commit_v2_deleted_paths_are_scope_checked_too():
+    """A deletion is as scope-bearing as a write: `deleted_paths` must reach
+    the same LEG 3 checks as `paths`, not ride along unchecked. A commit
+    carrying only deletions is a valid `ceremony.commit_v2` call and must
+    still resolve.
+    """
+    both = guard._resolve_git_commit_agent_pathspec(
+        "python3 -m coordinator_core.invoke ceremony.commit_v2 "
+        '\'{"paths": ["a.py"], "deleted_paths": ["b.py"], "message": "x"}\''
+    )
+    assert both == (["a.py", "b.py"], False)
+
+    deletions_only = guard._resolve_git_commit_agent_pathspec(
+        "python3 -m coordinator_core.invoke ceremony.commit_v2 "
+        '\'{"deleted_paths": ["b.py"], "message": "x"}\''
+    )
+    assert deletions_only == (["b.py"], False)
+
+    # A sweeping element smuggled in through `deleted_paths` denies exactly
+    # as it would in `paths` -- the concatenation is what makes that true.
+    allowed, reason = guard._pathspec_shape_permitted(["a.py", "."], False, "/repo")
+    assert allowed is False
+    assert reason == guard._LEG_SWEEPING_PATHSPEC
+
+
+def test_coordinator_invoke_door_is_covered_by_the_deny_matcher(monkeypatch):
+    """The `coordinator-invoke` door reaches the SAME
+    `coordinator_core.invoke.__main__.main` as the `-m` module spelling, and
+    it is the one that is actually on PATH. Until 2026-08-30 the deny
+    matcher walked the `-m` spelling only, so an ordinary subagent could
+    reach every committing op through the door and this guard never fired.
+
+    Pinned for a non-git-commit-agent subagent, where the verdict is a flat
+    deny with no allow leg in play.
+    """
+    _subagent(monkeypatch)
+    for op in ("ceremony.commit_v2", "memo.send"):
+        cmd = 'coordinator-invoke %s \'{"paths": ["a.py"]}\'' % op
+        assert guard._has_committing_op_invoke(cmd) is True, op
+        result = guard.check(_payload(cmd, agent_type=_SUBAGENT_TYPE))
+        assert result is not None, op
+        assert result["hookSpecificOutput"]["permissionDecision"] == "deny", op
+
+
+def test_both_invoke_spellings_resolve_the_same_op():
+    """One walk, two spellings -- `_invoke_op_token_indices` is shared by the
+    deny matcher and the allow extractor precisely so a future head spelling
+    cannot land on one side only.
+    """
+    for cmd in (
+        "coordinator-invoke ceremony.commit_v2 '{}'",
+        "python3 -m coordinator_core.invoke ceremony.commit_v2 '{}'",
+        "env FOO=1 python3 -m coordinator_core.invoke ceremony.commit_v2 '{}'",
+    ):
+        tokens = guard._tokenize_full_command(cmd)
+        segs = [seg for seg in guard._segments_from_tokens(tokens) if seg]
+        found = [
+            seq[idx]
+            for seg in segs
+            for idx, seq in guard._invoke_op_token_indices(seg)
+        ]
+        assert found == ["ceremony.commit_v2"], cmd

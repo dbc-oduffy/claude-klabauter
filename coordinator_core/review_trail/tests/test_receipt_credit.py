@@ -312,6 +312,26 @@ def test_never_spawns_a_subprocess(tmp_path: Path, monkeypatch) -> None:
     ) == {_SHA_A}
 
 
+def test_does_not_credit_a_kira_receipt(tmp_path: Path) -> None:
+    """C3 anti-scope, pinned as an executable assertion: `overengineering-
+    reviewer` (Kira) sits in `CLOSE_RECEIPT_REVIEWERS` (the close-floor
+    question) but deliberately NOT in `DELEGATE_REVIEWERS` (the commit-credit
+    question) -- see `reviewer_vocabulary`'s module docstring, "No second,
+    diverging reviewer set". This is the test that would catch a future
+    "simplification" that merges the two sets: crediting Kira's receipt here
+    would silently arm commit credit the plan never authorised for her."""
+    _write_sidecar(
+        tmp_path,
+        _SESSION,
+        stamped_at="2026-08-28T12:00:00+00:00",
+        agent_type="overengineering-reviewer",
+    )
+    credited = receipt_credited_shas(
+        tmp_path, [(_SHA_A, "2026-08-28T11:00:00+00:00", _SESSION)]
+    )
+    assert credited == set()
+
+
 def test_multiple_session_id_trailers_are_rejected_not_split(tmp_path: Path) -> None:
     """`git log --format=%(trailers:separator=%x20)` space-joins the values of
     TWO `Session-Id:` trailers on one commit into a single field. That joined

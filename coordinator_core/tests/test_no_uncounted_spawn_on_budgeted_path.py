@@ -6011,8 +6011,22 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     #   the reachable path of every op that reaches auto_push -- hence the
     #   identical +2 on fleet.migrate_handoff_vocabulary, handoff.transition,
     #   memo.transition and workday.drain_pending_push.
-    #   35d8884230 routed the push subsystem through ops/post_coverage_status.py,
-    #   adding _changed_files_or_git_failure to push.outstanding (+1).
+    #   push.outstanding's 3->4 raise: NO ESTABLISHED CAUSE (integrator
+    #   correction, review `coordinatorcode-reviewer.a637bcc18cac79d26`, Finding
+    #   2). Two attributions were offered and neither survives checking. First,
+    #   `35d8884230` -- but `git show 35d8884230 --name-only` never touches
+    #   ops/post_coverage_status.py; that commit is a pure module split moving
+    #   `push_with_retry` from commit_pipeline.py into ops/ceremony/push.py, and
+    #   the `post_coverage_status` call via `_recover_rule_violation_reject` was
+    #   already reachable from `push_outstanding` through `push_with_retry`
+    #   *before* the split. Second, an earlier attribution to `2a801281e4` --
+    #   that commit adds no such reference either. The pin stays at 4 because 4
+    #   is today's measured live count; only the causal story was unsupported.
+    #   Open question, not yet run: whether the pre-split count of 3 was itself
+    #   stale (the static walker undercounting across the pre-split module
+    #   boundary) or the +1 has some other real cause. Re-derive by measuring
+    #   push.outstanding's reachable-site count at 35d8884230^ vs 35d8884230
+    #   with this file's own walker before recording a cause here.
     # This is a reachability count, not execution evidence (see the ceiling
     # test's own docstring), so these raises record that the ops CAN reach more
     # sites -- not that they spend more processes per call.
@@ -6020,10 +6034,21 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     # --- Enrolled 2026-08-30: five ops that reached spawn sites nobody had ever
     # pinned, so they escaped op-keyed coverage entirely. Each is pinned at its
     # measured live count, which RECORDS today's reach as the ceiling rather
-    # than endorsing it -- housekeeping.cycle at 13 is the largest unpinned
-    # surface in the tree and reaches push_once, publish_lag x2, _detach_and_run
-    # and _invoke_cockpit_publish; it deserves its own read on cost, which this
-    # pin does not substitute for. It does stop any of them growing silently.
+    # than endorsing it.
+    #
+    # READ THE 13 ON housekeeping.cycle CORRECTLY -- it is reachability, not
+    # spend, and the gap between the two is larger here than anywhere else in
+    # this table. Measured 2026-08-30 via the op's own falsifier
+    # (docs/plans/2026-08-29-the-housekeeping-cycle-stops-committing.falsifier.py
+    # --entry module:coordinator_core.housekeeping.cycle:run): ONE git spawn,
+    # 140.6ms process time warm, 328.1ms cold where the extra is the
+    # once-per-checkout archive index build. Its plan's prime exit criterion is
+    # <=200ms and <=1 spawn, and that RUNTIME guarantee is asserted
+    # independently by housekeeping/tests/test_brightline.py (green), not by
+    # this pin. The 13 counts what the call graph can reach through
+    # archive_and_commit -- the auto_push and warm.skew machinery it does not
+    # execute -- so raising an alarm about "13 spawns" from this row alone is a
+    # misreading; go to the brightline test for what it actually costs.
     "ceremony.commit_v2": 1,
     "fleet.archive_actioned_memos": 4,
     "git.maintenance": 1,
@@ -6195,12 +6220,28 @@ _STATIC_SPAWN_COUNT_OVER_BUDGET_THRESHOLD = 8
 #: family and fleet.prune_closed_bugs dropped below the threshold (fleet.archive_completed_handoffs
 #: 10->4; the remaining fleet.archive_* + prune_closed_bugs 9->3) and fall OUT of this list, while
 #: every op still above `_STATIC_SPAWN_COUNT_OVER_BUDGET_THRESHOLD` keeps its D10-measured number.
-#: Re-emitted 2026-08-30 after the rot sweep: nine pins left the table entirely because their ops
-#: are now enrolled or fully legitimized and a pin beside either is dead weight (AC20c), which
-#: also drops ceremony.commit, deliverable.cascade_terminal and handoff.archive_transition out of
-#: this list. fleet.migrate_handoff_vocabulary and handoff.transition move 11->13 and
-#: memo.transition 9->11 on be2562f692's warm.skew import, and housekeeping.cycle enters at 13 --
-#: the largest single composition cost now named here.
+#: Re-emitted 2026-08-30 after the rot sweep: nine pins left the table entirely, but they split
+#: into two DIFFERENT categories that must not be conflated (integrator correction, review
+#: `coordinatorcode-reviewer.a637bcc18cac79d26`, Finding 1 -- the first pass recorded all nine
+#: under one false "duplicate/dead weight (AC20c)" reason):
+#:   -- GENUINELY DUPLICATE (AC20c: enrolled or fully legitimized elsewhere, so a pin beside
+#:      either is dead weight): deliverable.cascade_terminal, handoff.archive_transition,
+#:      fleet.prune_closed_bugs, handoff.has_live_children. Each is present in a D2/D3/D5 cluster
+#:      disposition/entrypoint table -- that coverage is what makes the pin redundant.
+#:   -- DEAD OP, not a duplicate (same transparent accounting the six explicit purges above use):
+#:      ceremony.commit, merge_assemble.brief, cartography.churn, session.boot_sweep,
+#:      handoff.reconcile_open. None of these five appears in `_BUDGETED_ENTRYPOINTS`, any
+#:      `_CLUSTER_D{2,3,4,5}_*` table in this file, or `coordinator_core/ops/_registry_map.py` --
+#:      confirmed by grep over both files at the pre-slice commit. They are dead the same way
+#:      `review_trail.scan_unresolved_ubt` / `write_surface.emit_manifest` /
+#:      `handoff.reconcile_close_terminal` / `ceremony.post_commit_tail` / `review_trail.write` /
+#:      `session.warm_start` are dead -- the op no longer resolves to anything live, not that its
+#:      coverage moved elsewhere. If any of the five turns out to still be live under a different
+#:      key or a dynamic registration this file's static walker cannot see, that is a genuine hole
+#:      and its pin must be restored, not re-justified as a duplicate.
+#: fleet.migrate_handoff_vocabulary and handoff.transition move 11->13 and memo.transition 9->11
+#: on be2562f692's warm.skew import, and housekeeping.cycle enters at 13 -- the largest single
+#: composition cost now named here.
 _STATIC_SPAWN_COUNT_OVER_BUDGET: dict[str, int] = {
     "plugin_health.sentinel": 26,
     "fleet.migrate_handoff_vocabulary": 13,
@@ -6233,9 +6274,14 @@ def test_static_spawn_count_pins_cover_every_unlegitimized_residual_op():
 
     stale = sorted(pinned - targets)
     assert not stale, (
-        f"{len(stale)} _STATIC_SPAWN_COUNT_PINS entry(ies) no longer need a static pin -- the "
-        "op is now enrolled in _BUDGETED_ENTRYPOINTS or fully execution-legitimized, and this "
-        "table must not duplicate a `_Legitimation` (AC20c):\n" + "\n".join(f"  {op}" for op in stale)
+        f"{len(stale)} _STATIC_SPAWN_COUNT_PINS entry(ies) no longer belong in this table -- "
+        "EITHER the op is now enrolled in _BUDGETED_ENTRYPOINTS or fully execution-legitimized "
+        "(this table must not duplicate a `_Legitimation`, AC20c) OR the op has dropped out of "
+        "`targets` because it is no longer live at all (absent from _live_static_pin_targets(), "
+        "e.g. deleted or renamed in ops/_registry_map.py) -- a dead op, not a covered one. Check "
+        "which before recording a reason: a dead op belongs in the same transparent dead-op "
+        "accounting the six explicit purges elsewhere in this file use, not filed as a "
+        "duplicate/AC20c removal:\n" + "\n".join(f"  {op}" for op in stale)
     )
 
 

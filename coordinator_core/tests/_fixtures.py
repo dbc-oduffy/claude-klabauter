@@ -20,10 +20,48 @@ from __future__ import annotations
 
 import os
 import shutil
+import subprocess
 import tempfile
 from collections.abc import Generator
+from pathlib import Path
 
 import pytest
+
+#: Shared by test_archive_stamp_claimant_identity.py and
+#: test_archive_stamp_human_claimant.py — the two claimant-stamp test modules,
+#: which independently authored byte-identical git scaffolding for the same
+#: two claim paths (handoff, memo) before this extraction.
+#: Review: overengineering-reviewer (Kira) — hoisted to end the duplication;
+#: _seed_handoff/_seed_memo stay local to each module (differing signatures,
+#: not worth reconciling for this).
+GIT_ENV = {
+    **os.environ,
+    "GIT_AUTHOR_NAME": "test",
+    "GIT_AUTHOR_EMAIL": "t@t",
+    "GIT_COMMITTER_NAME": "test",
+    "GIT_COMMITTER_EMAIL": "t@t",
+}
+
+
+def run_git(repo: Path, *args: str) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        ["git", "-C", str(repo), *args],
+        capture_output=True,
+        text=True,
+        env=GIT_ENV,
+        timeout=15,
+        stdin=subprocess.DEVNULL,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),  # popup-safe-env-suppressed
+    )
+
+
+def init_repo(repo: Path) -> None:
+    repo.mkdir(parents=True, exist_ok=True)
+    run_git(repo, "init")
+    run_git(repo, "config", "commit.gpgsign", "false")
+    (repo / "README.md").write_text("init\n", encoding="utf-8")
+    run_git(repo, "add", "README.md")
+    run_git(repo, "commit", "-m", "init")
 
 
 def isolated_svc_root_impl(monkeypatch: pytest.MonkeyPatch) -> Generator[None, None, None]:

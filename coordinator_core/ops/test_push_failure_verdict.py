@@ -267,7 +267,7 @@ def test_clean_index_costs_exactly_one_git_spawn(tmp_path, monkeypatch):
     assert result["verdict"] == "indeterminate"
 
 
-def test_staged_index_costs_at_most_two_git_spawns(tmp_path, monkeypatch):
+def test_staged_index_costs_exactly_two_git_spawns(tmp_path, monkeypatch):
     """A non-empty index adds exactly ONE spawn — the incoming-files diff
     that discriminates `half_applied_merge` from `peer_staged`. Nothing
     else may re-enter the process budget."""
@@ -294,6 +294,66 @@ def test_untracked_files_are_excluded_from_both_sets(tmp_path):
 
     assert result["evidence"]["staged_count"] == 0
     assert result["evidence"]["unstaged_local_count"] == 0
+
+
+def test_staged_path_with_space_is_not_truncated(tmp_path):
+    """Regression for the `_status_probe` field-boundary bug: git does not
+    quote a path merely for containing a space, so an unbounded
+    `rsplit(" ", 1)` silently truncated "my file.txt" to "file.txt". This
+    test failed (`staged_sample == ["file.txt"]`) before the bounded-split
+    fix and passes after it -- verified explicitly, both directions."""
+    _origin, clone = _clone_with_upstream(tmp_path)
+    (clone / "my file.txt").write_text("space in the name\n")
+    _git("add", "my file.txt", cwd=clone)
+
+    result = classify(clone)
+
+    assert result["evidence"]["staged_count"] == 1
+    assert result["evidence"]["staged_sample"] == ["my file.txt"]
+
+
+def test_unmerged_conflict_counted_as_staged_only(tmp_path):
+    """A `u` porcelain-v2 row (merge conflict) lands in `staged` only, per
+    the module docstring -- `merge_head_present` is the separate signal for
+    conflict state, and a conflicted path in BOTH sets would defeat
+    `_HALF_APPLIED_MAX_UNSTAGED_OVERLAP == 0`."""
+    origin, clone = _clone_with_upstream(tmp_path)
+
+    pusher = origin.parent / "conflict-pusher"
+    _git("clone", "-q", str(origin), str(pusher), cwd=origin.parent)
+    _git("config", "user.email", "test@example.com", cwd=pusher)
+    _git("config", "user.name", "Test", cwd=pusher)
+    (pusher / "README.md").write_text("remote change\n")
+    _git("add", "README.md", cwd=pusher)
+    _git("commit", "-q", "-m", "remote change", cwd=pusher)
+    _git("push", "-q", cwd=pusher)
+
+    (clone / "README.md").write_text("local conflicting change\n")
+    _git("add", "README.md", cwd=clone)
+    _git("commit", "-q", "-m", "local change", cwd=clone)
+    _git("fetch", "-q", cwd=clone)
+    _git("merge", "-q", "origin/main", cwd=clone, check=False)
+
+    result = classify(clone)
+
+    assert result["evidence"]["merge_head_present"] is True
+    assert "README.md" in result["evidence"]["staged_sample"]
+    assert result["evidence"]["unstaged_local_count"] == 0
+
+
+def test_no_upstream_configured_has_no_branch_ab_line(tmp_path):
+    """A branch with no upstream configured (distinct from detached HEAD)
+    never emits a `# branch.ab` line, so `upstream_resolved` reads False
+    directly off that absence."""
+    root = tmp_path / "no-upstream"
+    _init_repo(root)
+    _commit_file(root, "a.txt", "hello\n")
+    _git("checkout", "-q", "-b", "feature", cwd=root)
+
+    result = classify(root)
+
+    assert result["evidence"]["upstream_resolved"] is False
+    assert result["verdict"] == "indeterminate"
 
 
 def test_renamed_staged_path_is_counted_once(tmp_path):

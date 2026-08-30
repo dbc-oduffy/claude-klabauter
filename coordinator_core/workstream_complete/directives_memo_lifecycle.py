@@ -50,12 +50,6 @@ Consumes manifest (orchestrates, reimplements none):
         status-flip ceremony (no single-shot `resolve` verb is wired into
         this CLI's argv dispatch as of this module's authoring — see
         Negative-spec).
-    coordinator/bin/wsc-close.py `tail-args [--deleted-paths ...]
-        [--kept-entries ...]` — same CLI `coordinator_core.workstream_complete.
-        __init__.build_directives` already calls for `d-close-tail-args`;
-        this module's `d-emit-deletion-blocks` directive is the Step-2.67-
-        specific slice of that same call surface, relocated here per the
-        domain split above (see Negative-spec on the C3 wiring implication).
     coordinator_core.frontmatter.primitives.split_frontmatter / read_fm_field
         — frontmatter parsing for the inbox memo glob; never a full YAML load.
     A plain `git` subprocess (status/log/rev-parse) for the session-authored
@@ -141,14 +135,8 @@ _NO_CONSOLE = no_console_creationflags()
 #: (docs/plans/2026-07-29-workstream-complete-the-envelope-names-t.md):
 #: the arg-builder and the template read this SAME constant.
 _KEY_MEMO_DISPOSITIONS = "memo_dispositions"
-_KEY_DELETED_PATHS = "deleted_paths"
-_KEY_KEPT_ENTRIES = "kept_entries"
 
-FREE_VALUE_KEYS: tuple[str, ...] = (
-    _KEY_MEMO_DISPOSITIONS,
-    _KEY_DELETED_PATHS,
-    _KEY_KEPT_ENTRIES,
-)
+FREE_VALUE_KEYS: tuple[str, ...] = (_KEY_MEMO_DISPOSITIONS,)
 
 
 def _directive(
@@ -727,27 +715,16 @@ def classify_session_authored_files(
     return results
 
 
-def build_deletion_blocks_directive(
-    deleted_paths: Optional[list[str]] = None,
-    kept_entries: Optional[list[str]] = None,
-) -> dict[str, Any]:
-    """Step 2.67's Deleted/Kept block formatting (`d-emit-deletion-blocks`):
-    the EM-authored "Deleted (Step 2.67):"/"Kept (Step 2.67):" blocks are now
-    passed as structured CLI args, not hand-composed commit-body text, to
-    `wsc-close.py tail-args` — the enforcement point (`ceremony.wsc_tail`'s
-    `commit_gates.deletion_block_gate`) lives op-side, not in a separate
-    DoE-side script invocation. `deleted_paths` is a flat list of paths (one
-    `git rm` target each); `kept_entries` is a flat list of already-formatted
-    `"<path> — <reason>"` strings (em-dash separator, per the SKILL's fixed
-    grammar) — this function does not reformat or validate that grammar
-    itself, it only forwards what the caller supplies as CLI args.
-    """
-    args: list[str] = ["tail-args"]
-    if deleted_paths:
-        args += ["--deleted-paths", *[str(p) for p in deleted_paths]]
-    if kept_entries:
-        args += ["--kept-entries", *[str(e) for e in kept_entries]]
-    return _directive("d-emit-deletion-blocks", "wsc-close", args)
+#: `build_deletion_blocks_directive` (`d-emit-deletion-blocks`) was REMOVED
+#: 2026-08-30. It emitted `wsc-close.py tail-args --deleted-paths/--kept-
+#: entries`; `251ff57703` deleted that subcommand the same day, having already
+#: retired the OTHER producer of the same argv (`d-close-tail-args`) — this one
+#: was missed and outlived the parser it fed by one commit. The consumer chain
+#: died before either: K-046 deleted `coordinator/bin/wsc-tail.py` on
+#: 2026-08-23 (`c07062c99`). Nothing replaced it and nothing needs to; the
+#: `deleted_paths`/`kept_entries` decisions keys go with it. NOT to be confused
+#: with `build_deletion_blocks_check_directive` (`__init__.py`), which fronts
+#: the still-live op-side deletion-block gate.
 
 
 #: Step 2.67's banned Final Summary phrasings (`d-lint-banned-deferral-
@@ -792,12 +769,7 @@ def build_directives(decisions: dict[str, Any]) -> list[dict[str, Any]]:
     directive, never a directive with guessed/empty required args):
       - `memo_dispositions`: `list[{"path": str, "decision": str}]` — see
         `build_memo_disposition_directives`.
-      - `deleted_paths` / `kept_entries`: see `build_deletion_blocks_directive`.
     """
     directives: list[dict[str, Any]] = []
     directives.extend(build_memo_disposition_directives(decisions.get(_KEY_MEMO_DISPOSITIONS) or []))
-    if decisions.get(_KEY_DELETED_PATHS) or decisions.get(_KEY_KEPT_ENTRIES):
-        directives.append(
-            build_deletion_blocks_directive(decisions.get(_KEY_DELETED_PATHS), decisions.get(_KEY_KEPT_ENTRIES))
-        )
     return directives

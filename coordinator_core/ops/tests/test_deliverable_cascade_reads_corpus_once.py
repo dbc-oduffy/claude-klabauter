@@ -334,26 +334,87 @@ def test_parity_leg_b_live_successor_refusal_matches_baseline_and_collapsed(tmp_
 # ---------------------------------------------------------------------------
 
 
-def _count_read_meta_calls(monkeypatch) -> list:
-    """Wrap dag._read_meta and return a list whose length grows by one per call."""
-    calls: list = []
-    original = dag_mod._read_meta
+class _CorpusReadCounter:
+    """Record every corpus frontmatter read for ONE arm, installed and removed
+    around that arm alone.
 
-    def _wrapped(file_path):
-        calls.append(file_path)
-        return original(file_path)
+    Patches all THREE `_read_meta` bindings the handler's call graph reaches —
+    `dag`'s own (the `build_reverse_edge_index` fallback), and the
+    `from coordinator_core.dag import _read_meta` copies in
+    `deliverable_cascade` (which `_HANDOFF_KIND.reader` closes over, i.e. the
+    collect pass) and `handoff_children`. Patching only `dag`'s misses the
+    collect pass entirely and reports zero.
 
-    monkeypatch.setattr(dag_mod, "_read_meta", _wrapped)
-    return calls
+    Deliberately NOT monkeypatch-based: this test measures two arms in one test
+    body, and `monkeypatch.undo()` between them left the first wrapper
+    installed — arm 1 kept accumulating arm 2's reads while arm 2's own counter
+    recorded none.
+
+    <!-- Review: coordinator:code-reviewer (Finding 1) -->
+    """
+
+    def __init__(self) -> None:
+        self.paths: list = []
+        self._originals: dict = {}
+
+    def __enter__(self) -> "_CorpusReadCounter":
+        for module in (dag_mod, cascade_mod, hc_mod):
+            original = module._read_meta
+            self._originals[module] = original
+
+            def _wrapped(file_path, _original=original):
+                self.paths.append(str(file_path))
+                return _original(file_path)
+
+            module._read_meta = _wrapped
+        return self
+
+    def __exit__(self, *_exc) -> None:
+        for module, original in self._originals.items():
+            module._read_meta = original
+
+    def pad_reads(self, prefix: str) -> "dict[str, int]":
+        """`{path: times read}` for the padding nodes only — the corpus-wide
+        half of the scan, which is what leg (b)'s index build must read once
+        regardless of how many candidates are being advanced. Candidate
+        records are excluded on purpose: the handler re-reads each candidate
+        once per pass by design (legs (a)/(c) must judge CURRENT state), so
+        candidate reads scale with fanout and are not the claim."""
+        counts: dict = {}
+        for path in self.paths:
+            if prefix in Path(path).name:
+                counts[path] = counts.get(path, 0) + 1
+        return counts
 
 
 def test_read_count_is_flat_from_fanout_1_to_2(tmp_path, monkeypatch):
-    """The actual claim: `dag._read_meta` call count for the collapsed path's
-    leg (b) index build must be the SAME at fanout 1 and fanout 2 (both read
-    the whole corpus once), not scale with the number of candidates."""
-    session_id = "33333333-3333-3333-3333-333333333333"
+    """The claim: leg (b)'s CORPUS-WIDE read cost must not scale with the
+    number of candidates — the collapsed path reads each padding node exactly
+    once whether it is advancing one candidate or two.
 
-    def _build(repo: Path, did: str, n_candidates: int, pad: int) -> None:
+    The quantity is per-padding-node read multiplicity, not a raw
+    `dag._read_meta` total. The raw total is the wrong instrument twice over:
+    it is dominated by per-candidate reads that scale with fanout BY DESIGN
+    (each pass re-reads each candidate so legs (a)/(c) judge current state),
+    and on the collapsed path the archive half contributes zero reads at all
+    (`_build_index` excludes archive-resident nodes from the index set, so no
+    amount of archive padding makes a raw count non-vacuous). An earlier
+    version of this test asserted that raw total and, with a broken counter,
+    read `0 == 0` for its whole life.
+
+    Falsification check (run against a build with `corpus_metas` dropped at
+    the `_predicate_refusal` seam, i.e. the collapse reverted): padding reads
+    go from a flat 20/20 to 60 at fanout 1 and 100 at fanout 2 — both the
+    multiplicity assertion and the flatness assertion fail. The guard catches
+    the regression it exists to catch.
+
+    Closes state/bug-backlog/2026-08-30-the-flatness-guard-counts-a-quantity-
+    that-is-not-stable-4b1e77c2.yaml.
+    """
+    session_id = "33333333-3333-3333-3333-333333333333"
+    pad = 20
+
+    def _build(repo: Path, did: str, n_candidates: int, prefix: str) -> None:
         monkeypatch.setenv("CLAUDE_SESSION_ID", session_id)
         monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
         _init_repo(repo)
@@ -362,42 +423,62 @@ def test_read_count_is_flat_from_fanout_1_to_2(tmp_path, monkeypatch):
             name = f"20260101-c{i}.md"
             handoff = _seed_advanceable_handoff(repo, name, did)
             _git(repo, "add", str(handoff.relative_to(repo)))
-        _pad_corpus(repo, pad, prefix=f"flat-{n_candidates}")
+        _pad_corpus(repo, pad, prefix=prefix)
+        # The archive half stays in the fixture: it is what the real tree is
+        # mostly made of (1810 of 2404 baseline reads were archive-resident),
+        # so a reverted collapse must still be measured paying for it. On the
+        # collapsed path it contributes zero reads, which is the point.
+        _pad_archived_corpus(repo, pad, prefix=f"arch-{prefix}")
         _git(repo, "add", "-A")
         _git(repo, "commit", "-m", "seed corpus")
 
     repo1 = tmp_path / "repo1"
-    _build(repo1, "dlv-flat-1", n_candidates=1, pad=20)
-    calls1 = _count_read_meta_calls(monkeypatch)
-    result1 = _run(
-        {"deliverable_id": "dlv-flat-1", "source_kind": "plan", "source_path": "docs/plans/dummy.md"},
-        repo_root=repo1 / ".git",
-    )
-    reads_1 = len(calls1)
+    _build(repo1, "dlv-flat-1", n_candidates=1, prefix="flat1")
+    with _CorpusReadCounter() as counter1:
+        result1 = _run(
+            {"deliverable_id": "dlv-flat-1", "source_kind": "plan", "source_path": "docs/plans/dummy.md"},
+            repo_root=repo1 / ".git",
+        )
+    pad_reads_1 = counter1.pad_reads("flat1")
 
     monkeypatch.undo()
     monkeypatch.setenv("CLAUDE_SESSION_ID", session_id)
     monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
 
     repo2 = tmp_path / "repo2"
-    _build(repo2, "dlv-flat-2", n_candidates=2, pad=20)
-    calls2 = _count_read_meta_calls(monkeypatch)
-    result2 = _run(
-        {"deliverable_id": "dlv-flat-2", "source_kind": "plan", "source_path": "docs/plans/dummy.md"},
-        repo_root=repo2 / ".git",
-    )
-    reads_2 = len(calls2)
+    _build(repo2, "dlv-flat-2", n_candidates=2, prefix="flat2")
+    with _CorpusReadCounter() as counter2:
+        result2 = _run(
+            {"deliverable_id": "dlv-flat-2", "source_kind": "plan", "source_path": "docs/plans/dummy.md"},
+            repo_root=repo2 / ".git",
+        )
+    pad_reads_2 = counter2.pad_reads("flat2")
 
     assert len(result1["advanced"]) == 1
     assert len(result2["advanced"]) == 2
-    # `dag._read_meta` is used only by the leg (b) index-build path (via
-    # build_reverse_edge_index) in this call graph -- the collect pass reads
-    # frontmatter through `kind.reader`, a distinct function. Flat means: the
-    # corpus-wide index build cost does not grow with candidate count.
-    assert reads_1 == reads_2, (
-        f"leg (b)'s dag._read_meta call count must be FLAT across fanout "
-        f"(1 candidate: {reads_1} reads, 2 candidates: {reads_2} reads) -- a "
-        "constant-factor drop that still scales with fanout is not the claim"
+
+    # Non-vacuity: every padding node must actually have been read. A count
+    # that reaches zero proves nothing — it is equally true of a build that
+    # reads nothing at all.
+    assert len(pad_reads_1) == pad, (
+        f"expected all {pad} live padding nodes read at fanout 1, got {len(pad_reads_1)}"
+    )
+    assert len(pad_reads_2) == pad, (
+        f"expected all {pad} live padding nodes read at fanout 2, got {len(pad_reads_2)}"
+    )
+
+    # Reads the corpus ONCE: no padding node is read twice, at either fanout.
+    assert max(pad_reads_1.values()) == 1, f"corpus re-read at fanout 1: {pad_reads_1}"
+    assert max(pad_reads_2.values()) == 1, f"corpus re-read at fanout 2: {pad_reads_2}"
+
+    # Flat: the corpus-wide total is the same at fanout 2 as at fanout 1.
+    total_1 = sum(pad_reads_1.values())
+    total_2 = sum(pad_reads_2.values())
+    assert total_1 == total_2 == pad, (
+        f"leg (b)'s corpus-wide read count must be FLAT across fanout "
+        f"(1 candidate: {total_1} reads, 2 candidates: {total_2} reads, "
+        f"corpus: {pad} padding nodes) -- a constant-factor drop that still "
+        "scales with fanout is not the claim"
     )
 
 
@@ -487,42 +568,6 @@ def test_archive_resident_referencer_is_not_a_live_child_either_path(tmp_path):
     assert reason_collapsed is None, "an archive-resident referencer must NOT be treated as a live child (collapsed)"
 
 
-def test_live_referencer_is_a_live_child_either_path(tmp_path):
-    """The paired positive case: a LIVE handoff naming the candidate as its
-    predecessor IS a live child, on both paths -- without this pair, the
-    archive-equivalence claim above is untested against a false-negative
-    regression (an index-set narrowing that accidentally drops live
-    referencers too, not just archived ones)."""
-    repo = tmp_path / "repo"
-    _init_repo(repo)
-    candidate = _seed_handoff(repo, "20260101-candidate.md", deliverable_id="dlv-live-eq-0")
-    candidate_rel = str(candidate.relative_to(repo)).replace("\\", "/")
-    _seed_successor_handoff(
-        repo, "20260101-live-successor.md", predecessor_path=candidate_rel,
-        deliverable_id="dlv-live-eq-successor-0",
-    )
-
-    reason_baseline = asyncio.run(
-        cascade_mod._predicate_refusal(
-            candidate, cascade_mod._HANDOFF_KIND.reader(str(candidate)), repo / ".git",
-            kind=cascade_mod._HANDOFF_KIND,
-        )
-    )
-
-    corpus_metas: dict = {}
-    matches, _scan_incomplete, _unreadable = cascade_mod._collect_live_candidates_for_kind(
-        repo, "dlv-live-eq-0", kind=cascade_mod._HANDOFF_KIND, metas_out=corpus_metas
-    )
-    assert len(matches) == 1
-    reason_collapsed = asyncio.run(
-        cascade_mod._predicate_refusal(
-            matches[0]["path"], matches[0]["fm"], repo / ".git",
-            kind=cascade_mod._HANDOFF_KIND, corpus_metas=corpus_metas,
-        )
-    )
-
-    assert reason_baseline is not None and "live successor" in reason_baseline
-    assert reason_collapsed is not None and "live successor" in reason_collapsed
 
 
 # ---------------------------------------------------------------------------

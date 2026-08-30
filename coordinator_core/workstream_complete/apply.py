@@ -289,14 +289,15 @@ WorkstreamApplyExitCode = build_ceremony_halt_exit_codes("WorkstreamApplyExitCod
 #: still individually correct, still `CONSUMES_MANIFEST` members, but no
 #: longer the whole manifest (see module docstring, deviation 2). Originally
 #: four; `wsc-tail` was REMOVED (ceremony.wsc_tail kill, 2026-08-23 — the
-#: trampoline it named is deleted). Kept as a named constant (not inlined)
+#: trampoline it named is deleted) and `wsc-close` followed it off the
+#: manifest 2026-08-30 (its last directive emitter went with `wsc-close
+#: tail-args`; see the manifest's own note). Kept as a named constant (not inlined)
 #: purely so a future reader can grep for exactly the ones the plan text
 #: called out, without this module treating them as an exhaustive dispatch
 #: boundary.
 _LEGACY_CONVERT2_CLI_NAMES: tuple[str, ...] = (
     "wsc-coverage-gate-runner",
     "check-workstream-complete-deletion-blocks",
-    "wsc-close",
 )
 assert set(_LEGACY_CONVERT2_CLI_NAMES) <= set(CONSUMES_MANIFEST), (
     "workstream_complete.apply: the legacy Convert #2 CLI names must "

@@ -787,6 +787,7 @@ _RESOLVER_FAMILY_BY_FILE = {
     "append-goal-event.py": frozenset({"env_first"}),
     "append-plan-session.py": frozenset({"env_first"}),
     "archive-paper-trail.py": frozenset({"env_first"}),
+    "archive-session-scope.py": frozenset({"self_location"}),
     "assert-no-terminal-plans-in-live.py": frozenset({"env_first"}),
     "autonomous-verb.py": frozenset({"self_location"}),
     "cartography.py": frozenset({"self_location"}),
@@ -865,7 +866,6 @@ _RESOLVER_FAMILY_BY_FILE = {
     "workweek-complete-brief.py": frozenset({"self_location"}),
     "workweek-complete-doc-staleness.py": frozenset({"self_location"}),
     "workweek-complete-doc-verify.py": frozenset({"self_location"}),
-    "wsc-close.py": frozenset({"self_location"}),
     "wsc-session-disposition.py": frozenset({"env_first"}),
 }
 

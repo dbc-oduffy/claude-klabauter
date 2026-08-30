@@ -167,9 +167,9 @@ def _write_usage(session_id: str, used_percentage: float, now: float):
 class TestContextPressureCompactionWarningsFleetWins:
     """`compaction_warnings` is a VARIANT SELECTOR, never an off switch:
     for every value the key admits, the function still returns non-empty
-    advisory text at the 40% and 47% bands."""
+    advisory text at the 40% and 45% bands."""
 
-    def test_no_fleet_file_standard_variant_at_47(self, _isolate_sentinel_and_fleet):
+    def test_no_fleet_file_standard_variant_in_the_red_band(self, _isolate_sentinel_and_fleet):
         """Baseline unchanged: no fleet file -> standard HANDOFF NOW text."""
         now = 1_000_000.0
         _write_usage("cp1", 50.0, now)
@@ -179,7 +179,7 @@ class TestContextPressureCompactionWarningsFleetWins:
         assert "HANDOFF NOW" in text
         assert "INFORMATIONAL" not in text
 
-    def test_fleet_informational_selects_variant_at_47(self, _isolate_sentinel_and_fleet):
+    def test_fleet_informational_selects_variant_in_the_red_band(self, _isolate_sentinel_and_fleet):
         """fleet-wins proof, through the hook entry point: a fleet
         compaction_warnings:informational value selects the informational
         variant even with no session-scoped sentinel for this key."""

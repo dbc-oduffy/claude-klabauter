@@ -4,9 +4,13 @@ and-then-the-pipeline-can-go.md): the push-with-retry subsystem now lives at
 push-only importer resolves it from there.
 
 IMPORT-ONLY move, no behaviour change -- this test pins the SURFACE (the
-symbol lives at its new home, and `commit_pipeline.py` re-exports what it
-still needs internally), not push semantics, which the pre-existing push
-tests already cover.
+symbol lives at its new home), not push semantics, which the pre-existing
+push tests already cover.
+
+`commit_pipeline.py` itself was RETIRED by `12b6a009aa` (2026-08-29), so the
+re-export half of this pin went with it: a module that does not exist
+re-exports nothing -- see `test_commit_entry_import_cost.py` for the full
+incident this retirement surfaced.
 """
 
 from __future__ import annotations
@@ -58,27 +62,3 @@ def test_seven_push_only_importers_still_resolve_after_the_move():
     """
     for module_name in PUSH_ONLY_IMPORTERS:
         importlib.import_module(module_name)
-
-
-def test_commit_pipeline_reexports_only_what_it_still_uses():
-    """`commit_pipeline.py` still has these names in scope (its own body
-    uses them), but the module itself is no longer where they are DEFINED.
-    """
-    commit_pipeline_mod = importlib.import_module(
-        "coordinator_core.ops.ceremony.commit_pipeline"
-    )
-    push_mod = importlib.import_module("coordinator_core.ops.ceremony.push")
-    for name in (
-        "PushOutcome",
-        "push_with_retry",
-        "derive_push_status",
-        "derive_pushed_tristate",
-        "resolve_post_push_sha",
-        "PUSH_MODE_SYNC",
-        "PUSH_MODE_NONE",
-        "PUSH_MODE_NEVER",
-        "PUSH_STATUS_PUSHED",
-        "PUSH_STATUS_FAILED",
-        "PUSH_STATUS_NOT_ATTEMPTED",
-    ):
-        assert getattr(commit_pipeline_mod, name) is getattr(push_mod, name)

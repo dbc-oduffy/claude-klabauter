@@ -52,17 +52,18 @@ THE GUARDED SEAM (`coordinator_core.git.action_guard`, C2). This module used
 to consult nothing at all where `block_subagent_commit`'s dispatched-
 committer guard consults an ownership-scope predicate on the Bash-tool
 path -- verified at C2's own HEAD: no ownership check, no `dispatch_checks`
-import, no claim this seam existed. `commit_paths` now accepts `restrict_
-to_session` for exactly the leg that guard governs, and its contract is
-DELIBERATE: passing it ALWAYS denies today, because there is no non-
-cooperative identity channel reaching this op route (C2a, measured: zero
-occurrences of `agent_id`/`session_id`/`subagent` in this module or
-`ops/ceremony/commit_v2.py`). A caller-supplied value here would be exactly
-the fail-open substitution `action_guard.assert_noncooperative_identity_
-available` exists to refuse rather than trust -- see that function's own
-docstring. No caller passes this parameter today; it is the seam a future
-caller with a genuinely verified identity has to widen, rather than a
-reason to invent one.
+import, no claim this seam existed. `commit_paths` now calls `action_guard.
+assert_pathspec_shape_permitted` unconditionally on every commit's pathspec
+(see the DEFAULT-PATH SHAPE CHECK comment below) -- the sweeping/orphan/
+out-of-repo legs, which need no caller identity. The ownership leg this op
+route cannot reach (C2a, measured: zero occurrences of `agent_id`/
+`session_id`/`subagent` in this module or `ops/ceremony/commit_v2.py`) has
+no parameter here to invoke it with -- see `action_guard.assert_
+noncooperative_identity_available`'s own docstring for why a parameter
+accepting a caller-supplied substitute would be exactly the fail-open shape
+this seam exists to refuse, and why "this route can never resolve identity"
+belongs in that docstring and the DR/plan prose, not in a `commit_paths`
+argument (review: overengineering-reviewer Finding 2, 2026-08-30).
 """
 
 from __future__ import annotations
@@ -176,6 +177,28 @@ class NothingToCommit(CommitRefused):
     a caller must already suspect the bug to know to read it, which is the
     bug. `git commit` itself refuses this without `--allow-empty`; this route
     now agrees. Deliberate marker commits opt in via `allow_empty=True`."""
+
+
+class CommitDeniedByActionGuard(CommitRefused):
+    """A pathspec-shape deny from `action_guard.assert_pathspec_shape_permitted`.
+
+    `action_guard` raises THIS class directly, via a function-body lazy
+    import (the same dodge it already uses twice to reach
+    `block_subagent_commit`) -- collapsing the two-exception-types-for-one-
+    deny shape (review: overengineering-reviewer Finding 7, 2026-08-30) that
+    existed only to avoid `action_guard` importing this module at load time.
+    That collapse became safe once Finding 1 deleted the two never-called
+    `action_guard` functions whose standalone-importability was the shape's
+    only stated reason to exist; `commit_paths` now calls `action_guard.
+    assert_pathspec_shape_permitted` with no try/except of its own.
+
+    A SUBCLASS of `CommitRefused`, so a guard deny is catchable BOTH ways at
+    once: generically, by every existing `commit_paths` caller's
+    `except (CommitRefused, FilterUnsupported)` (it IS a `CommitRefused`, so
+    those five call sites need no edit), AND specifically, by the falsifier's
+    behavioural probe (and any future caller) that needs to tell "the shape
+    guard fired" apart from "some other check refused first" without
+    string-matching a message."""
 
 
 class FilterUnsupported(CommitRefused):
@@ -367,7 +390,6 @@ def commit_paths(
     prefer_deliberate_stage: bool = False,
     allow_empty: bool = False,
     blob_fallback: Optional[Callable[[Sequence[str]], Mapping[str, str]]] = None,
-    restrict_to_session: object = None,
 ) -> CommitOutcome:
     """Commit exactly `paths` (+ remove `deleted_paths`). Zero git spawns.
 
@@ -412,25 +434,7 @@ def commit_paths(
     legal ("at least one of `paths` / `deleted_paths`") -- reaches the empty-
     pathspec refusal below on its own terms instead of a missing-argument
     `TypeError` the caller reads the same wrong way.
-
-    `restrict_to_session` -- see the module docstring's "THE GUARDED SEAM"
-    section. Left `None` by every caller today; passing anything else raises
-    `action_guard.CommitActionDenied` unconditionally, before any git object
-    is written, because this op route has no non-cooperative identity input
-    to verify a passed value against.
     """
-    if restrict_to_session is not None:
-        # LAZY IMPORT, not a module-level one: `action_guard` imports
-        # `coordinator_core.ops.session.scope_report`, which imports
-        # `safe_commit_offer`, which imports THIS module for `CommitRefused`/
-        # `CommitOutcome` -- a module-level import here is a circular import
-        # (measured: `ImportError: cannot import name 'CommitRefused' from
-        # partially initialized module`). Deferred to call time, same shape
-        # `block_subagent_commit._import_assert_paths_in_session_scope`
-        # already uses for the identical reason.
-        from coordinator_core.git import action_guard
-
-        action_guard.assert_noncooperative_identity_available(restrict_to_session)
     if repo is _REQUIRED:
         if repo_root is None:
             raise TypeError(
@@ -468,15 +472,23 @@ def commit_paths(
             )
 
     # DEFAULT-PATH SHAPE CHECK (C2): the sweeping/orphan/out-of-repo legs of
-    # `block_subagent_commit`'s guard predicate, narrowed via `strict_
-    # ownership=False` so no caller identity is required -- see `action_
-    # guard.assert_pathspec_shape_permitted`'s own docstring. Called
-    # unconditionally (not behind `restrict_to_session`): every `commit_
-    # paths` call, not only one that supplied a session, gets its pathspec's
-    # shape checked. This does NOT reach `assert_paths_in_session_scope`
-    # (the ownership leg) -- that stays gated behind `restrict_to_session`
-    # above, which today always denies (C2a: no verified identity to check
-    # it against).
+    # `block_subagent_commit`'s guard predicate -- see `action_guard.assert_
+    # pathspec_shape_permitted`'s own docstring. Called unconditionally: every
+    # `commit_paths` call gets its pathspec's shape checked. This does NOT
+    # reach `assert_paths_in_session_scope` (the ownership leg) -- that leg
+    # has no parameter on this route to reach it at all (C2a: no verified
+    # identity to check it against; see `action_guard.assert_noncooperative_
+    # identity_available`'s docstring).
+    #
+    # No try/except here (review: overengineering-reviewer Finding 7,
+    # 2026-08-30): `action_guard` raises `CommitDeniedByActionGuard` --
+    # this module's own exception, lazy-imported inside `action_guard`'s
+    # function body -- directly, so there is nothing to catch and re-raise.
+    # Every known `commit_paths` caller (`commit_v2.py`, `close_out_and_
+    # stamp.py`, `memo_send.py`, `directives_commit_tail.py`, `safe_commit_
+    # offer.py`) catches `(CommitRefused, FilterUnsupported)`, and
+    # `CommitDeniedByActionGuard` IS a `CommitRefused`, so none of the five
+    # need an edit.
     from coordinator_core.git import action_guard
 
     action_guard.assert_pathspec_shape_permitted(

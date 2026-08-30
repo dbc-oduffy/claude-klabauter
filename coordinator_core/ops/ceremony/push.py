@@ -109,17 +109,14 @@ from coordinator_core.hooks.auto_push import branch_gate, classify_error, resolv
 #: never a rebase. Only "non-fast-forward" is REBASE-recoverable: it means a
 #: concurrent commit already landed upstream, and rebasing this session's
 #: own commit range onto the fetched ref is the correct fix. "ref-lock" is
-#: REMOTE ref contention on a shared branch, observed at 45-70s on
-#: 2026-08-30, not a local lock resolving in milliseconds -- a fetch+rebase
-#: cycle does nothing for it and only adds a rebase this pipeline would then
-#: have to run for no reason; `push_with_retry` now classifies it as a
-#: cadence deferral instead (`push:ref-contended`), so it never enters this
-#: retry set. "gh-transient" is a server-side 5xx/disconnect -- also not a
-#: divergence, so rebasing is not the fix (a bare retry with backoff would
-#: be, which this pipeline does not implement here -- the PM ruled for
-#: deferral over retry on 2026-08-30; see
-#: `dlv-ref-lock-s-backoff-meets-the-shared-bran-9254ac`'s plan for the
-#: burst measurements behind that ruling). Every
+#: REMOTE ref contention, not a local lock -- a fetch+rebase cycle does
+#: nothing for it, so `push_with_retry`'s ref-lock arm below (its own
+#: comment carries the deferral rationale) routes it to a cadence deferral
+#: instead and it never enters this retry set. "gh-transient" is a
+#: server-side 5xx/disconnect -- also not a divergence, so rebasing is not
+#: the fix (a bare retry with backoff would be, which this pipeline does
+#: not implement here -- the PM ruled for deferral over retry on
+#: 2026-08-30). Every
 #: other classification (gh-push-protection, gh-size-limit, gh-lfs-quota,
 #: auth, gh-server-reject, network, spawn-error, unknown, empty-stderr) names a failure
 #: no rebase addresses, so none of them belong in THIS set -- which is a
@@ -602,7 +599,7 @@ def _pushed_range_diagnostic(push_outcome: PushOutcome) -> str:
     )
 
 
-def _is_push_reject(reason: str) -> bool:
+def _is_push_reject(reason: str, err_class: Optional[str] = None) -> bool:
     """True iff `reason` classifies as a rebase-recoverable push reject.
 
     Routes through `auto_push.classify_error()` -- the same ordered,
@@ -613,8 +610,15 @@ def _is_push_reject(reason: str) -> bool:
     fetch+rebase+re-push cycle below; a GH013 stderr still contains
     "failed to push some refs", so a bare-marker test previously misfired
     here (2026-08-07 fix).
+
+    `err_class`, if given, is a pre-classified `classify_error(reason)`
+    result the caller already computed -- reused rather than re-derived
+    (Review: overengineering-reviewer -- classify_error was evaluated twice
+    per loop iteration on the same reason string).
     """
-    return classify_error(reason) in _PUSH_RETRY_CLASSES
+    if err_class is None:
+        err_class = classify_error(reason)
+    return err_class in _PUSH_RETRY_CLASSES
 
 
 #: Sub-classifies a `gh-push-protection` rejection (C2, docs/plans/2026-08-27-
@@ -1404,6 +1408,11 @@ def push_with_retry(
 
         reason = condense_git_diagnostic(push_result.stderr) or f"exit_code={push_result.returncode}"
         last_reason = reason
+        # Bound once, reused below by the ref-lock arm and `_is_push_reject`
+        # (Review: overengineering-reviewer -- classify_error is an ordered
+        # substring ladder, not free; re-deriving it twice per iteration on
+        # the same `reason` string was a straight redundancy).
+        err_class = classify_error(reason)
         last_exit_code = push_result.returncode or 1
         # The one place `unconfirmed` can ever become True: this push
         # attempt's own outcome was never observed. A timeout reason never
@@ -1413,14 +1422,15 @@ def push_with_retry(
         # fetch/rebase branches.
         last_indeterminate = _is_indeterminate_push_result(push_result)
 
-        if classify_error(reason) == "ref-lock":
-            # `exit_code=0` is load-bearing, not an oversight: `PushOutcome`'s
-            # own docstring already documents `exit_code == 0` as covering
-            # "did not push, on purpose" for the policy-decline case -- a
-            # ref-lock deferral is the same category, a deliberate non-push
-            # rather than an observed failure. `failed` and `unconfirmed`
-            # both stay empty here, so their documented mutual exclusivity
-            # (`PushOutcome`'s own docstring) is untouched by this outcome.
+        if err_class == "ref-lock":
+            # `exit_code=0` is load-bearing, not an oversight -- a ref-lock
+            # deferral is a deliberate non-push, the same category
+            # `PushOutcome`'s own docstring already covers for the
+            # policy-decline case; see that docstring for the `exit_code`/
+            # `failed`/`unconfirmed` contract this outcome conforms to.
+            # (Review: overengineering-reviewer -- this is the single home
+            # for the ref-lock deferral rationale; `_PUSH_RETRY_CLASSES`
+            # above points here rather than restating it.)
             return PushOutcome(exit_code=0, skipped=["push:ref-contended"])
 
         # C2 (docs/plans/2026-08-27-the-merge-gate-gets-a-remote-authority-
@@ -1450,7 +1460,7 @@ def push_with_retry(
                 break
             continue
 
-        if not _is_push_reject(reason) or attempt == _PUSH_MAX_RETRIES - 1:
+        if not _is_push_reject(reason, err_class) or attempt == _PUSH_MAX_RETRIES - 1:
             break
 
         if upstream_info is None:

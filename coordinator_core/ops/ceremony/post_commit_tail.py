@@ -13,11 +13,21 @@ _reach_post_commit_tail_stub_close`, i.e. `/execute-plan`'s close-out.
 `/workstream-complete` does not reach this module at all: it commits and
 releases claims through `workstream_complete/apply.py::_run_close_commit_tail`
 -> `directives_commit_tail.run_close_commit_and_release_claims`, and its only
-other reach into this file is `fold_completion_entry_commit`. Consequently
-`consumed_handoff_stamp.post_commit_stamp_and_ship`, composed by `run()` below,
-never fires on a WSC close — see kill-ledger K-046's 2026-08-30 amendment for
-the standing requirement that leaves open, and K-116 for why `run()` is
-retained at all.
+other reach into this file is `fold_completion_entry_commit`.
+
+AND THAT ONE LIVE CALLER SUPPRESSES THE STAMP. `_reach_post_commit_tail_stub_
+close` hardcodes `chain_terminal=False` and reads back only
+`origin_stub_result` — its name says so: it reaches THROUGH this composition
+for one leg. `post_commit_stamp_and_ship` returns an empty `StampOutcome` on
+that flag before doing anything. So the consumed-handoff ship-stamp has ZERO
+reachable invocations in this tree — not "fires only on the /execute-plan
+path", which is what this banner said on 2026-08-30 before the call site was
+read. `_run_deliverable_cascade` and `_run_gate_cascade_clear` likewise run
+against a permanently empty `stamp_outcome.stamped`.
+
+The suppression is correct for that ceremony, which owns no consumed set. What
+is missing is an owner: see kill-ledger K-046's standing requirement, and K-116
+for why `run()` is retained at all.
 
 THE COST OF NOT WRITING THIS SOONER, so the next reader weighs the prose below
 correctly: two EMs and a PM independently concluded from these docstrings that a
@@ -245,6 +255,7 @@ from coordinator_core.ops.ceremony.push import (
     _PUSH_MODES_SUPPRESSING_POST_COMMIT_HOOK,
     PUSH_MODE_NEVER,
     PUSH_MODE_SYNC,
+    PUSH_STATUS_CADENCE_PENDING,
     PUSH_STATUS_DECLINED,
     PUSH_STATUS_FAILED,
     PUSH_STATUS_NO_REMOTE,
@@ -506,7 +517,8 @@ def _commit_and_push_origin_stub_close(
         reason = push_outcome.message or "; ".join(push_outcome.failed) or "unknown push failure"
         return follow_up_sha, False, push_status, f"git push failed: {reason}"
     # PUSH_STATUS_DECLINED / PUSH_STATUS_NO_REMOTE / PUSH_STATUS_NOT_ATTEMPTED
-    # / PUSH_STATUS_UNCONFIRMED -- no push landed, but this is NOT an error
+    # / PUSH_STATUS_UNCONFIRMED / PUSH_STATUS_CADENCE_PENDING -- no push
+    # landed, but this is NOT an error
     # (see docstring above): a policy decline, a missing remote, or a
     # subprocess timeout whose outcome was never observed (FIX-I,
     # 2026-08-19 -- distinct from PUSH_STATUS_FAILED above, which is a
@@ -695,18 +707,20 @@ async def _run_origin_stub_close(
         # but never silently drop a genuine no-sha outcome as a clean success.
         failed.append("follow-up: commit landed but HEAD sha unresolved")
     elif follow_up_push_status in (
+        PUSH_STATUS_CADENCE_PENDING,
         PUSH_STATUS_DECLINED,
         PUSH_STATUS_NO_REMOTE,
         PUSH_STATUS_UNCONFIRMED,
     ):
-        # A policy decline, a missing remote, or a subprocess timeout whose
+        # A policy decline, a missing remote, a ref-lock deferral to the next
+        # cadence checkpoint, or a subprocess timeout whose
         # outcome was never observed (FIX-I, 2026-08-19) is NOT an error --
         # see `_commit_and_push_origin_stub_close`'s docstring. Named here
         # (skipped, never failed) purely for observability: the commit
         # itself landed, and the push status is withheld or unknown rather
         # than bad.
         #
-        # These THREE states are reported. The ladder is not exhaustive and
+        # These FOUR states are reported. The ladder is not exhaustive and
         # this comment does not claim it is: `PUSH_STATUS_PUSHED` falls
         # through deliberately (a silent success needs no entry), and
         # `PUSH_STATUS_NOT_ATTEMPTED` -- which is the DEFAULT
@@ -1252,7 +1266,12 @@ def _run_completion_entry_fold(
                 "skipped": [],
                 "failed": [f"{OP_COMPLETION_ENTRY_FOLD}: git push failed: {reason}"],
             }
-        if push_status in (PUSH_STATUS_DECLINED, PUSH_STATUS_NO_REMOTE, PUSH_STATUS_UNCONFIRMED):
+        if push_status in (
+            PUSH_STATUS_CADENCE_PENDING,
+            PUSH_STATUS_DECLINED,
+            PUSH_STATUS_NO_REMOTE,
+            PUSH_STATUS_UNCONFIRMED,
+        ):
             return {
                 "acted": [entry_relpath],
                 "skipped": [f"{OP_COMPLETION_ENTRY_FOLD}:push:{push_status}"],

@@ -112,9 +112,12 @@ REMEDY_COMMANDS: Dict[str, Tuple[str, ...]] = {
     COMPLETION_SCAFFOLD: (),
     ROADMAP_CALLOUT: (),
     EOL_SWEEP: (),
+    # By runnable path, never the bareword: the forwarder pair is not resolvable
+    # until the next install-chain run stamps it, so a report rendered before
+    # that would hand the operator a "command not found".
     GIT_MAINTENANCE: (
-        "coordinator-git-maintenance weekly",
-        "coordinator-git-maintenance daily",
+        "python coordinator/bin/coordinator-git-maintenance.py weekly",
+        "python coordinator/bin/coordinator-git-maintenance.py daily",
     ),
 }
 

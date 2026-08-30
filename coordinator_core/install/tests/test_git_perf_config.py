@@ -113,7 +113,10 @@ def test_maintenance_register_is_never_invoked(tmp_path, monkeypatch):
     monkeypatch.setattr(gpc, "_git", recording_git)
     gpc.apply(repo)
 
-    assert not any("register" in a for args in invoked for a in args), invoked
+    # Review: review-integrator (Finding 4, slice B) -- dropped the substring
+    # assertion (fragile: would false-fail on any unrelated arg containing
+    # "register"). `args[:1] == ("maintenance",)` alone pins the real
+    # invariant: no `git maintenance ...` invocation of any kind.
     assert not any(args[:1] == ("maintenance",) for args in invoked), invoked
 
 

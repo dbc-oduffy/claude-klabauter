@@ -1,7 +1,16 @@
 """
-coordinator_core.ops.ceremony.tests.test_commit_pipeline_import_cost — pins that
-importing the commit pipeline does NOT drag `asyncio` (nor the fleet
+coordinator_core.ops.ceremony.tests.test_commit_entry_import_cost — pins that
+importing the commit entry point does NOT drag `asyncio` (nor the fleet
 archive-sweep module that needs it), nor `socket`, into the interpreter.
+
+Repointed from the retired `commit_pipeline.py` onto `coordinator_core.git.
+commit`, the entry point that now carries the commit hot path. `12b6a009aa`
+(2026-08-29) retired `commit_pipeline.py` and reported its AST census of
+remaining touches at zero, but this file named the module in a STRING -- the
+`_PROBE` source handed to a fresh interpreter -- never in an import
+statement, so an import-node census could not see it and the file stayed red
+at HEAD with `ModuleNotFoundError`. The property is unchanged and still
+wanted; only its subject moved.
 
 WHY THIS IS A GUARD AND NOT A COMMENT. The commit path is a process before it is
 anything else: every ceremony commit pays interpreter start plus this module's
@@ -11,8 +20,8 @@ process-time samples of a cold `python -c "import <mod>"`:
 
     bare interpreter                          ~21ms
     + asyncio (and its ssl/socket subtree)    ~52ms
-    commit_pipeline, asyncio eager            ~88ms
-    commit_pipeline, asyncio deferred         ~61ms
+    commit entry, asyncio eager               ~88ms
+    commit entry, asyncio deferred            ~61ms
 
 Against the direct counterfactual -- the same import with `socket`, `asyncio`
 and the fleet module forced in first -- `-X importtime` summed over every module
@@ -63,7 +72,7 @@ import pytest
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 #: Modules that must stay OUT of the interpreter after a bare
-#: `import coordinator_core.ops.ceremony.commit_pipeline`. Prefix-matched, so a
+#: `import coordinator_core.git.commit`. Prefix-matched, so a
 #: submodule (`asyncio.events`) counts as a hit for its parent.
 #:
 #: `socket` (with `selectors`/`select`, ~4.3ms) arrives by a SECOND route:
@@ -89,7 +98,7 @@ _PROBE = textwrap.dedent(
     # Lazy ops deliberately left UNARMED — no COORDINATOR_CORE_LAZY_OPS env
     # var, no sys._coordinator_core_lazy_ops attribute. Arming it sweeps the
     # whole ops package in eagerly and the assertion would pass vacuously.
-    import coordinator_core.ops.ceremony.commit_pipeline  # noqa: F401
+    import coordinator_core.git.commit  # noqa: F401
 
     sys.stdout.write(json.dumps(sorted(sys.modules)))
     """
@@ -107,14 +116,14 @@ def _loaded_modules() -> list[str]:
         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
     )
     assert proc.returncode == 0, (
-        "import probe failed to import commit_pipeline at all -- that is a "
+        "import probe failed to import the commit entry point at all -- that is a "
         f"broken import, not an import-cost regression:\n{proc.stderr}"
     )
     return json.loads(proc.stdout)
 
 
-def test_commit_pipeline_import_does_not_pull_asyncio() -> None:
-    """A cold `import commit_pipeline` leaves `asyncio` and the fleet
+def test_commit_entry_import_does_not_pull_asyncio() -> None:
+    """A cold `import coordinator_core.git.commit` leaves `asyncio` and the fleet
     archive-sweep module unimported."""
     loaded = _loaded_modules()
     offenders = [
@@ -126,7 +135,7 @@ def test_commit_pipeline_import_does_not_pull_asyncio() -> None:
         )
     ]
     assert not offenders, (
-        "importing commit_pipeline pulled in modules the commit hot path must "
+        "importing the commit entry point pulled in modules the commit hot path must "
         f"not pay for: {', '.join(offenders)}.\n"
         "The archival sweep that used to defer these below a cadence gate was "
         "removed from the commit path entirely (PM ruling 2026-08-27), so there "
