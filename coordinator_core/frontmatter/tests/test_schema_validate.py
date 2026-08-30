@@ -3696,7 +3696,14 @@ _QUEUE_SCHEMA_PINS = {
     # 8b5ab1769) by bin/claude-klabauter-revendor-schema.py bug-backlog.
     #   C2: consume DoE's status:deferred grant conditional (plan
     #   2026-08-27-a-queue-deferral-is-a-grant-the-pm-issues)
-    'bug-backlog': "8b5ab1769b2c82b090782e182b54a3bec6ef002b",
+    # Pin moved 2026-08-30 to 4bf3ddd88d262ce473be21108462aba32a692ada (DoE
+    # HEAD) by bin/claude-klabauter-revendor-schema.py bug-backlog.
+    #   re-vendor prose-only delta: DoE corrected x-bump-class nested-field-
+    #   additive -> major with the reviewed rationale (improvement-queue also
+    #   gains the case_against deferred-branch sentence). No shape change;
+    #   claude-klabauter's copy carried no unique prose (DoE note strictly supersedes
+    #   ours, verified).
+    'bug-backlog': "4bf3ddd88d262ce473be21108462aba32a692ada",
     # Pin moved 2026-08-17 to cd70f651f95503ac2d8979b6900ba905c910a75a (DoE
     # HEAD) by bin/claude-klabauter-revendor-schema.py cross-repo-commitment.
     #   scheduled re-vendor pass: sync non-major drifted schemas from DoE HEAD
@@ -3744,7 +3751,14 @@ _QUEUE_SCHEMA_PINS = {
     # 8b5ab1769) by bin/claude-klabauter-revendor-schema.py debt-backlog.
     #   C2: consume DoE's status:deferred grant conditional (plan
     #   2026-08-27-a-queue-deferral-is-a-grant-the-pm-issues)
-    'debt-backlog': "8b5ab1769b2c82b090782e182b54a3bec6ef002b",
+    # Pin moved 2026-08-30 to 37de8d415a7fb11c9189a330320c8f74a3260a44 (DoE
+    # HEAD) by bin/claude-klabauter-revendor-schema.py debt-backlog.
+    #   re-vendor prose-only delta: DoE corrected x-bump-class nested-field-
+    #   additive -> major with the reviewed rationale (improvement-queue also
+    #   gains the case_against deferred-branch sentence). No shape change;
+    #   claude-klabauter's copy carried no unique prose (DoE note strictly supersedes
+    #   ours, verified).
+    'debt-backlog': "37de8d415a7fb11c9189a330320c8f74a3260a44",
     # Pin moved 2026-07-29 to 9f6ee8540e7b09da9ce6b81509402a4f118aefd8 (DoE
     # HEAD) by bin/claude-klabauter-revendor-schema.py improvement-queue.
     #   DoE 1239761c1 added the 'verification' member; b142e8dc re-vendored
@@ -3825,7 +3839,14 @@ _QUEUE_SCHEMA_PINS = {
     # 8b5ab1769) by bin/claude-klabauter-revendor-schema.py improvement-queue.
     #   C2: consume DoE's status:deferred grant conditional (plan
     #   2026-08-27-a-queue-deferral-is-a-grant-the-pm-issues)
-    'improvement-queue': "8b5ab1769b2c82b090782e182b54a3bec6ef002b",
+    # Pin moved 2026-08-30 to 37de8d415a7fb11c9189a330320c8f74a3260a44 (DoE
+    # HEAD) by bin/claude-klabauter-revendor-schema.py improvement-queue.
+    #   re-vendor prose-only delta: DoE corrected x-bump-class nested-field-
+    #   additive -> major with the reviewed rationale (improvement-queue also
+    #   gains the case_against deferred-branch sentence). No shape change;
+    #   claude-klabauter's copy carried no unique prose (DoE note strictly supersedes
+    #   ours, verified).
+    'improvement-queue': "37de8d415a7fb11c9189a330320c8f74a3260a44",
     # Pin moved 2026-08-17 to cd70f651f95503ac2d8979b6900ba905c910a75a (DoE
     # HEAD) by bin/claude-klabauter-revendor-schema.py lesson-entry.
     #   scheduled re-vendor pass: sync non-major drifted schemas from DoE HEAD
@@ -3873,7 +3894,13 @@ _QUEUE_SCHEMA_PINS = {
     # Pin moved 2026-08-17 to cd70f651f95503ac2d8979b6900ba905c910a75a (DoE
     # HEAD) by bin/claude-klabauter-revendor-schema.py review-findings.
     #   scheduled re-vendor pass: sync non-major drifted schemas from DoE HEAD
-    'review-findings': "cd70f651f95503ac2d8979b6900ba905c910a75a",
+    # Pin moved 2026-08-30 to 8c36240dad2b6dc4f1c88b7c54103d3c64f0018c (DoE
+    # HEAD) by bin/claude-klabauter-revendor-schema.py review-findings.
+    #   re-vendor to DoE 3.3.0: five optional top-level keys for the
+    #   Kira/review-integrator terminal-stamp contract (integrated_from,
+    #   rebuild_recommended, rebuild_rationale, rebuild_scope,
+    #   findings_count). nested-field-additive, no required change.
+    'review-findings': "8c36240dad2b6dc4f1c88b7c54103d3c64f0018c",
     # Moved off _C1_LANDING_SHA 2026-07-27: DoE landed the optional
     # `reviewed_paths` property at x-schema-version 1.1.0 (their 89c24b12d), in
     # response to this repo's canonical-first ask. Re-vendored from that commit;
@@ -5828,7 +5855,10 @@ class TestDescribeBehavioralCases:
         # attestation, a SIBLING field deliberately rather than a union inside
         # `reviewed_range`, so the pattern that must keep rejecting `..HEAD` and
         # the one that must accept `uncommitted:` are not one edit apart). Every
-        # other declared property is still `required`.
+        # other declared property is still `required`. v3.3.0 added the five-key
+        # Kira/review-integrator terminal-stamp set (`integrated_from`,
+        # `rebuild_recommended`, `rebuild_rationale`, `rebuild_scope`,
+        # `findings_count`) on the 2026-08-30 re-vendor.
         #
         # This list is asserted by equality on purpose: it is the behavioural pin
         # DoE's consult asked for — an empty optional list must be [], not a
@@ -5837,7 +5867,15 @@ class TestDescribeBehavioralCases:
         # it to a subset check, which would stop it noticing anything.
         result = describe('review-findings')
         assert 'optional' in result
-        assert result['optional'] == ['reviewed_range', 'reviewed_targets']
+        assert result['optional'] == [
+            'reviewed_range',
+            'reviewed_targets',
+            'integrated_from',
+            'rebuild_recommended',
+            'rebuild_rationale',
+            'rebuild_scope',
+            'findings_count',
+        ]
 
     def test_no_applies_to_returns_none_not_missing_key(self):
         # percolate-store.schema.json declares no applies_to glob.

@@ -6069,7 +6069,8 @@ def _git_commit_agent_pathspec_permitted(
     session_id: str,
     cwd: Optional[str],
     *,
-    assert_paths_in_session_scope,
+    assert_paths_in_session_scope=None,
+    strict_ownership: bool = True,
 ) -> "Tuple[bool, str]":
     """Payload-shape-agnostic core of LEG 3, extracted (PURE MOTION, no logic
     change) from `_git_commit_agent_may_commit` so a caller that already
@@ -6128,6 +6129,17 @@ def _git_commit_agent_pathspec_permitted(
     paths, absolute_out_of_repo = _repo_relativize_pathspec(list(paths), git_root)
     if absolute_out_of_repo:
         return False, _LEG_ABSOLUTE_OUT_OF_REPO
+    if not strict_ownership:
+        # SANCTIONED NARROWING (not a new predicate): the sweeping/orphan/
+        # out-of-repo legs above are shape-only checks that need no caller
+        # identity. The ownership leg below (`assert_paths_in_session_scope`)
+        # DOES need a verified `session_id`, and fails closed on an empty
+        # one -- calling it on a route with no verified identity would deny
+        # every such commit outright, while accepting a caller-supplied
+        # `session_id` here would launder an unverified identity into the
+        # ownership check. Neither is acceptable, so `strict_ownership=False`
+        # returns ALLOW here, before `session_id` is ever read.
+        return True, ""
     try:
         # `allow_orphans=False`, KEYWORD-form (keyword-only on
         # `assert_paths_in_session_scope`'s own signature, so a future

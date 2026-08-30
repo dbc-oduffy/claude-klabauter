@@ -146,6 +146,44 @@ def assert_git_commit_agent_pathspec_permitted(
         raise CommitActionDenied(reason or "git-commit-agent pathspec denied")
 
 
+def assert_pathspec_shape_permitted(
+    paths: Sequence[str],
+    include_orphans: bool,
+    git_root: str,
+) -> None:
+    """SANCTIONED NARROWING of `_git_commit_agent_pathspec_permitted` -- not
+    a second predicate. Consults ONLY the sweeping/orphan/out-of-repo legs
+    (`strict_ownership=False`), which need no caller identity, and returns
+    before the ownership leg (`assert_paths_in_session_scope`) is ever
+    reached -- that leg fails closed on an empty/unverified `session_id`,
+    so calling `assert_git_commit_agent_pathspec_permitted` (which always
+    consults it) on a route with no verified identity would deny every
+    op-route commit, and passing it a caller-supplied `session_id` would
+    launder an unverified identity into the ownership check this seam's
+    negative spec forbids. This wrapper takes no `session_id` parameter at
+    all, so neither failure mode is reachable through it.
+
+    Raises `CommitActionDenied(deny_reason)` on a sweeping pathspec, orphan
+    adoption, or out-of-repo absolute element -- the same three LEG 3
+    refusals `assert_git_commit_agent_pathspec_permitted` raises, minus
+    ownership scope.
+    """
+    from coordinator_core.bash_guards.block_subagent_commit import (
+        _git_commit_agent_pathspec_permitted,
+    )
+
+    allowed, reason = _git_commit_agent_pathspec_permitted(
+        paths,
+        include_orphans,
+        git_root,
+        "",
+        None,
+        strict_ownership=False,
+    )
+    if not allowed:
+        raise CommitActionDenied(reason or "pathspec shape denied")
+
+
 def assert_noncooperative_identity_available(session_id: object) -> None:
     """The seam's answer to the guard leg C2a found NOT liftable: caller
     identity. Raises `CommitActionDenied` unconditionally -- there is no

@@ -467,6 +467,22 @@ def commit_paths(
                 "including a peer's file added after the caller computed it"
             )
 
+    # DEFAULT-PATH SHAPE CHECK (C2): the sweeping/orphan/out-of-repo legs of
+    # `block_subagent_commit`'s guard predicate, narrowed via `strict_
+    # ownership=False` so no caller identity is required -- see `action_
+    # guard.assert_pathspec_shape_permitted`'s own docstring. Called
+    # unconditionally (not behind `restrict_to_session`): every `commit_
+    # paths` call, not only one that supplied a session, gets its pathspec's
+    # shape checked. This does NOT reach `assert_paths_in_session_scope`
+    # (the ownership leg) -- that stays gated behind `restrict_to_session`
+    # above, which today always denies (C2a: no verified identity to check
+    # it against).
+    from coordinator_core.git import action_guard
+
+    action_guard.assert_pathspec_shape_permitted(
+        path_list + delete_list, False, str(root)
+    )
+
     # THE ONE INDEX READ, and it decides nothing about mechanism: it answers
     # invariant 1 for exactly the k paths in this call. Scoped, so it never
     # materialises an entry outside `paths`.
