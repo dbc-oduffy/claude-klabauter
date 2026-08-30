@@ -89,6 +89,17 @@ def _tempfile():
     import tempfile
     return tempfile
 
+
+def _shlex():
+    """Function-local accessor for the `shlex` module.
+
+    Same discipline as `_tempfile` above and for the same reason: this module
+    is a PostToolUse hook, so eager imports are paid on every tool call in
+    every session, not only when the one check that needs them fires.
+    """
+    import shlex
+    return shlex
+
 #: Generator-provenance declaration: every durable-state write in this
 #: module (advisory-hook-state-<sid>.json, rt-bark-once-<sid>,
 #: first-agent-dispatch-advisory-<sid>) lands under tempfile.gettempdir() —
@@ -961,7 +972,15 @@ def _check_workflow_monitor_arm_sync(session_id: str, transcript_path: str, tool
 
     task_id = match.group("task_id")
     run_id = match.group("run_id")
-    transcript_dir = match.group("transcript_dir")
+    # The regex captures a JSON STRING LITERAL out of the raw transcript text,
+    # so a Windows path arrives with its separators still escaped
+    # (C:\Users\... as two characters each). Feeding that to os.path.join
+    # yields a mixed-separator path that is wrong even where it happens to
+    # resolve. Decode it back through the JSON rules that escaped it.
+    try:
+        transcript_dir = json.loads('"' + match.group("transcript_dir") + '"')
+    except Exception:
+        return ""
     if not task_id or not run_id or not transcript_dir:
         return ""
 
@@ -1011,11 +1030,19 @@ def _check_workflow_monitor_arm_sync(session_id: str, transcript_path: str, tool
         journal_path = os.path.join(transcript_dir, "journal.jsonl")
     else:
         journal_path = os.path.join(transcript_dir, run_id, "journal.jsonl")
+    # Quote every interpolated path. These are Windows paths on this box
+    # (C:\\Users\\...), and a POSIX shell eats the backslashes -- the
+    # command then names a path that does not exist, TailReader swallows the
+    # OSError, and the watcher polls a file it can never read for the FULL cap
+    # before exiting 1. That is silent, and it is the exact "outlives the run"
+    # failure this check exists to remove. A path containing a space breaks the
+    # unquoted form in any shell, on any host.
+    quote = _shlex().quote
     monitor_command = (
         "python3 -m coordinator_core.workflow_watch"
-        f" --transcript {transcript_path}"
-        f" --journal {journal_path}"
-        f" --task-id {task_id}"
+        f" --transcript {quote(transcript_path)}"
+        f" --journal {quote(journal_path)}"
+        f" --task-id {quote(task_id)}"
         " --poll-interval 1"
         f" --cap {cap_seconds}"
     )

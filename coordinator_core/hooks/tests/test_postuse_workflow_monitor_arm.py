@@ -23,6 +23,8 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
+import shlex
 import sys
 import tempfile
 import unittest.mock as mock
@@ -363,3 +365,78 @@ def test_handler_reads_no_params_field_beyond_the_six_mapped_fields(tmp_path):
 
     context = result["hookSpecificOutput"]["additionalContext"]
     assert "WORKFLOW MONITOR" in context
+
+
+# ---------------------------------------------------------------------------
+# The emitted command has to survive the shell that runs it
+# ---------------------------------------------------------------------------
+
+
+def _launch_transcript(tmp_path, dirname="sub agents", session_name="my session.jsonl"):
+    """A transcript whose launch record points at a path containing a space."""
+    transcript_dir = tmp_path / dirname / "wf_abc123"
+    transcript_dir.mkdir(parents=True)
+    (transcript_dir / "journal.jsonl").write_text("", encoding="utf-8")
+    transcript = tmp_path / session_name
+    record = {
+        "type": "assistant",
+        "toolUseResult": {
+            "status": "async_launched",
+            "taskId": "tk777",
+            "taskType": "local_workflow",
+            "workflowName": "w",
+            "runId": "wf_abc123",
+            "transcriptDir": str(transcript_dir),
+        },
+    }
+    transcript.write_text(
+        json.dumps({"type": "user"}) + "\n" + json.dumps(record) + "\n", encoding="utf-8"
+    )
+    return transcript
+
+
+def _emitted_args(advisory):
+    command = re.search(r'command="(.*?)", timeout_ms', advisory).group(1)
+    argv = shlex.split(command)
+    return dict(zip(argv[3::2], argv[4::2]))
+
+
+def test_emitted_paths_survive_a_posix_shell_and_resolve(tmp_path):
+    """Unquoted, a Windows path loses its backslashes to a POSIX shell.
+
+    The watcher would then poll a file it can never open, `TailReader` would
+    swallow the OSError, and it would run the FULL cap before exiting 1 --
+    silently becoming the very "monitor that outlives its run" this check
+    exists to remove. A path containing a space breaks the unquoted form in
+    any shell on any host, which is what this fixture uses.
+    """
+    advisory = pad._check_workflow_monitor_arm_sync(
+        "sess-quote", str(_launch_transcript(tmp_path)), "Workflow"
+    )
+    args = _emitted_args(advisory)
+    assert os.path.isfile(args["--transcript"])
+    assert os.path.isfile(args["--journal"])
+
+
+def test_journal_path_is_json_decoded_not_raw_capture(tmp_path):
+    """`transcriptDir` is captured out of raw transcript text as a JSON string
+    LITERAL, so a Windows path arrives with every separator still escaped.
+    Using it undecoded yields a doubled-separator path -- wrong even where it
+    happens to resolve.
+    """
+    advisory = pad._check_workflow_monitor_arm_sync(
+        "sess-decode", str(_launch_transcript(tmp_path)), "Workflow"
+    )
+    journal = _emitted_args(advisory)["--journal"]
+    assert "\\\\" not in journal
+    assert journal.count("wf_abc123") == 1
+
+
+def test_journal_path_does_not_double_append_the_run_id(tmp_path):
+    """`transcriptDir` already ends in the run id; appending it again names a
+    directory that never exists, so the renderer would emit nothing at all.
+    """
+    advisory = pad._check_workflow_monitor_arm_sync(
+        "sess-runid", str(_launch_transcript(tmp_path)), "Workflow"
+    )
+    assert os.path.isfile(_emitted_args(advisory)["--journal"])
