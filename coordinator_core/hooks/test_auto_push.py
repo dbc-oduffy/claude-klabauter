@@ -927,7 +927,7 @@ def test_run_push_with_retry_ref_lock_retries_to_per_class_budget_then_logs(monk
 def test_attempts_for_ref_lock_is_a_per_class_override_not_max_attempts():
     # Regression guard for DEC-1: ref-lock's budget must diverge from
     # MAX_ATTEMPTS, not merely equal it by coincidence of today's constants.
-    assert auto_push._attempts_for("ref-lock") != auto_push.MAX_ATTEMPTS
+    assert auto_push.REF_LOCK_ATTEMPTS != auto_push.MAX_ATTEMPTS
     assert auto_push._attempts_for("network") == auto_push.MAX_ATTEMPTS
     assert auto_push._attempts_for("gh-transient") == auto_push.MAX_ATTEMPTS
 

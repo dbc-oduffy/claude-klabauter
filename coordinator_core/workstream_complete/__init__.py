@@ -635,7 +635,7 @@ class SessionShapeGate(NamedTuple):
     #: `state/bug-backlog/2026-08-30-close-ceremony-clis-resolve-a-live-peer-
     #: b558b27c74e7.yaml` asks for in its `proposed_action`, serialised into
     #: the envelope alongside the id it describes so no reader has to take
-    #: `sid` on faith. `{"source": <"carried" | "em_sid" |
+    #: `sid` on faith. `{"source": <"carried" |
     #: SESSION_ENV_PRECEDENCE member | "unresolved">, "warm": bool,
     #: "pid": int}`.
     #:
@@ -691,15 +691,6 @@ def _detector_c_attribution_is_uncorroborated(detection: dict[str, Any]) -> bool
     return detection.get("exact_match_count") == 0
 
 
-#: `resolve_session_id_with_source(...).source` for the legacy `em_sid` tier,
-#: mirroring `wsc-session-disposition.SOURCE_LEGACY_EM_SID`. Compared as a
-#: literal rather than imported from the bin script because that module is
-#: loaded BY PATH and may be an older copy on a partially-updated tree — a
-#: missing attribute there would raise where this comparison simply does not
-#: match, which is the same degrade every other read of that module uses.
-_LEGACY_EM_SID_SOURCE = "em_sid"
-
-
 def compute_session_shape_gate(repo_root: Path) -> SessionShapeGate:
     """Steps 0 of `/workstream-complete`: resolve this session's id and
     chain-terminal-vs-single-session disposition via the ported detector
@@ -739,26 +730,13 @@ def compute_session_shape_gate(repo_root: Path) -> SessionShapeGate:
             f"source={(sid_source or {}).get('source', 'unavailable')!r} "
             f"warm={(sid_source or {}).get('warm')} pid={(sid_source or {}).get('pid')}. "
             "Warm: the request carried no identity (the door sent no _session_id); "
-            "cold: no tier of em_sid/COORDINATOR_SESSION_ID/CLAUDE_SESSION_ID/"
+            "cold: no tier of COORDINATOR_SESSION_ID/CLAUDE_SESSION_ID/"
             "CLAUDE_CODE_SESSION_ID resolved. Re-run through the cold door, or set "
             "COORDINATOR_SESSION_ID to this session's own id."
         )
     resolution = mod.resolve_disposition(repo_root, sid)
     disposition, consumed_handoff, diagnostics, consumed_handoff_paths = resolution
     detection = dict(getattr(resolution, "detection", None) or {})
-    if (sid_source or {}).get("source") == _LEGACY_EM_SID_SOURCE:
-        # The one surviving way a COLD close can key itself to a session that
-        # already ended: `em_sid` is exported by a shell, not by the harness,
-        # so it outlives the session that set it and no ratchet scans for it.
-        # Advisory, never a refusal — it names a real session and is the
-        # correct answer whenever the exporting shell IS this session.
-        diagnostics = list(diagnostics) + [
-            f"WARN: this session's id ({sid}) came from the legacy `em_sid` environment "
-            "variable, which no other resolver in the fleet reads and which a shell keeps "
-            "exporting after the session that set it has ended. Every gate, directive and "
-            "completion entry below is keyed on it. Confirm it names THIS session before "
-            "applying; unset em_sid to resolve through the canonical ladder instead."
-        ]
     if consumed_handoff and _detector_c_attribution_is_uncorroborated(detection):
         diagnostics = list(diagnostics) + [
             "REFUSED: Detector C (crash-recovery) attributed this session to "

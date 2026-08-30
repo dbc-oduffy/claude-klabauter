@@ -166,6 +166,7 @@ from __future__ import annotations
 
 import dataclasses
 import datetime
+import os
 import tempfile
 from pathlib import Path
 from typing import Any, Callable, Dict, FrozenSet, List, Optional
@@ -480,7 +481,11 @@ def _collect_live_candidates(worktree_root: Path, deliverable_id: str) -> tuple[
 
 
 def _collect_live_candidates_for_kind(
-    worktree_root: Path, deliverable_id: str, kind: _KindDescriptor = _HANDOFF_KIND
+    worktree_root: Path,
+    deliverable_id: str,
+    kind: _KindDescriptor = _HANDOFF_KIND,
+    *,
+    metas_out: Optional[dict] = None,
 ) -> tuple[List[dict], bool, List[dict]]:
     """Return ([{path, fm}, ...], scan_incomplete, unreadable) for every LIVE
     candidate of `kind` whose own `deliverable_id` field exact-matches the
@@ -509,6 +514,15 @@ def _collect_live_candidates_for_kind(
     distinct from a legitimate empty match set. For `strict_unreadable=False`
     (handoff), this is always `[]` and an unreadable/malformed record is
     silently dropped exactly as before (unchanged handoff behaviour).
+
+    `metas_out`, when supplied, is populated with EVERY frontmatter this scan
+    already read — matching or not — keyed by `os.path.abspath(str(path))`,
+    the same key convention `handoff_children.has_live_children_from_metas`
+    reads (see that module's own key-convention note). This lets a caller
+    that needs the whole corpus for a downstream index (leg (b) of
+    `_predicate_refusal`) reuse this read instead of re-scanning. Return
+    arity, return values and every existing caller are unaffected — this is
+    an out-param, not a new return.
     """
     base_dir = worktree_root / Path(kind.corpus_subdir)
     matches: List[dict] = []
@@ -534,6 +548,8 @@ def _collect_live_candidates_for_kind(
             if kind.strict_unreadable:
                 unreadable.append({"path": str(path), "reason": "empty or unparseable record"})
             continue
+        if metas_out is not None:
+            metas_out[os.path.abspath(str(path))] = fm
         artifact_did = fm.get("deliverable_id")
         if not isinstance(artifact_did, str) or artifact_did.strip() != deliverable_id:
             continue
@@ -557,6 +573,7 @@ async def _predicate_refusal(
     repo_root: Path,
     exclude_children_check: Optional[List[str]] = None,
     kind: _KindDescriptor = _HANDOFF_KIND,
+    corpus_metas: Optional[dict] = None,
 ) -> Optional[str]:
     """Evaluate the DR-263 three-legged per-target predicate, per `kind`'s own
     predicate-leg policy table (AC11). Returns a human-readable refusal reason,
@@ -583,6 +600,17 @@ async def _predicate_refusal(
     no candidate of its own scan has been written yet -- nothing to exclude), and
     its omission is exactly the pre-existing default (None -> no exclusion, byte-
     identical to this function's prior behaviour).
+
+    corpus_metas (C1, this chunk): when supplied, leg (b) ONLY answers its
+    live-successor question from an index built over this pre-read corpus
+    (`handoff_children.has_live_children_from_metas`) instead of re-scanning
+    frontmatter `_handler`'s own collect pass already read. `None` (the
+    default, and `cascade_backstop_sweep.py`'s own call shape, which never
+    supplies it) takes the pre-existing `_handoff_has_live_children` path,
+    byte-identical to this function's prior behaviour. Legs (a), (c) and (d)
+    never read this param — they judge the candidate's own current state,
+    which is the freshness contract the fixpoint loop exists to honour, not
+    a snapshot from the corpus read at collection time.
     """
     # Leg (c) — own work-state consistent with live-and-advanceable. Review:
     # staff-eng — Finding 1: a POSITIVE check against `kind.live_values` for
@@ -635,7 +663,11 @@ async def _predicate_refusal(
         # reverse-membership; mirrors ops/handoff_children.py's own function-local-import
         # discipline note for a sibling case (avoid pulling its transitive import set into
         # every eager-registration pass just for a defensive edge that today is acyclic).
-        from coordinator_core.ops.handoff_children import CONCLUSION_EDGE_KINDS, _handoff_has_live_children
+        from coordinator_core.ops.handoff_children import (
+            CONCLUSION_EDGE_KINDS,
+            _handoff_has_live_children,
+            has_live_children_from_metas,
+        )
 
         # This leg is conclusion-shaped, not archival-shaped: the write it gates is
         # `deployment_state -> shipped` with `status` untouched and NO file move
@@ -646,13 +678,22 @@ async def _predicate_refusal(
         # example-cockpit-repo-em-wsc-leg-b-counts-spinoffs-as-live-children.md).
         # Narrowed here explicitly rather than taking the op's archival-shaped
         # default (`_DEFAULT_EDGE_KINDS`).
-        children_params: Dict[str, Any] = {
-            "candidate": str(candidate_path),
-            "edge_kinds": CONCLUSION_EDGE_KINDS,
-        }
-        if exclude_children_check:
-            children_params["exclude"] = list(exclude_children_check)
-        children_result = await _handoff_has_live_children(children_params, repo_root)
+        if corpus_metas is None:
+            children_params: Dict[str, Any] = {
+                "candidate": str(candidate_path),
+                "edge_kinds": CONCLUSION_EDGE_KINDS,
+            }
+            if exclude_children_check:
+                children_params["exclude"] = list(exclude_children_check)
+            children_result = await _handoff_has_live_children(children_params, repo_root)
+        else:
+            children_result = await has_live_children_from_metas(
+                str(candidate_path),
+                repo_root,
+                edge_kinds=CONCLUSION_EDGE_KINDS,
+                exclude=list(exclude_children_check) if exclude_children_check else None,
+                metas=corpus_metas,
+            )
         children_exit = children_result.get("exit_code")
         if children_exit == 0:
             children = children_result.get("children") or []
@@ -1165,8 +1206,12 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
 
     worktree_root = main_worktree_root(repo_root)
 
+    # C1: leg (b) of `_predicate_refusal` (the live-successor check) answers
+    # from an index built over this same scan's frontmatter instead of
+    # re-reading the corpus per candidate — `corpus_metas` is threaded below.
+    corpus_metas: dict = {}
     candidates, scan_incomplete, unreadable = _collect_live_candidates_for_kind(
-        worktree_root, deliverable_id, kind=target_kind
+        worktree_root, deliverable_id, kind=target_kind, metas_out=corpus_metas
     )
 
     # Sizing kind's write side (C3) writes the `plan` FK alongside `status:
@@ -1237,6 +1282,17 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         passes_done += 1
         still_pending: List[dict] = []
 
+        # A pass after the first judges a corpus THIS RUN has itself changed
+        # (an earlier pass's advance/write) — leg (b) must see that, so the
+        # index is rebuilt from a fresh scan on every pass but the first.
+        # At the 95.8%-of-traffic one-candidate shape, max_passes == 1, so
+        # this rebuild never fires and the corpus is read exactly once.
+        if passes_done > 1:
+            corpus_metas = {}
+            _collect_live_candidates_for_kind(
+                worktree_root, deliverable_id, kind=target_kind, metas_out=corpus_metas
+            )
+
         for candidate in pending:
             candidate_path: Path = candidate["path"]
 
@@ -1258,6 +1314,7 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
                 repo_root,
                 exclude_children_check=resolved_this_run,
                 kind=target_kind,
+                corpus_metas=corpus_metas,
             )
             if refusal is not None:
                 refused_reason[str(candidate_path)] = refusal

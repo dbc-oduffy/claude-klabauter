@@ -83,7 +83,7 @@
 # both are valid answers, not failures). 2 usage error (bad/missing
 # subcommand or flag). 3 transport failure — repo root unresolvable (no
 # `--repo-root` and `git rev-parse --show-toplevel` failed). 4 session id
-# unresolvable — no tier (em_sid/CLAUDE_SESSION_ID/CLAUDE_CODE_SESSION_ID)
+# unresolvable — no tier (COORDINATOR_SESSION_ID/CLAUDE_SESSION_ID/CLAUDE_CODE_SESSION_ID)
 # resolved (KS-5, 2026-08-07): refusing to run the detector chain against an
 # unidentified session, rather than reporting a single-session disposition
 # that would read as a clean chain-end coverage gate skip. Detector-level
@@ -183,31 +183,28 @@ _SESSION_ID_UNRESOLVED = 4
 
 
 def _session_core():
-    """`coordinator_core.session.core`, imported plainly when it is already on the
-    path and via the engine bootstrap only when it is not.
+    """`coordinator_core.session.core`, imported plainly. Every entry path
+    into this module bootstraps `coordinator_core` onto `sys.path` before
+    any call can reach `resolve_session_id`: all three CLI arms and
+    `main()` call `_bootstrap_engine_imports()` first, and the in-process
+    path (`compute_session_shape_gate`) has already imported
+    `coordinator_core` to load this module by path."""
+    from coordinator_core.session import core as _core
 
-    Deliberately NOT `_bootstrap_engine_imports()` unconditionally. That function
-    pulls in `lib`/`cc_invoke` to LOCATE the engine, which is work
-    `resolve_session_id` does not need in either path that matters: the in-process
-    ceremony path has already imported `coordinator_core` to get here, and the
-    standalone CLI path has already bootstrapped by the time it resolves an id. The
-    fallback is for a caller that reaches this function before either — it costs a
-    failed import, once.
-    """
-    try:
-        from coordinator_core.session import core as _core
-    except ImportError:
-        _bootstrap_engine_imports()
-        from coordinator_core.session import core as _core
     return _core
 
 
 def resolve_session_id(_repo_root: Path) -> str:
-    """Resolve the current session id, first hit wins: the em_sid env var, then
-    the canonical `session.core.SESSION_ENV_PRECEDENCE` ladder
+    """Resolve the current session id, via the canonical
+    `session.core.SESSION_ENV_PRECEDENCE` ladder
     (COORDINATOR_SESSION_ID, CLAUDE_SESSION_ID, CLAUDE_CODE_SESSION_ID) —
     both COLD only. Under a warm-served request only the CALLER's carried
     identity counts, and an uncarried one resolves to "".
+
+    See `resolve_session_id_with_source` for the full resolution logic —
+    including the split-copy degrade case (`_FallbackResolution`,
+    `SOURCE_UNREPORTED_OLD_ENGINE`) — that this function's body delegates to
+    and this docstring does not restate. <!-- Review: coordinator:code-reviewer — Finding 2, docstring cross-reference -->
 
     WARM SPLIT, and the incident that put it here (2026-08-30). This
     resolver used to read `os.environ` unconditionally. Inside the resident
@@ -227,11 +224,7 @@ def resolve_session_id(_repo_root: Path) -> str:
     Delegating to `session.core.attributable_session_id` is what closes it:
     it reads the per-request ContextVar alone under warm (tier 0, the
     identity the caller carried) and the env ladder alone when cold, where
-    `os.environ` IS the caller's own. `em_sid` is a legacy tier that ladder
-    has never carried, so it is consulted here — and, like the ladder,
-    ONLY on the cold branch; reading it warm would reinstate the same
-    ambient answer through the one var the canonical resolver does not
-    govern.
+    `os.environ` IS the caller's own.
 
     An empty return is the DESIGNED outcome for a warm request that carried
     no identity, not a failure to try. Callers must fail loud on it rather
@@ -262,15 +255,6 @@ def resolve_session_id(_repo_root: Path) -> str:
     different route)."""
     return resolve_session_id_with_source(_repo_root).session_id
 
-
-#: `resolve_session_id_with_source(...).source` for the legacy `em_sid` tier.
-#: Its own value rather than a `SESSION_ENV_PRECEDENCE` member because it is
-#: not in that ladder: nothing else in the fleet reads it, no ratchet scans
-#: for it, and a shell that exported it for one session keeps exporting it for
-#: the next — so it is the one remaining way a COLD close can silently key
-#: itself to a session that ended. `compute_session_shape_gate` raises a
-#: diagnostic on it for exactly that reason.
-SOURCE_LEGACY_EM_SID = "em_sid"
 
 #: `resolve_session_id_with_source(...).source` when the ENGINE COPY this CLI
 #: is calling predates provenance reporting. Says "nobody asked" rather than
@@ -308,11 +292,9 @@ def resolve_session_id_with_source(_repo_root=None):
     A reader could only catch it, as the filing EM did, by recognising
     unfamiliar deliverable ids further downstream.
 
-    Everything except the legacy tier is `session.core`'s to answer, and is
-    NOT re-derived here — this function's whole job is to fold the one tier
-    that lives at this site into that record, so a caller reads one
-    provenance answer rather than reconciling two. See
-    `SOURCE_LEGACY_EM_SID`.
+    Resolution itself is `session.core`'s to answer and is NOT re-derived
+    here — this function's whole job is the split-copy degrade below, for
+    an engine copy that predates provenance reporting.
     """
     core = _session_core()
     with_source = getattr(core, "attributable_session_id_with_source", None)
@@ -328,20 +310,17 @@ def resolve_session_id_with_source(_repo_root=None):
         # structural backstop, hit the first time this ran for real. The
         # resolution itself needs no new engine surface, so degrade to it and
         # report the provenance as unavailable rather than inventing one.
+        # Review: coordinator:code-reviewer (Finding 1, P1) — the degrade
+        # guarded only the two attributes that happened to break on the copy
+        # that surfaced this bug. `in_warm_served_request` is a plain
+        # attribute read below; an engine copy old enough to lack it
+        # reproduces the same AttributeError outage one attribute later.
+        # `getattr` it with a safe default rather than treat it as load-bearing.
+        in_warm = getattr(core, "in_warm_served_request", None)
         return _FallbackResolution(
             session_id=_resolve_session_id_engine_only(core),
             source=SOURCE_UNREPORTED_OLD_ENGINE,
-            warm=bool(core.in_warm_served_request()),
-            pid=os.getpid(),
-        )
-    if core.in_warm_served_request():
-        return with_source()
-    legacy = os.environ.get("em_sid", "")
-    if legacy:
-        return record(
-            session_id=legacy,
-            source=SOURCE_LEGACY_EM_SID,
-            warm=False,
+            warm=bool(in_warm()) if in_warm is not None else False,
             pid=os.getpid(),
         )
     return with_source()
@@ -353,7 +332,16 @@ def _resolve_session_id_engine_only(core) -> str:
     `attributable_session_id` is the warm/cold-correct one and is what every
     current engine carries; the `resolve_session_id` arm is for a copy older
     than that accessor too, where blending is the pre-existing behaviour and
-    refusing outright would break every close against it."""
+    refusing outright would break every close against it.
+
+    # Review: coordinator:code-reviewer (Finding 1, P1) — `core.resolve_session_id`
+    # is read as a plain attribute, not `getattr`-guarded, and that is
+    # deliberate rather than an oversight: it is the oldest surface in this
+    # resolution ladder and predates every engine copy this bin script can
+    # meet. If a copy is missing IT, the module cannot resolve a session id
+    # by any route — a different failure (this engine copy cannot function
+    # at all) from a version-skew degrade, and not one this function can
+    # paper over with a fallback."""
     accessor = getattr(core, "attributable_session_id", None) or core.resolve_session_id
     return accessor() or ""
 
@@ -2036,7 +2024,7 @@ def _cmd_resolve(args: argparse.Namespace) -> int:
         # instead.
         print(
             "wsc-session-disposition: session id could not be resolved via any tier "
-            "(warm: the caller carried no identity; cold: em_sid/COORDINATOR_SESSION_ID/"
+            "(warm: the caller carried no identity; cold: COORDINATOR_SESSION_ID/"
             "CLAUDE_SESSION_ID/CLAUDE_CODE_SESSION_ID) — refusing to classify "
             "chain-terminal disposition against an unidentified session (KS-5: the "
             "fabricated-epoch fallback that used to paper over this was removed as "

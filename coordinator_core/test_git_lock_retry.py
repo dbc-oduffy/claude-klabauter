@@ -34,7 +34,6 @@ class TestIsLockContention:
             "fatal: pathspec 'x' did not match any files",
             "hook declined to commit",
             "",
-            "! [remote rejected] work/machine-a/2026-08-18to30 -> work/machine-a/2026-08-18to30 (cannot lock ref 'refs/heads/work/machine-a/2026-08-18to30': is at 825568a57e764d3962f60f5750672975d1c6f07a but expected 4d0e45aec5f86d98cf7311338ac47aabadef25d2)",
         ],
     )
     def test_non_lock_stderr_is_not_recognized(self, stderr):

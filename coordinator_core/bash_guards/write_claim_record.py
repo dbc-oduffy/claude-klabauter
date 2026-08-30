@@ -37,34 +37,83 @@ from typing import Optional
 #: file operand for any `sed -i '<script>' <file>` invocation (both are
 #: bare positional tokens once `-i` is present -- see
 #: `_write_bump_sink_shapes.extract_write_sink_targets_for_segment`'s own
-#: `sed` branch) and it is NOT a path this session wrote to; claiming it
-#: would append a claim for a string that is not a repo-relative path at
-#: all. A real path essentially never starts with a bare `s`/`y` followed
-#: immediately by a non-alphanumeric delimiter that recurs later in the
-#: same token, so this heuristic is sound in the direction that matters
-#: here (under-claiming, never over-claiming a real file).
+#: `sed` branch).
+#:
+#: WHY THIS FILTER IS LOAD-BEARING RATHER THAN TIDY -- measured 2026-08-30,
+#: because "it is not a path this session wrote to" is an aesthetic reason and
+#: the real one is worse. `claim_index.commit_set` does NOT filter claims by
+#: dirtiness, so a junk claim reaches `safe_paths` and lands in the commit
+#: pathspec. Probed on a scratch repo: `git add -- real.txt 's/a/b/'` exits
+#: 128 (`fatal: pathspec 's/a/b/' did not match any files`) and
+#: `git commit -m x -- real.txt 's/a/b/'` exits 1, with the real change NOT
+#: committed. One `sed -i` in a session would therefore destroy that
+#: session's entire commit -- strictly worse than the dropped-file bug this
+#: module exists to fix. Deleting this filter and letting
+#: `reconciliation.claimed_absent` name the junk afterwards was considered and
+#: is NOT viable for that reason.
+#:
+#: APPLIED ONLY WHEN THE HEAD VERB IS `sed`, and only together with
+#: `_delimiter_recurs` -- see `_is_claimable_target`. This pattern ALONE is
+#: far too greedy in the one direction that must never be taken: judged
+#: against any token it rejected `state/e2e-probe-bash-write.txt` (leading
+#: `s`, a `t` recurring inside the trailing `.txt`, letters to the end), and
+#: by extension most of `state/*.txt`. A dropped claim is invisible -- the
+#: file simply fails to make the commit, which is the very bug this module
+#: exists to fix -- so the head-verb gate, not the pattern, is what makes
+#: this sound.
 _SED_SCRIPT_RE = re.compile(r"^[sy](.).*\1[a-zA-Z]*$")
 
 
-def _is_claimable_target(raw: str) -> bool:
-    """True when `raw` (the literal token the command carried) looks like a
-    real path candidate rather than an operand the extractor mis-read as
-    one. The ONLY rejection performed today is the `sed` edit-script shape
-    above -- see the module docstring for why that is the one known
-    false-positive the shared extractor produces for the claiming question
-    specifically.
+def _delimiter_recurs(raw: str) -> bool:
+    """True when `raw`'s second character -- a candidate `sed` delimiter --
+    appears at least three times in total, which is what an `s/a/b/` or
+    `y/abc/xyz/` form requires and what a filename does not. `state/x.txt`
+    carries a single `/` and fails here; `s/a/b/` carries three."""
+    if len(raw) < 4:
+        return False
+    return raw.count(raw[1]) >= 3
 
-    Takes the raw token and nothing else, deliberately: containment against
-    the repo root is the CALLER's separate `_is_within` check, and a
-    `resolved`/`root` pair threaded through here for a caller that might
-    one day want root-relative reasoning would be two parameters this
-    function never reads.
+
+def _is_claimable_target(raw: str, head_base: str, resolved: str) -> bool:
+    """True when `raw` (the literal token the command carried) is a real path
+    candidate rather than an operand the extractor mis-read as one.
+
+    Three conditions must ALL hold before anything is rejected, and each one
+    is here because the previous shape of this function was wrong without it:
+
+    1. `head_base == "sed"` -- judged against any token, `_SED_SCRIPT_RE`
+       rejected `state/e2e-probe-bash-write.txt` and by extension most of
+       `state/*.txt`.
+    2. the s///-shape matches AND its delimiter genuinely recurs.
+    3. `resolved` DOES NOT EXIST on disk. This is the one that makes it
+       sound rather than merely narrower: `sed -i` can only edit a file that
+       is already there, so a real `sed` file operand always exists and an
+       edit script never does. Without it, `sed -i 's/a/b/' state/x.txt`
+       still silently dropped its own file operand -- conditions 1 and 2 both
+       hold for that path.
+
+    A dropped claim is invisible: the file simply fails to make the commit,
+    which is the exact bug this module exists to fix, so every condition here
+    is written to fail toward CLAIMING rather than toward rejecting.
+
+    The `resolved` stat is existence only -- never mtime, size, or content.
+    It reads no attribution signal and so cannot reintroduce the race
+    DR-258 refused; it is one `os.path.exists` on the `sed` branch alone,
+    never on the common path.
+
+    Containment against the repo root is the CALLER's separate `_is_within`
+    check and is deliberately not repeated here.
     """
     if not raw or not raw.strip():
         return False
-    if _SED_SCRIPT_RE.match(raw):
-        return False
-    return True
+    if head_base != "sed":
+        return True
+    if not (_SED_SCRIPT_RE.match(raw) and _delimiter_recurs(raw)):
+        return True
+    try:
+        return os.path.exists(resolved)
+    except Exception:
+        return True
 
 
 def _is_within(path: str, root: str) -> bool:
@@ -95,8 +144,9 @@ def record_write_claims(
     SAME extractor the outside-repo guard already runs over this same
     command, on this same PreToolUse call -- no second tokenizer), keeps
     only targets that resolve inside `root` and pass `_is_claimable_target`,
-    relpaths each to forward slashes, and appends one `VERB_TOUCH` per path
-    via `session.touch_record.append_event`.
+    relpaths each to forward slashes, and hands the list to
+    `session.touch_record.append_touch_claims` -- the shared sink tail both
+    this and C9's deletion-side recorder append through.
 
     Failure posture copied verbatim from `dispatch_checks._rm_flush_touch`
     (its own docstring is the reference): no path here may raise: a
@@ -121,16 +171,10 @@ def record_write_claims(
         from coordinator_core.bash_guards.bump_outside_repo_write import (
             _iter_write_sink_candidates,
         )
-        from coordinator_core.session.touch_record import (
-            VERB_TOUCH,
-            append_event,
-            sink_path,
-        )
+        from coordinator_core.session.touch_record import append_touch_claims
 
-        sid_dir = os.path.join(root, ".git", "coordinator-sessions", session_id)
-        sink = sink_path(sid_dir)
-
-        for resolved_target, _head_base, raw_target in _iter_write_sink_candidates(
+        rels = []
+        for resolved_target, head_base, raw_target in _iter_write_sink_candidates(
             cmd, root
         ):
             try:
@@ -138,21 +182,12 @@ def record_write_claims(
                     continue
             except Exception:
                 continue
-            if not _is_claimable_target(raw_target):
+            if not _is_claimable_target(raw_target, head_base, resolved_target):
                 continue
             try:
-                rel = os.path.relpath(resolved_target, root).replace(os.sep, "/")
+                rels.append(os.path.relpath(resolved_target, root).replace(os.sep, "/"))
             except ValueError:
                 continue
-            try:
-                append_event(
-                    sink,
-                    session_id=session_id,
-                    agent_id=None,
-                    verb=VERB_TOUCH,
-                    path=rel,
-                )
-            except Exception:
-                continue
+        append_touch_claims(rels, session_id, root)
     except Exception:
         return

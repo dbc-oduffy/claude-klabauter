@@ -78,7 +78,6 @@ def disposition_module():
 
 def _clear_session_env(monkeypatch: pytest.MonkeyPatch) -> None:
     for var in (
-        "em_sid",
         "COORDINATOR_SESSION_ID",
         "CLAUDE_SESSION_ID",
         "CLAUDE_CODE_SESSION_ID",
@@ -108,18 +107,6 @@ def test_cold_resolution_accepts_coordinator_session_id(
     assert disposition_module.resolve_session_id(Path(".")) == CALLER
 
 
-def test_cold_resolution_keeps_the_legacy_em_sid_tier(
-    disposition_module, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """`em_sid` predates `SESSION_ENV_PRECEDENCE` and is not in it. It stays a
-    cold-only first tier so no operator whose environment carries only that var loses
-    the ability to close."""
-    _clear_session_env(monkeypatch)
-    monkeypatch.setenv("em_sid", CALLER)
-    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", ENGINE_OWNER)
-    assert disposition_module.resolve_session_id(Path(".")) == CALLER
-
-
 def test_warm_resolution_prefers_the_carried_identity_over_the_environment(
     disposition_module, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -140,18 +127,6 @@ def test_warm_resolution_refuses_the_ambient_environment_when_nothing_was_carrie
     a genuine one."""
     _clear_session_env(monkeypatch)
     monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", ENGINE_OWNER)
-    with warm_served_request(True):
-        assert disposition_module.resolve_session_id(Path(".")) == ""
-
-
-def test_warm_resolution_ignores_em_sid_too(
-    disposition_module, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """`em_sid` is outside `SESSION_ENV_PRECEDENCE`, so the canonical resolver does not
-    govern it and the AST ratchet does not scan for it. Reading it on the warm branch
-    would reinstate the whole defect through the one var nothing else watches."""
-    _clear_session_env(monkeypatch)
-    monkeypatch.setenv("em_sid", ENGINE_OWNER)
     with warm_served_request(True):
         assert disposition_module.resolve_session_id(Path(".")) == ""
 
@@ -254,18 +229,6 @@ def test_the_incident_is_legible_in_the_record(
     assert resolved.warm is True
 
 
-def test_legacy_em_sid_is_reported_under_its_own_name(
-    disposition_module, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """`em_sid` is not in `SESSION_ENV_PRECEDENCE`, so `session.core` cannot label
-    it and would report `resolved-source-unaccounted`. The bin script folds its own
-    tier into the record instead — one provenance answer, not two to reconcile."""
-    _clear_session_env(monkeypatch)
-    monkeypatch.setenv("em_sid", CALLER)
-    resolved = disposition_module.resolve_session_id_with_source(Path("."))
-    assert (resolved.session_id, resolved.source) == (CALLER, "em_sid")
-
-
 def test_the_refusal_names_the_input_it_read(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -300,24 +263,6 @@ def test_provenance_rides_the_gate_on_the_SUCCESS_path(
         "warm": False,
         "pid": os.getpid(),
     }
-
-
-def test_a_legacy_em_sid_close_is_warned_about_but_not_refused(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """`em_sid` is exported by a SHELL, not by the harness, so it outlives the
-    session that set it and no ratchet scans for it — the one surviving way a cold
-    close can silently key itself to a session that ended. Advisory, never a
-    refusal: it names a real session, and is correct whenever the exporting shell
-    is this one.
-    """
-    _clear_session_env(monkeypatch)
-    monkeypatch.setenv("em_sid", CALLER)
-    monkeypatch.setattr(wsc, "_load_session_disposition_module", _load_real_disposition_module)
-    gate = wsc.compute_session_shape_gate(tmp_path)
-    assert gate.sid == CALLER
-    assert gate.sid_source["source"] == "em_sid"
-    assert any("legacy `em_sid`" in d for d in gate.diagnostics), gate.diagnostics
 
 
 def test_the_gate_stays_json_serialisable_with_provenance_on_it(
@@ -389,6 +334,40 @@ def test_an_engine_without_even_the_warm_accessor_still_resolves(
     assert disposition_module.resolve_session_id_with_source(Path(".")).session_id == CALLER
 
 
+def test_an_engine_without_even_the_warm_accessor_still_resolves_under_warm(
+    disposition_module, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """# Review: coordinator:code-reviewer (Finding 2, P2) — the sibling test above
+    only exercises the blend-reinstatement rung on the cold path, where blending
+    ambient `os.environ` is harmless because it IS the caller. The rung this
+    module falls to when even `attributable_session_id` is missing reinstates
+    exactly the defect `attributable_session_id`'s own docstring documents and
+    `state/bug-backlog/2026-08-29-the-warm-door-s-exe-route-stamps-the-ser-
+    47373b19c77e.yaml` measured live: under a warm-served request, plain
+    `resolve_session_id` reads `os.environ`, which belongs to whoever SPAWNED
+    the process, not to the current session. This test PINS that the degrade
+    knowingly reinstates that misattribution risk under warm with only ambient
+    env set (no carried id) rather than pretending the blend is safe there —
+    refusing outright in this rung would be STRICTER than the copy being
+    degraded to, which would break every close against that copy. The
+    resolution still returns an id; it is the SPAWNER's id, not the caller's,
+    and that is the documented, deliberate cost of degrading to an engine this
+    old, not a defect in this test or the degrade."""
+    _clear_session_env(monkeypatch)
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", CALLER)
+
+    real_core = disposition_module._session_core()
+
+    class _OlderEngine:
+        resolve_session_id = staticmethod(real_core.resolve_session_id)
+        in_warm_served_request = staticmethod(real_core.in_warm_served_request)
+
+    monkeypatch.setattr(disposition_module, "_session_core", lambda: _OlderEngine)
+    with warm_served_request(True):
+        resolved = disposition_module.resolve_session_id_with_source(Path("."))
+    assert resolved.session_id == CALLER
+
+
 def _pre_provenance_bin_module():
     """A stand-in for a bin script predating `resolve_session_id_with_source`.
 
@@ -397,12 +376,22 @@ def _pre_provenance_bin_module():
     function, so removing the one leaves the other raising `NameError` — a
     shape no released copy of this file ever had, and a test that would then
     pin a failure mode that cannot occur.
+
+    # Review: coordinator:code-reviewer (Finding 6, P2) — this stand-in's
+    # `resolve_session_id` calls `core.resolve_session_id`, the actual older
+    # accessor a real pre-provenance bin script shipped with, not today's
+    # warm/cold-safe `attributable_session_id`. Calling the current accessor
+    # behind an old-shaped name pinned the mirror-direction ROUTING switch
+    # (`with_source is None` -> `mod.resolve_session_id(repo_root)`) without
+    # ever exercising the CLI-side degrade against a genuinely old bin script
+    # that itself used the unsafe blend — a strictly weaker claim than the
+    # engine-side degrade this file's split-copy tests are worried about.
     """
     real = _load_real_disposition_module()
 
     class _OldBinModule:
         resolve_session_id = staticmethod(
-            lambda repo_root=None: real._session_core().attributable_session_id() or ""
+            lambda repo_root=None: real._session_core().resolve_session_id() or ""
         )
         resolve_disposition = staticmethod(real.resolve_disposition)
 

@@ -259,3 +259,68 @@ def test_non_sizing_doc_type_is_unaffected_by_the_gate(tmp_path):
         resolve_session_chain_deliverable_id(read_frontmatter_field, str(handoff))
         == "dlv-live-chain-ggg777"
     )
+
+
+# --- caller-level: the wrapper must thread doc_type through (2026-08-30) ----
+#
+# Spec backlink: coordinator/bin/coordinator-doc-new.py ::
+#                _resolve_session_chain_deliverable_id
+#
+# The engine-level tests above call `resolve_session_chain_deliverable_id`
+# directly with `doc_type="sizing-object"` handed in -- they stayed green
+# even while the ONLY production caller, the CLI wrapper of the same name in
+# `coordinator/bin/coordinator-doc-new.py`, silently dropped `doc_type` on
+# the floor at its call site and always defaulted the engine's gate to
+# `None`. This test exercises that wrapper function (imported via
+# importlib, since the module's hyphenated filename is not import-safe),
+# not the engine function called directly, so a regression on the
+# thread-through breaks it even though the tests above stay green.
+
+import importlib.util as _importlib_util  # noqa: E402
+from pathlib import Path as _Path  # noqa: E402
+
+
+def _load_coordinator_doc_new_module():
+    _repo_root = _Path(__file__).resolve().parents[3]
+    _module_path = _repo_root / "coordinator" / "bin" / "coordinator-doc-new.py"
+    _spec = _importlib_util.spec_from_file_location(
+        "_coordinator_doc_new_under_test", _module_path
+    )
+    _module = _importlib_util.module_from_spec(_spec)
+    _spec.loader.exec_module(_module)
+    return _module
+
+
+def test_wrapper_threads_doc_type_into_the_engine_sizing_object_gate(
+    tmp_path, monkeypatch
+):
+    """Caller-level regression: `coordinator-doc-new.py`'s own
+    `_resolve_session_chain_deliverable_id` wrapper must pass its `doc_type`
+    argument through to the engine call, so a `sizing-object` scaffold does
+    NOT inherit a live held-handoff's `deliverable_id`. Before the
+    thread-through fix, the wrapper always called the engine with the
+    default `doc_type=None`, so this held-handoff carry-on would have fired
+    regardless of the caller's actual doc type."""
+    _module = _load_coordinator_doc_new_module()
+
+    handoff = tmp_path / "handoff.md"
+    _write_frontmatter(
+        handoff,
+        status="claimed",
+        deployment_state="in-progress",
+        deliverable_id="dlv-unrelated-baton-fff666",
+    )
+
+    monkeypatch.setattr(_module, "_NEW_CHAIN_REQUESTED", False)
+    monkeypatch.setattr(
+        _module,
+        "_resolve_session_held_handoff_path",
+        lambda repo_root: str(handoff),
+    )
+
+    assert (
+        _module._resolve_session_chain_deliverable_id(
+            "sizing-object", str(tmp_path)
+        )
+        is None
+    )

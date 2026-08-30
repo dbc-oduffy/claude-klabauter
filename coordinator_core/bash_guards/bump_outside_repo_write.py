@@ -449,8 +449,8 @@ def _extract_inline_c_payload(tokens_after_interpreter: List[str]) -> Optional[s
 def _iter_write_sink_candidates(
     cmd: str, cwd: Optional[str], preserve_windows_backslashes: Optional[bool] = None
 ) -> Iterator[Tuple[str, str, str]]:
-    """Yield `(target_dir, label, raw_target)` for every write-sink candidate
-    this command carries -- every depth of `resolve_command_positions`'s own
+    """Yield `(resolved_target, head_base, raw_target)` for every write-sink
+    candidate this command carries -- every depth of `resolve_command_positions`'s own
     result (so `bash`/`sh`/`zsh -c` payloads, already unwrapped by that
     shared tokenizer, are covered for free), PLUS a manual unwrap of any
     depth-0 `python`/`python3 -c` payload (the one leg the shared tokenizer

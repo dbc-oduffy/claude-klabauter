@@ -4889,23 +4889,63 @@ def _unify_into_successor(root: Path, verdict: dict[str, Any]) -> str:
     Raising here instead of minting means a caller that hits this never has
     a commit to clean up."""
     from coordinator_core.archival import claimed_or_shipped_at_path
+    from coordinator_core.baton_assemble import _resolve_held_handoff_for_session
     from coordinator_core.baton_assemble.apply import apply as _baton_assemble_apply
     from coordinator_core.contract import apply_base as _apply_base
 
     parents = _unification_parents(verdict.get("held") or {})
+
+    # Defect B close: `apply`'s own `brief()` RE-DERIVES its predecessor set
+    # from this session's durable claim ledger (`_resolve_held_handoff_for_session`,
+    # the SAME resolver `brief()` itself calls for kind="handoff" with no
+    # `artifact_path`) rather than trusting `verdict["held"]` -- a leg present
+    # in apply's derived set but absent from `verdict["held"]` would otherwise
+    # reach the mint unchecked. Resolved via the SAME resolver apply uses,
+    # never a parallel re-derivation.
+    apply_primary, apply_additional, _apply_ledger_degraded = _resolve_held_handoff_for_session(
+        root, allow_standalone=True
+    )
+    apply_parents = [p for p in ([apply_primary] + list(apply_additional)) if p]
+
+    union_parents = list(dict.fromkeys(parents + apply_parents))
+
+    # Defect A close: an empty parent set means there is nothing to unify --
+    # reaching the mint in that state commits a handoff with no predecessor
+    # to supersede, the same "commit something that cannot succeed" failure
+    # the unready-legs check below exists to prevent, arriving by a different
+    # (empty-comprehension-is-falsy) door. Named separately from the
+    # unready-legs raise below -- "you have no parents" is a distinct cause
+    # from "your parents are not ready".
+    if not union_parents:
+        raise RuntimeError(
+            "baton unification precondition failed: zero parent legs resolved "
+            "(verdict held-set and apply's own claim-ledger derivation are "
+            "both empty) -- there is nothing to unify, so minting a "
+            f"successor now would commit a handoff with no predecessor to "
+            f"supersede; refusing to mint (held={verdict.get('held')})"
+        )
+
     unready = [
         parent_path
-        for parent_path in parents
+        for parent_path in union_parents
         if not claimed_or_shipped_at_path(
             str(_resolve_lineage_artifact_path(root, parent_path) or (root / parent_path))
         )
     ]
     if unready:
+        agreement_note = (
+            ""
+            if set(parents) == set(apply_parents)
+            else (
+                f" -- verdict held-set={parents} disagrees with apply's own "
+                f"derived set={apply_parents}, neither preferred"
+            )
+        )
         raise RuntimeError(
             "baton unification precondition failed: parent leg(s) "
             f"{unready} are not claimed-or-shipped, so baton_assemble.apply's "
             "d6 stamp would degrade rather than stamp continued_into -- "
-            f"refusing to mint (held={verdict.get('held')})"
+            f"refusing to mint (held={verdict.get('held')}){agreement_note}"
         )
 
     exit_code, report = _baton_assemble_apply(

@@ -208,7 +208,7 @@ import re
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
+from typing import Iterable, Optional
 
 from coordinator_core import atomic_append
 from coordinator_core.session.liveness import session_live
@@ -766,6 +766,54 @@ _ROTATED_SUFFIX_RE = re.compile(
 #: See module docstring's Observability section for why this stays
 #: per-process rather than a durable cross-process sink.
 _DEGRADE_COUNTS: dict[str, int] = {}
+
+
+def append_touch_claims(
+    paths: "Iterable[str]",
+    session_id: str,
+    root: "Path | str",
+) -> None:
+    """Append one ``VERB_TOUCH`` per repo-relative entry in ``paths`` to
+    ``session_id``'s own sink under ``root``. Returns ``None`` always, raises
+    never.
+
+    Exists because two callers had hand-copied the identical tail -- build
+    ``<root>/.git/coordinator-sessions/<sid>``, ``sink_path`` it, then loop
+    ``append_event`` swallowing per-path failures: ``bash_guards.
+    dispatch_checks._rm_flush_touch`` (deletions, C9 2026-08-27) and
+    ``bash_guards.write_claim_record.record_write_claims`` (writes,
+    2026-08-30). The copies had already begun to drift in their exception
+    handling, which is the drift this collapses.
+
+    FAILS TOWARD RECORDING NOTHING, NEVER TOWARD RAISING. Both callers sit on
+    the PreToolUse guard hot path, where a recording failure must never turn
+    an otherwise-ALLOWED command into a denied one. ``session_id`` and
+    ``root`` are the CALLER's already-resolved values -- this never re-derives
+    either, and adds no spawn and no directory walk.
+
+    Entries are repo-relative POSIX paths; relpath conversion belongs to the
+    caller, which is the half the two sites legitimately differ on.
+    """
+    if not session_id or not root:
+        return
+    try:
+        sid_dir = os.path.join(str(root), ".git", "coordinator-sessions", session_id)
+        sink = sink_path(sid_dir)
+        for rel in paths:
+            if not rel:
+                continue
+            try:
+                append_event(
+                    sink,
+                    session_id=session_id,
+                    agent_id=None,
+                    verb=VERB_TOUCH,
+                    path=rel,
+                )
+            except Exception:
+                continue
+    except Exception:
+        return
 
 
 def _note_degrade(reason: str, detail: str) -> None:

@@ -14,13 +14,12 @@ point of pulling parse/print out here (AC1 forbids the warm path importing
 `coordinator_core.merge_assemble`; AC2 needed the shared functions to live
 somewhere the warm path CAN legally import).
 
-`merge_assemble/__init__.py :: main` and `apply.py :: main_apply` both
-import FROM this module, so the cold path's observable behaviour — argv
-handling, printed bytes, the usage-error exit-2 path — is unchanged.
+`apply.py :: main_apply` imports FROM this module, so the cold path's
+observable behaviour — argv handling, printed bytes, the usage-error
+exit-2 path — is unchanged.
 
-ADDITIVE TO BEHAVIOUR, not to output: nothing about what these CLIs print or
-return moved in this chunk. `brief`'s parser is hand-rolled (a
-`while i < len(rest)` loop, not argparse) and is ported as-is.
+ADDITIVE TO BEHAVIOUR, not to output: nothing about what this CLI prints or
+returns moved in this chunk.
 
 Negative-spec:
     - Do NOT import `coordinator_core.merge_assemble` (the `__init__.py`
@@ -57,34 +56,6 @@ class UsageError(Exception):
     def __init__(self, message: Optional[str] = None):
         super().__init__(message or "")
         self.message = message
-
-
-def parse_brief_argv(rest: list[str]) -> dict[str, Any]:
-    """Parses `merge-assemble brief`'s argv (post-subcommand-dispatch,
-    `rest` is `argv[1:]` in `main`'s framing) into a `{"tag_prefix": str}`
-    params dict — the same hand-rolled `while i < len(rest)` loop
-    `merge_assemble.main` ran inline, ported as-is (no argparse rewrite).
-    Raises `UsageError` on any unrecognized token or a `--tag-prefix` with
-    no following value, matching `main`'s existing `_usage(...)` return
-    path exactly."""
-    tag_prefix = "v"
-    i = 0
-    while i < len(rest):
-        tok = rest[i]
-        if tok == "--tag-prefix":
-            if i + 1 >= len(rest):
-                raise UsageError(None)
-            tag_prefix = rest[i + 1]
-            i += 2
-        else:
-            raise UsageError(f"merge-assemble: unrecognized argument {tok!r}")
-    return {"tag_prefix": tag_prefix}
-
-
-def print_brief_result(decision_object: dict[str, Any]) -> None:
-    """Prints `decision_object` byte-identical to today's
-    `json.dumps(result.decision_object, indent=2, sort_keys=True)`."""
-    print(json.dumps(decision_object, indent=2, sort_keys=True))
 
 
 def parse_apply_argv(argv: list[str]) -> dict[str, Any]:

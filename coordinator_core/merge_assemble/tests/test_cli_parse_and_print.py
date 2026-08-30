@@ -18,44 +18,6 @@ from coordinator_core.merge_assemble import cli
 
 
 # ---------------------------------------------------------------------------
-# parse_brief_argv
-# ---------------------------------------------------------------------------
-
-
-def test_parse_brief_argv_default_tag_prefix():
-    assert cli.parse_brief_argv([]) == {"tag_prefix": "v"}
-
-
-def test_parse_brief_argv_custom_tag_prefix():
-    assert cli.parse_brief_argv(["--tag-prefix", "rel-"]) == {"tag_prefix": "rel-"}
-
-
-def test_parse_brief_argv_missing_value_raises_usage_error():
-    with pytest.raises(cli.UsageError) as exc_info:
-        cli.parse_brief_argv(["--tag-prefix"])
-    assert exc_info.value.message is None
-
-
-def test_parse_brief_argv_unrecognized_argument_raises_usage_error():
-    with pytest.raises(cli.UsageError) as exc_info:
-        cli.parse_brief_argv(["--bogus"])
-    assert exc_info.value.message == "merge-assemble: unrecognized argument '--bogus'"
-
-
-# ---------------------------------------------------------------------------
-# print_brief_result
-# ---------------------------------------------------------------------------
-
-
-def test_print_brief_result_byte_identical_to_prior_inline_call(capsys):
-    decision_object = {"b": 1, "a": [1, 2, {"z": 9, "y": 8}]}
-    cli.print_brief_result(decision_object)
-    captured = capsys.readouterr()
-    expected = json.dumps(decision_object, indent=2, sort_keys=True) + "\n"
-    assert captured.out == expected
-
-
-# ---------------------------------------------------------------------------
 # parse_apply_argv
 # ---------------------------------------------------------------------------
 
@@ -138,13 +100,13 @@ def test_print_apply_result_byte_identical_to_prior_inline_call(capsys):
 # ---------------------------------------------------------------------------
 
 
-def test_main_brief_usage_error_exits_2_and_prints_diagnostic(capsys):
+def test_main_unknown_subcommand_exits_2_and_prints_diagnostic(capsys):
     from coordinator_core.merge_assemble import main, EXIT_USAGE
 
     exit_code = main(["brief", "--bogus"])
     captured = capsys.readouterr()
     assert exit_code == EXIT_USAGE
-    assert "unrecognized argument" in captured.err
+    assert "unknown subcommand 'brief'" in captured.err
 
 
 def test_main_apply_usage_error_exits_transport_fail(capsys):

@@ -25,6 +25,15 @@ Coverage:
     the raise
   - `baton_assemble.apply.apply` is never invoked (a spy proves the mint call
     itself, not just its effects, never happened)
+  - Defect A (empty parent list): `verdict["held"]` resolving to ZERO
+    parents, with `apply`'s own claim-ledger derivation also empty, is
+    refused with its own message rather than falling through to the mint
+    (the empty-comprehension-is-falsy door)
+  - Defect B (verdict/apply parent-set disagreement): a leg present in
+    `apply`'s own claim-ledger derivation (`_resolve_held_handoff_for_session`,
+    the SAME resolver `apply`'s `brief()` calls) but ABSENT from
+    `verdict["held"]` is still caught by the precondition — not just the legs
+    named in the verdict
 
 Run from the repo root: python -m pytest
 coordinator_core/pickup_assemble/tests/test_unification_raise_is_clean.py -q
@@ -41,6 +50,7 @@ from coordinator_core.win_portability import no_console_creationflags
 
 import coordinator_core.baton_assemble.apply as ba_apply
 import coordinator_core.pickup_assemble as pa
+from coordinator_core.session.claims import claim_handoff
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -135,3 +145,77 @@ def test_precondition_raise_leaves_no_commit_and_never_reaches_the_mint(tmp_path
         "to pickup_assemble"
     )
     assert mint_called == [], "the precondition must raise BEFORE baton_assemble.apply is ever called"
+
+
+def test_empty_parent_list_refused_before_the_mint(tmp_path, monkeypatch):
+    """Defect A: `verdict["held"]` resolves to ZERO parents and this
+    session's own claim ledger (consulted for Defect B parity) also holds
+    zero handoff claims -- the empty-comprehension-is-falsy door must be
+    refused with its own message, never fall through to the mint."""
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    monkeypatch.setenv("COORDINATOR_SESSION_ID", "test-session-empty-parents")
+
+    mint_called = []
+    original_apply = ba_apply.apply
+
+    def _spy_apply(*args, **kwargs):
+        mint_called.append((args, kwargs))
+        return original_apply(*args, **kwargs)
+
+    monkeypatch.setattr(ba_apply, "apply", _spy_apply)
+
+    verdict = {"held": {"primary": None, "additional": [], "degraded": False}}
+
+    before_rev_count = _rev_count(repo)
+
+    with pytest.raises(RuntimeError, match="zero parent legs resolved"):
+        pa._unify_into_successor(repo, verdict)
+
+    after_rev_count = _rev_count(repo)
+
+    assert after_rev_count == before_rev_count, (
+        "an empty-parent-list raise must leave no commit behind"
+    )
+    assert mint_called == [], "the empty-parent-list precondition must raise BEFORE the mint is ever called"
+
+
+def test_apply_derived_parent_absent_from_verdict_is_still_caught(tmp_path, monkeypatch):
+    """Defect B: a leg present in `apply`'s OWN claim-ledger derivation
+    (`_resolve_held_handoff_for_session`, the same resolver `brief()` calls)
+    but ABSENT from `verdict["held"]` must still be checked -- not reaching
+    the mint unchecked just because the verdict's own held-set never named
+    it."""
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    _seed_unclaimed_handoff(repo, "ledger-only.md")
+
+    session_id = "test-session-ledger-only"
+    monkeypatch.setenv("COORDINATOR_SESSION_ID", session_id)
+    assert claim_handoff("ledger-only.md", cwd=str(repo)) is True
+
+    mint_called = []
+    original_apply = ba_apply.apply
+
+    def _spy_apply(*args, **kwargs):
+        mint_called.append((args, kwargs))
+        return original_apply(*args, **kwargs)
+
+    monkeypatch.setattr(ba_apply, "apply", _spy_apply)
+
+    # The verdict's OWN held-set names nothing -- only the claim ledger
+    # (read by `_unify_into_successor` via the same resolver `apply` uses)
+    # knows about `ledger-only.md`.
+    verdict = {"held": {"primary": None, "additional": [], "degraded": False}}
+
+    before_rev_count = _rev_count(repo)
+
+    with pytest.raises(RuntimeError, match="baton unification precondition failed"):
+        pa._unify_into_successor(repo, verdict)
+
+    after_rev_count = _rev_count(repo)
+
+    assert after_rev_count == before_rev_count, (
+        "a leg caught only via apply's own derived set must still raise before any commit"
+    )
+    assert mint_called == [], "a leg absent from verdict['held'] but present in apply's derived set must still block the mint"

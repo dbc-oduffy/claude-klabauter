@@ -250,6 +250,56 @@ def test_ac5_sed_inplace_claims_file_not_script(tmp_path):
     assert "s/a/b/" not in {e.path for e in touches}
 
 
+@pytest.mark.parametrize(
+    "cmd,expected",
+    [
+        # THE REGRESSION THIS EXISTS FOR. The first shape of
+        # `_is_claimable_target` judged the token alone against
+        # `_SED_SCRIPT_RE` and silently dropped any path starting `s`/`y`
+        # whose second character recurred before a letters-only tail --
+        # which is most of `state/*.txt`. It shipped green because AC5
+        # above happens to use `f.py`, a name outside the bad class, and it
+        # was caught only by running the offer end-to-end. A dropped claim
+        # is INVISIBLE: the file just quietly fails to make the commit,
+        # which is the exact bug this module exists to fix, so every case
+        # here asserts the CLAIMING direction.
+        ("cat >> state/e2e-probe-bash-write.txt", "state/e2e-probe-bash-write.txt"),
+        ("cat >> state/x.txt", "state/x.txt"),
+        ("echo hi > scripts/s.txt", "scripts/s.txt"),
+        ("echo hi > systems/y.txt", "systems/y.txt"),
+        ("echo hi > yesterday.txt", "yesterday.txt"),
+        # ...and the head-verb gate means a `sed`-shaped token under a
+        # NON-sed head is still a path, not a script.
+        ("cat >> s/a/b/c.txt", "s/a/b/c.txt"),
+    ],
+)
+def test_ac5_sed_filter_never_drops_a_real_path(tmp_path, cmd, expected):
+    root = _repo(tmp_path)
+    record_write_claims(cmd, _SESSION_ID, root, denied=False)
+    claimed = {e.path for e in _events(root) if e.verb == VERB_TOUCH}
+    assert expected in claimed, (
+        f"{cmd!r} lost its claim for {expected!r} -- got {claimed}. "
+        "A silently dropped claim is the bug this module fixes."
+    )
+
+
+def test_ac5_sed_file_operand_survives_even_in_the_bad_shape(tmp_path):
+    """The `sed` head-verb gate alone was not enough: conditions 1 and 2 both
+    hold for `sed -i 's/a/b/' state/x.txt`, so its own file operand was still
+    dropped. Existence is what discriminates -- `sed -i` can only edit a file
+    that is already there, so a real operand exists and a script never does.
+    """
+    root = _repo(tmp_path)
+    target = os.path.join(root, "state")
+    os.makedirs(target, exist_ok=True)
+    with open(os.path.join(target, "x.txt"), "w", encoding="utf-8") as fh:
+        fh.write("a\n")
+    record_write_claims("sed -i 's/a/b/' state/x.txt", _SESSION_ID, root, denied=False)
+    claimed = {e.path for e in _events(root) if e.verb == VERB_TOUCH}
+    assert "state/x.txt" in claimed, claimed
+    assert "s/a/b/" not in claimed, claimed
+
+
 # ---------------------------------------------------------------------------
 # AC6 -- never raises, never flips the verdict: an unwritable sink and a
 # `None` root must be indistinguishable, from the CALLER's perspective, from

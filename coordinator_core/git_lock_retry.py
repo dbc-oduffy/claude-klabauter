@@ -86,22 +86,18 @@ LOCK_CONTENTION_SIGNATURES = (
 #: different git subsystem, and a different hold duration than an index
 #: lock, and collapsing the two would leave that constant's name assert
 #: something narrower than its contents.
+#: WIRING WARNING, not a guard: `cannot lock ref` is ALSO what git prints for a
+#: REMOTE push rejection, on the same "refs/heads/<branch>" wording -- a local
+#: race and a remote rejection cannot be told apart by substring, only by the
+#: `! [remote rejected]` line git prefixes the remote form with. No push path
+#: routes through this module today (`hooks/auto_push.py` owns that class and
+#: its own seconds-scale ladder), so this predicate never sees the remote form
+#: and nothing here excludes it. Wire a push path in here and you must handle
+#: that first.
 REF_LOCK_CONTENTION_SIGNATURES = (
     "cannot lock ref",
 )
 
-#: `cannot lock ref` is ALSO what git prints for a remote push rejection
-#: (`hooks/auto_push.py`'s class) on the exact same "refs/heads/<branch>"
-#: wording a local ref race produces -- a narrower substring cannot tell
-#: these apart, only the line git prefixes the remote form with can. A
-#: local ref race wants this module's immediate bounded retry; a remote
-#: rejection wants `hooks/auto_push.py`'s own seconds-scale ladder, and
-#: neither is the other's mechanism. Belt-and-braces today: no push path
-#: routes through this helper, so this exclusion is currently inert -- a
-#: fact about the current call-site list, not a property of the
-#: predicate, and it is what keeps the predicate honest the day a push
-#: path is wired here.
-_REMOTE_REJECTION_MARKER = "[remote rejected]"
 
 #: Default bounded retry policy: 1 initial attempt + 7 retries (8 total),
 #: exponential backoff (seconds, slept BEFORE attempts 2..8) starting at
@@ -140,16 +136,14 @@ DEFAULT_BACKOFF_SCHEDULE_S = (0.1, 0.2, 0.4, 0.8, 1.0, 1.0, 1.0)
 
 def is_lock_contention(stderr: str) -> bool:
     """True iff `stderr` names a `.git/index.lock` OR `.git/refs/...`
-    contention failure — a peer session genuinely mid-write, not a stale
-    lock file to reap and not a remote push rejection (excluded below even
-    though it shares the ref wording) — the only classes of failure
-    `run_with_lock_retry` retries. Returns a bool only, never which class
-    matched: callers ask one question, retry or not."""
-    if any(sig in stderr for sig in LOCK_CONTENTION_SIGNATURES):
-        return True
-    if _REMOTE_REJECTION_MARKER in stderr:
-        return False
-    return any(sig in stderr for sig in REF_LOCK_CONTENTION_SIGNATURES)
+    contention failure — a peer session genuinely mid-write, not a stale lock
+    file to reap — the only classes of failure `run_with_lock_retry` retries.
+    Returns a bool only, never which class matched: callers ask one question,
+    retry or not."""
+    return any(
+        sig in stderr
+        for sig in LOCK_CONTENTION_SIGNATURES + REF_LOCK_CONTENTION_SIGNATURES
+    )
 
 
 _ResultT = TypeVar("_ResultT")

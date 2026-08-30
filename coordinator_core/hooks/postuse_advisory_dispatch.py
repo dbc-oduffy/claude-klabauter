@@ -1,14 +1,17 @@
 """
 coordinator_core.hooks.postuse_advisory_dispatch — PostToolUse advisory dispatcher op.
 
-Purpose: Folds four PostToolUse advisory checks — context-pressure, runtime-tripwire,
-a one-time first-Agent-dispatch sidecar advisory, and the unauthorized-handoff nudge —
-into a single in-process op, eliminating bash.exe spawns per tool call on Windows.
-Context-pressure and runtime-tripwire fire on ALL PostToolUse events (no tool_name
-gate — both checks are universal); the first-Agent-dispatch advisory fires only on
-tool_name == "Agent", and only once per session; the unauthorized-handoff nudge only
-on tool_name == "Write" with a handoff/spinoff file_path. The latter two narrow
-themselves internally — no handler-level tool_name gate is applied to the universal two.
+Purpose: Folds five PostToolUse advisory checks — context-pressure, runtime-tripwire,
+a one-time first-Agent-dispatch sidecar advisory, the unauthorized-handoff nudge, and
+the workflow-monitor arming advisory — into a single in-process op, eliminating
+bash.exe spawns per tool call on Windows. Context-pressure and runtime-tripwire fire
+on ALL PostToolUse events (no tool_name gate — both checks are universal); the
+first-Agent-dispatch advisory fires only on tool_name == "Agent", and only once per
+session; the unauthorized-handoff nudge only on tool_name == "Write" with a
+handoff/spinoff file_path; the workflow-monitor arming advisory only on
+tool_name == "Workflow", and only once per task id per session. The latter three
+narrow themselves internally — no handler-level tool_name gate is applied to the
+universal two.
 
 The session-scoped checks run concurrently via asyncio.gather. Whichever fire have
 their additionalContext texts merged with a blank-line separator into ONE
@@ -16,9 +19,9 @@ post_advisory() call (a PostToolUse hook must emit at most one JSON object). Whe
 fire, no_advisory() is returned.
 
 Port of: postuse-advisory-dispatch.sh (DoE 2f8b8450, 2026-07-16). The first-Agent-
-dispatch sidecar advisory has no bash-era equivalent — added directly here. The
-unauthorized-handoff nudge is a fan-in of DoE's separate PostToolUse(Write)
-registration, whose logic already lived in this engine
+dispatch sidecar advisory and the workflow-monitor arming advisory have no bash-era
+equivalent — added directly here. The unauthorized-handoff nudge is a fan-in of DoE's
+separate PostToolUse(Write) registration, whose logic already lived in this engine
 (coordinator_core.hooks.nudge_unauthorized_handoff, still registered as its own op for
 direct callers) — folding it here drops Write's registration count by one.
 
@@ -28,8 +31,10 @@ Translation notes:
     (new) first-Agent-dispatch  → _check_first_agent_dispatch_sync (session_id + tool_name)
     (fan-in) unauthorized-handoff → nudge_unauthorized_handoff.advisory_text
                                     (tool_name + file_path + content + transcript_path)
+    (new) workflow-monitor-arm  → _check_workflow_monitor_arm_sync
+                                    (session_id + transcript_path + tool_name)
     jq merge logic               → plain string concatenation + post_advisory()
-    All four return str advisory text or "" — "" means "did not fire".
+    All five return str advisory text or "" — "" means "did not fire".
 
 Spec backlink: pln-pcore-04-advisory-hook-ops-mak-b219a8 § C7
 """
@@ -879,6 +884,142 @@ def _check_first_agent_dispatch_sync(session_id: str, tool_name: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# _check_workflow_monitor_arm_sync
+#
+# New (no bash-era equivalent): a once-per-task advisory telling the
+# dispatching EM the exact `Monitor(...)` call to paste to arm the watcher
+# built in coordinator_core.workflow_watch (C1a/C1b) against a just-launched
+# harness `Workflow` background run, so the EM stops hand-writing monitors
+# (or worse, forgetting one and never learning the run ended).
+#
+# Gate is tool_name == "Workflow" — PostToolUse fires immediately after the
+# tool returns its async-launch result, so the launch record this check looks
+# for at the transcript tail IS the launch that just happened (see the plan's
+# Evidence section, pln 2026-08-30-the-workflow-monitor-outlives-the-run-it-
+# watches). taskId/runId/transcriptDir are read from the transcript tail via
+# coordinator_core.workflow_watch.tail.TailReader (the same reader C1a
+# builds), never from an unmapped `params` field — `_handler` receives
+# exactly session_id, transcript_path, agent_id, tool_name, file_path,
+# content, and this check reads no field beyond those six.
+# ---------------------------------------------------------------------------
+
+# Matches the async-launch result record's field order verbatim as observed
+# in the plan's evidence transcript: status, taskId, taskType, runId,
+# transcriptDir. Deliberately field-order-sensitive (not a JSON parse of an
+# arbitrary object) — the record is embedded inside a larger transcript line
+# that is not itself valid standalone JSON, the same reason terminal.py's
+# _TASK_NOTIFICATION_RE matches by regex rather than by json.loads.
+_ASYNC_LAUNCH_RE = re.compile(
+    r'"status"\s*:\s*"async_launched"'
+    r'[^{}]*?"taskId"\s*:\s*"(?P<task_id>[^"]*)"'
+    r'[^{}]*?"taskType"\s*:\s*"(?P<task_type>[^"]*)"'
+    r'[^{}]*?"runId"\s*:\s*"(?P<run_id>[^"]*)"'
+    r'[^{}]*?"transcriptDir"\s*:\s*"(?P<transcript_dir>[^"]*)"'
+)
+
+
+def _workflow_monitor_sentinel_path(tmpdir: str, session_id: str, task_id: str) -> str:
+    return os.path.join(tmpdir, f"workflow-monitor-armed-{session_id}-{task_id}")
+
+
+def _check_workflow_monitor_arm_sync(session_id: str, transcript_path: str, tool_name: str) -> str:
+    """One-time-per-task advisory: names the exact `Monitor(...)` call to arm
+    against a just-launched harness `Workflow` background run.
+
+    Returns non-empty advisory text when it fires; "" on every early-exit path
+    (non-Workflow tool call, no async_launched/local_workflow record found
+    near the transcript tail, sentinel already present/written, or the
+    watcher's wall-clock cap constant is unavailable). Never raises —
+    fail-open on all I/O errors, same posture as the other four checks in
+    this module (see the durable-state comment above _advisory_state_path).
+
+    Does NOT key on the `wf_` run id (see the plan's Anti-scope) — the
+    sentinel and the Monitor call's watcher argv are both keyed on the task
+    id; runId is read only to help derive the journal path to render.
+    """
+    if not session_id or tool_name != "Workflow" or not transcript_path:
+        return ""
+
+    try:
+        from coordinator_core.workflow_watch.tail import TailReader
+
+        text = TailReader(transcript_path).poll()
+    except Exception:
+        return ""
+    if not text:
+        return ""
+
+    # Last match wins: PostToolUse fires immediately after the tool returns,
+    # so the most recent async_launched record in the tail IS this launch.
+    match = None
+    for candidate in _ASYNC_LAUNCH_RE.finditer(text):
+        match = candidate
+    if match is None:
+        return ""
+    if match.group("task_type") != "local_workflow":
+        return ""
+
+    task_id = match.group("task_id")
+    run_id = match.group("run_id")
+    transcript_dir = match.group("transcript_dir")
+    if not task_id or not run_id or not transcript_dir:
+        return ""
+
+    # Review: code-reviewer (B-F3) — use tempfile.gettempdir(); /tmp/ absent on Windows.
+    tmpdir = _tempfile().gettempdir()
+    sentinel = _workflow_monitor_sentinel_path(tmpdir, session_id, task_id)
+    if os.path.isfile(sentinel):
+        return ""
+
+    try:
+        with open(sentinel, "w", encoding="utf-8", newline="\n") as fh:
+            fh.write(str(int(time.time())))
+    except Exception:
+        # Sentinel unwritable — fail open toward silence this call rather than
+        # raising or emitting an advisory whose one-time firing can't be
+        # recorded. Mirrors _check_first_agent_dispatch_sync's partial-write
+        # discipline: best-effort remove so a later Workflow launch with the
+        # same task id in this session can retry the write and actually fire.
+        try:
+            os.remove(sentinel)
+        except Exception:
+            pass
+        return ""
+
+    # The watcher's own wall-clock cap default (coordinator_core.workflow_watch,
+    # C1b) is the single source of truth for this number — the emitted
+    # timeout_ms below MUST be the same number as workflow_watch's own --cap
+    # default, derived once in one place, so the two cannot drift apart. This
+    # check imports it rather than re-stating it as a literal; if the constant
+    # is unavailable (C1b not yet landed, or renamed), fail open to silence
+    # rather than guess a number that could disagree with the watcher's own
+    # enforced cap.
+    try:
+        from coordinator_core.workflow_watch import DEFAULT_CAP_MS as cap_ms
+    except Exception:
+        return ""
+
+    journal_path = os.path.join(transcript_dir, run_id, "journal.jsonl")
+    monitor_command = (
+        "python3 -m coordinator_core.workflow_watch"
+        f" --transcript {transcript_path}"
+        f" --journal {journal_path}"
+        f" --task-id {task_id}"
+        " --poll-interval 1"
+        f" --cap {cap_ms}"
+    )
+
+    return (
+        "WORKFLOW MONITOR: this Workflow run is watched by a background hook"
+        " check, not by you — arm the watcher instead of hand-writing one."
+        f' Paste: Monitor(command="{monitor_command}", timeout_ms={cap_ms},'
+        " persistent=false). The watcher enforces its own wall-clock cap"
+        " independent of this timeout_ms and exits on its own once the run"
+        " reaches a terminal state."
+    )
+
+
+# ---------------------------------------------------------------------------
 # Failure isolation for the fold
 # ---------------------------------------------------------------------------
 
@@ -928,7 +1069,8 @@ async def _leg_text(label: str, coro) -> str:
 @register_op("hooks.postuse_advisory_dispatch")
 async def _handler(params: dict, repo_root=None) -> dict:
     """PostToolUse advisory dispatcher: folds context-pressure + runtime-tripwire +
-    the first-Agent-dispatch sidecar advisory + the unauthorized-handoff nudge.
+    the first-Agent-dispatch sidecar advisory + the unauthorized-handoff nudge +
+    the workflow-monitor arming advisory.
 
     Context-pressure and runtime-tripwire fire on ALL PostToolUse events (no
     tool_name gate — both are universal). The first-Agent-dispatch advisory only
@@ -936,14 +1078,18 @@ async def _handler(params: dict, repo_root=None) -> dict:
     plus a durable once-per-session sentinel (see _check_first_agent_dispatch_sync),
     not a handler-level tool_name gate applied to the other two. The
     unauthorized-handoff nudge gates internally on tool_name == "Write" plus a
-    handoff/spinoff file_path, the same narrowing shape. Merges whichever fire
-    (blank-line separator, cp/rt/first-agent-dispatch/unauthorized-handoff order),
+    handoff/spinoff file_path, the same narrowing shape. The workflow-monitor
+    arming advisory gates internally on tool_name == "Workflow" plus a durable
+    once-per-task sentinel (see _check_workflow_monitor_arm_sync), the same
+    narrowing shape again. Merges whichever fire (blank-line separator,
+    cp/rt/first-agent-dispatch/unauthorized-handoff/workflow-monitor-arm order),
     or returns no_advisory() when none fire.
 
-    Merge contract (mirrors postuse-advisory-dispatch.sh, extended for the third
-    and fourth checks):
-        N of 4 fire → post_advisory("\\n\\n".join of the N non-empty texts, in
-                       cp/rt/first-agent-dispatch/unauthorized-handoff order)
+    Merge contract (mirrors postuse-advisory-dispatch.sh, extended for the third,
+    fourth, and fifth checks):
+        N of 5 fire → post_advisory("\\n\\n".join of the N non-empty texts, in
+                       cp/rt/first-agent-dispatch/unauthorized-handoff/
+                       workflow-monitor-arm order)
         none fire   → no_advisory()
 
     Folding the fourth check in retires DoE's separate PostToolUse(Write)
@@ -956,14 +1102,22 @@ async def _handler(params: dict, repo_root=None) -> dict:
     Negative-spec:
         Context-pressure and runtime-tripwire DO NOT gate on tool_name —
         PostToolUse fires on every tool and both checks are universal (not
-        tool-name-scoped). The first-Agent-dispatch and unauthorized-handoff
-        advisories DO gate on tool_name internally ("Agent" and "Write"
-        respectively) — their own internal early-exits, not handler-level gates
-        applied to the universal two.
+        tool-name-scoped). The first-Agent-dispatch, unauthorized-handoff, and
+        workflow-monitor-arm advisories DO gate on tool_name internally ("Agent",
+        "Write", and "Workflow" respectively) — their own internal early-exits,
+        not handler-level gates applied to the universal two.
         DOES NOT gate the unauthorized-handoff nudge on session_id — its
         predicate is the Write payload alone, so it runs ahead of the
         session-scoped short-circuit rather than being swallowed by it.
         DOES NOT block execution — PostToolUse is advisory only.
+        DOES NOT arm the Monitor call itself — the workflow-monitor-arm check
+        only names the call for the EM to paste; it never dispatches, spawns,
+        or writes into the shared advisory-hook-state-{session_id}.json (its
+        once-per-task sentinel is its own disjoint file, matching the
+        first-Agent-dispatch and runtime-tripwire checks' own disjoint
+        sentinels — see the module-level state-management comment above
+        _advisory_state_path for why sharing that file across concurrent legs
+        is the regression this avoids).
         WRITES durable per-session dedup/throttle state to tempdir (see the
         module-level state-management comment above _advisory_state_path) —
         this op is classified MUTATING, not COMPUTE_ONLY (reversing the B-F1
@@ -1028,6 +1182,9 @@ async def _handler(params: dict, repo_root=None) -> dict:
         asyncio.to_thread(_check_runtime_tripwire_sync, session_id, agent_id),
         asyncio.to_thread(_check_first_agent_dispatch_sync, session_id, tool_name),
         uh_coro,
+        asyncio.to_thread(
+            _check_workflow_monitor_arm_sync, session_id, transcript_path, tool_name
+        ),
         return_exceptions=True,
     )
     labels = (
@@ -1035,12 +1192,13 @@ async def _handler(params: dict, repo_root=None) -> dict:
         "runtime_tripwire",
         "first_agent_dispatch",
         "unauthorized_handoff",
+        "workflow_monitor_arm",
     )
-    cp_text, rt_text, ad_text, uh_text = (
+    cp_text, rt_text, ad_text, uh_text, wm_text = (
         _text_or_breadcrumb(label, result) for label, result in zip(labels, results)
     )
 
-    texts = [text for text in (cp_text, rt_text, ad_text, uh_text) if text]
+    texts = [text for text in (cp_text, rt_text, ad_text, uh_text, wm_text) if text]
     if texts:
         return post_advisory("\n\n".join(texts))
     return no_advisory()

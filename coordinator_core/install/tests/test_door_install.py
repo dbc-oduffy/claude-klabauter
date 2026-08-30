@@ -267,4 +267,115 @@ def test_install_door_removes_stale_destination_sidecar_when_no_prebuilt_sidecar
 
     door_install.install_door(bin_dst, engine_root)
 
-    assert not stale_provenance.exists()
+
+# ---------------------------------------------------------------------------
+# `_replace_possibly_running_image` short-circuit + `_sweep_displaced_images`
+# ---------------------------------------------------------------------------
+
+
+def test_replace_possibly_running_image_identical_content_writes_nothing(tmp_path):
+    source = tmp_path / "source.exe"
+    source.write_bytes(b"same-content")
+    dest = tmp_path / "dest.exe"
+    dest.write_bytes(b"same-content")
+
+    before_mtime = dest.stat().st_mtime_ns
+
+    door_install._replace_possibly_running_image(source, dest)
+
+    assert dest.stat().st_mtime_ns == before_mtime
+    assert list(tmp_path.glob("*.stale-*")) == []
+
+
+def test_replace_possibly_running_image_copies_when_content_differs(tmp_path):
+    source = tmp_path / "source.exe"
+    source.write_bytes(b"new-content")
+    dest = tmp_path / "dest.exe"
+    dest.write_bytes(b"old-content")
+
+    door_install._replace_possibly_running_image(source, dest)
+
+    assert dest.read_bytes() == b"new-content"
+
+
+def test_replace_possibly_running_image_falls_through_to_copy_on_comparison_error(
+    tmp_path, monkeypatch
+):
+    source = tmp_path / "source.exe"
+    source.write_bytes(b"content-a")
+    dest = tmp_path / "dest.exe"
+    dest.write_bytes(b"content-a")
+
+    monkeypatch.setattr(
+        door_install.filecmp, "cmp", lambda *a, **k: (_ for _ in ()).throw(OSError("boom"))
+    )
+
+    calls = []
+    real_copy2 = door_install.shutil.copy2
+
+    def _spy_copy2(src, dst):
+        calls.append((src, dst))
+        return real_copy2(src, dst)
+
+    monkeypatch.setattr(door_install.shutil, "copy2", _spy_copy2)
+
+    door_install._replace_possibly_running_image(source, dest)
+
+    assert calls, "copy2 must be reached when the content comparison itself raises"
+
+
+def test_sweep_displaced_images_removes_stale_siblings_only(tmp_path):
+    bin_dst = tmp_path / "bin"
+    bin_dst.mkdir()
+    stale_one = bin_dst / "coordinator-invoke.exe.stale-1234-5678"
+    stale_two = bin_dst / "publish.exe.stale-999-111"
+    keep = bin_dst / "coordinator-invoke.exe"
+    stale_one.write_bytes(b"x")
+    stale_two.write_bytes(b"x")
+    keep.write_bytes(b"x")
+
+    removed = door_install._sweep_displaced_images(bin_dst)
+
+    assert set(removed) == {stale_one, stale_two}
+    assert not stale_one.exists()
+    assert not stale_two.exists()
+    assert keep.exists()
+
+
+def test_sweep_displaced_images_skips_permission_error_and_continues(tmp_path, monkeypatch):
+    bin_dst = tmp_path / "bin"
+    bin_dst.mkdir()
+    locked = bin_dst / "coordinator-invoke.exe.stale-1-1"
+    unlockable = bin_dst / "publish.exe.stale-2-2"
+    locked.write_bytes(b"x")
+    unlockable.write_bytes(b"x")
+
+    real_unlink = door_install.Path.unlink
+
+    def _flaky_unlink(self, *args, **kwargs):
+        if self.name == locked.name:
+            raise PermissionError("still mapped")
+        return real_unlink(self, *args, **kwargs)
+
+    monkeypatch.setattr(door_install.Path, "unlink", _flaky_unlink)
+
+    removed = door_install._sweep_displaced_images(bin_dst)
+
+    assert removed == [unlockable]
+    assert locked.exists()
+    assert not unlockable.exists()
+
+
+def test_install_door_check_only_sweeps_nothing(tmp_path):
+    engine_root = tmp_path / "engine"
+    _stamp_engine_root(engine_root)
+    bin_dst = tmp_path / "bin"
+    bin_dst.mkdir()
+    (bin_dst / door_install.DOOR_INSTALLED_NAME).write_bytes(b"x")
+    (bin_dst / door_build.SIDECAR_FILENAME).write_text("{}", encoding="utf-8")
+    stale = bin_dst / "coordinator-invoke.exe.stale-1-1"
+    stale.write_bytes(b"x")
+
+    door_install.install_door(bin_dst, engine_root, check_only=True)
+
+    assert stale.exists()

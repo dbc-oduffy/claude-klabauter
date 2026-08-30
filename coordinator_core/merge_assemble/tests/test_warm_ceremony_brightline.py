@@ -133,10 +133,6 @@ K_INVOCATIONS = 6
 """Matches the sizing/C3/C4 methodology (k>=6) already established for this
 instrument elsewhere in this repo — not re-derived here."""
 
-BRIGHTLINE_MS = 500.0
-"""DR-344's own brightline (CLAUDE.md § The brightline) — the number every
-assertion in this module is read against, never `SUSPENSION_BAR_MS`."""
-
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _FORWARDER = _REPO_ROOT / "coordinator" / "bin" / "merge-assemble.py"
 _ENTRY_POINT_SHIM = _REPO_ROOT / "coordinator" / "bin" / "lib" / "entry_point_shim.py"
@@ -155,12 +151,20 @@ _OP_PATH_SWEEP_EXEMPT_FILES = (
     (_REPO_ROOT / "coordinator_core" / "directive_cli_arity.py").resolve(),
     (_REPO_ROOT / "coordinator_core" / "session" / "grant_directive.py").resolve(),
     (_REPO_ROOT / "coordinator_core" / "workweek_complete" / "brief.py").resolve(),
+    (_REPO_ROOT / "coordinator_core" / "op_budget_suspension.py").resolve(),
 )
 """Files that legitimately NAME the two op ids without DISPATCHING them,
 verified individually at pin time (each occurrence read at its cited line
 before exemption — no blanket "docstrings are fine" rule):
 
     - `ops.py` — defines the two handlers (`register_op` decorator).
+    - `op_budget_suspension.py` — the K-114 tombstone entry for
+      `merge_assemble.brief` (a bare dict key, refusal-table bookkeeping,
+      never a call site) plus `merge_assemble.apply`'s own budget row —
+      same class of exemption as `authz/classification.py`/`op_scopes.py`
+      below, added when this file's sweep first fired on it (the tombstone
+      predates this row; the row itself is a residue-cleanup fix, not a
+      new dispatch site).
     - `apply.py`, `merge_assemble/__init__.py`, `cli.py` (the last added by
       this plan's C1, this exemption row added by C3 after the sweep fired
       on it — verified at source: two docstring mentions of the module
@@ -185,74 +189,6 @@ is exempt from its own sweep too — matching the idiom
 exact shape of check."""
 
 _OP_IDS = ("merge_assemble.brief", "merge_assemble.apply")
-
-_WARM_OP_PROBE_SOURCE = textwrap.dedent(
-    '''\
-    """Standalone probe (written to disk by test_warm_ceremony_brightline.py,
-    never committed): calls the WARM OP PATH's own two registered handlers
-    in-process, in a single spawned interpreter, so
-    `batched_process_time_ms` can measure that interpreter's process time.
-
-    argv[1] is the throwaway repo root; argv[2] ("stub" | "real") selects
-    whether `_CLI_DISPATCH` is monkeypatched to a uniform no-op stub before
-    calling `merge_assemble.apply` — "stub" isolates the op path's own
-    reach/dispatch-loop overhead (this module's ceremony test); "real"
-    never actually lands here (apply mutates and this probe is reused
-    read-only-only by design), kept as an explicit branch so a future
-    caller cannot silently drop the stub without noticing the branch.
-    """
-    import asyncio
-    import sys
-    from pathlib import Path
-
-    from coordinator_core.merge_assemble import apply as _ma_apply
-    from coordinator_core.merge_assemble import ops as _ma_ops
-
-
-    def _stub_handler(args, repo_root):
-        return {"ok": True, "args": args, "repo_root": str(repo_root)}
-
-
-    def main() -> int:
-        repo_root = Path(sys.argv[1])
-        mode = sys.argv[2] if len(sys.argv) > 2 else "brief-only"
-
-        brief_result = asyncio.run(_ma_ops._merge_assemble_brief({}, repo_root))
-        if brief_result["exit_code"] != 0:
-            print(f"brief failed: {brief_result}", file=sys.stderr)
-            return 1
-        if mode == "brief-only":
-            return 0
-
-        if mode == "stub":
-            for cli_name in list(_ma_apply._CLI_DISPATCH):
-                _ma_apply._CLI_DISPATCH[cli_name] = _stub_handler
-        elif mode != "real":
-            print(f"unrecognized mode {mode!r}", file=sys.stderr)
-            return 2
-
-        apply_result = asyncio.run(
-            _ma_ops._merge_assemble_apply(
-                {"session_id": "c7-warm-op-probe", "force": True}, repo_root
-            )
-        )
-        # exit_code 1 ("directive_failed"/halted-at-judgment) is EXPECTED
-        # and fine here — no decisions are supplied, so ship_verdict/
-        # version_bump_final stay unresolved and d2/d4 never land (verified
-        # by hand: the repo's own tag set is unchanged after this call).
-        # Only a transport-level failure (exit_code not in {0, 1}) is an
-        # error this probe should surface.
-        if apply_result["exit_code"] not in (0, 1):
-            print(f"apply transport-failed: {apply_result}", file=sys.stderr)
-            return 1
-        return 0
-
-
-    if __name__ == "__main__":
-        sys.exit(main())
-    '''
-)
-
 
 def _require_windows_or_darwin() -> None:
     if not (IS_WINDOWS or IS_DARWIN):
@@ -291,13 +227,6 @@ def _throwaway_repo(tmp_path: Path) -> Path:
     repo.mkdir()
     _init_throwaway_repo(repo)
     return repo
-
-
-@pytest.fixture()
-def _warm_op_probe(tmp_path: Path) -> Path:
-    probe = tmp_path / "warm_op_probe.py"
-    probe.write_text(_WARM_OP_PROBE_SOURCE, encoding="utf-8")
-    return probe
 
 
 def _spawn_env() -> dict:
@@ -432,23 +361,35 @@ class TestNoInTreeCallerDispatchesTheRegisteredOp:
         offenders = [op_id for op_id in _OP_IDS if op_id in content]
         assert offenders == ["merge_assemble.apply"]
 
-    def test_entry_point_shim_dispatches_both_op_ids(self) -> None:
-        """AC8: the entry DOES dispatch — both `merge_assemble.brief` and
-        `merge_assemble.apply` reach an actual `route(...)` call inside
-        `entry_point_shim.py`, keyed by AST, not by a substring hit."""
+    def test_entry_point_shim_dispatches_apply(self) -> None:
+        """AC8, NARROWED (docs/plans/2026-08-30-the-dead-brief-verb-stops-
+        advertising-it.md, C1): `merge_assemble.brief`'s CLI verb was
+        removed — the `brief` subcommand now refuses before any argv-parse/
+        dispatch machinery runs, so it never reaches `route(...)` at all.
+        Only `merge_assemble.apply` still does; this test asserts that
+        single surviving dispatch call site, keyed by AST, not by a
+        substring hit. (Was `test_entry_point_shim_dispatches_both_op_ids`,
+        asserting both op ids — no longer true.)"""
         source = _ENTRY_POINT_SHIM.read_text(encoding="utf-8")
-        for op_id in _OP_IDS:
-            assert _op_id_reaches_a_route_call(source, op_id), (
-                f"{op_id} is not reached by a route(...)/cc_invoke.route(...) "
-                f"call in {_ENTRY_POINT_SHIM} — AC8 requires an actual "
-                "dispatch call site, not a docstring/module-path mention"
-            )
+        assert _op_id_reaches_a_route_call(source, "merge_assemble.apply"), (
+            "merge_assemble.apply is not reached by a route(...)/"
+            f"cc_invoke.route(...) call in {_ENTRY_POINT_SHIM} — AC8 "
+            "requires an actual dispatch call site, not a docstring/"
+            "module-path mention"
+        )
+        assert not _op_id_reaches_a_route_call(source, "merge_assemble.brief"), (
+            "merge_assemble.brief reaches a route(...) call — its CLI verb "
+            "was removed (K-114 residue cleanup) and must never dispatch again"
+        )
 
     def test_goes_red_if_the_route_call_is_removed(self) -> None:
         """AC8's (c): the check must actually depend on C2's `route(...)`
         call being present — proved by mutating it out of the REAL source
         text (never a hand-written fixture) and asserting the check flips
-        to False for both op ids."""
+        to False. Narrowed to `merge_assemble.apply` (see
+        `test_entry_point_shim_dispatches_apply`'s own docstring) — `brief`
+        never reaches `route(...)` post-C1, so it cannot regress from True
+        to False here."""
         source = _ENTRY_POINT_SHIM.read_text(encoding="utf-8")
         target = "result = cc_invoke.route(op, params, repo_root, _legacy_fn)"
         assert target in source, (
@@ -457,12 +398,11 @@ class TestNoInTreeCallerDispatchesTheRegisteredOp:
         )
         mutated = source.replace(target, "result = _legacy_fn()")
         assert mutated != source
-        for op_id in _OP_IDS:
-            assert not _op_id_reaches_a_route_call(mutated, op_id), (
-                f"{op_id} still reads as dispatched after removing the "
-                "route(...) call — the check is not actually keyed on that "
-                "call site"
-            )
+        assert not _op_id_reaches_a_route_call(mutated, "merge_assemble.apply"), (
+            "merge_assemble.apply still reads as dispatched after removing "
+            "the route(...) call — the check is not actually keyed on that "
+            "call site"
+        )
 
     def test_a_bare_docstring_mention_does_not_satisfy_the_check(self) -> None:
         """Guards against the exact vacuous-inversion failure mode the EM
@@ -529,129 +469,18 @@ class TestNoInTreeCallerDispatchesTheRegisteredOp:
         assert "_simple_entry" in shim_content
 
 
-class TestWarmCeremonyBrightline:
-    """AC11: the converged ceremony's process-time cost on the WARM OP
-    PATH (C6's registered handlers, called in-process), against DR-344's
-    500ms brightline. Every assertion below is labelled with which path
-    produced its number."""
-
-    def test_warm_op_path_brief_process_time(
-        self, _throwaway_repo: Path, _warm_op_probe: Path
-    ) -> None:
-        """WARM OP PATH, `merge_assemble.brief` only — COMPUTE_ONLY, real
-        (non-stubbed) git reads against the throwaway fixture, safely
-        batched k times."""
-        _require_windows_or_darwin()
-
-        result = batched_process_time_ms(
-            [sys.executable, str(_warm_op_probe), str(_throwaway_repo), "brief-only"],
-            k=K_INVOCATIONS,
-            cwd=str(_throwaway_repo),
-            env=_spawn_env(),
-        )
-        assert result["rc"] == 0, result
-        assert result["process_time_ms"] <= BRIGHTLINE_MS, (
-            f"WARM OP PATH brief() missed the 500ms brightline: {result!r}"
-        )
-
-    def test_warm_op_path_ceremony_process_time(
-        self, _throwaway_repo: Path, _warm_op_probe: Path
-    ) -> None:
-        """WARM OP PATH, brief() + apply() end to end, `_CLI_DISPATCH`
-        stubbed (module docstring § METHODOLOGY) — the op path's own
-        reach and directive-loop overhead, real git reads included, no
-        per-handler execution cost folded in."""
-        _require_windows_or_darwin()
-
-        result = batched_process_time_ms(
-            [sys.executable, str(_warm_op_probe), str(_throwaway_repo), "stub"],
-            k=K_INVOCATIONS,
-            cwd=str(_throwaway_repo),
-            env=_spawn_env(),
-        )
-        assert result["rc"] == 0, result
-        # Reported findings from this chunk's own verification run (this
-        # box, 2026-08-26, k=6, Windows): 182.292ms process time / 9.0
-        # procs per call (1 interpreter + 8 real `git` subprocesses — two
-        # brief() computations, one standalone and one inside apply()'s
-        # own re-brief, each issuing ~4 real git calls). Both figures are
-        # reported, not just gated, so a reader does not have to re-derive
-        # the spawn/interpreter split from a bare pass/fail.
-        assert result["process_time_ms"] <= BRIGHTLINE_MS, (
-            "WARM OP PATH brief()+apply() (dispatch table stubbed) missed "
-            f"the 500ms brightline: {result!r} — dominant cost is real git "
-            "subprocesses (brief() runs twice: once standalone, once "
-            "inside apply()'s own re-brief), not the op-path adapter itself"
-        )
-
-    def test_warm_op_probe_rejects_unrecognized_mode(
-        self, _throwaway_repo: Path, _warm_op_probe: Path
-    ) -> None:
-        """Not a brightline measurement — covers the probe's own
-        `elif mode != "real":` guard (code-reviewer finding: that branch
-        was unreachable from this module, since every other test here only
-        ever passes "brief-only" or "stub"). A single plain subprocess
-        call, no batching: asserts the probe's documented `argv[2]`
-        contract ("stub" | "real", never anything else) is actually
-        enforced, not merely asserted in its own docstring."""
-        _require_windows_or_darwin()
-
-        completed = subprocess.run(
-            [sys.executable, str(_warm_op_probe), str(_throwaway_repo), "bogus-mode"],
-            cwd=str(_throwaway_repo),
-            env=_spawn_env(),
-            capture_output=True,
-            text=True,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-        )
-        assert completed.returncode == 2, completed
-        assert "unrecognized mode" in completed.stderr, completed
-
-    @pytest.mark.real_home
-    def test_forwarder_brief_is_now_warm_served(self, _throwaway_repo: Path) -> None:
-        """The forwarder leg, RE-PREMISED by this plan — read the history
-        before changing it again.
-
-        This test was inherited from the predecessor plan, where it asserted
-        `procs_per_call >= 2.0` on the grounds that the forwarder was cold and
-        "genuinely untouched ... no caller was repointed at the registered op".
-        THIS plan's C2 deliberately repointed that caller, so the old premise is
-        false by design, not by accident: the forwarder is now served by the warm
-        engine and spawns ONE process, because the engine does the git work
-        instead of the forwarder spawning it.
-
-        It is rewritten rather than deleted, and rather than having its threshold
-        lowered to whatever the run happened to produce, because the leg still
-        needs an oracle — it just needs the CURRENT true one. The cold-path
-        measurement it used to carry has not been dropped: it moved to
-        `TestLikeForLikeWarmVsColdComparison`, which forces the cold leg through
-        the real fallback rather than assuming an unforced run is cold. That
-        assumption is exactly what broke this test, and AC9 is the rule against
-        repeating it — a measurement must assert the path it was taken on.
-
-        `@pytest.mark.real_home`: the forwarder resolves `CLAUDE_KLABAUTER_ROOT` through the
-        machine-local registry, which this suite's HOME-quarantine autouse fixture
-        blocks; the documented opt-out case for a read-only oracle against the
-        live tree's own registry."""
-        _require_windows_or_darwin()
-
-        result = batched_process_time_ms(
-            [sys.executable, str(_FORWARDER), "brief"],
-            k=K_INVOCATIONS,
-            cwd=str(_throwaway_repo),
-        )
-        assert result["rc"] == 0, result
-        assert result["procs_per_call"] <= 1.5, (
-            "the forwarder is expected to be WARM-SERVED after C2 — one "
-            f"interpreter, no spawned git — got {result!r}. A rise back "
-            "toward the pre-C2 shape (>=2 procs/call) means the entry "
-            "silently stopped reaching the engine and fell back cold."
-        )
-        assert result["process_time_ms"] < 500.0, (
-            "brightline: the warm-served forwarder must stay under 500ms "
-            f"end-to-end, got {result!r}"
-        )
-
+    # `TestWarmCeremonyBrightline` (WARM OP PATH brief/ceremony process-time,
+    # AC11) was retired here (docs/plans/2026-08-30-the-dead-brief-verb-
+    # stops-advertising-it.md, C1 residue cleanup): `merge_assemble.ops`
+    # deregistered `_merge_assemble_brief` on 2026-08-27 (K-114), and this
+    # class's own `_WARM_OP_PROBE_SOURCE` probe called that handler
+    # unconditionally as its first step regardless of mode — so every test
+    # in the class was already dead against `AttributeError` before this
+    # plan, orphaned by the kill rather than caused by it. Its whole
+    # subject was the brief op's warm-path cost; no surviving surface
+    # measures that, so it is deleted rather than repointed. Includes
+    # `test_forwarder_brief_is_now_warm_served`, whose subject (the
+    # forwarder's `brief` invocation) no longer parses at all post-C1.
 
 
 def _ps_single_quote(value: str) -> str:
@@ -748,26 +577,14 @@ class TestDecisionsJsonSurvivesTheCmdLauncher:
 
 class TestInvokeByNameFromTheLauncher:
     """AC7 (this plan, = parent plan's AC8's two-consumer rule): `merge-
-    assemble brief` and `merge-assemble apply --help` both still work when
-    run from a prompt through the real `.cmd` launcher — not merely
-    through `sys.executable coordinator/bin/merge-assemble.py`."""
+    assemble apply --help` still works when run from a prompt through the
+    real `.cmd` launcher — not merely through `sys.executable coordinator/
+    bin/merge-assemble.py`.
 
-    @pytest.mark.real_home
-    def test_brief_runs_from_the_launcher(self, _throwaway_repo: Path) -> None:
-        _require_windows_or_darwin()
-        if not IS_WINDOWS:
-            pytest.skip(".cmd launcher invocation is Windows-only")
-
-        completed = subprocess.run(
-            [str(_LAUNCHER_CMD), "brief"],
-            cwd=str(_throwaway_repo),
-            capture_output=True,
-            text=True,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-        )
-        assert completed.returncode == 0, completed
-        decision_object = json.loads(completed.stdout)
-        assert isinstance(decision_object, dict), completed
+    `test_brief_runs_from_the_launcher` was retired here (docs/plans/
+    2026-08-30-the-dead-brief-verb-stops-advertising-it.md, C1): its whole
+    subject was the `brief` verb through the launcher, which no longer
+    parses at all post-C1 (the CLI verb itself was removed)."""
 
     @pytest.mark.real_home
     def test_apply_help_runs_from_the_launcher(self, _throwaway_repo: Path) -> None:
@@ -799,12 +616,16 @@ _ROUTING_LIKE_FOR_LIKE_PROBE_SOURCE = textwrap.dedent(
     """Standalone probe (written to disk by test_warm_ceremony_brightline.py,
     never committed): calls the REAL entry-point-shim function
     (`entry_point_shim._merge_assemble_entry`) that
-    `_ENGINE_ENTRIES["merge-assemble"]` resolves to -- brief then apply,
-    UNSTUBBED, so this is the actual routing-decision layer (`cc_invoke.
-    route`, the cold fallback, the path=cold/path=warm stderr line), not a
-    bypass of it. Always run against a PRISTINE throwaway repo (apply
-    mutates -- this module's C4 addendum docstring explains why the same
-    repo cannot absorb repeated calls the way brief-only batching can).
+    `_ENGINE_ENTRIES["merge-assemble"]` resolves to -- `apply` only
+    (docs/plans/2026-08-30-the-dead-brief-verb-stops-advertising-it.md, C1:
+    `brief`'s CLI verb was removed and no longer reaches `route(...)` at
+    all, so a "brief then apply" probe can no longer measure two dispatched
+    legs), UNSTUBBED, so this is the actual routing-decision layer
+    (`cc_invoke.route`, the cold fallback, the path=cold/path=warm stderr
+    line), not a bypass of it. Always run against a PRISTINE throwaway repo
+    (apply mutates -- this module's C4 addendum docstring explains why the
+    same repo cannot absorb repeated calls the way brief-only batching can
+    elsewhere in this file).
 
     argv[1] = coordinator/bin/lib (sys.path entry for entry_point_shim /
               cc_invoke)
@@ -835,13 +656,9 @@ _ROUTING_LIKE_FOR_LIKE_PROBE_SOURCE = textwrap.dedent(
 
 
     def main() -> int:
-        rc = _eps._merge_assemble_entry(["brief"])
-        if rc not in (0, 1):
-            print(f"brief failed: exit_code={rc}", file=sys.stderr)
-            return 10
-        rc2 = _eps._merge_assemble_entry(["apply", "--force"])
-        if rc2 not in (0, 1, 2, 3, 4):
-            print(f"apply transport-failed: exit_code={rc2}", file=sys.stderr)
+        rc = _eps._merge_assemble_entry(["apply", "--force"])
+        if rc not in (0, 1, 2, 3, 4):
+            print(f"apply transport-failed: exit_code={rc}", file=sys.stderr)
             return 11
         return 0
 
@@ -908,15 +725,20 @@ def _average_batched_over_fresh_repos(
 
 class TestLikeForLikeWarmVsColdComparison:
     """AC8 (PM ruling, 2026-08-26, this plan's chunk C4): the SAME workload
-    (`brief` + `apply`, unstubbed, through the real entry point), measured
-    TWICE -- once forced onto the cold fallback, once served by whatever
-    this box's real registry/engine state currently offers -- each number
-    labelled with the path `entry_point_shim` itself reports. Per AC8's own
-    honesty clause: the warm-vs-cold comparison is only asserted when the
-    "current" leg actually reports warm; if it reports cold (engine
-    unpublished, or not currently serving this op), this test reports that
-    residual honestly rather than synthesizing a warm number or a
-    comparison that never happened."""
+    (`apply`, unstubbed, through the real entry point), measured TWICE --
+    once forced onto the cold fallback, once served by whatever this box's
+    real registry/engine state currently offers -- each number labelled
+    with the path `entry_point_shim` itself reports. Per AC8's own honesty
+    clause: the warm-vs-cold comparison is only asserted when the "current"
+    leg actually reports warm; if it reports cold (engine unpublished, or
+    not currently serving this op), this test reports that residual
+    honestly rather than synthesizing a warm number or a comparison that
+    never happened.
+
+    NARROWED (docs/plans/2026-08-30-the-dead-brief-verb-stops-advertising-
+    it.md, C1): originally `brief` + `apply` — `brief`'s CLI verb was
+    removed and no longer reaches `route(...)` at all, so the workload this
+    class measures is `apply` alone."""
 
     @pytest.mark.real_home
     def test_forced_cold_leg_actually_reports_cold(
@@ -924,8 +746,8 @@ class TestLikeForLikeWarmVsColdComparison:
     ) -> None:
         """Sanity check on the forcing mechanism itself, before it is
         trusted for a timing comparison: with `cc_invoke._seam_present`
-        patched False, both `brief` and `apply` must report `path=cold`,
-        regardless of what this box's real engine state is.
+        patched False, `apply` must report `path=cold`, regardless of what
+        this box's real engine state is.
 
         `@pytest.mark.real_home`: `entry_point_shim`'s own eager
         `resolve_claude_klabauter_root()` call (sys.path setup, ahead of and
@@ -951,8 +773,8 @@ class TestLikeForLikeWarmVsColdComparison:
         )
         assert completed.returncode == 0, completed
         paths = _paths_served(completed.stderr)
-        assert paths == {"merge_assemble.brief": "cold", "merge_assemble.apply": "cold"}, (
-            f"forced-cold probe did not report cold on both ops: {completed.stderr}"
+        assert paths == {"merge_assemble.apply": "cold"}, (
+            f"forced-cold probe did not report cold on apply: {completed.stderr}"
         )
 
     @pytest.mark.real_home

@@ -1,7 +1,8 @@
 """Guard: a module outside `coordinator_core/git/` that imports one of the
 git-object-write / ref-move primitives (`coordinator_core.git.git_objects
-.write_object` / `.build_tree` / `.cas_ref` / `.append_reflog`, or
-`coordinator_core.git.index_write.splice_index`) reds unless it is named in
+.write_object` / `.build_tree` / `.cas_ref` / `.append_reflog`,
+`coordinator_core.git.index_write.splice_index`, or
+`coordinator_core.git.commit.commit_paths`) reds unless it is named in
 `docs/reference/git-action-seam-carve-outs.md`.
 
 Purpose: `docs/plans/2026-08-30-every-deny-capable-guard-fires-on-a-tool-
@@ -69,6 +70,7 @@ _GUARDED_TARGETS: FrozenSet[Tuple[str, str]] = frozenset(
         ("coordinator_core.git.git_objects", "cas_ref"),
         ("coordinator_core.git.git_objects", "append_reflog"),
         ("coordinator_core.git.index_write", "splice_index"),
+        ("coordinator_core.git.commit", "commit_paths"),
     }
 )
 
@@ -237,6 +239,53 @@ def test_guard_reds_on_an_unregistered_direct_git_action_caller(tmp_path):
     }, (
         "the unregistered fixture's guarded imports were not detected -- "
         "the detector failed to fire on a call it must catch"
+    )
+
+    registry = _load_carve_out_registry()
+    unregistered = hits - registry
+    assert unregistered, (
+        "the negative fixture came back registered -- either the fixture's "
+        "relpath collides with a real carve-out entry (test bug) or the "
+        "registry check is a no-op (the defect this test exists to catch)"
+    )
+
+
+def test_guard_reds_on_an_unregistered_commit_paths_bypass(tmp_path):
+    """THE NEGATIVE FIXTURE for the `commit_paths` bypass this chunk adds.
+    `commit_paths` is the op route's own entry point (unlike the five
+    lower-level object/ref primitives already covered above) -- a module
+    calling it directly, outside the seam and outside the named carve-out
+    (`coordinator_core/ops/ceremony/commit_v2.py :: _handler`), is exactly
+    the "op route stops being the unguarded default" bypass this plan
+    exists to close. Manufactures a synthetic caller and asserts the
+    detector fires on it, per this repo's standing lesson that an
+    instrument never shown to move proves nothing.
+    """
+    violating_module = tmp_path / "sneaky_commit_paths_caller.py"
+    violating_module.write_text(
+        textwrap.dedent(
+            """\
+            from coordinator_core.git.commit import commit_paths
+
+            def sneaky_commit(repo, paths, message):
+                return commit_paths(repo, paths, message)
+            """
+        ),
+        encoding="utf-8",
+    )
+    rel = "coordinator_core/hooks/sneaky_commit_paths_caller.py"
+    assert not _is_excluded_path(rel), (
+        "fixture's own relpath must land inside the guard's scan scope, or "
+        "this negative fixture proves nothing about the detector"
+    )
+
+    source = violating_module.read_text(encoding="utf-8")
+    hits = {(rel, name) for name in _guarded_imports_in_source(source)}
+
+    assert hits == {(rel, "commit_paths")}, (
+        "the unregistered commit_paths-bypass fixture's guarded import was "
+        "not detected -- the detector failed to fire on a call it must "
+        "catch"
     )
 
     registry = _load_carve_out_registry()

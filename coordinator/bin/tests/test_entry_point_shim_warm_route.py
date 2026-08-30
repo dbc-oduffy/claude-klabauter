@@ -100,8 +100,8 @@ def _stub_route(result=None, exc=None):
     "argv, route_result, route_exc, expected_code",
     [
         pytest.param(
-            ["brief"],
-            {"exit_code": 0, "decision_object": {"ok": True}},
+            ["apply"],
+            {"exit_code": 0, "report": {"ok": True}},
             None,
             0,
             id="0-ok",
@@ -114,25 +114,18 @@ def _stub_route(result=None, exc=None):
             id="1-halted-at-judgment",
         ),
         pytest.param(
-            ["brief", "--bogus"],
+            ["apply", "--bogus"],
             None,
             None,
-            _USAGE_FAIL,
-            id="2-usage-error",
-        ),
-        pytest.param(
-            ["brief"],
-            None,
-            RuntimeError("transport exploded"),
             _TRANSPORT_FAIL,
-            id="3-transport-failure",
+            id="2-usage-error",
         ),
         pytest.param(
             ["apply"],
             None,
             RuntimeError("transport exploded post-dispatch"),
             _APPLY_EXIT_PARTIAL_MUTATION,
-            id="4-partial-mutation",
+            id="3-partial-mutation",
         ),
     ],
 )
@@ -140,6 +133,23 @@ def test_exit_code_table(monkeypatch, argv, route_result, route_exc, expected_co
     monkeypatch.setattr(cc_invoke, "route", _stub_route(result=route_result, exc=route_exc))
     code = entry_point_shim._merge_assemble_entry(list(argv))
     assert code == expected_code
+
+
+def test_brief_subcommand_refused_names_verb_as_removed(capsys):
+    """The one addition this chunk makes (plan C1): `brief` no longer parses
+    at all — it exits non-zero naming the verb as removed, never reaching
+    `cc_invoke.route`."""
+    code = entry_point_shim._merge_assemble_entry(["brief"])
+    err = capsys.readouterr().err
+    assert code == _USAGE_FAIL
+    assert "brief" in err and "removed" in err
+
+
+def test_help_no_longer_mentions_brief(capsys):
+    code = entry_point_shim._merge_assemble_entry(["--help"])
+    out = capsys.readouterr().out
+    assert code == 0
+    assert "brief" not in out
 
 
 # ---------------------------------------------------------------------------
@@ -158,13 +168,9 @@ def _spy_cold_call(monkeypatch, return_value):
     return calls
 
 
-@pytest.mark.parametrize("verb, argv", [("brief", ["brief"]), ("apply", ["apply"])])
+@pytest.mark.parametrize("verb, argv", [("apply", ["apply"])])
 def test_method_not_found_falls_back_cold_and_does_not_surface_as_exit_3(monkeypatch, verb, argv):
-    cold_result = (
-        {"exit_code": 0, "decision_object": {"cold": True}}
-        if verb == "brief"
-        else {"exit_code": 0, "report": {"cold": True}}
-    )
+    cold_result = {"exit_code": 0, "report": {"cold": True}}
     calls = _spy_cold_call(monkeypatch, cold_result)
     monkeypatch.setattr(
         cc_invoke,
@@ -178,17 +184,13 @@ def test_method_not_found_falls_back_cold_and_does_not_surface_as_exit_3(monkeyp
     assert code != _TRANSPORT_FAIL
 
 
-@pytest.mark.parametrize("verb, argv", [("brief", ["brief"]), ("apply", ["apply"])])
+@pytest.mark.parametrize("verb, argv", [("apply", ["apply"])])
 def test_seam_absent_routes_through_legacy_fn_not_a_reimplemented_check(monkeypatch, verb, argv):
     """AC6: seam-absent is `route()`'s own State-1 gate (it owns calling
     `legacy_fn()`), not a branch this chunk re-derives. Stub `route` to
     mirror that real contract and assert OUR `legacy_fn` (built from
     `_merge_assemble_cold_call`) is what gets reached."""
-    cold_result = (
-        {"exit_code": 0, "decision_object": {"cold": True}}
-        if verb == "brief"
-        else {"exit_code": 0, "report": {"cold": True}}
-    )
+    cold_result = {"exit_code": 0, "report": {"cold": True}}
     calls = _spy_cold_call(monkeypatch, cold_result)
 
     def _seam_absent_route(op, params, repo_root, legacy_fn, **kwargs):
@@ -203,7 +205,6 @@ def test_seam_absent_routes_through_legacy_fn_not_a_reimplemented_check(monkeypa
 @pytest.mark.parametrize(
     "verb, argv, expected_code",
     [
-        ("brief", ["brief"], _TRANSPORT_FAIL),
         ("apply", ["apply"], _APPLY_EXIT_PARTIAL_MUTATION),
     ],
 )
@@ -294,21 +295,21 @@ def test_refusal_shape_c_castable_nonzero_exit_code_exits_and_prints_report(monk
 
 def test_path_served_indicator_warm(monkeypatch, capsys):
     monkeypatch.setattr(
-        cc_invoke, "route", _stub_route(result={"exit_code": 0, "decision_object": {}})
+        cc_invoke, "route", _stub_route(result={"exit_code": 0, "report": {}})
     )
-    entry_point_shim._merge_assemble_entry(["brief"])
+    entry_point_shim._merge_assemble_entry(["apply"])
     err = capsys.readouterr().err
     assert "path=warm" in err
 
 
 def test_path_served_indicator_cold(monkeypatch, capsys):
-    _spy_cold_call(monkeypatch, {"exit_code": 0, "decision_object": {}})
+    _spy_cold_call(monkeypatch, {"exit_code": 0, "report": {}})
     monkeypatch.setattr(
         cc_invoke,
         "route",
         _stub_route(exc=RuntimeError("code=-32601 Method not found")),
     )
-    entry_point_shim._merge_assemble_entry(["brief"])
+    entry_point_shim._merge_assemble_entry(["apply"])
     err = capsys.readouterr().err
     assert "path=cold" in err
 
@@ -326,10 +327,10 @@ def test_checked_repo_root_mismatch_warns_to_stderr_and_still_dispatches(monkeyp
 
     monkeypatch.setattr(repo_identity, "resolve_checked_repo_root", _fake_resolve_checked_repo_root)
     monkeypatch.setattr(
-        cc_invoke, "route", _stub_route(result={"exit_code": 0, "decision_object": {}})
+        cc_invoke, "route", _stub_route(result={"exit_code": 0, "report": {}})
     )
 
-    code = entry_point_shim._merge_assemble_entry(["brief"])
+    code = entry_point_shim._merge_assemble_entry(["apply"])
 
     err = capsys.readouterr().err
     assert "MISMATCH" in err

@@ -127,6 +127,105 @@ def test_zero_new_process_spawns_for_a_representative_commit(repo, monkeypatch):
     )
 
 
+def test_default_axis_ignores_a_foreign_staged_path(repo):
+    """C4, leg (a) -- DEFAULT AXIS (`prefer_deliberate_stage=False`, the
+    existing spec). `validate-commit` warns when a peer's unrelated content
+    is staged at commit time; with the default `prefer_deliberate_stage=
+    False`, `commit_paths` never reads the whole staged index for undeclared
+    paths -- invariant 1, "declared, never inferred". Stages a foreign path
+    (`seed.txt`) into the index, then calls `commit_paths` naming only
+    `own.txt` with no `prefer_deliberate_stage` -- the resulting commit must
+    contain ONLY the declared path, and the foreign staged content must not
+    be committed. This failing is what would make the default-case
+    divergence real again (see the row's own docstring in `commit.py` and
+    the escape table's `validate-commit` verdict).
+
+    Cites DR-386 (a route may satisfy a guard's INTENT by a stronger
+    property without literally evaluating the guard's predicate) and the
+    same house pattern as `state/bug-backlog/2026-08-29-the-commit-v2-route-
+    runs-none-of-the-fou-3e8811d511b7.yaml` / its spike-verdict discharge:
+    gates excluded on named grounds, pinned by a test that reds if the
+    property regresses.
+
+    Spec backlink: state/dispatch-briefs/2026-08-30-the-op-route-stops-
+    being-the-unguarded-default/C4.md
+    """
+    (repo / "own.txt").write_text("own\n", encoding="utf-8", newline="\n")
+    (repo / "seed.txt").write_text("foreign staged content\n", encoding="utf-8", newline="\n")
+    _git(repo, "add", "seed.txt")
+
+    outcome = gcommit.commit_paths(repo_root=repo, paths=["own.txt"], message="own only")
+
+    committed = _git(repo, "show", "--name-only", "--format=", outcome.sha).stdout.split()
+    assert committed == ["own.txt"], (
+        "the default-path commit pulled in a path it was never told about -- "
+        "invariant 1 (declared, never inferred) is broken"
+    )
+    assert (repo / "seed.txt").read_text(encoding="utf-8") == "foreign staged content\n", (
+        "the foreign staged content should remain untouched in the worktree; "
+        "commit_paths must not have consulted or altered it"
+    )
+
+
+def test_residual_axis_prefer_deliberate_stage_substitutes_staged_bytes(repo):
+    """C4, leg (b) -- RESIDUAL AXIS (`prefer_deliberate_stage=True`), the
+    real DR-379 axis staff-eng Finding 2 names. `commit_paths` accepts
+    `prefer_deliberate_stage: bool = False` (DR-379): when True, the
+    settle-against-HEAD loop infers a deliberate stage from index-differs-
+    from-HEAD and substitutes the staged blob with no per-path declaration.
+    Its two named opt-in callers (`ops/session/safe_commit_offer.py`,
+    `coordinator/bin/coordinator-safe-commit.py`) are the exact route this
+    plan's Problem section cites as its own live observation: if a peer
+    session stages bytes on a path that also appears in this caller's
+    `paths`, the peer's staged blob is committed under this session's
+    commit, by inference -- a peer's content entering a commit at commit
+    time, `validate-commit`'s failure mode, live on the opt-in path.
+
+    NAMED RESIDUAL, not fixed by this row -- narrowing `prefer_deliberate_
+    stage`'s behaviour is out of this plan's proportionality and belongs to
+    whichever plan owns `safe_commit_offer`'s contract. This leg only
+    characterizes existing behaviour so the residual's boundary is
+    checkable rather than assumed; it does not force a code change here.
+
+    Fixture: a tracked path (`shared.txt`) whose index holds a foreign
+    staged blob (`v2-staged`) differing from BOTH HEAD (`v1`) and the
+    worktree (`v3-worktree`), named in this caller's own `paths` with no
+    `prefer_staged` declaration -- `prefer_deliberate_stage=True` asserts
+    the staged bytes win, per `commit_paths`'s own DR-379 contract.
+
+    Spec backlink: state/dispatch-briefs/2026-08-30-the-op-route-stops-
+    being-the-unguarded-default/C4.md
+    """
+    (repo / "shared.txt").write_text("v1\n", encoding="utf-8", newline="\n")
+    _git(repo, "add", "shared.txt")
+    _git(repo, "commit", "-q", "-m", "shared v1")
+
+    (repo / "shared.txt").write_text("v2-staged\n", encoding="utf-8", newline="\n")
+    _git(repo, "add", "shared.txt")
+    (repo / "shared.txt").write_text("v3-worktree\n", encoding="utf-8", newline="\n")
+
+    outcome = gcommit.commit_paths(
+        repo_root=repo,
+        paths=["shared.txt"],
+        message="residual axis",
+        prefer_deliberate_stage=True,
+    )
+
+    assert outcome.staged_preferred == ("shared.txt",), (
+        "prefer_deliberate_stage=True must move the settled candidate into "
+        "staged_preferred, the same observable outcome as a declared "
+        "prefer_staged path"
+    )
+    committed_blob = _git(
+        repo, "show", f"{outcome.sha}:shared.txt"
+    ).stdout
+    assert committed_blob == "v2-staged\n", (
+        "the caller declared prefer_deliberate_stage=True, so the staged "
+        "bytes (the peer/foreign blob) must win over the worktree bytes -- "
+        "this is the named residual, characterized rather than fixed here"
+    )
+
+
 def test_measured_process_time_for_the_default_path_call(repo, capsys):
     """Records cold-import and warm-call process time separately, per the
     chunk brief's instruction to report both rather than a combined total.

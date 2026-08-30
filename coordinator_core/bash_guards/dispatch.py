@@ -236,6 +236,7 @@ from coordinator_core.bash_guards._tool_names import (
 from coordinator_core.bash_guards._dialect import (
     dialect_from_tool_name as _dialect_from_tool_name,
 )
+from coordinator_core.git.repo_root import show_toplevel as _show_toplevel
 from coordinator_core.session.guard_unlock_sentinel import (
     annotate_deny as _annotate_unlock,
     consume as _consume_unlock,
@@ -376,7 +377,6 @@ from coordinator_core.bash_guards.bump_outside_repo_write import (
 from coordinator_core.bash_guards.write_claim_record import (
     record_write_claims as _record_write_claims,
 )
-from coordinator_core.git.repo_root import show_toplevel as _show_toplevel
 from coordinator_core.bash_guards.guard_inprocess_search import (
     check as _check_inprocess_search,
     MATCHERS as _matchers_inprocess_search,
@@ -1234,10 +1234,14 @@ def _record_bash_write_claims(
     out of the budgeted call: that function's positional signature is a
     cross-plane contract (see ``evaluate_payload_json``'s own docstring,
     feature-detected by DoE's caller) and must not grow an internal-only
-    return channel. The parse mirrors ``_evaluate_payload_json_budgeted``'s
-    own read of these three fields exactly (``payload``/``tool_input``/
-    ``session_id``/``cwd``), so a payload it accepts is read identically
-    here. ``root`` is resolved via ``git.repo_root.show_toplevel`` -- a
+    return channel. The parse reads the same three fields that function
+    reads (``tool_input.command``/``session_id``/``cwd``) and is defensive
+    where it cannot be sure: a non-dict ``tool_input`` is treated as empty
+    rather than rejecting the payload, and a missing ``cmd``/``session_id``
+    returns without recording. It is NOT asserted to be byte-identical to
+    that function's own parse -- if the two are ever suspected of diverging
+    on an exotic payload shape, this is the place to check, and the failure
+    direction here is recording nothing. ``root`` is resolved via ``git.repo_root.show_toplevel`` -- a
     walk, never a spawn (see that function's own docstring) -- rather than
     re-deriving a repo-root convention of this module's own.
 

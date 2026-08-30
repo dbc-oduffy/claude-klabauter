@@ -24,6 +24,7 @@ _VALID_DRAFT = (
     "to: \"some-em\"\n"
     "created: 2026-08-07\n"
     "status: draft\n"
+    "kind: fyi\n"
     "delivery_mode: receiver-repo\n"
     "summary: \"a summary\"\n"
     "---\n"
@@ -63,6 +64,18 @@ class TestFires:
         )
         text = _advisory_text(result)
         assert "status must be 'draft'" in text
+
+    def test_fires_on_write_missing_kind(self, tmp_path):
+        d = _outbox_dir(tmp_path)
+        target = d / "some-topic.md"
+        result = guard.check(
+            _payload(
+                "Write",
+                {"file_path": str(target), "content": _VALID_DRAFT.replace("kind: fyi\n", "")},
+            )
+        )
+        text = _advisory_text(result)
+        assert "'kind' missing" in text
 
     def test_fires_on_edit_flipping_status_to_open(self, tmp_path):
         d = _outbox_dir(tmp_path)

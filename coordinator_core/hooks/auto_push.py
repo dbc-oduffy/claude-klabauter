@@ -242,32 +242,24 @@ MAX_ATTEMPTS = 3
 # Classes that are safe to retry; see classify_error() for why each is/isn't.
 _RETRYABLE_CLASSES = frozenset({"ref-lock", "network", "gh-transient"})
 
-# Per-class attempt budget (DEC-1, docs/plans/2026-08-30-ref-locks-ladder-
-# reaches-past-the-burst.md). MAX_ATTEMPTS stays the default AND the non-FF
-# poll budget unchanged -- it is load-bearing in both places, and this table
-# only overrides the retry budget for classes named here. ref-lock alone is
-# listed: its recovery timescale is a shared remote ref under contention for
-# tens of seconds, not the sub-second local lock the rest of the ladder is
-# sized for (see the "Retry policy" comment block above `_backoff_seconds`).
-# network and gh-transient fall through to `.get()`'s default, so their
-# behavior is unchanged by construction, not by a restated literal.
-_ATTEMPTS_BY_CLASS: dict[str, int] = {"ref-lock": 7}
-
-_MAX_ATTEMPTS_ACROSS_CLASSES = max(MAX_ATTEMPTS, *_ATTEMPTS_BY_CLASS.values())
-"""Widest attempt budget any class can reach -- the OUTER retry loop's bound.
-
-The loop cannot be bounded per-class up front: the class is only known AFTER
-`push_once` fails and `classify_error` runs, which happens INSIDE the loop
-body. Bounding the loop by the largest table value lets a long class (e.g.
-ref-lock) reach its full budget; the actual per-class stop is the `attempt <
-_attempts_for(err_class)` continue-gate below, evaluated once the class IS
-known -- the outer bound is a ceiling, not the budget itself."""
+# ref-lock's own attempt budget (DEC-1, docs/plans/2026-08-30-ref-locks-ladder-
+# reaches-past-the-burst.md). MAX_ATTEMPTS stays the default AND the non-FF poll
+# budget, unchanged -- it is load-bearing in both places, which is why this is a
+# second constant rather than a larger MAX_ATTEMPTS. network and gh-transient are
+# not named here at all, so they keep the default by construction.
+REF_LOCK_ATTEMPTS = 7
 
 
 def _attempts_for(err_class: str) -> int:
-    """Attempt budget for `err_class` -- the per-class override if one exists,
-    else MAX_ATTEMPTS (see `_ATTEMPTS_BY_CLASS` above)."""
-    return _ATTEMPTS_BY_CLASS.get(err_class, MAX_ATTEMPTS)
+    """Attempt budget for `err_class`.
+
+    The retry loop cannot bound itself per-class up front: the class is only
+    known after `push_once` fails and `classify_error` runs, inside the loop
+    body. The loop is therefore bounded by the widest budget any class can
+    reach and stopped by this function at the continue-gate, where the class
+    IS known -- the loop bound is a ceiling, never the budget itself.
+    """
+    return REF_LOCK_ATTEMPTS if err_class == "ref-lock" else MAX_ATTEMPTS
 
 
 # ---------------------------------------------------------------------------
@@ -1079,33 +1071,13 @@ def log_failure(
 # 2026-08-30): three retryable classes, each with a backoff matched to its
 # recovery timescale:
 #   - ref-lock      -- REMOTE ref contention on a shared branch, not a local
-#                       lock. Corrected 2026-08-30: the original "local
-#                       push-ref contention; resolves in milliseconds ->
-#                       sub-second jitter" premise is what this repo's own
-#                       evidence falsified. doe-claude-em measured 13
-#                       ref-lock failures across two bursts spanning 45s on
-#                       2026-08-30, every one logged "after 3", stderr
-#                       showing a *remote* rejection with a moving
-#                       expected-sha -- peers landing commits on the shared
-#                       branch every few seconds, not a local lock. This
-#                       repo's own `.git/push-failures.log` corroborated a
-#                       longer burst the same day: 29 ref-lock ladders, all
-#                       "after 3", between 11:26:32Z and 11:27:42Z -- 70
-#                       continuous seconds, longer than doe-claude-em's 45s.
-#                       Backoff is seconds-scale, capped: min(2**attempt, 30)
-#                       + 0-500ms jitter -- 2s, 4s, 8s, 16s, 30s, 30s across
-#                       six sleeps, ~90s of ladder for seven pushes, the cap
-#                       sized above the LONGER of the two observed bursts
-#                       rather than fitted to either one. The cost this
-#                       buys: a detached push child living ~90s instead of
-#                       ~1.5s. Acceptable because the child sleeps rather
-#                       than spins (holds RSS, no CPU, between attempts) and
-#                       because the commit hot path is already released
-#                       before this runs -- `run_push_with_retry` executes
-#                       only in the detached child (post-fork/post-respawn)
-#                       or under the `COORDINATOR_AUTO_PUSH_SYNC` test seam,
-#                       so no caller waits on it and the 500ms brightline
-#                       (which measures the commit path) does not apply here.
+#                       lock. The original "resolves in milliseconds" premise
+#                       was falsified 2026-08-30 by two measured bursts, 45s
+#                       and 70s; see docs/plans/2026-08-30-ref-locks-ladder-
+#                       reaches-past-the-burst.md for the counts and DEC-2 for
+#                       why the 90s ceiling is acceptable on a loaded box.
+#                       Backoff min(2**attempt, 30) + jitter, ~90s over seven
+#                       pushes, sized above the longer burst.
 #   - network       -- client-side connectivity blip; sub-second jitter (a
 #                       retry that fast either reconnects or fails again
 #                       cheaply)
@@ -1127,13 +1099,11 @@ def log_failure(
 def _backoff_seconds(err_class: str, attempt: int) -> float:
     """Compute the backoff duration for a retryable class at the given attempt.
 
-    ref-lock: seconds-scale, capped (min(2**attempt, 30) + 0-500ms jitter) --
-    2s, 4s, 8s, 16s, 30s, 30s at attempts 1-6, reaching past both observed
-    ref-lock bursts (doe-claude-em's 45s, this repo's own 70s) rather than
-    ref-lock's old sub-second jitter, which shared this arm's `return` with
-    network until 2026-08-30 (see the "Retry policy" comment block above).
-    gh-transient: seconds-scale (attempt*2 + 0-500ms jitter) -- 2s, then 4s.
-    network: jittered sub-second (200-700ms + 100ms/attempt), unchanged.
+    ref-lock: min(2**attempt, 30) + 0-500ms jitter -- 2s, 4s, 8s, 16s, 30s, 30s.
+    gh-transient: attempt*2 + 0-500ms jitter -- 2s, then 4s.
+    network: 200-700ms + 100ms/attempt.
+
+    Why ref-lock's arm is seconds-scale: the "Retry policy" block above.
     """
     import random
 
@@ -2354,7 +2324,7 @@ def run_push_with_retry(repo_root: str, branch: str, *, _skip_hold: bool = False
     )
 
     attempt = 1
-    while attempt <= _MAX_ATTEMPTS_ACROSS_CLASSES:
+    while attempt <= max(MAX_ATTEMPTS, REF_LOCK_ATTEMPTS):
         succeeded, stderr_text = push_once(repo_root, branch, windows_bash, ssh_remote)
         if succeeded:
             _clear_pending_record_if_branch(repo_root, branch)

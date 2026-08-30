@@ -310,20 +310,20 @@ def test_missing_corpus_dir_reports_scan_incomplete_not_clean_zero(tmp_path):
 
 
 def test_ac2_end_to_end_sizing_flips_to_shipped_through_registered_op(tmp_path):
-    """Routes through `get_op_handler("deliverable.cascade_terminal")` — the
-    same lookup the JSON-RPC dispatch path uses — rather than importing
-    `_handler` directly, so this proves the REGISTERED op, not a unit-level
-    stand-in."""
+    """K-104 killed `deliverable.cascade_terminal`'s registration, so
+    `ipc_mod.get_op_handler` now raises `OpSuspendedError` for it. This
+    routes against the LIBRARY instead -- importing `_handler` directly, as
+    the two live in-process callers (plan_status_transition,
+    handoff_transition) do -- keeping every behavioural assertion this test
+    already made about the sizing flip. Only the resolution route is dead;
+    the end-to-end coverage is worth keeping."""
     repo = tmp_path / "repo"
     _init_repo(repo)
     sizing = _seed_sizing(repo, "20260101-e2e.yaml", status="routed", deliverable_id="dlv-e2e-000000")
     plan_path = "docs/plans/2026-01-01-e2e-plan.md"
 
-    handler = ipc_mod.get_op_handler("deliverable.cascade_terminal")
-    assert handler is not None
-
     result = asyncio.run(
-        handler(
+        _handler(
             {
                 "deliverable_id": "dlv-e2e-000000",
                 "source_kind": "plan",
@@ -492,9 +492,13 @@ def test_ac3_full_cascade_second_run_is_a_clean_noop(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_ac4_exactly_one_cascade_terminal_op_registered():
+def test_ac4_cascade_terminal_op_is_absent_from_the_registry():
+    """K-104 killed `deliverable.cascade_terminal`'s registration deliberately
+    and the plan's anti-scope forbids re-registering it -- this guards that
+    kill, not a gap. If this reds, something re-registered the op; the fix
+    is to remove that registration, not to update this assertion."""
     registered = {n for n in ipc_mod._REGISTRY if n.endswith(".cascade_terminal")}
-    assert registered == {"deliverable.cascade_terminal"}
+    assert registered == set()
 
 
 # ---------------------------------------------------------------------------

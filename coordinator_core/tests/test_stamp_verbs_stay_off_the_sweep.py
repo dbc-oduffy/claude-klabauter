@@ -403,3 +403,174 @@ def test_supersede_usage_error_envelope_unchanged(tmp_path):
 
     assert old_result["exit_code"] == 2, old_result
     _assert_envelopes_match(old_result, new_result)
+
+
+# ---------------------------------------------------------------------------
+# C5 — the regression guard: fails when a verb starts walking the corpus
+# again. NOTE why this exists beyond the process-time/spawn-count budget
+# rows in the governing plan's prime exit criterion: a `subprocess.Popen`
+# counter CANNOT see an in-process corpus-walk regression -- 250ms spent
+# re-reading the live corpus and archive index at 0 git spawns would pass a
+# spawn assertion cleanly, and a 2ms process-time budget at 10x the
+# measured 0.20ms floor is loose enough to hide a real one. So these tests
+# assert directly on the CALL SITES: `coordinator_core.housekeeping.corpus
+# .read_live_corpus`, `coordinator_core.housekeeping.archive_index
+# .open_index`, and `coordinator_core.housekeeping.terminal
+# .compute_terminal_set` are monkeypatched to raise if reached, for each of
+# the three modes `handoff_stamp_targeted` implements. `chain`/`supersede`
+# still call `ops.fleet._common.archive_and_commit` (C3's own one-element
+# Move batch, the seam that pays the sweep's single git spawn for the index
+# resync) -- that call is exempt BY NAME, never by omission: it is left
+# entirely unpatched here, so a passing test proves the three sweep entry
+# points specifically were never reached, not that no git-adjacent call was
+# made at all.
+# ---------------------------------------------------------------------------
+
+
+def _raise_if_called(site_name: str):
+    def _raiser(*args, **kwargs):
+        raise AssertionError(
+            f"{site_name} was reached -- a stamp verb started walking the "
+            "corpus again (see coordinator_core/tests/"
+            "test_stamp_verbs_stay_off_the_sweep.py :: C5)"
+        )
+
+    return _raiser
+
+
+def _guard_corpus_walk_call_sites(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Patches the three corpus-walk entry points at their DEFINING module
+    (not at any importer's re-bound name) -- `handoff_stamp_targeted.py`
+    reaches all three, when it does, via a deferred `from <module> import
+    <name>` INSIDE the async mode functions (see that module's
+    `chain_archive_handoff`/`supersede_archive_handoff`), so patching the
+    source attribute before the call is live for those deferred imports.
+    `housekeeping/cycle.py` binds its own copies at cycle-module IMPORT
+    time (top-of-file `from ... import ...`), so this guard does not --
+    and does not need to -- reach the `stamp_shipped` fallback mode, which
+    C2/C3 never touched and which this test file's own module docstring
+    already excludes."""
+    monkeypatch.setattr(
+        "coordinator_core.housekeeping.corpus.read_live_corpus",
+        _raise_if_called("housekeeping.corpus.read_live_corpus"),
+    )
+    monkeypatch.setattr(
+        "coordinator_core.housekeeping.archive_index.open_index",
+        _raise_if_called("housekeeping.archive_index.open_index"),
+    )
+    monkeypatch.setattr(
+        "coordinator_core.housekeeping.terminal.compute_terminal_set",
+        _raise_if_called("housekeeping.terminal.compute_terminal_set"),
+    )
+
+
+class _SpawnCounter:
+    """Counts processes started inside the `with` block. Identical shape to
+    `coordinator_core/git/tests/test_commit_zero_spawn.py :: _SpawnCounter`
+    -- reused rather than re-derived."""
+
+    def __init__(self):
+        self.argvs = []
+
+    def __enter__(self):
+        self._run, self._popen = subprocess.run, subprocess.Popen
+        counter = self
+
+        def run_spy(*a, **k):
+            if a:
+                counter.argvs.append(a[0])
+            return counter._run(*a, **k)
+
+        class PopenSpy(counter._popen):  # type: ignore[misc,valid-type]
+            def __init__(self, *a, **k):
+                if a:
+                    counter.argvs.append(a[0])
+                super().__init__(*a, **k)
+
+        subprocess.run, subprocess.Popen = run_spy, PopenSpy
+        return self
+
+    def __exit__(self, *exc):
+        subprocess.run, subprocess.Popen = self._run, self._popen
+        return False
+
+
+def test_stamp_only_never_reaches_corpus_walk_call_sites(tmp_path, monkeypatch):
+    base = _make_git_repo(tmp_path, "c5-stamp-only")
+    _seed_handoff(base, "2026-01-05-a.md")
+    _git(base, "add", "-A")
+    _git(base, "commit", "-m", "add handoff")
+
+    _guard_corpus_walk_call_sites(monkeypatch)
+
+    params = {"mode": "stamp_only", "sha": "abc123def456", "kind": "ship-commit"}
+    path = str(base / "state" / "handoffs" / "2026-01-05-a.md")
+
+    with _SpawnCounter() as counter:
+        result = _call_handoff_archive_transition(path, params)
+
+    assert result["exit_code"] == 0, result
+    assert counter.argvs == [], f"expected zero git spawns for ship-handoff, got {counter.argvs}"
+
+
+def test_chain_never_reaches_corpus_walk_call_sites(tmp_path, monkeypatch):
+    base = _make_git_repo(tmp_path, "c5-chain")
+    _seed_handoff(
+        base,
+        "2026-01-05-b.md",
+        extra_fm="deployment_state: shipped\nshipped_in: deadbeef\npickup_ready: false\n",
+    )
+    _git(base, "add", "-A")
+    _git(base, "commit", "-m", "add handoff")
+
+    _guard_corpus_walk_call_sites(monkeypatch)
+
+    params = {"mode": "chain"}
+    path = str(base / "state" / "handoffs" / "2026-01-05-b.md")
+
+    # archive_and_commit (the C3 move-plus-index-resync seam) is exempt BY
+    # NAME -- left unpatched -- so this call is free to reach it; only the
+    # three named corpus-walk sites above would raise.
+    result = _call_handoff_archive_transition(path, params)
+
+    assert result["exit_code"] == 0, result
+    assert result["moved"] is True
+
+
+def test_supersede_never_reaches_corpus_walk_call_sites(tmp_path, monkeypatch):
+    base = _make_git_repo(tmp_path, "c5-supersede")
+    _seed_handoff(base, "2026-01-05-c.md")
+    _git(base, "add", "-A")
+    _git(base, "commit", "-m", "add handoff")
+
+    _guard_corpus_walk_call_sites(monkeypatch)
+
+    params = {"mode": "supersede", "continued_into": "2026-01-05-successor.md"}
+    path = str(base / "state" / "handoffs" / "2026-01-05-c.md")
+
+    result = _call_handoff_archive_transition(path, params)
+
+    assert result["exit_code"] == 0, result
+    assert result["superseded"] is True
+    assert result["moved"] is True
+
+
+def test_ship_handoff_spawns_zero_git(tmp_path):
+    """The budget-row companion to the call-site guards above: `ship-handoff`
+    (`mode="stamp_only"`) is the one mode C3's `archive_and_commit` never
+    touches -- the record stays in `state/handoffs/` for the cadence step
+    (governing plan's Problem section) -- so this is the one mode expected
+    to spawn NO git at all, corpus-walk or otherwise."""
+    base = _make_git_repo(tmp_path, "c5-ship-spawn")
+    _seed_handoff(base, "2026-01-05-d.md")
+    _git(base, "add", "-A")
+    _git(base, "commit", "-m", "add handoff")
+
+    params = {"mode": "stamp_only", "sha": "abc123def456", "kind": "ship-commit"}
+    path = str(base / "state" / "handoffs" / "2026-01-05-d.md")
+
+    with _SpawnCounter() as counter:
+        result = _call_handoff_archive_transition(path, params)
+
+    assert result["exit_code"] == 0, result
+    assert counter.argvs == [], f"expected zero git spawns, got {counter.argvs}"

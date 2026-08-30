@@ -131,11 +131,13 @@ docs/plans/2026-08-26-every-forwarder-that-can-reach-the-door-does.md).
 from __future__ import annotations
 
 import argparse
+import filecmp
 import hashlib
 import json
 import os
 import shutil
 import sys
+import time
 from pathlib import Path
 from typing import NamedTuple, Optional
 
@@ -404,6 +406,12 @@ def install_door(bin_dst: Path, engine_root: Path, *, check_only: bool = False) 
     `BARE_FORWARDER_NAME` when it removes a door that claimed that name, so
     uninstalling never leaves the box with no `coordinator-invoke` at all.
 
+    Also runs `_sweep_displaced_images(bin_dst)` before returning -- the
+    reaper for `.stale-` siblings `_replace_possibly_running_image` and
+    `install_named_forwarder` leave behind when a displaced image was still
+    mapped at the moment they tried to clean up after themselves. Never run
+    on the `check_only` path: that flag's contract is to mutate nothing.
+
     Returns the path to the installed (or verified) executable.
     """
     engine_root = Path(engine_root)
@@ -431,7 +439,7 @@ def install_door(bin_dst: Path, engine_root: Path, *, check_only: bool = False) 
     dest_provenance = installed_provenance_path(bin_dst)
 
     if _PREBUILT_DOOR_EXE.exists():
-        shutil.copy2(_PREBUILT_DOOR_EXE, dest_exe)
+        _replace_possibly_running_image(_PREBUILT_DOOR_EXE, dest_exe)
         print(f"[door-install] copied prebuilt {_PREBUILT_DOOR_EXE} -> {dest_exe}")
         if _PREBUILT_PROVENANCE.exists():
             shutil.copy2(_PREBUILT_PROVENANCE, dest_provenance)
@@ -474,6 +482,10 @@ def install_door(bin_dst: Path, engine_root: Path, *, check_only: bool = False) 
     # (last writer wins, and both writers agree on the same content for
     # the same `engine_root`).
     door_build.write_sidecar(dest_exe, engine_root)
+
+    swept = _sweep_displaced_images(bin_dst)
+    if swept:
+        print(f"[door-install] swept {len(swept)} stale displaced image(s) from {bin_dst}")
 
     return dest_exe
 
@@ -556,18 +568,149 @@ def install_named_forwarder(
     if os.path.normcase(os.path.abspath(dest)) == os.path.normcase(os.path.abspath(source)):
         return dest
 
+    displaced: Optional[Path] = None
     if dest.exists() or dest.is_symlink():
         try:
             dest.unlink()
         except OSError:
-            pass
+            displaced = dest.with_name(f"{dest.name}.stale-{os.getpid()}-{int(time.time())}")
+            try:
+                os.replace(dest, displaced)
+            except OSError:
+                displaced = None
 
     try:
         os.link(source, dest)
     except OSError:
         shutil.copy2(source, dest)
 
+    if displaced is not None:
+        try:
+            displaced.unlink()
+        except OSError:
+            print(
+                f"[door-install] could not remove displaced stale image {displaced} "
+                f"(likely still mapped by a running process) -- left for a later "
+                f"sweep; {dest.name} is current",
+                file=sys.stderr,
+            )
+
     return dest
+
+
+def _replace_possibly_running_image(source: Path, dest: Path) -> None:
+    """Copies `source` over `dest` even when `dest` is a door/forwarder image
+    a running session currently has mapped open.
+
+    THE LOCK IS THE NORMAL CONDITION, NOT AN EDGE CASE. Measured live
+    2026-08-30: a full `install-substrate` run died with `PermissionError:
+    [WinError 32] ... being used by another process` on a plain
+    `shutil.copy2(_PREBUILT_DOOR_EXE, dest_exe)`, because every session on
+    the box reaches the engine THROUGH these door images and the load norm
+    is 50-70 concurrent sessions -- a door invocation is in flight
+    essentially always. There is no quiet moment to wait for, so a retry
+    loop cannot fix this; the failure mode is structural, not transient.
+
+    RENAME IS PERMITTED WHERE OVERWRITE IS NOT. Windows refuses to open a
+    mapped executable for writing or deletion, but permits renaming it --
+    the directory entry moves while an already-mapped process keeps
+    executing the same file via its already-open handle. So: rename the old
+    image aside to a `.stale-<pid>-<timestamp>` sibling (freeing the
+    original path), copy the new image in at that now-free path, then
+    best-effort clean up the displaced file.
+
+    A failed install must never leave the box with no door -- `install_door`'s
+    own docstring already states this invariant. If the copy to the freed
+    path fails for any reason, the displaced original is renamed straight
+    back before the exception propagates.
+
+    The final `unlink()` of the displaced file is EXPECTED to fail while a
+    process still executes the old image -- that failure is swallowed and
+    reported, not raised: `dest` already carries the new content by that
+    point, and leaving a harmless `.stale-` residue for a later sweep is the
+    correct outcome of installing over a live box, not a defect to surface
+    as one.
+
+    THE CHEAPEST CORRECT INSTALL IS THE ONE THAT DOES NOT WRITE. When `dest`
+    already carries `source`'s bytes, the rename-aside path above is not
+    merely wasted work -- it is actively counterproductive: it displaces a
+    perfectly current image, cannot unlink the displacement while it stays
+    mapped (the load norm, per this docstring's own opening paragraph), and
+    so leaves `.stale-` residue on exactly the runs that had nothing to
+    install. A content check up front, before any write is attempted, means
+    a no-op install neither writes through 375 hardlinks nor manufactures
+    residue it can never clean up -- which is what makes re-running the
+    installer on a busy box safe and near-free rather than a source of
+    accumulating churn.
+    """
+    if dest.exists():
+        try:
+            unchanged = filecmp.cmp(source, dest, shallow=False)
+        except OSError:
+            unchanged = False
+        if unchanged:
+            return
+
+    try:
+        shutil.copy2(source, dest)
+        return
+    except PermissionError:
+        if not dest.exists():
+            raise
+
+    displaced = dest.with_name(f"{dest.name}.stale-{os.getpid()}-{int(time.time())}")
+    os.replace(dest, displaced)
+    try:
+        shutil.copy2(source, dest)
+    except BaseException:
+        os.replace(displaced, dest)
+        raise
+
+    try:
+        displaced.unlink()
+    except OSError:
+        print(
+            f"[door-install] could not remove displaced stale image {displaced} "
+            f"(likely still mapped by a running process) -- left for a later "
+            f"sweep; {dest.name} is current",
+            file=sys.stderr,
+        )
+
+
+def _sweep_displaced_images(bin_dst: Path) -> "list[Path]":
+    """Best-effort removal of `*.stale-*` siblings left by
+    `_replace_possibly_running_image` and `install_named_forwarder`'s own
+    displaced-image handling -- the sweep those functions' docstrings
+    promise and that no caller previously ran.
+
+    A DISPLACED IMAGE STILL MAPPED BY A LIVE PROCESS IS NOT A SWEEP FAILURE.
+    Skipping it silently is the correct behaviour, not a degraded one: the
+    process holding it will eventually exit, at which point the SAME file
+    becomes reapable, and the next install's call to this function is the
+    sweep for it -- there is no moment this pass could wait for that a retry
+    loop would reach any sooner, and a box with 50-70 concurrent sessions
+    means some fraction of `.stale-` siblings are essentially always mapped
+    by something. That is why this is a single best-effort pass over
+    whatever is unlinkable right now, not a loop that retries what is not.
+
+    Non-raising, per-entry: one `.stale-` sibling still in use is skipped
+    without raising or being reported, and the sweep continues to the rest
+    -- mirrors `_remove_shadowing_forwarder_siblings`'s posture (a cleanup
+    step's own failure must never un-succeed the install it follows).
+
+    Returns the paths actually removed (possibly empty).
+    """
+    bin_dst = Path(bin_dst)
+    removed: "list[Path]" = []
+    if not bin_dst.is_dir():
+        return removed
+    for candidate in bin_dst.glob("*.stale-*"):
+        try:
+            candidate.unlink()
+            removed.append(candidate)
+        except OSError:
+            continue
+    return removed
 
 
 def engine_carries_entrypoint_script(engine_root: Path, name: str) -> bool:

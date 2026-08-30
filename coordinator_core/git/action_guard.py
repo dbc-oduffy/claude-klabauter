@@ -184,7 +184,7 @@ def assert_pathspec_shape_permitted(
         raise CommitActionDenied(reason or "pathspec shape denied")
 
 
-def assert_noncooperative_identity_available(session_id: object) -> None:
+def assert_noncooperative_identity_available(session_id: object = None) -> None:
     """The seam's answer to the guard leg C2a found NOT liftable: caller
     identity. Raises `CommitActionDenied` unconditionally -- there is no
     non-cooperative identity channel reaching any Python-side git-writing op
@@ -193,10 +193,29 @@ def assert_noncooperative_identity_available(session_id: object) -> None:
     `coordinator_core/ops/ceremony/commit_v2.py`), so this is decidable
     without inspecting `session_id` at all -- ANY value reaching this
     function is, by construction, either absent or a caller-supplied
-    substitute, and both refuse identically. `session_id` is accepted only
-    so a future non-cooperative wiring has a call site to widen rather than
-    a function to invent from scratch; widening this function's verdict is
-    the moment a real non-cooperative channel exists, not before.
+    substitute, and both refuse identically. `session_id` defaults to `None`
+    (rather than being required) precisely so THIS function is the
+    ownership-scoped, identity-dependent leg's reachable entry point: a
+    caller with no identity to offer -- the only kind of caller this op
+    route has -- calls it with zero arguments and gets the same refusal a
+    caller passing a self-reported substitute would get. `session_id` is
+    accepted only so a future non-cooperative wiring has a call site to
+    widen rather than a function to invent from scratch; widening this
+    function's verdict is the moment a real non-cooperative channel exists,
+    not before.
+
+    This is not "no channel exists today" -- a wording that invites a future
+    reader to go looking for one. Per the binding spike verdict
+    (`docs/research/spike-verdicts/2026-08-30-non-cooperative-caller-
+    identity-at-the-in-process-op-route.md`, verdict **not-viable**): no
+    non-cooperative caller identity CAN exist for an in-process caller of
+    `commit_paths` at any price payable in-process -- the harness-stamped
+    `agent_id` is presented only on the tool-call channel and reaches
+    `warm/hook_http.py`, no subagent marker exists in the process
+    environment, and a subagent shares its EM's `CLAUDE_PID` /
+    `CLAUDE_CODE_SESSION_ID` / process tree, so ancestry is not even a layer
+    here. This function's unconditional raise is therefore the correct
+    permanent answer for this op route, not a stub awaiting wiring.
 
     Matches the prime exit criterion's third disjunct: "for a guard whose
     predicate depends on an input the op route has no non-cooperative
@@ -205,8 +224,10 @@ def assert_noncooperative_identity_available(session_id: object) -> None:
     """
     raise CommitActionDenied(
         "caller identity is unresolvable on this op route -- no "
-        "non-cooperative identity channel reaches coordinator_core.git "
-        "today (C2a), so this seam refuses rather than trust a "
-        "caller-supplied session_id as a substitute for a harness-stamped "
-        "agent_id"
+        "non-cooperative identity channel can exist for an in-process "
+        "caller of coordinator_core.git (C2a measurement; spike verdict "
+        "docs/research/spike-verdicts/2026-08-30-non-cooperative-caller-"
+        "identity-at-the-in-process-op-route.md, not-viable), so this seam "
+        "refuses rather than trust a caller-supplied session_id as a "
+        "substitute for a harness-stamped agent_id"
     )

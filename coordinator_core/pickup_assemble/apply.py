@@ -1453,7 +1453,13 @@ def drop(
     drop is a reason rather than a silent half-mutation (see the holder gate
     below) — `APPLY_EXIT_PARTIAL_MUTATION` when the handoff/memo-transition
     primitive itself reports failure (a genuine primitive error, distinct
-    from the ordinary not-yet-claimed no-op it tolerates).
+    from the ordinary not-yet-claimed no-op it tolerates), OR when the
+    frontmatter revert and ledger release have both landed but the terminal
+    `_scoped_commit` raises — the commit tail's `RuntimeError` is caught
+    (only there, not the primitives above it) and reported as
+    `APPLY_EXIT_PARTIAL_MUTATION` with `released: True`, `unclaimed` as the
+    class inverse actually returned, and `commit_sha: None`, naming the
+    underlying git error rather than letting it escape as a traceback.
 
     HOLDER GATE (2026-08-30): before either composed primitive runs, and
     before `_scoped_commit`, `drop` reads the claim ledger dir ONCE for a
@@ -1627,7 +1633,36 @@ def drop(
             # `claim_held_by_me`'s own fail-closed path govern instead (see
             # its docstring) — an explicit `my_sid` would short-circuit that
             # guard, which is not warranted for the env-fallback case.
+            #
+            # WHAT THIS GATE IS NOT: an authorization boundary. An explicit
+            # `--session-id` is taken on the caller's word — that is
+            # `claim_held_by_me`'s ratified contract ("a caller that has
+            # already resolved identity under its own rules is trusted with
+            # it"), not a hole this gate opened, and nothing in the fleet
+            # authenticates a session id. So the gate stops the ACCIDENTAL
+            # non-holder drop, which is the defect it was built for, and a
+            # caller asserting the holder's id passes it. Do not cite it as
+            # an authorization boundary, and do not make this one call site
+            # authenticate while every other `claim_held_by_me` consumer
+            # keeps the contract.
+            #
+            # What IS owed is telling the two apart downstream, per the
+            # additive-reporting ruling in `docs/wiki/claim-conflict-
+            # deadlock.md`: `identity_source` below labels which identity the
+            # gate decided on, so a decision made on a caller-ASSERTED id is
+            # distinguishable from one made on a RESOLVED id. It labels the
+            # discriminator already computed here and never selects an
+            # identity — a second ladder walk is what
+            # `test_warm_identity_env_reads.LADDER_READ_EXEMPTIONS` exists to
+            # keep out of this tree.
             _sid_is_explicit_or_warm = bool(session_id) or in_warm_served_request()
+            identity_source = (
+                "explicit-session-id"
+                if session_id
+                else "warm-carried"
+                if _sid_is_explicit_or_warm
+                else "ambient-env"
+            )
             if _sid_is_explicit_or_warm:
                 held_by_me = _liveness.claim_held_by_me(
                     str(claims_dir), my_sid=resolved_sid, cwd=str(root)
@@ -1646,6 +1681,7 @@ def drop(
                     "basename": basename,
                     "released": False,
                     "unclaimed": None,
+                    "identity_source": identity_source,
                 }
 
         unclaimed: Optional[bool] = None
@@ -1690,7 +1726,25 @@ def drop(
         # here branches on its return value.
         release_artifact(class_, basename, cwd=str(root))
 
-        scoped_sha = _scoped_commit(root, artifact_path_value, class_, basename, ["drop"])
+        try:
+            scoped_sha = _scoped_commit(root, artifact_path_value, class_, basename, ["drop"])
+        except RuntimeError as exc:
+            # Both the frontmatter revert (class inverse, above) and the
+            # ledger release (`release_artifact`, immediately above) have
+            # already landed by this point — only the terminal commit
+            # failed. `released`/`unclaimed` therefore report what actually
+            # happened (both True) rather than the `False` shape the two
+            # earlier partial-mutation returns use; those sit ABOVE
+            # `release_artifact` and are correct for their position, this
+            # one sits below it.
+            return APPLY_EXIT_PARTIAL_MUTATION, {
+                "error": f"drop: _scoped_commit failed for {artifact_path_value}: {exc}",
+                "class": class_,
+                "basename": basename,
+                "released": True,
+                "unclaimed": unclaimed,
+                "commit_sha": None,
+            }
         commit_sha = scoped_sha if scoped_sha is not None else memo_op_commit_sha
 
     return APPLY_EXIT_OK, {

@@ -1282,8 +1282,13 @@ def attributable_session_id_with_source(
         return SessionIdResolution("", SOURCE_UNRESOLVED, False, pid)
     # Label derivation only — `sid` is already resolved above. The tier-0
     # ContextVar is checked first because `resolve_session_id` consults it
-    # first, and a cold caller inside an explicitly opened identity scope
-    # (the assemble CLIs do this) must not be reported as an env read.
+    # first: the label loop must walk the same precedence order the value
+    # was actually resolved through, or the label could name a lower-tier
+    # source that merely happens to hold the same string.
+    # Review: coordinator:code-reviewer — grepped coordinator_core/ and
+    # coordinator/bin/ for a cold caller opening session_identity_override;
+    # none found (only warm/entry_seam.py opens it, on the warm path).
+    # Corrected from a prior claim of an "assemble CLIs" cold caller.
     if _SESSION_ID_OVERRIDE.get() == sid:
         return SessionIdResolution(sid, SOURCE_CARRIED, False, pid)
     for var in SESSION_ENV_PRECEDENCE:

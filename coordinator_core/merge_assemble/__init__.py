@@ -807,26 +807,18 @@ def brief(
 def _usage(prog: str) -> int:
     import sys
 
-    print(f"usage: {prog} brief [--tag-prefix <prefix>]", file=sys.stderr)
-    print(f"       {prog} apply [--session-id <id>] [--force] [--decisions <json>]", file=sys.stderr)
+    print(f"usage: {prog} apply [--session-id <id>] [--force] [--decisions <json>]", file=sys.stderr)
     return EXIT_USAGE
 
 
 def main(argv: list[str]) -> int:
     import sys
 
-    from coordinator_core.merge_assemble.cli import (
-        UsageError,
-        parse_brief_argv,
-        print_brief_result,
-    )
-
     if not argv:
         return _usage("merge-assemble")
 
     if argv[0] in ("--help", "-h"):
-        print("usage: merge-assemble brief [--tag-prefix <prefix>]")
-        print("       merge-assemble apply [--session-id <id>] [--force] [--decisions <json>]")
+        print("usage: merge-assemble apply [--session-id <id>] [--force] [--decisions <json>]")
         return EXIT_OK
 
     subcmd, rest = argv[0], argv[1:]
@@ -836,17 +828,5 @@ def main(argv: list[str]) -> int:
 
         return main_apply(rest)
 
-    if subcmd != "brief":
-        print(f"merge-assemble: unknown subcommand {subcmd!r}", file=sys.stderr)
-        return _usage("merge-assemble")
-
-    try:
-        params = parse_brief_argv(rest)
-    except UsageError as exc:
-        if exc.message is not None:
-            print(exc.message, file=sys.stderr)
-        return _usage("merge-assemble")
-
-    result = brief(tag_prefix=params["tag_prefix"])
-    print_brief_result(result.decision_object)
-    return result.exit_code
+    print(f"merge-assemble: unknown subcommand {subcmd!r}", file=sys.stderr)
+    return _usage("merge-assemble")

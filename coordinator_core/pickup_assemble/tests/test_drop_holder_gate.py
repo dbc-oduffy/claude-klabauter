@@ -134,3 +134,23 @@ def test_non_holder_drop_mutates_nothing_and_says_so(tmp_path):
     cdir = repo / ".git" / "coordinator-sessions" / "handoff-claims" / "h1.md"
     assert cdir.is_dir()
     assert (cdir / "session_id").read_text(encoding="utf-8").strip() == "sid-holder"
+
+
+def test_denied_drop_labels_the_identity_the_gate_decided_on(tmp_path):
+    """The holder gate is not an authorization boundary — an explicit
+    `--session-id` is taken on the caller's word, per `claim_held_by_me`'s
+    ratified contract. What is owed instead is telling an asserted identity
+    apart from a resolved one downstream, so a reader of the report can see
+    which kind of decision the refusal rests on. Without this label the two
+    are indistinguishable and the gate reads as stronger than it is."""
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    _seed_claimed_handoff(repo, "h1.md")
+    _write_ledger_claim(repo, "h1.md", "sid-holder")
+
+    exit_code, report = pa_apply.drop(
+        "state/handoffs/h1.md", session_id="sid-not-holder", repo_root=repo
+    )
+
+    assert exit_code == pa_apply.APPLY_EXIT_CLAIM_DENIED
+    assert report["identity_source"] == "explicit-session-id"

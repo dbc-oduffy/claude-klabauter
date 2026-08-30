@@ -419,6 +419,120 @@ async def has_live_children_many(
     return codes
 
 
+async def has_live_children_from_metas(
+    candidate: str,
+    repo_root: Path,
+    *,
+    edge_kinds: object = None,
+    exclude: Optional[List[str]] = None,
+    metas: Optional[Dict[str, dict]] = None,
+) -> Dict[str, Any]:
+    """Same question, same reply shape as `_handoff_has_live_children`, but
+    building its reverse-edge index over an ALREADY-read corpus (`metas`)
+    instead of re-scanning frontmatter this call's caller already read.
+
+    C1 (leg (b) reads the corpus once): `_predicate_refusal`'s leg (b) is the
+    one caller-shape that re-derives the whole-corpus answer per candidate
+    inside a cascade that has ALREADY read every record once via
+    `_collect_live_candidates_for_kind`. This function is that same question
+    — `has_live_children_many`'s single-candidate shape — but taking the
+    pre-read frontmatter as a `metas` lookup instead of re-reading it via
+    `_read_meta` inside `build_reverse_edge_index`.
+
+    `metas` is a LOOKUP with `_read_meta` fallback per missing path — that
+    fallback already lives inside `build_reverse_edge_index` itself. This
+    function does not add its own; a path absent from `metas` is not treated
+    as decided in `metas`'s favour, it is just read normally.
+
+    `edge_kinds` accepts the same shapes `_parse_edge_kinds` normalises for
+    the JSON-RPC op (CSV string, list/tuple, set, or None for default) —
+    `deliverable_cascade._predicate_refusal` passes the CSV constant
+    `CONCLUSION_EDGE_KINDS` here, the same value it passes to
+    `_handoff_has_live_children`'s params dict on the other branch.
+
+    Composes `has_live_children_many`'s already-decided shape rather than
+    reinventing it: same containment guard, same fail-closed empty/scan-error
+    live-set guard, same `_archive_resident` index-set split (index built over
+    non-archive paths only; `reverse_membership` still judges against the
+    FULL live set, so archive-resident referencers are still excluded via
+    `_is_terminal_or_archived_child`, never by omission from the index).
+
+    Returns the same four-key shape as `_handoff_has_live_children`:
+    `referenced`, `children`, `exit_code`, `error` — `error` present only on
+    the exit_code=2 (indeterminate) branch, `referenced`/`children` present
+    on every branch (fail-closed still carries `children: []`, never omits
+    it — see `_indeterminate`'s own note on why `referenced` alone is the
+    field that goes missing).
+    """
+    parsed_edge_kinds = _parse_edge_kinds(edge_kinds)
+
+    worktree_root = main_worktree_root(repo_root)
+    allowed_roots = [
+        worktree_root / "state" / "handoffs",
+        worktree_root / "archive" / "handoffs",
+    ]
+
+    resolved_candidate = contained_path(Path(candidate), allowed_roots)
+    if resolved_candidate is None:
+        return _indeterminate(
+            f"candidate escapes state/handoffs or archive/handoffs: {candidate}"
+        )
+    candidate_abs = str(resolved_candidate)
+    if not os.path.isfile(candidate_abs):
+        return _indeterminate(f"candidate not found on disk: {candidate}")
+
+    live_paths, scan_errors = await asyncio.to_thread(_collect_handoff_paths, worktree_root)
+    if scan_errors:
+        return _indeterminate(
+            "enumeration incomplete — cannot rule out a live child under an "
+            "unscannable subtree: " + "; ".join(scan_errors)
+        )
+    if not live_paths:
+        return _indeterminate(
+            "empty live set: cannot determine children "
+            "(handoff-has-live-children.sh:196-199 fail-closed guard)"
+        )
+
+    def _archive_resident(p: str) -> bool:
+        parts = Path(p).parts
+        return any(
+            parts[i] == "archive" and parts[i + 1] == "handoffs"
+            for i in range(len(parts) - 1)
+        )
+
+    index_set = [p for p in live_paths if not _archive_resident(p)]
+    try:
+        index = await asyncio.to_thread(
+            build_reverse_edge_index,
+            index_set,
+            str(worktree_root / "state" / "handoffs"),
+            None,
+            metas,
+        )
+    except Exception as exc:  # noqa: BLE001 — an unbuildable index decides nothing
+        return _indeterminate(f"unbuildable reverse-edge index: {exc}")
+
+    try:
+        children = reverse_membership(
+            candidate_abs,
+            live_paths,
+            exclude=exclude if exclude else None,
+            edge_kinds=parsed_edge_kinds,
+            index=index,
+        )
+    except (ValueError, TypeError) as exc:
+        return _indeterminate(f"reverse_membership error: {exc}")
+    except Exception as exc:  # noqa: BLE001
+        return _indeterminate(f"unexpected error in reverse_membership: {exc}")
+
+    referenced = len(children) > 0
+    return {
+        "referenced": referenced,
+        "children": sorted(children),
+        "exit_code": 0 if referenced else 1,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Error-shape helper — exit_code=2, fail-closed
 # ---------------------------------------------------------------------------

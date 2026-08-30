@@ -163,3 +163,49 @@ def test_holder_drop_reverts_frontmatter_releases_claim_one_commit_correct_order
         "release_artifact, proven via a call-order recorder wrapping the "
         "real primitives, not a mock of either one's effect"
     )
+
+
+def test_holder_drop_scoped_commit_failure_reports_partial_mutation_truthfully(
+    tmp_path, monkeypatch
+):
+    """`_scoped_commit` failing on the tail must not escape as a raised
+    `RuntimeError` — the frontmatter revert and ledger release have both
+    already landed by that point, so `drop` must report
+    `APPLY_EXIT_PARTIAL_MUTATION` with `released`/`unclaimed` describing
+    what actually happened (both True), not the earlier `released: False`
+    shape used above `release_artifact`.
+
+    `_scoped_commit` itself is patched to raise — not `release_artifact` or
+    either class-inverse transition primitive, which is the false-green
+    shape this test family exists to avoid. Everything up to the commit
+    call runs for real against a real git repo.
+    """
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    handoff = _seed_claimed_handoff(repo, "h2.md")
+    cdir = _write_ledger_claim(repo, "h2.md", HOLDER_SID)
+
+    monkeypatch.setenv("COORDINATOR_SESSION_ID", HOLDER_SID)
+
+    def _raising_scoped_commit(*args, **kwargs):
+        raise RuntimeError("simulated git commit failure")
+
+    monkeypatch.setattr(pa_apply, "_scoped_commit", _raising_scoped_commit)
+
+    exit_code, report = pa_apply.drop(
+        "state/handoffs/h2.md", session_id=HOLDER_SID, repo_root=repo
+    )
+
+    assert exit_code == pa_apply.APPLY_EXIT_PARTIAL_MUTATION
+    assert "simulated git commit failure" in report["error"]
+    assert report["released"] is True
+    assert report["unclaimed"] is True
+    assert report["commit_sha"] is None
+
+    # The frontmatter revert and ledger release genuinely landed even
+    # though the commit did not — the report tells the truth about both.
+    after_text = handoff.read_text(encoding="utf-8")
+    assert "status: open" in after_text
+    assert "deployment_state: ready_to_fire" in after_text
+    assert "claimed_by" not in after_text
+    assert not cdir.is_dir(), "the claim ledger dir must be gone despite the commit failure"

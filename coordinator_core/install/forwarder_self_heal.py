@@ -21,20 +21,32 @@ native door image or the bare-Python forwarder now, never a `.cmd`.)
 
 Why not just invoke the full `substrate.run()` when a gap is detected
 --------------------------------------------------------------------
-Considered and rejected. `run()` bundles far more than the forwarder loop:
-a hardware audit that spawns a subprocess and writes `hardware.local.toml`
-(Step 3h), an `fnm` brew/curl third-party installer step, and — the
-decisive one — a legacy `.coordinator-venv` HEALTH PROBE
-AND DELETE plus a venv REBUILD (Step C10a-3,
-`coordinator_core.install.ensure_venv.ensure_coordinator_venv`). Firing
-that unattended, even rarely, risks racing another concurrent session's
-live use of the same shared venv on a machine that runs 50-70 concurrent
-LLM sessions (CLAUDE.md § Load norm) — a half-rebuilt or briefly-absent
-venv breaks every other session on the box, which is a far worse failure
-mode than the drift this module fixes. `run()` also hard-requires
-`CLAUDE_PLUGIN_ROOT` for its DoE-side surfaces; this module's forwarder-only
-concern needs no such thing, since `coordinator/bin/`/`coordinator/lib/`
-resolve off `coordinator_core.engine_root.coordinator_engine_root()` alone.
+Considered and rejected — but not for the reason this paragraph used to
+give. It used to name a legacy `.coordinator-venv` HEALTH PROBE AND DELETE
+plus a venv REBUILD (Step C10a-3,
+`coordinator_core.install.ensure_venv.ensure_coordinator_venv`) as "the
+decisive one" — that stopped being true once `run()` grew
+`allow_venv_fallback: bool = False`
+(docs/plans/2026-08-18-retire-coordinator-venv.md chunk C4, AC5). Step
+C10a-3 is gated behind that flag (`substrate.py`, the `if not
+allow_venv_fallback:` guard ahead of the venv-rebuild call): a default
+`run()` prints "Step C10a-3 (venv rebuild) skipped" and returns without ever
+reaching `ensure_coordinator_venv`. It is therefore NOT a reason to avoid
+`run()` — only `--allow-venv-fallback` break-glass callers ever hit it, and
+this module never passes that flag.
+
+On 2026-08-30 an EM refused a PM-requested `install-substrate` run by
+quoting this paragraph's old claim; the run turned out to be both safe and
+necessary. See docs/plans/2026-08-18-retire-coordinator-venv.md.
+
+The remaining reasons still stand on their own. `run()` bundles far more
+than the forwarder loop: a hardware audit that spawns a subprocess and
+writes `hardware.local.toml` (Step 3h), an `fnm` brew/curl third-party
+installer step, and a hard requirement on `CLAUDE_PLUGIN_ROOT` for its
+DoE-side surfaces that this module's forwarder-only concern needs no part
+of, since `coordinator/bin/`/`coordinator/lib/` resolve off
+`coordinator_core.engine_root.coordinator_engine_root()` alone. Any one of
+those is enough reason for this module to stay narrow.
 
 So: extract (`substrate._write_agent_helper_forwarders`, a pure refactor of
 `substrate.py` Step 3b) rather than invoke the whole installer.

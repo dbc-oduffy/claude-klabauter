@@ -71,7 +71,10 @@ class ResolvePlanAuthorTest(unittest.TestCase):
             "coordinator_core.session.harness_registry.self_record",
             return_value=("sid-123", _FakeRecord("claude-klabauter-76")),
         ):
-            self.assertEqual(_cli._resolve_plan_author(), "claude-klabauter-76")
+            with mock.patch.object(_cli, "_resolve_session_id", return_value="sid-123"):
+                self.assertEqual(
+                    _cli._resolve_plan_author(), "claude-klabauter-76 (sid-123)"
+                )
 
     def test_falls_back_to_repo_identity_when_self_record_is_none(self):
         with mock.patch(
@@ -105,10 +108,42 @@ class ResolvePlanAuthorTest(unittest.TestCase):
             "coordinator_core.session.harness_registry.self_record",
             return_value=("sid-123", _FakeRecord("claude-klabauter-76")),
         ):
-            author = _cli._resolve_plan_author()
+            with mock.patch.object(_cli, "_resolve_session_id", return_value="sid-123"):
+                author = _cli._resolve_plan_author()
         content = _cli._scaffold_plan(title="t", branch="b", author=author)
-        self.assertIn("author: claude-klabauter-76", content)
+        self.assertIn("author: claude-klabauter-76 (sid-123)", content)
         self.assertNotIn("replace with actual author", content)
+
+
+class ResolvePlanAuthorUuidTest(unittest.TestCase):
+    """The uuid half is the point: a display name collides between live
+    sessions and nothing recovers it afterwards. See `_resolve_plan_author`."""
+
+    def test_name_alone_when_session_id_is_the_unknown_sentinel(self):
+        with mock.patch(
+            "coordinator_core.session.harness_registry.self_record",
+            return_value=("sid-123", _FakeRecord("claude-klabauter-76")),
+        ), mock.patch.object(_cli, "_resolve_session_id", return_value="em-unknown"):
+            self.assertEqual(_cli._resolve_plan_author(), "claude-klabauter-76")
+
+    def test_name_alone_when_session_id_resolver_raises(self):
+        with mock.patch(
+            "coordinator_core.session.harness_registry.self_record",
+            return_value=("sid-123", _FakeRecord("claude-klabauter-76")),
+        ), mock.patch.object(
+            _cli, "_resolve_session_id", side_effect=RuntimeError("seam down")
+        ):
+            self.assertEqual(_cli._resolve_plan_author(), "claude-klabauter-76")
+
+    def test_author_line_is_resolvable_to_a_session(self):
+        with mock.patch(
+            "coordinator_core.session.harness_registry.self_record",
+            return_value=("sid-123", _FakeRecord("claude-klabauter-76")),
+        ), mock.patch.object(
+            _cli, "_resolve_session_id", return_value="aac212bc-ea6b-4172-bd9f-b885f156c033"
+        ):
+            author = _cli._resolve_plan_author()
+        self.assertIn("aac212bc-ea6b-4172-bd9f-b885f156c033", author)
 
 
 class ResolveSessionDisplayNameTest(unittest.TestCase):

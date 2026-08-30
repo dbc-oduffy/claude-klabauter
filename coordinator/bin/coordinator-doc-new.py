@@ -1268,19 +1268,41 @@ def _resolve_session_display_name() -> str | None:
 
 
 def _resolve_plan_author() -> str:
-    """Stamp a plan's `author:` with the MINTING SESSION's own resolvable
-    name (e.g. `claude-klabauter-76`), not the repo-wide EM role string
+    """Stamp a plan's `author:` with the minting session's name AND its uuid,
+    as `claude-klabauter-76 (7f3a...-...)`, not the repo-wide EM role string
     `_resolve_from_repo()` returns.
 
-    Thin wrapper over `_resolve_session_display_name()` with a required-field
-    fallback: when that resolver returns `None` (registry seam unavailable,
-    `CLAUDE_PID` doesn't resolve, or the record carries no `name`), falls back
-    to `_resolve_from_repo()` — today's repo-level EM identity. Honest
-    degrade: it never fabricates a session number, it reuses the same
-    deterministic-but-coarser identity the field already carried before this
-    change.
+    WHY THE UUID IS NOT OPTIONAL HERE. A display name is not an identifier:
+    the harness mints it as `slug(basename(cwd)) + one random byte`, so two
+    live sessions in one repo collide on it routinely — three duplicate pairs
+    were visible in a single `ListAgents` on 2026-08-30. A name alone in a
+    durable record cannot be resolved back to a session by any later reader,
+    and there is no historical name->uuid map to recover it from, so the value
+    has to be written at mint time or it is lost. It was: a bug row crediting
+    "claude-klabauter-49" reached the wrong one of two live sessions with that
+    name, and the correction had to be hand-applied.
+
+    The name is KEPT rather than replaced. It is what a human scanning
+    frontmatter recognises, and it is what `ListAgents` shows; the uuid beside
+    it is what makes the line checkable. `self_record()` already returns the
+    pair, so the uuid costs nothing but was being discarded.
+
+    Fallbacks, in order — the field is required, so this never returns empty:
+    name plus uuid when both resolve; the name alone when the uuid does not
+    (`_resolve_session_id()` returning its `em-unknown` sentinel); and
+    `_resolve_from_repo()`'s repo-level identity when the registry seam gives
+    no name at all. Never fabricates either half.
     """
-    return _resolve_session_display_name() or _resolve_from_repo()
+    name = _resolve_session_display_name()
+    if not name:
+        return _resolve_from_repo()
+    try:
+        sid = _resolve_session_id()
+    except Exception:  # noqa: BLE001 — a scaffold must not die on an identity seam
+        sid = ""
+    if not sid or sid == "em-unknown":
+        return name
+    return f"{name} ({sid})"
 
 
 # ---------------------------------------------------------------------------
@@ -1496,7 +1518,7 @@ def _resolve_session_chain_deliverable_id(
         )
 
         return resolve_session_chain_deliverable_id(
-            _read_frontmatter_field, _chain_path
+            _read_frontmatter_field, _chain_path, doc_type=doc_type
         )
     except Exception:  # noqa: BLE001 -- discovery is best-effort; never blocks scaffolding
         return None
