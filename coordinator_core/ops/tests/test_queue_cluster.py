@@ -35,6 +35,7 @@ from coordinator_core.ops.queue_cluster import (  # noqa: E402
     _handler,
     cluster_records,
 )
+from coordinator_core.win_portability import no_console_creationflags
 
 import pytest
 
@@ -119,11 +120,12 @@ _SEED_FN = {
 
 
 def _init_repo(root) -> None:
-    subprocess.run(["git", "init", "-b", "main"], cwd=root, check=True, capture_output=True)
+    subprocess.run(["git", "init", "-b", "main"], cwd=root, check=True, capture_output=True, **no_console_creationflags())
     subprocess.run(
         ["git", "config", "user.email", "test@example.com"], cwd=root, check=True, capture_output=True
+        **no_console_creationflags(),
     )
-    subprocess.run(["git", "config", "user.name", "Test"], cwd=root, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=root, check=True, capture_output=True, **no_console_creationflags())
 
 
 # ---------------------------------------------------------------------------

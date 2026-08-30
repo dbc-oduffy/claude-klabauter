@@ -47,6 +47,7 @@ from unittest import mock
 import coordinator_core.claim_state as claim_state_mod
 from coordinator_core.ops.ceremony.branch_resolution import _sanitize_consumed_handoffs
 from coordinator_core.ops.ceremony.resolver import detect_git_provenance_consumed
+from coordinator_core.win_portability import no_console_creationflags
 
 import pytest
 
@@ -63,7 +64,7 @@ def _git(args, cwd: Path) -> subprocess.CompletedProcess:
         capture_output=True,
         text=True,
         encoding="utf-8",
-        check=True,
+        check=True, **no_console_creationflags(),
     )
 
 
@@ -91,7 +92,7 @@ def _init_repo_with_origin(tmp_path: Path) -> Path:
     bare = tmp_path / "origin.git"
     subprocess.run(
         ["git", "init", "--bare", "-b", "main", str(bare)],
-        check=True, capture_output=True,
+        check=True, capture_output=True, **no_console_creationflags(),
     )
     _git(["remote", "add", "origin", str(bare)], root)
     push = _git(["push", "-u", "origin", "main"], root)

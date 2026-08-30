@@ -75,6 +75,7 @@ from coordinator_core.hooks.cater_subagent_start import (
     compose_catering,
 )
 from coordinator_core.subagent_sandbox import engine as engine_mod
+from coordinator_core.win_portability import no_console_passthrough_kwargs
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
@@ -96,9 +97,9 @@ OFF_ROSTER_TYPE = "coordinator:git-commit-agent"
 
 @pytest.fixture
 def git_repo(tmp_path: Path) -> Path:
-    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
-    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=tmp_path, check=True)
-    subprocess.run(["git", "config", "user.name", "Test"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=tmp_path, check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=tmp_path, check=True, **no_console_passthrough_kwargs())
     return tmp_path
 
 

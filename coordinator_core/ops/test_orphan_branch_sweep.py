@@ -38,6 +38,7 @@ from coordinator_core.ops.orphan_branch_sweep import (
     list_unmerged_work_branches,
     verify_commit_in_review_window,
 )
+from coordinator_core.win_portability import no_console_creationflags
 
 # Spawns a real external process; runs at cadence gates, not per-commit.
 # Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
@@ -50,6 +51,7 @@ pytestmark = [
 def _git(repo: Path, *args: str) -> subprocess.CompletedProcess:
     return subprocess.run(
         ["git", *args], cwd=repo, capture_output=True, text=True, check=True
+        **no_console_creationflags(),
     )
 
 
@@ -229,6 +231,7 @@ def _dated_commit(repo: Path, name: str, msg: str, ts: int) -> None:
         ["git", "commit", "-q", "-m", msg, f"--date={date_str}"],
         cwd=repo, check=True, capture_output=True,
         env={**os.environ, "GIT_AUTHOR_DATE": date_str, "GIT_COMMITTER_DATE": date_str},
+        **no_console_creationflags(),
     )
 
 

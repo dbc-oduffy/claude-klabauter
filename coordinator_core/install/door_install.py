@@ -901,18 +901,21 @@ def remove_superseded_python_forwarders(
     a stray `.cmd` (never generated on POSIX, but cheap to sweep if an
     earlier cross-platform install left one) is removable there.
 
-    `exempt_names` -- STATIC-FAMILY OWNERSHIP, PASSED DOWN NOT LOOKED UP
-    (DR-365, "ruling 2 governs every managed launcher class"). A name a
-    static bin family owns (e.g. `claude-home`, written by `ch_family`
-    before the agent-helper loop runs) has a bare/`.cmd` pair that is NOT
-    this kill's superseded Python trampoline -- it is that family's own
-    file, and deleting it strips the family of its install. This module
-    does not import `coordinator_core.install.substrate` to look up family
-    membership itself (that would create a dependency this module does not
-    otherwise have); the caller (`substrate._cut_over_to_native_door`)
-    passes the exempt set down instead. Defaults to the empty set so every
-    existing caller is unaffected. A name in this set is left untouched
-    entirely -- neither candidate below is even considered for it.
+    `exempt_names` -- STATIC-FAMILY OWNERSHIP, this function's own contract
+    (it is the function that deletes files; it does not import
+    `coordinator_core.install.substrate` to look up family membership
+    itself, which would create a dependency this module does not otherwise
+    have). A name a static bin family owns (e.g. `claude-home`, written by
+    `ch_family` before the agent-helper loop runs) has a bare/`.cmd` pair
+    that is NOT this kill's superseded Python trampoline -- it is that
+    family's own file, and deleting it strips the family of its install.
+    Defaults to the empty set so every existing caller is unaffected. A name
+    in this set is left untouched entirely -- neither candidate below is
+    even considered for it. `substrate._cut_over_to_native_door`, the sole
+    installer-side caller, does not pass `static_family_names` here: a
+    static-owned name never reaches this call from there (it returns
+    earlier via `_STATIC_FAMILY_ALREADY_SERVED`), so the parameter is
+    exercised directly by this module's own tests instead.
 
     Non-raising, idempotent, best-effort: returns the paths actually
     removed. Mirrors `remove_shadowing_ps1_sibling`'s posture -- a failure

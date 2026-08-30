@@ -19,6 +19,7 @@ from pathlib import Path
 import pytest
 
 from coordinator_core.ops.emit import enrich
+from coordinator_core.win_portability import no_console_creationflags
 
 # Declared, not excused: this file spawns real git because the property under test
 # IS git's own `git log --name-only`/`-1 --format=%cI` history-walk semantics --
@@ -32,7 +33,7 @@ pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 
 def _run_git(repo: Path, *args: str) -> None:
-    subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True, **no_console_creationflags())
 
 
 def _commit_date(repo: Path, rel_path: str) -> str | None:
@@ -42,6 +43,7 @@ def _commit_date(repo: Path, rel_path: str) -> str | None:
         capture_output=True,
         text=True,
         check=False,
+        **no_console_creationflags(),
     )
     if out.returncode != 0:
         return None
@@ -229,6 +231,7 @@ class TestMergeCommitEquivalence:
             capture_output=True,
             text=True,
             check=False,
+            **no_console_creationflags(),
         )
         f.write_text("merge-resolution-differs-from-both-parents\n")
         _run_git(repo, "add", "docs/f.md")
@@ -281,12 +284,14 @@ class TestMergeCommitEquivalence:
             capture_output=True,
             text=True,
             check=True,
+            **no_console_creationflags(),
         ).stdout.strip()
         oracle_hash = subprocess.run(
             ["git", "-C", str(repo), "log", "-1", "--format=%H", "--", "docs/f.md"],
             capture_output=True,
             text=True,
             check=True,
+            **no_console_creationflags(),
         ).stdout.strip()
         assert oracle_hash != merge_hash
 

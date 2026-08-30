@@ -800,6 +800,18 @@ def _escape_for_js_template_literal(text: str) -> str:
     )
 
 
+#: Dispatch-layer bookkeeping surfaces an executor may legitimately write
+#: outside its wave's declared `writes:`. Membership here is the whole
+#: discriminator between a sidecar to ignore and stranded chunk work to halt
+#: on, so it is a POSITIVE allowlist and not a heuristic: an extra path that
+#: matches nothing here halts. Adding a prefix buys back silence on exactly
+#: that prefix and nothing else -- widen it only for a surface the dispatch
+#: layer itself writes, never for a surface a chunk might.
+_BOOKKEEPING_PREFIXES: tuple[str, ...] = ("state/subagent-share/",)
+
+_BOOKKEEPING_PREFIX_RENDER = ", ".join(f"`{prefix}**`" for prefix in _BOOKKEEPING_PREFIXES)
+
+
 #: Why each negative clause below is spelled out rather than left to judgment:
 #: every one names a refusal measured live, where the committer was correct
 #: about the fact and wrong about what it implied. Executing one plan
@@ -808,9 +820,19 @@ def _escape_for_js_template_literal(text: str) -> str:
 #: own `state/subagent-share/**` sidecar read as pathspec divergence; ~30
 #: peer-staged paths in a shared index read as "would be swept into my commit";
 #: a declared write target the chunk legitimately did not change read as a
-#: guard failure. Each cost a `resumeFromRunId`. The provenance check is
-#: genuinely one-directional -- it exists to catch a pathspec entry no executor
-#: touched, never to police what an executor touched beyond the pathspec.
+#: guard failure. Each cost a `resumeFromRunId`.
+#:
+#: The reverse direction is NOT symmetric with those four, and the block does
+#: police it: a reported-written path outside the pathspec and outside
+#: `_BOOKKEEPING_PREFIXES` is stranded chunk work. Measured on
+#: `docs/plans/2026-08-30-who-pushes-and-when.md` -- C7's `writes:` went 3 -> 8
+#: paths and C8's 4 -> 7 across three halts, the executors wrote all of them
+#: and reported green, and the commit agents committed only the original 3 and
+#: 4. Eight files sat uncommitted while their implementation halves landed, so
+#: HEAD was red on a shared branch and nothing in the run said so. That is why
+#: the exception is a positive allowlist rather than a blanket flip: a flip
+#: re-buys the four halts above, and a commit phase that halts four times in
+#: five is a phase operators learn to override.
 _PROVENANCE_HEADING = (
     "Pathspec provenance: the pathspec above is this wave's declared "
     "`writes:` scope. The executor report(s) below are, direct from the "
@@ -818,11 +840,22 @@ _PROVENANCE_HEADING = (
     "wave -- verify the handed pathspec against what they actually "
     "reported, and refuse any path in the pathspec that the reports do "
     "not corroborate."
-    "\n\nThe check is ONE-DIRECTIONAL. A path the reports name that is NOT "
-    "in the pathspec is outside this wave's declared writes scope and is NOT "
-    "a divergence: `state/subagent-share/**` executor sidecars in particular "
-    "are dispatch-layer bookkeeping, never chunk work. Leave them "
-    "uncommitted and do not refuse over them."
+    "\n\nThe check is ONE-DIRECTIONAL BY DEFAULT, with one named exception. "
+    "A path the reports name that is NOT in the pathspec is outside this "
+    "wave's declared `writes:` scope. If it falls under a DISPATCH-LAYER "
+    f"BOOKKEEPING prefix -- {_BOOKKEEPING_PREFIX_RENDER} -- it is not chunk "
+    "work: leave it uncommitted, do not refuse over it, do not mention it. "
+    "\n\nAny OTHER reported-written path absent from the pathspec IS a "
+    "divergence and you must STOP. It is chunk work this wave produced, and "
+    "committing without it strands it: its implementation half lands, the "
+    "rest sits uncommitted, and HEAD goes red on a branch many sessions "
+    "share -- silently, because every chunk still reports DONE and this "
+    "commit still succeeds. Do NOT widen the pathspec yourself and do NOT "
+    "commit the extra path: the pathspec is the spine's declared scope and "
+    "only the spine may widen it. Report instead, naming every such path "
+    "verbatim, in this shape -- 'these were written but are not in this "
+    "wave's declared `writes:` -- widen the spine row and restamp, or "
+    "confirm they are bookkeeping'. Emit no success token."
     "\n\nSHARED TREE: this repo is worked by many concurrent sessions, and "
     "the index routinely holds staged paths belonging to peers. That is the "
     "normal state, not a divergence and not a refusal condition -- your "

@@ -32,6 +32,7 @@ from typing import List
 import pytest
 
 from coordinator_core.ops.ceremony import git_native
+from coordinator_core.win_portability import no_console_creationflags
 
 from .fixtures.real_git import real_git_repo
 
@@ -43,7 +44,8 @@ pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 def _git(args: List[str], cwd: Path) -> subprocess.CompletedProcess:
     return subprocess.run(
-        ["git", *args], cwd=str(cwd), capture_output=True, text=True, check=True
+        ["git", *args], cwd=str(cwd), capture_output=True, text=True, check=True,
+        **no_console_creationflags(),
     )
 
 

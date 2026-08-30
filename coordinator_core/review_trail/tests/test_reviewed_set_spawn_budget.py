@@ -35,6 +35,7 @@ import pytest
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 from coordinator_core.review_trail import reviewed_set as rs
+from coordinator_core.win_portability import no_console_creationflags
 
 #: High-water mark for `fold_in`'s subprocess count on a single resolvable
 #: record: one `git rev-list --all --parents` (reach-set build) + one
@@ -58,7 +59,7 @@ class _SpawnCounter:
 
 def _git(args: List[str], cwd: Path) -> subprocess.CompletedProcess:
     return subprocess.run(
-        ["git"] + args, cwd=str(cwd), capture_output=True, encoding="utf-8", check=True,
+        ["git"] + args, cwd=str(cwd), capture_output=True, encoding="utf-8", check=True, **no_console_creationflags(),
     )
 
 
@@ -72,7 +73,7 @@ def _make_commit(repo: Path, message: str) -> str:
     _git(["commit", "--allow-empty", "-m", message], repo)
     return subprocess.run(
         ["git", "rev-parse", "HEAD"], cwd=str(repo),
-        capture_output=True, encoding="utf-8", check=True,
+        capture_output=True, encoding="utf-8", check=True, **no_console_creationflags(),
     ).stdout.strip()
 
 

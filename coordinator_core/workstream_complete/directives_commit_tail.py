@@ -50,7 +50,7 @@ without hand-landing the commit — was rebuilt, not restored, by DR-358
 2026-08-25:
 
 - `d-close-tail-args` (formerly `build_close_tail_args_directive`,
-  fronting `coordinator/bin/wsc-close.py tail-args`) and `d-run-wsc-tail`
+  fronting `coordinator/bin/archive-session-scope.py tail-args`) and `d-run-wsc-tail`
   (formerly `build_wsc_tail_directive`, fronting the now-deleted
   `coordinator/bin/wsc-tail.py` trampoline for the killed op) were removed
   outright by the kill and are NOT present in this file. DR-358 rules
@@ -130,6 +130,7 @@ Negative-spec:
 
 from __future__ import annotations
 
+import asyncio
 import re
 import subprocess
 import sys
@@ -1066,6 +1067,9 @@ _KEY_PROSE = "prose"
 _KEY_STAGE_PATHS = "stage_paths"
 _KEY_GOVERNING_PLAN_SLUG = "governing_plan_slug"
 
+#: This chunk's own decisions-key vocabulary (no prior key named this).
+_KEY_HANDOFF_DISPOSITIONS = "handoff_dispositions"
+
 FREE_VALUE_KEYS: tuple[str, ...] = (
     _KEY_DELETED_PATHS,
     _KEY_KEPT_ENTRIES,
@@ -1074,6 +1078,17 @@ FREE_VALUE_KEYS: tuple[str, ...] = (
     _KEY_PROSE,
     _KEY_STAGE_PATHS,
     _KEY_GOVERNING_PLAN_SLUG,
+    # `handoff_dispositions` is caller-supplied by design (see its own note
+    # below: the delivery sha is "resolved by the caller ... never derived
+    # here"), which makes declaring it here the whole difference between a
+    # key a caller can find and one it cannot. Landed without this entry,
+    # `resolve_ship_stamp_candidates` short-circuited on an always-absent key
+    # and the ship-stamp was inert in production while reporting a clean
+    # "ran, found nothing" -- the green-stamp-on-an-empty-set failure its own
+    # plan's Anti-scope names. This module's comment above already states the
+    # rule that catches it: "a key read here but absent from this tuple is a
+    # key no caller can discover from the template."
+    _KEY_HANDOFF_DISPOSITIONS,
 )
 
 
@@ -1356,6 +1371,209 @@ def run_close_commit_and_release_claims(
 
 
 # ---------------------------------------------------------------------------
+# C2 (docs/plans/2026-08-30-the-close-ships-the-baton-it-closed.md) —
+# ship-stamp the session's own delivered batons off the claim ledger, folded
+# into the SAME close commit `run_close_commit_and_release_claims` already
+# makes. NO CORPUS SCAN: candidates come from the claim ledger
+# (`session.claims.list_claims_by_session_checked`, the same "handoff-claims"
+# subdir `claim_state._sessions_dir(common_dir)` names), never a
+# glob/rglob over `state/handoffs/`/`archive/handoffs/` — see the plan's
+# Anti-scope ("Do not search for the batons") and C3's own budget-guard AC.
+#
+# `decisions["handoff_dispositions"]` (this chunk's own vocabulary — no
+# prior key existed for it) is `{basename: {"disposition": str, "shipped_in":
+# Optional[str]}}`. Only `disposition == "shipped"` with a non-empty
+# `shipped_in` (the already-landed DELIVERY commit sha, resolved by the
+# caller from its own commits/session facts — never derived here, never the
+# close's own commit sha) qualifies for the stamp; `closed`/`abandoned`/
+# `continued` are terminal-without-delivery and are excluded the same way a
+# claim absent from this map is excluded (the positive-membership rule: a
+# held claim qualifies only because THIS close's own decisions say so, never
+# because it is merely held).
+# ---------------------------------------------------------------------------
+
+#: `_KEY_HANDOFF_DISPOSITIONS` is defined beside FREE_VALUE_KEYS above --
+#: it has to be, since that tuple names it, and a key declared after the
+#: tuple that reads it is the NameError this module already paid for once.
+_HANDOFF_DISPOSITION_SHIPPED = "shipped"
+
+
+class ShipStampOutcome(NamedTuple):
+    """`apply_ship_stamps`'s own return shape — the "ran and found nothing"
+    vs "never ran" distinction the plan's Anti-scope demands a reader for
+    (the retired design's `empty_consumed_set` flag had none). `attempted`
+    is the candidate count BEFORE any per-candidate failure, so `attempted >
+    0` with `stamped_paths == ()` reads as "ran, everything failed/skipped",
+    distinct from `attempted == 0` ("nothing held qualified")."""
+
+    stamped_paths: tuple[str, ...]
+    skipped_paths: tuple[str, ...]
+    attempted: int
+    diagnostics: tuple[str, ...]
+
+
+def _held_handoff_basenames(worktree_root: "Union[Path, str]", session_id: str) -> "list[str]":
+    """This session's own held handoff-claim basenames — reuses
+    `session.claims.list_claims_by_session_checked` (the SAME claim-record
+    store `claim_state._sessions_dir` names) rather than re-deriving a
+    second ledger reader, filtered to the `"handoff-claims"` class only (that
+    accessor also reports `plan`/`memo` claims, neither relevant here)."""
+    from coordinator_core.session.claims import list_claims_by_session_checked
+
+    matches, _errors = list_claims_by_session_checked(session_id, cwd=str(worktree_root))
+    return [basename for class_, basename in matches if class_ == "handoff-claims"]
+
+
+def resolve_ship_stamp_candidates(
+    worktree_root: "Union[Path, str]",
+    session_id: Optional[str],
+    decisions: "dict[str, Any]",
+) -> "list[tuple[str, str]]":
+    """Returns `[(handoff_relpath, delivery_sha), ...]` for every held claim
+    this close's own `decisions["handoff_dispositions"]` records as
+    closed-with-delivery in THIS session (see this section's own module
+    comment for the positive-membership rule). Restricted to handoffs still
+    ACTIVE on disk (`state/handoffs/<basename>` present) — a basename no
+    longer there is already under `archive/handoffs/` (consumed, per the PM's
+    folder-fact ruling) and is not this close's to stamp; `handoff.stamp`
+    itself refuses a path under `archive/handoffs/` too (bonus enforcement,
+    named in the chunk body, not relied on alone here).
+
+    Returns `[]` (never raises) for a falsy `session_id` or an empty/absent
+    `decisions["handoff_dispositions"]` — both are "nothing to do", not an
+    error."""
+    if not session_id:
+        return []
+    dispositions = decisions.get(_KEY_HANDOFF_DISPOSITIONS) or {}
+    if not dispositions:
+        return []
+    held = set(_held_handoff_basenames(worktree_root, session_id))
+    root = Path(worktree_root)
+    candidates: "list[tuple[str, str]]" = []
+    for basename, entry in dispositions.items():
+        if basename not in held:
+            continue
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("disposition") != _HANDOFF_DISPOSITION_SHIPPED:
+            continue
+        sha = entry.get("shipped_in")
+        if not sha:
+            continue
+        active_path = root / "state" / "handoffs" / basename
+        if not active_path.is_file():
+            continue
+        candidates.append((f"state/handoffs/{basename}", str(sha)))
+    return candidates
+
+
+def apply_ship_stamps(
+    worktree_root: "Union[Path, str]", candidates: "list[tuple[str, str]]"
+) -> "tuple[ShipStampOutcome, dict[str, str]]":
+    """Writes all three fields the plan names, through the two named
+    validating writers only — never hand-edited frontmatter (constraint a):
+
+      1. `shipped_in` + `shipped_in_kind` (DR-096 lockstep) via
+         `archive_stamp.stamp_shipped_in(kind="ship-commit", sha=...)` — the
+         canonical caller-supplied-sha case; this function never resolves a
+         sha itself, matching `handoff_stamp.py`'s own negative-spec.
+      2. `deployment_state -> shipped` (pickup_ready -> false) via
+         `handoff.transition`'s `ship` verb — the SAME op
+         `archive_stamp._call_handoff_transition` uses for every other
+         transition, called the identical way here. NEVER
+         `handoff.ship_and_archive` (git-mv + its own archival commit — see
+         this module's own top-of-section comment and the chunk body's
+         explicit exclusion).
+
+    Returns `(outcome, backups)` — `backups` is `{relpath: original_text}`,
+    captured BEFORE either write, but ONLY for paths that reach full
+    `stamped_paths` membership (both writes succeeded) — `revert_ship_stamps`
+    uses it to restore on a failed/refused fold-in commit
+    (WRITE-LANDS-THEN-COMMIT-FAILS: the stamp is not durable until the
+    commit that carries it is known to have succeeded). A candidate whose
+    backup read fails is skipped outright (never written blind). A
+    candidate where `handoff.stamp` succeeds but the `ship` verb then fails
+    is reverted IMMEDIATELY, right here — never left at the partial
+    `handoff.stamp`-only state, which would be a shipped_in write with no
+    commit ever queued to carry it and no later revert pass positioned to
+    catch it (that half-state is excluded from `stamped_paths`, so a
+    caller's own commit-outcome revert never sees it)."""
+    from coordinator_core.archive_stamp import _resolve_repo_root_for, stamp_shipped_in
+    from coordinator_core.ops.handoff_transition import _handler as _transition_handler
+
+    root = Path(worktree_root)
+    stamped: "list[str]" = []
+    diagnostics: "list[str]" = []
+    backups: "dict[str, str]" = {}
+    for relpath, sha in candidates:
+        abspath = root / relpath
+        try:
+            original_text = abspath.read_text(encoding="utf-8")
+        except OSError as exc:
+            diagnostics.append(f"{relpath}: could not read for backup, skipped: {exc}")
+            continue
+
+        outcome = stamp_shipped_in(str(abspath), kind="ship-commit", sha=sha)
+        if outcome.exit_code != 0:
+            diagnostics.append(f"{relpath}: handoff.stamp failed: {outcome.error}")
+            continue
+
+        worktree, repo_root = _resolve_repo_root_for(abspath)
+        if worktree is None or repo_root is None:
+            diagnostics.append(f"{relpath}: could not resolve git worktree for ship verb")
+            revert_ship_stamps(root, [relpath], {relpath: original_text})
+            continue
+        try:
+            ship_result = asyncio.run(
+                _transition_handler(
+                    {"handoff_path": str(abspath), "verb": "ship"}, repo_root=repo_root
+                )
+            )
+        except Exception as exc:  # noqa: BLE001 - fold, never crash the close
+            diagnostics.append(f"{relpath}: handoff.transition ship raised: {exc}")
+            revert_ship_stamps(root, [relpath], {relpath: original_text})
+            continue
+        if int(ship_result.get("exit_code", 1)) != 0:
+            diagnostics.append(f"{relpath}: handoff.transition ship failed: {ship_result.get('error')}")
+            revert_ship_stamps(root, [relpath], {relpath: original_text})
+            continue
+
+        stamped.append(relpath)
+        backups[relpath] = original_text
+
+    stamped_set = set(stamped)
+    outcome_obj = ShipStampOutcome(
+        stamped_paths=tuple(stamped),
+        skipped_paths=tuple(relpath for relpath, _sha in candidates if relpath not in stamped_set),
+        attempted=len(candidates),
+        diagnostics=tuple(diagnostics),
+    )
+    return outcome_obj, backups
+
+
+def revert_ship_stamps(
+    worktree_root: "Union[Path, str]", relpaths: "Sequence[str]", backups: "dict[str, str]"
+) -> None:
+    """WRITE-LANDS-THEN-COMMIT-FAILS: best-effort restore of the exact prior
+    bytes captured by `apply_ship_stamps` before either write, for every
+    `relpath` in `relpaths` that has a backup. Never composes new content
+    (not a second hand-edit of frontmatter — constraint (a) is about
+    authoring new field values, not restoring bytes this same call already
+    read) and never raises: a restore failure leaves the stamp standing,
+    which the caller must not treat as durable either way once the commit it
+    was meant to ride has failed."""
+    root = Path(worktree_root)
+    for relpath in relpaths:
+        original = backups.get(relpath)
+        if original is None:
+            continue
+        try:
+            (root / relpath).write_text(original, encoding="utf-8")
+        except OSError:
+            pass
+
+
+# ---------------------------------------------------------------------------
 # Step 3.35 — d-push-outstanding — wires push_outstanding() (C4b, 2026-08-25,
 # docs/plans/2026-08-25-push-re-homes-onto-the-cadence-surfaces.md)
 # ---------------------------------------------------------------------------
@@ -1597,7 +1815,7 @@ def compute_publish_lag_advisory(repo_root: Path) -> Optional[str]:
 # untouched and remains callable directly.
 # (Session archival — formerly `d-archive-session-claim` here — moved to
 # session END, not workstream close; see `__init__.py`'s call-site comment
-# at the Step 3/3.5/3.6 assembly point. `wsc-close.py archive-session` and
+# at the Step 3/3.5/3.6 assembly point. `archive-session-scope.py archive-session` and
 # `coordinator_core/session/scope.py`'s `archive()` remain live for that
 # SessionEnd-hook caller; only this module's builder was removed.)
 

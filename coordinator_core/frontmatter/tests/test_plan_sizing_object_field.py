@@ -26,6 +26,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+from coordinator_core.win_portability import no_console_creationflags
 from coordinator_core.frontmatter.schema_validate import (
     parse_frontmatter,
     validate_frontmatter,
@@ -112,6 +113,7 @@ class TestPlanCorpusValidatesAgainstBumpedSchema:
                 ['git', 'show', 'feeb5d2c6135~1:coordinator_core/frontmatter/schemas/plan.schema.json'],
                 cwd=repo_root, check=True, capture_output=True, text=True, timeout=30,
                 stdin=subprocess.DEVNULL,
+                **no_console_creationflags(),
             ).stdout
         )
         with tempfile.TemporaryDirectory() as tmp_dir:

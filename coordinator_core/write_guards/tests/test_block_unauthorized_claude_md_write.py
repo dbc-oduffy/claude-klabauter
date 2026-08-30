@@ -41,6 +41,7 @@ from pathlib import Path
 import pytest
 
 from coordinator_core.write_guards import block_unauthorized_claude_md_write as guard
+from coordinator_core.win_portability import no_console_passthrough_kwargs
 
 # Declared, not excused: this file spawns a real process (git/python) because
 # the property under test is that binary's own behaviour, which no fixture
@@ -154,12 +155,12 @@ class TestSubagentOriginatedDenied:
 def _make_repo(tmp_path):
     import subprocess
 
-    subprocess.run(["git", "init", "-q"], cwd=tmp_path)
-    subprocess.run(["git", "config", "user.email", "t@example.com"], cwd=tmp_path)
-    subprocess.run(["git", "config", "user.name", "t"], cwd=tmp_path)
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "config", "user.email", "t@example.com"], cwd=tmp_path, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "config", "user.name", "t"], cwd=tmp_path, **no_console_passthrough_kwargs())
     (tmp_path / "README.md").write_text("x")
-    subprocess.run(["git", "add", "."], cwd=tmp_path)
-    subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=tmp_path)
+    subprocess.run(["git", "add", "."], cwd=tmp_path, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=tmp_path, **no_console_passthrough_kwargs())
     return tmp_path
 
 

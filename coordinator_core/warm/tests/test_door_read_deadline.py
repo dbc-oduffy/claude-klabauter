@@ -64,6 +64,8 @@ from pathlib import Path
 
 import pytest
 
+from coordinator_core.win_portability import no_console_creationflags
+
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
@@ -248,6 +250,7 @@ def _run_door(engine_root: Path, timeout: float) -> subprocess.CompletedProcess:
         env=env,
         timeout=timeout,
         cwd=str(engine_root),
+        **no_console_creationflags(),
     )
 
 

@@ -25,6 +25,7 @@ from pathlib import Path
 import pytest
 
 from coordinator_core.session import day_branch_cut_lock as lock
+from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -133,7 +134,7 @@ class TestRealProcessRace:
                 [sys.executable, "-c", _RACER, str(repo), root, f"sid-{i}"],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
-                text=True,
+                text=True, **no_console_creationflags(),
             )
             for i in range(n)
         ]

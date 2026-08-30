@@ -31,6 +31,10 @@ from coordinator_core.ops.workday_complete_step2_5_dirty_tree import (
     _Counters,
     _classify_main_pass,
 )
+from coordinator_core.win_portability import (
+    no_console_creationflags,
+    no_console_passthrough_kwargs,
+)
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
@@ -38,10 +42,10 @@ pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 def _make_repo(tmp_path, name="repo"):
     repo = tmp_path / name
     repo.mkdir()
-    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
-    subprocess.run(["git", "config", "user.email", "test@test.local"], cwd=repo, check=True)
-    subprocess.run(["git", "config", "user.name", "Test"], cwd=repo, check=True)
-    subprocess.run(["git", "config", "commit.gpgsign", "false"], cwd=repo, check=True)
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "config", "user.email", "test@test.local"], cwd=repo, check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=repo, check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "config", "commit.gpgsign", "false"], cwd=repo, check=True, **no_console_passthrough_kwargs())
     return repo
 
 
@@ -61,8 +65,8 @@ def test_classify_main_pass_spawns_exactly_two_git_calls_for_several_dirty_paths
     repo = _make_repo(tmp_path)
     (repo / "a.txt").write_text("v1\n", encoding="utf-8")
     (repo / "b.txt").write_text("v1\n", encoding="utf-8")
-    subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
-    subprocess.run(["git", "commit", "-q", "-m", "seed"], cwd=repo, check=True)
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "commit", "-q", "-m", "seed"], cwd=repo, check=True, **no_console_passthrough_kwargs())
 
     # a.txt: real content change (has diff content).
     (repo / "a.txt").write_text("v2\n", encoding="utf-8")
@@ -74,7 +78,8 @@ def test_classify_main_pass_spawns_exactly_two_git_calls_for_several_dirty_paths
     status = subprocess.run(
         ["git", "status", "--porcelain", "--untracked-files=all"],
         cwd=repo, check=True, capture_output=True, text=True,
-    ).stdout.splitlines()
+    **no_console_creationflags(),
+).stdout.splitlines()
 
     counters = _Counters()
     acc = _Accumulators()

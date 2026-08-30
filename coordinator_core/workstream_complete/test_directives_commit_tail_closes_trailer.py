@@ -42,12 +42,16 @@ from coordinator_core.ops.ceremony.push import (
     PUSH_STATUS_NOT_ATTEMPTED,
 )
 from coordinator_core.workstream_complete import directives_commit_tail as _tail
+from coordinator_core.win_portability import (
+    no_console_creationflags,
+    no_console_passthrough_kwargs,
+)
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 
 def _git(args, cwd) -> None:
-    subprocess.run(["git", *args], cwd=str(cwd), check=True, capture_output=True, text=True)
+    subprocess.run(["git", *args], cwd=str(cwd), check=True, capture_output=True, text=True, **no_console_creationflags())
 
 
 def _init_repo(tmp_path: Path) -> Path:
@@ -73,7 +77,8 @@ def _commit_message(repo: Path) -> str:
         capture_output=True,
         text=True,
         check=True,
-    )
+    **no_console_creationflags(),
+)
     return proc.stdout
 
 

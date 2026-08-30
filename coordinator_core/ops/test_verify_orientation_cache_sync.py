@@ -27,6 +27,7 @@ import pytest
 import coordinator_core.ops.verify_orientation_cache_sync as _verify_mod
 import coordinator_core.orientation.regenerate_cache as _writer_mod
 from coordinator_core.ops.verify_orientation_cache_sync import main, verify
+from coordinator_core.win_portability import no_console_creationflags
 
 # Spawns a real external process; runs at cadence gates, not per-commit.
 # Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
@@ -71,7 +72,7 @@ def _write(tmp_path, body: str):
 
 
 def _run(*args, cwd=None, check=True):
-    return subprocess.run(list(args), cwd=cwd, check=check, capture_output=True, text=True)
+    return subprocess.run(list(args), cwd=cwd, check=check, capture_output=True, text=True, **no_console_creationflags())
 
 
 # ---------------------------------------------------------------------------

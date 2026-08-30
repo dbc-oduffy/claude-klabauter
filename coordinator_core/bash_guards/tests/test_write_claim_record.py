@@ -397,6 +397,127 @@ _AC7_CORPUS = [
 ]
 
 
+# ---------------------------------------------------------------------------
+# C1 (docs/plans/2026-08-30-the-guard-s-own-remediation-route-hides.md) --
+# `python`/`python3 <scratchpad-script.py>` claims the in-repo write target
+# the SCRIPT FILE names, closing the blind spot on the guard's own
+# remediation route (write a script to scratch, run it by path) for the
+# inline `-c`/heredoc denial. All cases here monkeypatch `_all_temp_roots`
+# (the SAME seam `_write_bump_applicability` already exposes for exactly
+# this reason) to point at a `tmp_path`-built scratchpad root, never a
+# literal `/tmp` or a drive letter -- Windows/macOS/Linux all first-class.
+# ---------------------------------------------------------------------------
+
+
+def _scratchpad(tmp_path) -> str:
+    scratch = tmp_path / "scratchpad"
+    scratch.mkdir()
+    return str(scratch)
+
+
+def _patch_temp_roots(monkeypatch, *roots):
+    from coordinator_core.bash_guards import _write_bump_applicability as applicability
+
+    monkeypatch.setattr(applicability, "_all_temp_roots", lambda *a, **k: list(roots))
+
+
+def test_c1_scratchpad_script_claims_the_target_it_writes(tmp_path, monkeypatch):
+    root = _repo(tmp_path)
+    scratch = _scratchpad(tmp_path)
+    _patch_temp_roots(monkeypatch, scratch)
+
+    script = os.path.join(scratch, "fix.py")
+    with open(script, "w", encoding="utf-8") as fh:
+        fh.write("open('f.py', 'w').write('hi')\n")
+
+    record_write_claims(f"python3 {script}", _SESSION_ID, root, denied=False)
+    assert _touched_paths(root) == {"f.py"}
+
+
+_C1_UNCHANGED_SHAPES = [
+    pytest.param('python3 -c "open(\'f.py\', \'w\').write(\'hi\')"', id="inline-c"),
+    pytest.param("python3 - <<'PY'\nopen(\"f.py\", \"w\").write(\"hi\")\nPY", id="heredoc"),
+    pytest.param("echo x > f.py", id="redirect"),
+]
+
+
+@pytest.mark.parametrize("cmd", _C1_UNCHANGED_SHAPES)
+def test_c1_other_three_shapes_unchanged_by_the_new_branch(tmp_path, monkeypatch, cmd):
+    root = _repo(tmp_path)
+    scratch = _scratchpad(tmp_path)
+    _patch_temp_roots(monkeypatch, scratch)
+
+    record_write_claims(cmd, _SESSION_ID, root, denied=False)
+    assert _touched_paths(root) == {"f.py"}
+
+
+def test_c1_script_outside_scratchpad_claims_nothing(tmp_path, monkeypatch):
+    root = _repo(tmp_path)
+    scratch = _scratchpad(tmp_path)
+    _patch_temp_roots(monkeypatch, scratch)
+
+    outside_dir = tmp_path / "not-scratch"
+    outside_dir.mkdir()
+    script = outside_dir / "fix.py"
+    script.write_text("open('f.py', 'w').write('hi')\n", encoding="utf-8")
+
+    record_write_claims(f"python3 {script}", _SESSION_ID, root, denied=False)
+    assert _touched_paths(root) == set()
+
+
+def test_c1_scratchpad_script_naming_out_of_repo_path_claims_nothing(tmp_path, monkeypatch):
+    root = _repo(tmp_path)
+    scratch = _scratchpad(tmp_path)
+    _patch_temp_roots(monkeypatch, scratch)
+
+    outside_target = str(tmp_path / "elsewhere" / "f.py")
+    script = os.path.join(scratch, "fix.py")
+    with open(script, "w", encoding="utf-8") as fh:
+        fh.write(f"open({outside_target!r}, 'w').write('hi')\n")
+
+    record_write_claims(f"python3 {script}", _SESSION_ID, root, denied=False)
+    assert _touched_paths(root) == set()
+
+
+def test_c1_scratchpad_script_over_size_cap_claims_nothing(tmp_path, monkeypatch):
+    from coordinator_core.bash_guards import write_claim_record as wcr
+
+    root = _repo(tmp_path)
+    scratch = _scratchpad(tmp_path)
+    _patch_temp_roots(monkeypatch, scratch)
+    monkeypatch.setattr(wcr, "_SCRATCHPAD_SCRIPT_READ_CAP_BYTES", 16)
+
+    script = os.path.join(scratch, "fix.py")
+    with open(script, "w", encoding="utf-8") as fh:
+        fh.write("open('f.py', 'w').write('hi')\n")  # well over 16 bytes
+
+    record_write_claims(f"python3 {script}", _SESSION_ID, root, denied=False)
+    assert _touched_paths(root) == set()
+
+
+def test_c1_denied_command_claims_nothing_even_with_eligible_script(tmp_path, monkeypatch):
+    root = _repo(tmp_path)
+    scratch = _scratchpad(tmp_path)
+    _patch_temp_roots(monkeypatch, scratch)
+
+    script = os.path.join(scratch, "fix.py")
+    with open(script, "w", encoding="utf-8") as fh:
+        fh.write("open('f.py', 'w').write('hi')\n")
+
+    record_write_claims(f"python3 {script}", _SESSION_ID, root, denied=True)
+    assert _touched_paths(root) == set()
+
+
+def test_c1_unreadable_or_vanished_script_raises_nothing(tmp_path, monkeypatch):
+    root = _repo(tmp_path)
+    scratch = _scratchpad(tmp_path)
+    _patch_temp_roots(monkeypatch, scratch)
+
+    missing_script = os.path.join(scratch, "gone.py")
+    record_write_claims(f"python3 {missing_script}", _SESSION_ID, root, denied=False)  # must not raise
+    assert _touched_paths(root) == set()
+
+
 def test_ac7_cost_under_5ms_total_and_no_subprocess(monkeypatch):
     # Deliberately NOT pytest's own `tmp_path` (which lands under the OS
     # user-profile temp dir): on this box that path is under real-time

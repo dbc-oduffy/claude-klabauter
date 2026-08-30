@@ -26,6 +26,7 @@ from pathlib import Path
 
 from coordinator_core.bash_guards import dispatch_checks
 from coordinator_core.session import commit_scope_events
+from coordinator_core.win_portability import no_console_creationflags, no_console_passthrough_kwargs
 
 import pytest
 
@@ -47,11 +48,12 @@ def _init_repo(tmp_path):
         ["config", "user.email", "t@example.com"],
         ["config", "user.name", "t"],
     ):
-        subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True)
+        subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True, **no_console_creationflags())
     (repo / "README.md").write_text("init\n", encoding="utf-8")
-    subprocess.run(["git", "add", "README.md"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(["git", "add", "README.md"], cwd=repo, check=True, capture_output=True, **no_console_creationflags())
     subprocess.run(
         ["git", "commit", "-q", "-m", "init"], cwd=repo, check=True, capture_output=True
+        **no_console_creationflags(),
     )
     return repo
 
@@ -80,7 +82,7 @@ def _init_session(repo, sid=SID):
 
 def _stage(repo, name, content="x"):
     (repo / name).write_text(content, encoding="utf-8")
-    subprocess.run(["git", "add", name], cwd=repo, check=True)
+    subprocess.run(["git", "add", name], cwd=repo, check=True, **no_console_passthrough_kwargs())
 
 
 def _verdict(cmd, repo):

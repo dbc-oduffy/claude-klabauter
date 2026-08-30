@@ -105,6 +105,7 @@ from coordinator_core.housekeeping.terminal import (
 from coordinator_core.ipc import register_op
 from coordinator_core.lifecycle import git_common_dir, main_worktree_root
 from coordinator_core.liveness import cs_claim_holder_live, resolve_live_session_ids
+from coordinator_core.ops.fleet import archive_actioned_memos
 from coordinator_core.ops.fleet._common import Move, archive_and_commit, handoff_archive_dest
 from coordinator_core.ops.fleet.archive_terminal_handoffs import _dirty_handoff_relpaths
 
@@ -192,32 +193,30 @@ def _claim_holder_live_predicate(common_dir: Path):
 
 def archive_terminal_batch(
     worktree_root: Path,
-    terminal_entries: List[TerminalEntry],
+    moves: List[Move],
     subject: str,
 ) -> Tuple[List[dict], List[dict]]:
-    """Step E: one `os.replace` per terminal entry, landed as ONE commit via
-    the existing `archive_and_commit` seam (module docstring — no new
-    commit route, no second-guessing of its `(acted, failed)` split).
+    """Step E: one `os.replace` per Move, landed as ONE commit via the
+    existing `archive_and_commit` seam (module docstring — no new commit
+    route, no second-guessing of its `(acted, failed)` split).
+
+    Widened (2026-08-30, the actioned-memo class gets an occasion, C2) from
+    `List[TerminalEntry]` to a prebuilt `List[Move]` — `housekeeping.terminal`
+    type memos are not, and `plan_sweep` (the memo family's own planner)
+    already returns ready-built Moves. `run()` builds the handoff family's
+    Moves itself (mirroring what this function used to do internally) and
+    concatenates them with the memo family's Moves before calling here once,
+    so both families land in the SAME commit.
 
     Returns `(acted, failed)` — `archive_and_commit`'s own return shape,
-    passed through unchanged. An empty `terminal_entries` short-circuits
-    to `([], [])` without calling into the seam at all (nothing to move,
-    nothing to commit — a zero-length batch is not a degenerate call to
-    make, it is simply not a call).
+    passed through unchanged. An empty `moves` short-circuits to `([], [])`
+    without calling into the seam at all (nothing to move, nothing to
+    commit — a zero-length batch is not a degenerate call to make, it is
+    simply not a call).
     """
-    if not terminal_entries:
+    if not moves:
         return [], []
 
-    moves = [
-        Move(
-            src=entry.path,
-            dst=handoff_archive_dest(worktree_root, entry.path),
-            candidate_id=str(entry.path.relative_to(worktree_root)),
-            force=False,
-            restage_src=False,
-        )
-        for entry in terminal_entries
-    ]
     return asyncio.run(archive_and_commit(worktree_root, moves, subject))
 
 
@@ -238,11 +237,22 @@ def run(
     Returns a JSON-serializable result dict: `closed` (int, gates cleared
     this cycle), `conflicts` (list of str paths whose gate-clear lost a
     race — CONFLICT, never a silent overwrite), `archived` (list of
-    candidate ids `archive_and_commit` reports `acted` on), `failed` (list
-    of `{id, reason}` dicts for any terminal entry `archive_and_commit`
-    could not land), `live_read_count` (C3's own read-count, asserted
-    read-once by C7), and `scan_gaps` (C3's own directory-listing gaps,
-    preserved rather than folded into an empty result).
+    HANDOFF candidate ids `archive_and_commit` reports `acted` on), `failed`
+    (list of `{id, reason}` dicts for any HANDOFF terminal entry
+    `archive_and_commit` could not land), `live_read_count` (C3's own
+    read-count, asserted read-once by C7), and `scan_gaps` (C3's own
+    directory-listing gaps, preserved rather than folded into an empty
+    result).
+
+    `memos_archived` / `memos_failed` / `memos_skipped` (2026-08-30, the
+    actioned-memo class gets an occasion, C2) — the MEMO family's own
+    sibling keys, folded into this same cycle and the SAME commit as the
+    handoff family, but kept out of `archived`/`failed` so those two stay
+    BYTE-COMPATIBLE for existing consumers (`baton_assemble/apply.py`, the
+    ceremony spines) that read handoffs only. `memos_skipped` is
+    `archive_actioned_memos.plan_sweep`'s own returned skip semantics
+    (scan-time rail refusals plus plan-time dest-conflict/deferred-cap),
+    never swallowed.
 
     `exclude` — repo-relative POSIX paths this sweep must not touch, because
     something else in the same call already owns them. `_handler` passes the
@@ -339,7 +349,26 @@ def run(
         for path, record in records.items()
         if record.get("deployment_state") in TERMINAL_DEPLOYMENT_STATES
     })
-    dirty_rels = _dirty_handoff_relpaths(worktree_root, candidate_rels)
+
+    # -- Memo family (C2, the actioned-memo class gets an occasion). --
+    # `archive_actioned_memos.plan_sweep` owns its own scan/classify/cap-slot
+    # machinery entirely -- this module never re-derives it. The ONE thing
+    # folding the memo family into this cycle needs from HERE is its own
+    # candidate relpaths, unioned into the SINGLE dirty-check call below, so
+    # the memo family never triggers a second `git status` spawn.
+    try:
+        memo_candidate_paths = archive_actioned_memos.collect_inbox_memo_paths(worktree_root)
+    except OSError:
+        memo_candidate_paths = []
+    memo_candidate_rels = sorted({
+        p.relative_to(worktree_root).as_posix() for p in memo_candidate_paths
+    })
+
+    dirty_rels = _dirty_handoff_relpaths(
+        worktree_root,
+        sorted(set(candidate_rels) | set(memo_candidate_rels)),
+        fallback_pathspecs=("state/handoffs", "cross-repo/inbox"),
+    )
     # Read off the record step A already parsed -- the rail costs no I/O
     # here, where the predecessor sweep paid a per-candidate file read.
     # `claimed_by` is the live field; `consumed_by` is its retired spelling,
@@ -371,18 +400,84 @@ def run(
 
     terminal_entries = compute_terminal_set(records, cap, retained=_retained)
 
-    # -- E. One move + ONE commit. --------------------------------------
-    subject = "housekeeping: archive {} terminal handoff(s)".format(len(terminal_entries))
-    acted, failed = archive_terminal_batch(worktree_root, terminal_entries, subject)
+    # -- E. One move + ONE commit, across BOTH families. -----------------
+    # Handoff Moves, built exactly as `archive_terminal_batch` used to build
+    # them internally before it was widened to accept a prebuilt list (C2).
+    handoff_moves = [
+        Move(
+            src=entry.path,
+            dst=handoff_archive_dest(worktree_root, entry.path),
+            candidate_id=str(entry.path.relative_to(worktree_root)),
+            force=False,
+            restage_src=False,
+        )
+        for entry in terminal_entries
+    ]
 
+    # Memo Moves, from the memo op's OWN planner -- `cap` passed straight
+    # through, unmodified, exactly as it is already passed to
+    # `compute_terminal_set` for the handoff family above (no shared-cap-
+    # over-the-union re-derivation here). `known_dirty_relpaths=dirty_rels`
+    # answers the memo family's Rail 1 from the single union dirty-check
+    # already computed above, spawning nothing extra.
+    memos_skipped: List[dict] = []
+    memo_moves, memo_plan_skipped = archive_actioned_memos.plan_sweep(
+        worktree_root, common_dir, cap,
+        known_dirty_relpaths=dirty_rels,
+        scan_skipped=memos_skipped,
+        # Hand the walk we already did above straight through -- without this
+        # `_scan_terminal_memos` re-walks cross-repo/inbox and re-`resolve()`s
+        # every entry, a second full directory pass per cycle for a list this
+        # caller is already holding.
+        inbox_paths=memo_candidate_paths,
+    )
+    # `plan_sweep` returns its OWN plan-time skips (dest-conflict,
+    # deferred-cap) separately from the scan-time `scan_skipped` out-param --
+    # both are `plan_sweep`'s own returned skip semantics (RESULT SHAPE,
+    # C2), so `memos_skipped` reports the union rather than only the scan
+    # half.
+    memos_skipped.extend(memo_plan_skipped)
+
+    subject_parts = []
+    if terminal_entries:
+        subject_parts.append(f"{len(terminal_entries)} terminal handoff(s)")
+    if memo_moves:
+        subject_parts.append(f"{len(memo_moves)} actioned memo(s)")
+    subject = "housekeeping: archive " + " and ".join(subject_parts) if subject_parts else \
+        "housekeeping: archive 0 terminal handoff(s)"
+
+    acted, failed = archive_terminal_batch(
+        worktree_root, handoff_moves + memo_moves, subject,
+    )
+
+    handoff_move_ids = {m.candidate_id for m in handoff_moves}
+    memo_move_ids = {m.candidate_id for m in memo_moves}
+    memos_archived = [item["id"] for item in acted if item["id"] in memo_move_ids]
+    memos_failed = [item for item in failed if item["id"] in memo_move_ids]
+    archived = [item["id"] for item in acted if item["id"] in handoff_move_ids]
+    failed = [item for item in failed if item["id"] in handoff_move_ids]
+
+    index_changed = False
     if acted:
-        archive_index_mod.revalidate(archive_idx)
+        index_changed = bool(archive_index_mod.revalidate(archive_idx))
 
-    # Persist for the next cycle. Best-effort by construction: a cache that
-    # cannot be written costs the next cycle a rebuild, nothing else.
+    # Persist for the next cycle, ONLY when the on-disk cache would differ.
+    # Best-effort by construction: a cache that cannot be written costs the
+    # next cycle a rebuild, nothing else.
+    #
+    # The write is gated because it is NOT free and it was previously
+    # unconditional: `save_index` serialises the whole index to JSON, measured
+    # at 94ms / 16232 `_iterencode` calls over a 1,470-record archive by
+    # cProfile on process_time (2026-08-30). A cycle that archived nothing
+    # rewrote byte-identical content every run, which at backlog scale was the
+    # difference between the two-family cycle sitting inside
+    # CYCLE_PROCESS_TIME_BUDGET_MS and breaching it. Two cases genuinely need
+    # the write: a rebuild (there was no usable cache, or it was stale), and a
+    # revalidate that actually patched the index. Neither holds on a quiet
+    # cycle, which is the common case on a cadence job.
     index_cache_written = (
         archive_index_mod.save_index(archive_idx, cache_path)
-        if archive_dir_exists
+        if archive_dir_exists and (index_rebuilt or index_changed)
         else False
     )
 
@@ -390,8 +485,11 @@ def run(
         "closed": closed,
         "close_error": close_error,
         "conflicts": conflicts,
-        "archived": [item["id"] for item in acted],
+        "archived": archived,
         "failed": failed,
+        "memos_archived": memos_archived,
+        "memos_failed": memos_failed,
+        "memos_skipped": memos_skipped,
         "live_read_count": live_result.read_count,
         "scan_gaps": live_result.scan_gaps,
         "index_rebuilt": index_rebuilt,

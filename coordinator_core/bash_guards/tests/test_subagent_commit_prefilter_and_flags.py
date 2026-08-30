@@ -301,11 +301,12 @@ _NEWLY_ADDED_COMMITTING_OPS = (
     "fleet.archive_release_accumulator",
     "fleet.reap_unintegrated_findings",
     "fleet.reap_integrated_findings",
-    # "fleet.archive_actioned_memos" REMOVED -- op KILLED outright by PM
-    # ruling (ops/ceremony/tail_ops.py), module never existed under that
-    # path; a dead allowlist entry that made the archival caller census
-    # read as nine instead of eight. See guard.py's own
-    # _COMMITTING_OP_NAMES comment.
+    # "fleet.archive_actioned_memos" was REMOVED here for a period -- op
+    # KILLED outright by PM ruling (ops/ceremony/tail_ops.py), between its
+    # 2026-08-23 kill and its b8795931a rebuild; during that window it was a
+    # dead allowlist entry that made the archival caller census read as nine
+    # instead of eight. It is a RETURN now -- registered again, live. See
+    # guard.py's own _COMMITTING_OP_NAMES comment.
     "fleet.archive_completed_handoffs",
     "fleet.archive_paper_trail",
     "fleet.archive_queue_entry",

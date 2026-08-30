@@ -34,6 +34,10 @@ from coordinator_core.ops.workday_complete_step2_5_dirty_tree import main as por
 from coordinator_core.session import claim_index
 from coordinator_core.session import core as session_core
 from coordinator_core.session import scope as session_scope
+from coordinator_core.win_portability import (
+    no_console_creationflags,
+    no_console_passthrough_kwargs,
+)
 
 # Declared, not excused: this file spawns a real git process because the port
 # under test classifies and auto-commits real dirty-tree state (renames,
@@ -50,13 +54,13 @@ pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 def _make_repo(tmp_path, name="repo"):
     repo = tmp_path / name
     repo.mkdir()
-    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
-    subprocess.run(["git", "config", "user.email", "test@test.local"], cwd=repo, check=True)
-    subprocess.run(["git", "config", "user.name", "Test"], cwd=repo, check=True)
-    subprocess.run(["git", "config", "commit.gpgsign", "false"], cwd=repo, check=True)
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "config", "user.email", "test@test.local"], cwd=repo, check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=repo, check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "config", "commit.gpgsign", "false"], cwd=repo, check=True, **no_console_passthrough_kwargs())
     (repo / ".gitkeep").write_text("")
-    subprocess.run(["git", "add", "--", ".gitkeep"], cwd=repo, check=True)
-    subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=repo, check=True)
+    subprocess.run(["git", "add", "--", ".gitkeep"], cwd=repo, check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=repo, check=True, **no_console_passthrough_kwargs())
     return repo
 
 
@@ -73,7 +77,7 @@ def _run_port(repo, args, capsys):
 
 def _rev_count(repo):
     res = subprocess.run(
-        ["git", "rev-list", "--count", "HEAD"], cwd=repo, capture_output=True, text=True, check=True
+        ["git", "rev-list", "--count", "HEAD"], cwd=repo, capture_output=True, text=True, check=True, **no_console_creationflags()
     )
     return int(res.stdout.strip())
 
@@ -93,10 +97,10 @@ def test_empty_repo_ok(tmp_path, capsys):
 def test_eol_phantom_skipped(tmp_path, capsys):
     repo = _make_repo(tmp_path)
     (repo / "eol-test.txt").write_text("hello\n")
-    subprocess.run(["git", "add", "--", "eol-test.txt"], cwd=repo, check=True)
-    subprocess.run(["git", "commit", "-q", "-m", "add"], cwd=repo, check=True)
+    subprocess.run(["git", "add", "--", "eol-test.txt"], cwd=repo, check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "commit", "-q", "-m", "add"], cwd=repo, check=True, **no_console_passthrough_kwargs())
     (repo / "eol-test.txt").write_text("hello world\n")
-    subprocess.run(["git", "add", "--", "eol-test.txt"], cwd=repo, check=True)
+    subprocess.run(["git", "add", "--", "eol-test.txt"], cwd=repo, check=True, **no_console_passthrough_kwargs())
     rc, out, _err = _run_port(repo, [], capsys)
     assert rc == 0
     assert "EOL-phantom skipped: 1" in out
@@ -112,7 +116,7 @@ def test_auto_commit_review_trail(tmp_path, capsys):
     after = _rev_count(repo)
     assert after == before + 1
     show = subprocess.run(
-        ["git", "show", "--stat", "HEAD"], cwd=repo, capture_output=True, text=True, check=True
+        ["git", "show", "--stat", "HEAD"], cwd=repo, capture_output=True, text=True, check=True, **no_console_creationflags()
     ).stdout
     assert "r.json" in show
 
@@ -143,8 +147,8 @@ def test_auto_gitignore_tracked_log_rm_cached(tmp_path, capsys):
     repo = _make_repo(tmp_path)
     (repo / "logs").mkdir()
     (repo / "logs" / "foo.log").write_text("tracked log content\n")
-    subprocess.run(["git", "add", "--", "logs/foo.log"], cwd=repo, check=True)
-    subprocess.run(["git", "commit", "-q", "-m", "accidentally track"], cwd=repo, check=True)
+    subprocess.run(["git", "add", "--", "logs/foo.log"], cwd=repo, check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "commit", "-q", "-m", "accidentally track"], cwd=repo, check=True, **no_console_passthrough_kwargs())
     with open(repo / "logs" / "foo.log", "a", encoding="utf-8") as fh:
         fh.write("more log content\n")
     before = _rev_count(repo)
@@ -152,11 +156,11 @@ def test_auto_gitignore_tracked_log_rm_cached(tmp_path, capsys):
     assert rc == 0
     assert _rev_count(repo) == before + 1
     tracked = subprocess.run(
-        ["git", "ls-files", "--error-unmatch", "--", "logs/foo.log"], cwd=repo, capture_output=True
+        ["git", "ls-files", "--error-unmatch", "--", "logs/foo.log"], cwd=repo, capture_output=True, **no_console_creationflags()
     )
     assert tracked.returncode != 0
     status = subprocess.run(
-        ["git", "status", "--porcelain"], cwd=repo, capture_output=True, text=True, check=True
+        ["git", "status", "--porcelain"], cwd=repo, capture_output=True, text=True, check=True, **no_console_creationflags()
     ).stdout
     assert status.strip() == ""
 
@@ -176,8 +180,8 @@ def test_auto_gitignore_mixed_tracked_and_untracked_batch(tmp_path, capsys):
     (repo / "logs").mkdir()
     (repo / "logs" / "a.log").write_text("tracked a\n")
     (repo / "logs" / "b.log").write_text("tracked b\n")
-    subprocess.run(["git", "add", "--", "logs/a.log", "logs/b.log"], cwd=repo, check=True)
-    subprocess.run(["git", "commit", "-q", "-m", "accidentally track two"], cwd=repo, check=True)
+    subprocess.run(["git", "add", "--", "logs/a.log", "logs/b.log"], cwd=repo, check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "commit", "-q", "-m", "accidentally track two"], cwd=repo, check=True, **no_console_passthrough_kwargs())
     with open(repo / "logs" / "a.log", "a", encoding="utf-8") as fh:
         fh.write("more a\n")
     with open(repo / "logs" / "b.log", "a", encoding="utf-8") as fh:
@@ -191,12 +195,12 @@ def test_auto_gitignore_mixed_tracked_and_untracked_batch(tmp_path, capsys):
 
     for path in ("logs/a.log", "logs/b.log", "logs/c.log"):
         tracked = subprocess.run(
-            ["git", "ls-files", "--error-unmatch", "--", path], cwd=repo, capture_output=True
+            ["git", "ls-files", "--error-unmatch", "--", path], cwd=repo, capture_output=True, **no_console_creationflags()
         )
         assert tracked.returncode != 0, f"{path} still tracked after batched rm --cached"
 
     status = subprocess.run(
-        ["git", "status", "--porcelain"], cwd=repo, capture_output=True, text=True, check=True
+        ["git", "status", "--porcelain"], cwd=repo, capture_output=True, text=True, check=True, **no_console_creationflags()
     ).stdout
     assert status.strip() == ""
 
@@ -205,8 +209,8 @@ def test_source_tree_needs_pm(tmp_path, capsys):
     repo = _make_repo(tmp_path)
     (repo / "bin").mkdir()
     (repo / "bin" / "foo.sh").write_text("#!/usr/bin/env bash\necho hello\n")
-    subprocess.run(["git", "add", "--", "bin/foo.sh"], cwd=repo, check=True)
-    subprocess.run(["git", "commit", "-q", "-m", "add foo.sh"], cwd=repo, check=True)
+    subprocess.run(["git", "add", "--", "bin/foo.sh"], cwd=repo, check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "commit", "-q", "-m", "add foo.sh"], cwd=repo, check=True, **no_console_passthrough_kwargs())
     (repo / "bin" / "foo.sh").write_text("#!/usr/bin/env bash\necho goodbye\n")
     rc, out, err = _run_port(repo, [], capsys)
     assert rc == 2
@@ -243,15 +247,15 @@ def test_rename_fold_bug1_no_abort(tmp_path, capsys):
     (repo / "cross-repo" / "inbox").mkdir(parents=True)
     (repo / "cross-repo" / "archive").mkdir(parents=True)
     (repo / "cross-repo" / "inbox" / "memo.md").write_text("memo content\n")
-    subprocess.run(["git", "add", "--", "cross-repo/inbox/memo.md"], cwd=repo, check=True)
-    subprocess.run(["git", "commit", "-q", "-m", "add memo"], cwd=repo, check=True)
+    subprocess.run(["git", "add", "--", "cross-repo/inbox/memo.md"], cwd=repo, check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "commit", "-q", "-m", "add memo"], cwd=repo, check=True, **no_console_passthrough_kwargs())
     subprocess.run(
-        ["git", "mv", "cross-repo/inbox/memo.md", "cross-repo/archive/memo.md"], cwd=repo, check=True
+        ["git", "mv", "cross-repo/inbox/memo.md", "cross-repo/archive/memo.md"], cwd=repo, check=True, **no_console_passthrough_kwargs()
     )
     rc, _out, _err = _run_port(repo, [], capsys)
     assert rc == 0
     status = subprocess.run(
-        ["git", "status", "--porcelain"], cwd=repo, capture_output=True, text=True, check=True
+        ["git", "status", "--porcelain"], cwd=repo, capture_output=True, text=True, check=True, **no_console_creationflags()
     ).stdout
     assert status.strip() == ""
 
@@ -264,9 +268,9 @@ def test_rename_fold_pure_source_dest_source_tree(tmp_path, capsys):
     (repo / "cross-repo" / "inbox").mkdir(parents=True)
     (repo / "bin").mkdir()
     (repo / "cross-repo" / "inbox" / "x.md").write_text("x content\n")
-    subprocess.run(["git", "add", "--", "cross-repo/inbox/x.md"], cwd=repo, check=True)
-    subprocess.run(["git", "commit", "-q", "-m", "add x"], cwd=repo, check=True)
-    subprocess.run(["git", "mv", "cross-repo/inbox/x.md", "bin/x.md"], cwd=repo, check=True)
+    subprocess.run(["git", "add", "--", "cross-repo/inbox/x.md"], cwd=repo, check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "commit", "-q", "-m", "add x"], cwd=repo, check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "mv", "cross-repo/inbox/x.md", "bin/x.md"], cwd=repo, check=True, **no_console_passthrough_kwargs())
     rc, out, _err = _run_port(repo, [], capsys)
     assert rc == 2
     assert "NEEDS-PM" in out
@@ -276,7 +280,8 @@ def test_rename_fold_pure_source_dest_source_tree(tmp_path, capsys):
         capture_output=True,
         text=True,
         check=True,
-    ).stdout
+    **no_console_creationflags(),
+).stdout
     assert "cross-repo/inbox/x.md" in name_status
 
 
@@ -288,16 +293,16 @@ def test_rename_fold_rd_status_degrades_to_deletion(tmp_path, capsys):
     (repo / "cross-repo" / "inbox").mkdir(parents=True)
     (repo / "cross-repo" / "archive").mkdir(parents=True)
     (repo / "cross-repo" / "inbox" / "memo.md").write_text("memo content\n")
-    subprocess.run(["git", "add", "--", "cross-repo/inbox/memo.md"], cwd=repo, check=True)
-    subprocess.run(["git", "commit", "-q", "-m", "add memo"], cwd=repo, check=True)
+    subprocess.run(["git", "add", "--", "cross-repo/inbox/memo.md"], cwd=repo, check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "commit", "-q", "-m", "add memo"], cwd=repo, check=True, **no_console_passthrough_kwargs())
     subprocess.run(
-        ["git", "mv", "cross-repo/inbox/memo.md", "cross-repo/archive/memo.md"], cwd=repo, check=True
+        ["git", "mv", "cross-repo/inbox/memo.md", "cross-repo/archive/memo.md"], cwd=repo, check=True, **no_console_passthrough_kwargs()
     )
     os.remove(repo / "cross-repo" / "archive" / "memo.md")
     rc, _out, _err = _run_port(repo, [], capsys)
     assert rc == 0
     status = subprocess.run(
-        ["git", "status", "--porcelain"], cwd=repo, capture_output=True, text=True, check=True
+        ["git", "status", "--porcelain"], cwd=repo, capture_output=True, text=True, check=True, **no_console_creationflags()
     ).stdout
     assert status.strip() == ""
     name_status = subprocess.run(
@@ -306,7 +311,8 @@ def test_rename_fold_rd_status_degrades_to_deletion(tmp_path, capsys):
         capture_output=True,
         text=True,
         check=True,
-    ).stdout
+    **no_console_creationflags(),
+).stdout
     assert "D" in name_status and "cross-repo/inbox/memo.md" in name_status
 
 
@@ -401,12 +407,13 @@ def test_two_live_sessions_commits_own_reports_peer_never_commits(
         capture_output=True,
         text=True,
         check=True,
-    ).stdout
+    **no_console_creationflags(),
+).stdout
     assert "state/subagent-share/mine/minefile.md" in name_status
     assert "state/subagent-share/livepeer/peerfile.md" not in name_status
 
     status = subprocess.run(
-        ["git", "status", "--porcelain", "--untracked-files=all"], cwd=repo, capture_output=True, text=True, check=True
+        ["git", "status", "--porcelain", "--untracked-files=all"], cwd=repo, capture_output=True, text=True, check=True, **no_console_creationflags()
     ).stdout
     assert "state/subagent-share/livepeer/peerfile.md" in status
     assert "state/subagent-share/mine/minefile.md" not in status
@@ -447,7 +454,8 @@ def test_peer_claim_perturbation_resolvable_then_broken_never_commits(
     status = subprocess.run(
         ["git", "status", "--porcelain", "--untracked-files=all"],
         cwd=repo, capture_output=True, text=True, check=True,
-    ).stdout
+    **no_console_creationflags(),
+).stdout
     assert "state/subagent-share/livepeer/peerfile.md" in status
 
     # -- broken leg: livepeer's touched.txt becomes unreadable --
@@ -477,7 +485,8 @@ def test_peer_claim_perturbation_resolvable_then_broken_never_commits(
     status2 = subprocess.run(
         ["git", "status", "--porcelain", "--untracked-files=all"],
         cwd=repo, capture_output=True, text=True, check=True,
-    ).stdout
+    **no_console_creationflags(),
+).stdout
     assert "state/subagent-share/livepeer/peerfile.md" in status2
 
 
@@ -503,8 +512,8 @@ def test_claimed_source_tree_path_still_classifies_source_tree_never_commits(
 
     (repo / "bin").mkdir()
     (repo / "bin" / "foo.sh").write_text("#!/usr/bin/env bash\necho hello\n")
-    subprocess.run(["git", "add", "--", "bin/foo.sh"], cwd=repo, check=True)
-    subprocess.run(["git", "commit", "-q", "-m", "add foo.sh"], cwd=repo, check=True)
+    subprocess.run(["git", "add", "--", "bin/foo.sh"], cwd=repo, check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "commit", "-q", "-m", "add foo.sh"], cwd=repo, check=True, **no_console_passthrough_kwargs())
     (repo / "bin" / "foo.sh").write_text("#!/usr/bin/env bash\necho goodbye\n")
     session_scope.touch("mine", "bin/foo.sh", cwd=str(repo))
 
@@ -517,7 +526,7 @@ def test_claimed_source_tree_path_still_classifies_source_tree_never_commits(
     assert "claim-commit" not in out
     assert _rev_count(repo) == before  # this run made NO commit
     status = subprocess.run(
-        ["git", "status", "--porcelain"], cwd=repo, capture_output=True, text=True, check=True
+        ["git", "status", "--porcelain"], cwd=repo, capture_output=True, text=True, check=True, **no_console_creationflags()
     ).stdout
     assert "bin/foo.sh" in status  # still dirty, uncommitted
 
@@ -542,7 +551,8 @@ def test_unresolvable_session_id_degrades_to_pre_c6_ambiguous(tmp_path, capsys, 
     status = subprocess.run(
         ["git", "status", "--porcelain", "--untracked-files=all"],
         cwd=repo, capture_output=True, text=True, check=True,
-    ).stdout
+    **no_console_creationflags(),
+).stdout
     assert "state/subagent-share/someone/file.md" in status
 
 
@@ -555,10 +565,10 @@ def test_golden_fixture_parity(tmp_path, capsys, scenario):
             return
         if scenario == "eol_phantom":
             (repo / "eol-test.txt").write_text("hello\n")
-            subprocess.run(["git", "add", "--", "eol-test.txt"], cwd=repo, check=True)
-            subprocess.run(["git", "commit", "-q", "-m", "add"], cwd=repo, check=True)
+            subprocess.run(["git", "add", "--", "eol-test.txt"], cwd=repo, check=True, **no_console_passthrough_kwargs())
+            subprocess.run(["git", "commit", "-q", "-m", "add"], cwd=repo, check=True, **no_console_passthrough_kwargs())
             (repo / "eol-test.txt").write_text("hello world\n")
-            subprocess.run(["git", "add", "--", "eol-test.txt"], cwd=repo, check=True)
+            subprocess.run(["git", "add", "--", "eol-test.txt"], cwd=repo, check=True, **no_console_passthrough_kwargs())
         elif scenario == "auto_commit":
             (repo / "state" / "review-trail").mkdir(parents=True)
             (repo / "state" / "review-trail" / "r.json").write_text('{"status":"done"}\n')
@@ -568,8 +578,8 @@ def test_golden_fixture_parity(tmp_path, capsys, scenario):
         elif scenario == "source_tree":
             (repo / "bin").mkdir()
             (repo / "bin" / "foo.sh").write_text("echo hi\n")
-            subprocess.run(["git", "add", "--", "bin/foo.sh"], cwd=repo, check=True)
-            subprocess.run(["git", "commit", "-q", "-m", "add"], cwd=repo, check=True)
+            subprocess.run(["git", "add", "--", "bin/foo.sh"], cwd=repo, check=True, **no_console_passthrough_kwargs())
+            subprocess.run(["git", "commit", "-q", "-m", "add"], cwd=repo, check=True, **no_console_passthrough_kwargs())
             (repo / "bin" / "foo.sh").write_text("echo bye\n")
         elif scenario == "orphan_tmp":
             (repo / "foo.tmp.111.222").write_text("x\n")

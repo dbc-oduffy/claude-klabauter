@@ -19,6 +19,7 @@ from coordinator_core.engine_version import (
     resolve_engine_dirty,
     resolve_engine_sha,
 )
+from coordinator_core.win_portability import no_console_creationflags
 
 # Spawns a real external process; runs at cadence gates, not per-commit.
 # Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
@@ -175,6 +176,7 @@ def test_min_known_good_sha_is_a_real_commit_in_this_repo():
             capture_output=True,
             text=True,
             timeout=5,
+            **no_console_creationflags(),
         )
     except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
         pytest.skip("git unavailable in this test environment")

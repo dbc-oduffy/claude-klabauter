@@ -26,6 +26,7 @@ import pytest
 
 from coordinator_core.ops import verify_arch_audit_atlas_refresh as mod
 from coordinator_core.ops.verify_arch_audit_atlas_refresh import main
+from coordinator_core.win_portability import no_console_creationflags
 
 # Spawns a real external process; runs at cadence gates, not per-commit.
 # Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
@@ -39,7 +40,7 @@ pytestmark = [
 # Fixture helpers
 # ---------------------------------------------------------------------------
 def _run(cmd, cwd):
-    return subprocess.run(cmd, cwd=str(cwd), capture_output=True, text=True, check=True)
+    return subprocess.run(cmd, cwd=str(cwd), capture_output=True, text=True, check=True, **no_console_creationflags())
 
 
 def _init_repo(tmp_path: Path) -> Path:

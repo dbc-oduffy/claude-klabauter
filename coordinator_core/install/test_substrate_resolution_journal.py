@@ -30,6 +30,7 @@ from coordinator_core.install import resolution_journal
 from coordinator_core.install import substrate
 from coordinator_core.install.receipt import derive_receipt_entries
 from coordinator_core.install.write_surface import ShapedClause, WriteSurfaceEntry
+from coordinator_core.win_portability import no_console_creationflags
 
 # Spawns a real external process; runs at cadence gates, not per-commit.
 # Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
@@ -255,7 +256,7 @@ def test_prune_orphaned_static_names_never_got_there_leaves_no_row(tmp_path):
 
 def _git(*args, cwd):
     proc = subprocess.run(
-        ["git", *args], cwd=str(cwd), capture_output=True, text=True,
+        ["git", *args], cwd=str(cwd), capture_output=True, text=True, **no_console_creationflags(),
     )
     assert proc.returncode == 0, proc.stderr
 

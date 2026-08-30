@@ -35,6 +35,10 @@ import coordinator_core.ops.handoff_correct_body  # noqa: F401 — fires @regist
 from coordinator_core import claim_state as _claim_state_module
 from coordinator_core.ipc import _REGISTRY
 from coordinator_core.ops.handoff_correct_body import _handler
+from coordinator_core.win_portability import (
+    no_console_creationflags,
+    no_console_passthrough_kwargs,
+)
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -62,7 +66,8 @@ def _make_git_repo(tmp_path: Path) -> Path:
             cwd=str(repo),
             capture_output=True,
             check=True,
-        )
+    **no_console_creationflags(),
+)
 
     _git("init", "-b", "main")
     _git("config", "user.email", "correct-body-claim-state-test@claude-klabauter.test")

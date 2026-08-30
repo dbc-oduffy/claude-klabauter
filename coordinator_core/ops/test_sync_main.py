@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 
 from coordinator_core.ops.sync_main import main
+from coordinator_core.win_portability import no_console_creationflags, no_console_passthrough_kwargs
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
@@ -22,6 +23,7 @@ def _git(root: Path, *args: str) -> subprocess.CompletedProcess:
         capture_output=True,
         text=True,
         check=True,
+        **no_console_creationflags(),
     )
 
 
@@ -37,10 +39,10 @@ def _make_origin_and_clone(tmp_path: Path) -> tuple[Path, Path]:
     # at all, depending on the box.
     origin = tmp_path / "origin.git"
     origin.mkdir()
-    subprocess.run(["git", "init", "-q", "--bare", "-b", "main", str(origin)], check=True)
+    subprocess.run(["git", "init", "-q", "--bare", "-b", "main", str(origin)], check=True, **no_console_passthrough_kwargs())
 
     clone = tmp_path / "clone"
-    subprocess.run(["git", "clone", "-q", str(origin), str(clone)], check=True)
+    subprocess.run(["git", "clone", "-q", str(origin), str(clone)], check=True, **no_console_passthrough_kwargs())
     _git(clone, "config", "user.email", "test@example.com")
     _git(clone, "config", "user.name", "Test")
     # -B (not -b): the empty-origin clone may already have "main" checked
@@ -78,7 +80,7 @@ def test_unknown_argument_exits_1(capsys):
 
 
 def test_origin_unreachable_skips_silently(tmp_path, capsys, monkeypatch):
-    _git_init = subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    _git_init = subprocess.run(["git", "init", "-q", str(tmp_path)], check=True, **no_console_passthrough_kwargs())
     monkeypatch.chdir(tmp_path)
     rc = main([])
     err = capsys.readouterr().err
@@ -90,7 +92,7 @@ def test_on_main_ff_pull_succeeds(tmp_path, capsys, monkeypatch):
     origin, clone = _make_origin_and_clone(tmp_path)
 
     other = tmp_path / "other"
-    subprocess.run(["git", "clone", "-q", str(origin), str(other)], check=True)
+    subprocess.run(["git", "clone", "-q", str(origin), str(other)], check=True, **no_console_passthrough_kwargs())
     _git(other, "config", "user.email", "test@example.com")
     _git(other, "config", "user.name", "Test")
     _git(other, "checkout", "-q", "-B", "main", "origin/main")
@@ -124,7 +126,7 @@ def test_on_other_branch_updates_local_main_ref(tmp_path, capsys, monkeypatch):
     origin, clone = _make_origin_and_clone(tmp_path)
 
     other = tmp_path / "other"
-    subprocess.run(["git", "clone", "-q", str(origin), str(other)], check=True)
+    subprocess.run(["git", "clone", "-q", str(origin), str(other)], check=True, **no_console_passthrough_kwargs())
     _git(other, "config", "user.email", "test@example.com")
     _git(other, "config", "user.name", "Test")
     _git(other, "checkout", "-q", "-B", "main", "origin/main")

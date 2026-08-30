@@ -51,9 +51,12 @@ Negative-spec:
     - Does NOT read or aggregate `.git/push-failures.log` — that remains
       `workday.surface_auto_push_failure_stats`'s exclusive job.
     - Does NOT decide whether a push is due, nor retry beyond what
-      `run_push_with_retry(..., _skip_hold=True)` already performs
-      internally — delegates entirely, unchanged, to
-      `coordinator_core.hooks.auto_push.drain_pending_push`.
+      `run_push_with_retry(repo_root, branch)` already performs internally
+      — delegates entirely, unchanged, to
+      `coordinator_core.hooks.auto_push.drain_pending_push`. (Review:
+      coordinator:code-reviewer, P2, 2026-08-30 -- `_skip_hold` was deleted
+      from `run_push_with_retry`'s signature by this wave's Finding 6; this
+      docstring described a call shape that no longer exists.)
     - Does NOT accept or require a git COMMON dir — `repo_root` is the
       caller's working-tree root, exactly like `auto_push.py`'s own
       `repo_root` parameter (it resolves the common dir internally via

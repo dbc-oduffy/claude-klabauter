@@ -22,6 +22,7 @@ from pathlib import Path
 import pytest
 
 from coordinator_core.session_ledger import aggregate_chain_loe as agg
+from coordinator_core.win_portability import no_console_passthrough_kwargs
 
 # Real-git spawn is load-bearing: the fixture mirrors
 # test_aggregate_chain_loe.py's own git-repo helper, and `aggregate()` reads
@@ -35,7 +36,7 @@ pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 
 def _init_repo(tmp_path: Path) -> Path:
-    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True, **no_console_passthrough_kwargs())
     (tmp_path / "state" / "handoffs").mkdir(parents=True)
     (tmp_path / "archive" / "handoffs").mkdir(parents=True)
     return tmp_path

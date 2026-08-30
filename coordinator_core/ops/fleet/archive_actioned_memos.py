@@ -258,6 +258,7 @@ def _scan_terminal_memos(
     scan_errors: Optional[List[str]] = None,
     known_dirty_relpaths: Optional[set] = None,
     skipped: Optional[List[dict]] = None,
+    inbox_paths: Optional[List[Path]] = None,
 ) -> List[Tuple[Path, str, str, Optional[str]]]:
     """Return every terminal, unclaimed memo candidate — UNCAPPED,
     oldest-first — as (path, note, status_label, terminal_since) tuples.
@@ -281,17 +282,24 @@ def _scan_terminal_memos(
         if skipped is not None:
             skipped.append({"id": candidate_id, "reason": reason})
 
-    try:
-        inbox_paths = collect_inbox_memo_paths(worktree_root)
-    except OSError as exc:
-        inbox_dir = worktree_root / "cross-repo" / "inbox"
-        _LOG.warning(
-            "_scan_terminal_memos: cannot scan %s — %s; returning zero "
-            "candidates (degrade safe)", inbox_dir, exc,
-        )
-        if scan_errors is not None:
-            scan_errors.append(f"{inbox_dir}: {exc}")
-        return results
+    # An in-plane caller that already walked the inbox this invocation passes
+    # its own list through rather than paying a second `iterdir` + `resolve()`
+    # per entry (2026-08-30: cycle.run collected these to build the dirty-check
+    # union, then this scan re-walked the same directory -- measured 31ms of the
+    # two-family cycle at an 86-memo corpus, for a walk whose result the caller
+    # already held).
+    if inbox_paths is None:
+        try:
+            inbox_paths = collect_inbox_memo_paths(worktree_root)
+        except OSError as exc:
+            inbox_dir = worktree_root / "cross-repo" / "inbox"
+            _LOG.warning(
+                "_scan_terminal_memos: cannot scan %s — %s; returning zero "
+                "candidates (degrade safe)", inbox_dir, exc,
+            )
+            if scan_errors is not None:
+                scan_errors.append(f"{inbox_dir}: {exc}")
+            return results
     if not inbox_paths:
         return results
 
@@ -358,6 +366,7 @@ def plan_sweep(
     candidate_ids: Optional[List[str]] = None,
     known_dirty_relpaths: Optional[set] = None,
     scan_skipped: Optional[List[dict]] = None,
+    inbox_paths: Optional[List[Path]] = None,
 ) -> Tuple[List[Move], List[dict]]:
     """Classification-only planning: scan, cap-slot, and every exclusion
     rail. Mutates nothing, commits nothing, spawns nothing beyond what
@@ -370,7 +379,7 @@ def plan_sweep(
     """
     terminal = _scan_terminal_memos(
         worktree_root, common_dir, known_dirty_relpaths=known_dirty_relpaths,
-        skipped=scan_skipped,
+        skipped=scan_skipped, inbox_paths=inbox_paths,
     )
     terminal_by_id = {rel_id(p, worktree_root): (p, note) for p, note, _label, _ts in terminal}
 

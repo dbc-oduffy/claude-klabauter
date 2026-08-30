@@ -32,6 +32,7 @@ from coordinator_core.ops.ceremony.detached_render_commit import commit_own_arti
 from coordinator_core.session import claim_index
 from coordinator_core.session import core as session_core
 from coordinator_core.session import scope as session_scope
+from coordinator_core.win_portability import no_console_creationflags
 
 # `commit_own_artifact` lands a real commit and this suite reads the claim
 # back through `claim_index.lookup()` against a real repo -- the same
@@ -45,7 +46,7 @@ pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 
 def _git(args, cwd: Path) -> None:
-    subprocess.run(["git", *args], cwd=str(cwd), capture_output=True, text=True, check=True)
+    subprocess.run(["git", *args], cwd=str(cwd), capture_output=True, text=True, check=True, **no_console_creationflags())
 
 
 def _own_sid(monkeypatch, sid: str) -> None:

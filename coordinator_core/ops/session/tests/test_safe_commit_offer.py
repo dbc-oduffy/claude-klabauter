@@ -52,6 +52,7 @@ from coordinator_core.git.commit import CommitOutcome, CommitRefused
 from coordinator_core.ipc import dispatch_message
 from coordinator_core.session import claim_index, core, scope, touch_record
 from coordinator_core.ops.session import safe_commit_offer
+from coordinator_core.win_portability import no_console_creationflags, no_console_passthrough_kwargs
 
 # Real git spawn is load-bearing: compute_offer's dirty-set math and
 # `_dirty_files_under` read actual `git status`/diff output, and
@@ -64,14 +65,15 @@ def _make_repo(tmp_path):
     # Review: staff-eng F12 — check=True on every fixture-setup git call
     # (mirrors test_scope.py's _make_repo): a silent fixture-setup failure
     # must not masquerade as a passing test.
-    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True, **no_console_passthrough_kwargs())
     subprocess.run(
-        ["git", "config", "user.email", "t@example.com"], cwd=tmp_path, check=True
+        ["git", "config", "user.email", "t@example.com"], cwd=tmp_path, check=True,
+        **no_console_passthrough_kwargs(),
     )
-    subprocess.run(["git", "config", "user.name", "t"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "config", "user.name", "t"], cwd=tmp_path, check=True, **no_console_passthrough_kwargs())
     (tmp_path / "README.md").write_text("x")
-    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
-    subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=tmp_path, check=True, **no_console_passthrough_kwargs())
     return tmp_path
 
 
@@ -452,12 +454,14 @@ class TestComputeOffer:
         )
         before = touched_file.read_bytes()
         status_before = subprocess.run(
-            ["git", "status", "--porcelain"], cwd=repo, capture_output=True, text=True
+            ["git", "status", "--porcelain"], cwd=repo, capture_output=True, text=True,
+            **no_console_creationflags(),
         ).stdout
         safe_commit_offer.compute_offer("mine", cwd=str(repo))
         assert touched_file.read_bytes() == before
         status_after = subprocess.run(
-            ["git", "status", "--porcelain"], cwd=repo, capture_output=True, text=True
+            ["git", "status", "--porcelain"], cwd=repo, capture_output=True, text=True,
+            **no_console_creationflags(),
         ).stdout
         assert status_before == status_after
 
@@ -776,11 +780,13 @@ class TestAutoCommitSession:
         assert report["groups"][0]["committed"] is True
         assert report["groups"][0]["sha"]
         log = subprocess.run(
-            ["git", "log", "--oneline", "-1"], cwd=repo, capture_output=True, text=True
+            ["git", "log", "--oneline", "-1"], cwd=repo, capture_output=True, text=True,
+            **no_console_creationflags(),
         ).stdout
         assert "a.py" not in log  # commit landed, message is the mechanical subject
         status = subprocess.run(
-            ["git", "status", "--porcelain"], cwd=repo, capture_output=True, text=True
+            ["git", "status", "--porcelain"], cwd=repo, capture_output=True, text=True,
+            **no_console_creationflags(),
         ).stdout
         assert status == ""  # nothing left dirty
 
@@ -829,10 +835,12 @@ class TestAutoCommitSession:
             cwd=repo,
             capture_output=True,
             text=True,
+            **no_console_creationflags(),
         ).stdout.split()
         assert landed == ["a.py"], landed
         status = subprocess.run(
-            ["git", "status", "--porcelain"], cwd=repo, capture_output=True, text=True
+            ["git", "status", "--porcelain"], cwd=repo, capture_output=True, text=True,
+            **no_console_creationflags(),
         ).stdout
         assert status == ""  # nothing left dirty
 
@@ -868,7 +876,8 @@ class TestAutoCommitSession:
         assert "file_00.py" not in subject  # no enumerated filenames in the subject
 
         full_message = subprocess.run(
-            ["git", "log", "-1", "--pretty=%B"], cwd=repo, capture_output=True, text=True
+            ["git", "log", "-1", "--pretty=%B"], cwd=repo, capture_output=True, text=True,
+            **no_console_creationflags(),
         ).stdout
         for p in paths:
             assert p in full_message  # every rescued path IS in the body
@@ -915,7 +924,8 @@ class TestAutoCommitSession:
         assert len(report["groups"]) == 1
         assert report["groups"][0]["paths"] == ["a.py"]  # peer.py silently dropped
         status = subprocess.run(
-            ["git", "status", "--porcelain"], cwd=repo, capture_output=True, text=True
+            ["git", "status", "--porcelain"], cwd=repo, capture_output=True, text=True,
+            **no_console_creationflags(),
         ).stdout
         assert "peer.py" in status  # still dirty, never committed
 
@@ -1053,7 +1063,8 @@ class TestAutoCommitSession:
             ],
         )
         full_message = subprocess.run(
-            ["git", "log", "-1", "--pretty=%B"], cwd=repo, capture_output=True, text=True
+            ["git", "log", "-1", "--pretty=%B"], cwd=repo, capture_output=True, text=True,
+            **no_console_creationflags(),
         ).stdout
         assert "curated body text with real judgment behind it" in full_message
 
@@ -1178,7 +1189,8 @@ class TestHandler:
         assert out["dry_run"] is True
         assert out["safe_paths"] == ["a.py"]
         status = subprocess.run(
-            ["git", "status", "--porcelain"], cwd=repo, capture_output=True, text=True
+            ["git", "status", "--porcelain"], cwd=repo, capture_output=True, text=True,
+            **no_console_creationflags(),
         ).stdout
         assert "a.py" in status  # NOT committed
 
@@ -1248,7 +1260,8 @@ class TestHandler:
         assert out["failed_groups"] == []
         assert "hand-authored subject" in out["rendered"]
         status = subprocess.run(
-            ["git", "status", "--porcelain"], cwd=repo, capture_output=True, text=True
+            ["git", "status", "--porcelain"], cwd=repo, capture_output=True, text=True,
+            **no_console_creationflags(),
         ).stdout
         assert status == ""
 
@@ -1585,10 +1598,11 @@ def _landed_commit(repo, filenames):
     """Commit `filenames` (created here) and return the new sha."""
     for name in filenames:
         (repo / name).write_text("x\n")
-    subprocess.run(["git", "add", *filenames], cwd=repo, check=True)
-    subprocess.run(["git", "commit", "-q", "-m", "landed"], cwd=repo, check=True)
+    subprocess.run(["git", "add", *filenames], cwd=repo, check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "commit", "-q", "-m", "landed"], cwd=repo, check=True, **no_console_passthrough_kwargs())
     return subprocess.run(
-        ["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, text=True, check=True
+        ["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, text=True, check=True,
+        **no_console_creationflags(),
     ).stdout.strip()
 
 
@@ -1855,15 +1869,15 @@ class TestRenderReportDegradedScopeInput:
 def _make_memo_send_receiver_repo(tmp_path):
     root = tmp_path / "receiver-repo"
     root.mkdir()
-    subprocess.run(["git", "init", "-q", "-b", "main"], cwd=root, check=True)
-    subprocess.run(["git", "config", "user.email", "t@example.com"], cwd=root, check=True)
-    subprocess.run(["git", "config", "user.name", "t"], cwd=root, check=True)
-    subprocess.run(["git", "config", "commit.gpgsign", "false"], cwd=root, check=True)
+    subprocess.run(["git", "init", "-q", "-b", "main"], cwd=root, check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "config", "user.email", "t@example.com"], cwd=root, check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "config", "user.name", "t"], cwd=root, check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "config", "commit.gpgsign", "false"], cwd=root, check=True, **no_console_passthrough_kwargs())
     inbox = root / "cross-repo" / "inbox"
     inbox.mkdir(parents=True)
     (inbox / ".gitkeep").write_text("", encoding="utf-8")
-    subprocess.run(["git", "add", "-A"], cwd=root, check=True)
-    subprocess.run(["git", "commit", "-q", "-m", "init receiver"], cwd=root, check=True)
+    subprocess.run(["git", "add", "-A"], cwd=root, check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "commit", "-q", "-m", "init receiver"], cwd=root, check=True, **no_console_passthrough_kwargs())
     return root
 
 

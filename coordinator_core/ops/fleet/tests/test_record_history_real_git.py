@@ -28,6 +28,7 @@ from pathlib import Path
 import pytest
 
 from coordinator_core.ops.fleet import record_history as frh
+from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [
     pytest.mark.spawns_process,
@@ -36,7 +37,7 @@ pytestmark = [
 
 
 def _git(repo: Path, *args: str) -> subprocess.CompletedProcess:
-    return subprocess.run(["git", *args], cwd=str(repo), capture_output=True, check=True)
+    return subprocess.run(["git", *args], cwd=str(repo), capture_output=True, check=True, **no_console_creationflags())
 
 
 def _make_real_git_repo(tmp_path: Path, name: str = "git-repo") -> Path:

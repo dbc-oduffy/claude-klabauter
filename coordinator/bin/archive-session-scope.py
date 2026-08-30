@@ -1,14 +1,13 @@
 # Unix shebang — was generator-owned by gen-launcher-shim.py --ensure-unix; that mode was retired 2026-07-28 (POSIX-EXEC-ASSUMPTION-GUARD, PM ruling) and no longer regenerates this line.
 """archive-session-scope.py — archives a session's claim directory at SessionEnd.
 
-Named `wsc-close.py` until 2026-08-30. The WSC name outlived its meaning:
-nothing in `/workstream-complete` calls this file, and its whole job is the
-SessionEnd archive below. Renamed by agreement with DoE-claude (memo
-`cross-repo/inbox/2026-08-30-doe-claude-em-rename-wsc-close-yes-and-our-hook-
-now-fails-loud.md`), which owns the sole caller. The old name survives as a
-forwarder at `coordinator/bin/wsc-close.py` and is recorded in
-`docs/install/relocation-ledger.json`; the forwarder is dropped once
-DoE-claude's `_archive` is repointed at this name.
+Renamed here on 2026-08-30 from a WSC-prefixed name that had outlived its
+meaning: nothing in `/workstream-complete` calls this file, and its whole job
+is the SessionEnd archive below. Agreed with DoE-claude, which owns the sole
+caller, and sequenced so the caller never resolved a missing path -- rename
+plus a temporary forwarder at the old path, DoE's `_archive` repointed
+(DoE-claude `edbbf7fd48`), forwarder deleted. The old path is recorded in
+`docs/install/relocation-ledger.json`; nothing resolves it any more.
 
 Formerly also carried `tail-args`, which assembled optional
 `--deleted-paths`/`--kept-entries`/`--review-*` argv for a `wsc-tail.py`

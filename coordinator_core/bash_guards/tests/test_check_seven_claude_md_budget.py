@@ -28,6 +28,7 @@ from coordinator_core.claude_md_budget import (
     HARD_LIMIT_BYTES,
     SOFT_LIMIT_BYTES,
 )
+from coordinator_core.win_portability import no_console_creationflags
 
 import pytest
 
@@ -40,7 +41,7 @@ pytestmark = [
 
 
 def _git(root: str, *args: str) -> None:
-    subprocess.run(["git", *args], cwd=root, check=True, capture_output=True)
+    subprocess.run(["git", *args], cwd=root, check=True, capture_output=True, **no_console_creationflags())
 
 
 def _init_repo(tmp_path: Path) -> str:

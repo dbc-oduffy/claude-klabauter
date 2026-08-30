@@ -14,6 +14,7 @@ from pathlib import Path
 import pytest
 
 from coordinator_core.ops.detect_project_runtime import main, render, scan
+from coordinator_core.win_portability import no_console_passthrough_kwargs
 
 # Declared, not excused: `scan()`'s git-marker detection is part of the golden-oracle
 # parity contract this file ports (detect-project-runtime.sh) -- a real repo is
@@ -161,12 +162,13 @@ def test_secrets_both_outside_git_only_env_example_line_fires(tmp_path):
 
 
 def _git_init_commit(path: Path, *files: str) -> None:
-    subprocess.run(["git", "init", "-q"], cwd=path, check=True)
-    subprocess.run(["git", "-c", "user.email=a@a.com", "-c", "user.name=a", "add", *files], cwd=path, check=True)
+    subprocess.run(["git", "init", "-q"], cwd=path, check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "-c", "user.email=a@a.com", "-c", "user.name=a", "add", *files], cwd=path, check=True, **no_console_passthrough_kwargs())
     subprocess.run(
         ["git", "-c", "user.email=a@a.com", "-c", "user.name=a", "commit", "-q", "-m", "x"],
         cwd=path,
         check=True,
+        **no_console_passthrough_kwargs(),
     )
 
 

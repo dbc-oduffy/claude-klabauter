@@ -51,6 +51,7 @@ from coordinator_core.subagent_sandbox.provision_report import (
     assemble_contract_blocks_for_payload,
 )
 from coordinator_core.testing.doe_root import doe_root_and_present
+from coordinator_core.win_portability import no_console_passthrough_kwargs
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
@@ -84,7 +85,7 @@ def git_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     # trimming this fixture's 3 spawns to 1 is what keeps that call clear of
     # the timeout rather than flaking into a false "sidecar_provisioning:
     # missed" read.
-    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True, **no_console_passthrough_kwargs())
     (tmp_path / "coordinator" / "snippets").mkdir(parents=True)
     # `resolve_plugin_root()` (provision_report.py) resolves the
     # coordinator-claude plugin's CONTENT root independently of this
@@ -1034,7 +1035,7 @@ def test_real_run_report_sidecar_provisioned_and_marker_present(tmp_path: Path) 
     # (against the sibling DoE-claude checkout, right below) clear of the
     # load-driven contention that flaked it into a false
     # "sidecar_provisioning: missed" read.
-    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True, **no_console_passthrough_kwargs())
 
     policy_file = Path(DOE_ROOT) / "coordinator" / "subagent-sandbox-policy.yaml"
     import os

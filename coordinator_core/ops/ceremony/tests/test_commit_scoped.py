@@ -903,48 +903,13 @@ def test_ac12_non_ascii_lf_content_round_trips_byte_identically(tmp_path):
     assert _committed_content_bytes_at_head(repo, "file.txt") == content.encode("utf-8")
 
 
-def test_ac13_post_commit_auto_push_replayed_after_successful_cas(tmp_path, monkeypatch):
-    repo = real_git_repo(tmp_path)
-    (repo / "file.txt").write_text("original\n", encoding="utf-8")
-    _git(["add", "--", "file.txt"], repo)
-    _git(["commit", "-q", "-m", "baseline"], repo)
-
-    calls: list[tuple] = []
-    monkeypatch.setattr(
-        git_native,
-        "_replay_post_commit_auto_push",
-        lambda root, path_list=None, sid=None: calls.append((Path(root), path_list, sid)),
-    )
-    msg_file = _write_msg(tmp_path)
-
-    result = git_native.commit_authored_content(
-        "file.txt", "NEW\n", msg_file, repo, attributed_session_id="sess-ac13"
-    )
-
-    assert result.ok, result.stderr
-    assert len(calls) == 1
-    assert calls[0][0] == repo
-    # The replay is handed this entrypoint's own single path and already-resolved
-    # committing identity, so `auto_push` does not spawn `git show --name-only HEAD`
-    # to relearn a path this function has held since its first line.
-    assert calls[0][1] == ["file.txt"]
-    assert calls[0][2] == "sess-ac13"
-
-
-def test_ac13_post_commit_auto_push_not_replayed_on_failure(tmp_path, monkeypatch):
-    repo = real_git_repo(tmp_path)
-    calls: list[Path] = []
-    monkeypatch.setattr(
-        git_native,
-        "_replay_post_commit_auto_push",
-        lambda root, path_list=None, sid=None: calls.append(Path(root)),
-    )
-    msg_file = _write_msg(tmp_path)
-
-    result = git_native.commit_authored_content("missing.txt", "content\n", msg_file, repo)
-
-    assert result.ok is False
-    assert calls == []
+# AC13's two `_replay_post_commit_auto_push` pins ("replayed after a
+# successful CAS" / "not replayed on failure") were retired 2026-08-30 (C7 of
+# docs/plans/2026-08-30-who-pushes-and-when.md). C6 (544b21cfe) deleted
+# `_replay_post_commit_auto_push` and its call sites; both tests
+# monkeypatched an attribute that no longer exists on `git_native` and their
+# entire subject was the replay call itself, not merely a stale assertion
+# about it.
 
 
 # ---------------------------------------------------------------------------

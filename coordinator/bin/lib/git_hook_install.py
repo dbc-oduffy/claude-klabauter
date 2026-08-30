@@ -994,9 +994,28 @@ def ensure_post_commit_hook(
         return _note("skipped-no-root")
 
     header = "coordinator post-commit (auto-push retired)"
+    # Review (coordinator:code-reviewer, slice 3, Finding 1): every
+    # post-commit hook installed before this header rename appended under
+    # the LEGACY header below, via `_append_block(header="coordinator
+    # auto-push (crash insurance)", ...)`. Those on-disk bodies do not
+    # disappear when the header string changes, and the `_HOOK_GEN_STAMP`
+    # 10 -> 11 bump is what forces exactly this function to re-classify
+    # every one of them fleet-wide. Checking only the NEW header's start
+    # marker misses that shape entirely, falls through to the
+    # `_marker_in_noncomment(..., "coordinator-auto-push")` branch below,
+    # finds no `_hook_gen_stamp_line()` (append-form bodies never carry it),
+    # and whole-file-rewrites the hook — silently deleting the foreign
+    # prefix the append was spliced onto. Both header strings must be
+    # recognized as append-form indefinitely; git history for this file
+    # shows no other header was ever used for the post-commit hook (only
+    # `ensure_prepare_commit_msg_hook` used a different header,
+    # "coordinator Session-Id trailer injection", which is a different hook
+    # file and irrelevant here).
+    legacy_header = "coordinator auto-push (crash insurance)"
     hook_path = os.path.join(root, ".git", "hooks", "post-commit")
     fresh = _post_commit_noop_body()
     start_marker, end_marker = _append_markers(header)
+    legacy_start_marker, legacy_end_marker = _append_markers(legacy_header)
 
     if not os.path.exists(hook_path):
         os.makedirs(os.path.dirname(hook_path), exist_ok=True)
@@ -1006,14 +1025,20 @@ def ensure_post_commit_hook(
 
     body = _read(hook_path)
 
-    if _has_line(body, start_marker):
-        # Append-form body (ours, possibly spliced onto a foreign chain).
-        # Never eligible for the whole-file rewrite branch below — same
-        # "refuse to guess" principle as `_ensure_hook`'s own docstring.
-        if not _has_line(body, end_marker):
+    if _has_line(body, start_marker) or _has_line(body, legacy_start_marker):
+        # Append-form body (ours, possibly spliced onto a foreign chain),
+        # under either the current or the legacy header. Never eligible for
+        # the whole-file rewrite branch below — same "refuse to guess"
+        # principle as `_ensure_hook`'s own docstring.
+        active_start, active_end = (
+            (start_marker, end_marker)
+            if _has_line(body, start_marker)
+            else (legacy_start_marker, legacy_end_marker)
+        )
+        if not _has_line(body, active_end):
             print(
                 f"[git_hook_install] WARNING: {hook_path} carries a coordinator "
-                f"append block ('{start_marker}') installed before the "
+                f"append block ('{active_start}') installed before the "
                 "end-marker convention existed, so its extent cannot be "
                 "identified safely — leaving it untouched. Remove the stale "
                 "block by hand to pick up current fixes.",

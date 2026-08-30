@@ -22,6 +22,7 @@ from pathlib import Path
 import pytest
 
 from coordinator_core.ops.emit import enrich, lma_cache
+from coordinator_core.win_portability import no_console_creationflags
 
 # Spawns a real external process; runs at cadence gates, not per-commit.
 # Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
@@ -38,6 +39,7 @@ def _git(root: Path, *args: str, env: "dict | None" = None) -> str:
         text=True,
         check=True,
         env=env,
+        **no_console_creationflags(),
     )
     return result.stdout.strip()
 

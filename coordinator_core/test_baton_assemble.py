@@ -95,6 +95,22 @@ def _write_artifact(path: Path, fm_lines: list[str]) -> Path:
     return path
 
 
+def _seed_handoff_claim(
+    repo_root: Path,
+    session_id: str,
+    basename: str,
+    claimed_at: str | None = None,
+    stage: str | None = None,
+) -> None:
+    claims_dir = repo_root / ".git" / "coordinator-sessions" / "handoff-claims" / basename
+    claims_dir.mkdir(parents=True, exist_ok=True)
+    (claims_dir / "session_id").write_text(session_id, encoding="utf-8")
+    if claimed_at is not None:
+        (claims_dir / "claimed_at").write_text(claimed_at, encoding="utf-8")
+    if stage is not None:
+        (claims_dir / "stage").write_text(stage, encoding="utf-8")
+
+
 def _seed_claimed_predecessor(
     repo_root: Path, rel: str = "state/handoffs/predecessor.md"
 ) -> Path:
@@ -8069,64 +8085,51 @@ class TestRoadmapBatonDeclinesD6PerPredecessor:
 
 
 class TestFanInCarriedItemsBlockedVisibility:
-    """`blocked` rows survive the fan-in carry union; `closed`/`spun_off` do not.
-
-    `closed` terminated in place and `spun_off` names its own successor baton
-    in `disposition_detail`, so each leaves a reachable trace once its prior
-    archives. `blocked` leaves none -- it is an item still open on an external
-    dependency, and `handoff.schema.json` requires it to "remain visible and
-    explicit rather than silently re-carried". Dropping it at the hop hides
-    that dependency the moment the prior archives, which is the one failure
-    the disposition exists to prevent.
-    """
-
-    @staticmethod
-    def _seed_handoff_claim(repo_root: Path, session_id: str, basename: str, claimed_at: str) -> None:
-        claims_dir = repo_root / ".git" / "coordinator-sessions" / "handoff-claims" / basename
-        claims_dir.mkdir(parents=True, exist_ok=True)
-        (claims_dir / "session_id").write_text(session_id, encoding="utf-8")
-        (claims_dir / "claimed_at").write_text(claimed_at, encoding="utf-8")
-        (claims_dir / "stage").write_text("apply", encoding="utf-8")
-
-    @staticmethod
-    def _carried_items_lines(rows: "list[tuple[str, str, str]]") -> "list[str]":
-        lines = ["carried_items:"]
-        for carry_id, disposition, detail in rows:
-            lines.append(f"  - carry_id: {carry_id}")
-            lines.append(f'    description: "row {carry_id}"')
-            lines.append(f"    disposition: {disposition}")
-            if detail:
-                lines.append(f'    disposition_detail: "{detail}"')
-        return lines
+    """Pins `lineage["carried_items"]`: `blocked` rows survive the fan-in
+    carry union; `closed`/`spun_off` do not."""
 
     def test_blocked_row_carries_and_closed_and_spun_off_do_not(self, tmp_path, monkeypatch):
         _init_repo(tmp_path)
         primary = _write_artifact(
             tmp_path / "state" / "handoffs" / "2026-07-20-fanin-carry-primary.md",
-            ["deliverable_id: DEL-CARRY-1", "handoff_id: hnd-fanin-carry-pri-1c3d01"]
-            + self._carried_items_lines(
-                [
-                    ("cf-still-open-aa0001", "carried", ""),
-                    ("cf-needs-a-windows-box-aa0002", "blocked", "no Windows host in CI"),
-                    ("cf-done-here-aa0003", "closed", "fixed in 088bfe0121"),
-                ]
-            ),
+            [
+                "deliverable_id: DEL-CARRY-1",
+                "handoff_id: hnd-fanin-carry-pri-1c3d01",
+                "carried_items:",
+                '  - carry_id: "cf-still-open-aa0001"',
+                '    description: "row cf-still-open-aa0001"',
+                '    disposition: "carried"',
+                '  - carry_id: "cf-needs-a-windows-box-aa0002"',
+                '    description: "row cf-needs-a-windows-box-aa0002"',
+                '    disposition: "blocked"',
+                '    disposition_detail: "no Windows host in CI"',
+                '  - carry_id: "cf-done-here-aa0003"',
+                '    description: "row cf-done-here-aa0003"',
+                '    disposition: "closed"',
+                '    disposition_detail: "fixed in 088bfe0121"',
+            ],
         )
         extra = _write_artifact(
             tmp_path / "state" / "handoffs" / "2026-07-20-fanin-carry-extra.md",
-            ["deliverable_id: DEL-CARRY-2", "handoff_id: hnd-fanin-carry-ext-1c3d02"]
-            + self._carried_items_lines(
-                [
-                    ("cf-forked-off-aa0004", "spun_off", "state/handoffs/2026-08-02-spun.md"),
-                    ("cf-peer-repo-landing-aa0005", "blocked", "waits on DoE-claude re-vendor"),
-                ]
-            ),
+            [
+                "deliverable_id: DEL-CARRY-2",
+                "handoff_id: hnd-fanin-carry-ext-1c3d02",
+                "carried_items:",
+                '  - carry_id: "cf-forked-off-aa0004"',
+                '    description: "row cf-forked-off-aa0004"',
+                '    disposition: "spun_off"',
+                '    disposition_detail: "state/handoffs/2026-08-02-spun.md"',
+                '  - carry_id: "cf-peer-repo-landing-aa0005"',
+                '    description: "row cf-peer-repo-landing-aa0005"',
+                '    disposition: "blocked"',
+                '    disposition_detail: "waits on DoE-claude re-vendor"',
+            ],
         )
-        self._seed_handoff_claim(
-            tmp_path, "sid-fanin-carry", primary.name, "2026-07-20T09:00:00Z"
+        _seed_handoff_claim(
+            tmp_path, "sid-fanin-carry", primary.name, claimed_at="2026-07-20T09:00:00Z"
         )
-        self._seed_handoff_claim(
-            tmp_path, "sid-fanin-carry", extra.name, "2026-07-20T10:00:00Z"
+        _seed_handoff_claim(
+            tmp_path, "sid-fanin-carry", extra.name, claimed_at="2026-07-20T10:00:00Z"
         )
         monkeypatch.setenv("CLAUDE_SESSION_ID", "sid-fanin-carry")
 
@@ -8159,3 +8162,116 @@ class TestFanInCarriedItemsBlockedVisibility:
             by_id["cf-needs-a-windows-box-aa0002"]["disposition_detail"]
             == "no Windows host in CI"
         )
+
+    def test_leg_blocked_upgrades_primary_carried_row_in_place(self, tmp_path, monkeypatch):
+        """review-integrator ruling (2026-08-30, this slice): a `carry_id`
+        colliding as `carried` on the primary and `blocked` on a fan-in leg
+        must resolve to the `blocked` row (with its own `disposition_detail`)
+        WITHOUT moving its first-seen position in `carried_items`."""
+        _init_repo(tmp_path)
+        primary = _write_artifact(
+            tmp_path / "state" / "handoffs" / "2026-07-21-collision-primary.md",
+            [
+                "deliverable_id: DEL-COLLIDE-1",
+                "handoff_id: hnd-collide-pri-1c3d01",
+                "carried_items:",
+                '  - carry_id: "cf-first-row-bb0001"',
+                '    description: "row cf-first-row-bb0001"',
+                '    disposition: "carried"',
+                '  - carry_id: "cf-collides-bb0002"',
+                '    description: "row cf-collides-bb0002 (primary)"',
+                '    disposition: "carried"',
+                '  - carry_id: "cf-last-row-bb0003"',
+                '    description: "row cf-last-row-bb0003"',
+                '    disposition: "carried"',
+            ],
+        )
+        extra = _write_artifact(
+            tmp_path / "state" / "handoffs" / "2026-07-21-collision-extra.md",
+            [
+                "deliverable_id: DEL-COLLIDE-2",
+                "handoff_id: hnd-collide-ext-1c3d02",
+                "carried_items:",
+                '  - carry_id: "cf-collides-bb0002"',
+                '    description: "row cf-collides-bb0002 (leg)"',
+                '    disposition: "blocked"',
+                '    disposition_detail: "waits on peer repo re-vendor"',
+            ],
+        )
+        _seed_handoff_claim(
+            tmp_path, "sid-collide-carry", primary.name, claimed_at="2026-07-21T09:00:00Z"
+        )
+        _seed_handoff_claim(
+            tmp_path, "sid-collide-carry", extra.name, claimed_at="2026-07-21T10:00:00Z"
+        )
+        monkeypatch.setenv("CLAUDE_SESSION_ID", "sid-collide-carry")
+
+        decision = ba.brief("handoff", "", repo_root=tmp_path).decision_object
+        lineage = decision["artifact"]["lineage"]
+
+        carried = lineage.get("carried_items") or []
+        ids_in_order = [row["carry_id"] for row in carried]
+        assert ids_in_order == [
+            "cf-first-row-bb0001",
+            "cf-collides-bb0002",
+            "cf-last-row-bb0003",
+        ], "the winning row must replace in place, never move to the end"
+
+        winner = carried[1]
+        assert winner["disposition"] == "blocked"
+        assert winner["description"] == "row cf-collides-bb0002 (leg)"
+        assert winner["disposition_detail"] == "waits on peer repo re-vendor"
+
+    def test_primary_blocked_row_is_never_downgraded_by_leg_carried(
+        self, tmp_path, monkeypatch
+    ):
+        """Asymmetric direction: a retained `blocked` row on the primary is
+        NEVER downgraded by a later-seen `carried` row for the same id."""
+        _init_repo(tmp_path)
+        primary = _write_artifact(
+            tmp_path / "state" / "handoffs" / "2026-07-22-collision-primary.md",
+            [
+                "deliverable_id: DEL-COLLIDE-3",
+                "handoff_id: hnd-collide-pri-1c3d03",
+                "carried_items:",
+                '  - carry_id: "cf-collides-bb0004"',
+                '    description: "row cf-collides-bb0004 (primary)"',
+                '    disposition: "blocked"',
+                '    disposition_detail: "no Windows host in CI"',
+                '  - carry_id: "cf-last-row-bb0005"',
+                '    description: "row cf-last-row-bb0005"',
+                '    disposition: "carried"',
+            ],
+        )
+        extra = _write_artifact(
+            tmp_path / "state" / "handoffs" / "2026-07-22-collision-extra.md",
+            [
+                "deliverable_id: DEL-COLLIDE-4",
+                "handoff_id: hnd-collide-ext-1c3d04",
+                "carried_items:",
+                '  - carry_id: "cf-collides-bb0004"',
+                '    description: "row cf-collides-bb0004 (leg)"',
+                '    disposition: "carried"',
+            ],
+        )
+        _seed_handoff_claim(
+            tmp_path, "sid-collide-carry-2", primary.name, claimed_at="2026-07-22T09:00:00Z"
+        )
+        _seed_handoff_claim(
+            tmp_path, "sid-collide-carry-2", extra.name, claimed_at="2026-07-22T10:00:00Z"
+        )
+        monkeypatch.setenv("CLAUDE_SESSION_ID", "sid-collide-carry-2")
+
+        decision = ba.brief("handoff", "", repo_root=tmp_path).decision_object
+        lineage = decision["artifact"]["lineage"]
+
+        carried = lineage.get("carried_items") or []
+        ids_in_order = [row["carry_id"] for row in carried]
+        assert ids_in_order == ["cf-collides-bb0004", "cf-last-row-bb0005"], (
+            "the retained row must stay in its first-seen position"
+        )
+
+        retained = carried[0]
+        assert retained["disposition"] == "blocked"
+        assert retained["description"] == "row cf-collides-bb0004 (primary)"
+        assert retained["disposition_detail"] == "no Windows host in CI"

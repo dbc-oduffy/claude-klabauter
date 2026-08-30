@@ -64,6 +64,7 @@ from coordinator_core.bash_guards import (
 from coordinator_core.bash_guards import (
     block_reviewer_bash_outside_allowlist as reviewer_guard,
 )
+from coordinator_core.win_portability import no_console_creationflags
 from coordinator_core.bash_guards.tests.test_cd_prefix_bypass import (
     _decision,
     _SUBAGENT_IDENTITY,
@@ -145,19 +146,22 @@ def _build_load_bearing_repo(tmp_path: Path) -> Path:
     """
     repo = tmp_path / "shared-tree"
     (repo / "state").mkdir(parents=True)
-    subprocess.run(["git", "init", "-q"], cwd=str(repo), check=True, capture_output=True)
+    subprocess.run(["git", "init", "-q"], cwd=str(repo), check=True, capture_output=True, **no_console_creationflags())
     subprocess.run(
-        ["git", "config", "user.email", "t@t"], cwd=str(repo), check=True, capture_output=True
+        ["git", "config", "user.email", "t@t"], cwd=str(repo), check=True, capture_output=True,
+        **no_console_creationflags(),
     )
     subprocess.run(
-        ["git", "config", "user.name", "t"], cwd=str(repo), check=True, capture_output=True
+        ["git", "config", "user.name", "t"], cwd=str(repo), check=True, capture_output=True,
+        **no_console_creationflags(),
     )
 
     tracked = repo / "state" / "tracked.md"
     tracked.write_text("committed baseline\n", encoding="utf-8")
-    subprocess.run(["git", "add", "-A"], cwd=str(repo), check=True, capture_output=True)
+    subprocess.run(["git", "add", "-A"], cwd=str(repo), check=True, capture_output=True, **no_console_creationflags())
     subprocess.run(
-        ["git", "commit", "-qm", "baseline"], cwd=str(repo), check=True, capture_output=True
+        ["git", "commit", "-qm", "baseline"], cwd=str(repo), check=True, capture_output=True,
+        **no_console_creationflags(),
     )
 
     tracked.write_text("committed baseline\nuncommitted edit\n", encoding="utf-8")

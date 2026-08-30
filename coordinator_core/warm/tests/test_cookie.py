@@ -22,6 +22,7 @@ from pathlib import Path
 import pytest
 
 from coordinator_core.warm import breadcrumb, cookie
+from coordinator_core.win_portability import no_console_creationflags
 
 
 @pytest.fixture(autouse=True)
@@ -363,6 +364,7 @@ def test_curl_actually_consumes_the_config_and_sends_the_header(tmp_path):
                 f"http://127.0.0.1:{port}/health",
             ],
             capture_output=True, text=True, timeout=20,
+            **no_console_creationflags(),
         )
     finally:
         httpd.shutdown()

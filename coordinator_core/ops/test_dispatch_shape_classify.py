@@ -17,6 +17,7 @@ import sys
 import pytest
 
 from coordinator_core.ops.dispatch_shape_classify import main
+from coordinator_core.win_portability import no_console_creationflags
 
 # Spawns a real external process; runs at cadence gates, not per-commit.
 # Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
@@ -51,6 +52,7 @@ def _init_repo(tmp_path):
     subprocess.run(
         ["git", "init", "-q"], cwd=str(tmp_path), check=True,
         timeout=10, stdin=subprocess.DEVNULL,
+        **no_console_creationflags(),
     )
 
 

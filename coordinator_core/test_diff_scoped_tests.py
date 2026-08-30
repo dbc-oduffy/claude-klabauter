@@ -16,6 +16,7 @@ from coordinator_core.diff_scoped_tests import (
     append_test_paths,
     find_changed_test_files,
 )
+from coordinator_core.win_portability import no_console_creationflags
 
 # Spawns a real external process; runs at cadence gates, not per-commit.
 # Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
@@ -32,7 +33,8 @@ _MARKER_CMD = (
 
 def _git(args, cwd):
     subprocess.run(
-        ["git", *args], cwd=cwd, check=True, capture_output=True, text=True
+        ["git", *args], cwd=cwd, check=True, capture_output=True, text=True,
+        **no_console_creationflags(),
     )
 
 
@@ -185,5 +187,6 @@ def test_rc5_reproduces_against_real_pytest(tmp_path):
         ],
         capture_output=True,
         text=True,
+        **no_console_creationflags(),
     )
     assert proc.returncode == PYTEST_NO_TESTS_COLLECTED

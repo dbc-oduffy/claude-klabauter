@@ -46,6 +46,7 @@ import coordinator_core.ops  # noqa: F401 — populates _REGISTRY
 from coordinator_core.ipc import _REGISTRY
 from coordinator_core.ops.handoff_columns_query import _handler
 from coordinator_core.ops.emit.sections import handoff_columns as handoff_columns_mod
+from coordinator_core.win_portability import no_console_creationflags
 
 # Real-git spawn is load-bearing: coverage (d) asserts the O(1) git-log
 # subprocess spawn count for a multi-record query, a budget claim that a
@@ -79,14 +80,17 @@ def _make_git_repo(root: Path) -> Path:
     subprocess.run(
         ["git", "init", "-b", "main"],
         cwd=str(root), capture_output=True, check=True,
+        **no_console_creationflags(),
     )
     subprocess.run(
         ["git", "config", "user.email", "handoff-columns-query-test@claude-klabauter.test"],
         cwd=str(root), capture_output=True, check=True,
+        **no_console_creationflags(),
     )
     subprocess.run(
         ["git", "config", "user.name", "Handoff Columns Query Test"],
         cwd=str(root), capture_output=True, check=True,
+        **no_console_creationflags(),
     )
     return (root / ".git").resolve()
 

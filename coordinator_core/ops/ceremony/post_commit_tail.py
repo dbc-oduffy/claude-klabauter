@@ -1,43 +1,23 @@
 """
 GRAVESTONE NOTICE — READ BEFORE THE DOCSTRING BELOW (2026-08-30).
 
-`wsc_tail.py` DOES NOT EXIST. K-046 deleted it on 2026-08-23 (`c07062c99`) at
-220,191.7ms max / 30,015.6ms p50 wall, and it is not coming back in that shape.
-Every present-tense reference to it below — "`wsc_tail.py` still invokes this op
+`wsc_tail.py` DOES NOT EXIST (K-046, `c07062c99`, 2026-08-23). Every
+present-tense reference to it below — "`wsc_tail.py` still invokes this op
 IN-PROCESS", "the in-process WSC tail", its `_TailTiming` pinned contract, its
-`_close_origin_stub_handler` module-global — is HISTORICAL. It described this
-module's world before that kill and was never revised after it.
+`_close_origin_stub_handler` module-global — is HISTORICAL and was never
+revised after that kill.
 
 `run()`'s ONE live caller is `execute_plan_assemble/close_out_and_stamp.py::
-_reach_post_commit_tail_stub_close`, i.e. `/execute-plan`'s close-out.
-`/workstream-complete` does not reach this module at all: it commits and
-releases claims through `workstream_complete/apply.py::_run_close_commit_tail`
--> `directives_commit_tail.run_close_commit_and_release_claims`, and its only
-other reach into this file is `fold_completion_entry_commit`.
+_reach_post_commit_tail_stub_close` (`/execute-plan`'s close-out), and that
+caller suppresses the stamp: `post_commit_stamp_and_ship` has ZERO reachable
+invocations anywhere in this tree. Full trace, and why the suppression is
+correct but ownerless:
+`docs/research/spike-verdicts/2026-08-30-baton-ship-stamp-inside-a-500ms-close.md`
+§ CORRECTION; requirement: kill-ledger K-046; retention rationale: K-116.
 
-AND THAT ONE LIVE CALLER SUPPRESSES THE STAMP. `_reach_post_commit_tail_stub_
-close` hardcodes `chain_terminal=False` and reads back only
-`origin_stub_result` — its name says so: it reaches THROUGH this composition
-for one leg. `post_commit_stamp_and_ship` returns an empty `StampOutcome` on
-that flag before doing anything. So the consumed-handoff ship-stamp has ZERO
-reachable invocations in this tree — not "fires only on the /execute-plan
-path", which is what this banner said on 2026-08-30 before the call site was
-read. `_run_deliverable_cascade` and `_run_gate_cascade_clear` likewise run
-against a permanently empty `stamp_outcome.stamped`.
-
-The suppression is correct for that ceremony, which owns no consumed set. What
-is missing is an owner: see kill-ledger K-046's standing requirement, and K-116
-for why `run()` is retained at all.
-
-THE COST OF NOT WRITING THIS SOONER, so the next reader weighs the prose below
-correctly: two EMs and a PM independently concluded from these docstrings that a
-live WSC stamp path existed and was defective. doe-claude-em filed a cross-repo
-bug against a mechanism that is not broken
-(`cross-repo/inbox/2026-08-30-doe-claude-em-wsc-consumed-set-keys-on-a-retired-
-field.md`); this repo's EM then sized an M plan to "reconnect" a path the kill
-ledger already forbids reconnecting; the PM hand-swept four batons in the
-meantime. Prose naming a dead caller in the present tense is not cosmetic debt —
-it manufactures defects that do not exist and hides the requirement that does.
+Prose naming a dead caller in the present tense is not cosmetic debt here — it
+previously manufactured a defect that did not exist (see K-046's amendment)
+and hid the requirement that does.
 
 coordinator_core.ops.ceremony.post_commit_tail — `ceremony.post_commit_tail`
 standalone REGISTERED op composing `wsc_tail`'s two post-commit steps (5c:

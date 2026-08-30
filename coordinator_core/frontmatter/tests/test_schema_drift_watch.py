@@ -44,6 +44,7 @@ from coordinator_core.frontmatter.schema_drift_watch import (
 )
 from coordinator_core.frontmatter.schema_validate import check_schema_drift_advisory_batch
 from coordinator_core.git_scope import reset_foreign_repo_probe_memo
+from coordinator_core.win_portability import no_console_creationflags
 
 # Spawns a real external process; runs at cadence gates, not per-commit.
 # Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
@@ -63,7 +64,7 @@ def _git(repo: Path, *args: str) -> None:
         capture_output=True,
         text=True,
         timeout=30,
-        stdin=subprocess.DEVNULL,
+        stdin=subprocess.DEVNULL, **no_console_creationflags(),
     )
 
 

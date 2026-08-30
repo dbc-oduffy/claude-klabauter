@@ -49,7 +49,7 @@ AC2's phantom-verb consumes-manifest guard). Step 2.8's pinboard append
 and Step 2.95's regeneratability sub-check each have exactly that — a
 real CLI this module never runs, only names. Step 2.96 has NO such CLI
 on disk (grepped: no `wsc-*completeness*`/`*checklist*` entry exists
-alongside `wsc-close.py`/`wsc-tail.py`/`wsc-coverage-gate-runner.py`) —
+alongside `archive-session-scope.py`/`wsc-tail.py`/`wsc-coverage-gate-runner.py`) —
 its three census sub-steps (locate+parse, cross-reference+count, emit
 the fixed WARN template) are ALL pure reads: parse already-on-disk
 handoff frontmatter, cross-reference against caller-supplied task/waiver

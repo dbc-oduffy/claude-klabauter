@@ -34,6 +34,7 @@ import pytest
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 from coordinator_core import dag
+from coordinator_core.win_portability import no_console_passthrough_kwargs
 
 
 @pytest.fixture(autouse=True)
@@ -46,10 +47,10 @@ def clear_ever_tracked_cache():
 def _init_repo(tmp_path: Path) -> Path:
     root = tmp_path / "repo"
     root.mkdir()
-    subprocess.run(["git", "init", "-q"], cwd=root, check=True)
-    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=root, check=True)
-    subprocess.run(["git", "config", "user.name", "Test"], cwd=root, check=True)
-    subprocess.run(["git", "config", "commit.gpgsign", "false"], cwd=root, check=True)
+    subprocess.run(["git", "init", "-q"], cwd=root, check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=root, check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=root, check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "config", "commit.gpgsign", "false"], cwd=root, check=True, **no_console_passthrough_kwargs())
     return root
 
 
@@ -57,10 +58,11 @@ def _commit_file(root: Path, rel_path: str, content: str = "x") -> None:
     p = root / rel_path
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(content)
-    subprocess.run(["git", "add", "--", rel_path], cwd=root, check=True)
+    subprocess.run(["git", "add", "--", rel_path], cwd=root, check=True, **no_console_passthrough_kwargs())
     subprocess.run(
         ["git", "-c", "commit.gpgsign=false", "commit", "-q", "-m", f"add {rel_path}"],
         cwd=root, check=True,
+        **no_console_passthrough_kwargs(),
     )
 
 
@@ -76,10 +78,11 @@ class TestSameResultBeforeAndAfterDedup:
         _commit_file(root, rel_path)
         # Remove from disk so only tier 3 (git history) can resolve it.
         (root / rel_path).unlink()
-        subprocess.run(["git", "add", "--", rel_path], cwd=root, check=True)
+        subprocess.run(["git", "add", "--", rel_path], cwd=root, check=True, **no_console_passthrough_kwargs())
         subprocess.run(
             ["git", "-c", "commit.gpgsign=false", "commit", "-q", "-m", "remove foo.md"],
             cwd=root, check=True,
+            **no_console_passthrough_kwargs(),
         )
 
         handoff_dir = str(root / "state" / "handoffs")
@@ -140,10 +143,11 @@ class TestMemoReturnsStoredTrueNotStaleFalse:
         rel_path = "state/handoffs/tracked.md"
         _commit_file(root, rel_path)
         (root / rel_path).unlink()
-        subprocess.run(["git", "add", "--", rel_path], cwd=root, check=True)
+        subprocess.run(["git", "add", "--", rel_path], cwd=root, check=True, **no_console_passthrough_kwargs())
         subprocess.run(
             ["git", "-c", "commit.gpgsign=false", "commit", "-q", "-m", "remove tracked.md"],
             cwd=root, check=True,
+            **no_console_passthrough_kwargs(),
         )
 
         memo: dict = {}
@@ -194,10 +198,11 @@ class TestReDerivedCandidateStillResolves:
         rel_path = "archive/handoffs/bar.md"
         _commit_file(root, rel_path)
         (root / rel_path).unlink()
-        subprocess.run(["git", "add", "--", rel_path], cwd=root, check=True)
+        subprocess.run(["git", "add", "--", rel_path], cwd=root, check=True, **no_console_passthrough_kwargs())
         subprocess.run(
             ["git", "-c", "commit.gpgsign=false", "commit", "-q", "-m", "remove bar.md"],
             cwd=root, check=True,
+            **no_console_passthrough_kwargs(),
         )
 
         handoff_dir = str(root / "state" / "handoffs")

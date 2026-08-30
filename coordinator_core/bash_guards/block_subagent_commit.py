@@ -3272,15 +3272,20 @@ _COMMITTING_OP_NAMES = frozenset(
         # archive_and_commit(/rm_and_commit(/commit_scoped( (or delegates to
         # one, as handoff.ship_and_archive does via archive_shipped_handoffs'
         # own _handle_act) turned up eight more:
-        # "fleet.archive_actioned_memos" REMOVED (op KILLED outright by PM
-        # ruling -- see ops/ceremony/tail_ops.py's own note: "killed outright
-        # the same day", along with its sweep-actioned-memos.py CLI fire).
-        # fleet/archive_actioned_memos.py does not exist; nothing registers
-        # the name. It survived here as a dead allowlist entry, and because
-        # this list is the cheapest caller census available, it made the
-        # archival caller set read as NINE when it is EIGHT -- a spinoff was
-        # scoped against the wrong number on the strength of it (2026-08-25).
-        # Same removal shape as fleet.archive_shipped_handoffs above.
+        # "fleet.archive_actioned_memos" was REMOVED here for a period (op
+        # KILLED outright by PM ruling -- see ops/ceremony/tail_ops.py's own
+        # note: "killed outright the same day", along with its
+        # sweep-actioned-memos.py CLI fire), between its 2026-08-23 kill and
+        # its b8795931a rebuild. During that window fleet/archive_
+        # actioned_memos.py did not exist and nothing registered the name; it
+        # survived here as a dead allowlist entry, and because this list is
+        # the cheapest caller census available, it made the archival caller
+        # set read as NINE when it was EIGHT -- a spinoff was scoped against
+        # the wrong number on the strength of it (2026-08-25). Same removal
+        # shape as fleet.archive_shipped_handoffs above. It is a RETURN now
+        # -- see the "Seventh pass" note below at its live entry, which
+        # states the current truth: the module and op are registered again,
+        # live.
         "fleet.archive_completed_handoffs",  # fleet/archive_terminal_handoffs.py -- archive_and_commit(...)
         "fleet.archive_paper_trail",        # fleet/archive_paper_trail.py -- archive_and_commit(...)
         "fleet.archive_queue_entry",        # fleet/archive_queue_entry.py -- archive_and_commit(...)

@@ -19,6 +19,7 @@ import pytest
 
 from coordinator_core.ops.introspect import verify_shipped as vs_module
 from coordinator_core.ops.introspect.verify_shipped import verify_shipped
+from coordinator_core.win_portability import no_console_creationflags
 
 # Declared, not excused: this file spawns a real git process because the property under
 # test is git's own ancestry semantics (git merge-base against origin/main), which no
@@ -34,6 +35,7 @@ def _git(repo: Path, *args: str) -> subprocess.CompletedProcess:
         capture_output=True,
         text=True,
         check=True,
+        **no_console_creationflags(),
     )
 
 
@@ -58,8 +60,8 @@ def repo_with_origin(tmp_path):
     """
     bare = tmp_path / "bare_origin.git"
     work = tmp_path / "work"
-    subprocess.run(["git", "init", "--bare", "-b", "main", str(bare)], check=True, capture_output=True)
-    subprocess.run(["git", "init", "-b", "main", str(work)], check=True, capture_output=True)
+    subprocess.run(["git", "init", "--bare", "-b", "main", str(bare)], check=True, capture_output=True, **no_console_creationflags())
+    subprocess.run(["git", "init", "-b", "main", str(work)], check=True, capture_output=True, **no_console_creationflags())
     _git(work, "config", "user.email", "test@example.com")
     _git(work, "config", "user.name", "Test")
     _git(work, "remote", "add", "origin", str(bare))

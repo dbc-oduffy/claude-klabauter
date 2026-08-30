@@ -47,6 +47,7 @@ from coordinator_core.bash_guards.tests.test_bump_outside_repo_write import (
     _clean_bump_env,  # noqa: F401 -- reused fixture (C4 owns the fix; AC13/finding #6).
     requires_powershell_grammar,
 )
+from coordinator_core.win_portability import no_console_creationflags
 
 # Spawns a real external process; runs at cadence gates, not per-commit.
 # Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
@@ -69,7 +70,7 @@ def _posix(p) -> str:
 
 
 def _git(root: str, *args: str) -> None:
-    subprocess.run(["git", *args], cwd=root, check=True, capture_output=True)
+    subprocess.run(["git", *args], cwd=root, check=True, capture_output=True, **no_console_creationflags())
 
 
 def _init_repo(tmp_path: Path, name: str) -> Path:

@@ -56,6 +56,10 @@ from coordinator_core.ops.handoff_stamp import (
     _handler,
     _repair_archived_shipped_in_handler,
 )
+from coordinator_core.win_portability import (
+    no_console_creationflags,
+    no_console_passthrough_kwargs,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -80,7 +84,8 @@ def _make_git_repo(tmp_path: Path) -> Path:
             cwd=str(repo),
             capture_output=True,
             check=True,
-        )
+    **no_console_creationflags(),
+)
 
     _git("init", "-b", "main")
     _git("config", "user.email", "repair-test@claude-klabauter.test")
@@ -427,14 +432,16 @@ def test_stored_truncated_sha_resolves_same_commit_via_git(tmp_path):
     repo = _make_git_repo(tmp_path)
     hpath = _seed_archived_handoff(repo, "2026-07-10-git-equiv.md")
 
-    subprocess.run(["git", "add", "-A"], cwd=str(repo), check=True, capture_output=True)
+    subprocess.run(["git", "add", "-A"], cwd=str(repo), check=True, capture_output=True, **no_console_creationflags())
     subprocess.run(
         ["git", "commit", "-m", "chore: witness commit"],
         cwd=str(repo), check=True, capture_output=True,
-    )
+    **no_console_creationflags(),
+)
     full_sha = subprocess.run(
         ["git", "rev-parse", "HEAD"], cwd=str(repo), check=True, capture_output=True, text=True,
-    ).stdout.strip()
+    **no_console_creationflags(),
+).stdout.strip()
 
     result = _run(_repair_archived_shipped_in_handler(
         {"handoff_path": str(hpath), "reason": "incomplete-scope: test", "sha": full_sha},
@@ -447,7 +454,8 @@ def test_stored_truncated_sha_resolves_same_commit_via_git(tmp_path):
 
     resolved = subprocess.run(
         ["git", "rev-parse", stored], cwd=str(repo), check=True, capture_output=True, text=True,
-    ).stdout.strip()
+    **no_console_creationflags(),
+).stdout.strip()
     assert resolved == full_sha, (
         f"8-char stored form {stored!r} must resolve to the same commit as "
         f"the full sha {full_sha!r}; git rev-parse resolved to {resolved!r}"

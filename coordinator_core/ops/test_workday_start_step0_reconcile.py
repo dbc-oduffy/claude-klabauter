@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 
 from coordinator_core.ops.workday_start_step0_reconcile import main
+from coordinator_core.win_portability import no_console_creationflags, no_console_passthrough_kwargs
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
@@ -22,6 +23,7 @@ def _git(root: Path, *args: str) -> subprocess.CompletedProcess:
         capture_output=True,
         text=True,
         check=True,
+        **no_console_creationflags(),
     )
 
 
@@ -37,10 +39,10 @@ def _make_origin_and_clone(tmp_path: Path) -> tuple[Path, Path]:
     # at all, depending on the box.
     origin = tmp_path / "origin.git"
     origin.mkdir()
-    subprocess.run(["git", "init", "-q", "--bare", "-b", "main", str(origin)], check=True)
+    subprocess.run(["git", "init", "-q", "--bare", "-b", "main", str(origin)], check=True, **no_console_passthrough_kwargs())
 
     clone = tmp_path / "clone"
-    subprocess.run(["git", "clone", "-q", str(origin), str(clone)], check=True)
+    subprocess.run(["git", "clone", "-q", str(origin), str(clone)], check=True, **no_console_passthrough_kwargs())
     _git(clone, "config", "user.email", "test@example.com")
     _git(clone, "config", "user.name", "Test")
     # -B (not -b): the empty-origin clone may already have "main" checked
@@ -77,7 +79,7 @@ def test_reconciled_ff_when_origin_advances_cleanly(tmp_path, capsys, monkeypatc
     _git(clone, "checkout", "-q", "-b", "work/testmachine/2026-01-01")
 
     other = tmp_path / "other"
-    subprocess.run(["git", "clone", "-q", str(origin), str(other)], check=True)
+    subprocess.run(["git", "clone", "-q", str(origin), str(other)], check=True, **no_console_passthrough_kwargs())
     _git(other, "config", "user.email", "test@example.com")
     _git(other, "config", "user.name", "Test")
     _git(other, "checkout", "-q", "-B", "main", "origin/main")
@@ -104,7 +106,7 @@ def test_reconciled_merge_when_both_sides_advance_without_conflict(tmp_path, cap
     _git(clone, "commit", "-q", "-m", "local-only work")
 
     other = tmp_path / "other"
-    subprocess.run(["git", "clone", "-q", str(origin), str(other)], check=True)
+    subprocess.run(["git", "clone", "-q", str(origin), str(other)], check=True, **no_console_passthrough_kwargs())
     _git(other, "config", "user.email", "test@example.com")
     _git(other, "config", "user.name", "Test")
     _git(other, "checkout", "-q", "-B", "main", "origin/main")
@@ -130,7 +132,7 @@ def test_reconcile_conflict_aborts_and_exits_3(tmp_path, capsys, monkeypatch):
     _git(clone, "commit", "-q", "-m", "local conflicting edit")
 
     other = tmp_path / "other"
-    subprocess.run(["git", "clone", "-q", str(origin), str(other)], check=True)
+    subprocess.run(["git", "clone", "-q", str(origin), str(other)], check=True, **no_console_passthrough_kwargs())
     _git(other, "config", "user.email", "test@example.com")
     _git(other, "config", "user.name", "Test")
     _git(other, "checkout", "-q", "-B", "main", "origin/main")

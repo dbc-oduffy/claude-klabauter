@@ -50,6 +50,7 @@ import yaml
 from coordinator_core.dispatch.provision import provision_subagent_sidecar
 from coordinator_core.ops.session import safe_commit_offer
 from coordinator_core.session import core
+from coordinator_core.win_portability import no_console_passthrough_kwargs
 
 # Spawns a real external process; runs at cadence gates, not per-commit.
 # Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
@@ -65,17 +66,17 @@ def _make_repo(tmp_path: Path) -> Path:
     """Mirrors test_safe_commit_offer._make_repo — check=True on every
     fixture-setup git call so a silent setup failure cannot masquerade as a
     passing test."""
-    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True, **no_console_passthrough_kwargs())
     subprocess.run(
-        ["git", "config", "user.email", "t@example.com"], cwd=tmp_path, check=True
+        ["git", "config", "user.email", "t@example.com"], cwd=tmp_path, check=True, **no_console_passthrough_kwargs()
     )
-    subprocess.run(["git", "config", "user.name", "t"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "config", "user.name", "t"], cwd=tmp_path, check=True, **no_console_passthrough_kwargs())
     subprocess.run(
-        ["git", "config", "commit.gpgsign", "false"], cwd=tmp_path, check=True
+        ["git", "config", "commit.gpgsign", "false"], cwd=tmp_path, check=True, **no_console_passthrough_kwargs()
     )
     (tmp_path / "README.md").write_text("x")
-    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
-    subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=tmp_path, check=True, **no_console_passthrough_kwargs())
     return tmp_path
 
 

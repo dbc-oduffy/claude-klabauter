@@ -50,7 +50,7 @@ for the literal tuple; grouped here by which submodule names each CLI:
         gates.session_shape. NOT a CONSUMES_MANIFEST member (loaded
         in-process, never dispatched as a directive).
     wsc-coverage-gate-runner.py, check-workstream-complete-deletion-blocks.py,
-        wsc-close.py -> this module's own pre-existing Step
+        archive-session-scope.py -> this module's own pre-existing Step
         2.4/2.9/2.67/3 directive spine (unchanged from Convert #2, save the
         renames noted in the Negative-spec below). (`wsc-tail.py` was also
         part of this spine; removed in the ceremony.wsc_tail kill,
@@ -63,7 +63,7 @@ for the literal tuple; grouped here by which submodule names each CLI:
     coordinator-complete-entry.py, coordinator-fold-execution-record ->
         `directives_completion.py` (C2b). (`reconcile-completion-commits.py`
         was also named here; removed by PM ruling, 2026-08-23.)
-    (archive-stamp-cli, wsc-close.py, both already listed above) ->
+    (archive-stamp-cli, archive-session-scope.py, both already listed above) ->
         `directives_memo_lifecycle.py` (C2c) contributes no CLI beyond those
         two already-manifested names.
     regenerate-orientation-cache, check-machine-local-regeneratability.py ->
@@ -80,7 +80,7 @@ for the literal tuple; grouped here by which submodule names each CLI:
         `build_write_review_trail_directive` builders stay unwired (see
         Negative-spec: no duplicate-CLI directive pairs).
     session-claim-cli, emit-cadence -> `directives_commit_tail.py` (C2e).
-        (`wsc-close.py` already manifested; this module's own pre-existing
+        (`archive-session-scope.py` already manifested; this module's own pre-existing
         `d-close-tail-args`/`d-tail` inline builders were superseded by
         `directives_commit_tail.py`'s `build_close_tail_args_directive`/
         `build_wsc_tail_directive` — see Negative-spec. Both builders, and
@@ -152,7 +152,7 @@ Negative-spec:
       double-dispatch the same idempotent claim-plan call under two ids;
       C3 keeps only the new name. `d-coverage-gate`'s `depends_on` is
       repointed onto `d-claim-plan-execution-lock` accordingly.
-    - `d-close-archive-session` (Convert #2's original, `wsc-close.py
+    - `d-close-archive-session` (Convert #2's original, `archive-session-scope.py
       archive-session --sid <sid>`) was SUPERSEDED by `directives_commit_
       tail.py`'s `d-archive-session-claim` — byte-identical CLI/args,
       `depends_on` repointed onto the new tail directive. Same
@@ -171,7 +171,7 @@ Negative-spec:
       any chunk in this plan's file-overlap table) hardcodes two
       `"d-tail" in ids` assertions and one closed-set `_KNOWN_CLIS` check
       that enumerates every directive `.cli` against `{wsc-coverage-gate-
-      runner.py, check-workstream-complete-deletion-blocks.py, wsc-close.py,
+      runner.py, check-workstream-complete-deletion-blocks.py, archive-session-scope.py,
       wsc-tail.py}` — no wiring of C2a-i's actual output can keep that
       specific test green, since `_KNOWN_CLIS` is a closed 4-entry set and
       ANY additional directive (even one gated correctly) fails it. This is
@@ -362,6 +362,9 @@ CONSUMES_MANIFEST: tuple[str, ...] = (
     # directive emitter (`d-emit-deletion-blocks`) went with `wsc-close
     # tail-args` (251ff57703); `archive-session`, its only other subcommand,
     # is dispatched by a DoE-side SessionEnd hook and never by this assembly.
+    # The CLI itself was renamed `archive-session-scope.py` the same day, once
+    # the WSC name had nothing left behind it (see docs/install/relocation-
+    # ledger.json). gravestone: wsc-close.py
     # The CLI is alive -- this module simply no longer consumes it, and a
     # manifest row nothing emits is the dead census row
     # `test_every_manifest_entry_is_named_by_at_least_one_directive` exists
@@ -1504,8 +1507,8 @@ def build_directives(
     # destroying once-per-session sentinels and the dispatch-evidence file.
     # Archival now belongs to session END, not workstream close — wired via
     # a SessionEnd hook (DoE-claude repo) rather than this assembly. The
-    # `wsc-close archive-session` CLI subcommand remains in place for that
-    # caller; the directive builder that used to construct this call
+    # `archive-session-scope.py archive-session` CLI subcommand remains in
+    # place for that caller; the directive builder that used to construct it
     # (`directives_commit_tail.build_archive_session_claim_directive`) has
     # been removed as unreferenced — only the CLI it wrapped survives.
 

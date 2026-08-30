@@ -52,6 +52,7 @@ from coordinator_core.ops.tracker.fold_observed_set import (
     _handler,
     run_fold_observed_set,
 )
+from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -69,7 +70,7 @@ def _make_git_repo(root: Path) -> Path:
             ["git"] + list(args),
             cwd=str(root),
             capture_output=True,
-            check=True,
+            check=True, **no_console_creationflags(),
         )
 
     _git("init", "-b", "main")

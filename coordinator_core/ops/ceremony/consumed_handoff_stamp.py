@@ -4,14 +4,10 @@ ship-stamp + R1-R4 ship-drift correctness (break-class core, C5).
 
 GRAVESTONE NOTICE (2026-08-30): `wsc_tail`, named below as this seam's reason
 for existing, was deleted by K-046 on 2026-08-23 (`c07062c99`). This module's
-`post_commit_stamp_and_ship` therefore has NO REACHABLE CALLER AT ALL. Its one
-route in is `post_commit_tail.run()`, whose sole live caller
-(`execute_plan_assemble/close_out_and_stamp.py::_reach_post_commit_tail_stub_
-close`) hardcodes `chain_terminal=False` — the flag this function returns an
-empty `StampOutcome` on before doing any work. Every R1-R4 guarantee below is
-real and correct; none of it executes. Do not read the racing, ordering and
-TOCTOU analysis below as describing live behaviour. The missing owner is
-kill-ledger K-046's standing requirement, not a defect in this file.
+`post_commit_stamp_and_ship` has NO REACHABLE CALLER AT ALL. Every R1-R4
+guarantee below is real and correct; none of it executes. Full trace:
+`docs/research/spike-verdicts/2026-08-30-baton-ship-stamp-inside-a-500ms-close.md`
+§ CORRECTION; requirement: kill-ledger K-046; retention rationale: K-116.
 Separately: `StampOutcome.empty_consumed_set`, set below as the R2/AC7 loud
 report, is read by no caller anywhere — the report has no surface.
 

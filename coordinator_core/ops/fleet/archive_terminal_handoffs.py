@@ -647,7 +647,12 @@ def _dirty_relpaths_in_process(worktree: Path, ordered: Sequence[str]) -> Option
     return dirty
 
 
-def _dirty_handoff_relpaths(worktree: Path, survivor_relpaths: Sequence[str]) -> set:
+def _dirty_handoff_relpaths(
+    worktree: Path,
+    survivor_relpaths: Sequence[str],
+    *,
+    fallback_pathspecs: Sequence[str] = ("state/handoffs",),
+) -> set:
     """ONE scoped `git status --porcelain` call over `survivor_relpaths` —
     the classify-first reorder (C3): this is only invoked once classification
     has already narrowed the corpus to its surviving candidates, so the
@@ -661,9 +666,23 @@ def _dirty_handoff_relpaths(worktree: Path, survivor_relpaths: Sequence[str]) ->
     one spawn" contract this rail exists to hold), a survivor set whose
     total pathspec byte cost exceeds `_DIVERGENCE_CHECK_ARGV_BUDGET_CHARS`
     falls back to the CURRENT unscoped call
-    (`git status --porcelain -- state/handoffs`) — semantically identical to
-    the predecessor's own corpus-wide call, still exactly one spawn, no new
-    fail-open path.
+    (`git status --porcelain -- <fallback_pathspecs>`) — semantically
+    identical to the predecessor's own corpus-wide call, still exactly one
+    spawn, no new fail-open path.
+
+    `fallback_pathspecs` (2026-08-30, the actioned-memo class gets an
+    occasion, C2): the overflow-branch pathspec, generalised from the
+    hardcoded `["state/handoffs"]` so a caller unioning a second corpus
+    (e.g. `cross-repo/inbox`) into `survivor_relpaths` gets that corpus
+    covered by the fallback too. Defaults to the original single-element
+    tuple, so the sole pre-existing caller (this module's own handoff-only
+    scan) is unchanged. Passing the WRONG (narrower) fallback here is a
+    fail-OPEN hazard, not a cosmetic gap: a dirty path outside every listed
+    pathspec can never appear in the unscoped call's own porcelain output,
+    so it can never land in the returned dirty set — a caller unioning a
+    second corpus's relpaths into `survivor_relpaths` MUST also list that
+    corpus's root here, or an uncommitted file in it is silently treated as
+    clean once the survivor set is large enough to overflow the budget.
 
     Returns the set of repo-relative paths (drawn from `survivor_relpaths`,
     or discovered in the unscoped fallback's own output) that carry
@@ -693,7 +712,7 @@ def _dirty_handoff_relpaths(worktree: Path, survivor_relpaths: Sequence[str]) ->
         if in_process is not None:
             return in_process
     else:
-        scoped_paths = ["state/handoffs"]
+        scoped_paths = list(fallback_pathspecs)
 
     result = status_porcelain(worktree, scoped_paths)
     if not result.ok:

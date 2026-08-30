@@ -16,6 +16,7 @@ from typing import Optional
 import pytest
 
 from coordinator_core.ops.check_version_consistency import main
+from coordinator_core.win_portability import no_console_passthrough_kwargs
 
 # Declared, not excused: this file spawns real git because the bash-oracle parity
 # contract (test-check-version-consistency.sh) it ports depends on real git-tree
@@ -104,18 +105,20 @@ def test_ac7_flat_layout(tmp_path):
 
 
 def _git_bundle(d: Path, tag: Optional[str] = None) -> None:
-    subprocess.run(["git", "init", "-q"], cwd=d, check=True)
-    subprocess.run(["git", "add", "-A"], cwd=d, check=True)
+    subprocess.run(["git", "init", "-q"], cwd=d, check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "add", "-A"], cwd=d, check=True, **no_console_passthrough_kwargs())
     subprocess.run(
         ["git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "init"],
         cwd=d,
         check=True,
+        **no_console_passthrough_kwargs(),
     )
     if tag:
         subprocess.run(
             ["git", "-c", "tag.gpgSign=false", "-c", "tag.forcesignannotated=false", "tag", tag],
             cwd=d,
             check=True,
+            **no_console_passthrough_kwargs(),
         )
 
 

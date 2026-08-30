@@ -21,6 +21,10 @@ from pathlib import Path
 
 import pytest
 
+from coordinator_core.benchmarks.maintenance_tier_budget import (
+    SCRATCH_ROOT as _FALSIFIER_SCRATCH_ROOT,
+    check_maintenance_tier_budget,
+)
 from coordinator_core.ops import git_maintenance as gm
 from coordinator_core.win_portability import no_console_creationflags
 
@@ -62,9 +66,21 @@ def test_hourly_is_a_task_list_never_the_hourly_schedule():
     assert "--schedule=hourly" not in gm._TIER_ARGV["hourly"]
 
 
-def test_daily_and_weekly_are_schedules():
+def test_daily_is_a_schedule_and_weekly_is_not():
+    """`maintenance.strategy=incremental` makes git's schedules cumulative, so
+    `--schedule=weekly` re-runs every task `--schedule=daily` ran that same
+    day. Measured, that put the weekly tier at 515.6ms/9 procs against the
+    500ms brightline, of which 328ms was daily's work done twice. Daily keeps
+    its schedule because nothing above it duplicates anything; weekly names
+    the one task the daily set does not carry.
+
+    These two equality assertions ARE the cumulative-schedule-trap pin: no
+    value of `_TIER_ARGV["weekly"]` (or a hypothetical fourth tier above
+    daily) can regain `--schedule=weekly`/`--schedule=monthly` without
+    breaking one of them first, which is why there is no separate loop test
+    for that keyword ban here."""
     assert gm._TIER_ARGV["daily"] == ("maintenance", "run", "--schedule=daily")
-    assert gm._TIER_ARGV["weekly"] == ("maintenance", "run", "--schedule=weekly")
+    assert gm._TIER_ARGV["weekly"] == ("maintenance", "run", "--task=pack-refs")
 
 
 def test_unknown_tier_is_an_error_not_a_default(tmp_path):
@@ -232,12 +248,16 @@ def test_an_unreachable_object_inside_the_expiry_window_survives(tmp_path):
 
 
 def test_prune_runs_before_the_maintenance_run_not_after(tmp_path, monkeypatch):
-    """ORDERING IS LOAD-BEARING. `--schedule=weekly` includes `loose-objects`,
-    which PACKS loose objects, unreachable ones included. `git prune` only ever
-    removes LOOSE objects — once garbage is packed, dropping it needs a full
-    `repack -A -d` or a `gc`, and `gc` is a kill-bar item here. A prune
-    sequenced AFTER the maintenance run therefore reaps nothing, exits 0, and
-    lets unreachable history accumulate forever behind a green tier.
+    """ORDERING IS LOAD-BEARING ACROSS TIERS, NOT WITHIN THIS ONE. Weekly's own
+    `--task=pack-refs` packs nothing, so this order is harmless-but-no-longer-
+    required in isolation. It is still asserted because the DAILY tier's
+    `loose-objects` task PACKS loose objects, unreachable ones included, and
+    `git prune` only ever removes LOOSE objects — once garbage is packed,
+    dropping it needs a full `repack -A -d` or a `gc`, and `gc` is a kill-bar
+    item here. On a day both tiers fire, a weekly prune sequenced after that
+    run reaps nothing, exits 0, and lets unreachable history accumulate
+    forever behind a green tier. Filed as
+    state/bug-backlog/2026-08-30-the-daily-tier-packs-unreachable-objects-309a82437447.yaml.
 
     Found by the plan's falsifier: conjunct 4 read FAIL with the legs in the
     other order, with everything else identical.
@@ -370,58 +390,31 @@ def test_non_weekly_tiers_do_not_prune_or_sweep(tmp_path):
 
 @pytest.mark.cadence
 def test_every_tier_is_under_the_500ms_brightline(tmp_path):
-    """THE ACCEPTANCE ORACLE. Process time and spawn count, never wall clock.
+    """THE ACCEPTANCE ORACLE, and the only implementation of it left in the
+    tree. Delegates to `coordinator_core.benchmarks.maintenance_tier_budget
+    .check_maintenance_tier_budget` -- the same function the plan's own
+    falsifier (`docs/plans/2026-08-30-ceremony-driven-git-maintenance
+    .falsifier.py`) imports and runs -- instead of restating a second
+    sampling design here. The oracle lives in `coordinator_core/` rather
+    than in the `docs/plans/` artifact so that archiving the plan (closed
+    plans move to `archive/specs/YYYY-MM/`, with nothing moving a
+    `.falsifier.py` sidecar alongside its `.md`) cannot silently break this
+    test. A prior version of this test measured with a single shared repo,
+    k=3 repeat-averaging of a non-idempotent command, and the weekly prune
+    leg sequenced AFTER the maintenance run, all three defects the oracle's
+    docstring documents fixing. Keeping a second, uncorrected copy next to
+    the corrected one is how that drift happened the first time.
 
-    Measured against INDUCED CHURN, not a freshly cloned probe with nothing to
-    do: a guard that reproduces the same optimistic low-churn condition as its
-    standing measurement never exercises the expensive state it exists to
-    catch. Each tier is measured twice — first-invocation and warm.
-
-    THE 500ms VERDICT RESTS ON n=1 TODAY. Every figure in the plan's § Problem
-    came from one spike run; this test's first green run is the SECOND data
-    point, not a confirmation of the first.
-
-    Over the bar is a kill-bar item: rebuild under the bar, do not shave spawns.
+    Process time and spawn count, never wall clock: N independent COLD
+    repos per tier, each registered through coordinator's own config path
+    then churned, one first-run sample each, averaged over N. Over the bar
+    is a kill-bar item: rebuild under the bar, do not shave spawns.
     """
-    from coordinator_core.benchmarks.process_time import batched_process_time_ms
-
-    repo = _init_repo(tmp_path)
-    # INDUCED CHURN. A freshly cloned probe with nothing to do reproduces the
-    # same optimistic condition the spike measured under; commit-graph,
-    # loose-objects and incremental-repack need real work to be measured
-    # honestly. The spike's figures are lower bounds for exactly this reason.
-    for i in range(300):
-        (repo / "a.txt").write_text(f"line {i}\n", encoding="utf-8")
-        _git(repo, "add", "a.txt")
-        _git(repo, "commit", "-qm", f"churn {i}")
-
-    # Each tier's full git-leg cost: the maintenance run, plus weekly's prune.
-    # The orphan-pack sweep is deliberately NOT here — its ~2s is a SLEEP, not
-    # process time, and this bar is process time. That distinction is the
-    # reason the sweep is weekly-tier work and not commit-path work; wall
-    # clock on this box measures peer load, never our cost.
-    legs = {
-        tier: [["git", "-C", str(repo), *gm._TIER_ARGV[tier]]] for tier in gm.TIERS
-    }
-    legs["weekly"].append(["git", "-C", str(repo), "prune", f"--expire={gm._PRUNE_EXPIRE}"])
-
-    breaches = []
-    measured = {}
-    for tier, cmds in legs.items():
-        for pass_name in ("cold", "warm"):
-            total_ms = 0.0
-            total_procs = 0.0
-            for cmd in cmds:
-                sample = batched_process_time_ms(cmd, k=3, cwd=str(repo))
-                total_ms += sample["process_time_ms"]
-                total_procs += sample["procs_per_call"]
-            measured[(tier, pass_name)] = (total_ms, total_procs)
-            if total_ms >= 500:
-                breaches.append(f"{tier} ({pass_name}): {total_ms:.1f}ms / {total_procs:.1f} procs")
-
-    assert not breaches, (
+    _FALSIFIER_SCRATCH_ROOT.mkdir(parents=True, exist_ok=True)
+    ok, detail = check_maintenance_tier_budget(tmp_path)
+    assert ok, (
         "over the 500ms brightline -- a KILL-BAR item: rebuild under the bar, "
-        f"do not shave spawns off it. {breaches}. All samples: {measured}"
+        f"do not shave spawns off it. {detail}"
     )
 
 

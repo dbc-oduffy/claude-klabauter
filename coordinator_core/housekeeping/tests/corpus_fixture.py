@@ -95,6 +95,25 @@ DECOY_COUNT = 5
 
 _BOGUS_BLOCKER_ID = "hnd-fixture-blocker-does-not-exist"
 
+#: 2026-08-30, the actioned-memo class gets an occasion, C3 -- default number
+#: of terminal (status: actioned) cross-repo/inbox memos woven into EVERY
+#: `build_corpus` call, so the SAME fixture C7's brightline budget test
+#: (`test_brightline.py`) already builds every rep exercises the memo
+#: family's dirty-check/archival path too. A memo-leg regression (the memo
+#: family getting its own git spawn, or the union dirty-check silently
+#: excluding memo paths) fails that EXISTING test with zero new test code --
+#: C3's own brief, "add only the assertion the existing brightline test
+#: cannot already make".
+MEMO_TERMINAL_COUNT = 5
+
+#: Filename slug sized so a full relpath (`cross-repo/inbox/<name>`) sits in
+#: the ~90-110 char band the plan's own Problem section measures for a real
+#: memo filename -- long enough that ~57-65 terminal survivors overflow
+#: `_DIVERGENCE_CHECK_ARGV_BUDGET_CHARS` (6000,
+#: `coordinator_core/git/argv_batch.py`). Used by both `build_corpus`'s
+#: default memo records and `build_memo_overflow_corpus` below.
+_MEMO_SLUG = "a-realistically-long-descriptive-memo-slug-for-argv-budget-sizing"
+
 
 @dataclass
 class CorpusFixture:
@@ -110,6 +129,15 @@ class CorpusFixture:
     decoy_records: List[dict] = field(default_factory=list)
     clearing_record_id: str = ""
     clearing_blocker_id: str = ""
+    #: 2026-08-30, the actioned-memo class gets an occasion, C3.
+    memo_inbox_dir: Path = None  # type: ignore[assignment]
+    memo_archive_dir: Path = None  # type: ignore[assignment]
+    #: Terminal (status: actioned) memos -- expected to be archived by a
+    #: correct `cycle.run` given a cap at least this large.
+    memo_records: List[dict] = field(default_factory=list)
+    #: Non-terminal (status: open) memo(s) -- a negative control expected to
+    #: stay in the inbox untouched, regardless of cap.
+    memo_noise_records: List[dict] = field(default_factory=list)
 
     def records_by_stub_id(self) -> Dict[str, dict]:
         """Indexed by the id a gate's ``blocked_by`` actually names."""
@@ -166,9 +194,20 @@ def _archive_months(n_months: int) -> List[str]:
     return months
 
 
-def build_corpus(root: Path, *, seed: int = 20260829) -> CorpusFixture:
+def build_corpus(
+    root: Path, *, seed: int = 20260829, memo_terminal_count: int = MEMO_TERMINAL_COUNT
+) -> CorpusFixture:
     """Write a real-shaped corpus under ``root`` and return the manifest of
-    what was written. Deterministic across runs for a fixed ``seed``."""
+    what was written. Deterministic across runs for a fixed ``seed``.
+
+    Also writes ``memo_terminal_count`` terminal (``status: actioned``)
+    memos plus one non-terminal (``status: open``) noise memo under
+    ``<root>/cross-repo/inbox/`` -- the memo family C2 folded into
+    `housekeeping.cycle` (2026-08-30, the actioned-memo class gets an
+    occasion). Woven into every call, not a separate parallel fixture, so
+    the SAME build this module's callers already use exercises both
+    families.
+    """
     rng = random.Random(seed)
 
     live_dir = root / "state" / "handoffs"
@@ -315,6 +354,41 @@ def build_corpus(root: Path, *, seed: int = 20260829) -> CorpusFixture:
             {"path": path, "handoff_id": hid, "stub_id": sid, "deployment_state": state}
         )
 
+    # -- Memo family (2026-08-30, the actioned-memo class gets an occasion). --
+    memo_inbox_dir = root / "cross-repo" / "inbox"
+    memo_archive_dir = root / "cross-repo" / "archive"
+    memo_inbox_dir.mkdir(parents=True, exist_ok=True)
+    memo_archive_dir.mkdir(parents=True, exist_ok=True)
+
+    memo_records: List[dict] = []
+    for i in range(memo_terminal_count):
+        day = (i % 28) + 1
+        name = f"2026-01-{day:02d}-fixture-memo-{i:04d}-{_MEMO_SLUG}.md"
+        path = memo_inbox_dir / name
+        _write_frontmatter(
+            path,
+            {
+                "title": f"Fixture actioned memo {i}",
+                "created": f"2026-01-{day:02d}",
+                "status": "actioned",
+                "action_taken_at": f"2026-01-{day:02d}T00:00:00Z",
+            },
+        )
+        memo_records.append({"path": path, "rel_name": name, "status": "actioned"})
+
+    memo_noise_records: List[dict] = []
+    noise_name = "2026-01-01-fixture-memo-noise-still-open.md"
+    noise_path = memo_inbox_dir / noise_name
+    _write_frontmatter(
+        noise_path,
+        {
+            "title": "Fixture memo noise -- not terminal, must be retained",
+            "created": "2026-01-01",
+            "status": "open",
+        },
+    )
+    memo_noise_records.append({"path": noise_path, "rel_name": noise_name, "status": "open"})
+
     return CorpusFixture(
         root=root,
         live_dir=live_dir,
@@ -325,7 +399,47 @@ def build_corpus(root: Path, *, seed: int = 20260829) -> CorpusFixture:
         decoy_records=decoy_records,
         clearing_record_id=clearing_record_id,
         clearing_blocker_id=clearing_blocker_id,
+        memo_inbox_dir=memo_inbox_dir,
+        memo_archive_dir=memo_archive_dir,
+        memo_records=memo_records,
+        memo_noise_records=memo_noise_records,
     )
+
+
+def build_memo_overflow_corpus(inbox_dir: Path, *, count: int = 80) -> List[dict]:
+    """Write ``count`` realistic-length-named terminal (``status: actioned``)
+    memos directly under ``inbox_dir`` (``cross-repo/inbox/``).
+
+    C3's own OVERFLOW FIXTURE contract (staff-eng Finding 3, major): each
+    relpath sits in the ~90-110+ char band a real memo filename measures at,
+    so the surviving candidate set overflows
+    `_DIVERGENCE_CHECK_ARGV_BUDGET_CHARS` (6000,
+    `coordinator_core/git/argv_batch.py`) well before ``count`` is reached --
+    the branch C2's generalised ``fallback_pathspecs`` fix changes behaviour
+    on. A separate helper from `build_corpus` (not folded into its default
+    count) because the brightline budget test's own N_OUTER=3 reps must stay
+    cheap; only the dedicated overflow test pays for this corpus.
+
+    Returns ``[{"path": Path, "rel_name": str}, ...]``, oldest-first by
+    filename, so a caller can single out one entry to dirty afterward.
+    """
+    inbox_dir.mkdir(parents=True, exist_ok=True)
+    records: List[dict] = []
+    for i in range(count):
+        day = (i % 28) + 1
+        name = f"2026-02-{day:02d}-overflow-fixture-memo-{i:04d}-{_MEMO_SLUG}.md"
+        path = inbox_dir / name
+        _write_frontmatter(
+            path,
+            {
+                "title": f"Overflow fixture actioned memo {i}",
+                "created": f"2026-02-{day:02d}",
+                "status": "actioned",
+                "action_taken_at": f"2026-02-{day:02d}T00:00:00Z",
+            },
+        )
+        records.append({"path": path, "rel_name": name})
+    return records
 
 
 def _read_blocked_by(path: Path) -> List[str]:

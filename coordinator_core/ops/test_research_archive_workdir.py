@@ -32,6 +32,7 @@ from coordinator_core.ops import research_archive_workdir as mod
 from coordinator_core.ops.session import safe_commit_offer
 from coordinator_core.session import core as session_core
 from coordinator_core.session import scope as session_scope
+from coordinator_core.win_portability import no_console_passthrough_kwargs
 
 # Declared, not excused: `_mk_git_worktree` builds a REAL git repo (unlike this
 # file's default plain-.git `_mk_worktree`) because `safe_commit_offer.compute_offer`
@@ -295,14 +296,15 @@ def _mk_git_worktree(tmp_path: Path) -> Path:
     session's scope, on top of the touched.txt claim side this test exists
     to exercise.
     """
-    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True, **no_console_passthrough_kwargs())
     subprocess.run(
-        ["git", "config", "user.email", "t@example.com"], cwd=tmp_path, check=True
+        ["git", "config", "user.email", "t@example.com"], cwd=tmp_path, check=True,
+        **no_console_passthrough_kwargs(),
     )
-    subprocess.run(["git", "config", "user.name", "t"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "config", "user.name", "t"], cwd=tmp_path, check=True, **no_console_passthrough_kwargs())
     (tmp_path / "README.md").write_text("x", encoding="utf-8")
-    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
-    subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=tmp_path, check=True, **no_console_passthrough_kwargs())
     (tmp_path / "docs" / "research" / "archive").mkdir(parents=True)
     return tmp_path
 

@@ -21,6 +21,7 @@ import sys
 import pytest
 
 from coordinator_core.ops import fan_out_integrator as mod
+from coordinator_core.win_portability import no_console_passthrough_kwargs
 
 # Spawns a real external process; runs at cadence gates, not per-commit.
 # Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
@@ -39,12 +40,12 @@ pytestmark = [
 def git_repo(tmp_path, monkeypatch):
     repo = tmp_path / "repo"
     repo.mkdir()
-    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
-    subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=repo, check=True)
-    subprocess.run(["git", "config", "user.name", "Test"], cwd=repo, check=True)
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=repo, check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=repo, check=True, **no_console_passthrough_kwargs())
     (repo / "root.txt").write_text("root\n")
-    subprocess.run(["git", "add", "root.txt"], cwd=repo, check=True)
-    subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=repo, check=True)
+    subprocess.run(["git", "add", "root.txt"], cwd=repo, check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=repo, check=True, **no_console_passthrough_kwargs())
     monkeypatch.chdir(repo)
     return repo
 

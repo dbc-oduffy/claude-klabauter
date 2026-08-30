@@ -65,6 +65,7 @@ from coordinator_core.install import gen_settings_hooks as _gen_hooks_module
 from coordinator_core.install import maximalist
 from coordinator_core.install import scaffold_structure as _scaffold_module
 from coordinator_core.install import substrate as _substrate_module
+from coordinator_core.win_portability import no_console_creationflags
 from coordinator_core.ops import capture_fan_out_threshold as _threshold_module
 from coordinator_core.ops import coordinator_setup_state as _setup_state_module
 from coordinator_core.ops import detect_existing_claude_home as _detect_module
@@ -2099,6 +2100,7 @@ def test_own_root_wins_precedence_not_merely_present(tmp_path):
         capture_output=True,
         text=True,
         env={**os.environ, "PYTHONPATH": str(decoy)},
+        **no_console_creationflags(),
     )
     assert proc.returncode == 0, proc.stderr
     lines = proc.stdout.splitlines()

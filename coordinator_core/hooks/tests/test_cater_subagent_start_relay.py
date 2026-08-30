@@ -26,6 +26,7 @@ import pytest
 
 import coordinator_core.ipc as ipc
 from coordinator_core import hooks as hooks_pkg
+from coordinator_core.win_portability import no_console_passthrough_kwargs
 from coordinator_core.hooks.cater_subagent_start import (
     OP_NAME,
     SIDECAR_MISS_MARKER,
@@ -46,9 +47,9 @@ SESSION_ID = "session-relay-1"
 
 @pytest.fixture
 def git_repo(tmp_path: Path) -> Path:
-    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
-    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=tmp_path, check=True)
-    subprocess.run(["git", "config", "user.name", "Test"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=tmp_path, check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=tmp_path, check=True, **no_console_passthrough_kwargs())
     return tmp_path
 
 

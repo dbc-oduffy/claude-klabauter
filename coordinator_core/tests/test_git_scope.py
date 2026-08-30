@@ -46,13 +46,14 @@ from coordinator_core.git_scope import (
     git_predicate,
     scoped_git_env,
 )
+from coordinator_core.win_portability import no_console_creationflags
 
 _ABSENT_SHA = "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef"[:40]
 
 
 def _git(*args: str, cwd) -> subprocess.CompletedProcess:
     return subprocess.run(
-        ["git", *args], cwd=str(cwd), capture_output=True, text=True, check=False
+        ["git", *args], cwd=str(cwd), capture_output=True, text=True, check=False, **no_console_creationflags()
     )
 
 
@@ -224,7 +225,7 @@ def test_git_dir_poison_does_not_retarget_the_predicate(monkeypatch, receiver, s
     # Baseline: prove the poison is live and would have flipped the verdict.
     unscoped = subprocess.run(
         ["git", "-C", str(r_root), "rev-parse", "--verify", "--quiet", f"{r_sha}^{{commit}}"],
-        capture_output=True, text=True, check=False,
+        capture_output=True, text=True, check=False, **no_console_creationflags(),
     )
     assert unscoped.returncode != 0, (
         "fixture is not exercising the defect — the poisoned environment must "
@@ -323,7 +324,7 @@ def test_unusable_reason_catches_a_git_dir_outside_the_target_tree(tmp_path, rec
 
     probe = subprocess.run(
         ["git", "-C", str(impostor), "rev-parse", "--absolute-git-dir"],
-        capture_output=True, text=True, check=False, env=scoped_git_env(),
+        capture_output=True, text=True, check=False, env=scoped_git_env(), **no_console_creationflags(),
     )
     if probe.returncode != 0:
         pytest.skip("this git rejects the gitdir-file fixture; confinement is untestable here")

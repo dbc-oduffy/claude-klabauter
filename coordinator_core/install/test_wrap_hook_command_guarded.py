@@ -503,6 +503,7 @@ def test_powershell_resolved_guard_call_operator_executes_and_exits_127_for_miss
         capture_output=True,
         text=True,
         timeout=15,
+        **no_console_creationflags(),
     )
     assert result.returncode == 127
     assert result.returncode != 0
@@ -531,6 +532,7 @@ def test_powershell_resolved_guard_real_interpreter_and_script_exits_0(tmp_path:
         capture_output=True,
         text=True,
         timeout=15,
+        **no_console_creationflags(),
     )
     assert result.returncode == 0
 

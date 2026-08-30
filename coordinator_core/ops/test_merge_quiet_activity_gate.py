@@ -20,6 +20,7 @@ from coordinator_core.ops.merge_quiet_activity_gate import (
     _resolve_quiet_threshold_seconds,
     evaluate,
 )
+from coordinator_core.win_portability import no_console_creationflags
 
 # Spawns a real external process; runs at cadence gates, not per-commit.
 # Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
@@ -39,6 +40,7 @@ def _git(*args: str, cwd: Path, env: dict | None = None) -> subprocess.Completed
         timeout=30,
         stdin=subprocess.DEVNULL,
         env=env,
+        **no_console_creationflags(),
     )
 
 

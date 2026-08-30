@@ -43,6 +43,7 @@ from coordinator_core.ops.fleet.memo_send import (
     _memo_send,
     _validate_send_params,
 )
+from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
@@ -54,6 +55,7 @@ pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 def _git(repo: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess:
     return subprocess.run(
         ["git"] + list(args), cwd=str(repo), capture_output=True, check=check,
+        **no_console_creationflags(),
     )
 
 
@@ -805,6 +807,7 @@ class TestSharedLedgerCommitsTheWorktreeUnion:
         staged_blob = subprocess.run(
             ["git", "ls-files", "-s", "state/memo-outbox/sent-ledger.jsonl"],
             cwd=str(sender_repo), capture_output=True, text=True, check=True,
+            **no_console_creationflags(),
         ).stdout.split()[1]
 
         result = _memo_send(
@@ -815,6 +818,7 @@ class TestSharedLedgerCommitsTheWorktreeUnion:
         head_ledger = subprocess.run(
             ["git", "show", "HEAD:state/memo-outbox/sent-ledger.jsonl"],
             cwd=str(sender_repo), capture_output=True, text=True, check=True,
+            **no_console_creationflags(),
         ).stdout
         head_topics = [
             json.loads(line)["topic"]

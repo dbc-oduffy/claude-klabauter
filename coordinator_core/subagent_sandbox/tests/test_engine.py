@@ -34,6 +34,7 @@ import yaml
 
 from coordinator_core.session import identity as session_identity
 from coordinator_core.subagent_sandbox import engine
+from coordinator_core.win_portability import no_console_passthrough_kwargs
 
 # Real git repo is load-bearing: resolve_git_root() is asserted against a
 # real `git init`'d tree per this file's own module docstring so it behaves
@@ -63,11 +64,12 @@ CANONICAL_TEAMMATE_AGENT_ID = "c7-agent-probe@session-2c79e462"
 def git_repo(tmp_path: Path) -> Path:
     """A real, empty git repo rooted at tmp_path (so resolve_git_root
     behaves exactly as it does against a production checkout)."""
-    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True, **no_console_passthrough_kwargs())
     subprocess.run(
         ["git", "config", "user.email", "test@example.com"], cwd=tmp_path, check=True
+        **no_console_passthrough_kwargs(),
     )
-    subprocess.run(["git", "config", "user.name", "Test"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=tmp_path, check=True, **no_console_passthrough_kwargs())
     return tmp_path
 
 
@@ -201,7 +203,7 @@ def test_resolve_git_root_failed_resolution_is_not_memoized(
     assert first is None
     assert len(popen_spawn_count) == 1
 
-    subprocess.run(["git", "init", "-q"], cwd=not_yet_a_repo, check=True)
+    subprocess.run(["git", "init", "-q"], cwd=not_yet_a_repo, check=True, **no_console_passthrough_kwargs())
     second = engine.resolve_git_root(str(not_yet_a_repo))
     assert second == str(not_yet_a_repo)
     # The failed call must have re-spawned rather than being served a

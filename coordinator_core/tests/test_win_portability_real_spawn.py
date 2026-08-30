@@ -21,6 +21,8 @@ import sys
 
 import pytest
 
+from coordinator_core.win_portability import no_console_creationflags
+
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 
@@ -43,4 +45,4 @@ def test_bare_subprocess_run_reproduces_the_original_break(tmp_path):
     child = _write_child_script(tmp_path)
     buf = io.StringIO()
     with pytest.raises(io.UnsupportedOperation):
-        subprocess.run([sys.executable, child], stdout=buf, stderr=buf)
+        subprocess.run([sys.executable, child], stdout=buf, stderr=buf, **no_console_creationflags())

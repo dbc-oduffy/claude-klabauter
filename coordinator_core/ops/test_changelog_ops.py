@@ -38,6 +38,7 @@ from coordinator_core.ops.changelog_ops import (
     main,
     upsert_reviewed,
 )
+from coordinator_core.win_portability import no_console_creationflags, no_console_passthrough_kwargs
 
 # Declared, not excused: this file spawns a real git process because `main()`
 # resolves the repo root via real `git rev-parse`, and `_plans_touched` reads
@@ -55,9 +56,9 @@ pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 def _init_repo(tmp_path: Path) -> Path:
     repo = tmp_path / "repo"
     repo.mkdir()
-    subprocess.run(["git", "init", "-q", str(repo)], check=True)
-    subprocess.run(["git", "-C", str(repo), "config", "user.email", "t@t.com"], check=True)
-    subprocess.run(["git", "-C", str(repo), "config", "user.name", "t"], check=True)
+    subprocess.run(["git", "init", "-q", str(repo)], check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "-C", str(repo), "config", "user.email", "t@t.com"], check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "-C", str(repo), "config", "user.name", "t"], check=True, **no_console_passthrough_kwargs())
     return repo
 
 
@@ -103,9 +104,10 @@ def test_main_positive_backfills_gap(tmp_path: Path, monkeypatch, capsys) -> Non
         f"**Week starting:** {today}\n\n## Week summary\n\n(test)\n"
     )
     (repo / "README.md").write_text("hello\n")
-    subprocess.run(["git", "-C", str(repo), "add", "-A"], check=True)
+    subprocess.run(["git", "-C", str(repo), "add", "-A"], check=True, **no_console_passthrough_kwargs())
     subprocess.run(
         ["git", "-C", str(repo), "commit", "-q", "-m", "init commit"], check=True
+        **no_console_passthrough_kwargs(),
     )
 
     monkeypatch.chdir(repo)
@@ -157,8 +159,8 @@ def test_main_help_does_not_run_backfill(tmp_path: Path, monkeypatch, capsys) ->
     today = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
     (week_changelog / "HEADER.md").write_text(f"**Week starting:** {today}\n")
     (repo / "README.md").write_text("hello\n")
-    subprocess.run(["git", "-C", str(repo), "add", "-A"], check=True)
-    subprocess.run(["git", "-C", str(repo), "commit", "-q", "-m", "init"], check=True)
+    subprocess.run(["git", "-C", str(repo), "add", "-A"], check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "-C", str(repo), "commit", "-q", "-m", "init"], check=True, **no_console_passthrough_kwargs())
     monkeypatch.chdir(repo)
 
     rc = main(["--help"])
@@ -178,8 +180,8 @@ def test_main_dry_run_reports_without_writing(tmp_path: Path, monkeypatch, capsy
     today = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
     (week_changelog / "HEADER.md").write_text(f"**Week starting:** {today}\n")
     (repo / "README.md").write_text("hello\n")
-    subprocess.run(["git", "-C", str(repo), "add", "-A"], check=True)
-    subprocess.run(["git", "-C", str(repo), "commit", "-q", "-m", "init"], check=True)
+    subprocess.run(["git", "-C", str(repo), "add", "-A"], check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "-C", str(repo), "commit", "-q", "-m", "init"], check=True, **no_console_passthrough_kwargs())
     monkeypatch.chdir(repo)
 
     rc = main(["--dry-run"])
@@ -204,8 +206,8 @@ def test_main_names_written_files_on_stderr(tmp_path: Path, monkeypatch, capsys)
     today = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
     (week_changelog / "HEADER.md").write_text(f"**Week starting:** {today}\n")
     (repo / "README.md").write_text("hello\n")
-    subprocess.run(["git", "-C", str(repo), "add", "-A"], check=True)
-    subprocess.run(["git", "-C", str(repo), "commit", "-q", "-m", "init"], check=True)
+    subprocess.run(["git", "-C", str(repo), "add", "-A"], check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "-C", str(repo), "commit", "-q", "-m", "init"], check=True, **no_console_passthrough_kwargs())
     monkeypatch.chdir(repo)
 
     rc = main([])
@@ -228,8 +230,8 @@ def test_main_host_resolves_via_compute_machine(tmp_path: Path, monkeypatch, cap
     today = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
     (week_changelog / "HEADER.md").write_text(f"**Week starting:** {today}\n")
     (repo / "README.md").write_text("hello\n")
-    subprocess.run(["git", "-C", str(repo), "add", "-A"], check=True)
-    subprocess.run(["git", "-C", str(repo), "commit", "-q", "-m", "init"], check=True)
+    subprocess.run(["git", "-C", str(repo), "add", "-A"], check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "-C", str(repo), "commit", "-q", "-m", "init"], check=True, **no_console_passthrough_kwargs())
     monkeypatch.chdir(repo)
     # compute_machine() lowercases via machine_slug() (coordinator_core.ops.emit._slug):
     # "MixedCaseSlug" -> "mixedcaseslug".
@@ -387,9 +389,9 @@ class TestPerDayFilenameCollapse:
         {date}.md already exists — the existing per-day changelog is sacred."""
         repo = tmp_path / "repo"
         repo.mkdir()
-        subprocess.run(["git", "init", "-q", str(repo)], check=True)
-        subprocess.run(["git", "-C", str(repo), "config", "user.email", "t@t.com"], check=True)
-        subprocess.run(["git", "-C", str(repo), "config", "user.name", "t"], check=True)
+        subprocess.run(["git", "init", "-q", str(repo)], check=True, **no_console_passthrough_kwargs())
+        subprocess.run(["git", "-C", str(repo), "config", "user.email", "t@t.com"], check=True, **no_console_passthrough_kwargs())
+        subprocess.run(["git", "-C", str(repo), "config", "user.name", "t"], check=True, **no_console_passthrough_kwargs())
 
         today = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
         week_dir = repo / "state" / "week-changelog"
@@ -402,8 +404,8 @@ class TestPerDayFilenameCollapse:
         existing_file.write_text(existing_content, encoding="utf-8")
 
         (repo / "README.md").write_text("hello\n")
-        subprocess.run(["git", "-C", str(repo), "add", "-A"], check=True)
-        subprocess.run(["git", "-C", str(repo), "commit", "-q", "-m", "init commit"], check=True)
+        subprocess.run(["git", "-C", str(repo), "add", "-A"], check=True, **no_console_passthrough_kwargs())
+        subprocess.run(["git", "-C", str(repo), "commit", "-q", "-m", "init commit"], check=True, **no_console_passthrough_kwargs())
 
         result = backfill_gaps(repo_root=repo / ".git", host="backfill-host", today_override=today)
 
@@ -420,9 +422,9 @@ class TestPerDayFilenameCollapse:
         {date}.md exists — only the {date}.md path is newly sacred."""
         repo = tmp_path / "repo"
         repo.mkdir()
-        subprocess.run(["git", "init", "-q", str(repo)], check=True)
-        subprocess.run(["git", "-C", str(repo), "config", "user.email", "t@t.com"], check=True)
-        subprocess.run(["git", "-C", str(repo), "config", "user.name", "t"], check=True)
+        subprocess.run(["git", "init", "-q", str(repo)], check=True, **no_console_passthrough_kwargs())
+        subprocess.run(["git", "-C", str(repo), "config", "user.email", "t@t.com"], check=True, **no_console_passthrough_kwargs())
+        subprocess.run(["git", "-C", str(repo), "config", "user.name", "t"], check=True, **no_console_passthrough_kwargs())
 
         today = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
         week_dir = repo / "state" / "week-changelog"
@@ -434,8 +436,8 @@ class TestPerDayFilenameCollapse:
         own_backfill.write_text("stale content\n", encoding="utf-8")
 
         (repo / "README.md").write_text("hello\n")
-        subprocess.run(["git", "-C", str(repo), "add", "-A"], check=True)
-        subprocess.run(["git", "-C", str(repo), "commit", "-q", "-m", "init commit"], check=True)
+        subprocess.run(["git", "-C", str(repo), "add", "-A"], check=True, **no_console_passthrough_kwargs())
+        subprocess.run(["git", "-C", str(repo), "commit", "-q", "-m", "init commit"], check=True, **no_console_passthrough_kwargs())
 
         result = backfill_gaps(repo_root=repo / ".git", host="myhost", today_override=today)
 
@@ -526,8 +528,8 @@ def _commit_plan(repo: Path, rel: str, body: str) -> None:
     path = repo / rel
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(body, encoding="utf-8")
-    subprocess.run(["git", "-C", str(repo), "add", "--", rel], check=True)
-    subprocess.run(["git", "-C", str(repo), "commit", "-q", "-m", f"plan: {rel}"], check=True)
+    subprocess.run(["git", "-C", str(repo), "add", "--", rel], check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "-C", str(repo), "commit", "-q", "-m", f"plan: {rel}"], check=True, **no_console_passthrough_kwargs())
 
 
 def _plans_touched_all(repo: Path) -> str:
@@ -535,6 +537,7 @@ def _plans_touched_all(repo: Path) -> str:
     first = subprocess.run(
         ["git", "-C", str(repo), "rev-list", "--max-parents=0", "HEAD"],
         capture_output=True, text=True, check=True,
+        **no_console_creationflags(),
     ).stdout.split()[0]
     return _plans_touched(repo, "2026-07-20", commit_span=f"{first}..HEAD")
 
@@ -571,8 +574,9 @@ def test_plans_touched_dangling_path_renders_removed(tmp_path: Path) -> None:
     _commit_plan(repo, "docs/plans/2026-07-14-doomed.md", "---\nstatus: draft\n---\n\n# X\n")
     subprocess.run(
         ["git", "-C", str(repo), "rm", "-q", "--", "docs/plans/2026-07-14-doomed.md"], check=True
+        **no_console_passthrough_kwargs(),
     )
-    subprocess.run(["git", "-C", str(repo), "commit", "-q", "-m", "drop plan"], check=True)
+    subprocess.run(["git", "-C", str(repo), "commit", "-q", "-m", "drop plan"], check=True, **no_console_passthrough_kwargs())
 
     assert _plans_touched_all(repo) == "docs/plans/2026-07-14-doomed.md (status: removed)"
 
@@ -662,10 +666,11 @@ def _commit_plan_dated(repo: Path, rel: str, body: str, when: str, msg: str) -> 
     env = dict(os.environ)
     env["GIT_AUTHOR_DATE"] = when
     env["GIT_COMMITTER_DATE"] = when
-    subprocess.run(["git", "-C", str(repo), "add", "--", rel], check=True)
-    subprocess.run(["git", "-C", str(repo), "commit", "-q", "-m", msg], check=True, env=env)
+    subprocess.run(["git", "-C", str(repo), "add", "--", rel], check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "-C", str(repo), "commit", "-q", "-m", msg], check=True, env=env, **no_console_passthrough_kwargs())
     return subprocess.run(
-        ["git", "-C", str(repo), "rev-parse", "HEAD"], capture_output=True, text=True, check=True
+        ["git", "-C", str(repo), "rev-parse", "HEAD"], capture_output=True, text=True, check=True,
+        **no_console_creationflags(),
     ).stdout.strip()
 
 
@@ -730,8 +735,9 @@ def test_plans_touched_plan_deleted_later_still_reports_its_status_then(tmp_path
     env["GIT_AUTHOR_DATE"] = env["GIT_COMMITTER_DATE"] = "2026-07-19T10:00:00"
     subprocess.run(
         ["git", "-C", str(repo), "rm", "-q", "--", "docs/plans/2026-07-15-doomed.md"], check=True
+        **no_console_passthrough_kwargs(),
     )
-    subprocess.run(["git", "-C", str(repo), "commit", "-q", "-m", "drop"], check=True, env=env)
+    subprocess.run(["git", "-C", str(repo), "commit", "-q", "-m", "drop"], check=True, env=env, **no_console_passthrough_kwargs())
 
     assert _plans_touched(repo, "2026-07-15") == (
         "docs/plans/2026-07-15-doomed.md (status: implemented)"

@@ -52,6 +52,7 @@ from coordinator_core.ops._registry_map import OP_MODULE_MAP
 from coordinator_core.ops.tracker.render_status import _handler
 from coordinator_core.tracker_entities import emit_item_created, mint_item_id
 from coordinator_core import tracker_transitions as tt
+from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -70,6 +71,7 @@ def _make_git_repo(root: Path) -> Path:
             cwd=str(root),
             capture_output=True,
             check=True,
+            **no_console_creationflags(),
         )
 
     _git("init", "-b", "main")

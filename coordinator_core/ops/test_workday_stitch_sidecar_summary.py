@@ -45,6 +45,7 @@ import coordinator_core.ops.workday_stitch_sidecar_summary  # noqa: F401
 from coordinator_core.ipc import _REGISTRY
 from coordinator_core.locked_write import LockTimeout
 from coordinator_core.ops.workday_stitch_sidecar_summary import _handler
+from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -81,6 +82,7 @@ def _make_git_repo(tmp_path: Path) -> Path:
             cwd=str(repo),
             capture_output=True,
             check=True,
+            **no_console_creationflags(),
         )
 
     _git("init", "-b", "main")

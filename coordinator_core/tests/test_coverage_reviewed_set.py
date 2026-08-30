@@ -35,6 +35,10 @@ from pathlib import Path
 from typing import List
 
 import pytest
+from coordinator_core.win_portability import (
+    no_console_creationflags,
+    no_console_passthrough_kwargs,
+)
 
 # Declared, not excused: `_classify_bookkeeping_shas`/`_credit_from_kind_partition`
 # classify real commits by their actually-touched paths via `git log`, so several
@@ -54,7 +58,8 @@ def _git(args: List[str], cwd: Path) -> subprocess.CompletedProcess:
         capture_output=True,
         encoding="utf-8",
         check=True,
-    )
+    **no_console_creationflags(),
+)
 
 
 def _make_commit(repo: Path, message: str) -> str:
@@ -66,7 +71,8 @@ def _make_commit(repo: Path, message: str) -> str:
         capture_output=True,
         encoding="utf-8",
         check=True,
-    )
+    **no_console_creationflags(),
+)
     return result.stdout.strip()
 
 
@@ -87,7 +93,8 @@ def _make_path_commit(repo: Path, rel_path: str, message: str) -> str:
     return subprocess.run(
         ["git", "rev-parse", "HEAD"], cwd=str(repo),
         capture_output=True, encoding="utf-8", check=True,
-    ).stdout.strip()
+    **no_console_creationflags(),
+).stdout.strip()
 
 
 # ---------------------------------------------------------------------------

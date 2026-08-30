@@ -39,6 +39,7 @@ from pathlib import Path
 import pytest
 
 from coordinator_core.ops.ceremony import chunk_commits
+from coordinator_core.win_portability import no_console_creationflags
 
 # Declared, not excused: this file spawns a real process (git/python) because
 # the property under test is that binary's own behaviour, which no fixture
@@ -53,7 +54,8 @@ pytestmark = [
 
 def _git(args, cwd) -> str:
     result = subprocess.run(
-        ["git", *args], cwd=str(cwd), check=True, capture_output=True, text=True
+        ["git", *args], cwd=str(cwd), check=True, capture_output=True, text=True,
+        **no_console_creationflags(),
     )
     return result.stdout
 

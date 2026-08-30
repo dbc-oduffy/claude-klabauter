@@ -13,6 +13,7 @@ from pathlib import Path
 import pytest
 
 from coordinator_core.git import repo_root
+from coordinator_core.win_portability import no_console_creationflags
 
 # Real git is load-bearing for two tests in this file that shell `git
 # rev-parse` directly (not via repo_root): pinning that real git never emits
@@ -346,7 +347,8 @@ def test_real_git_never_emits_empty_stdout_on_success_except_show_prefix(tmp_pat
     repo = tmp_path / "blast_radius_repo"
     repo.mkdir()
     subprocess.run(
-        ["git", "init", "-q"], cwd=str(repo), check=True, capture_output=True
+        ["git", "init", "-q"], cwd=str(repo), check=True, capture_output=True,
+        **no_console_creationflags(),
     )
     for form in (
         "--show-toplevel",
@@ -360,6 +362,7 @@ def test_real_git_never_emits_empty_stdout_on_success_except_show_prefix(tmp_pat
             cwd=str(repo),
             capture_output=True,
             text=True,
+            **no_console_creationflags(),
         )
         assert result.returncode == 0
         assert result.stdout.strip() != "", (
@@ -371,6 +374,7 @@ def test_real_git_never_emits_empty_stdout_on_success_except_show_prefix(tmp_pat
         cwd=str(repo),
         capture_output=True,
         text=True,
+        **no_console_creationflags(),
     )
     assert prefix_result.returncode == 0
     assert prefix_result.stdout.strip() == ""
@@ -390,14 +394,16 @@ def test_show_toplevel_spawn_fallback_matches_path_format_absolute(tmp_path):
     # the regression class the reviewer flagged.
     repo = tmp_path / "path_format_repo"
     repo.mkdir()
-    subprocess.run(["git", "init", "-q"], cwd=str(repo), check=True, capture_output=True)
+    subprocess.run(["git", "init", "-q"], cwd=str(repo), check=True, capture_output=True, **no_console_creationflags())
     plain = subprocess.run(
         ["git", "rev-parse", "--show-toplevel"],
         cwd=str(repo), capture_output=True, text=True,
+        **no_console_creationflags(),
     )
     absolute = subprocess.run(
         ["git", "rev-parse", "--path-format=absolute", "--show-toplevel"],
         cwd=str(repo), capture_output=True, text=True,
+        **no_console_creationflags(),
     )
     assert plain.returncode == 0 and absolute.returncode == 0
     assert plain.stdout.strip() == absolute.stdout.strip()
@@ -450,6 +456,7 @@ def test_show_prefix_at_real_git_toplevel_returns_empty_string(tmp_path):
         cwd=str(repo),
         check=True,
         capture_output=True,
+        **no_console_creationflags(),
     )
     sub = repo / "sub"
     sub.mkdir()

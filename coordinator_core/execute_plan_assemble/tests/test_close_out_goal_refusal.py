@@ -38,6 +38,7 @@ import yaml
 
 import coordinator_core.execute_plan_assemble.close_out_and_stamp as coas
 from coordinator_core.frontmatter.primitives import canonical_body_sha
+from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
@@ -52,7 +53,7 @@ _FIXTURE_PATH = Path(__file__).resolve().parent / "fixtures" / "close_out_dry_ru
 
 def _run_git(args: list[str], cwd: Path) -> subprocess.CompletedProcess:
     return subprocess.run(
-        ["git", *args], cwd=str(cwd), capture_output=True, text=True, check=True
+        ["git", *args], cwd=str(cwd), capture_output=True, text=True, check=True, **no_console_creationflags()
     )
 
 

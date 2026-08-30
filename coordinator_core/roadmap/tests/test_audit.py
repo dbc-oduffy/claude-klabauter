@@ -31,6 +31,7 @@ from coordinator_core.roadmap.audit import (
     run_audit,
     validate_run_id,
 )
+from coordinator_core.win_portability import no_console_passthrough_kwargs
 
 # Declared, not excused: `test_resolve_repo_root_git_dir_returns_toplevel` and
 # `test_resolve_data_root_derives_from_cwd_repo_root` spawn a real `git init` because
@@ -497,7 +498,7 @@ def test_resolve_repo_root_non_git_dir_fails_loud(tmp_path: Path) -> None:
 
 
 def test_resolve_repo_root_git_dir_returns_toplevel(tmp_path: Path) -> None:
-    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True, **no_console_passthrough_kwargs())
     nested = tmp_path / "sub" / "dir"
     nested.mkdir(parents=True)
 
@@ -623,7 +624,7 @@ def test_resolve_data_root_root_flag_wins(tmp_path: Path) -> None:
 def test_resolve_data_root_derives_from_cwd_repo_root(tmp_path: Path) -> None:
     repo_root = tmp_path / "sibling-repo"
     repo_root.mkdir()
-    subprocess.run(["git", "init", "-q"], cwd=repo_root, check=True)
+    subprocess.run(["git", "init", "-q"], cwd=repo_root, check=True, **no_console_passthrough_kwargs())
 
     result = resolve_data_root(None, cwd=repo_root)
 

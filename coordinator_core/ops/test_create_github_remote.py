@@ -24,6 +24,7 @@ from pathlib import Path
 import pytest
 
 from coordinator_core.ops import create_github_remote as cgr
+from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
@@ -31,6 +32,7 @@ pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 def _git(repo: Path, *args: str) -> subprocess.CompletedProcess:
     return subprocess.run(
         ["git", *args], cwd=repo, capture_output=True, text=True, check=True
+        **no_console_creationflags(),
     )
 
 
@@ -88,6 +90,7 @@ def gh_env(tmp_path, monkeypatch):
     bare = tmp_path / "hub.git"
     subprocess.run(
         ["git", "init", "-q", "--bare", str(bare)], check=True, capture_output=True
+        **no_console_creationflags(),
     )
     fake = _FakeGh({"myproj": str(bare)})
     monkeypatch.setattr(cgr, "_gh", fake)
@@ -105,6 +108,7 @@ def test_create_path_creates_configures_remote_and_pushes(gh_env):
     heads = subprocess.run(
         ["git", "for-each-ref", "refs/heads"], cwd=bare,
         capture_output=True, text=True, check=True,
+        **no_console_creationflags(),
     ).stdout
     assert "main" in heads
 

@@ -30,6 +30,7 @@ from coordinator_core.ops.discover_working_repos import (
     _to_posix_key,
     main,
 )
+from coordinator_core.win_portability import no_console_passthrough_kwargs
 
 # Declared, not excused: this file spawns a real git process because
 # `_is_git_root`/discovery under test detect real `.git` directory presence
@@ -45,17 +46,18 @@ pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 def _init_git_repo(path: Path) -> None:
     path.mkdir(parents=True, exist_ok=True)
-    subprocess.run(["git", "init", "-q", str(path)], check=True, timeout=30)
+    subprocess.run(["git", "init", "-q", str(path)], check=True, timeout=30, **no_console_passthrough_kwargs())
     subprocess.run(
         ["git", "-C", str(path), "checkout", "-q", "-b", "main"],
         check=False,
         timeout=30,
+        **no_console_passthrough_kwargs(),
     )
-    subprocess.run(["git", "-C", str(path), "config", "user.email", "t@e.com"], check=True, timeout=30)
-    subprocess.run(["git", "-C", str(path), "config", "user.name", "t"], check=True, timeout=30)
+    subprocess.run(["git", "-C", str(path), "config", "user.email", "t@e.com"], check=True, timeout=30, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "-C", str(path), "config", "user.name", "t"], check=True, timeout=30, **no_console_passthrough_kwargs())
     (path / "f").write_text("x")
-    subprocess.run(["git", "-C", str(path), "add", "-A"], check=True, timeout=30)
-    subprocess.run(["git", "-C", str(path), "commit", "-q", "-m", "init"], check=True, timeout=30)
+    subprocess.run(["git", "-C", str(path), "add", "-A"], check=True, timeout=30, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "-C", str(path), "commit", "-q", "-m", "init"], check=True, timeout=30, **no_console_passthrough_kwargs())
 
 
 class TestIsGitRoot:

@@ -43,6 +43,8 @@ import sys
 
 import pytest
 
+from coordinator_core.win_portability import no_console_creationflags
+
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 _COUNT_AFTER_CLIENT_IMPORT = (
@@ -60,7 +62,7 @@ def _ops_modules_after(code: str) -> int:
         [sys.executable, "-c", code],
         capture_output=True,
         text=True,
-        check=False,
+        check=False, **no_console_creationflags(),
     )
     assert result.returncode == 0, result.stderr
     return int(result.stdout.strip())

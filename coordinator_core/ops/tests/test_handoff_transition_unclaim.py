@@ -38,6 +38,7 @@ import coordinator_core.ops.deliverable_cascade as cascade_mod
 import coordinator_core.ops.handoff_transition as ht
 from coordinator_core.frontmatter.baton_class import kind_values_for_canonical
 from coordinator_core.frontmatter.primitives import read_fm_field, split_frontmatter
+from coordinator_core.win_portability import no_console_creationflags
 
 # Declared, not excused: this file spawns a real `git` process because
 # locked_rmw (the write path _unclaim routes through) resolves the git
@@ -69,7 +70,7 @@ def _git(repo: Path, *args: str) -> subprocess.CompletedProcess:
         text=True,
         env=_GIT_ENV,
         timeout=15,
-        stdin=subprocess.DEVNULL,
+        stdin=subprocess.DEVNULL, **no_console_creationflags(),
     )
 
 

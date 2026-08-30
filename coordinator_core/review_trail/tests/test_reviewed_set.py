@@ -26,6 +26,7 @@ import pytest
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 from coordinator_core.review_trail import reviewed_set as rs
+from coordinator_core.win_portability import no_console_creationflags
 
 
 # ---------------------------------------------------------------------------
@@ -36,6 +37,7 @@ from coordinator_core.review_trail import reviewed_set as rs
 def _git(args: List[str], cwd: Path) -> subprocess.CompletedProcess:
     return subprocess.run(
         ["git"] + args, cwd=str(cwd), capture_output=True, encoding="utf-8", check=True,
+        **no_console_creationflags(),
     )
 
 
@@ -50,6 +52,7 @@ def _make_commit(repo: Path, message: str) -> str:
     return subprocess.run(
         ["git", "rev-parse", "HEAD"], cwd=str(repo),
         capture_output=True, encoding="utf-8", check=True,
+        **no_console_creationflags(),
     ).stdout.strip()
 
 

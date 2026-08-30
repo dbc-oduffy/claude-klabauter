@@ -51,6 +51,7 @@ import pytest
 from coordinator_core.lifecycle import git_common_dir
 from coordinator_core.session import claims as _session_claims
 from coordinator_core.session import core as _session_core_mod
+from coordinator_core.win_portability import no_console_creationflags
 from coordinator_core.workstream_complete import directives_commit_tail
 
 # Declared, not excused: this file spawns a real process (git/python) because
@@ -66,7 +67,8 @@ pytestmark = [
 
 def _git(*args: str, cwd) -> subprocess.CompletedProcess:
     return subprocess.run(
-        ["git", *args], cwd=str(cwd), capture_output=True, text=True, check=False
+        ["git", *args], cwd=str(cwd), capture_output=True, text=True, check=False,
+        **no_console_creationflags(),
     )
 
 
@@ -363,6 +365,7 @@ def _this_repo_toplevel() -> Path:
         capture_output=True,
         text=True,
         check=True,
+        **no_console_creationflags(),
     )
     return Path(proc.stdout.strip())
 
@@ -406,6 +409,7 @@ def hooks_live_repo(tmp_path, monkeypatch):
         capture_output=True,
         text=True,
         check=True,
+        **no_console_creationflags(),
     )
     _git("config", "user.email", "t@example.com", cwd=dest)
     _git("config", "user.name", "t", cwd=dest)

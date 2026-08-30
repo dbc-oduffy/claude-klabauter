@@ -35,6 +35,10 @@ from typing import List
 import pytest
 
 from coordinator_core import coverage as cov
+from coordinator_core.win_portability import (
+    no_console_creationflags,
+    no_console_passthrough_kwargs,
+)
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -47,7 +51,8 @@ def _git(args: List[str], cwd: Path) -> subprocess.CompletedProcess:
         capture_output=True,
         text=True,
         check=True,
-    )
+    **no_console_creationflags(),
+)
 
 
 def _init_repo(path: Path) -> None:

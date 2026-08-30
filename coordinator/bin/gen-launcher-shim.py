@@ -251,7 +251,7 @@ SPEC_BACKLINK_REGISTRY = Path(__file__).resolve().parent / "launcher-spec-backli
 # `parallel-review-orthogonality-guard.py`, and `wsc-coverage-gate-runner.py`
 # all take an arbitrary git rev/range directly from an agent's typed CLI
 # invocation (never defaulted, never composed internally via a Python-list
-# subprocess call the way e.g. wsc-close.py's --review-sha-range is), so a
+# subprocess call), so a
 # literal `^` (`sha^..sha`, the per-commit predecessor-range shape `--scope
 # chain` callers use) is genuinely reachable in normal use on each. Every
 # other git-rev/sha-taking bin/ CLI surveyed at the same time (`close-origin-

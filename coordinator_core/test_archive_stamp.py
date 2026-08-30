@@ -22,6 +22,8 @@ from typing import Optional
 
 import pytest
 
+from coordinator_core.win_portability import no_console_creationflags
+
 # Import guards — fire @register_op side effects before any handler is invoked
 # in-process by archive_stamp.
 import coordinator_core.ops.handoff_archive_transition  # noqa: F401
@@ -111,6 +113,7 @@ def _git(
         env=_GIT_ENV,
         timeout=15,
         stdin=subprocess.DEVNULL,
+        **no_console_creationflags(),
     )
 
 
@@ -889,6 +892,7 @@ def _git_dated(
         env=env,
         timeout=15,
         stdin=subprocess.DEVNULL,
+        **no_console_creationflags(),
     )
 
 
@@ -3094,6 +3098,7 @@ class TestArchiveStampColdImport:
             encoding="utf-8",
             timeout=30,
             cwd=_REPO_ROOT,
+            **no_console_creationflags(),
         )
         assert proc.returncode == 0, (
             f"cold import of coordinator_core.archive_stamp failed "
@@ -3113,6 +3118,7 @@ class TestArchiveStampColdImport:
             encoding="utf-8",
             timeout=30,
             cwd=_REPO_ROOT,
+            **no_console_creationflags(),
         )
         assert proc.returncode == 0, (
             f"cold import of both modules failed:\n{proc.stderr}"

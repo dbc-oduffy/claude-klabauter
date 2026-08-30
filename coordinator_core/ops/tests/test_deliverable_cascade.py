@@ -40,6 +40,7 @@ import coordinator_core.ops.deliverable_cascade as cascade_mod
 import coordinator_core.ops.handoff_children  # noqa: F401 — fires @register_op side effect
 import coordinator_core.ops.handoff_transition  # noqa: F401 — fires @register_op side effect
 from coordinator_core.frontmatter.primitives import read_fm_field, split_frontmatter
+from coordinator_core.win_portability import no_console_creationflags
 
 # Declared, not excused: this file spawns a real `git` process because the
 # happy-path write leg (AC10's "parent ships") resolves shipped_in evidence
@@ -71,6 +72,7 @@ def _git(repo: Path, *args: str) -> subprocess.CompletedProcess:
         env=_GIT_ENV,
         timeout=15,
         stdin=subprocess.DEVNULL,
+        **no_console_creationflags(),
     )
 
 

@@ -45,6 +45,7 @@ from coordinator_core.frontmatter.schema_validate import compute_grouping_digest
 from coordinator_core.testing.doe_root import doe_root_and_present
 from coordinator_core.write_guards import validate_frontmatter_schema_advisory as advisory_guard
 from coordinator_core.write_guards import validate_frontmatter_schema_deny as guard
+from coordinator_core.win_portability import no_console_creationflags
 
 _doe_root, _doe_present = doe_root_and_present()
 
@@ -1503,7 +1504,7 @@ class TestHandoffKindOffEnumUnconditionalDeny:
 
 
 def _git(root: str, *args: str) -> None:
-    subprocess.run(["git", *args], cwd=root, check=True, capture_output=True)
+    subprocess.run(["git", *args], cwd=root, check=True, capture_output=True, **no_console_creationflags())
 
 
 def _init_repo(tmp_path: Path, name: str) -> Path:

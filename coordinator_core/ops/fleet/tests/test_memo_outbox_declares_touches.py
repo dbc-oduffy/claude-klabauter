@@ -32,6 +32,7 @@ import pytest
 
 from coordinator_core.ops.fleet.memo_reconcile_outbox import _memo_reconcile_outbox
 from coordinator_core.ops.fleet.memo_send import _SENT_LEDGER_FILENAME, _memo_send
+from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
@@ -45,6 +46,7 @@ _OUTBOX = ("state", "memo-outbox")
 def _git(repo: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess:
     return subprocess.run(
         ["git"] + list(args), cwd=str(repo), capture_output=True, check=check,
+        **no_console_creationflags(),
     )
 
 

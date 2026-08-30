@@ -19,9 +19,30 @@ Spec backlink: state/handoffs/2026-07-15_164501_auto-push-naked-python-reimpl.md
 Doctrine: DR-059 (break-class windows-hostile bash surfaces get reimplemented in
 Python, not patched in place); CLAUDE.md § Runtime conventions.
 
-Invocation:
-    python3 -m coordinator_core.hooks.auto_push
-    python3 coordinator_core/hooks/auto_push.py
+No CLI entrypoint. `main()` (the former `python3 -m coordinator_core.hooks.
+auto_push` / `python3 coordinator_core/hooks/auto_push.py` invocation) is
+gravestoned 2026-08-30 (overengineering-reviewer Finding 4): the post-commit
+hook stopped invoking this module at all once C6/C7 landed, leaving `main()`
+with no production caller. Every surviving function here is called
+in-process.
+
+Review: coordinator:code-reviewer (P1, 2026-08-30) -- this docstring
+previously claimed `warm.push_cadence.sweep_repos` was "the current
+production entry into `run_push_with_retry`". Traced and found false:
+`sweep_repos` -> `push_outstanding` -> `coordinator_core/ops/ceremony/
+push.py` implements its own push/retry logic and never calls
+`run_push_with_retry`. `run_push_with_retry`'s only remaining callers are
+internal to this module (`_drain_dead_ref_record`, `drain_pending_push`),
+and `drain_pending_push`'s only production writer of the record it acts on
+(`_write_pending_record`, via `_hold_window`) is gravestoned -- so in
+ordinary operation no pending record is ever written for it to find, and
+`run_push_with_retry` (with it, `_maybe_publish_cockpit_contract`) never
+fires. It remains code-reachable only via the registered
+`workday.drain_pending_push` JSON-RPC op acting on a stale pre-existing
+record file, or a future re-wiring that is NOT this module's job to
+perform -- see docs/plans/2026-08-30-who-pushes-and-when.md and the
+review-integration run report for this finding's full trace and the
+question of what (if anything) should replace this wiring.
 
 Behavior-preservation notes (read alongside the bash source):
   - Branch case-canonicalization (Windows case-insensitive-FS fix), the
@@ -44,7 +65,6 @@ keeps this a no-op in every other fleet repo.
 
 from __future__ import annotations
 
-import argparse
 import json
 import os
 import re
@@ -56,7 +76,6 @@ from pathlib import Path
 
 from coordinator_core.git.git_dir import resolve_git_common_dir
 from coordinator_core.session import core as session_core
-from coordinator_core.session import liveness as session_liveness
 from coordinator_core.win_portability import no_console_creationflags
 
 
@@ -177,60 +196,19 @@ hook, so expiry routes to that same never-block path."""
 # in the bash source).
 _ENV_NO_SLEEP = "COORDINATOR_AUTO_PUSH_NO_SLEEP"
 
-# Test/dev seam: run synchronously (skip the fork/respawn self-detach) so the
-# calling process (and tests) can observe the push outcome directly.
-_ENV_SYNC = "COORDINATOR_AUTO_PUSH_SYNC"
-
 # Forensic seam: when the hook runs through a wrapper, sys.executable names the
 # wrapper's interpreter rather than the real host interpreter that launched it.
 _ENV_HOST_PYTHON = "COORDINATOR_HOST_PYTHON"
 
-# Stand-down seam (opro-01 C-01, state/audits/2026-08-18-opro-01-where-the-
-# push-outcome-is-known.md): set by a caller that will publish this commit
-# ITSELF, synchronously, and therefore needs to be the only publisher.
-#
-# Not a disable switch and not a test seam. `git commit` fires this hook and
-# the hook detaches; a caller that then runs its own `git push` has two
-# publishers racing for one branch tip, and when the detached child wins, the
-# caller's push fails on a commit that IS on the remote. That is the
-# 2026-07-30 false negative, and it is why `scoped_git_commit` grew a
-# remote-confirmation probe to walk its own verdict back.
-#
-# One publisher, chosen deliberately, makes the caller's own push outcome
-# authoritative by construction. The commit is still published -- by the
-# caller, in the same invocation, synchronously -- so nothing is deferred and
-# no pending record is written. A caller that sets this and does NOT push is
-# the one misuse this seam has, which is why the name says SUPPRESS_FOR_
-# SYNC_PUSH rather than DISABLE.
-#
-# AC9 disposition (docs/decisions/DR-329-push-runs-on-a-cadence-not-on-
-# every-commit.md; docs/plans/2026-08-25-push-re-homes-onto-the-cadence-
-# surfaces.md, chunk C5b): retained deliberately, not tightened, because
-# this variable already IS the engine-asserted condition AC9 asked for --
-# an upstream caller sets it, this hook only reads it, never re-derives
-# session state itself. `coordinator_core/ops/ceremony/git_native.py::
-# _sole_publisher_env` sets it whenever `push_mode in
-# commit_pipeline.py::_PUSH_MODES_SUPPRESSING_POST_COMMIT_HOOK` (today
-# `{PUSH_MODE_SYNC, PUSH_MODE_NEVER}`), so every commit `run_commit_
-# pipeline` makes already stands this hook down -- including under DR-329's
-# ratified cadence disposition, where the six named cadence surfaces will
-# call with `push_mode=NEVER` (commit_pipeline.py's own C5 chunk, gated
-# behind DR-329's ratification and still unlanded as of this note) and
-# publish instead via their own synchronous `push_outstanding()` checkpoint
-# call, per DR-329 §6's supersession of DEC-1. No new condition is needed
-# here for that path.
-#
-# What remains genuinely unconditional -- and correctly so -- is a `work/*`
-# commit made OUTSIDE the engine (a manual `git commit`, an IDE commit, any
-# caller that never set this variable): this hook is that commit's sole
-# publisher, and gating it on inferred session state was the shape AC9's
-# brief named and refused (`claude-klabauter-59`'s declined symmetric change
-# on `prepare-commit-msg`, for the same reason: re-deriving session state
-# inside a hook duplicates the engine's own hand-mirrored ladder). Measured
-# at HEAD with every session env var cleared, this path issues its detached
-# push regardless -- ~203ms / 1 spawn -- because there is no other
-# publisher for it to defer to.
-_ENV_SUPPRESS_FOR_SYNC_PUSH = "COORDINATOR_AUTO_PUSH_SUPPRESS_FOR_SYNC_PUSH"
+# Review: overengineering-reviewer Finding 5 -- the sole-publisher
+# suppression axis (this constant, `_ENV_SUPPRESS_FOR_SYNC_PUSH`, plus
+# its only reader, `main()`, deleted per Finding 4) is gravestoned.
+# Verified at HEAD: `git_native.ensure_post_commit_hook` no longer
+# passes `skip_env` for the post-commit hook (C7 made its body
+# `exit 0`), so the writer side (`_sole_publisher_env` et al. in
+# `ops/ceremony/git_native.py`) is dead too -- see that file's own
+# Finding-5 annotation.
+
 
 #: Generator-provenance declaration: every write in this module (push-
 #: failures.log, push-stderr-*.log, coordinator-auto-push-pending.json)
@@ -1369,17 +1347,21 @@ def _maybe_publish_cockpit_contract(
 # ---------------------------------------------------------------------------
 # Durable pending-push record (AC14/AC14a) -- holds a push back on a shared
 # branch instead of publishing a trivially-reversible bad commit within
-# ~60s of it landing. See `_hold_window`'s docstring for the full contract;
-# this section is the record's read/write/staleness primitives it builds
-# on. Lives ENTIRELY inside the detached child (called from the head of
-# `run_push_with_retry`, never from `branch_gate()` -- see that function's
-# and `_hold_window`'s docstrings for why the parent process that `git
-# commit` waits on synchronously must never pay this cost).
+# ~60s of it landing. This section is the record's read/write/staleness
+# primitives. Lives ENTIRELY inside the detached child (called from the
+# head of `run_push_with_retry`, never from `branch_gate()`, so the parent
+# process that `git commit` waits on synchronously never pays this cost).
 #
-# The hold's trigger is narrower than plain `_shared_branch_live_count(...) >
-# 1`: `_hold_window` also calls `_peer_commit_within_window` and skips the
-# hold when a foreign-session commit has already landed on the branch within
-# the window. Measured 2026-08-20 on work/machine-a/2026-08-18to20 (trailing
+# Review: code-reviewer, 2026-08-30 -- the trigger/hold decision this
+# section used to describe as `_hold_window`'s lived entirely in that
+# function, gravestoned by C8 (docs/plans/2026-08-30-who-pushes-and-when.md
+# § C8); these primitives no longer have a live caller that CREATES a new
+# hold, but `_drain_dead_ref_record` still round-trips any record already
+# on disk through them, so they stay defined. `_hold_window`'s trigger was
+# narrower than plain `_shared_branch_live_count(...) > 1`: it also called
+# `_peer_commit_within_window` and skipped the hold when a foreign-session
+# commit had already landed on the branch within the window. Measured
+# 2026-08-20 on work/machine-a/2026-08-18to20 (trailing
 # 36h): 2079 commits, median inter-commit gap 20s, a median of 10 peer
 # commits land on top of any given commit within the 300s hold, and only 6
 # of 2079 commits had zero followers in that window. On a branch that busy
@@ -1448,10 +1430,11 @@ def _write_pending_record(
     `os.replace`s it into place -- atomic on both POSIX and Windows (unlike
     a direct write, which a concurrent reader could observe mid-write as
     invalid JSON). Returns False (never raises) on any OSError -- the
-    caller (`_hold_window`) treats a failed write as AC14a precondition (1)
-    unmet and pushes immediately rather than sleeping un-recorded, which
-    would make an interrupted hold indistinguishable from a silently lost
-    push.
+    caller (`_drain_dead_ref_record`, the only production caller left now
+    that `_hold_window` is gravestoned by C8) treats a failed write as
+    AC14a precondition (1) unmet and falls through to the orphaned-report
+    path rather than trusting an un-recorded retarget, which would make an
+    interrupted hold indistinguishable from a silently lost push.
     """
     git_dir = resolve_git_common_dir(repo_root)
     try:
@@ -1525,419 +1508,6 @@ def _record_is_stale(record: dict, now: float) -> bool:
     if isinstance(hold_until, (int, float)) and now > hold_until + _STALE_GRACE_SECONDS:
         return True
     return False
-
-
-def _shared_branch_live_count(repo_root: str, branch: str) -> int | None:
-    """Count live sessions whose `meta.json:branch` equals `branch`.
-
-    ### DECISION (C7, PM-required -- stated here per the plan body since this
-    chunk cannot edit the plan doc itself): the >1-live-session predicate is
-    **branch-scoped**, not repo-wide. `live_session_ids()` is branch-blind
-    (it enumerates every live session in the repo's session hub, not per
-    branch); the only per-session branch signal is `meta.json:branch`,
-    read today only by `pickup_assemble/holder_evidence.py`. Branch-scoped
-    was chosen because this chunk's own title and the incident it fixes are
-    both specifically about a SHARED BRANCH -- a repo-wide count would hold
-    an auto-push back whenever ANY two sessions are live anywhere in the
-    repo, including two sessions on two disjoint branches that can never
-    race each other on origin, which is not the hazard AC14 describes.
-    Measured on this repo 2026-08-03: sessions routinely run several live
-    peers across unrelated `work/*` branches, so a repo-wide predicate would
-    hold back the common case, not just the shared-branch one.
-    A peer whose `meta.json:branch` is empty/unreadable is NOT counted as
-    sharing `branch` (the unknown-branch case degrades toward publishing,
-    per the plan body's explicit instruction) -- an undercount here only
-    means this branch pushes a little earlier than a perfectly-informed
-    predicate would, never that a solo branch is held back forever.
-
-    Returns None (not a count) if the predicate itself could not be
-    resolved (sessions root walk raised) -- AC14a precondition (3) unmet;
-    the caller pushes immediately rather than guessing.
-    """
-    try:
-        sessions_root = session_core.sessions_dir(repo_root)
-        if not sessions_root:
-            return 0
-        live_ids = session_liveness.live_session_ids(repo_root)
-        count = 0
-        for sid in live_ids:
-            sdir = str(Path(sessions_root) / sid)
-            peer_branch = session_core.read_meta_field(sdir, "branch")
-            if peer_branch and peer_branch == branch:
-                count += 1
-        return count
-    except Exception:
-        return None
-
-
-def _peer_commit_within_window(repo_root: str, branch: str, now: float) -> bool | None:
-    """True if a commit from a session OTHER than this process's own landed on
-    `branch` within the last `_HOLD_WINDOW_SECONDS`.
-
-    ### WHAT THIS IS AND IS NOT. This is a base-rate PROXY for "the hold's
-    retraction promise will be gone before the hold finishes sleeping" -- it is
-    NOT a measurement of that. It cannot be: at the moment `_hold_window` runs,
-    the commit being protected IS the branch tip, so it has no followers yet by
-    construction, and the followers that would destroy retractability are in the
-    future. A descendant walk here would therefore return "no followers" always
-    and hold always, which is exactly the behaviour this predicate exists to
-    narrow. So it measures recent PEER ACTIVITY on the branch and infers the
-    rest from the base rate below.
-
-    Known bias, stated because the name of the thing it proxies is stronger than
-    what it observes: peer commits inside the window are counted whether or not
-    they are ancestors of the commit being protected. A peer commit at T=0 on an
-    otherwise idle branch, ours at T=100, causes the hold to be skipped even
-    though ours is genuinely still retractable. The skip is the safe direction
-    (publish sooner), and a branch with any peer commit in the last five minutes
-    is one where a follower inside the next five is the overwhelming base case --
-    but "a quiet shared branch still holds" is true of a branch quiet for the
-    whole window, not of one that merely has no followers yet.
-
-    Commits with no Session-Id trailer are not counted as peer commits. Plumbing
-    commits drop that trailer, so this under-detects peers and, where it does,
-    errs toward holding -- the pre-existing behaviour.
-
-    ### DECISION (measured 2026-08-20, work/machine-a/2026-08-18to20, trailing
-    36h): 2079 commits, median inter-commit gap 20s -- a median of 10 peer
-    commits land on top of any given commit within the 300s hold window, and
-    only 6 of 2079 commits had zero followers in that window. The hold's
-    stated purpose (see the section comment above this function) is to avoid
-    publishing a trivially-reversible bad commit within ~60s of it landing --
-    a retraction window. On a branch this busy that window doesn't exist: by
-    the time the hold would wake, peers have already built on the commit it
-    was protecting, and rewinding it would rewrite their work too. The
-    `_shared_branch_live_count(...) > 1` trigger inverts under load --
-    sharing is exactly what makes retraction impossible, not what threatens
-    it -- so this predicate narrows the hold toward the case where holding can
-    still plausibly deliver on its promise.
-
-    Does exactly ONE bounded `git log --since=...` call -- no per-commit
-    spawning; this repo's amplification gate
-    (`coordinator_core/tests/test_no_unbatched_per_item_git_spawn.py`)
-    forbids that shape. Reuses the `%x1f`-delimited Session-Id trailer format
-    `session_attribution.py` already established
-    (`bulk_trailer_session_map`/`trailer_foreign_shas`) rather than inventing
-    a new parsing shape -- those functions aren't called directly because
-    both append a single revision-arg string after the format flag, and that
-    slot can't also carry this call's `--since=...` bound.
-
-    Returns None -- not False -- if the predicate could not be evaluated
-    (this process's own session id is unresolvable, or the `git log` call
-    fails/times out). `_hold_window` treats None as "push", matching AC14a's
-    existing fail-toward-publishing posture for every other precondition
-    here: a predicate that holds when it can't prove retraction is already
-    lost would reintroduce the exact starvation this function removes.
-    """
-    own_session_id = session_core.resolve_session_id(repo_root)
-    if not own_session_id:
-        return None
-    since_iso = datetime.fromtimestamp(
-        now - _HOLD_WINDOW_SECONDS, tz=timezone.utc
-    ).isoformat()
-    output = _run_git(
-        repo_root,
-        [
-            "log", "--no-merges",
-            f"--since={since_iso}",
-            "--format=%H%x1f%(trailers:key=Session-Id,valueonly)",
-            branch,
-        ],
-    )
-    if output is None:
-        return None
-    for line in output.splitlines():
-        if "\x1f" not in line:
-            continue
-        _, trailer = line.split("\x1f", 1)
-        trailer = trailer.strip()
-        if trailer and trailer != own_session_id:
-            return True
-    return False
-
-
-_ANCESTOR_WALK_MAX_COMMITS = 20000
-"""Bound on the spawn-free ancestry walk in `_remote_is_ancestor_no_spawn` --
-well past any honest divergence check on this hot path (the commit being
-tested is recent, not a full-history rebase), and a bound only a genuinely
-pathological or corrupt object graph would ever reach. Exists so a walk that
-cannot find `remote_sha` terminates in bounded time rather than degrading
-into an unbounded local-disk crawl on every commit."""
-
-
-def _read_ref_sha_no_spawn(common_dir: Path, ref: str) -> str | None:
-    """Read `ref`'s sha spawn-free: loose ref file first, `packed-refs`
-    fallback -- the same two-step lookup `_canonical_branch_case` already
-    uses for `refs/heads/*`, generalized to any ref path (here: `refs/heads/
-    <branch>` and `refs/remotes/origin/<branch>`).
-
-    Returns None if the ref does not resolve at all (no loose file, no
-    packed-refs entry) -- the caller treats an unresolvable ref as "no
-    answer" (e.g. no remote-tracking ref yet on a brand-new branch), never
-    as a divergence signal either way.
-    """
-    ref_path = common_dir / ref
-    try:
-        text = ref_path.read_text(encoding="utf-8").strip()
-        if text and not text.startswith("ref:"):
-            return text
-    except OSError:
-        pass
-
-    try:
-        packed_text = (common_dir / "packed-refs").read_text(encoding="utf-8")
-    except OSError:
-        return None
-    for line in packed_text.splitlines():
-        line = line.strip()
-        if not line or line[0] in "#^":
-            continue
-        parts = line.split(" ", 1)
-        if len(parts) != 2:
-            continue
-        if parts[1].strip() == ref:
-            return parts[0].strip()
-    return None
-
-
-def _remote_is_ancestor_no_spawn(common_dir: Path, remote_sha: str, local_sha: str) -> bool | None:
-    """Spawn-free mirror of `_is_ancestor(repo_root, remote_sha, local_branch)`
-    for this one call site: is `remote_sha` reachable by walking `local_sha`'s
-    parent chain, read directly off the object store via
-    `coordinator_core.git.git_objects._read_object` (packs then loose, no
-    `git` subprocess)?
-
-    Returns None -- not False -- when the walk cannot reach a definitive
-    answer (a commit object is missing/corrupt, a non-commit object turns up
-    where a parent was expected, or the walk exceeds
-    `_ANCESTOR_WALK_MAX_COMMITS`). `_branch_diverged_no_spawn` treats None
-    the same as "not diverged", the same fail-toward-publishing direction
-    every other precondition in this module already takes on an
-    indeterminate answer.
-    """
-    from coordinator_core.git.git_objects import _read_object
-
-    if remote_sha == local_sha:
-        return True
-
-    seen: set[str] = set()
-    frontier = [local_sha]
-    steps = 0
-    while frontier:
-        sha = frontier.pop()
-        if sha in seen:
-            continue
-        seen.add(sha)
-        steps += 1
-        if steps > _ANCESTOR_WALK_MAX_COMMITS:
-            return None
-        obj = _read_object(common_dir, sha)
-        if obj is None:
-            return None
-        kind, payload = obj
-        if kind != "commit":
-            return None
-        for line in payload.split(b"\n"):
-            if not line:
-                break
-            if line.startswith(b"parent "):
-                parent = line[len(b"parent "):].decode("ascii", "replace").strip()
-                if parent == remote_sha:
-                    return True
-                frontier.append(parent)
-    return False
-
-
-def _branch_diverged_no_spawn(repo_root: str, branch: str) -> bool:
-    """Spawn-free divergence test for `_hold_window`'s divergence gate (C4):
-    True iff the remote's last-known tip is NOT an ancestor of the local
-    branch -- the mirror of "local not an ancestor of remote", i.e. a push
-    on this branch is guaranteed to be rejected non-fast-forward before it
-    is ever issued.
-
-    Reads `refs/remotes/origin/<branch>` (with a `packed-refs` fallback)
-    UNFETCHED -- this runs at the head of `run_push_with_retry`, before any
-    fetch in this process, so the remote-tracking ref may be stale. That is
-    acceptable and deliberate: staleness only biases this predicate toward
-    False (an actually-diverged branch reads as not-yet-diverged) -- the
-    safe direction, immediate push, i.e. today's behaviour -- never the
-    reverse.
-
-    Returns False (not diverged -- push) whenever any precondition is
-    unmet: no remote-tracking ref yet (first push on a new branch), no
-    resolvable local ref, or the ancestry walk itself can't reach a
-    definitive answer. Every one of these mirrors the fail-toward-
-    publishing posture `_shared_branch_live_count`/`_peer_commit_within_
-    window` already take on their own indeterminate cases.
-    """
-    try:
-        common_dir = resolve_git_common_dir(repo_root)
-    except OSError:
-        return False
-
-    remote_sha = _read_ref_sha_no_spawn(common_dir, f"refs/remotes/origin/{branch}")
-    if not remote_sha:
-        return False
-
-    local_sha = _read_ref_sha_no_spawn(common_dir, f"refs/heads/{branch}")
-    if not local_sha:
-        return False
-
-    return _remote_is_ancestor_no_spawn(common_dir, remote_sha, local_sha) is False
-
-
-def _hold_window(repo_root: str, branch: str) -> bool:
-    """Decide whether `run_push_with_retry` should push NOW or has already
-    delegated to an existing holder.
-
-    Returns True when the caller should proceed to attempt the push
-    immediately after this call returns -- covering four cases: (a) the
-    branch is solo (<=1 live session sharing it), (b) the live-session
-    predicate could not be resolved (fail toward publishing -- AC14a
-    precondition 3 unmet), (b2) the branch IS shared and a foreign-session
-    commit landed within the hold window, which `_peer_commit_within_window`
-    treats as a base-rate proxy for the retraction promise being gone before
-    the hold could finish sleeping (see that function for what the proxy does
-    and does not observe), and (c)
-    this call became the new/takeover holder, slept out its window (or
-    skipped the sleep under the test seam), and now owns the push.
-
-    Returns False only when a LIVE, non-stale pending record already covers
-    this exact branch (AC14a precondition 2 unmet) -- this call exits
-    without pushing at all; the incumbent holder publishes the branch tip
-    at wake time, a superset of what this call would have pushed (AC14's
-    coalescing-token contract), so a second commit inside one window never
-    stacks a second sleeper.
-
-    Also returns False when (d) `_branch_diverged_no_spawn` finds the
-    remote's last-known tip is not an ancestor of `branch` -- a push here is
-    guaranteed non-fast-forward before it is even attempted, so this writes/
-    updates the pending record and defers instead of pushing into that wall
-    (C4). Checked AFTER the live-record gate above and BEFORE the peer-
-    commit bypass below, per that predicate's own placement note.
-
-    AC14a precondition (1) -- the record was written and read back
-    successfully -- is enforced by `_write_pending_record`'s return value:
-    a failed write pushes immediately rather than sleeping un-recorded.
-
-    Precondition (4) -- "the platform's detach was verified at install
-    time" -- REMAINS a docstring argument, not a runtime boolean, after
-    deliberately trying and rejecting three concrete candidates (2026-08-03,
-    AC14a chunk):
-      - A "was this call reached via a detached child" env marker, set by
-        `_detach_and_run`'s fork child / Windows respawn and by
-        `spawn_detached_push`'s respawn, checked here. Rejected: every
-        existing hold-window test (`test_hold_window_*`,
-        `test_no_sleep_env_skips_backoff_but_not_the_hold_decision`, the
-        loss-path and coalescing tests) calls `_hold_window` /
-        `run_push_with_retry` DIRECTLY, in the test process, with no
-        marker set and without going through `_detach_and_run` or
-        `spawn_detached_push` at all -- a gate that requires the marker
-        would read every one of those calls as precondition-(4)-unmet and
-        skip straight to an immediate push, silently deleting the
-        write-then-sleep behavior those tests pin. The HARD CONSTRAINT that
-        this coverage keep passing UNCHANGED rules this candidate out; the
-        alternative (special-casing "am I under pytest" in production code)
-        is not a real precondition, it is a test detector wearing one.
-      - `os.getsid(0) == os.getpid()` (POSIX session-leader check, true
-        after the fork child's own `os.setsid()`). Rejected for the same
-        reason: unrelated to whether pytest's own process happens to be a
-        session leader on a given CI box/terminal, so it is not a stable
-        signal either way, and a flaky gate is worse than a documented one.
-      - A literal install-time artifact (e.g. a stamped file written by the
-        installer after running the wire-path push-to-a-real-remote check
-        `test_wire_path_respawn_actually_pushes_to_a_real_remote` exercises
-        in-repo). Rejected because no such artifact exists anywhere in this
-        install chain today (`docs/install/agent-install-manifest.json`,
-        `scripts/setup.py` -- neither stamps or checks one), and inventing
-        one is explicitly out of scope for this chunk.
-    Conclusion: this function only ever runs inside the already-detached
-    child in PRODUCTION (this call site is the HEAD of
-    `run_push_with_retry`, which itself only ever runs post-detach or under
-    the explicit `COORDINATOR_AUTO_PUSH_SYNC` test seam), and that detach's
-    own import/PYTHONPATH correctness is `_respawn_env`'s contract (fixed
-    2026-08-03, prerequisite to this chunk). There is no runtime signal that
-    distinguishes a legitimate direct call (test, or a future in-process
-    caller under the sync seam) from an illegitimate one without either
-    breaking existing coverage or faking a test-only backdoor -- precondition
-    (4) stays a structural/install-time argument, not a fourth gated boolean.
-
-    NEVER called from `branch_gate()` -- that runs in the PARENT process
-    that `git commit` waits on synchronously; a hold there would block
-    every commit for the full window. This lives at the head of
-    `run_push_with_retry` instead, so the `--branch` engine path (which
-    skips `branch_gate()` entirely per DEC-1) inherits the same behaviour
-    for free.
-    """
-    now = time.time()
-
-    existing = _read_pending_record(repo_root)
-    if (
-        existing is not None
-        and existing.get("branch") == branch
-        and not _record_is_stale(existing, now)
-    ):
-        return False
-
-    # Divergence gate (C4). Sits ABOVE the live-count gate, not below it:
-    # a push whose rejection is already determined has no crash-insurance
-    # value to trade away, so the solo case has nothing to gain by falling
-    # through to it. It stayed below until 2026-08-27, which made this gate
-    # unreachable for exactly the branch it exists for -- a solo session on
-    # a diverged branch (or one whose live-count predicate is unresolvable)
-    # short-circuited to `return True` and pushed into the wall on every
-    # subsequent commit. Observed cross-repo: DoE-claude
-    # `work/machine-a/2026-08-22` logged 22 identical non-fast-forward
-    # failures over an hour, one per commit, where this gate would have
-    # produced a single deferred record. The gate must still run AFTER the
-    # live-record check above -- testing a bypass-shaped predicate ahead of
-    # an incumbent holder's record can push and unlink a still-sleeping
-    # holder's coalescing token (the regression `_peer_commit_within_window`'s
-    # own placement note describes).
-    #
-    # Spawn-free (AC13) and fetch-free -- see `_branch_diverged_no_spawn`'s
-    # docstring for why a stale remote-tracking read is safe here (it biases
-    # only toward False, i.e. toward today's immediate-push behaviour).
-    if _branch_diverged_no_spawn(repo_root, branch):
-        sha = _run_git(repo_root, ["rev-parse", branch])
-        hold_until = now + _HOLD_WINDOW_SECONDS
-        wrote = _write_pending_record(repo_root, branch, sha, hold_until, os.getpid())
-        # A failed write is AC14a precondition (1) unmet -- push immediately
-        # rather than deferring un-recorded, same fallback `_write_pending_
-        # record`'s own docstring already documents for the non-diverged
-        # holder path below.
-        if not wrote:
-            return True
-        return False
-
-    live_count = _shared_branch_live_count(repo_root, branch)
-    if live_count is None or live_count <= 1:
-        return True
-
-    # Deliberately BELOW the live-record check (now hoisted to the head of
-    # this function, above the divergence gate that must follow it): an incumbent holder's record is
-    # AC14's coalescing token, and `run_push_with_retry`'s success path clears
-    # it. Testing this predicate first let a hold-skipping call push and unlink
-    # a still-sleeping incumbent's record, leaving nothing for drain_pending_push
-    # or boot_sweep to take over if that incumbent was then killed.
-    #
-    # `is not False`, not a truthy check: None (predicate unresolvable) reads
-    # the same as True here -- both push immediately. Only an explicit False
-    # (no peer commit in the window, proven by a clean git log read) falls
-    # through to the hold logic below.
-    if _peer_commit_within_window(repo_root, branch, now) is not False:
-        return True
-
-    sha = _run_git(repo_root, ["rev-parse", branch])
-    hold_until = now + _HOLD_WINDOW_SECONDS
-    wrote = _write_pending_record(repo_root, branch, sha, hold_until, os.getpid())
-    if not wrote:
-        return True
-
-    if not _no_sleep():
-        time.sleep(_HOLD_WINDOW_SECONDS)
-
-    return True
 
 
 def _branch_resolves_locally(repo_root: str, branch: str) -> bool:
@@ -2015,7 +1585,7 @@ def _drain_dead_ref_record(repo_root: str, record: dict, branch: str) -> None:
                     "(branch rename) -- pushing.",
                     file=sys.stderr,
                 )
-                run_push_with_retry(repo_root, current_branch, _skip_hold=True)
+                run_push_with_retry(repo_root, current_branch)
                 return
             # _write_pending_record failed -- same AC14a precondition-(1)
             # reasoning as case 2's own fallthrough below: never trust a
@@ -2055,7 +1625,7 @@ def _drain_dead_ref_record(repo_root: str, record: dict, branch: str) -> None:
                 "pushing.",
                 file=sys.stderr,
             )
-            run_push_with_retry(repo_root, current_branch, _skip_hold=True)
+            run_push_with_retry(repo_root, current_branch)
             return
         # _write_pending_record failed (AC14a's own precondition-(1)
         # contract: a failed write is never trusted) -- fall through to the
@@ -2121,9 +1691,10 @@ def drain_pending_push(repo_root: str) -> None:
     on every commit once `hold_until` has passed, do so forever (AC5-AC7).
 
     When the branch DOES resolve, behavior is unchanged from before AC4-AC7:
-    pushed synchronously via `run_push_with_retry(..., _skip_hold=True)` --
-    bypassing `_hold_window` entirely, since this call IS the drain, not a
-    new hold decision -- and that call's own success path removes the
+    pushed synchronously via `run_push_with_retry(repo_root, branch)` --
+    this call IS the drain, not a new hold decision (no code path creates
+    a new hold anymore -- `_hold_window`, the only caller that did, is
+    gravestoned by C8) -- and that call's own success path removes the
     record (`_clear_pending_record_if_branch`), so a push that fails here
     leaves the record in place for the next drain point to retry, exactly
     the "delay, never lose" contract this record exists to provide.
@@ -2144,7 +1715,7 @@ def drain_pending_push(repo_root: str) -> None:
         if not _branch_resolves_locally(repo_root, branch):
             _drain_dead_ref_record(repo_root, record, branch)
             return
-        run_push_with_retry(repo_root, branch, _skip_hold=True)
+        run_push_with_retry(repo_root, branch)
     except Exception:
         pass
 
@@ -2209,7 +1780,17 @@ def _refresh_engine_currency_cache(repo_root: str) -> None:
         return
 
 
-def run_push_with_retry(repo_root: str, branch: str, *, _skip_hold: bool = False) -> None:
+# Review: overengineering-reviewer Finding 6 -- the `if not _skip_hold:`
+# block is deleted along with the now-vacuous `_skip_hold` parameter: every
+# surviving call site already passed `_skip_hold=True` (the block's own
+# comment said so), so this changes no production behavior. This removes
+# run_push_with_retry's only call site of `_refresh_engine_currency_cache`
+# and of `drain_pending_push` -- neither call ever executed in production
+# either (same reachability trace), so `_refresh_engine_currency_cache` is
+# left defined (it has its own direct test coverage in
+# test_resolve_claude_klabauter_currency_signal.py, out of this dispatch's scope) as
+# a re-home/gravestone candidate for a follow-on chunk, not deleted here.
+def run_push_with_retry(repo_root: str, branch: str) -> None:
     """Attempt the push up to MAX_ATTEMPTS times, retrying retryable classes
     with a class-appropriate backoff. Logs a forensic failure entry and
     returns (never raises) if all attempts are exhausted or a non-retryable
@@ -2232,72 +1813,7 @@ def run_push_with_retry(repo_root: str, branch: str, *, _skip_hold: bool = False
     a no-op in every repo but DoE-claude). Never fires on failure or on a
     skipped push -- both of this function's `return` sites for a failed/
     exhausted push are left untouched.
-
-    Head-of-function hold (AC14): unless `_skip_hold` is set (the drain
-    path, `drain_pending_push`, which IS the hold's own resolution, not a
-    new hold decision), `_hold_window` decides whether to proceed now or
-    exit immediately because a live peer record already covers this branch
-    -- see that function's docstring for the full contract. This is
-    deliberately NOT in `branch_gate()`: that runs in the PARENT process
-    `git commit` waits on synchronously, and a multi-minute hold there would
-    block every commit for the window; this function only ever runs in the
-    already-detached child (or under the `COORDINATOR_AUTO_PUSH_SYNC` test
-    seam), so the sleep costs nothing the caller is waiting on. Both
-    success sites below clear the pending record via
-    `_clear_pending_record_if_branch` -- removed only after a push that
-    actually succeeded (AC14), never on failure or a retry-in-progress.
     """
-    if not _skip_hold:
-        # Refresh the engine-currency verdict the forwarder door reads. Placed
-        # HERE, and nowhere else, for one property this function's own
-        # docstring already states: it "only ever runs in the already-detached
-        # child", so the 15.6ms of process time (measured k=5, 2026-08-28) is
-        # paid by a process nobody is waiting on, never by the `git commit` the
-        # parent hook is holding up. `_skip_hold` marks the drain's own nested
-        # call, so this cannot fire twice for one commit.
-        #
-        # Ahead of the push, not after it, and not gated on push success: the
-        # COMMIT is the event that invalidates the verdict. A commit that fails
-        # to push still changed what the door should say.
-        _refresh_engine_currency_cache(repo_root)
-
-        # The free drain point (AC14): every commit's own post-commit hook
-        # already respawns a detached child that ends up here for ITS OWN
-        # branch -- draining any due/stale record (this branch's own from a
-        # crashed prior hold, or another branch's leftover) piggybacks on
-        # that spawn at zero extra process cost. `_skip_hold=True` marks
-        # the drain's OWN nested call, so this can never recurse: the drain
-        # path pushes once and returns, it never drains again.
-        #
-        # `pending_before` is read BEFORE the drain to detect the case
-        # where the record drain just actioned is THIS call's own branch
-        # (review: coordinator:review-code, Finding 2, 2026-08-19): when
-        # `wsc_tail._deferred_publisher_backstop` writes an already-due
-        # record moments before spawning this very push, `drain_pending_push`
-        # below reads it back, does a nested `_skip_hold=True` push, and
-        # clears it on success -- all before `_hold_window` gets a look.
-        # Without this check, `_hold_window` then finds no record for
-        # `branch`, mistakes this outer call for a brand-new holder on a
-        # shared branch, and writes a fresh record + sleeps out a fully
-        # redundant `_HOLD_WINDOW_SECONDS` for a push that already landed.
-        pending_before = _read_pending_record(repo_root)
-        drain_pending_push(repo_root)
-        if (
-            pending_before is not None
-            and pending_before.get("branch") == branch
-            and _read_pending_record(repo_root) is None
-        ):
-            # The drain just cleared (pushed) or dropped (already-superseded
-            # / orphaned) the record for THIS branch -- either way there is
-            # nothing left for this call to publish or hold for, so return
-            # rather than re-entering `_hold_window` as a phantom fresh
-            # holder. A record still present here (failed push, or a live
-            # incumbent's own untouched hold) falls through to the normal
-            # `_hold_window` decision below, unchanged.
-            return
-        if not _hold_window(repo_root, branch):
-            return
-
     windows_bash = is_windows_bash()
     # `git remote get-url origin` used to run here to derive `ssh_remote`. NOTHING
     # consumes that flag any more, on any path: the 2026-08-06 no-shell-spawns
@@ -2398,631 +1914,31 @@ def run_push_with_retry(repo_root: str, branch: str, *, _skip_hold: bool = False
 
 
 # ---------------------------------------------------------------------------
-# Async self-detach
+# Async self-detach (GRAVESTONED 2026-08-30, docs/plans/2026-08-30-who-
+# pushes-and-when.md C8)
 # ---------------------------------------------------------------------------
 #
-# The bash shim previously did `nohup bash "$SCRIPT" … &` for async push (so
-# the commit returns immediately on large repos). The new sh shim `exec`s
-# python directly with NO shell `&`, so async must live INSIDE this module.
-#
-# POSIX: os.fork() -- parent returns immediately (commit hook exits), child
-# performs the push and exits on its own. Windows has no fork(); instead we
-# re-spawn ourselves via subprocess.Popen with DETACHED_PROCESS |
-# CREATE_NEW_PROCESS_GROUP and pass --no-async (via env seam) so the child
-# runs synchronously while the parent returns immediately.
-#
-# This is the part of the port most needing live Windows verification -- the
-# spike handoff (state/handoffs/2026-07-15_164501_auto-push-naked-python-reimpl.md)
-# names it explicitly. Gated behind --async/--no-async / COORDINATOR_AUTO_PUSH_SYNC
-# so tests always run synchronously (no forking under pytest).
+# Review: coordinator:code-reviewer (P3, 2026-08-30) -- this header used to
+# describe the os.fork()/Windows subprocess.Popen re-spawn machinery
+# (`_detach_and_run`, `spawn_detached_push`) in the present tense. Both are
+# gravestoned along with the per-commit respawn they implemented; only
+# `_resolve_python_exe()` survives beneath this header now, reused by
+# `_invoke_cockpit_publish` to run the DoE-owned publish script with the
+# repo's own interpreter -- see that function's own docstring, which
+# correctly dates the gravestoning.
 # ---------------------------------------------------------------------------
 
 def _resolve_python_exe() -> str | None:
-    """Resolve the interpreter to respawn with, shared by both respawn-Popen
-    call sites (`_detach_and_run`'s Windows leg and `spawn_detached_push`) so
-    a future change to the fallback order can't be applied to only one site.
+    """Resolve the interpreter used by `_invoke_cockpit_publish` to run the
+    DoE-owned publish script with the repo's own interpreter.
+
+    Formerly also shared by the per-commit respawn call sites
+    (`_detach_and_run`'s Windows leg and `spawn_detached_push`), both
+    gravestoned 2026-08-30 (docs/plans/2026-08-30-who-pushes-and-when.md
+    C8) once the post-commit hook stopped invoking `auto_push` at all (C6/
+    C7) -- this is now this function's sole caller.
     """
     import shutil
 
     return sys.executable or shutil.which("python3") or shutil.which("python")
 
-
-def _claude_klabauter_package_root() -> str:
-    """Directory containing the `coordinator_core` package, for the
-    respawned child's PYTHONPATH.
-
-    Both respawn call sites launch the child by resolved ABSOLUTE SCRIPT
-    PATH, never `-m` (see each call site's comment for why `-m` is unsafe:
-    the hook fires with cwd = the committing fleet repo, not this one, and a
-    module-relative import resolves against the caller's cwd). Running the
-    script directly puts only `coordinator_core/hooks/` on `sys.path[0]`, so
-    `coordinator_core` itself is not importable regardless of the child's
-    cwd -- this is the root cause of the 2026-08-01 regression
-    (ModuleNotFoundError at the top-level `from coordinator_core.git...`
-    import, silently swallowed because the detached child's stderr is
-    DEVNULL'd). Injecting this repo's root into PYTHONPATH fixes the import
-    without touching the `-m` invariant the existing regression tests
-    protect.
-    """
-    return str(Path(__file__).resolve().parents[2])
-
-
-def _respawn_env() -> dict:
-    """Build the respawned child's environment: sync seam + PYTHONPATH.
-
-    Shared by both respawn-Popen call sites (mirrors `_resolve_python_exe`
-    and `_windows_detached_flags`'s own sharing rationale) so a future change
-    to one can't silently diverge from the other. Prepends
-    `_claude_klabauter_package_root()` ahead of any pre-existing `PYTHONPATH` --
-    never replaces it -- so a fleet repo that already sets its own
-    PYTHONPATH for unrelated reasons keeps that value reachable too.
-    """
-    env = dict(os.environ)
-    env[_ENV_SYNC] = "1"
-    package_root = _claude_klabauter_package_root()
-    existing = env.get("PYTHONPATH", "")
-    env["PYTHONPATH"] = (
-        package_root if not existing else f"{package_root}{os.pathsep}{existing}"
-    )
-    return env
-
-
-def _open_respawn_stderr_log(repo_root: str, branch: str):
-    """Open a durable, append-only sink for the respawned child's stderr.
-
-    The respawned child's stdio is otherwise entirely DEVNULL'd by design
-    (see `_disown_stdio`'s docstring for the pipe-hold hazard that mandates
-    disowning it) -- which is exactly what let the 2026-08-01
-    ModuleNotFoundError regression above run silently for two days: the
-    child died at import, its exit code was never observed (the parent
-    returns immediately for push-time latency), and its stderr went nowhere
-    an operator could see. Redirecting stderr to a plain FILE instead of a
-    PIPE or DEVNULL gives the next invocation or an operator a durable trail
-    without console noise -- and unlike a PIPE, a FILE is never read back by
-    this process, so it can never reintroduce the pipe-hold defect
-    `_disown_stdio` guards against (a full OS pipe buffer blocking the
-    child). Lives alongside `push-failures.log` in the git COMMON dir (same
-    `resolve_git_common_dir` target, so linked worktrees/submodules share one
-    log). Returns None (caller falls back to DEVNULL) if the log can't be
-    opened -- best-effort only; must never block or fail the respawn.
-    """
-    try:
-        git_dir = resolve_git_common_dir(repo_root)
-        git_dir.mkdir(parents=True, exist_ok=True)
-        log_path = git_dir / "auto-push-respawn-stderr.log"
-        fh = open(log_path, "a", encoding="utf-8", newline="\n")
-        stamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-        fh.write(f"--- respawn {stamp} branch={branch} ---\n")
-        fh.flush()
-        return fh
-    except OSError:
-        return None
-
-
-def _windows_detached_flags() -> int:
-    """Compose the Windows-only detached-process creation flags, shared by
-    both respawn-Popen call sites (see `_resolve_python_exe`'s docstring for
-    why this is factored out rather than duplicated).
-
-    negative-spec -- DETACHED_PROCESS MUST NOT be reintroduced here, and
-    ORing it with CREATE_NO_WINDOW is NOT a middle ground: Win32 documents
-    CREATE_NO_WINDOW as IGNORED whenever DETACHED_PROCESS or
-    CREATE_NEW_CONSOLE is also set. This function carried exactly that
-    combination and therefore read as console-suppressed while behaving as
-    bare DETACHED_PROCESS -- measured as 6 visible `conhost.exe` windows
-    across 3 spawns, versus 0 once DETACHED_PROCESS was dropped.
-
-    The mechanism is inheritance, and it is why one flag fixes a whole
-    subtree: DETACHED_PROCESS leaves the child with no console, so every
-    descendant (`git`, each hook interpreter) allocates its own WINDOWED
-    console. CREATE_NO_WINDOW gives the child a WINDOWLESS console, which
-    descendants inherit and never need to reallocate.
-
-    Detached lifetime is preserved and was measured, not assumed -- Windows
-    does not reap children on parent exit, so the respawned child still
-    outlives a hard-killed parent. Ctrl-C isolation stays with
-    CREATE_NEW_PROCESS_GROUP.
-
-    Measurement: `state/audits/2026-08-21-detached-process-console-window-storm.md`.
-    """
-    subprocess = _subprocess()
-    flags = 0
-    flags |= getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
-    flags |= getattr(subprocess, "CREATE_NO_WINDOW", 0)
-    return flags
-
-
-def _disown_stdio() -> None:
-    """Redirect the fork child's stdin/stdout/stderr to os.devnull.
-
-    Without this, the child inherits the parent `git commit` process's
-    stdout/stderr pipes. The engine's `_git()` runs `subprocess.run(...,
-    capture_output=True)`, which blocks reading those pipes until EOF -- so a
-    detached-in-name-only child that still holds the write end of the pipe
-    open keeps `git commit` blocked for its entire push+retry lifetime. Never
-    redirect to the forensic log (`.git/push-failures.log`): that file is
-    written by `log_failure()`'s structured appends, and raw child stdio
-    pointed at it would interleave and corrupt those writes.
-    """
-    devnull_fd = os.open(os.devnull, os.O_RDWR)
-    try:
-        for fd in (0, 1, 2):
-            os.dup2(devnull_fd, fd)
-    finally:
-        if devnull_fd > 2:
-            os.close(devnull_fd)
-
-
-def _detach_and_run(repo_root: str, branch: str) -> None:
-    """Run the push asynchronously so the calling commit hook returns immediately."""
-    if hasattr(os, "fork"):
-        pid = os.fork()
-        if pid > 0:
-            # Parent: return immediately, letting the commit hook exit.
-            return
-        # Child: detach from the controlling terminal/session where possible,
-        # then perform the push and exit without propagating back to the
-        # original hook process.
-        try:
-            os.setsid()
-        except (AttributeError, OSError):
-            pass  # best-effort detach only (no setsid on Windows / already a session leader) -- push still runs either way
-        try:
-            _disown_stdio()
-        except Exception as exc:
-            # If stdio disown itself fails, do NOT let the exception unwind
-            # into main()'s top-level except-Exception handler -- the child's
-            # stdio hasn't been redirected yet, so that handler would print to
-            # stderr and spawn a git subprocess while still holding the
-            # parent's pipe open, reintroducing the exact pipe-hold defect
-            # this chunk exists to close. Exit immediately instead. (Review:
-            # code-reviewer -- Finding 4.)
-            #
-            # But exiting silently left this guard with zero forensic trail
-            # (cross-repo/inbox/2026-07-23-claude-central-em-enum-parity-consumed-and-fork-child-silence-reply.md).
-            # Log a row first -- route/err_class/attempts are hardcoded
-            # literals, never computed via _run_git/route_label/is_windows_bash,
-            # because a subprocess spawn here would itself hold the still-open
-            # parent pipe for the push+retry lifetime, the exact defect above.
-            # log_failure()'s own OSError fallback prints to sys.stderr (the
-            # still-held parent pipe too) -- that's acceptable here because
-            # it's a bounded two-line write immediately followed by
-            # os._exit(1), not a pipe held open for a whole retry lifetime.
-            try:
-                try:
-                    provenance = _module_provenance()
-                except Exception:
-                    provenance = "module=<unresolved> interp=<unknown> python=<unknown>"
-                log_failure(
-                    repo_root,
-                    branch,
-                    "direct push",
-                    "unknown",
-                    0,
-                    f"internal error in _disown_stdio [{provenance}]: "
-                    + f"{type(exc).__name__}: {exc}"[:200],
-                    traceback.format_exc(),
-                )
-            except Exception:
-                # Diagnostics must never be the thing that blocks os._exit(1).
-                pass
-            os._exit(1)
-        try:
-            run_push_with_retry(repo_root, branch)
-        finally:
-            os._exit(0)  # never returns -- child terminates here
-
-    # Windows: no fork(). Re-spawn self as a fully detached child process with
-    # the sync seam set, then return immediately from the parent.
-    env = _respawn_env()
-    detached_flags = _windows_detached_flags()
-    python_exe = _resolve_python_exe()
-    if not python_exe:
-        # No interpreter to respawn with -- fall back to a synchronous run
-        # rather than silently dropping the push.
-        run_push_with_retry(repo_root, branch)
-        return
-    # Respawn by RESOLVED ABSOLUTE PATH, never `-m`. The hook fires in EVERY
-    # fleet repo, whose cwd is the committing repo (NOT claude-klabauter), so
-    # `-m coordinator_core.hooks.auto_push` raises ModuleNotFoundError there --
-    # and because the respawn is a detached child, that failure is INVISIBLE:
-    # the commit succeeds, the push never happens, nothing is logged. That is
-    # the exact silent-no-op class this port exists to eliminate, and it is the
-    # default path on Windows (async_mode defaults True). Verified empirically
-    # 2026-07-20 on win32: `-m` from cwd=X:/example-retrieval-repo ->
-    # "No module named 'coordinator_core'"; absolute path -> clean exit 0.
-    # This mirrors the sh shim's own exec-by-abspath contract (Artifact A /
-    # DoE cutover memo contract point 3) -- keep the two in agreement.
-    #
-    # 2026-08-01 follow-up regression: the module later grew its own
-    # top-level `from coordinator_core.git.git_dir import
-    # resolve_git_common_dir`, which the abspath respawn above cannot
-    # satisfy on its own -- running THIS file directly puts only
-    # `coordinator_core/hooks/` on `sys.path[0]`, so `coordinator_core`
-    # itself isn't importable regardless of cwd. `_respawn_env()` fixes this
-    # by injecting this repo's root into the child's PYTHONPATH (see its
-    # docstring) rather than switching to `-m`, which would reintroduce the
-    # cwd-dependence this comment already documents. Verified empirically
-    # 2026-08-03: pre-fix, `python <abspath>` from any cwd ->
-    # `ModuleNotFoundError: No module named 'coordinator_core'`, exit 1,
-    # silently swallowed by the DEVNULL'd stderr below; post-fix, clean
-    # exit 0. See `test_spawn_detached_push_child_survives_import_when_spawned_outside_claude_klabauter`.
-    stderr_log = _open_respawn_stderr_log(repo_root, branch)
-    subprocess = _subprocess()
-    try:
-        subprocess.Popen(
-            [python_exe, os.path.abspath(__file__), "--repo-root", repo_root],
-            env=env,
-            # Detached child: never inherit the hook's stdin/stdout/stderr. An
-            # inherited-but-invalid stdin handle under CREATE_NO_WINDOW hangs
-            # _execute_child on nt (same trap coverage.py:122 documents); an
-            # un-redirected stdout keeps the parent's pipes open across the
-            # push+retry lifetime, blocking any capture_output=True reader of
-            # the parent (the pipe-hold defect this chunk exists to close).
-            # stderr goes to a durable FILE (see `_open_respawn_stderr_log`)
-            # instead of DEVNULL -- a file, unlike a pipe, is never read back
-            # by this process, so it carries none of that pipe-hold hazard,
-            # while still surfacing an import-time death instead of hiding
-            # it. Falls back to DEVNULL if the log couldn't be opened.
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=stderr_log if stderr_log is not None else subprocess.DEVNULL,
-            creationflags=detached_flags,
-            close_fds=True,
-        )
-    finally:
-        if stderr_log is not None:
-            stderr_log.close()
-
-
-def spawn_detached_push(repo_root: str, branch: str) -> None:
-    """Engine-facing detached-push entry: respawn-Popen leg on BOTH platforms.
-
-    Reused by the wsc_tail deferred-push cutover (C3) so the engine never
-    holds a synchronous push on its blocking path. Deliberately NOT
-    os.fork()-based, unlike `_detach_and_run`'s legacy hook leg: the engine is
-    a threaded asyncio process (to_thread pool), and fork-from-threaded is a
-    known deadlock class (locks held by other threads are copied held --
-    logging, malloc). A fork child would also inherit the engine's own
-    JSON-RPC stdout pipe to its client, reintroducing the pipe-hold defect one
-    layer up instead of closing it. A fresh interpreter respawn, fully
-    disowned from stdin/stdout/stderr, sidesteps both hazards on every
-    platform.
-
-    `branch` is forwarded to the respawned child via `--branch` and pushed
-    UNCONDITIONALLY -- `main()` skips `resolve_branch()`/`branch_gate()`
-    entirely when `--branch` is present. This is what makes the entry point
-    "deterministic and branch-gate-independent" per DEC-1
-    (`docs/plans/2026-07-22-wsc-tail-sub-2s-invoke-budget.md`): the caller
-    already decided which branch to push, so re-deriving it from disk at
-    child-spawn time would both race the caller's intent and silently
-    re-apply the hook's `work/*`-only gate to a caller that never asked for
-    one. (Review: code-reviewer -- Finding 1, `branch` argument was
-    previously discarded on the primary respawn path.)
-    """
-    python_exe = _resolve_python_exe()
-    if not python_exe:
-        run_push_with_retry(repo_root, branch)
-        return
-    env = _respawn_env()
-    popen_kwargs: dict = {}
-    if hasattr(os, "fork"):
-        # POSIX: start_new_session=True is the fork-free equivalent of
-        # os.setsid() -- detaches the child from the parent's session so it
-        # survives the parent (the engine's op handler) returning.
-        popen_kwargs["start_new_session"] = True
-    else:
-        popen_kwargs["creationflags"] = _windows_detached_flags()
-    # Respawn by RESOLVED ABSOLUTE PATH, never `-m` -- mirrors the Windows
-    # hook-leg respawn's own contract (see _detach_and_run's comment): a
-    # module-relative import can silently fail to resolve depending on the
-    # caller's cwd, and a detached child's failure is invisible. This entry
-    # point runs on BOTH platforms (unlike `_detach_and_run`'s POSIX fork
-    # leg), so it hit the 2026-08-01 top-level `coordinator_core` import
-    # regression on macOS/Linux too, not just Windows -- `_respawn_env()`'s
-    # PYTHONPATH injection fixes it here for the same reason.
-    stderr_log = _open_respawn_stderr_log(repo_root, branch)
-    subprocess = _subprocess()
-    try:
-        subprocess.Popen(
-            [python_exe, os.path.abspath(__file__), "--repo-root", repo_root, "--branch", branch],
-            env=env,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            # Durable file, not DEVNULL -- see `_open_respawn_stderr_log`'s
-            # docstring (same rationale as `_detach_and_run`'s Windows leg).
-            stderr=stderr_log if stderr_log is not None else subprocess.DEVNULL,
-            close_fds=True,
-            **popen_kwargs,
-        )
-    finally:
-        if stderr_log is not None:
-            stderr_log.close()
-
-
-# ---------------------------------------------------------------------------
-# Entrypoint
-# ---------------------------------------------------------------------------
-
-def _release_claims_for_head(repo_root: str) -> None:
-    """Append the ``R`` (release) events for the commit that just landed.
-
-    WHY THIS LIVES IN AUTO-PUSH, which is otherwise about pushing: the claim
-    ledger must be released for EVERY commit route, not only the coordinator
-    ops that call ``scope.release_committed_claims`` themselves
-    (``scoped_git_commit``, ``consumed_handoff_stamp``,
-    ``detached_render_commit``, ``post_commit_tail``). A plain ``git commit``
-    -- an operator's, a tool's, any route bypassing those ops -- released
-    nothing, so the claim stayed ``T`` forever and
-    ``claim_index.commit_set`` kept offering an already-committed path back
-    for commit. That is precisely the "you already committed these" answer the
-    offer exists NOT to give.
-
-    The post-commit hook is the one seam every route passes through, and this
-    module is the only program that hook runs -- so folding the release in here
-    costs ZERO additional processes on the commit hot path, where a second
-    interpreter start would be break-class under CLAUDE.md's brightline.
-
-    CORRECTED 2026-08-26 (session a2d4a470), measured: this leg adds **TWO**
-    git spawns, not the one this docstring claimed -- ``git show --name-only``
-    here, plus the ``git status --porcelain`` that ``release_committed_claims``
-    takes for its clean check. ~49ms together at this box's ~22ms per spawn.
-    The ``--no-claim-release`` flag below already exists to skip both, and its
-    own comment says so; ``git_native._replay_post_commit_auto_push`` does not
-    pass it, and cannot until its caller releases claims itself -- see C4 of
-    docs/plans/2026-08-26-the-commit-op-stops-asking-git-eleven-times.md.
-    The ``git show`` is also avoidable outright on that route: it asks git
-    which paths just landed, a fact the commit pipeline is already holding.
-
-    Complementary, never double-releasing: the coordinator commit path sets
-    ``_ENV_SUPPRESS_FOR_SYNC_PUSH``, which returns from ``main`` before this is
-    reached, and that path already released its own claims. This covers exactly
-    the routes that were missing it.
-
-    Fail-open in every arm, like everything else here: a commit must never be
-    blocked, and a stale claim is a far smaller harm than a failed commit.
-
-    KNOWN NARROW GAP, measured rather than theorised: ``release_committed_claims``
-    releases only paths that are CLEAN in the worktree, and a path git is still
-    renormalizing line endings for can read as dirty for a moment right after
-    the commit. Observed once here -- of two paths in one commit, one released
-    and one did not; calling ``release_committed_claims`` on the straggler
-    seconds later released it immediately, so the function was right and the
-    timing was not. The failure mode is benign and self-correcting in effect:
-    the claim stays ``T``, so the offer re-offers an already-committed path and
-    the next commit of it is an empty no-op. Do NOT "fix" this by relaxing the
-    clean check -- that check is what stops a release racing an unstaged edit.
-    """
-    try:
-        from coordinator_core.session import core as _session_core
-        from coordinator_core.session import scope as _session_scope
-
-        sid = _session_core.resolve_session_id(repo_root)
-        if not sid:
-            return
-        # `--format=` suppresses the header, leaving one path per line.
-        out = _run_git(repo_root, ["show", "--name-only", "--format=", "HEAD"])
-        if not out:
-            return
-        paths = [line.strip() for line in out.splitlines() if line.strip()]
-        if not paths:
-            return
-        # Releases only paths that are CLEAN in the worktree, and is
-        # structurally incapable of releasing a peer's claim -- see
-        # `release_committed_claims`' own docstring for both properties.
-        _session_scope.release_committed_claims(sid, paths, cwd=repo_root)
-    except Exception:
-        # Never block a commit, and never let a diagnostic here become the
-        # thing that does.
-        pass
-
-
-def _ref_sha(common_dir, ref: str):
-    """`<sha>` for `ref` under `common_dir`, loose file first then
-    `packed-refs`, or `None`. Spawn-free: two file reads at most.
-
-    Same one-hop resolution `git_state.head_sha` performs for HEAD's target,
-    generalised to any full refname because the comparand this module needs
-    (`refs/remotes/origin/<branch>`) is not reachable through that function.
-    Not folded back into `git_state`: this is a private read for the gate
-    below, and widening a shared reader for one caller is how that module's
-    three-valued contracts grow a fourth dimension.
-    """
-    try:
-        sha = (common_dir / ref).read_text(encoding="utf-8").strip()
-        if sha:
-            return sha
-    except OSError:
-        pass
-    try:
-        packed_text = (common_dir / "packed-refs").read_text(encoding="utf-8")
-    except OSError:
-        return None
-    for line in packed_text.splitlines():
-        if not line or line[0] in "#^":
-            continue
-        sha, _, ref_name = line.partition(" ")
-        if ref_name == ref:
-            return sha
-    return None
-
-
-def _push_would_be_a_noop(repo_root: str, branch: str) -> bool:
-    """True iff `refs/heads/<branch>` and `refs/remotes/origin/<branch>`
-    already resolve to the same sha, so a push has nothing to send.
-
-    WHY THIS EXISTS. Without it `main()` reaches `_detach_and_run` on EVERY
-    commit to a `work/*` branch, and that leg is a `subprocess.Popen` of a
-    FRESH PYTHON INTERPRETER on Windows (`spawn_detached_push`'s docstring
-    explains why it cannot fork: the engine is threaded asyncio and
-    fork-from-threaded is a known deadlock class). The child then resolves
-    refs, finds nothing outstanding, and exits -- so the box paid an
-    interpreter start to learn what two file reads answer. DR-344 is explicit
-    that "an interpreter start ahead of warmth is break-class", and this one
-    sits on the commit hot path every route in the repo passes through.
-
-    The parent-side cost hides this: the Popen detaches in ~7ms, so the spawn
-    is invisible to parent-CPU accounting and can escape a job object
-    entirely (`benchmarks/process_time.py`'s AC9 note: job accounting
-    "silently excludes any process a misbehaving child manages to launch
-    OUTSIDE the job"). An instrument reading 7ms while the box starts an
-    interpreter is why this went unmeasured.
-
-    FAIL-OPEN, in the spawn direction. Every uncertain state returns False and
-    the respawn happens exactly as before: no remote-tracking ref (never
-    pushed), an unreadable ref, an unborn branch, a `None` from either read.
-    The gate only ever suppresses a spawn it can PROVE is redundant -- a false
-    positive is a silently unpushed commit, the precise failure the auto-push
-    health signal exists to catch, while a false negative costs one
-    interpreter start, which is what happens unconditionally today.
-
-    STALENESS IS NOT A HAZARD, in either direction. If the remote moved ahead
-    and the remote-tracking ref is stale, the two shas differ and we spawn
-    (correct: a push is genuinely owed, and the child owns the
-    non-fast-forward outcome). If they are equal, this side has nothing local
-    to send whatever the remote has done since -- push sends local commits and
-    there are none. This function never claims the branch is up to date with
-    the remote, only that this side has nothing to offer it.
-    """
-    try:
-        from coordinator_core.git.git_state import resolve_git_common_dir
-
-        common_dir = resolve_git_common_dir(repo_root)
-        local = _ref_sha(common_dir, "refs/heads/" + branch)
-        remote = _ref_sha(common_dir, "refs/remotes/origin/" + branch)
-    except Exception:
-        return False
-    return bool(local) and local == remote
-
-
-def main(argv: list[str] | None = None) -> int:
-    """Entrypoint. ALWAYS returns 0 -- auto-push must never block a commit.
-
-    Wraps the whole body in a broad except so no unexpected internal error
-    escapes as a non-zero exit code; best-effort logs the error and still
-    exits 0.
-    """
-    parser = argparse.ArgumentParser(add_help=False)
-    parser.add_argument("--async", dest="async_mode", action="store_true", default=None)
-    parser.add_argument("--no-async", dest="async_mode", action="store_false")
-    parser.add_argument("--repo-root", dest="repo_root", default=None)
-    parser.add_argument("--branch", dest="branch", default=None)
-    # A caller that has ALREADY released this commit's claims, with paths it
-    # knows directly, suppresses the release leg below rather than paying for
-    # it twice. Narrower than `_ENV_SUPPRESS_FOR_SYNC_PUSH`, deliberately: that
-    # one also stands the push down, which a caller that does not publish its
-    # own commits must not do. See `_release_claims_for_head`'s own
-    # "never double-releasing" note and the 2026-08-25 measurement that found
-    # the archival path doing exactly that.
-    parser.add_argument(
-        "--no-claim-release", dest="claim_release", action="store_false", default=True
-    )
-    try:
-        args, _unknown = parser.parse_known_args(argv)
-    except SystemExit:
-        # argparse's own error() path (near-unreachable here: all defined
-        # flags are boolean/string with no type validation) -- covered by
-        # this function's own "must never block a commit" contract.
-        return 0
-
-    branch = "<unknown>"
-    try:
-        if os.environ.get(_ENV_SUPPRESS_FOR_SYNC_PUSH):
-            # The committing caller publishes this commit itself, in this same
-            # invocation -- see `_ENV_SUPPRESS_FOR_SYNC_PUSH`. Stand down before
-            # resolving anything: no detach, no pending record, no drain. Silent
-            # by design, since this fires on every commit through the sanctioned
-            # path and a per-commit line on the hot path is noise, not signal.
-            return 0
-
-        repo_root = args.repo_root or _resolve_repo_root()
-        if not repo_root:
-            return 0
-
-        if args.branch is None and not args.claim_release:
-            # Caller already released (see --no-claim-release). Skipping saves
-            # this leg's `git show` plus its `git status --porcelain`.
-            pass
-        elif args.branch is None:
-            # Only on the genuine post-commit invocation, and BEFORE the branch
-            # gate below -- the ledger must be released for a commit on a branch
-            # this hook declines to push, exactly as for one it pushes.
-            # `spawn_detached_push` respawns this same main() with an explicit
-            # --branch; releasing there would repeat the work and add a spawn in
-            # the detached child.
-            _release_claims_for_head(repo_root)
-
-        if args.branch:
-            # Explicit branch from an engine-facing spawn
-            # (spawn_detached_push's respawn) -- deterministic and
-            # branch-gate-independent per DEC-1: the caller already decided
-            # to push this branch, so skip resolve_branch()/branch_gate()
-            # entirely rather than silently re-deriving and re-gating it.
-            # (Review: code-reviewer -- Finding 1.)
-            branch = args.branch
-        else:
-            branch = resolve_branch(repo_root)
-            if not branch:
-                return 0
-
-            should_push, skip_message = branch_gate(branch)
-            if skip_message:
-                print(skip_message, file=sys.stderr)
-            if not should_push:
-                return 0
-
-        async_mode = args.async_mode
-        if async_mode is None:
-            async_mode = not bool(os.environ.get(_ENV_SYNC))
-
-        if async_mode:
-            # Spawn-free redundancy gate ahead of the respawn -- see
-            # `_push_would_be_a_noop`. Only the async leg is gated: the
-            # synchronous leg pays no interpreter start, so there is
-            # nothing to save there and skipping it would change that
-            # caller's contract rather than its cost.
-            if _push_would_be_a_noop(repo_root, branch):
-                return 0
-            _detach_and_run(repo_root, branch)
-        else:
-            run_push_with_retry(repo_root, branch)
-    except Exception as exc:
-        # Best-effort: never let an internal error block the commit.
-        try:
-            provenance = _module_provenance()
-        except Exception:
-            # Diagnostics must never be the thing that blocks a commit.
-            provenance = "module=<unresolved> interp=<unknown> python=<unknown>"
-        print(f"coordinator-auto-push: internal error [{provenance}]: {exc}", file=sys.stderr)
-        try:
-            # Deliberately NOT `_resolve_repo_root()`: this is the cold error
-            # path, reached once per failure, so it has no spawn to save --
-            # and the walk resolves from the process cwd, whereas this handler
-            # must name the repo the hook actually fired for, which the caller
-            # may have supplied explicitly.
-            repo_root_fallback = args.repo_root or _run_git(
-                None, ["rev-parse", "--show-toplevel"]
-            )
-            if repo_root_fallback:
-                log_failure(
-                    repo_root_fallback,
-                    branch,
-                    "direct push",
-                    "unknown",
-                    0,
-                    # Only the unbounded part (the exception message) is capped:
-                    # the provenance prefix must survive truncation, since it is
-                    # the field that identifies WHICH copy of this module ran.
-                    f"internal error in auto_push.py [{provenance}]: "
-                    + f"{type(exc).__name__}: {exc}"[:200],
-                    traceback.format_exc(),
-                )
-        except Exception as log_exc:
-            print(f"coordinator-auto-push: also failed to record the internal error: {log_exc}", file=sys.stderr)
-        return 0
-
-    return 0
-
-
-if __name__ == "__main__":
-    sys.exit(main())

@@ -8,8 +8,8 @@ Four legs, each pinned to fail if its own trigger stops firing (chunk body):
   (3) a sweep never blocks demotion / never extends server lifetime
   (4) a second concurrent sweeper on the same repo declines
 
-Plus: drains a pending record it finds, touches only served repos, and
-feeds the failure detector on a declined/failed push.
+Plus: touches only served repos, and feeds the failure detector on a
+declined/failed push.
 """
 
 from __future__ import annotations
@@ -213,7 +213,7 @@ def test_idle_tick_runs_cadence_only_when_should_demote_is_false(monkeypatch):
 def test_sweep_total_ceiling_stops_taking_new_repos(tmp_path):
     swept = []
 
-    def _fake_sweep_one(repo_root, *, per_repo_deadline):
+    def _fake_sweep_one(repo_root):
         swept.append(repo_root)
 
     # First value establishes the deadline (0.0 + total_ceiling_secs); the
@@ -283,37 +283,16 @@ def test_release_only_removes_own_record(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Drains a pending record it finds; touches only served repos.
+# Touches only served repos. (Review: overengineering-reviewer Finding 3 --
+# `_sweep_one` no longer drains; `test_sweep_one_drains_before_pushing`
+# retired with the drain call it pinned.)
 # ---------------------------------------------------------------------------
-
-
-def test_sweep_one_drains_before_pushing(tmp_path, monkeypatch):
-    repo = _repo(tmp_path)
-    calls = []
-    monkeypatch.setattr(
-        push_cadence, "drain_pending_push", lambda root: calls.append(("drain", root))
-    )
-
-    class _Outcome:
-        failed = []
-        unconfirmed = []
-
-    monkeypatch.setattr(
-        push_cadence,
-        "push_outstanding",
-        lambda root: calls.append(("push", root)) or _Outcome(),
-    )
-
-    push_cadence._sweep_one(repo, per_repo_deadline=12.0)
-
-    assert [c[0] for c in calls] == ["drain", "push"]
 
 
 def test_sweep_repos_touches_only_the_served_set(tmp_path, monkeypatch):
     served = _repo(tmp_path, "served")
     unserved_marker = []
 
-    monkeypatch.setattr(push_cadence, "drain_pending_push", lambda root: None)
 
     class _Outcome:
         failed = []
@@ -348,7 +327,6 @@ def test_server_context_served_repos_reflects_only_recorded_repos(tmp_path):
 
 def test_failed_push_feeds_the_failure_detector(tmp_path, monkeypatch):
     repo = _repo(tmp_path)
-    monkeypatch.setattr(push_cadence, "drain_pending_push", lambda root: None)
     monkeypatch.setattr(push_cadence, "head_branch", lambda root: "work/x/2026-08-30")
 
     class _FailedOutcome:
@@ -366,7 +344,7 @@ def test_failed_push_feeds_the_failure_detector(tmp_path, monkeypatch):
         ),
     )
 
-    push_cadence._sweep_one(repo, per_repo_deadline=12.0)
+    push_cadence._sweep_one(repo)
 
     assert len(logged) == 1
     repo_root, branch, route, err_class, first_err = logged[0]
@@ -378,7 +356,6 @@ def test_failed_push_feeds_the_failure_detector(tmp_path, monkeypatch):
 
 def test_successful_push_does_not_feed_the_failure_detector(tmp_path, monkeypatch):
     repo = _repo(tmp_path)
-    monkeypatch.setattr(push_cadence, "drain_pending_push", lambda root: None)
 
     class _OkOutcome:
         failed = []
@@ -393,6 +370,6 @@ def test_successful_push_does_not_feed_the_failure_detector(tmp_path, monkeypatc
         lambda *a, **kw: logged.append(1),
     )
 
-    push_cadence._sweep_one(repo, per_repo_deadline=12.0)
+    push_cadence._sweep_one(repo)
 
     assert logged == []

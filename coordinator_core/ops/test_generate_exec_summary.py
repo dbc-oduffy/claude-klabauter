@@ -21,6 +21,7 @@ import pytest
 from coordinator_core import meta_repo_identity
 from coordinator_core import state_root as state_root_mod
 from coordinator_core.ops import generate_exec_summary as mod
+from coordinator_core.win_portability import no_console_creationflags
 
 # Spawns a real external process; runs at cadence gates, not per-commit.
 # Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
@@ -38,6 +39,7 @@ def _git(repo: str, *args: str) -> None:
         text=True,
         env={**os.environ, "GIT_AUTHOR_NAME": "Test", "GIT_AUTHOR_EMAIL": "test@test.com",
              "GIT_COMMITTER_NAME": "Test", "GIT_COMMITTER_EMAIL": "test@test.com"},
+        **no_console_creationflags(),
     )
 
 
@@ -46,7 +48,7 @@ def repo(tmp_path, monkeypatch):
     repo_dir = tmp_path / "repo"
     (repo_dir / "docs").mkdir(parents=True)
     (repo_dir / "state").mkdir(parents=True)
-    subprocess.run(["git", "init", "-q", str(repo_dir)], check=True, capture_output=True)
+    subprocess.run(["git", "init", "-q", str(repo_dir)], check=True, capture_output=True, **no_console_creationflags())
 
     readme = repo_dir / "README.md"
     readme.write_text(

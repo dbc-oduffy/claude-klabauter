@@ -46,6 +46,7 @@ from coordinator_core.frontmatter.primitives import (
     read_fm_field_unquoted,
     split_frontmatter,
 )
+from coordinator_core.win_portability import no_console_creationflags
 
 # Declared, not excused: this file spawns a real process (git/python) because
 # the property under test is that binary's own behaviour, which no fixture
@@ -76,6 +77,7 @@ def _git(repo: Path, *args: str) -> subprocess.CompletedProcess:
         env=_GIT_ENV,
         timeout=15,
         stdin=subprocess.DEVNULL,
+        **no_console_creationflags(),
     )
 
 

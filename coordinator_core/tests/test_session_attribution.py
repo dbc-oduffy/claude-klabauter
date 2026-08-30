@@ -68,7 +68,7 @@ _GOLDEN_PATH = Path(__file__).resolve().parent / "session_attribution_golden.jso
 
 
 def _git(args: list[str], cwd: Path) -> None:
-    subprocess.run(["git"] + args, cwd=str(cwd), capture_output=True, check=True)
+    subprocess.run(["git"] + args, cwd=str(cwd), capture_output=True, check=True, **no_console_creationflags())
 
 
 def _init_repo(root: Path) -> str:
@@ -103,9 +103,11 @@ def _commit(
     subprocess.run(
         ["git", "commit", "-m", message],
         cwd=str(root), capture_output=True, check=True, env=env,
+        **no_console_creationflags(),
     )
     result = subprocess.run(
         ["git", "rev-parse", "HEAD"], cwd=str(root), capture_output=True, text=True, check=True,
+        **no_console_creationflags(),
     )
     return result.stdout.strip()
 

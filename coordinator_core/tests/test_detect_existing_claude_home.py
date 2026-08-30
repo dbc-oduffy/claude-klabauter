@@ -16,6 +16,7 @@ from pathlib import Path
 
 import pytest
 
+from coordinator_core.win_portability import no_console_passthrough_kwargs
 from coordinator_core.ops.detect_existing_claude_home import (
     _has_installed_plugin,
     _installed_plugins_json_nonempty,
@@ -143,14 +144,14 @@ def test_t3b_stub_claude_md_is_used_vanilla(tmp_path):
 # T4 / T4b: git-tracked target → configured; git-tracked ANCESTOR → pristine
 # ---------------------------------------------------------------------------
 def test_t4_git_tracked_target_is_configured(tmp_path):
-    subprocess.run(["git", "init", "--quiet", str(tmp_path)], check=True, timeout=30)
+    subprocess.run(["git", "init", "--quiet", str(tmp_path)], check=True, timeout=30, **no_console_passthrough_kwargs())
     _assert(tmp_path, "configured", "B")
 
 
 def test_t4b_subdir_of_ancestor_repo_is_pristine(tmp_path):
     parent = tmp_path / "git-parent"
     parent.mkdir()
-    subprocess.run(["git", "init", "--quiet", str(parent)], check=True, timeout=30)
+    subprocess.run(["git", "init", "--quiet", str(parent)], check=True, timeout=30, **no_console_passthrough_kwargs())
     target = parent / "dot-claude"
     target.mkdir()
     _assert(target, "pristine", "A")
@@ -184,7 +185,7 @@ def test_t6b_coordinator_local_md_is_configured(tmp_path):
 def test_t7_configured_beats_used_vanilla(tmp_path):
     (tmp_path / "projects").mkdir()
     (tmp_path / "CLAUDE.md").write_text("# config\n")
-    subprocess.run(["git", "init", "--quiet", str(tmp_path)], check=True, timeout=30)
+    subprocess.run(["git", "init", "--quiet", str(tmp_path)], check=True, timeout=30, **no_console_passthrough_kwargs())
     _assert(tmp_path, "configured", "B")
 
 

@@ -57,6 +57,7 @@ from coordinator_core.bash_guards import _write_bump_session_start as session_st
 from coordinator_core.bash_guards import dispatch
 from coordinator_core.session import em_guard_grant as eg
 from coordinator_core.session import guard_unlock_sentinel
+from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [
     pytest.mark.cadence,
@@ -71,7 +72,7 @@ def _unique_sid(prefix: str) -> str:
 
 
 def _git(root: str, *args: str) -> None:
-    subprocess.run(["git", *args], cwd=root, check=True, capture_output=True)
+    subprocess.run(["git", *args], cwd=root, check=True, capture_output=True, **no_console_creationflags())
 
 
 def _init_repo(tmp_path: Path, name: str) -> Path:

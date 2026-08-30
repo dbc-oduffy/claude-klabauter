@@ -35,6 +35,7 @@ from pathlib import Path
 import pytest
 
 from coordinator_core.ops.plan_status_transition import _PROG, main
+from coordinator_core.win_portability import no_console_creationflags
 
 # Pins that `_stamp_implemented` commits its own terminal status flip — the
 # entire point of the suite is asserting a REAL commit lands (HEAD SHA moves,
@@ -59,10 +60,12 @@ def _ensure_git_repo(tmp_path: Path) -> None:
         return
     subprocess.run(
         ["git", "init"], cwd=str(tmp_path), capture_output=True, env=_git_env(), timeout=15,
+        **no_console_creationflags(),
     )
     subprocess.run(
         ["git", "config", "commit.gpgsign", "false"],
         cwd=str(tmp_path), capture_output=True, env=_git_env(), timeout=15,
+        **no_console_creationflags(),
     )
 
 
@@ -86,9 +89,10 @@ def _write_and_commit(tmp_path: Path, name: str, body: str) -> Path:
     # PRE-flip status, mirroring production, not a bare uncommitted worktree
     # file in a zero-commit repo.
     p = _write(tmp_path, name, body)
-    subprocess.run(["git", "add", "--", name], cwd=str(tmp_path), capture_output=True, env=_git_env(), timeout=15)
+    subprocess.run(["git", "add", "--", name], cwd=str(tmp_path), capture_output=True, env=_git_env(), timeout=15, **no_console_creationflags())
     subprocess.run(
         ["git", "commit", "-m", "initial"], cwd=str(tmp_path), capture_output=True, env=_git_env(), timeout=15,
+        **no_console_creationflags(),
     )
     return p
 
@@ -97,6 +101,7 @@ def _head_sha(tmp_path: Path) -> str | None:
     r = subprocess.run(
         ["git", "rev-parse", "HEAD"],
         cwd=str(tmp_path), capture_output=True, text=True, env=_git_env(), timeout=15,
+        **no_console_creationflags(),
     )
     return r.stdout.strip() if r.returncode == 0 else None
 
@@ -105,6 +110,7 @@ def _porcelain(tmp_path: Path, relpath: str) -> str:
     r = subprocess.run(
         ["git", "status", "--porcelain", "--", relpath],
         cwd=str(tmp_path), capture_output=True, text=True, env=_git_env(), timeout=15,
+        **no_console_creationflags(),
     )
     return r.stdout
 
@@ -113,6 +119,7 @@ def _show_head_blob(tmp_path: Path, relpath: str) -> str:
     r = subprocess.run(
         ["git", "show", f"HEAD:{relpath}"],
         cwd=str(tmp_path), capture_output=True, text=True, env=_git_env(), timeout=15,
+        **no_console_creationflags(),
     )
     assert r.returncode == 0, r.stderr
     return r.stdout
@@ -224,6 +231,7 @@ def test_second_invocation_resumes_a_stranded_uncommitted_flip(tmp_path, capsys,
         subprocess.run(
             ["git", "add", "--", path], cwd=str(cwd), capture_output=True,
             env=_git_env(), timeout=15,
+            **no_console_creationflags(),
         )
         return GitResult(returncode=1, stdout="", stderr="simulated post-stage commit failure")
 
@@ -353,15 +361,16 @@ def test_ac10_resume_with_non_terminal_on_disk_content_fails_loud(tmp_path, caps
     # The resume path must refuse to launder it as a stranded write of its
     # own and must fail loud rather than commit unvalidated on-disk bytes.
     p = _write(tmp_path, "p.md", "---\nstatus: draft\n---\n\nBody.\n")
-    subprocess.run(["git", "add", "p.md"], cwd=str(tmp_path), capture_output=True, env=_git_env(), timeout=15)
+    subprocess.run(["git", "add", "p.md"], cwd=str(tmp_path), capture_output=True, env=_git_env(), timeout=15, **no_console_creationflags())
     subprocess.run(
         ["git", "commit", "-m", "initial"], cwd=str(tmp_path), capture_output=True, env=_git_env(), timeout=15,
+        **no_console_creationflags(),
     )
     initial_sha = _head_sha(tmp_path)
     assert initial_sha is not None
 
     p.write_text("---\nstatus: abandoned\n---\n\nBody.\n", encoding="utf-8")
-    subprocess.run(["git", "add", "p.md"], cwd=str(tmp_path), capture_output=True, env=_git_env(), timeout=15)
+    subprocess.run(["git", "add", "p.md"], cwd=str(tmp_path), capture_output=True, env=_git_env(), timeout=15, **no_console_creationflags())
     # Tracked, staged, dirty relative to HEAD -- NOT a bare '??' entry.
 
     rc = main(["stamp-implemented", "--plan", str(p)])
@@ -385,6 +394,7 @@ def test_ac5_resumed_stdout_token_distinguishes_from_a_genuine_no_op(tmp_path, c
     def _fail_after_staging(path, content, msg_file, cwd, **_kw):
         subprocess.run(
             ["git", "add", "--", path], cwd=str(cwd), capture_output=True, env=_git_env(), timeout=15,
+            **no_console_creationflags(),
         )
         return GitResult(returncode=1, stdout="", stderr="simulated failure")
 

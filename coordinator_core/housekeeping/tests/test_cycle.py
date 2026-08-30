@@ -3,9 +3,11 @@ Tests for coordinator_core.housekeeping.cycle — Step E (move + ONE commit
 through the existing `archive_and_commit` seam) and the assembled `run(...)`
 entry point (plan chunk C6c).
 
-Covers: `archive_terminal_batch` builds the correct `Move` list and never
-calls into the seam for an empty batch; the seam's `(acted, failed)` split
-is passed through unmodified (no second-guessing, no leave-and-log); and an
+Covers: `archive_terminal_batch` passes a prebuilt `Move` list through to
+the seam unchanged and never calls into the seam for an empty batch; the
+handoff `Move` list itself is built by `run(...)` since C2 widened the batch
+function (the actioned-memo class gets an occasion); the seam's (acted,
+failed) split is passed through unmodified (no second-guessing, no leave-and-log); and an
 end-to-end `run(...)` cycle on a small real git repo — a gate genuinely
 clears, a terminal record is archived and landed in ONE commit, a
 claim-held terminal record is retained, and a gate-clear CONFLICT is
@@ -32,6 +34,7 @@ from coordinator_core.claim_state import handoff_claim_dir
 from coordinator_core.housekeeping import cycle
 from coordinator_core.housekeeping.gate_clear import CONFLICT
 from coordinator_core.housekeeping.terminal import TerminalEntry
+from coordinator_core.ops.fleet._common import Move
 from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = pytest.mark.spawns_process
@@ -83,44 +86,46 @@ def test_archive_terminal_batch_empty_never_calls_the_seam(tmp_path, monkeypatch
     assert failed == []
 
 
-def test_archive_terminal_batch_builds_moves_and_passes_through_the_seam_result(tmp_path, monkeypatch):
+def _handoff_move(worktree_root, path):
+    """Build a handoff Move the way `run(...)` does — the construction
+    `archive_terminal_batch` owned before C2 widened it to take a prebuilt
+    list."""
+    return Move(
+        src=path,
+        dst=cycle.handoff_archive_dest(worktree_root, path),
+        candidate_id=str(path.relative_to(worktree_root)),
+        force=False,
+        restage_src=False,
+    )
+
+
+def test_archive_terminal_batch_passes_prebuilt_moves_through_to_the_seam(tmp_path, monkeypatch):
+    """C2 widened this function from `List[TerminalEntry]` to a prebuilt
+    `List[Move]` so both families land in one commit; it now hands the list
+    to the seam unchanged rather than building it."""
     worktree_root = tmp_path
     p1 = worktree_root / "state" / "handoffs" / "2026-01-01_00001_a.md"
     p2 = worktree_root / "state" / "handoffs" / "2026-01-02_00002_b.md"
-    entries = [
-        TerminalEntry(path=p1, record={"handoff_id": "hnd-a", "deployment_state": "closed"}),
-        TerminalEntry(path=p2, record={"handoff_id": "hnd-b", "deployment_state": "shipped"}),
-    ]
+    moves = [_handoff_move(worktree_root, p1), _handoff_move(worktree_root, p2)]
 
     captured = {}
 
-    async def _fake_archive_and_commit(root, moves, subject):
+    async def _fake_archive_and_commit(root, seam_moves, subject):
         captured["root"] = root
-        captured["moves"] = moves
+        captured["moves"] = seam_moves
         captured["subject"] = subject
         return (
-            [{"id": m.candidate_id, "archived": True} for m in moves],
+            [{"id": m.candidate_id, "archived": True} for m in seam_moves],
             [],
         )
 
     monkeypatch.setattr(cycle, "archive_and_commit", _fake_archive_and_commit)
 
-    acted, failed = cycle.archive_terminal_batch(worktree_root, entries, "the subject")
+    acted, failed = cycle.archive_terminal_batch(worktree_root, moves, "the subject")
 
     assert captured["root"] == worktree_root
     assert captured["subject"] == "the subject"
-    moves = captured["moves"]
-    assert [m.src for m in moves] == [p1, p2]
-    assert [m.dst for m in moves] == [
-        cycle.handoff_archive_dest(worktree_root, p1),
-        cycle.handoff_archive_dest(worktree_root, p2),
-    ]
-    assert [m.candidate_id for m in moves] == [
-        str(p1.relative_to(worktree_root)),
-        str(p2.relative_to(worktree_root)),
-    ]
-    assert all(m.force is False for m in moves)
-    assert all(m.restage_src is False for m in moves)
+    assert captured["moves"] == moves
 
     assert failed == []
     assert {item["id"] for item in acted} == {
@@ -134,14 +139,14 @@ def test_archive_terminal_batch_passes_through_failed_without_retry(tmp_path, mo
     never retries or patches a failed item (D5: complete-or-restore lives
     INSIDE archive_and_commit, never re-attempted here)."""
     p1 = tmp_path / "state" / "handoffs" / "2026-01-01_00001_a.md"
-    entries = [TerminalEntry(path=p1, record={"handoff_id": "hnd-a", "deployment_state": "closed"})]
+    moves = [_handoff_move(tmp_path, p1)]
 
-    async def _fake_archive_and_commit(root, moves, subject):
-        return ([], [{"id": moves[0].candidate_id, "reason": "dst-exists"}])
+    async def _fake_archive_and_commit(root, seam_moves, subject):
+        return ([], [{"id": seam_moves[0].candidate_id, "reason": "dst-exists"}])
 
     monkeypatch.setattr(cycle, "archive_and_commit", _fake_archive_and_commit)
 
-    acted, failed = cycle.archive_terminal_batch(tmp_path, entries, "subject")
+    acted, failed = cycle.archive_terminal_batch(tmp_path, moves, "subject")
     assert acted == []
     assert failed == [{"id": str(p1.relative_to(tmp_path)), "reason": "dst-exists"}]
 

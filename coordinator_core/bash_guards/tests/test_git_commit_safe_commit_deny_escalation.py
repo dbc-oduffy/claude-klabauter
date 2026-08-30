@@ -35,6 +35,7 @@ import subprocess
 
 from coordinator_core.bash_guards import dispatch
 from coordinator_core.bash_guards import dispatch_checks
+from coordinator_core.win_portability import no_console_creationflags, no_console_passthrough_kwargs
 
 import pytest
 
@@ -49,16 +50,16 @@ pytestmark = [
 def _init_repo(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
-    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
-    subprocess.run(["git", "config", "user.email", "t@example.com"], cwd=repo, check=True)
-    subprocess.run(["git", "config", "user.name", "t"], cwd=repo, check=True)
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "config", "user.email", "t@example.com"], cwd=repo, check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "config", "user.name", "t"], cwd=repo, check=True, **no_console_passthrough_kwargs())
     return repo
 
 
 def _stage(repo, name, content="x"):
     path = repo / name
     path.write_text(content)
-    subprocess.run(["git", "add", name], cwd=repo, check=True)
+    subprocess.run(["git", "add", name], cwd=repo, check=True, **no_console_passthrough_kwargs())
 
 
 def _verdict(cmd: str) -> str:
@@ -235,7 +236,8 @@ def test_solo_bare_commit_amend_only_with_pathspec_never_fires(tmp_path):
     repo = _init_repo(tmp_path)
     _stage(repo, "mine.txt")
     subprocess.run(
-        ["git", "commit", "-m", "base\n\nSession-Id: sess-c7"], cwd=repo, check=True
+        ["git", "commit", "-m", "base\n\nSession-Id: sess-c7"], cwd=repo, check=True,
+        **no_console_passthrough_kwargs()
     )
     _stage(repo, "foreign.txt")
     cmd = 'git -C %s commit --amend --only -m "x" -- mine.txt' % shlex.quote(str(repo))
@@ -256,6 +258,7 @@ def _commit_with_trailer(repo, message, sid):
         ["git", "commit", "-m", "%s\n\nSession-Id: %s" % (message, sid)],
         cwd=repo,
         check=True,
+        **no_console_passthrough_kwargs()
     )
 
 
@@ -267,7 +270,7 @@ def test_amend_scoped_denies_when_head_is_not_this_session(tmp_path):
     the amend must now deny instead of falling through silently."""
     repo = _init_repo(tmp_path)
     _stage(repo, "mine.txt")
-    subprocess.run(["git", "commit", "-m", "peer base"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-m", "peer base"], cwd=repo, check=True, **no_console_passthrough_kwargs())
     _stage(repo, "extra.txt")
     cmd = 'git -C %s commit --amend --only -m "x" -- mine.txt' % shlex.quote(str(repo))
     out = dispatch_checks.check_git_commit_safe_commit_advise(cmd, "sess-mine")
@@ -323,7 +326,7 @@ def test_amend_missing_session_id_fails_closed(tmp_path):
     carrying no trailer of its own must deny, not vacuously match."""
     repo = _init_repo(tmp_path)
     _stage(repo, "mine.txt")
-    subprocess.run(["git", "commit", "-m", "base"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-m", "base"], cwd=repo, check=True, **no_console_passthrough_kwargs())
     _stage(repo, "extra.txt")
     cmd = 'git -C %s commit --amend --only -m "x" -- mine.txt' % shlex.quote(str(repo))
     out = dispatch_checks.check_git_commit_safe_commit_advise(cmd, "")
@@ -359,7 +362,7 @@ def test_amend_override_key_allows_foreign_head(tmp_path, monkeypatch):
     must be tunable separately, per the memo's proposal (3)."""
     repo = _init_repo(tmp_path)
     _stage(repo, "mine.txt")
-    subprocess.run(["git", "commit", "-m", "peer base"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-m", "peer base"], cwd=repo, check=True, **no_console_passthrough_kwargs())
     _stage(repo, "extra.txt")
     cmd = 'git -C %s commit --amend --only -m "x" -- mine.txt' % shlex.quote(str(repo))
     monkeypatch.setenv("COORDINATOR_ALLOW_GIT_COMMIT_AMEND", "1")
@@ -372,7 +375,7 @@ def test_amend_deny_reason_names_the_commit_and_notes_remedy(tmp_path):
     which cannot amend."""
     repo = _init_repo(tmp_path)
     _stage(repo, "mine.txt")
-    subprocess.run(["git", "commit", "-m", "peer subject line"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-m", "peer subject line"], cwd=repo, check=True, **no_console_passthrough_kwargs())
     _stage(repo, "extra.txt")
     cmd = 'git -C %s commit --amend --only -m "x" -- mine.txt' % shlex.quote(str(repo))
     out = dispatch_checks.check_git_commit_safe_commit_advise(cmd, "sess-mine")
@@ -559,7 +562,7 @@ def test_dash_am_denies_in_a_hazard_repo_when_worktree_holds_modified_paths(
     the two index-based predicates unconditionally exclude."""
     repo = _init_repo(tmp_path)
     _stage(repo, "base.txt")
-    subprocess.run(["git", "commit", "-m", "base"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-m", "base"], cwd=repo, check=True, **no_console_passthrough_kwargs())
     _touch_worktree(repo, "base.txt")
     _force_hazard(monkeypatch, True)
     cmd = 'git -C %s commit -am "x"' % shlex.quote(str(repo))
@@ -569,7 +572,7 @@ def test_dash_am_denies_in_a_hazard_repo_when_worktree_holds_modified_paths(
 def test_dash_a_dash_m_separate_tokens_denies_in_a_hazard_repo(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path)
     _stage(repo, "base.txt")
-    subprocess.run(["git", "commit", "-m", "base"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-m", "base"], cwd=repo, check=True, **no_console_passthrough_kwargs())
     _touch_worktree(repo, "base.txt")
     _force_hazard(monkeypatch, True)
     cmd = 'git -C %s commit -a -m "x"' % shlex.quote(str(repo))
@@ -579,7 +582,7 @@ def test_dash_a_dash_m_separate_tokens_denies_in_a_hazard_repo(tmp_path, monkeyp
 def test_bundled_dash_sam_denies_in_a_hazard_repo(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path)
     _stage(repo, "base.txt")
-    subprocess.run(["git", "commit", "-m", "base"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-m", "base"], cwd=repo, check=True, **no_console_passthrough_kwargs())
     _touch_worktree(repo, "base.txt")
     _force_hazard(monkeypatch, True)
     cmd = 'git -C %s commit -sam "x"' % shlex.quote(str(repo))
@@ -589,7 +592,7 @@ def test_bundled_dash_sam_denies_in_a_hazard_repo(tmp_path, monkeypatch):
 def test_dash_dash_all_denies_in_a_hazard_repo(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path)
     _stage(repo, "base.txt")
-    subprocess.run(["git", "commit", "-m", "base"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-m", "base"], cwd=repo, check=True, **no_console_passthrough_kwargs())
     _touch_worktree(repo, "base.txt")
     _force_hazard(monkeypatch, True)
     cmd = 'git -C %s commit --all -m "x"' % shlex.quote(str(repo))
@@ -609,7 +612,7 @@ def test_dash_am_with_trailing_pathspec_still_participates_in_escalation(
     in a hazard repo, staying advisory in a non-hazard one."""
     repo = _init_repo(tmp_path)
     _stage(repo, "base.txt")
-    subprocess.run(["git", "commit", "-m", "base"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-m", "base"], cwd=repo, check=True, **no_console_passthrough_kwargs())
     _touch_worktree(repo, "base.txt")
     cmd = 'git -C %s commit -am "x" -- base.txt' % shlex.quote(str(repo))
     _force_hazard(monkeypatch, True)
@@ -622,7 +625,7 @@ def test_dash_c_prefixed_dash_am_denies_in_a_hazard_repo(tmp_path, monkeypatch):
     """AC4: honours `-C <dir>` -- reuses `_bt_git_dash_c_value`."""
     repo = _init_repo(tmp_path)
     _stage(repo, "base.txt")
-    subprocess.run(["git", "commit", "-m", "base"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-m", "base"], cwd=repo, check=True, **no_console_passthrough_kwargs())
     _touch_worktree(repo, "base.txt")
     _force_hazard(monkeypatch, True)
     cmd = 'git -C %s commit -am "x"' % shlex.quote(str(repo))
@@ -634,7 +637,7 @@ def test_git_index_file_prefixed_dash_am_denies_in_a_hazard_repo(tmp_path, monke
     `_bt_git_index_file_env` rather than re-deriving it."""
     repo = _init_repo(tmp_path)
     _stage(repo, "base.txt")
-    subprocess.run(["git", "commit", "-m", "base"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-m", "base"], cwd=repo, check=True, **no_console_passthrough_kwargs())
     _touch_worktree(repo, "base.txt")
     index_file = repo / ".git" / "index"
     _force_hazard(monkeypatch, True)
@@ -647,7 +650,7 @@ def test_git_index_file_prefixed_dash_am_denies_in_a_hazard_repo(tmp_path, monke
 def test_piped_dash_am_segment_denies_in_a_hazard_repo(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path)
     _stage(repo, "base.txt")
-    subprocess.run(["git", "commit", "-m", "base"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-m", "base"], cwd=repo, check=True, **no_console_passthrough_kwargs())
     _touch_worktree(repo, "base.txt")
     _force_hazard(monkeypatch, True)
     cmd = 'echo y | git -C %s commit -am "x"' % shlex.quote(str(repo))
@@ -661,7 +664,7 @@ def test_compound_add_then_dash_am_still_denies_in_a_hazard_repo(tmp_path, monke
     compound-shape predicate."""
     repo = _init_repo(tmp_path)
     _stage(repo, "base.txt")
-    subprocess.run(["git", "commit", "-m", "base"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-m", "base"], cwd=repo, check=True, **no_console_passthrough_kwargs())
     _touch_worktree(repo, "base.txt")
     other = repo / "mine.py"
     other.write_text("mine")
@@ -687,7 +690,7 @@ def test_dash_am_stays_advisory_in_a_non_hazard_repo_even_when_dirty(tmp_path, m
     it via a different guard."""
     repo = _init_repo(tmp_path)
     _stage(repo, "base.txt")
-    subprocess.run(["git", "commit", "-m", "base"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-m", "base"], cwd=repo, check=True, **no_console_passthrough_kwargs())
     _touch_worktree(repo, "base.txt")
     _force_hazard(monkeypatch, False)
     cmd = 'git -C %s commit -am "x"' % shlex.quote(str(repo))
@@ -700,7 +703,7 @@ def test_dash_am_budget_spent_dispatch_stays_advisory_never_deny(tmp_path, monke
     never DENY."""
     repo = _init_repo(tmp_path)
     _stage(repo, "base.txt")
-    subprocess.run(["git", "commit", "-m", "base"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-m", "base"], cwd=repo, check=True, **no_console_passthrough_kwargs())
     _touch_worktree(repo, "base.txt")
     _force_hazard(monkeypatch, True)
 
@@ -715,7 +718,7 @@ def test_dash_am_budget_spent_dispatch_stays_advisory_never_deny(tmp_path, monke
 def test_dash_am_probe_failure_fails_open_never_denies(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path)
     _stage(repo, "base.txt")
-    subprocess.run(["git", "commit", "-m", "base"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-m", "base"], cwd=repo, check=True, **no_console_passthrough_kwargs())
     _touch_worktree(repo, "base.txt")
     _force_hazard(monkeypatch, True)
 
@@ -796,10 +799,10 @@ def test_solo_bare_commit_advisory_still_fires_through_the_real_dispatcher_under
 
 
 def _commit_on(repo, branch, name, content):
-    subprocess.run(["git", "checkout", "-q", "-B", branch], cwd=repo, check=True)
+    subprocess.run(["git", "checkout", "-q", "-B", branch], cwd=repo, check=True, **no_console_passthrough_kwargs())
     (repo / name).write_text(content)
-    subprocess.run(["git", "add", name], cwd=repo, check=True)
-    subprocess.run(["git", "commit", "-q", "-m", f"{branch}:{name}"], cwd=repo, check=True)
+    subprocess.run(["git", "add", name], cwd=repo, check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "commit", "-q", "-m", f"{branch}:{name}"], cwd=repo, check=True, **no_console_passthrough_kwargs())
 
 
 def _repo_mid_merge(tmp_path):
@@ -807,17 +810,17 @@ def _repo_mid_merge(tmp_path):
     non-empty, and no `git add` anywhere in the command under test."""
     repo = _init_repo(tmp_path)
     (repo / "base.txt").write_text("base")
-    subprocess.run(["git", "add", "base.txt"], cwd=repo, check=True)
-    subprocess.run(["git", "commit", "-q", "-m", "base"], cwd=repo, check=True)
+    subprocess.run(["git", "add", "base.txt"], cwd=repo, check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "commit", "-q", "-m", "base"], cwd=repo, check=True, **no_console_passthrough_kwargs())
     _commit_on(repo, "main", "conflict.txt", "ours")
-    subprocess.run(["git", "checkout", "-q", "-b", "side", "HEAD~1"], cwd=repo, check=True)
+    subprocess.run(["git", "checkout", "-q", "-b", "side", "HEAD~1"], cwd=repo, check=True, **no_console_passthrough_kwargs())
     (repo / "conflict.txt").write_text("theirs")
-    subprocess.run(["git", "add", "conflict.txt"], cwd=repo, check=True)
-    subprocess.run(["git", "commit", "-q", "-m", "side"], cwd=repo, check=True)
-    merge = subprocess.run(["git", "merge", "main"], cwd=repo, capture_output=True, text=True)
+    subprocess.run(["git", "add", "conflict.txt"], cwd=repo, check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "commit", "-q", "-m", "side"], cwd=repo, check=True, **no_console_passthrough_kwargs())
+    merge = subprocess.run(["git", "merge", "main"], cwd=repo, capture_output=True, text=True, **no_console_creationflags())
     assert merge.returncode != 0, "fixture must stop inside a conflicted merge"
-    subprocess.run(["git", "checkout", "--theirs", "--", "conflict.txt"], cwd=repo, check=True)
-    subprocess.run(["git", "add", "conflict.txt"], cwd=repo, check=True)
+    subprocess.run(["git", "checkout", "--theirs", "--", "conflict.txt"], cwd=repo, check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "add", "conflict.txt"], cwd=repo, check=True, **no_console_passthrough_kwargs())
     assert (repo / ".git" / "MERGE_HEAD").exists()
     return repo
 
@@ -849,6 +852,7 @@ def test_the_denys_own_remediation_really_is_unrunnable_mid_merge(tmp_path):
     scoped = subprocess.run(
         ["git", "commit", "-m", "x", "--", "conflict.txt"],
         cwd=repo, capture_output=True, text=True,
+        **no_console_creationflags()
     )
     assert scoped.returncode != 0
     assert "partial commit" in (scoped.stderr + scoped.stdout).lower()

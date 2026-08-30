@@ -25,6 +25,7 @@ from pathlib import Path
 import pytest
 
 from coordinator_core.archive_stamp import _call_handoff_archive_transition
+from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -35,7 +36,7 @@ pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 
 def _git(repo: Path, *args: str) -> None:
-    subprocess.run(["git"] + list(args), cwd=str(repo), capture_output=True, check=True)
+    subprocess.run(["git"] + list(args), cwd=str(repo), capture_output=True, check=True, **no_console_creationflags())
 
 
 def _make_git_repo(tmp_path: Path, name: str) -> Path:

@@ -70,7 +70,7 @@ import statistics
 import subprocess
 import time
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple
 from unittest.mock import patch
 
 import pytest
@@ -78,9 +78,18 @@ import pytest
 from coordinator_core.benchmarks.tests.test_archival_commit_process_budget import (
     GIT_SPAWN_COUNT_TOTAL_RATCHET,
 )
+from coordinator_core.git.argv_batch import _DIVERGENCE_CHECK_ARGV_BUDGET_CHARS
 from coordinator_core.housekeeping import archive_index as archive_index_mod
 from coordinator_core.housekeeping import cycle
-from coordinator_core.housekeeping.tests.corpus_fixture import TOTAL_LIVE, build_corpus
+from coordinator_core.housekeeping.tests.corpus_fixture import (
+    CorpusFixture,
+    LIVE_STATE_COUNTS,
+    MEMO_TERMINAL_COUNT,
+    TERMINAL_STATES,
+    TOTAL_LIVE,
+    build_corpus,
+    build_memo_overflow_corpus,
+)
 from coordinator_core.lifecycle import git_common_dir, main_worktree_root
 from coordinator_core.win_portability import no_console_creationflags
 
@@ -119,13 +128,20 @@ def _init_repo(root: Path) -> Path:
     return root
 
 
-def _build_and_commit_fixture(root: Path, seed: int) -> Path:
+def _build_and_commit_fixture(
+    root: Path, seed: int, **build_corpus_kwargs: Any
+) -> Tuple[Path, CorpusFixture]:
     """Fixture SETUP, excluded from every measured figure below: a fresh
     real-shaped corpus (`build_corpus`) committed as the repo's baseline,
     exactly mirroring `test_cycle.py`'s own `repo` fixture shape but at the
-    plan's own real scale rather than a 5-record toy."""
+    plan's own real scale rather than a 5-record toy.
+
+    Returns `(repo, fixture)` -- the `CorpusFixture` manifest (2026-08-30,
+    the actioned-memo class gets an occasion, C3) so a caller can assert
+    against the memo family's own records without re-scanning the corpus.
+    """
     repo = _init_repo(root)
-    build_corpus(repo, seed=seed)
+    fixture = build_corpus(repo, seed=seed, **build_corpus_kwargs)
     _git(repo, "add", "-A")
     _git(repo, "commit", "-q", "-m", "brightline fixture baseline")
 
@@ -145,10 +161,12 @@ def _build_and_commit_fixture(root: Path, seed: int) -> Path:
     assert archive_index_mod.save_index(
         warm, archive_index_mod.cache_path_for(common_dir)
     ), "fixture could not pre-warm the index cache"
-    return repo
+    return repo, fixture
 
 
-def _run_one_cycle(repo: Path, monkeypatch: pytest.MonkeyPatch) -> Dict[str, Any]:
+def _run_one_cycle(
+    repo: Path, monkeypatch: pytest.MonkeyPatch, *, cap: int = CAP
+) -> Dict[str, Any]:
     """Run ONE gate-clearing cycle, bracketing `time.process_time()` and
     counting real git spawns around `cycle.run()` ONLY — fixture
     construction and the baseline commit above are excluded from both
@@ -199,7 +217,7 @@ def _run_one_cycle(repo: Path, monkeypatch: pytest.MonkeyPatch) -> Dict[str, Any
 
     t0 = time.process_time()
     with patch("asyncio.create_subprocess_exec", side_effect=_counting_spawn):
-        result = cycle.run(str(repo), cap=CAP)
+        result = cycle.run(str(repo), cap=cap)
     elapsed_ms = (time.process_time() - t0) * 1000.0
 
     result = dict(result)
@@ -224,7 +242,7 @@ def test_brightline_gate_clears_and_archives_within_budget(tmp_path_factory, mon
 
     for rep in range(N_OUTER):
         root = tmp_path_factory.mktemp(f"brightline_{rep}")
-        repo = _build_and_commit_fixture(root, seed=20260829 + rep)
+        repo, fixture = _build_and_commit_fixture(root, seed=20260829 + rep)
 
         result = _run_one_cycle(repo, monkeypatch)
 
@@ -245,6 +263,26 @@ def test_brightline_gate_clears_and_archives_within_budget(tmp_path_factory, mon
             f"record, per cycle, per C3's own contract) -- a re-scan/re-read "
             f"regression. result={result!r}"
         )
+        # C3 (2026-08-30, the actioned-memo class gets an occasion): the ONE
+        # assertion this existing test could not already make -- that a memo
+        # actually moved, and the negative control (a non-terminal memo)
+        # stayed. Everything else (spawn count, process time) is already
+        # covered below over the SAME fixture, now that it carries a memo
+        # corpus too -- a memo-leg dirty-check regression already fails
+        # `max_spawns <= GIT_SPAWN_COUNT_TOTAL_RATCHET` below with zero new
+        # test code (this chunk's own brief).
+        assert len(result["memos_archived"]) == MEMO_TERMINAL_COUNT, (
+            f"rep {rep}: expected all {MEMO_TERMINAL_COUNT} clean fixture memos "
+            f"archived (cap={CAP} comfortably exceeds the fixture's memo count): "
+            f"result={result!r}"
+        )
+        assert result["memos_failed"] == [], f"rep {rep}: memo archival failure(s): {result!r}"
+        for noise in fixture.memo_noise_records:
+            assert noise["path"].exists(), (
+                f"rep {rep}: non-terminal (status: open) memo noise control "
+                f"{noise['rel_name']!r} must be retained in the inbox, never "
+                f"archived: result={result!r}"
+            )
 
         samples_ms.append(result["_process_time_ms"])
         spawn_counts.append(result["_git_spawns"])
@@ -302,6 +340,92 @@ def test_brightline_gate_clears_and_archives_within_budget(tmp_path_factory, mon
         f"a second git spawn entered the cycle. {detail}"
     )
     print(detail)
+
+
+def test_cap_applies_independently_per_family_not_over_the_union(tmp_path_factory, monkeypatch):
+    """CAP FIXTURE (staff-eng Finding 5, superseded by overengineering-
+    reviewer Finding 1, EM-adjudicated): each family is capped
+    independently, by its own existing planner (`compute_terminal_set` for
+    handoffs, `plan_sweep` for memos), never a shared cap over the union. A
+    fixture exceeding `cap` in BOTH families combined must still archive up
+    to `cap` from EACH family, not `cap` total split between them.
+
+    A single rep, not part of the N_OUTER budget loop above -- this asserts
+    a functional property (which items got archived), not process time or
+    spawn count.
+    """
+    root = tmp_path_factory.mktemp("brightline_cap")
+    repo, fixture = _build_and_commit_fixture(root, seed=20260830)
+
+    small_cap = 2
+    # Sanity: the default fixture shape already exceeds small_cap in BOTH
+    # families -- LIVE_STATE_COUNTS's own terminal live records (shipped=2,
+    # closed=1, continued=1 == 4) and MEMO_TERMINAL_COUNT=5 actioned memos --
+    # so "archived == cap" below is a genuine cap-slot, never a vacuous count
+    # that just happens to equal the corpus size.
+    assert MEMO_TERMINAL_COUNT > small_cap
+    terminal_live_count = sum(
+        count for state, count in LIVE_STATE_COUNTS.items() if state in TERMINAL_STATES
+    )
+    assert terminal_live_count > small_cap
+
+    result = _run_one_cycle(repo, monkeypatch, cap=small_cap)
+
+    assert len(result["archived"]) == small_cap, (
+        f"handoff family should archive exactly cap={small_cap} despite "
+        f"{terminal_live_count} terminal candidates existing -- its own "
+        f"planner (compute_terminal_set) owns this cap slot: result={result!r}"
+    )
+    assert len(result["memos_archived"]) == small_cap, (
+        f"memo family should ALSO archive exactly cap={small_cap} -- each "
+        f"family is capped independently by its own planner (plan_sweep), "
+        f"never a shared cap over the union (a shared cap would give this "
+        f"family fewer than {small_cap} since the handoff family took its "
+        f"share first): result={result!r}"
+    )
+
+
+def test_memo_overflow_corpus_survives_the_argv_budget_and_dirty_memo_is_retained(
+    tmp_path_factory, monkeypatch
+):
+    """OVERFLOW FIXTURE (staff-eng Finding 3, major): a memo corpus large
+    enough to overflow `_DIVERGENCE_CHECK_ARGV_BUDGET_CHARS` (imported from
+    `coordinator_core.git.argv_batch`, never hand-copied) exercises the
+    branch C2's generalised `fallback_pathspecs` fix changes behaviour on.
+    One survivor is worktree-dirty and must be retained; `git_spawns` must
+    stay at exactly 1, unchanged from the non-overflow case.
+    """
+    root = tmp_path_factory.mktemp("brightline_overflow")
+    repo, fixture = _build_and_commit_fixture(root, seed=20260831)
+
+    overflow_records = build_memo_overflow_corpus(fixture.memo_inbox_dir, count=80)
+    total_chars = sum(len(r["rel_name"]) + 1 for r in overflow_records)
+    assert total_chars > _DIVERGENCE_CHECK_ARGV_BUDGET_CHARS, (
+        f"overflow fixture must exceed the argv budget to exercise the "
+        f"branch under test: {total_chars} chars <= budget "
+        f"{_DIVERGENCE_CHECK_ARGV_BUDGET_CHARS}"
+    )
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "overflow fixture: 80 more actioned memos")
+
+    dirty_record = overflow_records[0]
+    with dirty_record["path"].open("a", encoding="utf-8") as fh:
+        fh.write("\nuncommitted dirty edit\n")
+    dirty_rel = f"cross-repo/inbox/{dirty_record['rel_name']}"
+
+    result = _run_one_cycle(repo, monkeypatch, cap=CAP)
+
+    assert dirty_rel not in result["memos_archived"], (
+        f"the worktree-dirty overflow memo must be retained, never archived: "
+        f"result={result!r}"
+    )
+    assert dirty_record["path"].exists(), "dirty memo must still be present in the inbox on disk"
+    assert result["_git_spawns"] == 1, (
+        f"the overflow branch must still spawn exactly 1 git process (the "
+        f"inherited main-index resync), unchanged from the non-overflow "
+        f"case -- a second spawn here means the generalised "
+        f"fallback_pathspecs fix regressed: result={result!r}"
+    )
 
 
 def test_warm_cycle_uses_the_cache_and_cold_first_build_is_reported_not_hidden(tmp_path):

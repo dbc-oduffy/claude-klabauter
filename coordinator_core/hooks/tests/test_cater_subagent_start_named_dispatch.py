@@ -28,6 +28,7 @@ from coordinator_core.hooks.cater_subagent_start import (
     NAMED_DISPATCH_ROW_RESOLVED_MARKER,
     compose_catering,
 )
+from coordinator_core.win_portability import no_console_passthrough_kwargs
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
@@ -61,9 +62,9 @@ def _canonical_key(raw_agent_id: str, payload_session_id: str) -> str:
 
 @pytest.fixture
 def git_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
-    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=tmp_path, check=True)
-    subprocess.run(["git", "config", "user.name", "Test"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=tmp_path, check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=tmp_path, check=True, **no_console_passthrough_kwargs())
     (tmp_path / "coordinator" / "snippets").mkdir(parents=True)
     # `resolve_plugin_root()` (provision_report.py) resolves the
     # coordinator-claude plugin's CONTENT root independently of this

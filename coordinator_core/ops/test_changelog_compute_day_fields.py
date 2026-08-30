@@ -41,6 +41,7 @@ from coordinator_core.ops.changelog_ops import (
     extract_field_from_handoffs,
     parse_review_record,
 )
+from coordinator_core.win_portability import no_console_creationflags, no_console_passthrough_kwargs
 
 # Declared, not excused: this file spawns a real git process because
 # `_collect_commits`/`_commit_range` under test read real commit-window
@@ -57,22 +58,24 @@ pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 def _init_repo(tmp_path: Path) -> Path:
     repo = tmp_path / "repo"
     repo.mkdir()
-    subprocess.run(["git", "init", "-q", str(repo)], check=True)
-    subprocess.run(["git", "-C", str(repo), "config", "user.email", "t@t.com"], check=True)
-    subprocess.run(["git", "-C", str(repo), "config", "user.name", "t"], check=True)
+    subprocess.run(["git", "init", "-q", str(repo)], check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "-C", str(repo), "config", "user.email", "t@t.com"], check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "-C", str(repo), "config", "user.name", "t"], check=True, **no_console_passthrough_kwargs())
     return repo
 
 
 def _commit(repo: Path, msg: str, fname: str = "f.txt", content: str = "x") -> str:
     (repo / fname).write_text(content)
-    subprocess.run(["git", "-C", str(repo), "add", "-A"], check=True)
+    subprocess.run(["git", "-C", str(repo), "add", "-A"], check=True, **no_console_passthrough_kwargs())
     subprocess.run(
         ["git", "-C", str(repo), "commit", "-q", "--date", "2026-07-15T10:00:00", "-m", msg],
         check=True,
         env=_env_for_commit(),
+        **no_console_passthrough_kwargs(),
     )
     out = subprocess.run(
-        ["git", "-C", str(repo), "rev-parse", "HEAD"], capture_output=True, text=True, check=True
+        ["git", "-C", str(repo), "rev-parse", "HEAD"], capture_output=True, text=True, check=True,
+        **no_console_creationflags(),
     )
     return out.stdout.strip()
 
@@ -150,11 +153,12 @@ def test_plans_touched_lists_docs_plans_files(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     (repo / "docs" / "plans").mkdir(parents=True)
     (repo / "docs" / "plans" / "2026-07-15-thing.md").write_text("# plan\n")
-    subprocess.run(["git", "-C", str(repo), "add", "-A"], check=True)
+    subprocess.run(["git", "-C", str(repo), "add", "-A"], check=True, **no_console_passthrough_kwargs())
     subprocess.run(
         ["git", "-C", str(repo), "commit", "-q", "-m", "feat: add plan"],
         check=True,
         env=_env_for_commit(),
+        **no_console_passthrough_kwargs(),
     )
     result = _plans_touched(repo, "2026-07-15")
     assert result == "docs/plans/2026-07-15-thing.md (status: unknown)"

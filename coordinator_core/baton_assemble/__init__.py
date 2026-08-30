@@ -2885,10 +2885,22 @@ def resolve_lineage(
         # which is the one failure the disposition exists to prevent. It is
         # injected with its disposition UNCHANGED -- visibility, never a
         # re-open; the successor re-declares its state like any other row.
-        # `handoff_carry_gate._TERMINAL_DISPOSITIONS` is not the same axis:
-        # that set means "requires a disposition_detail", not "is
-        # discharged", so including `blocked` here splits no contract. A
-        # leg with no readable `carried_items` (absent field, unparseable
+        # Not the same axis as handoff_carry_gate._TERMINAL_DISPOSITIONS
+        # (that set = "requires a disposition_detail") -- `blocked`'s
+        # membership in that detail-required set does not imply it should
+        # be excluded from this union's visibility axis.
+        # Collision ruling (2026-08-30, review-integrator on this slice):
+        # when a retained `carried` row and an incoming `blocked` row share
+        # a `carry_id`, `blocked` wins and replaces the row IN PLACE (same
+        # list position) -- `blocked` is strictly more informative (names
+        # an external dependency, carries a mandatory disposition_detail)
+        # and losing it loses information nothing downstream can
+        # reconstruct, while losing a `carried` in favour of `blocked`
+        # loses nothing. Asymmetric on purpose: a retained `blocked` is
+        # NEVER downgraded by a later `carried`. `closed`/`spun_off` are
+        # never injected here, so this is a two-value rule, not a
+        # precedence table.
+        # A leg with no readable `carried_items` (absent field, unparseable
         # frontmatter, or a shape `handoff_carry_gate.read_carried_items`
         # itself refuses) contributes nothing and is never fatal here --
         # d7's own gate already covers the PRIMARY predecessor's shape
@@ -2896,7 +2908,7 @@ def resolve_lineage(
         # the same "drop, don't crash" posture `_deliverable_id_for` already
         # takes on this exact leg list.
         _carried_items_paths = [lineage.get("predecessor")] + list(_extra_paths_for_union)
-        _carried_items_seen: set[str] = set()
+        _carried_items_seen: dict[str, int] = {}
         _carried_items_union: list[dict[str, Any]] = []
         for _ci_path in _carried_items_paths:
             if not _ci_path:
@@ -2919,9 +2931,18 @@ def resolve_lineage(
                 if _ci_item.get("disposition") not in ("carried", "blocked"):
                     continue
                 _ci_id = _ci_item.get("carry_id")
-                if not _ci_id or not isinstance(_ci_id, str) or _ci_id in _carried_items_seen:
+                if not _ci_id or not isinstance(_ci_id, str):
                     continue
-                _carried_items_seen.add(_ci_id)
+                if _ci_id in _carried_items_seen:
+                    _ci_existing_idx = _carried_items_seen[_ci_id]
+                    _ci_existing = _carried_items_union[_ci_existing_idx]
+                    if (
+                        _ci_existing.get("disposition") == "carried"
+                        and _ci_item.get("disposition") == "blocked"
+                    ):
+                        _carried_items_union[_ci_existing_idx] = _ci_item
+                    continue
+                _carried_items_seen[_ci_id] = len(_carried_items_union)
                 _carried_items_union.append(_ci_item)
         lineage["carried_items"] = _carried_items_union or None
 

@@ -33,6 +33,7 @@ import pytest
 from coordinator_core.bash_guards import _write_bump_marker as marker
 from coordinator_core.bash_guards import _write_bump_message as message
 from coordinator_core.bash_guards._message_size import MESSAGE_PROSE_CAP_BYTES, measure_envelope
+from coordinator_core.win_portability import no_console_creationflags
 
 # Spawns a real external process; runs at cadence gates, not per-commit.
 # Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
@@ -43,7 +44,7 @@ pytestmark = [
 
 
 def _git(root: str, *args: str) -> None:
-    subprocess.run(["git", *args], cwd=root, check=True, capture_output=True)
+    subprocess.run(["git", *args], cwd=root, check=True, capture_output=True, **no_console_creationflags())
 
 
 def _init_repo(tmp_path: Path, name: str = "repo") -> Path:

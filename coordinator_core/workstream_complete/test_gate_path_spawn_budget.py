@@ -54,6 +54,7 @@ import pytest
 
 import coordinator_core.workstream_complete as wsc
 import coordinator_core.ops.gate_dimension_review as gate_dimension_review
+from coordinator_core.win_portability import no_console_creationflags
 
 # Declared, not excused: this file spawns real `git` processes because the
 # property under test IS process count -- no fixture stands in for it. Same
@@ -64,7 +65,8 @@ pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 def _git(*args: str, cwd) -> subprocess.CompletedProcess:
     return subprocess.run(
-        ["git", *args], cwd=str(cwd), capture_output=True, text=True, check=False
+        ["git", *args], cwd=str(cwd), capture_output=True, text=True, check=False,
+        **no_console_creationflags(),
     )
 
 

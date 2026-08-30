@@ -31,6 +31,7 @@ import pytest
 from coordinator_core.ops.emit.context import EmitContext
 from coordinator_core.ops.emit.sections import handoffs as handoffs_section
 from coordinator_core.ops.emit.sections import handoff_columns
+from coordinator_core.win_portability import no_console_creationflags
 
 # The tail of this file (`test_compute_handoff_columns_resolves_shipped_in_
 # via_git` and its sibling) resolves `shipped_in` via a real `git log`
@@ -386,7 +387,7 @@ def _run_git_or_raise(repo_root: Path, *args: str) -> str:
         ["git", "-C", str(repo_root), *args],
         capture_output=True,
         text=True,
-        check=True,
+        check=True, **no_console_creationflags(),
     )
     return result.stdout.strip()
 

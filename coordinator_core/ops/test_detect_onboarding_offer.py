@@ -14,6 +14,7 @@ import subprocess
 import pytest
 
 from coordinator_core.ops.detect_onboarding_offer import detect_onboarding_offer, main
+from coordinator_core.win_portability import no_console_passthrough_kwargs
 
 # Declared, not excused: this file spawns real git because the bash-oracle parity
 # contract (test-detect-onboarding-offer.sh) it ports depends on real repo state
@@ -26,15 +27,15 @@ pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 
 def _init_git_repo(path):
-    subprocess.run(["git", "init", "--quiet"], cwd=str(path), check=True)
-    subprocess.run(["git", "config", "user.email", "test@test"], cwd=str(path), check=True)
-    subprocess.run(["git", "config", "user.name", "Test"], cwd=str(path), check=True)
+    subprocess.run(["git", "init", "--quiet"], cwd=str(path), check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "config", "user.email", "test@test"], cwd=str(path), check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=str(path), check=True, **no_console_passthrough_kwargs())
     (path / "README.md").write_text("# baseline\n")
-    subprocess.run(["git", "add", "--", "README.md"], cwd=str(path), check=True)
+    subprocess.run(["git", "add", "--", "README.md"], cwd=str(path), check=True, **no_console_passthrough_kwargs())
     subprocess.run(
         ["git", "commit", "--quiet", "--no-verify", "-m", "chore: baseline"],
         cwd=str(path),
-        check=True,
+        check=True, **no_console_passthrough_kwargs(),
     )
 
 

@@ -19,6 +19,10 @@ from pathlib import Path
 import pytest
 
 from coordinator_core.ops import session_commits
+from coordinator_core.win_portability import (
+    no_console_creationflags,
+    no_console_passthrough_kwargs,
+)
 
 pytestmark = [
     pytest.mark.cadence,
@@ -28,7 +32,7 @@ pytestmark = [
 
 def _git(args, cwd) -> str:
     result = subprocess.run(
-        ["git", *args], cwd=str(cwd), check=True, capture_output=True, text=True
+        ["git", *args], cwd=str(cwd), check=True, capture_output=True, text=True, **no_console_creationflags()
     )
     return result.stdout
 

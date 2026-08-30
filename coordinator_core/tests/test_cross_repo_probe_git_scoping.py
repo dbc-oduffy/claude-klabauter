@@ -39,6 +39,7 @@ from coordinator_core.frontmatter.schema_validate import (
     check_schema_drift,
     check_schema_drift_advisory,
 )
+from coordinator_core.win_portability import no_console_creationflags
 
 # Spawns a real external process; runs at cadence gates, not per-commit.
 # Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
@@ -54,7 +55,7 @@ def _git(repo: Path, *args: str) -> subprocess.CompletedProcess:
     return subprocess.run(
         ["git", "-C", str(repo), *args],
         capture_output=True, text=True, check=False, timeout=30,
-        stdin=subprocess.DEVNULL,
+        stdin=subprocess.DEVNULL, **no_console_creationflags(),
     )
 
 

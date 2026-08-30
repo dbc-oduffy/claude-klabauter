@@ -50,6 +50,7 @@ import pytest
 
 from coordinator_core.session import core, scope, touch_record
 from coordinator_core.testing import symlink_capability
+from coordinator_core.win_portability import no_console_creationflags, no_console_passthrough_kwargs
 
 # Every test in this file builds its repo via `_make_repo(tmp_path)`, spawning
 # real git (init/config/add/commit) because the production code under test --
@@ -103,14 +104,15 @@ def _make_repo(tmp_path):
     # silent fixture-setup failure (e.g. a misconfigured test-runner git)
     # must not masquerade as a passing test exercising an empty/unstaged
     # repo; fail loud at setup instead.
-    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True, **no_console_passthrough_kwargs())
     subprocess.run(
-        ["git", "config", "user.email", "t@example.com"], cwd=tmp_path, check=True
+        ["git", "config", "user.email", "t@example.com"], cwd=tmp_path, check=True,
+        **no_console_passthrough_kwargs(),
     )
-    subprocess.run(["git", "config", "user.name", "t"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "config", "user.name", "t"], cwd=tmp_path, check=True, **no_console_passthrough_kwargs())
     (tmp_path / "README.md").write_text("x")
-    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
-    subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=tmp_path, check=True, **no_console_passthrough_kwargs())
     return tmp_path
 
 
@@ -432,9 +434,10 @@ class TestTouchNormalization:
         repo = _make_repo(tmp_path)
         target = repo / "café.md"
         target.write_text("y", encoding="utf-8")
-        subprocess.run(["git", "add", "café.md"], cwd=str(repo), check=True)
+        subprocess.run(["git", "add", "café.md"], cwd=str(repo), check=True, **no_console_passthrough_kwargs())
         subprocess.run(
-            ["git", "commit", "-m", "add non-ascii file"], cwd=str(repo), check=True
+            ["git", "commit", "-m", "add non-ascii file"], cwd=str(repo), check=True,
+            **no_console_passthrough_kwargs(),
         )
         result = scope.normalize_touch_path(str(target), cwd=str(repo))
         assert result == "café.md"
@@ -740,9 +743,10 @@ class TestFastArmGuardClausesPinned:
         repo = _make_repo(tmp_path)
         target = repo / "café.md"
         target.write_text("y", encoding="utf-8")
-        subprocess.run(["git", "add", "café.md"], cwd=str(repo), check=True)
+        subprocess.run(["git", "add", "café.md"], cwd=str(repo), check=True, **no_console_passthrough_kwargs())
         subprocess.run(
-            ["git", "commit", "-m", "add non-ascii file"], cwd=str(repo), check=True
+            ["git", "commit", "-m", "add non-ascii file"], cwd=str(repo), check=True,
+            **no_console_passthrough_kwargs(),
         )
 
         candidate, _exc = scope._relpath_candidate(str(target), str(repo))
@@ -772,9 +776,10 @@ class TestFastArmGuardClausesPinned:
         real_dir = repo / "actual"
         real_dir.mkdir()
         (real_dir / "foo.py").write_text("y")
-        subprocess.run(["git", "add", "actual/foo.py"], cwd=str(repo), check=True)
+        subprocess.run(["git", "add", "actual/foo.py"], cwd=str(repo), check=True, **no_console_passthrough_kwargs())
         subprocess.run(
-            ["git", "commit", "-m", "add actual/foo.py"], cwd=str(repo), check=True
+            ["git", "commit", "-m", "add actual/foo.py"], cwd=str(repo), check=True,
+            **no_console_passthrough_kwargs(),
         )
         link_dir = repo / "linked"
 
@@ -816,8 +821,8 @@ class TestFastArmGuardClausesPinned:
         repo = _make_repo(tmp_path)
         (repo / "src").mkdir()
         (repo / "src" / "a.py").write_text("y")
-        subprocess.run(["git", "add", "src/a.py"], cwd=str(repo), check=True)
-        subprocess.run(["git", "commit", "-m", "add src/a.py"], cwd=str(repo), check=True)
+        subprocess.run(["git", "add", "src/a.py"], cwd=str(repo), check=True, **no_console_passthrough_kwargs())
+        subprocess.run(["git", "commit", "-m", "add src/a.py"], cwd=str(repo), check=True, **no_console_passthrough_kwargs())
         target = repo / "src"
 
         candidate, _exc = scope._relpath_candidate(str(target), str(repo))
@@ -955,6 +960,7 @@ def _load_pre_c1_scope_module():
         capture_output=True,
         text=True,
         check=True,
+        **no_console_creationflags(),
     )
     source = result.stdout
     module_name = "_pre_c1_scope_for_differential_test"
@@ -1040,8 +1046,8 @@ class TestNormalizeTouchPathDifferential:
         repo = _make_repo(tmp_path)
         (repo / "src").mkdir()
         (repo / "src" / "a.py").write_text("y")
-        subprocess.run(["git", "add", "src/a.py"], cwd=str(repo), check=True)
-        subprocess.run(["git", "commit", "-m", "add src/a.py"], cwd=str(repo), check=True)
+        subprocess.run(["git", "add", "src/a.py"], cwd=str(repo), check=True, **no_console_passthrough_kwargs())
+        subprocess.run(["git", "commit", "-m", "add src/a.py"], cwd=str(repo), check=True, **no_console_passthrough_kwargs())
         target = repo / "src"
         old = pre_c1_scope.normalize_touch_path(str(target), cwd=str(repo), root=str(repo))
         new = scope.normalize_touch_path(str(target), cwd=str(repo), root=str(repo))
@@ -1051,9 +1057,10 @@ class TestNormalizeTouchPathDifferential:
         repo = _make_repo(tmp_path)
         target = repo / "café.md"
         target.write_text("y", encoding="utf-8")
-        subprocess.run(["git", "add", "café.md"], cwd=str(repo), check=True)
+        subprocess.run(["git", "add", "café.md"], cwd=str(repo), check=True, **no_console_passthrough_kwargs())
         subprocess.run(
-            ["git", "commit", "-m", "add non-ascii file"], cwd=str(repo), check=True
+            ["git", "commit", "-m", "add non-ascii file"], cwd=str(repo), check=True,
+            **no_console_passthrough_kwargs(),
         )
         old = pre_c1_scope.normalize_touch_path(str(target), cwd=str(repo), root=str(repo))
         new = scope.normalize_touch_path(str(target), cwd=str(repo), root=str(repo))
@@ -1096,9 +1103,10 @@ class TestNormalizeTouchPathDifferential:
         real_dir = repo / "actual"
         real_dir.mkdir()
         (real_dir / "foo.py").write_text("y")
-        subprocess.run(["git", "add", "actual/foo.py"], cwd=str(repo), check=True)
+        subprocess.run(["git", "add", "actual/foo.py"], cwd=str(repo), check=True, **no_console_passthrough_kwargs())
         subprocess.run(
-            ["git", "commit", "-m", "add actual/foo.py"], cwd=str(repo), check=True
+            ["git", "commit", "-m", "add actual/foo.py"], cwd=str(repo), check=True,
+            **no_console_passthrough_kwargs(),
         )
         link_dir = repo / "linked"
 
@@ -2044,7 +2052,7 @@ class TestC0AgentDirJsonlOnlyUnion:
 
         (repo / "coordinator" / "agent_dir_owned").mkdir(parents=True)
         (repo / "coordinator" / "agent_dir_owned" / "inner.py").write_text("z")
-        subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+        subprocess.run(["git", "add", "-A"], cwd=repo, check=True, **no_console_passthrough_kwargs())
 
         result = scope.compute_scope("bystander", cwd=str(repo))
 
@@ -2410,9 +2418,10 @@ class TestComputeScopeLiveness:
 
         # clean.py: committed, no uncommitted content -> claim is stale.
         (repo / "clean.py").write_text("z")
-        subprocess.run(["git", "add", "clean.py"], cwd=repo, check=True)
+        subprocess.run(["git", "add", "clean.py"], cwd=repo, check=True, **no_console_passthrough_kwargs())
         subprocess.run(
-            ["git", "commit", "-q", "-m", "add clean.py"], cwd=repo, check=True
+            ["git", "commit", "-q", "-m", "add clean.py"], cwd=repo, check=True,
+            **no_console_passthrough_kwargs(),
         )
         scope.touch("mine", "clean.py", cwd=str(repo))
         scope.touch("peer", "clean.py", cwd=str(repo))
@@ -2955,9 +2964,10 @@ class TestAttribution:
         core.init("peer", cwd=str(repo))
 
         (repo / "clean.py").write_text("z")
-        subprocess.run(["git", "add", "clean.py"], cwd=repo, check=True)
+        subprocess.run(["git", "add", "clean.py"], cwd=repo, check=True, **no_console_passthrough_kwargs())
         subprocess.run(
-            ["git", "commit", "-q", "-m", "add clean.py"], cwd=repo, check=True
+            ["git", "commit", "-q", "-m", "add clean.py"], cwd=repo, check=True,
+            **no_console_passthrough_kwargs(),
         )
         scope.touch("mine", "clean.py", cwd=str(repo))
         scope.touch("peer", "clean.py", cwd=str(repo))
@@ -3957,9 +3967,10 @@ class TestReleaseCommittedClaims:
         core.init("s-rel1", cwd=str(repo))
         (repo / "foo.py").write_text("x")
         scope.touch("s-rel1", "foo.py", cwd=str(repo))
-        subprocess.run(["git", "add", "foo.py"], cwd=repo, check=True)
+        subprocess.run(["git", "add", "foo.py"], cwd=repo, check=True, **no_console_passthrough_kwargs())
         subprocess.run(
-            ["git", "commit", "-q", "-m", "commit foo"], cwd=repo, check=True
+            ["git", "commit", "-q", "-m", "commit foo"], cwd=repo, check=True,
+            **no_console_passthrough_kwargs(),
         )
 
         scope.release_committed_claims("s-rel1", ["foo.py"], cwd=str(repo))
@@ -4010,9 +4021,10 @@ class TestReleaseCommittedClaims:
         core.init("s-rel4", cwd=str(repo))
         (repo / "hunked.py").write_text("v1")
         scope.touch("s-rel4", "hunked.py", cwd=str(repo))
-        subprocess.run(["git", "add", "hunked.py"], cwd=repo, check=True)
+        subprocess.run(["git", "add", "hunked.py"], cwd=repo, check=True, **no_console_passthrough_kwargs())
         subprocess.run(
-            ["git", "commit", "-q", "-m", "first hunk"], cwd=repo, check=True
+            ["git", "commit", "-q", "-m", "first hunk"], cwd=repo, check=True,
+            **no_console_passthrough_kwargs(),
         )
         # A second, uncommitted edit lands on the SAME already-committed path.
         (repo / "hunked.py").write_text("v2")
@@ -4041,9 +4053,10 @@ class TestReleaseCommittedClaims:
         core.init("s-rel7a", cwd=str(repo))
         (repo / "clean.py").write_text("x")
         scope.touch("s-rel7a", "clean.py", cwd=str(repo))
-        subprocess.run(["git", "add", "clean.py"], cwd=repo, check=True)
+        subprocess.run(["git", "add", "clean.py"], cwd=repo, check=True, **no_console_passthrough_kwargs())
         subprocess.run(
-            ["git", "commit", "-q", "-m", "commit clean"], cwd=repo, check=True
+            ["git", "commit", "-q", "-m", "commit clean"], cwd=repo, check=True,
+            **no_console_passthrough_kwargs(),
         )
 
         record = _sdir(repo, "s-rel7a") / "touch-record.jsonl"
@@ -4086,9 +4099,10 @@ class TestReleaseCommittedClaims:
         core.init("s-rel8", cwd=str(repo))
         (repo / "cycle.py").write_text("v1")
         scope.touch("s-rel8", "cycle.py", cwd=str(repo))
-        subprocess.run(["git", "add", "cycle.py"], cwd=repo, check=True)
+        subprocess.run(["git", "add", "cycle.py"], cwd=repo, check=True, **no_console_passthrough_kwargs())
         subprocess.run(
-            ["git", "commit", "-q", "-m", "commit cycle"], cwd=repo, check=True
+            ["git", "commit", "-q", "-m", "commit cycle"], cwd=repo, check=True,
+            **no_console_passthrough_kwargs(),
         )
 
         scope.release_committed_claims("s-rel8", ["cycle.py"], cwd=str(repo))
@@ -4127,16 +4141,19 @@ class TestReleaseCommittedClaims:
         core.init("s-rename", cwd=str(repo))
         (repo / "old_name.py").write_text("x")
         scope.touch("s-rename", "old_name.py", cwd=str(repo))
-        subprocess.run(["git", "add", "old_name.py"], cwd=repo, check=True)
+        subprocess.run(["git", "add", "old_name.py"], cwd=repo, check=True, **no_console_passthrough_kwargs())
         subprocess.run(
-            ["git", "commit", "-q", "-m", "commit old_name"], cwd=repo, check=True
+            ["git", "commit", "-q", "-m", "commit old_name"], cwd=repo, check=True,
+            **no_console_passthrough_kwargs(),
         )
 
         subprocess.run(
-            ["git", "mv", "old_name.py", "new_name.py"], cwd=repo, check=True
+            ["git", "mv", "old_name.py", "new_name.py"], cwd=repo, check=True,
+            **no_console_passthrough_kwargs(),
         )
         subprocess.run(
-            ["git", "commit", "-q", "-m", "rename to new_name"], cwd=repo, check=True
+            ["git", "commit", "-q", "-m", "rename to new_name"], cwd=repo, check=True,
+            **no_console_passthrough_kwargs(),
         )
         # Re-touch under the new name -- a rename is a fresh file identity
         # from touched.txt's own perspective; nothing renames the entry.
@@ -4168,9 +4185,10 @@ class TestReleaseCommittedClaims:
 
         (repo / "shared.py").write_text("x")
         scope.touch("s-releaser", "shared.py", cwd=str(repo))
-        subprocess.run(["git", "add", "shared.py"], cwd=repo, check=True)
+        subprocess.run(["git", "add", "shared.py"], cwd=repo, check=True, **no_console_passthrough_kwargs())
         subprocess.run(
-            ["git", "commit", "-q", "-m", "commit shared"], cwd=repo, check=True
+            ["git", "commit", "-q", "-m", "commit shared"], cwd=repo, check=True,
+            **no_console_passthrough_kwargs(),
         )
 
         base = Path(core.sessions_dir(cwd=str(repo)))
@@ -4233,9 +4251,10 @@ class TestCrossDialectClaimCancellation:
 
         # Commit it so release_committed_claims sees it clean, then release
         # under the forward-slashed dialect via the real release helper.
-        subprocess.run(["git", "add", "state/x.md"], cwd=repo, check=True)
+        subprocess.run(["git", "add", "state/x.md"], cwd=repo, check=True, **no_console_passthrough_kwargs())
         subprocess.run(
-            ["git", "commit", "-q", "-m", "commit state/x.md"], cwd=repo, check=True
+            ["git", "commit", "-q", "-m", "commit state/x.md"], cwd=repo, check=True,
+            **no_console_passthrough_kwargs(),
         )
         scope.release_committed_claims("s-xd1", ["state/x.md"], cwd=str(repo))
 
@@ -4263,9 +4282,10 @@ class TestCrossDialectClaimCancellation:
         before = claim_index.lookup(["state\\y.md"], sessions_dir=sessions_dir)
         assert before == {"state\\y.md": ["s-xd2"]}
 
-        subprocess.run(["git", "add", "state/y.md"], cwd=repo, check=True)
+        subprocess.run(["git", "add", "state/y.md"], cwd=repo, check=True, **no_console_passthrough_kwargs())
         subprocess.run(
-            ["git", "commit", "-q", "-m", "commit state/y.md"], cwd=repo, check=True
+            ["git", "commit", "-q", "-m", "commit state/y.md"], cwd=repo, check=True,
+            **no_console_passthrough_kwargs(),
         )
         scope.release_committed_claims("s-xd2", ["state\\y.md"], cwd=str(repo))
 
@@ -4297,9 +4317,10 @@ class TestBackslashedRelativePathspecCommitClearsClaimEndToEnd:
             "pkg/mod.py": ["s-e2e"]
         }
 
-        subprocess.run(["git", "add", "pkg/mod.py"], cwd=repo, check=True)
+        subprocess.run(["git", "add", "pkg/mod.py"], cwd=repo, check=True, **no_console_passthrough_kwargs())
         subprocess.run(
-            ["git", "commit", "-q", "-m", "commit pkg/mod.py"], cwd=repo, check=True
+            ["git", "commit", "-q", "-m", "commit pkg/mod.py"], cwd=repo, check=True,
+            **no_console_passthrough_kwargs(),
         )
         scope.release_committed_claims("s-e2e", ["pkg\\mod.py"], cwd=str(repo))
 
@@ -4327,9 +4348,10 @@ class TestBackslashedRelativePathspecCommitClearsClaimEndToEnd:
             "pkg2/mod.py": ["s-e2e-fwd"]
         }
 
-        subprocess.run(["git", "add", "pkg2/mod.py"], cwd=repo, check=True)
+        subprocess.run(["git", "add", "pkg2/mod.py"], cwd=repo, check=True, **no_console_passthrough_kwargs())
         subprocess.run(
-            ["git", "commit", "-q", "-m", "commit pkg2/mod.py"], cwd=repo, check=True
+            ["git", "commit", "-q", "-m", "commit pkg2/mod.py"], cwd=repo, check=True,
+            **no_console_passthrough_kwargs(),
         )
         scope.release_committed_claims("s-e2e-fwd", ["pkg2/mod.py"], cwd=str(repo))
 

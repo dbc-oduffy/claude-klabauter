@@ -144,6 +144,7 @@ import subprocess
 import warnings
 from pathlib import Path
 
+from coordinator_core.win_portability import no_console_creationflags
 from coordinator_core.write_guards.tests._casefold_bypass_lint_baseline import (
     KNOWN_BYPASS_BASELINE,
 )
@@ -178,6 +179,7 @@ def _tracked_write_guard_files() -> tuple[str, ...]:
         capture_output=True,
         text=True,
         check=True,
+        **no_console_creationflags(),
     )
     out = []
     for rel in proc.stdout.split("\x00"):
@@ -525,6 +527,7 @@ def test_gate_catches_the_real_pre_fix_file_verbatim():
         capture_output=True,
         text=True,
         check=True,
+        **no_console_creationflags(),
     ).stdout
     findings = _scan_source(
         "coordinator_core/write_guards/block_consumed_handoff_edit.py", pre_fix_source

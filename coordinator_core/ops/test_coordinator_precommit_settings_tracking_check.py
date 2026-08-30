@@ -24,6 +24,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+from coordinator_core.win_portability import no_console_creationflags
 import pytest
 
 # Spawns a real external process; runs at cadence gates, not per-commit.
@@ -48,7 +49,7 @@ _NEW_MARKERS = (
 
 
 def _git(args: list, cwd: Path) -> subprocess.CompletedProcess:
-    return subprocess.run(["git", *args], cwd=str(cwd), capture_output=True, text=True, check=True)
+    return subprocess.run(["git", *args], cwd=str(cwd), capture_output=True, text=True, check=True, **no_console_creationflags())
 
 
 def _make_meta_repo(tmp_path: Path) -> tuple[Path, Path]:
@@ -65,7 +66,7 @@ def _run(meta_repo: Path, home: Path) -> subprocess.CompletedProcess:
     env = dict(os.environ)
     env["HOME"] = str(home)
     return subprocess.run(
-        [sys.executable, str(_SCRIPT)], cwd=str(meta_repo), capture_output=True, text=True, env=env
+        [sys.executable, str(_SCRIPT)], cwd=str(meta_repo), capture_output=True, text=True, env=env, **no_console_creationflags()
     )
 
 
@@ -105,7 +106,7 @@ def test_override_bypasses_the_new_markers_too(tmp_path):
     env["HOME"] = str(home)
     env["COORDINATOR_OVERRIDE_PRECOMMIT_SETTINGS_TRACKING"] = "1"
     result = subprocess.run(
-        [sys.executable, str(_SCRIPT)], cwd=str(meta), capture_output=True, text=True, env=env
+        [sys.executable, str(_SCRIPT)], cwd=str(meta), capture_output=True, text=True, env=env, **no_console_creationflags()
     )
 
     assert result.returncode == 0

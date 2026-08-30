@@ -48,6 +48,7 @@ import pytest
 
 from coordinator_core.frontmatter.primitives import read_fm_field, split_frontmatter
 from coordinator_core.ops.ceremony import completion_entry
+from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -68,6 +69,7 @@ def _make_git_repo(tmp_path: Path) -> Path:
             cwd=str(repo),
             capture_output=True,
             check=True,
+            **no_console_creationflags(),
         )
 
     _git("init", "-b", "main")

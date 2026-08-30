@@ -29,6 +29,7 @@ from coordinator_core.ops.goal_append import (
 )
 from coordinator_core.ops.emit._slug import machine_slug
 from coordinator_core.testing import symlink_capability
+from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -55,6 +56,7 @@ def _make_git_repo(tmp_path: Path) -> Path:
             cwd=str(repo),
             capture_output=True,
             check=True,
+            **no_console_creationflags(),
         )
 
     _git("init", "-b", "main")

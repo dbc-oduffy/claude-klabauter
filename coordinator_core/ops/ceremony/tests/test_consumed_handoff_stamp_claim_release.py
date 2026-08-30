@@ -31,6 +31,7 @@ from coordinator_core.ops.ceremony.consumed_handoff_stamp import (
 )
 from coordinator_core.session import core as session_core
 from coordinator_core.session import scope as session_scope
+from coordinator_core.win_portability import no_console_creationflags
 
 # `_commit_and_push_follow_up` lands a real commit and reads real touched.txt
 # claim-release events through `session_scope` -- a mocked git would not
@@ -44,7 +45,7 @@ pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 
 def _git(args, cwd: Path) -> None:
-    subprocess.run(["git", *args], cwd=str(cwd), capture_output=True, text=True, check=True)
+    subprocess.run(["git", *args], cwd=str(cwd), capture_output=True, text=True, check=True, **no_console_creationflags())
 
 
 def _sdir(repo: Path, sid: str) -> Path:

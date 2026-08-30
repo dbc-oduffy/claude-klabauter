@@ -80,16 +80,20 @@ C6/C7 delete, and the Stop-time push-failure detector
 sweep push records a row through `log_failure` directly so the detector
 does not go quiet on exactly the failures the cadence now owns.
 
-INHERITS THE DRAIN. `drain_pending_push(repo_root)` runs before
-`push_outstanding` on every swept repo -- the regression this whole module
-exists to prevent is losing `drain_pending_push`'s only "for free" call
-site (the per-commit detached respawn `run_push_with_retry`'s own head
-used to reach). What the drain actually buys here is documented on
-`drain_pending_push` itself: the dead-ref record path, pending-record
-cleanup, and the retry ladder's forensic trail -- `push_outstanding`'s own
-outstanding-work decision does not depend on it (it compares HEAD to the
-upstream ref directly), so the bound this module names is not itself
-contingent on the drain succeeding.
+DOES NOT DRAIN. This module used to call `drain_pending_push(repo_root)`
+ahead of `push_outstanding` on every swept repo, "for free" call site
+reasoning that no longer holds: `drain_pending_push`'s only production
+writer, `_write_pending_record`, is reachable only from `_hold_window`,
+which C8 gravestoned -- so the record it would drain is never written on
+any surviving path (review: overengineering-reviewer, Finding 3,
+2026-08-30). `push_outstanding`'s own outstanding-work decision does not
+depend on the drain either way (it compares HEAD to the upstream ref
+directly), so removing the call changes nothing this module's own bound
+relies on. The pending-record subsystem itself
+(`_write_pending_record`/`_read_pending_record`/`drain_pending_push`/the
+`workday.drain_pending_push` op/`push.py::_drain_pending_push_after_sync`)
+is left in place -- gravestoning it is a separate, multi-file follow-on
+outside this module's scope.
 """
 
 from __future__ import annotations
@@ -103,7 +107,7 @@ from typing import Callable, Iterable, List, Optional, Union
 
 from coordinator_core.git.git_dir import resolve_git_common_dir
 from coordinator_core.git.git_state import head_branch
-from coordinator_core.hooks.auto_push import drain_pending_push, log_failure
+from coordinator_core.hooks.auto_push import log_failure
 from coordinator_core.ops.ceremony.push import PUSH_RETRY_BUDGET_SECS
 from coordinator_core.ops.push_outstanding import push_outstanding
 from coordinator_core.session import core as session_core
@@ -264,11 +268,43 @@ def _release_sweep_lock(repo_root: Union[str, Path], *, pid: Optional[int] = Non
     """Best-effort release -- never raises, and never releases a foreign
     holder's record (a stale-but-foreign record is left for the next
     acquirer's own takeover check, not unlinked here).
+
+    Review: code-reviewer P3, 2026-08-30 -- reading the record and then
+    unlinking BY PATH is check-then-act: if this holder's own hold window
+    has already run past `_SWEEP_LOCK_HOLD_SECS` + `_SWEEP_LOCK_STALE_GRACE_SECS`
+    (this process overran its own generous budget) a peer can have already
+    declared this record stale, `unlink()`ed it, and recreated it as its
+    own live lock between the read below and this function's `unlink()` --
+    which would then delete the PEER's live lock by path, not by identity.
+    `os.stat`+`st_ino`/`st_dev` on the path immediately before unlinking
+    closes that window down to the syscall gap between the two calls
+    (irreducible without a platform-level atomic compare-and-delete):
+    a peer's takeover always creates a NEW inode, so a mismatch here means
+    "someone else already owns this path" and is treated exactly like a
+    foreign holder_pid -- leave it alone.
     """
     pid = os.getpid() if pid is None else pid
     path = _sweep_lock_path(repo_root)
-    record = _read_sweep_lock(path)
-    if record is not None and record.get("holder_pid") != pid:
+    try:
+        fd = os.open(str(path), os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        st = os.fstat(fd)
+        data = os.read(fd, 65536)
+    finally:
+        os.close(fd)
+    try:
+        record = json.loads(data.decode("utf-8"))
+    except ValueError:
+        return
+    if not isinstance(record, dict) or record.get("holder_pid") != pid:
+        return
+    try:
+        cur_st = os.stat(path)
+    except OSError:
+        return
+    if cur_st.st_ino != st.st_ino or cur_st.st_dev != st.st_dev:
         return
     try:
         path.unlink()
@@ -295,23 +331,22 @@ def _feed_failure_detector(repo_root: Union[str, Path], outcome) -> None:
         pass
 
 
-def _sweep_one(repo_root: Union[str, Path], *, per_repo_deadline: float) -> None:
-    """Drain, then push, exactly one repo -- declining outright if another
-    sweeper already holds this repo's lock. `per_repo_deadline` is accepted
-    for documentation symmetry with the module's SWEEP COST BUDGET section;
-    the actual per-repo bound is enforced by `push_with_retry`'s own
-    `PUSH_RETRY_BUDGET_SECS`-keyed ladder deadline inside `push_outstanding`
-    itself, not re-implemented here.
+# Review: overengineering-reviewer Finding 1 -- `per_repo_deadline` existed
+# only to be `del`eted on entry; doctrine forbids a signature carrying a
+# parameter no caller needs and no callee uses.
+# Review: overengineering-reviewer Finding 3 -- no `drain_pending_push` call
+# here; see module docstring's DOES NOT DRAIN section for why.
+def _sweep_one(repo_root: Union[str, Path]) -> None:
+    """Push exactly one repo -- declining outright if another sweeper
+    already holds this repo's lock. The per-repo bound is enforced by
+    `push_with_retry`'s own `PUSH_RETRY_BUDGET_SECS`-keyed ladder deadline
+    inside `push_outstanding` itself -- see the module docstring's SWEEP
+    COST BUDGET section, not re-implemented here.
     """
-    del per_repo_deadline
     root = Path(repo_root)
     if not _acquire_sweep_lock(root):
         return
     try:
-        try:
-            drain_pending_push(str(root))
-        except Exception:  # noqa: BLE001 -- the sweep must not die on drain
-            pass
         try:
             outcome = push_outstanding(root)
         except Exception:  # noqa: BLE001 -- a sweep push must never raise
@@ -325,7 +360,6 @@ def _sweep_one(repo_root: Union[str, Path], *, per_repo_deadline: float) -> None
 def sweep_repos(
     repos: Iterable[Union[str, Path]],
     *,
-    per_repo_deadline: float = PUSH_RETRY_BUDGET_SECS,
     total_ceiling_secs: float = SWEEP_TOTAL_CEILING_SECS,
     clock: Callable[[], float] = time.monotonic,
 ) -> None:
@@ -343,7 +377,7 @@ def sweep_repos(
         if root in seen:
             continue
         seen.append(root)
-        _sweep_one(root, per_repo_deadline=per_repo_deadline)
+        _sweep_one(root)
 
 
 def on_idle_tick(

@@ -44,6 +44,7 @@ from pathlib import Path
 import pytest
 
 from coordinator_core.ops.ceremony import git_native
+from coordinator_core.win_portability import no_console_creationflags
 from .fixtures.real_git import (
     make_agree_path,
     make_diverged_path,
@@ -56,7 +57,8 @@ pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 def _git(args: list[str], cwd: Path) -> subprocess.CompletedProcess:
     return subprocess.run(
-        ["git", *args], cwd=str(cwd), capture_output=True, text=True, check=True
+        ["git", *args], cwd=str(cwd), capture_output=True, text=True, check=True,
+        **no_console_creationflags(),
     )
 
 
@@ -234,7 +236,8 @@ def test_staged_deletion_is_actually_removed_not_resurrected(tmp_path):
     ls_tree = _git(["ls-tree", "HEAD", "--", "doomed.txt"], repo).stdout
     assert ls_tree == "", f"doomed.txt must not exist in the new HEAD tree: {ls_tree!r}"
     show = subprocess.run(
-        ["git", "show", "HEAD:doomed.txt"], cwd=str(repo), capture_output=True, text=True
+        ["git", "show", "HEAD:doomed.txt"], cwd=str(repo), capture_output=True, text=True,
+        **no_console_creationflags(),
     )
     assert show.returncode != 0, "doomed.txt must not exist in the new HEAD tree"
 

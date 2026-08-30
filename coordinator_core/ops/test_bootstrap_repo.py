@@ -31,6 +31,7 @@ from coordinator_core.ops.bootstrap_repo import (
     _validate_target_root_op,
     main,
 )
+from coordinator_core.win_portability import no_console_creationflags, no_console_passthrough_kwargs
 
 # Declared, not excused: this file spawns a real git process because
 # `_validate_target_root_is_git_repo` under test validates a real target
@@ -44,20 +45,20 @@ pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 
 def _init_git(root: str) -> None:
-    subprocess.run(["git", "-C", root, "init", "--quiet"], check=True, timeout=30)
-    subprocess.run(["git", "-C", root, "config", "user.email", "test@test"], check=True, timeout=30)
-    subprocess.run(["git", "-C", root, "config", "user.name", "Test"], check=True, timeout=30)
-    subprocess.run(["git", "-C", root, "config", "commit.gpgsign", "false"], check=True, timeout=30)
+    subprocess.run(["git", "-C", root, "init", "--quiet"], check=True, timeout=30, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "-C", root, "config", "user.email", "test@test"], check=True, timeout=30, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "-C", root, "config", "user.name", "Test"], check=True, timeout=30, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "-C", root, "config", "commit.gpgsign", "false"], check=True, timeout=30, **no_console_passthrough_kwargs())
 
 
 def _baseline_commit(root: str) -> None:
     with open(os.path.join(root, "README.md"), "w", encoding="utf-8") as fh:
         fh.write("# baseline\n")
-    subprocess.run(["git", "-C", root, "add", "--", "README.md"], check=True, timeout=30)
+    subprocess.run(["git", "-C", root, "add", "--", "README.md"], check=True, timeout=30, **no_console_passthrough_kwargs())
     subprocess.run(
         ["git", "-C", root, "commit", "--quiet", "--no-verify", "-m", "chore: baseline"],
         check=True,
-        timeout=30,
+        timeout=30, **no_console_passthrough_kwargs(),
     )
 
 
@@ -67,7 +68,7 @@ def _head_sha(root: str) -> str:
         check=True,
         capture_output=True,
         text=True,
-        timeout=30,
+        timeout=30, **no_console_creationflags(),
     )
     return proc.stdout.strip()
 
@@ -77,7 +78,7 @@ def _commit_subject(root: str) -> str:
         ["git", "-C", root, "log", "-1", "--format=%s"],
         capture_output=True,
         text=True,
-        timeout=30,
+        timeout=30, **no_console_creationflags(),
     )
     return (proc.stdout or "").strip()
 
@@ -458,11 +459,11 @@ def test_conflict_warn_gate_fires_exit_four(tmp_path, monkeypatch):
     _baseline_commit(str(target))
     with open(target / "version.txt", "w", encoding="utf-8") as fh:
         fh.write("deadbeef\n")
-    subprocess.run(["git", "-C", str(target), "add", "--", "version.txt"], check=True, timeout=30)
+    subprocess.run(["git", "-C", str(target), "add", "--", "version.txt"], check=True, timeout=30, **no_console_passthrough_kwargs())
     subprocess.run(
         ["git", "-C", str(target), "commit", "--quiet", "--no-verify", "-m", "chore: add version.txt"],
         check=True,
-        timeout=30,
+        timeout=30, **no_console_passthrough_kwargs(),
     )
 
     conflict_coord_root = _make_coordinator_root(

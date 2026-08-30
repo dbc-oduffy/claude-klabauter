@@ -42,6 +42,7 @@ from coordinator_core.bash_guards._write_bump_marker import (
     resolve_gitdir,
 )
 from coordinator_core.bash_guards._write_bump_sink_shapes import WRITE_SINK_BINARIES
+from coordinator_core.win_portability import no_console_creationflags
 
 # Spawns a real external process; runs at cadence gates, not per-commit.
 # Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
@@ -141,7 +142,7 @@ def _posix(p) -> str:
 
 
 def _git(root: str, *args: str) -> None:
-    subprocess.run(["git", *args], cwd=root, check=True, capture_output=True)
+    subprocess.run(["git", *args], cwd=root, check=True, capture_output=True, **no_console_creationflags())
 
 
 def _init_repo(tmp_path: Path, name: str) -> Path:

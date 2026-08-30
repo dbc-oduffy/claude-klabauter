@@ -77,6 +77,7 @@ from coordinator_core.ops.handoff_correct_body import (
     _handler,
     _is_roadmap_workflow_authoring_session,
 )
+from coordinator_core.win_portability import no_console_creationflags
 from coordinator_core.ops.handoff_discharge_criteria import (
     _handler as _discharge_handler,
 )
@@ -129,6 +130,7 @@ def _make_git_repo(tmp_path: Path) -> Path:
             cwd=str(repo),
             capture_output=True,
             check=True,
+            **no_console_creationflags(),
         )
 
     _git("init", "-b", "main")
@@ -2514,7 +2516,8 @@ def test_ac5_d2vi_handler_never_issues_git_commit(tmp_path, monkeypatch):
     _set_calling_session(monkeypatch)
 
     head_before = subprocess.run(
-        ["git", "rev-parse", "HEAD"], cwd=str(repo), capture_output=True, text=True, check=True
+        ["git", "rev-parse", "HEAD"], cwd=str(repo), capture_output=True, text=True, check=True,
+        **no_console_creationflags(),
     ).stdout.strip()
 
     result = _run(_handler(
@@ -2528,12 +2531,14 @@ def test_ac5_d2vi_handler_never_issues_git_commit(tmp_path, monkeypatch):
 
     assert result["exit_code"] == 0, result
     head_after = subprocess.run(
-        ["git", "rev-parse", "HEAD"], cwd=str(repo), capture_output=True, text=True, check=True
+        ["git", "rev-parse", "HEAD"], cwd=str(repo), capture_output=True, text=True, check=True,
+        **no_console_creationflags(),
     ).stdout.strip()
     assert head_after == head_before, "the handler must never git-commit"
 
     status = subprocess.run(
-        ["git", "status", "--porcelain"], cwd=str(repo), capture_output=True, text=True, check=True
+        ["git", "status", "--porcelain"], cwd=str(repo), capture_output=True, text=True, check=True,
+        **no_console_creationflags(),
     ).stdout
     assert "2026-08-06-no-commit.md" in status, "the write must be an uncommitted, dirty change"
 

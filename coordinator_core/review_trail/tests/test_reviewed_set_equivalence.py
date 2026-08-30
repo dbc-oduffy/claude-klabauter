@@ -66,6 +66,7 @@ pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 from coordinator_core.review_trail import backfill
 from coordinator_core.review_trail import reviewed_set as rs
+from coordinator_core.win_portability import no_console_creationflags
 
 #: This repo's own root — coordinator_core/review_trail/tests/<this file>.py
 #: is three levels below it (tests -> review_trail -> coordinator_core -> root).
@@ -91,6 +92,7 @@ _RATCHET_PATH = (
 def _git(args: List[str], cwd: Path) -> subprocess.CompletedProcess:
     return subprocess.run(
         ["git"] + args, cwd=str(cwd), capture_output=True, encoding="utf-8", check=True,
+        **no_console_creationflags(),
     )
 
 
@@ -106,6 +108,7 @@ def _make_commit(repo: Path, message: str, session_id: Optional[str] = None) -> 
     return subprocess.run(
         ["git", "rev-parse", "HEAD"], cwd=str(repo),
         capture_output=True, encoding="utf-8", check=True,
+        **no_console_creationflags(),
     ).stdout.strip()
 
 
@@ -121,6 +124,7 @@ def _make_file_commit(repo: Path, rel_path: str, message: str) -> str:
     return subprocess.run(
         ["git", "rev-parse", "HEAD"], cwd=str(repo),
         capture_output=True, encoding="utf-8", check=True,
+        **no_console_creationflags(),
     ).stdout.strip()
 
 
@@ -131,6 +135,7 @@ def _touched_paths(sha: str, repo: Path) -> set:
     out = subprocess.run(
         ["git", "diff-tree", "--no-commit-id", "--name-only", "-r", sha],
         cwd=str(repo), capture_output=True, encoding="utf-8", check=True,
+        **no_console_creationflags(),
     ).stdout
     return {p.strip() for p in out.splitlines() if p.strip()}
 
@@ -139,6 +144,7 @@ def _rev_list(sha_range: str, repo: Path) -> set:
     out = subprocess.run(
         ["git", "rev-list", sha_range], cwd=str(repo),
         capture_output=True, encoding="utf-8", check=True,
+        **no_console_creationflags(),
     ).stdout
     return {s.strip() for s in out.splitlines() if s.strip()}
 

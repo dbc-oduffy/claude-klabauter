@@ -45,8 +45,10 @@ The terminal-handoff sweep's live call site is now
 zero additional git spawns, zero additional commits (see that module). This module wires
 no call site for it any more; ``fleet.archive_completed_plans`` and ``fleet.
 archive_actioned_memos`` remain without any occasioned call site here (the former killed
-and rebuilt from scratch 2026-08-23, the latter killed outright the same day, both PM
-rulings, neither yet re-earning one).
+and rebuilt from scratch 2026-08-23, PM ruling, not yet re-earning one; the latter also
+killed outright the same day, PM ruling, then itself rebuilt from scratch and returned to
+the live registry at ``b8795931a`` -- see ``state/kill-ledger.md`` K-052 -- but still
+without an occasioned call site of its own here).
 
 C5 (2026-07-23 wsc-tail-slim-down): ``refresh_roadmap_callout`` below was being dropped from
 ``wsc_tail.py``'s BLOCKING pre-commit tail and fired as a DETACHED CLI spawn instead, via

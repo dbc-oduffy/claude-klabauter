@@ -139,6 +139,7 @@ import pytest
 
 from coordinator_core.benchmarks import process_time
 from coordinator_core.benchmarks.process_time import IS_DARWIN, batched_process_time_ms
+from coordinator_core.win_portability import no_console_passthrough_kwargs
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -364,7 +365,7 @@ def test_registering_a_reaped_pid_raises_rather_than_reporting_one_process(monke
     concretely `ProcessLookupError` from the subsequent `os.kill` on the
     already-reaped pid -- never a silent `procs_per_call == 1`."""
     _require_darwin()
-    proc = subprocess.Popen(["/bin/sh", "-c", "true"])
+    proc = subprocess.Popen(["/bin/sh", "-c", "true"], **no_console_passthrough_kwargs())
     reaped_pid = proc.pid
     os.waitpid(reaped_pid, 0)
 

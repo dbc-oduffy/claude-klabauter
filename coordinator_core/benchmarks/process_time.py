@@ -148,6 +148,10 @@ if IS_WINDOWS:
 
     _JOB_OBJECT_BASIC_ACCOUNTING_INFORMATION = 1
     _CREATE_SUSPENDED = 0x00000004
+    # Without this every measured child allocates a conhost window. This module
+    # measures git, and a k-batched call spawns k of them, so the omission cost
+    # a window per sample on every budget measurement in the repo.
+    _CREATE_NO_WINDOW = 0x08000000
     _PROCESS_SET_QUOTA = 0x0100
     _PROCESS_TERMINATE = 0x0001
     _TH32CS_SNAPTHREAD = 0x00000004
@@ -309,7 +313,7 @@ def _windows_spawn_into_job(
         cwd=cwd,
         stdout=stdout,
         stderr=stderr,
-        creationflags=_CREATE_SUSPENDED,
+        creationflags=_CREATE_SUSPENDED | _CREATE_NO_WINDOW,
     )
     if not _k32.AssignProcessToJobObject(
         wintypes.HANDLE(job), wintypes.HANDLE(int(proc._handle))

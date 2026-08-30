@@ -5,29 +5,15 @@ coordinator/bin/ names an artifact the relocation ledger records as RETIRED or
 MOVED, unless that (file, artifact) pair predates this gate and is recorded in
 its baseline.
 
-MOTIVATING INCIDENT (2026-08-30, this repo). K-046 deleted
-``coordinator_core/ops/ceremony/wsc_tail.py`` on 2026-08-23. Nothing revised the
-31 places ``ops/ceremony/post_commit_tail.py`` describes it, in the present
-tense, as a live in-process caller -- so that module went on documenting a
-``/workstream-complete`` stamp path that had stopped existing. The cost was not
-cosmetic:
-
-  - doe-claude-em read the surviving prose, correctly expected a close to stamp
-    its baton, found the stamp unfired, and filed a cross-repo bug against
-    ``find_all_consumed_handoffs`` -- a predicate that is not defective
-    (``cross-repo/inbox/2026-08-30-doe-claude-em-wsc-consumed-set-keys-on-a-
-    retired-field.md``).
-  - This repo's EM then sized an M plan to "reconnect" a path both K-046's and
-    K-116's returns-when explicitly forbid reconnecting.
-  - The PM hand-swept four batons in the meantime (DoE ``cca375e23``).
-  - K-116 itself justified retaining ``post_commit_tail.run()`` by naming
-    ``wsc_tail.py`` as its caller -- four days after that file was deleted.
-
-Three readers, one PM sweep, and a kill-ledger entry, all wrong in the same
-direction, from prose that outlived its subject. The brightline already names
-the rule this violates -- "No conclusion rests on 'a caller exists'" -- but a
-rule with no artifact behind it is the thing the north star exists to replace.
-This module is that artifact.
+MOTIVATING INCIDENT (2026-08-30, this repo). ``ops/ceremony/post_commit_tail.py``
+went on describing a dead caller (K-046, `c07062c99`, 2026-08-23) in the present
+tense, and three readers plus a PM sweep were each misled by it in turn before
+the trace was corrected. Full incident:
+``docs/research/spike-verdicts/2026-08-30-baton-ship-stamp-inside-a-500ms-close.md``
+§ CORRECTION, and kill-ledger K-046/K-116. The brightline already names the rule
+this violates -- "No conclusion rests on 'a caller exists'" -- but a rule with
+no artifact behind it is the thing the north star exists to replace. This
+module is that artifact.
 
 WHY THE RELOCATION LEDGER IS THE NAME SET. It is the one place a deliberate
 death is already recorded, in machine-readable form, as a precondition of

@@ -16,6 +16,7 @@ import pytest
 
 from coordinator_core.install import door_install_posix_build as posix_install
 from coordinator_core.warm.door import build_posix
+from coordinator_core.win_portability import no_console_creationflags
 
 
 pytestmark = pytest.mark.skipif(
@@ -117,6 +118,7 @@ def test_build_or_advise_advisory_command_actually_runs(tmp_path, monkeypatch):
         text=True,
         timeout=60,
         cwd=str(tmp_path),
+        **no_console_creationflags(),
     )
     assert completed.returncode == 0, (
         "the advisory names a command that does not run:\n"

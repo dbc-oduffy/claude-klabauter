@@ -71,6 +71,7 @@ from coordinator_core.ops.records_query import (
     _walk_glob_segments,
     liveness,
 )
+from coordinator_core.win_portability import no_console_creationflags
 from coordinator_core.write_guards.nudge_improvement_queue_write import (
     _ENTRY_LINE_RE as _WRITE_GUARD_ENTRY_LINE_RE,
 )
@@ -121,18 +122,21 @@ def _make_git_repo(root: Path) -> Path:
         cwd=str(root),
         capture_output=True,
         check=True,
+        **no_console_creationflags(),
     )
     subprocess.run(
         ["git", "config", "user.email", "records-query-test@claude-klabauter.test"],
         cwd=str(root),
         capture_output=True,
         check=True,
+        **no_console_creationflags(),
     )
     subprocess.run(
         ["git", "config", "user.name", "Records Query Test"],
         cwd=str(root),
         capture_output=True,
         check=True,
+        **no_console_creationflags(),
     )
     return (root / ".git").resolve()
 

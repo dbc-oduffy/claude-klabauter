@@ -40,7 +40,7 @@ _SID = "12121212-1212-4121-8121-121212121212"
 
 
 def _git(args, cwd) -> None:
-    subprocess.run(["git", *args], cwd=str(cwd), check=True, capture_output=True, text=True)
+    subprocess.run(["git", *args], cwd=str(cwd), check=True, capture_output=True, text=True, **no_console_creationflags())
 
 
 def _init_repo(tmp_path: Path) -> Path:

@@ -39,6 +39,10 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from coordinator_core.search.regex_translate import translate
+from coordinator_core.win_portability import (
+    no_console_creationflags,
+    no_console_passthrough_kwargs,
+)
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -103,7 +107,8 @@ def _real_grep_lines(pattern: str, dialect: str, path: Path) -> set:
         ["grep"] + flag + ["-n", "-f", str(pattern_file), "--", str(path)],
         capture_output=True,
         timeout=5,
-    )
+    **no_console_creationflags(),
+)
     assert proc.returncode in (0, 1), (
         "real grep itself errored on %r (dialect=%s): rc=%d stderr=%r -- "
         "this pattern cannot be used as a differential oracle case"

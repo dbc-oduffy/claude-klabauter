@@ -44,6 +44,7 @@ from coordinator_core.ops.fleet.memo_draft import (
 )
 from coordinator_core.ops.fleet._memo_resolver import resolve_receiver_inbox, unique_nearest_receiver
 from coordinator_core.ops.fleet._memo_summary import _SUMMARY_MAX_CHARS, SUMMARY_PLACEHOLDER
+from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -57,6 +58,7 @@ def _run(result):
 def _git(repo: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess:
     return subprocess.run(
         ["git"] + list(args), cwd=str(repo), capture_output=True, check=check,
+        **no_console_creationflags(),
     )
 
 

@@ -85,6 +85,7 @@ from coordinator_core.ops.emit.normalizers import (  # noqa: E402
     _relativize_abs_fixture_path,
 )
 from coordinator_core.ops.emit.resolvers import resolve_coordinator_root  # noqa: E402
+from coordinator_core.win_portability import no_console_creationflags  # noqa: E402
 
 
 def normalize_record(record: dict) -> dict:
@@ -676,6 +677,7 @@ def _run_git_or_raise(repo_root: Path, *args: str) -> str:
         capture_output=True,
         text=True,
         check=True,
+        **no_console_creationflags(),
     )
     return result.stdout.strip()
 

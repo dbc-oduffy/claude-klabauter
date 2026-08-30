@@ -90,6 +90,7 @@ from pathlib import Path
 from typing import Iterable, Optional
 
 from coordinator_core.install import door_install
+from coordinator_core.win_portability import no_console_creationflags
 from coordinator_core.install.engine_root_for_install import resolve_engine_root_for_install
 from coordinator_core.install.substrate import _static_bin_family_names
 
@@ -315,6 +316,10 @@ def _probe(name: str, settings_home_bin: Optional[Path] = None) -> int:
         capture_output=True,
         text=True,
         timeout=30,
+        # `no_console_creationflags()`, not the passthrough variant: this call
+        # captures and re-emits both streams itself two lines below, which is
+        # the condition that makes the bare flag safe.
+        **no_console_creationflags(),
     )
     sys.stdout.write(result.stdout)
     sys.stderr.write(result.stderr)

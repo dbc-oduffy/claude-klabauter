@@ -19,6 +19,10 @@ import pytest
 
 import coordinator_core.ops.workday_start_cross_repo_memo_surface as surface_mod
 from coordinator_core.ops.workday_start_cross_repo_memo_surface import main
+from coordinator_core.win_portability import (
+    no_console_creationflags,
+    no_console_passthrough_kwargs,
+)
 
 # Declared, not excused: `test_main_performs_no_archival_in_a_real_git_worktree`
 # spawns a real git process because it deliberately regression-tests the
@@ -439,14 +443,14 @@ def test_main_performs_no_archival_in_a_real_git_worktree(tmp_path, monkeypatch)
     fires on the git-root-resolved path."""
     repo = tmp_path / "repo"
     repo.mkdir()
-    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
-    subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=repo, check=True)
-    subprocess.run(["git", "config", "user.name", "test"], cwd=repo, check=True)
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=repo, check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "config", "user.name", "test"], cwd=repo, check=True, **no_console_passthrough_kwargs())
     inbox = repo / "cross-repo" / "inbox"
     inbox.mkdir(parents=True)
     (repo / "README.md").write_text("placeholder\n")
-    subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
-    subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=repo, check=True)
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=repo, check=True, **no_console_passthrough_kwargs())
 
     _write_memo(
         inbox,
@@ -471,6 +475,6 @@ def test_main_performs_no_archival_in_a_real_git_worktree(tmp_path, monkeypatch)
     assert rc == 0
 
     log = subprocess.run(
-        ["git", "log", "--oneline"], cwd=repo, capture_output=True, text=True, check=True
+        ["git", "log", "--oneline"], cwd=repo, capture_output=True, text=True, check=True, **no_console_creationflags()
     )
     assert len(log.stdout.strip().splitlines()) == 1

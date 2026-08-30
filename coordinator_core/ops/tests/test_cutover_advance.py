@@ -27,6 +27,10 @@ import pytest
 import yaml
 
 from coordinator_core.ops.cutover_advance import _cutover_advance
+from coordinator_core.win_portability import (
+    no_console_creationflags,
+    no_console_passthrough_kwargs,
+)
 
 # Spawns a real external process; runs at cadence gates, not per-commit.
 # Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
@@ -50,15 +54,17 @@ def git_repo_root(tmp_path: Path) -> Path:
     """
     repo_root = tmp_path / "repo"
     repo_root.mkdir()
-    subprocess.run(["git", "init", "-b", "main"], cwd=str(repo_root), capture_output=True, check=True)
+    subprocess.run(["git", "init", "-b", "main"], cwd=str(repo_root), capture_output=True, check=True, **no_console_creationflags())
     subprocess.run(
         ["git", "config", "user.email", "cutover-advance-test@claude-klabauter.test"],
         cwd=str(repo_root), capture_output=True, check=True,
-    )
+    **no_console_creationflags(),
+)
     subprocess.run(
         ["git", "config", "user.name", "Cutover Advance Test"],
         cwd=str(repo_root), capture_output=True, check=True,
-    )
+    **no_console_creationflags(),
+)
     return repo_root
 
 
@@ -66,7 +72,8 @@ def _common_dir(repo_root: Path) -> Path:
     result = subprocess.run(
         ["git", "rev-parse", "--path-format=absolute", "--git-common-dir"],
         cwd=str(repo_root), capture_output=True, check=True, encoding="utf-8",
-    )
+    **no_console_creationflags(),
+)
     return Path(result.stdout.strip())
 
 

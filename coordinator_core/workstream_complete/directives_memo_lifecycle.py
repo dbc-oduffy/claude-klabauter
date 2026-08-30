@@ -716,7 +716,7 @@ def classify_session_authored_files(
 
 
 #: `build_deletion_blocks_directive` (`d-emit-deletion-blocks`) was REMOVED
-#: 2026-08-30. It emitted `wsc-close.py tail-args --deleted-paths/--kept-
+#: 2026-08-30. It emitted `archive-session-scope.py tail-args --deleted-paths/--kept-
 #: entries`; `251ff57703` deleted that subcommand the same day, having already
 #: retired the OTHER producer of the same argv (`d-close-tail-args`) — this one
 #: was missed and outlived the parser it fed by one commit. The consumer chain

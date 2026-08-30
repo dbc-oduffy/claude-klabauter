@@ -28,6 +28,7 @@ import pytest
 
 from coordinator_core.bash_guards import dispatch_checks
 from coordinator_core.session import core, touch_record
+from coordinator_core.win_portability import no_console_creationflags
 
 # Spawns real external `git` processes; runs at cadence gates, not per-commit.
 # Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
@@ -39,7 +40,7 @@ def _run(coro):
 
 
 def _git(root: str, *args: str) -> None:
-    subprocess.run(["git", *args], cwd=root, check=True, capture_output=True)
+    subprocess.run(["git", *args], cwd=root, check=True, capture_output=True, **no_console_creationflags())
 
 
 def _init_repo(tmp_path: Path) -> str:

@@ -364,7 +364,6 @@
     "workweek-trail-scope",
     "write-identity-file",
     "write-workday-start-marker",
-    "wsc-close",
     "wsc-coverage-gate-runner",
     "wsc-session-disposition"
   ]

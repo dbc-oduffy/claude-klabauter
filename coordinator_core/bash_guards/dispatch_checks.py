@@ -2870,6 +2870,27 @@ def _rm_flush_touch(paths: List[str], session_id: str, root: Optional[str]) -> N
     resolved and relpaths them; the write side receives them relative
     already. That appender carries the same never-raise posture, so the
     outer ``try`` is belt-and-braces for the import, not for the writes.
+
+    Containment against ``root`` is load-bearing here, not tidy -- it is
+    the write side's own gate (``write_claim_record.record_write_claims``,
+    via that module's local ``_is_within`` twin, kept local rather than
+    imported from here on purpose -- see that function's docstring), and
+    this deletion-side twin had none until now. ``claim_index.commit_set``
+    filters neither dirtiness nor containment by its own NEGATIVE SPEC (PM
+    ruling 2026-08-21), so an out-of-repo claim that slips past this
+    function reaches ``safe_commit_offer``'s commit pathspec undetected.
+    That is the exact failure mode ``write_claim_record._SED_SCRIPT_RE``'s
+    own note already measured: `git add -- <junk>` exits 128 and the real
+    change is NOT committed, so one bad claim destroys the session's whole
+    commit. Sighted for real in cross-repo memo ``2026-08-30-doe-claude-em-
+    safe-commit-drops-subagent-written-paths.md``, which reported a bare
+    ``holder.json`` in ``reconciliation.claimed_absent``, sourced from a
+    pytest ``tmp_path`` outside the repo -- benign there only because an
+    ABSENT out-of-repo path routes to ``deleted_paths`` and commits
+    nothing; a PRESENT one is not benign. Skip before relpathing, not
+    after: a skipped target still never raises (the never-raise posture
+    above is unchanged), it is simply never handed to ``os.path.relpath``
+    or the appender at all.
     """
     if not paths or not session_id or not root:
         return
@@ -2878,6 +2899,8 @@ def _rm_flush_touch(paths: List[str], session_id: str, root: Optional[str]) -> N
 
         rels = []
         for tgt_abs in paths:
+            if not _is_within(tgt_abs, root):
+                continue
             try:
                 rels.append(os.path.relpath(tgt_abs, root).replace(os.sep, "/"))
             except ValueError:

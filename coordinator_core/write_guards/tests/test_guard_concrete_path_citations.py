@@ -32,6 +32,7 @@ from pathlib import Path
 import pytest
 
 from coordinator_core.write_guards.guard_concrete_path_citations import CLASS, check
+from coordinator_core.win_portability import no_console_passthrough_kwargs
 
 # Spawns a real external process; runs at cadence gates, not per-commit.
 # Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
@@ -86,7 +87,7 @@ def repo_root():
     through an interactive shell -- unaffected by the interactive-session
     destructive-git guard)."""
     with tempfile.TemporaryDirectory() as d:
-        subprocess.run(["git", "init", "-q", d], check=True)
+        subprocess.run(["git", "init", "-q", d], check=True, **no_console_passthrough_kwargs())
         yield Path(d)
 
 

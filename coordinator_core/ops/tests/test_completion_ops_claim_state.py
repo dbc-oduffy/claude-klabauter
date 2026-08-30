@@ -35,6 +35,10 @@ import coordinator_core.ops.completion_ops  # noqa: F401 — fires @register_op
 
 from coordinator_core import claim_state as _claim_state_module
 from coordinator_core.ops.completion_ops import day_coverage_sweep
+from coordinator_core.win_portability import (
+    no_console_creationflags,
+    no_console_passthrough_kwargs,
+)
 
 # Spawns a real external process; runs at cadence gates, not per-commit.
 # Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
@@ -53,7 +57,8 @@ def _git(repo: Path, *args: str) -> None:
         cwd=str(repo),
         capture_output=True,
         check=True,
-    )
+    **no_console_creationflags(),
+)
 
 
 def _make_git_repo(tmp_path: Path) -> Path:
@@ -78,7 +83,8 @@ def _make_git_repo(tmp_path: Path) -> Path:
         capture_output=True,
         check=True,
         env=_committer_env("2020-01-01T00:00:00+00:00"),
-    )
+    **no_console_creationflags(),
+)
 
     return repo
 
@@ -118,7 +124,8 @@ def _commit_with_session_trailer(repo: Path, fname: str, session_id: str, day: s
         capture_output=True,
         check=True,
         env=_committer_env(ts),
-    )
+    **no_console_creationflags(),
+)
 
 
 def _committer_env(ts: str) -> dict:

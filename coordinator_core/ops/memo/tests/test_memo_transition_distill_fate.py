@@ -27,6 +27,7 @@ import pytest
 
 from coordinator_core.frontmatter.schema_validate import validate_memo_cross_fields
 from coordinator_core.ops.memo_transition import _action
+from coordinator_core.win_portability import no_console_creationflags
 
 # Real git spawn is load-bearing: this file re-derives parity against the JS
 # oracle's stamp-at-source fields, which are written into a real committed
@@ -36,15 +37,16 @@ pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 def _git_init(path: Path) -> None:
     path.mkdir(parents=True, exist_ok=True)
-    subprocess.run(["git", "init", str(path)], check=True, capture_output=True)
+    subprocess.run(["git", "init", str(path)], check=True, capture_output=True, **no_console_creationflags())
     (path / ".gitkeep").touch()
-    subprocess.run(["git", "-C", str(path), "add", ".gitkeep"], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(path), "add", ".gitkeep"], check=True, capture_output=True, **no_console_creationflags())
     subprocess.run(
         ["git", "-C", str(path), "commit", "-m", "init", "--allow-empty-message"],
         check=True, capture_output=True,
         env={**__import__("os").environ, "GIT_AUTHOR_NAME": "test",
              "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "test",
              "GIT_COMMITTER_EMAIL": "t@t"},
+        **no_console_creationflags(),
     )
 
 
@@ -55,9 +57,9 @@ def _git_track(repo: Path, target: Path) -> None:
            "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "test",
            "GIT_COMMITTER_EMAIL": "t@t"}
     subprocess.run(["git", "-C", str(repo), "add", "--", rel],
-                   check=True, capture_output=True)
+                   check=True, capture_output=True, **no_console_creationflags())
     subprocess.run(["git", "-C", str(repo), "commit", "-m", "deliver memo", "--", rel],
-                   check=True, capture_output=True, env=env)
+                   check=True, capture_output=True, env=env, **no_console_creationflags())
 
 
 _IN_PROGRESS_FIXTURE = """\

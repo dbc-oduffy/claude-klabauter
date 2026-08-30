@@ -96,8 +96,6 @@ ASSEMBLER_DISPATCHABLE: "types.MappingProxyType[str, frozenset[str]]" = types.Ma
     "workstream_complete": frozenset({
         "wsc-coverage-gate-runner",
         "check-workstream-complete-deletion-blocks",
-        "archive-session-scope",
-        "wsc-close",
         "coordinator-lesson-add",
         "coordinator-queue-append",
         "archive-stamp-cli",

@@ -32,6 +32,7 @@ import pytest
 from coordinator_core import claim_state
 from coordinator_core.ops.ceremony import commit_gates as _cg
 from coordinator_core.ops.ceremony.commit_gates import dirty_tree_gate
+from coordinator_core.win_portability import no_console_creationflags
 
 # Real-git spawn is load-bearing (index/worktree state); cadence-scoped like
 # the sibling dirty_tree_gate suites in this module.
@@ -39,7 +40,7 @@ pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 
 def _git(args, cwd) -> None:
-    subprocess.run(["git", *args], cwd=str(cwd), check=True, capture_output=True, text=True)
+    subprocess.run(["git", *args], cwd=str(cwd), check=True, capture_output=True, text=True, **no_console_creationflags())
 
 
 def _init_repo(tmp_path: Path) -> Path:

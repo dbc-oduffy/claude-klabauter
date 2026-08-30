@@ -15,6 +15,7 @@ import pytest
 
 from coordinator_core.ops.dirty_tree_gate import _resolve_plugin_root, main
 from coordinator_core.testing.doe_root import resolve_doe_root
+from coordinator_core.win_portability import no_console_creationflags
 
 # Spawns a real external process; runs at cadence gates, not per-commit.
 # Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
@@ -30,6 +31,7 @@ def _git(repo: Path, *args: str) -> subprocess.CompletedProcess:
         capture_output=True,
         text=True,
         check=True,
+        **no_console_creationflags(),
     )
 
 

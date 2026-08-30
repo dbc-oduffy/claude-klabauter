@@ -13,16 +13,35 @@ the tier does the work, and nothing runs on a timer.
 THE OP TAKES A TIER, NEVER A SCHEDULE OR A TASK LIST. The mapping, and the
 measured cost of each (spike figures, n=1, lower bounds — see § below):
 
-  hourly  -> git maintenance run --task=commit-graph      31.2 ms,  2.0 procs
-  daily   -> git maintenance run --schedule=daily        190.6 ms,  6.0 procs
-  weekly  -> git prune --expire=2.weeks.ago               40.6 ms,  1.0 proc
-             then git maintenance run --schedule=weekly  178.1 ms,  7.0 procs
+  hourly  -> git maintenance run --task=commit-graph      40.6 ms,  2.0 procs
+  daily   -> git maintenance run --schedule=daily        392.6 ms,  7.0 procs
+  weekly  -> git prune --expire=2.weeks.ago              175.0 ms,  1.0 proc
+             then git maintenance run --task=pack-refs    53.1 ms,  2.0 procs
              then sweep_orphan_packs()                    ~2 s (one window)
 
-THE WEEKLY ORDER IS LOAD-BEARING — prune FIRST. `--schedule=weekly` includes
-`loose-objects`, which packs loose objects, unreachable ones included, and
-`git prune` only ever removes LOOSE objects. Prune sequenced after the run
-therefore reaps nothing and exits 0. See `run_tier` for the full note.
+THE WEEKLY TIER WAS `--schedule=weekly` AND IT WENT OVER THE BAR. Measured at
+515.6 ms mean / 9 procs (N=8 independent COLD repos, each registered through
+`configure_git` + `git_perf_config.apply()` and given 200 commits of churn,
+one first-run sample each). Five of eight samples landed at or above 500 ms.
+Decomposing it named the cause rather than inviting a shave: commit-graph
+(40.6) + loose-objects (203.1) + incremental-repack (31.2) = 328 ms of that
+bundle is what `--schedule=daily` had ALREADY run that day, because
+`maintenance.strategy=incremental` makes schedules cumulative. The only
+weekly-unique work is `pack-refs` and this module's own prune. So the tier
+was rebuilt around what it is FOR -- refs compaction and unreachable-object
+reaping -- instead of around a schedule keyword that re-does yesterday.
+Numbers above are means over N independent COLD registered repos. Do not
+restore figures measured against UNREGISTERED repos or a single warm sample --
+both under-measure, and both were tried and retracted.
+
+THE WEEKLY ORDER IS STILL LOAD-BEARING, BUT ACROSS TIERS NOW, NOT WITHIN ONE
+-- `--task=pack-refs` packs nothing, so prune-before-pack-refs is no longer
+load-bearing on its own. The order survives because the DAILY tier's
+`loose-objects` task packs loose objects, unreachable ones included, and
+`git prune` only ever removes LOOSE objects: on a day both tiers fire, a
+weekly prune sequenced after that daily run reaps nothing and exits 0. Filed
+as state/bug-backlog/2026-08-30-the-daily-tier-packs-unreachable-objects-309a82437447.yaml.
+See `run_tier` for the full note.
 
 The ~2 s is a SLEEP, not process time, and the brightline is process time. That
 distinction is exactly why the sweep is weekly-tier work and never commit-path
@@ -130,14 +149,23 @@ _PRUNE_EXPIRE = "2.weeks.ago"
 _ORPHAN_PACK_AGE_SEC = 600
 _ORPHAN_PACK_STABILITY_SEC = 2.0
 
-# Tier -> the `git maintenance run` argument vector for that tier. Hourly is a
-# task list precisely so `prefetch` cannot enter it; daily and weekly are
-# schedules because their task sets are git's to define and the prefetch key
-# suppresses the one task that would put them over the bar.
+# Tier -> the `git maintenance run` argument vector for that tier. Hourly and
+# weekly are task lists, each derived and measured: hourly to keep `prefetch`
+# out, weekly to drop the tasks `--schedule=weekly` shared with daily under
+# `maintenance.strategy=incremental` (which install sets), which is what put
+# it at 515.6ms/9 procs -- 328ms of that was daily's work, done twice.
+#
+# DAILY IS STILL `--schedule=daily`, UNLIKE THE OTHER TWO. It was not the tier
+# that breached, so it was never re-derived from first principles the way
+# weekly was -- this is the one exemption in this map that rests on nothing
+# measured beyond its own total. It sits at 392.6ms against the 500ms bar,
+# ~107ms of margin, on a keyword whose task set is git's to change between
+# versions rather than ours to name. Kept as-is because nothing forced the
+# question, not because the question was asked and answered.
 _TIER_ARGV = {
     "hourly": ("maintenance", "run", "--task=commit-graph"),
     "daily": ("maintenance", "run", "--schedule=daily"),
-    "weekly": ("maintenance", "run", "--schedule=weekly"),
+    "weekly": ("maintenance", "run", "--task=pack-refs"),
 }
 
 # Review: overengineering-reviewer -- was a second literal declaration of
@@ -152,7 +180,7 @@ class MaintenanceResult:
     no work — a caller reading only the exit code cannot tell it from a
     successful run, which is why it is reported."""
 
-    tier: str
+    tier: Optional[str]
     ran: bool = False
     deferred: Optional[str] = None
     pruned: bool = False
@@ -406,9 +434,10 @@ def run_tier(repo: Path, tier: Optional[str]) -> MaintenanceResult:
     # PRUNE RUNS BEFORE THE MAINTENANCE RUN, NOT AFTER, and the order is
     # load-bearing rather than stylistic.
     #
-    # `--schedule=weekly` includes the `loose-objects` task, which PACKS loose
-    # objects -- unreachable ones included. `git prune` only ever removes LOOSE
-    # objects; once garbage has been packed, dropping it needs a full
+    # The daily tier's `loose-objects` task PACKS loose objects -- unreachable
+    # ones included -- and on a day the weekly tier also fires, daily runs
+    # first. `git prune` only ever removes LOOSE objects; once garbage has
+    # been packed, dropping it needs a full
     # `repack -A -d` or a `gc`, and `gc` is a kill-bar item here (10,068ms/9
     # procs against prune's 40.6ms/1 proc). So a prune sequenced after the
     # maintenance run silently reaps nothing: `loose-objects` has already

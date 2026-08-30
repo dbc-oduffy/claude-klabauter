@@ -50,7 +50,6 @@ commit. See state/kill-ledger.md.
 
 from __future__ import annotations
 
-import contextvars
 import functools
 import ntpath
 import os
@@ -59,10 +58,9 @@ import subprocess
 import tempfile
 import time
 import uuid
-from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Optional, Sequence, Set, Tuple, Union
+from typing import Any, Dict, List, Optional, Sequence, Set, Tuple, Union
 
 from coordinator_core.git.content_hash import (
     _attributes_pattern_matches,
@@ -1180,114 +1178,30 @@ def directory_pathspec_diagnostic(path: str) -> str:
     )
 
 
-#: Env var `coordinator_core.hooks.auto_push` reads to stand down for one
-#: commit. Imported by name rather than restated as a literal so the two
-#: modules cannot drift apart silently.
-_AUTO_PUSH_SUPPRESS_ENV = "COORDINATOR_AUTO_PUSH_SUPPRESS_FOR_SYNC_PUSH"
-
-
-#: Widens `_sole_publisher_env()`'s suppression decision for the DURATION of
-#: a caller-declared span, independent of the per-call `suppress_post_commit_
-#: auto_push` argument each higher-level caller (`commit_pipeline.commit`,
-#: `post_commit_tail`, `consumed_handoff_stamp`) computes for itself as
-#: `(push_mode == PUSH_MODE_SYNC)`. A `contextvars.ContextVar`, deliberately
-#: NOT `os.environ`: `_sole_publisher_env`'s own docstring names the reason
-#: `os.environ` is never mutated here (a cold-spawn engine hides a process-
-#: global toggle; a warm one turns it into a cross-request leak) -- a
-#: contextvar is coroutine/task-local under asyncio (and copied into an
-#: `asyncio.to_thread` worker via `contextvars.copy_context()`, so it
-#: survives the `commit_pipeline`/`post_commit_tail` call chain's own
-#: to_thread hop) and carries none of that leak risk. Sole writer today:
-#: `wsc_tail._deferred_publisher_backstop()`, wrapping the deferred-path's
-#: steps 5a-5d so the hook's own push stands down for the WHOLE span (the
-#: main ceremony commit and its 5c/5d follow-up commits alike), leaving
-#: step 5e's own detached push as the sole publisher (opro-01 C-01 follow-up,
-#: docs/plans/2026-08-19-windows-commit-hook-starts-python-once.md C5).
-_deferred_publisher_active: "contextvars.ContextVar[bool]" = contextvars.ContextVar(
-    "_deferred_publisher_active", default=False
-)
-
-
-@contextmanager
-def deferred_publisher_span() -> Iterator[None]:
-    """Mark every `_sole_publisher_env()` call reached during this span as
-    "the caller will publish" (see `_sole_publisher_env`'s own docstring:
-    "the invariant is not enforceable here ... held at each call site").
-    `wsc_tail`'s deferred-path backstop is this contextvar's sole caller --
-    see its own docstring for why the widening is scoped to that one span
-    rather than applied unconditionally to every `push_mode="deferred"`
-    caller in the codebase (there is, today, exactly one: `wsc_tail`).
-
-    Resets via the token on exit (including on an exception) rather than
-    unconditionally clearing to `False` -- a NESTED span (not exercised
-    today, but the correct contract for one) restores the OUTER span's
-    value instead of clobbering it to `False` on the inner span's exit.
-    """
-    token = _deferred_publisher_active.set(True)
-    try:
-        yield
-    finally:
-        _deferred_publisher_active.reset(token)
-
-
+# Review: overengineering-reviewer Finding 5 -- the sole-publisher
+# suppression axis is gravestoned. `_AUTO_PUSH_SUPPRESS_ENV`'s only reader
+# was `auto_push.main()` (deleted, Finding 4); `git_hook_install.
+# ensure_post_commit_hook` stopped passing `skip_env` for post-commit once
+# C7 made its body `exit 0`, so the write-side env var reached no consumer
+# either way. `deferred_publisher_span()`/`_deferred_publisher_active` had
+# their one named caller, `wsc_tail._deferred_publisher_backstop()`, and
+# `wsc_tail.py` does not exist in this tree (verified at HEAD) -- so that
+# axis was dead on arrival, not merely orphaned by this wave. Both deleted
+# outright; `_sole_publisher_env` survives as a no-op stub below because
+# `commit_with_message_file`, `commit_with_message_file_pathspec_scoped`,
+# and `commit_scoped` all still accept `suppress_post_commit_auto_push` as
+# a keyword from callers this dispatch's scope does not include
+# (`consumed_handoff_stamp.py`, `post_commit_tail.py`) -- dropping the
+# parameter from those three signatures would break those out-of-scope
+# call sites. The per-commit `dict(os.environ)` copy is what actually goes:
+# nothing downstream reads the env this function used to build, so it now
+# always returns None (`_git` inherits the parent environment unchanged).
 def _sole_publisher_env(suppress_post_commit_auto_push: bool) -> Optional[Dict[str, str]]:
-    """Env for a `git commit` whose caller will publish the commit itself.
-
-    opro-01 C-01 (state/audits/2026-08-18-opro-01-where-the-push-outcome-is-
-    known.md). `git commit` fires the installed `post-commit` hook, which
-    detaches and pushes; a caller that then runs its own synchronous `git
-    push` has TWO publishers racing for one branch tip. When the detached
-    child wins, the caller's own push fails on a commit that is already on
-    the remote -- the 2026-07-30 false negative, and the reason
-    `scoped_git_commit` grew a remote-confirmation probe to walk its own
-    verdict back.
-
-    Standing the hook's push down for this one commit makes the caller's own
-    push outcome authoritative BY CONSTRUCTION rather than by corroborating
-    it against the remote. The commit is still published -- synchronously, by
-    the caller, in the same invocation.
-
-    Accepted delta, named because it is a real one (review, s2): on a
-    suppressed commit whose synchronous push then FAILS, no pending-push record
-    is written by anyone -- the hook that would have written one stood down, and
-    the caller's re-hosted drain only runs after a push that succeeded. This is
-    not silent (`integrity_breach` fires on exactly that path) and the commit is
-    not orphaned (it rides the branch tip on the next successful push), so the
-    "delay, never lose" contract degrades to "delay" rather than breaking. The
-    alternative -- writing a record from the failure path -- would hand the
-    next drain a push this caller already owns, which is the two-publisher
-    problem this seam exists to remove.
-
-    The invariant is "whoever sets this WILL publish the commit" -- not,
-    as an earlier revision of this docstring stated, "synchronously, in
-    this same invocation": `wsc_tail`'s deferred-path backstop (C5,
-    docs/plans/2026-08-19-windows-commit-hook-starts-python-once.md) sets
-    this for a commit it will publish via a DETACHED child spawned later,
-    after steps 5a-5d complete -- still exactly one publisher, just not a
-    synchronous one. Neither shape is enforceable here: this function
-    cannot see the caller's later control flow. Each is held at its own
-    call site -- the synchronous shape by tying the per-call
-    `suppress_post_commit_auto_push` argument to `push_mode ==
-    PUSH_MODE_SYNC` (pinned by `test_suppression_is_wired_to_sync_mode_
-    only`), the deferred shape by `wsc_tail` wrapping steps 5a-5d in
-    `deferred_publisher_span()` (pinned by
-    `test_deferred_publisher_span_widens_suppression`).
-
-    Returns None when suppression is off (neither the per-call argument NOR
-    an active `deferred_publisher_span()`), so the caller passes `env=None`
-    and `_git` inherits the parent environment unchanged (never a rebuilt
-    copy of `os.environ`, which would be a behaviour change wearing a
-    no-op's clothes). `os.environ` itself is never mutated: this repo's
-    engine is a cold spawn per invocation today, but the warm engine would
-    make a process-global toggle here a cross-request leak -- the reason
-    the span above is a `contextvars.ContextVar`, not a second `os.environ`
-    write.
+    """No-op. Always returns None -- see the gravestone note above this
+    function for why the parameter is still accepted.
     """
-    if not (suppress_post_commit_auto_push or _deferred_publisher_active.get()):
-        return None
-    env = dict(os.environ)
-    env[_AUTO_PUSH_SUPPRESS_ENV] = "1"
-    return env
+    del suppress_post_commit_auto_push
+    return None
 
 
 def commit_with_message_file(
@@ -4072,11 +3986,14 @@ def commit_scoped(
         # on `msg_file` now, a fact this code just established. No spawned
         # `git commit` runs on this branch any more (see below), so no
         # `prepare-commit-msg` hook will ever read this sentinel for THIS
-        # call -- it is set anyway, unconditionally, so AC12's single-setter
-        # invariant continues to describe a real fact about this call site
-        # rather than a landmark from a mechanism that no longer runs here.
-        trailer_sentinel_env = _trailer_sentinel_env()
-        del trailer_sentinel_env
+        # call. Review: coordinator:code-reviewer (P3, 2026-08-30) -- the
+        # prior assign-then-`del` here computed `_trailer_sentinel_env()`
+        # and immediately discarded it, which read as accidental dead code
+        # rather than a deliberate invariant pin; no test in the current
+        # tree consumes a "sentinel-setter fired here" fact (grep confirms
+        # zero references to `_TRAILERS_ALREADY_APPLIED_ENV`/
+        # `_trailer_sentinel_env` outside this module), so the call is
+        # dropped outright rather than kept as a no-op assert.
 
         # C3 dispatch (state/dispatch-briefs/2026-08-26-the-commit-becomes-
         # a-warm-served-op/C3.md), spike verdict docs/research/spike-
@@ -4711,13 +4628,6 @@ def commit_authored_content(
     let this function's own `compute_missing_trailer_args` call re-derive
     the committer's identity a second, independent way -- the same
     disagreeing-copies hazard `commit_scoped`'s own docstring names.
-
-    Bound 5's auto-push replay stands down for the duration of an active
-    `deferred_publisher_span()`, exactly as `commit_scoped` honours the same
-    span. This entrypoint reads that predicate directly off
-    `_deferred_publisher_active` at the replay call site rather than through
-    `commit_scoped`'s env-marker mechanism, because it runs no `git commit`
-    and fires no hooks for that marker to reach.
 
     Returns a `GitResult`; on success `stdout` carries the new commit SHA
     (matching `_commit_scoped_private_index`'s own contract). Failure

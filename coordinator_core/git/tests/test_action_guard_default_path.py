@@ -31,6 +31,7 @@ from coordinator_core.git import commit as gcommit
 from coordinator_core.git import action_guard
 from coordinator_core.git.commit import CommitDeniedByActionGuard, CommitRefused
 from coordinator_core.ops.session import scope_report
+from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -39,7 +40,8 @@ _NOWIN = {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)}
 
 def _git(repo, *args):
     return subprocess.run(
-        ["git", *args], cwd=str(repo), capture_output=True, text=True, check=True, **_NOWIN
+        ["git", *args], cwd=str(repo), capture_output=True, text=True, check=True, **_NOWIN,
+        **no_console_creationflags(),
     )
 
 

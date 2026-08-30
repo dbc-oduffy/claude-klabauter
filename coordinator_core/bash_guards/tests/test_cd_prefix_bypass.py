@@ -135,6 +135,7 @@ from coordinator_core.bash_guards import (
 from coordinator_core.bash_guards import (
     block_reviewer_bash_outside_allowlist as reviewer_guard,
 )
+from coordinator_core.win_portability import no_console_creationflags
 
 # Spawns a real external process; runs at cadence gates, not per-commit.
 # Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
@@ -890,19 +891,22 @@ def _git_repo_with_loadbearing_state(tmp_path: Path) -> Path:
     """
     repo = tmp_path / "shared-tree"
     (repo / "state").mkdir(parents=True)
-    subprocess.run(["git", "init", "-q"], cwd=str(repo), check=True, capture_output=True)
+    subprocess.run(["git", "init", "-q"], cwd=str(repo), check=True, capture_output=True, **no_console_creationflags())
     subprocess.run(
         ["git", "config", "user.email", "t@t"], cwd=str(repo), check=True, capture_output=True
+        **no_console_creationflags(),
     )
     subprocess.run(
         ["git", "config", "user.name", "t"], cwd=str(repo), check=True, capture_output=True
+        **no_console_creationflags(),
     )
 
     tracked = repo / "state" / "tracked.md"
     tracked.write_text("committed baseline\n", encoding="utf-8")
-    subprocess.run(["git", "add", "-A"], cwd=str(repo), check=True, capture_output=True)
+    subprocess.run(["git", "add", "-A"], cwd=str(repo), check=True, capture_output=True, **no_console_creationflags())
     subprocess.run(
         ["git", "commit", "-qm", "baseline"], cwd=str(repo), check=True, capture_output=True
+        **no_console_creationflags(),
     )
 
     # Uncommitted tracked edit -- what an unscoped `git stash` sweeps.

@@ -19,6 +19,7 @@ from coordinator_core.ops.doc_staleness import (
     build_doc_staleness_report,
     compute_doc_staleness,
 )
+from coordinator_core.win_portability import no_console_creationflags
 
 import pytest
 
@@ -34,7 +35,8 @@ _BASE_DATE = date(2026, 1, 1)
 
 def _git(repo: Path, *args: str) -> subprocess.CompletedProcess:
     return subprocess.run(
-        ["git", *args], cwd=repo, capture_output=True, text=True, check=True
+        ["git", *args], cwd=repo, capture_output=True, text=True, check=True,
+        **no_console_creationflags(),
     )
 
 
@@ -70,6 +72,7 @@ def _dated_commit(
         env=env,
         check=True,
         capture_output=True,
+        **no_console_creationflags(),
     )
     return _git(repo, "rev-parse", "HEAD").stdout.strip()
 

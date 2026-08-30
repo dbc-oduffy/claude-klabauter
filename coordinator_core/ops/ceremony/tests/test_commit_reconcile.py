@@ -23,12 +23,13 @@ from pathlib import Path
 import pytest
 
 import coordinator_core.ops.ceremony.commit_reconcile as commit_reconcile_mod
+from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 
 def _git(args, cwd) -> None:
-    subprocess.run(["git", *args], cwd=str(cwd), check=True, capture_output=True, text=True)
+    subprocess.run(["git", *args], cwd=str(cwd), check=True, capture_output=True, text=True, **no_console_creationflags())
 
 
 def _init_repo(tmp_path: Path) -> Path:
@@ -48,7 +49,8 @@ def _seed_file(repo: Path, rel_path: str, content: str) -> None:
 
 def _rev_parse_head(repo: Path) -> str:
     return subprocess.run(
-        ["git", "rev-parse", "HEAD"], cwd=str(repo), capture_output=True, text=True, check=True
+        ["git", "rev-parse", "HEAD"], cwd=str(repo), capture_output=True, text=True, check=True,
+        **no_console_creationflags(),
     ).stdout.strip()
 
 

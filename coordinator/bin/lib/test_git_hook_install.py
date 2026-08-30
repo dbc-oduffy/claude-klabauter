@@ -148,7 +148,7 @@ def test_shim_body_missing_interpreter_and_missing_script_read_the_same_shape():
 # rungs, and losing either must still be caught.
 # ---------------------------------------------------------------------------
 
-_EXPECTED_BODY_SHAPE_CHECKSUM = "b4162604b3bd0afe3c8483dadcda99e5c707cbb96cec245ca7c330d0314d90a2"
+_EXPECTED_BODY_SHAPE_CHECKSUM = "98cd38f8e25a78cb40e0990769cb89b62d90e49d1ab869fe78befb81c2cb67cc"
 
 _BAKED_PY_PLACEHOLDER = "<BAKED-INTERPRETER>"
 
@@ -464,11 +464,21 @@ def test_post_commit_never_carries_the_no_session_gate():
 # called, and no resolution rung is left on the bare `[ -f ]` that the MSYS
 # `.exe` fallback makes a lie.
 # ---------------------------------------------------------------------------
+#
+# Review: overengineering-reviewer Finding 4 residual (state/bug-backlog/
+# 2026-08-30-auto-push-main-and-two-launcher-referenc-2d703797edb5.yaml) --
+# the exemplar script name below was "coordinator-auto-push", a script
+# `_append_block` no longer generates a shim for (`ensure_post_commit_hook`
+# is a pure no-op, C7; `_append_block`'s one production caller today is
+# `ensure_prepare_commit_msg_hook`). Renamed to the real current caller so
+# this generic-shim test never reads as pinning a retired forwarder target
+# -- `_append_block` itself is a plain string-template function with no
+# behavior tied to either script name.
 
 _APPEND_BLOCK_ARGS = (
     "/fake/coord/bin",
-    "coordinator-auto-push",
-    "coordinator auto-push (crash insurance)",
+    "coordinator-prepare-commit-msg",
+    "coordinator Session-Id trailer injection",
     '"$_PY" "$_T" "$@"',
 )
 
@@ -497,14 +507,14 @@ def test_append_block_runs_an_installed_exe_forwarder_directly(tmp_path):
     never enter the interpreter chain that would hand it to python."""
     settings_home = tmp_path / "settings-home"
     (settings_home / "bin").mkdir(parents=True)
-    forwarder = settings_home / "bin" / "coordinator-auto-push.exe"
+    forwarder = settings_home / "bin" / "coordinator-prepare-commit-msg.exe"
     marker = tmp_path / "forwarder-ran"
     forwarder.write_text(
         f'#!/bin/sh\nprintf ran > "{marker.as_posix()}"\n', encoding="utf-8"
     )
     forwarder.chmod(0o755)
 
-    hook = tmp_path / "post-commit"
+    hook = tmp_path / "prepare-commit-msg"
     hook.write_text(
         _with_unresolvable_interpreter(
             "#!/bin/sh\n" + _append_block(*_APPEND_BLOCK_ARGS) + " || true\n"

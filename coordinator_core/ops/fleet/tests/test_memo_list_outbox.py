@@ -32,6 +32,7 @@ from coordinator_core.ops.fleet.memo_list_outbox import (
     _memo_list_outbox,
     _validate_list_outbox_params,
 )
+from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -46,7 +47,7 @@ def _run(result):
 
 def _git(repo: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess:
     return subprocess.run(
-        ["git"] + list(args), cwd=str(repo), capture_output=True, check=check,
+        ["git"] + list(args), cwd=str(repo), capture_output=True, check=check, **no_console_creationflags(),
     )
 
 

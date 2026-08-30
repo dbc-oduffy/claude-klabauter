@@ -41,6 +41,7 @@ import coordinator_core.ops  # noqa: F401 — populates _REGISTRY
 
 from coordinator_core.ipc import _REGISTRY
 from coordinator_core.ops.initiatives_serve import _handler
+from coordinator_core.win_portability import no_console_creationflags
 
 # Spawns a real external process; runs at cadence gates, not per-commit.
 # Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
@@ -117,19 +118,19 @@ def _make_git_repo(root: Path) -> Path:
         ["git", "init", "-b", "main"],
         cwd=str(root),
         capture_output=True,
-        check=True,
+        check=True, **no_console_creationflags(),
     )
     subprocess.run(
         ["git", "config", "user.email", "serve-test@claude-klabauter.test"],
         cwd=str(root),
         capture_output=True,
-        check=True,
+        check=True, **no_console_creationflags(),
     )
     subprocess.run(
         ["git", "config", "user.name", "Serve Test"],
         cwd=str(root),
         capture_output=True,
-        check=True,
+        check=True, **no_console_creationflags(),
     )
     return (root / ".git").resolve()
 

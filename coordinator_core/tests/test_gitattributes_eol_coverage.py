@@ -72,6 +72,8 @@ from typing import NamedTuple
 
 import pytest
 
+from coordinator_core.win_portability import no_console_creationflags
+
 # Spawns a real external process; runs at cadence gates, not per-commit.
 # Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [
@@ -207,6 +209,7 @@ def _ls_files_eol() -> list[EolRow]:
         capture_output=True,
         text=True,
         check=True,
+        **no_console_creationflags(),
     )
     return [_parse_eol_line(line) for line in result.stdout.splitlines() if "\t" in line]
 
@@ -343,7 +346,7 @@ def test_pinned_class_worktree_matches_its_checkout_direction(ext, tracked):
         f'  python3 -c "import pathlib,subprocess,sys; '
         f"[pathlib.Path(p).unlink() for p in sys.argv[1:]]; "
         f'subprocess.check_call([\'git\',\'checkout-index\',\'--\',*sys.argv[1:]])" {paths}\n'
-        f"Expected w/ one of {sorted(WORKTREE_CONFORMANT[expected])}.\n" + _cite(divergent)
+        f"Expected w/ one of {sorted(WORKTREE_CONFORMANT[expected])}.\n" + _cite(divergent),
     )
 
 

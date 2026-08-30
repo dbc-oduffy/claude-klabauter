@@ -11,67 +11,15 @@ WHAT SHIPPED: the engine entrypoint. `coordinator/bin/claude-home.py` exists,
 which is the only path any door leg resolves, so the name COULD be served by
 the door once an owner is settled for `<settings-home>/bin/claude-home`.
 
-WHAT DID NOT SHIP, AND MUST NOT BE QUIETLY RE-ATTEMPTED: the cutover itself.
-An attempt to gate `_AGENT_HELPER_RESERVED_NAMES` to POSIX-only -- freeing the
-generic agent-helper scan to derive `claude-home` on Windows and cut it over
--- was backed out the same day. Two findings killed it, and the last test in
-this file exists to make a re-attempt fail loudly rather than silently:
-
-  1. TWO WRITERS, ONE PATH. `ch_family` writes extensionless `claude-home`
-     into `<settings-home>/bin` on EVERY platform, Windows included.
-     Un-reserving the name adds the agent-helper loop as a second writer of
-     that same path (ch_family runs first, the helper loop after), and BOTH
-     of the loop's branches take ch_family's files:
-       - UNSTAMPED engine root -- the common case, not the edge:
-         `_cut_over_to_native_door` returns None, the fallback writes an
-         extensionless Python forwarder at `bin_dst/claude-home`, and
-         ch_family's shim is overwritten and loses its exec bit. This is the
-         branch the failing test below actually observed.
-       - STAMPED root: the cutover succeeds and calls
-         `door_install.remove_superseded_python_forwarders`, which on Windows
-         DELETES bare `claude-home` and `claude-home.cmd`. Those are
-         ch_family's static-family files; that function has no exemption for
-         them and no knowledge that another family owns them.
-  2. RETIRING THE `.cmd` LEAVES NO NATIVE-WINDOWS LEG ON AN UNSTAMPED ROOT.
-     An earlier version of this docstring claimed instead that the
-     agent-helper loop "writes a `.cmd` straight back". THAT WAS FALSE and is
-     retracted -- `_cut_over_to_native_door` is called FIRST and `continue`s
-     on success (so the Python pair is never written for a cut-over name),
-     and `_write_agent_cmd_forwarder` was deleted outright on 2026-08-29
-     (gravestone in `substrate.py`, PM ruling: one native entrypoint per
-     platform). No `.cmd` is generated for any derived name, ever. The real
-     hazard is the inverse: the fallback's extensionless forwarder is not
-     executable via PATHEXT in cmd or PowerShell, so with `claude-home.cmd`
-     retired the name leaves native-Windows PATH entirely on every unstamped
-     install. Correction supplied by an eng-director review, verified against
-     source before being written here.
-
-THE OWNERSHIP RULE, ruled 2026-08-30 (eng-director) — ONE PATH, ONE OWNER.
-The name was never the unit of ownership; the PATH is. `named_forwarder_path`
-returns `claude-home.exe` on Windows (a DIFFERENT file from the shim) and the
-bare `claude-home` on POSIX (the SAME file). So:
-
-  - `<settings-home>/bin/claude-home` (extensionless) -- `ch_family` forever,
-    both platforms. It is the POSIX leg and the Windows git-bash leg. On
-    native Windows it is already inert: cmd and PowerShell cannot execute an
-    extensionless file, which is why `claude-home.cmd` is the leg that
-    actually runs there today.
-  - `<settings-home>/bin/claude-home.exe` -- the door, Windows only, additive.
-  - `claude-home` STAYS reserved from the generic derivation. A Windows
-    cutover, when it happens, is an explicit door-only write of the `.exe`
-    that touches nothing else. Un-reservation is the wrong lever: it buys the
-    cutover, the fallback, and the removal sweep as one bundle, and only the
-    first is wanted.
-
-That is not a per-platform split of one file -- it is two files with one
-owner each, which is what makes it a rule rather than two bugs agreeing.
-
-TWO PREREQUISITES before any re-attempt, both defects on their own merits and
-neither specific to `claude-home`: a static-family exemption in
-`remove_superseded_python_forwarders` (it must not remove a name in
-`_static_bin_family_names()`), and cutover-or-defer in
-`_cut_over_to_native_door` (None must mean "do nothing" for a name whose
-fallback a static family already owns, not "write the Python forwarder").
+WHAT DID NOT SHIP, AND MUST NOT BE QUIETLY RE-ATTEMPTED: un-reserving the
+name to let the generic agent-helper scan derive and cut it over. That was
+tried and backed out the same day -- see DR-365's 2026-08-30 note for the
+findings that killed it and the ownership rule that replaced it. That note's
+two prerequisites (a static-family exemption in
+`remove_superseded_python_forwarders`, cutover-or-defer in
+`_cut_over_to_native_door`) HAVE SHIPPED (389fb3268e) and are pinned by the
+tests below; a re-attempt of the un-reservation itself is the live mistake
+the last three tests in this file exist to catch.
 
 Negative-spec: this file asserts nothing about a door image being installed
 for `claude-home` on either platform, because none is. It pins the entrypoint,
@@ -92,22 +40,16 @@ pytestmark = [pytest.mark.cadence]
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
-def test_claude_home_py_entrypoint_exists():
-    entrypoint = _REPO_ROOT / "coordinator" / "bin" / "claude-home.py"
-    assert entrypoint.is_file(), (
-        "coordinator/bin/claude-home.py must exist -- it is the engine "
-        "entrypoint every door leg (_resolve_entrypoint_script, "
-        "door.c :: fall_through, door_posix.c) resolves for the name "
-        "'claude-home'."
-    )
-
-
 def test_claude_home_resolves_under_the_same_rule_the_door_uses():
     """`engine_carries_entrypoint_script` is the generator-side stand-in for
     the door's own resolution rule (`<engine_root>/coordinator/bin/
     <name>.py`) -- pinning it against this repo's own tree (self-as-engine)
     is the same check `launcher_is_installable`/`_cut_over_to_native_door`
-    perform against a real published engine root at install time."""
+    perform against a real published engine root at install time. Also pins
+    the file's existence -- `engine_carries_entrypoint_script` cannot pass if
+    `coordinator/bin/claude-home.py` is absent, which is the door's own
+    resolution rule (_resolve_entrypoint_script, door.c :: fall_through,
+    door_posix.c) and needs no separate existence check."""
     assert door_install.engine_carries_entrypoint_script(_REPO_ROOT, "claude-home"), (
         "the door's own resolution rule (<engine_root>/coordinator/bin/"
         "<name>.py) does not find claude-home.py -- the entrypoint is not "

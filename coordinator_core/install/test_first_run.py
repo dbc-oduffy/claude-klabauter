@@ -18,6 +18,7 @@ from unittest import mock
 import pytest
 
 from coordinator_core.install import first_run as fr
+from coordinator_core.win_portability import no_console_creationflags
 
 # Spawns a real external process; runs at cadence gates, not per-commit.
 # Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
@@ -101,6 +102,7 @@ def _oracle_derive_key(repo_base: str) -> str:
         capture_output=True,
         text=True,
         timeout=10,
+        **no_console_creationflags(),
     )
     return proc.stdout
 

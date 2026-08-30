@@ -37,6 +37,7 @@ from coordinator_core.ops.cartography_chunk_table import (
     build_chunk_table_artifact,
 )
 from coordinator_core.cartography.chunk_table import compute_chunk_table
+from coordinator_core.win_portability import no_console_passthrough_kwargs
 
 _OP_NAME = "cartography.chunk_table"
 assert _OP_NAME in _REGISTRY, (
@@ -54,9 +55,9 @@ pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 def git_repo(tmp_path: Path) -> Path:
     root = tmp_path / "repo"
     root.mkdir()
-    subprocess.run(["git", "init", "-q"], cwd=root, check=True)
-    subprocess.run(["git", "config", "user.email", "t@example.com"], cwd=root, check=True)
-    subprocess.run(["git", "config", "user.name", "T"], cwd=root, check=True)
+    subprocess.run(["git", "init", "-q"], cwd=root, check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "config", "user.email", "t@example.com"], cwd=root, check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "config", "user.name", "T"], cwd=root, check=True, **no_console_passthrough_kwargs())
 
     # "big.py" is 5 newline-terminated lines (loc=5); "small.py" is 2 (loc=2);
     # "binary.py" is undecodable as UTF-8 (loc=None) despite a source
@@ -67,8 +68,8 @@ def git_repo(tmp_path: Path) -> Path:
     (root / "systemA" / "small.py").write_text("a\nb\n", encoding="utf-8")
     (root / "systemA" / "binary.py").write_bytes(b"\xff\xfe\x00\x01not-utf8\n")
 
-    subprocess.run(["git", "add", "-A"], cwd=root, check=True)
-    subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=root, check=True)
+    subprocess.run(["git", "add", "-A"], cwd=root, check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=root, check=True, **no_console_passthrough_kwargs())
     return root
 
 
@@ -171,8 +172,8 @@ def test_none_loc_file_never_oversized(git_repo):
 def test_oversized_is_sorted(git_repo):
     (git_repo / "systemA" / "zzz_big.py").write_text("a\nb\nc\nd\ne\nf\n", encoding="utf-8")
     (git_repo / "systemA" / "aaa_big.py").write_text("a\nb\nc\nd\ne\nf\n", encoding="utf-8")
-    subprocess.run(["git", "add", "-A"], cwd=git_repo, check=True)
-    subprocess.run(["git", "commit", "-q", "-m", "more"], cwd=git_repo, check=True)
+    subprocess.run(["git", "add", "-A"], cwd=git_repo, check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "commit", "-q", "-m", "more"], cwd=git_repo, check=True, **no_console_passthrough_kwargs())
 
     artifact = build_chunk_table_artifact(
         git_repo, run_id="run1", systems=_SYSTEMS, chunk_size=10, oversized_threshold=5

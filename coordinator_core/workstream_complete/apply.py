@@ -48,7 +48,7 @@ Deviation from the workday/workweek exemplars (both noted, both forced by
        contract) is unchanged.
     2. The C4 plan body's own text says to pin and assert-equal a 4-member
        CLI tuple (`wsc-coverage-gate-runner.py`,
-       `check-workstream-complete-deletion-blocks.py`, `wsc-close.py`,
+       `check-workstream-complete-deletion-blocks.py`, `archive-session-scope.py`,
        `wsc-tail.py`) against `CONSUMES_MANIFEST`. That text predates C3
        landing the full 7-submodule wiring (C2a-C2i): C3's actual
        `CONSUMES_MANIFEST` carries 20 members, and
@@ -1197,6 +1197,38 @@ def _run_close_commit_tail(
     wrapped call's own `finally` by the time any exception reaches this
     frame."""
     kwargs = _resolve_close_commit_kwargs(decisions, sid)
+    if kwargs is not None:
+        # C2 (docs/plans/2026-08-30-the-close-ships-the-baton-it-closed.md):
+        # ship-stamp the session's own delivered batons BEFORE the commit
+        # call (constraint (b) — a pathspec commit re-reads the tree at
+        # commit time, so a write landing after the call is silently
+        # omitted), then fold the stamped paths into the SAME `stage_paths`
+        # sequence this commit already stages. See
+        # `directives_commit_tail`'s own module comment for the candidate
+        # rule and the two validating writers this routes through.
+        ship_candidates = directives_commit_tail.resolve_ship_stamp_candidates(
+            worktree_root, sid, decisions
+        )
+        ship_backups: dict[str, str] = {}
+        if ship_candidates:
+            ship_outcome, ship_backups = directives_commit_tail.apply_ship_stamps(
+                worktree_root, ship_candidates
+            )
+            if ship_outcome.stamped_paths:
+                existing = list(kwargs.get("stage_paths") or ())
+                merged = existing + [
+                    p for p in ship_outcome.stamped_paths if p not in existing
+                ]
+                kwargs["stage_paths"] = merged
+        else:
+            # RAN, FOUND NOTHING TO DO -- distinguishable from "never ran"
+            # per the plan's Anti-scope (the retired design's
+            # `empty_consumed_set` flag had no reader; this one is read by
+            # `apply()`'s own report, below). `resolve_ship_stamp_candidates`
+            # always executes whenever a commit is being attempted at all.
+            ship_outcome = directives_commit_tail.ShipStampOutcome(
+                stamped_paths=(), skipped_paths=(), attempted=0, diagnostics=()
+            )
     if kwargs is None:
         # A SKIP IS REPORTED, NEVER SILENT (2026-08-27). This used to return
         # `None`, and `apply()` then folded nothing into the report at all: a
@@ -1227,8 +1259,17 @@ def _run_close_commit_tail(
     try:
         result = directives_commit_tail.run_close_commit_and_release_claims(worktree_root, **kwargs)
     except Exception as exc:  # noqa: BLE001 - closed call, fold rather than crash
+        # WRITE-LANDS-THEN-COMMIT-FAILS: a raise here means the commit's own
+        # outcome is unknown/failed -- any ship-stamp write already landed on
+        # disk (see the block above) rides no commit, so it is reverted
+        # rather than left standing for the archival sweep to act on.
+        if ship_outcome is not None and ship_outcome.stamped_paths:
+            directives_commit_tail.revert_ship_stamps(
+                worktree_root, ship_outcome.stamped_paths, ship_backups
+            )
         return {"attempted": True, "commit_failed": True, "error": str(exc)}
-    return {
+
+    report = {
         "attempted": True,
         "commit_failed": result.commit_failed,
         "committed_sha": result.committed_sha,
@@ -1236,6 +1277,29 @@ def _run_close_commit_tail(
         "integrity_breach": result.integrity_breach,
         "diagnostics": list(result.diagnostics),
     }
+    if ship_outcome is not None:
+        # WRITE-LANDS-THEN-COMMIT-FAILS: the stamp is durable only once this
+        # commit is KNOWN to have succeeded -- a failed/refused commit
+        # (commit_failed True) or a no-op (no committed_sha, e.g. nothing
+        # else to stage) leaves the ship-stamp write with no commit carrying
+        # it, so it is reverted rather than reported as landed.
+        if result.commit_failed or not result.committed_sha:
+            directives_commit_tail.revert_ship_stamps(
+                worktree_root, ship_outcome.stamped_paths, ship_backups
+            )
+            reverted = ship_outcome.stamped_paths
+            landed = ()
+        else:
+            reverted = ()
+            landed = ship_outcome.stamped_paths
+        report["ship_stamp"] = {
+            "attempted": ship_outcome.attempted,
+            "stamped": list(landed),
+            "reverted": list(reverted),
+            "skipped": list(ship_outcome.skipped_paths),
+            "diagnostics": list(ship_outcome.diagnostics),
+        }
+    return report
 
 
 def _run_completion_entry_fold(

@@ -1267,41 +1267,14 @@ def _door_eligible_forwarder_names() -> "frozenset[str]":
     return frozenset(n for n in names if isinstance(n, str))
 
 
-# Sentinel distinguishing "no door to cut over to, caller must write the
-# Python pair" (plain `None`) from "this name is already served by a static
-# bin family (e.g. `ch_family`'s `claude-home`) -- caller must write
-# NOTHING, not even the Python pair" (this object). Both are falsy-shaped
-# non-Path returns from `_cut_over_to_native_door`, which is exactly why a
-# bare `is None` check can no longer stand in for "no native image was
-# written" -- see that function's own docstring for the two-meaning split
-# this sentinel exists to make explicit rather than implicit in a comment
-# (ruling 2, DR-365: ONE PATH, ONE OWNER).
-#
-# TYPED, not a bare `object()`. `Union[Path, None, object]` collapses to
-# `object` for a type checker, so it accepts every value and warns on
-# nothing -- an annotation that reads as a guarantee and provides none. The
-# whole point of this sentinel is that a caller who forgets the `is` check
-# writes a Python forwarder over a static family's file, which is the exact
-# bug this return shape exists to prevent. A named class makes that a
-# checkable signature rather than a convention.
 class _StaticFamilyAlreadyServed:
-    """Return marker: a static bin family already owns this name's file(s),
-    so the caller must do NOTHING for it -- not a cutover, and not the
-    doorless Python-pair fallback `None` asks for.
-
-    DISCRIMINATE WITH `is`, NEVER WITH TRUTHINESS. This instance is truthy,
-    so `if _cut_over_to_native_door(...)` reads it as a successful cutover;
-    a falsy `__bool__` would make it indistinguishable from `None` instead.
-    Neither is a discriminator -- there is no truthiness convention that
-    separates all three returns, which is why the contract is an identity
-    check. `forwarder_self_heal.py` currently tests this call for truthiness
-    and is safe only because it never passes `static_family_names` (so this
-    value cannot arise there) and only ever acts on names ABSENT from
-    `bin_dst`, which a static-family name never is. Passing the set in there
-    without converting that test to `is` would silently reintroduce the
-    conflation."""
-
-    __slots__ = ()
+    """Return marker from `_cut_over_to_native_door`: a static bin family
+    (e.g. `ch_family`'s `claude-home`) already owns this name's file(s), so
+    the caller must write NOTHING -- distinct from `None` ("no door, write
+    the Python pair") and from a `Path` ("cutover succeeded"). DISCRIMINATE
+    WITH `is`, NEVER TRUTHINESS: this instance is truthy, so `if
+    _cut_over_to_native_door(...)` reads it as a successful cutover, and no
+    `__bool__` value separates all three returns."""
 
 
 _STATIC_FAMILY_ALREADY_SERVED = _StaticFamilyAlreadyServed()
@@ -1351,19 +1324,27 @@ def _cut_over_to_native_door(
     The pair is now REMOVED on a successful cutover, and -- the half that
     keeps this safe -- simply never written in the first place, so a
     cut-over name costs one native install instead of three writes and a
-    delete. `remove_superseded_python_forwarders` is passed
-    `static_family_names` too (as `exempt_names`), defense-in-depth against
-    ever deleting a static family's own bare/`.cmd` files -- unreachable in
-    this function's own control flow (a static-owned name already returned
-    above), but that function has no other caller-independent way to know
-    the same thing.
+    delete. This call does not pass `static_family_names` down as
+    `exempt_names`: a static-owned name already returned above, so
+    `remove_superseded_python_forwarders` is only ever reached here for a
+    non-exempt name, and `exempt_names` stays that function's own contract
+    (it is the function that deletes files) for callers that don't have
+    this function's own early return.
 
     `None` IS *A* FALLBACK SIGNAL, NOT THE ONLY ONE, AND NOT AN ERROR. A
     root that cannot supply a door (no engine stamp) returns `None` here,
     and the caller then writes the ordinary Python pair for that name --
     the doorless fallback, preserved intact for every name NOT already
     served by a static family. The kill removes a superseded artifact,
-    never the only route to the engine."""
+    never the only route to the engine.
+
+    `forwarder_self_heal.py` tests this call's return for truthiness rather
+    than `is`, and is safe only because it never passes
+    `static_family_names` (so `_STATIC_FAMILY_ALREADY_SERVED` cannot arise
+    there) and only ever acts on names ABSENT from `bin_dst`, which a
+    static-family name never is. Passing the set in there without
+    converting that test to `is` would silently reintroduce the
+    conflation this sentinel exists to prevent."""
     if name in static_family_names:
         return _STATIC_FAMILY_ALREADY_SERVED
     if engine_root is None:
@@ -1373,9 +1354,7 @@ def _cut_over_to_native_door(
         return native_dst
     from coordinator_core.install import door_install
 
-    door_install.remove_superseded_python_forwarders(
-        bin_dst, name, exempt_names=static_family_names
-    )
+    door_install.remove_superseded_python_forwarders(bin_dst, name)
     return native_dst
 
 
@@ -1740,7 +1719,7 @@ def _write_agent_forwarder(
     unrepresentable. Re-deriving the target from the installed name alone
     silently produced the nonexistent extensionless path for every
     ``.py``-suffixed CLI — the entire /workstream-complete + /handoff
-    ceremony spine (``wsc-close.py``, ``wsc-session-disposition.py``,
+    ceremony spine (``wsc-session-disposition.py``,
     ``review-brightline-gate.py``, etc.) rc=127'd on a fresh install because
     of exactly this. See
     cross-repo/inbox/2026-07-23-claude-central-em-claude-klabauter-pickup-assemble-heads-up.md
@@ -1914,55 +1893,12 @@ exec_cli("{target}")
 # ``os.execv``s claude in place — a genuine process replacement, adding no
 # intermediate process at all.
 #
-# ``claude-home`` is reserved on POSIX ONLY (C5, docs/plans/2026-08-30-
-# twenty-one-bin-names-reach-the-door-or-are-thoroughly-dead.md) — the
-# thoroughly-dead.md). `coordinator/bin/claude-home.py` now exists, so the
-# plain directory scan below WOULD derive it as an ordinary agent-helper
-# name if it were not reserved. It stays reserved on EVERY platform, and the
-# C5 cutover is NOT shipped -- an attempt to gate this reservation to POSIX
-# only was backed out the same day, on two findings that killed it:
-#
-#   1. TWO WRITERS, ONE PATH. `ch_family` writes extensionless `claude-home`
-#      on every platform, including Windows, and runs BEFORE the helper
-#      loop. Un-reserving the name makes that loop a second writer of the
-#      same `<settings-home>/bin/claude-home` path, and both its branches
-#      take ch_family's files: on an UNSTAMPED root (the common case)
-#      `_cut_over_to_native_door` returns None and the fallback overwrites
-#      the shim with an extensionless Python forwarder, losing its exec bit
-#      (`test_install_substrate_uninstall_legs.py ::
-#      test_substrate_run_success_path_dual_anchor_populated_tree` catches
-#      this); on a STAMPED root the cutover calls
-#      `door_install.remove_superseded_python_forwarders`, which on Windows
-#      DELETES bare `claude-home` and `claude-home.cmd` outright -- it has
-#      no static-family exemption and no knowledge another family owns them.
-#   2. RETIRING THE `.cmd` LEAVES NO NATIVE-WINDOWS LEG ON AN UNSTAMPED
-#      ROOT. An earlier version of this comment claimed the helper loop
-#      "writes a `.cmd` right back"; that was FALSE and is retracted.
-#      `_cut_over_to_native_door` runs FIRST and `continue`s on success, so
-#      the Python pair is never written for a cut-over name, and
-#      `_write_agent_cmd_forwarder` was deleted 2026-08-29 (gravestone
-#      below) -- no `.cmd` is generated for any derived name. The real
-#      hazard is the inverse: the fallback's extensionless forwarder is not
-#      PATHEXT-executable in cmd or PowerShell, so retiring
-#      `claude-home.cmd` drops the name off native-Windows PATH entirely on
-#      every unstamped install.
-#
-# OWNERSHIP RULE, ruled 2026-08-30 (eng-director) -- ONE PATH, ONE OWNER.
-# The name was never the unit of ownership; the path is.
-# `<settings-home>/bin/claude-home` belongs to `ch_family` forever, on both
-# platforms (the POSIX leg, and the Windows git-bash leg -- cmd and
-# PowerShell cannot execute an extensionless file, so it is already inert
-# on native Windows and the `.cmd` is what runs there).
-# `<settings-home>/bin/claude-home.exe` belongs to the door, Windows only.
-# The name therefore STAYS reserved here, and a Windows cutover is an
-# explicit door-only write of the `.exe` that touches nothing else --
-# un-reservation buys the cutover, the fallback and the removal sweep as one
-# bundle, and only the first is wanted. Prerequisites, both defects in their
-# own right: a static-family exemption in
-# `remove_superseded_python_forwarders`, and cutover-or-defer in
-# `_cut_over_to_native_door`. POSIX stays with `ch_family` under the same
-# rule (there the image path IS the shim path), independently of the
-# uncompiled `door_posix.c` P2 row.
+# ``claude-home`` is reserved on EVERY platform: `ch_family` owns
+# `<settings-home>/bin/claude-home` permanently (both the POSIX leg and the
+# Windows git-bash leg), the door owns `claude-home.exe` on Windows only, and
+# no cutover of either leg has shipped. See DR-365's 2026-08-30 note for the
+# full history (an attempted cutover was backed out the same day) — do not
+# re-derive it here.
 _AGENT_HELPER_RESERVED_NAMES = frozenset(
     {
         "machine-local",
@@ -3628,12 +3564,9 @@ def _write_agent_helper_forwarders(
             except OSError as exc:
                 failed.append((f, exc))
         _report_agent_helper_forwarder_summary(agent_helper_target_map, failed)
-        if failed:
-            names = ", ".join(name for name, _exc in failed)
-            raise SubstrateFatalError(
-                f"install-substrate: check failed: {len(failed)} agent-helper forwarder(s) "
-                f"could not be checked ({names})"
-            )
+        _raise_if_agent_helper_forwarders_failed(
+            failed, agent_helper_target_map, check_only=True, agent_helper_resolved=agent_helper_resolved,
+        )
         return agent_helper_resolved
 
     agent_helper_resolved = []
@@ -3659,21 +3592,40 @@ def _write_agent_helper_forwarders(
             except OSError as exc:
                 failed.append((f, exc))
 
-    _report_agent_helper_forwarder_summary(agent_helper_target_map, failed)
-
     if engine_root is not None:
         _write_native_forwarder_manifest(bin_dst, native_written)
 
     _report_agent_helper_forwarder_summary(agent_helper_target_map, failed)
-    if failed:
-        names = ", ".join(name for name, _exc in failed)
-        raise SubstrateFatalError(
-            f"install-substrate: {len(failed)} agent-helper forwarder(s) could not be "
-            f"written ({names}); {len(agent_helper_resolved)} of {len(agent_helper_target_map)} "
-            "written this run. See stderr above for the per-name error(s)."
-        )
+    _raise_if_agent_helper_forwarders_failed(
+        failed, agent_helper_target_map, check_only=False, agent_helper_resolved=agent_helper_resolved,
+    )
 
     return agent_helper_resolved
+
+
+def _raise_if_agent_helper_forwarders_failed(
+    failed: "list[tuple[str, BaseException]]",
+    agent_helper_target_map: "dict[str, str]",
+    *,
+    check_only: bool,
+    agent_helper_resolved: "list[WriteSurfaceEntry]",
+) -> None:
+    """Shared summary-then-raise for `_write_agent_helper_forwarders`'s two
+    branches, which previously duplicated this block with only the message
+    text differing. No-op when `failed` is empty."""
+    if not failed:
+        return
+    names = ", ".join(name for name, _exc in failed)
+    if check_only:
+        raise SubstrateFatalError(
+            f"install-substrate: check failed: {len(failed)} agent-helper forwarder(s) "
+            f"could not be checked ({names})"
+        )
+    raise SubstrateFatalError(
+        f"install-substrate: {len(failed)} agent-helper forwarder(s) could not be "
+        f"written ({names}); {len(agent_helper_resolved)} of {len(agent_helper_target_map)} "
+        "written this run. See stderr above for the per-name error(s)."
+    )
 
 
 def _report_agent_helper_forwarder_summary(
@@ -5040,9 +4992,8 @@ WRITE_SURFACE = WriteSurfaceDeclaration(
             ),
         ),
         # Clause 10 — the claude-home family: a STATIC, hand-maintained
-        # 2-entry tuple (`_CH_FAMILY_FILES` — the `.cmd` entry retired by C5,
-        # docs/plans/2026-08-30-twenty-one-bin-names-reach-the-door-or-are-
-        # thoroughly-dead.md), sourced from claude-klabauter's own
+        # 3-entry tuple (`_CH_FAMILY_FILES` — `.cmd` retention is an EM call,
+        # DR-365's 2026-08-30 note), sourced from claude-klabauter's own
         # `coordinator/lib/claude-home/` (NOT DoE's `templates/bin/`, so
         # deliberately out of `bin-templates-manifest.py`/clauses 7-9 by
         # construction — see `_CH_FAMILY_FILES`'s own comment). Genuinely

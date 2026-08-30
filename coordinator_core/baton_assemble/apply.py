@@ -1217,6 +1217,12 @@ def _dispatch_baton_stamp_carried_ids(args: list[str], repo_root: Path) -> dict[
             _state["stamped"].append(key)
 
         if carried_items:
+            # Mismatch note (2026-08-30, review-integrator): a baton stamped
+            # BEFORE the `blocked`-visibility fix (union computed carried-only)
+            # and replayed AFTER it (union now carried+blocked) legitimately
+            # hits the `existing_entries != carried_items` branch below and
+            # refuses -- this is correct, not a regression, and must be
+            # resolved by hand rather than silently re-stamped.
             import yaml as _yaml
 
             existing_block = read_fm_nested_field(fm, "carried_items")

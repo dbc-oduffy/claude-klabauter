@@ -19,6 +19,7 @@ import pytest
 
 from coordinator_core.ops import plan_status_transition as pst
 from coordinator_core.ops.plan_status_transition import main
+from coordinator_core.win_portability import no_console_creationflags
 
 # Declared, not excused: this file spawns a real process (git/python) because
 # the property under test is that binary's own behaviour, which no fixture
@@ -45,9 +46,10 @@ def _git_env() -> dict:
 def _ensure_git_repo(tmp_path: Path) -> None:
     if (tmp_path / ".git").exists():
         return
-    subprocess.run(["git", "init"], cwd=str(tmp_path), capture_output=True, env=_git_env(), timeout=15)
+    subprocess.run(["git", "init"], cwd=str(tmp_path), capture_output=True, env=_git_env(), timeout=15, **no_console_creationflags())
     subprocess.run(
         ["git", "config", "commit.gpgsign", "false"], cwd=str(tmp_path), capture_output=True, env=_git_env(), timeout=15,
+        **no_console_creationflags(),
     )
 
 
@@ -56,9 +58,10 @@ def _write_and_commit(tmp_path: Path, name: str, body: str) -> Path:
     p = tmp_path / name
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(body, encoding="utf-8")
-    subprocess.run(["git", "add", "--", name], cwd=str(tmp_path), capture_output=True, env=_git_env(), timeout=15)
+    subprocess.run(["git", "add", "--", name], cwd=str(tmp_path), capture_output=True, env=_git_env(), timeout=15, **no_console_creationflags())
     subprocess.run(
         ["git", "commit", "-m", "initial"], cwd=str(tmp_path), capture_output=True, env=_git_env(), timeout=15,
+        **no_console_creationflags(),
     )
     return p
 
@@ -107,6 +110,7 @@ def test_live_foreign_holder_refuses_no_write_no_commit(tmp_path, monkeypatch, c
     assert "status: approved" in text
     r = subprocess.run(
         ["git", "status", "--porcelain"], cwd=str(tmp_path), capture_output=True, text=True, env=_git_env(), timeout=15,
+        **no_console_creationflags(),
     )
     assert r.stdout.strip() == ""
 

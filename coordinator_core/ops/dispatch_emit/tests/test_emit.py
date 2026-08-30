@@ -11,6 +11,7 @@ import textwrap
 
 import pytest
 
+from coordinator_core.ops.dispatch_emit import emit
 from coordinator_core.ops._workflow_contract import Severity, run_checks
 from coordinator_core.ops.dispatch_emit.emit import (
     MixedAgentTypeRowError,
@@ -1095,7 +1096,7 @@ def test_compose_script_commit_prompt_names_every_measured_false_refusal():
     waves = _two_wave_fixture()
     script = compose_script(waves, name="wf", description="two waves")
 
-    assert "ONE-DIRECTIONAL" in script
+    assert "ONE-DIRECTIONAL BY DEFAULT" in script
     assert "state/subagent-share/**" in script
     assert "SHARED TREE" in script
     assert "UNCHANGED DECLARED PATHS" in script
@@ -1115,6 +1116,76 @@ def test_compose_script_commit_prompt_names_every_measured_false_refusal():
 
     errors = [f for f in run_checks(script) if f.severity is Severity.ERROR]
     assert errors == []
+
+
+# ---------------------------------------------------------------------------
+# compose_script — the bookkeeping-prefix carve-out is a positive allowlist,
+# not a blanket one-directional pass (doe-claude-em memo 2026-08-30 (iii);
+# improvement-queue c6acabf9a600)
+# ---------------------------------------------------------------------------
+
+
+def test_bookkeeping_prefix_render_is_derived_from_the_allowlist():
+    """The prompt must name the same prefixes the allowlist holds.
+
+    Hand-writing the prefix into the prompt string is how the two drift:
+    a later prefix addition would silence the halt in nobody's prompt.
+    """
+    assert emit._BOOKKEEPING_PREFIXES == ("state/subagent-share/",)
+    for prefix in emit._BOOKKEEPING_PREFIXES:
+        assert f"`{prefix}**`" in emit._BOOKKEEPING_PREFIX_RENDER
+    assert emit._BOOKKEEPING_PREFIX_RENDER in emit._PROVENANCE_HEADING
+
+
+def test_commit_prompt_halts_on_a_reported_write_outside_the_allowlist():
+    """The eight paths stranded on `2026-08-30-who-pushes-and-when.md` were
+    chunk work under already-declared surfaces, not sidecars. The prompt has
+    to make that case a STOP while leaving the bookkeeping prefix silent --
+    a blanket flip re-buys the four measured false halts instead."""
+    waves = _two_wave_fixture()
+    script = compose_script(waves, name="wf", description="two waves")
+
+    assert "DISPATCH-LAYER BOOKKEEPING" in script
+    assert "Any OTHER reported-written path absent from the pathspec IS a" in script
+    assert "you must STOP" in script
+    # The committer must not resolve the divergence itself: widening is the
+    # spine's call, and a self-widened pathspec would commit work the spine
+    # never declared.
+    assert "Do NOT widen the pathspec yourself" in script
+    assert "Emit no success token." in script
+
+    errors = [f for f in run_checks(script) if f.severity is Severity.ERROR]
+    assert errors == []
+
+
+def test_commit_prompt_halt_message_points_the_operator_at_the_spine():
+    """A halt that names the paths but not the remedy is a halt an operator
+    resolves by overriding. The message has to say where the widening
+    belongs."""
+    waves = _two_wave_fixture()
+    script = compose_script(waves, name="wf", description="two waves")
+
+    assert "naming every such path verbatim" in script
+    assert "widen the spine row and restamp, or confirm they are bookkeeping" in script
+
+
+def test_the_four_measured_false_halts_stay_silent_under_the_new_clause():
+    """Guards the memo's caution directly: none of the four halts measured on
+    `pln-the-discriminators-that-alread-1545b5` may be re-bought.
+
+    Sidecars are allowlisted; peer-staged paths and unchanged-declared paths
+    are not reported-written by this wave's executors at all, so the STOP
+    clause cannot reach them -- and each keeps its own naming clause."""
+    waves = _two_wave_fixture()
+    script = compose_script(waves, name="wf", description="two waves")
+
+    assert "state/subagent-share/**" in script
+    assert "do not refuse over it" in script
+    assert "SHARED TREE" in script
+    assert "UNCHANGED DECLARED PATHS" in script
+    # The STOP is keyed on what the REPORTS name, never on the index or on a
+    # declared path that did not change.
+    assert "reported-written path absent from the pathspec" in script
 
 
 if __name__ == "__main__":
