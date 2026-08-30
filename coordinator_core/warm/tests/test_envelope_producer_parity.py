@@ -78,6 +78,14 @@ import pytest
 _ENGINE_ROOT = Path(__file__).resolve().parents[3]
 _CLIENT_PY = _ENGINE_ROOT / "coordinator_core" / "warm" / "client.py"
 _DOOR_C = _ENGINE_ROOT / "coordinator_core" / "warm" / "door" / "door.c"
+#: The POSIX twin. It is a THIRD producer of the same envelope, and it was
+#: outside this guard until 2026-08-30: C1b widened `client.py` and `door.c` to
+#: `_caller` and retired the bare `_session_id` key, and `door_posix.c` kept
+#: stamping the retired key -- a POSIX caller's identity dropped on the floor by
+#: a server that no longer reads it, with every leg this guard DID compare
+#: agreeing with itself. A parity guard that covers two of three producers
+#: reports green for exactly the drift it exists to catch.
+_DOOR_POSIX_C = _ENGINE_ROOT / "coordinator_core" / "warm" / "door" / "door_posix.c"
 
 _INNER_FUNC_NAME = "_try_warm_dispatch_inner"
 
@@ -211,8 +219,31 @@ def _python_envelope_fields_from_func(func: ast.FunctionDef) -> set[str]:
     `test_a_setdefault_stamp_with_unresolvable_key_fails_loud`)."""
     local_bindings = _local_str_bindings(func)
     fields: set[str] = set()
+    # ENVELOPE-LEVEL ONLY, the mirror of `_c_envelope_fields`'s depth rule.
+    # `request["_caller"] = {...}` (C1b) stamps ONE envelope field whose value
+    # is a nested object; an unqualified `ast.Dict` walk would additionally
+    # report that object's own members -- `pid`, `session_id`, `cwd` -- as
+    # envelope fields door.c never stamps at that level, failing the parity leg
+    # on a difference that is not one. The member keys are still checked, by
+    # `test_caller_object_mirrors_the_caller_context_dataclass` in
+    # test_envelope_carries_caller_identity.py, against the dataclass they
+    # serialise -- so skipping them here drops no coverage.
+    # Allowlist, not a denylist: the ONLY dict literal whose keys are envelope
+    # fields is the one bound to `request` itself. A denylist ("skip the dict
+    # assigned to request[...]") missed `resolve_caller_context({"session_id":
+    # ...})` -- a dict that is a call ARGUMENT, neither the envelope nor a
+    # stamped value -- and silently readmitted its key.
+    envelope_dicts = {
+        id(node.value)
+        for node in ast.walk(func)
+        if isinstance(node, ast.Assign)
+        and isinstance(node.value, ast.Dict)
+        and any(isinstance(t, ast.Name) and t.id == "request" for t in node.targets)
+    }
     for node in ast.walk(func):
         if isinstance(node, ast.Dict):
+            if id(node) not in envelope_dicts:
+                continue
             for key in node.keys:
                 if key is None:  # the `**msg` spread itself
                     continue
@@ -276,31 +307,42 @@ _C_REGION_START = r"(?=" + re.escape(
 ) + r")"
 _C_REGION_END = r'req_ok &= buf_append_cstr\(&req, "\}\\n"\);'
 
+#: The POSIX twin's own start anchor. It opens the same envelope one character
+#: differently (`"\"},\"_engine_token\":\""` -- it closes a string as well as
+#: `params`), so it needs its own anchor rather than a loosened shared one: a
+#: regex widened until it matched both would also match a region it should have
+#: refused, which is how an anchor stops anchoring.
+_C_POSIX_REGION_START = r"(?=" + re.escape(
+    'req_ok &= buf_append_cstr(&req, "\\"},\\"_engine_token\\":\\"");'
+) + r")"
+
 #: A `,\"<field>\":` literal passed to `buf_append_cstr` -- the shape every
 #: envelope-level field append in `door.c` takes, verified against all
 #: three known appends (`_engine_token`, `_settings_home`, `_session_id`).
 _C_FIELD_PATTERN = re.compile(r',\\"([A-Za-z_][A-Za-z0-9_]*)\\":')
 
 
-def _c_envelope_region(source: str) -> str:
+def _c_envelope_region(
+    source: str, *, start_anchor: str | None = None, label: str = "door.c"
+) -> str:
     """The envelope-level slice of `door.c`'s request-building region,
     located by anchored text scan (never by line number, which drifts).
     Raises with a clear message if either anchor goes missing -- a
     disappeared anchor means the region moved or was rewritten, and this
     module must not silently scan the wrong slice or the whole file.
     """
-    start_match = re.search(_C_REGION_START, source)
+    start_match = re.search(start_anchor or _C_REGION_START, source)
     if start_match is None:
         raise AssertionError(
-            "door.c: could not find the envelope-region start anchor "
-            f"({_C_REGION_START!r}) -- door.c's request builder moved or "
-            "was rewritten; update this test's anchor, do not remove it"
+            f"{label}: could not find the envelope-region start anchor "
+            f"({start_anchor or _C_REGION_START!r}) -- {label}'s request builder "
+            "moved or was rewritten; update this test's anchor, do not remove it"
         )
     end_match = re.search(_C_REGION_END, source[start_match.end():])
     if end_match is None:
         raise AssertionError(
-            "door.c: could not find the envelope-region end anchor "
-            f"({_C_REGION_END!r}) after the start anchor -- door.c's "
+            f"{label}: could not find the envelope-region end anchor "
+            f"({_C_REGION_END!r}) after the start anchor -- {label}'s "
             "request builder moved or was rewritten"
         )
     region_start = start_match.end()
@@ -319,9 +361,30 @@ _C_APPEND_CALL = re.compile(r"(\w+)\(&req,\s*([^;]+?)\)\s*;")
 _C_APPEND_FUNCS = frozenset({"buf_append_cstr", "buf_append_json_escaped"})
 
 #: String literals in the region that carry no field name: the closing quote of
-#: a value and the envelope's own terminator. Anything else quoted must parse as
-#: a field or stop the run.
-_C_KNOWN_NON_FIELD_LITERALS = frozenset({'\\"', "}\\n"})
+#: a value, the close brace of a NESTED envelope-level object (`_caller`, added
+#: by C1b of docs/plans/2026-08-30-every-op-runs-in-the-callers-environment.md),
+#: and the envelope's own terminator. Anything else quoted must parse as a field
+#: or stop the run.
+_C_KNOWN_NON_FIELD_LITERALS = frozenset({'\\"', "}", "}\\n"})
+
+#: Brace depth at which a field name is ENVELOPE-level. The region is anchored
+#: to OPEN at envelope level (its first append closes `params` and writes
+#: `_engine_token` beside it), so envelope members sit at 0 and a member of the
+#: nested `_caller` object sits at 1. Depth is floored at 0 for the same reason:
+#: a `}` closing an object opened BEFORE the region -- `params`, in that very
+#: first append -- is outside this scan's accounting and must not push its
+#: envelope-level siblings below the floor.
+_C_ENVELOPE_DEPTH = 0
+
+
+def _brace_delta(text: str) -> int:
+    """Net object nesting the C string literal `text` opens (`+`) or closes.
+
+    Only unescaped structural braces count. `door.c` writes its JSON by hand,
+    so every brace in these literals IS structural -- there is no `{` inside a
+    quoted VALUE here (values go through `buf_append_json_escaped`, which this
+    reader skips outright)."""
+    return text.count("{") - text.count("}")
 
 
 def _c_envelope_fields(region: str) -> set[str]:
@@ -341,6 +404,7 @@ def _c_envelope_fields(region: str) -> set[str]:
     module exists to break.
     """
     fields: set[str] = set()
+    depth = 0
     for func_name, raw_arg in _C_APPEND_CALL.findall(region):
         if func_name not in _C_APPEND_FUNCS:
             raise AssertionError(
@@ -356,11 +420,25 @@ def _c_envelope_fields(region: str) -> set[str]:
         if not arg.startswith('"'):
             continue
         literal = arg[1:-1] if arg.endswith('"') else arg[1:]
-        matched = _C_FIELD_PATTERN.findall(literal)
+        matched = list(_C_FIELD_PATTERN.finditer(literal))
         if matched:
-            fields.update(matched)
+            # ENVELOPE-LEVEL ONLY. `_caller` (C1b) is a NESTED object, so a
+            # flat scan would report its member keys -- `pid`, `session_id` --
+            # as envelope fields the Python producer never stamps, failing the
+            # parity leg on a difference that is not one. A field belongs to
+            # whichever object is open where its name appears, so depth is
+            # read at the field's own OFFSET, never as a whole-literal count:
+            # the envelope's own opening `{` sits in the same literal as its
+            # first fields, and a per-literal count would push those fields to
+            # the wrong side of it.
+            for m in matched:
+                at = max(0, depth + _brace_delta(literal[: m.start()]))
+                if at == _C_ENVELOPE_DEPTH:
+                    fields.add(m.group(1))
+            depth = max(0, depth + _brace_delta(literal))
             continue
         if literal in _C_KNOWN_NON_FIELD_LITERALS:
+            depth = max(0, depth + _brace_delta(literal))
             continue
         raise AssertionError(
             f"door.c: string literal {literal!r} appended to the envelope "
@@ -402,6 +480,53 @@ def test_envelope_field_sets_match():
     mismatches = _parity_mismatches(python_fields, c_fields, _KNOWN_ONE_SIDED_FIELDS)
     assert not mismatches, (
         "warm envelope producers disagree on field set:\n" + "\n".join(mismatches)
+    )
+
+
+def test_posix_door_envelope_field_set_matches_too():
+    """THE THIRD PRODUCER. `door_posix.c` builds the same envelope for the POSIX
+    named-pipe leg, and until 2026-08-30 no parity leg read it: C1b widened
+    `client.py` and `door.c` to `_caller` and retired the bare `_session_id`
+    key, `door_posix.c` kept stamping the retired key, and every comparison
+    this module DID make still agreed. A POSIX caller's identity would have
+    been dropped on the floor by a server that no longer reads that key, with
+    this file green throughout.
+
+    Same predicate, same exception list -- a producer is either compared or it
+    is unguarded, and there is no third state."""
+    python_fields = _python_envelope_fields()
+    posix_source = _DOOR_POSIX_C.read_text(encoding="utf-8")
+    posix_fields = _c_envelope_fields(
+        _c_envelope_region(
+            posix_source, start_anchor=_C_POSIX_REGION_START, label="door_posix.c"
+        )
+    )
+
+    mismatches = _parity_mismatches(python_fields, posix_fields, _KNOWN_ONE_SIDED_FIELDS)
+    assert not mismatches, (
+        "warm envelope producers disagree on field set (POSIX door):\n"
+        + "\n".join(mismatches)
+    )
+
+
+def test_both_doors_agree_with_each_other():
+    """The two door twins ship as one wire format. Comparing each against the
+    Python producer separately would let a field they BOTH omit pass unnoticed
+    only if the exception list hid it; comparing them to each other names the
+    Windows/POSIX split directly, which is the `multi-os-first-class` claim
+    this repo makes about every transport."""
+    win_fields = _c_envelope_fields(_c_envelope_region(_DOOR_C.read_text(encoding="utf-8")))
+    posix_fields = _c_envelope_fields(
+        _c_envelope_region(
+            _DOOR_POSIX_C.read_text(encoding="utf-8"),
+            start_anchor=_C_POSIX_REGION_START,
+            label="door_posix.c",
+        )
+    )
+    assert win_fields == posix_fields, (
+        "door.c and door_posix.c stamp different envelope field sets: "
+        f"windows-only={sorted(win_fields - posix_fields)}, "
+        f"posix-only={sorted(posix_fields - win_fields)}"
     )
 
 

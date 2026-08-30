@@ -48,16 +48,14 @@ ladder's job is done today by `ops/ceremony/push.py`'s own ladder, and the
 drain leg had no answer to "what needs it."
 
 The record's READ primitives (`_read_pending_record`, `_pending_record_
-path`, `_holder_alive`, `_record_is_stale`) are NOT gravestoned with the
-rest: `coordinator_core/orientation/regenerate_cache.py::
-emit_auto_push_health` imports the first and last of those four (aliased
-`_ap_read_pending_record`/`_ap_record_is_stale`) as a real, if now-always-
-empty, read site -- the write side that would ever populate a record for
-it to find (`_hold_window`) is already gravestoned by C8, but the
-orientation-cache consumer's import is still live and breaks module import
-outright if these four are deleted too. See
+path`, `_record_is_stale`) are gone too (2026-08-30, overengineering-
+reviewer finding 2): their sole caller, `orientation/regenerate_cache.py::
+emit_auto_push_health`, now reports from the live `push-failures.log`
+signal directly instead of a record nothing writes -- see that module for
+the migration. See
 `state/lessons/2026-08-30-a-survival-citation-needs-the-same-call-19f9f746ade3.yaml`
-for the citation-trace lesson this gravestoning follows.
+for the citation-trace lesson that flagged the read-only shape as
+insufficient on its own (an import site is not a live call site).
 
 Behavior-preservation notes (read alongside the bash source):
   - Branch case-canonicalization (Windows case-insensitive-FS fix), the
@@ -80,7 +78,6 @@ keeps this a no-op in every other fleet repo.
 
 from __future__ import annotations
 
-import json
 import os
 import re
 import sys
@@ -91,7 +88,6 @@ from pathlib import Path
 from typing import Optional
 
 from coordinator_core.git.git_dir import resolve_git_common_dir
-from coordinator_core.session.day_branch_cut_lock import holder_alive
 from coordinator_core.win_portability import no_console_creationflags
 
 
@@ -1391,84 +1387,6 @@ def _maybe_publish_cockpit_contract(
             "(EXPLAIN_ONLY=1 for a dry run).",
             file=sys.stderr,
         )
-
-
-# ---------------------------------------------------------------------------
-# Pending-record READ primitives -- NOT gravestoned with the rest of the
-# subsystem above (C2, docs/plans/2026-08-30-who-pushes-and-when.md). Live
-# caller found post-deletion: `coordinator_core/orientation/regenerate_
-# cache.py::emit_auto_push_health` imports `_read_pending_record` and
-# `_record_is_stale` (aliased `_ap_read_pending_record`/`_ap_record_is_
-# stale`) to distinguish "auto-push is deliberately holding a push during
-# an active window" from "auto-push is lagging" in the orientation cache --
-# a real, if now-always-empty, read site (no code path writes a record any
-# more; `_hold_window`, the sole writer, was gravestoned by C8). Deleting
-# these broke that module's import outright
-# (`coordinator_core.ops::_eager_import_all` failed to register
-# `orientation.regenerate_cache`'s ops -- caught by
-# `test_no_uncounted_spawn_on_budgeted_path.py::test_registry_fast_path_
-# matches_live_registry`), which is a citation the C2 brief's own
-# reachability trace missed (same failure mode the brief's own "HOW THIS
-# GOT MISSED" note names for C8). Restored to their pre-C2 shape,
-# read-only: the WRITE/REMOVE/drain/retry side (`_write_pending_record`,
-# `_remove_pending_record`, `_clear_pending_record_if_branch`,
-# `_branch_resolves_locally`, `_drain_dead_ref_record`, `drain_pending_
-# push`, `run_push_with_retry`) had zero external callers and stays
-# deleted.
-# ---------------------------------------------------------------------------
-
-_PENDING_RECORD_NAME = "coordinator-auto-push-pending.json"
-# Grace margin past a record's `hold_until` before `_record_is_stale` calls
-# it stale on timing alone (independent of holder liveness).
-_STALE_GRACE_SECONDS = 60
-
-
-def _pending_record_path(repo_root: str) -> Path:
-    """`<git-common-dir>/coordinator-auto-push-pending.json` -- see
-    `log_failure`'s docstring for why this is the git COMMON dir (worktree/
-    submodule safety), not a literal `<repo_root>/.git` join.
-    """
-    return resolve_git_common_dir(repo_root) / _PENDING_RECORD_NAME
-
-
-def _read_pending_record(repo_root: str) -> dict | None:
-    """Read the pending-push record, or None if absent/corrupt/unreadable.
-
-    A corrupt or partially-written record (this process crashing mid-write,
-    pre-atomic-rename) reads as None -- exactly like "no record" -- rather
-    than raising, so a reader always has a safe fallback: treat it as if no
-    hold is in effect.
-    """
-    try:
-        text = _pending_record_path(repo_root).read_text(encoding="utf-8")
-    except OSError:
-        return None
-    try:
-        record = json.loads(text)
-    except ValueError:
-        return None
-    return record if isinstance(record, dict) else None
-
-
-def _record_is_stale(record: dict, now: float) -> bool:
-    """A pending record is stale (dead holder, or hold_until long past) --
-    taken over, never trusted. Checked before either coalescing onto an
-    existing record or draining one.
-
-    Negative spec: the liveness probe is `day_branch_cut_lock.holder_alive`,
-    never a copy local to this module. `None` from it means "could not
-    determine" (e.g. `MissingPsutilError` on a psutil-less Windows box), and
-    this function then falls back to the hold_until+grace check alone rather
-    than raising. A local re-implementation here is what the prime exit
-    criterion's one-implementation clause forbids.
-    """
-    alive = holder_alive(record.get("holder_pid"))
-    if alive is False:
-        return True
-    hold_until = record.get("hold_until")
-    if isinstance(hold_until, (int, float)) and now > hold_until + _STALE_GRACE_SECONDS:
-        return True
-    return False
 
 
 def _engine_source_root_for_currency() -> "Path":

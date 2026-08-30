@@ -50,7 +50,7 @@ def _serve(frame: bytes, dispatch) -> _FakeIO:
 
 
 def _ok_dispatch(seen: list):
-    def _dispatch(msg: dict, *, session_id=None) -> dict:
+    def _dispatch(msg: dict, *, caller=None, isolated=False) -> dict:
         seen.append(msg)
         return {"jsonrpc": "2.0", "id": msg["id"], "result": "ok"}
 

@@ -74,9 +74,14 @@ from __future__ import annotations
 
 import contextlib
 import contextvars
+import os
 from typing import Any, Iterator, List, Optional
 
-from coordinator_core.session.core import session_identity_override, warm_served_request
+from coordinator_core.session.core import (
+    _UUID_RE,
+    session_identity_override,
+    warm_served_request,
+)
 from coordinator_core.session.declared_writes import collecting
 
 __all__ = [
@@ -151,6 +156,81 @@ def collecting_diagnostics(into: Optional[List[str]] = None) -> Iterator[List[st
         _DIAGNOSTICS.reset(token)
 
 
+# ---------------------------------------------------------------------------
+# `os.environ` IDENTITY BORROW (C3, docs/plans/2026-08-30-every-op-runs-in-
+# the-callers-environment.md).
+#
+# WHY THIS EXISTS. `session_identity_override` binds a ContextVar only, so
+# only a resolver that reads it (`session.core.resolve_session_id`) sees the
+# caller's carried identity -- a raw `os.environ.get(...)` read steps
+# straight past it and gets whoever spawned the server
+# (`docs/research/warm-engine-premise/mechanism-2-globals-and-env.md`
+# § Disposition names `os.environ` as the outermost-boundary compatibility
+# mirror this closes). Mutating process-wide `os.environ` is a real
+# concurrency hazard in general (36 of 40 pool tasks observed a prior task's
+# unrestored value in the spike behind this chunk) -- safe here ONLY because
+# `isolated=True` is asserted by the caller to mean this dispatch owns a
+# process no concurrent request shares (C2's process-pool isolation), never
+# because this helper trusts its caller's word for free.
+#
+# `CLAUDE_PID` is popped whenever `isolated`, on the SAME terms as the two
+# lower-tier session vars, even though no carried pid is ever set here: this
+# server process's own `CLAUDE_PID` names whoever spawned it, and
+# `harness_registry.self_record()` resolves through that name with no other
+# discriminator -- left in place it attributes an isolated dispatch's own
+# self-classification to the spawner, the identical misattribution shape
+# `COORDINATOR_SESSION_ID` closes. Popping never fabricates a value; it only
+# refuses to let a stranger's pid answer on this dispatch's behalf.
+# ---------------------------------------------------------------------------
+_ENV_LOWER_TIER_SESSION_NAMES = ("CLAUDE_SESSION_ID", "CLAUDE_CODE_SESSION_ID")
+_ENV_TOP_TIER_SESSION_NAME = "COORDINATOR_SESSION_ID"
+_ENV_ALL_SESSION_NAMES = (_ENV_TOP_TIER_SESSION_NAME,) + _ENV_LOWER_TIER_SESSION_NAMES
+_ENV_CLAUDE_PID_NAME = "CLAUDE_PID"
+_ENV_BORROWED_NAMES = _ENV_ALL_SESSION_NAMES + (_ENV_CLAUDE_PID_NAME,)
+
+
+@contextlib.contextmanager
+def _environ_identity_borrow(session_id: Optional[str], isolated: bool) -> Iterator[None]:
+    """Mirror the caller's carried identity into `os.environ` for the life
+    of one ISOLATED dispatch, restored in a `finally` regardless of how the
+    block exits.
+
+    `isolated=False` is a complete no-op -- `os.environ` is never touched,
+    read or written -- which is what keeps the `BrokenProcessPool` fallback
+    (a real accept-thread dispatch, sharing this process with every other
+    connection) from borrowing an identity into state every other in-flight
+    request's ambient-env readers would also observe.
+
+    `session_id` is re-validated here against the same UUID shape
+    `session_identity_override` gates on (`session.core._UUID_RE`) rather
+    than trusted as already-valid: a caller-supplied value that failed that
+    gate must be treated as "no carried identity" on this axis too, or the
+    two axes could disagree about whether an identity was carried at all.
+    """
+    if not isolated:
+        yield
+        return
+
+    saved = {name: os.environ.get(name) for name in _ENV_BORROWED_NAMES}
+    try:
+        valid_sid = session_id if session_id and _UUID_RE.fullmatch(session_id) else None
+        if valid_sid:
+            os.environ[_ENV_TOP_TIER_SESSION_NAME] = valid_sid
+            for name in _ENV_LOWER_TIER_SESSION_NAMES:
+                os.environ.pop(name, None)
+        else:
+            for name in _ENV_ALL_SESSION_NAMES:
+                os.environ.pop(name, None)
+        os.environ.pop(_ENV_CLAUDE_PID_NAME, None)
+        yield
+    finally:
+        for name, value in saved.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
+
+
 @contextlib.contextmanager
 def per_request_state(
     into: Optional[List[str]] = None,
@@ -158,6 +238,7 @@ def per_request_state(
     session_id: Optional[str] = None,
     diagnostics: Optional[List[str]] = None,
     warm_served: Optional[bool] = None,
+    isolated: bool,
 ) -> Iterator[List[str]]:
     """Open one request's worth of explicit, Token/reset-scoped state.
 
@@ -206,6 +287,26 @@ def per_request_state(
     force-bind default (`False`) was the one axis on this seam that did not
     inherit-on-absent, and that divergence is what forced
     `reentrant_dispatch` to re-thread the outer flag by hand. -->
+
+    `isolated` is a REQUIRED keyword-only argument, with no default: every
+    call site must declare its own execution shape rather than inheriting a
+    silently-safe one. `True` means this dispatch owns a process no
+    concurrent request shares (the `DISPATCH_PROCESS_POOL_SIZE` pool worker
+    target, `warm.server._pool_dispatch_worker`, on both transport legs) and
+    additionally mirrors the caller's carried identity into `os.environ` for
+    the block's duration (`_environ_identity_borrow`, restored in a
+    `finally`) — the compatibility mirror ambient-env readers (e.g.
+    `harness_registry.self_record()`, `subprocess_identity_env()`'s callers)
+    need, safe here only because process isolation means no OTHER concurrent
+    request's ambient-env read can observe this process's mutated
+    environment. `False` — every other caller, including the cold path
+    (`os.environ` there already IS the caller's own, so the borrow would be a
+    no-op that costs a dict copy) and the `BrokenProcessPool` degrade path
+    (a real, unisolated accept-thread dispatch sharing this process with
+    every other in-flight connection) — takes no env borrow at all; the
+    ContextVar bind above (`session_identity_override`) still happens
+    unconditionally on every leg, since that bind is thread-safe regardless
+    of process isolation.
     """
     warm_scope: "contextlib.AbstractContextManager[object]"
     if warm_served is None:
@@ -213,12 +314,13 @@ def per_request_state(
     else:
         warm_scope = warm_served_request(bool(warm_served))
     with warm_scope, session_identity_override(session_id):
-        with collecting(into) as declared:
-            if diagnostics is None:
-                yield declared
-            else:
-                with collecting_diagnostics(diagnostics):
+        with _environ_identity_borrow(session_id, isolated):
+            with collecting(into) as declared:
+                if diagnostics is None:
                     yield declared
+                else:
+                    with collecting_diagnostics(diagnostics):
+                        yield declared
 
 
 from dataclasses import dataclass
@@ -467,5 +569,5 @@ def reentrant_dispatch(
     # import `in_warm_served_request` and re-thread it by hand to avoid a
     # force-bind default silently re-defaulting a nested scope to cold;
     # aligning the default on `per_request_state` removed the need. -->
-    with per_request_state():
+    with per_request_state(isolated=False):
         return handler(params, repo_root=repo_root)

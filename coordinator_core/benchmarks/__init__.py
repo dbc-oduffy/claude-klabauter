@@ -9,6 +9,16 @@ per-op override) budget manifest, and persists an append-only
 code_sha-keyed baseline store.
 
 Spec backlink: pln-qsub-01-per-op-end-to-end-late-53ff10
+
+Measured-window discipline: a benchmark module's own git spawns (fixture
+build, sample listing, post-window verification) are never the measured
+subject — the timed subject is measured separately (`LiveTreeAccountant`,
+`batched_process_time_ms`, `single_invocation_tree_process_time`, or
+equivalent) around its own calls, outside any seam these fixture spawns
+route through. Routing fixture-only git calls through
+`coordinator_core.git.run` (G7) therefore adds no seam cost to the figure a
+module reports. Individual call sites cite this paragraph rather than
+restating it.
 """
 
 from __future__ import annotations

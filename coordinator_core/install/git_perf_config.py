@@ -58,17 +58,13 @@ import sys
 from pathlib import Path
 from typing import List
 
-from coordinator_core.git.run import GitResult, run_git
-
-
-def _git(repo: Path, *args: str) -> GitResult:
-    return run_git(list(args), cwd=str(repo))
+from coordinator_core.git.run import run_git
 
 
 def filesystem_supports_untracked_cache(repo: Path) -> bool:
     """git's own mtime probe. Returns False rather than raising, so a filesystem
     that cannot carry the cache is a skip and never an install failure."""
-    return _git(repo, "update-index", "--test-untracked-cache").returncode == 0
+    return run_git(["update-index", "--test-untracked-cache"], cwd=str(repo)).returncode == 0
 
 
 def apply(repo: Path, *, dry_run: bool = False) -> List[str]:
@@ -90,7 +86,16 @@ def apply(repo: Path, *, dry_run: bool = False) -> List[str]:
     # module docstring's measurement bar, not by restoring the dict.
     key, wanted = "core.untrackedCache", "true"
     report: List[str] = []
-    current = _git(repo, "config", "--get", key).stdout.strip() or None
+    current_result = run_git(["config", "--get", key], cwd=str(repo))
+    # Review: integrator sweep -- an unread current value (timeout/missing
+    # git) must not be folded into "unset", which the branch below treats as
+    # license to write. That would let a peer's deliberately differing value
+    # (the negative spec's own "never overwritten" case) get clobbered simply
+    # because this read never came back, not because it was confirmed absent.
+    if current_result.timed_out or current_result.returncode == 127:
+        report.append("skip    %s (could not read current value: git did not answer)" % key)
+        return report
+    current = current_result.stdout.strip() or None
 
     if current == wanted:
         report.append("ok      %s = %s (already set)" % (key, wanted))
@@ -108,7 +113,7 @@ def apply(repo: Path, *, dry_run: bool = False) -> List[str]:
         if dry_run:
             report.append("would   %s = %s" % (key, wanted))
             return report
-        proc = _git(repo, "config", key, wanted)
+        proc = run_git(["config", key, wanted], cwd=str(repo))
         if proc.returncode != 0:
             report.append("FAILED  %s: %s" % (key, proc.stderr.strip()))
             return report
@@ -117,7 +122,7 @@ def apply(repo: Path, *, dry_run: bool = False) -> List[str]:
     if not dry_run:
         # THE CONFIG KEY ALONE IS INERT -- the cache lives in the index and
         # must be extended into it. Cheap and idempotent when already present.
-        extend = _git(repo, "update-index", "--untracked-cache")
+        extend = run_git(["update-index", "--untracked-cache"], cwd=str(repo))
         if extend.returncode != 0:
             report[-1] += " (index not extended: %s)" % extend.stderr.strip()
 
@@ -197,7 +202,15 @@ def _apply_maintenance_keys(repo: Path, *, dry_run: bool = False) -> List[str]:
     """
     report: List[str] = []
     for key, wanted in _MAINTENANCE_KEYS:
-        current = _git(repo, "config", "--get", key).stdout.strip() or None
+        current_result = run_git(["config", "--get", key], cwd=str(repo))
+        # Review: integrator sweep -- same "unread is not unset" gap as
+        # `apply()` above: a timeout must not license the write branch below.
+        if current_result.timed_out or current_result.returncode == 127:
+            report.append(
+                "skip    %s (could not read current value: git did not answer)" % key
+            )
+            continue
+        current = current_result.stdout.strip() or None
         if current == wanted:
             report.append("ok      %s = %s (already set)" % (key, wanted))
         elif current is not None:
@@ -207,7 +220,7 @@ def _apply_maintenance_keys(repo: Path, *, dry_run: bool = False) -> List[str]:
         elif dry_run:
             report.append("would   %s = %s" % (key, wanted))
         else:
-            proc = _git(repo, "config", key, wanted)
+            proc = run_git(["config", key, wanted], cwd=str(repo))
             if proc.returncode != 0:
                 report.append("FAILED  %s: %s" % (key, proc.stderr.strip()))
             else:

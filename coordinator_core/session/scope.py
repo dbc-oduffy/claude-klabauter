@@ -62,7 +62,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Dict, List, Literal, Mapping, NamedTuple, Optional, Set, Tuple
 
-from coordinator_core.git.run import run_git
+from coordinator_core.git.run import GitResult, run_git
 from coordinator_core.session import core, liveness, touch_record
 from coordinator_core.session.path_dialect import canonicalize_relative_path
 
@@ -388,31 +388,12 @@ def normalize_diagnostic_fired() -> bool:
     return _normalize_diag_fired
 
 
-class GitRun(NamedTuple):
-    """One completed ``git`` invocation's full result — returncode, stdout and
-    stderr — for the one call site that must DISCRIMINATE between failure
-    shapes rather than collapse them (see :func:`_ls_files_failure_is_benign`).
-    """
-
-    returncode: int
-    stdout: str
-    stderr: str
 
 
-#: PROCESS-time budget for the one git seam below, passed straight through as
-#: `run_git`'s own `timeout=` kwarg -- the seam's ceiling is headroom added on
-#: top of this, not a replacement for it. Matches
-#: `coordinator_core.git.repo_root._TIMEOUT_SECS` deliberately -- these are the
-#: same class of call (a small local-metadata git on a hook hot path) and a
-#: second, different number here would be a budget nobody could justify against
-#: the other. It exists so a wedged git cannot hold a PreToolUse hook open
-#: indefinitely, not to enforce the brightline (which is measured in process
-#: time).
-_GIT_TIMEOUT_SECS = 2.0
 
 
-def _git_run(args: List[str], cwd: Optional[str] = None) -> Optional[GitRun]:
-    """Run ``git <args>`` and return the full :class:`GitRun`, or ``None`` iff
+def _git_run(args: List[str], cwd: Optional[str] = None) -> Optional[GitResult]:
+    """Run ``git <args>`` and return the full :class:`GitResult`, or ``None`` iff
     git could not be EXECUTED at all (``OSError``: binary missing, not
     executable, fork failure).
 
@@ -422,14 +403,14 @@ def _git_run(args: List[str], cwd: Optional[str] = None) -> Optional[GitRun]:
     mode).
 
     Negative spec: ``None`` means "no git ran", NOT "git failed" — a non-zero
-    exit is a fully-populated ``GitRun`` and must stay distinguishable from
+    exit is a fully-populated ``GitResult`` and must stay distinguishable from
     ``None``, because the two classify differently downstream (an unexecutable
     git is always operational; a non-zero exit may be benign).
 
     A TIMEOUT joins ``OSError`` on the ``None`` side of that line, not the
-    ``GitRun`` side. There is no exit code and no output to report, and a
+    ``GitResult`` side. There is no exit code and no output to report, and a
     wedged git is an operational fact of exactly the kind the ``None`` branch
-    already classifies -- whereas a synthetic non-zero ``GitRun`` would let a
+    already classifies -- whereas a synthetic non-zero ``GitResult`` would let a
     hang read downstream as a benign git verdict. This module is reachable from
     the PreToolUse dispatch path, where an unbounded spawn can hold a hook open
     for as long as git is willing to hang; the bound is what
@@ -442,10 +423,10 @@ def _git_run(args: List[str], cwd: Optional[str] = None) -> Optional[GitRun]:
     (git never executed -- ``OSError``) are exactly the two cases this
     function has always collapsed to ``None``.
     """
-    result = run_git(args, cwd=cwd, timeout=_GIT_TIMEOUT_SECS)
+    result = run_git(args, cwd=cwd)
     if result.timed_out or result.returncode == 127:
         return None
-    return GitRun(result.returncode, result.stdout, result.stderr)
+    return result
 
 
 def _git_output(args: List[str], cwd: Optional[str] = None) -> Optional[str]:
@@ -498,7 +479,7 @@ def _path_is_outside_worktree(fpath: str, root: Optional[str]) -> Optional[bool]
 
 
 def _ls_files_failure_is_benign(
-    result: Optional[GitRun], fpath: str, root: Optional[str]
+    result: Optional[GitResult], fpath: str, root: Optional[str]
 ) -> bool:
     """Did ``git ls-files --full-name -- <fpath>`` fail merely because
     ``fpath`` is not in THIS repository?

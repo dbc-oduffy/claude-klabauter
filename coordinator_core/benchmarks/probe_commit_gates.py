@@ -58,8 +58,8 @@ def _tracked_sample(root: Path, n: int) -> list:
     of `deletion_block_gate` runs, and this probe measures the ordinary case.
 
     Sample-building, not the measured subject -- the four gate functions
-    below are what `_window` times. Routing this listing through
-    `coordinator_core.git.run` (G7) never enters a measured window.
+    below are what `_window` times. See `coordinator_core.benchmarks`'s
+    module docstring, "Measured-window discipline".
     """
     out = run_git(["ls-files", "--", "coordinator_core"], cwd=str(root)).stdout.split("\n")
     live = [p for p in out if p.strip() and (root / p).is_file()]

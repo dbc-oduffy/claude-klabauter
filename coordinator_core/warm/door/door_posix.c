@@ -1210,6 +1210,19 @@ int main(int argc, char **argv) {
      * binds nothing, which is today's behaviour byte-for-byte. Envelope
      * level, sibling of `_engine_token`: transport metadata the server
      * pops before dispatch, never an op param.
+     *
+     * THE IDENTITY SET, NOT ONE FIELD, AND UNDER `_caller`. C1b of
+     * docs/plans/2026-08-30-every-op-runs-in-the-callers-environment.md
+     * widened both production legs to one top-level `_caller` object whose
+     * fields ARE `coordinator_core.warm.caller_context.CallerContext`, and
+     * retired the bare `_session_id` key with NO alias -- `_serve_line`
+     * reads `_caller` only. This POSIX twin widens with its Windows sibling
+     * (`door.c`) or a POSIX caller's identity is dropped on the floor by a
+     * server that no longer looks at the key it sends. `pid` is always
+     * carried and is why the widening matters beyond the session id:
+     * `harness_registry.self_record()` keys off `CLAUDE_PID`, and the
+     * warm-identity cohort sweep names three live defects that resolve
+     * self-classification that way.
      */
     if (req_ok) {
         static const char *const session_env_precedence[] = {
@@ -1219,16 +1232,27 @@ int main(int argc, char **argv) {
         };
         const size_t session_env_count =
             sizeof(session_env_precedence) / sizeof(session_env_precedence[0]);
+        const char *sid = NULL;
+        char pid_buf[32];
         for (size_t i = 0; i < session_env_count; i++) {
-            const char *sid = getenv(session_env_precedence[i]);
-            if (sid == NULL || sid[0] == '\0') {
+            const char *candidate = getenv(session_env_precedence[i]);
+            if (candidate == NULL || candidate[0] == '\0') {
                 continue;
             }
-            req_ok &= buf_append_cstr(&req, ",\"_session_id\":\"");
-            req_ok &= buf_append_json_escaped(&req, sid, strlen(sid));
-            req_ok &= buf_append_cstr(&req, "\"");
+            sid = candidate;
             break;
         }
+        snprintf(pid_buf, sizeof(pid_buf), "%ld", (long)getpid());
+
+        req_ok &= buf_append_cstr(&req, ",\"_caller\":{\"pid\":\"");
+        req_ok &= buf_append_cstr(&req, pid_buf);
+        req_ok &= buf_append_cstr(&req, "\"");
+        if (sid != NULL) {
+            req_ok &= buf_append_cstr(&req, ",\"session_id\":\"");
+            req_ok &= buf_append_json_escaped(&req, sid, strlen(sid));
+            req_ok &= buf_append_cstr(&req, "\"");
+        }
+        req_ok &= buf_append_cstr(&req, "}");
     }
 
     req_ok &= buf_append_cstr(&req, "}\n");

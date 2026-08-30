@@ -241,7 +241,7 @@ def test_run_dispatch_records_process_wide_process_time(tmp_path, monkeypatch):
         "jsonrpc": "2.0", "id": 1, "method": "ping", "params": {},
         "_origin_worktree": str(tmp_path),
     }
-    warm_server._run_dispatch(msg, session_id=None)
+    warm_server._run_dispatch(msg)
 
     entries = [e for e in _read_entries(_sink(common_dir)) if e.get("kind") == "process_time"]
     assert len(entries) == 1

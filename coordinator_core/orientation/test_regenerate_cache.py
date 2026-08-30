@@ -1537,14 +1537,16 @@ def test_atomic_replace_stat_permission_error_propagates(tmp_path, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# ## Auto-push health -- hold-window awareness, failure-recency bounding, and
-# the "timeout" classification (2026-08-20 dispatch, three-defect fix). See
-# regenerate_cache.py's `emit_auto_push_health` docstring-adjacent comments
-# for the full rationale; these tests exercise the reporting surface only,
-# never auto_push.py's own timing (_HOLD_WINDOW_SECONDS is untouched).
+# ## Auto-push health -- failure-recency bounding and the "timeout"
+# classification (2026-08-20 dispatch, three-defect fix). Hold-window
+# awareness was retired 2026-08-30 (overengineering-reviewer finding 2):
+# the record it read has no writer any more, so the health line reports
+# from push-failures.log alone. See regenerate_cache.py's
+# `emit_auto_push_health` docstring-adjacent comments for the full
+# rationale; these tests exercise the reporting surface only, never
+# auto_push.py's own timing.
 # ---------------------------------------------------------------------------
 
-import time as _time
 from datetime import datetime as _datetime, timezone as _timezone
 from coordinator_core.win_portability import no_console_passthrough_kwargs
 
@@ -1576,18 +1578,6 @@ def _make_repo_with_upstream(tmp_path: Path, branch: str = "work/x", unpushed: i
     return repo
 
 
-def _write_pending_record(repo: Path, branch: str, hold_until: float, holder_pid: int | None = None) -> None:
-    record = {
-        "branch": branch,
-        "sha": "deadbeef",
-        "hold_until": hold_until,
-        "holder_pid": holder_pid if holder_pid is not None else os.getpid(),
-    }
-    (repo / ".git" / "coordinator-auto-push-pending.json").write_text(
-        _json.dumps(record), encoding="utf-8"
-    )
-
-
 def _write_failure_log_line(repo: Path, branch: str, err_class: str, when: _datetime) -> None:
     stamp = when.strftime("%Y-%m-%dT%H:%M:%SZ")
     line = f"[{stamp}] PUSH FAILED on {branch} (direct push/{err_class} after 2) :: some detail :: stderr=<empty>\n"
@@ -1596,30 +1586,7 @@ def _write_failure_log_line(repo: Path, branch: str, err_class: str, when: _date
         fh.write(line)
 
 
-def test_auto_push_health_live_hold_renders_as_holding_not_warning(tmp_path):
-    repo = _make_repo_with_upstream(tmp_path, branch="work/hold")
-    _write_pending_record(repo, "work/hold", hold_until=_time.time() + 120)
-
-    result = mod.emit_auto_push_health(repo)
-
-    assert "⚠" not in result
-    assert "holding" in result
-    assert "2 unpushed commit(s)" in result
-
-
-def test_auto_push_health_stale_record_still_warns(tmp_path):
-    repo = _make_repo_with_upstream(tmp_path, branch="work/stale")
-    # hold_until far enough in the past to clear _STALE_GRACE_SECONDS (60s)
-    # even though the recorded holder_pid (self) is genuinely alive.
-    _write_pending_record(repo, "work/stale", hold_until=_time.time() - 1000)
-
-    result = mod.emit_auto_push_health(repo)
-
-    assert "⚠" in result
-    assert "lagging" in result
-
-
-def test_auto_push_health_absent_record_still_warns(tmp_path):
+def test_auto_push_health_no_failure_log_still_warns(tmp_path):
     repo = _make_repo_with_upstream(tmp_path, branch="work/nohold")
 
     result = mod.emit_auto_push_health(repo)

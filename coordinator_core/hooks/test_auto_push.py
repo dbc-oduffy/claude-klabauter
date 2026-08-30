@@ -16,11 +16,12 @@ Tests assert:
     gh-transient's seconds-scale backoff is never actually paid.
 
   GRAVESTONED 2026-08-30 (docs/plans/2026-08-30-who-pushes-and-when.md C2):
-  run_push_with_retry() and the durable pending-push record subsystem
-  (drain_pending_push, _drain_dead_ref_record, and the read/write/staleness
-  primitives only they reached) are deleted; their tests retired with them
-  rather than retargeted -- see auto_push.py's module docstring for the
-  gravestoning's full citation trail.
+  run_push_with_retry() and the durable pending-push write/drain subsystem
+  (drain_pending_push, _write_pending_record, _drain_dead_ref_record) are
+  deleted; their tests retired with them rather than retargeted. The read
+  primitives (_read_pending_record, _pending_record_path, _record_is_stale)
+  were restored the same day for orientation/regenerate_cache.py's health
+  check -- see auto_push.py's module docstring for the full citation trail.
 
 No test performs a real `git push` or touches a real remote --
 subprocess/push_once and os.fork are monkeypatched throughout, and repo dirs

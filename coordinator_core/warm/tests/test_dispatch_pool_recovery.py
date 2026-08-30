@@ -21,6 +21,7 @@ from concurrent.futures.process import BrokenProcessPool
 import pytest
 
 from coordinator_core.warm import server
+from coordinator_core.warm.caller_context import resolve_caller_context
 
 
 class _BrokenPool:
@@ -48,14 +49,14 @@ def ctx(monkeypatch):
 
 def test_broken_pool_still_answers_the_caller(ctx, monkeypatch):
     monkeypatch.setattr(
-        server, "_run_dispatch", lambda msg, session_id=None: {"ok": True, "via": "in_process"}
+        server, "_run_dispatch", lambda msg, *, caller=None, isolated=False: {"ok": True, "via": "in_process"}
     )
     result = ctx._pool_dispatch({"jsonrpc": "2.0", "id": 1, "method": "ping"})
     assert result == {"ok": True, "via": "in_process"}
 
 
 def test_broken_pool_is_discarded_so_the_next_request_rebuilds(ctx, monkeypatch):
-    monkeypatch.setattr(server, "_run_dispatch", lambda msg, session_id=None: {"ok": True})
+    monkeypatch.setattr(server, "_run_dispatch", lambda msg, *, caller=None, isolated=False: {"ok": True})
     broken = ctx._dispatch_pool
 
     ctx._pool_dispatch({"jsonrpc": "2.0", "id": 1, "method": "ping"})
@@ -68,13 +69,20 @@ def test_session_id_survives_the_fallback(ctx, monkeypatch):
     """Per-request identity is load-bearing; the degraded path must not drop it."""
     seen = {}
 
-    def _fake(msg, session_id=None):
-        seen["session_id"] = session_id
+    def _fake(msg, *, caller=None, isolated=False):
+        seen["session_id"] = caller.session_id if caller is not None else None
+        seen["isolated"] = isolated
         return {"ok": True}
 
     monkeypatch.setattr(server, "_run_dispatch", _fake)
-    ctx._pool_dispatch({"jsonrpc": "2.0", "id": 1, "method": "ping"}, session_id="sid-42")
+    ctx._pool_dispatch(
+        {"jsonrpc": "2.0", "id": 1, "method": "ping"},
+        caller=resolve_caller_context({"session_id": "sid-42"}),
+    )
     assert seen["session_id"] == "sid-42"
+    # The degrade path runs IN THIS process on an accept thread, so it must
+    # carry the identity without taking the env borrow (C3's `isolated=False`).
+    assert seen["isolated"] is False
 
 
 def test_broken_pool_returns_indeterminate_for_a_mutating_op(ctx, monkeypatch):
@@ -97,7 +105,7 @@ def test_broken_pool_still_reruns_a_compute_only_op(ctx, monkeypatch):
     """Negative-spec companion to the mutating case above: a COMPUTE_ONLY op
     stays on the pre-existing in-process fallback, unchanged."""
     monkeypatch.setattr(
-        server, "_run_dispatch", lambda msg, session_id=None: {"ok": True, "via": "in_process"}
+        server, "_run_dispatch", lambda msg, *, caller=None, isolated=False: {"ok": True, "via": "in_process"}
     )
     result = ctx._pool_dispatch({"jsonrpc": "2.0", "id": 1, "method": "ping"})
     assert result == {"ok": True, "via": "in_process"}

@@ -25,6 +25,7 @@ from coordinator_core.benchmarks.maintenance_tier_budget import (
     SCRATCH_ROOT as _FALSIFIER_SCRATCH_ROOT,
     check_maintenance_tier_budget,
 )
+from coordinator_core.git.run import GitResult
 from coordinator_core.ops import git_maintenance as gm
 from coordinator_core.win_portability import no_console_creationflags
 
@@ -283,13 +284,13 @@ def _recorded_argv(tmp_path, tier, monkeypatch):
     """
     repo = _init_repo(tmp_path)
     invoked = []
-    real = gm._git
+    real_run_git = gm.run_git
 
-    def recording(r, *args, **kwargs):
-        invoked.append(args)
-        return real(r, *args, **kwargs)
+    def recording(args, **kwargs):
+        invoked.append(tuple(args))
+        return real_run_git(args, **kwargs)
 
-    monkeypatch.setattr(gm, "_git", recording)
+    monkeypatch.setattr(gm, "run_git", recording)
     gm.run_tier(repo, tier)
     return invoked
 
@@ -346,14 +347,17 @@ def test_stamp_does_not_fire_when_the_prune_leg_fails(tmp_path, monkeypatch):
     'ran and is fine' -- it must not also claim 'fine' for a tier whose prune
     leg errored, even though the maintenance-run leg after it succeeded."""
     repo = _init_repo(tmp_path)
-    real = gm._git
+    real_run_git = gm.run_git
 
-    def failing_prune(r, *args, **kwargs):
+    def failing_prune(args, **kwargs):
         if args and args[0] == "prune":
-            return subprocess.CompletedProcess(args, returncode=128, stdout="", stderr="boom")
-        return real(r, *args, **kwargs)
+            # Review: coordinatorcode-reviewer.aaf79112307317734 -- stub the
+            # real GitResult shape run_git now returns, not a bare
+            # subprocess.CompletedProcess.
+            return GitResult(returncode=128, stdout="", stderr="boom", timed_out=False)
+        return real_run_git(args, **kwargs)
 
-    monkeypatch.setattr(gm, "_git", failing_prune)
+    monkeypatch.setattr(gm, "run_git", failing_prune)
     stamped = []
     monkeypatch.setattr(gm, "_stamp", lambda repo: stamped.append(repo))
 

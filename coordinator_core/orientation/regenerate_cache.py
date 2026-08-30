@@ -203,10 +203,6 @@ from coordinator_core._settings_home import settings_home
 from coordinator_core.engine_root import coordinator_engine_root_env
 from coordinator_core.git.git_dir import resolve_git_common_dir
 from coordinator_core.git.repo_root import is_inside_work_tree, show_toplevel
-from coordinator_core.hooks.auto_push import (
-    _read_pending_record as _ap_read_pending_record,
-    _record_is_stale as _ap_record_is_stale,
-)
 from coordinator_core.ipc import register_op
 from coordinator_core.orientation.hook_cancellation_signal import emit_hook_cancellation_rate
 from coordinator_core.orientation.warm_health_signal import emit_warm_engine_health
@@ -947,38 +943,14 @@ def emit_auto_push_health(repo_root: Path) -> str:
     if unpushed == 0:
         return ""
 
-    # Defect 1 (2026-08-20 dispatch): auto_push.py deliberately HOLDS a push
-    # back on a shared branch for up to _HOLD_WINDOW_SECONDS -- one holder
-    # writes coordinator-auto-push-pending.json, sleeps, then pushes; every
-    # other attempt in that window reads the live record and returns without
-    # pushing, BY DESIGN. A non-zero unpushed count during an active hold is
-    # normal, not lag. Reuse auto_push's own record-read/staleness primitives
-    # (rather than re-deriving the record path or the staleness check here a
-    # second time) to tell the two states apart.
+    # Defect 1 (2026-08-20 dispatch), migrated 2026-08-30 (overengineering-
+    # reviewer finding 2): this used to distinguish "auto-push is
+    # deliberately holding a push" from "auto-push is lagging" by reading
+    # auto_push.py's pending-record file. That record's sole writer
+    # (`_hold_window`) was gravestoned by C8, so nothing writes it any more
+    # and the read always came back empty -- the distinction is gone with
+    # the write side. Report from the live signal instead: push-failures.log.
     now = time.time()
-    record = _ap_read_pending_record(str(repo_root))
-    # An ABSOLUTE stamp, never a countdown: this string is written into
-    # state/orientation_cache.md, which is regenerated per workday rather than
-    # per read. A relative "(287s remaining)" is true when built and a lie for
-    # the rest of the artifact's life -- and if the holder is killed mid-sleep
-    # (routine at this machine's load) a baked-in countdown would keep telling
-    # every reader that auto-push is healthily holding while commits sit
-    # unpushed. The reader compares the stamp against the clock themselves, so
-    # a hold that has since expired reads as expired.
-    if record is not None and record.get("branch") == branch and not _ap_record_is_stale(record, now):
-        hold_until = record.get("hold_until")
-        if isinstance(hold_until, (int, float)):
-            until_iso = datetime.fromtimestamp(hold_until, tz=timezone.utc).strftime("%H:%M:%SZ")
-            if hold_until > now:
-                return (
-                    f"- {unpushed} unpushed commit(s) on `{branch}` — auto-push holding "
-                    f"until {until_iso} (by design on a shared branch)"
-                )
-            return (
-                f"- ⚠ {unpushed} unpushed commit(s) on `{branch}` — auto-push hold expired at "
-                f"{until_iso} and the push has not landed; run: git push origin {branch}"
-            )
-
     lastclass = ""
     logf = resolve_git_common_dir(repo_root) / "push-failures.log"
     if logf.is_file() and logf.stat().st_size > 0:

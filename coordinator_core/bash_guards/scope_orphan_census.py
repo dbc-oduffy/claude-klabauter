@@ -242,10 +242,14 @@ def iter_orphan_events(
 def _git_tracked_at_head(git_root: str, path: str) -> bool:
     """True if `path` is tracked at HEAD (used to detect deletions)."""
     result = run_git(["ls-files", "--error-unmatch", "--", path], cwd=git_root)
-    if result.returncode == 127:
+    if result.returncode == 127 or result.timed_out:
         # Unreadable git state must not manufacture a deletion verdict --
         # fail toward "cannot confirm deletion" so classify_cause() falls
-        # through to a later, non-destructive bucket.
+        # through to a later, non-destructive bucket. `timed_out` belongs in
+        # the same arm as 127: `run_git` reports a timeout as returncode -1,
+        # which would otherwise fall to the comparison below and read as a
+        # confident "not tracked" -- the exact verdict this guard refuses to
+        # manufacture, arrived at because git did not answer.
         return True
     return result.returncode == 0
 

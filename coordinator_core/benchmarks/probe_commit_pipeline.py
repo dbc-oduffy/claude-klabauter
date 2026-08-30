@@ -37,9 +37,8 @@ WARMUP = 6
 def _q(root: Path, *a):
     """Fixture build and post-window verification only -- `commit_paths`
     (imported above) is the measured subject, timed by `LiveTreeAccountant`
-    around its own calls; these git spawns never enter that window, so
-    routing them through `coordinator_core.git.run` (G7) adds no seam cost
-    to the figure this module reports."""
+    around its own calls. See `coordinator_core.benchmarks`'s module
+    docstring, "Measured-window discipline"."""
     return run_git(list(a), cwd=str(root))
 
 

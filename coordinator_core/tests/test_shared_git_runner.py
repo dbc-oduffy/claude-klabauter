@@ -752,7 +752,7 @@ _GRANDFATHERED_DIALS: frozenset = frozenset(
 #: all. Lowering either is free and is the point; raising either is the
 #: deliberate, reviewable act of arguing that the tree needs one more private
 #: git runner than it had yesterday.
-_PINNED_RUNNER_CEILING = 192
+_PINNED_RUNNER_CEILING = 191
 _PINNED_DIAL_CEILING = 68
 
 

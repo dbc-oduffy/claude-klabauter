@@ -96,17 +96,19 @@ Caller-identity seam: `_caller_session_id()` resolves THIS client process's
 own session id (`coordinator_core.session.core.resolve_session_id()`) --
 cold, in the true caller's own environment, before the request ever
 crosses the pipe -- and the request carries it beside `_engine_token` under
-`_session_id`, mirroring that field's own naming and "absent means
-degrade, never fabricate" handling. Exists to close the warm-engine
+one top-level `_caller` object, whose fields ARE `warm.caller_context.
+CallerContext` serialised directly (ADDED 2026-08-30, docs/plans/
+2026-08-30-every-op-runs-in-the-callers-environment.md § C1b; previously a
+bare `_session_id` string). Exists to close the warm-engine
 identity-attribution defect (state/bug-backlog/2026-08-18-a-warm-server-
 stamps-every-op-it-serves-eeb801fc6bee.yaml): a long-lived warm server's
 own `os.environ` reflects whoever SPAWNED it, not the caller of any given
 request, so identity must cross the wire explicitly rather than being
-re-resolved server-side. Unresolvable (empty string) is omitted from the
-request entirely, never sent as `""` or fabricated -- the server-side
-`session.core.session_identity_override` no-ops on absence exactly like
-`resolve_session_id()`'s own env chain does today, so an older client (or
-a caller this process cannot identify) degrades to the server's
+re-resolved server-side. An unresolvable `session_id` is `None` inside the
+`_caller` object, never a fabricated value -- the server-side
+`session.core.session_identity_override` no-ops on a `None`/non-UUID value
+exactly like `resolve_session_id()`'s own env chain does today, so an older
+client (or a caller this process cannot identify) degrades to the server's
 pre-existing behaviour, not a broken one.
 
 Engine-token seam: `engine_token()` is a placeholder. C16 ("Version tokens
@@ -910,10 +912,32 @@ def _try_warm_dispatch_inner(msg: dict) -> Optional[dict]:
     token = engine_token()
     pipe = _endpoint_name(token)
     request = {**msg, "_engine_token": token}
+    # Caller-identity seam (module docstring): one top-level `_caller` object, ADDED
+    # 2026-08-30 (docs/plans/2026-08-30-every-op-runs-in-the-callers-environment.md
+    # § C1b), replacing the bare `_session_id` string this leg used to send. Fields ARE
+    # `warm.caller_context.CallerContext`, serialised directly -- `plugin_root`/`cwd`/`pid`
+    # resolve via that accessor's own ambient fallback rungs (this call site IS the true
+    # caller, with no wire in between, which is the one case those rungs exist for);
+    # `session_id` is supplied from THIS process's own resolution (`_caller_session_id()`,
+    # cold, in this client's own environment) because `resolve_caller_context` never
+    # substitutes an ambient guess for that field. No deprecated `_session_id` alias is
+    # kept alive alongside it: door.c and this module publish and install in lockstep
+    # (`state/lessons/a-door-fix-is-inert-until-the-installed-exe-images-are-rewritten.md`),
+    # so the mixed-version state an alias would defend against does not occur.
+    from coordinator_core.warm import caller_context as _caller_context
+
     caller_sid = _caller_session_id()
-    if caller_sid:
-        request["_session_id"] = caller_sid
-    # Publish-lane seam (DR-350), the same shape and the same reason as `_session_id`
+    caller = _caller_context.resolve_caller_context(
+        {"session_id": caller_sid} if caller_sid else None
+    )
+    request["_caller"] = {
+        "plugin_root": caller.plugin_root,
+        "cwd": caller.cwd,
+        "session_id": caller.session_id,
+        "agent_id": caller.agent_id,
+        "pid": caller.pid,
+    }
+    # Publish-lane seam (DR-350), the same shape and the same reason as `_caller`
     # directly above: a long-lived warm server's `os.environ` reflects whoever SPAWNED
     # it, never the caller of any given request, so a fact about THIS caller has to
     # cross the pipe explicitly rather than be re-resolved server-side. Stamped only
@@ -931,7 +955,7 @@ def _try_warm_dispatch_inner(msg: dict) -> Optional[dict]:
     if publish_lane.env_declares_lane():
         request[publish_lane.PUBLISH_LANE_FIELD] = True
 
-    # Settings-home seam, third instance of the same shape as `_session_id` and
+    # Settings-home seam, third instance of the same shape as `_caller` and
     # `_publish_lane` directly above and stamped for the same reason: the warm server
     # resolved `settings_home()` once, from the environment of whoever SPAWNED it, and is
     # keyed on (user, engine-clone, engine-token) -- never on the settings home. Without

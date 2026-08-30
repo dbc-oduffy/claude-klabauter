@@ -1065,7 +1065,7 @@ _git_probe_deadline: contextvars.ContextVar[Optional[float]] = contextvars.Conte
 #: (`check_destructive_git_clean`, and the revert/reset/stash oracles), and
 #: a budget-exhausted probe is a guard-process resource condition, not
 #: evidence the command is unsafe -- denying on it would block real work on
-#: a loaded machine, the same argument `_bt_c7_index_holds_foreign_paths`
+#: a loaded machine, the same argument `_bt_solo_bare_commit_index_nonempty`
 #: already makes for its own fail-open posture. Every `rc != 0` call site in
 #: this file therefore degrades to its own already-specified fail-open
 #: default, which is strictly better than what the overrun produced: a
@@ -8325,7 +8325,7 @@ def _bt_commit_operand_scan(
     `git commit a.py -m x` and `git commit -m x -- a.py` are the same
     operation. A guard whose verdict turns on that token reads syntax where
     it means to read semantics -- the defect this module already hit at
-    opposite polarity in `_bt_git_add_own_pathspec` (deny keyed ON the
+    opposite polarity in the deleted `git add` pathspec extractor (deny keyed ON the
     separator) and here (suppression keyed on it).
 
     `ambiguous` is True when the walk cannot prove the operand list: an
@@ -8528,20 +8528,25 @@ def _bt_commit_has_explicit_pathspec(seg_tokens: List[str]) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# C7 (docs/plans/2026-08-01-advisory-firing-shape-predicate.md) -- the index
-# probe that escalates ONE shape of the check below (the compound `git add
-# -- <paths> && git commit -m "x"` bare-commit-half) from advisory to deny.
+# C7's escalation predicates for the check below. The compound `git add
+# -- <paths> && git commit -m "x"` bare-commit-half denies UNCONDITIONALLY
+# (PM ruling 2026-08-30, `_bt_compound_add_bare_commit`) -- the index probe
+# that used to gate it is deleted, not suspended: it cost two `git diff
+# --cached` spawns on the commit hot path to compute a condition the ruling
+# no longer reads. The remaining index probes here serve the SOLO bare
+# commit and the `-a`/`--all` sweep, which are different shapes.
 # PM Ruling 2: escalate-only, no index-based suppression exists anywhere in
 # this plan; `-a`/`-am`/`--all` are excluded from index-based reasoning
-# unconditionally. See `_bt_c7_index_holds_foreign_paths`'s own docstring for
-# the monotonicity argument and the deliberate compound-shape-only scope cut.
+# unconditionally.
 # ---------------------------------------------------------------------------
 
 #: A bundled short-flag cluster carrying `a` (`-a`, `-am`, `-sa`, `-asm`, ...)
 #: or the long form `--all` -- PM Ruling 2, finding 6: these stage every
 #: modified TRACKED file from the WORKTREE at commit time, not the index, so
 #: a clean-index probe would read "safe" for a command about to sweep
-#: everything. Excluded from C7's index-based reasoning unconditionally.
+#: everything. Excluded from C7's index-based reasoning unconditionally, and
+#: from `_bt_compound_add_bare_commit`'s unconditional deny for the same
+#: reason -- that shape is not the bare-commit half.
 _COMMIT_BUNDLED_SHORT_RE = re.compile(r"^-[a-zA-Z]+$")
 
 
@@ -8669,68 +8674,6 @@ def _bt_commit_own_pathspec(seg_tokens: List[str]) -> Optional[List[str]]:
     return operands
 
 
-def _bt_git_add_own_pathspec(seg_tokens: List[str]) -> Optional[List[str]]:
-    """Extract the pathspec tokens from a `git add` segment, so C7's probe can
-    compute "the command's own pathspec" for a compound `git add <paths> &&
-    git commit -m "x"` shape. `None` if this segment is not a git-add
-    invocation, or if it is one but names no paths of its own (an unscoped
-    add, e.g. `git add -A` / `git add -u`, contributes no "own" scope to the
-    compound command either -- treated the same as no preceding add at all).
-
-    POSITIONAL operands count, not only a `-- <paths>` separator. Requiring
-    the separator inverted the guard: `git add -- a.py && git commit -m x`
-    (the careful spelling) escalated to DENY, while `git add a.py && git
-    commit -m x` (the overwhelmingly common one, and the shape that actually
-    swept a peer's staged work in practice) degraded to advisory. The prior
-    docstring justified this by equating a separator-less add with `git add
-    -A`, but those are different: `-A` is genuinely unbounded, whereas
-    `git add a.py` is exactly as scoped as `git add -- a.py`. Only the
-    ABSENCE of path operands means unscoped.
-
-    A flag-bounded add (`git add -A a.py`, `git add -u src/`) still yields
-    its operands: git bounds `-A`/`-u` BY the pathspec when one is given, so
-    the monotonicity argument in the caller's docstring holds unchanged.
-
-    `--pathspec-from-file` yields `None` (fail open, no escalation): the
-    paths live in a file this predicate does not read, so no set-difference
-    is computable and a deny would rest on an unknown pathspec.
-
-    A trailing `-- <paths>` UNIONS with any positional operands that
-    preceded it (review finding, P2), rather than replacing them: `git add`
-    has no revision argument, so `--` there means only "stop parsing
-    options" -- `git add foo.py -- bar.py` genuinely adds BOTH `foo.py` and
-    `bar.py`. Returning only the post-separator tokens under-counted `own_
-    pathspec`, which could make the caller's own just-added `foo.py` appear
-    in the caller's "foreign" set and trigger a spurious deny."""
-    if _bt_git_resolved_subcommand(seg_tokens) != "add":
-        return None
-    try:
-        start = seg_tokens.index("add") + 1
-    except ValueError:
-        return None
-    paths: List[str] = []
-    i = start
-    n = len(seg_tokens)
-    while i < n:
-        tok = seg_tokens[i]
-        if tok == "--":
-            paths.extend(seg_tokens[i + 1:])
-            break
-        if tok == "--pathspec-from-file" or tok.startswith(
-            "--pathspec-from-file="
-        ):
-            return None
-        if tok in _GIT_ADD_OPT_WITH_ARG:
-            i += 2
-            continue
-        if tok.startswith("-") and tok != "-":
-            i += 1
-            continue
-        paths.append(tok)
-        i += 1
-    return paths or None
-
-
 def _bt_git_dash_c_value(tokens: List[str]) -> Optional[str]:
     """Extract the LAST `-C <dir>` global-option value from a (wrapper-
     peeled) `git ...` invocation, so C7's probe runs against the SAME
@@ -8791,83 +8734,53 @@ def _bt_git_index_file_env(tokens: List[str]) -> Optional[str]:
     return None
 
 
-def _bt_c7_index_holds_foreign_paths(
+def _bt_compound_add_bare_commit(
     seg_tokens: List[str],
     segments: List[Tuple[List[str], bool]],
     seg_index: int,
 ) -> bool:
-    """C7's escalation predicate for one bare `git commit` segment: True iff
-    a PRECEDING `git add -- <paths>` segment exists earlier in the SAME
-    command, and the staged index holds paths outside that pathspec --
-    foreign work (a concurrent session's staging, or an unrelated earlier
-    `git add`) sitting in the shared index alongside whatever this command's
-    own `add` will put there.
+    """True iff `seg_tokens` is the bare-commit half of a compound `git add
+    ... && git commit` -- i.e. some earlier segment of this SAME command is a
+    `git add`, and the commit carries no `-a`/`-am`/`--all`.
 
-    Scope decision (executor call, C7): escalation is attempted ONLY for the
-    compound `git add -- <paths> && git commit -m "x"` shape (AC1's
-    bare-commit-half). A solo bare `git commit` with NO preceding `add`
-    segment anywhere in the command carries no "own pathspec" for the
-    set-difference formula below to compare against -- the monotonicity
-    argument only reasons about a `git add` that is PART OF THIS COMMAND and
-    has not run yet; it does not apply when there is no such add at all. This
-    check also receives no `cwd` from its own caller, so a solo bare
-    commit's probe would read whatever the ambient process cwd's index holds
-    with no command-level signal at all to tell session-own staging apart
-    from a peer's. That shape stays advisory-only (unchanged, still fires
-    unconditionally per AC1) rather than probing indiscriminately.
+    This is the unconditional deny predicate for that shape (PM ruling,
+    2026-08-30). It replaces C7's deleted index probe, which gated the same
+    deny on a two-`git diff --cached` set-difference proving the index held
+    paths outside the command's own `git add`. The ruling drops that
+    condition: the deny's ground is no longer "foreign paths were observed"
+    but "this commit names no scope, so what it sweeps is decided by whatever
+    the shared index happens to hold at run time". Whether a peer had already
+    staged into it at the moment the guard looked is a race, not a property
+    of the command.
 
-    Monotonicity argument (why this is computable at PreToolUse, BEFORE the
-    `git add` segment has actually run): `index_post ⊇ index_pre` and
-    `index_post \\ index_pre ⊆ the command's own pathspec`, where "the
-    command's own pathspec" is the UNION of every preceding `git add --
-    <paths>` segment in this same compound command (each such `add` only
-    ever adds the paths it was given, and a command may run more than one
-    before its commit), so "pre-add index holds no foreign paths" ⟺
-    "post-add index holds no foreign paths" -- probing the PRE-add index
-    (the only one available at PreToolUse, since this check runs before the
-    tool call executes) is equivalent to probing the index the commit will
-    actually see.
+    This reverses C7 PM Ruling 2 (the 2026-08-01 advisory-firing-shape plan),
+    which deliberately kept the safe single-session case advisory. The PM was
+    told it reverses that carve-out and proceeded.
 
-    `-a`/`-am`/`--all` are excluded unconditionally (PM Ruling 2, finding
-    6) -- see `_bt_commit_has_sweep_all_flag`.
+    NO PROBE. The predicate is pure token inspection, so this deny costs zero
+    subprocesses where the condition it replaces cost two `git diff --cached`
+    spawns on the commit hot path -- see the brightline in CLAUDE.md.
 
-    Fails OPEN on any probe failure (timeout, non-zero exit, unresolvable
-    `git`, bare/detached repo): returns `False` -- the OPPOSITE posture from
-    the advisory's own "probe failure fires", since a false deny blocks real
-    work on a guard-process error while a false silence merely returns to
-    today's advisory-only baseline.
+    SCOPE JUDGMENT (EM, not settled by the ruling's text): an UNSCOPED
+    preceding add (`git add -A`, `git add -u`, `--pathspec-from-file`) counts
+    here, where the deleted probe short-circuited to False on it. That
+    short-circuit existed because an unscoped add gives the set-difference
+    nothing to compare against -- a reason that dies with the
+    set-difference. Keeping it would leave `git add -A && git commit`
+    ADVISORY while `git add one.py && git commit` DENIES, i.e. a guard that
+    punishes the careful spelling and waves through the unbounded one. The
+    unscoped shape is strictly the more dangerous of the two.
+
+    `-a`/`-am`/`--all` stay excluded (PM Ruling 2, finding 6) -- that shape is
+    not the bare-commit half at all and is owned by
+    `_bt_sweep_all_holds_unverifiable_paths`.
     """
     if _bt_commit_has_sweep_all_flag(seg_tokens):
         return False
-    own_pathspec: List[str] = []
     for prior_tokens, _pipe in segments[:seg_index]:
-        add_paths = _bt_git_add_own_pathspec(prior_tokens)
-        if add_paths:
-            own_pathspec.extend(add_paths)
-    if not own_pathspec:
-        return False
-    cwd = _bt_git_dash_c_value(seg_tokens)
-    extra_env: Optional[Dict[str, str]] = None
-    index_file = _bt_git_index_file_env(seg_tokens)
-    if index_file:
-        extra_env = {"GIT_INDEX_FILE": index_file}
-    rc_full, out_full = _run_git(
-        ["diff", "--cached", "--name-only"], cwd=cwd, extra_env=extra_env
-    )
-    if rc_full != 0:
-        return False
-    full_paths = {ln for ln in out_full.splitlines() if ln}
-    if not full_paths:
-        return False
-    rc_scoped, out_scoped = _run_git(
-        ["diff", "--cached", "--name-only", "--", *own_pathspec],
-        cwd=cwd,
-        extra_env=extra_env,
-    )
-    if rc_scoped != 0:
-        return False
-    scoped_paths = {ln for ln in out_scoped.splitlines() if ln}
-    return bool(full_paths - scoped_paths)
+        if _bt_git_resolved_subcommand(prior_tokens) == "add":
+            return True
+    return False
 
 
 #: Matches a `Session-Id: <sid>` trailer line exactly -- the shape
@@ -8934,13 +8847,13 @@ def _bt_solo_bare_commit_index_nonempty(
     seg_index: int,
 ) -> bool:
     """True iff `seg_tokens` is a solo bare `git commit` -- no preceding
-    `git add -- <paths>` anywhere earlier in the same command (the shape
-    `_bt_c7_index_holds_foreign_paths` deliberately declines to probe, see
-    its own docstring) -- AND the index it would commit currently holds
-    ANY staged path.
+    `git add` anywhere earlier in the same command (that shape is
+    `_bt_compound_add_bare_commit`'s, and denies unconditionally without
+    probing) -- AND the index it would commit currently holds ANY staged
+    path.
 
-    Unlike C7's set-difference (which can name "foreign" paths because it
-    has the command's own `add` pathspec to diff against), a solo bare
+    Unlike a set-difference against the command's own `add` pathspec, a
+    solo bare
     commit supplies NO pathspec at all in this operation -- there is
     nothing here to subtract, so nothing here can be verified as this
     command's own staging. On a shared tree the guard cannot tell "I
@@ -8970,16 +8883,15 @@ def _bt_solo_bare_commit_index_nonempty(
     for prior_tokens, _pipe in segments[:seg_index]:
         # ANY preceding `git add` segment -- scoped or not (`-A`/`-u`/
         # `--pathspec-from-file` included) -- takes this command out of
-        # "solo bare commit" and into the compound bare-commit-half shape
-        # C7's own probe already owns (advisory-only when it cannot
-        # extract a pathspec, per that check's own fail-open posture).
-        # Checking `_bt_git_add_own_pathspec(...)` truthiness alone here
-        # (rather than "is this an `add` segment at all") wrongly treated
-        # `git add -A && git commit` as a solo bare commit -- an unscoped
-        # add still means the caller DID stage something in this
-        # operation, just not precisely enough for C7's set-difference.
+        # "solo bare commit" and into the compound bare-commit-half shape,
+        # which `_bt_compound_add_bare_commit` denies unconditionally. The
+        # two predicates test the same condition with opposite polarity and
+        # must stay bit-identical: any `add` at all, never "an add whose
+        # pathspec we could extract". Keying on extractability instead
+        # wrongly read `git add -A && git commit` as a SOLO bare commit --
+        # an unscoped add still means the caller staged something here.
         if _bt_git_resolved_subcommand(prior_tokens) == "add":
-            return False  # compound shape -- C7's own probe handles this
+            return False  # compound shape -- `_bt_compound_add_bare_commit`'s
     cwd = _bt_git_dash_c_value(seg_tokens)
     extra_env: Optional[Dict[str, str]] = None
     index_file = _bt_git_index_file_env(seg_tokens)
@@ -9095,9 +9007,8 @@ def _bt_sweep_all_holds_unverifiable_paths(seg_tokens: List[str]) -> bool:
     "a false deny blocks work on a guard-process error while a false
     silence merely returns to today's advisory-only baseline"
     (`docs/plans/2026-08-01-advisory-firing-shape-predicate.md`, C7). Same
-    posture as `_bt_c7_index_holds_foreign_paths` and
-    `_bt_solo_bare_commit_index_nonempty` above -- inherited, not
-    reinvented.
+    posture as `_bt_solo_bare_commit_index_nonempty` above -- inherited,
+    not reinvented.
 
     The `-a`/`-am`/`--all`/`--amend` short-circuit this predicate INVERTS
     is itself provenanced from `state/lessons/2026-08-03-git-add-mine-
@@ -9175,23 +9086,25 @@ def check_git_commit_safe_commit_advise(
     `updatedInput` is exactly the kind of clever, unverified substitution
     `check_offer_git_c`'s own docstring warns against.
 
-    C7 (docs/plans/2026-08-01-advisory-firing-shape-predicate.md, PM Ruling
-    2): the bare-commit-half shape (`git add -- <paths> && git commit -m
-    "x"`, still unconditionally firing per the paragraph above) escalates
-    from advisory to DENY when `_bt_c7_index_holds_foreign_paths` finds the
-    staged index holds paths OUTSIDE that command's own `git add` pathspec
-    -- a peer's staged work sitting in the shared index alongside what this
-    commit is about to sweep under one subject. A bare commit against an
-    index the session staged in full on its own stays advisory (allowed),
-    so the deny never fires on the safe single-session case. This is the
-    ONLY index-based reasoning anywhere in this plan and it only ESCALATES,
-    never suppresses -- see that function's own docstring for the
-    monotonicity argument, the deliberate compound-shape-only scope cut, the
-    `-a`/`-am`/`--all` exclusion, and the fail-open-on-probe-failure
-    posture -- a probe failure here never denies (a false deny would block
-    real work on a guard-process error), unlike a fail-closed hard-deny
-    guard elsewhere in this package where a probe failure denies (a false
-    silence there would be the worse outcome for that guard's own class).
+    BARE-COMMIT-HALF DENY (PM ruling, 2026-08-30): the shape `git add
+    <paths> && git commit -m "x"` denies UNCONDITIONALLY -- see
+    `_bt_compound_add_bare_commit`, which decides it from the command tokens
+    alone and spawns nothing. The ruling REVERSES C7 PM Ruling 2, which kept
+    this shape advisory whenever the session had staged the whole index
+    itself; the safe single-session case is no longer carved out, because
+    whether a peer had staged into the shared index at the instant the guard
+    looked is a race, not a property of the command. The two-`git diff
+    --cached` probe that computed that carve-out is deleted, not suspended.
+
+    The remaining index-based reasoning in this function serves DIFFERENT
+    shapes -- the solo bare commit
+    (`_bt_solo_bare_commit_index_nonempty`) and the `-a`/`--all` sweep
+    (`_bt_sweep_all_holds_unverifiable_paths`) -- and still only ESCALATES,
+    never suppresses. Both fail OPEN on probe failure: a probe failure never
+    denies (a false deny would block real work on a guard-process error),
+    unlike a fail-closed hard-deny guard elsewhere in this package where a
+    probe failure denies (a false silence there would be the worse outcome
+    for that guard's own class).
 
     AMEND GATE (example-retrieval-repo-em cross-repo memo, 2026-08-15): a segment
     carrying `--amend` is checked for HEAD ownership FIRST, ahead of the
@@ -9346,12 +9259,9 @@ def check_git_commit_safe_commit_advise(
         # branches on TEXT ONLY -- the deny/advisory/allow decision above is
         # unchanged.
         is_amend = _bt_commit_has_amend_flag(seg_tokens)
-        # Escalate to DENY when the compound bare-commit-half's own `git
-        # add` pathspec leaves foreign staged paths behind
-        # -- see `_bt_c7_index_holds_foreign_paths`'s own docstring for the
-        # monotonicity argument and the scope cut. Every other bare-commit
-        # shape (no preceding `add`, or `-a`/`-am`/`--all` present) stays
-        # advisory, unchanged.
+        # DENY the compound bare-commit-half unconditionally (PM ruling,
+        # 2026-08-30) -- see `_bt_compound_add_bare_commit`. `-a`/`-am`/
+        # `--all` are not this shape and keep their own predicate below.
         _commit_bare_note = operator_override_note(
             "COORDINATOR_ALLOW_GIT_COMMIT_BARE", payload=payload, git_root=git_root
         )
@@ -9396,15 +9306,15 @@ def check_git_commit_safe_commit_advise(
                 )
                 + ("\n\n%s" % _commit_bare_note if _commit_bare_note else "")
             )
-        if _bt_c7_index_holds_foreign_paths(seg_tokens, segments, seg_index):
+        if _bt_compound_add_bare_commit(seg_tokens, segments, seg_index):
             return _deny(
                 (
                     "Deny: " + _amend_body
                     if is_amend
                     else (
-                        "Deny: the index holds staged paths OUTSIDE this "
-                        "command's own 'git add' — a peer's staged work would be "
-                        "swept under your subject.\n\n"
+                        "Deny: this 'git commit' names no scope — it commits the "
+                        "whole shared index, not what its own 'git add' named. A "
+                        "peer staging concurrently is swept under your subject.\n\n"
                         "Use instead:\n"
                         "  git add -- <paths> && git commit -m %s -- <paths>"
                         % (subject_operand,)

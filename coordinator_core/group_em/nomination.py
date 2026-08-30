@@ -13,12 +13,21 @@ shape and repo-key derivation are mirrored from the reference script above, not 
 
 NEGATIVE SPEC -- what this deliberately does NOT do:
 
-  - It NEVER auto-supersedes an incumbent, live or dead. `claim()` returns a verdict --
-    ``claimed: true`` only when there was no incumbent, or the incumbent already names the
-    caller. A live OR a dead incumbent is reported as `superseded_incumbent` for the PM to act
-    on; no code path in this module writes over another session's record. This is the exact
-    2026-08-30 DoE failure this chunk exists to not repeat: a dead crown auto-yielding is as
-    wrong as a live one being stolen.
+  - It NEVER auto-supersedes a LIVE incumbent, or one merely UNACCOUNTED FOR
+    (`live_reason: "no_registry_record"` -- absence of registry evidence, not evidence of
+    absence, on a fleet that is multi-machine). Both report `superseded_incumbent` for the PM to
+    act on; no code path writes over either one's record. This is the exact 2026-08-30 DoE
+    failure this chunk exists to not repeat for a LIVE crown, and the multi-machine ambiguity
+    means an unaccounted-for one gets the same treatment.
+
+  - It DOES auto-replace an incumbent with POSITIVE evidence of death
+    (`live_reason: "pid_not_running"` -- a harness registry row exists for that session_id and
+    its pid is confirmed not running). A dead-but-unreaped record is this mode's steady state,
+    not an anomaly: refusing every one forever would fire on essentially every invocation after
+    the first, turning the guard into a prompt-to-continue. The replacement is reported LOUDLY,
+    in its own `replaced_holder` field, never folded into `superseded_incumbent` -- that name
+    means "refused, a human decides," and reusing it here would recreate the exact ambiguity the
+    two-field split exists to remove.
 
   - Liveness is NEVER read off a pid recorded in the nomination record itself. See
     `state/lessons/2026-08-29-a-claim-records-pid-is-not-a-liveness-signal.yaml`: a pid captured
@@ -206,21 +215,59 @@ def claim(
     directory: Optional[Path] = None,
 ) -> dict:
     """Read the nomination record for `repo_root_str` and return a verdict -- never a unilateral
-    supersede.
+    supersede of a LIVE holder, or one merely UNACCOUNTED FOR.
 
-    Four cases, all returning a dict shaped ``{claimed, holder, already_held, superseded_incumbent}``:
+    Five cases, all returning a dict shaped
+    ``{claimed, holder, already_held, superseded_incumbent, replaced_holder}``:
 
-      - no record on file                    -> claim it; ``{claimed: True, holder: session_id}``
-      - record already names `session_id`    -> ``{claimed: True, holder: session_id,
-                                                    already_held: True}`` (record is refreshed,
-                                                    not left untouched, so `nominated_at` stays
-                                                    current -- same idempotent-refresh shape as
-                                                    the reference's `self_refresh`)
-      - record names another session, live   -> DO NOT CLAIM. ``{claimed: False, holder: <them>,
-                                                    superseded_incumbent: {..., live: True,
-                                                    live_reason: "live"}}``
-      - record names another session, dead   -> DO NOT CLAIM EITHER. Same shape, ``live: False``
-                                                    and the distinguishing `live_reason`.
+      - no record on file                       -> claim it; ``{claimed: True, holder: session_id,
+                                                       already_held: False,
+                                                       superseded_incumbent: None,
+                                                       replaced_holder: None}``
+      - record already names `session_id`       -> ``{claimed: True, holder: session_id,
+                                                       already_held: True, superseded_incumbent:
+                                                       None, replaced_holder: None}`` (record is
+                                                       refreshed, not left untouched, so
+                                                       `nominated_at` stays current -- same
+                                                       idempotent-refresh shape as the reference's
+                                                       `self_refresh`)
+      - record names another session, LIVE      -> DO NOT CLAIM. Direction-class, a human's call.
+                                                       ``{claimed: False, holder: <them>,
+                                                       already_held: False, superseded_incumbent:
+                                                       {..., live: True, live_reason: "live"},
+                                                       replaced_holder: None}``
+      - record names another session, PID-DEAD  -> AUTO-REPLACE. ``live_reason ==
+                                                       "pid_not_running"`` is POSITIVE evidence of
+                                                       death -- the harness registry has a row for
+                                                       that session_id and its pid is not running,
+                                                       so nobody is on the other side. Claim it,
+                                                       loudly: ``{claimed: True, holder: session_id,
+                                                       already_held: False, superseded_incumbent:
+                                                       None, replaced_holder: {..., live: False,
+                                                       live_reason: "pid_not_running"}}``. Never
+                                                       reuse `superseded_incumbent` for this case --
+                                                       that name means "refused, a human decides",
+                                                       and overloading it re-creates the exact
+                                                       ambiguity the dedicated field exists to
+                                                       remove.
+      - record names another session, NO RECORD -> DO NOT CLAIM. ``live_reason ==
+                                                       "no_registry_record"`` is only ABSENCE of
+                                                       evidence -- this fleet is multi-machine, and
+                                                       a session on another machine, or one whose
+                                                       messaging gate is off, is indistinguishable
+                                                       from an exited one from here. Same refusal
+                                                       shape as the LIVE case: ``{claimed: False,
+                                                       holder: <them>, already_held: False,
+                                                       superseded_incumbent: {..., live: False,
+                                                       live_reason: "no_registry_record"},
+                                                       replaced_holder: None}``.
+
+    The asymmetry is who is harmed: superseding a LIVE peer takes the role from someone holding
+    it, so that stays a human's call (`superseded_incumbent`). Replacing a record whose session is
+    PROVABLY gone (`pid_not_running`) takes nothing from anyone -- refusing it forever would fire
+    on essentially every invocation after the first, since a dead-but-unreaped record is this
+    mode's steady state, not an anomaly. A record with NO registry trace at all stays a refusal:
+    absence of evidence is not evidence of absence on a multi-machine fleet.
 
     `repo_root_str` is normalised (resolved to an absolute path) before use, matching the
     reference's own `_normalised_repo_root`.
@@ -236,6 +283,7 @@ def claim(
             "holder": session_id,
             "already_held": False,
             "superseded_incumbent": None,
+            "replaced_holder": None,
         }
 
     incumbent_sid = str(existing.get("session_id") or "")
@@ -247,9 +295,35 @@ def claim(
             "holder": session_id,
             "already_held": True,
             "superseded_incumbent": None,
+            "replaced_holder": None,
         }
 
     liveness = is_live(existing)
+
+    if liveness.live_reason == "pid_not_running":
+        # AUTO-REPLACE: positive evidence of death (a registry row exists for the
+        # incumbent's session_id and its pid is not running). Claim it -- but loudly:
+        # the replaced holder is named in its own field, never folded into
+        # `superseded_incumbent`, so a caller cannot mistake this for the silent
+        # clean-pass-under-a-dead-crown failure this whole guard exists to prevent.
+        replaced_holder = {
+            "session_id": incumbent_sid,
+            "peer_name": existing.get("peer_name"),
+            "nominated_at": existing.get("nominated_at"),
+            "nominated_by": existing.get("nominated_by"),
+            "live": liveness.live,
+            "live_reason": liveness.live_reason,
+        }
+        record = _build_record(repo_root, session_id, peer_name, nominated_by)
+        _write_json_atomic(_record_path(repo_root, directory), record)
+        return {
+            "claimed": True,
+            "holder": session_id,
+            "already_held": False,
+            "superseded_incumbent": None,
+            "replaced_holder": replaced_holder,
+        }
+
     return {
         "claimed": False,
         "holder": incumbent_sid,
@@ -262,4 +336,5 @@ def claim(
             "live": liveness.live,
             "live_reason": liveness.live_reason,
         },
+        "replaced_holder": None,
     }

@@ -49,7 +49,7 @@ def test_warm_carries_the_caller_not_the_servers_spawner(monkeypatch):
         monkeypatch.delenv(var, raising=False)
     monkeypatch.setenv("CLAUDE_SESSION_ID", _SPAWNER)
 
-    with per_request_state(session_id=_CALLER, warm_served=True):
+    with per_request_state(session_id=_CALLER, warm_served=True, isolated=True):
         env = core.subprocess_identity_env()
 
     assert _ids(env) == {var: _CALLER for var in core.SESSION_ENV_PRECEDENCE}
@@ -68,7 +68,7 @@ def test_warm_with_no_carried_identity_strips_rather_than_inherits(monkeypatch):
     monkeypatch.setenv("CLAUDE_SESSION_ID", _SPAWNER)
     monkeypatch.setenv("COORDINATOR_SESSION_ID", _SPAWNER)
 
-    with per_request_state(warm_served=True):
+    with per_request_state(warm_served=True, isolated=True):
         env = core.subprocess_identity_env()
 
     assert _ids(env) == {}
@@ -95,7 +95,7 @@ def test_never_mutates_the_process_environment(monkeypatch):
     monkeypatch.setenv("CLAUDE_SESSION_ID", _SPAWNER)
     before = dict(os.environ)
 
-    with per_request_state(session_id=_CALLER, warm_served=True):
+    with per_request_state(session_id=_CALLER, warm_served=True, isolated=True):
         core.subprocess_identity_env()
 
     assert dict(os.environ) == before

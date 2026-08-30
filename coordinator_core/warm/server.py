@@ -116,8 +116,10 @@ convergence, is deliberate: it is what makes this module's own per-request
 scoping visible and testable at the boundary this row owns, independent of
 `ipc.py`'s internals ever changing. As of C-warm-identity, `per_request_
 state` ALSO binds the calling session's identity for the same scope (`_serve_
-line` pops `_session_id` off the request and threads it through) -- this
-server process's OWN environment (whoever spawned it) must never leak into
+line` pops the top-level `_caller` object off the request, resolves it via
+`caller_context.resolve_caller_context`, and threads its `session_id` through
+-- docs/plans/2026-08-30-every-op-runs-in-the-callers-environment.md § C1b) --
+this server process's OWN environment (whoever spawned it) must never leak into
 `session.core.resolve_session_id()` for a request some OTHER session sent;
 see `session.core.session_identity_override`'s docstring for the full
 defect this closes.
@@ -189,13 +191,14 @@ import sys
 import threading
 import time
 from pathlib import Path
-from typing import Any, Callable, NamedTuple, Optional
+from typing import Any, Callable, Mapping, NamedTuple, Optional
 
 from coordinator_core.ipc import INTERNAL_ERROR, INVALID_REQUEST, PARSE_ERROR
 from coordinator_core.telemetry import op_latency
 from coordinator_core.telemetry import spawn_counter as _spawn_counter
 from coordinator_core.warm import (
     breadcrumb,
+    caller_context,
     election,
     idle,
     lifecycle,
@@ -204,6 +207,7 @@ from coordinator_core.warm import (
     skew,
     telemetry,
 )
+from coordinator_core.warm.caller_context import CallerContext
 from coordinator_core.warm.engine_root import current_engine_clone
 from coordinator_core.warm.entry_seam import per_request_state
 # Reached into directly, not duplicated, despite this module's own
@@ -478,7 +482,7 @@ def _spawn_delta(start: Optional[int], end: Optional[int]) -> Optional[int]:
     return end - start
 
 
-def _run_dispatch(msg: dict, *, session_id: Optional[str] = None) -> dict:
+def _run_dispatch(msg: dict, *, caller: Optional[CallerContext] = None, isolated: bool = False) -> dict:
     """Invoke the existing engine core for one already-parsed JSON-RPC
     request -- the SOLE process-level dispatch chokepoint
     (`coordinator_core.ipc.dispatch_message`'s own docstring), never a
@@ -492,13 +496,26 @@ def _run_dispatch(msg: dict, *, session_id: Optional[str] = None) -> dict:
     scheduling and leaves no shared loop state for the next request on this
     thread, or any other connection's thread, to inherit.
 
-    `session_id`, when given (the caller's own resolved identity, carried
-    over the wire as the request's `_session_id` field and popped by
-    `_serve_line` before this call), is bound for the duration of the
-    dispatch via `per_request_state`'s own `session_id` parameter -- see
+    `caller`, when given (the caller's own resolved identity SET, carried
+    over the wire as the request's top-level `_caller` object and popped
+    and resolved into a `warm.caller_context.CallerContext` by `_serve_line`
+    before this call -- docs/plans/2026-08-30-every-op-runs-in-the-callers-
+    environment.md § C1b), has its `session_id` bound for the duration of
+    the dispatch via `per_request_state`'s own `session_id` parameter -- see
     that seam's docstring for the full identity-attribution defect this
     closes. `None` (no identity carried) is a no-op bind, reproducing
     today's server-resolves-its-own-env behaviour exactly.
+
+    `isolated` (C3, defaults `False`) is threaded straight through to
+    `entry_seam.per_request_state`'s own required `isolated` argument. This
+    function runs on the accept process's own connection thread -- never in
+    a process no other in-flight request shares -- so `False` is correct for
+    every caller EXCEPT none in production today: the real accept loop
+    dispatches through `_ServerContext._pool_dispatch` (which submits to the
+    process pool instead), and that method's own `BrokenProcessPool`
+    fallback -- the one production caller of this function -- passes
+    `isolated=False` explicitly, matching this default, because that fallback
+    still executes in THIS shared process.
 
     STDOUT CAPTURE (W9). A handler `print()` here is not the transport --
     unlike `invoke.__main__`'s cold path, this process's stdout is never the
@@ -547,13 +564,14 @@ def _run_dispatch(msg: dict, *, session_id: Optional[str] = None) -> dict:
     _t_start = _time.time()
     _process_start = _time.process_time()
     _spawn_start = _spawn_count_or_none()
-    _caller = "coordinator_core.warm.server._run_dispatch"
+    _caller_route = "coordinator_core.warm.server._run_dispatch"
+    session_id = caller.session_id if caller is not None else None
     try:
         with per_request_state(
-            session_id=session_id, diagnostics=diagnostics, warm_served=True
+            session_id=session_id, diagnostics=diagnostics, warm_served=True, isolated=isolated
         ):
             with contextlib.redirect_stdout(_handler_stdout), contextlib.redirect_stderr(_handler_stderr):
-                response = asyncio.run(dispatch_message(msg, caller=_caller))
+                response = asyncio.run(dispatch_message(msg, caller=_caller_route))
     finally:
         _process_ms = (_time.process_time() - _process_start) * 1000.0
         _repo_root = resolve_request_repo(msg) or resolve_caller_cwd(msg)
@@ -567,7 +585,7 @@ def _run_dispatch(msg: dict, *, session_id: Optional[str] = None) -> dict:
             repo_root=_repo_root,
             sid=session_id or None,
             spawns=_spawn_delta(_spawn_start, _spawn_count_or_none()),
-            caller=_caller,
+            caller=_caller_route,
         )
 
     # The op's diagnostic lines ride the TRANSPORT frame, never `result` — the
@@ -606,7 +624,7 @@ def _run_dispatch(msg: dict, *, session_id: Optional[str] = None) -> dict:
     return response
 
 
-def _pool_dispatch_worker(msg: dict, session_id: Optional[str]) -> dict:
+def _pool_dispatch_worker(msg: dict, caller: Optional[CallerContext]) -> dict:
     """The `DISPATCH_PROCESS_POOL_SIZE` worker-process target -- identical
     body to `_run_dispatch`, factored out as its own top-level (picklable)
     function because `concurrent.futures.ProcessPoolExecutor.submit` needs
@@ -623,6 +641,13 @@ def _pool_dispatch_worker(msg: dict, session_id: Optional[str]) -> dict:
     process's own connection thread was -- each worker process has entirely
     its own contextvar storage, with no cross-process sharing to guard
     against.
+
+    Opens `per_request_state(..., isolated=True)` UNCONDITIONALLY (C3) --
+    unlike `_run_dispatch`, this function has no other production shape:
+    every call runs inside a freshly-dispatched worker process no concurrent
+    request shares, on both transport legs (Windows named pipe, POSIX
+    socket), so the `os.environ` identity mirror `isolated=True` opens is
+    always safe here and never conditional on a caller-supplied flag.
 
     STDOUT CAPTURE (W9). This worker's own stdout is bound to `os.devnull`
     by `_bind_null_std_streams` (`_worker_process_init`, `pythonw.exe` spawn)
@@ -657,13 +682,14 @@ def _pool_dispatch_worker(msg: dict, session_id: Optional[str]) -> dict:
     _t_start = _time.time()
     _process_start = _time.process_time()
     _spawn_start = _spawn_count_or_none()
-    _caller = "coordinator_core.warm.server._pool_dispatch_worker"
+    _caller_route = "coordinator_core.warm.server._pool_dispatch_worker"
+    session_id = caller.session_id if caller is not None else None
     try:
         with per_request_state(
-            session_id=session_id, diagnostics=diagnostics, warm_served=True
+            session_id=session_id, diagnostics=diagnostics, warm_served=True, isolated=True
         ):
             with contextlib.redirect_stdout(_handler_stdout), contextlib.redirect_stderr(_handler_stderr):
-                response = asyncio.run(dispatch_message(msg, caller=_caller))
+                response = asyncio.run(dispatch_message(msg, caller=_caller_route))
     finally:
         _process_ms = (_time.process_time() - _process_start) * 1000.0
         _repo_root = resolve_request_repo(msg) or resolve_caller_cwd(msg)
@@ -677,7 +703,7 @@ def _pool_dispatch_worker(msg: dict, session_id: Optional[str]) -> dict:
             repo_root=_repo_root,
             sid=session_id or None,
             spawns=_spawn_delta(_spawn_start, _spawn_count_or_none()),
-            caller=_caller,
+            caller=_caller_route,
         )
 
     # STDERR CAPTURE (C6) -- same rationale as `_run_dispatch`'s own note:
@@ -1086,13 +1112,22 @@ def _serve_line(
     already-released rather than deadlocking on its own count) and have the
     connection thread's own cleanup call it again as a no-op safety net.
 
-    Pops `_session_id` (the caller's own resolved identity, set by
-    `warm.client._try_warm_dispatch_inner`) off `msg` the same way
-    `_engine_token` is already popped, and passes it through to `dispatch`
-    as a `session_id=` kwarg -- `_run_dispatch`'s own docstring covers the
-    bind/no-op contract from there. Absent (older client, or a caller
-    `resolve_session_id()` could not identify) is `None`, which is a no-op
-    bind, not a fabricated identity.
+    Pops `_caller` (the caller's own resolved identity SET, set by
+    `warm.client._try_warm_dispatch_inner` and by `door.c`) off `msg` the
+    same way `_engine_token` is already popped, resolves it into a
+    `warm.caller_context.CallerContext` via `caller_context.
+    resolve_caller_context`, and passes that object through to `dispatch`
+    as a `caller=` kwarg -- `_run_dispatch`'s own docstring covers the
+    bind/no-op contract from there. Absent entirely (older client, or a
+    caller this transport cannot identify) resolves to a `CallerContext`
+    whose `session_id`/`agent_id` are `None` (no ambient fallback for a
+    per-call fact -- see `caller_context`'s own docstring), which is a
+    no-op bind, not a fabricated identity. No deprecated top-level
+    `_session_id` key is read any more (docs/plans/2026-08-30-every-op-
+    runs-in-the-callers-environment.md § C1b) -- `door.c` and `warm.client`
+    both send `_caller` now, and this repo publishes and installs both
+    images in lockstep, so the mixed-version state an alias would defend
+    against does not occur.
 
     Pops `_settings_home` (the caller's own resolved settings home, stamped
     by `warm.client._try_warm_dispatch_inner` and by the native door only
@@ -1145,7 +1180,10 @@ def _serve_line(
 
     request_id = msg.get("id")
     client_token = msg.pop("_engine_token", None)
-    caller_session_id = msg.pop("_session_id", None)
+    caller_payload = msg.pop("_caller", None)
+    caller = caller_context.resolve_caller_context(
+        caller_payload if isinstance(caller_payload, Mapping) else None
+    )
 
     if client_token is None:
         _write_and_release(_untrusted_caller_response(request_id))
@@ -1185,7 +1223,7 @@ def _serve_line(
     # the native door re-run the call cold.
     #
     # The field is POPPED, not merely read, like `_engine_token` and
-    # `_session_id` above it: `dispatch_message` validates the envelope it is
+    # `_caller` above it: `dispatch_message` validates the envelope it is
     # handed, and transport metadata must never reach an op's params.
     #
     # Costs nothing when nothing is claimed. `request_claim` is a dict lookup;
@@ -1217,7 +1255,7 @@ def _serve_line(
             pass
 
     try:
-        response = dispatch(msg, session_id=caller_session_id)
+        response = dispatch(msg, caller=caller)
     except Exception as exc:  # noqa: BLE001 -- never fail the caller, see module docstring
         response = {
             "jsonrpc": "2.0",
@@ -1525,7 +1563,7 @@ class _ServerContext:
                     )
         return self._dispatch_pool
 
-    def _pool_dispatch(self, msg: dict, *, session_id: Optional[str] = None) -> dict:
+    def _pool_dispatch(self, msg: dict, *, caller: Optional[CallerContext] = None) -> dict:
         """The `dispatch=` callable a real accept-loop worker thread
         (`_worker_loop`) hands to `_handle_connection` -- submits the call
         to `DISPATCH_PROCESS_POOL_SIZE` worker PROCESSES and blocks this
@@ -1537,7 +1575,7 @@ class _ServerContext:
         off this process's interpreter lock entirely.
         """
         try:
-            future = self._ensure_dispatch_pool().submit(_pool_dispatch_worker, msg, session_id)
+            future = self._ensure_dispatch_pool().submit(_pool_dispatch_worker, msg, caller)
             return future.result()
         except BrokenProcessPool:
             # A ProcessPoolExecutor whose worker died is broken PERMANENTLY --
@@ -1577,7 +1615,12 @@ class _ServerContext:
             # caller unchanged, same as a client-detected indeterminate case.
             if _op_may_mutate(msg.get("method")):
                 return _pool_broken_indeterminate_envelope(msg)
-            return _run_dispatch(msg, session_id=session_id)
+            # `isolated=False`, explicitly: this fallback runs the op IN
+            # THIS process, on this connection's own accept-thread -- the
+            # exact threaded, unisolated shape the spike measured 8/8
+            # contaminated (C3's own body) -- so it must take no `os.environ`
+            # borrow, only the thread-safe ContextVar bind.
+            return _run_dispatch(msg, caller=caller, isolated=False)
 
     def _ctx_shutdown(self) -> None:
         """Step 3 of `warm.lifecycle`'s sequence: flush the log, unlink the

@@ -512,7 +512,7 @@ def _check_extension_axis(
         )
     if doe_root is None:
         return (
-            [f"[skip] {_PROG} (extension axis): DoE-claude root unresolvable — nothing to compare"],
+            [f"[skip] {_PROG} (extension axis): engine sibling repo unresolvable — nothing to compare"],
             {},
         )
     if not settings_bin.is_dir():

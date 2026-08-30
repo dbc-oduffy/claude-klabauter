@@ -141,10 +141,11 @@ GENERATES: list = []
 # coincides EXACTLY with this ceiling (500_000 tokens), firing the warning
 # level with the cut instead of ahead of it and defeating the whole point of a
 # pre-emptive advisory — a handoff needs runway to compose before an
-# involuntary, lossy auto-compaction lands. The band sat at 47 until
-# 2026-08-30, when auto-compaction was observed firing at 47 in practice —
-# level with the cut again, one rung down. PM ruling 2026-08-30 moved it to
-# 45, which leaves ~50K tokens of runway. Referenced by comment rather than by
+# involuntary, lossy auto-compaction lands. The band sat at 47, then briefly at
+# 45, both on 2026-08-30: auto-compaction was observed firing at 47, and then
+# again at 47 with the band already at 45 — a warning at 45 has only two points
+# of runway before the cut, which is not enough to compose a handoff in. PM
+# ruling 2026-08-30 moved it to 43. Referenced by comment rather than by
 # arithmetic: the bands are
 # PM-set percentages, not values derived from this constant, and deriving them
 # from it would silently move them if Anthropic moves the ceiling.
@@ -335,7 +336,7 @@ def _check_context_pressure_sync(session_id: str, transcript_path: str) -> str:
 
     Phase 2: Throttled (5 min) threshold warnings, sidecar-sourced.
         Two bands and only two: 40% of window (orange — consider a handoff if
-        the work cannot close in ~5% more) and 45% (red — handoff now, ahead of
+        the work cannot close in ~3% more) and 43% (red — handoff now, ahead of
         compaction). Nothing fires below 40, and a session with no usable
         reading gets silence, not an escalating UNKNOWN notice.
 
@@ -549,22 +550,22 @@ def _check_context_pressure_sync(session_id: str, transcript_path: str) -> str:
     #
     # 40 — ORANGE. "Consider a handoff if this work cannot close within about
     #      another 5% of window." An orientation signal, not an instruction.
-    # 45 — RED. "Go to handoff now, before compaction takes the choice away."
+    # 43 — RED. "Go to handoff now, before compaction takes the choice away."
     #
-    # Why 45 and not 50 on the 1M tier: auto-compaction fires at a fixed
+    # Why 43 and not 50 on the 1M tier: auto-compaction fires at a fixed
     # ~500K tokens there (_AUTO_COMPACT_CEILING_TOKENS_1M), so a 50% trigger
     # coincides EXACTLY with the cut instead of landing ahead of it, and a
-    # handoff needs runway to compose. Why not 47, which this band was until
-    # 2026-08-30: auto-compaction was observed firing at 47 in practice, so 47
-    # fired level with the cut it exists to pre-empt — the same failure mode as
-    # 50, one rung down. PM ruling 2026-08-30: 45% of 1M is ~450K, which
-    # restores the runway.
+    # handoff needs runway to compose. Why not 47, and why not 45: this band
+    # was 47 until 2026-08-30, moved to 45 that day because auto-compaction was
+    # observed firing at 47, and moved again the same day because a compaction
+    # was then observed at 47 with the band at 45 — two points of runway is not
+    # enough to compose a handoff in. PM ruling 2026-08-30: 43.
     #
     # NOTHING fires below 40. No checkpoint prompts, no "consider wrapping",
     # no informational heads-up at 15/20/25%. That is the PM ruling, stated as
     # a floor rather than a default: a check added here that fires under 40
     # violates it no matter how quiet its wording.
-    if display_pct >= 45 and transcript_hash not in cp_state.get("critical_fired", []):
+    if display_pct >= 43 and transcript_hash not in cp_state.get("critical_fired", []):
         _mark_advisory_fired(cp_state, transcript_hash, critical=True)
         _save_advisory_state(tmpdir, session_id, cp_state)
         # The autonomous variant REPLACES the recommendation rather than
@@ -621,7 +622,7 @@ def _check_context_pressure_sync(session_id: str, transcript_path: str) -> str:
             f"CONTEXT PRESSURE — INFORMATIONAL: ~{display_pct}% of window"
             f" used{age_note}, measured from the harness's own context_window"
             f" block. Checkpoint state to disk at the next natural boundary so"
-            f" the run is resumable. The hard call comes at 45%."
+            f" the run is resumable. The hard call comes at 43%."
         )
 
     _save_advisory_state(tmpdir, session_id, cp_state)

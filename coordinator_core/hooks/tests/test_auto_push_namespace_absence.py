@@ -13,14 +13,17 @@ leg3 (`leg3_cadence`) already uses to distinguish "named right" from
 "behaves right": here the criterion is "named at all".
 
 Negative-spec: this file does NOT re-verify that the SURVIVING symbols
-(`run_push_with_retry`, `log_failure`, `log_race_resolved`,
-`log_dead_ref_failure`, `drain_pending_push`, `_write_pending_record`,
-`_read_pending_record`, `_remove_pending_record`, `_maybe_publish_cockpit_
-contract`) still exist -- that is `coordinator_core/warm/push_cadence.py`'s
-own import surface and `test_auto_push.py`'s retargeted coverage, and
-duplicating it here would let this file go stale in the direction that
-hides a real regression (a survivor accidentally deleted) behind a passing
-absence-only assertion.
+(`log_failure`, `log_race_resolved`, `log_dead_ref_failure`,
+`_read_pending_record`, `_pending_record_path`, `_record_is_stale`,
+`_maybe_publish_cockpit_contract`) still exist -- that is
+`coordinator_core/warm/push_cadence.py`'s own import surface and
+`test_auto_push.py`'s retargeted coverage, and duplicating it here would
+let this file go stale in the direction that hides a real regression (a
+survivor accidentally deleted) behind a passing absence-only assertion.
+(`run_push_with_retry`, `drain_pending_push`, and `_write_pending_record`
+were themselves gravestoned the same day by C2, a separate commit from
+this file's own `_GRAVESTONED_NAMES` list below, which tracks C8's
+distinct `_hold_window`/detached-respawn cascade.)
 
 Spec backlink: state/dispatch-briefs/2026-08-30-who-pushes-and-when/C8.md
 Module under test: coordinator_core/hooks/auto_push.py

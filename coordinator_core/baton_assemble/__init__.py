@@ -2056,6 +2056,36 @@ def _deliverable_id_for(rel_or_abs_path: Optional[str], root: Path) -> Optional[
     return value or None
 
 
+
+def _sanitize_mint_slug(raw: str) -> str:
+    """Reduce a fan-in mint slug to the charset `deliverable_id`'s own schema
+    accepts, before `mint()` interpolates it into `dlv-<slug>-<6hex>`.
+
+    Neither source DR-388's mint reads is already in that charset. A title is
+    free prose (spaces, commas, apostrophes). An `output_path` stem is the
+    mint convention's `YYYY-MM-DD_HHMMSS_<title-slug>`, whose two UNDERSCORES
+    are the ones that actually fired: `handoff.schema.json`'s
+    `^dlv-(?!placeholder-replace-with)[0-9a-zA-Z][0-9a-zA-Z.-]*$` excludes
+    `_`, so `coordinator-doc-new` refused to write its own generated
+    frontmatter and every fan-in unification raised on d1.
+
+    Sanitizing HERE rather than inside `mint()`: that helper is the fleet's
+    shared carry-or-mint primitive with a bash/JS parity oracle, and its
+    other callers (`coordinator-doc-new`, roadmap-planning) already hand it
+    a hyphenated slug. This is the one site that introduced a slug source of
+    a different shape, so it is the site that owes the reduction.
+
+    Negative-spec: NOT `_slug_from_title`'s 40-char truncation. A
+    deliverable_id is opaque and never a filename, so length buys nothing
+    and a truncated id is harder to trace back to the successor it names.
+    """
+    slug = re.sub(r"[^0-9a-zA-Z.-]+", "-", raw).strip("-.")
+    # The schema's first character must be alphanumeric -- a slug reduced to
+    # nothing, or to leading punctuation, would otherwise mint an id that
+    # fails the same validation this function exists to satisfy.
+    return slug or "fan-in"
+
+
 def resolve_lineage(
     kind: str,
     artifact_path: str,
@@ -2956,7 +2986,9 @@ def resolve_lineage(
         # `deliverable_ids`. Single-predecessor carry-verbatim (DD#1) is
         # untouched: this fires only when a real fan-in leg is present.
         if lineage.get("additional_predecessors"):
-            _fan_in_mint_slug = title or Path(lineage["output_path"]).stem
+            _fan_in_mint_slug = _sanitize_mint_slug(
+                title or Path(lineage["output_path"]).stem
+            )
             lineage["deliverable_id"], _ = _mint_deliverable_id(slug=_fan_in_mint_slug)
             lineage["discovery"] = "fan-in-mint"
 

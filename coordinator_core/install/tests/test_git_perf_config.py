@@ -10,10 +10,16 @@ from __future__ import annotations
 
 import pytest
 
+from coordinator_core.git.run import run_git
 from coordinator_core.install import git_perf_config as gpc
-from coordinator_core.install.git_perf_config import _git
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
+
+def _git(repo, *args):
+    """Test-local fixture helper -- production code inlines `run_git` directly
+    (no module-private alias to import here)."""
+    return run_git(list(args), cwd=str(repo))
 
 
 def _init_repo(tmp_path):
@@ -104,13 +110,13 @@ def test_maintenance_register_is_never_invoked(tmp_path, monkeypatch):
     GLOBAL config. The design never runs the scheduler that reads it."""
     repo = _init_repo(tmp_path)
     invoked = []
-    real_git = gpc._git
+    real_run_git = gpc.run_git
 
-    def recording_git(r, *args, **kwargs):
-        invoked.append(args)
-        return real_git(r, *args, **kwargs)
+    def recording_run_git(args, **kwargs):
+        invoked.append(tuple(args))
+        return real_run_git(args, **kwargs)
 
-    monkeypatch.setattr(gpc, "_git", recording_git)
+    monkeypatch.setattr(gpc, "run_git", recording_run_git)
     gpc.apply(repo)
 
     # Review: review-integrator (Finding 4, slice B) -- dropped the substring

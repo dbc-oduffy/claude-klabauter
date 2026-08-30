@@ -2,11 +2,12 @@
 spawns, whether this worktree has anything to push, and reuse
 `push_with_retry` for the actual push when it does.
 
-WHY `workday_drain_pending_push.drain_pending_push` CANNOT BE REUSED for
-this: it acts only on a pending-hold record the post-commit hook itself
-wrote when a commit ran under a deferred push mode. A commit routed through
-`push_mode=NEVER` never writes that record, so `drain_pending_push` finds
-nothing to act on even when the branch is genuinely ahead of its upstream.
+WHY THE RETIRED `workday.drain_pending_push` OP COULD NOT HAVE BEEN REUSED
+for this (op gravestoned 2026-08-30, docs/plans/2026-08-30-who-pushes-and-
+when.md C2/C8): it acted only on a pending-hold record the post-commit hook
+itself wrote when a commit ran under a deferred push mode. A commit routed
+through `push_mode=NEVER` never wrote that record, so the drain found
+nothing to act on even when the branch was genuinely ahead of its upstream.
 This module answers a different question -- "is HEAD ahead of its upstream
 tracking ref, right now" -- without depending on any prior commit having
 left a marker behind.
@@ -453,12 +454,16 @@ def push_outstanding(
         # cadence budget (6.0s) reaches this far more often than the
         # interactive 12.0s ladder ever did.
         if cockpit_script is not None and publish_budget is not None and publish_budget > 0:
+            # `_resolve_pushed_range` (ops/ceremony/push.py) never returns a
+            # half-populated range -- both halves or `None, None` -- so this
+            # partition always yields two non-empty shas; a future change to
+            # that resolver's failure arm would need to update this call site.
             old_sha, _, new_sha = outcome.pushed_range.partition("..")
             _maybe_publish_cockpit_contract(
                 str(root),
                 cockpit_script,
-                old_sha or None,
-                new_sha or None,
+                old_sha,
+                new_sha,
                 timeout_secs=publish_budget,
             )
 
@@ -516,6 +521,44 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     all six cadence surfaces, four of them in DoE-claude -- unable to tell a
     definite reject from an indeterminate one, the exact distinction that
     decides whether re-pushing is safe.
+
+    READING THE RESULT -- the discriminator is which LIST is non-empty, never
+    `pushed_count`. Every outcome below is reachable; branch in this order:
+
+        unconfirmed non-empty  -> the push's outcome was NEVER OBSERVED. It may
+                                  already be on the remote. Reconcile (see
+                                  below), never re-push blind.
+        failed non-empty       -> observed, definite failure. Safe to act on.
+        acted == ["push"]      -> landed. `pushed_range`/`pushed_count` describe
+                                  what THIS call landed.
+        skipped names why      -> `push:nothing-outstanding` (no-op),
+                                  `push:landed-by-peer` (a peer's push carried
+                                  these commits), `push:ref-contended`,
+                                  `push:branch-policy`, `push:no-remote`,
+                                  `push:branch-unresolvable`. The
+                                  `push:lfs-range-*` verdict rides alongside any
+                                  of these and never decides the outcome.
+
+    `pushed_range`/`pushed_count` are `None` on EVERY non-landed outcome -- a
+    no-op and an unconfirmed timeout both read `null`, by construction, because
+    they are an explicit-unknown pair rather than a status. A caller that
+    branches on them cannot tell "nothing to push" from "push unconfirmed", and
+    that is not a gap to be closed by widening them: the lists above already
+    carry the answer.
+
+    THE INCIDENT (2026-08-30, example-retrieval-repo-em). A caller read `pushed_range:
+    null, pushed_count: null` on both a timeout and a subsequent success, judged
+    that both "read as nothing happened", and fell back to `git merge-base
+    --is-ancestor` against the remote to tell them apart. That out-of-band check
+    was correct but unnecessary -- `unconfirmed` was non-empty on the first and
+    empty on the second. The fields were all present and the reading order was
+    not, which is why this block exists rather than a shape change.
+
+    Reconciling an `unconfirmed` is the ONE case needing more than this result:
+    the push may have landed after the parent was killed, so re-read the remote
+    (`git merge-base --is-ancestor HEAD <upstream>`) or simply let the next
+    cadence tick re-drive it. `ipc.py`'s reconcile-before-retry negative spec
+    owns that rule; do not hand-roll a re-push here.
 
     Negative-spec: does NOT collapse `failed`/`unconfirmed` into one key or
     synthesize a summary string from them -- they are mutually exclusive by

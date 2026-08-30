@@ -172,7 +172,6 @@ _ALLOWED: Dict[Tuple[str, str, str, str, str, int], str] = {
     ("coordinator_core", "distill/log_normalize.py", "normalize_arrow_dialects_log", "os.replace", "os.replace(tmp_path, log_path)", 1): "atomic tmp->final rename; temp source never claimed, same pattern as normalize_log's own entry above",
     ("coordinator_core", "distill/wiki_log_migrate.py", "migrate_wiki_log", "os.replace", "os.replace(tmp_path, wiki_log_path)", 1): "atomic tmp->final rename; temp source never claimed",
     ("coordinator_core", "goals/reassess_krs.py", "_write_goal_file_atomic", "os.replace", "os.replace(tmp, goal_file)", 1): "atomic tmp->final rename; temp source never claimed",
-    ("coordinator_core", "hooks/auto_push.py", "_write_pending_record", "os.replace", "os.replace(tmp, target)", 1): "atomic tmp->final; temp source never claimed",
     ("coordinator_core", "hooks/platform_localize.py", "atomic_write", "os.replace", "os.replace(tmp, path)", 1): "atomic tmp->final; temp source never claimed",
     ("coordinator_core", "hooks/postuse_advisory_dispatch.py", "_save_advisory_state", "os.replace", "os.replace(tmp_path, path)", 1): "atomic tmp->final; temp source never claimed",
     ("coordinator_core", "hooks/track_dispatched_agents.py", "_write_backpointer_sync", "os.replace", "os.replace(tmp, em_backpointer)", 1): "atomic tmp->final; temp source never claimed",

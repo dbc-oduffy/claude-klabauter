@@ -460,46 +460,17 @@ def test_sweep_repos_refuses_to_start_a_repo_it_cannot_finish(tmp_path):
     assert swept == []
 
 
-def test_sweep_total_ceiling_secs_is_under_fifteen_seconds():
-    assert push_cadence.SWEEP_TOTAL_CEILING_SECS < 15.0
-
-
 def test_exit_sweep_ceiling_secs_stays_tighter_than_the_idle_ceiling():
     assert push_cadence.EXIT_SWEEP_CEILING_SECS < push_cadence.SWEEP_TOTAL_CEILING_SECS
 
 
-def test_cadence_budgeted_push_cut_mid_leg_reported_distinctly(tmp_path, monkeypatch):
-    """A cadence-budgeted push that is cut mid-leg (a genuine subprocess
-    timeout, `PushOutcome.unconfirmed`) must still be reported distinctly
-    from an ordinary observed failure -- never silently folded into
-    `sweep-failed`. `_feed_failure_detector`'s `err_class` is the signal a
-    later reader keys on."""
-    repo = _repo(tmp_path)
-    monkeypatch.setattr(push_cadence, "head_branch", lambda root: "work/x/2026-08-30")
-
-    class _UnconfirmedOutcome:
-        failed = []
-        unconfirmed = ["git push: timed out after 6s (...)"]
-        attempts = 1
-
-    monkeypatch.setattr(push_cadence, "push_outstanding", lambda root, **kw: _UnconfirmedOutcome())
-
-    logged = []
-    monkeypatch.setattr(
-        push_cadence,
-        "log_failure",
-        lambda repo_root, branch, route, err_class, attempts, first_err, stderr_text: logged.append(
-            (route, err_class, first_err)
-        ),
-    )
-
-    push_cadence._sweep_one(repo)
-
-    assert len(logged) == 1
-    route, err_class, first_err = logged[0]
-    assert route == "cadence-sweep"
-    assert err_class == "sweep-unconfirmed"
-    assert "timed out" in first_err
+def test_sweep_lock_hold_secs_is_keyed_to_the_cadence_budget():
+    """`_SWEEP_LOCK_HOLD_SECS` must track `CADENCE_PUSH_RETRY_BUDGET_SECS`
+    (the cadence path's own budget) -- not the interactive
+    `PUSH_RETRY_BUDGET_SECS` this sweep never spends -- so the lock stays a
+    bounded margin over the work it actually guards
+    (overengineering-reviewer finding 5)."""
+    assert push_cadence._SWEEP_LOCK_HOLD_SECS == push_cadence.CADENCE_PUSH_RETRY_BUDGET_SECS + 10.0
 
 
 def test_successful_push_does_not_feed_the_failure_detector(tmp_path, monkeypatch):

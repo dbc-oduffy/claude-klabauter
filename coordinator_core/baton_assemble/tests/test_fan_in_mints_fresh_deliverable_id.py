@@ -19,6 +19,7 @@ coordinator_core/baton_assemble/tests/test_fan_in_mints_fresh_deliverable_id.py 
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
@@ -138,3 +139,45 @@ def test_fan_in_mint_is_reproducibly_unique_across_two_resolutions(tmp_path):
     )
 
     assert first["deliverable_id"] != second["deliverable_id"]
+
+
+# ---------------------------------------------------------------------------
+# The mint has to satisfy the schema its own output is written under.
+# ---------------------------------------------------------------------------
+
+#: `handoff.schema.json`'s `deliverable_id` pattern, mirrored as a literal.
+#: Imported by value rather than read off the schema file: the point of these
+#: tests is that the MINT and the SCHEMA agree, and deriving the assertion
+#: from the schema the mint is checked against would pass while both drifted.
+_DELIVERABLE_ID_RE = re.compile(
+    r"^dlv-(?!placeholder-replace-with)[0-9a-zA-Z][0-9a-zA-Z.-]*$"
+)
+
+
+@pytest.mark.parametrize(
+    "raw, why",
+    [
+        (
+            "2026-08-30_215434_the-cockpit-publish-plan-awaits-ratification",
+            "the mint convention's own output-path stem — two underscores",
+        ),
+        ("A Title, With Prose!", "a caller-supplied title is free prose"),
+        ("___", "a slug that reduces to nothing must still mint"),
+        (".hidden", "leading punctuation is not an alphanumeric first char"),
+    ],
+)
+def test_sanitized_slug_always_mints_a_schema_valid_id(raw, why):
+    """The live failure: `_fan_in_mint_slug` fed `mint()` an output-path stem
+    whose underscores the schema forbids, so `coordinator-doc-new` refused to
+    write its own generated frontmatter and every fan-in unification raised on
+    d1 — a session holding two batons could not be picked up at all."""
+    minted = f"dlv-{ba._sanitize_mint_slug(raw)}-abc123"
+    assert _DELIVERABLE_ID_RE.match(minted), f"{why}: {minted!r}"
+
+
+def test_sanitizer_does_not_truncate():
+    """Negative-spec on the helper: a deliverable_id is opaque and never a
+    filename, so the 40-char truncation `_slug_from_title` applies would only
+    make the id harder to trace back to the successor it names."""
+    raw = "a" * 120
+    assert ba._sanitize_mint_slug(raw) == raw

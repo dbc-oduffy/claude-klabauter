@@ -708,7 +708,7 @@ def _dirty_paths(cwd: Optional[str] = None) -> set:
     """
     from coordinator_core.git.run import run_git
 
-    result = run_git(["--no-optional-locks", "status", "--porcelain"], cwd=cwd or None, timeout=20)
+    result = run_git(["--no-optional-locks", "status", "--porcelain"], cwd=cwd or None)
     if result.timed_out or result.returncode == 127:
         return set()
     out = result.stdout

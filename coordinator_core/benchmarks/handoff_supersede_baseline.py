@@ -147,9 +147,9 @@ def build_fixture(root: Path) -> None:
 
     Fixture setup only -- the op measured by `sample()` below is the
     `archive-stamp-cli` subprocess, timed separately via
-    `single_invocation_tree_process_time`. These git calls never enter that
-    window, so routing them through `coordinator_core.git.run` (G7) adds no
-    seam cost to the figure this module reports.
+    `single_invocation_tree_process_time` -- see
+    `coordinator_core.benchmarks`'s module docstring, "Measured-window
+    discipline".
     """
     hd = root / "state" / "handoffs"
     hd.mkdir(parents=True)

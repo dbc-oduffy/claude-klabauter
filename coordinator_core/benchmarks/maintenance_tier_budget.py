@@ -41,11 +41,10 @@ _TIER_BUDGET_SAMPLES = 3
 _TIER_BUDGET_CHURN = 200
 
 # `_churn` and `_make_throwaway_clone` below spawn git only to build each
-# sample's FIXTURE (a freshly-churned throwaway repo) -- never to run the
-# tier legs being timed. Those legs are measured through
-# `batched_process_time_ms`, entirely separate from this seam, so routing
-# fixture setup through `coordinator_core.git.run` adds no seam cost to the
-# figure this module reports. Migrated per G7 (test_shared_git_runner.py).
+# sample's FIXTURE (a freshly-churned throwaway repo), timed separately via
+# `batched_process_time_ms` -- see `coordinator_core.benchmarks`'s module
+# docstring, "Measured-window discipline". Migrated per G7
+# (test_shared_git_runner.py).
 
 
 def _apply_coordinator_registration(repo: Path) -> None:

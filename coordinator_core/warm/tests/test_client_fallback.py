@@ -726,24 +726,37 @@ def test_request_payload_carries_the_callers_resolved_session_id(monkeypatch: py
     environment, cold, and attaches it beside `_engine_token` -- this is
     the sole place identity crosses the wire; the server never re-resolves
     it from its own environment (state/bug-backlog/2026-08-18-a-warm-
-    server-stamps-every-op-it-serves-eeb801fc6bee.yaml)."""
+    server-stamps-every-op-it-serves-eeb801fc6bee.yaml).
+
+    The key is `_caller` (a serialised `CallerContext`), not the bare
+    `_session_id` this asserted before: C1b of docs/plans/2026-08-30-every-
+    op-runs-in-the-callers-environment.md widened both legs to the caller's
+    identity SET and retired that key with no alias, so `_serve_line` reads
+    only `_caller` now."""
     monkeypatch.setattr(client, "_caller_session_id", lambda: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")
     fake = _FakePipe()
     monkeypatch.setattr(client, "_open_pipe", lambda pipe: fake)
     client.try_warm_dispatch(_MSG)
     sent = json.loads(fake.written[0].decode("utf-8"))
-    assert sent["_session_id"] == "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+    assert sent["_caller"]["session_id"] == "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+    assert "_session_id" not in sent
 
 
 def test_request_payload_omits_session_id_when_unresolvable(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Unresolvable identity (`_caller_session_id()` returns "") must be
-    OMITTED from the request, never sent as an empty string or fabricated
-    -- the server-side no-op fallback keys on the field's absence."""
+    """Unresolvable identity (`_caller_session_id()` returns "") must never
+    be sent as an empty string or a fabricated value -- the server-side
+    no-op fallback keys on the value being absent.
+
+    Since C1b the omission is at the FIELD, not at the object: `_caller` is
+    still sent (its `pid` and `cwd` are the caller's own and are resolvable
+    even when the session id is not, and `harness_registry.self_record()`
+    keys off exactly those), with `session_id` left `None` inside it."""
     monkeypatch.setattr(client, "_caller_session_id", lambda: "")
     fake = _FakePipe()
     monkeypatch.setattr(client, "_open_pipe", lambda pipe: fake)
     client.try_warm_dispatch(_MSG)
     sent = json.loads(fake.written[0].decode("utf-8"))
+    assert sent["_caller"]["session_id"] is None
     assert "_session_id" not in sent
 
 

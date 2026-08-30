@@ -642,7 +642,7 @@ class TestNormalizeTouchPathSpawnCount:
         target.mkdir()
 
         def _broken_ls_files(args, cwd=None):
-            return scope.GitRun(returncode=128, stdout="", stderr="fatal: index corrupt")
+            return scope.GitResult(returncode=128, stdout="", stderr="fatal: index corrupt", timed_out=False)
 
         monkeypatch.setattr(scope, "_git_run", _broken_ls_files)
         monkeypatch.setattr(scope, "_normalize_diag_fired", False)
@@ -1240,7 +1240,7 @@ class TestNormalizeDiagnostic:
         # isolates the relpath failure path from the ls-files failure path
         # (which fires its own, separately-tested diagnostic reason).
         monkeypatch.setattr(
-            scope, "_git_run", lambda args, cwd=None: scope.GitRun(0, "", "")
+            scope, "_git_run", lambda args, cwd=None: scope.GitResult(0, "", "", False)
         )
 
         def _boom(*a, **k):
@@ -1273,7 +1273,7 @@ class TestNormalizeDiagnostic:
         self._reset_latch(monkeypatch)
         repo = _make_repo(tmp_path)
         monkeypatch.setattr(
-            scope, "_git_run", lambda args, cwd=None: scope.GitRun(0, "", "")
+            scope, "_git_run", lambda args, cwd=None: scope.GitResult(0, "", "", False)
         )
 
         def _boom(*a, **k):
@@ -1349,9 +1349,9 @@ class TestNormalizeDiagnosticBenignVsOperational:
         monkeypatch.setattr(
             scope,
             "_git_run",
-            lambda args, cwd=None: scope.GitRun(
+            lambda args, cwd=None: scope.GitResult(
                 128, "", "fatal: Unable to create '.git/index.lock': File exists.\n"
-            ),
+            , False),
         )
 
         result = scope.normalize_touch_path(str(repo / "README.md"), cwd=str(repo))
@@ -1367,7 +1367,7 @@ class TestNormalizeDiagnosticBenignVsOperational:
         verdict; the absence of evidence either way is not it."""
         repo = _make_repo(tmp_path)
         monkeypatch.setattr(
-            scope, "_git_run", lambda args, cwd=None: scope.GitRun(-9, "", "")
+            scope, "_git_run", lambda args, cwd=None: scope.GitResult(-9, "", "", False)
         )
 
         scope.normalize_touch_path(str(repo / "README.md"), cwd=str(repo))
@@ -1394,7 +1394,7 @@ class TestNormalizeDiagnosticBenignVsOperational:
         monkeypatch.setattr(
             scope,
             "_git_run",
-            lambda args, cwd=None: scope.GitRun(128, "", "fatal: something odd\n"),
+            lambda args, cwd=None: scope.GitResult(128, "", "fatal: something odd\n", False),
         )
         monkeypatch.setattr(scope.core, "git_root", lambda cwd=None: None)
 

@@ -137,7 +137,7 @@ from pathlib import Path
 from typing import Callable, List, Optional, Sequence
 
 from coordinator_core.git.repo_root import absolute_git_dir, git_common_dir
-from coordinator_core.git.run import GitResult, run_git
+from coordinator_core.git.run import run_git
 from coordinator_core.ipc import register_op
 from coordinator_core.ops.reap_stale_locks import _env_float, _env_int, _file_size, _mtime_epoch
 
@@ -362,10 +362,6 @@ def sweep_orphan_packs(
     return OrphanPackSweep(reaped=reaped, failed=failed, skipped=skipped)
 
 
-def _git(repo: Path, *args: str) -> GitResult:
-    return run_git(list(args), cwd=str(repo))
-
-
 def defer_reason(repo: Path, git_dir: Path) -> Optional[str]:
     """Why this worktree must not be maintained right now, or None.
 
@@ -395,7 +391,13 @@ def defer_reason(repo: Path, git_dir: Path) -> Optional[str]:
     ):
         if (git_dir / marker).exists():
             return f"{what} in progress ({marker} present)"
-    unmerged = _git(repo, "ls-files", "--unmerged")
+    unmerged = run_git(["ls-files", "--unmerged"], cwd=str(repo))
+    if unmerged.timed_out or unmerged.returncode == 127:
+        # This function gates a DESTRUCTIVE tier (gc/prune/repack), so an
+        # unanswered git is an obstruction, not a clearance. Reading a timeout
+        # as "no unmerged entries" would let maintenance run against an index
+        # whose state nobody established.
+        return "could not read index state (git did not answer)"
     if unmerged.returncode == 0 and unmerged.stdout.strip():
         return "index has unmerged entries"
     return None
@@ -443,7 +445,7 @@ def run_tier(repo: Path, tier: Optional[str]) -> MaintenanceResult:
     # § Anti-scope names only the `gc` half of it. Found by the plan's
     # falsifier, whose conjunct 4 read FAIL with the legs in the other order.
     if tier == "weekly":
-        prune = _git(repo, "prune", f"--expire={_PRUNE_EXPIRE}")
+        prune = run_git(["prune", f"--expire={_PRUNE_EXPIRE}"], cwd=str(repo))
         if prune.returncode != 0:
             result.errors.append(
                 f"prune --expire={_PRUNE_EXPIRE} failed rc={prune.returncode}: {prune.stderr.strip()}"
@@ -451,7 +453,7 @@ def run_tier(repo: Path, tier: Optional[str]) -> MaintenanceResult:
         else:
             result.pruned = True
 
-    proc = _git(repo, *_TIER_ARGV[tier])
+    proc = run_git(list(_TIER_ARGV[tier]), cwd=str(repo))
     if proc.returncode != 0:
         result.errors.append(f"{' '.join(_TIER_ARGV[tier])} failed rc={proc.returncode}: {proc.stderr.strip()}")
         return result

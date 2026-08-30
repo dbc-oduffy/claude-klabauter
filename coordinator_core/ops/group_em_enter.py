@@ -42,10 +42,61 @@ above rather than four fully isolated legs). A reader adding a fifth leg
 expecting the same isolation nomination gets should not: it inherits
 whatever the roster chain does.
 
+ORDER IS LOAD-BEARING: crown, then roster, then digest. A REFUSED crown -- `claimed`
+false in the nomination verdict -- stops the op BEFORE the roster leg is built, not
+merely before the digest. `send_pass.build_send_digest` arms each emitted peer's
+cooldown as it emits, so a session with no standing to hold the crown building one
+anyway would burn an hour of throttle state on peers it had no right to offer, silently
+degrading the legitimate holder's next digest. An AUTO-REPLACED crown (see below) is
+NOT a refusal -- `claimed` is true, so roster/digest/baseline all run normally.
+
+FIVE NOMINATION OUTCOMES, TWO OF THEM REFUSALS. `nomination.claim` (see that module's
+own docstring for the full table) returns one of:
+    1. fresh claim (no prior record)                        -> claimed=True
+    2. re-entry by the current holder                        -> claimed=True, already_held=True
+    3. LIVE incumbent                                         -> claimed=False, REFUSAL
+    4. incumbent with POSITIVE evidence of death
+       (`live_reason: "pid_not_running"`)                     -> claimed=True, AUTO-REPLACE,
+                                                                  `replaced_holder` populated
+    5. incumbent with only ABSENCE of registry evidence
+       (`live_reason: "no_registry_record"`)                  -> claimed=False, REFUSAL
+Only 3 and 5 stop this op before the roster leg. Case 4 claims and proceeds -- a record
+whose session is PROVABLY gone (not merely unaccounted for) takes nothing from anyone,
+and refusing it forever would fire on essentially every invocation after the first
+(a dead-but-unreaped record is this mode's steady state). The replacement is reported
+LOUDLY via `nomination["replaced_holder"]`, never folded into `superseded_incumbent`.
+
+PAYLOAD SHAPE ON REFUSAL -- ABSENT KEYS, NOT NULL VALUES. On a refused crown (cases 3
+and 5 above), `roster` and `digest` (and `baseline`, which itself consumes the roster)
+are OMITTED from the returned dict entirely -- `"roster" not in result`, never
+`result["roster"] is None`. This is deliberate and load-bearing for the consumer, not a
+cosmetic choice: an EMPTY roster (`[]`) is a live fact -- "I looked, nobody is there" --
+while an ABSENT roster means "I had no standing to look, do not reason about peers from
+this." Collapsing the two into "falsy" would tell a session "no peers need you" when
+this op never looked. No `roster_error` / `digest_error` / `baseline_error` sibling is
+written on this path either, for the same reason the value key itself is omitted -- the
+per-leg degrade convention (`_leg`, below) is for a leg that RAN and failed, not one
+that never ran.
+
+NOMINATION FIELDS ARE PASSED THROUGH VERBATIM, NEVER COLLAPSED. `already_held`, the
+nested `superseded_incumbent.live_reason` (one of `"live"`, `"no_registry_record"`,
+`"pid_not_running"`), and `replaced_holder` are the only way a consumer distinguishes,
+from the payload alone, all five cases above -- a boolean `claimed` alone cannot
+express them. This op adds no new names for these fields and re-derives nothing:
+`result["nomination"]` is exactly `nomination.claim()`'s return value, unmodified.
+
 Negative-spec:
     - Never auto-supersedes a crown. `nomination.claim`'s verdict --
-      including a live OR dead `superseded_incumbent` -- is passed through
-      verbatim; this op never claims over anyone.
+      including a live OR dead `superseded_incumbent`, its `already_held`
+      flag, and its `live_reason` -- is passed through verbatim; this op
+      never claims over anyone, never lets a caller pass a supersede flag
+      on its own initiative, and never reduces any of those fields to a
+      bool or renames them.
+    - Never builds the roster or digest on a refused crown, and never
+      reports them as present-but-null. See "PAYLOAD SHAPE ON REFUSAL"
+      above -- a refusal is direction-class and reaches the human via the
+      passed-through `superseded_incumbent`, never retried or swallowed
+      here, and never disguised as an empty/absent-but-keyed result.
     - Never resolves GATE 1 / GATE 2. `digest["gate_declaration_required"]`
       is carried through from `build_send_digest` unmodified.
     - Never re-enumerates the harness. The roster leg is built over
@@ -154,8 +205,13 @@ def _group_em_enter(params: dict, repo_root: Optional[Path] = None) -> dict:
     Returns:
         {"nomination": {...} | None, "roster": [...] | None,
          "digest": {...} | None, "baseline": {...} | None}
-    A failed leg is `None` with a `"<key>_error"` sibling string carrying
-    the reason; the other legs still populate (see module docstring).
+    A failed leg (one that RAN and raised) is `None` with a `"<key>_error"`
+    sibling string carrying the reason; the other legs still populate (see
+    module docstring). On a REFUSED crown, `roster`/`digest`/`baseline` are
+    OMITTED from the dict entirely -- a leg that never ran is absent, not
+    `None` -- see module docstring § PAYLOAD SHAPE ON REFUSAL.
+    `nomination["already_held"]` and `nomination["superseded_incumbent"]
+    ["live_reason"]` are passed through from `nomination.claim()` verbatim.
 
     Scope "none" (op_scopes.py): the engine-injected `repo_root` kwarg is
     never resolved/injected for a "none"-scoped op -- the `repo_root` WIRE
@@ -174,13 +230,30 @@ def _group_em_enter(params: dict, repo_root: Optional[Path] = None) -> dict:
 
     result: dict[str, Any] = {}
 
-    _leg(
-        result,
-        "nomination",
+    nomination_outcome = (
         _run_nomination(target_root, caller_session_id)
         if caller_session_id
-        else (None, "no-caller-session-id"),
+        else (None, "no-caller-session-id")
     )
+    _leg(result, "nomination", nomination_outcome)
+    nomination_value = nomination_outcome[0]
+
+    # ORDER IS LOAD-BEARING: crown, then roster, then digest. A REFUSED crown --
+    # `claimed` false, whether the incumbent is live or dead -- stops here, before the
+    # roster leg even runs, not just before the digest. `send_pass.build_send_digest`
+    # arms each emitted peer's cooldown as it emits; a session with no standing to hold
+    # the crown must not burn that throttle state on peers it had no right to offer.
+    # Roster and digest are reported ABSENT with a reason, distinguishable from "ran and
+    # found nothing" -- never an empty list, never a partially-built digest.
+    crown_refused = isinstance(nomination_value, dict) and nomination_value.get("claimed") is False
+
+    if crown_refused:
+        # ABSENT, not null: `roster`/`digest`/`baseline` are OMITTED from `result`
+        # entirely on this path -- never written as `None`, never given an `_error`
+        # sibling. An empty roster is a fact ("looked, found nobody"); an absent one
+        # means "had no standing to look" -- collapsing the two loses that distinction
+        # for the consumer. See module docstring § PAYLOAD SHAPE ON REFUSAL.
+        return result
 
     _leg(result, "roster", _run_roster(target_root, caller_session_id))
     roster = result["roster"]

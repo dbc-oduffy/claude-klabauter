@@ -1034,8 +1034,45 @@ def require_dispatch_engine_on_path() -> str:
             f"'{report.engine_root}'. Fix: call this before any earlier "
             "module-level coordinator_core-binding import."
         )
-    _announce_engine_cli_split(root)
+    if _reader_owns_one_of_the_split_trees(root):
+        _announce_engine_cli_split(root)
     return root
+
+
+def _reader_owns_one_of_the_split_trees(dispatch_root: str) -> bool:
+    """Gate for the `require_dispatch_engine_on_path` call site only --
+    `_announce_engine_cli_split` itself stays unconditional (its own direct
+    unit tests, `test_cc_invoke_engine_split_announcement.py`, pin that: they
+    call it directly against synthetic roots with no reader-repo context, and
+    must keep passing unchanged).
+
+    INCIDENTAL disposition (probe row calibration site 2,
+    state/audits/2026-08-30-foreign-repo-identity-disposition-probe.md): the
+    remedy -- publish the engine -- belongs to the owner of one of the two
+    named roots, not to a reader whose own repo is neither. That reader
+    cannot act on the message, so this call site skips it for them. Stays
+    SUBJECT (announces) for a session whose own repo IS one of the two roots.
+
+    Fails OPEN to True (announce) whenever the reader's own repo cannot be
+    resolved or compared, or `resolve_engine_root` disagrees on the CLI half
+    -- an unresolvable reader is not evidence of a third-repo reader, and
+    this is advisory text, never a gate that should go silent on doubt.
+    """
+    try:
+        cli_root = resolve_engine_root(__file__)
+        if not cli_root or not dispatch_root:
+            return True
+        from coordinator_core.git.repo_root import show_toplevel as _show_toplevel
+
+        reader_root = _show_toplevel()
+        if reader_root is None:
+            return True
+        norm_reader = _norm_path_for_split_compare(reader_root)
+        return norm_reader == _norm_path_for_split_compare(
+            cli_root
+        ) or norm_reader == _norm_path_for_split_compare(dispatch_root)
+    except Exception:
+        return True
 
 
 def _is_source_twin(report: "ProvenanceReport") -> bool:

@@ -167,7 +167,7 @@ def _write_usage(session_id: str, used_percentage: float, now: float):
 class TestContextPressureCompactionWarningsFleetWins:
     """`compaction_warnings` is a VARIANT SELECTOR, never an off switch:
     for every value the key admits, the function still returns non-empty
-    advisory text at the 40% and 45% bands."""
+    advisory text at the 40% and 43% bands."""
 
     def test_no_fleet_file_standard_variant_in_the_red_band(self, _isolate_sentinel_and_fleet):
         """Baseline unchanged: no fleet file -> standard HANDOFF NOW text."""

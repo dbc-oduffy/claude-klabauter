@@ -112,7 +112,7 @@ def _bind_handler(tmp_path: Path, *, dispatch):
     return httpd, port
 
 
-def _deny_dispatch(msg, *, session_id=None):
+def _deny_dispatch(msg, *, caller=None, isolated=False):
     return {
         "jsonrpc": "2.0",
         "id": msg.get("id"),
@@ -146,7 +146,7 @@ def test_server_environ_override_does_not_reach_the_forwarded_verdict(tmp_path: 
     monkeypatch.setenv("COORDINATOR_ALLOW_RM", "1")
     seen = {}
 
-    def _capturing_dispatch(msg, *, session_id=None):
+    def _capturing_dispatch(msg, *, caller=None, isolated=False):
         seen["payload"] = msg.get("params", {}).get("payload")
         return {"jsonrpc": "2.0", "id": msg.get("id"), "result": {}}
 
@@ -159,7 +159,7 @@ def test_server_environ_override_does_not_reach_the_forwarded_verdict(tmp_path: 
     assert seen["payload"]["env"] == {}
 
 
-def _method_not_found_dispatch(msg, *, session_id=None):
+def _method_not_found_dispatch(msg, *, caller=None, isolated=False):
     """The LIVE response shape today: `GUARD_OP_NAME` has no registered handler, so
     `_run_dispatch` (via `coordinator_core.ipc.dispatch_message`) answers exactly this --
     a well-formed JSON-RPC error envelope, code -32601. Reproduced by hand here rather than
@@ -189,7 +189,7 @@ def test_method_not_found_never_reads_as_an_allow(tmp_path: Path):
     assert "-32601" in body["systemMessage"]
 
 
-def _no_result_dispatch(msg, *, session_id=None):
+def _no_result_dispatch(msg, *, caller=None, isolated=False):
     """A well-formed response carrying no `result` object -- e.g. a handler that answered
     with a bare string. `interpret_result` must treat this as unreachable too, not crash
     trying to read a decision out of it."""
@@ -209,7 +209,7 @@ def test_non_object_result_never_reads_as_an_allow(tmp_path: Path):
     assert "did not run" in body["hookSpecificOutput"]["additionalContext"]
 
 
-def _echoing_dispatch(msg, *, session_id=None):
+def _echoing_dispatch(msg, *, caller=None, isolated=False):
     """Answers with the method it was asked for, plus injected content -- so one fake
     can pin BOTH that the URL chose the op and that the op's output survives."""
     return {
@@ -259,7 +259,7 @@ def test_an_out_of_namespace_path_is_404_not_dispatched(tmp_path: Path):
 
     calls = []
 
-    def _recording_dispatch(msg, *, session_id=None):
+    def _recording_dispatch(msg, *, caller=None, isolated=False):
         calls.append(msg.get("method"))
         return {"jsonrpc": "2.0", "id": msg.get("id"), "result": {}}
 
@@ -279,7 +279,7 @@ def test_a_bare_hook_post_still_reaches_the_guard_op(tmp_path: Path):
     """Keeps the measured arms in budget-manifest.json quotable after routing landed."""
     seen = []
 
-    def _recording_dispatch(msg, *, session_id=None):
+    def _recording_dispatch(msg, *, caller=None, isolated=False):
         seen.append(msg.get("method"))
         return {"jsonrpc": "2.0", "id": msg.get("id"), "result": {}}
 
@@ -299,7 +299,7 @@ def test_explicit_guard_op_path_still_refuses_an_event_it_has_no_route_for(tmp_p
     the unserved shape, never reach the guard's dispatch."""
     seen = []
 
-    def _recording_dispatch(msg, *, session_id=None):
+    def _recording_dispatch(msg, *, caller=None, isolated=False):
         seen.append(msg.get("method"))
         return {"jsonrpc": "2.0", "id": msg.get("id"), "result": {}}
 

@@ -357,6 +357,12 @@ def render_em_message(
     defect = _classification_defect_notice(target_repo, session_repo, "your PM")
     if defect is not None:
         return defect
+    # Axis 3 classification (task C4, per-path, not a shared mechanism -- see
+    # C3's identical per-site declaration shape): `target_repo` and
+    # `raw_target` are SUBJECT (the message's whole point is telling the
+    # reader where "there" is); `session_repo` is the reader's OWN repo and
+    # is NOT-FOREIGN, so it renders untouched. A future edit adding a fourth
+    # rendered path here must add its own declaration, not extend this one.
     return (
         "Coordinator guard — instead: check with your PM before writing into "
         f"{_target_phrase(target_repo, raw_target)} (not `{session_repo}`). "
@@ -392,6 +398,12 @@ def render_subagent_message(
     defect = _classification_defect_notice(target_repo, session_repo, "the EM that dispatched you")
     if defect is not None:
         return defect
+    # Axis 3 classification (task C4, per-path, not a shared mechanism -- see
+    # C3's identical per-site declaration shape): `target_repo` and
+    # `raw_target` are SUBJECT (the message's whole point is telling the
+    # reader where "there" is); `session_repo` is the reader's OWN repo and
+    # is NOT-FOREIGN, so it renders untouched. A future edit adding a fourth
+    # rendered path here must add its own declaration, not extend this one.
     return (
         "Coordinator guard — instead: no PM here — report to the EM that "
         f"dispatched you before writing into {_target_phrase(target_repo, raw_target)} (not `{session_repo}`); "

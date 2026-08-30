@@ -3271,19 +3271,10 @@ def _fire_agent_completion_log_noop() -> Optional[Dict[str, Any]]:
 
 # C4 coverage-gap closer, 2026-08-30 (two-ratchet-gates-the-work-outran):
 # `agent_postuse_dispatch` (module landed 2026-08-26) had no corpus row.
-# NOT an exemption -- unlike `auto_push`/`platform_localize` (real,
-# unsafe-to-fire side effects) this fan-in's own two legs
-# (`agent_completion_log.run`, `track_dispatched_agents.run`) are BOTH
-# pure write ops that "always return no_advisory()" per their own module
-# docstrings (see the `_fire_agent_completion_log_noop`/
-# `_fire_track_dispatched_agents_noop` rows above/below, which prove each
-# leg individually) -- so this row fires the REAL merge entrypoint
-# (`asyncio.gather` over both real legs, the actual `_advisory_text`/
-# `post_advisory` merge logic this module exists for) with the identical
-# safe no-repo_root/empty-params arm those two rows already use, and
-# asserts what the module's own docstring states as fact ("Both legs are
-# write ops that return no_advisory() today, so the merge is no_advisory()
-# in practice") rather than merely citing it.
+# Both legs return no_advisory() per their own docstrings (see the
+# `_fire_agent_completion_log_noop`/`_fire_track_dispatched_agents_noop`
+# rows above/below); this row exercises the real `asyncio.gather` merge,
+# unlike the auto_push/platform_localize exemptions.
 def _fire_agent_postuse_dispatch_noop() -> Optional[Dict[str, Any]]:
     return _to_envelope_or_none(
         _hooks_asyncio.run(_hook_agent_postuse_dispatch._handler({}, repo_root=None))

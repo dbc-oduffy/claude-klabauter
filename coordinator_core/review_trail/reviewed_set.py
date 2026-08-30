@@ -106,13 +106,17 @@ _SHAS_FILENAME = "reviewed-shas"
 _FOLDED_IDS_FILENAME = "folded-record-ids"
 
 
-def _run(cmd: List[str], cwd: str) -> Tuple[int, str, str]:
-    """Run `cmd` (a full argv, leading `"git"` included, for call-site parity
-    with the private runner this replaces); return (returncode, stdout,
-    stderr). Never raises — a spawn failure (missing git, timeout, etc.)
-    degrades to (1, "", msg), the same fail-closed shape every caller here
-    already treats an unresolved endpoint/range as."""
-    result = run_git(cmd[1:], cwd=cwd)
+# Review: coordinator:code-reviewer (Finding 3) -- returncode sentinel on
+# spawn failure changed from a hand-picked `1` to run_git's `-1`
+# (timeout)/`127` (missing git or OSError) on migration; confirmed every
+# caller in this module branches on nonzero generically and none pattern-
+# matches the specific old value `1`.
+def _run(args: List[str], cwd: str) -> Tuple[int, str, str]:
+    """Run git `args` (no leading `"git"` — the seam's own signature); return
+    (returncode, stdout, stderr). Never raises — a spawn failure degrades to
+    whatever nonzero code `run_git` assigns it, the same fail-closed SHAPE
+    every caller here already treats an unresolved endpoint/range as."""
+    result = run_git(args, cwd=cwd)
     return result.returncode, result.stdout, result.stderr
 
 
@@ -315,7 +319,7 @@ def _build_reach_set(repo_root: str) -> Optional[FrozenSet[str]]:
     "nothing is reachable") — callers treat None as "cannot resolve
     anything this batch", leaving every record unresolved rather than
     folding a wrong empty-set answer."""
-    rc, out, _err = _run(["git", "rev-list", "--all", "--parents"], cwd=repo_root)
+    rc, out, _err = _run(["rev-list", "--all", "--parents"], cwd=repo_root)
     if rc != 0:
         return None
     shas: Set[str] = set()
@@ -513,7 +517,7 @@ def fold_in(repo_root: str, records: List[Tuple[str, str]]) -> FoldResult:
     # floor for this primitive, in the same class as `explicit_stage`'s retained
     # `git check-ignore`.
     for record_id, sha_range in eligible:
-        rc, out, _err = _run(["git", "rev-list", sha_range], cwd=repo_root)
+        rc, out, _err = _run(["rev-list", sha_range], cwd=repo_root)
         if rc != 0:
             unresolved.append(record_id)
             continue

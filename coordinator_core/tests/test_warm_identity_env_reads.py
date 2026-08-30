@@ -24,18 +24,26 @@ a live warm server. A source-shape ratchet is the artifact that survives that �
 also costs no subprocess, so it stays on the fast tier rather than tripping the
 per-item spawn budget.
 
-SCOPE — DELIBERATELY NOT REPO-WIDE, and that is the honest shape.
-``coordinator_core`` names these env vars in dozens of places. Most are CLI
-entrypoints, hook processes and guard processes that never execute inside a
-warm-served dispatch, where a raw env read is correct. A blanket repo-wide assert
-would need every one of those triaged; asserting over an untriaged population and
-allowlisting whatever happened to fail would encode "currently passing" as
-"reviewed", which is the failure mode the backlog entry explicitly warned against.
+SCOPE — NARROWED TO THE LEGS THE CARRIED-IDENTITY MECHANISM DOES NOT REACH.
+The C-door leg now carries the caller's session id across the wire
+(``warm/door/door.c`` sends it, ``warm.server._serve_line`` pops it,
+``warm.entry_seam.per_request_state`` binds it through
+``session.core.session_identity_override``), so a resolver that reads the bound
+ContextVar sees the real caller there and a raw env read on that leg is no longer
+the only way to get it wrong. Two legs the new mechanism deliberately does not
+reach still resolve identity from ambient ``os.environ``: the supervisor HTTP leg,
+and the ``BrokenProcessPool`` degrade path. On both, "whoever spawned the process"
+and "whoever is asking" can differ, and a raw env read on a warm-reachable module
+still gets the spawner. This ratchet's model — a raw env read under warm dispatch
+is a defect — remains exactly correct for that population; it was never correct
+repo-wide.
 
-So this ratchet governs one NAMED cohort: the residual sites that entry enumerated
-on 2026-08-19, each carrying its own reachability verdict below. The rest of the
-repo is untriaged, not vouched for. Widening this cohort means triaging the new
-members first — the verdict is the work, not the allowlist line.
+So this ratchet governs one NAMED cohort: the residual sites reachable through
+those two ambient-env legs, each carrying its own reachability verdict below (the
+2026-08-19 backlog's original enumeration, since re-triaged against the current
+call graph rather than against the retired one-server-one-owner model). The rest
+of the repo is untriaged, not vouched for. Widening this cohort means triaging the
+new members first — the verdict is the work, not the allowlist line.
 
 REACHABILITY RULE used for every verdict here: a site is warm-reachable when it is
 reachable from a ``@register_op`` handler's call graph, because

@@ -33,7 +33,7 @@ def test_tokenless_request_is_refused_not_silently_served():
     """
     dispatch_calls: list[dict] = []
 
-    def _dispatch(msg: dict, *, session_id=None) -> dict:
+    def _dispatch(msg: dict, *, caller=None, isolated=False) -> dict:
         dispatch_calls.append(msg)
         return {"jsonrpc": "2.0", "id": msg["id"], "result": "ok"}
 

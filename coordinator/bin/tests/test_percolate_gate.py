@@ -799,7 +799,7 @@ def test_git_log_batched_survives_a_pathspec_set_over_the_windows_cmdline_cap(
     assert sum(len(n) + 1 for n in names) > 32767, "fixture must exceed the cap"
 
     base = [
-        "git", "-C", str(drift_repo), "log",
+        "-C", str(drift_repo), "log",
         "--no-merges", "--format=%h %ad %s", "--date=short",
     ]
     lines = _mod._git_log_batched(base, ["--since=30 days ago"], names)
@@ -812,7 +812,7 @@ def test_git_log_batched_survives_a_pathspec_set_over_the_windows_cmdline_cap(
 def test_git_log_batched_raises_instead_of_swallowing_a_git_failure(
     drift_repo: Path,
 ) -> None:
-    base = ["git", "-C", str(drift_repo), "log", "--format=%h %ad %s", "--date=short"]
+    base = ["-C", str(drift_repo), "log", "--format=%h %ad %s", "--date=short"]
     with pytest.raises(RuntimeError, match="git log failed"):
         _mod._git_log_batched(base, ["no-such-ref..HEAD"], ["seed.txt"])
 

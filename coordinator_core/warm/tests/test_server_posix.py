@@ -427,7 +427,7 @@ def test_a_real_unix_socket_server_answers_a_real_client(tmp_path, monkeypatch) 
     monkeypatch.setattr(
         type(ctx),
         "_pool_dispatch",
-        lambda self, msg, session_id=None: {
+        lambda self, msg, *, caller=None, isolated=False: {
             "jsonrpc": "2.0",
             "id": msg["id"],
             "result": {"echo": msg["method"]},
@@ -471,7 +471,7 @@ def test_an_abandoned_client_does_not_kill_a_worker(tmp_path, monkeypatch) -> No
 
     ctx = _ctx(name=str(path), engine_root=tmp_path, listen_socket=listen_socket, endpoint_path=path)
 
-    def _slow_dispatch(self, msg, session_id=None):
+    def _slow_dispatch(self, msg, *, caller=None, isolated=False):
         if msg["id"] == "abandoned":
             release.wait(5)
         return {"jsonrpc": "2.0", "id": msg["id"], "result": "ok"}

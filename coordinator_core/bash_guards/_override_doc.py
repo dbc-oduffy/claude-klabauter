@@ -29,20 +29,35 @@ from __future__ import annotations
 #: repo root to find the file on disk (the retention suite does exactly that).
 OVERRIDE_KEYS_DOC = "docs/reference/guard-override-keys.md"
 
-#: The DISPLAY form -- a repo-qualified hint, e.g.
-#: ``"claude-klabauter docs/reference/guard-override-keys.md"``. Not
-#: interchangeable with ``OVERRIDE_KEYS_DOC`` above: that constant is the
-#: file-resolution form a caller joins to a repo root, this is what a reader
-#: of a guard MESSAGE sees.
+#: The DISPLAY form -- DR-290 form 2, the literal, never-expanded
+#: settings-root pointer, the same shape
+#: ``session/guard_unlock_sentinel.py :: _SETTINGS_ROOT_WIKI_POINTER``
+#: already ships. Not interchangeable with ``OVERRIDE_KEYS_DOC`` above: that
+#: constant is the file-resolution form a caller joins to a repo root, this
+#: is what a reader of a guard MESSAGE sees.
 #:
 #: These guards are not claude-klabauter-local: DoE's PreToolUse shim resolves this
 #: engine and runs the guard logic in-process for EVERY repo on the machine,
 #: so the reader of this pointer is usually sitting in some other repo's
-#: tree, where a bare `docs/reference/...` resolves to nothing. Naming the
-#: repo matches the convention CLAUDE.md already uses for cross-repo
-#: citations ("DoE-claude coordinator/docs/wiki/..."). NEGATIVE SPEC: do not
-#: collapse these two constants back into one -- the file-resolution caller
-#: and the message reader need different strings.
+#: tree, where a bare `docs/reference/...` resolves to nothing, and where a
+#: repo-qualified relative form (DR-290 form 1, this constant's prior value)
+#: names a repo the reader may have neither checked out nor heard of --
+#: exactly the foreign-repo-identity leak
+#: `docs/plans/2026-08-30-the-engine-stops-naming-its-own-repo.md` exists to
+#: close. The settings-root form resolves for every reader, including one
+#: with none of our repos checked out, because it points at the one
+#: location every coordinator install populates regardless of which repo a
+#: session happens to be working in: `coordinator_core/install/substrate.py
+#: :: _install_seed_wikis`'s claude-klabauter-sourced sibling leg copies this file's
+#: named page (`docs/reference/guard-override-keys.md`) to
+#: `<settings-home>/coordinator-claude/docs/wiki/guard-override-keys.md` at
+#: install time, so the pointer below resolves post-install without naming
+#: this repo. NEGATIVE SPEC: do not collapse these two constants back into
+#: one -- the file-resolution caller and the message reader need different
+#: strings. Left as ``~/...`` literally -- never expanded via
+#: ``Path.home()``/``os.path.expanduser`` -- for the same reason
+#: ``_SETTINGS_ROOT_WIKI_POINTER`` is: expansion would reintroduce the
+#: machine-specific leak this form exists to avoid.
 #:
 #: 2026-08-05 (PM-raised, break-class): this used to be only the FALLBACK,
 #: with a resolver (``_resolve_override_keys_doc_display``, since reduced to
@@ -59,6 +74,16 @@ OVERRIDE_KEYS_DOC = "docs/reference/guard-override-keys.md"
 #: that produced it. A pointer that does not resolve for a stranger on a
 #: different OS is not "correct but sensitive", it is simply broken, and
 #: this repo ships as an OSS mirror -- every downstream reader would have
-#: hit that. The repo-qualified relative form is the only one of the two
-#: that is portable AND leaks nothing, so it is now unconditional.
-OVERRIDE_KEYS_DOC_DISPLAY = "claude-klabauter " + OVERRIDE_KEYS_DOC
+#: hit that.
+#:
+#: 2026-08-30 (DR-290 form 1 -> form 2, `the engine stops naming its own
+#: repo` plan, C2): the repo-qualified relative form above was itself still
+#: a foreign-repo-identity leak for a session working in neither
+#: claude-klabauter nor its publish mirror -- it named `claude-klabauter`
+#: unconditionally. Moved to DR-290 form 2 (the literal settings-root
+#: pointer) instead, with the install leg (`_install_seed_wikis`'s
+#: claude-klabauter-sourced sibling) landing in the same commit so the pointer
+#: resolves rather than trading one broken pointer for another.
+OVERRIDE_KEYS_DOC_DISPLAY = (
+    "~/.coordinator-claude-settings/coordinator-claude/docs/wiki/guard-override-keys.md"
+)

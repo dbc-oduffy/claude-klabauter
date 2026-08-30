@@ -13,6 +13,14 @@ commit -m "x"`, and -- as of the 2026-08-15 fourth-recurrence promotion --
 the solo bare `git commit -m "x"` with no preceding `add` at all), does it
 fire as ADVISORY or escalate to DENY, and under what index state.
 
+2026-08-30 PM ruling: the compound bare-commit-half no longer has an index
+axis at all -- it denies UNCONDITIONALLY (`_bt_compound_add_bare_commit`),
+and the two-`git diff --cached` probe that used to gate it is deleted. Its
+rows below therefore assert DENY across every index state, which is the
+POINT of those rows, not redundancy: they pin that no index state, and no
+probe outcome, can talk the deny back down to advisory. The index axis is
+still live for the SOLO bare commit and the `-a`/`--all` sweep.
+
 Each row below uses a real, isolated `tmp_path` git repo (never the
 Claude-klabauter checkout itself -- this check's probe reads the ACTUAL
 `git diff --cached` state of whatever cwd it resolves, so a test that ran
@@ -98,8 +106,10 @@ def test_deny_when_own_add_names_paths_positionally_without_separator(tmp_path):
     Requiring the separator inverted this guard in production: the careful
     spelling denied while the common one -- `git add a.py && git commit -m x`,
     the shape that actually swept a live peer's staged work -- fell through to
-    advisory, because `_bt_git_add_own_pathspec` returned `None` and the
-    escalation predicate short-circuited on an empty own-pathspec."""
+    advisory, because the pathspec extractor returned `None` and the
+    escalation predicate short-circuited on an empty own-pathspec. Both are
+    deleted as of 2026-08-30 and this shape now denies on the compound
+    SHAPE alone -- the row stays as the regression pin it always was."""
     repo = _init_repo(tmp_path)
     _stage(repo, "foreign.txt")
     repo_q = shlex.quote(str(repo))
@@ -107,21 +117,28 @@ def test_deny_when_own_add_names_paths_positionally_without_separator(tmp_path):
     assert _verdict(cmd) == "deny"
 
 
-def test_advisory_when_separatorless_add_covers_the_whole_index(tmp_path):
-    """The separator-less arm must not over-fire either: same spelling, but
-    the index holds only what this command's own add names."""
+def test_separatorless_add_denies_even_when_it_covers_the_whole_index(tmp_path):
+    """2026-08-30 ruling: the index holding ONLY what this command's own add
+    names no longer earns an advisory. The index is shared and a peer can
+    stage into it between this guard's read and the commit's write, so a
+    clean index at guard time is a race outcome, not a property of the
+    command."""
     repo = _init_repo(tmp_path)
     _stage(repo, "own.txt")
     repo_q = shlex.quote(str(repo))
     cmd = 'git -C %s add own.txt && git -C %s commit -m "x"' % (repo_q, repo_q)
-    assert _verdict(cmd) == "advisory"
+    assert _verdict(cmd) == "deny"
 
 
-def test_flag_only_add_contributes_no_own_scope(tmp_path):
-    """Negative-spec for the arm above: an add with NO path operands
-    (`git add -A`, `git add -u`) is genuinely unscoped and still contributes
-    no own-pathspec -- the set-difference has nothing to compare against, so
-    the shape stays advisory rather than denying on an unbounded add."""
+def test_flag_only_add_denies_too(tmp_path):
+    """INVERTED 2026-08-30. An add with no path operands (`git add -A`,
+    `git add -u`) used to stay advisory because it contributed no
+    own-pathspec for the set-difference to compare against. With the
+    set-difference gone that reason is gone with it, and keeping the
+    carve-out would leave the UNBOUNDED shape advisory while the scoped
+    `git add one.py && git commit` denies -- a guard that punishes the
+    careful spelling. The unscoped shape is strictly the more dangerous
+    one, so it denies too."""
     repo = _init_repo(tmp_path)
     _stage(repo, "foreign.txt")
     repo_q = shlex.quote(str(repo))
@@ -129,38 +146,42 @@ def test_flag_only_add_contributes_no_own_scope(tmp_path):
         cmd = 'git -C %s add %s && git -C %s commit -m "x"' % (
             repo_q, add_flags, repo_q
         )
-        assert _verdict(cmd) == "advisory", add_flags
+        assert _verdict(cmd) == "deny", add_flags
 
 
-def test_pathspec_from_file_add_fails_open(tmp_path):
-    """`--pathspec-from-file` names paths this predicate never reads, so no
-    set-difference is computable -- fail open (advisory), never deny on an
-    unknown pathspec."""
+def test_pathspec_from_file_add_denies_too(tmp_path):
+    """INVERTED 2026-08-30, same reasoning as the flag-only arm above:
+    `--pathspec-from-file` named paths no predicate here reads, which made
+    the set-difference incomputable and the shape fail open. The deny no
+    longer rests on a set-difference, and an add whose scope the guard
+    cannot see is not a reason to wave the unscoped commit through."""
     repo = _init_repo(tmp_path)
     _stage(repo, "foreign.txt")
     repo_q = shlex.quote(str(repo))
     cmd = 'git -C %s add --pathspec-from-file list.txt && git -C %s commit -m "x"' % (
         repo_q, repo_q
     )
-    assert _verdict(cmd) == "advisory"
+    assert _verdict(cmd) == "deny"
 
 
-def test_advisory_when_index_holds_only_the_commands_own_pathspec(tmp_path):
-    """The safe single-session case: the index holds exactly what THIS
-    command's own `git add` staged and nothing else -- stays advisory
-    (allowed), never denied."""
+def test_denies_even_when_index_holds_only_the_commands_own_pathspec(tmp_path):
+    """INVERTED 2026-08-30 -- this row IS the reversal of C7 PM Ruling 2.
+    The "safe single-session case" (index holds exactly what THIS command's
+    own `git add` staged, nothing else) was the carve-out that kept the deny
+    off; the PM was told the new ruling reverses it and proceeded."""
     repo = _init_repo(tmp_path)
     _stage(repo, "own.txt")
     cmd = _compound_cmd(repo, ["own.txt"])
-    assert _verdict(cmd) == "advisory"
+    assert _verdict(cmd) == "deny"
 
 
-def test_advisory_when_index_holds_exactly_the_union_of_two_own_adds(tmp_path):
-    """Regression: a compound command may run MORE THAN ONE `git add --
-    <paths>` before its commit. "The command's own pathspec" is the UNION
-    of every such preceding add, not just the last one -- a two-add compound
-    where the index holds exactly both files (and nothing else) must stay
-    advisory, never escalate to deny on the earlier add's path."""
+def test_denies_when_index_holds_exactly_the_union_of_two_own_adds(tmp_path):
+    """INVERTED 2026-08-30. A compound command may run MORE THAN ONE
+    `git add` before its commit; the union of those adds used to buy an
+    advisory when it covered the whole index. It no longer does -- but the
+    row stays, because the multi-add shape is the one whose segment walk
+    `_bt_compound_add_bare_commit` still has to get right (it scans every
+    prior segment, not just the immediately preceding one)."""
     repo = _init_repo(tmp_path)
     _stage(repo, "one.txt")
     _stage(repo, "two.txt")
@@ -169,14 +190,18 @@ def test_advisory_when_index_holds_exactly_the_union_of_two_own_adds(tmp_path):
         "git -C %s add -- one.txt && git -C %s add -- two.txt && "
         'git -C %s commit -m "x"' % (repo_q, repo_q, repo_q)
     )
-    assert _verdict(cmd) == "advisory"
+    assert _verdict(cmd) == "deny"
 
 
-def test_advisory_when_nothing_staged_at_all(tmp_path):
-    """An empty index has no foreign paths to hold by construction."""
+def test_denies_even_when_nothing_is_staged_at_all(tmp_path):
+    """INVERTED 2026-08-30. An empty index held no foreign paths by
+    construction, so this was the clearest advisory row of the set. It is
+    now the clearest statement of what changed: the deny reads the COMMAND,
+    not the index, and an index that is empty when the guard looks says
+    nothing about what it holds when the commit runs."""
     repo = _init_repo(tmp_path)
     cmd = _compound_cmd(repo, ["own.txt"])
-    assert _verdict(cmd) == "advisory"
+    assert _verdict(cmd) == "deny"
 
 
 def test_solo_bare_commit_denies_when_index_holds_any_staged_paths(tmp_path):
@@ -462,11 +487,15 @@ def test_dash_dash_all_excludes_from_escalation(tmp_path):
     assert _verdict(cmd) == "advisory"
 
 
-def test_probe_failure_fails_open_never_denies(monkeypatch, tmp_path):
-    """AC1: probe failure posture is the OPPOSITE of a fail-closed hard
-    deny -- a forced `_run_git` failure must degrade to advisory, never
-    deny, since a false deny would block real work on a guard-process
-    error while a false silence just returns to today's baseline."""
+def test_compound_deny_survives_a_dead_git_because_it_never_probes(
+    monkeypatch, tmp_path
+):
+    """INVERTED 2026-08-30, and the sharpest pin on the new predicate. This
+    row used to assert the fail-OPEN posture: a forced `_run_git` failure
+    degraded the compound deny to advisory, because the deny rested on a
+    probe. It rests on the command tokens now, so a totally dead `git` must
+    change NOTHING -- if this row ever goes advisory again, a probe has
+    crept back onto the commit hot path."""
     repo = _init_repo(tmp_path)
     _stage(repo, "foreign.txt")
     cmd = _compound_cmd(repo, ["own.txt"])
@@ -475,18 +504,38 @@ def test_probe_failure_fails_open_never_denies(monkeypatch, tmp_path):
         return (-1, "")  # rc == -1: `_run_git`'s own timeout convention
 
     monkeypatch.setattr(dispatch_checks, "_run_git", _boom)
-    assert _verdict(cmd) == "advisory"
+    assert _verdict(cmd) == "deny"
 
 
-def test_probe_success_still_denies_when_not_forced(tmp_path):
-    """Companion oracle row to the forced-failure case above, asserted in
-    the SAME module so both postures of AC1's probe-failure requirement
-    are visible side by side: an unforced, healthy probe against the same
-    foreign-path setup still denies."""
+def test_compound_deny_spends_no_index_probe(tmp_path, monkeypatch):
+    """The brightline leg of the 2026-08-30 change: the compound deny no
+    longer reads the index, so it spends NO `git diff --cached` spawn where
+    the deleted probe spent two per commit attempt -- on the commit hot
+    path, under a 500ms budget with 50-70 concurrent sessions.
+
+    Asserted as "no index probe", not "no subprocess at all", because that
+    would be false and the difference matters: `_bt_git_sequencer_in_
+    progress` still spends THREE `git rev-parse --git-path` spawns ahead of
+    this deny, on every bare-commit evaluation. Those are pre-existing and
+    out of this change's scope, but they are the remaining per-commit spawn
+    cost on this path and the row names them so the next reader measures
+    against the real number rather than this test's title."""
     repo = _init_repo(tmp_path)
     _stage(repo, "foreign.txt")
     cmd = _compound_cmd(repo, ["own.txt"])
+    spawned = []
+    real_run = dispatch_checks.subprocess.run
+
+    def _counting_run(args, *a, **kw):
+        spawned.append(list(args))
+        return real_run(args, *a, **kw)
+
+    monkeypatch.setattr(dispatch_checks.subprocess, "run", _counting_run)
     assert _verdict(cmd) == "deny"
+    assert not [a for a in spawned if "diff" in a], spawned
+    # Pin the pre-existing cost too, so a REGRESSION that adds a fourth
+    # spawn to this path is caught by the row that measures the path.
+    assert len(spawned) == 3, spawned
 
 
 def test_explicit_pathspec_on_commit_still_short_circuits_before_any_probe(tmp_path):
@@ -502,14 +551,16 @@ def test_explicit_pathspec_on_commit_still_short_circuits_before_any_probe(tmp_p
     assert _verdict(cmd) == "none"
 
 
-def test_add_positional_and_separator_paths_both_count_as_own(tmp_path):
-    """Review finding 4 (P2): `git add <pos> -- <pos>` unions BOTH halves as
-    the add's own pathspec -- `git add` has no revision argument, so `--`
-    there means only "stop parsing options"; both `one.txt` and `two.txt`
-    are genuine pathspecs. Pre-fix, only the post-separator token counted,
-    so the index-only pre-separator path (`one.txt`) fell into the "foreign"
-    set and this compound would have wrongly escalated to deny even though
-    both staged paths belong to this command's own add."""
+def test_add_positional_and_separator_paths_deny_like_any_other_add(tmp_path):
+    """RETIRED DISTINCTION, kept as a regression row. `git add <pos> -- <pos>`
+    used to need its two halves unioned into "the command's own pathspec",
+    because miscounting them dropped `one.txt` into the foreign set and
+    escalated a safe compound to deny. With the set-difference deleted there
+    is no own-pathspec to compute and no way to get this spelling wrong --
+    it denies because it is a compound bare commit, like every other add
+    spelling. The row survives to pin that the exotic spelling still
+    TOKENIZES as a `git add` segment, which is the one thing
+    `_bt_compound_add_bare_commit` still has to see."""
     repo = _init_repo(tmp_path)
     _stage(repo, "one.txt")
     _stage(repo, "two.txt")
@@ -518,7 +569,7 @@ def test_add_positional_and_separator_paths_both_count_as_own(tmp_path):
         'git -C %s add one.txt -- two.txt && git -C %s commit -m "x"'
         % (repo_q, repo_q)
     )
-    assert _verdict(cmd) == "advisory"
+    assert _verdict(cmd) == "deny"
 
 
 def test_deny_reason_names_the_shape_and_offers_a_runnable_scoped_form(tmp_path):
@@ -730,10 +781,11 @@ def test_dash_am_probe_failure_fails_open_never_denies(tmp_path, monkeypatch):
     assert _verdict(cmd) == "advisory"
 
 
-def test_two_index_based_predicates_still_return_false_on_dash_a(tmp_path):
-    """Negative spec, called directly: the two index-based predicates keep
-    short-circuiting on `-a` bit-identically to before -- this new
-    predicate is the only one that inverts that gate."""
+def test_bare_commit_predicates_still_return_false_on_dash_a(tmp_path):
+    """Negative spec, called directly: the bare-commit-half predicates keep
+    short-circuiting on `-a` -- the worktree-union predicate below is the
+    only one that inverts that gate. `_bt_compound_add_bare_commit` inherits
+    the exclusion from the probe it replaced, unchanged."""
     repo = _init_repo(tmp_path)
     _stage(repo, "foreign.txt")
     tokens = dispatch_checks._bt_tokenize_full_command(
@@ -741,7 +793,7 @@ def test_two_index_based_predicates_still_return_false_on_dash_a(tmp_path):
     )
     segments = dispatch_checks._bt_segments_from_tokens_with_pipe_flag(tokens)
     seg_tokens, _pipe = segments[0]
-    assert dispatch_checks._bt_c7_index_holds_foreign_paths(seg_tokens, segments, 0) is False
+    assert dispatch_checks._bt_compound_add_bare_commit(seg_tokens, segments, 0) is False
     assert dispatch_checks._bt_solo_bare_commit_index_nonempty(seg_tokens, segments, 0) is False
 
 

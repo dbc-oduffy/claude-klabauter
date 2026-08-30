@@ -488,15 +488,44 @@ def build_request(event: Mapping[str, Any], method: str, request_id: int = 1) ->
     No `_engine_token` here: the transport places it from its header, so that both the
     HTTP and named-pipe paths present a token the same code judges. Adding one here would
     be a second scheme beside that one.
+
+    The caller's identity IS stamped here, at the envelope's TOP LEVEL, as the one
+    `_caller` object `warm/server.py :: _serve_line` pops (`msg.pop("_caller", None)`)
+    and resolves through `caller_context.resolve_caller_context` -- the same shape and
+    the same key `warm/client.py :: _try_warm_dispatch_inner` and `door.c` send on their
+    own transports. Its fields ARE `warm.caller_context.CallerContext` serialised
+    directly, so this leg carries the caller's identity SET (session id AND harness pid),
+    not one field.
+
+    Read off the posted event's own `session_id`, never off this process's environment:
+    a resident server's `os.environ` names whoever spawned it, not the caller of this
+    request. An unresolvable session id stays `None` INSIDE the object rather than
+    suppressing it -- `resolve_caller_context` still resolves the caller's `pid` and
+    `cwd`, which `harness_registry.self_record()` keys off, and the server-side override
+    no-ops on a `None` session id exactly as it does for the other two transports. A
+    fabricated value is never substituted.
+
+    NOT a bare top-level `_session_id`: that key was retired with the alias when C1b
+    widened both legs to `_caller`, and `_serve_line` no longer reads it. Stamping it
+    here would drop this leg's identity on the floor while the envelope still looked
+    correct to a probe that asserts on the key rather than on what dispatch pops.
     """
-    return json.dumps(
-        {
-            "jsonrpc": "2.0",
-            "id": request_id,
-            "method": method,
-            "params": {"payload": payload_from_event(event)},
-        }
-    ).encode("utf-8")
+    request: Dict[str, Any] = {
+        "jsonrpc": "2.0",
+        "id": request_id,
+        "method": method,
+        "params": {"payload": payload_from_event(event)},
+    }
+    caller_sid = event.get("session_id")
+    caller = resolve_caller_context({"session_id": caller_sid} if caller_sid else None)
+    request["_caller"] = {
+        "plugin_root": caller.plugin_root,
+        "cwd": caller.cwd,
+        "session_id": caller.session_id,
+        "agent_id": caller.agent_id,
+        "pid": caller.pid,
+    }
+    return json.dumps(request).encode("utf-8")
 
 
 def interpret_result(event_name: str, frame: bytes) -> Dict[str, Any]:

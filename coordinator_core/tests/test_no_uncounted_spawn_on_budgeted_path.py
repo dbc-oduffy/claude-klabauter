@@ -924,11 +924,27 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
         ("_memo_reconcile_outbox",),
     ),
     #
+    # `groupem.enter`: see the D6/D11 block below (fourth bullet, added 2026-08-30).
+    "groupem.enter": (
+        "coordinator_core/ops/group_em_enter.py",
+        ("_group_em_enter",),
+    ),
+    #
     # D6/D11 (2026-08-22-the-composition-gate-counts-processes-across-the-op-graph, this
-    # chunk): the registry divergence check flagged four live ops with an EMPTY
-    # function-granular reachable spawn set. D11 adjudicated each by hand (not just by the
-    # mechanical empty measurement, EM adjudication step 2, this file's own dispatch brief).
-    # Three are genuinely spawn-free and enrolled below:
+    # chunk) + the 2026-08-30 two-ratchet-gates close: the registry divergence check
+    # flagged four live ops with an EMPTY function-granular reachable spawn set, hand
+    # adjudicated each time (not just by the mechanical empty measurement, EM
+    # adjudication step 2, this file's own dispatch brief). Three are genuinely
+    # spawn-free and enrolled below, plus a fourth (`groupem.enter`) added 2026-08-30:
+    #   - `groupem.enter`: `_group_em_enter` runs four legs (`group_em.baseline`,
+    #     `.nomination`, `.read_pass`, `.send_pass`) and NONE of the four modules carries
+    #     a `subprocess`/`Popen` call anywhere in the file. `read_pass` is the one that
+    #     could plausibly have carried one and deliberately does not -- its own docstring
+    #     records that C6 replaced a `claude agents --json` child spawn with an in-process
+    #     `harness_registry.snapshot()` read, and names reintroducing that spawn as the
+    #     thing not to do. Its reachable set went empty when C3 of the two-ratchet-gates
+    #     plan routed `session/scope.py::_git_run` onto `git/run.py::run_git` -- the last
+    #     site it reached through that module.
     #   - `hooks.agent_postuse_dispatch`: `_handler` runs its two legs
     #     (`agent_completion_log.run`, `track_dispatched_agents.run`) through `asyncio.gather`
     #     -- an indirect call the walker cannot trace as an edge -- but both leg modules were
@@ -951,9 +967,9 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
     #     claim below rests on the CURRENT `git_common_dir` behaviour, hand-verified, not on
     #     that stale sentence.
     #
-    # The fourth, `merge_assemble.brief`, is NOT enrolled -- it has real, non-empty evidence
-    # (the closed resolver-gap paragraph below) and is a pinned, un-legitimized residual instead,
-    # next to `merge_assemble.apply`'s own disposition.
+    # D6/D11's own fourth flagged op, `merge_assemble.brief`, is NOT enrolled -- it has real,
+    # non-empty evidence (the closed resolver-gap paragraph below) and is a pinned,
+    # un-legitimized residual instead, next to `merge_assemble.apply`'s own disposition.
     "hooks.agent_postuse_dispatch": (
         "coordinator_core/hooks/agent_postuse_dispatch.py",
         ("_handler",),
@@ -1507,7 +1523,7 @@ _CLUSTER_D3_OPEN_DISPOSITION: dict[str, tuple[tuple[str, str, str, int], ...]] =
     ),
     "distill.apply_disposal": (
         ("coordinator_core/dag.py", "_git_path_ever_tracked", "git", 0),
-        ("coordinator_core/session/scope.py", "_git_run", "git", 0),
+        ("coordinator_core/git/run.py", "run_git", "git", 0),
     ),
     "engine.drift": (
         ("coordinator_core/git/run.py", "run_git", "git", 0),
@@ -1515,42 +1531,40 @@ _CLUSTER_D3_OPEN_DISPOSITION: dict[str, tuple[tuple[str, str, str, int], ...]] =
     "fleet.archive_completed_handoffs": (
         ("coordinator_core/git/run.py", "run_git", "git", 0),
         ("coordinator_core/ops/ceremony/git_native.py", "_git._invoke", "<dynamic>", 0),
-        ("coordinator_core/session/scope.py", "_git_run", "git", 0),
     ),
     "fleet.archive_paper_trail": (
+        ("coordinator_core/git/run.py", "run_git", "git", 0),
         ("coordinator_core/ops/ceremony/git_native.py", "_git._invoke", "<dynamic>", 0),
-        ("coordinator_core/session/scope.py", "_git_run", "git", 0),
     ),
     "fleet.archive_queue_entry": (
+        ("coordinator_core/git/run.py", "run_git", "git", 0),
         ("coordinator_core/ops/ceremony/git_native.py", "_git._invoke", "<dynamic>", 0),
-        ("coordinator_core/session/scope.py", "_git_run", "git", 0),
     ),
     "fleet.archive_release_accumulator": (
+        ("coordinator_core/git/run.py", "run_git", "git", 0),
         ("coordinator_core/ops/ceremony/git_native.py", "_git._invoke", "<dynamic>", 0),
-        ("coordinator_core/session/scope.py", "_git_run", "git", 0),
     ),
     "fleet.archive_terminal_sizings": (
+        ("coordinator_core/git/run.py", "run_git", "git", 0),
         ("coordinator_core/ops/ceremony/git_native.py", "_git._invoke", "<dynamic>", 0),
-        ("coordinator_core/session/scope.py", "_git_run", "git", 0),
     ),
     "fleet.migrate_handoff_vocabulary": (
         ("coordinator_core/dag.py", "_git_path_ever_tracked", "git", 0),
         ("coordinator_core/git/run.py", "run_git", "git", 0),
         ("coordinator_core/ops/ceremony/git_native.py", "_git._invoke", "<dynamic>", 0),
         ("coordinator_core/ops/ceremony/git_native.py", "_hash_object_stdin_bytes", "<dynamic>", 0),
-        ("coordinator_core/session/scope.py", "_git_run", "git", 0),
     ),
     "fleet.prune_closed_bugs": (
+        ("coordinator_core/git/run.py", "run_git", "git", 0),
         ("coordinator_core/ops/ceremony/git_native.py", "_git._invoke", "<dynamic>", 0),
-        ("coordinator_core/session/scope.py", "_git_run", "git", 0),
     ),
     "fleet.reap_integrated_findings": (
+        ("coordinator_core/git/run.py", "run_git", "git", 0),
         ("coordinator_core/ops/ceremony/git_native.py", "_git._invoke", "<dynamic>", 0),
-        ("coordinator_core/session/scope.py", "_git_run", "git", 0),
     ),
     "fleet.reap_unintegrated_findings": (
+        ("coordinator_core/git/run.py", "run_git", "git", 0),
         ("coordinator_core/ops/ceremony/git_native.py", "_git._invoke", "<dynamic>", 0),
-        ("coordinator_core/session/scope.py", "_git_run", "git", 0),
     ),
     "git.push_failure_verdict": (
         ("coordinator_core/ops/ceremony/git_native.py", "_git._invoke", "<dynamic>", 0),
@@ -1559,7 +1573,6 @@ _CLUSTER_D3_OPEN_DISPOSITION: dict[str, tuple[tuple[str, str, str, int], ...]] =
         ("coordinator_core/git/run.py", "run_git", "git", 0),
         ("coordinator_core/ops/ceremony/git_native.py", "_git._invoke", "<dynamic>", 0),
         ("coordinator_core/ops/ceremony/git_native.py", "_hash_object_stdin_bytes", "<dynamic>", 0),
-        ("coordinator_core/session/scope.py", "_git_run", "git", 0),
     ),
     "handoff.close_origin_stub": (
         ("coordinator_core/dag.py", "_git_path_ever_tracked", "git", 0),
@@ -1579,10 +1592,9 @@ _CLUSTER_D3_OPEN_DISPOSITION: dict[str, tuple[tuple[str, str, str, int], ...]] =
         ("coordinator_core/git/run.py", "run_git", "git", 0),
         ("coordinator_core/ops/ceremony/git_native.py", "_git._invoke", "<dynamic>", 0),
         ("coordinator_core/ops/ceremony/git_native.py", "_hash_object_stdin_bytes", "<dynamic>", 0),
-        ("coordinator_core/session/scope.py", "_git_run", "git", 0),
     ),
     "hooks.cater_subagent_start": (
-        ("coordinator_core/session/scope.py", "_git_run", "git", 0),
+        ("coordinator_core/git/run.py", "run_git", "git", 0),
     ),
     "memo.transition": (
         ("coordinator_core/git/run.py", "run_git", "git", 0),
@@ -1593,13 +1605,13 @@ _CLUSTER_D3_OPEN_DISPOSITION: dict[str, tuple[tuple[str, str, str, int], ...]] =
         ("coordinator_core/git/repo_root.py", "_spawn_rev_parse", "git", 0),
     ),
     "priority.drain": (
-        ("coordinator_core/session/scope.py", "_git_run", "git", 0),
+        ("coordinator_core/git/run.py", "run_git", "git", 0),
     ),
     "research.archive_workdir": (
-        ("coordinator_core/session/scope.py", "_git_run", "git", 0),
+        ("coordinator_core/git/run.py", "run_git", "git", 0),
     ),
     "research.restructure_for_repeat_topic": (
-        ("coordinator_core/session/scope.py", "_git_run", "git", 0),
+        ("coordinator_core/git/run.py", "run_git", "git", 0),
     ),
     "review.freeze_diff": (
         ("coordinator_core/ops/ceremony/git_native.py", "_git._invoke", "<dynamic>", 0),
@@ -1701,7 +1713,7 @@ def test_cluster_d3_open_disposition_matches_live_measurement():
     hand-picked one -- and asserts it against the frozen disposition, byte for byte, per op.
     A site the live tree adds or drops without this dict being updated in the SAME change fails
     here, matching `test_cluster_d2_open_disposition_matches_live_measurement`'s own precedent.
-    Also asserts the total pair count (110) and the entrypoint-resolves-to-a-real-function
+    Also asserts the total pair count (59) and the entrypoint-resolves-to-a-real-function
     precondition."""
     for op_key, (relpath, func_name) in _CLUSTER_D3_OPEN_ENTRYPOINTS.items():
         assert op_key in _CLUSTER_D3_OPEN_DISPOSITION, f"{op_key} has an entrypoint but no disposition entry"
@@ -1747,9 +1759,17 @@ def test_cluster_d3_open_disposition_matches_live_measurement():
         "_CLUSTER_D3_OPEN_DISPOSITION has drifted from the live tree's own cluster reachability "
         "(re-derive and update the dict, do not silently widen or narrow it):\n" + "\n".join(mismatches)
     )
-    assert total_pairs == 63, (
+    assert total_pairs == 59, (
         f"_CLUSTER_D3_OPEN_DISPOSITION now totals {total_pairs} (op, site) pairs, not the "
-        "63: 5ae46cc1b9 also dropped session/scope.py::_git_run from deliverable.cascade_terminal and memo.transition (65 -> 63). Before that, 65 was left after the 2026-08-30 rot sweep. Two reductions, both traced pair-by-pair "
+        "59: 869247ab3a (two-ratchet-gates C3) routed session/scope.py::_git_run onto "
+        "git/run.py::run_git, which rewrote the scope.py row of all SIXTEEN ops that carried "
+        "one. Twelve of the sixteen did not already reach run_git, so their row was renamed "
+        "at constant count. The other FOUR -- fleet.archive_completed_handoffs, "
+        "fleet.migrate_handoff_vocabulary, handoff.archive_transition and handoff.transition "
+        "-- already carried a run_git pair, so the rewrite collapsed into it: -1 each, "
+        "63 - 4 = 59. This is one migrated site leaving the reachable set beneath every op "
+        "that reached it, which is also why six static pins went slack by exactly -1 in the "
+        "same change; it is not four independent reductions. Prior history: 5ae46cc1b9 also dropped session/scope.py::_git_run from deliverable.cascade_terminal and memo.transition (65 -> 63). Before that, 65 was left after the 2026-08-30 rot sweep. Two reductions, both traced pair-by-pair "
         "against the revision that set 79 (63cd18de01). FIRST, four pairs had already left "
         "without this constant moving, which is why it was red before the sweep: "
         "ceremony.session_instructions (-1), eol.census (-1), eol.repair (-1) and "
@@ -5968,18 +5988,21 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     # <=200ms and <=1 spawn, and that RUNTIME guarantee is asserted
     # independently by housekeeping/tests/test_brightline.py (green), not by
     # this pin. The pin (13 when measured 2026-08-30, 6 after 5ae46cc1b9 removed the
-# auto_push reach) counts what the call graph can reach through
+# auto_push reach, 6 -> 5, 2026-08-30 (two-ratchet-gates C3): scope.py::_git_run's
+# removal from the reachable set) counts what the call graph can reach through
     # archive_and_commit -- the auto_push and warm.skew machinery it does not
     # execute -- so raising an alarm about "13 spawns" from this row alone is a
     # misreading; go to the brightline test for what it actually costs.
     "ceremony.commit_v2": 1,
-    "fleet.archive_actioned_memos": 4,
+    # 4 -> 3, 2026-08-30 (two-ratchet-gates C3): scope.py::_git_run's removal from
+    # the reachable set.
+    "fleet.archive_actioned_memos": 3,
     "git.maintenance": 1,
-    "housekeeping.cycle": 6,
+    "housekeeping.cycle": 5,
     "session.safe_commit_offer": 1,
     "plugin_health.sentinel": 26,
-    "fleet.migrate_handoff_vocabulary": 6,
-    "handoff.transition": 6,
+    "fleet.migrate_handoff_vocabulary": 5,
+    "handoff.transition": 5,
     "fleet.reap_integrated_findings": 9,
     "fleet.reap_unintegrated_findings": 9,
     # 4 -> 5, 2026-08-27: the value arrived via a concurrent peer commit (76c5cf07b,
@@ -5990,12 +6013,12 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     # the D3 cluster disposition naming the newly-reached site
     # (`coordinator_core/git/run.py::run_git`). Peer drift on this op is well-attested --
     # 10 -> 4 before this plan's handoff, 4 -> 5 during its verification run.
-    "fleet.archive_completed_handoffs": 4,
+    "fleet.archive_completed_handoffs": 3,
     "fleet.archive_paper_trail": 3,
     "fleet.archive_queue_entry": 3,
     "fleet.archive_release_accumulator": 3,
     "fleet.archive_terminal_sizings": 3,
-    "warm_guard.evaluate": 10,
+    "warm_guard.evaluate": 9,
     "distill.apply_disposal": 9,
     "memo.transition": 3,
     "merge_assemble.apply": 1,
@@ -6165,11 +6188,9 @@ _STATIC_SPAWN_COUNT_OVER_BUDGET_THRESHOLD = 8
 #: on be2562f692's warm.skew import, and housekeeping.cycle enters at 13 -- the largest single
 #: composition cost now named here.
 _STATIC_SPAWN_COUNT_OVER_BUDGET: dict[str, int] = {
-    "plugin_health.sentinel": 26,
-    "warm_guard.evaluate": 10,
-    "distill.apply_disposal": 9,
-    "fleet.reap_integrated_findings": 9,
-    "fleet.reap_unintegrated_findings": 9,
+    op: count
+    for op, count in _STATIC_SPAWN_COUNT_PINS.items()
+    if count > _STATIC_SPAWN_COUNT_OVER_BUDGET_THRESHOLD
 }
 
 

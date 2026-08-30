@@ -129,7 +129,7 @@ def test_advisory_band_deny_reaches_the_caller(monkeypatch) -> None:
     return, which is independent of how the predicate reached `True`.
     """
     monkeypatch.setattr(
-        dispatch_checks, "_bt_c7_index_holds_foreign_paths", lambda *a, **k: True
+        dispatch_checks, "_bt_compound_add_bare_commit", lambda *a, **k: True
     )
     out = dispatch.evaluate_payload_json(_payload(_SWEEP_SHAPE_CMD))
     assert isinstance(out, dict), (
@@ -140,7 +140,7 @@ def test_advisory_band_deny_reaches_the_caller(monkeypatch) -> None:
     )
     hso = out["hookSpecificOutput"]
     assert hso["permissionDecision"] == "deny"
-    assert "OUTSIDE this command's own 'git add'" in hso["permissionDecisionReason"]
+    assert "names no scope" in hso["permissionDecisionReason"]
 
 
 def test_probe_budget_declines_unspawned_once_spent(monkeypatch) -> None:

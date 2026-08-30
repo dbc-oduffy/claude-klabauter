@@ -119,7 +119,7 @@ def recording_declared_writes(*, cwd: Optional[str] = None) -> Iterator[List[str
     resolved_cwd = cwd if cwd is not None else os.getcwd()
     declared: List[str] = []
     try:
-        with per_request_state(declared):
+        with per_request_state(declared, isolated=False):
             yield declared
     finally:
         _record(declared, resolved_cwd)

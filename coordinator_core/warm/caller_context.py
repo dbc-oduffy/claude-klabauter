@@ -71,16 +71,26 @@ __all__ = ["CallerContext", "resolve_caller_context"]
 
 @dataclass(frozen=True)
 class CallerContext:
-    """The four caller-owned facts a warm-engine call site needs, resolved per-call.
+    """The five caller-owned facts a warm-engine call site needs, resolved per-call.
 
     Every field is `Optional[str]` -- a miss at every applicable rung is `None`, never an
     exception and never a silently-substituted ambient guess dressed up as a caller value.
+
+    `pid` (added by docs/plans/2026-08-30-every-op-runs-in-the-callers-environment.md
+    § C1b) is the fifth field: the CALLER process's own id, resolved payload-first with
+    `os.getpid()` as its ambient fallback rung -- the same disposition `cwd` already has,
+    for the same reason (see `resolve_caller_context`'s own docstring). It exists because
+    `harness_registry.self_record()` keys off `CLAUDE_PID`, not off `session_id`, and the
+    warm-identity cohort sweep (`state/audits/2026-08-30-warm-identity-cohort-sweep.md`)
+    names three live defects that misattribute self-classification for exactly that
+    reason -- a session-id-only fix leaves them standing.
     """
 
     plugin_root: Optional[str]
     cwd: Optional[str]
     session_id: Optional[str]
     agent_id: Optional[str]
+    pid: Optional[str]
 
 
 def resolve_caller_context(payload: Optional[Mapping[str, Any]] = None) -> CallerContext:
@@ -105,11 +115,17 @@ def resolve_caller_context(payload: Optional[Mapping[str, Any]] = None) -> Calle
       - `session_id`, `agent_id` -> no ambient fallback. Neither has a meaningful process-wide
         answer (module docstring, "WHY plugin_root NEEDS A FALLBACK AND THE OTHER THREE DO
         NOT"); a payload miss resolves straight to `None`.
+      - `pid` -> `os.getpid()`, this PROCESS's own id -- the same disposition as `cwd`
+        and for the same reason: correct only when the caller and this process are the
+        same, which a per-call payload miss cannot confirm, so this rung exists for a
+        genuinely fresh dispatch (payload absent entirely) rather than for a server
+        reading an incomplete wire payload.
     """
     plugin_root: Optional[str] = None
     cwd: Optional[str] = None
     session_id: Optional[str] = None
     agent_id: Optional[str] = None
+    pid: Optional[str] = None
 
     if isinstance(payload, Mapping):
         candidate = payload.get("plugin_root")
@@ -128,15 +144,23 @@ def resolve_caller_context(payload: Optional[Mapping[str, Any]] = None) -> Calle
         if isinstance(candidate, str) and candidate:
             agent_id = candidate
 
+        candidate = payload.get("pid")
+        if isinstance(candidate, str) and candidate:
+            pid = candidate
+
     if plugin_root is None:
         plugin_root = _resolve_plugin_root_ambient()
 
     if cwd is None:
         cwd = os.getcwd()
 
+    if pid is None:
+        pid = str(os.getpid())
+
     return CallerContext(
         plugin_root=plugin_root,
         cwd=cwd,
         session_id=session_id,
         agent_id=agent_id,
+        pid=pid,
     )

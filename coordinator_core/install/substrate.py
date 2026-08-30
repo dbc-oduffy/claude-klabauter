@@ -3076,6 +3076,9 @@ def run(setup_only: bool = False, check_only: bool = False, allow_venv_fallback:
         # --- Step C10b: settings-home seed-wiki population ---
         _install_seed_wikis(plugin_root, settings_home_path, check_only)
 
+        # --- Step C10b-ii: claude-klabauter-sourced seed-wiki sibling leg (DR-290 form 2) ---
+        _install_claude_klabauter_seed_wiki_page(claude_klabauter_root, settings_home_path, check_only)
+
         if setup_only:
             seeded_verb = "would be seeded" if check_only else "seeded"
             if _is_windows_shell():
@@ -4587,6 +4590,68 @@ def _install_seed_wikis(plugin_root: Path, settings_home_path: Path, check_only:
             f"seed-wikis.json missing on disk: {', '.join(missing)}",
             file=sys.stderr,
         )
+
+
+#: The single claude-klabauter-sourced page installed by ``_install_claude_klabauter_seed_wiki_page``
+#: below, repo-root-relative -- the same page
+#: ``coordinator_core.bash_guards._override_doc.OVERRIDE_KEYS_DOC`` names as
+#: its RESOLUTION form. Declared here (rather than only in code) so
+#: ``docs/install/agent-install-manifest.json``'s declared target and this
+#: source stay one visible pair; see that manifest's
+#: ``installed_wiki_pages`` entry, which names the destination this
+#: function writes to.
+_CLAUDE_KLABAUTER_SEED_WIKI_PAGE_SRC_RELATIVE = "docs/reference/guard-override-keys.md"
+
+
+def _install_claude_klabauter_seed_wiki_page(claude_klabauter_root: Path, settings_home_path: Path, check_only: bool) -> None:
+    """Copy ``<claude_klabauter_root>/docs/reference/guard-override-keys.md`` into
+    ``<settings_home>/coordinator-claude/docs/wiki/guard-override-keys.md`` --
+    the second, claude-klabauter-sourced leg on the same seam ``_install_seed_wikis``
+    already installs DoE's pages through, not a new install mechanism.
+
+    Why this destination and not ``<settings-home>/claude-klabauter/``: DR-290
+    form 2 (``OVERRIDE_KEYS_DOC_DISPLAY``, `coordinator_core/bash_guards/
+    _override_doc.py`) is a literal settings-root pointer that must resolve
+    for a reader in ANY repo, and it must not itself name a repo --
+    ``<settings-home>/claude-klabauter/...`` would make the pointer read
+    ``~/.coordinator-claude-settings/claude-klabauter/docs/reference/
+    guard-override-keys.md``, self-defeating the whole change. Landing the
+    page under ``coordinator-claude/docs/wiki/`` -- the same directory
+    ``_install_seed_wikis`` populates from DoE's own manifest -- is a
+    namespace choice made unilaterally by this chunk (`docs/plans/
+    2026-08-30-the-engine-stops-naming-its-own-repo.md` chunk C2); whether
+    DoE ratifies claude-klabauter writing into that directory rides in chunk C1's
+    cross-repo memo, not here.
+
+    Single named file, not manifest-driven, unlike ``_install_seed_wikis``:
+    there is exactly one claude-klabauter-sourced page today and no analogue to
+    ``seed-wikis.json`` on this side of the seam. Overwritten
+    unconditionally on every re-run (same derived-cache reasoning as
+    ``_install_seed_wikis``'s docstring: this settings-home copy doesn't
+    author the content, so a stale destination must not be preserved as if
+    it were operator customization).
+    """
+    src = claude_klabauter_root / _CLAUDE_KLABAUTER_SEED_WIKI_PAGE_SRC_RELATIVE
+    dst = settings_home_path / "coordinator-claude" / "docs" / "wiki" / "guard-override-keys.md"
+
+    if not src.is_file():
+        print(
+            f"[install-substrate] WARNING: claude-klabauter seed wiki page missing at {src} "
+            "-- skipping (DR-290 form-2 pointer will not resolve until this file "
+            "is restored)",
+            file=sys.stderr,
+        )
+        return
+
+    if check_only:
+        if dst.is_file() and filecmp.cmp(src, dst, shallow=False):
+            print(f"[install-substrate] check: guard-override-keys.md up to date -> {dst} (no-op)")
+        else:
+            print(f"[install-substrate] would: copy claude-klabauter seed wiki guard-override-keys.md -> {dst}")
+        return
+
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(src, dst)
 
 
 def _fnm_curl_leg_declined() -> bool:

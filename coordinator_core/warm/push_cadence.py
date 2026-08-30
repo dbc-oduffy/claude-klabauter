@@ -95,11 +95,12 @@ any surviving path (review: overengineering-reviewer, Finding 3,
 2026-08-30). `push_outstanding`'s own outstanding-work decision does not
 depend on the drain either way (it compares HEAD to the upstream ref
 directly), so removing the call changes nothing this module's own bound
-relies on. The pending-record subsystem itself
-(`_write_pending_record`/`_read_pending_record`/`drain_pending_push`/the
-`workday.drain_pending_push` op/`push.py::_drain_pending_push_after_sync`)
-is left in place -- gravestoning it is a separate, multi-file follow-on
-outside this module's scope.
+relies on. The pending-record subsystem itself -- `_write_pending_record`,
+`drain_pending_push`, and the `workday.drain_pending_push` op -- was
+gravestoned in this same follow-on pass (docs/plans/2026-08-30-who-pushes-
+and-when.md C2/C8); only the read primitives (`_read_pending_record`,
+`_pending_record_path`, `_record_is_stale`) survive, restored for
+`orientation/regenerate_cache.py::emit_auto_push_health`.
 """
 
 from __future__ import annotations
@@ -114,10 +115,7 @@ from typing import Callable, Iterable, List, Optional, Union
 from coordinator_core.git.git_dir import resolve_git_common_dir
 from coordinator_core.git.git_state import head_branch
 from coordinator_core.hooks.auto_push import log_failure
-from coordinator_core.ops.ceremony.push import (
-    CADENCE_PUSH_RETRY_BUDGET_SECS,
-    PUSH_RETRY_BUDGET_SECS,
-)
+from coordinator_core.ops.ceremony.push import CADENCE_PUSH_RETRY_BUDGET_SECS
 from coordinator_core.ops.push_outstanding import push_outstanding
 from coordinator_core.session.day_branch_cut_lock import holder_alive
 
@@ -169,8 +167,12 @@ _last_sweep_monotonic: Optional[float] = None
 
 _SWEEP_LOCK_NAME = "coordinator-push-cadence-sweep.json"
 #: Generous headroom over one repo's own `push_with_retry` ladder deadline
-#: -- a live sweep should never be mistaken for stale mid-push.
-_SWEEP_LOCK_HOLD_SECS = PUSH_RETRY_BUDGET_SECS + 10.0
+#: -- a live sweep should never be mistaken for stale mid-push. Keyed to
+#: `CADENCE_PUSH_RETRY_BUDGET_SECS` (this module's own cadence-path budget,
+#: C5, 2026-08-30), not the interactive `PUSH_RETRY_BUDGET_SECS` this sweep
+#: never uses -- that stale coupling held the lock ~4x the work it bounds
+#: (overengineering-reviewer finding 5).
+_SWEEP_LOCK_HOLD_SECS = CADENCE_PUSH_RETRY_BUDGET_SECS + 10.0
 #: Grace past `hold_until` before a peer calls a still-recorded holder
 #: stale, mirroring `coordinator_core.session.day_branch_cut_lock`'s own
 #: constant of the same name.
@@ -408,9 +410,12 @@ def sweep_repos(
     `total_ceiling_secs + per_repo_budget_secs` -- 72s at the pre-C5
     60.0/12.0 pairing, still over the criterion's 15s bound even after
     lowering just the ceiling. Checking `now + per_repo_budget_secs >
-    deadline` as well as `now >= deadline` makes `total_ceiling_secs` the
-    real bound: no repo this call ever touches can push it past that
-    ceiling. `per_repo_budget_secs` defaults to the cadence's own
+    deadline` makes `total_ceiling_secs` the real bound: no repo this call
+    ever touches can push it past that ceiling -- for any positive budget
+    this single check subsumes the plain `now >= deadline` case, so that
+    clause is dropped rather than kept as unreachable dead weight
+    (overengineering-reviewer finding 3). `per_repo_budget_secs` defaults to
+    the cadence's own
     `CADENCE_PUSH_RETRY_BUDGET_SECS` -- the same budget `_sweep_one` hands
     `push_outstanding` -- so the admission guard and the actual per-repo
     spend agree without a second number to keep in sync.
@@ -419,7 +424,7 @@ def sweep_repos(
     seen: List[Path] = []
     for repo in repos:
         now = clock()
-        if now >= deadline or now + per_repo_budget_secs > deadline:
+        if now + per_repo_budget_secs > deadline:
             break
         root = Path(repo)
         if root in seen:

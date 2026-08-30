@@ -474,9 +474,15 @@ def test_concurrent_entrypoint_calls_do_not_race_the_shared_process_cwd(tmp_path
 #     stopped there: same hook, correct cold, a stranger's id warm, on EVERY
 #     hook-path commit on a box carrying the forwarder.
 #
-#     Asserted against the env a real CLI reads, not against the ContextVar —
-#     binding the ContextVar is what the seam already did while the defect was
-#     live, so a test at that level certifies the route that already worked.
+#     C4: the point fix (`_borrowed_session_identity`, formerly local to this
+#     module) is deleted — `coordinator_core.warm.entry_seam.per_request_state`
+#     (`_environ_identity_borrow`, C3) now makes the caller's identity true in
+#     `os.environ` for the whole isolated dispatch this op runs inside, so
+#     these tests open the SEAM's own scope (`isolated=True`) around
+#     `_run_entrypoint`, instead of binding `session_identity_override`/
+#     `warm_served_request` directly and relying on a borrow local to this
+#     module. They still pin the property (caller's id wins, absent-when-
+#     uncarried, server env restored), not the mechanism.
 # ---------------------------------------------------------------------------
 
 _CALLER_SID = "8b40d62c-55ef-4702-83ce-0cd8dc6513e3"
@@ -498,17 +504,16 @@ _SESSION_ENV_PROBE = (
 
 
 def _run_session_env_probe(tmp_path, monkeypatch, *, carried, server_env):
-    """Run a fake CLI through `_run_entrypoint` under a warm-served request
-    carrying `carried`, with `server_env` as the server process's own
-    environment; return what the CLI saw, plus this process's env afterwards.
+    """Run a fake CLI through `_run_entrypoint`, inside the seam-level
+    isolated-dispatch scope (`entry_seam.per_request_state(isolated=True)`)
+    that C3 made responsible for mirroring `carried` into `os.environ`, with
+    `server_env` as the server process's own environment; return what the CLI
+    saw, plus this process's env afterwards.
     """
     import builtins
 
-    from coordinator_core.session.core import (
-        SESSION_ENV_PRECEDENCE,
-        session_identity_override,
-        warm_served_request,
-    )
+    from coordinator_core.session.core import SESSION_ENV_PRECEDENCE
+    from coordinator_core.warm import entry_seam
 
     bin_dir = tmp_path / "coordinator" / "bin"
     bin_dir.mkdir(parents=True)
@@ -528,7 +533,9 @@ def _run_session_env_probe(tmp_path, monkeypatch, *, carried, server_env):
             "_WARM_ENTRYPOINT_ALLOWLIST",
             frozenset({"fake-entrypoint-session-env"}),
         ):
-            with warm_served_request(True), session_identity_override(carried):
+            with entry_seam.per_request_state(
+                session_id=carried, warm_served=True, isolated=True
+            ):
                 result = _run_entrypoint("fake-entrypoint-session-env", [], str(tmp_path))
         seen = builtins._ENTRYPOINT_SESSION_ENV_SEEN
     finally:

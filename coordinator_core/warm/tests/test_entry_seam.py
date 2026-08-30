@@ -28,7 +28,7 @@ from coordinator_core.warm.entry_seam import (
 
 
 def test_per_request_state_yields_the_collecting_list():
-    with per_request_state() as declared:
+    with per_request_state(isolated=False) as declared:
         assert declared == []
         declare_write("some/path.txt")
         assert declared == ["some/path.txt"]
@@ -38,7 +38,7 @@ def test_per_request_state_yields_the_collecting_list():
 
 def test_per_request_state_accepts_a_preexisting_list():
     into: list = []
-    with per_request_state(into) as declared:
+    with per_request_state(into, isolated=False) as declared:
         assert declared is into
         declare_write("a.txt")
     assert into == ["a.txt"]
@@ -50,9 +50,9 @@ def test_per_request_state_nesting_does_not_cross_contaminate():
     fixed at the dispatch core (a bare rebind instead of Token/reset) for
     exactly this reason.
     """
-    with per_request_state() as outer:
+    with per_request_state(isolated=False) as outer:
         declare_write("outer.txt")
-        with per_request_state() as inner:
+        with per_request_state(isolated=False) as inner:
             declare_write("inner.txt")
             assert inner == ["inner.txt"]
             assert active_declarations() is inner
@@ -97,7 +97,7 @@ def test_reentrant_dispatch_scopes_declared_writes_per_call():
     that makes it safe for a `get_op_handler` re-entry call site to adopt
     without leaking its own declarations into (or out of) the op it calls.
     """
-    with per_request_state() as outer:
+    with per_request_state(isolated=False) as outer:
         declare_write("caller.txt")
         reentrant_dispatch("ping", {})
         # ping declares nothing; the outer scope is unaffected either way.
@@ -125,7 +125,7 @@ def test_reentrant_dispatch_inherits_warm_served_from_the_outer_scope(monkeypatc
 
     monkeypatch.setattr(ipc, "get_op_handler", lambda name: _probe)
 
-    with per_request_state(warm_served=True):
+    with per_request_state(warm_served=True, isolated=False):
         reentrant_dispatch("probe.warm_served", {})
 
     assert seen["warm_served"] is True, (
@@ -135,7 +135,7 @@ def test_reentrant_dispatch_inherits_warm_served_from_the_outer_scope(monkeypatc
 
 
 def test_per_request_state_binds_the_given_session_id():
-    with per_request_state(session_id="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"):
+    with per_request_state(session_id="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", isolated=False):
         assert resolve_session_id() == "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
     # Unwound outside the block -- reproducing today's env-only behaviour.
 
@@ -144,7 +144,7 @@ def test_per_request_state_with_no_session_id_is_a_no_op(monkeypatch):
     monkeypatch.delenv("COORDINATOR_SESSION_ID", raising=False)
     monkeypatch.delenv("CLAUDE_SESSION_ID", raising=False)
     monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
-    with per_request_state():
+    with per_request_state(isolated=False):
         assert resolve_session_id() == ""
 
 
@@ -154,7 +154,7 @@ def test_per_request_state_rejects_a_non_uuid_shaped_session_id(monkeypatch):
     env chain, same fail-safe direction as `commit_trailers.compute_
     missing_trailer_args`'s own `session_id_override` gate."""
     monkeypatch.setenv("COORDINATOR_SESSION_ID", "env-value")
-    with per_request_state(session_id="not-a-uuid"):
+    with per_request_state(session_id="not-a-uuid", isolated=False):
         assert resolve_session_id() == "env-value"
 
 

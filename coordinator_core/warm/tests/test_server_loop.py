@@ -121,7 +121,7 @@ def test_overlapping_dispatch_keeps_distinct_identities():
     seen: dict[int, list[str]] = {}
     barrier = threading.Barrier(2)
 
-    def _dispatch(msg: dict, *, session_id=None) -> dict:
+    def _dispatch(msg: dict, *, caller=None, isolated=False) -> dict:
         declared_writes.declare_write(f"path-{msg['id']}.txt")
         barrier.wait(timeout=5)  # force the two threads to overlap
         seen[msg["id"]] = list(declared_writes.active_declarations() or [])
@@ -164,7 +164,7 @@ def test_wedged_op_does_not_stall_the_next():
     order: list[str] = []
     order_lock = threading.Lock()
 
-    def _dispatch(msg: dict, *, session_id=None) -> dict:
+    def _dispatch(msg: dict, *, caller=None, isolated=False) -> dict:
         if msg["id"] == "wedged":
             wedge_released.wait(timeout=5)
         with order_lock:
@@ -261,7 +261,7 @@ def test_shutdown_trigger_waits_for_a_separate_in_flight_request_before_exit():
     other_done = threading.Event()
     exit_calls: list[int] = []
 
-    def dispatch_a(msg: dict, *, session_id=None) -> dict:
+    def dispatch_a(msg: dict, *, caller=None, isolated=False) -> dict:
         hold.wait(timeout=5)
         other_done.set()
         return {"jsonrpc": "2.0", "id": msg["id"], "result": "ok"}
@@ -358,7 +358,7 @@ def test_ordinary_dispatch_exception_still_surfaces_as_internal_error():
     in_flight = server.InFlightCounter()
     io_obj = _FakeIO([_frame(id_=1)])
 
-    def _raising_dispatch(msg, session_id=None):
+    def _raising_dispatch(msg, *, caller=None, isolated=False):
         raise ValueError("some ordinary op bug")
 
     server._handle_connection(
@@ -850,15 +850,15 @@ def test_serve_line_resolves_the_caller_identity_carried_on_the_request(monkeypa
 
     observed: list[str] = []
 
-    def _dispatch(msg: dict, *, session_id=None) -> dict:
+    def _dispatch(msg: dict, *, caller=None, isolated=False) -> dict:
         # Mirrors `server._run_dispatch`'s own real binding of the seam --
         # this stub swaps out only the `asyncio.run(dispatch_message(...))`
         # body, not the per-request scoping around it.
-        with per_request_state(session_id=session_id):
+        with per_request_state(session_id=caller.session_id if caller else None, isolated=True):
             observed.append(session_core.resolve_session_id())
         return {"jsonrpc": "2.0", "id": msg["id"], "result": "ok"}
 
-    io_obj = _FakeIO([_frame(id_="req-1", extra={"_session_id": session_b})])
+    io_obj = _FakeIO([_frame(id_="req-1", extra={"_caller": {"session_id": session_b}})])
     server._handle_connection(
         io_obj,
         version_state=_FakeVersionState(),
@@ -871,9 +871,9 @@ def test_serve_line_resolves_the_caller_identity_carried_on_the_request(monkeypa
 
     assert observed == [session_b]  # resolved the CALLER's id, not the server's own
     assert session_core.resolve_session_id() == session_a  # unwound back to the server's own default
-    # `_session_id` never reaches the dispatched handler's own msg -- popped
+    # `_caller` never reaches the dispatched handler's own msg -- popped
     # the same way `_engine_token` already is.
-    assert "_session_id" not in json.loads(io_obj.written[0])  # response frame, not the request
+    assert "_caller" not in json.loads(io_obj.written[0])  # response frame, not the request
 
 
 def test_run_dispatch_itself_binds_the_given_session_id(monkeypatch):
@@ -881,7 +881,10 @@ def test_run_dispatch_itself_binds_the_given_session_id(monkeypatch):
     seam every connection actually calls, not a hand-rolled stand-in) --
     only its leaf `ipc.dispatch_message` call is replaced, so the
     `per_request_state(session_id=...)` bind this function itself performs
-    is real production code, not test-side reimplementation."""
+    is real production code, not test-side reimplementation.
+
+    Takes `caller` (a `CallerContext`), not a bare `session_id`: C1b widened
+    the dispatch chain to the caller's identity SET."""
     from coordinator_core import ipc
     from coordinator_core.session import core as session_core
 
@@ -892,18 +895,26 @@ def test_run_dispatch_itself_binds_the_given_session_id(monkeypatch):
 
     monkeypatch.setattr(ipc, "dispatch_message", _fake_dispatch_message)
 
+    from coordinator_core.warm.caller_context import resolve_caller_context
+
     response = server._run_dispatch(
-        {"jsonrpc": "2.0", "id": "1", "method": "noop", "params": {}}, session_id=session_b
+        {"jsonrpc": "2.0", "id": "1", "method": "noop", "params": {}},
+        caller=resolve_caller_context({"session_id": session_b}),
+        isolated=True,
     )
     assert response["result"] == session_b
     assert session_core.resolve_session_id() != session_b  # unwound after the call
 
 
-def test_serve_line_with_no_carried_identity_falls_back_to_the_servers_own_env(monkeypatch):
-    """No-identity fallback: a request that carries no `_session_id` at all
-    (older client, or a caller `resolve_session_id()` could not identify)
-    must behave exactly as today -- the server resolves its OWN
-    environment, never a fabricated or substituted identity."""
+def test_serve_line_with_no_carried_identity_strips_rather_than_falls_back(monkeypatch):
+    """No-identity, isolated (C3 supersedes this test's pre-C3 fall-back
+    expectation): a request that carries no `_caller` at all (older
+    client, or a caller `resolve_session_id()` could not identify) must
+    resolve NOTHING -- never the server's own spawner-named environment,
+    which is the exact misattribution `session.core.carried_session_id()`'s
+    omit-never-substitute contract forbids. `os.environ` is restored to the
+    server's own value once the block closes, proving the strip is scoped to
+    the dispatch and not a permanent mutation."""
     from coordinator_core.session import core as session_core
 
     session_a = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
@@ -913,12 +924,12 @@ def test_serve_line_with_no_carried_identity_falls_back_to_the_servers_own_env(m
 
     observed: list[str] = []
 
-    def _dispatch(msg: dict, *, session_id=None) -> dict:
-        with per_request_state(session_id=session_id):
+    def _dispatch(msg: dict, *, caller=None, isolated=False) -> dict:
+        with per_request_state(session_id=caller.session_id if caller else None, isolated=True):
             observed.append(session_core.resolve_session_id())
         return {"jsonrpc": "2.0", "id": msg["id"], "result": "ok"}
 
-    io_obj = _FakeIO([_frame(id_="req-1")])  # no _session_id field at all
+    io_obj = _FakeIO([_frame(id_="req-1")])  # no _caller field at all
     server._handle_connection(
         io_obj,
         version_state=_FakeVersionState(),
@@ -929,7 +940,7 @@ def test_serve_line_with_no_carried_identity_falls_back_to_the_servers_own_env(m
         dispatch=_dispatch,
     )
 
-    assert observed == [session_a]
+    assert observed == [""]
     assert session_core.resolve_session_id() == session_a
 
 

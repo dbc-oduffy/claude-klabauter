@@ -543,6 +543,15 @@ def publish_lag_message(lag: PublishLag, *, site: str = "fire") -> Optional[str]
     Returns `None` below `PUBLISH_LAG_THRESHOLD_MINUTES` or when
     `engine_commits_behind` is 0 -- callers gate on this return, not on a
     separately-recomputed threshold check.
+
+    INCIDENTAL on the remedy's repo name (probe row 21, same shape as
+    `cc_invoke._announce_engine_cli_split`): this text surfaces broadly
+    (engine floor, cross-repo) regardless of the reader's own repo, but
+    `claude-klabauter` is the publish DESTINATION, not the reader's
+    problem to name unless the reader owns this engine's own checkout.
+    `_reader_owns_engine_repo` suppresses only that repo name for a
+    third-repo reader; the lag fact and the rest of the sentence are
+    SUBJECT and always render.
     """
     if lag.engine_commits_behind <= 0:
         return None
@@ -554,11 +563,40 @@ def publish_lag_message(lag: PublishLag, *, site: str = "fire") -> Optional[str]
         if site == "fire"
         else "These are not live for any session until a round lands them."
     )
+    remedy = (
+        "Publish: python coordinator/bin/percolate-round.py claude-klabauter"
+        if _reader_owns_engine_repo()
+        else "Publish: run a percolate round to publish this engine."
+    )
     return (
         f"Engine lag: {lag.engine_commits_behind} commit(s) touching engine "
         f"code are unpublished (oldest {age_hours:.1f}h). {scope} "
-        "Publish: python coordinator/bin/percolate-round.py claude-klabauter"
+        f"{remedy}"
     )
+
+
+def _reader_owns_engine_repo() -> bool:
+    """Whether the calling session's own repo (its cwd's git root) is this
+    running engine's own checkout -- the same reader-identity question
+    `cc_invoke._announce_engine_cli_split` asks, answered here without a
+    second resolver: `current_engine_clone()` is already the locator-axis
+    root for this process (see that function's own docstring), so the only
+    new lookup is the reader's own git root.
+
+    Fails OPEN to True (name shown) whenever the reader's own root cannot be
+    resolved or compared -- an unresolvable reader is not evidence of a
+    third-repo reader, and this is advisory text, never a gate.
+    """
+    try:
+        from coordinator_core.git.repo_root import show_toplevel
+        from coordinator_core.warm.engine_root import current_engine_clone
+
+        reader_root = show_toplevel()
+        if reader_root is None:
+            return True
+        return Path(reader_root).resolve() == current_engine_clone().resolve()
+    except Exception:
+        return True
 
 
 # --- the currency cache: computed where git is already paid for, read where -

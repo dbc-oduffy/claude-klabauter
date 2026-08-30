@@ -192,7 +192,7 @@ def _resolve_special(
         distinct_ranges.setdefault(sha_range, []).append((record_id, record, kind))
 
     def _revlist(sha_range: str) -> Tuple[str, int, str]:
-        rc, out, _err = _store._run(["git", "rev-list", sha_range], repo_root)
+        rc, out, _err = _store._run(["rev-list", sha_range], repo_root)
         return sha_range, rc, out
 
     ranges = list(distinct_ranges.keys())

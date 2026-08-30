@@ -12,8 +12,10 @@ work from them because the tree is shared.
 Keyed on the WORKTREE, never the session id — a session-keyed lock cannot
 serialise sessions. Specifically keyed on
 ``coordinator_core.git.git_dir.resolve_git_common_dir(repo_root)``, with the
-lock file placed INSIDE the common dir, exactly as
-``coordinator_core/hooks/auto_push.py::_pending_record_path`` already does.
+lock file placed INSIDE the common dir, the same placement
+``coordinator_core/hooks/auto_push.py``'s now-deleted pending-record path
+used (2026-08-30, overengineering-reviewer finding 1 -- that record's sole
+writer was already gravestoned, so the read half followed it out).
 
     Negative-spec — do NOT key this on a hashed path string. ``X:\\DoE-claude``,
     ``X:/DoE-claude``, a substituted-drive view and a UNC view all denote the
@@ -30,10 +32,11 @@ lock file placed INSIDE the common dir, exactly as
     work. Cited here to be distinguished from, not assumed: this lock is a
     sub-second mutex over one ``git checkout -b``, and importing claim
     semantics would wedge a tree-wide invariant behind a dead process. The
-    idiom actually REUSED is ``auto_push.py``'s pending record — ``holder_pid``
-    plus ``hold_until``, takeover on CONFIRMED-DEAD holder OR
-    ``_STALE_GRACE_SECONDS`` elapsed past ``hold_until``
-    (``auto_push._record_is_stale``). PID-liveness gives immediate takeover on
+    idiom actually REUSED is the shape ``auto_push.py``'s now-deleted pending
+    record used — ``holder_pid`` plus ``hold_until``, takeover on
+    CONFIRMED-DEAD holder OR ``_STALE_GRACE_SECONDS`` elapsed past
+    ``hold_until`` (below, this module's own copy — the sole surviving one).
+    PID-liveness gives immediate takeover on
     a crashed holder instead of every peer polling a corpse for the full grace
     window; age stays the ceiling, not the only signal.
 
@@ -65,7 +68,9 @@ _LOCK_NAME = "coordinator-day-branch-cut.json"
 _HOLD_WINDOW_SECONDS = 10.0
 
 #: Grace past ``hold_until`` before a peer calls a still-live holder stale.
-#: Mirrors ``auto_push._STALE_GRACE_SECONDS`` deliberately.
+#: The sole surviving copy of this shape — ``auto_push.py``'s copy was
+#: deleted 2026-08-30 (overengineering-reviewer finding 2) once its own
+#: write side had no caller left to serve.
 _STALE_GRACE_SECONDS = 60.0
 
 
@@ -93,7 +98,8 @@ def read_record(repo_root: str | Path) -> Optional[dict]:
     """The lock record, or None if absent/corrupt/unreadable.
 
     A corrupt or partially-written record reads as None — exactly like "no
-    lock" — rather than raising, mirroring ``auto_push._read_pending_record``.
+    lock" — rather than raising, the same fail-safe shape
+    ``auto_push.py``'s now-deleted pending-record reader used.
     """
     try:
         text = lock_path(repo_root).read_text(encoding="utf-8")

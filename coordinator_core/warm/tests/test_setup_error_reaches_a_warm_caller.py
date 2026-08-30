@@ -82,11 +82,11 @@ def test_sink_is_token_reset_scoped_and_does_not_leak():
 
 def test_per_request_state_binds_the_sink_only_when_asked():
     collected: list = []
-    with per_request_state(diagnostics=collected):
+    with per_request_state(diagnostics=collected, isolated=False):
         emit_diagnostic("bound")
     assert collected == ["bound"]
 
-    with per_request_state():
+    with per_request_state(isolated=False):
         emit_diagnostic("unbound")  # no sink — must not raise
     assert collected == ["bound"]
 
