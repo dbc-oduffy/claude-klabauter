@@ -101,7 +101,11 @@ from coordinator_core.install.write_surface import (
     WriteSurfaceDeclaration,
     WriteSurfaceEntry,
 )
-from coordinator_core.engine_root import _registry_mtime_pair, coordinator_engine_root_with_class
+from coordinator_core.engine_root import (
+    _registry_mtime_pair,
+    coordinator_engine_root_with_class,
+    engine_source_root,
+)
 
 # Generator-provenance declaration (generator_provenance.py). Every write
 # (dst.write_text, _write_bin_manifest, the policy-gate report) targets
@@ -3417,29 +3421,55 @@ def _write_agent_helper_forwarders(
     """
     native_written: "set[str]" = set()
 
+    # PER-NAME FAILURE MUST NOT EXIT 0 SILENTLY (state/bug-backlog/2026-08-30-
+    # install-substrate-exits-0-after-failing-45f4d5390b68.yaml). Measured live
+    # 2026-08-30: a door-image write raising `PermissionError` (WinError 32,
+    # `install_named_forwarder`'s `os.link`/`shutil.copy2` fallback hitting a
+    # mapped .exe) propagated out of this loop uncaught, and the run that
+    # reached that name went unreported as a failure — the actual cause was
+    # fixed separately at 652b830146, but the exit-code contract was not: any
+    # future per-name failure here (a different lock, a permissions change, a
+    # full disk) is swallowed the same way. Per-name tolerance is legitimate
+    # (one bad name should not abort every name after it in `sorted()` order),
+    # so each name's write is caught individually here rather than left to
+    # propagate — but the run as a whole must still fail loud. `failed`
+    # collects (name, exc) pairs; a non-empty `failed` after the loop raises
+    # `SubstrateFatalError`, which `run()`/`main()` already turn into exit 1
+    # (see their own `except SubstrateFatalError` clauses) — no new exit path.
+    failed: "list[tuple[str, BaseException]]" = []
+
     if check_only:
         agent_helper_resolved: "list[WriteSurfaceEntry]" = []
         for f, target in sorted(agent_helper_target_map.items()):
-            native_dst = _cut_over_to_native_door(f, bin_dst, check_only, engine_root=engine_root)
-            if native_dst is not None:
-                agent_helper_resolved.append(WriteSurfaceEntry(kind="file-path", path=str(native_dst)))
-                continue
-            py_dst = bin_dst / f
-            _write_agent_forwarder(f, py_dst, check_only, target=target)
-            agent_helper_resolved.append(WriteSurfaceEntry(kind="file-path", path=str(py_dst)))
+            try:
+                native_dst = _cut_over_to_native_door(f, bin_dst, check_only, engine_root=engine_root)
+                if native_dst is not None:
+                    agent_helper_resolved.append(WriteSurfaceEntry(kind="file-path", path=str(native_dst)))
+                    continue
+                py_dst = bin_dst / f
+                _write_agent_forwarder(f, py_dst, check_only, target=target)
+                agent_helper_resolved.append(WriteSurfaceEntry(kind="file-path", path=str(py_dst)))
+            except OSError as exc:
+                failed.append((f, exc))
+        _report_agent_helper_forwarder_summary(agent_helper_target_map, failed)
         return agent_helper_resolved
 
     agent_helper_resolved = []
     with held_lock(bin_dst, holder_label="install-substrate-forwarders"):
         for f, target in sorted(agent_helper_target_map.items()):
-            native_dst = _cut_over_to_native_door(f, bin_dst, check_only, engine_root=engine_root)
-            if native_dst is not None:
-                agent_helper_resolved.append(WriteSurfaceEntry(kind="file-path", path=str(native_dst)))
-                native_written.add(f)
-                continue
-            py_dst = bin_dst / f
-            _write_agent_forwarder(f, py_dst, check_only, target=target)
-            agent_helper_resolved.append(WriteSurfaceEntry(kind="file-path", path=str(py_dst)))
+            try:
+                native_dst = _cut_over_to_native_door(f, bin_dst, check_only, engine_root=engine_root)
+                if native_dst is not None:
+                    agent_helper_resolved.append(WriteSurfaceEntry(kind="file-path", path=str(native_dst)))
+                    native_written.add(f)
+                    continue
+                py_dst = bin_dst / f
+                _write_agent_forwarder(f, py_dst, check_only, target=target)
+                agent_helper_resolved.append(WriteSurfaceEntry(kind="file-path", path=str(py_dst)))
+            except OSError as exc:
+                failed.append((f, exc))
+
+    _report_agent_helper_forwarder_summary(agent_helper_target_map, failed)
 
     if engine_root is not None:
         _write_native_forwarder_manifest(bin_dst, native_written)
@@ -3635,11 +3665,42 @@ def _install_bin_resolvers(
             _WRITER_ID, _CLAUSE_AGENT_HELPER_FORWARDERS, agent_helper_resolved,
         )
 
+    # LIVE-SOURCE-TREE PROTECTION. `agent_helper_target_map` above is derived
+    # from `claude_klabauter_root_resolved`, which on a published-engine install run is
+    # the MIRROR -- and the mirror's `coordinator/bin/` is a strict SUBSET of
+    # the live source tree's. Publisher-only CLIs (`_resolve_claude_klabauter ::
+    # PUBLISHER_ONLY_TARGETS` -- percolate-push/round/gate, publish,
+    # coordinator-publish, ...) and other deliberately-unpublished names have
+    # no target there by design. Their installed forwarders are NOT orphans:
+    # `_resolve_claude_klabauter` resolves each against the live working tree at call
+    # time, which is the whole point of the publisher-only rung. But they are
+    # absent from THIS run's write set, so condition 2 hands them straight to
+    # the sweep -- and on 2026-08-30 a published-engine install run deleted 16
+    # of them the first hour the marker branch could identify them at all
+    # (`_AGENT_FORWARDER_MARKER_RE`, added the same day: before it, the
+    # exact-substring marker check was ACCIDENTALLY the thing keeping this
+    # class alive, since a mirror-built image looked for a resolver basename
+    # no installed forwarder carried).
+    #
+    # So the sweep's write set must be every name EITHER tree can serve, not
+    # just the tree this run happens to be executing from. `engine_source_root()`
+    # returns None on an ordinary consumer install -- one tree, so the subset
+    # cannot differ and there is nothing to add.
+    live_source_root = engine_source_root()
+    live_tree_protected: "frozenset[str]" = frozenset()
+    if live_source_root and Path(live_source_root) != claude_klabauter_root_resolved:
+        live_bin = Path(live_source_root) / "coordinator" / "bin"
+        if live_bin.is_dir():
+            live_map = _derive_agent_helper_target_map(live_bin)
+            live_tree_protected = frozenset(
+                set(live_map) | set(_resolve_agent_cmd_dest_collisions(live_map).values())
+            )
+
     _sweep_orphaned_agent_helpers(
         bin_dst, agent_helper_target_map, agent_cmd_dest_map, check_only,
         extra_protected_names=frozenset(
             door_install.named_forwarder_path(bin_dst, name).name for name in door_eligible_names
-        ),
+        ) | live_tree_protected,
     )
 
     # --- Step 3c: platform-localize hook ---

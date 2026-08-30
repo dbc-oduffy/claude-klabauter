@@ -108,13 +108,18 @@ from coordinator_core.hooks.auto_push import branch_gate, classify_error, resolv
 #: "gh-transient"}`), because that retry is a bare re-send with backoff,
 #: never a rebase. Only "non-fast-forward" is REBASE-recoverable: it means a
 #: concurrent commit already landed upstream, and rebasing this session's
-#: own commit range onto the fetched ref is the correct fix. "ref-lock" is a
-#: LOCAL lock contention on the push-ref -- resolves in milliseconds on its
-#: own; a fetch+rebase cycle does nothing for it and only adds a rebase this
-#: pipeline would then have to run for no reason. "gh-transient" is a
-#: server-side 5xx/disconnect -- also not a divergence, so rebasing is not
-#: the fix (a bare retry with backoff would be, which this pipeline does not
-#: implement here; see module docstring's push-with-retry scope). Every
+#: own commit range onto the fetched ref is the correct fix. "ref-lock" is
+#: REMOTE ref contention on a shared branch, observed at 45-70s on
+#: 2026-08-30, not a local lock resolving in milliseconds -- a fetch+rebase
+#: cycle does nothing for it and only adds a rebase this pipeline would then
+#: have to run for no reason; `push_with_retry` now classifies it as a
+#: cadence deferral instead (`push:ref-contended`), so it never enters this
+#: retry set. "gh-transient" is a server-side 5xx/disconnect -- also not a
+#: divergence, so rebasing is not the fix (a bare retry with backoff would
+#: be, which this pipeline does not implement here -- the PM ruled for
+#: deferral over retry on 2026-08-30; see
+#: `dlv-ref-lock-s-backoff-meets-the-shared-bran-9254ac`'s plan for the
+#: burst measurements behind that ruling). Every
 #: other classification (gh-push-protection, gh-size-limit, gh-lfs-quota,
 #: auth, gh-server-reject, network, spawn-error, unknown, empty-stderr) names a failure
 #: no rebase addresses, so none of them belong in THIS set -- which is a
@@ -545,10 +550,12 @@ def derive_push_status(push_outcome: Optional[PushOutcome]) -> str:
     with no name.
 
     Rule: `push:branch-policy` or `push:branch-unresolvable` in `skipped` ->
-    `declined`; `push:no-remote` in `skipped` -> `no-remote`; `acted ==
-    ["push"]` -> `pushed`; non-empty `unconfirmed` -> `unconfirmed` (checked
-    BEFORE `failed` -- see below); non-empty `failed` -> `push-failed`; push
-    never reached (outcome is `None`) -> `not-attempted`.
+    `declined`; `push:no-remote` in `skipped` -> `no-remote`; `push:ref-
+    contended` in `skipped` -> `cadence-pending` (a ref-lock rejection is a
+    deferral, not a failure -- see `push_with_retry`'s own ref-lock arm);
+    `acted == ["push"]` -> `pushed`; non-empty `unconfirmed` -> `unconfirmed`
+    (checked BEFORE `failed` -- see below); non-empty `failed` -> `push-
+    failed`; push never reached (outcome is `None`) -> `not-attempted`.
 
     `unconfirmed` is checked before `failed` on purpose, though
     `PushOutcome`'s own docstring documents the two fields as mutually
@@ -566,6 +573,8 @@ def derive_push_status(push_outcome: Optional[PushOutcome]) -> str:
         return PUSH_STATUS_DECLINED
     if "push:no-remote" in push_outcome.skipped:
         return PUSH_STATUS_NO_REMOTE
+    if "push:ref-contended" in push_outcome.skipped:
+        return PUSH_STATUS_CADENCE_PENDING
     if push_outcome.unconfirmed:
         return PUSH_STATUS_UNCONFIRMED
     if push_outcome.failed:
@@ -1403,6 +1412,16 @@ def push_with_retry(
         # breaks immediately below -- the flag never survives into the
         # fetch/rebase branches.
         last_indeterminate = _is_indeterminate_push_result(push_result)
+
+        if classify_error(reason) == "ref-lock":
+            # `exit_code=0` is load-bearing, not an oversight: `PushOutcome`'s
+            # own docstring already documents `exit_code == 0` as covering
+            # "did not push, on purpose" for the policy-decline case -- a
+            # ref-lock deferral is the same category, a deliberate non-push
+            # rather than an observed failure. `failed` and `unconfirmed`
+            # both stay empty here, so their documented mutual exclusivity
+            # (`PushOutcome`'s own docstring) is untouched by this outcome.
+            return PushOutcome(exit_code=0, skipped=["push:ref-contended"])
 
         # C2 (docs/plans/2026-08-27-the-merge-gate-gets-a-remote-authority-
         # layer.md § C2): a rule-violation (GH013) refusal is NOT rebase-

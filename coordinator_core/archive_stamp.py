@@ -1345,108 +1345,46 @@ _SWEEP_CAP = 150
 
 
 def _call_handoff_archive_transition(handoff_path: str, params: dict) -> dict:
-    """Composes the archive-transition compute for one named handoff — the
-    targeted, zero-corpus-read path for the three modes
-    `coordinator_core.ops.handoff_stamp_targeted` implements (`stamp_only`,
-    `chain`, `supersede`), falling back to the sweep-coupled
-    `housekeeping.cycle` door ONLY for `stamp_shipped`, the one mode that
-    module does not implement (plan C1/C2: C2 implements ship/stamp_only
-    only; C3 implements chain/supersede; `stamp_shipped` — `cs_ship_handoff
-    (archive=True)` — was never in either chunk's scope).
+    """Composes the archive-transition compute for one named handoff — a
+    direct, zero-corpus-read library call into
+    `handoff_archive_transition._handler` for ALL FOUR modes (`stamp_only`,
+    `chain`, `supersede`, `stamp_shipped`). NO mode routes through
+    `housekeeping.cycle`'s sweep any more.
 
     Repointed 2026-08-30 per
-    `docs/plans/2026-08-30-the-stamp-stops-paying-for-a-sweep-that.md` chunk
-    C4. Was, until this change, routed THROUGH `housekeeping.cycle` (itself a
-    2026-08-30 repoint of the dead `handoff.housekeeping` op key — kill means
-    kill forever, PM 2026-08-23) for every mode, paying that cycle's
-    corpus-wide `read_live_corpus`/`open_index`/`compute_terminal_set` scan
-    on every single-record call — see the governing plan's Problem section
-    for the measured cost (373ms p50) and why the fused sweep could not even
-    archive anything on this path once `ed95dd5f80`'s worktree-dirty rail
-    landed (0 of 400 terminal targets moved across 70 calls).
+    `docs/plans/2026-08-30-the-stamp-stops-paying-for-a-sweep-that.md`. The
+    transition module itself (`handoff_archive_transition.py`) is already a
+    per-record path with ZERO references to `read_live_corpus`/`open_index`/
+    `compute_terminal_set` — the corpus-wide scan cost this repoint exists to
+    kill was never in the transition body, it was in this function calling
+    the WHOLE housekeeping cycle (itself calling the same `_handler` one line
+    above its own `run(...)` sweep) just to reach that one library call. That
+    made the interposed `coordinator_core.ops.handoff_stamp_targeted` module
+    — a hand-transcription of the transition module's per-mode rules, which
+    had already drifted from it — pure duplication: calling
+    `handoff_archive_transition._handler` directly is both smaller and
+    correct-by-construction (one source of truth for the mutation rules,
+    not two). `handoff_stamp_targeted` and its test are deleted as part of
+    this same pass.
 
     THE RETURN SHAPE IS UNCHANGED, and that is load-bearing rather than
     incidental. Every caller here — `cs_ship_handoff`, `cs_chain_archive_handoff`,
     `cs_supersede_archive_handoff`, and DoE's `archive-stamp-cli` behind them —
     keys on the transition op's own `exit_code`/`retained`/`moved`/`message`/
-    `retain_reason`/`warnings`. `handoff_stamp_targeted`'s three functions
-    reproduce `handoff_archive_transition._handler`'s own envelope
-    byte-for-byte per mode (see that module's own docstrings), so not one of
-    those predicates moves. `coordinator_core.tests.
-    test_stamp_verbs_stay_off_the_sweep` is this repoint's own contract test,
-    diffing the returned envelope against the pre-change (`housekeeping.cycle`)
-    path for the same inputs.
-
-    WHAT DOES NOT CHANGE for `stamp_only`/`chain`/`supersede`: the archival
-    sweep no longer runs on these calls at all (it never usefully could — see
-    above) — `stamp_only` already left the file in `state/handoffs/` for the
-    cadence step (`handoff-housekeeping`, per the 2026-08-27 PM ruling,
-    already runs at `workday_complete`/`workweek_complete`); `chain`/
-    `supersede` still move the file themselves, via `handoff_stamp_targeted`'s
-    own `archive_and_commit` call, never via the cycle's sweep.
-
-    A `stamp_shipped` call takes the unchanged fallback path: a housekeeping
-    refusal that happens BEFORE the transition is composed (an unresolvable
-    worktree, a bad cap) comes back with `transition: None`, relayed as
-    housekeeping's own error dict rather than an empty one, because every
-    caller prints `result["error"]` and a bare `{}` would have them report
-    "unknown error" for a cause this function was told.
+    `retain_reason`/`warnings`, which is exactly the dict `_handler` itself
+    returns (the same dict `housekeeping.cycle` used to relay verbatim under
+    its own `transition` key — see that module's `_handler`, which performs
+    this identical `asyncio.run(_transition_handler(...))` call one line
+    above its sweep).
     """
     hpath = Path(handoff_path)
     worktree, repo_root = _resolve_repo_root_for(hpath)
     if worktree is None or repo_root is None:
         return {"exit_code": 1, "error": f"could not resolve git worktree for {handoff_path}"}
 
-    mode = params.get("mode")
+    from coordinator_core.ops.handoff_archive_transition import _handler as _transition_handler
 
-    if mode == "stamp_only":
-        from coordinator_core.ops.handoff_stamp_targeted import ship_stamp_only
-
-        return ship_stamp_only(
-            handoff_path,
-            repo_root,
-            sha=params.get("sha"),
-            kind=params.get("kind"),
-            force=bool(params.get("force", False)),
-        )
-
-    if mode == "chain":
-        from coordinator_core.ops.handoff_stamp_targeted import chain_archive_handoff
-
-        return asyncio.run(chain_archive_handoff(handoff_path, repo_root))
-
-    if mode == "supersede":
-        from coordinator_core.ops.handoff_stamp_targeted import supersede_archive_handoff
-
-        return asyncio.run(
-            supersede_archive_handoff(
-                handoff_path,
-                repo_root,
-                continued_into=params.get("continued_into", ""),
-                sha=params.get("sha"),
-                kind=params.get("kind"),
-                force=bool(params.get("force", False)),
-            )
-        )
-
-    # stamp_shipped — not in C2/C3's scope; unchanged sweep-coupled fallback.
-    from coordinator_core.housekeeping.cycle import _handler as _housekeeping_handler
-
-    housekeeping = _housekeeping_handler(
-        {
-            "close": False,
-            "cap": _SWEEP_CAP,
-            "transition": {"handoff_path": handoff_path, **params},
-        },
-        repo_root=repo_root,
-    )
-    transition = housekeeping.get("transition")
-    if transition is None:
-        return {
-            "exit_code": housekeeping.get("exit_code", 1),
-            "error": housekeeping.get("error", "handoff.housekeeping returned no transition"),
-        }
-    return transition
+    return asyncio.run(_transition_handler({"handoff_path": handoff_path, **params}, repo_root))
 
 
 def cs_ship_handoff(
@@ -1836,6 +1774,82 @@ def _record_human_claimant_best_effort(target_path: str, worktree: Path) -> None
         )
 
 
+def _record_claimant_identity_best_effort(target_path: str, worktree: Path, anchor_field: str) -> None:
+    """Claim-time stamp of the claiming SESSION's harness identity — `claimed_by_name`
+    (the peer label) and `claimed_by_address` (its `SendMessage` socket) — beside the
+    `claimed_by`/`picked_up_by` UUID, which stays the durable identity and is unchanged.
+
+    PM ruling, 2026-08-30. Closes a real gap the UUID alone cannot: while the claimant
+    is LIVE, `session.resolve_address` already answers "who holds this baton" and no
+    stamp is needed; once it EXITS its registry record is gone and the UUID resolves to
+    `not_reachable/no-live-record`, leaving a claimed, in-flight baton whose owner
+    cannot even be named. Observed on
+    `state/handoffs/2026-08-30-ceremony-driven-git-maintenance.md`.
+
+    `claimed_by_address` IS NOT A SEND TARGET, and narrows rather than reverses
+    `session.work_state._resolve_send_message_addresses`' negative-spec ("must never be
+    persisted and reused past the instant it was computed... a dead socket can be reused
+    by an unrelated LATER session"). That hazard is real and unmitigated by the stamp
+    alone, so the field is written for FORENSICS and STALENESS DETECTION only. A caller
+    that wants to message the claimant MUST re-resolve `claimed_by` through
+    `reachability.resolve_address` and send to THAT; a stamped address matching the
+    re-resolved one means the original claimant is still live, and a mismatch (or a
+    `not_reachable`) means the stamp is stale and the socket may now belong to an
+    unrelated session. Comparing the two is the only sanctioned read.
+
+    Resolution is `harness_registry.self_record()` — the O(1) leg, one registry-record
+    `read_text`, no `snapshot()` scan and no spawn, so this adds nothing measurable to
+    the claim path.
+
+    Best-effort and non-fatal, mirroring `_record_human_claimant_best_effort`'s contract:
+    an unresolvable record, a record carrying neither field (the harness omits
+    `messagingSocketPath` whenever its cross-session-inbox gate is off), or any write
+    failure leaves the fields unset rather than aborting the caller's claim. Each field
+    is inserted ONLY when absent and only when its value is non-empty — an idempotent
+    re-claim by the same session never re-stamps or overwrites.
+    """
+    try:
+        from coordinator_core.session import harness_registry
+
+        parsed = harness_registry.self_record()
+    except Exception:  # noqa: BLE001 — best-effort; a registry read failure is not a claim failure
+        return
+    if parsed is None:
+        return
+    _sid, record = parsed
+    fields = [
+        ("claimed_by_name", record.name),
+        ("claimed_by_address", record.messaging_socket_path),
+    ]
+    if not any(value for _key, value in fields):
+        return
+    try:
+        repo_root = _git_common_dir(worktree)
+        if repo_root is None:
+            return
+
+        def _mutate(old_text: str) -> str:
+            split = split_frontmatter(old_text)
+            if split is None:
+                raise MutateAbort(f"no parseable YAML frontmatter in {target_path}")
+            fm_text = split.fm_text
+            for key, value in fields:
+                if not value:
+                    continue
+                if read_fm_field(fm_text, key) is not None:
+                    continue
+                fm_text = insert_fm_field(fm_text, key, value, anchor_field, numeric_quoting=True)
+            return rebuild(split, fm_text)
+
+        locked_rmw(Path(target_path), _mutate, repo_root=repo_root)
+    except Exception as exc:  # noqa: BLE001 — best-effort, must never abort the caller
+        print(
+            f"_record_claimant_identity_best_effort: WARNING — claimant identity not "
+            f"recorded for {target_path} ({exc}); non-fatal",
+            file=sys.stderr,
+        )
+
+
 def _record_pickup_best_effort(handoff_path: str, worktree: Path, sid: str) -> None:
     """C2 write-moment: best-effort, non-fatal session.record_pickup — mirrors the
     oracle's foreign-repo-bleed fix (repo-relative handoff path, never absolute)."""
@@ -2001,6 +2015,7 @@ def cs_claim_handoff(handoff_path: str, *, return_result: bool = False) -> "int 
     _record_pickup_best_effort(handoff_path, worktree, sid)
     _record_session_goal_best_effort(handoff_path, worktree, sid)
     _record_human_claimant_best_effort(handoff_path, worktree)
+    _record_claimant_identity_best_effort(handoff_path, worktree, "claimed_by")
     return result if return_result else 0
 
 
@@ -2049,6 +2064,7 @@ def cs_claim_memo_stamp(memo_path: str, *, return_result: bool = False) -> "int 
         print(f"cs_claim_memo_stamp: {result.get('error', 'unknown error')}", file=sys.stderr)
     elif worktree is not None:
         _record_human_claimant_best_effort(memo_path, worktree)
+        _record_claimant_identity_best_effort(memo_path, worktree, "picked_up_by")
     return result if return_result else rc
 
 

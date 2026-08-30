@@ -2317,6 +2317,7 @@ class TestChainArchiveHandoff:
         branch is deliberately non-fatal), making a genuinely failed move
         indistinguishable from success at this wrapper's own rc."""
         import coordinator_core.ops.fleet._common as fleet_common
+        import coordinator_core.ops.handoff_archive_transition as archive_transition
 
         repo = tmp_path / "repo"
         _init_repo(repo)
@@ -2331,14 +2332,14 @@ class TestChainArchiveHandoff:
                 [{"candidate_id": moves[0].candidate_id, "reason": "simulated ref-lock contention"}],
             )
 
-        # Patched on `ops.fleet._common`, the definition site, rather than on
-        # `handoff_archive_transition`'s module-level re-binding: chain now
-        # resolves `archive_and_commit` through a function-local import in
-        # `ops/handoff_stamp_targeted.py`, which a patch on the old module's
-        # attribute never intercepts. Patching the definition site covers both
-        # routes; patching the re-binding silently no-ops on this one, and the
-        # test then asserts against a move that really succeeded.
+        # `archive_stamp._call_handoff_archive_transition` now calls
+        # `handoff_archive_transition._handler` directly, which resolves
+        # `archive_and_commit` via a module-level `from ... import` re-binding
+        # (that module's own top of file) — patch that re-binding, the live
+        # call site, not just `ops.fleet._common`'s definition site (also
+        # patched, for any caller that still resolves the name fresh).
         monkeypatch.setattr(fleet_common, "archive_and_commit", _boom_archive_and_commit)
+        monkeypatch.setattr(archive_transition, "archive_and_commit", _boom_archive_and_commit)
 
         import io
         import contextlib

@@ -98,3 +98,23 @@ def test_sweep_leaves_a_lookalike_import_of_another_symbol_alone(sweepable):
     _sweep_orphaned_agent_helpers(sweepable, {}, {}, False)
 
     assert decoy.exists()
+
+
+def test_publisher_only_forwarder_survives_a_mirror_derived_write_set(sweepable):
+    """The regression the resolver-agnostic marker exposed: a published-engine
+    install run derives its write set from the MIRROR's `coordinator/bin/`,
+    which lacks every publisher-only and otherwise-unpublished CLI. Those
+    forwarders resolve against the live working tree at call time and are not
+    orphans -- passing the live tree's names through `extra_protected_names`
+    is what keeps condition 2 from handing them to the sweep."""
+    name = "percolate-push"
+    kept = sweepable / name
+    kept.write_text(_forwarder_body(name, "_resolve_claude_klabauter"), encoding="utf-8")
+
+    _sweep_orphaned_agent_helpers(
+        sweepable, {}, {}, False, extra_protected_names=frozenset({name})
+    )
+
+    assert kept.exists(), (
+        "a name the live source tree can serve must survive a mirror-derived write set"
+    )
