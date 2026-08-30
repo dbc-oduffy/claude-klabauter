@@ -36,6 +36,7 @@ import yaml
 
 import coordinator_core.dag as dag_mod
 import coordinator_core.ops.deliverable_cascade as cascade_mod
+import coordinator_core.ops.handoff_children as hc_mod
 from coordinator_core.frontmatter.primitives import (
     read_fm_field,
     read_fm_field_unquoted,
@@ -139,6 +140,52 @@ def _pad_corpus(repo: Path, n: int, *, prefix: str = "pad") -> None:
         )
 
 
+def _pad_archived_corpus(repo: Path, n: int, *, prefix: str = "pad-archived") -> None:
+    """Seed `n` additional, unrelated ARCHIVE-RESIDENT handoffs, mirroring
+    `_pad_corpus` for `archive/handoffs/`. None of them name any
+    deliverable_id under test or reference any live candidate as a
+    predecessor, so they contribute pure archive-scan read-count/read-time
+    cost without affecting outcomes.
+
+    <!-- Review: coordinator:code-reviewer (EM finding, post-hoc) — a
+    corpus fixture that only pads state/handoffs/ hides the archive-resident
+    read cost the deliverable exists to correct (real tree: 1810/2404
+    baseline reads are archive-resident). -->
+    """
+    for i in range(n):
+        _seed_archived_successor_handoff(
+            repo,
+            f"20260101-{prefix}-{i:04d}.md",
+            predecessor_path="none",
+            deliverable_id=f"dlv-pad-{prefix}-{i:04d}",
+        )
+
+
+def _seed_advanceable_handoff(repo: Path, name: str, did: str) -> Path:
+    """The frontmatter shape shared by every advanceable-candidate fixture in
+    this file: a single live handoff, no predecessor, scoped to
+    `feature.txt`.
+
+    <!-- Review: coordinator:code-reviewer (Finding 3) — hoisted from three
+    independent inline copies of this same frontmatter shape. -->
+    """
+    path = repo / "state" / "handoffs" / name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fm = (
+        f'title: "Test Handoff {name}"\n'
+        "created: 2026-01-01\n"
+        "branch: work/test/2026-01-01\n"
+        "status: open\n"
+        'predecessor: "none"\n'
+        "deployment_state: ready_to_fire\n"
+        f"deliverable_id: {did}\n"
+        "scope:\n"
+        "  - feature.txt\n"
+    )
+    path.write_text(f"---\n{fm}---\n\n# Handoff\n\nBody.\n", encoding="utf-8")
+    return path
+
+
 # ---------------------------------------------------------------------------
 # 1. PARITY — fanout 1 and 2, plus at least one refusal case per leg
 # ---------------------------------------------------------------------------
@@ -157,20 +204,7 @@ def test_parity_fanout1_advances_identically_baseline_vs_collapsed(tmp_path, mon
     def _build_repo(repo: Path, did: str, handoff_name: str) -> tuple[Path, str]:
         _init_repo(repo)
         feature_sha = _make_scoped_commit(repo, session_id)
-        handoff = repo / "state" / "handoffs" / handoff_name
-        handoff.parent.mkdir(parents=True, exist_ok=True)
-        fm = (
-            f'title: "Test Handoff {handoff_name}"\n'
-            "created: 2026-01-01\n"
-            "branch: work/test/2026-01-01\n"
-            "status: open\n"
-            'predecessor: "none"\n'
-            "deployment_state: ready_to_fire\n"
-            f"deliverable_id: {did}\n"
-            "scope:\n"
-            "  - feature.txt\n"
-        )
-        handoff.write_text(f"---\n{fm}---\n\n# Handoff\n\nBody.\n", encoding="utf-8")
+        handoff = _seed_advanceable_handoff(repo, handoff_name, did)
         _git(repo, "add", str(handoff.relative_to(repo)))
         _git(repo, "commit", "-m", "add handoff")
         return handoff, feature_sha
@@ -239,20 +273,7 @@ def test_parity_fanout2_advances_identically_baseline_vs_collapsed(tmp_path, mon
     handoffs = []
     for i in range(2):
         name = f"20260101-h{i}.md"
-        handoff = repo / "state" / "handoffs" / name
-        handoff.parent.mkdir(parents=True, exist_ok=True)
-        fm = (
-            f'title: "Test Handoff {name}"\n'
-            "created: 2026-01-01\n"
-            "branch: work/test/2026-01-01\n"
-            "status: open\n"
-            'predecessor: "none"\n'
-            "deployment_state: ready_to_fire\n"
-            f"deliverable_id: {did}\n"
-            "scope:\n"
-            "  - feature.txt\n"
-        )
-        handoff.write_text(f"---\n{fm}---\n\n# Handoff\n\nBody.\n", encoding="utf-8")
+        handoff = _seed_advanceable_handoff(repo, name, did)
         _git(repo, "add", str(handoff.relative_to(repo)))
         handoffs.append(handoff)
     _git(repo, "commit", "-m", "add both handoffs")
@@ -339,20 +360,7 @@ def test_read_count_is_flat_from_fanout_1_to_2(tmp_path, monkeypatch):
         _make_scoped_commit(repo, session_id)
         for i in range(n_candidates):
             name = f"20260101-c{i}.md"
-            handoff = repo / "state" / "handoffs" / name
-            handoff.parent.mkdir(parents=True, exist_ok=True)
-            fm = (
-                f'title: "Candidate {name}"\n'
-                "created: 2026-01-01\n"
-                "branch: work/test/2026-01-01\n"
-                "status: open\n"
-                'predecessor: "none"\n'
-                "deployment_state: ready_to_fire\n"
-                f"deliverable_id: {did}\n"
-                "scope:\n"
-                "  - feature.txt\n"
-            )
-            handoff.write_text(f"---\n{fm}---\n\n# Handoff\n\nBody.\n", encoding="utf-8")
+            handoff = _seed_advanceable_handoff(repo, name, did)
             _git(repo, "add", str(handoff.relative_to(repo)))
         _pad_corpus(repo, pad, prefix=f"flat-{n_candidates}")
         _git(repo, "add", "-A")
@@ -526,8 +534,6 @@ def test_fail_closed_empty_live_set_through_metas_path(tmp_path):
     """An empty live set (no state/handoffs at all) must fail closed
     (exit_code 2) through `has_live_children_from_metas`, exactly as through
     `_handoff_has_live_children`."""
-    import coordinator_core.ops.handoff_children as hc_mod
-
     repo = tmp_path / "repo"
     _init_repo(repo)
     # No state/handoffs directory at all -- _collect_handoff_paths returns
@@ -547,8 +553,6 @@ def test_fail_closed_empty_live_set_through_metas_path(tmp_path):
 def test_fail_closed_candidate_escapes_allowed_roots_through_metas_path(tmp_path):
     """A candidate path outside state/handoffs or archive/handoffs escapes
     containment and must fail closed (exit_code 2) through the metas path."""
-    import coordinator_core.ops.handoff_children as hc_mod
-
     repo = tmp_path / "repo"
     _init_repo(repo)
     (repo / "state" / "handoffs").mkdir(parents=True, exist_ok=True)
@@ -583,29 +587,24 @@ def test_process_time_under_200ms_at_one_advanced_candidate(tmp_path, monkeypatc
     _init_repo(repo)
     _make_scoped_commit(repo, session_id)
 
-    handoff = repo / "state" / "handoffs" / "20260101-perf-candidate.md"
-    handoff.parent.mkdir(parents=True, exist_ok=True)
-    fm = (
-        'title: "Perf Candidate"\n'
-        "created: 2026-01-01\n"
-        "branch: work/test/2026-01-01\n"
-        "status: open\n"
-        'predecessor: "none"\n'
-        "deployment_state: ready_to_fire\n"
-        "deliverable_id: dlv-perf-0\n"
-        "scope:\n"
-        "  - feature.txt\n"
-    )
-    handoff.write_text(f"---\n{fm}---\n\n# Handoff\n\nBody.\n", encoding="utf-8")
+    handoff = _seed_advanceable_handoff(repo, "20260101-perf-candidate.md", "dlv-perf-0")
     _git(repo, "add", str(handoff.relative_to(repo)))
 
-    # >= 275-file corpus, per the plan's own reference measurement scale.
+    # >= 275-file LIVE corpus, per the plan's own reference measurement scale,
+    # PLUS an archive-resident corpus at roughly the real tree's ~1:3
+    # live:archive ratio (real baseline: 301 live, 901 archived) -- an
+    # archive-empty fixture hides the dominant read cost this deliverable
+    # exists to correct.
+    # <!-- Review: coordinator:code-reviewer (EM finding, post-hoc) -->
     _pad_corpus(repo, 280, prefix="perf")
+    _pad_archived_corpus(repo, 840, prefix="perf-archived")
     _git(repo, "add", "-A")
     _git(repo, "commit", "-m", "seed perf corpus")
 
     corpus_size = len(list((repo / "state" / "handoffs").glob("*.md")))
+    archive_size = len(list((repo / "archive" / "handoffs").glob("*.md")))
     assert corpus_size >= 275
+    assert archive_size >= 275 * 3
 
     pt_before = time.process_time()
     result = _run(

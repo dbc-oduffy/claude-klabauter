@@ -6003,10 +6003,35 @@ def _measure_static_spawn_counts(op_names, entrypoints) -> dict[str, int]:
 #: transcribed here without this file's own re-derivation, which is what these two entries are.
 #: Both pinned at their freshly measured 1.
 _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
+    # --- Raised 2026-08-30, cause identified before the raise (this dict's own
+    # rule: a raised pin is a budget increase and needs the same evidence any
+    # other one does). Two peer changes, not five independent regressions:
+    #   be2562f692 gave hooks/auto_push.py a `from coordinator_core.warm import
+    #   skew` import, which puts warm/skew.py::publish_lag's TWO git sites on
+    #   the reachable path of every op that reaches auto_push -- hence the
+    #   identical +2 on fleet.migrate_handoff_vocabulary, handoff.transition,
+    #   memo.transition and workday.drain_pending_push.
+    #   35d8884230 routed the push subsystem through ops/post_coverage_status.py,
+    #   adding _changed_files_or_git_failure to push.outstanding (+1).
+    # This is a reachability count, not execution evidence (see the ceiling
+    # test's own docstring), so these raises record that the ops CAN reach more
+    # sites -- not that they spend more processes per call.
+    #
+    # --- Enrolled 2026-08-30: five ops that reached spawn sites nobody had ever
+    # pinned, so they escaped op-keyed coverage entirely. Each is pinned at its
+    # measured live count, which RECORDS today's reach as the ceiling rather
+    # than endorsing it -- housekeeping.cycle at 13 is the largest unpinned
+    # surface in the tree and reaches push_once, publish_lag x2, _detach_and_run
+    # and _invoke_cockpit_publish; it deserves its own read on cost, which this
+    # pin does not substitute for. It does stop any of them growing silently.
+    "ceremony.commit_v2": 1,
+    "fleet.archive_actioned_memos": 4,
+    "git.maintenance": 1,
+    "housekeeping.cycle": 13,
+    "session.safe_commit_offer": 1,
     "plugin_health.sentinel": 26,
-    "handoff.archive_transition": 12,
-    "fleet.migrate_handoff_vocabulary": 11,
-    "handoff.transition": 11,
+    "fleet.migrate_handoff_vocabulary": 13,
+    "handoff.transition": 13,
     "fleet.reap_integrated_findings": 9,
     "fleet.reap_unintegrated_findings": 9,
     # 4 -> 5, 2026-08-27: the value arrived via a concurrent peer commit (76c5cf07b,
@@ -6018,40 +6043,34 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     # (`coordinator_core/git/run.py::run_git`). Peer drift on this op is well-attested --
     # 10 -> 4 before this plan's handoff, 4 -> 5 during its verification run.
     "fleet.archive_completed_handoffs": 4,
-    "ceremony.commit": 10,
     "fleet.archive_paper_trail": 3,
     "fleet.archive_queue_entry": 3,
     "fleet.archive_release_accumulator": 3,
     "fleet.archive_terminal_sizings": 3,
-    "fleet.prune_closed_bugs": 3,
-    "deliverable.cascade_terminal": 10,
     "warm_guard.evaluate": 10,
     "distill.apply_disposal": 9,
-    "memo.transition": 9,
+    "memo.transition": 11,
     "merge_assemble.apply": 1,
-    "merge_assemble.brief": 1,
     "cruft_sweep.run": 8,
     "memo.send": 2,
     "workflow.fire": 6,
     "machine.hibernate": 4,
     "orientation.regenerate_cache": 4,
-    "workday.drain_pending_push": 4,
+    "workday.drain_pending_push": 6,
     "branch.merge_into_workstream": 3,
     "distill.assemble_disposal_manifest": 3,
-    "push.outstanding": 3,
+    "push.outstanding": 4,
     "plan.suggest_completion_steps": 3,
     "release.cut_tag_and_publish": 3,
     "repo.clone_and_register": 3,
     "repo.create_and_push_remote": 3,
     "tracker.push_suggestion": 3,
     "backlog.record": 2,
-    "cartography.churn": 2,
     "cartography.file_index": 2,
     "ceremony.update_docs_scan": 2,
     "changelog.backfill_gaps": 2,
     "hooks.cater_subagent_start": 2,
     "priority.drain": 2,
-    "session.boot_sweep": 2,
     "changelog.inject_anchor": 2,
     "ci.run_semgrep_scan": 2,
     "ci.run_shellcheck_sweep": 2,
@@ -6102,7 +6121,6 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     "handoff.author_fork": 1,
     "handoff.backfill_claim_stamp": 1,
     "handoff.columns": 1,
-    "handoff.has_live_children": 1,
     "handoff.lineage_ancestry": 1,
     "handoff.repoint_origin": 1,
     # ADDED 2026-08-26 (C14, pln-reconcile-open-comes-back-under-the-bar): the C4 measurement
@@ -6121,7 +6139,6 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     # state/bug-backlog/2026-08-26-ops-with-spawn-evidence-cannot-see-a-spa-0f0dad490422.yaml
     # (a different blind spot -- a by-reference dispatch dict, not present on this op's path --
     # but the same principle: an empty reading must never stand in for "genuinely spawn-free").
-    "handoff.reconcile_open": 1,
     "handoff.scaffold_from_queue": 1,
     "hooks.context_pressure_precompact": 1,
     "hooks.subagent_fabrication_check": 1,
@@ -6178,18 +6195,22 @@ _STATIC_SPAWN_COUNT_OVER_BUDGET_THRESHOLD = 8
 #: family and fleet.prune_closed_bugs dropped below the threshold (fleet.archive_completed_handoffs
 #: 10->4; the remaining fleet.archive_* + prune_closed_bugs 9->3) and fall OUT of this list, while
 #: every op still above `_STATIC_SPAWN_COUNT_OVER_BUDGET_THRESHOLD` keeps its D10-measured number.
+#: Re-emitted 2026-08-30 after the rot sweep: nine pins left the table entirely because their ops
+#: are now enrolled or fully legitimized and a pin beside either is dead weight (AC20c), which
+#: also drops ceremony.commit, deliverable.cascade_terminal and handoff.archive_transition out of
+#: this list. fleet.migrate_handoff_vocabulary and handoff.transition move 11->13 and
+#: memo.transition 9->11 on be2562f692's warm.skew import, and housekeeping.cycle enters at 13 --
+#: the largest single composition cost now named here.
 _STATIC_SPAWN_COUNT_OVER_BUDGET: dict[str, int] = {
     "plugin_health.sentinel": 26,
-    "handoff.archive_transition": 12,
-    "fleet.migrate_handoff_vocabulary": 11,
-    "handoff.transition": 11,
-    "fleet.reap_integrated_findings": 9,
-    "fleet.reap_unintegrated_findings": 9,
-    "ceremony.commit": 10,
-    "deliverable.cascade_terminal": 10,
+    "fleet.migrate_handoff_vocabulary": 13,
+    "handoff.transition": 13,
+    "housekeeping.cycle": 13,
+    "memo.transition": 11,
     "warm_guard.evaluate": 10,
     "distill.apply_disposal": 9,
-    "memo.transition": 9,
+    "fleet.reap_integrated_findings": 9,
+    "fleet.reap_unintegrated_findings": 9,
 }
 
 

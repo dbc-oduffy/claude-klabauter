@@ -67,10 +67,6 @@ def test_daily_and_weekly_are_schedules():
     assert gm._TIER_ARGV["weekly"] == ("maintenance", "run", "--schedule=weekly")
 
 
-def test_every_tier_name_is_mapped():
-    assert set(gm.TIERS) == set(gm._TIER_ARGV)
-
-
 def test_unknown_tier_is_an_error_not_a_default(tmp_path):
     result = gm.run_tier(_init_repo(tmp_path), "monthly")
 

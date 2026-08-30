@@ -285,6 +285,52 @@ def test_write_agent_helper_forwarders_without_engine_root_is_unaffected(tmp_pat
         assert not native_dst.exists()
 
 
+def test_one_name_write_failure_is_fatal_and_named_in_the_summary(tmp_path, capsys, monkeypatch):
+    """Regression for state/bug-backlog/2026-08-30-install-substrate-exits-0-
+    after-failing-45f4d5390b68.yaml: a real install run whose door-image
+    write died with an uncaught `PermissionError` (WinError 32) printed the
+    traceback, wrote NO image, and still reported success (exit 0) -- twice.
+
+    Uses the doorless fallback path (unstamped `engine_root`, per
+    `test_doorless_root_falls_back_to_the_bare_python_forwarder_and_never_a_
+    cmd` above) so this pins the contract without depending on a committed
+    prebuilt door image being present in the checkout. One of two names'
+    write raises; the other name must still land (per-name tolerance is
+    legitimate), but the run as a whole must raise -- never exit clean while
+    a reported name was not actually written."""
+    engine_root = tmp_path / "engine"
+    engine_root.mkdir(parents=True, exist_ok=True)
+    bin_dst = tmp_path / "bin"
+    bin_dst.mkdir(parents=True, exist_ok=True)
+
+    real_writer = substrate._write_agent_forwarder
+
+    def _flaky_writer(name, py_dst, check_only, *, target):
+        if name == "cross-repo-memo":
+            raise PermissionError(13, "boom -- simulated WinError 32")
+        return real_writer(name, py_dst, check_only, target=target)
+
+    monkeypatch.setattr(substrate, "_write_agent_forwarder", _flaky_writer)
+    with pytest.raises(substrate.SubstrateFatalError) as excinfo:
+        substrate._write_agent_helper_forwarders(
+            {"cross-repo-memo": "cross-repo-memo", "coordinator-doc-new": "coordinator-doc-new"},
+            bin_dst, False,
+            engine_root=engine_root,
+        )
+
+    assert "cross-repo-memo" in str(excinfo.value)
+
+    # The name whose write raised never landed; the other name still did --
+    # per-name tolerance, but the run itself failed loud (SubstrateFatalError
+    # above), never a silent exit 0.
+    assert not (bin_dst / "cross-repo-memo").exists()
+    assert (bin_dst / "coordinator-doc-new").exists()
+
+    captured = capsys.readouterr()
+    assert "1 FAILED of 2" in captured.err
+    assert "cross-repo-memo" in captured.err
+
+
 # GRAVESTONE -- `test_emit_and_verify_ps1_forwarders_skips_excluded_names`
 # (deleted 2026-08-29, docs/plans/2026-08-26-every-forwarder-that-can-reach-
 # the-door-does.md C12). Covered `_emit_and_verify_ps1_forwarders`'s

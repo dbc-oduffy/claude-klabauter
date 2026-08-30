@@ -114,8 +114,6 @@ from coordinator_core.win_portability import no_console_creationflags
 
 _PREFIX = "git-maintenance"
 
-TIERS = ("hourly", "daily", "weekly")
-
 _PRUNE_EXPIRE = "2.weeks.ago"
 
 _ORPHAN_PACK_AGE_SEC = 600
@@ -131,6 +129,11 @@ _TIER_ARGV = {
     "weekly": ("maintenance", "run", "--schedule=weekly"),
 }
 
+# Review: overengineering-reviewer -- was a second literal declaration of
+# `_TIER_ARGV`'s key set, policed only by a sync test. `_TIER_ARGV` is the
+# actual source of truth; this is derived, not restated.
+TIERS = tuple(_TIER_ARGV)
+
 
 @dataclass
 class MaintenanceResult:
@@ -144,6 +147,7 @@ class MaintenanceResult:
     lock_held: bool = False
     pruned: bool = False
     orphan_packs_reaped: int = 0
+    orphan_packs_skipped: int = 0
     errors: List[str] = field(default_factory=list)
 
     @property
@@ -197,9 +201,6 @@ def _orphan_pack_candidates(pack_dir: Path) -> List[Path]:
 def sweep_orphan_packs(
     pack_dir: Path,
     *,
-    age_floor: Optional[int] = None,
-    stability_sec: Optional[float] = None,
-    no_sleep: bool = False,
     on_wait: Optional[Callable[[], None]] = None,
 ) -> OrphanPackSweep:
     """Reaper (a): orphan `.tmp-*-pack-*` bodies, paying ONE stability window.
@@ -253,12 +254,10 @@ def sweep_orphan_packs(
     `on_wait`, when given, replaces the real sleep entirely — the injectable
     re-sample seam, mirroring `stale_and_stable`'s own.
     """
-    if age_floor is None:
-        age_floor = _env_int("COORDINATOR_ORPHAN_PACK_REAP_AGE_SEC", _ORPHAN_PACK_AGE_SEC)
-    if stability_sec is None:
-        stability_sec = _env_float(
-            "COORDINATOR_ORPHAN_PACK_REAP_STABILITY_SEC", _ORPHAN_PACK_STABILITY_SEC
-        )
+    age_floor = _env_int("COORDINATOR_ORPHAN_PACK_REAP_AGE_SEC", _ORPHAN_PACK_AGE_SEC)
+    stability_sec = _env_float(
+        "COORDINATOR_ORPHAN_PACK_REAP_STABILITY_SEC", _ORPHAN_PACK_STABILITY_SEC
+    )
 
     candidates = _orphan_pack_candidates(pack_dir)
     if not candidates:
@@ -275,9 +274,12 @@ def sweep_orphan_packs(
 
     # THE ONE WINDOW. Not inside the loop below, and not inside a per-file
     # helper -- see this docstring.
+    # Review: overengineering-reviewer -- `no_sleep` had no caller and no env
+    # knob (unlike reap_stale_locks's sibling), so `elif not no_sleep` was a
+    # permanently-true guard; `on_wait` is the test seam every sweep test uses.
     if on_wait is not None:
         on_wait()
-    elif not no_sleep:
+    else:
         time.sleep(stability_sec)
 
     reaped: List[Path] = []
@@ -411,6 +413,7 @@ def run_tier(repo: Path, tier: str) -> MaintenanceResult:
     # arbitrate against our own repack.
     swept = sweep_orphan_packs(common / "objects" / "pack")
     result.orphan_packs_reaped = len(swept.reaped)
+    result.orphan_packs_skipped = swept.skipped
     for failed in swept.failed:
         result.errors.append(f"orphan pack not removed: {failed}")
 
@@ -455,7 +458,12 @@ def _report(result: MaintenanceResult) -> None:
         return
     line = f"{_PREFIX}: {result.tier} ran"
     if result.tier == "weekly":
-        line += f"; pruned={result.pruned}; orphan packs reaped={result.orphan_packs_reaped}"
+        # Review: overengineering-reviewer -- `skipped` was maintained at four
+        # bookkeeping sites and shown nowhere; this is its production reader.
+        line += (
+            f"; pruned={result.pruned}; orphan packs reaped={result.orphan_packs_reaped}"
+            f"; skipped={result.orphan_packs_skipped}"
+        )
     print(line, file=sys.stderr)
 
 
@@ -476,13 +484,13 @@ def main(argv: Sequence[str]) -> int:
 
 @register_op("git.maintenance")
 async def _git_maintenance(params: dict, repo_root: Optional[Path] = None) -> dict:
-    """JSON-RPC `git.maintenance` handler. `params["tier"]` is required."""
+    """JSON-RPC `git.maintenance` handler. `params["tier"]` is required.
+
+    Review: overengineering-reviewer -- tier validity was checked a third time
+    here; `run_tier` already rejects an unknown tier into `result.errors`,
+    which this handler already serialises, so the pre-check bought nothing.
+    """
     tier = params.get("tier")
-    if tier not in _TIER_ARGV:
-        return {
-            "ok": False,
-            "error": f"unknown tier {tier!r} -- expected one of {', '.join(TIERS)}",
-        }
     repo = Path(params.get("repo") or repo_root or Path.cwd())
     result = run_tier(repo, tier)
     return {

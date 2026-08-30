@@ -2862,33 +2862,27 @@ def _rm_flush_touch(paths: List[str], session_id: str, root: Optional[str]) -> N
     values (``session_id`` is this check's own parameter; ``root`` is
     ``cur_repo``, the one `rev-parse --show-toplevel` this function's
     caller already spawned for its own purposes), not re-derived here.
+
+    The append tail itself lives in ``session.touch_record.append_touch_
+    claims``, shared with ``bash_guards.write_claim_record.record_write_
+    claims`` (2026-08-30). What stays HERE is the half the two callers
+    legitimately differ on: this one is handed ABSOLUTE targets an `rm`
+    resolved and relpaths them; the write side receives them relative
+    already. That appender carries the same never-raise posture, so the
+    outer ``try`` is belt-and-braces for the import, not for the writes.
     """
     if not paths or not session_id or not root:
         return
     try:
-        from coordinator_core.session.touch_record import (
-            VERB_TOUCH,
-            append_event,
-            sink_path,
-        )
+        from coordinator_core.session.touch_record import append_touch_claims
 
-        sid_dir = os.path.join(root, ".git", "coordinator-sessions", session_id)
-        sink = sink_path(sid_dir)
+        rels = []
         for tgt_abs in paths:
             try:
-                rel = os.path.relpath(tgt_abs, root).replace(os.sep, "/")
+                rels.append(os.path.relpath(tgt_abs, root).replace(os.sep, "/"))
             except ValueError:
                 continue
-            try:
-                append_event(
-                    sink,
-                    session_id=session_id,
-                    agent_id=None,
-                    verb=VERB_TOUCH,
-                    path=rel,
-                )
-            except Exception:
-                continue
+        append_touch_claims(rels, session_id, root)
     except Exception:
         return
 
@@ -7947,15 +7941,23 @@ def check_heredoc_repo_write_advise(
     git_root: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
     """BX-16-family sibling of `check_cat_heredoc_write_advise`, for the
-    DIFFERENT hazard a scriptable-interpreter heredoc creates (`python3 -
-    <<'PY' ... PY`, a generator, a formatter): its write is invisible to
-    `coordinator_core/hooks/track_touched_files.py::_handler` (matcher is
+    write a scriptable-interpreter heredoc performs (`python3 - <<'PY' ...
+    PY`, a generator, a formatter). The PostToolUse touch-tracker
+    (`coordinator_core/hooks/track_touched_files.py::_handler`, matcher
     `Write|Edit|MultiEdit|NotebookEdit` ONLY -- a ratified permanent limit,
-    DR-258, NOT touched or widened by this guard), so `safe-commit-offer`
-    silently drops the file from the session's commit pathspec. Advisory
-    only, and silence-biased: this can only ever SUGGEST the Write tool, and
-    stays silent on anything it cannot resolve to a literal repo-relative
-    path rather than risk a false positive on every python heredoc.
+    DR-258, NOT touched or widened by this guard) still never sees that
+    write. What it no longer implies is a dropped file: since 2026-08-30
+    `bash_guards.write_claim_record.record_write_claims` appends a claim from
+    THIS SAME PreToolUse call for every path the command literally names, so
+    `safe-commit-offer` carries them (DR-258 section "Amendment 2026-08-30").
+    The residue this guard's message still names is the path a heredoc
+    COMPUTES at runtime and never spells out -- unclaimable by construction,
+    and deliberately so.
+
+    Advisory only, and silence-biased: it states what is and is not recorded
+    for the path it resolved, and stays silent on anything it cannot resolve
+    to a literal repo-relative path rather than risk a false positive on
+    every python heredoc.
 
     Detection is pure path arithmetic on `git_root` (handed in by the
     caller, never derived here) -- NO subprocess, NO `git status`/`git

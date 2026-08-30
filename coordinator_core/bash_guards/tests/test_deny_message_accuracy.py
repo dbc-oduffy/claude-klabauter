@@ -641,7 +641,7 @@ class TestCatHeredocWriteAdviseMessageAccuracy:
 
 
 class TestHeredocRepoWriteAdviseMessageAccuracy:
-    def test_advisory_names_the_write_tool_and_the_exact_target(self, tmp_path, monkeypatch):
+    def test_advisory_names_the_exact_target_and_what_is_recorded(self, tmp_path, monkeypatch):
         # `tmp_path` lives under the real $TEMP/$TMP -- clear both so this
         # stand-in `git_root` isn't itself misclassified as a scratch root
         # by the guard's own env-var scratch check (see the dedicated test
@@ -661,8 +661,19 @@ class TestHeredocRepoWriteAdviseMessageAccuracy:
                 )
             )
         )
-        assert "Write tool" in advisory
+        # The "use the Write tool" nudge this assertion used to require is
+        # RETIRED, not lost: DR-258 section "Amendment 2026-08-30" is why.
+        # This guard only ever fires on a path the command LITERALLY names,
+        # and `bash_guards.write_claim_record.record_write_claims` now
+        # records exactly those from the same PreToolUse call -- so the
+        # write reaches the commit and there is no longer an alternative to
+        # nudge toward. Restoring the nudge here would re-pin a message that
+        # states a retired fact. What the message must still do is name the
+        # exact resolved target, and say what IS and is NOT recorded.
         assert "coordinator_core/x.py" in advisory
+        assert "recorded" in advisory
+        assert "does not name" in advisory
+        assert "Write tool" not in advisory
 
     def test_no_git_root_returns_none(self):
         cmd = (

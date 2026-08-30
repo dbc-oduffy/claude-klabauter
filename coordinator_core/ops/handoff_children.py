@@ -457,12 +457,23 @@ async def has_live_children_from_metas(
     FULL live set, so archive-resident referencers are still excluded via
     `_is_terminal_or_archived_child`, never by omission from the index).
 
-    Returns the same four-key shape as `_handoff_has_live_children`:
-    `referenced`, `children`, `exit_code`, `error` — `error` present only on
-    the exit_code=2 (indeterminate) branch, `referenced`/`children` present
-    on every branch (fail-closed still carries `children: []`, never omits
-    it — see `_indeterminate`'s own note on why `referenced` alone is the
-    field that goes missing).
+    Returns the same reply shape as `has_live_children_many`'s per-candidate
+    question, per the plan's own citation (docs/plans/2026-08-30-the-terminal-
+    cascade-reads-the-corpus-once.md, C1 Part A): `referenced`, `children`,
+    `exit_code` on the success branch, plus `error` on the exit_code=2
+    (indeterminate) branch. `children` is present on every branch (fail-closed
+    still carries `children: []`, never omits it — see `_indeterminate`'s own
+    note on why `referenced` alone is the field that goes missing).
+
+    Deliberately NOT the same shape as `_handoff_has_live_children` (5 keys —
+    it also carries `live_session_count`, informational metadata from the
+    liveness seam this function does not call): this function's success
+    branch has no `live_session_count`, and its `_indeterminate`-sourced
+    fail-closed branch inherits `live_session_count: 0` from that shared
+    helper (also used by `_handoff_has_live_children`) rather than omitting
+    it. No caller reads the field on either branch today (Review: code-
+    reviewer, Finding 1) — widening the success branch to add it would exceed
+    this chunk's scope.
     """
     parsed_edge_kinds = _parse_edge_kinds(edge_kinds)
 

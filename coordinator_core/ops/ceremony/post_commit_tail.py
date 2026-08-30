@@ -1,4 +1,34 @@
 """
+GRAVESTONE NOTICE — READ BEFORE THE DOCSTRING BELOW (2026-08-30).
+
+`wsc_tail.py` DOES NOT EXIST. K-046 deleted it on 2026-08-23 (`c07062c99`) at
+220,191.7ms max / 30,015.6ms p50 wall, and it is not coming back in that shape.
+Every present-tense reference to it below — "`wsc_tail.py` still invokes this op
+IN-PROCESS", "the in-process WSC tail", its `_TailTiming` pinned contract, its
+`_close_origin_stub_handler` module-global — is HISTORICAL. It described this
+module's world before that kill and was never revised after it.
+
+`run()`'s ONE live caller is `execute_plan_assemble/close_out_and_stamp.py::
+_reach_post_commit_tail_stub_close`, i.e. `/execute-plan`'s close-out.
+`/workstream-complete` does not reach this module at all: it commits and
+releases claims through `workstream_complete/apply.py::_run_close_commit_tail`
+-> `directives_commit_tail.run_close_commit_and_release_claims`, and its only
+other reach into this file is `fold_completion_entry_commit`. Consequently
+`consumed_handoff_stamp.post_commit_stamp_and_ship`, composed by `run()` below,
+never fires on a WSC close — see kill-ledger K-046's 2026-08-30 amendment for
+the standing requirement that leaves open, and K-116 for why `run()` is
+retained at all.
+
+THE COST OF NOT WRITING THIS SOONER, so the next reader weighs the prose below
+correctly: two EMs and a PM independently concluded from these docstrings that a
+live WSC stamp path existed and was defective. doe-claude-em filed a cross-repo
+bug against a mechanism that is not broken
+(`cross-repo/inbox/2026-08-30-doe-claude-em-wsc-consumed-set-keys-on-a-retired-
+field.md`); this repo's EM then sized an M plan to "reconnect" a path the kill
+ledger already forbids reconnecting; the PM hand-swept four batons in the
+meantime. Prose naming a dead caller in the present tense is not cosmetic debt —
+it manufactures defects that do not exist and hides the requirement that does.
+
 coordinator_core.ops.ceremony.post_commit_tail — `ceremony.post_commit_tail`
 standalone REGISTERED op composing `wsc_tail`'s two post-commit steps (5c:
 the C5 consumed-handoff stamp+ship, 5d: the 2026-07-22 origin-stub-close

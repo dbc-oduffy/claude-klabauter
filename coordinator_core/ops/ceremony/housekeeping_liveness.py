@@ -138,21 +138,32 @@ _CLASS_STALE_THRESHOLDS: Dict[str, float] = {
 }
 
 
-def _threshold_for(cls: str, requested: float) -> float:
+def _threshold_for(cls: str, requested: Optional[float]) -> float:
     """The staleness threshold for `cls`.
 
     PRECEDENCE: an explicitly-passed `stale_threshold_s` always wins — a caller
     that named a number meant it. The `_CLASS_STALE_THRESHOLDS` map applies only
-    when the caller left the argument at its default.
+    when the caller supplied nothing.
+
+    `None` IS THE "CALLER SUPPLIED NOTHING" SIGNAL, and it has to be, because the
+    obvious alternative is wrong: comparing the received value against
+    `_DEFAULT_STALE_THRESHOLD_S` cannot tell "left at the default" apart from
+    "explicitly passed a number that happens to equal the default". That is not a
+    hypothetical — every existing caller of `check_stale`/`check_stale_detailed`/
+    `liveness_status` that passes the argument at all passes exactly
+    `7 * 24 * 3600.0`, and under a value comparison all of them would have been
+    silently re-pointed at the per-class override they were explicitly opting out
+    of. A public keyword argument that is quietly ignored when you pass it is a
+    worse failure than any duplicated threshold.
 
     Consulted by BOTH `check_stale_detailed` and `liveness_status`. Reaching only
     one of them would let the two accessors disagree about the same class's status
     on the same day, which is worse than no per-class threshold at all.
     `check_stale` needs no direct change: it delegates to `check_stale_detailed`.
     """
-    if requested != _DEFAULT_STALE_THRESHOLD_S:
+    if requested is not None:
         return requested
-    return _CLASS_STALE_THRESHOLDS.get(cls, requested)
+    return _CLASS_STALE_THRESHOLDS.get(cls, _DEFAULT_STALE_THRESHOLD_S)
 
 # Three-state liveness contract (see module docstring's "Three-state contract" section).
 # `STATUS_NEVER_STAMPED` is NOT a synonym for `STATUS_FRESH` -- it means "this store has
@@ -221,7 +232,7 @@ def stamp_liveness(repo_root: str, housekeeping_class: str) -> None:
 def check_stale_detailed(
     repo_root: str,
     classes: Optional[List[str]] = None,
-    stale_threshold_s: float = _DEFAULT_STALE_THRESHOLD_S,
+    stale_threshold_s: Optional[float] = None,
 ) -> List[Tuple[str, str]]:
     """Return one ``(class_key, human-readable message)`` pair per class that HAS a recorded
     stamp but is older than `stale_threshold_s`. A class with no stamp at all is silently
@@ -269,7 +280,7 @@ def check_stale_detailed(
 def liveness_status(
     repo_root: str,
     classes: Optional[List[str]] = None,
-    stale_threshold_s: float = _DEFAULT_STALE_THRESHOLD_S,
+    stale_threshold_s: Optional[float] = None,
 ) -> Dict[str, str]:
     """Return every class in `classes` (default `KNOWN_CLASSES`) mapped to one of
     `STATUS_FRESH`, `STATUS_STALE`, or `STATUS_NEVER_STAMPED` -- the three-state contract
@@ -318,7 +329,7 @@ def liveness_status(
 def check_stale(
     repo_root: str,
     classes: Optional[List[str]] = None,
-    stale_threshold_s: float = _DEFAULT_STALE_THRESHOLD_S,
+    stale_threshold_s: Optional[float] = None,
 ) -> List[str]:
     """Return one human-readable message per class that HAS a recorded stamp but is older
     than `stale_threshold_s`. A class with no stamp at all is silently skipped (see module

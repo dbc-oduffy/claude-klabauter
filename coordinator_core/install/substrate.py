@@ -3452,6 +3452,12 @@ def _write_agent_helper_forwarders(
             except OSError as exc:
                 failed.append((f, exc))
         _report_agent_helper_forwarder_summary(agent_helper_target_map, failed)
+        if failed:
+            names = ", ".join(name for name, _exc in failed)
+            raise SubstrateFatalError(
+                f"install-substrate: check failed: {len(failed)} agent-helper forwarder(s) "
+                f"could not be checked ({names})"
+            )
         return agent_helper_resolved
 
     agent_helper_resolved = []
@@ -3474,7 +3480,43 @@ def _write_agent_helper_forwarders(
     if engine_root is not None:
         _write_native_forwarder_manifest(bin_dst, native_written)
 
+    _report_agent_helper_forwarder_summary(agent_helper_target_map, failed)
+    if failed:
+        names = ", ".join(name for name, _exc in failed)
+        raise SubstrateFatalError(
+            f"install-substrate: {len(failed)} agent-helper forwarder(s) could not be "
+            f"written ({names}); {len(agent_helper_resolved)} of {len(agent_helper_target_map)} "
+            "written this run. See stderr above for the per-name error(s)."
+        )
+
     return agent_helper_resolved
+
+
+def _report_agent_helper_forwarder_summary(
+    agent_helper_target_map: "dict[str, str]", failed: "list[tuple[str, BaseException]]",
+) -> None:
+    """Prints the written/failed summary line for the agent-helper forwarder
+    write loop, so the difference between "every name landed" and "some
+    names silently did not" is visible in the run's own output regardless of
+    whether the caller goes on to fail loud over it (state/bug-backlog/
+    2026-08-30-install-substrate-exits-0-after-failing-45f4d5390b68.yaml).
+
+    Deliberately NOT gated on ``failed`` being non-empty — the all-clear case
+    prints too, so "no summary line" is never itself evidence of success; a
+    run that crashed before reaching this call is visibly missing the line
+    rather than silently indistinguishable from a clean one."""
+    total = len(agent_helper_target_map)
+    written = total - len(failed)
+    if failed:
+        print(
+            f"[install-substrate] agent-helper forwarders: {written} written, "
+            f"{len(failed)} FAILED of {total}",
+            file=sys.stderr,
+        )
+        for name, exc in failed:
+            print(f"[install-substrate]   FAILED {name}: {exc}", file=sys.stderr)
+    else:
+        print(f"[install-substrate] agent-helper forwarders: {written} written, 0 failed of {total}")
 
 
 def _install_bin_resolvers(

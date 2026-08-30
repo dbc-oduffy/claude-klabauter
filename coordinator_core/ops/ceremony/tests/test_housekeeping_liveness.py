@@ -372,13 +372,55 @@ def test_git_maintenance_uses_the_ten_day_threshold_not_the_uniform_default():
     """7 days equals the weekly cadence exactly, so the class would read stale
     the instant it came due, every cycle -- a permanently-amber signal nobody
     reads."""
-    assert hl._threshold_for(hl.GIT_MAINTENANCE, hl._DEFAULT_STALE_THRESHOLD_S) == 10 * 24 * 3600.0
-    assert hl._threshold_for(hl.ARCHIVE_SWEEPS, hl._DEFAULT_STALE_THRESHOLD_S) == hl._DEFAULT_STALE_THRESHOLD_S
+    assert hl._threshold_for(hl.GIT_MAINTENANCE, None) == 10 * 24 * 3600.0
+    assert hl._threshold_for(hl.ARCHIVE_SWEEPS, None) == hl._DEFAULT_STALE_THRESHOLD_S
 
 
 def test_an_explicit_threshold_beats_the_per_class_map():
     """A caller that named a number meant it."""
     assert hl._threshold_for(hl.GIT_MAINTENANCE, 42.0) == 42.0
+
+
+def test_explicitly_passing_the_default_value_is_still_an_explicit_opt_out():
+    """THE BUG THIS PINS, which a value comparison cannot express: every caller
+    of check_stale/check_stale_detailed/liveness_status that passes the
+    argument at all passes exactly 7*24*3600.0. Detecting "supplied" by
+    comparing against _DEFAULT_STALE_THRESHOLD_S reads all of them as "left at
+    the default" and silently re-points them at the per-class override they
+    were explicitly opting out of. A public keyword argument that is quietly
+    ignored when you pass it is worse than any duplicated threshold."""
+    assert (
+        hl._threshold_for(hl.GIT_MAINTENANCE, hl._DEFAULT_STALE_THRESHOLD_S)
+        == hl._DEFAULT_STALE_THRESHOLD_S
+    )
+
+
+def test_an_explicit_seven_day_threshold_reaches_both_accessors(tmp_path):
+    """The end-to-end shape of the same bug: a caller asking for 7 days must
+    get 7 days from BOTH threshold-consuming accessors, not the 10-day
+    per-class override."""
+    repo = tmp_path / "repo"
+    (repo / ".git").mkdir(parents=True)
+    (repo / "state").mkdir()
+    eight_days_ago = (datetime.now(timezone.utc) - timedelta(days=8)).strftime(
+        "%Y-%m-%dT%H:%M:%SZ"
+    )
+    (repo / "state" / "housekeeping-liveness.json").write_text(
+        json.dumps({hl.GIT_MAINTENANCE: eight_days_ago}), encoding="utf-8"
+    )
+    seven_days = 7 * 24 * 3600.0
+
+    detailed = dict(
+        hl.check_stale_detailed(
+            str(repo), [hl.GIT_MAINTENANCE], stale_threshold_s=seven_days
+        )
+    )
+    status = hl.liveness_status(
+        str(repo), [hl.GIT_MAINTENANCE], stale_threshold_s=seven_days
+    )
+
+    assert hl.GIT_MAINTENANCE in detailed, detailed
+    assert status[hl.GIT_MAINTENANCE] == hl.STATUS_STALE, status
 
 
 def test_both_accessors_agree_on_git_maintenance_at_day_eight(tmp_path):

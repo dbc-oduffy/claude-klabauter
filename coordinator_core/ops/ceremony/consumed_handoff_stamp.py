@@ -2,6 +2,16 @@
 coordinator_core.ops.ceremony.consumed_handoff_stamp — Consumed-handoff
 ship-stamp + R1-R4 ship-drift correctness (break-class core, C5).
 
+GRAVESTONE NOTICE (2026-08-30): `wsc_tail`, named below as this seam's reason
+for existing, was deleted by K-046 on 2026-08-23 (`c07062c99`). This module's
+`post_commit_stamp_and_ship` therefore has NO caller from `/workstream-complete`
+— its one live reach is `post_commit_tail.run()`, itself called only by
+`/execute-plan`'s close-out. Every R1-R4 guarantee below is real and still
+holds; it simply holds on one path rather than the two the prose assumes. The
+WSC-side loss is a standing requirement on kill-ledger K-046, not a defect here.
+Separately: `StampOutcome.empty_consumed_set`, set below as the R2/AC7 loud
+report, is read by no caller anywhere — the report has no surface.
+
 Purpose: this is the correctness-critical seam of the wsc_tail rebuild. It
 closes the ship-drift bug class the retired `2026-07-14-wsc-chain-terminal-
 ship-drift-fix.md` plan set out to fix (same-session receipt-freeze TOCTOU +

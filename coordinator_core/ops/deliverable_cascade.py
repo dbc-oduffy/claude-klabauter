@@ -485,7 +485,7 @@ def _collect_live_candidates_for_kind(
     deliverable_id: str,
     kind: _KindDescriptor = _HANDOFF_KIND,
     *,
-    metas_out: Optional[dict] = None,
+    metas_out: Optional[Dict[str, dict]] = None,
 ) -> tuple[List[dict], bool, List[dict]]:
     """Return ([{path, fm}, ...], scan_incomplete, unreadable) for every LIVE
     candidate of `kind` whose own `deliverable_id` field exact-matches the
@@ -573,7 +573,7 @@ async def _predicate_refusal(
     repo_root: Path,
     exclude_children_check: Optional[List[str]] = None,
     kind: _KindDescriptor = _HANDOFF_KIND,
-    corpus_metas: Optional[dict] = None,
+    corpus_metas: Optional[Dict[str, dict]] = None,
 ) -> Optional[str]:
     """Evaluate the DR-263 three-legged per-target predicate, per `kind`'s own
     predicate-leg policy table (AC11). Returns a human-readable refusal reason,

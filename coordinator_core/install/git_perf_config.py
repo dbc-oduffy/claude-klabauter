@@ -217,8 +217,21 @@ def _git_hook_install_registry_helpers():
     `coordinator_core` package member, so reaching it needs a `sys.path`
     push). Not imported directly from `doctor.py` -- that helper is
     module-private, and duplicating the ~10-line lookup here is cheaper than
-    creating a cross-module coupling on another module's leading-underscore
-    name. Returns `None` on any failure (module not found, or found but
+    creating a coupling ACROSS PACKAGES on another module's leading-underscore
+    name.
+
+    THAT CLAUSE IS NARROWER THAN IT LOOKS, and the qualifier above is load-
+    bearing: the lines below reach straight into `git_hook_install`'s OWN
+    leading-underscore names. What is avoided is a `coordinator_core.install`
+    -> `coordinator_core.ops` private coupling, not private names as such --
+    `git_hook_install` has no public surface for this and is reached through a
+    `sys.path` push either way. An earlier reading of this docstring took it
+    for a blanket ban on importing a sibling's private helpers and read it as
+    contradicting the same-package `_env_int`/`_mtime_epoch` imports in
+    `coordinator_core.ops.git_maintenance`; it is not in tension with those,
+    which are intra-package and carry no `sys.path` manipulation at all.
+
+    Returns `None` on any failure (module not found, or found but
     missing an expected attribute), so a caller degrades to an advisory line
     rather than raising -- this runs at install time, on the machine whose
     layout may itself be incomplete.
