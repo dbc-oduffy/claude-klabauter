@@ -21,6 +21,8 @@ import subprocess
 
 import pytest
 
+from coordinator_core.win_portability import no_console_creationflags
+
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 
@@ -30,13 +32,19 @@ def _git(repo, *args: str) -> subprocess.CompletedProcess:
         capture_output=True,
         text=True,
         check=False,
+        **no_console_creationflags(),
     )
 
 
 @pytest.fixture()
 def repo(tmp_path):
     """A throwaway repository with one commit."""
-    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True, capture_output=True)
+    subprocess.run(
+        ["git", "init", "-q", str(tmp_path)],
+        check=True,
+        capture_output=True,
+        **no_console_creationflags(),
+    )
     _git(tmp_path, "config", "user.email", "oracle@example.invalid")
     _git(tmp_path, "config", "user.name", "oracle")
     (tmp_path / "f1").write_text("one\n", encoding="utf-8")

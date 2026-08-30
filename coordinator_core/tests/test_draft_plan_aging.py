@@ -26,6 +26,7 @@ from coordinator_core.ops.draft_plan_aging import (
     main,
     scan,
 )
+from coordinator_core.win_portability import no_console_passthrough_kwargs
 
 # Declared, not excused: `_has_recent_real_work_commit` reads real git log/commit
 # timestamps to decide plan staleness -- the property under test is that real-commit
@@ -52,9 +53,9 @@ def _write_plan(path: Path, created: str, status: str = "draft", scope_lines: "l
 
 
 def _init_git_repo(d: Path) -> None:
-    subprocess.run(["git", "init", "-q"], cwd=d, check=True, timeout=30)
-    subprocess.run(["git", "config", "user.email", "t@t.com"], cwd=d, check=True, timeout=30)
-    subprocess.run(["git", "config", "user.name", "t"], cwd=d, check=True, timeout=30)
+    subprocess.run(["git", "init", "-q"], cwd=d, check=True, timeout=30, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "config", "user.email", "t@t.com"], cwd=d, check=True, timeout=30, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "config", "user.name", "t"], cwd=d, check=True, timeout=30, **no_console_passthrough_kwargs())
 
 
 def _commit(d: Path, message: str, days_ago: "int | None" = None) -> None:
@@ -63,8 +64,8 @@ def _commit(d: Path, message: str, days_ago: "int | None" = None) -> None:
         git_date = (date.today() - timedelta(days=days_ago)).isoformat() + "T12:00:00"
         env["GIT_AUTHOR_DATE"] = git_date
         env["GIT_COMMITTER_DATE"] = git_date
-    subprocess.run(["git", "add", "-A"], cwd=d, check=True, timeout=30)
-    subprocess.run(["git", "commit", "-q", "-m", message], cwd=d, check=True, timeout=30, env=env)
+    subprocess.run(["git", "add", "-A"], cwd=d, check=True, timeout=30, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "commit", "-q", "-m", message], cwd=d, check=True, timeout=30, env=env, **no_console_passthrough_kwargs())
 
 
 # ---------------------------------------------------------------------------

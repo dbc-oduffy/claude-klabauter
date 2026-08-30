@@ -25,6 +25,7 @@ import subprocess
 import pytest
 
 from coordinator_core.ops import renormalize_index as rni
+from coordinator_core.win_portability import no_console_creationflags
 
 # Spawns a real external process; runs at cadence gates, not per-commit.
 # Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
@@ -40,7 +41,7 @@ def _git(cwd, *args, **kwargs):
         capture_output=True,
         text=True,
         check=False,
-        **kwargs,
+        **kwargs, **no_console_creationflags(),
     )
 
 

@@ -37,6 +37,7 @@ import pytest
 
 from coordinator_core.bash_guards import dispatch_checks as dc
 from coordinator_core.bash_guards import guard_head_tail_rewrite as ht
+from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -71,10 +72,15 @@ def _run_via_real_shell(command: str, timeout: float = 10.0) -> subprocess.Compl
         if bash is None:
             pytest.skip("git-bash not found on PATH")
         return subprocess.run(
-            [bash, "-c", command], capture_output=True, text=True, timeout=timeout
+            [bash, "-c", command],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            **no_console_creationflags(),
         )
     return subprocess.run(
-        command, shell=True, capture_output=True, text=True, timeout=timeout
+        command, shell=True, capture_output=True, text=True, timeout=timeout,
+        **no_console_creationflags(),
     )
 
 

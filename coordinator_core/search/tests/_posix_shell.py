@@ -25,6 +25,7 @@ import os
 import shutil
 
 import pytest
+from coordinator_core.win_portability import no_console_creationflags
 
 #: Git-for-Windows install locations, probed only after PATH resolution fails. `bash` is
 #: reliably on PATH under the harness's own Bash tool but NOT under a PowerShell-hosted
@@ -74,6 +75,6 @@ def run_real(cmd: str, cwd) -> tuple[int, str]:
         capture_output=True,
         # Bytes, not text: `text=True` applies universal-newline translation, which turns
         # a CRLF divergence into a silent agreement. AC6 exists to catch exactly that.
-        check=False,
+        check=False, **no_console_creationflags(),
     )
     return proc.returncode, proc.stdout.decode("utf-8", errors="surrogateescape")

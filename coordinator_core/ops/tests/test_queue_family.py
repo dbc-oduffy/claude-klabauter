@@ -35,14 +35,16 @@ from coordinator_core.ops.queue_family import (
     load_family_records,
     normalize_family,
 )
+from coordinator_core.win_portability import no_console_creationflags
 
 
 def _init_repo(root: Path) -> None:
-    subprocess.run(["git", "init", "-b", "main"], cwd=root, check=True, capture_output=True)
+    subprocess.run(["git", "init", "-b", "main"], cwd=root, check=True, capture_output=True, **no_console_creationflags())
     subprocess.run(
-        ["git", "config", "user.email", "test@example.com"], cwd=root, check=True, capture_output=True
+        ["git", "config", "user.email", "test@example.com"], cwd=root, check=True, capture_output=True,
+        **no_console_creationflags(),
     )
-    subprocess.run(["git", "config", "user.name", "Test"], cwd=root, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=root, check=True, capture_output=True, **no_console_creationflags())
 
 
 def _seed(root: Path, rel_dir: str, name: str, body: str) -> Path:
@@ -50,9 +52,10 @@ def _seed(root: Path, rel_dir: str, name: str, body: str) -> Path:
     d.mkdir(parents=True, exist_ok=True)
     p = d / name
     p.write_text(textwrap.dedent(body).lstrip(), encoding="utf-8")
-    subprocess.run(["git", "add", "-A"], cwd=root, check=True, capture_output=True)
+    subprocess.run(["git", "add", "-A"], cwd=root, check=True, capture_output=True, **no_console_creationflags())
     subprocess.run(
-        ["git", "commit", "-m", f"seed {name}"], cwd=root, check=True, capture_output=True
+        ["git", "commit", "-m", f"seed {name}"], cwd=root, check=True, capture_output=True,
+        **no_console_creationflags(),
     )
     return p
 

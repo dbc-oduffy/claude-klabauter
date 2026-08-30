@@ -32,6 +32,7 @@ from pathlib import Path
 from coordinator_core.ops.ceremony import commit_exec_bit
 
 import pytest
+from coordinator_core.win_portability import no_console_creationflags
 
 # Spawns a real external process; runs at cadence gates, not per-commit.
 # Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
@@ -44,7 +45,7 @@ pytestmark = [
 def _git(args, cwd) -> str:
     result = subprocess.run(
         ["git", *args], cwd=str(cwd), check=True, capture_output=True, text=True
-    )
+    , **no_console_creationflags())
     return result.stdout
 
 

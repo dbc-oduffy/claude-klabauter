@@ -103,11 +103,19 @@ _shutdown_entered = False
 #: zero-arg callable with no return value, or `None` (the default) when no
 #: caller has registered one. Registered as a settable module-level hook
 #: rather than threaded through `begin_shutdown`/`drain_and_exit`'s own
-#: kwargs because `warm.idle.demote_if_idle` (out of this chunk's writable
-#: scope) calls `begin_shutdown` internally with a fixed kwarg set this
-#: module cannot widen without editing `idle.py` -- a hook registered here,
-#: read by BOTH entry points' shared tail, reaches the idle-demotion exit
-#: path without idle.py needing to know this module exists.
+#: kwargs because FOUR independent call sites reach these two entry points
+#: -- `warm/front_door.py:1218`, `warm/idle.py:285`, `warm/supervisor.py:898`
+#: (all `begin_shutdown`), and `warm/server.py:1631` (`drain_and_exit`) --
+#: and only `server.py` holds a reference to the sweep it must run. A kwarg
+#: would have to be threaded through all four, and a caller that forgot it
+#: would produce a silent no-sweep exit; a module-global hook makes "every
+#: exit sweeps" structural, reachable from every trigger without each call
+#: site needing to know the sweep exists. (Re-verified 2026-08-30 against
+#: `state/audits/2026-08-30-four-push-close-backlog-items-probe.py` leg G;
+#: Finding 8's premise -- that this can now collapse into a threaded kwarg
+#: because C4's idle.py write-scope constraint expired -- is FALSE: the
+#: constraint that mattered was never idle.py's writable-scope status, it
+#: was these four callers' inability to source the sweep themselves.)
 _final_sweep_hook_lock = threading.Lock()
 _final_sweep_hook: Optional[Callable[[], None]] = None
 

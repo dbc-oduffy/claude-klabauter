@@ -66,7 +66,7 @@ def git_repo(tmp_path: Path) -> Path:
     behaves exactly as it does against a production checkout)."""
     subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True, **no_console_passthrough_kwargs())
     subprocess.run(
-        ["git", "config", "user.email", "test@example.com"], cwd=tmp_path, check=True
+        ["git", "config", "user.email", "test@example.com"], cwd=tmp_path, check=True,
         **no_console_passthrough_kwargs(),
     )
     subprocess.run(["git", "config", "user.name", "Test"], cwd=tmp_path, check=True, **no_console_passthrough_kwargs())

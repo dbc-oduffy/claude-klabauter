@@ -3,15 +3,15 @@ Tests for coordinator_core.housekeeping.cycle — Step E (move + ONE commit
 through the existing `archive_and_commit` seam) and the assembled `run(...)`
 entry point (plan chunk C6c).
 
-Covers: `archive_terminal_batch` passes a prebuilt `Move` list through to
-the seam unchanged and never calls into the seam for an empty batch; the
-handoff `Move` list itself is built by `run(...)` since C2 widened the batch
-function (the actioned-memo class gets an occasion); the seam's (acted,
-failed) split is passed through unmodified (no second-guessing, no leave-and-log); and an
-end-to-end `run(...)` cycle on a small real git repo — a gate genuinely
-clears, a terminal record is archived and landed in ONE commit, a
-claim-held terminal record is retained, and a gate-clear CONFLICT is
-reported rather than silently dropped.
+Covers: `run(...)` never calls into the `archive_and_commit` seam for an
+empty combined batch; handoff and memo `Move` lists are both built inline
+in `run(...)` (C2, the actioned-memo class gets an occasion) and land in
+ONE commit; the seam's (acted, failed) split is passed through unmodified
+(no second-guessing, no leave-and-log); and an end-to-end `run(...)` cycle
+on a small real git repo — a gate genuinely clears, a terminal record is
+archived and landed in ONE commit, a claim-held terminal record is
+retained, and a gate-clear CONFLICT is reported rather than silently
+dropped.
 
 Spec backlink: docs/plans/2026-08-29-the-housekeeping-cycle-stops-committing.md
   § C6c; docs/research/2026-08-29-housekeeping-v2-target-shape.md § 2 step E.
@@ -33,8 +33,6 @@ import pytest
 from coordinator_core.claim_state import handoff_claim_dir
 from coordinator_core.housekeeping import cycle
 from coordinator_core.housekeeping.gate_clear import CONFLICT
-from coordinator_core.housekeeping.terminal import TerminalEntry
-from coordinator_core.ops.fleet._common import Move
 from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = pytest.mark.spawns_process
@@ -72,83 +70,94 @@ def _write_frontmatter(path: Path, fields: Dict[str, Any], body: str = "Fixture 
 
 
 # ---------------------------------------------------------------------------
-# archive_terminal_batch — Step E in isolation
+# Step E's empty-batch short-circuit — no longer a dedicated function after
+# F4 (overengineering-reviewer, 2026-08-30): `archive_terminal_batch` was a
+# single-caller passthrough (empty-check + one asyncio.run) once the Move
+# construction moved into run(); inlined there, so the seam-never-called-
+# for-an-empty-batch guarantee is now asserted at `run(...)` itself.
 # ---------------------------------------------------------------------------
 
 
-def test_archive_terminal_batch_empty_never_calls_the_seam(tmp_path, monkeypatch):
+def _write_memo(path: Path, status: str, body: str = "Fixture memo body.\n") -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(f"---\nstatus: {status}\n---\n\n{body}", encoding="utf-8")
+
+
+def test_the_seam_fires_for_memos_alone_with_zero_terminal_handoffs(tmp_path, monkeypatch):
+    """coordinator:code-reviewer F3 -- the F4 inline's guarantee is `if
+    handoff_moves or memo_moves:` (OR, not AND). Nothing before this test
+    isolated "handoffs empty, memos non-empty" from "both empty" or "both
+    non-empty", so a latent `if handoff_moves and memo_moves:` typo would
+    have gone undetected -- every existing fixture either has both families
+    empty or both populated."""
+    root = _init_repo(tmp_path / "repo")
+    _write_memo(root / "cross-repo" / "inbox" / "memo-only.md", "actioned")
+    _git(root, "add", "-A")
+    _git(root, "commit", "-q", "-m", "fixture: one actioned memo, no handoffs")
+
+    calls = {"n": 0}
+    real_archive_and_commit = cycle.archive_and_commit
+
+    async def _counting(*args, **kwargs):
+        calls["n"] += 1
+        return await real_archive_and_commit(*args, **kwargs)
+
+    monkeypatch.setattr(cycle, "archive_and_commit", _counting)
+
+    result = cycle.run(root, cap=10)
+
+    assert result["archived"] == []
+    assert result["failed"] == []
+    assert result["memos_archived"] == ["cross-repo/inbox/memo-only.md"]
+    assert result["memos_failed"] == []
+    assert calls["n"] == 1, "the seam must fire exactly once for a memo-only batch"
+
+
+def test_the_seam_fires_for_handoffs_alone_with_zero_actioned_memos(tmp_path, monkeypatch):
+    """The reverse of the case above -- handoffs non-empty, memos empty
+    (no `cross-repo/inbox/` at all)."""
+    root = _init_repo(tmp_path / "repo")
+    _write_frontmatter(
+        root / "state" / "handoffs" / "2026-06-01_00003_terminal.md",
+        {"handoff_id": "hnd-t1", "deployment_state": "closed"},
+    )
+    _git(root, "add", "-A")
+    _git(root, "commit", "-q", "-m", "fixture: one terminal handoff, no memos")
+
+    calls = {"n": 0}
+    real_archive_and_commit = cycle.archive_and_commit
+
+    async def _counting(*args, **kwargs):
+        calls["n"] += 1
+        return await real_archive_and_commit(*args, **kwargs)
+
+    monkeypatch.setattr(cycle, "archive_and_commit", _counting)
+
+    result = cycle.run(root, cap=10)
+
+    assert result["archived"] == ["state/handoffs/2026-06-01_00003_terminal.md"]
+    assert result["failed"] == []
+    assert result["memos_archived"] == []
+    assert result["memos_failed"] == []
+    assert calls["n"] == 1, "the seam must fire exactly once for a handoff-only batch"
+
+
+def test_run_never_calls_the_seam_when_the_batch_is_empty(tmp_path, monkeypatch):
+    root = _init_repo(tmp_path / "repo")
+    _git(root, "add", "-A")
+    _git(root, "commit", "-q", "-m", "empty fixture", "--allow-empty")
+
     def _boom(*args, **kwargs):
         raise AssertionError("archive_and_commit must not be called for an empty batch")
 
     monkeypatch.setattr(cycle, "archive_and_commit", _boom)
-    acted, failed = cycle.archive_terminal_batch(tmp_path, [], "subject")
-    assert acted == []
-    assert failed == []
 
+    result = cycle.run(root, cap=150)
 
-def _handoff_move(worktree_root, path):
-    """Build a handoff Move the way `run(...)` does — the construction
-    `archive_terminal_batch` owned before C2 widened it to take a prebuilt
-    list."""
-    return Move(
-        src=path,
-        dst=cycle.handoff_archive_dest(worktree_root, path),
-        candidate_id=str(path.relative_to(worktree_root)),
-        force=False,
-        restage_src=False,
-    )
-
-
-def test_archive_terminal_batch_passes_prebuilt_moves_through_to_the_seam(tmp_path, monkeypatch):
-    """C2 widened this function from `List[TerminalEntry]` to a prebuilt
-    `List[Move]` so both families land in one commit; it now hands the list
-    to the seam unchanged rather than building it."""
-    worktree_root = tmp_path
-    p1 = worktree_root / "state" / "handoffs" / "2026-01-01_00001_a.md"
-    p2 = worktree_root / "state" / "handoffs" / "2026-01-02_00002_b.md"
-    moves = [_handoff_move(worktree_root, p1), _handoff_move(worktree_root, p2)]
-
-    captured = {}
-
-    async def _fake_archive_and_commit(root, seam_moves, subject):
-        captured["root"] = root
-        captured["moves"] = seam_moves
-        captured["subject"] = subject
-        return (
-            [{"id": m.candidate_id, "archived": True} for m in seam_moves],
-            [],
-        )
-
-    monkeypatch.setattr(cycle, "archive_and_commit", _fake_archive_and_commit)
-
-    acted, failed = cycle.archive_terminal_batch(worktree_root, moves, "the subject")
-
-    assert captured["root"] == worktree_root
-    assert captured["subject"] == "the subject"
-    assert captured["moves"] == moves
-
-    assert failed == []
-    assert {item["id"] for item in acted} == {
-        str(p1.relative_to(worktree_root)),
-        str(p2.relative_to(worktree_root)),
-    }
-
-
-def test_archive_terminal_batch_passes_through_failed_without_retry(tmp_path, monkeypatch):
-    """The seam's own (acted, failed) split is reported as-is — this module
-    never retries or patches a failed item (D5: complete-or-restore lives
-    INSIDE archive_and_commit, never re-attempted here)."""
-    p1 = tmp_path / "state" / "handoffs" / "2026-01-01_00001_a.md"
-    moves = [_handoff_move(tmp_path, p1)]
-
-    async def _fake_archive_and_commit(root, seam_moves, subject):
-        return ([], [{"id": seam_moves[0].candidate_id, "reason": "dst-exists"}])
-
-    monkeypatch.setattr(cycle, "archive_and_commit", _fake_archive_and_commit)
-
-    acted, failed = cycle.archive_terminal_batch(tmp_path, moves, "subject")
-    assert acted == []
-    assert failed == [{"id": str(p1.relative_to(tmp_path)), "reason": "dst-exists"}]
+    assert result["archived"] == []
+    assert result["failed"] == []
+    assert result["memos_archived"] == []
+    assert result["memos_failed"] == []
 
 
 # ---------------------------------------------------------------------------
@@ -229,9 +238,12 @@ def test_run_clears_a_gate_archives_terminal_records_and_retains_held_claims(
 
     result = cycle.run(str(repo), cap=10)
 
-    t1_id = str(
-        (repo / "state" / "handoffs" / "2026-06-01_00003_terminal.md").relative_to(repo)
-    )
+    # Hardcoded forward-slash literal, not a `relative_to()` round-trip of
+    # the production id-format bug (coordinator:code-reviewer F2) -- the
+    # round-trip form passes on any platform regardless of what `archived`
+    # actually carries, so it can never catch a regression to the native-
+    # separator `str(relative_to())` form on Windows.
+    t1_id = "state/handoffs/2026-06-01_00003_terminal.md"
 
     assert result["closed"] == 1
     assert result["conflicts"] == []
@@ -284,12 +296,11 @@ def test_run_reports_gate_clear_conflict_without_losing_the_cycle(repo, monkeypa
     monkeypatch.setattr(cycle, "apply_gate_clear", _fake_apply_gate_clear)
     monkeypatch.setattr(cycle, "cs_claim_holder_live", lambda claim_path: False)
 
-    t1_id = str(
-        (repo / "state" / "handoffs" / "2026-06-01_00003_terminal.md").relative_to(repo)
-    )
-    t2_id = str(
-        (repo / "state" / "handoffs" / "2026-06-02_00004_held.md").relative_to(repo)
-    )
+    # Hardcoded forward-slash literals (coordinator:code-reviewer F2) -- see
+    # the sibling fix above; a `relative_to()` round-trip here would mirror
+    # rather than catch a native-separator regression.
+    t1_id = "state/handoffs/2026-06-01_00003_terminal.md"
+    t2_id = "state/handoffs/2026-06-02_00004_held.md"
 
     result = cycle.run(str(repo), cap=10)
 

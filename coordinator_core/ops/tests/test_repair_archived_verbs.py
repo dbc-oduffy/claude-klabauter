@@ -49,6 +49,7 @@ from coordinator_core.ops.handoff_stamp import (
     _repair_archived_deployment_state_handler,
     _repair_archived_shipped_in_handler,
 )
+from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -71,6 +72,7 @@ def _make_git_repo(tmp_path: Path) -> Path:
     def _git(*args: str) -> None:
         subprocess.run(
             ["git"] + list(args), cwd=str(repo), capture_output=True, check=True,
+            **no_console_creationflags(),
         )
 
     _git("init", "-b", "main")

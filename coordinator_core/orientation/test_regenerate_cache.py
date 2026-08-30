@@ -47,15 +47,15 @@ def _init_git_repo(repo: Path, commit_subjects: list) -> None:
     ``git log`` output to render instead of degrading to ``[]``."""
     env = dict(os.environ, GIT_AUTHOR_NAME="test", GIT_AUTHOR_EMAIL="test@example.com",
                GIT_COMMITTER_NAME="test", GIT_COMMITTER_EMAIL="test@example.com")
-    subprocess.run(["git", "init", "-q"], cwd=str(repo), check=True, env=env)
+    subprocess.run(["git", "init", "-q"], cwd=str(repo), check=True, env=env, **no_console_passthrough_kwargs())
     (repo / ".gitkeep").write_text("", encoding="utf-8")
-    subprocess.run(["git", "add", "."], cwd=str(repo), check=True, env=env)
+    subprocess.run(["git", "add", "."], cwd=str(repo), check=True, env=env, **no_console_passthrough_kwargs())
     for i, subject in enumerate(commit_subjects):
         (repo / f"file-{i}.txt").write_text(subject, encoding="utf-8")
-        subprocess.run(["git", "add", "."], cwd=str(repo), check=True, env=env)
+        subprocess.run(["git", "add", "."], cwd=str(repo), check=True, env=env, **no_console_passthrough_kwargs())
         subprocess.run(
             ["git", "commit", "-q", "--allow-empty", "-m", subject], cwd=str(repo), check=True, env=env
-        )
+        , **no_console_passthrough_kwargs())
 
 
 def _seed_full_cache(repo: Path, pinboard: str = "") -> Path:
@@ -1178,7 +1178,7 @@ def test_recent_commits_renders_between_branch_and_auto_push_health(tmp_path):
     # oldest first -- "newest commit" lands on HEAD, so it is git log's top line
     _init_git_repo(repo, ["oldest commit", "middle commit", "newest commit"])
     # make it look like an unpushed work/ branch so Auto-push health also renders
-    subprocess.run(["git", "checkout", "-q", "-b", "work/x"], cwd=str(repo), check=True)
+    subprocess.run(["git", "checkout", "-q", "-b", "work/x"], cwd=str(repo), check=True, **no_console_passthrough_kwargs())
 
     result = mod.build_cache(invoker="workday-start", repo_root=repo)
     output = result["output"]
@@ -1546,6 +1546,7 @@ def test_atomic_replace_stat_permission_error_propagates(tmp_path, monkeypatch):
 
 import time as _time
 from datetime import datetime as _datetime, timezone as _timezone
+from coordinator_core.win_portability import no_console_passthrough_kwargs
 
 
 def _make_repo_with_upstream(tmp_path: Path, branch: str = "work/x", unpushed: int = 2) -> Path:
@@ -1558,20 +1559,20 @@ def _make_repo_with_upstream(tmp_path: Path, branch: str = "work/x", unpushed: i
         GIT_COMMITTER_NAME="test", GIT_COMMITTER_EMAIL="test@example.com",
     )
     remote = tmp_path / "remote.git"
-    subprocess.run(["git", "init", "-q", "--bare", str(remote)], check=True, env=env)
+    subprocess.run(["git", "init", "-q", "--bare", str(remote)], check=True, env=env, **no_console_passthrough_kwargs())
     repo = tmp_path / "repo"
     repo.mkdir()
-    subprocess.run(["git", "init", "-q"], cwd=str(repo), check=True, env=env)
-    subprocess.run(["git", "checkout", "-q", "-b", branch], cwd=str(repo), check=True, env=env)
-    subprocess.run(["git", "remote", "add", "origin", str(remote)], cwd=str(repo), check=True, env=env)
+    subprocess.run(["git", "init", "-q"], cwd=str(repo), check=True, env=env, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "checkout", "-q", "-b", branch], cwd=str(repo), check=True, env=env, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "remote", "add", "origin", str(remote)], cwd=str(repo), check=True, env=env, **no_console_passthrough_kwargs())
     (repo / "base.txt").write_text("base", encoding="utf-8")
-    subprocess.run(["git", "add", "."], cwd=str(repo), check=True, env=env)
-    subprocess.run(["git", "commit", "-q", "-m", "base"], cwd=str(repo), check=True, env=env)
-    subprocess.run(["git", "push", "-q", "-u", "origin", branch], cwd=str(repo), check=True, env=env)
+    subprocess.run(["git", "add", "."], cwd=str(repo), check=True, env=env, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "commit", "-q", "-m", "base"], cwd=str(repo), check=True, env=env, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "push", "-q", "-u", "origin", branch], cwd=str(repo), check=True, env=env, **no_console_passthrough_kwargs())
     for i in range(unpushed):
         (repo / f"file-{i}.txt").write_text(str(i), encoding="utf-8")
-        subprocess.run(["git", "add", "."], cwd=str(repo), check=True, env=env)
-        subprocess.run(["git", "commit", "-q", "-m", f"unpushed {i}"], cwd=str(repo), check=True, env=env)
+        subprocess.run(["git", "add", "."], cwd=str(repo), check=True, env=env, **no_console_passthrough_kwargs())
+        subprocess.run(["git", "commit", "-q", "-m", f"unpushed {i}"], cwd=str(repo), check=True, env=env, **no_console_passthrough_kwargs())
     return repo
 
 

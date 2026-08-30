@@ -66,7 +66,18 @@ def _sibling_directive(id_: str) -> dict[str, Any]:
     stands in for "the rest of the close" so AC2's "no sibling directive
     gained a `depends_on` edge onto the advisory" assertion has something
     concrete to check."""
-    return {"id": id_, "cli": "wsc-close", "args": [], "depends_on": None, "already_satisfied": True}
+    # Review: code-reviewer (Finding 2, nit) -- aligned with sibling test
+    # files in this slice (`wsc-close` left CONSUMES_MANIFEST/
+    # ASSEMBLER_DISPATCHABLE); inert either way since already_satisfied=True
+    # short-circuits before CLI resolution, but kept consistent for the next
+    # reader who copies this helper as a template.
+    return {
+        "id": id_,
+        "cli": "wsc-coverage-gate-runner",
+        "args": [],
+        "depends_on": None,
+        "already_satisfied": True,
+    }
 
 
 # ---------------------------------------------------------------------------

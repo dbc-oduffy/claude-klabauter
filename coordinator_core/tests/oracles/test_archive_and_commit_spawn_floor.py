@@ -65,6 +65,7 @@ from unittest.mock import patch
 import pytest
 
 from coordinator_core.ops.fleet._common import Move, archive_and_commit
+from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
@@ -76,6 +77,7 @@ def _git(args: list[str], cwd: Path) -> subprocess.CompletedProcess:
     # fixtures are deliberately shaped to match).
     return subprocess.run(
         ["git", *args], cwd=str(cwd), capture_output=True, text=True, check=True,
+        **no_console_creationflags(),
     )
 
 

@@ -41,6 +41,7 @@ from contextlib import redirect_stdout
 import pytest
 
 from coordinator_core.bash_guards import dispatch_checks as dc
+from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -103,9 +104,12 @@ def _run_real(cmd: str, timeout: float = 10.0) -> str:
             pytest.skip("git-bash not found on PATH")
         result = subprocess.run(
             [bash, "-c", cmd], capture_output=True, text=True, timeout=timeout
-        )
+        , **no_console_creationflags())
     else:
-        result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=timeout)
+        result = subprocess.run(
+            cmd, shell=True, capture_output=True, text=True, timeout=timeout,
+            **no_console_creationflags(),
+        )
     return result.stdout
 
 

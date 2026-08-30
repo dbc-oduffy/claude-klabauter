@@ -64,6 +64,7 @@ from coordinator_core.ops.distill_disposal_manifest import (
     evaluate_candidate_receipts,
     write_disposal_manifest,
 )
+from coordinator_core.win_portability import no_console_passthrough_kwargs
 
 # Spawns a real external process; runs at cadence gates, not per-commit.
 # Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
@@ -431,7 +432,7 @@ def test_dispatch_message_smoke(tmp_path: Path):
     import coordinator_core.ops  # noqa: F401 — triggers eager registration
 
     _full_handoff(tmp_path, "eligible.md")
-    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True, **no_console_passthrough_kwargs())
 
     msg = {
         "jsonrpc": "2.0",

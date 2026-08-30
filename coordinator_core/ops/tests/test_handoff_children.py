@@ -36,6 +36,7 @@ import coordinator_core.ops.handoff_children  # noqa: F401 — fires @register_o
 
 from coordinator_core.ipc import _REGISTRY
 from coordinator_core.ops.handoff_children import _handoff_has_live_children
+from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -75,6 +76,7 @@ def _make_git_repo(tmp_path: Path) -> Path:
             cwd=str(repo),
             capture_output=True,
             check=True,
+            **no_console_creationflags(),
         )
 
     _git("init", "-b", "main")

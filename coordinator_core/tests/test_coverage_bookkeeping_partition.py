@@ -69,6 +69,7 @@ import pytest
 
 from coordinator_core import coverage as cov
 from coordinator_core import dag
+from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -81,6 +82,7 @@ def _git(args: List[str], cwd: Path) -> subprocess.CompletedProcess:
         capture_output=True,
         text=True,
         check=True,
+        **no_console_creationflags(),
     )
 
 

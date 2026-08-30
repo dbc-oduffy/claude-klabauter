@@ -35,10 +35,7 @@ import coordinator_core.ops.handoff_correct_body  # noqa: F401 — fires @regist
 from coordinator_core import claim_state as _claim_state_module
 from coordinator_core.ipc import _REGISTRY
 from coordinator_core.ops.handoff_correct_body import _handler
-from coordinator_core.win_portability import (
-    no_console_creationflags,
-    no_console_passthrough_kwargs,
-)
+from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 

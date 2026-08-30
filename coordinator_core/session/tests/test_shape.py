@@ -27,6 +27,10 @@ from pathlib import Path
 import pytest
 
 from coordinator_core.session import core, scope, shape, touch_record
+from coordinator_core.win_portability import (
+    no_console_creationflags,
+    no_console_passthrough_kwargs,
+)
 
 # Every test in this file builds its repo via `_make_repo(tmp_path)`, spawning
 # real git (init/config/add/commit) because the production code under test --
@@ -45,12 +49,20 @@ pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 
 def _make_repo(tmp_path):
-    subprocess.run(["git", "init", "-q"], cwd=tmp_path)
-    subprocess.run(["git", "config", "user.email", "t@example.com"], cwd=tmp_path)
-    subprocess.run(["git", "config", "user.name", "t"], cwd=tmp_path)
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, **no_console_passthrough_kwargs())
+    subprocess.run(
+        ["git", "config", "user.email", "t@example.com"],
+        cwd=tmp_path,
+        **no_console_passthrough_kwargs(),
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "t"], cwd=tmp_path, **no_console_passthrough_kwargs()
+    )
     (tmp_path / "README.md").write_text("x")
-    subprocess.run(["git", "add", "."], cwd=tmp_path)
-    subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=tmp_path)
+    subprocess.run(["git", "add", "."], cwd=tmp_path, **no_console_passthrough_kwargs())
+    subprocess.run(
+        ["git", "commit", "-q", "-m", "init"], cwd=tmp_path, **no_console_passthrough_kwargs()
+    )
     return tmp_path
 
 
@@ -343,19 +355,30 @@ class TestSessionShapeMagnitude:
         repo = _make_repo(tmp_path)
         sdir = _sdir(repo, "m3")
         head0 = subprocess.run(
-            ["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, text=True
+            ["git", "rev-parse", "HEAD"],
+            cwd=repo,
+            capture_output=True,
+            text=True,
+            **no_console_creationflags(),
         ).stdout.strip()
         # \r / trailing-newline tolerance is part of the contract.
         (sdir / "head_at_start").write_text(head0 + "\r\n")
         for i in range(3):
             (repo / f"f{i}.txt").write_text(str(i))
-            subprocess.run(["git", "add", "."], cwd=repo)
-            subprocess.run(["git", "commit", "-q", "-m", f"c{i}"], cwd=repo)
+            subprocess.run(
+                ["git", "add", "."], cwd=repo, **no_console_passthrough_kwargs()
+            )
+            subprocess.run(
+                ["git", "commit", "-q", "-m", f"c{i}"],
+                cwd=repo,
+                **no_console_passthrough_kwargs(),
+            )
         ground = subprocess.run(
             ["git", "rev-list", "--count", f"{head0}..HEAD"],
             cwd=repo,
             capture_output=True,
             text=True,
+            **no_console_creationflags(),
         ).stdout.strip()
         out = json.loads(shape.session_shape_magnitude("m3", cwd=str(repo)))
         assert out["commits_since_start"] == int(ground) == 3

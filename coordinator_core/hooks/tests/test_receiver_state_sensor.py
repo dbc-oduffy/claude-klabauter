@@ -25,7 +25,16 @@ def _fake_session_dir(monkeypatch, tmp_path: Path):
     def _fake_session_dir(sid: str, cwd=None) -> str:
         return str(fake_base / sid)
 
+    def _fake_ensure_session(sid: str, cwd=None, **kwargs) -> str:
+        # `write_receiver_state` calls `ensure_session` directly (not `session_dir`)
+        # to create the session directory — patch it to the same fake base so the
+        # write never escapes to the real `.git/coordinator-sessions/` hub.
+        sdir = fake_base / sid
+        sdir.mkdir(parents=True, exist_ok=True)
+        return str(sdir)
+
     monkeypatch.setattr(session_core, "session_dir", _fake_session_dir)
+    monkeypatch.setattr(session_core, "ensure_session", _fake_ensure_session)
 
 
 def _write_transcript(tmp_path: Path, lines: list[str]) -> str:

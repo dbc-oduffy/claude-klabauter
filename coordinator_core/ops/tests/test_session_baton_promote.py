@@ -17,15 +17,16 @@ pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 from coordinator_core.ops import session_baton_promote as promote_mod
 from coordinator_core.session_baton import store
+from coordinator_core.win_portability import no_console_passthrough_kwargs
 
 
 def _make_repo(tmp_path):
-    subprocess.run(["git", "init", "-q"], cwd=tmp_path)
-    subprocess.run(["git", "config", "user.email", "t@example.com"], cwd=tmp_path)
-    subprocess.run(["git", "config", "user.name", "t"], cwd=tmp_path)
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "config", "user.email", "t@example.com"], cwd=tmp_path, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "config", "user.name", "t"], cwd=tmp_path, **no_console_passthrough_kwargs())
     (tmp_path / "README.md").write_text("x")
-    subprocess.run(["git", "add", "."], cwd=tmp_path)
-    subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=tmp_path)
+    subprocess.run(["git", "add", "."], cwd=tmp_path, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=tmp_path, **no_console_passthrough_kwargs())
     return tmp_path
 
 

@@ -29,6 +29,7 @@ from pathlib import Path
 import pytest
 
 import coordinator_core.pickup_assemble.apply as pa_apply
+from coordinator_core.win_portability import no_console_creationflags
 
 # Real-git spawn is load-bearing: AC10's scoped-commit test proves the
 # explicit pathspec survives a dirty shared index with real sibling-session
@@ -57,7 +58,7 @@ def _git(repo: Path, *args: str) -> subprocess.CompletedProcess:
         text=True,
         timeout=15,
         stdin=subprocess.DEVNULL,
-    )
+    **no_console_creationflags())
 
 
 def _init_repo(repo: Path) -> None:

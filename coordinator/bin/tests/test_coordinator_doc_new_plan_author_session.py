@@ -6,9 +6,18 @@ Purpose: `author:` on a scaffolded plan used to be a hardcoded, then a
 repo-level EM-role string (`claude-klabauter-em`) -- traceable to the repo, not
 to WHICH session minted the plan. `_resolve_plan_author` now stamps the
 minting session's own resolvable name (e.g. `claude-klabauter-76`) off
-`coordinator_core.session.harness_registry.self_record()`, falling back to the
+`coordinator_core.session.harness_registry.lookup(sid)`, falling back to the
 prior repo-level identity (`_resolve_from_repo()`) when the registry seam
 can't resolve one.
+
+2026-08-30 -- WHY `lookup(sid)` AND NOT `self_record()`, which this suite used
+to stub. warm-safe: see `_resolve_session_id`'s docstring in coordinator-doc-new.py
+for the full incident (audit
+`state/audits/2026-08-30-author-stamp-resolves-machine-wide.md`). The uuid now comes
+from the canonical warm-safe `resolve_current_session_id`, and the name is looked
+up BY that uuid -- one resolution feeding both halves. The consequence this suite
+now pins: the bare-name shape (`author: claude-klabauter-d8`, name with no uuid) is
+UNREACHABLE, where it used to be a documented fallback leg.
 
 Extension (same dispatch): `_scaffold_handoff`'s `authoring_session:` field
 was already machine-stamped, but as a raw session UUID with no human-readable
@@ -20,7 +29,7 @@ UUID + comment `_scaffold_handoff` already emits, falling back to the literal
 `PLACEHOLDER` (this function's own pre-existing unresolved convention, not
 handoff's omit-the-key convention) only when unresolvable.
 
-Stubs `harness_registry.self_record` and `_resolve_session_id` directly (no
+Stubs `harness_registry.lookup` and `_resolve_session_id` directly (no
 live registry file, no subprocess) -- same injection idiom this file's
 sibling suites use for session-state seams (see
 test_coordinator_doc_new_predecessor.py's docstring). Never asserts against a
@@ -65,21 +74,44 @@ class _FakeRecord:
         self.name = name
 
 
+def _lookup_returning(expected_sid: str, name: str | None):
+    """Stub `harness_registry.lookup` that ALSO asserts which sid it was asked for.
+
+    The plain-return stub the pre-2026-08-30 suite used could not have caught this
+    defect: `self_record()` took no argument, so a stub returning a fixed record was
+    indistinguishable from one keyed off the spawner's pid. Keying the fake on the
+    argument is what makes "the name belongs to the session the uuid names" testable
+    at all -- a stub that ignores its sid re-opens the exact hole.
+    """
+
+    def _lookup(sid):
+        if sid != expected_sid:
+            raise AssertionError(
+                f"registry looked up {sid!r}, but the stamped uuid is {expected_sid!r} "
+                "-- the name and the uuid must come from ONE resolution"
+            )
+        return _FakeRecord(name) if name is not None else None
+
+    return _lookup
+
+
 class ResolvePlanAuthorTest(unittest.TestCase):
-    def test_uses_self_record_name_when_resolvable(self):
+    def test_uses_registry_name_for_the_resolved_sid(self):
         with mock.patch(
-            "coordinator_core.session.harness_registry.self_record",
-            return_value=("sid-123", _FakeRecord("claude-klabauter-76")),
+            "coordinator_core.session.harness_registry.lookup",
+            side_effect=_lookup_returning("sid-123", "claude-klabauter-76"),
         ):
             with mock.patch.object(_cli, "_resolve_session_id", return_value="sid-123"):
                 self.assertEqual(
                     _cli._resolve_plan_author(), "claude-klabauter-76 (sid-123)"
                 )
 
-    def test_falls_back_to_repo_identity_when_self_record_is_none(self):
+    def test_falls_back_to_repo_identity_when_lookup_is_none(self):
         with mock.patch(
-            "coordinator_core.session.harness_registry.self_record",
+            "coordinator_core.session.harness_registry.lookup",
             return_value=None,
+        ), mock.patch.object(
+            _cli, "_resolve_session_id", return_value="sid-123"
         ), mock.patch.object(
             _cli, "_resolve_from_repo", return_value="claude-klabauter-em"
         ):
@@ -87,8 +119,10 @@ class ResolvePlanAuthorTest(unittest.TestCase):
 
     def test_falls_back_to_repo_identity_when_record_name_is_empty(self):
         with mock.patch(
-            "coordinator_core.session.harness_registry.self_record",
-            return_value=("sid-123", _FakeRecord(None)),
+            "coordinator_core.session.harness_registry.lookup",
+            return_value=_FakeRecord(None),
+        ), mock.patch.object(
+            _cli, "_resolve_session_id", return_value="sid-123"
         ), mock.patch.object(
             _cli, "_resolve_from_repo", return_value="claude-klabauter-em"
         ):
@@ -96,8 +130,10 @@ class ResolvePlanAuthorTest(unittest.TestCase):
 
     def test_falls_back_to_repo_identity_when_registry_read_raises(self):
         with mock.patch(
-            "coordinator_core.session.harness_registry.self_record",
+            "coordinator_core.session.harness_registry.lookup",
             side_effect=RuntimeError("registry unreadable"),
+        ), mock.patch.object(
+            _cli, "_resolve_session_id", return_value="sid-123"
         ), mock.patch.object(
             _cli, "_resolve_from_repo", return_value="claude-klabauter-em"
         ):
@@ -105,8 +141,8 @@ class ResolvePlanAuthorTest(unittest.TestCase):
 
     def test_scaffold_plan_threads_the_resolved_author(self):
         with mock.patch(
-            "coordinator_core.session.harness_registry.self_record",
-            return_value=("sid-123", _FakeRecord("claude-klabauter-76")),
+            "coordinator_core.session.harness_registry.lookup",
+            side_effect=_lookup_returning("sid-123", "claude-klabauter-76"),
         ):
             with mock.patch.object(_cli, "_resolve_session_id", return_value="sid-123"):
                 author = _cli._resolve_plan_author()
@@ -119,61 +155,89 @@ class ResolvePlanAuthorUuidTest(unittest.TestCase):
     """The uuid half is the point: a display name collides between live
     sessions and nothing recovers it afterwards. See `_resolve_plan_author`."""
 
-    def test_name_alone_when_session_id_is_the_unknown_sentinel(self):
+    def test_author_line_is_resolvable_to_a_session(self):
+        sid = "aac212bc-ea6b-4172-bd9f-b885f156c033"
         with mock.patch(
-            "coordinator_core.session.harness_registry.self_record",
-            return_value=("sid-123", _FakeRecord("claude-klabauter-76")),
-        ), mock.patch.object(_cli, "_resolve_session_id", return_value="em-unknown"):
-            self.assertEqual(_cli._resolve_plan_author(), "claude-klabauter-76")
+            "coordinator_core.session.harness_registry.lookup",
+            side_effect=_lookup_returning(sid, "claude-klabauter-76"),
+        ), mock.patch.object(_cli, "_resolve_session_id", return_value=sid):
+            author = _cli._resolve_plan_author()
+        self.assertIn(sid, author)
 
-    def test_name_alone_when_session_id_resolver_raises(self):
+
+class BareNameShapeIsUnreachableTest(unittest.TestCase):
+    """`author: claude-klabauter-d8` -- a name with no uuid -- must not be emittable.
+
+    That shape was the cleanest on-disk evidence of the 2026-08-30 defect: it can
+    only occur when the name and the uuid resolve through SEPARATE ladders and one
+    succeeds where the other does not. Both halves now derive from a single
+    `_resolve_session_id()` result, so an unresolvable session drops to the
+    repo-level identity rather than emitting half a record. Supersedes the two
+    `test_name_alone_when_*` cases, which asserted the defect's own shape as
+    intended behaviour.
+    """
+
+    def test_unknown_sentinel_yields_the_repo_identity_not_a_bare_name(self):
         with mock.patch(
-            "coordinator_core.session.harness_registry.self_record",
-            return_value=("sid-123", _FakeRecord("claude-klabauter-76")),
+            "coordinator_core.session.harness_registry.lookup",
+            return_value=_FakeRecord("claude-klabauter-76"),
+        ), mock.patch.object(
+            _cli, "_resolve_from_repo", return_value="claude-klabauter-em"
+        ), mock.patch.object(
+            _cli, "_resolve_session_id", return_value="em-unknown"
+        ):
+            self.assertEqual(_cli._resolve_plan_author(), "claude-klabauter-em")
+
+    def test_resolver_raising_yields_the_repo_identity_not_a_bare_name(self):
+        with mock.patch(
+            "coordinator_core.session.harness_registry.lookup",
+            return_value=_FakeRecord("claude-klabauter-76"),
+        ), mock.patch.object(
+            _cli, "_resolve_from_repo", return_value="claude-klabauter-em"
         ), mock.patch.object(
             _cli, "_resolve_session_id", side_effect=RuntimeError("seam down")
         ):
-            self.assertEqual(_cli._resolve_plan_author(), "claude-klabauter-76")
-
-    def test_author_line_is_resolvable_to_a_session(self):
-        with mock.patch(
-            "coordinator_core.session.harness_registry.self_record",
-            return_value=("sid-123", _FakeRecord("claude-klabauter-76")),
-        ), mock.patch.object(
-            _cli, "_resolve_session_id", return_value="aac212bc-ea6b-4172-bd9f-b885f156c033"
-        ):
-            author = _cli._resolve_plan_author()
-        self.assertIn("aac212bc-ea6b-4172-bd9f-b885f156c033", author)
+            self.assertEqual(_cli._resolve_plan_author(), "claude-klabauter-em")
 
 
 class ResolveSessionDisplayNameTest(unittest.TestCase):
     def test_returns_record_name_when_resolvable(self):
         with mock.patch(
-            "coordinator_core.session.harness_registry.self_record",
-            return_value=("sid-123", _FakeRecord("claude-klabauter-76")),
+            "coordinator_core.session.harness_registry.lookup",
+            side_effect=_lookup_returning("sid-123", "claude-klabauter-76"),
         ):
-            self.assertEqual(_cli._resolve_session_display_name(), "claude-klabauter-76")
+            self.assertEqual(
+                _cli._resolve_session_display_name("sid-123"), "claude-klabauter-76"
+            )
 
-    def test_returns_none_when_self_record_is_none(self):
+    def test_returns_none_when_lookup_is_none(self):
         with mock.patch(
-            "coordinator_core.session.harness_registry.self_record",
+            "coordinator_core.session.harness_registry.lookup",
             return_value=None,
         ):
-            self.assertIsNone(_cli._resolve_session_display_name())
+            self.assertIsNone(_cli._resolve_session_display_name("sid-123"))
 
     def test_returns_none_when_record_name_is_empty(self):
         with mock.patch(
-            "coordinator_core.session.harness_registry.self_record",
-            return_value=("sid-123", _FakeRecord(None)),
+            "coordinator_core.session.harness_registry.lookup",
+            return_value=_FakeRecord(None),
         ):
-            self.assertIsNone(_cli._resolve_session_display_name())
+            self.assertIsNone(_cli._resolve_session_display_name("sid-123"))
 
     def test_returns_none_when_registry_read_raises(self):
         with mock.patch(
-            "coordinator_core.session.harness_registry.self_record",
+            "coordinator_core.session.harness_registry.lookup",
             side_effect=RuntimeError("registry unreadable"),
         ):
-            self.assertIsNone(_cli._resolve_session_display_name())
+            self.assertIsNone(_cli._resolve_session_display_name("sid-123"))
+
+    def test_returns_none_for_the_unknown_sentinel_without_touching_the_registry(self):
+        """No sid means no lookup -- never a registry scan that could match a peer."""
+        with mock.patch(
+            "coordinator_core.session.harness_registry.lookup",
+            side_effect=AssertionError("registry must not be consulted for em-unknown"),
+        ):
+            self.assertIsNone(_cli._resolve_session_display_name("em-unknown"))
 
 
 class ScaffoldHandoffAuthoringSessionDisplayNameTest(unittest.TestCase):

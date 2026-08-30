@@ -56,6 +56,7 @@ from coordinator_core.ops.ceremony.commit_gates import (
     parse_step267_blocks,
 )
 from coordinator_core.ops.ceremony.git_native import status_porcelain as _status_porcelain
+from coordinator_core.win_portability import no_console_creationflags
 
 # Real-git spawn is load-bearing: dirty_tree_gate classifies real porcelain
 # output (staged/EOL-phantom/rename-destination-only), which a mocked git
@@ -67,7 +68,7 @@ _EM_DASH = " — "
 
 
 def _git(args, cwd) -> None:
-    subprocess.run(["git", *args], cwd=str(cwd), check=True, capture_output=True, text=True)
+    subprocess.run(["git", *args], cwd=str(cwd), check=True, capture_output=True, text=True, **no_console_creationflags())
 
 
 def _init_repo(tmp_path: Path) -> Path:
@@ -98,6 +99,7 @@ def _make_conflicted_repo(tmp_path: Path) -> Path:
     base_branch = subprocess.run(
         ["git", "branch", "--show-current"],
         cwd=str(repo), capture_output=True, text=True, check=True,
+        **no_console_creationflags(),
     ).stdout.strip()
 
     _git(["checkout", "-q", "-b", "side"], repo)
@@ -111,7 +113,7 @@ def _make_conflicted_repo(tmp_path: Path) -> Path:
     # Left deliberately unresolved -- `git merge` exits non-zero here, which
     # is the point: the index now carries stage-1/2/3 entries for
     # conflict.md, never committed or resolved.
-    subprocess.run(["git", "merge", "-q", "side"], cwd=str(repo), capture_output=True, text=True)
+    subprocess.run(["git", "merge", "-q", "side"], cwd=str(repo), capture_output=True, text=True, **no_console_creationflags())
     return repo
 
 
@@ -260,6 +262,7 @@ def test_deletion_gate_assertion_1_recognizes_staged_rename_source(tmp_path):
     name_status = subprocess.run(
         ["git", "diff", "--cached", "--name-status", "-M"],
         cwd=str(repo), capture_output=True, text=True, check=True,
+        **no_console_creationflags(),
     ).stdout
     assert name_status.startswith("R")
 
@@ -1269,7 +1272,8 @@ def _old_deletion_block_gate(
 
 def _git_stdout(args, cwd) -> str:
     return subprocess.run(
-        ["git", *args], cwd=str(cwd), check=True, capture_output=True, text=True
+        ["git", *args], cwd=str(cwd), check=True, capture_output=True, text=True,
+        **no_console_creationflags(),
     ).stdout.strip()
 
 
@@ -1389,6 +1393,7 @@ def _shape_symlink(tmp_path):
     proc = subprocess.run(
         ["git", "hash-object", "-w", "--stdin"],
         cwd=str(repo), input="target.txt", capture_output=True, text=True, check=True,
+        **no_console_creationflags(),
     )
     blob = proc.stdout.strip()
     _git(["update-index", "--add", "--cacheinfo", f"120000,{blob},link-me"], repo)

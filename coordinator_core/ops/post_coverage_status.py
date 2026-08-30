@@ -346,20 +346,12 @@ def _changed_files_or_git_failure(commit_range: str) -> tuple[list[str], bool]:
 
     Returns (changed_files, git_failed).
     """
-    import subprocess
+    from coordinator_core.git.run import run_git
 
-    from coordinator_core.win_portability import no_console_creationflags
-
-    proc = subprocess.run(
-        ["git", "diff", "--name-only", commit_range],
-        capture_output=True,
-        text=True,
-        check=False,
-        **no_console_creationflags(),
-    )
-    if proc.returncode != 0:
+    result = run_git(["diff", "--name-only", commit_range])
+    if result.returncode != 0:
         return [], True
-    return [line for line in proc.stdout.splitlines() if line], False
+    return [line for line in result.stdout.splitlines() if line], False
 
 
 def compute_status(commit_range: str, repo_root: Optional[str] = None) -> tuple[str, str]:

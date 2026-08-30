@@ -18,6 +18,7 @@ from coordinator_core.install.clone_sibling_repo import (
     _clone_idempotent,
     clone_idempotent,
 )
+from coordinator_core.win_portability import no_console_creationflags
 
 # Spawns a real external process; runs at cadence gates, not per-commit.
 # Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
@@ -37,6 +38,7 @@ def _run_git(args: list[str], cwd: Path) -> None:
         text=True,
         timeout=_GIT_TIMEOUT,
         check=False,
+        **no_console_creationflags(),
     )
     assert result.returncode == 0, f"git {args} failed: {result.stderr}"
 

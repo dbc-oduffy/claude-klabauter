@@ -42,10 +42,7 @@ from coordinator_core.ops.ceremony.push import (
     PUSH_STATUS_NOT_ATTEMPTED,
 )
 from coordinator_core.workstream_complete import directives_commit_tail as _tail
-from coordinator_core.win_portability import (
-    no_console_creationflags,
-    no_console_passthrough_kwargs,
-)
+from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 

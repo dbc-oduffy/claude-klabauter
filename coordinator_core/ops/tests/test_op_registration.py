@@ -67,6 +67,7 @@ from pathlib import Path
 import pytest
 
 import coordinator_core.ops  # noqa: F401 — triggers every op module's register_op(...) side-effect
+from coordinator_core.win_portability import no_console_passthrough_kwargs
 import coordinator_core.ipc as ipc
 from coordinator_core.authz.classification import OpClass, classify
 from coordinator_core.benchmarks.budget import resolve_budget
@@ -358,7 +359,7 @@ def test_memo_triage_dispatch_message_smoke(tmp_path, monkeypatch):
 
     monkeypatch.setenv("CLAUDE_HOME", str(tmp_path / "dot-claude"))
 
-    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True, **no_console_passthrough_kwargs())
 
     msg = {
         "jsonrpc": "2.0",
@@ -394,12 +395,12 @@ def test_memo_triage_dispatch_message_smoke(tmp_path, monkeypatch):
 def test_cartography_tree_dispatch_message_smoke(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
-    subprocess.run(["git", "init", "-q", "-b", "main"], cwd=repo, check=True)
-    subprocess.run(["git", "config", "user.email", "cartography-test@claude-klabauter.test"], cwd=repo, check=True)
-    subprocess.run(["git", "config", "user.name", "Cartography Test"], cwd=repo, check=True)
+    subprocess.run(["git", "init", "-q", "-b", "main"], cwd=repo, check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "config", "user.email", "cartography-test@claude-klabauter.test"], cwd=repo, check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "config", "user.name", "Cartography Test"], cwd=repo, check=True, **no_console_passthrough_kwargs())
     (repo / "mod.py").write_text("x = 1\n", encoding="utf-8")
-    subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
-    subprocess.run(["git", "commit", "-q", "-m", "add mod.py"], cwd=repo, check=True)
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "commit", "-q", "-m", "add mod.py"], cwd=repo, check=True, **no_console_passthrough_kwargs())
 
     msg = {
         "jsonrpc": "2.0",

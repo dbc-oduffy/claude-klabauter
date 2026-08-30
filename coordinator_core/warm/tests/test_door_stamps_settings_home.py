@@ -40,6 +40,7 @@ from coordinator_core.warm.tests.test_door_read_deadline import (
     _make_stub_engine_root,
     _pipe_name_for,
 )
+from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [
     pytest.mark.spawns_process,
@@ -76,7 +77,7 @@ def _exchange(root: Path, settings_home: str | None, reply: bytes = _OK_REPLY):
             env=env,
             timeout=60,
             cwd=str(root),
-        )
+        **no_console_creationflags())
     finally:
         server.close()
 

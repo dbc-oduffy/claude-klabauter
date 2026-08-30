@@ -35,6 +35,10 @@ from coordinator_core.ops.install_doe_claude_precommit_hook import (
 )
 import coordinator_core.ops.install_doe_claude_precommit_hook as _mod
 from coordinator_core.testing.sh_interpreter import require_sh_interpreter
+from coordinator_core.win_portability import (
+    no_console_creationflags,
+    no_console_passthrough_kwargs,
+)
 
 # Declared, not excused: this file behaviorally executes the generated hook body
 # via real `sh` against stub gate scripts, and validates it with `sh -n`, to prove
@@ -46,7 +50,9 @@ pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 
 def _git_init(path: Path) -> None:
-    subprocess.run(["git", "init", "-q", str(path)], check=True)
+    subprocess.run(
+        ["git", "init", "-q", str(path)], check=True, **no_console_passthrough_kwargs()
+    )
 
 
 def _hook_path(repo: Path) -> Path:
@@ -81,7 +87,12 @@ def _run_hook(
     if extra_env:
         env.update(extra_env)
     return subprocess.run(
-        [require_sh_interpreter(), str(hook)], cwd=str(cwd), capture_output=True, text=True, env=env
+        [require_sh_interpreter(), str(hook)],
+        cwd=str(cwd),
+        capture_output=True,
+        text=True,
+        env=env,
+        **no_console_creationflags(),
     )
 
 
@@ -423,7 +434,10 @@ def test_hook_sh_syntax_is_valid(tmp_path, monkeypatch):
     commonly exit 2)."""
     repo = _install(tmp_path, monkeypatch)
     result = subprocess.run(
-        [require_sh_interpreter(), "-n", str(_hook_path(repo))], capture_output=True, text=True
+        [require_sh_interpreter(), "-n", str(_hook_path(repo))],
+        capture_output=True,
+        text=True,
+        **no_console_creationflags(),
     )
     assert result.returncode == 0, result.stderr
 

@@ -81,6 +81,7 @@ pytestmark = [
 
 from coordinator_core.ops import priority_drain, priority_set  # noqa: E402
 from coordinator_core.ops.priority_drain import drain  # noqa: E402
+from coordinator_core.win_portability import no_console_creationflags
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
@@ -334,7 +335,7 @@ def test_ac1_durability_across_real_crash_mid_drain(_isolated_central_root):
         text=True,
         timeout=60,
         cwd=str(_PROJECT_ROOT),
-        env=env,
+        env=env, **no_console_creationflags(),
     )
 
     # A REAL SIGKILL: the subprocess must NOT have exited cleanly, and must

@@ -23,6 +23,7 @@ import yaml
 
 from coordinator_core.ops.normalize_claimed_frontmatter import main, normalize_one
 import coordinator_core.ops.normalize_claimed_frontmatter as _normalize_claimed_frontmatter_mod
+from coordinator_core.win_portability import no_console_passthrough_kwargs
 
 # main()'s CLI-level walkDir/git-tracked-file gating (cases 6+) reads real
 # `git ls-files` output to decide which paths qualify for rewrite — the
@@ -233,9 +234,9 @@ def test_gate_dependency_retirement_preserves_value_longer_than_former_60_char_t
 # ---------------------------------------------------------------------------
 
 def _init_git_repo(root: Path) -> None:
-    subprocess.run(["git", "init", "-q"], cwd=root, check=True)
-    subprocess.run(["git", "config", "user.email", "t@example.com"], cwd=root, check=True)
-    subprocess.run(["git", "config", "user.name", "T"], cwd=root, check=True)
+    subprocess.run(["git", "init", "-q"], cwd=root, check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "config", "user.email", "t@example.com"], cwd=root, check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "config", "user.name", "T"], cwd=root, check=True, **no_console_passthrough_kwargs())
 
 
 def test_main_flips_tracked_file_and_reports_on_stdout(tmp_path, capsys):
@@ -243,7 +244,7 @@ def test_main_flips_tracked_file_and_reports_on_stdout(tmp_path, capsys):
     handoffs = tmp_path / "state" / "handoffs"
     handoffs.mkdir(parents=True)
     p = _write_fixture(handoffs, "sha.md", "abc1234f")
-    subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True, **no_console_passthrough_kwargs())
 
     rc = main(["--root", str(tmp_path), "--type", "handoff"])
     assert rc == 0
@@ -258,7 +259,7 @@ def test_main_dry_run_does_not_write(tmp_path, capsys):
     handoffs = tmp_path / "state" / "handoffs"
     handoffs.mkdir(parents=True)
     p = _write_fixture(handoffs, "sha.md", "abc1234f")
-    subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True, **no_console_passthrough_kwargs())
     original = p.read_text(encoding="utf-8")
 
     rc = main(["--root", str(tmp_path), "--type", "handoff", "--dry-run"])
@@ -288,7 +289,7 @@ def test_main_no_drift_prints_stderr_message(tmp_path, capsys):
     (handoffs / "plain.md").write_text(
         "---\nstatus: open\n---\n\nNo marker.\n", encoding="utf-8"
     )
-    subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True, **no_console_passthrough_kwargs())
 
     rc = main(["--root", str(tmp_path), "--type", "handoff"])
     assert rc == 0
@@ -315,7 +316,7 @@ def test_main_block_scalar_field_errors_but_continues_scan(tmp_path, capsys):
         encoding="utf-8",
     )
     good = _write_fixture(handoffs, "good.md", "abc1234f")
-    subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True, **no_console_passthrough_kwargs())
 
     rc = main(["--root", str(tmp_path), "--type", "handoff"])
     assert rc == 1
@@ -335,7 +336,7 @@ def test_get_tracked_files_call_count_does_not_grow_with_dir_count(tmp_path, cap
     for sub in ("state/handoffs", "docs/plans", "docs/decisions", "state/reviews"):
         (tmp_path / sub).mkdir(parents=True)
     p = _write_fixture(tmp_path / "state" / "handoffs", "sha.md", "abc1234f")
-    subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True, **no_console_passthrough_kwargs())
 
     real_batch = _normalize_claimed_frontmatter_mod.get_tracked_files_batch
     calls = []

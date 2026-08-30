@@ -19,6 +19,7 @@ import coordinator_core.ops.cascade_backstop_sweep as sweep_mod
 import coordinator_core.ops.handoff_children  # noqa: F401 — fires @register_op side effect
 import coordinator_core.ops.handoff_transition  # noqa: F401 — fires @register_op side effect
 from coordinator_core.frontmatter.primitives import read_fm_field, split_frontmatter
+from coordinator_core.win_portability import no_console_creationflags
 
 # Spawns a real external process; runs at cadence gates, not per-commit.
 # Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
@@ -46,6 +47,7 @@ def _git(repo: Path, *args: str) -> subprocess.CompletedProcess:
         env=_GIT_ENV,
         timeout=15,
         stdin=subprocess.DEVNULL,
+        **no_console_creationflags(),
     )
 
 
@@ -138,6 +140,7 @@ class TestNeverWrites:
             ["git", "-C", str(repo), "status", "--porcelain"],
             capture_output=True,
             text=True,
+            **no_console_creationflags(),
         )
         assert status.stdout.strip() == "", f"backstop sweep left a dirty tree: {status.stdout!r}"
 
@@ -302,6 +305,7 @@ class TestSlugPrefixFamilyDivergence:
             ["git", "-C", str(repo), "status", "--porcelain"],
             capture_output=True,
             text=True,
+            **no_console_creationflags(),
         )
         assert status.stdout.strip() == ""
 

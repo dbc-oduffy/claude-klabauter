@@ -32,6 +32,7 @@ import subprocess
 import sys
 
 import pytest
+from coordinator_core.win_portability import no_console_creationflags
 
 # Spawns a real external process; runs at cadence gates, not per-commit.
 # Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
@@ -101,7 +102,7 @@ def test_importing_the_dispatch_chain_does_not_load_the_hooks_package() -> None:
         cwd=str(_REPO_ROOT),
         capture_output=True,
         text=True,
-    )
+    **no_console_creationflags())
     assert result.returncode == 0, (
         "probe failed to import the guard chain:\n" + result.stderr[-2000:]
     )
@@ -141,7 +142,7 @@ def test_evaluating_a_benign_command_does_not_load_the_hooks_package() -> None:
         cwd=str(_REPO_ROOT),
         capture_output=True,
         text=True,
-    )
+    **no_console_creationflags())
     assert result.returncode == 0, (
         "probe failed to evaluate a benign command:\n" + result.stderr[-2000:]
     )

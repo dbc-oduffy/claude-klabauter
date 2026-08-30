@@ -49,6 +49,7 @@ from pathlib import Path
 import pytest
 
 from coordinator_core.ops.ceremony import git_native
+from coordinator_core.win_portability import no_console_creationflags
 
 from .fixtures.real_git import real_git_repo
 
@@ -65,7 +66,7 @@ pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 def _git(args: list[str], cwd: Path, **kwargs) -> subprocess.CompletedProcess:
     return subprocess.run(
-        ["git", *args], cwd=str(cwd), capture_output=True, text=True, check=True, **kwargs
+        ["git", *args], cwd=str(cwd), capture_output=True, text=True, check=True, **kwargs, **no_console_creationflags()
     )
 
 
@@ -81,7 +82,11 @@ def _head_sha(repo: Path, ref: str = "HEAD") -> str:
 def _assert_ac2_oracle(repo: Path) -> None:
     assert _porcelain(repo) == [], "git status --porcelain is not empty"
     fsck = subprocess.run(
-        ["git", "fsck", "--strict"], cwd=str(repo), capture_output=True, text=True
+        ["git", "fsck", "--strict"],
+        cwd=str(repo),
+        capture_output=True,
+        text=True,
+        **no_console_creationflags(),
     )
     assert fsck.returncode == 0, f"git fsck --strict failed: {fsck.stdout}\n{fsck.stderr}"
 

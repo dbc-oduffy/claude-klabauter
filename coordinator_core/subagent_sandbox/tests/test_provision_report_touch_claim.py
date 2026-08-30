@@ -31,6 +31,7 @@ from coordinator_core.ops.session import safe_commit_offer
 from coordinator_core.session import core as session_core
 from coordinator_core.subagent_sandbox.provision_report import _provision
 from coordinator_core.subagent_sandbox.provision_report import main as provision_main
+from coordinator_core.win_portability import no_console_passthrough_kwargs
 
 # Spawns a real external process; runs at cadence gates, not per-commit.
 # Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
@@ -48,11 +49,12 @@ BARE_HEX_AGENT_ID = "abc123def4567890"
 def git_repo(tmp_path: Path) -> Path:
     """A real, empty git repo rooted at tmp_path (mirrors
     test_provision_report.py's identical fixture)."""
-    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True, **no_console_passthrough_kwargs())
     subprocess.run(
-        ["git", "config", "user.email", "test@example.com"], cwd=tmp_path, check=True
+        ["git", "config", "user.email", "test@example.com"], cwd=tmp_path, check=True,
+        **no_console_passthrough_kwargs(),
     )
-    subprocess.run(["git", "config", "user.name", "Test"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=tmp_path, check=True, **no_console_passthrough_kwargs())
     return tmp_path
 
 

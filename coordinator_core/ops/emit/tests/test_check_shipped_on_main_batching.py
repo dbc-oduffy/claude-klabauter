@@ -21,6 +21,7 @@ import pytest
 
 from coordinator_core.ops.emit import resolvers
 from coordinator_core.ops.emit.resolvers import main
+from coordinator_core.win_portability import no_console_creationflags
 
 # Declared, not excused: this file spawns a real process (git/python) because
 # the property under test is that binary's own behaviour, which no fixture
@@ -36,6 +37,7 @@ def _git(repo: Path, *args: str) -> subprocess.CompletedProcess:
         capture_output=True,
         text=True,
         check=True,
+        **no_console_creationflags(),
     )
 
 
@@ -56,8 +58,8 @@ def _shared_repo(tmp_path_factory):
     tmp_path = tmp_path_factory.mktemp("check_shipped_on_main_batching")
     bare = tmp_path / "bare_origin.git"
     work = tmp_path / "work"
-    subprocess.run(["git", "init", "--bare", "-b", "main", str(bare)], check=True, capture_output=True)
-    subprocess.run(["git", "init", "-b", "main", str(work)], check=True, capture_output=True)
+    subprocess.run(["git", "init", "--bare", "-b", "main", str(bare)], check=True, capture_output=True, **no_console_creationflags())
+    subprocess.run(["git", "init", "-b", "main", str(work)], check=True, capture_output=True, **no_console_creationflags())
     _git(work, "config", "user.email", "test@example.com")
     _git(work, "config", "user.name", "Test")
     _git(work, "remote", "add", "origin", str(bare))

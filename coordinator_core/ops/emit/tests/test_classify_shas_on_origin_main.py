@@ -23,6 +23,7 @@ import subprocess
 from pathlib import Path
 
 from coordinator_core.ops.emit.resolvers import classify_shas_on_origin_main, sha_on_origin_main
+from coordinator_core.win_portability import no_console_creationflags
 
 import pytest
 
@@ -40,6 +41,7 @@ def _git(repo: Path, *args: str) -> subprocess.CompletedProcess:
         capture_output=True,
         text=True,
         check=True,
+        **no_console_creationflags(),
     )
 
 

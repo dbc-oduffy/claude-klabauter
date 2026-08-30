@@ -35,10 +35,7 @@ import coordinator_core.ops.completion_ops  # noqa: F401 — fires @register_op
 
 from coordinator_core import claim_state as _claim_state_module
 from coordinator_core.ops.completion_ops import day_coverage_sweep
-from coordinator_core.win_portability import (
-    no_console_creationflags,
-    no_console_passthrough_kwargs,
-)
+from coordinator_core.win_portability import no_console_creationflags
 
 # Spawns a real external process; runs at cadence gates, not per-commit.
 # Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py

@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import subprocess
 from pathlib import Path
+from coordinator_core.win_portability import no_console_creationflags
 
 
 def _git(args: list[str], cwd: Path) -> subprocess.CompletedProcess:
@@ -39,7 +40,7 @@ def _git(args: list[str], cwd: Path) -> subprocess.CompletedProcess:
         cwd=str(cwd),
         capture_output=True,
         text=True,
-        check=True,
+        check=True, **no_console_creationflags(),
     )
 
 

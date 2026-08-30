@@ -23,14 +23,15 @@ import pytest
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 from coordinator_core.git import content_hash
+from coordinator_core.win_portability import no_console_creationflags
 
 
 def _real_git(args, cwd) -> None:
-    subprocess.run(["git", *args], cwd=str(cwd), check=True, capture_output=True, text=True)
+    subprocess.run(["git", *args], cwd=str(cwd), check=True, capture_output=True, text=True, **no_console_creationflags())
 
 
 def _real_git_out(cwd, *args) -> str:
-    result = subprocess.run(["git", *args], cwd=str(cwd), capture_output=True, text=True, check=True)
+    result = subprocess.run(["git", *args], cwd=str(cwd), capture_output=True, text=True, check=True, **no_console_creationflags())
     return result.stdout.strip()
 
 

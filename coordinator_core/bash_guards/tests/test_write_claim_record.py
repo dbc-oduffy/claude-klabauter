@@ -518,6 +518,103 @@ def test_c1_unreadable_or_vanished_script_raises_nothing(tmp_path, monkeypatch):
     assert _touched_paths(root) == set()
 
 
+# ---------------------------------------------------------------------------
+# C1 P1/P2 (docs/plans/2026-08-30-the-guard-s-own-remediation-route-hides.md,
+# review round): each row of the reviewer's measured table -- a case-folded
+# head verb, a version-pinned interpreter, a value-taking flag ahead of the
+# script operand, and a chained invocation naming two DIFFERENT scripts.
+# `env python3 <script>` is deliberately NOT included here -- the reviewer's
+# claim about it was wrong (already covered by `interpreter-payload`-style
+# depth-0 resolution) and this round records that, it does not "fix" it.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "head",
+    [
+        pytest.param("Python3", id="capitalized"),
+        pytest.param("PYTHON3", id="all-caps"),
+    ],
+)
+def test_c1_case_folded_head_verb_still_claims(tmp_path, monkeypatch, head):
+    root = _repo(tmp_path)
+    scratch = _scratchpad(tmp_path)
+    _patch_temp_roots(monkeypatch, scratch)
+
+    script = os.path.join(scratch, "fix.py")
+    with open(script, "w", encoding="utf-8") as fh:
+        fh.write("open('f.py', 'w').write('hi')\n")
+
+    record_write_claims(f"{head} {script}", _SESSION_ID, root, denied=False)
+    assert _touched_paths(root) == {"f.py"}
+
+
+def test_c1_version_pinned_interpreter_still_claims(tmp_path, monkeypatch):
+    root = _repo(tmp_path)
+    scratch = _scratchpad(tmp_path)
+    _patch_temp_roots(monkeypatch, scratch)
+
+    script = os.path.join(scratch, "fix.py")
+    with open(script, "w", encoding="utf-8") as fh:
+        fh.write("open('f.py', 'w').write('hi')\n")
+
+    record_write_claims(f"python3.11 {script}", _SESSION_ID, root, denied=False)
+    assert _touched_paths(root) == {"f.py"}
+
+
+def test_c1_value_taking_flag_ahead_of_operand_still_claims(tmp_path, monkeypatch):
+    root = _repo(tmp_path)
+    scratch = _scratchpad(tmp_path)
+    _patch_temp_roots(monkeypatch, scratch)
+
+    script = os.path.join(scratch, "fix.py")
+    with open(script, "w", encoding="utf-8") as fh:
+        fh.write("open('f.py', 'w').write('hi')\n")
+
+    record_write_claims(
+        f"python3 -X faulthandler {script}", _SESSION_ID, root, denied=False
+    )
+    assert _touched_paths(root) == {"f.py"}
+
+
+def test_c1_chained_invocation_claims_both_different_targets(tmp_path, monkeypatch):
+    """The obvious same-path chained test proves nothing -- both scripts here
+    write a DIFFERENT path, so only returning ALL matching operands (not just
+    the first) makes this pass."""
+    root = _repo(tmp_path)
+    scratch = _scratchpad(tmp_path)
+    _patch_temp_roots(monkeypatch, scratch)
+
+    script_a = os.path.join(scratch, "a.py")
+    with open(script_a, "w", encoding="utf-8") as fh:
+        fh.write("open('a-target.py', 'w').write('hi')\n")
+    script_b = os.path.join(scratch, "b.py")
+    with open(script_b, "w", encoding="utf-8") as fh:
+        fh.write("open('b-target.py', 'w').write('hi')\n")
+
+    record_write_claims(
+        f"python3 {script_a} && python3 {script_b}", _SESSION_ID, root, denied=False
+    )
+    assert _touched_paths(root) == {"a-target.py", "b-target.py"}
+
+
+def test_c1_env_python3_already_claims_without_a_fix(tmp_path, monkeypatch):
+    """Ground-truth correction: the reviewer's claim that `env python3
+    <script>` drops its claim was wrong -- it already resolves via the same
+    depth-0 walk (`env` is transparent to `resolve_command_positions`). This
+    pins the already-correct behaviour so it cannot regress."""
+    root = _repo(tmp_path)
+    scratch = _scratchpad(tmp_path)
+    _patch_temp_roots(monkeypatch, scratch)
+
+    script = os.path.join(scratch, "fix.py")
+    with open(script, "w", encoding="utf-8") as fh:
+        fh.write("open('f.py', 'w').write('hi')\n")
+
+    record_write_claims(f"env python3 {script}", _SESSION_ID, root, denied=False)
+    assert _touched_paths(root) == {"f.py"}
+
+
 def test_ac7_cost_under_5ms_total_and_no_subprocess(monkeypatch):
     # Deliberately NOT pytest's own `tmp_path` (which lands under the OS
     # user-profile temp dir): on this box that path is under real-time

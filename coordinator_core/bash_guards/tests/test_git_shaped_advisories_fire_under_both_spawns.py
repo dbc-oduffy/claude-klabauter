@@ -37,10 +37,18 @@ class TestValidateCommitBothDialects:
     def _init_repo_with_no_staged_changes(self, tmp_path):
         import subprocess
 
+        from coordinator_core.win_portability import no_console_creationflags
+
         root = str(tmp_path)
 
         def _git(*args):
-            subprocess.run(["git", *args], cwd=root, check=True, capture_output=True)
+            subprocess.run(
+                ["git", *args],
+                cwd=root,
+                check=True,
+                capture_output=True,
+                **no_console_creationflags(),
+            )
 
         _git("init", "-q")
         _git("config", "user.email", "t@example.com")

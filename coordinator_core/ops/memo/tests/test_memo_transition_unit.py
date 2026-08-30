@@ -38,6 +38,7 @@ from coordinator_core.locked_write import LockTimeout
 # across tests.
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 from coordinator_core.ops.fleet._memo_summary import _SUMMARY_MAX_CHARS
+from coordinator_core.win_portability import no_console_creationflags
 from coordinator_core.ops.memo_transition import (
     _action,
     _claim,
@@ -67,16 +68,17 @@ def _fm_dict(memo_path) -> dict:
 def _git_init(path: Path) -> None:
     """Initialise a bare-minimum git repo so git rev-parse --show-toplevel works."""
     path.mkdir(parents=True, exist_ok=True)
-    subprocess.run(["git", "init", str(path)], check=True, capture_output=True)
+    subprocess.run(["git", "init", str(path)], check=True, capture_output=True, **no_console_creationflags())
     # Commit something so the repo is valid (not strictly required for rev-parse but safer).
     (path / ".gitkeep").touch()
-    subprocess.run(["git", "-C", str(path), "add", ".gitkeep"], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(path), "add", ".gitkeep"], check=True, capture_output=True, **no_console_creationflags())
     subprocess.run(
         ["git", "-C", str(path), "commit", "-m", "init", "--allow-empty-message"],
         check=True, capture_output=True,
         env={**__import__("os").environ, "GIT_AUTHOR_NAME": "test",
              "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "test",
              "GIT_COMMITTER_EMAIL": "t@t"},
+        **no_console_creationflags(),
     )
 
 
@@ -87,9 +89,9 @@ def _git_track(repo: Path, target: Path) -> None:
            "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "test",
            "GIT_COMMITTER_EMAIL": "t@t"}
     subprocess.run(["git", "-C", str(repo), "add", "--", rel],
-                   check=True, capture_output=True)
+                   check=True, capture_output=True, **no_console_creationflags())
     subprocess.run(["git", "-C", str(repo), "commit", "-m", "deliver memo", "--", rel],
-                   check=True, capture_output=True, env=env)
+                   check=True, capture_output=True, env=env, **no_console_creationflags())
 
 
 # ---------------------------------------------------------------------------

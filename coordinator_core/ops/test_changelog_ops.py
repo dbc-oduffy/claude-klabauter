@@ -106,7 +106,7 @@ def test_main_positive_backfills_gap(tmp_path: Path, monkeypatch, capsys) -> Non
     (repo / "README.md").write_text("hello\n")
     subprocess.run(["git", "-C", str(repo), "add", "-A"], check=True, **no_console_passthrough_kwargs())
     subprocess.run(
-        ["git", "-C", str(repo), "commit", "-q", "-m", "init commit"], check=True
+        ["git", "-C", str(repo), "commit", "-q", "-m", "init commit"], check=True,
         **no_console_passthrough_kwargs(),
     )
 
@@ -573,7 +573,7 @@ def test_plans_touched_dangling_path_renders_removed(tmp_path: Path) -> None:
     _commit_plan(repo, "README.md", "root\n")
     _commit_plan(repo, "docs/plans/2026-07-14-doomed.md", "---\nstatus: draft\n---\n\n# X\n")
     subprocess.run(
-        ["git", "-C", str(repo), "rm", "-q", "--", "docs/plans/2026-07-14-doomed.md"], check=True
+        ["git", "-C", str(repo), "rm", "-q", "--", "docs/plans/2026-07-14-doomed.md"], check=True,
         **no_console_passthrough_kwargs(),
     )
     subprocess.run(["git", "-C", str(repo), "commit", "-q", "-m", "drop plan"], check=True, **no_console_passthrough_kwargs())
@@ -734,7 +734,7 @@ def test_plans_touched_plan_deleted_later_still_reports_its_status_then(tmp_path
     env = dict(os.environ)
     env["GIT_AUTHOR_DATE"] = env["GIT_COMMITTER_DATE"] = "2026-07-19T10:00:00"
     subprocess.run(
-        ["git", "-C", str(repo), "rm", "-q", "--", "docs/plans/2026-07-15-doomed.md"], check=True
+        ["git", "-C", str(repo), "rm", "-q", "--", "docs/plans/2026-07-15-doomed.md"], check=True,
         **no_console_passthrough_kwargs(),
     )
     subprocess.run(["git", "-C", str(repo), "commit", "-q", "-m", "drop"], check=True, env=env, **no_console_passthrough_kwargs())

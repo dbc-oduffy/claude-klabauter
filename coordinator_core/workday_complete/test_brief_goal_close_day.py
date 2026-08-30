@@ -27,6 +27,8 @@ from coordinator_core.workday_complete import brief as wc_brief
 
 import pytest
 
+from coordinator_core.win_portability import no_console_creationflags
+
 # Spawns a real external process; runs at cadence gates, not per-commit.
 # Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [
@@ -38,7 +40,7 @@ _EMPTY = {"today": [], "stale": [], "unreadable_error": None}
 
 
 def _run_git(args: list[str], cwd: Path) -> None:
-    subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True, text=True)
+    subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True, text=True, **no_console_creationflags())
 
 
 def _init_real_repo(tmp_path: Path) -> Path:

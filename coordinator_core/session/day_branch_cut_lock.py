@@ -106,13 +106,20 @@ def read_record(repo_root: str | Path) -> Optional[dict]:
     return record if isinstance(record, dict) else None
 
 
-def _holder_alive(pid) -> Optional[bool]:
-    """True/False when PID liveness is known, None when it cannot be probed."""
+def holder_alive(pid) -> Optional[bool]:
+    """True/False when PID liveness is known, None when it cannot be probed.
+
+    Shared by ``day_branch_cut_lock`` and ``warm.push_cadence``'s sweep lock —
+    the git-common-dir holder-liveness CHECK the two lock PROTOCOLS both
+    wrap. Contract, stated deliberately: unknown liveness is ``None`` and
+    NEVER a verdict (never coerced to True or False by a caller); a
+    non-``int`` ``pid`` is unknown, and a probe that raises is unknown.
+    """
     if not isinstance(pid, int):
         return None
     try:
         return session_core.pid_alive(pid)
-    except Exception:
+    except Exception:  # noqa: BLE001 -- unknown liveness is not a verdict
         return None
 
 
@@ -123,7 +130,7 @@ def record_is_stale(record: dict, now: Optional[float] = None) -> bool:
     rather than every peer polling a corpse for the full grace window.
     """
     now = time.time() if now is None else now
-    if _holder_alive(record.get("holder_pid")) is False:
+    if holder_alive(record.get("holder_pid")) is False:
         return True
     hold_until = record.get("hold_until")
     return isinstance(hold_until, (int, float)) and now > hold_until + _STALE_GRACE_SECONDS

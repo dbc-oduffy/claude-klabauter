@@ -46,6 +46,10 @@ from coordinator_core.win_portability import leaf_spawn_creationflags
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 from coordinator_core.ops.ceremony import git_native
+from coordinator_core.win_portability import (
+    no_console_creationflags,
+    no_console_passthrough_kwargs,
+)
 
 
 def _make_completed(returncode: int = 0, stdout: str = "", stderr: str = "") -> MagicMock:
@@ -345,6 +349,7 @@ def test_rev_parse_head_returns_head_sha_with_trailing_newline(tmp_path):
     spawned = subprocess.run(
         ["git", "rev-parse", "HEAD"], cwd=str(repo),
         capture_output=True, text=True, check=True,
+        **no_console_creationflags(),
     )
     assert result.stdout == spawned.stdout
 
@@ -595,12 +600,24 @@ def test_no_bash_or_node_argv():
 
 
 def _real_git(args, cwd) -> None:
-    subprocess.run(["git", *args], cwd=str(cwd), check=True, capture_output=True, text=True)
+    subprocess.run(
+        ["git", *args],
+        cwd=str(cwd),
+        check=True,
+        capture_output=True,
+        text=True,
+        **no_console_creationflags(),
+    )
 
 
 def _real_porcelain(cwd) -> list[str]:
     result = subprocess.run(
-        ["git", "status", "--porcelain"], cwd=str(cwd), capture_output=True, text=True, check=True,
+        ["git", "status", "--porcelain"],
+        cwd=str(cwd),
+        capture_output=True,
+        text=True,
+        check=True,
+        **no_console_creationflags(),
     )
     return [line for line in result.stdout.splitlines() if line]
 
@@ -995,7 +1012,11 @@ def test_commit_authored_content_issues_its_git_sequence_through_the_shared_git_
     )
     assert _committed_content_at_head(repo, "file.txt") == "AUTHORED CONTENT\n"
     fsck = subprocess.run(
-        ["git", "fsck", "--strict"], cwd=str(repo), capture_output=True, text=True,
+        ["git", "fsck", "--strict"],
+        cwd=str(repo),
+        capture_output=True,
+        text=True,
+        **no_console_creationflags(),
     )
     assert fsck.returncode == 0, fsck.stderr
 
@@ -1066,17 +1087,32 @@ def test_commit_authored_content_cas_still_fails_loud_on_concurrent_head_move(tm
     # The sibling's own commit must still be HEAD's tip -- a silently
     # orphaned peer commit is exactly the hazard this CAS exists to prevent.
     head_now = subprocess.run(
-        ["git", "rev-parse", "HEAD"], cwd=str(repo), capture_output=True, text=True, check=True,
+        ["git", "rev-parse", "HEAD"],
+        cwd=str(repo),
+        capture_output=True,
+        text=True,
+        check=True,
+        **no_console_creationflags(),
     ).stdout.strip()
     subject_now = subprocess.run(
-        ["git", "log", "-1", "--format=%s", head_now], cwd=str(repo), capture_output=True, text=True, check=True,
+        ["git", "log", "-1", "--format=%s", head_now],
+        cwd=str(repo),
+        capture_output=True,
+        text=True,
+        check=True,
+        **no_console_creationflags(),
     ).stdout.strip()
     assert subject_now == "concurrent sibling commit"
 
 
 def _committed_content_at_head(repo, rel: str) -> str:
     result = subprocess.run(
-        ["git", "show", f"HEAD:{rel}"], cwd=str(repo), capture_output=True, text=True, check=True,
+        ["git", "show", f"HEAD:{rel}"],
+        cwd=str(repo),
+        capture_output=True,
+        text=True,
+        check=True,
+        **no_console_creationflags(),
     )
     return result.stdout
 
@@ -1326,7 +1362,12 @@ def test_commit_authored_content_explicit_deliverable_id_wins_over_session_resol
 
     assert result.ok, result.stderr
     log_result = subprocess.run(
-        ["git", "log", "-1", "--format=%B"], cwd=str(repo), capture_output=True, text=True, check=True,
+        ["git", "log", "-1", "--format=%B"],
+        cwd=str(repo),
+        capture_output=True,
+        text=True,
+        check=True,
+        **no_console_creationflags(),
     )
     assert "Deliverable-Id: caller-supplied-deliverable-id" in log_result.stdout
     assert "Deliverable-Id: session-resolved-deliverable-id" not in log_result.stdout
@@ -1784,21 +1825,26 @@ def _spine_repo(tmp_path, files):
     test is agreement WITH git, so a stand-in would assert nothing."""
     root = tmp_path / "spine"
     root.mkdir()
-    subprocess.run(["git", "init", "-q", "."], cwd=root, check=True)
-    subprocess.run(["git", "config", "user.email", "t@t"], cwd=root, check=True)
-    subprocess.run(["git", "config", "user.name", "t"], cwd=root, check=True)
+    subprocess.run(["git", "init", "-q", "."], cwd=root, check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "config", "user.email", "t@t"], cwd=root, check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "config", "user.name", "t"], cwd=root, check=True, **no_console_passthrough_kwargs())
     for rel, content in files.items():
         p = root / rel
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(content, encoding="utf-8")
-        subprocess.run(["git", "add", "--", rel], cwd=root, check=True)
-    subprocess.run(["git", "commit", "-qm", "base"], cwd=root, check=True)
+        subprocess.run(["git", "add", "--", rel], cwd=root, check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "commit", "-qm", "base"], cwd=root, check=True, **no_console_passthrough_kwargs())
     return root, root / ".git"
 
 
 def _git_out(root, *args):
     return subprocess.run(
-        ["git", *args], cwd=root, capture_output=True, text=True, check=True
+        ["git", *args],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        check=True,
+        **no_console_creationflags(),
     ).stdout.strip()
 
 
@@ -1857,8 +1903,8 @@ def test_rewrite_head_spine_prunes_emptied_dirs_like_git(
     (root / dest).parent.mkdir(parents=True, exist_ok=True)
     (root / dest).write_text((root / moved).read_text(encoding="utf-8"), encoding="utf-8")
     (root / moved).unlink()
-    subprocess.run(["git", "add", "--", dest], cwd=root, check=True)
-    subprocess.run(["git", "add", "-u", "--", moved], cwd=root, check=True)
+    subprocess.run(["git", "add", "--", dest], cwd=root, check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "add", "-u", "--", moved], cwd=root, check=True, **no_console_passthrough_kwargs())
     theirs = _git_out(root, "write-tree")
 
     assert ours == theirs, (
@@ -1954,7 +2000,12 @@ def test_agree_branch_commits_at_zero_or_one_spawn_via_private_index_route(tmp_p
     assert len(hash_object_spawns) <= 1, hash_object_spawns
 
     committed = subprocess.run(
-        ["git", "show", "HEAD:new.txt"], cwd=str(repo), capture_output=True, text=True, check=True,
+        ["git", "show", "HEAD:new.txt"],
+        cwd=str(repo),
+        capture_output=True,
+        text=True,
+        check=True,
+        **no_console_creationflags(),
     ).stdout
     assert committed == "brand new content\n"
 
@@ -1984,14 +2035,24 @@ def test_agree_branch_commits_correctly_immediately_after_pack_refs(tmp_path):
 
     assert result.ok, result.stderr
     committed = subprocess.run(
-        ["git", "show", "HEAD:after_pack.txt"], cwd=str(repo), capture_output=True, text=True, check=True,
+        ["git", "show", "HEAD:after_pack.txt"],
+        cwd=str(repo),
+        capture_output=True,
+        text=True,
+        check=True,
+        **no_console_creationflags(),
     ).stdout
     assert committed == "landed after pack-refs\n"
 
 
 def _real_git_out(cwd, *args) -> str:
     return subprocess.run(
-        ["git", *args], cwd=str(cwd), capture_output=True, text=True, check=True,
+        ["git", *args],
+        cwd=str(cwd),
+        capture_output=True,
+        text=True,
+        check=True,
+        **no_console_creationflags(),
     ).stdout.strip()
 
 
@@ -2149,6 +2210,7 @@ def test_hash_worktree_blobs_autocrlf_true_crlf_content_writes_in_process_no_spa
         real_stdin_sha = subprocess.run(
             ["git", "hash-object", "--path=crlf.txt", "--stdin"],
             cwd=str(repo), input=fh.read(), capture_output=True, check=True,
+            **no_console_creationflags(),
         ).stdout.decode().strip()
     assert result.stdout.splitlines() == [real_stdin_sha]
 
@@ -2167,6 +2229,7 @@ def test_hash_worktree_blobs_autocrlf_true_binary_nul_content_left_verbatim(tmp_
     real_sha = subprocess.run(
         ["git", "hash-object", "--path=bin.dat", "--stdin"],
         cwd=str(repo), input=content, capture_output=True, check=True,
+        **no_console_creationflags(),
     ).stdout.decode().strip()
     assert result.stdout.splitlines() == [real_sha]
 
@@ -2186,6 +2249,7 @@ def test_hash_worktree_blobs_autocrlf_true_lone_cr_blocks_whole_buffer_conversio
     real_sha = subprocess.run(
         ["git", "hash-object", "--path=lonecr.txt", "--stdin"],
         cwd=str(repo), input=content, capture_output=True, check=True,
+        **no_console_creationflags(),
     ).stdout.decode().strip()
     assert result.stdout.splitlines() == [real_sha]
 
@@ -2305,6 +2369,7 @@ def test_autocrlf_checkin_normalize_matches_real_git_corpus(tmp_path):
         real_sha = subprocess.run(
             ["git", "hash-object", "--path=x.txt", "--stdin"],
             cwd=str(repo), input=content, capture_output=True, check=True,
+            **no_console_creationflags(),
         ).stdout.decode().strip()
         import hashlib
         got_sha = hashlib.sha1(b"blob " + str(len(got)).encode() + b"\0" + got).hexdigest()

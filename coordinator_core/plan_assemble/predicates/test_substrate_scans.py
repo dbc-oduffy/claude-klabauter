@@ -14,6 +14,7 @@ import pytest
 
 from coordinator_core.plan_assemble.predicates import PredicateContext
 from coordinator_core.plan_assemble.predicates import substrate_scans as ss
+from coordinator_core.win_portability import no_console_creationflags, no_console_passthrough_kwargs
 
 # Declares a real external-process spawn (spawn ratchet Rule 2). Tiering onto the
 # cadence suite is the separate threshold ruling, not this declaration.
@@ -27,14 +28,15 @@ def _git_repo_with_one_commit(tmp_path: Path) -> tuple[Path, str]:
     """A real `git init`ed repo under `tmp_path` with one commit, for
     exercising `_peer_sha_lint`'s batched `git cat-file --batch-check`
     resolution against a genuine local SHA rather than a mocked call."""
-    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
-    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=tmp_path, check=True)
-    subprocess.run(["git", "config", "user.name", "Test"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=tmp_path, check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=tmp_path, check=True, **no_console_passthrough_kwargs())
     (tmp_path / "f.txt").write_text("hello\n", encoding="utf-8")
-    subprocess.run(["git", "add", "f.txt"], cwd=tmp_path, check=True)
-    subprocess.run(["git", "commit", "-q", "-m", "initial"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "add", "f.txt"], cwd=tmp_path, check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "commit", "-q", "-m", "initial"], cwd=tmp_path, check=True, **no_console_passthrough_kwargs())
     sha = subprocess.run(
-        ["git", "rev-parse", "HEAD"], cwd=tmp_path, check=True, capture_output=True, text=True
+        ["git", "rev-parse", "HEAD"], cwd=tmp_path, check=True, capture_output=True, text=True,
+        **no_console_creationflags(),
     ).stdout.strip()
     return tmp_path, sha
 

@@ -30,6 +30,7 @@ from typing import List, Optional
 import pytest
 
 from coordinator_core.ops.workday_complete_backfill_scan import main
+from coordinator_core.win_portability import no_console_creationflags
 
 # Declared, not excused: this file's `main()` calls genuinely shell out to
 # `git log --after/--before` (see `_window_args` below) to build per-day commit
@@ -63,7 +64,7 @@ def _git(repo: Path, *args: str, env: Optional[dict] = None) -> str:
         timeout=20,
         stdin=subprocess.DEVNULL,
         env=env,
-    )
+    **no_console_creationflags())
     assert result.returncode == 0, f"git {args} failed: {result.stderr}"
     return result.stdout.strip()
 
@@ -97,7 +98,7 @@ def _commit_on(repo: Path, day: str, msg: str, fname: Optional[str] = None, time
         timeout=20,
         stdin=subprocess.DEVNULL,
         env=env,
-    )
+    **no_console_creationflags())
     assert result.returncode == 0, result.stderr
     return _git(repo, "rev-parse", "HEAD")
 
@@ -110,7 +111,7 @@ def _branch_commit_from(repo: Path, branch: str, start_sha: str, day: str, time_
         text=True,
         timeout=20,
         stdin=subprocess.DEVNULL,
-    )
+    **no_console_creationflags())
     if result.returncode != 0:
         _git(repo, "checkout", branch, "-q")
     (repo / fname).write_text(msg + "\n")
@@ -125,7 +126,7 @@ def _branch_commit_from(repo: Path, branch: str, start_sha: str, day: str, time_
         timeout=20,
         stdin=subprocess.DEVNULL,
         env=env,
-    )
+    **no_console_creationflags())
     assert result.returncode == 0, result.stderr
     return _git(repo, "rev-parse", "HEAD")
 

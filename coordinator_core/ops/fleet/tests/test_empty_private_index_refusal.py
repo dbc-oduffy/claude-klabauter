@@ -51,6 +51,7 @@ from coordinator_core.ops.fleet._common import (
     _empty_private_index_breach,
     archive_and_commit,
 )
+from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
@@ -64,6 +65,7 @@ def _git(args: list[str], cwd: Path) -> subprocess.CompletedProcess:
         capture_output=True,
         text=True,
         check=True,
+        **no_console_creationflags(),
     )
 
 
@@ -144,6 +146,7 @@ def test_seeded_index_is_permitted(tmp_path: Path):
     subprocess.run(
         ["git", "read-tree", "HEAD"],
         cwd=str(root), env=env, capture_output=True, text=True, check=True,
+        **no_console_creationflags(),
     )
 
     reason, tree_sha = _run(_empty_private_index_breach(root, env, "archive_and_commit"))

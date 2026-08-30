@@ -52,12 +52,12 @@ import json
 import os
 import shutil
 import statistics
-import subprocess
 import sys
 import tempfile
 from pathlib import Path
 
 from coordinator_core.benchmarks import declare_benchmark_origin
+from coordinator_core.git.run import run_git
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
@@ -137,13 +137,6 @@ ARGV = {
 }
 
 
-def _git(args, cwd: Path):
-    return subprocess.run(
-        ["git", *args], cwd=cwd, capture_output=True, text=True,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-    )
-
-
 def build_fixture(root: Path) -> None:
     """Materialises the minimum corpus the op accepts.
 
@@ -151,17 +144,23 @@ def build_fixture(root: Path) -> None:
     frontmatter validation refuses before the op is ever reached without them —
     and the predecessor needs `claimed_by`, or DR-242's claimed-or-shipped gate
     refuses first.
+
+    Fixture setup only -- the op measured by `sample()` below is the
+    `archive-stamp-cli` subprocess, timed separately via
+    `single_invocation_tree_process_time`. These git calls never enter that
+    window, so routing them through `coordinator_core.git.run` (G7) adds no
+    seam cost to the figure this module reports.
     """
     hd = root / "state" / "handoffs"
     hd.mkdir(parents=True)
     (hd / "2026-08-27-probe-pred.md").write_text(_PRED, encoding="utf-8")
     (hd / "2026-08-27-probe-succ.md").write_text(_SUCC, encoding="utf-8")
     (hd / "2026-08-27-probe-terminal.md").write_text(_TERMINAL, encoding="utf-8")
-    _git(["init", "-q", "-b", "probe/baseline"], root)
-    _git(["config", "user.email", "probe@example.invalid"], root)
-    _git(["config", "user.name", "probe"], root)
-    _git(["add", "-A"], root)
-    _git(["commit", "-qm", "fixture"], root)
+    run_git(["init", "-q", "-b", "probe/baseline"], cwd=str(root))
+    run_git(["config", "user.email", "probe@example.invalid"], cwd=str(root))
+    run_git(["config", "user.name", "probe"], cwd=str(root))
+    run_git(["add", "-A"], cwd=str(root))
+    run_git(["commit", "-qm", "fixture"], cwd=str(root))
 
 
 def sample(mode: str, out_dir: Path, idx: int) -> dict:

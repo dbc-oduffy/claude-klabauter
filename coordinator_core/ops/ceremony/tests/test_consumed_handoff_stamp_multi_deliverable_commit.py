@@ -30,6 +30,7 @@ from coordinator_core.ops.ceremony.consumed_handoff_stamp import (
     _commit_and_push_follow_up,
     group_stamped_by_deliverable_id,
 )
+from coordinator_core.win_portability import no_console_creationflags
 
 # Real git, per the docstring above. Same tiering rationale as the sibling
 # `test_consumed_handoff_stamp_claim_release.py`; the spawn ratchet's
@@ -55,7 +56,14 @@ def _write(root: Path, rel: str, deliverable_id: str) -> str:
 
 
 def _git(args, cwd: Path) -> None:
-    subprocess.run(["git", *args], cwd=str(cwd), capture_output=True, text=True, check=True)
+    subprocess.run(
+        ["git", *args],
+        cwd=str(cwd),
+        capture_output=True,
+        text=True,
+        check=True,
+        **no_console_creationflags(),
+    )
 
 
 @pytest.fixture
@@ -111,6 +119,7 @@ def test_ungrouped_two_baton_pathspec_commits_untrailered(repo, sid_env):
         capture_output=True,
         text=True,
         check=True,
+        **no_console_creationflags(),
     ).stdout
     assert "Deliverable-Id:" not in msg, (
         "a pathspec spanning two deliverables must omit the trailer, never "
@@ -144,5 +153,6 @@ def test_each_group_commits_cleanly_with_its_own_trailer(repo, sid_env):
             capture_output=True,
             text=True,
             check=True,
+            **no_console_creationflags(),
         ).stdout
         assert f"Deliverable-Id: {deliverable_id}" in message

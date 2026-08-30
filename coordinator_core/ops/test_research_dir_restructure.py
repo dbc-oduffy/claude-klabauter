@@ -40,6 +40,7 @@ from coordinator_core.session import core as session_core
 # coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 from coordinator_core.session import scope as session_scope
+from coordinator_core.win_portability import no_console_passthrough_kwargs
 
 TOPIC = "warp-core-ejection"
 DATE = "2026-07-22"
@@ -83,13 +84,16 @@ def _mk_real_git_worktree(tmp_path: Path) -> Path:
     ``.git`` dir) — needed only by the claim-restatement test below, which
     asserts through ``safe_commit_offer.compute_offer`` and therefore needs
     a real ``git status`` to run against."""
-    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
-    subprocess.run(["git", "config", "user.email", "t@example.com"], cwd=tmp_path, check=True)
-    subprocess.run(["git", "config", "user.name", "t"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True, **no_console_passthrough_kwargs())
+    subprocess.run(
+        ["git", "config", "user.email", "t@example.com"], cwd=tmp_path, check=True,
+        **no_console_passthrough_kwargs(),
+    )
+    subprocess.run(["git", "config", "user.name", "t"], cwd=tmp_path, check=True, **no_console_passthrough_kwargs())
     (tmp_path / "docs" / "research" / "archive").mkdir(parents=True)
     (tmp_path / "README.md").write_text("x\n", encoding="utf-8")
-    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
-    subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=tmp_path, check=True, **no_console_passthrough_kwargs())
     return tmp_path
 
 

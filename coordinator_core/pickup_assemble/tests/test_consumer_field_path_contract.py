@@ -65,6 +65,7 @@ from pathlib import Path
 import pytest
 
 import coordinator_core.pickup_assemble as pa
+from coordinator_core.win_portability import no_console_creationflags
 from coordinator_core.frontmatter.primitives import canonical_body_sha
 
 # Declared, not excused: this file spawns a real process (git/python) because
@@ -105,6 +106,7 @@ def _git(repo: Path, *args: str) -> subprocess.CompletedProcess:
         timeout=15,
         stdin=subprocess.DEVNULL,
         env=_isolated_git_env(repo.parent),
+        **no_console_creationflags(),
     )
 
 

@@ -18,6 +18,7 @@ from pathlib import Path
 import pytest
 
 import coordinator_core.ops.plan_tasks_spine_drift_check as drift_mod
+from coordinator_core.win_portability import no_console_creationflags
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -76,6 +77,7 @@ def _git(repo: Path, *args: str) -> subprocess.CompletedProcess:
         ["git", "-C", str(repo), *args],
         capture_output=True,
         text=True,
+        **no_console_creationflags(),
         env=_GIT_ENV,
         timeout=15,
         stdin=subprocess.DEVNULL,
@@ -295,6 +297,7 @@ class TestImportOrderRegression:
             capture_output=True,
             text=True,
             timeout=60,
+            **no_console_creationflags(),
         )
         assert result.returncode == 0, result.stdout + result.stderr
         assert "OK" in result.stdout

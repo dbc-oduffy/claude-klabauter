@@ -26,6 +26,7 @@ import pytest
 
 from coordinator_core.ceremony_common import apply_halt
 from coordinator_core.contract.decision_object.envelope import ENVELOPE_KEYS
+from coordinator_core.win_portability import no_console_creationflags, no_console_passthrough_kwargs
 
 # Real git spawn is load-bearing: terminal-status coverage tests read the
 # DoE-claude repo's real HEAD `plan.schema.json` via `git show` to pin the
@@ -1297,6 +1298,7 @@ def _leg_a_non_terminal_schema_statuses() -> list[str] | None:
         text=True,
         encoding="utf-8",
         timeout=30,
+        **no_console_creationflags(),
     )
     # Review: coordinator:code-reviewer -- mirror the terminal-arm test's
     # hard failure on a git-show error against a *present* DoE checkout;
@@ -1590,6 +1592,7 @@ def test_leg_a_terminal_plan_status_covers_every_terminal_member_of_the_schema_e
         text=True,
         encoding="utf-8",
         timeout=30,
+        **no_console_creationflags(),
     )
     assert result.returncode == 0, f"Cannot read DoE HEAD plan.schema.json: {result.stderr.strip()}"
     doe_plan_schema = json.loads(result.stdout)
@@ -2743,12 +2746,12 @@ def test_no_claim_plan_directive_when_no_governing_plan_resolved(monkeypatch, tm
 def _init_git_repo(root: Path) -> None:
     import subprocess
 
-    subprocess.run(["git", "init", "-q"], cwd=root, check=True)
-    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=root, check=True)
-    subprocess.run(["git", "config", "user.name", "Test"], cwd=root, check=True)
+    subprocess.run(["git", "init", "-q"], cwd=root, check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=root, check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=root, check=True, **no_console_passthrough_kwargs())
     (root / "README.md").write_text("seed\n", encoding="utf-8")
-    subprocess.run(["git", "add", "README.md"], cwd=root, check=True)
-    subprocess.run(["git", "commit", "-q", "-m", "seed"], cwd=root, check=True)
+    subprocess.run(["git", "add", "README.md"], cwd=root, check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "commit", "-q", "-m", "seed"], cwd=root, check=True, **no_console_passthrough_kwargs())
 
 
 def _commit_with_session_trailer(root: Path, name: str, sid: str) -> None:
@@ -2759,11 +2762,12 @@ def _commit_with_session_trailer(root: Path, name: str, sid: str) -> None:
     implies_excluded_from_commits_arm`, extracted per this module's own
     `_init_git_repo` precedent of a module-level fixture helper."""
     (root / name).write_text(f"{name}\n", encoding="utf-8")
-    subprocess.run(["git", "add", name], cwd=root, check=True)
+    subprocess.run(["git", "add", name], cwd=root, check=True, **no_console_passthrough_kwargs())
     subprocess.run(
         ["git", "commit", "-q", "-m", f"add {name}", "--trailer", f"Session-Id: {sid}"],
         cwd=root,
         check=True,
+        **no_console_passthrough_kwargs(),
     )
 
 
@@ -2880,8 +2884,8 @@ def test_classify_session_authored_files_git_failure_degrades_predicate_a_to_fal
 
     _init_git_repo(tmp_path)
     (tmp_path / "tracked-dirty.md").write_text("committed\n", encoding="utf-8")
-    subprocess_module.run(["git", "add", "tracked-dirty.md"], cwd=tmp_path, check=True)
-    subprocess_module.run(["git", "commit", "-q", "-m", "add tracked-dirty"], cwd=tmp_path, check=True)
+    subprocess_module.run(["git", "add", "tracked-dirty.md"], cwd=tmp_path, check=True, **no_console_passthrough_kwargs())
+    subprocess_module.run(["git", "commit", "-q", "-m", "add tracked-dirty"], cwd=tmp_path, check=True, **no_console_passthrough_kwargs())
 
     session_start_time = datetime.now(timezone.utc) - timedelta(hours=1)
     # Dirty (but not untracked) the already-committed file so predicate (b)
@@ -2920,8 +2924,8 @@ def test_classify_session_authored_files_equivalent_to_per_path_predicate(tmp_pa
 
     # Committed before session_start_time -- not session-authored via (a).
     (tmp_path / "old-file.md").write_text("old\n", encoding="utf-8")
-    subprocess_module.run(["git", "add", "old-file.md"], cwd=tmp_path, check=True)
-    subprocess_module.run(["git", "commit", "-q", "-m", "old"], cwd=tmp_path, check=True)
+    subprocess_module.run(["git", "add", "old-file.md"], cwd=tmp_path, check=True, **no_console_passthrough_kwargs())
+    subprocess_module.run(["git", "commit", "-q", "-m", "old"], cwd=tmp_path, check=True, **no_console_passthrough_kwargs())
 
     # `--since` compares at whole-second granularity -- pad on both sides so
     # the old/new commits land unambiguously before/after session_start_time.
@@ -2931,8 +2935,8 @@ def test_classify_session_authored_files_equivalent_to_per_path_predicate(tmp_pa
 
     # Committed after session_start_time -- session-authored via (a).
     (tmp_path / "new-file.md").write_text("new\n", encoding="utf-8")
-    subprocess_module.run(["git", "add", "new-file.md"], cwd=tmp_path, check=True)
-    subprocess_module.run(["git", "commit", "-q", "-m", "new"], cwd=tmp_path, check=True)
+    subprocess_module.run(["git", "add", "new-file.md"], cwd=tmp_path, check=True, **no_console_passthrough_kwargs())
+    subprocess_module.run(["git", "commit", "-q", "-m", "new"], cwd=tmp_path, check=True, **no_console_passthrough_kwargs())
 
     # Dirty the committed files so both appear in porcelain status.
     (tmp_path / "old-file.md").write_text("old edited\n", encoding="utf-8")
@@ -2971,8 +2975,8 @@ def test_classify_session_authored_files_batched_path_handles_quoted_filename(tm
 
     weird_name = "café-notes.md"
     (tmp_path / weird_name).write_text("notes\n", encoding="utf-8")
-    subprocess_module.run(["git", "add", weird_name], cwd=tmp_path, check=True)
-    subprocess_module.run(["git", "commit", "-q", "-m", "add weird name"], cwd=tmp_path, check=True)
+    subprocess_module.run(["git", "add", weird_name], cwd=tmp_path, check=True, **no_console_passthrough_kwargs())
+    subprocess_module.run(["git", "commit", "-q", "-m", "add weird name"], cwd=tmp_path, check=True, **no_console_passthrough_kwargs())
 
     session_start_time = datetime.now(timezone.utc) - timedelta(hours=1)
 
@@ -3153,7 +3157,7 @@ def test_resolve_known_concurrent_paths_excludes_live_peer_committed_file(tmp_pa
     _make_live_session_claim_dir(tmp_path, peer_sid)
 
     (tmp_path / "peer-committed.md").write_text("peer work\n", encoding="utf-8")
-    subprocess.run(["git", "add", "peer-committed.md"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "add", "peer-committed.md"], cwd=tmp_path, check=True, **no_console_passthrough_kwargs())
     subprocess.run(
         [
             "git",
@@ -3166,6 +3170,7 @@ def test_resolve_known_concurrent_paths_excludes_live_peer_committed_file(tmp_pa
         ],
         cwd=tmp_path,
         check=True,
+        **no_console_passthrough_kwargs(),
     )
 
     result = directives_commit_tail.resolve_known_concurrent_paths(tmp_path, "this-session-id")
@@ -3426,6 +3431,7 @@ def _git(tmp_path: Path, *args: str) -> str:
         capture_output=True,
         text=True,
         check=True,
+        **no_console_creationflags(),
     )
     return proc.stdout.strip()
 
@@ -5133,7 +5139,7 @@ def test_review_trail_guard_foreign_flag_implies_excluded_from_commits_arm(tmp_p
     _commit_with_session_trailer(tmp_path, "own-3.md", own_sid)
 
     def _run(argv: list[str], cwd: str | None) -> tuple[int, str, str]:
-        result = subprocess.run(argv, cwd=cwd, capture_output=True, text=True)
+        result = subprocess.run(argv, cwd=cwd, capture_output=True, text=True, **no_console_creationflags())
         return result.returncode, result.stdout, result.stderr
 
     foreign_shas = session_attribution.trailer_foreign_shas(
@@ -5215,7 +5221,7 @@ def test_session_owned_shas_map_path_agrees_with_spawn_path(tmp_path):
     assert spawn_path is not None and len(spawn_path) == 2
 
     def _run(argv: list[str], cwd: str | None) -> tuple[int, str, str]:
-        result = subprocess.run(argv, cwd=cwd, capture_output=True, text=True)
+        result = subprocess.run(argv, cwd=cwd, capture_output=True, text=True, **no_console_creationflags())
         return result.returncode, result.stdout, result.stderr
 
     trailer_map = session_attribution.bulk_trailer_session_map(
@@ -5278,11 +5284,12 @@ def test_commit_count_measured_path_carries_no_scope_clause(monkeypatch, tmp_pat
     for i in range(6):
         name = f"f{i}.py"
         (tmp_path / name).write_text(f"{i}\n", encoding="utf-8")
-        subprocess.run(["git", "add", name], cwd=tmp_path, check=True)
+        subprocess.run(["git", "add", name], cwd=tmp_path, check=True, **no_console_passthrough_kwargs())
         subprocess.run(
             ["git", "commit", "-q", "-m", f"c{i}", "--trailer", f"Session-Id: {own_sid}"],
             cwd=tmp_path,
             check=True,
+            **no_console_passthrough_kwargs(),
         )
     _patch_gate(monkeypatch, _gate("single-session"))
     # `stage_paths: []` -- an ANSWER ("no uncommitted files"), not an absent
@@ -5317,11 +5324,12 @@ def test_commit_count_unmeasured_on_call_one_never_argues_for_less_review(
     for i in range(6):
         name = f"f{i}.py"
         (tmp_path / name).write_text(f"{i}\n", encoding="utf-8")
-        subprocess.run(["git", "add", name], cwd=tmp_path, check=True)
+        subprocess.run(["git", "add", name], cwd=tmp_path, check=True, **no_console_passthrough_kwargs())
         subprocess.run(
             ["git", "commit", "-q", "-m", f"c{i}", "--trailer", f"Session-Id: {own_sid}"],
             cwd=tmp_path,
             check=True,
+            **no_console_passthrough_kwargs(),
         )
     _patch_gate(monkeypatch, _gate("single-session"))
     review_scale = wsc.brief(decisions={}, repo_root=tmp_path)["gates"]["review_scale"]

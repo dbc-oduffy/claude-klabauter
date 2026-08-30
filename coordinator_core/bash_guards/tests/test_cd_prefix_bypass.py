@@ -893,11 +893,11 @@ def _git_repo_with_loadbearing_state(tmp_path: Path) -> Path:
     (repo / "state").mkdir(parents=True)
     subprocess.run(["git", "init", "-q"], cwd=str(repo), check=True, capture_output=True, **no_console_creationflags())
     subprocess.run(
-        ["git", "config", "user.email", "t@t"], cwd=str(repo), check=True, capture_output=True
+        ["git", "config", "user.email", "t@t"], cwd=str(repo), check=True, capture_output=True,
         **no_console_creationflags(),
     )
     subprocess.run(
-        ["git", "config", "user.name", "t"], cwd=str(repo), check=True, capture_output=True
+        ["git", "config", "user.name", "t"], cwd=str(repo), check=True, capture_output=True,
         **no_console_creationflags(),
     )
 
@@ -905,7 +905,7 @@ def _git_repo_with_loadbearing_state(tmp_path: Path) -> Path:
     tracked.write_text("committed baseline\n", encoding="utf-8")
     subprocess.run(["git", "add", "-A"], cwd=str(repo), check=True, capture_output=True, **no_console_creationflags())
     subprocess.run(
-        ["git", "commit", "-qm", "baseline"], cwd=str(repo), check=True, capture_output=True
+        ["git", "commit", "-qm", "baseline"], cwd=str(repo), check=True, capture_output=True,
         **no_console_creationflags(),
     )
 

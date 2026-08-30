@@ -24,6 +24,7 @@ import pytest
 
 from coordinator_core.bash_guards import check_test_suite_invocation as guard
 from coordinator_core.session import core, grant, tier_u_gate
+from coordinator_core.win_portability import no_console_passthrough_kwargs
 
 # Every test in this file builds its repo via `_make_repo(tmp_path)`, spawning
 # real git (init/config/add/commit) because the production code under test --
@@ -38,15 +39,23 @@ pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 
 def _make_repo(tmp_path):
-    subprocess.run(["git", "init", "-q"], cwd=tmp_path)
-    subprocess.run(["git", "config", "user.email", "t@example.com"], cwd=tmp_path)
-    subprocess.run(["git", "config", "user.name", "t"], cwd=tmp_path)
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, **no_console_passthrough_kwargs())
+    subprocess.run(
+        ["git", "config", "user.email", "t@example.com"],
+        cwd=tmp_path,
+        **no_console_passthrough_kwargs(),
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "t"], cwd=tmp_path, **no_console_passthrough_kwargs()
+    )
     (tmp_path / "pyproject.toml").write_text(
         "[tool.pytest.ini_options]\ntestpaths = [\"coordinator_core\"]\n"
     )
     (tmp_path / "coordinator_core").mkdir()
-    subprocess.run(["git", "add", "."], cwd=tmp_path)
-    subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=tmp_path)
+    subprocess.run(["git", "add", "."], cwd=tmp_path, **no_console_passthrough_kwargs())
+    subprocess.run(
+        ["git", "commit", "-q", "-m", "init"], cwd=tmp_path, **no_console_passthrough_kwargs()
+    )
     return tmp_path
 
 
@@ -219,7 +228,9 @@ class TestEnforceTierUGate:
         with a normal grant (the Tier-F leg, not the Tier-U leg with its R6
         declaration exit), never as a tied Tier U."""
         repo = tmp_path
-        subprocess.run(["git", "init", "-q"], cwd=repo)
+        subprocess.run(
+            ["git", "init", "-q"], cwd=repo, **no_console_passthrough_kwargs()
+        )
         (repo / "pyproject.toml").write_text(
             "[tool.pytest.ini_options]\ntestpaths = [\"coordinator_core\"]\n"
         )

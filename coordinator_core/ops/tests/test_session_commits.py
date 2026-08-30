@@ -19,10 +19,7 @@ from pathlib import Path
 import pytest
 
 from coordinator_core.ops import session_commits
-from coordinator_core.win_portability import (
-    no_console_creationflags,
-    no_console_passthrough_kwargs,
-)
+from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [
     pytest.mark.cadence,

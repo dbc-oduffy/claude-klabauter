@@ -22,10 +22,7 @@ pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 from coordinator_core.review_trail import backfill
 from coordinator_core.review_trail import reviewed_set as rs
-from coordinator_core.win_portability import (
-    no_console_creationflags,
-    no_console_passthrough_kwargs,
-)
+from coordinator_core.win_portability import no_console_creationflags
 
 
 def _git(args, cwd):

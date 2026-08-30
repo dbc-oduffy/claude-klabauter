@@ -38,6 +38,10 @@ from typing import List, Optional
 import pytest
 
 from coordinator_core.ops.ceremony.tests.fixtures.real_git import real_git_repo
+from coordinator_core.win_portability import (
+    no_console_creationflags,
+    no_console_passthrough_kwargs,
+)
 from coordinator_core.ops.fleet._common import (
     Move,
     _resync_main_index_for_moves,
@@ -543,26 +547,29 @@ def test_restore_staged_on_head_absent_path_removes_index_entry_real_git(tmp_pat
 
     tracked = root / "tracked.md"
     tracked.write_text("tracked content\n", encoding="utf-8")
-    subprocess.run(["git", "add", "--", "tracked.md"], cwd=str(root), check=True)
+    subprocess.run(["git", "add", "--", "tracked.md"], cwd=str(root), check=True, **no_console_passthrough_kwargs())
     subprocess.run(
         ["git", "commit", "-q", "-m", "add tracked.md"], cwd=str(root), check=True,
+        **no_console_passthrough_kwargs(),
     )
 
     # Remove tracked.md from HEAD via a second commit, so it is now a path
     # genuinely absent from HEAD (the post-archival `src` shape).
-    subprocess.run(["git", "rm", "-q", "--", "tracked.md"], cwd=str(root), check=True)
+    subprocess.run(["git", "rm", "-q", "--", "tracked.md"], cwd=str(root), check=True, **no_console_passthrough_kwargs())
     subprocess.run(
         ["git", "commit", "-q", "-m", "remove tracked.md"], cwd=str(root), check=True,
+        **no_console_passthrough_kwargs(),
     )
 
     # Re-stage tracked.md by hand to simulate the residue: index disagrees
     # with HEAD (HEAD has no entry, index has one) — the exact bare staged
     # deletion this plan exists to close.
     tracked.write_text("resurrected on disk\n", encoding="utf-8")
-    subprocess.run(["git", "add", "--", "tracked.md"], cwd=str(root), check=True)
+    subprocess.run(["git", "add", "--", "tracked.md"], cwd=str(root), check=True, **no_console_passthrough_kwargs())
 
     status_before = subprocess.run(
         ["git", "status", "--porcelain"], cwd=str(root), capture_output=True, text=True, check=True,
+        **no_console_creationflags(),
     ).stdout
     assert "tracked.md" in status_before
 
@@ -571,11 +578,13 @@ def test_restore_staged_on_head_absent_path_removes_index_entry_real_git(tmp_pat
         cwd=str(root),
         capture_output=True,
         text=True,
+        **no_console_creationflags(),
     )
     assert result.returncode == 0, result.stderr
 
     status_after = subprocess.run(
         ["git", "status", "--porcelain"], cwd=str(root), capture_output=True, text=True, check=True,
+        **no_console_creationflags(),
     ).stdout
     # The worktree file (untracked now that HEAD holds no entry for it) may
     # still show as "??" — but there must be no staged ("A "/"M "/"D ") entry
@@ -612,19 +621,22 @@ def test_restore_staged_batch_aborts_atomically_on_one_bad_pathspec_real_git(tmp
 
     tracked = root / "tracked.md"
     tracked.write_text("tracked content\n", encoding="utf-8")
-    subprocess.run(["git", "add", "--", "tracked.md"], cwd=str(root), check=True)
+    subprocess.run(["git", "add", "--", "tracked.md"], cwd=str(root), check=True, **no_console_passthrough_kwargs())
     subprocess.run(
         ["git", "commit", "-q", "-m", "add tracked.md"], cwd=str(root), check=True,
+        **no_console_passthrough_kwargs(),
     )
-    subprocess.run(["git", "rm", "-q", "--", "tracked.md"], cwd=str(root), check=True)
+    subprocess.run(["git", "rm", "-q", "--", "tracked.md"], cwd=str(root), check=True, **no_console_passthrough_kwargs())
     subprocess.run(
         ["git", "commit", "-q", "-m", "remove tracked.md"], cwd=str(root), check=True,
+        **no_console_passthrough_kwargs(),
     )
     tracked.write_text("resurrected on disk\n", encoding="utf-8")
-    subprocess.run(["git", "add", "--", "tracked.md"], cwd=str(root), check=True)
+    subprocess.run(["git", "add", "--", "tracked.md"], cwd=str(root), check=True, **no_console_passthrough_kwargs())
 
     status_before = subprocess.run(
         ["git", "status", "--porcelain"], cwd=str(root), capture_output=True, text=True, check=True,
+        **no_console_creationflags(),
     ).stdout
     assert "tracked.md" in status_before
 
@@ -633,12 +645,14 @@ def test_restore_staged_batch_aborts_atomically_on_one_bad_pathspec_real_git(tmp
         cwd=str(root),
         capture_output=True,
         text=True,
+        **no_console_creationflags(),
     )
     assert result.returncode != 0
     assert "did not match any file" in result.stderr
 
     status_after = subprocess.run(
         ["git", "status", "--porcelain"], cwd=str(root), capture_output=True, text=True, check=True,
+        **no_console_creationflags(),
     ).stdout
     # The batch aborted BEFORE writing anything: tracked.md's staged residue
     # from before the call is still present, byte-for-byte, rather than

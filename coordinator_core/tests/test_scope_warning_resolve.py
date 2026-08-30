@@ -14,6 +14,7 @@ import os
 import pytest
 
 from coordinator_core.ops.scope_warning_resolve import VALID_RESOLUTIONS, main, resolve
+from coordinator_core.win_portability import no_console_passthrough_kwargs
 
 # Spawns a real external process; runs at cadence gates, not per-commit.
 # Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
@@ -156,7 +157,7 @@ def test_main_happy_path(tmp_path, monkeypatch, capsys):
     import subprocess
 
     root, log = _make_repo(tmp_path)
-    subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+    subprocess.run(["git", "init", "-q"], cwd=root, check=True, **no_console_passthrough_kwargs())
     monkeypatch.chdir(root)
     rc = main(["test-session-1", "1", "legitimate-mine"])
     captured = capsys.readouterr()

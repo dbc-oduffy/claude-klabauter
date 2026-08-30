@@ -26,6 +26,7 @@ import pytest
 
 from coordinator_core.hooks import nudge_unrouted_sizing as m
 from coordinator_core.session.scope import format_touch_event
+from coordinator_core.win_portability import no_console_passthrough_kwargs
 
 # Real git spawn is load-bearing: the nudge reads real touched-file/dirty
 # state via git to decide whether the narrated route was ever entered; the
@@ -59,12 +60,12 @@ scout_evidence: []
 
 
 def _git_init(repo):
-    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
-    subprocess.run(["git", "config", "user.email", "t@example.com"], cwd=repo, check=True)
-    subprocess.run(["git", "config", "user.name", "t"], cwd=repo, check=True)
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "config", "user.email", "t@example.com"], cwd=repo, check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "config", "user.name", "t"], cwd=repo, check=True, **no_console_passthrough_kwargs())
     (repo / "README.md").write_text("x", encoding="utf-8")
-    subprocess.run(["git", "add", "."], cwd=repo, check=True)
-    subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=repo, check=True)
+    subprocess.run(["git", "add", "."], cwd=repo, check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=repo, check=True, **no_console_passthrough_kwargs())
 
 
 def _write_touched(repo, session_id, *rel_paths):

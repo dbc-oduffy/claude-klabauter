@@ -16,6 +16,7 @@ import subprocess
 import pytest
 
 from coordinator_core.hooks import nudge_harness_directive_dispatch as m
+from coordinator_core.win_portability import no_console_passthrough_kwargs
 
 # Real git spawn is load-bearing: the nudge's dispatch-detection reads real
 # git state to decide whether a directive was actually acted on; the repo
@@ -400,12 +401,12 @@ def test_ordinary_final_turn_is_silent(repo):
 def _git_init(repo):
     """Initialise a minimal committed git repo at repo — needed so git_common_dir
     (a real `git rev-parse` subprocess call) resolves instead of raising."""
-    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
-    subprocess.run(["git", "config", "user.email", "t@example.com"], cwd=repo, check=True)
-    subprocess.run(["git", "config", "user.name", "t"], cwd=repo, check=True)
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "config", "user.email", "t@example.com"], cwd=repo, check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "config", "user.name", "t"], cwd=repo, check=True, **no_console_passthrough_kwargs())
     (repo / "README.md").write_text("x", encoding="utf-8")
-    subprocess.run(["git", "add", "."], cwd=repo, check=True)
-    subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=repo, check=True)
+    subprocess.run(["git", "add", "."], cwd=repo, check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=repo, check=True, **no_console_passthrough_kwargs())
 
 
 def _write_dispatched_agents(repo, session_id, content):
@@ -460,6 +461,7 @@ def test_dispatch_evidence_in_worktree_common_dir_still_does_not_suppress(tmp_pa
         ["git", "worktree", "add", "-q", "-b", "wt-branch", str(wt)],
         cwd=main_repo,
         check=True,
+        **no_console_passthrough_kwargs(),
     )
 
     session_id = "sess-worktree-dispatch"

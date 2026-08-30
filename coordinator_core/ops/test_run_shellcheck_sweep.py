@@ -50,6 +50,7 @@ from coordinator_core.ops.run_shellcheck_sweep import (
     _run_shellcheck_sweep,
     run_shellcheck_sweep,
 )
+from coordinator_core.win_portability import no_console_creationflags
 
 # Spawns a real external process; runs at cadence gates, not per-commit.
 # Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
@@ -69,11 +70,25 @@ def _init_repo(base: Path) -> Path:
     """git-init a throwaway repo under `base` and return its root."""
     repo = base / "repo"
     repo.mkdir(parents=True)
-    subprocess.run(["git", "init", "-q"], cwd=repo, capture_output=True, check=True)
     subprocess.run(
-        ["git", "config", "user.email", "test@example.com"], cwd=repo, capture_output=True
+        ["git", "init", "-q"],
+        cwd=repo,
+        capture_output=True,
+        check=True,
+        **no_console_creationflags(),
     )
-    subprocess.run(["git", "config", "user.name", "test"], cwd=repo, capture_output=True)
+    subprocess.run(
+        ["git", "config", "user.email", "test@example.com"],
+        cwd=repo,
+        capture_output=True,
+        **no_console_creationflags(),
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "test"],
+        cwd=repo,
+        capture_output=True,
+        **no_console_creationflags(),
+    )
     return repo
 
 
@@ -84,7 +99,13 @@ def _track_file(repo: Path, rel_path: str, content: str) -> Path:
     path = repo / rel_path
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(content.encode("utf-8"))
-    subprocess.run(["git", "add", rel_path], cwd=repo, capture_output=True, check=True)
+    subprocess.run(
+        ["git", "add", rel_path],
+        cwd=repo,
+        capture_output=True,
+        check=True,
+        **no_console_creationflags(),
+    )
     return path
 
 

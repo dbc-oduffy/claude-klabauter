@@ -27,6 +27,7 @@ from pathlib import Path
 import pytest
 
 from coordinator_core import data_root as dr_mod
+from coordinator_core.win_portability import no_console_creationflags
 
 _BIN_LIB_DIR = Path(__file__).resolve().parent.parent / "coordinator" / "bin" / "lib"
 
@@ -290,6 +291,7 @@ def test_module_imports_standalone_in_an_oss_shaped_hermetic_subprocess(tmp_path
         capture_output=True,
         text=True,
         timeout=60,
+        **no_console_creationflags(),
     )
 
     assert proc.returncode == 0, f"hermetic import failed:\n{proc.stderr}"

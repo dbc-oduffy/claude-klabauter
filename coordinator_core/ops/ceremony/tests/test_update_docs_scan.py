@@ -40,6 +40,7 @@ import pytest
 import coordinator_core.ops.ceremony.update_docs_scan as uds  # noqa: F401
 
 from coordinator_core.ipc import _REGISTRY
+from coordinator_core.win_portability import no_console_creationflags, no_console_passthrough_kwargs
 
 # Spawns a real external process; runs at cadence gates, not per-commit.
 # Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
@@ -110,7 +111,7 @@ def _seed_git_repo(tmp_path: Path, *, now: _dt.datetime) -> Path:
     import subprocess
 
     repo_root = _seed_repo(tmp_path, now=now)
-    subprocess.run(["git", "init", "-q"], cwd=repo_root, check=True)
+    subprocess.run(["git", "init", "-q"], cwd=repo_root, check=True, **no_console_passthrough_kwargs())
     return repo_root
 
 
@@ -160,7 +161,7 @@ def test_tracker_reconcile_preview_reports_without_writing(tmp_path, monkeypatch
     repo_root = _seed_repo(tmp_path, now=now)
 
     def _git(args):
-        subprocess.run(["git", *args], cwd=repo_root, check=True, capture_output=True)
+        subprocess.run(["git", *args], cwd=repo_root, check=True, capture_output=True, **no_console_creationflags())
 
     _git(["init", "-q"])
     _git(["config", "user.email", "t@t"])

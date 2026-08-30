@@ -28,6 +28,7 @@ from pathlib import Path
 import pytest
 
 from coordinator_core.install import substrate_migrate as sm
+from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -62,7 +63,11 @@ def _git_repo_tracking(claude_base: Path, *, tracked: list[str]) -> None:
         "GIT_COMMITTER_EMAIL": "t@example.invalid",
     }
     run = lambda *a: subprocess.run(  # noqa: E731
-        ["git", "-C", str(claude_base), *a], check=True, capture_output=True, env=env
+        ["git", "-C", str(claude_base), *a],
+        check=True,
+        capture_output=True,
+        env=env,
+        **no_console_creationflags(),
     )
     run("init", "-q")
     for rel in tracked:
@@ -110,10 +115,12 @@ def test_tracked_legacy_dir_guard_mutates_no_git_state(tmp_path, monkeypatch):
     before = subprocess.run(
         ["git", "-C", str(claude_base), "status", "--porcelain=v1"],
         capture_output=True, text=True, check=True,
+        **no_console_creationflags(),
     ).stdout
     head_before = subprocess.run(
         ["git", "-C", str(claude_base), "rev-parse", "HEAD"],
         capture_output=True, text=True, check=True,
+        **no_console_creationflags(),
     ).stdout
 
     sm.migrate_substrate_to_settings_home(claude_base, tmp_path / "settings-home", check_only=False)
@@ -121,10 +128,12 @@ def test_tracked_legacy_dir_guard_mutates_no_git_state(tmp_path, monkeypatch):
     after = subprocess.run(
         ["git", "-C", str(claude_base), "status", "--porcelain=v1"],
         capture_output=True, text=True, check=True,
+        **no_console_creationflags(),
     ).stdout
     head_after = subprocess.run(
         ["git", "-C", str(claude_base), "rev-parse", "HEAD"],
         capture_output=True, text=True, check=True,
+        **no_console_creationflags(),
     ).stdout
     assert (before, head_before) == (after, head_after)
     assert (claude_base / "machine-local" / ".gitignore").is_file()

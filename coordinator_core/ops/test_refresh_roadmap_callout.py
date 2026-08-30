@@ -22,6 +22,10 @@ from coordinator_core.ops.refresh_roadmap_callout import (
     _validate_roadmap_id,
     main,
 )
+from coordinator_core.win_portability import (
+    no_console_creationflags,
+    no_console_passthrough_kwargs,
+)
 
 # Declared, not excused: the `test_self_commit_*` tests spawn a real git
 # process because `main(..., self_commit=True)` under test performs a real
@@ -167,20 +171,21 @@ def test_no_stub_index_at_all_is_clean_noop(tmp_path, capsys):
 
 
 def _init_git_repo(root: Path) -> None:
-    subprocess.run(["git", "init", "-q"], cwd=str(root), check=True)
-    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=str(root), check=True)
-    subprocess.run(["git", "config", "user.name", "Test"], cwd=str(root), check=True)
+    subprocess.run(["git", "init", "-q"], cwd=str(root), check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=str(root), check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=str(root), check=True, **no_console_passthrough_kwargs())
     (root / "README.md").write_text("seed\n", encoding="utf-8")
-    subprocess.run(["git", "add", "--", "README.md"], cwd=str(root), check=True)
+    subprocess.run(["git", "add", "--", "README.md"], cwd=str(root), check=True, **no_console_passthrough_kwargs())
     subprocess.run(
         ["git", "-c", "commit.gpgsign=false", "commit", "-m", "seed"],
-        cwd=str(root), check=True,
+        cwd=str(root), check=True, **no_console_passthrough_kwargs(),
     )
 
 
 def _log_subjects(root: Path) -> list[str]:
     result = subprocess.run(
         ["git", "log", "--format=%s"], cwd=str(root), capture_output=True, text=True, check=True,
+        **no_console_creationflags(),
     )
     return result.stdout.splitlines()
 
@@ -188,10 +193,10 @@ def _log_subjects(root: Path) -> list[str]:
 def test_self_commit_true_commits_changed_stub_index(tmp_path, monkeypatch):
     _init_git_repo(tmp_path)
     stub_index = _make_stub_index(tmp_path, "test-roadmap-a", CALLOUT_BODY)
-    subprocess.run(["git", "add", "--", "state"], cwd=str(tmp_path), check=True)
+    subprocess.run(["git", "add", "--", "state"], cwd=str(tmp_path), check=True, **no_console_passthrough_kwargs())
     subprocess.run(
         ["git", "-c", "commit.gpgsign=false", "commit", "-m", "seed stub-index"],
-        cwd=str(tmp_path), check=True,
+        cwd=str(tmp_path), check=True, **no_console_passthrough_kwargs(),
     )
     fake_cc_root = tmp_path / "fake-cc-root"
     fake_cc_root.mkdir()
@@ -211,6 +216,7 @@ def test_self_commit_true_commits_changed_stub_index(tmp_path, monkeypatch):
     show = subprocess.run(
         ["git", "show", "--name-only", "--format="], cwd=str(tmp_path),
         capture_output=True, text=True, check=True,
+        **no_console_creationflags(),
     )
     assert show.stdout.strip() == "state/roadmap/test-roadmap-a/STUB-INDEX.md"
 
@@ -218,10 +224,10 @@ def test_self_commit_true_commits_changed_stub_index(tmp_path, monkeypatch):
 def test_self_commit_true_no_change_produces_no_commit(tmp_path, monkeypatch):
     _init_git_repo(tmp_path)
     stub_index = _make_stub_index(tmp_path, "test-roadmap-a", CALLOUT_BODY)
-    subprocess.run(["git", "add", "--", "state"], cwd=str(tmp_path), check=True)
+    subprocess.run(["git", "add", "--", "state"], cwd=str(tmp_path), check=True, **no_console_passthrough_kwargs())
     subprocess.run(
         ["git", "-c", "commit.gpgsign=false", "commit", "-m", "seed stub-index"],
-        cwd=str(tmp_path), check=True,
+        cwd=str(tmp_path), check=True, **no_console_passthrough_kwargs(),
     )
     before = _log_subjects(tmp_path)
     fake_cc_root = tmp_path / "fake-cc-root"
@@ -240,10 +246,10 @@ def test_self_commit_true_no_change_produces_no_commit(tmp_path, monkeypatch):
 def test_self_commit_true_skips_commit_on_failed_render(tmp_path, monkeypatch):
     _init_git_repo(tmp_path)
     stub_index = _make_stub_index(tmp_path, "test-roadmap-a", CALLOUT_BODY)
-    subprocess.run(["git", "add", "--", "state"], cwd=str(tmp_path), check=True)
+    subprocess.run(["git", "add", "--", "state"], cwd=str(tmp_path), check=True, **no_console_passthrough_kwargs())
     subprocess.run(
         ["git", "-c", "commit.gpgsign=false", "commit", "-m", "seed stub-index"],
-        cwd=str(tmp_path), check=True,
+        cwd=str(tmp_path), check=True, **no_console_passthrough_kwargs(),
     )
     before = _log_subjects(tmp_path)
     fake_cc_root = tmp_path / "fake-cc-root"
@@ -268,10 +274,10 @@ def test_self_commit_true_skips_commit_on_failed_render(tmp_path, monkeypatch):
 def test_self_commit_false_default_never_commits(tmp_path, monkeypatch):
     _init_git_repo(tmp_path)
     stub_index = _make_stub_index(tmp_path, "test-roadmap-a", CALLOUT_BODY)
-    subprocess.run(["git", "add", "--", "state"], cwd=str(tmp_path), check=True)
+    subprocess.run(["git", "add", "--", "state"], cwd=str(tmp_path), check=True, **no_console_passthrough_kwargs())
     subprocess.run(
         ["git", "-c", "commit.gpgsign=false", "commit", "-m", "seed stub-index"],
-        cwd=str(tmp_path), check=True,
+        cwd=str(tmp_path), check=True, **no_console_passthrough_kwargs(),
     )
     before = _log_subjects(tmp_path)
     fake_cc_root = tmp_path / "fake-cc-root"

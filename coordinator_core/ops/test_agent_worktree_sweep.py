@@ -18,6 +18,7 @@ from coordinator_core.ops.agent_worktree_sweep import (
     main,
 )
 from coordinator_core.session import liveness as cs_liveness
+from coordinator_core.win_portability import no_console_creationflags
 
 # Spawns a real external process; runs at cadence gates, not per-commit.
 # Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
@@ -36,6 +37,7 @@ def _git(*args: str, cwd: Path, check: bool = True) -> subprocess.CompletedProce
         check=check,
         timeout=30,
         stdin=subprocess.DEVNULL,
+        **no_console_creationflags(),
     )
 
 

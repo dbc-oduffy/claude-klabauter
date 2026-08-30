@@ -36,6 +36,7 @@ from coordinator_core.cartography.file_index import (
     build_file_index,
     list_untracked_files,
 )
+from coordinator_core.win_portability import no_console_creationflags
 
 # Spawns a real external process; runs at cadence gates, not per-commit.
 # Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
@@ -56,6 +57,7 @@ def git_repo_with_untracked(tmp_path: Path) -> Path:
             cwd=str(root),
             capture_output=True,
             check=True,
+            **no_console_creationflags(),
         )
 
     _git("init", "-b", "main")
@@ -135,7 +137,7 @@ def test_list_untracked_files_empty_when_tree_clean(tmp_path):
     root.mkdir()
 
     def _git(*args: str) -> None:
-        subprocess.run(["git", *args], cwd=str(root), capture_output=True, check=True)
+        subprocess.run(["git", *args], cwd=str(root), capture_output=True, check=True, **no_console_creationflags())
 
     _git("init", "-b", "main")
     _git("config", "user.email", "cartography-test@claude-klabauter.test")

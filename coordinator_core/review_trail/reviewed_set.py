@@ -87,12 +87,11 @@ from __future__ import annotations
 
 import os
 import re
-import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, FrozenSet, List, Optional, Set, Tuple
 
-from coordinator_core.win_portability import no_console_creationflags
+from coordinator_core.git.run import run_git
 from coordinator_core.locked_write import held_lock
 from coordinator_core.lifecycle import git_common_dir
 
@@ -102,30 +101,19 @@ _SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 #: Fixed record width for `reviewed-shas`: 40 hex chars + one `\n`.
 _SHA_RECORD_WIDTH = 41
 
-_NO_CONSOLE = no_console_creationflags()
-
 _STORE_SUBDIR = ("coordinator-review-trail",)
 _SHAS_FILENAME = "reviewed-shas"
 _FOLDED_IDS_FILENAME = "folded-record-ids"
 
 
 def _run(cmd: List[str], cwd: str) -> Tuple[int, str, str]:
-    """Run `cmd`; return (returncode, stdout, stderr). Never raises — a
-    spawn failure (missing git, timeout, etc.) degrades to (1, "", msg),
-    the same fail-closed shape every caller here already treats an
-    unresolved endpoint/range as."""
-    try:
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            cwd=cwd,
-            stdin=subprocess.DEVNULL,
-            **_NO_CONSOLE,
-        )
-        return result.returncode, result.stdout, result.stderr
-    except Exception as exc:  # pragma: no cover - defensive, mirrors coverage.py's _run
-        return 1, "", str(exc)
+    """Run `cmd` (a full argv, leading `"git"` included, for call-site parity
+    with the private runner this replaces); return (returncode, stdout,
+    stderr). Never raises — a spawn failure (missing git, timeout, etc.)
+    degrades to (1, "", msg), the same fail-closed shape every caller here
+    already treats an unresolved endpoint/range as."""
+    result = run_git(cmd[1:], cwd=cwd)
+    return result.returncode, result.stdout, result.stderr
 
 
 def store_dir(repo_root: str) -> Path:
@@ -351,18 +339,12 @@ def _batch_check(exprs: List[str], repo_root: str) -> List[str]:
     here rather than its import weight. The output-shape guarantee below is that
     function's, empirically verified there (code-reviewer item 3 + EM follow-up,
     2026-07-28) and unchanged since."""
-    try:
-        result = subprocess.run(
-            ["git", "cat-file", "--batch-check=%(objectname) %(objecttype)"],
-            input="\n".join(exprs) + "\n",
-            cwd=repo_root,
-            capture_output=True,
-            text=True,
-            **_NO_CONSOLE,
-        )
-        return result.stdout.splitlines() if result.returncode == 0 else []
-    except Exception:
-        return []
+    result = run_git(
+        ["cat-file", "--batch-check=%(objectname) %(objecttype)"],
+        input=("\n".join(exprs) + "\n").encode("utf-8"),
+        cwd=repo_root,
+    )
+    return result.stdout.splitlines() if result.returncode == 0 else []
 
 
 def _resolve_endpoints_batch(tokens: List[str], repo_root: str) -> Dict[str, Optional[str]]:

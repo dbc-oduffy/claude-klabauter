@@ -65,8 +65,8 @@ disk change, spawn-free by its own budget (5ms leg, C4).
 `run(...)` assembles the whole cycle — steps A (`corpus.read_live_corpus`),
 B (`archive_index.build_index`), C (`gate_clear.evaluate_gate_clear` /
 `apply_gate_clear`, resolved via `resolve.make_resolver`), D
-(`terminal.compute_terminal_set`), and E (this module's own
-`archive_terminal_batch`) — in one synchronous call, matching the
+(`terminal.compute_terminal_set`), and E (the move + commit inline in
+`run(...)` itself) — in one synchronous call, matching the
 falsifier's `fn(repo_root: str, cap: int) -> dict` contract
 (docs/plans/2026-08-29-the-housekeeping-cycle-stops-committing.falsifier.py
 :: `measure_via_module`).
@@ -83,8 +83,9 @@ to catch.
 from __future__ import annotations
 
 import asyncio
+import logging
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Tuple, Union
+from typing import Any, Dict, List, Optional, Set, Union
 
 from coordinator_core.claim_state import handoff_claim_dir
 from coordinator_core.housekeeping import archive_index as archive_index_mod
@@ -108,6 +109,9 @@ from coordinator_core.liveness import cs_claim_holder_live, resolve_live_session
 from coordinator_core.ops.fleet import archive_actioned_memos
 from coordinator_core.ops.fleet._common import Move, archive_and_commit, handoff_archive_dest
 from coordinator_core.ops.fleet.archive_terminal_handoffs import _dirty_handoff_relpaths
+from coordinator_core.wire_paths import rel_id
+
+_LOG = logging.getLogger(__name__)
 
 PathLike = Union[str, Path]
 
@@ -189,35 +193,6 @@ def _claim_holder_live_predicate(common_dir: Path):
             return False
 
     return predicate
-
-
-def archive_terminal_batch(
-    worktree_root: Path,
-    moves: List[Move],
-    subject: str,
-) -> Tuple[List[dict], List[dict]]:
-    """Step E: one `os.replace` per Move, landed as ONE commit via the
-    existing `archive_and_commit` seam (module docstring — no new commit
-    route, no second-guessing of its `(acted, failed)` split).
-
-    Widened (2026-08-30, the actioned-memo class gets an occasion, C2) from
-    `List[TerminalEntry]` to a prebuilt `List[Move]` — `housekeeping.terminal`
-    type memos are not, and `plan_sweep` (the memo family's own planner)
-    already returns ready-built Moves. `run()` builds the handoff family's
-    Moves itself (mirroring what this function used to do internally) and
-    concatenates them with the memo family's Moves before calling here once,
-    so both families land in the SAME commit.
-
-    Returns `(acted, failed)` — `archive_and_commit`'s own return shape,
-    passed through unchanged. An empty `moves` short-circuits to `([], [])`
-    without calling into the seam at all (nothing to move, nothing to
-    commit — a zero-length batch is not a degenerate call to make, it is
-    simply not a call).
-    """
-    if not moves:
-        return [], []
-
-    return asyncio.run(archive_and_commit(worktree_root, moves, subject))
 
 
 def run(
@@ -356,10 +331,23 @@ def run(
     # folding the memo family into this cycle needs from HERE is its own
     # candidate relpaths, unioned into the SINGLE dirty-check call below, so
     # the memo family never triggers a second `git status` spawn.
+    memo_scan_error: Optional[str] = None
     try:
         memo_candidate_paths = archive_actioned_memos.collect_inbox_memo_paths(worktree_root)
-    except OSError:
+    except OSError as exc:
         memo_candidate_paths = []
+        inbox_dir = worktree_root / archive_actioned_memos.INBOX_RELDIR
+        memo_scan_error = f"{inbox_dir}: {exc}"
+        # Review: coordinator:code-reviewer F1 -- the op's own `inbox_paths=None`
+        # path logs + records a `scan_errors` entry when the inbox can't be
+        # enumerated; this caller degraded to `[]` silently, so a permission
+        # problem on the inbox directory was indistinguishable from a
+        # genuinely empty inbox. Log here, and surface via `memo_scan_error`
+        # in the result dict below, so the degradation stays observable.
+        _LOG.warning(
+            "cycle.run: cannot scan %s — %s; treating memo family as empty "
+            "this cycle (degrade safe)", inbox_dir, exc,
+        )
     memo_candidate_rels = sorted({
         p.relative_to(worktree_root).as_posix() for p in memo_candidate_paths
     })
@@ -367,7 +355,7 @@ def run(
     dirty_rels = _dirty_handoff_relpaths(
         worktree_root,
         sorted(set(candidate_rels) | set(memo_candidate_rels)),
-        fallback_pathspecs=("state/handoffs", "cross-repo/inbox"),
+        fallback_pathspecs=("state/handoffs", archive_actioned_memos.INBOX_RELDIR),
     )
     # Read off the record step A already parsed -- the rail costs no I/O
     # here, where the predecessor sweep paid a per-candidate file read.
@@ -407,7 +395,15 @@ def run(
         Move(
             src=entry.path,
             dst=handoff_archive_dest(worktree_root, entry.path),
-            candidate_id=str(entry.path.relative_to(worktree_root)),
+            # Review: coordinator:code-reviewer F1 -- `Move.candidate_id` is
+            # the wire "id" field throughout the result envelope
+            # (`ops/fleet/_common.py:677-678,710`); `wire_paths.rel_id`'s own
+            # docstring names the native-separator `str(relative_to())` form
+            # WRONG for exactly this reason. Using it here made
+            # `archived`/`failed` ids carry `os.sep` while this same diff's
+            # `memos_archived` sibling (via `plan_sweep` -> `rel_id`) carries
+            # forward-slash -- two id shapes in one result dict on Windows.
+            candidate_id=rel_id(entry.path, worktree_root),
             force=False,
             restage_src=False,
         )
@@ -446,9 +442,23 @@ def run(
     subject = "housekeeping: archive " + " and ".join(subject_parts) if subject_parts else \
         "housekeeping: archive 0 terminal handoff(s)"
 
-    acted, failed = archive_terminal_batch(
-        worktree_root, handoff_moves + memo_moves, subject,
-    )
+    # Step E: one `os.replace` per Move, landed as ONE commit via the
+    # existing `archive_and_commit` seam (module docstring — no new commit
+    # route, no second-guessing of its `(acted, failed)` split). An empty
+    # combined batch never calls into the seam at all (nothing to move,
+    # nothing to commit — a zero-length batch is not a degenerate call to
+    # make, it is simply not a call).
+    # Review: overengineering-reviewer F4 — `archive_terminal_batch` was a
+    # single-caller passthrough (empty-check + one asyncio.run) after the
+    # Move-prebuild moved into run(); inlined here, function and its three
+    # tests deleted.
+    combined_moves = handoff_moves + memo_moves
+    if combined_moves:
+        acted, failed = asyncio.run(
+            archive_and_commit(worktree_root, combined_moves, subject)
+        )
+    else:
+        acted, failed = [], []
 
     handoff_move_ids = {m.candidate_id for m in handoff_moves}
     memo_move_ids = {m.candidate_id for m in memo_moves}
@@ -457,9 +467,20 @@ def run(
     archived = [item["id"] for item in acted if item["id"] in handoff_move_ids]
     failed = [item for item in failed if item["id"] in handoff_move_ids]
 
-    index_changed = False
-    if acted:
-        index_changed = bool(archive_index_mod.revalidate(archive_idx))
+    # Review: coordinator:code-reviewer F4 -- gating `revalidate` on `acted`
+    # meant a quiet cycle (this cycle moved nothing) never called it at all,
+    # so archive drift from a peer process or a manual git operation between
+    # cycles was never detected and the stale cache never rewritten.
+    # `revalidate` is `archive_index`'s own cheap (~2ms at 1,470 files),
+    # spawn-free `os.scandir`+stat leg -- call it whenever there is an
+    # archive tree to revalidate against, not only on this cycle's own
+    # `acted` batch; only the expensive `save_index` write below stays gated.
+    # `archive_dir_exists` still guards it: `revalidate`'s default `onerror`
+    # re-raises, and a repo with no `archive/handoffs/` yet has an EMPTY
+    # archive (step B's own branch above), not a scan failure.
+    index_changed = (
+        bool(archive_index_mod.revalidate(archive_idx)) if archive_dir_exists else False
+    )
 
     # Persist for the next cycle, ONLY when the on-disk cache would differ.
     # Best-effort by construction: a cache that cannot be written costs the
@@ -473,8 +494,11 @@ def run(
     # difference between the two-family cycle sitting inside
     # CYCLE_PROCESS_TIME_BUDGET_MS and breaching it. Two cases genuinely need
     # the write: a rebuild (there was no usable cache, or it was stale), and a
-    # revalidate that actually patched the index. Neither holds on a quiet
-    # cycle, which is the common case on a cadence job.
+    # revalidate that actually patched the index. `revalidate` itself now
+    # runs on every cycle with an archive tree (F4 above), so it also catches
+    # cross-process drift; `save_index` stays gated on the same
+    # `index_rebuilt or index_changed` pair -- only the (cheap) detection
+    # moved off the `acted` gate, not the (expensive) write.
     index_cache_written = (
         archive_index_mod.save_index(archive_idx, cache_path)
         if archive_dir_exists and (index_rebuilt or index_changed)
@@ -490,6 +514,7 @@ def run(
         "memos_archived": memos_archived,
         "memos_failed": memos_failed,
         "memos_skipped": memos_skipped,
+        "memo_scan_error": memo_scan_error,
         "live_read_count": live_result.read_count,
         "scan_gaps": live_result.scan_gaps,
         "index_rebuilt": index_rebuilt,

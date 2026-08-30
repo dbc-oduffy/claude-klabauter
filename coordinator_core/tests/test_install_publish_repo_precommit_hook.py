@@ -18,6 +18,7 @@ from pathlib import Path
 import pytest
 
 from coordinator_core.ops.install_publish_repo_precommit_hook import main
+from coordinator_core.win_portability import no_console_passthrough_kwargs
 
 # PATH lookup, not a spawn: the previous shape ran `git --version` at MODULE
 # level to compute this condition, so it spawned during collection on every
@@ -36,7 +37,7 @@ pytestmark = [
 
 def _init_repo(path: Path) -> None:
     path.mkdir(parents=True, exist_ok=True)
-    subprocess.run(["git", "init", "-q", str(path)], check=True)
+    subprocess.run(["git", "init", "-q", str(path)], check=True, **no_console_passthrough_kwargs())
 
 
 def _run_main(repo_dir: Path, argv: list[str], capsys) -> tuple[int, str]:

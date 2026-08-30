@@ -39,6 +39,7 @@ from coordinator_core.cartography.tree import (
     build_tree,
     list_tracked_files,
 )
+from coordinator_core.win_portability import no_console_creationflags
 
 # Spawns a real external process; runs at cadence gates, not per-commit.
 # Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
@@ -72,7 +73,7 @@ def git_repo(tmp_path: Path) -> Path:
             cwd=str(root),
             capture_output=True,
             check=True,
-        )
+        **no_console_creationflags())
 
     _git("init", "-b", "main")
     _git("config", "user.email", "cartography-test@claude-klabauter.test")

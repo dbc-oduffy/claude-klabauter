@@ -22,6 +22,7 @@ from coordinator_core.ops.plan_suggest_completion_steps import (
     _plan_touching_shas_batch,
     suggest_completion_steps,
 )
+from coordinator_core.win_portability import no_console_creationflags
 
 # Declared, not excused: every test in this file drives real `git log`/`git
 # rev-list` queries (candidate-touching-commit resolution, sha_range
@@ -31,7 +32,7 @@ pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 
 def _run_git(repo: Path, *args: str) -> None:
-    subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True, text=True)
+    subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True, text=True, **no_console_creationflags())
 
 
 def _init_repo(repo: Path) -> None:
@@ -60,7 +61,8 @@ def _commit_plan(repo: Path, path: Path, message: str) -> str:
     _run_git(repo, "add", str(path.relative_to(repo)))
     _run_git(repo, "commit", "-q", "-m", message)
     result = subprocess.run(
-        ["git", "rev-parse", "HEAD"], cwd=repo, check=True, capture_output=True, text=True
+        ["git", "rev-parse", "HEAD"], cwd=repo, check=True, capture_output=True, text=True,
+        **no_console_creationflags(),
     )
     return result.stdout.strip()
 
@@ -195,7 +197,8 @@ def test_plan_touching_shas_batch_attributes_commits_to_the_right_path(tmp_path)
     _run_git(tmp_path, "add", "docs/plans/a.md", "docs/plans/b.md")
     _run_git(tmp_path, "commit", "-q", "-m", "touch both")
     sha_both = subprocess.run(
-        ["git", "rev-parse", "HEAD"], cwd=tmp_path, check=True, capture_output=True, text=True
+        ["git", "rev-parse", "HEAD"], cwd=tmp_path, check=True, capture_output=True, text=True,
+        **no_console_creationflags(),
     ).stdout.strip()
 
     result = _plan_touching_shas_batch(tmp_path, ["docs/plans/a.md", "docs/plans/b.md"])

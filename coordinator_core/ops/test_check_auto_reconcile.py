@@ -143,9 +143,11 @@ def test_resolve_own_repo_root_targets_invoking_repo_not_claude_klabauter(
     """
     import subprocess
 
+    from coordinator_core.win_portability import no_console_passthrough_kwargs
+
     other_repo = tmp_path / "sibling-repo"
     other_repo.mkdir()
-    subprocess.run(["git", "init", "-q"], cwd=other_repo, check=True)
+    subprocess.run(["git", "init", "-q"], cwd=other_repo, check=True, **no_console_passthrough_kwargs())
 
     monkeypatch.chdir(other_repo)
     resolved = check_auto_reconcile._resolve_own_repo_root()
@@ -168,9 +170,11 @@ def test_get_response_stamps_origin_worktree_from_cwd_not_module_location(
     """
     import subprocess
 
+    from coordinator_core.win_portability import no_console_passthrough_kwargs
+
     other_repo = tmp_path / "another-caller-repo"
     other_repo.mkdir()
-    subprocess.run(["git", "init", "-q"], cwd=other_repo, check=True)
+    subprocess.run(["git", "init", "-q"], cwd=other_repo, check=True, **no_console_passthrough_kwargs())
     monkeypatch.chdir(other_repo)
 
     seen: dict = {}

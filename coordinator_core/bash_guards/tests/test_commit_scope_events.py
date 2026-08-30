@@ -52,7 +52,7 @@ def _init_repo(tmp_path):
     (repo / "README.md").write_text("init\n", encoding="utf-8")
     subprocess.run(["git", "add", "README.md"], cwd=repo, check=True, capture_output=True, **no_console_creationflags())
     subprocess.run(
-        ["git", "commit", "-q", "-m", "init"], cwd=repo, check=True, capture_output=True
+        ["git", "commit", "-q", "-m", "init"], cwd=repo, check=True, capture_output=True,
         **no_console_creationflags(),
     )
     return repo

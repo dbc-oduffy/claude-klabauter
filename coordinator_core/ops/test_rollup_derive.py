@@ -11,6 +11,10 @@ import subprocess
 import pytest
 
 from coordinator_core.ops.rollup_derive import main
+from coordinator_core.win_portability import (
+    no_console_creationflags,
+    no_console_passthrough_kwargs,
+)
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
@@ -19,19 +23,24 @@ pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 def git_repo(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
-    subprocess.run(["git", "init", "-q", "-b", "main"], cwd=repo, check=True)
-    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=repo, check=True)
-    subprocess.run(["git", "config", "user.name", "Test"], cwd=repo, check=True)
+    subprocess.run(["git", "init", "-q", "-b", "main"], cwd=repo, check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=repo, check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=repo, check=True, **no_console_passthrough_kwargs())
     return repo
 
 
 def _commit(repo, message: str) -> str:
     f = repo / "f.txt"
     f.write_text(f.read_text() + "x" if f.exists() else "x")
-    subprocess.run(["git", "add", "f.txt"], cwd=repo, check=True)
-    subprocess.run(["git", "commit", "-q", "-m", message], cwd=repo, check=True)
+    subprocess.run(["git", "add", "f.txt"], cwd=repo, check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "commit", "-q", "-m", message], cwd=repo, check=True, **no_console_passthrough_kwargs())
     result = subprocess.run(
-        ["git", "rev-parse", "HEAD"], cwd=repo, check=True, capture_output=True, text=True
+        ["git", "rev-parse", "HEAD"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        text=True,
+        **no_console_creationflags(),
     )
     return result.stdout.strip()
 
@@ -114,8 +123,8 @@ def test_body_mention_without_trailer_does_not_resolve(git_repo, monkeypatch, ca
     )
     _f = git_repo / "f.txt"
     _f.write_text("x")
-    subprocess.run(["git", "add", "f.txt"], cwd=git_repo, check=True)
-    subprocess.run(["git", "commit", "-q", "-m", message], cwd=git_repo, check=True)
+    subprocess.run(["git", "add", "f.txt"], cwd=git_repo, check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "commit", "-q", "-m", message], cwd=git_repo, check=True, **no_console_passthrough_kwargs())
 
     rc = main(["dlv-test-id-body-only"])
     captured = capsys.readouterr()
@@ -172,15 +181,15 @@ def test_true_zero_candidates_emits_no_diagnostic(git_repo, monkeypatch, capsys)
 def test_shipped_all_resolving_commits_on_origin_main(tmp_path, monkeypatch, capsys):
     bare = tmp_path / "bare_origin.git"
     work = tmp_path / "work"
-    subprocess.run(["git", "init", "--bare", "-q", "-b", "main", str(bare)], check=True)
-    subprocess.run(["git", "init", "-q", "-b", "main", str(work)], check=True)
-    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=work, check=True)
-    subprocess.run(["git", "config", "user.name", "Test"], cwd=work, check=True)
-    subprocess.run(["git", "remote", "add", "origin", str(bare)], cwd=work, check=True)
+    subprocess.run(["git", "init", "--bare", "-q", "-b", "main", str(bare)], check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "init", "-q", "-b", "main", str(work)], check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=work, check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=work, check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "remote", "add", "origin", str(bare)], cwd=work, check=True, **no_console_passthrough_kwargs())
 
     monkeypatch.chdir(work)
     sha = _commit(work, "resolving commit\n\nResolves: test-artifact-1\n")
-    subprocess.run(["git", "push", "-q", "origin", "main"], cwd=work, check=True)
+    subprocess.run(["git", "push", "-q", "origin", "main"], cwd=work, check=True, **no_console_passthrough_kwargs())
 
     rc = main(["test-artifact-1"])
     captured = capsys.readouterr()
@@ -193,15 +202,15 @@ def test_shipped_all_resolving_commits_on_origin_main(tmp_path, monkeypatch, cap
 def test_not_shipped_resolving_commit_ahead_of_origin_main(tmp_path, monkeypatch, capsys):
     bare = tmp_path / "bare_origin.git"
     work = tmp_path / "work"
-    subprocess.run(["git", "init", "--bare", "-q", "-b", "main", str(bare)], check=True)
-    subprocess.run(["git", "init", "-q", "-b", "main", str(work)], check=True)
-    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=work, check=True)
-    subprocess.run(["git", "config", "user.name", "Test"], cwd=work, check=True)
-    subprocess.run(["git", "remote", "add", "origin", str(bare)], cwd=work, check=True)
+    subprocess.run(["git", "init", "--bare", "-q", "-b", "main", str(bare)], check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "init", "-q", "-b", "main", str(work)], check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=work, check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=work, check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "remote", "add", "origin", str(bare)], cwd=work, check=True, **no_console_passthrough_kwargs())
 
     monkeypatch.chdir(work)
     _commit(work, "base commit")
-    subprocess.run(["git", "push", "-q", "origin", "main"], cwd=work, check=True)
+    subprocess.run(["git", "push", "-q", "origin", "main"], cwd=work, check=True, **no_console_passthrough_kwargs())
     sha = _commit(work, "local-only resolving commit\n\nResolves: test-artifact-2\n")
 
     rc = main(["test-artifact-2"])
@@ -262,9 +271,9 @@ def test_resolving_shas_batches_one_git_log_call_not_per_candidate(git_repo, mon
 def test_unknown_error_when_origin_main_missing(tmp_path, monkeypatch, capsys):
     """No 'origin' remote at all -> resolvers.main rc=2 -> propagated as unknown-error, not not-shipped."""
     work = tmp_path / "work"
-    subprocess.run(["git", "init", "-q", "-b", "main", str(work)], check=True)
-    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=work, check=True)
-    subprocess.run(["git", "config", "user.name", "Test"], cwd=work, check=True)
+    subprocess.run(["git", "init", "-q", "-b", "main", str(work)], check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=work, check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=work, check=True, **no_console_passthrough_kwargs())
 
     monkeypatch.chdir(work)
     sha = _commit(work, "resolving commit\n\nResolves: test-artifact-3\n")

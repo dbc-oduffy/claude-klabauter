@@ -37,6 +37,7 @@ import pytest
 from coordinator_core import sibling_fact
 from coordinator_core.reconcile import commitments_recheck
 from coordinator_core.reconcile.commitments_recheck import recheck_commitments
+from coordinator_core.win_portability import no_console_creationflags
 
 # Spawns a real external process; runs at cadence gates, not per-commit.
 # Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
@@ -58,6 +59,7 @@ def _git(args: List[str], cwd: Path) -> subprocess.CompletedProcess:
         capture_output=True,
         encoding="utf-8",
         check=True,
+        **no_console_creationflags(),
     )
 
 
@@ -75,6 +77,7 @@ def _make_commit(repo: Path, message: str) -> str:
         capture_output=True,
         encoding="utf-8",
         check=True,
+        **no_console_creationflags(),
     )
     return result.stdout.strip()
 

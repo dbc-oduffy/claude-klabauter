@@ -37,6 +37,7 @@ from coordinator_core.ops.crossrepo_closure_status import (
 )
 
 import pytest
+from coordinator_core.win_portability import no_console_passthrough_kwargs
 
 # Spawns a real external process; runs at cadence gates, not per-commit.
 # Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
@@ -72,12 +73,12 @@ def _entry(commitments_dir: Path, entry_id: str, *, memo_ref: str, status: str, 
 
 
 def _init_git_repo(root: Path) -> None:
-    subprocess.run(["git", "init", "-q"], cwd=root, check=True)
-    subprocess.run(["git", "config", "user.email", "t@example.com"], cwd=root, check=True)
-    subprocess.run(["git", "config", "user.name", "T"], cwd=root, check=True)
+    subprocess.run(["git", "init", "-q"], cwd=root, check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "config", "user.email", "t@example.com"], cwd=root, check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "config", "user.name", "T"], cwd=root, check=True, **no_console_passthrough_kwargs())
     (root / "seed.txt").write_text("seed\n", encoding="utf-8")
-    subprocess.run(["git", "add", "seed.txt"], cwd=root, check=True)
-    subprocess.run(["git", "commit", "-q", "-m", "seed"], cwd=root, check=True)
+    subprocess.run(["git", "add", "seed.txt"], cwd=root, check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "commit", "-q", "-m", "seed"], cwd=root, check=True, **no_console_passthrough_kwargs())
 
 
 def test_join_input_count_equals_output_count_no_commitments(tmp_path: Path) -> None:

@@ -10,14 +10,17 @@ Tests assert:
   - extract_first_err()'s Trace-preamble-skipping fallback chain.
   - main() always exits 0, even on push failure or an injected internal
     exception (auto-push must never block a commit).
-  - run_push_with_retry()'s retry policy: ref-lock retries (re-pushing) to
-    MAX_ATTEMPTS then logs; non-fast-forward issues push_once exactly ONCE and
-    instead polls a read-only fetch+ancestor "already superseded" test on each
-    remaining attempt's backoff (XB-12) -- resolving as soon as a poll confirms
-    the commit already reached origin and logging nothing, and logging FAILED
-    only once every poll is exhausted with no supersession found.
+  - _attempts_for()/_backoff_seconds()'s per-class retry-budget table
+    (ref-lock's own override, network/gh-transient's unchanged envelope).
     COORDINATOR_AUTO_PUSH_NO_SLEEP=1 is set for all retry tests so
     gh-transient's seconds-scale backoff is never actually paid.
+
+  GRAVESTONED 2026-08-30 (docs/plans/2026-08-30-who-pushes-and-when.md C2):
+  run_push_with_retry() and the durable pending-push record subsystem
+  (drain_pending_push, _drain_dead_ref_record, and the read/write/staleness
+  primitives only they reached) are deleted; their tests retired with them
+  rather than retargeted -- see auto_push.py's module docstring for the
+  gravestoning's full citation trail.
 
 No test performs a real `git push` or touches a real remote --
 subprocess/push_once and os.fork are monkeypatched throughout, and repo dirs
@@ -41,6 +44,8 @@ import textwrap
 import time
 import uuid
 from pathlib import Path
+
+from coordinator_core.win_portability import no_console_creationflags, no_console_passthrough_kwargs
 
 import pytest
 
@@ -225,6 +230,38 @@ def test_push_once_timeout_message_classifies_as_timeout():
     stderr_text = (
         f"fatal: push exceeded {auto_push.GIT_PUSH_TIMEOUT_SECS}s and was killed "
         "(Could not read from remote repository: timed out)"
+    )
+    assert auto_push.classify_error(stderr_text) == "timeout"
+
+
+def test_classify_error_capitalized_ssh_failure_is_auth_not_unknown():
+    # The single commonest real SSH push failure, verbatim from git. It fell to
+    # "unknown" until _PAT_AUTH became IGNORECASE (2026-08-30) -- 52 of the 185
+    # rows in example-retrieval-repo's push-failures.log, the largest unnamed class in it.
+    stderr_text = (
+        "fatal: Could not read from remote repository.\n"
+        "\n"
+        "Please make sure you have the correct access rights\n"
+        "and the repository exists.\n"
+    )
+    assert auto_push.classify_error(stderr_text) == "auth"
+
+
+def test_classify_error_capitalized_auth_change_is_label_only():
+    # IGNORECASE must not move anything into or out of the retry ladder: "auth"
+    # was already non-retrying and so was the "unknown" these rows used to land
+    # in, so the operator-facing label is the only thing that changed.
+    assert "auth" not in auto_push._RETRYABLE_CLASSES
+    assert "unknown" not in auto_push._RETRYABLE_CLASSES
+
+
+def test_classify_error_timeout_still_beats_case_insensitive_auth():
+    # The ordering trap IGNORECASE would otherwise open: the synthesized timeout
+    # message carries "Could not read from remote repository", which _PAT_AUTH
+    # now matches. _PAT_TIMEOUT is tested first and must stay first.
+    stderr_text = (
+        f"fatal: push exceeded {auto_push.GIT_PUSH_TIMEOUT_SECS}s and was killed\n"
+        "fatal: Could not read from remote repository.\n"
     )
     assert auto_push.classify_error(stderr_text) == "timeout"
 
@@ -598,6 +635,17 @@ def test_log_failure_submodule_relative_gitdir_resolves_against_repo_root(tmp_pa
     assert log_path.exists(), f"expected log at resolved submodule gitdir {modules_dir}"
 
 
+def test_log_failure_none_attempts_renders_explicit_unknown(tmp_path):
+    # A caller that did not count its ladder legs must say so. Substituting a
+    # number is what made three months of `cadence-sweep/... after 1` rows
+    # assert a one-attempt ladder that does not exist.
+    repo_root = tmp_path / "repo"
+    (repo_root / ".git").mkdir(parents=True)
+    auto_push.log_failure(str(repo_root), "work/foo", "cadence-sweep", "sweep-unconfirmed", None, "timed out", "")
+    line = (repo_root / ".git" / "push-failures.log").read_text(encoding="utf-8")
+    assert "(cadence-sweep/sweep-unconfirmed after ?)" in line
+
+
 def test_log_failure_fail_open_on_garbage_dot_git_file(tmp_path):
     """`.git` file with unparseable content -- falls back to the literal
     `<root>/.git` join without raising."""
@@ -637,36 +685,6 @@ def test_log_failure_forensic_sidecar_lands_beside_log_in_non_plain_topology(tmp
 # Retry policy
 # ---------------------------------------------------------------------------
 
-def test_run_push_with_retry_ref_lock_retries_to_per_class_budget_then_logs(monkeypatch, tmp_path):
-    # ref-lock gets its own per-class budget (DEC-1) -- MAX_ATTEMPTS is NOT
-    # what bounds this class any more, so this asserts _attempts_for("ref-lock")
-    # rather than the shared constant (regression guard: a literal here would
-    # silently pass even if the per-class table stopped being consulted).
-    repo_root = str(tmp_path)
-    (tmp_path / ".git").mkdir()
-    monkeypatch.setenv(auto_push._ENV_NO_SLEEP, "1")
-
-    call_count = {"n": 0}
-
-    def _fake_push_once(root, branch, windows_bash, ssh_remote):
-        call_count["n"] += 1
-        return False, "error: cannot lock ref 'refs/heads/work/foo': is at abc but expected def\n"
-
-    monkeypatch.setattr(auto_push, "push_once", _fake_push_once)
-    monkeypatch.setattr(auto_push, "_run_git", lambda root, args: {
-        ("remote", "get-url", "origin"): "https://github.com/org/repo.git",
-    }.get(tuple(args)))
-    monkeypatch.setattr(auto_push, "is_windows_bash", lambda: False)
-
-    auto_push.run_push_with_retry(repo_root, "work/foo")
-
-    expected_attempts = auto_push._attempts_for("ref-lock")
-    assert call_count["n"] == expected_attempts
-    log_path = tmp_path / ".git" / "push-failures.log"
-    assert log_path.exists()
-    content = log_path.read_text()
-    assert f"after {expected_attempts}" in content
-    assert "ref-lock" in content
 
 
 def test_attempts_for_ref_lock_is_a_per_class_override_not_max_attempts():
@@ -706,184 +724,14 @@ def test_backoff_seconds_gh_transient_unchanged_envelope():
         assert low <= value <= high
 
 
-def test_run_push_with_retry_non_fast_forward_exhausts_when_never_superseded(monkeypatch, tmp_path):
-    # A genuine, still-diverged non-fast-forward: _is_ancestor never confirms
-    # our commit reached origin by any path. push_once is issued exactly
-    # once (never re-pushed); the remaining attempts poll supersession on
-    # the existing backoff, and once every poll comes back negative this
-    # fails loud, logging after MAX_ATTEMPTS.
-    repo_root = str(tmp_path)
-    (tmp_path / ".git").mkdir()
-    monkeypatch.setenv(auto_push._ENV_NO_SLEEP, "1")
-
-    call_count = {"n": 0}
-
-    def _fake_push_once(root, branch, windows_bash, ssh_remote):
-        call_count["n"] += 1
-        return False, "! [rejected] work/foo -> work/foo (fetch first)\nnon-fast-forward\n"
-
-    monkeypatch.setattr(auto_push, "push_once", _fake_push_once)
-    monkeypatch.setattr(auto_push, "_run_git", lambda root, args: {
-        ("remote", "get-url", "origin"): "https://github.com/org/repo.git",
-        ("rev-parse", "work/foo"): "abc123",
-        ("fetch", "origin", "work/foo"): "",
-    }.get(tuple(args)))
-    ancestor_calls = {"n": 0}
-
-    def _fake_is_ancestor(root, sha, ref):
-        ancestor_calls["n"] += 1
-        return False
-
-    monkeypatch.setattr(auto_push, "_is_ancestor", _fake_is_ancestor)
-    monkeypatch.setattr(auto_push, "is_windows_bash", lambda: False)
-
-    auto_push.run_push_with_retry(repo_root, "work/foo")
-
-    assert call_count["n"] == 1
-    # MAX_ATTEMPTS, deliberately, not `_attempts_for("non-fast-forward")`: this
-    # is DEC-1's independence guard. The non-FF poll budget is a fail-loud
-    # mechanism kept separate from the per-class RETRY table, so rebinding this
-    # bound to the table -- the obvious "simplification" -- must fail here.
-    assert ancestor_calls["n"] == auto_push.MAX_ATTEMPTS
-    log_path = tmp_path / ".git" / "push-failures.log"
-    assert log_path.exists()
-    content = log_path.read_text()
-    assert f"after {auto_push.MAX_ATTEMPTS}" in content
-    assert "non-fast-forward" in content
 
 
-def test_run_push_with_retry_non_fast_forward_resolves_immediately_when_superseded(monkeypatch, tmp_path, capsys):
-    # The commit is already on origin (a peer's push, or our own
-    # out-of-order async sibling, landed it first) -- must NOT write to
-    # push-failures.log at all, must retry exactly once (the supersession
-    # check runs before any retry decision), and must print an info-level
-    # trace instead (XB-12: this is the false-positive PUSH FAILED the row
-    # exists to eliminate).
-    repo_root = str(tmp_path)
-    (tmp_path / ".git").mkdir()
-    monkeypatch.setenv(auto_push._ENV_NO_SLEEP, "1")
-
-    call_count = {"n": 0}
-
-    def _fake_push_once(root, branch, windows_bash, ssh_remote):
-        call_count["n"] += 1
-        return False, "! [rejected] work/foo -> work/foo (fetch first)\nnon-fast-forward\n"
-
-    monkeypatch.setattr(auto_push, "push_once", _fake_push_once)
-    monkeypatch.setattr(auto_push, "_run_git", lambda root, args: {
-        ("remote", "get-url", "origin"): "https://github.com/org/repo.git",
-        ("rev-parse", "work/foo"): "abc123",
-        ("fetch", "origin", "work/foo"): "",
-    }.get(tuple(args)))
-    monkeypatch.setattr(auto_push, "_is_ancestor", lambda root, sha, ref: True)
-    monkeypatch.setattr(auto_push, "is_windows_bash", lambda: False)
-
-    auto_push.run_push_with_retry(repo_root, "work/foo")
-
-    assert call_count["n"] == 1
-    log_path = tmp_path / ".git" / "push-failures.log"
-    assert not log_path.exists()
-    captured = capsys.readouterr()
-    assert "race resolved" in captured.err
-    assert "work/foo" in captured.err
 
 
-def test_run_push_with_retry_non_fast_forward_polls_then_resolves(monkeypatch, tmp_path, capsys):
-    # First supersession check (right after the sole push_once call): not yet
-    # superseded (peer's push hasn't landed on origin from our vantage point
-    # yet). Second check, on the next attempt's poll: confirms our commit
-    # reached origin -- must stop polling immediately (not grind to
-    # MAX_ATTEMPTS), must NOT re-issue push_once, and must not log a failure.
-    repo_root = str(tmp_path)
-    (tmp_path / ".git").mkdir()
-    monkeypatch.setenv(auto_push._ENV_NO_SLEEP, "1")
-
-    call_count = {"n": 0}
-    ancestor_calls = {"n": 0}
-
-    def _fake_push_once(root, branch, windows_bash, ssh_remote):
-        call_count["n"] += 1
-        return False, "! [rejected] work/foo -> work/foo (fetch first)\nnon-fast-forward\n"
-
-    def _fake_is_ancestor(root, sha, ref):
-        ancestor_calls["n"] += 1
-        return ancestor_calls["n"] >= 2
-
-    monkeypatch.setattr(auto_push, "push_once", _fake_push_once)
-    monkeypatch.setattr(auto_push, "_run_git", lambda root, args: {
-        ("remote", "get-url", "origin"): "https://github.com/org/repo.git",
-        ("rev-parse", "work/foo"): "abc123",
-        ("fetch", "origin", "work/foo"): "",
-    }.get(tuple(args)))
-    monkeypatch.setattr(auto_push, "_is_ancestor", _fake_is_ancestor)
-    monkeypatch.setattr(auto_push, "is_windows_bash", lambda: False)
-
-    auto_push.run_push_with_retry(repo_root, "work/foo")
-
-    assert call_count["n"] == 1
-    assert ancestor_calls["n"] == 2
-    log_path = tmp_path / ".git" / "push-failures.log"
-    assert not log_path.exists()
-    captured = capsys.readouterr()
-    assert "race resolved" in captured.err
 
 
-def test_run_push_with_retry_dead_ref_never_retries_never_logs_stderr_only(monkeypatch, tmp_path, capsys):
-    # AC1-AC3: a `src refspec ... does not match any` rejection classifies
-    # as dead-ref, is attempted exactly once (not retried), and reports on
-    # stderr only -- push-failures.log must stay unwritten, mirroring
-    # log_race_resolved()'s precedent for keeping non-actionable outcomes
-    # out of the forensic failure log.
-    repo_root = str(tmp_path)
-    (tmp_path / ".git").mkdir()
-    monkeypatch.setenv(auto_push._ENV_NO_SLEEP, "1")
-
-    call_count = {"n": 0}
-
-    def _fake_push_once(root, branch, windows_bash, ssh_remote):
-        call_count["n"] += 1
-        return False, "error: src refspec work/gone does not match any\n"
-
-    monkeypatch.setattr(auto_push, "push_once", _fake_push_once)
-    monkeypatch.setattr(auto_push, "_run_git", lambda root, args: {
-        ("remote", "get-url", "origin"): "https://github.com/org/repo.git",
-    }.get(tuple(args)))
-    monkeypatch.setattr(auto_push, "is_windows_bash", lambda: False)
-
-    auto_push.run_push_with_retry(repo_root, "work/gone")
-
-    assert call_count["n"] == 1, "dead-ref must not be retried"
-    log_path = tmp_path / ".git" / "push-failures.log"
-    assert not log_path.exists()
-    captured = capsys.readouterr()
-    assert "dead-ref" in captured.err
-    assert "work/gone" in captured.err
 
 
-def test_run_push_with_retry_succeeds_on_second_attempt(monkeypatch, tmp_path):
-    repo_root = str(tmp_path)
-    (tmp_path / ".git").mkdir()
-    monkeypatch.setenv(auto_push._ENV_NO_SLEEP, "1")
-
-    call_count = {"n": 0}
-
-    def _fake_push_once(root, branch, windows_bash, ssh_remote):
-        call_count["n"] += 1
-        if call_count["n"] == 1:
-            return False, "error: cannot lock ref 'refs/heads/work/foo'\n"
-        return True, ""
-
-    monkeypatch.setattr(auto_push, "push_once", _fake_push_once)
-    monkeypatch.setattr(auto_push, "_run_git", lambda root, args: {
-        ("remote", "get-url", "origin"): "https://github.com/org/repo.git",
-    }.get(tuple(args)))
-    monkeypatch.setattr(auto_push, "is_windows_bash", lambda: False)
-
-    auto_push.run_push_with_retry(repo_root, "work/foo")
-
-    assert call_count["n"] == 2
-    log_path = tmp_path / ".git" / "push-failures.log"
-    assert not log_path.exists()
 
 
 # ---------------------------------------------------------------------------
@@ -895,186 +743,16 @@ def test_run_push_with_retry_succeeds_on_second_attempt(monkeypatch, tmp_path):
 # DoE-claude).
 # ---------------------------------------------------------------------------
 
-def test_run_push_with_retry_no_cockpit_script_never_attempts_publish_anti_regression(monkeypatch, tmp_path):
-    # Anti-regression for the rejected fleet-wide-firing design: a repo that
-    # does not track .github/scripts/publish_cockpit_contract.py (i.e. every
-    # coordinator-installed repo except DoE-claude) must NEVER attempt to
-    # invoke it, even on a fully successful push. No .github/ tree is created
-    # in this tmp_path repo at all.
-    repo_root = str(tmp_path)
-    (tmp_path / ".git").mkdir()
-    monkeypatch.setenv(auto_push._ENV_NO_SLEEP, "1")
-
-    monkeypatch.setattr(auto_push, "push_once", lambda root, branch, windows_bash, ssh_remote: (True, ""))
-    monkeypatch.setattr(auto_push, "_run_git", lambda root, args: {
-        ("remote", "get-url", "origin"): "https://github.com/org/repo.git",
-        ("rev-parse", "work/foo"): "abc123",
-    }.get(tuple(args)))
-    monkeypatch.setattr(auto_push, "is_windows_bash", lambda: False)
-
-    invoked = []
-    monkeypatch.setattr(auto_push, "_invoke_cockpit_publish", lambda *a, **k: invoked.append(a))
-
-    auto_push.run_push_with_retry(repo_root, "work/foo")
-
-    assert invoked == []
-    # The guard must short-circuit before the extra rev-parse this seam adds
-    # for repos that DO carry the script -- resolve_candidate's ancestry
-    # rev-parse never fires here.
-    assert auto_push._cockpit_publish_script(repo_root) is None
 
 
-def test_run_push_with_retry_cockpit_script_present_schema_not_touched_skips_publish(monkeypatch, tmp_path):
-    repo_root = str(tmp_path)
-    (tmp_path / ".git").mkdir()
-    script_dir = tmp_path / ".github" / "scripts"
-    script_dir.mkdir(parents=True)
-    (script_dir / "publish_cockpit_contract.py").write_text("# stub\n")
-    monkeypatch.setenv(auto_push._ENV_NO_SLEEP, "1")
-
-    monkeypatch.setattr(auto_push, "push_once", lambda root, branch, windows_bash, ssh_remote: (True, ""))
-    monkeypatch.setattr(auto_push, "_run_git", lambda root, args: {
-        ("remote", "get-url", "origin"): "https://github.com/org/repo.git",
-        ("rev-parse", "work/foo"): "abc123",
-        ("rev-parse", "refs/remotes/origin/work/foo"): "old111",
-        ("diff", "--name-only", "old111..abc123", "--", auto_push._COCKPIT_SCHEMA_PATH): "",
-    }.get(tuple(args)))
-    monkeypatch.setattr(auto_push, "is_windows_bash", lambda: False)
-
-    invoked = []
-    monkeypatch.setattr(auto_push, "_invoke_cockpit_publish", lambda *a, **k: invoked.append(a))
-
-    auto_push.run_push_with_retry(repo_root, "work/foo")
-
-    assert invoked == []
 
 
-def test_run_push_with_retry_cockpit_schema_touched_attempts_publish(monkeypatch, tmp_path):
-    repo_root = str(tmp_path)
-    (tmp_path / ".git").mkdir()
-    script_dir = tmp_path / ".github" / "scripts"
-    script_dir.mkdir(parents=True)
-    script_path = script_dir / "publish_cockpit_contract.py"
-    script_path.write_text("# stub\n")
-    monkeypatch.setenv(auto_push._ENV_NO_SLEEP, "1")
-
-    monkeypatch.setattr(auto_push, "push_once", lambda root, branch, windows_bash, ssh_remote: (True, ""))
-    monkeypatch.setattr(auto_push, "_run_git", lambda root, args: {
-        ("remote", "get-url", "origin"): "https://github.com/org/repo.git",
-        ("rev-parse", "work/foo"): "abc123",
-        ("rev-parse", "refs/remotes/origin/work/foo"): "old111",
-        ("diff", "--name-only", "old111..abc123", "--", auto_push._COCKPIT_SCHEMA_PATH):
-            "coordinator/cockpit-contract/schema/cockpit-contract.schema.json",
-    }.get(tuple(args)))
-    monkeypatch.setattr(auto_push, "is_windows_bash", lambda: False)
-
-    invoked = []
-    monkeypatch.setattr(
-        auto_push, "_invoke_cockpit_publish",
-        lambda root, script: invoked.append((root, script)),
-    )
-
-    auto_push.run_push_with_retry(repo_root, "work/foo")
-
-    assert invoked == [(repo_root, script_path)]
 
 
-def test_run_push_with_retry_cockpit_schema_touched_multi_commit_push_uses_full_range(monkeypatch, tmp_path):
-    # A schema-touching commit buried earlier in a multi-commit push must
-    # still be caught -- the diff range is old_remote_sha..local_sha, not
-    # merely the latest commit.
-    repo_root = str(tmp_path)
-    (tmp_path / ".git").mkdir()
-    script_dir = tmp_path / ".github" / "scripts"
-    script_dir.mkdir(parents=True)
-    (script_dir / "publish_cockpit_contract.py").write_text("# stub\n")
-    monkeypatch.setenv(auto_push._ENV_NO_SLEEP, "1")
-
-    monkeypatch.setattr(auto_push, "push_once", lambda root, branch, windows_bash, ssh_remote: (True, ""))
-    monkeypatch.setattr(auto_push, "_run_git", lambda root, args: {
-        ("remote", "get-url", "origin"): "https://github.com/org/repo.git",
-        ("rev-parse", "work/foo"): "headsha",
-        ("rev-parse", "refs/remotes/origin/work/foo"): "basesha",
-        ("diff", "--name-only", "basesha..headsha", "--", auto_push._COCKPIT_SCHEMA_PATH):
-            "coordinator/cockpit-contract/schema/cockpit-contract.schema.json",
-    }.get(tuple(args)))
-    monkeypatch.setattr(auto_push, "is_windows_bash", lambda: False)
-
-    invoked = []
-    monkeypatch.setattr(
-        auto_push, "_invoke_cockpit_publish",
-        lambda root, script: invoked.append((root, script)),
-    )
-
-    auto_push.run_push_with_retry(repo_root, "work/foo")
-
-    assert len(invoked) == 1
 
 
-def test_run_push_with_retry_first_push_no_remote_tracking_ref_uses_empty_tree_base(monkeypatch, tmp_path):
-    # A brand-new branch has no refs/remotes/origin/<branch> yet -- the base
-    # falls back to the empty-tree SHA rather than skipping the check.
-    repo_root = str(tmp_path)
-    (tmp_path / ".git").mkdir()
-    script_dir = tmp_path / ".github" / "scripts"
-    script_dir.mkdir(parents=True)
-    (script_dir / "publish_cockpit_contract.py").write_text("# stub\n")
-    monkeypatch.setenv(auto_push._ENV_NO_SLEEP, "1")
-
-    monkeypatch.setattr(auto_push, "push_once", lambda root, branch, windows_bash, ssh_remote: (True, ""))
-    monkeypatch.setattr(auto_push, "_run_git", lambda root, args: {
-        ("remote", "get-url", "origin"): "https://github.com/org/repo.git",
-        ("rev-parse", "work/foo"): "abc123",
-        ("rev-parse", "refs/remotes/origin/work/foo"): None,
-        (
-            "diff", "--name-only", f"{auto_push._EMPTY_TREE_SHA}..abc123",
-            "--", auto_push._COCKPIT_SCHEMA_PATH,
-        ): "coordinator/cockpit-contract/schema/cockpit-contract.schema.json",
-    }.get(tuple(args)))
-    monkeypatch.setattr(auto_push, "is_windows_bash", lambda: False)
-
-    invoked = []
-    monkeypatch.setattr(
-        auto_push, "_invoke_cockpit_publish",
-        lambda root, script: invoked.append((root, script)),
-    )
-
-    auto_push.run_push_with_retry(repo_root, "work/foo")
-
-    assert len(invoked) == 1
 
 
-def test_run_push_with_retry_push_failure_never_attempts_publish(monkeypatch, tmp_path):
-    # A failed push (retries exhausted) must never attempt the publish, even
-    # when the repo carries the script and the local tree touched the schema
-    # dir -- nothing was actually pushed, so there is nothing new on origin
-    # to publish from.
-    repo_root = str(tmp_path)
-    (tmp_path / ".git").mkdir()
-    script_dir = tmp_path / ".github" / "scripts"
-    script_dir.mkdir(parents=True)
-    (script_dir / "publish_cockpit_contract.py").write_text("# stub\n")
-    monkeypatch.setenv(auto_push._ENV_NO_SLEEP, "1")
-
-    monkeypatch.setattr(
-        auto_push, "push_once",
-        lambda root, branch, windows_bash, ssh_remote: (
-            False, "error: cannot lock ref 'refs/heads/work/foo'\n",
-        ),
-    )
-    monkeypatch.setattr(auto_push, "_run_git", lambda root, args: {
-        ("remote", "get-url", "origin"): "https://github.com/org/repo.git",
-        ("rev-parse", "work/foo"): "abc123",
-        ("rev-parse", "refs/remotes/origin/work/foo"): "old111",
-    }.get(tuple(args)))
-    monkeypatch.setattr(auto_push, "is_windows_bash", lambda: False)
-
-    invoked = []
-    monkeypatch.setattr(auto_push, "_invoke_cockpit_publish", lambda *a, **k: invoked.append(a))
-
-    auto_push.run_push_with_retry(repo_root, "work/foo")
-
-    assert invoked == []
 
 
 # Review: overengineering-reviewer Finding 4 -- the branch-gate-skip ->
@@ -1102,39 +780,6 @@ def test_cockpit_publish_nonzero_exit_does_not_fail_hook_and_warns(monkeypatch, 
     assert "publish_cockpit_contract.py" in captured.err
 
 
-def test_run_push_with_retry_cockpit_publish_nonzero_exit_still_leaves_push_successful(monkeypatch, tmp_path, capsys):
-    # The publish script declining/failing must never be mistaken for a push
-    # failure -- no push-failures.log entry, and run_push_with_retry itself
-    # must not raise.
-    repo_root = str(tmp_path)
-    (tmp_path / ".git").mkdir()
-    script_dir = tmp_path / ".github" / "scripts"
-    script_dir.mkdir(parents=True)
-    (script_dir / "publish_cockpit_contract.py").write_text("# stub\n")
-    monkeypatch.setenv(auto_push._ENV_NO_SLEEP, "1")
-
-    monkeypatch.setattr(auto_push, "push_once", lambda root, branch, windows_bash, ssh_remote: (True, ""))
-    monkeypatch.setattr(auto_push, "_run_git", lambda root, args: {
-        ("remote", "get-url", "origin"): "https://github.com/org/repo.git",
-        ("rev-parse", "work/foo"): "abc123",
-        ("rev-parse", "refs/remotes/origin/work/foo"): "old111",
-        ("diff", "--name-only", "old111..abc123", "--", auto_push._COCKPIT_SCHEMA_PATH):
-            "coordinator/cockpit-contract/schema/cockpit-contract.schema.json",
-    }.get(tuple(args)))
-    monkeypatch.setattr(auto_push, "is_windows_bash", lambda: False)
-
-    class _FakeResult:
-        returncode = 3
-
-    monkeypatch.setattr(auto_push.subprocess, "run", lambda *a, **k: _FakeResult())
-    monkeypatch.setattr(auto_push, "_resolve_python_exe", lambda: "python3")
-
-    auto_push.run_push_with_retry(repo_root, "work/foo")  # must not raise
-
-    captured = capsys.readouterr()
-    assert "[coordinator]" in captured.err
-    log_path = tmp_path / ".git" / "push-failures.log"
-    assert not log_path.exists()
 
 
 # ---------------------------------------------------------------------------
@@ -1280,435 +925,6 @@ def test_resolved_git_rides_executable_and_never_argv0(invoke, tmp_path, monkeyp
         "back to the PATH lookup that produced the [WinError 2] cluster"
     )
 
-
-
-
-# ---------------------------------------------------------------------------
-# Durable pending-push record (AC14/AC14a/AC15, C7/C9) -- hold, drain,
-# coalesce, takeover, the loss path, and a real-subprocess wire-path test.
-#
-# Review: coordinator:code-reviewer (P3, 2026-08-30) -- `_shared_branch_
-# live_count`/`_hold_window` are gravestoned (2026-08-30-who-pushes-and-
-# when.md C8); the tests below drive `_write_pending_record`/
-# `_read_pending_record`/`drain_pending_push` directly and do not
-# monkeypatch either deleted predicate. This header previously described a
-# monkeypatching approach that no longer applies to the tests beneath it.
-# ---------------------------------------------------------------------------
-
-def _dead_pid_for_record() -> int:
-    """A `holder_pid` value `_holder_alive` will report as dead.
-
-    Not a live PID at all (rather than racing a real spawned-and-reaped
-    child's PID against OS recycling) -- deterministic across POSIX and
-    Windows, and matches the plan body's own "simulate with a pending
-    record carrying a dead pid" alternative to actually killing a holder
-    mid-window.
-    """
-    return 999_999_999
-
-
-
-
-
-
-# ---------------------------------------------------------------------------
-# Review: coordinator:code-reviewer (P3, 2026-08-30) -- `_peer_commit_
-# within_window` is gravestoned along with `_hold_window` (2026-08-30-who-
-# pushes-and-when.md C8). The tests below exercise the loss/drain path via
-# `_write_pending_record`/`_read_pending_record`/`drain_pending_push`
-# directly and do not restore or call the deleted predicate; this header
-# previously described a "restore the real function" approach that no
-# longer applies to the tests beneath it.
-# ---------------------------------------------------------------------------
-
-
-
-
-
-
-
-
-
-
-
-def test_loss_path_dead_holder_mid_window_drains_and_reaches_remote(monkeypatch, tmp_path):
-    # Simulates a holder that died mid-window (AC14's forensic-trace case):
-    # a pending record is on disk, its hold_until is still far in the
-    # future (the holder never got to wake and push), and its holder_pid is
-    # dead. The record alone must make the interrupted hold detectable from
-    # disk -- no process-table access beyond the recorded pid.
-    repo_root = str(tmp_path)
-    (tmp_path / ".git").mkdir()
-    dead_pid = _dead_pid_for_record()
-    future_hold_until = time.time() + 9999
-    wrote = auto_push._write_pending_record(
-        repo_root, "work/foo", "deadsha", future_hold_until, dead_pid
-    )
-    assert wrote
-
-    # Detectable from disk alone, before any drain runs.
-    on_disk = auto_push._read_pending_record(repo_root)
-    assert on_disk == {
-        "branch": "work/foo",
-        "sha": "deadsha",
-        "hold_until": future_hold_until,
-        "holder_pid": dead_pid,
-    }
-    assert auto_push._holder_alive(dead_pid) is False
-    assert auto_push._record_is_stale(on_disk, time.time()) is True
-
-    monkeypatch.setattr(auto_push, "_run_git", lambda root, args: {
-        ("remote", "get-url", "origin"): "https://github.com/org/repo.git",
-        # Branch still resolves locally -- this scenario is a dead HOLDER
-        # process, not a dead ref (AC4 must fall through to the unchanged
-        # push path here, not the dead-ref handling).
-        ("rev-parse", "--verify", "refs/heads/work/foo"): "deadsha",
-    }.get(tuple(args)))
-    monkeypatch.setattr(auto_push, "is_windows_bash", lambda: False)
-
-    push_calls = []
-
-    def _fake_push_once(root, branch, windows_bash, ssh_remote):
-        push_calls.append(branch)
-        return True, ""  # "reaches its remote"
-
-    monkeypatch.setattr(auto_push, "push_once", _fake_push_once)
-
-    auto_push.drain_pending_push(repo_root)
-
-    assert push_calls == ["work/foo"], "drain must push the dead holder's branch"
-    # Removed ONLY after the successful push -- never before, never on a
-    # failed attempt.
-    assert auto_push._read_pending_record(repo_root) is None
-
-
-def test_loss_path_drain_leaves_record_in_place_on_failed_push(monkeypatch, tmp_path):
-    repo_root = str(tmp_path)
-    (tmp_path / ".git").mkdir()
-    dead_pid = _dead_pid_for_record()
-    auto_push._write_pending_record(
-        repo_root, "work/foo", "deadsha", time.time() + 9999, dead_pid
-    )
-    monkeypatch.setenv(auto_push._ENV_NO_SLEEP, "1")
-    monkeypatch.setattr(auto_push, "_run_git", lambda root, args: {
-        ("remote", "get-url", "origin"): "https://github.com/org/repo.git",
-        ("rev-parse", "work/foo"): "deadsha",
-        ("fetch", "origin", "work/foo"): "",
-        # Branch still resolves locally -- dead HOLDER process, not a dead
-        # ref; AC4 must fall through to the unchanged push path.
-        ("rev-parse", "--verify", "refs/heads/work/foo"): "deadsha",
-    }.get(tuple(args)))
-    monkeypatch.setattr(auto_push, "is_windows_bash", lambda: False)
-    monkeypatch.setattr(auto_push, "_is_ancestor", lambda root, sha, ref: False)
-    monkeypatch.setattr(
-        auto_push, "push_once",
-        lambda root, branch, w, s: (False, "error: cannot lock ref\n"),
-    )
-
-    auto_push.drain_pending_push(repo_root)
-
-    # Never removed on a failed/exhausted push -- a missed drain DELAYS,
-    # never LOSES, the record stays for the next drain point to retry.
-    record = auto_push._read_pending_record(repo_root)
-    assert record is not None
-    assert record["branch"] == "work/foo"
-
-
-# ---------------------------------------------------------------------------
-# Dead-ref pending records (AC4-AC7) -- a record whose `branch` no longer
-# resolves locally (the branch-rename incident: `work/machine-a/2026-08-10`
-# renamed to `work/machine-a/2026-08-10to11`, leaving the old name's record
-# behind). Without AC4-AC7 this loops forever: `due` stays true on every
-# later commit once `hold_until` has passed, so the pre-fix code kept
-# re-calling `run_push_with_retry` for a branch that can never resolve,
-# appending a `push-failures.log` row every time.
-# ---------------------------------------------------------------------------
-
-def test_drain_pending_push_dead_ref_sha_absent_drops_no_log(monkeypatch, tmp_path, capsys):
-    # AC6: no pinned sha at all -- nothing to retry, drop with a stderr
-    # note only.
-    repo_root = str(tmp_path)
-    (tmp_path / ".git").mkdir()
-    auto_push._write_pending_record(repo_root, "work/gone", None, time.time() - 1, os.getpid())
-    monkeypatch.setattr(auto_push, "_run_git", lambda root, args: {
-        # branch/gone does not resolve -- for-each-ref/branch --show-current
-        # both come up empty, matching a branch that was renamed away.
-    }.get(tuple(args)))
-
-    push_calls = {"n": 0}
-    monkeypatch.setattr(
-        auto_push, "push_once",
-        lambda root, branch, w, s: push_calls.__setitem__("n", push_calls["n"] + 1) or (True, ""),
-    )
-
-    auto_push.drain_pending_push(repo_root)
-
-    assert push_calls["n"] == 0, "no sha pinned -- nothing to push"
-    assert auto_push._read_pending_record(repo_root) is None
-    log_path = tmp_path / ".git" / "push-failures.log"
-    assert not log_path.exists()
-    assert "dropping pending push" in capsys.readouterr().err
-
-
-def test_drain_pending_push_dead_ref_already_on_origin_drops_no_log(monkeypatch, tmp_path, capsys):
-    # AC6: the branch was renamed, but the rename's own push already
-    # carried the pinned sha to origin under the CURRENT branch name --
-    # the observed 2026-08-11 incident. Drop, stderr note only.
-    repo_root = str(tmp_path)
-    (tmp_path / ".git").mkdir()
-    auto_push._write_pending_record(
-        repo_root, "work/machine-a/2026-08-10", "abc123", time.time() - 1, os.getpid()
-    )
-    monkeypatch.setattr(auto_push, "_run_git", lambda root, args: {
-        # The old name never resolves; the resolved current branch is the
-        # renamed one.
-        ("branch", "--show-current"): "work/machine-a/2026-08-10to11",
-        ("for-each-ref", "--format=%(refname:short)", "refs/heads/"): "work/machine-a/2026-08-10to11",
-        ("fetch", "origin", "work/machine-a/2026-08-10to11"): "",
-    }.get(tuple(args)))
-    monkeypatch.setattr(auto_push, "_is_ancestor", lambda root, sha, ref: True)
-
-    push_calls = {"n": 0}
-    monkeypatch.setattr(
-        auto_push, "push_once",
-        lambda root, branch, w, s: push_calls.__setitem__("n", push_calls["n"] + 1) or (True, ""),
-    )
-
-    auto_push.drain_pending_push(repo_root)
-
-    assert push_calls["n"] == 0, "commit is already on origin -- nothing to push"
-    assert auto_push._read_pending_record(repo_root) is None
-    log_path = tmp_path / ".git" / "push-failures.log"
-    assert not log_path.exists()
-    assert "dropping pending push" in capsys.readouterr().err
-
-
-def test_drain_pending_push_dead_ref_reachable_from_current_branch_retargets_and_pushes(
-    monkeypatch, tmp_path
-):
-    # AC5: the branch was renamed and the commits moved with it, but the
-    # rename's push has NOT yet reached origin from this vantage point --
-    # the record is re-targeted onto the current branch name and pushed.
-    repo_root = str(tmp_path)
-    (tmp_path / ".git").mkdir()
-    auto_push._write_pending_record(
-        repo_root, "work/machine-a/2026-08-10", "abc123", time.time() - 1, 4242
-    )
-    monkeypatch.setattr(auto_push, "_run_git", lambda root, args: {
-        ("branch", "--show-current"): "work/machine-a/2026-08-10to11",
-        ("for-each-ref", "--format=%(refname:short)", "refs/heads/"): "work/machine-a/2026-08-10to11",
-        ("fetch", "origin", "work/machine-a/2026-08-10to11"): None,  # fetch fails -> not superseded
-        ("remote", "get-url", "origin"): "https://github.com/org/repo.git",
-        ("rev-parse", "work/machine-a/2026-08-10to11"): "abc123",
-    }.get(tuple(args)))
-
-    def _fake_is_ancestor(root, sha, ref):
-        # Locally reachable from the CURRENT branch tip.
-        return ref == "work/machine-a/2026-08-10to11" and sha == "abc123"
-
-    monkeypatch.setattr(auto_push, "_is_ancestor", _fake_is_ancestor)
-    monkeypatch.setattr(auto_push, "is_windows_bash", lambda: False)
-
-    push_calls = []
-    monkeypatch.setattr(
-        auto_push, "push_once",
-        lambda root, branch, w, s: (push_calls.append(branch), (True, ""))[1],
-    )
-
-    auto_push.drain_pending_push(repo_root)
-
-    assert push_calls == ["work/machine-a/2026-08-10to11"], "retargeted push must use the CURRENT branch"
-    # Successful push clears the (retargeted) record.
-    assert auto_push._read_pending_record(repo_root) is None
-    log_path = tmp_path / ".git" / "push-failures.log"
-    assert not log_path.exists()
-
-
-def test_drain_pending_push_dead_ref_orphaned_logs_once_and_drops(monkeypatch, tmp_path):
-    # AC7: reachable from nowhere -- genuine loss risk, not a rename
-    # artifact. ONE loud push-failures.log row naming the orphaned sha,
-    # then drop; never looped.
-    repo_root = str(tmp_path)
-    (tmp_path / ".git").mkdir()
-    auto_push._write_pending_record(repo_root, "work/gone", "orphansha", time.time() - 1, 4242)
-    monkeypatch.setattr(auto_push, "_run_git", lambda root, args: {
-        ("branch", "--show-current"): "work/other",
-        ("for-each-ref", "--format=%(refname:short)", "refs/heads/"): "work/other",
-        ("fetch", "origin", "work/other"): "",
-    }.get(tuple(args)))
-    monkeypatch.setattr(auto_push, "_is_ancestor", lambda root, sha, ref: False)
-
-    push_calls = {"n": 0}
-    monkeypatch.setattr(
-        auto_push, "push_once",
-        lambda root, branch, w, s: push_calls.__setitem__("n", push_calls["n"] + 1) or (True, ""),
-    )
-
-    auto_push.drain_pending_push(repo_root)
-
-    assert push_calls["n"] == 0, "unreachable sha must never be pushed"
-    assert auto_push._read_pending_record(repo_root) is None
-    log_path = tmp_path / ".git" / "push-failures.log"
-    assert log_path.exists()
-    content = log_path.read_text()
-    assert "orphansha" in content
-    assert "work/gone" in content
-
-
-def test_drain_pending_push_dead_ref_sha_none_with_current_branch_retargets_and_pushes(
-    monkeypatch, tmp_path, capsys
-):
-    # Review: coordinator:review-code, Finding 1, 2026-08-19 -- the compound
-    # case AC3 exists to cover: `wsc_tail._deferred_publisher_backstop`
-    # writes a record with `sha=None` (commit hadn't landed at write time),
-    # and a branch rename (workday-start-step0) lands before the next drain.
-    # Case 0 must retarget onto the current branch and push, exactly like
-    # the sha-pinned case 2 -- NOT drop, which would silently lose the
-    # backstopped obligation.
-    repo_root = str(tmp_path)
-    (tmp_path / ".git").mkdir()
-    auto_push._write_pending_record(
-        repo_root, "work/machine-a/2026-08-18", None, time.time() - 1, 4242
-    )
-    monkeypatch.setattr(auto_push, "_run_git", lambda root, args: {
-        ("branch", "--show-current"): "work/machine-a/2026-08-18to19",
-        ("for-each-ref", "--format=%(refname:short)", "refs/heads/"): "work/machine-a/2026-08-18to19",
-    }.get(tuple(args)))
-    monkeypatch.setattr(auto_push, "is_windows_bash", lambda: False)
-
-    push_calls = []
-    monkeypatch.setattr(
-        auto_push, "push_once",
-        lambda root, branch, w, s: (push_calls.append(branch), (True, ""))[1],
-    )
-
-    auto_push.drain_pending_push(repo_root)
-
-    assert push_calls == ["work/machine-a/2026-08-18to19"], (
-        "an unknown-sha record must still retarget and push, not be dropped"
-    )
-    assert auto_push._read_pending_record(repo_root) is None
-    assert "re-targeted" in capsys.readouterr().err
-
-
-def test_drain_pending_push_dead_ref_sha_none_no_current_branch_drops(monkeypatch, tmp_path, capsys):
-    # Complements the sha-absent test above: with no current branch to
-    # retarget onto at all, case 0 still drops -- there is nowhere left the
-    # payload could be.
-    repo_root = str(tmp_path)
-    (tmp_path / ".git").mkdir()
-    auto_push._write_pending_record(repo_root, "work/gone", None, time.time() - 1, 4242)
-    monkeypatch.setattr(auto_push, "_run_git", lambda root, args: {}.get(tuple(args)))
-
-    push_calls = {"n": 0}
-    monkeypatch.setattr(
-        auto_push, "push_once",
-        lambda root, branch, w, s: push_calls.__setitem__("n", push_calls["n"] + 1) or (True, ""),
-    )
-
-    auto_push.drain_pending_push(repo_root)
-
-    assert push_calls["n"] == 0
-    assert auto_push._read_pending_record(repo_root) is None
-    assert "dropping pending push" in capsys.readouterr().err
-
-
-
-
-
-
-
-
-
-
-# ---------------------------------------------------------------------------
-# Divergence gate (C4): a branch already diverged from its upstream defers
-# to the pending record instead of pushing into a guaranteed non-fast-
-# forward wall. Real git repos throughout (no `_run_git`/object-store
-# monkeypatching) -- the whole point of `_branch_diverged_no_spawn` is a
-# real spawn-free read of the real object store, so faking that store would
-# test nothing.
-# ---------------------------------------------------------------------------
-
-def _real_git(args: list[str], cwd: Path) -> None:
-    result = subprocess.run(
-        ["git", *args], cwd=str(cwd), capture_output=True, text=True,
-    )
-    assert result.returncode == 0, f"git {args} failed: {result.stderr}"
-
-
-def _init_divergence_repo(tmp_path: Path, branch: str) -> Path:
-    """A real work repo on `branch`, with a real bare `origin` remote, one
-    commit already pushed (so `refs/remotes/origin/<branch>` exists
-    locally). Returns the work repo root."""
-    bare = tmp_path / "bare.git"
-    work = tmp_path / "work"
-    _real_git(["init", "--bare", "-q", str(bare)], tmp_path)
-    _real_git(["init", "-q", str(work)], tmp_path)
-    _real_git(["config", "user.email", "auto-push-c4@example.com"], work)
-    _real_git(["config", "user.name", "auto-push-c4"], work)
-    _real_git(["config", "commit.gpgsign", "false"], work)
-    _real_git(["checkout", "-q", "-b", branch], work)
-    (work / "f.txt").write_text("one\n", encoding="utf-8")
-    _real_git(["add", "f.txt"], work)
-    _real_git(["commit", "-q", "-m", "c1"], work)
-    _real_git(["remote", "add", "origin", str(bare)], work)
-    _real_git(["push", "-q", "-u", "origin", branch], work)
-    return work
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-# ---------------------------------------------------------------------------
-# Wire-path: the pending-push record's own respawn must survive being
-# ACTUALLY EXECUTED, not merely argv-shape-asserted -- the same blind spot
-# named in the 2026-08-01 import regression (see the "actually imports"
-# tests above) applies equally to this record's code path, since
-# `drain_pending_push` now runs unconditionally at the head of every
-# `run_push_with_retry` call, including inside the respawned child. This
-# test spawns a REAL child against a REAL local git remote (not a fake
-# `.git` stub) and asserts the branch tip actually lands there -- a real
-# push attempt, not just a clean exit.
-# ---------------------------------------------------------------------------
-
-def _init_real_repo_with_local_remote(tmp_path: Path) -> tuple[str, str, str]:
-    """Build a real (non-bare) git repo with one commit, plus a real bare
-    remote it can push to over the filesystem. Returns
-    (repo_root, branch, bare_remote_path).
-    """
-    bare = tmp_path / "remote.git"
-    work = tmp_path / "work"
-    work.mkdir()
-    subprocess.run(["git", "init", "--bare", str(bare)], check=True, capture_output=True)
-    subprocess.run(["git", "init", str(work)], check=True, capture_output=True)
-    subprocess.run(["git", "-C", str(work), "config", "user.email", "auto-push-test@example.com"], check=True)
-    subprocess.run(["git", "-C", str(work), "config", "user.name", "auto-push-test"], check=True)
-    subprocess.run(["git", "-C", str(work), "checkout", "-b", "work/wire-path-test"], check=True, capture_output=True)
-    (work / "file.txt").write_text("hello\n", encoding="utf-8")
-    subprocess.run(["git", "-C", str(work), "add", "file.txt"], check=True, capture_output=True)
-    subprocess.run(
-        ["git", "-C", str(work), "commit", "-m", "wire-path test commit"],
-        check=True, capture_output=True,
-    )
-    subprocess.run(
-        ["git", "-C", str(work), "remote", "add", "origin", str(bare)],
-        check=True, capture_output=True,
-    )
-    return str(work), "work/wire-path-test", str(bare)
 
 
 # Review: overengineering-reviewer Finding 4 -- auto_push.main(),

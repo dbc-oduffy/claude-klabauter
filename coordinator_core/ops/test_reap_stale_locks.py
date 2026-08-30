@@ -13,6 +13,7 @@ import subprocess
 import pytest
 
 from coordinator_core.ops import reap_stale_locks as rsl
+from coordinator_core.win_portability import no_console_passthrough_kwargs
 
 # Declared, not excused: this file spawns real git because `reap_stale_locks`'s own
 # port-parity contract (against reap-stale-locks.bats/test-coordinator-reap-stale-
@@ -26,9 +27,9 @@ pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 def _init_repo(path):
     path.mkdir(parents=True, exist_ok=True)
-    subprocess.run(["git", "init", "-q"], cwd=str(path), check=True)
-    subprocess.run(["git", "config", "user.email", "t@t"], cwd=str(path), check=True)
-    subprocess.run(["git", "config", "user.name", "t"], cwd=str(path), check=True)
+    subprocess.run(["git", "init", "-q"], cwd=str(path), check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "config", "user.email", "t@t"], cwd=str(path), check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "config", "user.name", "t"], cwd=str(path), check=True, **no_console_passthrough_kwargs())
     return path
 
 
@@ -190,15 +191,15 @@ def test_maintenance_lock_younger_than_maint_floor_preserved(repo, monkeypatch):
 def test_maintenance_lock_reaped_via_common_dir_from_linked_worktree(repo, monkeypatch, tmp_path):
     # `repo` needs a commit before `git worktree add` can check out a branch into it.
     (repo / "seed.txt").write_text("seed")
-    subprocess.run(["git", "add", "seed.txt"], cwd=str(repo), check=True)
-    subprocess.run(["git", "commit", "-q", "-m", "seed"], cwd=str(repo), check=True)
+    subprocess.run(["git", "add", "seed.txt"], cwd=str(repo), check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "commit", "-q", "-m", "seed"], cwd=str(repo), check=True, **no_console_passthrough_kwargs())
 
     worktree = tmp_path / "linked-worktree"
     subprocess.run(
         ["git", "worktree", "add", "-q", str(worktree), "-b", "wt-branch"],
         cwd=str(repo),
         check=True,
-    )
+    **no_console_passthrough_kwargs())
 
     maint_lock = repo / ".git" / "objects" / "maintenance.lock"
     maint_lock.write_text("gc")

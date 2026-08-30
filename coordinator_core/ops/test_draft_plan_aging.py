@@ -31,6 +31,7 @@ from coordinator_core.ops.draft_plan_aging import (
     list_stale_executing,
     resolve_plan_owner,
 )
+from coordinator_core.win_portability import no_console_creationflags
 
 # Declared, not excused: this file spawns a real git process because
 # `_git_commit_epoch` under test reads a plan file's real last-commit
@@ -45,7 +46,14 @@ pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 
 def _run_git(repo: Path, *args: str) -> None:
-    subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True, text=True)
+    subprocess.run(
+        ["git", *args],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        text=True,
+        **no_console_creationflags(),
+    )
 
 
 def _init_repo(repo: Path) -> None:
@@ -86,6 +94,7 @@ def _write_and_commit_plan(
             "GIT_AUTHOR_DATE": env_date,
             "GIT_COMMITTER_DATE": env_date,
         },
+        **no_console_creationflags(),
     )
     return path
 
@@ -232,6 +241,7 @@ def _commit_at(repo: Path, message: str, commit_days_ago: int, today: date, *, a
             "GIT_AUTHOR_DATE": env_date,
             "GIT_COMMITTER_DATE": env_date,
         },
+        **no_console_creationflags(),
     )
 
 
@@ -275,6 +285,7 @@ def test_batch_git_commit_epochs_resolves_conflict_resolution_merge_commit(tmp_p
         cwd=tmp_path,
         capture_output=True,
         text=True,
+        **no_console_creationflags(),
     )
     assert merge.returncode != 0, "expected a real conflict to set up this fixture"
 
@@ -289,6 +300,7 @@ def test_batch_git_commit_epochs_resolves_conflict_resolution_merge_commit(tmp_p
             capture_output=True,
             text=True,
             check=True,
+            **no_console_creationflags(),
         ).stdout.strip()
     )
 
@@ -1308,6 +1320,7 @@ def test_ac10_scan_parity_head_vs_working_tree(tmp_path):
         cwd=repo_root,
         capture_output=True,
         text=True,
+        **no_console_creationflags(),
     )
     if head_show.returncode != 0:
         pytest.skip(

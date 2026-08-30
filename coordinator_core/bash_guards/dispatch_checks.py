@@ -2875,10 +2875,13 @@ def _rm_flush_touch(paths: List[str], session_id: str, root: Optional[str]) -> N
     the write side's own gate (``write_claim_record.record_write_claims``,
     via that module's local ``_is_within`` twin, kept local rather than
     imported from here on purpose -- see that function's docstring), and
-    this deletion-side twin had none until now. ``claim_index.commit_set``
-    filters neither dirtiness nor containment by its own NEGATIVE SPEC (PM
-    ruling 2026-08-21), so an out-of-repo claim that slips past this
-    function reaches ``safe_commit_offer``'s commit pathspec undetected.
+    this deletion-side twin had none until now. ``claim_index.commit_set``'s
+    own NEGATIVE SPEC (PM ruling 2026-08-21) covers dirtiness only -- it
+    says nothing about containment one way or the other. The containment
+    consequence below is real, but it follows from `commit_set` simply
+    having no containment check at all, not from a documented ruling there:
+    an out-of-repo claim that slips past this function reaches
+    ``safe_commit_offer``'s commit pathspec undetected regardless.
     That is the exact failure mode ``write_claim_record._SED_SCRIPT_RE``'s
     own note already measured: `git add -- <junk>` exits 128 and the real
     change is NOT committed, so one bad claim destroys the session's whole
@@ -2888,9 +2891,13 @@ def _rm_flush_touch(paths: List[str], session_id: str, root: Optional[str]) -> N
     pytest ``tmp_path`` outside the repo -- benign there only because an
     ABSENT out-of-repo path routes to ``deleted_paths`` and commits
     nothing; a PRESENT one is not benign. Skip before relpathing, not
-    after: a skipped target still never raises (the never-raise posture
-    above is unchanged), it is simply never handed to ``os.path.relpath``
-    or the appender at all.
+    after: a skipped target is simply never handed to ``os.path.relpath``
+    or the appender at all, which is also why the bare
+    ``except ValueError: continue`` that used to wrap the relpath call was
+    deleted rather than kept -- this gate rejects every input that call
+    could raise on (cross-drive on Windows; POSIX's relpath has no drive
+    concept to raise over), so that branch was unreachable dead code, not
+    defense-in-depth.
     """
     if not paths or not session_id or not root:
         return
@@ -2900,11 +2907,14 @@ def _rm_flush_touch(paths: List[str], session_id: str, root: Optional[str]) -> N
         rels = []
         for tgt_abs in paths:
             if not _is_within(tgt_abs, root):
+                # Review: C2 code-reviewer — the `_is_within` gate above already
+                # rejects any target `os.path.relpath` would raise `ValueError`
+                # on (cross-drive on Windows; POSIX has no drive concept for
+                # relpath to raise over), so a bare `except ValueError: continue`
+                # around the relpath call below is unreachable from this call
+                # site and was deleted rather than kept as belt-and-braces.
                 continue
-            try:
-                rels.append(os.path.relpath(tgt_abs, root).replace(os.sep, "/"))
-            except ValueError:
-                continue
+            rels.append(os.path.relpath(tgt_abs, root).replace(os.sep, "/"))
         append_touch_claims(rels, session_id, root)
     except Exception:
         return

@@ -55,6 +55,7 @@ import coordinator_core.ops  # noqa: F401 — populates _REGISTRY (queue.append 
 from coordinator_core.ipc import dispatch_message, _REGISTRY, _SCOPE_TOUCH_PATHS_KEY
 from coordinator_core.session import core, scope, liveness, touch_record
 from coordinator_core.ops.session.safe_commit_offer import compute_offer
+from coordinator_core.win_portability import no_console_passthrough_kwargs
 
 # Declared, not excused: this file's `_scope_touch_paths` self-report contract is
 # threaded through `safe_commit_offer.compute_offer`, which reads real git status/diff
@@ -73,12 +74,12 @@ def _run(coro):
 
 
 def _make_repo(tmp_path):
-    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
-    subprocess.run(["git", "config", "user.email", "t@example.com"], cwd=tmp_path, check=True)
-    subprocess.run(["git", "config", "user.name", "t"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "config", "user.email", "t@example.com"], cwd=tmp_path, check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "config", "user.name", "t"], cwd=tmp_path, check=True, **no_console_passthrough_kwargs())
     (tmp_path / "README.md").write_text("x")
-    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
-    subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=tmp_path, check=True, **no_console_passthrough_kwargs())
     return tmp_path
 
 

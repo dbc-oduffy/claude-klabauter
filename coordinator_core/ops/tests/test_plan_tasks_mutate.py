@@ -69,6 +69,7 @@ import coordinator_core.ops.plan_tasks_mutate as plan_tasks_mutate  # noqa: F401
 
 from coordinator_core.ipc import _REGISTRY
 from coordinator_core.ops.plan_tasks_mutate import _handler
+from coordinator_core.win_portability import no_console_creationflags
 
 # _invoke_cli spawns `python -m coordinator_core.invoke` as a real subprocess.
 # That child inherits cwd but NOT pytest's rootdir sys.path insertion, so it
@@ -118,6 +119,7 @@ def _make_git_repo(tmp_path: Path) -> Path:
             cwd=str(repo),
             capture_output=True,
             check=True,
+            **no_console_creationflags(),
         )
 
     _git("init", "-b", "main")

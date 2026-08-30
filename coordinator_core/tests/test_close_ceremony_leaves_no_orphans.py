@@ -64,6 +64,10 @@ import pytest
 
 from coordinator_core import quick_wrap_assemble as qwa
 from coordinator_core.ops.ceremony import receipt_emit
+from coordinator_core.win_portability import (
+    no_console_creationflags,
+    no_console_passthrough_kwargs,
+)
 from coordinator_core.ops.ceremony.pipeline_context import PipelineContext
 from coordinator_core.session import core as session_core
 
@@ -77,14 +81,15 @@ def _make_repo(tmp_path: Path) -> Path:
     """A real, empty git repo with one initial commit (plus the initial
     commit `test_safe_commit_offer.py::_make_repo` also carries --
     `commit_session_offer_async`'s own commit path needs a resolvable HEAD)."""
-    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True, **no_console_passthrough_kwargs())
     subprocess.run(
-        ["git", "config", "user.email", "t@example.com"], cwd=tmp_path, check=True
+        ["git", "config", "user.email", "t@example.com"], cwd=tmp_path, check=True,
+        **no_console_passthrough_kwargs(),
     )
-    subprocess.run(["git", "config", "user.name", "t"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "config", "user.name", "t"], cwd=tmp_path, check=True, **no_console_passthrough_kwargs())
     (tmp_path / "README.md").write_text("x\n", encoding="utf-8")
-    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
-    subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=tmp_path, check=True, **no_console_passthrough_kwargs())
     return tmp_path
 
 
@@ -98,6 +103,7 @@ def _untracked_under(repo: Path, rel_dir: str) -> list[str]:
         capture_output=True,
         text=True,
         check=True,
+        **no_console_creationflags(),
     )
     return [line for line in proc.stdout.splitlines() if line.strip()]
 
@@ -145,6 +151,7 @@ def test_quick_wrap_close_commits_declared_artifacts_leaving_no_orphans(
         capture_output=True,
         text=True,
         check=True,
+        **no_console_creationflags(),
     ).stdout
     receipt_rel = str(receipt_path.relative_to(repo)).replace("\\", "/")
     assert receipt_rel in log, f"{receipt_rel!r} was never committed"

@@ -63,6 +63,7 @@ from typing import Callable
 import pytest
 
 from coordinator_core.ops.ceremony import git_native
+from coordinator_core.win_portability import no_console_creationflags
 
 from .fixtures.real_git import (
     make_agree_path,
@@ -81,7 +82,8 @@ pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 def _git(args: list[str], cwd: Path, **kwargs) -> subprocess.CompletedProcess:
     return subprocess.run(
-        ["git", *args], cwd=str(cwd), capture_output=True, text=True, check=True, **kwargs
+        ["git", *args], cwd=str(cwd), capture_output=True, text=True, check=True,
+        **no_console_creationflags(), **kwargs
     )
 
 
@@ -103,7 +105,8 @@ def _assert_ac2_oracle(repo: Path) -> None:
     reconcile it first -- see this module's own docstring."""
     assert _porcelain(repo) == [], f"git status --porcelain is not empty: {_porcelain(repo)!r}"
     fsck = subprocess.run(
-        ["git", "fsck", "--strict"], cwd=str(repo), capture_output=True, text=True
+        ["git", "fsck", "--strict"], cwd=str(repo), capture_output=True, text=True,
+        **no_console_creationflags(),
     )
     assert fsck.returncode == 0, f"git fsck --strict failed: {fsck.stdout}\n{fsck.stderr}"
 
@@ -116,7 +119,8 @@ def _assert_fsck_clean_only(repo: Path) -> None:
     so asserting it empty would be asserting the refusal itself never
     happened."""
     fsck = subprocess.run(
-        ["git", "fsck", "--strict"], cwd=str(repo), capture_output=True, text=True
+        ["git", "fsck", "--strict"], cwd=str(repo), capture_output=True, text=True,
+        **no_console_creationflags(),
     )
     assert fsck.returncode == 0, f"git fsck --strict failed: {fsck.stdout}\n{fsck.stderr}"
 
@@ -294,6 +298,7 @@ def _write_patch(repo: Path, rel_path: str, old_content: str, new_content: str) 
     (repo / rel_path).write_text(new_content, encoding="utf-8")
     diff_result = subprocess.run(
         ["git", "diff", "--", rel_path], cwd=str(repo), capture_output=True, text=True, check=True,
+        **no_console_creationflags(),
     )
     patch_path = repo.parent / f"{rel_path.replace('/', '_')}.patch"
     patch_path.write_text(diff_result.stdout, encoding="utf-8", newline="")

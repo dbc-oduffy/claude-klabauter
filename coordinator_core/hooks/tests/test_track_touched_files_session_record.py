@@ -50,6 +50,7 @@ import pytest
 from coordinator_core.hooks import track_touched_files as ttf
 from coordinator_core.lifecycle import git_common_dir
 from coordinator_core.session import touch_record
+from coordinator_core.win_portability import no_console_passthrough_kwargs
 
 # Spawns a real external process (git init fixture); runs at cadence gates,
 # not per-commit.
@@ -61,12 +62,12 @@ pytestmark = [
 
 
 def _make_repo(tmp_path):
-    subprocess.run(["git", "init", "-q"], cwd=tmp_path)
-    subprocess.run(["git", "config", "user.email", "t@example.com"], cwd=tmp_path)
-    subprocess.run(["git", "config", "user.name", "t"], cwd=tmp_path)
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "config", "user.email", "t@example.com"], cwd=tmp_path, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "config", "user.name", "t"], cwd=tmp_path, **no_console_passthrough_kwargs())
     (tmp_path / "README.md").write_text("x")
-    subprocess.run(["git", "add", "."], cwd=tmp_path)
-    subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=tmp_path)
+    subprocess.run(["git", "add", "."], cwd=tmp_path, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=tmp_path, **no_console_passthrough_kwargs())
     return tmp_path
 
 

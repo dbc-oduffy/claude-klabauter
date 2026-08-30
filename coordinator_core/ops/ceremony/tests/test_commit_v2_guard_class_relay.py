@@ -44,6 +44,7 @@ from pathlib import Path
 import pytest
 
 from coordinator_core.ops.ceremony import commit_v2
+from coordinator_core.win_portability import no_console_creationflags
 
 # Spawns real external `git` processes; runs at cadence gates, not per-commit.
 # Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
@@ -57,7 +58,8 @@ _GUARD_PATH = "coordinator_core/write_guards/some_guard.py"
 
 def _git(args, cwd) -> str:
     result = subprocess.run(
-        ["git", *args], cwd=str(cwd), check=True, capture_output=True, text=True
+        ["git", *args], cwd=str(cwd), check=True, capture_output=True, text=True,
+        **no_console_creationflags(),
     )
     return result.stdout
 

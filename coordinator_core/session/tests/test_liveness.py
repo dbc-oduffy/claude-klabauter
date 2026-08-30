@@ -62,6 +62,10 @@ import pytest
 from coordinator_core.session import core, liveness, scope, touch_record
 from coordinator_core.session import harness_registry
 from coordinator_core.session import holder_evidence as holder_evidence_mod
+from coordinator_core.win_portability import (
+    no_console_creationflags,
+    no_console_passthrough_kwargs,
+)
 
 # MOST tests in this file build their repo via `_make_repo(tmp_path)`, spawning
 # real git (init/config/add/commit) because the production code under test --
@@ -120,12 +124,12 @@ def _reset_registry_snapshot_cache():
 
 
 def _make_repo(tmp_path):
-    subprocess.run(["git", "init", "-q"], cwd=tmp_path)
-    subprocess.run(["git", "config", "user.email", "t@example.com"], cwd=tmp_path)
-    subprocess.run(["git", "config", "user.name", "t"], cwd=tmp_path)
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "config", "user.email", "t@example.com"], cwd=tmp_path, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "config", "user.name", "t"], cwd=tmp_path, **no_console_passthrough_kwargs())
     (tmp_path / "README.md").write_text("x")
-    subprocess.run(["git", "add", "."], cwd=tmp_path)
-    subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=tmp_path)
+    subprocess.run(["git", "add", "."], cwd=tmp_path, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=tmp_path, **no_console_passthrough_kwargs())
     return tmp_path
 
 
@@ -149,6 +153,7 @@ def _self_lstart():
         ["ps", "-p", str(os.getpid()), "-o", "lstart="],
         capture_output=True,
         text=True,
+        **no_console_creationflags(),
     )
     lstart = result.stdout.strip()
     assert lstart, "ps -p <self> -o lstart= must succeed on a live test process"

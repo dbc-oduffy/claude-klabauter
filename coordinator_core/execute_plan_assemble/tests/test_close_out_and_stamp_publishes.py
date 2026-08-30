@@ -52,6 +52,7 @@ import pytest
 
 import coordinator_core.execute_plan_assemble.close_out_and_stamp as coas
 from coordinator_core.ops.ceremony import push as cp
+from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
@@ -67,7 +68,8 @@ _WORK_BRANCH = "work/publish-boundary-test/2026-08-25"
 
 def _run_git(args: list[str], cwd: Path) -> subprocess.CompletedProcess:
     return subprocess.run(
-        ["git", *args], cwd=str(cwd), capture_output=True, text=True, check=True
+        ["git", *args], cwd=str(cwd), capture_output=True, text=True, check=True,
+        **no_console_creationflags(),
     )
 
 

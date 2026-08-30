@@ -41,6 +41,7 @@ import subprocess
 
 import pytest
 
+from coordinator_core.win_portability import no_console_creationflags
 from coordinator_core.contract.cockpit_schema.tests.conftest import (
     COCKPIT_CONTRACT_DIR,
     DOE_CLONE,
@@ -67,6 +68,7 @@ def test_ac1_no_handoff_record_carries_status_superseded():
         cwd=DOE_CLONE,
         capture_output=True,
         text=True,
+        **no_console_creationflags(),
     )
     # grep exit 1 == no matches (pass); exit 0 with output == a violator found.
     assert result.returncode != 0, (

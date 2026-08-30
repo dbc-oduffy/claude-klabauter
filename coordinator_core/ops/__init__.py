@@ -287,6 +287,7 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ("coordinator_core.ops.session.safe_commit_offer", 'registers "session.safe_commit_offer"'),
     ("coordinator_core.ops.session_resolve_address", 'registers "session.resolve_address"'),
     ("coordinator_core.ops.session_peer_roster", 'registers "session.peer_roster"'),
+    ("coordinator_core.ops.group_em_enter", 'registers "groupem.enter"'),
     ("coordinator_core.ops.session_work_state", 'registers "session.work_state"'),
     ("coordinator_core.ops.session_artifact_owner", 'registers "session.artifact_owner"'),
     ("coordinator_core.ops.handoff_author_fork", 'registers "handoff.author_fork"'),
@@ -347,7 +348,6 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ("coordinator_core.ops.session_baton_promote", 'registers "session_baton.promote"'),
     ("coordinator_core.ops.self_persist_findings", 'registers "findings.self_persist_fallback"'),
     ("coordinator_core.ops.workday_stitch_sidecar_summary", 'registers "workday.stitch_sidecar_into_summary"'),
-    ("coordinator_core.ops.workday_drain_pending_push", 'registers "workday.drain_pending_push"'),
     ("coordinator_core.ops.write_identity_file", 'registers "install.write_identity_file"'),
     ("coordinator_core.install.clone_sibling_repo", 'registers "install.clone_idempotent"'),
     (

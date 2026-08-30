@@ -78,8 +78,15 @@ def _run(coro: Any) -> Any:
 def _committed_content_at_head(repo: Path, rel: str) -> str:
     import subprocess
 
+    from coordinator_core.win_portability import no_console_creationflags
+
     result = subprocess.run(
-        ["git", "show", f"HEAD:{rel}"], cwd=str(repo), capture_output=True, text=True, check=True
+        ["git", "show", f"HEAD:{rel}"],
+        cwd=str(repo),
+        capture_output=True,
+        text=True,
+        check=True,
+        **no_console_creationflags(),
     )
     return result.stdout
 

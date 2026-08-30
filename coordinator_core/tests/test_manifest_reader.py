@@ -27,6 +27,7 @@ from coordinator_core.install.manifest_reader import (
     manifest_read_ndjson,
     resolve_manifest_path,
 )
+from coordinator_core.win_portability import no_console_passthrough_kwargs
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -42,6 +43,7 @@ def test_find_python_resolves_current_interpreter():
     check = subprocess.run(
         [resolved, "-c", "import sys; sys.exit(0 if sys.version_info[:2] >= (3,11) else 1)"],
         timeout=10,
+        **no_console_passthrough_kwargs(),
     )
     assert check.returncode == 0
 

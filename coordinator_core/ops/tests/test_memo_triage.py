@@ -762,13 +762,16 @@ def test_dispatch_message_smoke_with_origin_worktree(golden_corpus, monkeypatch)
     import subprocess
 
     import coordinator_core.ipc as ipc
+    from coordinator_core.win_portability import no_console_passthrough_kwargs
 
     monkeypatch.setenv("CLAUDE_HOME", str(golden_corpus / "dot-claude"))
 
     # dispatch_message's routing-key resolution shells out to `git
     # rev-parse --git-common-dir` under _origin_worktree — make the fixture
     # root a real (throwaway) git repo so that resolution succeeds.
-    subprocess.run(["git", "init", "-q"], cwd=golden_corpus, check=True)
+    subprocess.run(
+        ["git", "init", "-q"], cwd=golden_corpus, check=True, **no_console_passthrough_kwargs()
+    )
 
     saved_registry = ipc._REGISTRY.get("memo.triage")
     saved_scope = ipc._OP_KEY_SCOPE.get("memo.triage")

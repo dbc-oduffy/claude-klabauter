@@ -25,6 +25,7 @@ from coordinator_core.bash_guards._command_tokenizer import (
 from coordinator_core.bash_guards.guard_offer_invoke_params_stdin import (
     check_offer_invoke_params_stdin,
 )
+from coordinator_core.win_portability import no_console_creationflags
 
 # Spawns a real external process; runs at cadence gates, not per-commit.
 # Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
@@ -160,6 +161,7 @@ def test_rewritten_command_is_valid_shell_and_reaches_the_op():
         text=True,
         timeout=60,
         cwd=_REPO_ROOT,
+        **no_console_creationflags(),
     )
     assert proc.returncode == 0, proc.stderr
     assert json.loads(proc.stdout)["ok"] is True
@@ -193,6 +195,7 @@ def test_rewritten_command_is_valid_shell_for_and_semicolon_and_background(tail)
         text=True,
         timeout=60,
         cwd=_REPO_ROOT,
+        **no_console_creationflags(),
     )
     assert proc.returncode == 0, proc.stderr
     assert json.loads(proc.stdout)["ok"] is True
@@ -202,7 +205,7 @@ def test_original_command_is_the_shell_syntax_error_this_guard_exists_for():
     """Pins the premise. If bash ever stops choking on this shape, the guard's
     justification changed and this test says so."""
     cmd = _cmd_with(json.dumps(_HAZARDOUS_PAYLOAD))
-    proc = subprocess.run(["bash", "-n", "-c", cmd], capture_output=True, text=True)
+    proc = subprocess.run(["bash", "-n", "-c", cmd], capture_output=True, text=True, **no_console_creationflags())
     assert proc.returncode != 0
     assert "syntax error" in proc.stderr
 

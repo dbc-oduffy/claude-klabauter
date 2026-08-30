@@ -31,6 +31,7 @@ from coordinator_core.ops.completion_ops import (
     day_coverage_sweep,
     flip_completion_entries_to_released,
 )
+from coordinator_core.win_portability import no_console_creationflags
 
 # Spawns a real external process; runs at cadence gates, not per-commit.
 # Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
@@ -52,6 +53,7 @@ def _git(root: Path, *args: str) -> subprocess.CompletedProcess:
         capture_output=True,
         text=True,
         check=True,
+        **no_console_creationflags(),
     )
 
 
@@ -298,6 +300,7 @@ def _commit_on(
         capture_output=True,
         text=True,
         check=True,
+        **no_console_creationflags(),
     )
     return _git(root, "rev-parse", "HEAD").stdout.strip()
 

@@ -34,7 +34,7 @@ named departures (the UNKNOWN-override fix and the CPU cursor replacing a blocki
         ``timestamp``, ``message.stop_reason``, tool NAMES from
         ``content[].type == "tool_use"``, the literal sentinel string
         ``"__TOOL_RESULT__"`` for any ``content[].type == "tool_result"`` block,
-        ``isSidechain``, and ``pendingBackgroundAgentCount``. The line is parsed with
+        and ``pendingBackgroundAgentCount``. The line is parsed with
         plain ``json.loads`` (no ``object_pairs_hook`` — filtering at every nesting
         level a transcript line can contain would add real complexity for no privacy
         gain over the shape below); the fully-parsed dict is local to ``_reduce_line``
@@ -68,12 +68,22 @@ named departures (the UNKNOWN-override fix and the CPU cursor replacing a blocki
         (one session with a live subagent and a 3.5s-old transcript was still returned
         UNKNOWN). AC3 requires the override apply to both.
 
-        Two details ported verbatim because they are load-bearing and easy to lose:
-        isSidechain lines are filtered out before anything else in the tail (a
-        sidechain record is a different logical stream, not the session's own last
-        turn), and the walk-back skips untimestamped CONTROL lines
-        (``{mode, permission-mode, last-prompt, queue-operation}``) to find the real
-        last substantive line.
+        One detail load-bearing and easy to lose: the walk-back is an ALLOW-LIST of
+        state-bearing shapes (``_STATE_BEARING_SYSTEM_SUBTYPES``, plus ``assistant``/
+        ``user`` by type) rather than a deny-list of known control types — inverted
+        2026-08-30 after the deny-list version left 52% of a 48-session sample UNKNOWN
+        (state/audits/2026-08-30-group-em-classifier-blindness.md): the transcript
+        vocabulary is open and grows without a code change here, so an allow-list
+        degrades safely (walk one more line back) where a deny-list goes blind.
+
+        NEGATIVE-SPEC, not enforced in code: a sidechain record (a different logical
+        stream, not the session's own last turn) must not be walked into. Measured 0 of
+        35,012 lines across 48 real transcripts on this harness build (subagent traffic
+        goes to a separate sidecar file this reader never opens) — the isSidechain filter
+        this module carried to enforce it was deleted (overengineering review finding 2)
+        rather than kept for a build that might inline sidechain records; if one ever
+        does, this policy line is what tells the next reader to re-add a filter against a
+        written spec, not to inherit a filter nobody has exercised.
 
         ``_TOOL_UNANSWERED_GRACE_SECONDS`` (step 2's 90s) is an undocumented bare
         literal in the spike whose "measured" provenance is not traceable to any
@@ -157,6 +167,10 @@ Negative-spec:
       evidence dressed as corroboration, not two independent signals. The genuinely
       independent pair this module treats as tiebreak-worthy is the ladder's
       ``stop_reason`` branches vs the CPU cursor.
+    - ``delegation_evidence_from_sidecar`` reads ONLY mtimes off directory-listing
+      metadata (`os.scandir`/`stat`) — it never opens a subagent transcript file, so
+      it carries none of part (b)'s privacy machinery and needs none: there is no
+      message content anywhere in a directory listing.
     - Do NOT treat the transcript line-type vocabulary as closed — an unmodelled type
       (e.g. ``attachment``, which broke the spike's ladder once in a 30-session run) is
       expected, not exceptional; it resolves to UNKNOWN:unmodelled and is recorded, not
@@ -199,10 +213,21 @@ _TAIL_CAP_BYTES = _TAIL_MAX_CHUNKS * _TAIL_CHUNK_BYTES
 # still bounding the work done per invocation.
 _MAX_WALKBACK_LINES = 64
 
-# Control-line "type" values that carry no timestamp and must be walked back
-# past to find the real last substantive line (module docstring (c)).
-_UNTIMESTAMPED_CONTROL_TYPES = frozenset(
-    {"mode", "permission-mode", "last-prompt", "queue-operation"}
+# ALLOW-LIST of state-bearing line shapes (module docstring (c)) — the walk-back
+# treats everything NOT matching this as a control/metadata line to walk past,
+# never as something to classify. Inverted from a deny-list on 2026-08-30
+# (state/audits/2026-08-30-group-em-classifier-blindness.md): the transcript
+# line-type vocabulary is open and demonstrably growing (`atis-latch` appeared
+# on 40/48 sampled sessions the day it shipped with no code change here), so a
+# deny-list goes UNKNOWN-blind on every new addition while an allow-list only
+# ever degrades to "walk one more line back". `assistant` and `user` are
+# state-bearing by type; `system` is state-bearing ONLY for the three subtypes
+# the ladder itself models in `_classify_one` — every other `system` subtype
+# (and every other type entirely: `attachment`, `atis-latch`, `ai-title`,
+# `cost-state`, `mode`, `permission-mode`, `last-prompt`, `queue-operation`,
+# `file-history-snapshot`, `file-history-delta`, etc.) is walked past.
+_STATE_BEARING_SYSTEM_SUBTYPES = frozenset(
+    {"away_summary", "stop_hook_summary", "turn_duration"}
 )
 
 # Step 2's grace window before an in-flight tool call downgrades from
@@ -315,7 +340,6 @@ class _ReducedLine:
     subtype: str
     timestamp: str
     stop_reason: str
-    is_sidechain: bool
     pending_background_agent_count: int
     tool_names: tuple[str, ...]
     tool_result_markers: tuple[str, ...]
@@ -357,7 +381,6 @@ def _reduce_line(raw_line: str) -> Optional[_ReducedLine]:
     subtype = subtype if isinstance(subtype, str) else ""
     timestamp = record.get("timestamp")
     timestamp = timestamp if isinstance(timestamp, str) else ""
-    is_sidechain = bool(record.get("isSidechain", False))
     pending_count = record.get("pendingBackgroundAgentCount", 0)
     pending_count = pending_count if isinstance(pending_count, int) else 0
 
@@ -391,7 +414,6 @@ def _reduce_line(raw_line: str) -> Optional[_ReducedLine]:
         subtype=subtype,
         timestamp=timestamp,
         stop_reason=stop_reason,
-        is_sidechain=is_sidechain,
         pending_background_agent_count=pending_count,
         tool_names=tuple(tool_names),
         tool_result_markers=tuple(tool_result_markers),
@@ -419,24 +441,190 @@ class Verdict:
     unmodelled_subtype: str = ""
 
 
+def _is_state_bearing(ln: _ReducedLine) -> bool:
+    """ALLOW-LIST predicate (see `_STATE_BEARING_SYSTEM_SUBTYPES`'s docstring): True
+    only for `assistant`/`user` lines, or a `system` line whose subtype is one of the
+    three the ladder models in `_classify_one`. Everything else is a control or
+    metadata line the walk-back must step past, never classify."""
+    if ln.type in ("assistant", "user"):
+        return True
+    if ln.type == "system" and ln.subtype in _STATE_BEARING_SYSTEM_SUBTYPES:
+        return True
+    return False
+
+
 def _select_last_substantive_line(reduced_lines: list[_ReducedLine]) -> Optional[_ReducedLine]:
-    """Filter isSidechain lines, then walk back past untimestamped control lines to find
-    the real last substantive line. Returns None if nothing survives the filter."""
-    candidates = [ln for ln in reduced_lines if not ln.is_sidechain]
-    for ln in reversed(candidates):
-        if ln.type in _UNTIMESTAMPED_CONTROL_TYPES:
-            continue
-        return ln
+    """Walk back past every non-state-bearing line (see `_is_state_bearing`) to find the
+    real last substantive line. Returns None if nothing survives the walk.
+
+    No isSidechain filter here (overengineering review finding 2, 2026-08-30): measured
+    0 of 35,012 lines across 48 real transcripts on this harness build — subagent
+    traffic is written to a separate sidecar file this reader never opens — and deleted
+    rather than kept "cheap, harmless" for a build that might inline sidechain records.
+    See the module docstring's NEGATIVE-SPEC note for the written policy a future build
+    that changes this reads against."""
+    for ln in reversed(reduced_lines):
+        if _is_state_bearing(ln):
+            return ln
     return None
 
 
 def _has_live_delegation_evidence(delegation_evidence: bool) -> bool:
     """Thin pass-through — kept as its own function so the ladder's step 7 reads as a
-    named predicate rather than a bare parameter, and so a future richer delegation
-    check (subagent-sidecar mtime lookup) has a single call site to grow into. That
-    lookup itself is NOT this module's job (Anti-scope: correlated-not-independent —
-    see module docstring); the caller supplies the boolean."""
+    named predicate rather than a bare parameter. The caller (the sensor op) is
+    responsible for arriving at this boolean, which as of 2026-08-30 it does by
+    merging any caller-supplied flag with `delegation_evidence_from_sidecar`'s mtime
+    read (see that function and `merge_delegation_evidence` below) — this function
+    itself stays a pure pass-through so `classify` remains independently testable
+    against a bare bool without needing a real sidecar directory on disk."""
     return bool(delegation_evidence)
+
+
+# Root cause (state/audits/2026-08-30-group-em-classifier-blindness.md § "Worth a
+# separate look"): `delegation_evidence` was ALWAYS False in production because
+# nothing ever computed it — `classify`'s step 7 has taken a caller-supplied bool
+# since it was written, and neither this module nor its hook wrapper (nor, so far as
+# this dispatch found, anything upstream in DoE-claude) ever populated one. The
+# parameter was not wired to a bug; it was wired to nothing. The functions below are
+# that missing producer: a cheap, already-on-disk liveness signal from the subagent
+# sidecar directory's mtimes, per the audit's recommendation 5.
+_DELEGATION_ACTIVITY_GRACE_SECONDS = 120  # matches subagent_arrival_check.py's own
+# calibrated debounce window (that file's _DEBOUNCE_SECONDS, empirically derived
+# 2026-07-30 from 176,949 mid-run windows) — reused here as "recently active" rather
+# than re-derived, since it already answers the adjacent question "is this subagent
+# still mid-turn" from the same mtime-shaped evidence.
+
+
+def _subagents_dir_for(transcript_path: Optional[str]) -> Optional[str]:
+    """dirname(transcript_path)/stem(transcript_path)/subagents — the sidecar
+    directory a session's dispatched subagent transcripts live under. Mirrors
+    `hooks/subagent_arrival_check.py::_derive_subagent_transcript_path`'s path
+    shape exactly (same directory, minus the per-agent filename); not imported from
+    there because that function derives a single agent's file, not the directory,
+    and pulling in a hook module from a session-layer library would invert this
+    tree's dependency direction. Returns None when `transcript_path` is falsy —
+    there is nothing to derive a sidecar directory from."""
+    if not transcript_path:
+        return None
+    directory = os.path.dirname(transcript_path)
+    basename = os.path.basename(transcript_path)
+    stem, _, _ext = basename.rpartition(".")
+    stem = stem or basename
+    if not stem:
+        return None
+    return os.path.join(directory, stem, "subagents")
+
+
+DELEGATION_UNRESOLVED = "unresolved"
+"""Sentinel returned by `delegation_evidence_from_sidecar` for case (b): a
+transcript path WAS supplied and DID resolve to a candidate sidecar directory, but
+listing/stating it failed for a reason other than "does not exist" (e.g. a
+permission error). Genuinely ambiguous — the session might be delegating and this
+module cannot tell — so `merge_delegation_evidence` fails toward PRODUCING here.
+Distinct from a bare `None`, which means case (a): no transcript path to resolve
+from at all, i.e. no information whatsoever, which is exactly what UNKNOWN already
+exists to say and must NOT be manufactured into positive delegation evidence (see
+`merge_delegation_evidence`'s docstring — collapsing the two was a design error
+caught in review, since UNKNOWN is already excluded from the nudge candidate roster
+and fail-toward-PRODUCING buys zero extra protection there while destroying a
+first-class signal)."""
+
+
+def delegation_evidence_from_sidecar(
+    transcript_path: Optional[str], *, now_epoch: float
+) -> "bool | None | str":
+    """Cheap on-disk delegation-liveness signal, computed from ONE bounded directory
+    listing plus one `stat()` per entry in that listing — no transcript is opened, no
+    line is read. Bounded by construction: a session's own subagents directory holds
+    one file per dispatched subagent for that session, not an unbounded or shared
+    tree.
+
+    Returns one of FOUR distinct outcomes — collapsing any two of them together is
+    the exact design error this module must not repeat (see `DELEGATION_UNRESOLVED`):
+
+        True   — at least one `agent-*.jsonl` sidecar's mtime is within
+                 `_DELEGATION_ACTIVITY_GRACE_SECONDS` of `now_epoch` (a subagent is
+                 actively being written to right now, i.e. this session is
+                 delegating).
+        False  — the sidecar directory does not exist at all (this session has
+                 never dispatched a subagent) OR it exists but every file in it is
+                 older than the grace window. Both are a genuine, resolvable
+                 negative.
+        None   — NO INFORMATION AT ALL: no `transcript_path` was supplied, so there
+                 is nothing to derive a sidecar directory from. This is not
+                 ambiguous evidence about delegation — it is the absence of any
+                 basis to ask the question, which is what an UNKNOWN ladder verdict
+                 already means. `merge_delegation_evidence` must NOT override on
+                 this case.
+        DELEGATION_UNRESOLVED — a transcript path WAS supplied and a candidate
+                 sidecar directory WAS derived, but listing/stating it failed for a
+                 reason other than "does not exist" (e.g. permission denied). This
+                 IS genuinely ambiguous evidence — the session may well be
+                 delegating and this module simply could not check — so
+                 `merge_delegation_evidence` fails toward PRODUCING on this case
+                 only.
+
+    Never raises. Blocking (stat/scandir) — callers MUST invoke this via
+    asyncio.to_thread(), matching every other filesystem read in this module.
+    """
+    subagents_dir = _subagents_dir_for(transcript_path)
+    if subagents_dir is None:
+        return None
+    try:
+        entries = list(os.scandir(subagents_dir))
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return DELEGATION_UNRESOLVED
+
+    newest_mtime = 0.0
+    for entry in entries:
+        if not entry.name.endswith(".jsonl"):
+            continue
+        try:
+            mtime = entry.stat().st_mtime
+        except OSError:
+            continue
+        if mtime > newest_mtime:
+            newest_mtime = mtime
+
+    if newest_mtime == 0.0:
+        return False
+    return (now_epoch - newest_mtime) <= _DELEGATION_ACTIVITY_GRACE_SECONDS
+
+
+def merge_delegation_evidence(payload_flag: bool, sidecar_signal: "bool | None | str") -> bool:
+    """Combine the caller-supplied `delegation_evidence` flag with the sidecar mtime
+    signal (`delegation_evidence_from_sidecar`) into the single bool `classify`'s
+    step 7 consumes.
+
+    True when EITHER source says True, or when the sidecar signal is
+    `DELEGATION_UNRESOLVED` (case (b): a check was attempted and failed
+    ambiguously) — that case alone fails toward PRODUCING, never toward PAUSED (the
+    whole defect this fix addresses is a working session wrongly read as idle and
+    nudged; see the module's Anti-scope-turned-scope note above).
+
+    A bare `None` sidecar signal (case (a): no transcript path, no information at
+    all) does NOT trigger the override — there is nothing here to fail toward
+    PRODUCING about, and doing so anyway would manufacture positive delegation
+    evidence out of a pure absence of information, destroying the UNKNOWN verdict
+    the ladder already produces for exactly this case. UNKNOWN is never a nudge
+    candidate on its own (`build_candidate_roster` only surfaces `candidate: true`
+    rows), so the fail-toward-PRODUCING safety argument that justifies the
+    `DELEGATION_UNRESOLVED` case simply does not apply here — this branch buys zero
+    additional protection against the spurious-nudge defect while erasing a
+    signal the classifier is meant to preserve. (Caught in review 2026-08-30 after
+    an earlier version of this function collapsed both `None` causes together.)
+
+    Only a definitively-negative sidecar signal (`False`: the subagents directory
+    does not exist, i.e. this session never dispatched anyone) or a genuinely
+    unknowable one (`None`: no transcript path) combined with a `False` payload
+    flag yields `False` here."""
+    if payload_flag:
+        return True
+    if sidecar_signal is DELEGATION_UNRESOLVED:
+        return True
+    return bool(sidecar_signal)
 
 
 def classify(
@@ -462,7 +650,26 @@ def classify(
     """
     last = _select_last_substantive_line(reduced_lines)
     if last is None:
-        verdict = Verdict("UNKNOWN", "no substantive line survived the isSidechain filter and control-line walk-back")
+        if not reduced_lines:
+            # Reachable causes, per state/audits/2026-08-30-group-em-classifier-
+            # blindness.md § 3: no transcript_path was supplied (the caller already
+            # collapsed that to []), the file was absent/unreadable, or it parsed to
+            # zero usable lines. This module cannot distinguish those three from an
+            # empty `reduced_lines` alone (the caller discards which one happened
+            # before this function ever sees it) — name the fact honestly rather than
+            # blaming a filter this module no longer carries (see
+            # `_select_last_substantive_line`'s docstring).
+            verdict = Verdict(
+                "UNKNOWN",
+                "no lines to classify: transcript_path missing, or the file was "
+                "absent/unreadable/empty",
+            )
+        else:
+            verdict = Verdict(
+                "UNKNOWN",
+                f"window held {len(reduced_lines)} line(s), none state-bearing "
+                "(assistant/user/system:away_summary|stop_hook_summary|turn_duration)",
+            )
     else:
         verdict = _classify_one(last, now_epoch=now_epoch, transcript_mtime_epoch=transcript_mtime_epoch)
 

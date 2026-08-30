@@ -457,6 +457,7 @@ class TestAppendSessionInternalLogic:
 import asyncio
 
 from coordinator_core.ops.completion_ops import _append_session_handler
+from coordinator_core.win_portability import no_console_creationflags
 
 
 def _run(coro):
@@ -479,6 +480,7 @@ def _make_repo_with_plan(tmp_path: Path, plan_name: str, plan_content: str) -> t
             cwd=str(repo),
             capture_output=True,
             check=True,
+            **no_console_creationflags(),
         )
 
     _git("init", "-b", "main")

@@ -77,6 +77,7 @@ from coordinator_core.ops.ceremony.push import (
 )
 from .fixtures.real_git import make_diverged_path, real_git_repo
 from coordinator_core.op_budget_suspension import OpSuspendedError
+from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -102,6 +103,7 @@ class StampRepo:
             cwd=str(self.root),
             capture_output=True,
             text=True,
+            **no_console_creationflags(),
         )
 
     @property
@@ -215,7 +217,7 @@ def repo_with_remote(tmp_path, repo) -> StampRepo:
     """
     branch = "work/test/consumed-handoff-stamp"
     bare = tmp_path / "origin.git"
-    subprocess.run(["git", "init", "--bare", "-b", "main", str(bare)], check=True, capture_output=True)
+    subprocess.run(["git", "init", "--bare", "-b", "main", str(bare)], check=True, capture_output=True, **no_console_creationflags())
     repo._git("checkout", "-b", branch)
     repo._git("remote", "add", "origin", str(bare))
     result = repo._git("push", "-u", "origin", branch)
@@ -937,6 +939,7 @@ def test_follow_up_commit_preserves_peer_staged_divergence(tmp_path):
     result = subprocess.run(
         ["git", "show", "HEAD:state/handoffs/some-handoff.md"],
         cwd=str(repo), capture_output=True, text=True, check=True,
+        **no_console_creationflags(),
     )
     assert result.stdout == "STAGED\n"
     # Worktree content is untouched -- commit_scoped never re-derives the
@@ -962,6 +965,7 @@ def test_follow_up_push_declined_by_branch_policy_not_reported_as_error(tmp_path
     subprocess.run(
         ["git", "remote", "add", "origin", str(tmp_path / "does-not-exist.git")],
         cwd=str(repo), capture_output=True, text=True, check=True,
+        **no_console_creationflags(),
     )
     (repo / "seed.txt").write_text("declined\n", encoding="utf-8")
 
@@ -988,6 +992,7 @@ def test_follow_up_push_genuine_failure_still_routes_through_error(tmp_path):
     subprocess.run(
         ["git", "checkout", "-b", "work/test/c6e"],
         cwd=str(repo), capture_output=True, text=True, check=True,
+        **no_console_creationflags(),
     )
     # A configured-but-unreachable remote: `git remote` reports non-empty
     # (so `push_with_retry` does NOT take its no-remote skip), but the push
@@ -995,6 +1000,7 @@ def test_follow_up_push_genuine_failure_still_routes_through_error(tmp_path):
     subprocess.run(
         ["git", "remote", "add", "origin", str(tmp_path / "does-not-exist.git")],
         cwd=str(repo), capture_output=True, text=True, check=True,
+        **no_console_creationflags(),
     )
     (repo / "seed.txt").write_text("failure\n", encoding="utf-8")
 

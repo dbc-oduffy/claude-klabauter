@@ -37,6 +37,7 @@ from pathlib import Path
 import coordinator_core.ipc as ipc
 
 import pytest
+from coordinator_core.win_portability import no_console_creationflags
 
 # Spawns a real external process; runs at cadence gates, not per-commit.
 # Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
@@ -95,7 +96,7 @@ def _run_subprocess_script(script: str) -> subprocess.CompletedProcess:
         text=True,
         timeout=60,
         cwd=project_root,
-        env=env,
+        env=env, **no_console_creationflags(),
     )
 
 

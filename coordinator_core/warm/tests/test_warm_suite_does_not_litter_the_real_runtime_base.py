@@ -36,6 +36,7 @@ from pathlib import Path
 import pytest
 
 from coordinator_core.warm import breadcrumb
+from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -197,6 +198,7 @@ def test_a_warm_suite_run_creates_no_new_real_runtime_directories() -> None:
         capture_output=True,
         text=True,
         timeout=900,
+        **no_console_creationflags(),
     )
 
     after = _clone_key_dirs(real_base)

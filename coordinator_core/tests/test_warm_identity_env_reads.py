@@ -103,6 +103,30 @@ COHORT: dict[str, tuple[bool, str]] = {
         "b558b27c74e7.yaml. `em_sid` survives as a cold-only legacy tier: this ratchet "
         "does not govern that name, and the warm branch does not read it.",
     ),
+    "coordinator/bin/coordinator-doc-new.py": (
+        False,
+        "Warm-reachable, and the SECOND cohort member outside coordinator_core (after "
+        "wsc-session-disposition.py, same escape route). "
+        "`baton_assemble.apply._load_doc_new_module` loads this script BY PATH and "
+        "calls its scaffolder functions in-process; `baton_assemble` is itself "
+        "warm-reachable via the registered op `handoff.correct_body`, so a registered-"
+        "op call graph reaches these scaffolders while no scan of the package could "
+        "see them. What the spawner's id reached was not a gate but every "
+        "provenance stamp the generator writes -- `author:`, `authoring_session:`, "
+        "sidecar `dispatched_by:`, and the `state/subagent-share/<session>/` directory "
+        "leaf. Triaged and adopted 2026-08-30 from OBSERVED misattribution, not "
+        "inspection: five wrong stamps across claude-klabauter and example-retrieval-repo in one "
+        "day, three of which reached a peer session as a false ownership claim -- one "
+        "peer was one step from standing down on a real work item. "
+        "state/audits/2026-08-30-author-stamp-resolves-machine-wide.md. "
+        "Two INDEPENDENT reads composed one field here, which is the shape worth "
+        "carrying forward: the uuid walked this ladder while the name came from "
+        "`harness_registry.self_record()` keyed on `CLAUDE_PID` -- a fourth identity "
+        "env var this ratchet does not govern. Fixing only the ladder would have left "
+        "the name resolving off the spawner, so `_resolve_session_display_name` was "
+        "repointed at a sid-keyed `snapshot()` lookup in the same change. A ratchet "
+        "over `SESSION_ENV_NAMES` alone cannot see that half.",
+    ),
     "coordinator_core/baton_assemble/__init__.py": (
         False,
         "Warm-reachable: the registered op `handoff.correct_body` imports "
@@ -206,6 +230,7 @@ _COHORT_FLOOR: frozenset = frozenset(
         "coordinator_core/write_guards/block_subagent_plan_body_write.py",
         "coordinator_core/ops/review_trail_write.py",
         "coordinator_core/ops/tracker/push_suggestion.py",
+        "coordinator/bin/coordinator-doc-new.py",
     }
 )
 

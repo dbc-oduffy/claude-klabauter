@@ -32,6 +32,7 @@ import pytest
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 import coordinator_core.ops.review_coverage_core as rcc
+from coordinator_core.win_portability import no_console_creationflags
 
 
 def _git(*args, cwd):
@@ -40,7 +41,7 @@ def _git(*args, cwd):
         cwd=cwd,
         check=True,
         capture_output=True,
-        **rcc._CREATIONFLAGS,
+        **rcc._CREATIONFLAGS, **no_console_creationflags(),
     )
 
 
@@ -51,7 +52,7 @@ def _head(cwd) -> str:
         capture_output=True,
         text=True,
         check=True,
-        **rcc._CREATIONFLAGS,
+        **rcc._CREATIONFLAGS, **no_console_creationflags(),
     ).stdout.strip()
 
 

@@ -365,6 +365,13 @@ def test_registering_a_reaped_pid_raises_rather_than_reporting_one_process(monke
     concretely `ProcessLookupError` from the subsequent `os.kill` on the
     already-reaped pid -- never a silent `procs_per_call == 1`."""
     _require_darwin()
+    # Darwin-only site (_require_darwin() above; os.waitpid is POSIX-only), so
+    # the splat is inert AT RUNTIME -- review: coordinatorcode-reviewer
+    # .ad915a07f1fc080c3 Finding 4, declined. It is not inert to the STANDING
+    # GATE: `test_no_bare_test_tree_spawn` walks the test tree by AST and knows
+    # nothing about platform guards, so deleting the splat reads as a bare
+    # spawn and trips it. Teaching that gate to evaluate `_require_darwin()`
+    # reachability, for one site, costs more than a no-op mapping does.
     proc = subprocess.Popen(["/bin/sh", "-c", "true"], **no_console_passthrough_kwargs())
     reaped_pid = proc.pid
     os.waitpid(reaped_pid, 0)

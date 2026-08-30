@@ -37,12 +37,13 @@ import pytest
 import coordinator_core.ops.ceremony.push as push_mod
 from coordinator_core.ops.ceremony import git_native
 from coordinator_core.ops.ceremony.git_native import GitResult
+from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 
 def _git(args, cwd) -> None:
-    subprocess.run(["git", *args], cwd=str(cwd), check=True, capture_output=True, text=True)
+    subprocess.run(["git", *args], cwd=str(cwd), check=True, capture_output=True, text=True, **no_console_creationflags())
 
 
 def _init_repo(tmp_path: Path) -> Path:

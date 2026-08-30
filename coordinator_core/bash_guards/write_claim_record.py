@@ -161,23 +161,47 @@ def _rel_if_inside(resolved_target: str, root: str) -> Optional[str]:
 _SCRATCHPAD_SCRIPT_READ_CAP_BYTES = 65536
 
 
-def _python_head_script_operand(cmd: str) -> Optional[str]:
-    """The single script-file operand of a bare `python`/`python3
-    <script.py>` invocation found at depth 0 of `cmd`, or `None` when no
-    depth-0 segment matches that exact shape.
+#: `pythonX`, `pythonX.Y` basename shape -- `python3.11`, `python3`,
+#: `python2.7`. Checked ALONGSIDE (never instead of, never by editing)
+#: `_write_bump_sink_shapes._PYTHON_C_FLAG_INTERPRETERS`, which
+#: `bump_outside_repo_write` also consumes for the outside-repo question --
+#: the plan's Anti-scope fences that table, so a version-pinned interpreter
+#: is recognized locally, here, rather than by widening the shared set.
+_VERSIONED_PYTHON_BASENAME_RE = re.compile(r"^python[23]?(\.\d+)?$")
+
+#: Interpreter flags that consume a SEPARATE following token as their value
+#: rather than being a bare switch -- `python -X faulthandler script.py`
+#: presents two non-flag-looking tokens if this isn't accounted for, and the
+#: bare `len(positional) == 1` test then misses the script operand entirely
+#: (a silent drop, the exact bug class this module exists to fix). `-c` is
+#: handled separately above (it never reaches here, the segment is skipped
+#: outright). Kept to the flags actually documented to take a value with
+#: `python --help`; a flag not in this set is treated as unrecognized rather
+#: than guessed at, per the ambiguity rule below.
+_PYTHON_VALUE_TAKING_FLAGS = frozenset({"-W", "-X", "-Q"})
+
+
+def _python_head_script_operands(cmd: str) -> List[str]:
+    """Every script-file operand of a bare `python`/`python3 <script.py>`
+    invocation found at depth 0 of `cmd`, in left-to-right encounter order
+    across ALL matching depth-0 segments -- a chained command running two
+    scripts (`python a.py && python b.py`) yields both, not just the first.
 
     Reuses `_command_tokenizer.resolve_command_positions` -- the package's
     one resolve-once tokenizer -- and `_write_bump_sink_shapes._PYTHON_C_
     FLAG_INTERPRETERS` for head-verb identity, mirroring `_write_bump_sink_
     shapes._iter_python_dash_c_payloads`'s own depth-0-only, fail-open
-    walk. No new tokenizer, no new interpreter set.
+    walk. No new tokenizer, no new interpreter set -- `_VERSIONED_PYTHON_
+    BASENAME_RE` above is an ADDITIONAL local check, not an edit to that
+    shared table.
 
     Deliberately narrow: a segment carrying a `-c` flag (an inline payload,
     already covered by `extract_interpreter_payload_write_sink_targets`
-    above) or more than one non-flag positional argument is not this shape
-    and yields `None` for that segment -- ambiguity here resolves toward
-    "not a scratchpad script", never toward guessing which operand is the
-    script.
+    above) or more than one non-flag positional argument (after consuming
+    each `_PYTHON_VALUE_TAKING_FLAGS` flag's own value token) is not this
+    shape and contributes nothing for that segment -- ambiguity here
+    resolves toward "not a scratchpad script", never toward guessing which
+    operand is the script.
     """
     from coordinator_core.bash_guards._command_tokenizer import (
         ResolutionConfidence,
@@ -193,8 +217,9 @@ def _python_head_script_operand(cmd: str) -> Optional[str]:
             cmd, preserve_windows_backslashes=(os.name == "nt")
         )
     except Exception:
-        return None
+        return []
 
+    operands: List[str] = []
     for seg in segments:
         if seg.depth != 0 or seg.confidence == ResolutionConfidence.UNRESOLVED:
             continue
@@ -202,15 +227,29 @@ def _python_head_script_operand(cmd: str) -> Optional[str]:
         if not tokens:
             continue
         head_base = normalize_executable_basename(tokens[0])
-        if head_base not in _PYTHON_C_FLAG_INTERPRETERS:
+        if (
+            head_base not in _PYTHON_C_FLAG_INTERPRETERS
+            and not _VERSIONED_PYTHON_BASENAME_RE.match(head_base)
+        ):
             continue
         args = tokens[1:]
         if any(a == "-c" or a.startswith("-c") for a in args):
             continue
-        positional = [a for a in args if not a.startswith("-")]
+        positional = []
+        skip_next = False
+        for a in args:
+            if skip_next:
+                skip_next = False
+                continue
+            if a in _PYTHON_VALUE_TAKING_FLAGS:
+                skip_next = True
+                continue
+            if a.startswith("-"):
+                continue
+            positional.append(a)
         if len(positional) == 1:
-            return positional[0]
-    return None
+            operands.append(positional[0])
+    return operands
 
 
 def _scratchpad_script_write_targets(cmd: str, root: str) -> List[str]:
@@ -238,51 +277,64 @@ def _scratchpad_script_write_targets(cmd: str, root: str) -> List[str]:
     `try` is the backstop above that -- a failure here must cost this branch
     its candidates, never the common path's.
 
-    A substring pre-filter (`"python" not in cmd`) is checked before any
-    tokenizing, so the overwhelming majority of commands -- which do not
+    A substring pre-filter (`"python" not in cmd.lower()`) is checked before
+    any tokenizing, so the overwhelming majority of commands -- which do not
     invoke a Python interpreter at all -- never pay for
-    `resolve_command_positions`. Pure text rejection: it can only return
-    `[]` early, never open a new detection path.
+    `resolve_command_positions`. Pure text rejection, and case-INSENSITIVE
+    on purpose: Windows PATH/`cmd.exe` resolution is case-insensitive
+    (`normalize_executable_basename`'s own docstring), so `Python3 script.py`
+    and `PYTHON3 script.py` are real, executable invocations this filter
+    must not silently drop ahead of the tokenizer ever seeing them. Still
+    pure text rejection: it can only return `[]` early, never open a new
+    detection path, and costs no extra `resolve_command_positions` pass --
+    `record_write_claims`'s two loops (this one and the common
+    `_iter_write_sink_candidates` path) between them still make exactly two
+    tokenizer passes per call, not three.
 
-    Exactly ONE existence/stat probe plus one bounded read
-    (`_SCRATCHPAD_SCRIPT_READ_CAP_BYTES`), on this branch only, never a
-    directory walk: a `.py` operand outside the scratchpad, a nonexistent or
-    unreadable file, or a file over the size cap all yield `[]` here, no
-    exception ever escapes.
+    Exactly one existence/stat probe plus one bounded read
+    (`_SCRATCHPAD_SCRIPT_READ_CAP_BYTES`) PER matching operand, on this
+    branch only, never a directory walk: a `.py` operand outside the
+    scratchpad, a nonexistent or unreadable file, or a file over the size
+    cap all contribute nothing for that operand, no exception ever escapes.
     """
     try:
-        if "python" not in cmd:
+        if "python" not in cmd.lower():
             return []
-        operand = _python_head_script_operand(cmd)
-        if not operand or not operand.lower().endswith(".py"):
-            return []
-
-        candidate = operand if os.path.isabs(operand) else os.path.join(root, operand)
-        candidate = os.path.normpath(candidate)
 
         from coordinator_core.bash_guards._write_bump_applicability import (
             _all_temp_roots,
         )
-
-        temp_roots = _all_temp_roots()
-        if not any(_is_within(candidate, r) for r in temp_roots):
-            return []
-
-        try:
-            if not os.path.isfile(candidate):
-                return []
-            if os.path.getsize(candidate) > _SCRATCHPAD_SCRIPT_READ_CAP_BYTES:
-                return []
-            with open(candidate, "r", encoding="utf-8", errors="replace") as fh:
-                text = fh.read(_SCRATCHPAD_SCRIPT_READ_CAP_BYTES)
-        except OSError:
-            return []
-
         from coordinator_core.bash_guards._write_bump_sink_shapes import (
             _python_write_targets_in_text,
         )
 
-        return _python_write_targets_in_text(text)
+        temp_roots = _all_temp_roots()
+        all_targets: List[str] = []
+        for operand in _python_head_script_operands(cmd):
+            if not operand or not operand.lower().endswith(".py"):
+                continue
+
+            candidate = (
+                operand if os.path.isabs(operand) else os.path.join(root, operand)
+            )
+            candidate = os.path.normpath(candidate)
+
+            if not any(_is_within(candidate, r) for r in temp_roots):
+                continue
+
+            try:
+                if not os.path.isfile(candidate):
+                    continue
+                if os.path.getsize(candidate) > _SCRATCHPAD_SCRIPT_READ_CAP_BYTES:
+                    continue
+                with open(candidate, "r", encoding="utf-8", errors="replace") as fh:
+                    text = fh.read(_SCRATCHPAD_SCRIPT_READ_CAP_BYTES)
+            except OSError:
+                continue
+
+            all_targets.extend(_python_write_targets_in_text(text))
+
+        return all_targets
     except Exception:
         return []
 

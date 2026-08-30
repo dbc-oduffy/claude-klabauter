@@ -35,10 +35,7 @@ from pathlib import Path
 from typing import List
 
 import pytest
-from coordinator_core.win_portability import (
-    no_console_creationflags,
-    no_console_passthrough_kwargs,
-)
+from coordinator_core.win_portability import no_console_creationflags
 
 # Declared, not excused: `_classify_bookkeeping_shas`/`_credit_from_kind_partition`
 # classify real commits by their actually-touched paths via `git log`, so several

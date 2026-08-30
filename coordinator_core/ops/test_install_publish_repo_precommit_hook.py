@@ -26,6 +26,10 @@ import coordinator_core.ops.install_publish_repo_precommit_hook as _mod
 from coordinator_core.ops.install_publish_repo_precommit_hook import main
 from coordinator_core.testing import symlink_capability
 from coordinator_core.testing.sh_interpreter import require_sh_interpreter
+from coordinator_core.win_portability import (
+    no_console_creationflags,
+    no_console_passthrough_kwargs,
+)
 
 # Declared, not excused: this file behaviorally executes the emitted pre-commit
 # hook via real `sh`/`git` (per the D2 fix's own contract) to prove the hook's
@@ -39,7 +43,7 @@ pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 
 def _git_init(path: Path) -> None:
-    subprocess.run(["git", "init", "-q", str(path)], check=True)
+    subprocess.run(["git", "init", "-q", str(path)], check=True, **no_console_passthrough_kwargs())
 
 
 def _make_oss_repo(tmp_path: Path) -> Path:
@@ -79,7 +83,8 @@ def _run_hook(
     if extra_env:
         env.update(extra_env)
     return subprocess.run(
-        [require_sh_interpreter(), str(hook)], cwd=str(cwd), capture_output=True, text=True, env=env
+        [require_sh_interpreter(), str(hook)], cwd=str(cwd), capture_output=True, text=True, env=env,
+        **no_console_creationflags(),
     )
 
 
@@ -427,6 +432,7 @@ def _tool_survives_a_narrowed_path(candidate: str, name: str) -> bool:
         env=env,
         capture_output=True,
         text=True,
+        **no_console_creationflags(),
     )
     return result.returncode == 0
 

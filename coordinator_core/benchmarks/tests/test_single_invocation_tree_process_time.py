@@ -22,6 +22,7 @@ from coordinator_core.benchmarks.process_time import (
     IS_WINDOWS,
     single_invocation_tree_process_time,
 )
+from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [
     pytest.mark.skipif(
@@ -45,6 +46,7 @@ _SPAWNING_CHILD = textwrap.dedent(
         subprocess.run(
             [sys.executable, "-c", "sum(range(200000))"],
             stdout=subprocess.DEVNULL,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
     print("child-done")
     """
@@ -149,13 +151,21 @@ def test_the_floor_this_primitive_replaces_still_reads_zero_on_windows(tmp_path)
     probe = textwrap.dedent(
         f"""
         import os, subprocess, sys
-        subprocess.run([sys.executable, {script!r}, "4"], stdout=subprocess.DEVNULL)
+        subprocess.run(
+            [sys.executable, {script!r}, "4"],
+            stdout=subprocess.DEVNULL,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
         t = os.times()
         print(t.children_user, t.children_system)
         """
     )
     out = subprocess.run(
-        [sys.executable, "-c", probe], capture_output=True, text=True, check=True
+        [sys.executable, "-c", probe],
+        capture_output=True,
+        text=True,
+        check=True,
+        **no_console_creationflags(),
     )
     children_user, children_system = (float(v) for v in out.stdout.split())
 

@@ -706,24 +706,12 @@ def _dirty_paths(cwd: Optional[str] = None) -> set:
     guard import path and the only caller is the rare dead-holder takeover, so
     the import cost is paid there rather than on every guard fire.
     """
-    import subprocess
+    from coordinator_core.git.run import run_git
 
-    from coordinator_core.win_portability import no_console_creationflags
-
-    try:
-        out = subprocess.run(
-            ["git", "--no-optional-locks", "status", "--porcelain"],
-            capture_output=True,
-            text=True,
-            cwd=cwd or None,
-            timeout=20,
-            # Windows is first-class here: without this the spawn pops a console
-            # window under headless Bash. Shared helper, not a local getattr, so
-            # the suppression cannot drift from every other spawn site.
-            **no_console_creationflags(),
-        ).stdout
-    except Exception:
+    result = run_git(["--no-optional-locks", "status", "--porcelain"], cwd=cwd or None, timeout=20)
+    if result.timed_out or result.returncode == 127:
         return set()
+    out = result.stdout
     dirty = set()
     for line in out.splitlines():
         if len(line) <= 3:

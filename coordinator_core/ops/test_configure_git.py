@@ -12,6 +12,7 @@ import pytest
 
 from coordinator_core.install.write_surface import StaticClause
 from coordinator_core.ops import configure_git as cg
+from coordinator_core.win_portability import no_console_creationflags
 
 # Declared, not excused: this file spawns a real git process because the
 # hardening under test writes real git config (`gc.auto`,
@@ -27,7 +28,8 @@ pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 def _git(cwd, *args):
     return subprocess.run(
-        ["git", *args], cwd=str(cwd), capture_output=True, encoding="utf-8", check=True
+        ["git", *args], cwd=str(cwd), capture_output=True, encoding="utf-8", check=True,
+        **no_console_creationflags(),
     )
 
 
@@ -122,6 +124,7 @@ def test_config_set_failure_exits_1_with_partial_success(tmp_path, monkeypatch, 
         cwd=str(repo),
         capture_output=True,
         encoding="utf-8",
+        **no_console_creationflags(),
     )
     assert res.returncode != 0
 
@@ -141,6 +144,7 @@ def test_global_scope_does_not_require_git_repo(tmp_path, monkeypatch):
         ["git", "config", "--global", "--get", "gc.auto"],
         capture_output=True,
         encoding="utf-8",
+        **no_console_creationflags(),
     )
     assert res.stdout.strip() == "0"
 
@@ -148,6 +152,7 @@ def test_global_scope_does_not_require_git_repo(tmp_path, monkeypatch):
         ["git", "config", "--global", "--get", "core.checkStat"],
         capture_output=True,
         encoding="utf-8",
+        **no_console_creationflags(),
     )
     assert res2.stdout.strip() == "minimal"
 
@@ -184,6 +189,7 @@ def test_global_scope_setting_written_machine_wide_from_repo_invocation(
         ["git", "config", "--global", "--get", "core.checkStat"],
         capture_output=True,
         encoding="utf-8",
+        **no_console_creationflags(),
     )
     assert res.stdout.strip() == "minimal"
 
@@ -192,6 +198,7 @@ def test_global_scope_setting_written_machine_wide_from_repo_invocation(
         cwd=str(repo),
         capture_output=True,
         encoding="utf-8",
+        **no_console_creationflags(),
     )
     assert local.returncode != 0
 
@@ -214,6 +221,7 @@ def test_repo_scope_setting_follows_invocation_both_modes(tmp_path, monkeypatch)
         ["git", "config", "--global", "--get", "gc.auto"],
         capture_output=True,
         encoding="utf-8",
+        **no_console_creationflags(),
     )
     assert res.stdout.strip() == "0"
 
@@ -236,6 +244,7 @@ def test_setting_skipped_for_platform(tmp_path, monkeypatch):
         cwd=str(repo),
         capture_output=True,
         encoding="utf-8",
+        **no_console_creationflags(),
     )
     assert res.returncode != 0
     assert _git(repo, "config", "--get", "gc.auto").stdout.strip() == "0"

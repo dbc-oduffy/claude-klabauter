@@ -18,6 +18,7 @@ from coordinator_core.ops.check_auto_memory_drained import (
     _slugify_repo_root,
     main,
 )
+from coordinator_core.win_portability import no_console_passthrough_kwargs
 
 # Spawns a real external process; runs at cadence gates, not per-commit.
 # Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
@@ -35,7 +36,7 @@ def _run(*extra_args: str) -> tuple[int, str, str]:
 
 
 def _init_repo(root: Path) -> None:
-    subprocess.run(["git", "init", "-q", str(root)], check=True)
+    subprocess.run(["git", "init", "-q", str(root)], check=True, **no_console_passthrough_kwargs())
 
 
 def test_slugify_replaces_path_separators_with_dashes() -> None:

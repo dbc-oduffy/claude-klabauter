@@ -31,13 +31,15 @@ from coordinator_core.ops.promote_shipped_in_flight_stubs import (
     _select_best_sha,
     main,
 )
+from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 
 def _run(*args, cwd=None, check=True):
     return subprocess.run(
-        list(args), cwd=cwd, check=check, capture_output=True, text=True
+        list(args), cwd=cwd, check=check, capture_output=True, text=True,
+        **no_console_creationflags(),
     )
 
 

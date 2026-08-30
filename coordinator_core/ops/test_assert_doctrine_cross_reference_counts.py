@@ -34,6 +34,7 @@ import coordinator_core.ops.assert_doctrine_cross_reference_counts  # noqa: F401
 
 from coordinator_core.ipc import _REGISTRY
 from coordinator_core.ops.assert_doctrine_cross_reference_counts import _handler
+from coordinator_core.win_portability import no_console_creationflags
 
 # Spawns a real external process; runs at cadence gates, not per-commit.
 # Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
@@ -47,12 +48,13 @@ def _init_repo(tmp_path: Path) -> Path:
     """Init a throwaway git repo under tmp_path and return its common dir."""
     root = tmp_path / "repo"
     root.mkdir()
-    subprocess.run(["git", "init", "-q"], cwd=str(root), check=True, capture_output=True)
-    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=str(root), check=True, capture_output=True)
-    subprocess.run(["git", "config", "user.name", "Test"], cwd=str(root), check=True, capture_output=True)
+    subprocess.run(["git", "init", "-q"], cwd=str(root), check=True, capture_output=True, **no_console_creationflags())
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=str(root), check=True, capture_output=True, **no_console_creationflags())
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=str(root), check=True, capture_output=True, **no_console_creationflags())
     result = subprocess.run(
         ["git", "rev-parse", "--path-format=absolute", "--git-common-dir"],
         cwd=str(root), capture_output=True, check=True,
+        **no_console_creationflags(),
     )
     return Path(result.stdout.decode().strip()).resolve()
 
@@ -154,6 +156,7 @@ def test_idempotent_double_invocation(tmp_path):
     assert first == second == {"ok": True, "mismatches": []}
     status = subprocess.run(
         ["git", "status", "--porcelain"], cwd=str(worktree), capture_output=True, check=True,
+        **no_console_creationflags(),
     )
     # Untracked seed file only — the op itself must never stage/commit/mutate.
     assert status.stdout.decode().strip() == "?? skills/"

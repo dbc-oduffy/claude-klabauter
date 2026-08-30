@@ -27,6 +27,7 @@ import pytest
 import yaml
 
 from coordinator_core.dispatch.provision import _build_sidecar_text
+from coordinator_core.win_portability import no_console_passthrough_kwargs
 from coordinator_core.frontmatter.schema_validate import parse_frontmatter
 from coordinator_core.frontmatter.schema_validate import parse_yaml
 from coordinator_core.subagent_sandbox.provision_report import _build_doc_text
@@ -105,11 +106,12 @@ def _sanitize_expected(seg: str) -> str:
 def git_repo(tmp_path: Path) -> Path:
     """A real, empty git repo rooted at tmp_path (so resolve_git_root behaves
     exactly as it does against a production checkout)."""
-    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True, **no_console_passthrough_kwargs())
     subprocess.run(
-        ["git", "config", "user.email", "test@example.com"], cwd=tmp_path, check=True
+        ["git", "config", "user.email", "test@example.com"], cwd=tmp_path, check=True,
+        **no_console_passthrough_kwargs(),
     )
-    subprocess.run(["git", "config", "user.name", "Test"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=tmp_path, check=True, **no_console_passthrough_kwargs())
     return tmp_path
 
 

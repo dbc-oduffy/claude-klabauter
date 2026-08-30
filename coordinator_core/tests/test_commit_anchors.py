@@ -24,6 +24,7 @@ from typing import List
 
 import pytest
 
+from coordinator_core.win_portability import no_console_creationflags
 
 # Declared, not excused: the "commit.anchors" op reads Plan/Plan-Id/Deliverable-Id
 # trailers off real STAGED DIFF content and asserts it performs no git writes
@@ -56,6 +57,7 @@ def _git(args: List[str], cwd: Path) -> subprocess.CompletedProcess:
         capture_output=True,
         encoding="utf-8",
         check=True,
+        **no_console_creationflags(),
     )
 
 
@@ -78,6 +80,7 @@ def _common_dir(worktree: Path) -> Path:
         capture_output=True,
         encoding="utf-8",
         check=True,
+        **no_console_creationflags(),
     )
     return Path(result.stdout.strip())
 
@@ -954,6 +957,7 @@ class TestComputeOnly:
         before = subprocess.run(
             ["git", "status", "--porcelain"],
             cwd=str(tmp_path), capture_output=True, encoding="utf-8", check=True,
+            **no_console_creationflags(),
         ).stdout
 
         # Capture state/ mtime snapshot (if it exists)
@@ -976,6 +980,7 @@ class TestComputeOnly:
         after = subprocess.run(
             ["git", "status", "--porcelain"],
             cwd=str(tmp_path), capture_output=True, encoding="utf-8", check=True,
+            **no_console_creationflags(),
         ).stdout
         assert before == after, (
             f"git status changed after op (COMPUTE_ONLY violation):\n"

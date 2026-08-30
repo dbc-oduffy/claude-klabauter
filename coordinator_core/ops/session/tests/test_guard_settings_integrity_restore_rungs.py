@@ -43,6 +43,7 @@ from coordinator_core.ops.session import guard_settings_integrity as _gsi
 from coordinator_core.ops.session.guard_settings_integrity import (
     evaluate_settings_integrity,
 )
+from coordinator_core.win_portability import no_console_creationflags
 
 # Spawns a real external process; runs at cadence gates, not per-commit.
 # Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
@@ -173,6 +174,7 @@ def _git(*args: str, cwd: Path) -> None:
         check=True,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
+        **no_console_creationflags(),
     )
 
 

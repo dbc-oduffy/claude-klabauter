@@ -57,6 +57,7 @@ from coordinator_core.bash_guards import block_subagent_guard_grant
 from coordinator_core.bash_guards import block_noncanonical_branch_creation
 from coordinator_core.bash_guards import guard_branch_set_precedence
 from coordinator_core.bash_guards import guard_longlived_branch_naming
+from coordinator_core.win_portability import no_console_creationflags
 
 # Spawns real `git` subprocesses (the revert guard's own status/toplevel
 # oracles) -- cadence-gated, matching the sibling
@@ -82,14 +83,14 @@ def repo_with_peer_work(tmp_path: Path) -> Path:
     the exact state an unscoped `git stash` silently sweeps."""
     repo = tmp_path / "shared-tree"
     (repo / "state").mkdir(parents=True)
-    subprocess.run(["git", "init", "-q"], cwd=str(repo), check=True, capture_output=True)
-    subprocess.run(["git", "config", "user.email", "t@t"], cwd=str(repo), check=True, capture_output=True)
-    subprocess.run(["git", "config", "user.name", "t"], cwd=str(repo), check=True, capture_output=True)
+    subprocess.run(["git", "init", "-q"], cwd=str(repo), check=True, capture_output=True, **no_console_creationflags())
+    subprocess.run(["git", "config", "user.email", "t@t"], cwd=str(repo), check=True, capture_output=True, **no_console_creationflags())
+    subprocess.run(["git", "config", "user.name", "t"], cwd=str(repo), check=True, capture_output=True, **no_console_creationflags())
 
     peer_file = repo / "state" / "peer-in-flight.md"
     peer_file.write_text("committed baseline\n", encoding="utf-8")
-    subprocess.run(["git", "add", "-A"], cwd=str(repo), check=True, capture_output=True)
-    subprocess.run(["git", "commit", "-qm", "baseline"], cwd=str(repo), check=True, capture_output=True)
+    subprocess.run(["git", "add", "-A"], cwd=str(repo), check=True, capture_output=True, **no_console_creationflags())
+    subprocess.run(["git", "commit", "-qm", "baseline"], cwd=str(repo), check=True, capture_output=True, **no_console_creationflags())
 
     peer_file.write_text("committed baseline\npeer's in-flight edit\n", encoding="utf-8")
     return repo

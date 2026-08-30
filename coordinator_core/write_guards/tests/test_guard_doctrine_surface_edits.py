@@ -31,6 +31,7 @@ import pytest
 
 from coordinator_core.session import harness_registry as hr
 from coordinator_core.write_guards import guard_doctrine_surface_edits as guard
+from coordinator_core.win_portability import no_console_creationflags
 
 # Real git is load-bearing for two tests below (test_sentinel_is_gitignored_
 # in_this_repo, test_sentinel_is_not_tracked_in_this_repo): they assert on
@@ -187,11 +188,11 @@ def test_sentinel_is_gitignored_in_this_repo():
     repo_root = subprocess.run(
         ["git", "rev-parse", "--show-toplevel"],
         capture_output=True, text=True, check=True,
-    ).stdout.strip()
+    **no_console_creationflags()).stdout.strip()
     result = subprocess.run(
         ["git", "check-ignore", "-q", _SENTINEL_NAME],
         cwd=repo_root, capture_output=True,
-    )
+    **no_console_creationflags())
     assert result.returncode == 0, (
         f"{_SENTINEL_NAME} is not gitignored -- a committed sentinel arrives "
         "with a fresh mtime on every checkout, which _sentinel_state reads as "
@@ -203,11 +204,11 @@ def test_sentinel_is_not_tracked_in_this_repo():
     repo_root = subprocess.run(
         ["git", "rev-parse", "--show-toplevel"],
         capture_output=True, text=True, check=True,
-    ).stdout.strip()
+    **no_console_creationflags()).stdout.strip()
     tracked = subprocess.run(
         ["git", "ls-files", "--error-unmatch", _SENTINEL_NAME],
         cwd=repo_root, capture_output=True, text=True,
-    )
+    **no_console_creationflags())
     assert tracked.returncode != 0, (
         f"{_SENTINEL_NAME} is TRACKED -- gitignore does not untrack an "
         "already-committed path. Run `git rm --cached` on it."

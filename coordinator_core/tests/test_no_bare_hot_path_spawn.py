@@ -45,6 +45,54 @@ single named constant this gate's scope lives in -- widening it was a
 one-line edit to that tuple plus a re-run, no rewrite of the detection logic
 below, per the plan's own C6 body.
 
+STAGE 3 — TEST-TREE ARM. `test_no_bare_hot_path_spawn` (and the production
+`find_bare_hot_path_spawns` collector it calls) skips every
+`is_test_tree_site` path outright — by design, since a test fixture spawning
+`git` to build a scratch repo is common and not itself "the hot path". That
+skip means a bare, console-flashing spawn landing in a test file has never
+been gated at all. `find_bare_test_tree_spawns`/`test_no_bare_test_tree_spawn`
+are the mirror-image collector/gate for exactly that population: same
+detection logic (imported, not re-derived — this module's own stage-1/2
+precedent), same `discover_source_files` traversal, `is_test_tree_site`
+inverted (KEEP the test-tree paths instead of skipping them). Scope defaults
+to the same `_GATE_SCOPE_DIRS` the production arm uses (Review:
+overengineering-reviewer -- a dedicated `_TEST_TREE_GATE_SCOPE_DIRS`
+constant used to exist here whose one value was "no scoping", i.e. no
+different from `_GATE_SCOPE_DIRS`'s own default); a caller widening the
+test-tree arm's scope independently passes an explicit `scope_dirs=`.
+
+Reasoned, named exemptions for the test-tree arm (none currently resolve to
+an in-scope test-tree file, so `find_bare_test_tree_spawns`'s `exemptions`
+defaults to an empty set rather than naming a dedicated,
+permanently-empty module constant — named here per this module's own
+negative-spec convention rather than left silent, same reasoning as
+`_EXEMPT_CALL_SITES` above):
+
+  - `coordinator_core/ops/verify_no_powershell_flash.py`'s
+    `subprocess.run(...)` — NOT a test-tree file (`is_test_tree_site` is
+    False: no `tests/` component, no `test_` basename), so this arm never
+    walks it at all. Named here anyway because its reason — "console
+    behaviour is the thing under test, suppressing it would corrupt the
+    measurement" — is exactly the shape of reason a genuine test-tree
+    exemption would carry, and it is already compliant-by-tag
+    (`# popup-intentional-last-resort`) under the production arm.
+  - The `# popup-intentional-last-resort`-tagged site in
+    `coordinator_core/win_portability.py` — also not a test-tree file, also
+    already compliant-by-tag under the production arm this module already
+    runs. Named for the same reason as above.
+  - Any `shell=True` site this arm's sweep skipped because it carries a
+    `creationflags=`/`**no_console_creationflags()` kwarg: `CREATE_NO_WINDOW`
+    suppresses the console of the process CreateProcess actually launches,
+    which under `shell=True` on Windows is `cmd.exe`, not the ultimate
+    command — the flag is real but does not, by itself, prove the whole
+    chain is console-free. A repo-wide AST sweep at 2026-08-30 (see this
+    commit) found ZERO test-tree call sites combining `shell=True` with a
+    creationflags-shaped kwarg, so there is nothing to list by
+    `(relpath, lineno)` yet. Left named rather than silent so the next
+    `shell=True`-carrying test fixture that also reaches for
+    `no_console_creationflags()` gets a human decision instead of a
+    false-green pass.
+
 Definition of "bare" (per plan C6 body): a subprocess spawn call with no
 `creationflags=` keyword and no double-star kwargs splat that resolves to
 the `no_console_creationflags()` primitive (directly, via a module-scope
@@ -105,6 +153,15 @@ REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 #: C6/C10. "" matches every discovered relpath under the scan root.
 #: Paths are `coordinator_core`-relative, POSIX-separated.
 _GATE_SCOPE_DIRS: tuple[str, ...] = ("",)
+
+# Review: overengineering-reviewer -- `_TEST_TREE_GATE_SCOPE_DIRS` used to be
+# a second, separately-defined scope tuple whose one value ("" -- no
+# scoping) only mirrored `_GATE_SCOPE_DIRS`'s shape rather than expressing a
+# real, distinct need. `find_bare_test_tree_spawns` now defaults its
+# `scope_dirs` param to `_GATE_SCOPE_DIRS` directly; widen the test-tree
+# arm's scope independently of the production arm's by passing an explicit
+# `scope_dirs=` argument at the call site, the same way any other
+# non-default scoping call already works.
 
 #: Spawn function names, keyed by the module they must resolve to. `os.system`
 #: and `os.popen` can never carry `creationflags=` (no such parameter exists
@@ -188,6 +245,47 @@ def _dict_has_creationflags_key(node: ast.expr) -> bool:
     )
 
 
+def _splats_a_no_console_source(keywords: list[ast.keyword], known: set[str]) -> bool:
+    """True when a `**` splat in `keywords` carries the suppression primitive.
+
+    NOT optional sugar: the builder shape this recognises --
+    ``kwargs = dict(cwd=..., check=True, **no_console_creationflags())``
+    followed by ``subprocess.run([...], **kwargs)`` -- is the form ten
+    already-correct call sites in `coordinator_core/git/tests/` use, and
+    without this the gate reports every one of them as a bare spawn. A
+    detector that cannot see through one level of the codebase's own
+    prevailing idiom manufactures work on correct code, which is the same
+    class of error as missing a real one."""
+
+    for kw in keywords:
+        if kw.arg is not None:
+            continue
+        target = kw.value.func if isinstance(kw.value, ast.Call) else kw.value
+        func_name = _call_func_name(target)
+        if func_name is not None and _is_no_console_shaped(func_name):
+            return True
+        if isinstance(kw.value, ast.Name) and kw.value.id in known:
+            return True
+    return False
+
+
+def _dict_splats_a_no_console_source(node: ast.Dict, known: set[str]) -> bool:
+    """The dict-literal twin of `_splats_a_no_console_source` --
+    ``{**no_console_creationflags(), "cwd": ...}``. A `None` key is how
+    `ast` spells `**value` inside a dict display."""
+
+    for key, value in zip(node.keys, node.values):
+        if key is not None:
+            continue
+        target = value.func if isinstance(value, ast.Call) else value
+        func_name = _call_func_name(target)
+        if func_name is not None and _is_no_console_shaped(func_name):
+            return True
+        if isinstance(value, ast.Name) and value.id in known:
+            return True
+    return False
+
+
 def _collect_no_console_names(stmts: list[ast.stmt]) -> set[str]:
     """Resolution of `NAME = no_console_creationflags(...)`-shaped,
     `NAME = {"creationflags": ...}`-shaped, and `NAME["creationflags"] =
@@ -217,6 +315,12 @@ def _collect_no_console_names(stmts: list[ast.stmt]) -> set[str]:
                 if isinstance(value, ast.Call):
                     func_name = _call_func_name(value.func)
                     resolved = func_name is not None and _is_no_console_shaped(func_name)
+                    if not resolved:
+                        resolved = _splats_a_no_console_source(value.keywords, names)
+                elif isinstance(value, ast.Dict):
+                    resolved = _dict_has_creationflags_key(value) or _dict_splats_a_no_console_source(
+                        value, names
+                    )
                 elif _dict_has_creationflags_key(value):
                     resolved = True
                 if resolved:
@@ -253,6 +357,15 @@ def _collect_no_console_names(stmts: list[ast.stmt]) -> set[str]:
 #: primitive (C3/C4) or carries the inline `# popup-intentional-last-resort`
 #: tag, which this gate honours directly rather than via a duplicate register.
 _EXEMPT_CALL_SITES: set[tuple[str, int]] = set()
+
+# Review: overengineering-reviewer -- `_TEST_TREE_EXEMPT_CALL_SITES` used to
+# be a second, module-level, empty-by-construction registry mirroring
+# `_EXEMPT_CALL_SITES`'s shape for an arm that has never needed one. The
+# shared `_bare_spawns_in_population` engine already carries the exemption
+# set as a caller-supplied argument, so `find_bare_test_tree_spawns` passes
+# an inline `set()` default instead of naming a dedicated, permanently-empty
+# module constant. A real test-tree exemption, when one arrives, becomes a
+# literal `{(relpath, lineno), ...}` passed at that call site.
 
 
 @dataclasses.dataclass(frozen=True)
@@ -450,6 +563,51 @@ def _bare_spawns_in_file(
     return violations
 
 
+def _bare_spawns_in_population(
+    root: pathlib.Path,
+    scope_dirs: tuple[str, ...],
+    families: frozenset[str],
+    *,
+    want_test_tree: bool,
+    exemptions: set[tuple[str, int]],
+) -> list[BareSpawnSite]:
+    """Shared collector engine for both the production and test-tree arms
+    (Review: overengineering-reviewer -- `find_bare_hot_path_spawns`/
+    `find_bare_test_tree_spawns` were a line-for-line copy of this walk;
+    the only real differences were the `is_test_tree_site` polarity and
+    which exemption registry applied, so those are now parameters instead
+    of a duplicated function body).
+
+    `want_test_tree=False` reproduces `find_bare_hot_path_spawns`'s old
+    behaviour exactly (skip test-tree paths, apply `_EXEMPT_CALL_SITES`
+    inside `_bare_spawns_in_file`); `want_test_tree=True` reproduces
+    `find_bare_test_tree_spawns`'s (keep only test-tree paths, apply
+    the caller-supplied `exemptions` set after the fact, since
+    `_bare_spawns_in_file` only knows the production `_EXEMPT_CALL_SITES`
+    registry).
+    """
+    discovered, _excluded = discover_source_files(root, exclude=DEFAULT_EXCLUDE)
+
+    violations: list[BareSpawnSite] = []
+    for relpath, file_path in discovered:
+        if not _in_scope(relpath, scope_dirs):
+            continue
+
+        if is_test_tree_site(relpath) != want_test_tree:
+            continue
+
+        if not want_test_tree:
+            violations.extend(_bare_spawns_in_file(relpath, file_path, families))
+            continue
+
+        for site in _bare_spawns_in_file(relpath, file_path, families):
+            if (site.path, site.lineno) in exemptions:
+                continue
+            violations.append(site)
+
+    return violations
+
+
 def find_bare_hot_path_spawns(
     root: pathlib.Path,
     scope_dirs: tuple[str, ...] = _GATE_SCOPE_DIRS,
@@ -462,21 +620,40 @@ def find_bare_hot_path_spawns(
     Used against the real `coordinator_core/` tree (both the `subprocess`-
     only standing gate and the widened-family `designed_red` worklist) and
     against an isolated `tmp_path` fixture (this gate's own self-tests,
-    which all use the `subprocess`-only default).
+    which all use the `subprocess`-only default). Call-through onto the
+    shared `_bare_spawns_in_population` engine -- see its docstring.
     """
-    discovered, _excluded = discover_source_files(root, exclude=DEFAULT_EXCLUDE)
+    return _bare_spawns_in_population(
+        root, scope_dirs, families, want_test_tree=False, exemptions=_EXEMPT_CALL_SITES
+    )
 
-    violations: list[BareSpawnSite] = []
-    for relpath, file_path in discovered:
-        if not _in_scope(relpath, scope_dirs):
-            continue
 
-        if is_test_tree_site(relpath):
-            continue
+def find_bare_test_tree_spawns(
+    root: pathlib.Path,
+    scope_dirs: tuple[str, ...] = _GATE_SCOPE_DIRS,
+    families: frozenset[str] = _STANDING_GATE_FAMILIES,
+    exemptions: set[tuple[str, int]] | None = None,
+) -> list[BareSpawnSite]:
+    """STAGE 3 mirror of `find_bare_hot_path_spawns`: walk `root`, scoped to
+    `scope_dirs` and `families`, and return every bare (unsuppressed) spawn
+    site INSIDE the test tree (the population the production collector
+    skips). Call-through onto the shared `_bare_spawns_in_population`
+    engine, `is_test_tree_site` polarity inverted -- see that engine's
+    docstring and module docstring "STAGE 3".
 
-        violations.extend(_bare_spawns_in_file(relpath, file_path, families))
-
-    return violations
+    `exemptions` defaults to an empty set: no test-tree exemption has ever
+    resolved to an in-scope file (module docstring "STAGE 3 -- TEST-TREE
+    ARM"), so there is no dedicated, permanently-empty module constant to
+    default to any more (Review: overengineering-reviewer, `_TEST_TREE_
+    EXEMPT_CALL_SITES`).
+    """
+    return _bare_spawns_in_population(
+        root,
+        scope_dirs,
+        families,
+        want_test_tree=True,
+        exemptions=exemptions if exemptions is not None else set(),
+    )
 
 
 def _format_violation(site: BareSpawnSite) -> str:
@@ -532,6 +709,102 @@ def test_no_bare_hot_path_spawn():
     (`designed_red`, deselected by the fast tier `main` is protected by).
     """
     violations = find_bare_hot_path_spawns(REPO_ROOT / "coordinator_core")
+    assert violations == [], "\n\n".join(_format_violation(site) for site in violations)
+
+
+def find_double_console_suppressions(
+    root: pathlib.Path,
+) -> list[BareSpawnSite]:
+    """Spawn calls carrying TWO suppression sources at once.
+
+    `subprocess.run(argv, **_NOWIN, **no_console_creationflags())` is not
+    belt-and-braces -- both mappings carry a `creationflags` key, so Python
+    raises `TypeError: got multiple values for keyword argument
+    'creationflags'` when the call runs. It compiles, it imports, it passes
+    collection, and every "is this site suppressed?" check reads GREEN,
+    because a doubly-suppressed site is suppressed twice over. Only
+    executing it fails.
+
+    Why this exists as its own gate: the 2026-08-30 repo-wide sweep splatted
+    the primitive into 1,473 call sites and verified each one on six axes --
+    all of them asking whether a site was suppressed ENOUGH. None asked
+    whether it was suppressed twice, so 16 sites went in broken and took 64
+    tests in `coordinator_core/git/tests/` down with them. A detector that
+    can only see under-application will keep re-admitting the sweep's own
+    over-application."""
+
+    # Review: overengineering-reviewer -- was a THIRD, divergent file walk
+    # (`root.rglob("*.py")`), disagreeing with the other two arms of this
+    # gate about which files are in the repo. Routed through the same
+    # `discover_source_files`/`DEFAULT_EXCLUDE` population they share.
+    discovered, _excluded = discover_source_files(root, exclude=DEFAULT_EXCLUDE)
+
+    sites: list[BareSpawnSite] = []
+    for relpath, file_path in sorted(discovered):
+        try:
+            source = file_path.read_text(encoding="utf-8")
+            tree = ast.parse(source)
+        except (OSError, SyntaxError):
+            continue
+        if "no_console" not in source:
+            continue
+        module_names = _collect_no_console_names(tree.body)
+        scopes: list[tuple[ast.AST, set[str]]] = [(tree, module_names)]
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                scopes.append((node, module_names | _collect_no_console_names(node.body)))
+        seen: set[int] = set()
+        for scope_node, names in scopes:
+            for call in ast.walk(scope_node):
+                if not isinstance(call, ast.Call) or call.lineno in seen:
+                    continue
+                sources = 0
+                for kw in call.keywords:
+                    if kw.arg == "creationflags":
+                        sources += 1
+                        continue
+                    if kw.arg is not None:
+                        continue
+                    target = kw.value.func if isinstance(kw.value, ast.Call) else kw.value
+                    func_name = _call_func_name(target)
+                    if func_name is not None and _is_no_console_shaped(func_name):
+                        sources += 1
+                    elif isinstance(kw.value, ast.Name) and kw.value.id in names:
+                        sources += 1
+                if sources >= 2:
+                    seen.add(call.lineno)
+                    sites.append(BareSpawnSite(relpath, call.lineno, "<double>", "subprocess"))
+    return sites
+
+
+def test_no_double_console_suppression():
+    """Two suppression sources on one call is a runtime `TypeError`, not
+    redundancy -- see `find_double_console_suppressions`. Remove the added
+    splat; the pre-existing local mapping was already correct."""
+
+    violations = find_double_console_suppressions(REPO_ROOT / "coordinator_core")
+    assert violations == [], "\n".join(
+        f"{site.path}:{site.lineno} -- two `creationflags` sources on one spawn "
+        "call. Both mappings carry the key, so this raises `TypeError: got "
+        "multiple values for keyword argument 'creationflags'` when it runs. "
+        "Drop the redundant `**no_console_*()` splat and keep the local mapping."
+        for site in violations
+    )
+
+
+def test_no_bare_test_tree_spawn():
+    """STAGE 3 standing gate: no `subprocess` spawn inside the test tree
+    (`is_test_tree_site`) may be bare/unsuppressed either, except an explicit
+    `# popup-intentional-last-resort`-tagged site or an explicit
+    `exemptions=` entry passed to `find_bare_test_tree_spawns`. Deliberately
+    NOT `designed_red`:
+    per the dispatch instructions extending this gate, an existing bare
+    test-tree spawn is a real finding to report, not a population to wave
+    through -- unlike `test_widened_spawn_families_surface_known_preexisting_sites`
+    (a different, already-scoped-out family widening), this arm is not
+    given a standing exemption from failing.
+    """
+    violations = find_bare_test_tree_spawns(REPO_ROOT / "coordinator_core")
     assert violations == [], "\n\n".join(_format_violation(site) for site in violations)
 
 

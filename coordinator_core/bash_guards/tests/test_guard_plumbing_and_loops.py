@@ -75,6 +75,7 @@ import pytest
 
 from coordinator_core.bash_guards import guard_plumbing_and_loops as guard
 from coordinator_core.bash_guards._helpers import OVERRIDE_KEYS_DOC
+from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -490,7 +491,7 @@ class TestVerbatimHeadTailAlternativeIsRealAndEquivalent:
 
     def _run(self, cmd):
         return subprocess.run(
-            cmd, shell=True, capture_output=True, text=True, check=True
+            cmd, shell=True, capture_output=True, text=True, check=True, **no_console_creationflags()
         ).stdout
 
     def _alternative_stdout(self, original_cmd):

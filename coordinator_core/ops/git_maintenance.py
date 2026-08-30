@@ -130,7 +130,6 @@ Negative-spec:
 
 GENERATES = []  # mutates only git's own object store via git's own maintenance -- no tracked repo artifact
 
-import subprocess
 import sys
 import time
 from dataclasses import dataclass, field
@@ -138,9 +137,9 @@ from pathlib import Path
 from typing import Callable, List, Optional, Sequence
 
 from coordinator_core.git.repo_root import absolute_git_dir, git_common_dir
+from coordinator_core.git.run import GitResult, run_git
 from coordinator_core.ipc import register_op
 from coordinator_core.ops.reap_stale_locks import _env_float, _env_int, _file_size, _mtime_epoch
-from coordinator_core.win_portability import no_console_creationflags
 
 _PREFIX = "git-maintenance"
 
@@ -363,13 +362,8 @@ def sweep_orphan_packs(
     return OrphanPackSweep(reaped=reaped, failed=failed, skipped=skipped)
 
 
-def _git(repo: Path, *args: str) -> subprocess.CompletedProcess:
-    return subprocess.run(
-        ["git", "-C", str(repo), *args],
-        capture_output=True,
-        text=True,
-        **no_console_creationflags(),
-    )
+def _git(repo: Path, *args: str) -> GitResult:
+    return run_git(list(args), cwd=str(repo))
 
 
 def defer_reason(repo: Path, git_dir: Path) -> Optional[str]:

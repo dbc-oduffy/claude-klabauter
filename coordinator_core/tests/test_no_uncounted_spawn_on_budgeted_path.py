@@ -1300,8 +1300,10 @@ _UNCOUNTED_MEASURED_UNREACHED: dict[tuple[str, str], str] = {}
 #: `test_migrate_handoff_vocabulary.py`, `test_handoff_archive_transition_holder_live.py`,
 #: `test_handoff_reconcile_close_terminal_defects.py`, `test_handoff_reconcile_*.py`,
 #: `test_handoff_transition_*.py`, `test_invoke_from_argv.py`,
-#: `test_memo_transition_*.py`, `test_warm_start*.py`,
-#: `test_workday_drain_pending_push.py`): none of them contains a spawn-count assertion at all.
+#: `test_memo_transition_*.py`, `test_warm_start*.py`): none of them contains a spawn-count
+#: assertion at all. (`workday.drain_pending_push`'s own `test_workday_drain_pending_push.py`
+#: is gone -- the op itself is gravestoned 2026-08-30, C2 -- so it no longer belongs in this
+#: list either; see the `total_pairs` narrative below for the citation.)
 #:
 #: Building the missing companion fixture(s) for any of the 11 means writing to test files this
 #: chunk's `writes:` scope does NOT include (`coordinator_core/tests/test_no_uncounted_spawn_on_
@@ -1327,12 +1329,6 @@ _CLUSTER_D2_OPEN_DISPOSITION: dict[str, tuple[tuple[str, str, str, int], ...]] =
     "invoke.from_argv": (
         ("coordinator_core/ops/ceremony/detached_spawn.py", "spawn_detached", "<dynamic>", 0),
     ),
-    "workday.drain_pending_push": (
-        ("coordinator_core/hooks/auto_push.py", "_run_git", "<dynamic>", 0),
-        ("coordinator_core/hooks/auto_push.py", "push_once", "git", 0),
-        ("coordinator_core/hooks/auto_push.py", "_is_ancestor", "git", 0),
-        ("coordinator_core/hooks/auto_push.py", "_invoke_cockpit_publish", "<dynamic>", 0),
-    ),
 }
 
 #: Entrypoints for the 11 D2-open ops, resolved the same (relpath, func_name) shape
@@ -1343,9 +1339,6 @@ _CLUSTER_D2_OPEN_DISPOSITION: dict[str, tuple[tuple[str, str, str, int], ...]] =
 #: need to).
 _CLUSTER_D2_OPEN_ENTRYPOINTS: dict[str, tuple[str, str]] = {
     "invoke.from_argv": ("coordinator_core/ops/invoke_from_argv.py", "_invoke_from_argv"),
-    "workday.drain_pending_push": (
-        "coordinator_core/ops/workday_drain_pending_push.py", "_handler",
-    ),
 }
 
 #: The three cluster files this D2 disposition is scoped to -- matches the chunk's own `writes:`
@@ -1415,16 +1408,17 @@ def test_cluster_d2_open_disposition_matches_live_measurement():
         "_CLUSTER_D2_OPEN_DISPOSITION has drifted from the live tree's own cluster reachability "
         "(re-derive and update the dict, do not silently widen or narrow it):\n" + "\n".join(mismatches)
     )
-    assert total_pairs == 5, (
+    assert total_pairs == 1, (
         f"_CLUSTER_D2_OPEN_DISPOSITION now totals {total_pairs} (op, site) pairs, not the "
-        "5 left after 5ae46cc1b9 (a peer's own Kira pass) removed the auto_push reach entirely: deliverable.cascade_terminal, fleet.migrate_handoff_vocabulary, handoff.archive_transition, handoff.transition and memo.transition each measured live=[] and left this dict outright. Prior to that, 30 was left after the 2026-08-30 rot sweep: ceremony.post_commit_tail (5 pairs) and "
-        "handoff.reconcile_close_terminal (5 pairs) were both removed from every table in this "
-        "file, as was session.warm_start (1 pair, ops/session/warm_start.py deleted outright), "
-        "file once neither resolved to a live op -- post_commit_tail.py survives but registers "
-        "nothing, and handoff_reconcile_close_terminal.py is gone from the tree; neither key "
-        "appears in ops/_registry_map.py. 41 - 5 - 5 - 1 = 30, every pair attributed. Update "
-        "this constant deliberately if the shift is real and understood, never to silence a "
-        "drift you have not traced."
+        "1 left after 2026-08-30-who-pushes-and-when.md C2 gravestoned "
+        "workday.drain_pending_push outright (op, module, and test all deleted -- nothing "
+        "rides on it), removing its 4 pairs from this dict wholesale, leaving only "
+        "invoke.from_argv's single pair. Prior to that, 5 was left after 5ae46cc1b9 (a peer's "
+        "own Kira pass) removed the auto_push reach entirely: deliverable.cascade_terminal, "
+        "fleet.migrate_handoff_vocabulary, handoff.archive_transition, handoff.transition and "
+        "memo.transition each measured live=[] and left this dict outright. Update this "
+        "constant deliberately if the shift is real and understood, never to silence a drift "
+        "you have not traced."
     )
 
     for op_key in _CLUSTER_D2_OPEN_DISPOSITION:
@@ -5949,7 +5943,8 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     #   skew` import, which puts warm/skew.py::publish_lag's TWO git sites on
     #   the reachable path of every op that reaches auto_push -- hence the
     #   identical +2 on fleet.migrate_handoff_vocabulary, handoff.transition,
-    #   memo.transition and workday.drain_pending_push.
+    #   memo.transition and workday.drain_pending_push (that op's own row is
+    #   removed 2026-08-30, C2 -- op gravestoned, nothing left to pin).
     #   push.outstanding's 3->4 raise: pinned at 4, today's measured live count,
     #   cause unattributed -- full investigation narrative in
     #   state/bug-backlog/2026-08-30-the-spawn-ratchet-is-red-at-head-in-four-
@@ -6009,7 +6004,6 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     "workflow.fire": 6,
     "machine.hibernate": 4,
     "orientation.regenerate_cache": 4,
-    "workday.drain_pending_push": 6,
     "branch.merge_into_workstream": 3,
     "distill.assemble_disposal_manifest": 3,
     "push.outstanding": 4,

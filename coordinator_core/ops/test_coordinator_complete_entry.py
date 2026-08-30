@@ -22,6 +22,7 @@ import pytest
 
 from coordinator_core.ops import coordinator_complete_entry as m
 from coordinator_core.testing.doe_root import resolve_doe_root
+from coordinator_core.win_portability import no_console_creationflags
 
 # Declared, not excused: this file spawns real git because the module under test
 # writes real commit-completion state (frontmatter, idempotency guard) that its own
@@ -35,7 +36,7 @@ pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 
 def _git(args, cwd):
-    result = subprocess.run(["git"] + list(args), cwd=str(cwd), capture_output=True, text=True)
+    result = subprocess.run(["git"] + list(args), cwd=str(cwd), capture_output=True, text=True, **no_console_creationflags())
     assert result.returncode == 0, f"git {args} failed: {result.stderr}"
     return result
 

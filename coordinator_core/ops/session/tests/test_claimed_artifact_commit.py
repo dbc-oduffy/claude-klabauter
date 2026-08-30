@@ -29,18 +29,19 @@ import pytest
 from coordinator_core.git.commit import CommitRefused
 from coordinator_core.session import claim_index, core, scope
 from coordinator_core.ops.session import safe_commit_offer
+from coordinator_core.win_portability import no_console_creationflags, no_console_passthrough_kwargs
 
 # Real git spawn is load-bearing, same rationale as test_safe_commit_offer.py.
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 
 def _make_repo(tmp_path):
-    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
-    subprocess.run(["git", "config", "user.email", "t@example.com"], cwd=tmp_path, check=True)
-    subprocess.run(["git", "config", "user.name", "t"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "config", "user.email", "t@example.com"], cwd=tmp_path, check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "config", "user.name", "t"], cwd=tmp_path, check=True, **no_console_passthrough_kwargs())
     (tmp_path / "README.md").write_text("x")
-    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
-    subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=tmp_path, check=True, **no_console_passthrough_kwargs())
     return tmp_path
 
 
@@ -75,7 +76,7 @@ class TestAC6PeerIsolationSameDirectory:
 
         status = subprocess.run(
             ["git", "status", "--porcelain"], cwd=repo, capture_output=True, text=True
-        ).stdout
+        , **no_console_creationflags()).stdout
         assert "state/peer.txt" in status  # still untracked, never committed
         assert "state/mine.txt" not in status  # ours landed
 
@@ -127,7 +128,7 @@ class TestDegradedOrIndeterminateCommitsNothing:
 
         status = subprocess.run(
             ["git", "status", "--porcelain"], cwd=repo, capture_output=True, text=True
-        ).stdout
+        , **no_console_creationflags()).stdout
         assert "mine.py" in status  # never committed, even though uncontested
 
     def test_degraded_ownership_read_skips_the_whole_call(self, tmp_path, monkeypatch):
@@ -297,5 +298,5 @@ class TestDirtyPathAlreadyDirtyFromAnotherWriterFailsClosed:
 
         status = subprocess.run(
             ["git", "status", "--porcelain"], cwd=repo, capture_output=True, text=True
-        ).stdout
+        , **no_console_creationflags()).stdout
         assert "contested.py" in status  # withheld, never committed

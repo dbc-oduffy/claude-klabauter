@@ -46,6 +46,7 @@ from http.server import ThreadingHTTPServer
 import pytest
 
 from coordinator_core.warm import cookie, skew, supervisor
+from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [
     pytest.mark.skipif(
@@ -79,7 +80,7 @@ def _spawn_elapsed_ms(argv, **kwargs) -> float:
     half -- is structural: one curl process per delivery, asserted separately.
     """
     start = time.perf_counter()
-    subprocess.run(argv, capture_output=True, **kwargs)
+    subprocess.run(argv, capture_output=True, **kwargs, **no_console_creationflags())
     return (time.perf_counter() - start) * 1000.0
 
 
@@ -133,6 +134,7 @@ def test_curl_reaches_the_credentialed_listener_using_only_the_config(
         ],
         capture_output=True,
         text=True,
+        **no_console_creationflags(),
     )
     assert proc.returncode == 0, proc.stderr
     assert proc.stdout.strip().endswith("200")
@@ -159,6 +161,7 @@ def test_an_uncredentialed_curl_is_refused_by_the_same_listener(
         ],
         capture_output=True,
         text=True,
+        **no_console_creationflags(),
     )
     assert proc.stdout.strip().endswith("401")
 

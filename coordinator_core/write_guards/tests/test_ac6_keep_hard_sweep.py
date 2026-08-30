@@ -46,6 +46,10 @@ import pytest
 from coordinator_core.bash_guards import dispatch as bash_dispatch
 from coordinator_core.bash_guards.dispatch import AdvisoryValue, GuardBand
 from coordinator_core.write_guards import engine as write_engine
+from coordinator_core.win_portability import (
+    no_console_creationflags,
+    no_console_passthrough_kwargs,
+)
 
 # Spawns a real external process; runs at cadence gates, not per-commit.
 # Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
@@ -157,6 +161,7 @@ def _has_baseline() -> bool:
         ["git", "cat-file", "-e", _BASELINE],
         cwd=str(_REPO_ROOT),
         capture_output=True,
+        **no_console_creationflags(),
     )
     if result.returncode != 0:
         return False
@@ -165,6 +170,7 @@ def _has_baseline() -> bool:
             ["git", "cat-file", "-e", sha],
             cwd=str(_REPO_ROOT),
             capture_output=True,
+            **no_console_creationflags(),
         )
         if result.returncode != 0:
             return False
@@ -193,6 +199,7 @@ def _diff_is_empty(rel_path: str) -> bool:
         result = subprocess.run(
             ["git", "diff", "--quiet", "%s^..%s" % (sha, sha), "--", rel_path],
             cwd=str(_REPO_ROOT),
+            **no_console_passthrough_kwargs(),
         )
         if result.returncode != 0:
             return False

@@ -15,6 +15,7 @@ from pathlib import Path
 
 from coordinator_core.ops import ownership_index
 from coordinator_core.session import claims
+from coordinator_core.win_portability import no_console_creationflags
 
 import pytest
 
@@ -27,7 +28,9 @@ pytestmark = [
 
 
 def _git(repo: Path, *args: str) -> None:
-    subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True)
+    subprocess.run(
+        ["git", *args], cwd=repo, check=True, capture_output=True, **no_console_creationflags()
+    )
 
 
 def _init_repo(repo: Path) -> None:

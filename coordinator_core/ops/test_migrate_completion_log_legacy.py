@@ -17,6 +17,7 @@ import subprocess
 import pytest
 
 from coordinator_core.ops.migrate_completion_log_legacy import main
+from coordinator_core.win_portability import no_console_creationflags
 
 # Spawns a real external process; runs at cadence gates, not per-commit.
 # Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
@@ -27,7 +28,13 @@ pytestmark = [
 
 
 def _git(args, cwd):
-    result = subprocess.run(["git"] + args, cwd=str(cwd), capture_output=True, text=True)
+    result = subprocess.run(
+        ["git"] + args,
+        cwd=str(cwd),
+        capture_output=True,
+        text=True,
+        **no_console_creationflags(),
+    )
     assert result.returncode == 0, f"git {args} failed: {result.stderr}"
     return result
 

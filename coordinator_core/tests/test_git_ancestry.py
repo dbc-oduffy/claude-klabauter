@@ -32,6 +32,7 @@ from typing import List
 import pytest
 
 from coordinator_core.git_ancestry import is_covered, is_ancestor, _is_ancestor
+from coordinator_core.win_portability import no_console_creationflags
 
 # Spawns a real external process; runs at cadence gates, not per-commit.
 # Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
@@ -53,6 +54,7 @@ def _git(args: List[str], cwd: Path) -> subprocess.CompletedProcess:
         capture_output=True,
         encoding="utf-8",
         check=True,
+        **no_console_creationflags(),
     )
 
 
@@ -65,6 +67,7 @@ def _make_commit(repo: Path, message: str) -> str:
         capture_output=True,
         encoding="utf-8",
         check=True,
+        **no_console_creationflags(),
     )
     return result.stdout.strip()
 

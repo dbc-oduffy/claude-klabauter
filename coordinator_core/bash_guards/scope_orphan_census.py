@@ -80,9 +80,10 @@ import argparse
 import json
 import os
 import re
-import subprocess
 from dataclasses import dataclass, field
 from typing import Dict, Iterable, Iterator, List, Optional
+
+from coordinator_core.git.run import run_git
 
 __all__ = [
     "OrphanEvent",
@@ -103,8 +104,6 @@ _CAUSES = (
     "unrecorded-write",
     "genuinely-unowned",
 )
-
-_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 _OP_OUTPUT_PREFIX_RE = re.compile(
     r"""['"](state/[A-Za-z0-9_./-]+|archive/[A-Za-z0-9_./-]+)['"]"""
@@ -242,15 +241,8 @@ def iter_orphan_events(
 
 def _git_tracked_at_head(git_root: str, path: str) -> bool:
     """True if `path` is tracked at HEAD (used to detect deletions)."""
-    try:
-        result = subprocess.run(
-            ["git", "ls-files", "--error-unmatch", "--", path],
-            cwd=git_root,
-            capture_output=True,
-            text=True,
-            creationflags=_NO_WINDOW,
-        )
-    except OSError:
+    result = run_git(["ls-files", "--error-unmatch", "--", path], cwd=git_root)
+    if result.returncode == 127:
         # Unreadable git state must not manufacture a deletion verdict --
         # fail toward "cannot confirm deletion" so classify_cause() falls
         # through to a later, non-destructive bucket.

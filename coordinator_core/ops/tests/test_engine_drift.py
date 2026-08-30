@@ -35,6 +35,7 @@ from coordinator_core.ops.engine_drift import (
     _git_is_behind,
     classify_drift,
 )
+from coordinator_core.win_portability import no_console_creationflags
 
 import pytest
 
@@ -167,14 +168,16 @@ class TestGitIsBehindRealAncestry:
         # MIN_KNOWN_GOOD_SHA is an ancestor of this checkout's HEAD by construction —
         # the floor is a committed-in-the-past SHA relative to any checkout built on it.
         head = subprocess.run(
-            ["git", "rev-parse", "HEAD"], capture_output=True, text=True, cwd="coordinator_core"
+            ["git", "rev-parse", "HEAD"], capture_output=True, text=True, cwd="coordinator_core",
+            **no_console_creationflags(),
         ).stdout.strip()
         result = _git_is_behind(FLOOR, head)
         assert result is True
 
     def test_descendant_sha_returns_false(self):
         head = subprocess.run(
-            ["git", "rev-parse", "HEAD"], capture_output=True, text=True, cwd="coordinator_core"
+            ["git", "rev-parse", "HEAD"], capture_output=True, text=True, cwd="coordinator_core",
+            **no_console_creationflags(),
         ).stdout.strip()
         result = _git_is_behind(head, FLOOR)
         assert result is False

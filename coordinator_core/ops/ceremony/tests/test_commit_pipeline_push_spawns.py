@@ -36,12 +36,20 @@ import pytest
 
 import coordinator_core.ops.ceremony.git_native as git_native_mod
 from coordinator_core.ops.ceremony.push import push_with_retry
+from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 
 def _git(args: Sequence[str], cwd: Path) -> None:
-    subprocess.run(["git", *args], cwd=str(cwd), check=True, capture_output=True, text=True)
+    subprocess.run(
+        ["git", *args],
+        cwd=str(cwd),
+        check=True,
+        capture_output=True,
+        text=True,
+        **no_console_creationflags(),
+    )
 
 
 def _init_repo_with_pushed_upstream(tmp_path: Path) -> Path:

@@ -35,6 +35,7 @@ import pytest
 from coordinator_core.commit_ledger import store as ledger_store
 from coordinator_core.contract.cockpit_schema.entities.commit_closure import CommitClosure
 from coordinator_core.ops.emit.sections import commit_closures
+from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -52,6 +53,7 @@ def _run_git_or_raise(repo_root: Path, *args: str) -> str:
         capture_output=True,
         text=True,
         check=True,
+        **no_console_creationflags(),
     )
     return result.stdout.strip()
 

@@ -22,6 +22,7 @@ import pytest
 
 from coordinator_core.frontmatter.primitives import read_fm_field, split_frontmatter
 from coordinator_core.ops.cascade_baton_rows import resolve_baton_rows
+from coordinator_core.win_portability import no_console_creationflags
 
 # Spawns a real external process; runs at cadence gates, not per-commit.
 # Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
@@ -47,7 +48,7 @@ def _run_git(args: list[str], root: Path) -> subprocess.CompletedProcess:
         env=_GIT_ENV,
         timeout=15,
         stdin=subprocess.DEVNULL,
-    )
+    **no_console_creationflags())
 
 
 def _init_repo(repo: Path) -> None:

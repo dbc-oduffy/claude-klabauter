@@ -44,13 +44,14 @@ from coordinator_core.git.git_state import index_read_cache_scope
 from coordinator_core.ops.ceremony import git_native
 
 from .fixtures.real_git import make_diverged_path, real_git_repo
+from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 
 def _git(args: list[str], cwd: Path, **kwargs) -> subprocess.CompletedProcess:
     return subprocess.run(
-        ["git", *args], cwd=str(cwd), capture_output=True, text=True, check=True, **kwargs
+        ["git", *args], cwd=str(cwd), capture_output=True, text=True, check=True, **kwargs, **no_console_creationflags()
     )
 
 

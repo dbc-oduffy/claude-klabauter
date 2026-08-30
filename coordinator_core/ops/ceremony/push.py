@@ -9,11 +9,16 @@ no renames, no behaviour change from the code as it stood in
 Hosts: the `PUSH_MODE_*` / `PUSH_STATUS_*` vocabularies, `PushOutcome`,
 `push_with_retry` (reject-detect -> fetch -> rebase --onto -> re-push,
 bounded, never `--force`), `derive_push_status` / `derive_pushed_tristate`,
-`resolve_post_push_sha`, the GH013 push-protection sub-classification
+`resolve_post_push_sha`, and the GH013 push-protection sub-classification
 (`_is_push_reject` and its secret-scanning / rule-violation sub-checks --
 the spinoff's Finding 3, discharged here rather than in a separate chunk
-because the predicate travels with the retry ladder it guards), and
-`_drain_pending_push_after_sync`.
+because the predicate travels with the retry ladder it guards).
+
+`_drain_pending_push_after_sync` (the pending-push record's per-commit
+drain re-host) is GRAVESTONED 2026-08-30
+(docs/plans/2026-08-30-who-pushes-and-when.md C2): it had zero call sites
+and its own delegate, `auto_push.drain_pending_push`, is deleted in the
+same pass -- see that module's docstring for the full trace.
 
 `commit_pipeline.py` re-imports what it still needs from this module; its
 own callers are unaffected by this file existing.
@@ -21,7 +26,6 @@ own callers are unaffected by this file existing.
 
 from __future__ import annotations
 
-import logging
 import re
 import sys
 import time
@@ -190,6 +194,29 @@ _PUSH_MAX_RETRIES = 3
 #: ladder that does not fit is a cheaper ladder, never a wider number here. The
 #: network floor above is the one term nothing in this repo can shrink.
 PUSH_RETRY_BUDGET_SECS: float = 12.0
+
+#: C5 (2026-08-30, docs/plans/2026-08-30-the-cockpit-publish-rejoins-the-
+#: push-that-survived.md) -- the cadence sweep's OWN retry budget, separate
+#: from the interactive `PUSH_RETRY_BUDGET_SECS` above. The cadence used to
+#: inherit that constant by accident (nothing sized a cadence-specific
+#: number), and at `SWEEP_TOTAL_CEILING_SECS=60.0` / `12.0` that bought only
+#: five served repos before the ceiling was exhausted.
+#:
+#: SIZING: one attempt plus one retry is a fetch + local `rebase --onto` +
+#: re-push, not a second push alone -- against the same 2026-08-26
+#: measurements behind `PUSH_RETRY_BUDGET_SECS` (ls-remote p50 669.5ms, push
+#: --dry-run p50 753.9ms, quiet), that is ~2.2s before any load.
+#: `CEREMONY_PUSH_BUDGET_SECS` (1.2s) already documents what 1.2s buys in
+#: this codebase ("exactly ONE honest push attempt and no retry ladder"), so
+#: 2.0s is not enough headroom for a retry. 6.0 is roughly half of the
+#: interactive 12.0 (not a quarter) -- one attempt plus one retry with
+#: load-norm headroom kept. A cadence sweep that fails a repo this tick
+#: retries in `push_cadence.PUSH_CADENCE_INTERVAL_SECS` (600s) regardless,
+#: so it does not need the interactive ladder's full patience; that 600s
+#: retry is what keeps the publish guarantee intact while this budget
+#: shrinks. Ratchets in step with `push_cadence.SWEEP_TOTAL_CEILING_SECS`/
+#: `EXIT_SWEEP_CEILING_SECS`, never independently.
+CADENCE_PUSH_RETRY_BUDGET_SECS: float = 6.0
 
 #: The push budget for a CEREMONY op, which is a different job from the cadence
 #: ladder above and deliberately carries a different number.
@@ -436,6 +463,19 @@ class PushOutcome:
             (`git rev-list --count <pushed_range>`), or `None` under the
             exact same "unknown, not zero, not omitted" rule as
             `pushed_range` -- read together, never independently.
+        attempts -- how many push legs this ladder ACTUALLY ran before
+            returning, on the two non-landed paths a failure detector reads
+            (`failed`, `unconfirmed`) and on a budget-exhausted return.
+            Exists because `auto_push.log_failure` writes an `after <N>`
+            field into `.git/push-failures.log` and every reader of that log
+            takes N as measured. The cadence-sweep feed had no attempt count
+            to give and passed a literal `1`, so three months of
+            `cadence-sweep/... after 1` rows asserted a one-attempt ladder
+            that does not exist -- example-retrieval-repo-em read exactly that and
+            inferred an asymmetric ladder from it (memo 2026-08-30, § Problem
+            1). `None` is the explicit "this path never counted legs" sentinel
+            under the same rule as `pushed_count`, and `log_failure` renders
+            it `after ?` rather than substituting a number.
     """
 
     exit_code: int
@@ -446,6 +486,7 @@ class PushOutcome:
     message: Optional[str] = None
     pushed_range: Optional[str] = None
     pushed_count: Optional[int] = None
+    attempts: Optional[int] = None
 
 
 # ---------------------------------------------------------------------------
@@ -1385,6 +1426,7 @@ def push_with_retry(
                     f"git push: "
                     f"{_budget_exhausted_reason(attempt, budget_secs, last_reason)}"
                 ],
+                attempts=attempt,
             )
         push_result = (
             git_native.push(root)
@@ -1524,8 +1566,16 @@ def push_with_retry(
             break
 
     if last_indeterminate:
-        return PushOutcome(exit_code=last_exit_code, unconfirmed=[f"git push: {last_reason}"])
-    return PushOutcome(exit_code=last_exit_code, failed=[f"git push: {last_reason}"])
+        return PushOutcome(
+            exit_code=last_exit_code,
+            unconfirmed=[f"git push: {last_reason}"],
+            attempts=attempt + 1,
+        )
+    return PushOutcome(
+        exit_code=last_exit_code,
+        failed=[f"git push: {last_reason}"],
+        attempts=attempt + 1,
+    )
 
 
 def _resolve_pushed_range(
@@ -1613,37 +1663,3 @@ def derive_pushed_tristate(push_outcome: Optional[PushOutcome]) -> Optional[bool
     if status == PUSH_STATUS_FAILED:
         return False
     return None
-
-
-
-_LOG = logging.getLogger(__name__)
-
-
-def _drain_pending_push_after_sync(worktree_root: Union[str, Path]) -> None:
-    """Re-host `auto_push.drain_pending_push`'s per-commit call site.
-
-    opro-01 C-01. That drain used to ride at the head of every commit's own
-    detached `run_push_with_retry` -- "the NEXT commit fires this for free"
-    (see its own docstring, call site 1 of 3). Standing the post-commit hook
-    down so this op is the sole publisher would have taken that call site
-    with it, silently narrowing a durability mechanism to its two remaining
-    hosts (session boot, workday-start) as a side effect of a spawn-count
-    fix. Re-hosted here instead of accepted as collateral.
-
-    Called only AFTER a confirmed successful synchronous push, for two
-    reasons: the branch tip is already published at that point, so a record
-    covering this branch is moot rather than raced; and the network cost is
-    already paid, so this is not a new blocking call on the commit hot path.
-    Costs zero subprocesses when no record exists (`_read_pending_record`
-    returns None and it returns immediately), which is the ordinary case.
-
-    Best-effort by the same contract as everything else in that module: a
-    drain failure must never turn a landed, pushed commit into a reported
-    failure.
-    """
-    try:
-        from coordinator_core.hooks import auto_push
-
-        auto_push.drain_pending_push(str(worktree_root))
-    except Exception:
-        _LOG.debug("post-sync-push pending-push drain failed", exc_info=True)

@@ -20,6 +20,7 @@ from unittest.mock import patch
 import pytest
 
 from coordinator_core.ops import workday_surface_stale_stash_entries as mod
+from coordinator_core.win_portability import no_console_creationflags
 
 # Spawns a real external process; runs at cadence gates, not per-commit.
 # Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
@@ -31,7 +32,12 @@ pytestmark = [
 
 def _git(args, cwd, check=True):
     return subprocess.run(
-        ["git", *args], cwd=str(cwd), capture_output=True, text=True, check=check
+        ["git", *args],
+        cwd=str(cwd),
+        capture_output=True,
+        text=True,
+        check=check,
+        **no_console_creationflags(),
     )
 
 

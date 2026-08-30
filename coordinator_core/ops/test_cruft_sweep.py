@@ -31,6 +31,7 @@ from pathlib import Path
 import pytest
 
 from coordinator_core.ops import cruft_sweep
+from coordinator_core.win_portability import no_console_passthrough_kwargs
 
 # _init_git_repo below spawns real `git` via an aliased subprocess import
 # (`import subprocess as _subprocess`) -- SPAWN-RATCHET Rule 2 declaration,
@@ -334,13 +335,13 @@ def test_sweep_scratch_apply_batches_multiple_auto_prune_dirs(tmp_path):
 def _init_git_repo(repo_root: Path) -> None:
     import subprocess as _subprocess
 
-    _subprocess.run(["git", "init", "-q", str(repo_root)], check=True)
+    _subprocess.run(["git", "init", "-q", str(repo_root)], check=True, **no_console_passthrough_kwargs())
     _subprocess.run(
         ["git", "-C", str(repo_root), "config", "user.email", "test@example.com"],
-        check=True,
+        check=True, **no_console_passthrough_kwargs(),
     )
     _subprocess.run(
-        ["git", "-C", str(repo_root), "config", "user.name", "Test"], check=True,
+        ["git", "-C", str(repo_root), "config", "user.name", "Test"], check=True, **no_console_passthrough_kwargs(),
     )
 
 

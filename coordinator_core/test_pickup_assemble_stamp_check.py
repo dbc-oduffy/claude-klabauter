@@ -15,6 +15,7 @@ from pathlib import Path
 
 import coordinator_core.pickup_assemble as pa
 from coordinator_core.pickup_assemble.stamp_check import stamp_check
+from coordinator_core.win_portability import no_console_creationflags
 
 import pytest
 
@@ -33,6 +34,7 @@ def _git(repo: Path, *args: str) -> subprocess.CompletedProcess:
         text=True,
         timeout=15,
         stdin=subprocess.DEVNULL,
+        **no_console_creationflags(),
     )
 
 
@@ -63,6 +65,7 @@ def _canonical_body_sha(repo: Path, text: str) -> str:
         input=body.encode("utf-8"),
         capture_output=True,
         timeout=15,
+        **no_console_creationflags(),
     )
     assert result.returncode == 0, result.stderr
     return result.stdout.decode("utf-8").strip()

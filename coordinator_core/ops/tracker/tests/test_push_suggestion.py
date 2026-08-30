@@ -55,6 +55,7 @@ from coordinator_core.ops.tracker.push_suggestion import (
     _handler,
 )
 from coordinator_core import tracker_holder
+from coordinator_core.win_portability import no_console_creationflags
 
 
 def _run(coro):
@@ -71,6 +72,7 @@ def _make_git_repo(root: Path) -> Path:
             cwd=str(root),
             capture_output=True,
             check=True,
+            **no_console_creationflags(),
         )
 
     _git("init", "-b", "main")
@@ -240,6 +242,7 @@ def test_handler_peer_target_delivers_committed_envelope(monkeypatch, tmp_path):
     log = subprocess.run(
         ["git", "-C", str(peer), "log", "--oneline"],
         capture_output=True, text=True, check=True,
+        **no_console_creationflags(),
     )
     assert delivered_path.name not in log.stdout or "deliver sovereign-tracker event" in log.stdout
 
@@ -976,7 +979,8 @@ def _init_receiver_repo(root):
         ["commit", "-q", "--allow-empty", "-m", "seed"],
     ):
         subprocess.run(["git", "-C", str(root), *args], check=True,
-                       capture_output=True, stdin=subprocess.DEVNULL)
+                       capture_output=True, stdin=subprocess.DEVNULL,
+                       **no_console_creationflags())
 
 
 def test_failed_delivery_commit_leaves_envelope_unstaged_in_receiver(tmp_path, monkeypatch):
@@ -1007,6 +1011,7 @@ def test_failed_delivery_commit_leaves_envelope_unstaged_in_receiver(tmp_path, m
     staged = real_run(
         ["git", "-C", str(receiver), "diff", "--cached", "--name-only"],
         capture_output=True, text=True, stdin=subprocess.DEVNULL,
+        **no_console_creationflags(),
     ).stdout.split()
     assert rel_path not in staged, (
         f"envelope left STAGED in the receiver's index after a failed delivery "

@@ -12,6 +12,10 @@ import subprocess
 import pytest
 
 from coordinator_core.ops.resolve_baton_path import _resolve_baton_path_and_repo
+from coordinator_core.win_portability import (
+    no_console_creationflags,
+    no_console_passthrough_kwargs,
+)
 
 # Spawns a real external process; runs at cadence gates, not per-commit.
 # Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
@@ -23,9 +27,15 @@ pytestmark = [
 
 def _init_repo(path):
     path.mkdir(parents=True, exist_ok=True)
-    subprocess.run(["git", "init", "-q"], cwd=str(path), check=True)
-    subprocess.run(["git", "config", "user.email", "t@t"], cwd=str(path), check=True)
-    subprocess.run(["git", "config", "user.name", "t"], cwd=str(path), check=True)
+    subprocess.run(["git", "init", "-q"], cwd=str(path), check=True, **no_console_passthrough_kwargs())
+    subprocess.run(
+        ["git", "config", "user.email", "t@t"], cwd=str(path), check=True,
+        **no_console_passthrough_kwargs(),
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "t"], cwd=str(path), check=True,
+        **no_console_passthrough_kwargs(),
+    )
     return path
 
 
@@ -40,6 +50,7 @@ def _rev_parse_toplevel(cwd):
         capture_output=True,
         text=True,
         check=True,
+        **no_console_creationflags(),
     ).stdout.rstrip("\n")
 
 

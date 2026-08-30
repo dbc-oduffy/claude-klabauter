@@ -25,6 +25,7 @@ import subprocess
 import pytest
 
 from coordinator_core.bash_guards import dispatch_checks as dc
+from coordinator_core.win_portability import no_console_creationflags
 
 # Spawns a real external process; runs at cadence gates, not per-commit.
 # Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
@@ -41,6 +42,7 @@ def _git(*args: str, cwd: str) -> None:
         check=True,
         capture_output=True,
         text=True,
+        **no_console_creationflags(),
     )
 
 
@@ -118,6 +120,7 @@ def test_each_target_keeps_its_own_status(tmp_path):
         capture_output=True,
         text=True,
         check=False,
+        **no_console_creationflags(),
     )
     table = dc._attribute_porcelain(out.stdout, root, targets)
     assert table is not None, "the plain `XY <path>` shape must be attributable"

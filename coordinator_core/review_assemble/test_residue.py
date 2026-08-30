@@ -27,6 +27,7 @@ from coordinator_core.review_assemble.residue import (
     ResidueUsageError,
     brief,
 )
+from coordinator_core.win_portability import no_console_creationflags
 
 # Spawns a real external process; runs at cadence gates, not per-commit.
 # Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
@@ -43,6 +44,7 @@ def _git(repo: Path, *args: str) -> subprocess.CompletedProcess:
         text=True,
         timeout=15,
         stdin=subprocess.DEVNULL,
+        **no_console_creationflags(),
     )
 
 

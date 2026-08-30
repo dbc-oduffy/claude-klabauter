@@ -298,7 +298,7 @@ def test_sweep_repos_touches_only_the_served_set(tmp_path, monkeypatch):
         failed = []
         unconfirmed = []
 
-    def _fake_push_outstanding(root):
+    def _fake_push_outstanding(root, **kwargs):
         unserved_marker.append(root)
         return _Outcome()
 
@@ -332,26 +332,174 @@ def test_failed_push_feeds_the_failure_detector(tmp_path, monkeypatch):
     class _FailedOutcome:
         failed = ["git push: non-fast-forward"]
         unconfirmed = []
+        attempts = 3
 
-    monkeypatch.setattr(push_cadence, "push_outstanding", lambda root: _FailedOutcome())
+    monkeypatch.setattr(push_cadence, "push_outstanding", lambda root, **kw: _FailedOutcome())
 
     logged = []
     monkeypatch.setattr(
         push_cadence,
         "log_failure",
         lambda repo_root, branch, route, err_class, attempts, first_err, stderr_text: logged.append(
-            (repo_root, branch, route, err_class, first_err)
+            (repo_root, branch, route, err_class, attempts, first_err)
         ),
     )
 
     push_cadence._sweep_one(repo)
 
     assert len(logged) == 1
-    repo_root, branch, route, err_class, first_err = logged[0]
+    repo_root, branch, route, err_class, attempts, first_err = logged[0]
     assert branch == "work/x/2026-08-30"
     assert route == "cadence-sweep"
     assert err_class == "sweep-failed"
     assert "non-fast-forward" in first_err
+    # The ladder depth the outcome actually ran, never a literal -- this feed
+    # hardcoded 1 for three months and every reader of push-failures.log took
+    # that as measured (example-retrieval-repo-em memo, 2026-08-30).
+    assert attempts == 3
+
+
+def test_sweep_feed_reports_the_outcomes_own_attempt_count(tmp_path, monkeypatch):
+    # Regression guard for the fabricated `after 1`: whatever the ladder
+    # reports, including its explicit `None` unknown, reaches log_failure
+    # unchanged. A literal here re-manufactures the false asymmetry between the
+    # cadence-sweep and direct-push routes that this fix removed.
+    repo = _repo(tmp_path)
+    monkeypatch.setattr(push_cadence, "head_branch", lambda root: "work/x/2026-08-30")
+
+    seen = []
+    monkeypatch.setattr(
+        push_cadence,
+        "log_failure",
+        lambda *a, **kw: seen.append(a[4]),
+    )
+
+    for reported in (1, 2, 3, None):
+
+        class _Unconfirmed:
+            failed = []
+            unconfirmed = ["git push: timed out"]
+            attempts = reported
+
+        monkeypatch.setattr(push_cadence, "push_outstanding", lambda root, o=_Unconfirmed, **kw: o())
+        push_cadence._sweep_one(repo)
+
+    assert seen == [1, 2, 3, None]
+
+
+# ---------------------------------------------------------------------------
+# C5 -- the cadence sweep gets its own retry budget, separate from the
+# interactive one.
+# ---------------------------------------------------------------------------
+
+
+def test_sweep_one_passes_the_cadence_budget_not_the_interactive_one(tmp_path, monkeypatch):
+    """`_sweep_one` must hand `push_outstanding` the cadence's OWN, smaller
+    `CADENCE_PUSH_RETRY_BUDGET_SECS` -- never the interactive
+    `PUSH_RETRY_BUDGET_SECS` every other `push_outstanding` caller defaults
+    to. Pinned directly at the seam, not inferred from timing."""
+    from coordinator_core.ops.ceremony import push as push_mod
+
+    repo = _repo(tmp_path)
+    calls = []
+
+    def _fake_push_outstanding(root, **kwargs):
+        calls.append(kwargs)
+
+        class _Outcome:
+            failed = []
+            unconfirmed = []
+
+        return _Outcome()
+
+    monkeypatch.setattr(push_cadence, "push_outstanding", _fake_push_outstanding)
+
+    push_cadence._sweep_one(repo)
+
+    assert len(calls) == 1
+    assert calls[0].get("budget_secs") == push_mod.CADENCE_PUSH_RETRY_BUDGET_SECS
+    assert calls[0].get("budget_secs") != push_mod.PUSH_RETRY_BUDGET_SECS
+
+
+def test_sweep_repos_refuses_to_start_a_repo_it_cannot_finish(tmp_path):
+    """The (3) regression, pinned directly: a repo entered just under the
+    deadline used to still spend its full per-repo budget, making the true
+    worst case `total_ceiling_secs + per_repo_budget_secs` rather than the
+    ceiling itself. `sweep_repos` must now refuse to START a repo whose own
+    budget would run it past the deadline, even though `now < deadline`
+    still holds at that check."""
+    swept = []
+
+    def _fake_sweep_one(repo_root):
+        swept.append(repo_root)
+
+    # deadline = 0.0 + 10.0 = 10.0. The per-iteration check reads 6.0: still
+    # under the deadline (6.0 < 10.0) so the OLD check alone would proceed,
+    # but 6.0 + per_repo_budget_secs (6.0) = 12.0 > 10.0, so the new
+    # admission guard must refuse to start this repo.
+    clock_values = iter([0.0, 6.0])
+
+    def _clock():
+        return next(clock_values, 999.0)
+
+    import coordinator_core.warm.push_cadence as pc
+
+    orig_sweep_one = pc._sweep_one
+    try:
+        pc._sweep_one = _fake_sweep_one
+        repos = [_repo(tmp_path, "a")]
+        pc.sweep_repos(
+            repos,
+            total_ceiling_secs=10.0,
+            per_repo_budget_secs=6.0,
+            clock=_clock,
+        )
+    finally:
+        pc._sweep_one = orig_sweep_one
+
+    assert swept == []
+
+
+def test_sweep_total_ceiling_secs_is_under_fifteen_seconds():
+    assert push_cadence.SWEEP_TOTAL_CEILING_SECS < 15.0
+
+
+def test_exit_sweep_ceiling_secs_stays_tighter_than_the_idle_ceiling():
+    assert push_cadence.EXIT_SWEEP_CEILING_SECS < push_cadence.SWEEP_TOTAL_CEILING_SECS
+
+
+def test_cadence_budgeted_push_cut_mid_leg_reported_distinctly(tmp_path, monkeypatch):
+    """A cadence-budgeted push that is cut mid-leg (a genuine subprocess
+    timeout, `PushOutcome.unconfirmed`) must still be reported distinctly
+    from an ordinary observed failure -- never silently folded into
+    `sweep-failed`. `_feed_failure_detector`'s `err_class` is the signal a
+    later reader keys on."""
+    repo = _repo(tmp_path)
+    monkeypatch.setattr(push_cadence, "head_branch", lambda root: "work/x/2026-08-30")
+
+    class _UnconfirmedOutcome:
+        failed = []
+        unconfirmed = ["git push: timed out after 6s (...)"]
+        attempts = 1
+
+    monkeypatch.setattr(push_cadence, "push_outstanding", lambda root, **kw: _UnconfirmedOutcome())
+
+    logged = []
+    monkeypatch.setattr(
+        push_cadence,
+        "log_failure",
+        lambda repo_root, branch, route, err_class, attempts, first_err, stderr_text: logged.append(
+            (route, err_class, first_err)
+        ),
+    )
+
+    push_cadence._sweep_one(repo)
+
+    assert len(logged) == 1
+    route, err_class, first_err = logged[0]
+    assert route == "cadence-sweep"
+    assert err_class == "sweep-unconfirmed"
+    assert "timed out" in first_err
 
 
 def test_successful_push_does_not_feed_the_failure_detector(tmp_path, monkeypatch):
@@ -360,8 +508,9 @@ def test_successful_push_does_not_feed_the_failure_detector(tmp_path, monkeypatc
     class _OkOutcome:
         failed = []
         unconfirmed = []
+        attempts = None
 
-    monkeypatch.setattr(push_cadence, "push_outstanding", lambda root: _OkOutcome())
+    monkeypatch.setattr(push_cadence, "push_outstanding", lambda root, **kw: _OkOutcome())
 
     logged = []
     monkeypatch.setattr(

@@ -40,6 +40,7 @@ import pytest
 
 import coordinator_core.claim_state as claim_state_mod
 import coordinator_core.pickup_assemble as pa
+from coordinator_core.win_portability import no_console_creationflags
 
 # Spawns a real external process; runs at cadence gates, not per-commit.
 # Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
@@ -75,7 +76,7 @@ def _git(repo: Path, *args: str) -> subprocess.CompletedProcess:
         timeout=15,
         stdin=subprocess.DEVNULL,
         env=_isolated_git_env(repo.parent),
-    )
+    **no_console_creationflags())
 
 
 def _init_repo(repo: Path) -> None:

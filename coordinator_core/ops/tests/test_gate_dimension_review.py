@@ -18,6 +18,8 @@ from typing import List
 
 import pytest
 
+from coordinator_core.win_portability import no_console_creationflags
+
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 import coordinator_core.ops.gate_dimension_review as gate_dimension_review
@@ -362,6 +364,7 @@ def _git(args: "List[str]", cwd: Path) -> subprocess.CompletedProcess:
         encoding="utf-8",
         check=True,
         **gate_dimension_review._CREATIONFLAGS,
+        **no_console_creationflags(),
     )
 
 

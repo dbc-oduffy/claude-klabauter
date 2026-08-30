@@ -98,6 +98,7 @@ from pathlib import Path
 import pytest
 
 from coordinator_core.ops.fleet._common import Move, archive_and_commit, rm_and_commit
+from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
@@ -112,6 +113,7 @@ def _git(args: list[str], cwd: Path, *, check: bool = True) -> subprocess.Comple
         capture_output=True,
         text=True,
         check=check,
+        **no_console_creationflags(),
     )
 
 

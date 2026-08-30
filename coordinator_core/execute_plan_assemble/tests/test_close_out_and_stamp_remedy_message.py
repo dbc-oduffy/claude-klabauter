@@ -27,6 +27,7 @@ from typing import Optional
 import pytest
 
 from coordinator_core.execute_plan_assemble import close_out_and_stamp as coas
+from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -40,7 +41,8 @@ _DLV_VALID_SPINE = "dlv-fixture-valid-spine-000001"
 
 def _run_git(args: list[str], cwd: Path) -> subprocess.CompletedProcess:
     return subprocess.run(
-        ["git", *args], cwd=str(cwd), capture_output=True, text=True, check=True
+        ["git", *args], cwd=str(cwd), capture_output=True, text=True, check=True,
+        **no_console_creationflags(),
     )
 
 

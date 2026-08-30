@@ -49,6 +49,7 @@ from coordinator_core.bash_guards.dispatch_checks import (
     check_destructive_git_revert,
     check_destructive_git_revert_advisory,
 )
+from coordinator_core.win_portability import no_console_creationflags
 
 # Spawns a real external process; runs at cadence gates, not per-commit.
 # Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
@@ -71,14 +72,14 @@ def repo_with_peer_work(tmp_path: Path) -> Path:
     """
     repo = tmp_path / "shared-tree"
     (repo / "state").mkdir(parents=True)
-    subprocess.run(["git", "init", "-q"], cwd=str(repo), check=True, capture_output=True)
-    subprocess.run(["git", "config", "user.email", "t@t"], cwd=str(repo), check=True, capture_output=True)
-    subprocess.run(["git", "config", "user.name", "t"], cwd=str(repo), check=True, capture_output=True)
+    subprocess.run(["git", "init", "-q"], cwd=str(repo), check=True, capture_output=True, **no_console_creationflags())
+    subprocess.run(["git", "config", "user.email", "t@t"], cwd=str(repo), check=True, capture_output=True, **no_console_creationflags())
+    subprocess.run(["git", "config", "user.name", "t"], cwd=str(repo), check=True, capture_output=True, **no_console_creationflags())
 
     peer_file = repo / "state" / "peer-in-flight.md"
     peer_file.write_text("committed baseline\n", encoding="utf-8")
-    subprocess.run(["git", "add", "-A"], cwd=str(repo), check=True, capture_output=True)
-    subprocess.run(["git", "commit", "-qm", "baseline"], cwd=str(repo), check=True, capture_output=True)
+    subprocess.run(["git", "add", "-A"], cwd=str(repo), check=True, capture_output=True, **no_console_creationflags())
+    subprocess.run(["git", "commit", "-qm", "baseline"], cwd=str(repo), check=True, capture_output=True, **no_console_creationflags())
 
     # The peer's uncommitted, tracked, git-unrecoverable work.
     peer_file.write_text("committed baseline\npeer's in-flight edit\n", encoding="utf-8")
@@ -409,14 +410,14 @@ def repo_with_ordinary_dirty_file(tmp_path: Path) -> Path:
     shape the advisory floor exists for."""
     repo = tmp_path / "ordinary-tree"
     repo.mkdir()
-    subprocess.run(["git", "init", "-q"], cwd=str(repo), check=True, capture_output=True)
-    subprocess.run(["git", "config", "user.email", "t@t"], cwd=str(repo), check=True, capture_output=True)
-    subprocess.run(["git", "config", "user.name", "t"], cwd=str(repo), check=True, capture_output=True)
+    subprocess.run(["git", "init", "-q"], cwd=str(repo), check=True, capture_output=True, **no_console_creationflags())
+    subprocess.run(["git", "config", "user.email", "t@t"], cwd=str(repo), check=True, capture_output=True, **no_console_creationflags())
+    subprocess.run(["git", "config", "user.name", "t"], cwd=str(repo), check=True, capture_output=True, **no_console_creationflags())
 
     tracked = repo / "app.py"
     tracked.write_text("x = 1\n", encoding="utf-8")
-    subprocess.run(["git", "add", "app.py"], cwd=str(repo), check=True, capture_output=True)
-    subprocess.run(["git", "commit", "-qm", "baseline"], cwd=str(repo), check=True, capture_output=True)
+    subprocess.run(["git", "add", "app.py"], cwd=str(repo), check=True, capture_output=True, **no_console_creationflags())
+    subprocess.run(["git", "commit", "-qm", "baseline"], cwd=str(repo), check=True, capture_output=True, **no_console_creationflags())
 
     tracked.write_text("x = 2\n", encoding="utf-8")
     return repo
@@ -428,12 +429,12 @@ def clean_repo(tmp_path: Path) -> Path:
     stays empty, so neither a deny nor an advisory is ever warranted."""
     repo = tmp_path / "clean-tree"
     repo.mkdir()
-    subprocess.run(["git", "init", "-q"], cwd=str(repo), check=True, capture_output=True)
-    subprocess.run(["git", "config", "user.email", "t@t"], cwd=str(repo), check=True, capture_output=True)
-    subprocess.run(["git", "config", "user.name", "t"], cwd=str(repo), check=True, capture_output=True)
+    subprocess.run(["git", "init", "-q"], cwd=str(repo), check=True, capture_output=True, **no_console_creationflags())
+    subprocess.run(["git", "config", "user.email", "t@t"], cwd=str(repo), check=True, capture_output=True, **no_console_creationflags())
+    subprocess.run(["git", "config", "user.name", "t"], cwd=str(repo), check=True, capture_output=True, **no_console_creationflags())
     (repo / "app.py").write_text("x = 1\n", encoding="utf-8")
-    subprocess.run(["git", "add", "app.py"], cwd=str(repo), check=True, capture_output=True)
-    subprocess.run(["git", "commit", "-qm", "baseline"], cwd=str(repo), check=True, capture_output=True)
+    subprocess.run(["git", "add", "app.py"], cwd=str(repo), check=True, capture_output=True, **no_console_creationflags())
+    subprocess.run(["git", "commit", "-qm", "baseline"], cwd=str(repo), check=True, capture_output=True, **no_console_creationflags())
     return repo
 
 

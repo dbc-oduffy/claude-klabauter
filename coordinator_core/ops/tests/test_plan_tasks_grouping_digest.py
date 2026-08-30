@@ -48,6 +48,7 @@ from coordinator_core.ops.plan_tasks_grouping_digest import (
     compute_prospective_grouping_digest,
     main as cli_main,
 )
+from coordinator_core.win_portability import no_console_creationflags
 
 # Spawns a real external process; runs at cadence gates, not per-commit.
 # Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
@@ -83,7 +84,7 @@ def _make_git_repo(tmp_path: Path) -> Path:
             cwd=str(repo),
             capture_output=True,
             check=True,
-        )
+        **no_console_creationflags())
 
     _git("init", "-b", "main")
     _git("config", "user.email", "plan-tasks-digest-test@claude-klabauter.test")

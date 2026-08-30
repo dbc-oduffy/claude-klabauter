@@ -795,6 +795,29 @@ def fire_workflow(
     """Fire one detached ``claude -p`` child for ``script_path``.
 
     Returns the fire registry record (the run handle) -- never a bare pid.
+
+    ``cwd`` DOES NOT SET THE CHILD'S WORKING DIRECTORY. It selects which
+    repo's bookkeeping this fire is recorded against, and nothing else:
+    ``_registry_dir``, ``count_live_fires``, and ``_publish_lag_message``
+    are its only three readers. It is deliberately NOT in ``popen_kwargs``
+    -- the spawned child inherits the FIRING process's cwd, so firing with
+    ``cwd=<sibling repo>`` still starts a child sitting in the caller's own
+    repo.
+
+    Negative-spec: do not "fix" this by threading ``cwd`` into
+    ``subprocess.Popen``. A tool the child runs would then resolve its repo
+    from a directory the firing session never chose, which is the ambiguity
+    the repo-identity gate exists to refuse. Anything the child must target
+    outside the firing repo is passed to it EXPLICITLY -- see
+    ``coordinator/bin/coordinator-tasks-mirror.py``'s ``--repo-root``, which
+    exists precisely because there is no correct root to infer from a cwd
+    that is the wrong repo by construction.
+
+    The parameter name has now misled two readers into assuming it is the
+    child's working directory (2026-08-30, claude-klabauter-em and
+    doe-claude-e8, independently). It is documented rather than renamed
+    because it is a published engine seam; a rename is a breaking change to
+    every caller and belongs in its own plan.
     Raises ``ScriptNotFoundError``, ``PluginDirResolutionError``,
     ``ConcurrencyCapExceededError``, or ``ChildSpawnFailedError`` before
     ever returning a handle for a child that cannot be confirmed live.

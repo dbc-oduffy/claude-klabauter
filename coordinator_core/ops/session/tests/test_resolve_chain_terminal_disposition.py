@@ -34,6 +34,7 @@ import subprocess
 import pytest
 
 import coordinator_core.ops.session.resolve_chain_terminal_disposition as rctd
+from coordinator_core.win_portability import no_console_passthrough_kwargs
 
 # _make_repo spawns real git per test (init/config/add/commit); declared to
 # the spawn ratchet rather than grandfathered in its frozen baseline --
@@ -45,12 +46,12 @@ pytestmark = [
 
 
 def _make_repo(tmp_path):
-    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
-    subprocess.run(["git", "config", "user.email", "t@example.com"], cwd=tmp_path, check=True)
-    subprocess.run(["git", "config", "user.name", "t"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "config", "user.email", "t@example.com"], cwd=tmp_path, check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "config", "user.name", "t"], cwd=tmp_path, check=True, **no_console_passthrough_kwargs())
     (tmp_path / "README.md").write_text("x")
-    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
-    subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=tmp_path, check=True, **no_console_passthrough_kwargs())
     return tmp_path
 
 
@@ -109,8 +110,8 @@ class TestClassifySyncUnresolvedGuard:
         (handoffs_dir / "unclaimed.md").write_text(
             "---\npredecessor: none\n---\nbody\n", encoding="utf-8"
         )
-        subprocess.run(["git", "add", "."], cwd=repo, check=True)
-        subprocess.run(["git", "commit", "-q", "-m", "add unclaimed handoff"], cwd=repo, check=True)
+        subprocess.run(["git", "add", "."], cwd=repo, check=True, **no_console_passthrough_kwargs())
+        subprocess.run(["git", "commit", "-q", "-m", "add unclaimed handoff"], cwd=repo, check=True, **no_console_passthrough_kwargs())
 
         result = rctd._classify_sync(repo, None, {})
         assert result["exit_code"] != 0
@@ -143,18 +144,20 @@ class TestDetectorBPositiveOwnership:
     def _repo_with_archived_touch(tmp_path, sid, frontmatter, subject):
         repo = _make_repo(tmp_path)
         subprocess.run(
-            ["git", "update-ref", "refs/remotes/origin/main", "HEAD"], cwd=repo, check=True
+            ["git", "update-ref", "refs/remotes/origin/main", "HEAD"], cwd=repo, check=True,
+            **no_console_passthrough_kwargs(),
         )
         archive_dir = repo / "archive" / "handoffs"
         archive_dir.mkdir(parents=True)
         (archive_dir / "2026-08-10_144028_peer-baton.md").write_text(
             frontmatter, encoding="utf-8"
         )
-        subprocess.run(["git", "add", "."], cwd=repo, check=True)
+        subprocess.run(["git", "add", "."], cwd=repo, check=True, **no_console_passthrough_kwargs())
         subprocess.run(
             ["git", "commit", "-q", "-m", f"{subject}\n\nSession-Id: {sid}"],
             cwd=repo,
             check=True,
+            **no_console_passthrough_kwargs(),
         )
         # `_classify_sync`'s first arg is the git COMMON DIR, not the worktree
         # root (_OP_KEY_SCOPE = "common_dir"); it derives the worktree via

@@ -894,6 +894,15 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # this engine-injected repo_root kwarg.
     # Spec: state/handoffs/2026-08-13-live-peer-roster.md § 1-2.
     "session.peer_roster":                    "none",
+    # groupem.enter — same resolution story as session.peer_roster
+    # immediately above: the harness peer registry it composes over is
+    # machine-global, not per-worktree, and the nomination record it also
+    # touches lives under settings-home (also machine-global, in neither
+    # repo's tree) -- never resolved against repo_root. Its wire-level
+    # repo_root filter param is read from params, never from this
+    # engine-injected kwarg.
+    # Spec: docs/plans/2026-08-30-group-em-entry-fires-one-warm-op.md § C5.
+    "groupem.enter":                          "none",
     # session.work_state — read-only held/unclaimed corpus read over
     # state/handoffs/, which is main-worktree-rooted repo state -- exactly
     # the case this table's own header comment names for "common_dir"
@@ -1333,11 +1342,21 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # keying), independent of this scope key. See the op module's own
     # docstring for the full rationale.
     "git.push_failure_verdict":                 "show_top",
-    # workday.drain_pending_push — show_top: same rationale as its read-half
-    # sibling above — the handler ignores the ipc-injected repo_root kwarg
-    # entirely and uses only the explicit `repo_root` param (see that op's own
-    # module docstring, coordinator_core/ops/workday_drain_pending_push.py).
-    "workday.drain_pending_push":                "show_top",
+    # git.maintenance — common_dir: the handler resolves its target as
+    # `params["repo"] or repo_root or cwd` and runs maintenance tiers (prune,
+    # repack, orphan-pack reaping) against that repository's object store,
+    # which lives in the git COMMON dir and is shared by every worktree —
+    # never per-worktree state. Same verdict as every sibling repo-operating
+    # git op: commit.anchors, push.outstanding, commit.exec_bit_change,
+    # git_branch.compute_descendant_tip.
+    # BACKFILL, not this op's author: registered in _registry_map.py by
+    # cf467d0abb without a scope entry. Verdict derived from the handler
+    # signature and the sibling precedents above; if cf467d0abb's author
+    # intended a different one, correct it here.
+    "git.maintenance":                          "common_dir",
+    # workday.drain_pending_push retired 2026-08-30
+    # (docs/plans/2026-08-30-who-pushes-and-when.md C2) -- op and its
+    # delegate deleted outright. Row removed.
     # tracker.advance_status — common_dir: tracker_path is a caller-supplied
     # path resolved against main_worktree_root(common_dir) and path-contained
     # to it (coordinator_core/ops/_path_guard.contained_path). See

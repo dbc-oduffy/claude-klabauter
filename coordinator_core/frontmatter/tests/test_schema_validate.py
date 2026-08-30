@@ -83,6 +83,7 @@ from coordinator_core.frontmatter.schema_validate import (
     _read_bump_note,
 )
 from coordinator_core.testing.doe_root import resolve_doe_root
+from coordinator_core.win_portability import no_console_creationflags
 
 # The former node-oracle differential/parity suites (schema.js / schema-cli.js
 # byte-parity, de-node Gate A straggler conversion) were retired 2026-07-24 (D1 of
@@ -2240,6 +2241,7 @@ class TestPlanCorpusValidatesAgainstBumpedSchema:
                 ['git', 'show', 'HEAD:coordinator_core/frontmatter/schemas/plan.schema.json'],
                 cwd=repo_root, check=True, capture_output=True, text=True, timeout=30,
                 stdin=subprocess.DEVNULL,
+                **no_console_creationflags(),
             ).stdout
         )
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -3449,6 +3451,7 @@ class TestDriftCheck:
             text=True,
             encoding='utf-8',
             timeout=30,
+            **no_console_creationflags(),
         )
         assert doe_result.returncode == 0, (
             f'Cannot read DoE HEAD handoff.schema.json: {doe_result.stderr.strip()}'
@@ -4070,6 +4073,7 @@ def _advisory_git(repo: Path, *args: str) -> None:
         text=True,
         timeout=30,
         stdin=subprocess.DEVNULL,
+        **no_console_creationflags(),
     )
 
 
@@ -4850,6 +4854,7 @@ def _ahead_git(repo: Path, *args: str, env: dict | None = None) -> None:
         timeout=30,
         stdin=subprocess.DEVNULL,
         env=run_env,
+        **no_console_creationflags(),
     )
 
 
@@ -4900,6 +4905,7 @@ class TestCheckSchemaAheadOfDoe:
         doe_ref = subprocess.run(
             ["git", "-C", str(repo), "rev-parse", "HEAD"],
             capture_output=True, text=True, check=True,
+            **no_console_creationflags(),
         ).stdout.strip()
         check_schema_ahead_of_doe(
             local, repo, doe_ref=doe_ref, reason="test", provenance="test",
@@ -4910,6 +4916,7 @@ class TestCheckSchemaAheadOfDoe:
         stale_ref = subprocess.run(
             ["git", "-C", str(repo), "rev-parse", "HEAD"],
             capture_output=True, text=True, check=True,
+            **no_console_creationflags(),
         ).stdout.strip()
         # DoE moves after the pin was recorded.
         schemas = repo / "coordinator" / "schemas"
@@ -4935,6 +4942,7 @@ class TestCheckSchemaAheadOfDoe:
         stale_ref = subprocess.run(
             ["git", "-C", str(repo), "rev-parse", "HEAD"],
             capture_output=True, text=True, check=True,
+            **no_console_creationflags(),
         ).stdout.strip()
         _ahead_git(repo, "checkout", "-q", "-b", "other-branch")
         schemas = repo / "coordinator" / "schemas"
@@ -4965,6 +4973,7 @@ class TestCheckSchemaAheadOfDoe:
         doe_ref = subprocess.run(
             ["git", "-C", str(repo), "rev-parse", "HEAD"],
             capture_output=True, text=True, check=True,
+            **no_console_creationflags(),
         ).stdout.strip()
         # Real divergence, not extension: the leaf value CHANGES, not merely
         # gains a trailing char in a description field — must not pass.
@@ -4979,6 +4988,7 @@ class TestCheckSchemaAheadOfDoe:
         doe_ref = subprocess.run(
             ["git", "-C", str(repo), "rev-parse", "HEAD"],
             capture_output=True, text=True, check=True,
+            **no_console_creationflags(),
         ).stdout.strip()
         local = self._local(tmp_path, "1.1.0", extra={"description": "short, extended"})
         check_schema_ahead_of_doe(
@@ -4995,6 +5005,7 @@ class TestCheckSchemaAheadOfDoe:
         doe_ref = subprocess.run(
             ["git", "-C", str(repo), "rev-parse", "HEAD"],
             capture_output=True, text=True, check=True,
+            **no_console_creationflags(),
         ).stdout.strip()
         local = self._local(
             tmp_path, "1.1.0",
@@ -5011,6 +5022,7 @@ class TestCheckSchemaAheadOfDoe:
         doe_ref = subprocess.run(
             ["git", "-C", str(repo), "rev-parse", "HEAD"],
             capture_output=True, text=True, check=True,
+            **no_console_creationflags(),
         ).stdout.strip()
         local = self._local(tmp_path, "1.1.0", extra={"x-bump-note": "renamed a field"})
         with pytest.raises(SchemaDriftError, match="leaf-retention"):
@@ -5027,6 +5039,7 @@ class TestCheckSchemaAheadOfDoe:
         doe_ref = subprocess.run(
             ["git", "-C", str(repo), "rev-parse", "HEAD"],
             capture_output=True, text=True, check=True,
+            **no_console_creationflags(),
         ).stdout.strip()
         local = self._local(tmp_path, "1.1.0", extra={"applies_to": "state/review-trail/*.jsonl"})
         with pytest.raises(SchemaDriftError, match="leaf-retention"):
@@ -5044,6 +5057,7 @@ class TestCheckSchemaAheadOfDoe:
         doe_ref = subprocess.run(
             ["git", "-C", str(repo), "rev-parse", "HEAD"],
             capture_output=True, text=True, check=True,
+            **no_console_creationflags(),
         ).stdout.strip()
         local = self._local(tmp_path, "1.1.0")
         with pytest.raises(SchemaDriftError, match="strictly greater"):
@@ -5056,6 +5070,7 @@ class TestCheckSchemaAheadOfDoe:
         doe_ref = subprocess.run(
             ["git", "-C", str(repo), "rev-parse", "HEAD"],
             capture_output=True, text=True, check=True,
+            **no_console_creationflags(),
         ).stdout.strip()
         # Uncommitted edit on the DoE side — must be refused, not read as "unmoved".
         (repo / "coordinator" / "schemas" / "widget.schema.json").write_text(
@@ -5073,6 +5088,7 @@ class TestCheckSchemaAheadOfDoe:
         doe_ref = subprocess.run(
             ["git", "-C", str(repo), "rev-parse", "HEAD"],
             capture_output=True, text=True, check=True,
+            **no_console_creationflags(),
         ).stdout.strip()
         local = self._local(tmp_path, "1.1.0")
         with pytest.raises(SchemaDriftError, match="tamper-pin"):
@@ -5088,6 +5104,7 @@ class TestCheckSchemaAheadOfDoe:
         doe_ref = subprocess.run(
             ["git", "-C", str(repo), "rev-parse", "HEAD"],
             capture_output=True, text=True, check=True,
+            **no_console_creationflags(),
         ).stdout.strip()
         local = self._local(tmp_path, "1.1.0")
         expected = _local_shape_hash(local.read_text(encoding="utf-8"))
@@ -5101,6 +5118,7 @@ class TestCheckSchemaAheadOfDoe:
         doe_ref = subprocess.run(
             ["git", "-C", str(repo), "rev-parse", "HEAD"],
             capture_output=True, text=True, check=True,
+            **no_console_creationflags(),
         ).stdout.strip()
         local = self._local(tmp_path, "not-a-version")
         with pytest.raises(SchemaDriftError, match="could not compare"):

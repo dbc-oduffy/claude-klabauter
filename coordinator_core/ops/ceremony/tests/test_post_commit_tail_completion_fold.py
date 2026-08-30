@@ -27,6 +27,7 @@ import pytest
 
 from coordinator_core.ops.ceremony import consumed_handoff_stamp
 from coordinator_core.ops.ceremony import post_commit_tail as m
+from coordinator_core.win_portability import no_console_creationflags
 from .fixtures.real_git import real_git_repo
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
@@ -37,7 +38,14 @@ def _run(coro: Any) -> Any:
 
 
 def _git(args: list[str], cwd: Path) -> subprocess.CompletedProcess:
-    return subprocess.run(["git", *args], cwd=str(cwd), capture_output=True, text=True, check=True)
+    return subprocess.run(
+        ["git", *args],
+        cwd=str(cwd),
+        capture_output=True,
+        text=True,
+        check=True,
+        **no_console_creationflags(),
+    )
 
 
 def _write_completion_entry(root: Path, rel: str, extra_commits_block: str = "commits: []") -> Path:
@@ -101,7 +109,12 @@ def test_late_landing_commit_folds_into_entry_commits_list(monkeypatch, tmp_path
     # The fold's own commit landed and is real HEAD -- read the entry back
     # from git, not just the worktree, to prove it is actually committed.
     committed_text = subprocess.run(
-        ["git", "show", f"HEAD:{entry_rel}"], cwd=str(root), capture_output=True, text=True, check=True
+        ["git", "show", f"HEAD:{entry_rel}"],
+        cwd=str(root),
+        capture_output=True,
+        text=True,
+        check=True,
+        **no_console_creationflags(),
     ).stdout
     assert landed_sha in committed_text
 

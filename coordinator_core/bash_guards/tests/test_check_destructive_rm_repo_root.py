@@ -46,6 +46,7 @@ from coordinator_core.bash_guards.dispatch_checks import (
     _is_same_dir,
     check_destructive_rm,
 )
+from coordinator_core.win_portability import no_console_creationflags
 
 # Spawns a real external process; runs at cadence gates, not per-commit.
 # Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
@@ -62,7 +63,7 @@ def _git(*args: str, cwd: str) -> None:
         check=True,
         capture_output=True,
         env={**os.environ, "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_SYSTEM": os.devnull},
-    )
+    **no_console_creationflags())
 
 
 def _make_repo(path: str) -> str:
@@ -138,7 +139,7 @@ class TestCleanRepoRootStillDenied:
             cwd=repo_outside_any_repo,
             capture_output=True,
             text=True,
-        )
+        **no_console_creationflags())
         assert out.stdout.strip() == "", "fixture must be clean for this to mean anything"
         assert _denied(f"rm -rf {repo_outside_any_repo}")
 

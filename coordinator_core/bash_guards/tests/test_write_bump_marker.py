@@ -22,6 +22,10 @@ from coordinator_core.bash_guards import _write_bump_marker as marker
 from coordinator_core.bash_guards import _write_bump_applicability as applicability
 from coordinator_core.bash_guards import _write_bump_session_start as session_start
 from coordinator_core.bash_guards import bump_foreign_repo_write as fg_guard
+from coordinator_core.win_portability import (
+    no_console_creationflags,
+    no_console_passthrough_kwargs,
+)
 
 # Spawns a real external process; runs at cadence gates, not per-commit.
 # Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
@@ -44,7 +48,13 @@ def _posix(p) -> str:
 
 
 def _git(root: str, *args: str) -> None:
-    subprocess.run(["git", *args], cwd=root, check=True, capture_output=True)
+    subprocess.run(
+        ["git", *args],
+        cwd=root,
+        check=True,
+        capture_output=True,
+        **no_console_creationflags(),
+    )
 
 
 def _init_repo(tmp_path: Path, name: str = "repo") -> Path:
@@ -336,7 +346,7 @@ def test_clear_line_command_works_verbatim_on_a_fresh_machine(tmp_path):
     assert marker.marker_present(gitdir, session_id) is False
 
     command = line[len("touch "):]
-    subprocess.run(["touch", command], check=True)
+    subprocess.run(["touch", command], check=True, **no_console_passthrough_kwargs())
 
     assert marker.marker_present(gitdir, session_id) is True
 

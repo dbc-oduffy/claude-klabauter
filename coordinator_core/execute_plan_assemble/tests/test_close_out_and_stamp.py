@@ -60,6 +60,7 @@ import pytest
 
 import coordinator_core.execute_plan_assemble.close_out_and_stamp as coas
 from coordinator_core.frontmatter.body_blocks import LocateStatus, locate_fenced_block
+from coordinator_core.win_portability import no_console_creationflags
 
 # Declared, not excused: this file exercises the op's own `_run_git`/git-log path
 # and its real, in-process commit leg (`run_commit_pipeline`, per this file's own
@@ -101,7 +102,12 @@ _DLV_DISPOSITION = "dlv-fixture-disposition-000001"
 
 def _run_git(args: list[str], cwd: Path) -> subprocess.CompletedProcess:
     return subprocess.run(
-        ["git", *args], cwd=str(cwd), capture_output=True, text=True, check=True
+        ["git", *args],
+        cwd=str(cwd),
+        capture_output=True,
+        text=True,
+        check=True,
+        **no_console_creationflags(),
     )
 
 

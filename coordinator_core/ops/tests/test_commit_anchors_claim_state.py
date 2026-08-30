@@ -34,6 +34,7 @@ import pytest
 
 import coordinator_core.claim_state as claim_state_mod
 from coordinator_core.ops.commit_anchors import _resolve_anchor
+from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -47,6 +48,7 @@ def _git(args, cwd: Path) -> subprocess.CompletedProcess:
         capture_output=True,
         encoding="utf-8",
         check=True,
+        **no_console_creationflags(),
     )
 
 

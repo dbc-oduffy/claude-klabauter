@@ -458,3 +458,139 @@ def test_concurrent_entrypoint_calls_do_not_race_the_shared_process_cwd(tmp_path
         )
     finally:
         del builtins._ENTRYPOINT_CWD_RACE_RECORD
+
+
+# ---------------------------------------------------------------------------
+# (g) `params.entrypoint` set: the served CLI reads the CALLER's session
+#     identity out of `os.environ`, never the warm server owner's.
+#
+#     The defect (cross-repo/inbox/2026-08-30-example-retrieval-repo-em-prepare-commit-
+#     msg-stamps-warm-engine-owner-session-id.md, reproduced in this repo
+#     2026-08-30): every `coordinator/bin/*.py` CLI resolves its session id by
+#     reading `SESSION_ENV_PRECEDENCE` out of `os.environ` — the
+#     `prepare-commit-msg` hook does so in a deliberately hand-mirrored copy of
+#     that ladder. Served in-process here, that environment is the server
+#     owner's, so the door's `_session_id` reached `resolve_session_id()` and
+#     stopped there: same hook, correct cold, a stranger's id warm, on EVERY
+#     hook-path commit on a box carrying the forwarder.
+#
+#     Asserted against the env a real CLI reads, not against the ContextVar —
+#     binding the ContextVar is what the seam already did while the defect was
+#     live, so a test at that level certifies the route that already worked.
+# ---------------------------------------------------------------------------
+
+_CALLER_SID = "8b40d62c-55ef-4702-83ce-0cd8dc6513e3"
+_SERVER_OWNER_SID = "b68689fb-a9a5-4f3d-9ca9-f688530ed7c1"
+
+_SESSION_ENV_PROBE = (
+    "import builtins\n"
+    "import os\n"
+    "\n"
+    "\n"
+    "def main(argv):\n"
+    "    builtins._ENTRYPOINT_SESSION_ENV_SEEN = {\n"
+    "        name: os.environ.get(name)\n"
+    "        for name in ("
+    "'COORDINATOR_SESSION_ID', 'CLAUDE_SESSION_ID', 'CLAUDE_CODE_SESSION_ID')\n"
+    "    }\n"
+    "    return 0\n"
+)
+
+
+def _run_session_env_probe(tmp_path, monkeypatch, *, carried, server_env):
+    """Run a fake CLI through `_run_entrypoint` under a warm-served request
+    carrying `carried`, with `server_env` as the server process's own
+    environment; return what the CLI saw, plus this process's env afterwards.
+    """
+    import builtins
+
+    from coordinator_core.session.core import (
+        SESSION_ENV_PRECEDENCE,
+        session_identity_override,
+        warm_served_request,
+    )
+
+    bin_dir = tmp_path / "coordinator" / "bin"
+    bin_dir.mkdir(parents=True)
+    (bin_dir / "fake-entrypoint-session-env.py").write_text(
+        _SESSION_ENV_PROBE, encoding="utf-8"
+    )
+
+    for name in SESSION_ENV_PRECEDENCE:
+        monkeypatch.delenv(name, raising=False)
+    for name, value in server_env.items():
+        monkeypatch.setenv(name, value)
+
+    builtins._ENTRYPOINT_SESSION_ENV_SEEN = None
+    try:
+        with mock.patch.object(invoke_from_argv, "_ENGINE_ROOT", tmp_path), mock.patch.object(
+            invoke_from_argv,
+            "_WARM_ENTRYPOINT_ALLOWLIST",
+            frozenset({"fake-entrypoint-session-env"}),
+        ):
+            with warm_served_request(True), session_identity_override(carried):
+                result = _run_entrypoint("fake-entrypoint-session-env", [], str(tmp_path))
+        seen = builtins._ENTRYPOINT_SESSION_ENV_SEEN
+    finally:
+        del builtins._ENTRYPOINT_SESSION_ENV_SEEN
+
+    assert result["exit_code"] == 0, result
+    after = {name: os.environ.get(name) for name in SESSION_ENV_PRECEDENCE}
+    return seen, after
+
+
+def test_served_cli_reads_the_callers_session_id_not_the_servers(tmp_path, monkeypatch):
+    """The defect itself. The server's own environment names the session that
+    spawned it; the CLI must see the one the door carried."""
+    seen, _ = _run_session_env_probe(
+        tmp_path,
+        monkeypatch,
+        carried=_CALLER_SID,
+        server_env={"CLAUDE_CODE_SESSION_ID": _SERVER_OWNER_SID},
+    )
+
+    assert seen["COORDINATOR_SESSION_ID"] == _CALLER_SID
+    # The lower-tier names are popped, not merely outranked: a CLI reading only
+    # `CLAUDE_CODE_SESSION_ID` would otherwise still resurface the owner's id.
+    assert seen["CLAUDE_SESSION_ID"] is None
+    assert seen["CLAUDE_CODE_SESSION_ID"] is None
+
+
+def test_warm_request_carrying_no_identity_shows_the_cli_none(tmp_path, monkeypatch):
+    """The fail-safe direction. A warm request the door sent no `_session_id`
+    for is indistinguishable from a cold one at the ContextVar, and the two
+    need opposite answers: omitting a trailer is coverage-neutral, stamping the
+    server owner's is misattribution (`session.core.carried_session_id`)."""
+    seen, _ = _run_session_env_probe(
+        tmp_path,
+        monkeypatch,
+        carried=None,
+        server_env={
+            "COORDINATOR_SESSION_ID": _SERVER_OWNER_SID,
+            "CLAUDE_CODE_SESSION_ID": _SERVER_OWNER_SID,
+        },
+    )
+
+    assert seen == {
+        "COORDINATOR_SESSION_ID": None,
+        "CLAUDE_SESSION_ID": None,
+        "CLAUDE_CODE_SESSION_ID": None,
+    }
+
+
+def test_the_servers_own_session_env_is_restored_after_the_call(tmp_path, monkeypatch):
+    """Borrowed, not taken. `os.environ` is process-global in a server ~50
+    sessions share — the same restore discipline the cwd and `sys.argv` borrows
+    beside it already carry."""
+    _, after = _run_session_env_probe(
+        tmp_path,
+        monkeypatch,
+        carried=_CALLER_SID,
+        server_env={"CLAUDE_CODE_SESSION_ID": _SERVER_OWNER_SID},
+    )
+
+    assert after == {
+        "COORDINATOR_SESSION_ID": None,
+        "CLAUDE_SESSION_ID": None,
+        "CLAUDE_CODE_SESSION_ID": _SERVER_OWNER_SID,
+    }

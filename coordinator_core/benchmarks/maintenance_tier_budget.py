@@ -26,14 +26,10 @@ calls instead of a chdir.
 from __future__ import annotations
 
 import os
-import subprocess
 import tempfile
 from pathlib import Path
 
-# Windows allocates a console window per child under a headless host, and the
-# repo-provisioning below spawns git hundreds of times per run. The sanctioned
-# helper is a no-op splat on POSIX and leaves capture_output wiring untouched.
-from coordinator_core.win_portability import no_console_creationflags
+from coordinator_core.git.run import run_git
 
 SCRATCH_ROOT = Path(tempfile.gettempdir()) / "coordinator-falsifier"
 
@@ -44,12 +40,12 @@ SCRATCH_ROOT = Path(tempfile.gettempdir()) / "coordinator-falsifier"
 _TIER_BUDGET_SAMPLES = 3
 _TIER_BUDGET_CHURN = 200
 
-
-def _run(argv, cwd=None):
-    return subprocess.run(
-        argv, cwd=cwd, capture_output=True, text=True, check=False,
-        **no_console_creationflags(),
-    )
+# `_churn` and `_make_throwaway_clone` below spawn git only to build each
+# sample's FIXTURE (a freshly-churned throwaway repo) -- never to run the
+# tier legs being timed. Those legs are measured through
+# `batched_process_time_ms`, entirely separate from this seam, so routing
+# fixture setup through `coordinator_core.git.run` adds no seam cost to the
+# figure this module reports. Migrated per G7 (test_shared_git_runner.py).
 
 
 def _apply_coordinator_registration(repo: Path) -> None:
@@ -73,9 +69,9 @@ def _churn(repo: Path, commits: int) -> None:
     reads green whatever the code does."""
     for i in range(commits):
         (repo / "churn.txt").write_text("line %d\n" % i, encoding="utf-8")
-        _run(["git", "add", "churn.txt"], cwd=str(repo))
-        _run(
-            ["git", "-c", "user.email=f@example.com", "-c", "user.name=f",
+        run_git(["add", "churn.txt"], cwd=str(repo))
+        run_git(
+            ["-c", "user.email=f@example.com", "-c", "user.name=f",
              "commit", "-q", "-m", "churn %d" % i],
             cwd=str(repo),
         )
@@ -87,11 +83,11 @@ def _make_throwaway_clone() -> Path:
     claude-klabauter .git.
     """
     work = Path(tempfile.mkdtemp(prefix="falsifier-worktree-", dir=str(SCRATCH_ROOT)))
-    _run(["git", "init", "-q"], cwd=str(work))
+    run_git(["init", "-q"], cwd=str(work))
     (work / "seed.txt").write_text("seed\n", encoding="utf-8")
-    _run(["git", "add", "seed.txt"], cwd=str(work))
-    _run(
-        ["git", "-c", "user.email=falsifier@example.com", "-c", "user.name=falsifier",
+    run_git(["add", "seed.txt"], cwd=str(work))
+    run_git(
+        ["-c", "user.email=falsifier@example.com", "-c", "user.name=falsifier",
          "commit", "-q", "-m", "seed"],
         cwd=str(work),
     )

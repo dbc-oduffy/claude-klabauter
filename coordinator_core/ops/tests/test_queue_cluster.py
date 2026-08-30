@@ -122,7 +122,7 @@ _SEED_FN = {
 def _init_repo(root) -> None:
     subprocess.run(["git", "init", "-b", "main"], cwd=root, check=True, capture_output=True, **no_console_creationflags())
     subprocess.run(
-        ["git", "config", "user.email", "test@example.com"], cwd=root, check=True, capture_output=True
+        ["git", "config", "user.email", "test@example.com"], cwd=root, check=True, capture_output=True,
         **no_console_creationflags(),
     )
     subprocess.run(["git", "config", "user.name", "Test"], cwd=root, check=True, capture_output=True, **no_console_creationflags())

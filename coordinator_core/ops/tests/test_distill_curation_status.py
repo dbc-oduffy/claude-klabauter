@@ -48,6 +48,7 @@ import pytest
 import coordinator_core.ops.distill_curation_status as dcs  # noqa: F401
 
 from coordinator_core.ipc import _REGISTRY
+from coordinator_core.win_portability import no_console_passthrough_kwargs
 
 # Spawns a real external process; runs at cadence gates, not per-commit.
 # Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
@@ -86,7 +87,7 @@ def _seed_git_repo(tmp_path: Path) -> Path:
     that exercises the emit=True path, since locked_write.locked_rmw's lock
     sidecar is keyed off git_common_dir(repo_root)."""
     repo_root = _seed_repo(tmp_path)
-    subprocess.run(["git", "init", "-q"], cwd=repo_root, check=True)
+    subprocess.run(["git", "init", "-q"], cwd=repo_root, check=True, **no_console_passthrough_kwargs())
     return repo_root
 
 
@@ -175,7 +176,7 @@ def _seed_bare_repo(tmp_path: Path) -> Path:
     degrade path without tripping compute_harvest_debt's fail-loud missing-log
     contract (that contract only fires when archive/specs/ itself exists)."""
     (tmp_path / "docs" / "plans").mkdir(parents=True)
-    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True, **no_console_passthrough_kwargs())
     return tmp_path
 
 

@@ -36,10 +36,7 @@ from coordinator_core.ops.cutover_gate import (
     CutoverSchemaResolutionError,
     resolve_cutover_schema,
 )
-from coordinator_core.win_portability import (
-    no_console_creationflags,
-    no_console_passthrough_kwargs,
-)
+from coordinator_core.win_portability import no_console_creationflags
 
 # Spawns a real external process; runs at cadence gates, not per-commit.
 # Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py

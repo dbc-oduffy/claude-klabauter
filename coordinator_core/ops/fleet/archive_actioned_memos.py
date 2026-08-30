@@ -152,6 +152,15 @@ _SCAN_REASON_LIVE_CLAIM = "live-claim-holder: claim dir holds a live session"
 # default.
 _RECOMMENDED_CAP_CHOICE = 150
 
+# The memo corpus root, repo-relative POSIX. Exported so a caller outside
+# this module (`housekeeping/cycle.py`'s union dirty-check fallback
+# pathspec) reads the corpus location from here rather than carrying its
+# own copy of the literal -- a corpus move stays a one-file edit.
+# (Review: overengineering-reviewer F5 -- cycle.py hardcoded
+# "cross-repo/inbox" as a fallback pathspec; that is memo-corpus knowledge
+# that belongs here, not in the handoff cycle.)
+INBOX_RELDIR = "cross-repo/inbox"
+
 # Fallback receipt sink for the one setup-error shape that has NO common_dir
 # to root a receipt under at all (`repo_root` handler arg absent/None, with
 # or without an also-bad `cap`). `_sweep_receipt.record_sweep_outcome` is
@@ -203,7 +212,7 @@ def collect_inbox_memo_paths(worktree_root: Path) -> List[Path]:
     documents. Callers MUST catch OSError and degrade to "no candidates
     visible this call".
     """
-    inbox_dir = worktree_root / "cross-repo" / "inbox"
+    inbox_dir = worktree_root / INBOX_RELDIR
     if not inbox_dir.is_dir():
         return []
     try:
@@ -292,7 +301,7 @@ def _scan_terminal_memos(
         try:
             inbox_paths = collect_inbox_memo_paths(worktree_root)
         except OSError as exc:
-            inbox_dir = worktree_root / "cross-repo" / "inbox"
+            inbox_dir = worktree_root / INBOX_RELDIR
             _LOG.warning(
                 "_scan_terminal_memos: cannot scan %s — %s; returning zero "
                 "candidates (degrade safe)", inbox_dir, exc,

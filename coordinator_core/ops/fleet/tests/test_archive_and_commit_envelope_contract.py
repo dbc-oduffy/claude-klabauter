@@ -47,6 +47,7 @@ import pytest
 
 from coordinator_core.ops.fleet._common import Move, archive_and_commit
 from coordinator_core.ops.fleet.tests.archive_git_free_seam import make_recording_mover
+from coordinator_core.win_portability import no_console_creationflags
 
 # Real-git spawn is load-bearing: this file proves the real archive_and_commit
 # envelope shape against a real repo (clean move + disk/HEAD drift refusal),
@@ -68,7 +69,7 @@ def _git(args: list[str], cwd: Path) -> subprocess.CompletedProcess:
         cwd=str(cwd),
         capture_output=True,
         text=True,
-        check=True,
+        check=True, **no_console_creationflags(),
     )
 
 

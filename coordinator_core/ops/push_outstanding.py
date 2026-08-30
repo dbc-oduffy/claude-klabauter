@@ -158,7 +158,12 @@ from coordinator_core.git.git_state import head_branch, head_sha
 from coordinator_core.ops.ceremony.push import (
     PUSH_RETRY_BUDGET_SECS,
     PushOutcome,
+    _remaining_or_none,
     push_with_retry,
+)
+from coordinator_core.hooks.auto_push import (
+    _cockpit_publish_script,
+    _maybe_publish_cockpit_contract,
 )
 
 __all__ = ["push_outstanding"]
@@ -336,6 +341,7 @@ def push_outstanding(
     *,
     allow_protected_branch: bool = False,
     protected_branch_override_reason: Optional[str] = None,
+    budget_secs: float = PUSH_RETRY_BUDGET_SECS,
 ) -> PushOutcome:
     """Push `worktree_root`'s current branch iff it is ahead of its own
     upstream tracking ref -- decided at zero git spawns (see module
@@ -344,6 +350,12 @@ def push_outstanding(
     `allow_protected_branch`/`protected_branch_override_reason` pass straight
     through to `push_with_retry` -- see that function's own docstring; this
     module adds no new override surface of its own.
+
+    `budget_secs` (C5, 2026-08-30) -- defaults to the interactive
+    `PUSH_RETRY_BUDGET_SECS` so no existing caller changes behaviour. The
+    cadence sweep (`warm.push_cadence._sweep_one`) passes its own, smaller
+    `ops.ceremony.push.CADENCE_PUSH_RETRY_BUDGET_SECS` instead -- see that
+    constant's own docstring for why the cadence needs a shorter ladder.
 
     When HEAD itself is unresolvable (detached, or `.git/HEAD` unreadable),
     or the current branch name cannot be determined, the zero-spawn sha
@@ -360,7 +372,8 @@ def push_outstanding(
     skips the predicate entirely.
 
     THE LADDER OWNS ITS OWN DEADLINE (2026-08-26). This call passes
-    `budget_secs=PUSH_RETRY_BUDGET_SECS`, so the push/fetch/rebase/re-push
+    `budget_secs` (defaulting to `PUSH_RETRY_BUDGET_SECS`, see that
+    parameter's own docstring above), so the push/fetch/rebase/re-push
     ladder stops ITSELF between attempts rather than being cut mid-leg by
     `ipc._timeout_for`'s dispatch guard. That guard is wall-clock and does
     not abort server-side execution, so firing it inside a `git push`
@@ -411,14 +424,35 @@ def push_outstanding(
         else:
             lfs_note.append("push:lfs-range-clean")
 
+    publish_deadline = time.monotonic() + budget_secs
     outcome = push_with_retry(
         root,
         allow_protected_branch=allow_protected_branch,
         protected_branch_override_reason=protected_branch_override_reason,
-        budget_secs=PUSH_RETRY_BUDGET_SECS,
+        budget_secs=budget_secs,
     )
     if lfs_note:
         outcome.skipped.extend(lfs_note)
+
+    # Fire the cockpit-contract publish on a genuinely LANDED push -- read
+    # from the OUTCOME, never the pre-call sha pair (see module/brief note:
+    # `push_with_retry` fetches+rebases on reject, so a pre-call
+    # `upstream_sha`/`current_sha` pair can name a base/tip this call never
+    # actually landed). `outcome.pushed_range` is computed precisely to
+    # answer "what did THIS call land" and is `None` on every non-landed
+    # outcome, so it doubles as the landed-push predicate here.
+    if outcome.exit_code == 0 and outcome.pushed_range is not None:
+        cockpit_script = _cockpit_publish_script(str(root))
+        if cockpit_script is not None:
+            old_sha, _, new_sha = outcome.pushed_range.partition("..")
+            _maybe_publish_cockpit_contract(
+                str(root),
+                cockpit_script,
+                old_sha or None,
+                new_sha or None,
+                timeout_secs=_remaining_or_none(publish_deadline),
+            )
+
     _record_arm_latency(_ARM_NETWORK, arm_t_start, root)
     return outcome
 

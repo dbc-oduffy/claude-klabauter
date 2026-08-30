@@ -1992,6 +1992,29 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #   5. Persistent state changes observable across process boundaries?     No.
     #      Returns {"rows": [...]} only.
     "session.peer_roster": OpClass.COMPUTE_ONLY,
+    # groupem.enter — MUTATING, unlike every other op on this surface: it
+    # composes session.peer_roster's own read (via read_pass) with two
+    # writing legs -- nomination.claim() writes/refreshes
+    # <settings-home>/state/group-em/<repo-key>.json (a mutual-exclusion
+    # claim record), and baseline.diff_and_persist() writes
+    # state/subagent-share/<session_id>/group-em-baseline-<repo_key>.json
+    # (the peer-set snapshot for the next tick's diff). send_pass's
+    # build_send_digest also appends to that session's own send-log on
+    # every eligible entry it emits. A read-only classification would be
+    # wrong the moment any one of these three writes lands.
+    # DR-208 five-question affirmation:
+    #   1. Writes, deletes, or reorders any state file, queue, or git object? Yes --
+    #      the nomination record, the baseline snapshot, and the send log.
+    #   2. Writes into rag's relational store?                                No.
+    #   3. Opens any file for write (including sentinel creation)?            Yes --
+    #      all three files above, each via its own module's atomic-write helper.
+    #   4. Mutates shared mutable state outside its own module?               No --
+    #      each write is scoped to its own settings-home or session-share path.
+    #   5. Persistent state changes observable across process boundaries?     Yes --
+    #      the nomination claim and the baseline snapshot are both read back
+    #      by a later invocation.
+    # Spec: docs/plans/2026-08-30-group-em-entry-fires-one-warm-op.md § C5.
+    "groupem.enter": OpClass.MUTATING,
     # session.work_state — COMPUTE_ONLY: reads state/handoffs/*.md and the
     # claim-state ledger via build_work_state() (coordinator_core.session.
     # work_state), which itself only reads disk (frontmatter, claim ledger,
@@ -2109,13 +2132,10 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # convention as session.scope_report just above, which composes this
     # module's own `compute_offer`.
     "session.safe_commit_offer": OpClass.MUTATING,
-    # workday.drain_pending_push — MUTATING: delegates to
-    # `coordinator_core.hooks.auto_push.drain_pending_push`, which pushes and removes
-    # the pending-push record on success — a real write/mutation, not a read. Kept a
-    # separate op from the pure-read `workday.surface_auto_push_failure_stats` per
-    # that op's own docstring contract. Spec: docs/plans/2026-08-03-check5-owner-
-    # attribution-liveness.md § AC14/AC14a.
-    "workday.drain_pending_push": OpClass.MUTATING,
+    # workday.drain_pending_push retired 2026-08-30
+    # (docs/plans/2026-08-30-who-pushes-and-when.md C2): its delegate,
+    # `auto_push.drain_pending_push`, and the pending-push record subsystem
+    # it acted on are deleted outright -- nothing rides on it. Row removed.
     # percolate.run — MUTATING: dispatches the percolation engine's phase functions
     # (path/substitute/stem/depersonalize content rewrites + basename-rename + inject/preserve),
     # which write, rename, and copy files under the target tree (§ engine.py phase model,

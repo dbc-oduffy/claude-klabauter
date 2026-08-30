@@ -41,6 +41,7 @@ from coordinator_core.frontmatter.schema_validate import (
     validate_frontmatter,
 )
 from coordinator_core.ops.records_query import _handler
+from coordinator_core.win_portability import no_console_creationflags
 
 # Two of this module's tests seed a real git repo so `--type roadmap`
 # exercises the actual records-query collection path (glob walk +
@@ -72,18 +73,20 @@ def _run(coro):
 
 def _make_git_repo(root: Path) -> Path:
     root.mkdir(parents=True, exist_ok=True)
-    subprocess.run(["git", "init", "-b", "main"], cwd=str(root), capture_output=True, check=True)
+    subprocess.run(["git", "init", "-b", "main"], cwd=str(root), capture_output=True, check=True, **no_console_creationflags())
     subprocess.run(
         ["git", "config", "user.email", "roadmap-schema-glob-test@claude-klabauter.test"],
         cwd=str(root),
         capture_output=True,
         check=True,
+        **no_console_creationflags(),
     )
     subprocess.run(
         ["git", "config", "user.name", "Roadmap Schema Glob Test"],
         cwd=str(root),
         capture_output=True,
         check=True,
+        **no_console_creationflags(),
     )
     return (root / ".git").resolve()
 

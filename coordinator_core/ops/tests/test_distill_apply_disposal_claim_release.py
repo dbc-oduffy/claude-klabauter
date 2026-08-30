@@ -32,6 +32,7 @@ from coordinator_core.ops.distill_apply_disposal import _delete_tracked_and_appe
 from coordinator_core.session import claim_index
 from coordinator_core.session import core as session_core
 from coordinator_core.session import scope as session_scope
+from coordinator_core.win_portability import no_console_creationflags
 
 # Real-git spawn is load-bearing: this suite drives
 # `_delete_tracked_and_append_log` against a real git repo and reads the
@@ -44,7 +45,14 @@ pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 
 def _git(args, cwd: Path) -> None:
-    subprocess.run(["git", *args], cwd=str(cwd), capture_output=True, text=True, check=True)
+    subprocess.run(
+        ["git", *args],
+        cwd=str(cwd),
+        capture_output=True,
+        text=True,
+        check=True,
+        **no_console_creationflags(),
+    )
 
 
 def _run(coro):

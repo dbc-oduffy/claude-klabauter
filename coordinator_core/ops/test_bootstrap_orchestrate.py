@@ -33,6 +33,10 @@ from coordinator_core.ops.bootstrap_orchestrate import (
     _coordinator_currency_write,
     main,
 )
+from coordinator_core.win_portability import (
+    no_console_creationflags,
+    no_console_passthrough_kwargs,
+)
 
 # Declared, not excused: this file spawns a real git process because the
 # orchestrate pipeline under test validates/commits against a real target
@@ -46,20 +50,33 @@ pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 
 def _init_git(root: str) -> None:
-    subprocess.run(["git", "-C", root, "init", "--quiet"], check=True, timeout=30)
-    subprocess.run(["git", "-C", root, "config", "user.email", "test@test"], check=True, timeout=30)
-    subprocess.run(["git", "-C", root, "config", "user.name", "Test"], check=True, timeout=30)
-    subprocess.run(["git", "-C", root, "config", "commit.gpgsign", "false"], check=True, timeout=30)
+    subprocess.run(["git", "-C", root, "init", "--quiet"], check=True, timeout=30, **no_console_passthrough_kwargs())
+    subprocess.run(
+        ["git", "-C", root, "config", "user.email", "test@test"],
+        check=True, timeout=30, **no_console_passthrough_kwargs(),
+    )
+    subprocess.run(
+        ["git", "-C", root, "config", "user.name", "Test"],
+        check=True, timeout=30, **no_console_passthrough_kwargs(),
+    )
+    subprocess.run(
+        ["git", "-C", root, "config", "commit.gpgsign", "false"],
+        check=True, timeout=30, **no_console_passthrough_kwargs(),
+    )
 
 
 def _baseline_commit(root: str) -> None:
     with open(os.path.join(root, "README.md"), "w", encoding="utf-8") as fh:
         fh.write("# baseline\n")
-    subprocess.run(["git", "-C", root, "add", "--", "README.md"], check=True, timeout=30)
+    subprocess.run(
+        ["git", "-C", root, "add", "--", "README.md"],
+        check=True, timeout=30, **no_console_passthrough_kwargs(),
+    )
     subprocess.run(
         ["git", "-C", root, "commit", "--quiet", "--no-verify", "-m", "chore: baseline"],
         check=True,
         timeout=30,
+        **no_console_passthrough_kwargs(),
     )
 
 
@@ -69,6 +86,7 @@ def _commit_count(root: str) -> int:
         capture_output=True,
         text=True,
         timeout=30,
+        **no_console_creationflags(),
     )
     return int((proc.stdout or "0").strip() or "0")
 
@@ -79,6 +97,7 @@ def _head_sha(root: str) -> str:
         capture_output=True,
         text=True,
         timeout=30,
+        **no_console_creationflags(),
     )
     return proc.stdout.strip()
 
@@ -238,6 +257,7 @@ def test_express_rerun_is_idempotent(tmp_path, fake_home, capsys):
         capture_output=True,
         text=True,
         timeout=30,
+        **no_console_creationflags(),
     ).stdout.strip()
     assert dirty == ""
 

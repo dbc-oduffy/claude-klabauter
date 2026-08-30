@@ -27,6 +27,7 @@ import pytest
 from coordinator_core.bash_guards import block_reviewer_bash_outside_allowlist as guard
 from coordinator_core.subagent_sandbox import engine as _sandbox_engine
 from coordinator_core.bash_guards import _helpers
+from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -64,7 +65,7 @@ def named_dispatch(tmp_path, monkeypatch):
     subprocess.run(
         ["git", "init", "-q", str(root)],
         check=True, capture_output=True,
-    )
+    **no_console_creationflags())
     _sandbox_engine.reset_resolve_git_root_cache()
 
     sessions = root / ".git" / "coordinator-sessions"

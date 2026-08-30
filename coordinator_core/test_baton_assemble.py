@@ -49,6 +49,7 @@ from coordinator_core.session import claims as session_claims
 from coordinator_core.session.claimed_plan import resolve_claimed_plan_path
 from coordinator_core.session import shape as session_shape
 from coordinator_core.session.touch_record import append_event
+from coordinator_core.win_portability import no_console_creationflags
 
 # Real-git spawn is load-bearing: the CLI smoke tests round-trip a real
 # subprocess against baton_assemble's own trampoline, and apply_base runner
@@ -138,6 +139,7 @@ def _git(repo: Path, *args: str) -> subprocess.CompletedProcess:
         text=True,
         timeout=15,
         stdin=subprocess.DEVNULL,
+        **no_console_creationflags(),
     )
 
 

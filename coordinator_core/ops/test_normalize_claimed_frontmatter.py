@@ -16,6 +16,7 @@ import subprocess
 from pathlib import Path
 
 from coordinator_core.ops import normalize_claimed_frontmatter as ncf
+from coordinator_core.win_portability import no_console_creationflags
 
 import pytest
 
@@ -37,7 +38,7 @@ def _handoff_dir(root: Path) -> Path:
 
 
 def _git(root: Path, *args: str) -> None:
-    subprocess.run(["git", *args], cwd=root, check=True, capture_output=True)
+    subprocess.run(["git", *args], cwd=root, check=True, capture_output=True, **no_console_creationflags())
 
 
 class TestStatusDeploymentFlip:

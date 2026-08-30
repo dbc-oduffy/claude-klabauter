@@ -12,7 +12,7 @@ Job object attached to this process, so every `git` child AND the `conhost.exe`
 Windows allocates alongside one (DR-373) is counted -- the undercount a
 `subprocess.Popen` patch produces is exactly what this exists to avoid.
 """
-import os, shutil, subprocess, sys, tempfile, time
+import os, shutil, sys, tempfile, time
 from functools import partial
 from pathlib import Path
 
@@ -27,6 +27,7 @@ from coordinator_core.benchmarks import declare_benchmark_origin
 from coordinator_core.benchmarks.process_time import LiveTreeAccountant
 from coordinator_core.git.commit import CommitRefused, FilterUnsupported, commit_paths
 from coordinator_core.git.commit import hash_worktree_blobs_via_spawn
+from coordinator_core.git.run import run_git
 from coordinator_core.ops.ceremony.commit_message import compose_message
 
 
@@ -34,10 +35,12 @@ WARMUP = 6
 
 
 def _q(root: Path, *a):
-    return subprocess.run(
-        ["git", *a], cwd=root, capture_output=True, text=True,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-    )
+    """Fixture build and post-window verification only -- `commit_paths`
+    (imported above) is the measured subject, timed by `LiveTreeAccountant`
+    around its own calls; these git spawns never enter that window, so
+    routing them through `coordinator_core.git.run` (G7) adds no seam cost
+    to the figure this module reports."""
+    return run_git(list(a), cwd=str(root))
 
 
 def build_repo(root: Path):

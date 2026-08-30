@@ -56,6 +56,10 @@ from coordinator_core.ops.session.scope_report import (
     assert_paths_in_session_scope,
 )
 from coordinator_core.session import claim_index, core, scope
+from coordinator_core.win_portability import (
+    no_console_creationflags,
+    no_console_passthrough_kwargs,
+)
 
 # Real git spawn is load-bearing: assert_paths_in_session_scope and
 # session.scope_report both delegate to compute_offer, which reads real
@@ -75,18 +79,42 @@ assert _OP_NAME in _REGISTRY, (
 
 
 def _make_repo(tmp_path):
-    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
-    subprocess.run(["git", "config", "user.email", "t@example.com"], cwd=tmp_path, check=True)
-    subprocess.run(["git", "config", "user.name", "t"], cwd=tmp_path, check=True)
+    subprocess.run(
+        ["git", "init", "-q"], cwd=tmp_path, check=True, **no_console_passthrough_kwargs()
+    )
+    subprocess.run(
+        ["git", "config", "user.email", "t@example.com"],
+        cwd=tmp_path,
+        check=True,
+        **no_console_passthrough_kwargs(),
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "t"],
+        cwd=tmp_path,
+        check=True,
+        **no_console_passthrough_kwargs(),
+    )
     (tmp_path / "README.md").write_text("x")
-    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
-    subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=tmp_path, check=True)
+    subprocess.run(
+        ["git", "add", "."], cwd=tmp_path, check=True, **no_console_passthrough_kwargs()
+    )
+    subprocess.run(
+        ["git", "commit", "-q", "-m", "init"],
+        cwd=tmp_path,
+        check=True,
+        **no_console_passthrough_kwargs(),
+    )
     return tmp_path
 
 
 def _dirty_status(repo):
     result = subprocess.run(
-        ["git", "status", "--porcelain"], cwd=repo, capture_output=True, text=True, check=True
+        ["git", "status", "--porcelain"],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        check=True,
+        **no_console_creationflags(),
     )
     return result.stdout
 
@@ -805,6 +833,7 @@ class TestPostCommitResidueReport:
             capture_output=True,
             text=True,
             check=True,
+            **no_console_creationflags(),
         ).stdout
         assert "peer.py" in status_after
         assert "residue.txt" in status_after

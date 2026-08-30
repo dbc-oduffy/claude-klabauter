@@ -24,6 +24,7 @@ import pytest
 
 from coordinator_core.session import harness_registry as hr
 from coordinator_core.session_ledger.aggregate_chain_loe import main, resolve_state_root
+from coordinator_core.win_portability import no_console_passthrough_kwargs
 
 # Spawns a real external process; runs at cadence gates, not per-commit.
 # Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
@@ -56,7 +57,7 @@ predecessor: {predecessor}
 
 
 def _init_repo(tmp_path: Path) -> Path:
-    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True, **no_console_passthrough_kwargs())
     (tmp_path / "state" / "handoffs").mkdir(parents=True)
     (tmp_path / "archive" / "handoffs").mkdir(parents=True)
     (tmp_path / "coordinator" / "lib").mkdir(parents=True)
@@ -149,8 +150,8 @@ def test_resolve_state_root_is_scoped_to_passed_cwd_not_ambient_cwd(tmp_path, mo
     repo_b = tmp_path / "repo_b"
     repo_a.mkdir()
     repo_b.mkdir()
-    subprocess.run(["git", "init", "-q"], cwd=repo_a, check=True)
-    subprocess.run(["git", "init", "-q"], cwd=repo_b, check=True)
+    subprocess.run(["git", "init", "-q"], cwd=repo_a, check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "init", "-q"], cwd=repo_b, check=True, **no_console_passthrough_kwargs())
 
     monkeypatch.chdir(repo_a)
     result = resolve_state_root(Path("unused"), repo_b)

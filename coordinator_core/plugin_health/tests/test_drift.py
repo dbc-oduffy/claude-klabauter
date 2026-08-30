@@ -42,6 +42,7 @@ from coordinator_core.plugin_health.drift import (
     check_plugin,
     git_worktree_root_if_self,
 )
+from coordinator_core.win_portability import no_console_creationflags, no_console_passthrough_kwargs
 
 # Spawns a real external process; runs at cadence gates, not per-commit.
 # Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
@@ -59,10 +60,10 @@ def _mkrepo(path: Path) -> None:
         "GIT_COMMITTER_NAME": "test",
         "GIT_COMMITTER_EMAIL": "t@t",
     }
-    subprocess.run(["git", "-C", str(path), "init", "-q"], check=True)
+    subprocess.run(["git", "-C", str(path), "init", "-q"], check=True, **no_console_passthrough_kwargs())
     (path / "seed.txt").write_text("seed\n")
-    subprocess.run(["git", "-C", str(path), "add", "seed.txt"], check=True)
-    subprocess.run(["git", "-C", str(path), "commit", "-qm", "seed"], check=True, env={**_env_base(), **env})
+    subprocess.run(["git", "-C", str(path), "add", "seed.txt"], check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "-C", str(path), "commit", "-qm", "seed"], check=True, env={**_env_base(), **env}, **no_console_passthrough_kwargs())
 
 
 def _env_base():
@@ -235,15 +236,17 @@ def test_copy_install_content_equivalence_batches_multi_file_hash_object(tmp_pat
         "GIT_COMMITTER_NAME": "test",
         "GIT_COMMITTER_EMAIL": "t@t",
     }
-    subprocess.run(["git", "-C", str(source), "add", "-A"], check=True)
+    subprocess.run(["git", "-C", str(source), "add", "-A"], check=True, **no_console_passthrough_kwargs())
     subprocess.run(
         ["git", "-C", str(source), "commit", "-qm", "add plugin files"],
         check=True,
         env={**_env_base(), **env},
+        **no_console_passthrough_kwargs(),
     )
     head = subprocess.run(
         ["git", "-C", str(source), "rev-parse", "HEAD"],
         check=True, capture_output=True, text=True,
+        **no_console_creationflags(),
     ).stdout.strip()
 
     live = tmp_path / "live"

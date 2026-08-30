@@ -30,6 +30,8 @@ from pathlib import Path
 
 import pytest
 
+from coordinator_core.win_portability import no_console_passthrough_kwargs
+
 # Real git repo is load-bearing: compute_chunk_table pipes through
 # cartography.tree.list_tracked_files, which shells `git ls-files` -- the
 # tracked-vs-untracked distinction under test (build/vendor/test-artifact
@@ -75,9 +77,9 @@ assert _OP_NAME in _REGISTRY, (
 def git_repo(tmp_path: Path) -> Path:
     root = tmp_path / "repo"
     root.mkdir()
-    subprocess.run(["git", "init", "-q"], cwd=root, check=True)
-    subprocess.run(["git", "config", "user.email", "t@example.com"], cwd=root, check=True)
-    subprocess.run(["git", "config", "user.name", "T"], cwd=root, check=True)
+    subprocess.run(["git", "init", "-q"], cwd=root, check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "config", "user.email", "t@example.com"], cwd=root, check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "config", "user.name", "T"], cwd=root, check=True, **no_console_passthrough_kwargs())
 
     files = {
         "systemA/foo.py": "print(1)\n",
@@ -96,8 +98,8 @@ def git_repo(tmp_path: Path) -> Path:
         full.parent.mkdir(parents=True, exist_ok=True)
         full.write_text(content, encoding="utf-8")
 
-    subprocess.run(["git", "add", "-A"], cwd=root, check=True)
-    subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=root, check=True)
+    subprocess.run(["git", "add", "-A"], cwd=root, check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=root, check=True, **no_console_passthrough_kwargs())
     return root
 
 

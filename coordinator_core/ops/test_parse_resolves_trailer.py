@@ -15,6 +15,10 @@ import subprocess
 import pytest
 
 from coordinator_core.ops.parse_resolves_trailer import main, run
+from coordinator_core.win_portability import (
+    no_console_creationflags,
+    no_console_passthrough_kwargs,
+)
 
 # Declared, not excused: this file spawns real git because the property under test
 # is `Resolves:` trailer parsing off REAL commit metadata (`git log`/`git show`
@@ -31,19 +35,43 @@ pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 def git_repo(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
-    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
-    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=repo, check=True)
-    subprocess.run(["git", "config", "user.name", "Test"], cwd=repo, check=True)
+    subprocess.run(
+        ["git", "init", "-q"], cwd=repo, check=True, **no_console_passthrough_kwargs()
+    )
+    subprocess.run(
+        ["git", "config", "user.email", "test@example.com"],
+        cwd=repo,
+        check=True,
+        **no_console_passthrough_kwargs(),
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "Test"],
+        cwd=repo,
+        check=True,
+        **no_console_passthrough_kwargs(),
+    )
     return repo
 
 
 def _commit(repo, message: str) -> str:
     f = repo / "f.txt"
     f.write_text(message)
-    subprocess.run(["git", "add", "f.txt"], cwd=repo, check=True)
-    subprocess.run(["git", "commit", "-q", "-m", message], cwd=repo, check=True)
+    subprocess.run(
+        ["git", "add", "f.txt"], cwd=repo, check=True, **no_console_passthrough_kwargs()
+    )
+    subprocess.run(
+        ["git", "commit", "-q", "-m", message],
+        cwd=repo,
+        check=True,
+        **no_console_passthrough_kwargs(),
+    )
     result = subprocess.run(
-        ["git", "rev-parse", "HEAD"], cwd=repo, check=True, capture_output=True, text=True
+        ["git", "rev-parse", "HEAD"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        text=True,
+        **no_console_creationflags(),
     )
     return result.stdout.strip()
 

@@ -37,6 +37,10 @@ from unittest import mock
 import pytest
 
 from coordinator_core.ops.ceremony import detached_render_commit as drc
+from coordinator_core.win_portability import (
+    no_console_creationflags,
+    no_console_passthrough_kwargs,
+)
 
 # Spawns a real external process; runs at cadence gates, not per-commit.
 # Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
@@ -47,14 +51,14 @@ pytestmark = [
 
 
 def _init_repo(root: Path) -> None:
-    subprocess.run(["git", "init", "-q"], cwd=str(root), check=True)
-    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=str(root), check=True)
-    subprocess.run(["git", "config", "user.name", "Test"], cwd=str(root), check=True)
+    subprocess.run(["git", "init", "-q"], cwd=str(root), check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=str(root), check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=str(root), check=True, **no_console_passthrough_kwargs())
     (root / "README.md").write_text("seed\n", encoding="utf-8")
-    subprocess.run(["git", "add", "--", "README.md"], cwd=str(root), check=True)
+    subprocess.run(["git", "add", "--", "README.md"], cwd=str(root), check=True, **no_console_passthrough_kwargs())
     subprocess.run(
         ["git", "-c", "commit.gpgsign=false", "commit", "-m", "seed"],
-        cwd=str(root), check=True,
+        cwd=str(root), check=True, **no_console_passthrough_kwargs(),
     )
 
 
@@ -67,6 +71,7 @@ def repo(tmp_path: Path) -> Path:
 def _log_subjects(root: Path) -> list[str]:
     result = subprocess.run(
         ["git", "log", "--format=%s"], cwd=str(root), capture_output=True, text=True, check=True,
+        **no_console_creationflags(),
     )
     return result.stdout.splitlines()
 
@@ -93,6 +98,7 @@ def test_commits_new_file(repo: Path) -> None:
     show = subprocess.run(
         ["git", "show", "--name-only", "--format="], cwd=str(repo),
         capture_output=True, text=True, check=True,
+        **no_console_creationflags(),
     )
     assert show.stdout.strip() == "state/handoff-tracker.md"
 
@@ -106,10 +112,10 @@ def test_noop_when_clean(repo: Path) -> None:
     target = repo / "state" / "handoff-tracker.md"
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text("# Handoff Tracker\n", encoding="utf-8")
-    subprocess.run(["git", "add", "--", "state/handoff-tracker.md"], cwd=str(repo), check=True)
+    subprocess.run(["git", "add", "--", "state/handoff-tracker.md"], cwd=str(repo), check=True, **no_console_passthrough_kwargs())
     subprocess.run(
         ["git", "-c", "commit.gpgsign=false", "commit", "-m", "pre-existing"],
-        cwd=str(repo), check=True,
+        cwd=str(repo), check=True, **no_console_passthrough_kwargs(),
     )
     before = _log_subjects(repo)
 

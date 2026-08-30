@@ -24,6 +24,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from coordinator_core.ops import migrate_branch_canonical_case as mbcc  # noqa: E402
+from coordinator_core.win_portability import no_console_creationflags
 
 # Spawns a real external process; runs at cadence gates, not per-commit.
 # Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
@@ -35,7 +36,7 @@ pytestmark = [
 
 def _git(repo: Path, *args: str) -> subprocess.CompletedProcess:
     return subprocess.run(
-        ["git", *args], cwd=repo, capture_output=True, text=True
+        ["git", *args], cwd=repo, capture_output=True, text=True, **no_console_creationflags()
     )
 
 

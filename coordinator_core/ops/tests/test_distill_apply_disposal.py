@@ -90,6 +90,7 @@ from coordinator_core.ops.distill_stamp_disposal import (
     load_disposal_manifest,
     manifest_path_for_run,
 )
+from coordinator_core.win_portability import no_console_creationflags
 
 # Spawns a real external process; runs at cadence gates, not per-commit.
 # Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
@@ -108,7 +109,12 @@ def _run(coro):
 
 def _git(*args: str, cwd: Path) -> str:
     result = subprocess.run(
-        ["git", *args], cwd=cwd, check=True, capture_output=True, text=True
+        ["git", *args],
+        cwd=cwd,
+        check=True,
+        capture_output=True,
+        text=True,
+        **no_console_creationflags(),
     )
     return result.stdout.strip()
 

@@ -31,6 +31,7 @@ from coordinator_core.session.touch_record import (
     iter_complete_lines,
     sink_path,
 )
+from coordinator_core.win_portability import no_console_creationflags
 
 # Spawns a real external process; runs at cadence gates, not per-commit.
 # Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
@@ -49,6 +50,7 @@ def _git(*args: str, cwd: str) -> None:
         check=True,
         capture_output=True,
         text=True,
+        **no_console_creationflags(),
     )
 
 

@@ -54,13 +54,18 @@ from pathlib import Path
 import pytest
 
 from coordinator_core.ops.ceremony.resolver import detect_git_provenance_consumed
+from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 
 def _git(root: Path, *args: str) -> subprocess.CompletedProcess:
     return subprocess.run(
-        ["git", *args], cwd=str(root), capture_output=True, text=True
+        ["git", *args],
+        cwd=str(root),
+        capture_output=True,
+        text=True,
+        **no_console_creationflags(),
     )
 
 
@@ -85,7 +90,9 @@ def _init_repo_with_origin(tmp_path: Path) -> Path:
     bare = tmp_path / "origin.git"
     subprocess.run(
         ["git", "init", "--bare", "-b", "main", str(bare)],
-        check=True, capture_output=True,
+        check=True,
+        capture_output=True,
+        **no_console_creationflags(),
     )
     _git(root, "remote", "add", "origin", str(bare))
     push = _git(root, "push", "-u", "origin", "main")

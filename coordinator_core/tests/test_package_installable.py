@@ -96,6 +96,7 @@ def _pristine_source_export(repo_root: Path, dest: Path) -> None:
         capture_output=True,
         text=True,
         timeout=60,
+        creationflags=_NO_CONSOLE,
     )
     assert ls_files.returncode == 0, f"git ls-files failed:\n{ls_files.stderr}"
 

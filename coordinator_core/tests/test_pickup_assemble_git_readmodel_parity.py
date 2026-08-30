@@ -44,6 +44,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
 
 from coordinator_core import pickup_assemble as pa  # noqa: E402
+from coordinator_core.win_portability import no_console_creationflags
 
 # Declared, not excused: the point of this file IS the parity comparison between
 # `pickup_assemble._run_git`'s in-process read-model and the real `git` CLI it
@@ -75,6 +76,7 @@ def _real_git(args, cwd):
         capture_output=True,
         text=True,
         timeout=30,
+        **no_console_creationflags(),
     )
 
 
@@ -215,35 +217,37 @@ def _merge_treesame_to_first_parent_fixture(root: Path) -> tuple[str, str, str]:
         ["config", "user.name", "Fixture"],
         ["config", "commit.gpgsign", "false"],
     ):
-        subprocess.run(["git", "-C", str(root), *args], check=True, capture_output=True)
+        subprocess.run(["git", "-C", str(root), *args], check=True, capture_output=True, **no_console_creationflags())
     (root / "file.txt").write_text("no needle here\n", encoding="utf-8")
-    subprocess.run(["git", "-C", str(root), "add", "file.txt"], check=True, capture_output=True)
-    subprocess.run(["git", "-C", str(root), "commit", "-q", "-m", "C0"], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(root), "add", "file.txt"], check=True, capture_output=True, **no_console_creationflags())
+    subprocess.run(["git", "-C", str(root), "commit", "-q", "-m", "C0"], check=True, capture_output=True, **no_console_creationflags())
 
     (root / "file.txt").write_text("NEEDLE here\n", encoding="utf-8")
-    subprocess.run(["git", "-C", str(root), "add", "file.txt"], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(root), "add", "file.txt"], check=True, capture_output=True, **no_console_creationflags())
     subprocess.run(
-        ["git", "-C", str(root), "commit", "-q", "-m", "C1 introduces NEEDLE"], check=True, capture_output=True
+        ["git", "-C", str(root), "commit", "-q", "-m", "C1 introduces NEEDLE"], check=True, capture_output=True, **no_console_creationflags()
     )
     c1_sha = _real_git(["rev-parse", "HEAD"], root).stdout.strip()
 
     subprocess.run(
-        ["git", "-C", str(root), "checkout", "-q", "-b", "branch", "HEAD~1"], check=True, capture_output=True
+        ["git", "-C", str(root), "checkout", "-q", "-b", "branch", "HEAD~1"], check=True, capture_output=True, **no_console_creationflags()
     )
     (root / "file.txt").write_text("no needle here\nbranch change\n", encoding="utf-8")
-    subprocess.run(["git", "-C", str(root), "add", "file.txt"], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(root), "add", "file.txt"], check=True, capture_output=True, **no_console_creationflags())
     subprocess.run(
         ["git", "-C", str(root), "commit", "-q", "-m", "B1 branch change, no NEEDLE"],
         check=True,
         capture_output=True,
+    **no_console_creationflags(),
     )
     branch_sha = _real_git(["rev-parse", "HEAD"], root).stdout.strip()
 
-    subprocess.run(["git", "-C", str(root), "checkout", "-q", "main"], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(root), "checkout", "-q", "main"], check=True, capture_output=True, **no_console_creationflags())
     subprocess.run(
         ["git", "-C", str(root), "merge", "-q", "--no-ff", "-m", "M merge, keep main", "-X", "ours", "branch"],
         check=True,
         capture_output=True,
+    **no_console_creationflags(),
     )
     merge_sha = _real_git(["rev-parse", "HEAD"], root).stdout.strip()
     return c1_sha, merge_sha, branch_sha
@@ -290,20 +294,22 @@ def _init_fixture_repo(root: Path) -> None:
         ["config", "user.email", "fixture@example.com"],
         ["config", "user.name", "Fixture"],
     ):
-        subprocess.run(["git", "-C", str(root), *args], check=True, capture_output=True)
+        subprocess.run(["git", "-C", str(root), *args], check=True, capture_output=True, **no_console_creationflags())
     (root / "a.txt").write_text("one\n", encoding="utf-8")
-    subprocess.run(["git", "-C", str(root), "add", "a.txt"], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(root), "add", "a.txt"], check=True, capture_output=True, **no_console_creationflags())
     subprocess.run(
         ["git", "-C", str(root), "commit", "-q", "-m", "first"],
         check=True,
         capture_output=True,
+    **no_console_creationflags(),
     )
     (root / "a.txt").write_text("two\n", encoding="utf-8")
-    subprocess.run(["git", "-C", str(root), "add", "a.txt"], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(root), "add", "a.txt"], check=True, capture_output=True, **no_console_creationflags())
     subprocess.run(
         ["git", "-C", str(root), "commit", "-q", "-m", "second"],
         check=True,
         capture_output=True,
+    **no_console_creationflags(),
     )
 
 
@@ -313,7 +319,7 @@ def test_detached_head_fixture():
         root.mkdir()
         _init_fixture_repo(root)
         first_sha = _real_git(["rev-parse", "HEAD~1"], root).stdout.strip()
-        subprocess.run(["git", "-C", str(root), "checkout", "-q", first_sha], check=True, capture_output=True)
+        subprocess.run(["git", "-C", str(root), "checkout", "-q", first_sha], check=True, capture_output=True, **no_console_creationflags())
 
         real_branch = _real_git(["rev-parse", "--abbrev-ref", "HEAD"], root).stdout.strip()
         mine_branch = pa._current_branch(root)
@@ -456,12 +462,13 @@ def test_linked_worktree_fixture():
         root = Path(tmp) / "fixture"
         root.mkdir()
         _init_fixture_repo(root)
-        subprocess.run(["git", "-C", str(root), "branch", "wt-branch"], check=True, capture_output=True)
+        subprocess.run(["git", "-C", str(root), "branch", "wt-branch"], check=True, capture_output=True, **no_console_creationflags())
         worktree_dir = Path(tmp) / "fixture-wt"
         subprocess.run(
             ["git", "-C", str(root), "worktree", "add", "-q", str(worktree_dir), "wt-branch"],
             check=True,
             capture_output=True,
+        **no_console_creationflags(),
         )
 
         real_toplevel = _real_git(["rev-parse", "--show-toplevel"], worktree_dir).stdout.strip()

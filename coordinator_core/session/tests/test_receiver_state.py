@@ -11,6 +11,7 @@ Spec backlink: docs/plans/2026-08-14-receiver-state-sensor.md § C5
 from __future__ import annotations
 
 import json
+import os
 import time
 from pathlib import Path
 
@@ -87,7 +88,13 @@ def _sidechain_line() -> str:
     return json.dumps({"type": "assistant", "isSidechain": True, "message": {"stop_reason": "end_turn"}})
 
 
-def _unmodelled_line(line_type: str = "attachment", subtype: str = "image") -> str:
+def _unmodelled_line(line_type: str = "assistant", subtype: str = "image") -> str:
+    # A state-bearing TYPE (assistant/user) whose shape the ladder still doesn't
+    # recognise (no stop_reason matching any arm) — this is what actually reaches
+    # `_classify_one`'s final UNKNOWN:unmodelled branch under the allow-list walk-back.
+    # A non-state-bearing type (e.g. "attachment") is walked PAST by
+    # `_select_last_substantive_line` and never reaches `_classify_one` at all — see
+    # `test_non_state_bearing_type_is_walked_past_not_recorded_as_unmodelled`.
     return json.dumps({"type": line_type, "subtype": subtype, "timestamp": "2026-08-14T00:00:00Z"})
 
 
@@ -190,11 +197,34 @@ class TestLadderArms:
 
 class TestUnknownAndDelegationOverride:
     def test_unmodelled_line_yields_unknown_and_records_type(self, tmp_path: Path) -> None:
-        reduced = _reduce(tmp_path, [_unmodelled_line("attachment", "image")])
+        reduced = _reduce(tmp_path, [_unmodelled_line("assistant", "image")])
         v = rs.classify(reduced, now_epoch=0.0, transcript_mtime_epoch=None, delegation_evidence=False)
         assert v.verdict == "UNKNOWN"
-        assert v.unmodelled_type == "attachment"
+        assert v.unmodelled_type == "assistant"
         assert v.unmodelled_subtype == "image"
+
+    def test_non_state_bearing_type_is_walked_past_not_recorded_as_unmodelled(
+        self, tmp_path: Path
+    ) -> None:
+        """Regression for state/audits/2026-08-30-group-em-classifier-blindness.md:
+        `attachment` (and the other non-state-bearing types it names) must be walked
+        PAST to the real last state-bearing line, never classified as UNKNOWN:unmodelled
+        in its own right."""
+        reduced = _reduce(
+            tmp_path, [_system_stop_hook_summary(), _unmodelled_line("attachment", "image")]
+        )
+        v = rs.classify(reduced, now_epoch=0.0, transcript_mtime_epoch=None, delegation_evidence=False)
+        assert v.verdict == "PAUSED"
+        assert v.reason == "turn-ended"
+
+    def test_window_all_non_state_bearing_yields_unknown_with_new_reason(
+        self, tmp_path: Path
+    ) -> None:
+        reduced = _reduce(tmp_path, [_unmodelled_line("attachment", "image"), _control_line("atis-latch")])
+        v = rs.classify(reduced, now_epoch=0.0, transcript_mtime_epoch=None, delegation_evidence=False)
+        assert v.verdict == "UNKNOWN"
+        assert "none state-bearing" in v.reason
+        assert "isSidechain" not in v.reason
 
     def test_unknown_plus_live_delegation_evidence_overrides_to_producing_delegated(
         self, tmp_path: Path
@@ -220,6 +250,112 @@ class TestUnknownAndDelegationOverride:
         v = rs.classify(reduced, now_epoch=0.0, transcript_mtime_epoch=None, delegation_evidence=True)
         assert v.verdict == "PRODUCING"
         assert v.reason == "mid-turn"
+
+
+class TestDelegationEvidenceFromSidecar:
+    """state/audits/2026-08-30-group-em-classifier-blindness.md's root-cause finding:
+    `delegation_evidence` was ALWAYS False in production because nothing ever
+    computed it — these tests cover the producer this dispatch adds
+    (`delegation_evidence_from_sidecar`) across its FOUR distinct outcomes: present,
+    absent, no-transcript-path (case (a): no information at all — bare `None`), and
+    listing-errored (case (b): genuinely ambiguous — `DELEGATION_UNRESOLVED`). The
+    two `None`-shaped causes were originally collapsed together and had to be split
+    apart after review; see `merge_delegation_evidence`'s docstring for why they
+    must stay distinct."""
+
+    @staticmethod
+    def _sidecar_dir(tmp_path: Path) -> tuple[Path, str]:
+        """Build <tmp>/session.jsonl + <tmp>/session/subagents/ and return
+        (subagents_dir, transcript_path) — the exact shape
+        `_subagents_dir_for` derives from a real transcript path."""
+        transcript = tmp_path / "session.jsonl"
+        transcript.write_text("{}\n", encoding="utf-8")
+        subagents_dir = tmp_path / "session" / "subagents"
+        subagents_dir.mkdir(parents=True)
+        return subagents_dir, str(transcript)
+
+    def test_present_recent_mtime_is_true(self, tmp_path: Path) -> None:
+        subagents_dir, transcript_path = self._sidecar_dir(tmp_path)
+        agent_file = subagents_dir / "agent-abc123.jsonl"
+        agent_file.write_text("{}\n", encoding="utf-8")
+        now = os.path.getmtime(agent_file) + 5.0
+        result = rs.delegation_evidence_from_sidecar(transcript_path, now_epoch=now)
+        assert result is True
+
+    def test_present_stale_mtime_is_false(self, tmp_path: Path) -> None:
+        subagents_dir, transcript_path = self._sidecar_dir(tmp_path)
+        agent_file = subagents_dir / "agent-abc123.jsonl"
+        agent_file.write_text("{}\n", encoding="utf-8")
+        stale_now = os.path.getmtime(agent_file) + rs._DELEGATION_ACTIVITY_GRACE_SECONDS + 1.0
+        result = rs.delegation_evidence_from_sidecar(transcript_path, now_epoch=stale_now)
+        assert result is False
+
+    def test_no_subagents_directory_is_false(self, tmp_path: Path) -> None:
+        transcript = tmp_path / "solo-session.jsonl"
+        transcript.write_text("{}\n", encoding="utf-8")
+        result = rs.delegation_evidence_from_sidecar(str(transcript), now_epoch=0.0)
+        assert result is False
+
+    def test_no_transcript_path_is_bare_none_no_information(self) -> None:
+        """Case (a): no transcript_path at all is NO INFORMATION, distinct from a
+        failed check. Must be a bare `None`, never `DELEGATION_UNRESOLVED` and never
+        `False` — this is what an UNKNOWN ladder verdict already means, and
+        `merge_delegation_evidence` must not override on it (see that function's
+        test class below)."""
+        assert rs.delegation_evidence_from_sidecar(None, now_epoch=0.0) is None
+        assert rs.delegation_evidence_from_sidecar("", now_epoch=0.0) is None
+
+    def test_unreadable_directory_is_delegation_unresolved(self, tmp_path: Path, monkeypatch) -> None:
+        """Case (b): a transcript path WAS supplied and DID resolve to a candidate
+        directory, but listing it failed for a reason other than "does not exist"
+        (e.g. a permission error) — genuinely ambiguous, must be the
+        `DELEGATION_UNRESOLVED` sentinel, never a bare `None` and never `False`."""
+        subagents_dir, transcript_path = self._sidecar_dir(tmp_path)
+
+        def _boom(_path):
+            raise PermissionError("simulated")
+
+        monkeypatch.setattr(rs.os, "scandir", _boom)
+        result = rs.delegation_evidence_from_sidecar(transcript_path, now_epoch=0.0)
+        assert result is rs.DELEGATION_UNRESOLVED
+        assert result is not None
+
+    def test_non_jsonl_entries_ignored(self, tmp_path: Path) -> None:
+        subagents_dir, transcript_path = self._sidecar_dir(tmp_path)
+        meta_file = subagents_dir / "agent-abc123.meta.json"
+        meta_file.write_text("{}\n", encoding="utf-8")
+        now = os.path.getmtime(meta_file) + 5.0
+        result = rs.delegation_evidence_from_sidecar(transcript_path, now_epoch=now)
+        assert result is False
+
+
+class TestMergeDelegationEvidence:
+    def test_payload_true_wins_regardless_of_sidecar(self) -> None:
+        assert rs.merge_delegation_evidence(True, False) is True
+        assert rs.merge_delegation_evidence(True, None) is True
+        assert rs.merge_delegation_evidence(True, rs.DELEGATION_UNRESOLVED) is True
+
+    def test_sidecar_true_wins_when_payload_false(self) -> None:
+        assert rs.merge_delegation_evidence(False, True) is True
+
+    def test_delegation_unresolved_fails_toward_true(self) -> None:
+        """Case (b) — a check was attempted and genuinely could not be answered —
+        must fail toward PRODUCING, never collapse to the same outcome as a
+        definitive negative."""
+        assert rs.merge_delegation_evidence(False, rs.DELEGATION_UNRESOLVED) is True
+
+    def test_no_transcript_path_does_not_override(self) -> None:
+        """Case (a) — regression coverage for the design error caught in review: a
+        bare `None` sidecar signal (no transcript path, i.e. NO information at all)
+        must NOT be treated the same as `DELEGATION_UNRESOLVED`. Overriding here
+        would manufacture positive delegation evidence out of an absence of
+        information and destroy the UNKNOWN verdict the ladder already produces —
+        UNKNOWN is never a nudge candidate on its own, so this buys zero additional
+        protection against the spurious-nudge defect."""
+        assert rs.merge_delegation_evidence(False, None) is False
+
+    def test_both_false_is_false(self) -> None:
+        assert rs.merge_delegation_evidence(False, False) is False
 
 
 # ---------------------------------------------------------------------------

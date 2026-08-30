@@ -31,6 +31,7 @@ from coordinator_core.ops.install_meta_repo_precommit_hook import (
 )
 import coordinator_core.ops.install_meta_repo_precommit_hook as _mod
 from coordinator_core.testing.sh_interpreter import require_sh_interpreter
+from coordinator_core.win_portability import no_console_creationflags, no_console_passthrough_kwargs
 
 # Declared, not excused: this file spawns real `git` and `sh` processes
 # because the tests are deliberately BEHAVIORAL -- they execute the emitted
@@ -48,7 +49,7 @@ pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 
 def _git_init(path: Path) -> None:
-    subprocess.run(["git", "init", "-q", str(path)], check=True)
+    subprocess.run(["git", "init", "-q", str(path)], check=True, **no_console_passthrough_kwargs())
 
 
 def _make_meta_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
@@ -100,7 +101,7 @@ def _run_hook(
         env.update(extra_env)
     return subprocess.run(
         [require_sh_interpreter(), str(hook)], cwd=str(cwd), capture_output=True, text=True, env=env
-    )
+    , **no_console_creationflags())
 
 
 # ---------------------------------------------------------------------------
@@ -1218,7 +1219,7 @@ def test_hook_sh_syntax_is_valid(tmp_path, monkeypatch):
 
     result = subprocess.run(
         [require_sh_interpreter(), "-n", str(_hook_path(meta))], capture_output=True, text=True
-    )
+    , **no_console_creationflags())
     assert result.returncode == 0, result.stderr
 
 

@@ -28,6 +28,7 @@ from coordinator_core.resolve_validation_cmd import (
     redact_for_diag,
     resolve_python_interp,
 )
+from coordinator_core.win_portability import no_console_creationflags
 
 # Spawns a real external process; runs at cadence gates, not per-commit.
 # Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
@@ -265,7 +266,9 @@ def test_fast_local_md_marker_expression_survives_a_real_shell(tmp_path):
     shell_cmd = result.cmd.replace(
         "python3 -m pytest", f"python3 {shlex.quote(echo_argv_posix)}", 1
     )
-    proc = subprocess.run(["sh", "-c", shell_cmd], capture_output=True, text=True)
+    proc = subprocess.run(
+        ["sh", "-c", shell_cmd], capture_output=True, text=True, **no_console_creationflags()
+    )
     assert proc.returncode == 0, proc.stderr
     argv = json.loads(proc.stdout)
     marker_idx = argv.index("-m")

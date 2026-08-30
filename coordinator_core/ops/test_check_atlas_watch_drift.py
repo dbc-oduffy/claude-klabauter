@@ -26,6 +26,7 @@ import pytest
 
 from coordinator_core.ops import check_atlas_watch_drift
 from coordinator_core.ops.check_atlas_watch_drift import run
+from coordinator_core.win_portability import no_console_passthrough_kwargs
 
 # Declared, not excused: this file spawns real git because the ported bash-oracle
 # contract (test_atlas_watch_drift.py, DoE-claude) depends on real commit/mtime
@@ -46,10 +47,10 @@ pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 def _init_repo(root):
     """Initialize a minimal git repo at `root` and return (root_str, systems_dir_str)."""
     root = str(root)
-    subprocess.run(["git", "init", "-q", root], check=True)
-    subprocess.run(["git", "-C", root, "config", "user.email", "test@example.com"], check=True)
-    subprocess.run(["git", "-C", root, "config", "user.name", "Test"], check=True)
-    subprocess.run(["git", "-C", root, "config", "commit.gpgsign", "false"], check=True)
+    subprocess.run(["git", "init", "-q", root], check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "-C", root, "config", "user.email", "test@example.com"], check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "-C", root, "config", "user.name", "Test"], check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "-C", root, "config", "commit.gpgsign", "false"], check=True, **no_console_passthrough_kwargs())
     systems = os.path.join(root, "docs", "architecture", "systems")
     os.makedirs(systems, exist_ok=True)
     return root, systems
@@ -376,7 +377,7 @@ def test_unknown_arg_emits_error(tmp_path):
 
 def test_no_atlas_dir_returns_empty(tmp_path):
     repo = str(tmp_path)
-    subprocess.run(["git", "init", "-q", repo], check=True)
+    subprocess.run(["git", "init", "-q", repo], check=True, **no_console_passthrough_kwargs())
     lines, rc = run([], cwd=Path(repo))
     assert rc == 0
     assert lines == []

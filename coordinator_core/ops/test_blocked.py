@@ -11,6 +11,7 @@ from pathlib import Path
 from coordinator_core.ops.blocked import main
 
 import pytest
+from coordinator_core.win_portability import no_console_passthrough_kwargs
 
 # Spawns a real external process; runs at cadence gates, not per-commit.
 # Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
@@ -21,7 +22,7 @@ pytestmark = [
 
 
 def _init_git_repo(root: Path) -> None:
-    subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+    subprocess.run(["git", "init", "-q"], cwd=root, check=True, **no_console_passthrough_kwargs())
 
 
 def _write_handoff(repo: Path, name: str, frontmatter: str) -> None:

@@ -76,6 +76,7 @@ import pytest
 import coordinator_core.ops.fleet._common as _common_mod
 from coordinator_core.ops.fleet._common import Move, archive_and_commit
 from coordinator_core.ops.ceremony.git_native import GitResult
+from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
@@ -90,7 +91,7 @@ def _git(args: list[str], cwd: Path) -> subprocess.CompletedProcess:
         capture_output=True,
         text=True,
         check=True,
-    )
+    **no_console_creationflags())
 
 
 def _run(coro):

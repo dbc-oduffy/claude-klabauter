@@ -26,11 +26,18 @@ Input (flat scalar, via `hooks/_payload.py::field()`; "" treated as absent):
                          absent/unparseable pid simply skips the CPU cursor for this
                          invocation (the ladder verdict is still written).
     delegation_evidence — "true"/"false" flag (via `_payload.field()`'s bool
-                         normalisation), supplied by the CALLER, for the ladder's step 7
-                         override. This op does NOT derive delegation evidence itself
-                         (Anti-scope: correlated-not-independent — see
-                         `session.receiver_state`'s module docstring); an absent/anything
-                         other-than-"true" value is treated as False.
+                         normalisation), OPTIONALLY supplied by the CALLER, for the
+                         ladder's step 7 override; an absent/anything-other-than-"true"
+                         value is treated as False. As of 2026-08-30 this op no longer
+                         relies solely on the caller for this signal (root cause: no
+                         caller ever populated it, so the override never fired in
+                         production — state/audits/2026-08-30-group-em-classifier-
+                         blindness.md). It now also computes its own cheap on-disk
+                         signal from the subagent sidecar directory's mtimes
+                         (`session.receiver_state.delegation_evidence_from_sidecar`)
+                         and merges the two (`merge_delegation_evidence`) — either
+                         source saying True, or the sidecar signal being unresolvable,
+                         is enough to enable the override (fail toward PRODUCING).
 
 Always returns `no_advisory()` — the product is the on-disk write side-effect, exactly
 as `session_heartbeat.py` does. Never blocks a tool call; never raises into its caller
@@ -45,8 +52,11 @@ Negative-spec:
     - Does NOT read or depend on `stable_pid` (AC13) — `pid` here is the caller-supplied
       OS pid used ONLY for a CPU-TIME sample, never fed to any liveness check. See
       `session.receiver_state`'s RAW-PID-LIVENESS floor restatement.
-    - Does NOT compute delegation evidence itself — accepts it as a caller-supplied
-      boolean (see Input above).
+    - Does NOT open or read any subagent transcript to compute delegation evidence —
+      only a directory listing plus each entry's `stat()` mtime (see Input above and
+      `session.receiver_state.delegation_evidence_from_sidecar`'s own docstring for
+      the exact bound: one `scandir` of this session's own subagents directory, never
+      a wider tree walk).
     - Does NOT sleep, retry, or poll — a single point-in-time read + write per
       invocation (ipc.py DEC-2: no per-op dispatch-timeout override exists to spend on
       a slower posture).
@@ -96,11 +106,18 @@ def _run_sensor(
         reduced_lines = []
         transcript_mtime = None
 
+    sidecar_signal = receiver_state.delegation_evidence_from_sidecar(
+        transcript_path or None, now_epoch=float(now_epoch)
+    )
+    merged_delegation_evidence = receiver_state.merge_delegation_evidence(
+        delegation_evidence, sidecar_signal
+    )
+
     ladder_verdict = receiver_state.classify(
         reduced_lines,
         now_epoch=float(now_epoch),
         transcript_mtime_epoch=transcript_mtime,
-        delegation_evidence=delegation_evidence,
+        delegation_evidence=merged_delegation_evidence,
     )
 
     cpu_cursor = None

@@ -54,25 +54,15 @@ NEGATIVE SPEC -- this module does not:
 
 from __future__ import annotations
 
-import subprocess
 import sys
 from pathlib import Path
 from typing import List
 
-
-def _no_window_flags() -> int:
-    """Windows: keep a console from flashing for each probe under a headless host."""
-    return getattr(subprocess, "CREATE_NO_WINDOW", 0)
+from coordinator_core.git.run import GitResult, run_git
 
 
-def _git(repo: Path, *args: str) -> subprocess.CompletedProcess:
-    return subprocess.run(
-        ("git", *args),
-        cwd=str(repo),
-        capture_output=True,
-        text=True,
-        creationflags=_no_window_flags(),
-    )
+def _git(repo: Path, *args: str) -> GitResult:
+    return run_git(list(args), cwd=str(repo))
 
 
 def filesystem_supports_untracked_cache(repo: Path) -> bool:

@@ -20,6 +20,7 @@ from coordinator_core.ops.plan_status_transition import (
     main,
 )
 from coordinator_core.testing import symlink_capability
+from coordinator_core.win_portability import no_console_creationflags
 
 # Golden-oracle cases pin `main`'s real HEAD-commit and porcelain-status reads
 # against an actual git repo — the CLI's stdout/exit-code contract was captured
@@ -60,19 +61,23 @@ def _ensure_git_repo(tmp_path: Path) -> None:
     env = {**os.environ, **_GIT_ENV_KEYS}
     subprocess.run(
         ["git", "init"], cwd=str(tmp_path), capture_output=True, env=env, timeout=15,
+        **no_console_creationflags(),
     )
     subprocess.run(
         ["git", "config", "commit.gpgsign", "false"],
         cwd=str(tmp_path), capture_output=True, env=env, timeout=15,
+        **no_console_creationflags(),
     )
     (tmp_path / ".gitkeep").write_text("", encoding="utf-8")
     subprocess.run(
         ["git", "add", "--", ".gitkeep"],
         cwd=str(tmp_path), capture_output=True, env=env, timeout=15,
+        **no_console_creationflags(),
     )
     subprocess.run(
         ["git", "commit", "-m", "initial commit"],
         cwd=str(tmp_path), capture_output=True, env=env, timeout=15,
+        **no_console_creationflags(),
     )
 
 
@@ -93,10 +98,12 @@ def _track(tmp_path: Path, p: Path) -> None:
     subprocess.run(
         ["git", "add", "--", str(rel)],
         cwd=str(tmp_path), capture_output=True, env=env, timeout=15,
+        **no_console_creationflags(),
     )
     subprocess.run(
         ["git", "commit", "-m", f"seed {rel}"],
         cwd=str(tmp_path), capture_output=True, env=env, timeout=15,
+        **no_console_creationflags(),
     )
 
 
@@ -510,6 +517,7 @@ def test_untracked_plan_flips_on_disk_and_skips_commit(tmp_path, capsys):
     status = subprocess.run(
         ["git", "status", "--porcelain", "--", "p.md"],
         cwd=str(tmp_path), capture_output=True, text=True, timeout=15,
+        **no_console_creationflags(),
     )
     assert status.stdout.strip().startswith("??"), (
         f"expected the plan to remain untracked (never first-committed): {status.stdout!r}"
@@ -947,10 +955,11 @@ def test_no_head_plan_flips_on_disk_and_skips_commit(tmp_path, capsys):
     import os
 
     env = {**os.environ, **_GIT_ENV_KEYS}
-    subprocess.run(["git", "init"], cwd=str(tmp_path), capture_output=True, env=env, timeout=15)
+    subprocess.run(["git", "init"], cwd=str(tmp_path), capture_output=True, env=env, timeout=15, **no_console_creationflags())
     subprocess.run(
         ["git", "config", "commit.gpgsign", "false"],
         cwd=str(tmp_path), capture_output=True, env=env, timeout=15,
+        **no_console_creationflags(),
     )
     p = tmp_path / "p.md"
     p.write_text("---\nstatus: draft\n---\n\nBody.\n", encoding="utf-8")
@@ -999,14 +1008,17 @@ def test_ac1_plan_trigger_never_stamps_own_flip_commit_as_shipped_in_e2e(tmp_pat
     subprocess.run(
         ["git", "add", "--", "feature.txt"],
         cwd=str(tmp_path), capture_output=True, env=env, timeout=15,
+        **no_console_creationflags(),
     )
     subprocess.run(
         ["git", "commit", "-m", f"implement the feature this handoff scopes\n\nSession-Id: {session_id}"],
         cwd=str(tmp_path), capture_output=True, env=env, timeout=15,
+        **no_console_creationflags(),
     )
     feature_sha = subprocess.run(
         ["git", "rev-parse", "HEAD"],
         cwd=str(tmp_path), capture_output=True, env=env, timeout=15, text=True,
+        **no_console_creationflags(),
     ).stdout.strip()
 
     deliverable_id = "dlv-ac1-e2e-000000"
@@ -1049,6 +1061,7 @@ def test_ac1_plan_trigger_never_stamps_own_flip_commit_as_shipped_in_e2e(tmp_pat
     flip_sha = subprocess.run(
         ["git", "rev-parse", "HEAD"],
         cwd=str(tmp_path), capture_output=True, env=env, timeout=15, text=True,
+        **no_console_creationflags(),
     ).stdout.strip()
     assert flip_sha != feature_sha
 

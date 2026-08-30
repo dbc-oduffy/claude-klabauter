@@ -46,6 +46,7 @@ from coordinator_core.ops.doc_content_verify import (
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 from coordinator_core.doe_root_pointer import read_doe_root_pointer
 from coordinator_core.engine_root import coordinator_engine_root
+from coordinator_core.win_portability import no_console_creationflags
 
 _B644D5A9_SHA = "b644d5a9"
 
@@ -316,6 +317,7 @@ def _git_show(repo_root: str, sha: str, path: str) -> str:
         capture_output=True,
         text=True,
         check=True,
+        **no_console_creationflags(),
     )
     return result.stdout
 
@@ -326,6 +328,7 @@ def _git_ls_tree_exists(repo_root: str, sha: str, path: str) -> bool:
         cwd=repo_root,
         capture_output=True,
         text=True,
+        **no_console_creationflags(),
     )
     return result.returncode == 0 and bool(result.stdout.strip())
 
@@ -343,6 +346,7 @@ def _doe_repo_available() -> bool:
         ["git", "cat-file", "-e", f"{_B644D5A9_SHA}^{{commit}}"],
         cwd=root,
         capture_output=True,
+        **no_console_creationflags(),
     )
     return result.returncode == 0
 

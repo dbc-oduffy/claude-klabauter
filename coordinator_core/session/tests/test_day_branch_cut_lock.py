@@ -123,6 +123,30 @@ class TestAcquireRelease:
         lock.lock_path(repo).unlink()  # would raise PermissionError if held
 
 
+class TestHolderAlive:
+    """The promoted, shared holder-liveness CHECK: unknown is ``None`` and
+    never a verdict; a non-``int`` pid is unknown; a probe that raises is
+    unknown. ``warm.push_cadence`` imports this same function rather than
+    keeping its own copy."""
+
+    def test_live_pid_is_true(self):
+        assert lock.holder_alive(os.getpid()) is True
+
+    def test_confirmed_dead_pid_is_false(self):
+        assert lock.holder_alive(999_999_999) is False
+
+    def test_non_int_pid_is_unknown(self):
+        assert lock.holder_alive("not-a-pid") is None
+        assert lock.holder_alive(None) is None
+
+    def test_probe_raising_is_unknown_not_a_verdict(self, monkeypatch):
+        def _boom(pid):
+            raise RuntimeError("probe blew up")
+
+        monkeypatch.setattr(lock.session_core, "pid_alive", _boom)
+        assert lock.holder_alive(os.getpid()) is None
+
+
 class TestRealProcessRace:
     def test_exactly_one_of_n_processes_acquires(self, repo):
         """Real processes, not threads — filesystem atomicity is the guarantee."""

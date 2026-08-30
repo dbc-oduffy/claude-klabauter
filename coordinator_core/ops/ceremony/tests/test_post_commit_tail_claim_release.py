@@ -31,6 +31,7 @@ from coordinator_core.ops.ceremony.post_commit_tail import (
 )
 from coordinator_core.session import core as session_core
 from coordinator_core.session import scope as session_scope
+from coordinator_core.win_portability import no_console_creationflags
 
 # `_commit_and_push_origin_stub_close` lands a real commit and this suite
 # reads real touched.txt claim-release events back through `session_scope`
@@ -43,7 +44,14 @@ pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 
 def _git(args, cwd: Path) -> None:
-    subprocess.run(["git", *args], cwd=str(cwd), capture_output=True, text=True, check=True)
+    subprocess.run(
+        ["git", *args],
+        cwd=str(cwd),
+        capture_output=True,
+        text=True,
+        check=True,
+        **no_console_creationflags(),
+    )
 
 
 def _sdir(repo: Path, sid: str) -> Path:

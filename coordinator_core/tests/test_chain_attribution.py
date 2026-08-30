@@ -33,6 +33,7 @@ import pytest
 
 from coordinator_core import chain_attribution, session_attribution
 from coordinator_core.session_attribution import GitLogFailed
+from coordinator_core.win_portability import no_console_creationflags
 
 # Declared, not excused: this file spawns a real process (git/python) because
 # the property under test is that binary's own behaviour, which no fixture
@@ -46,7 +47,7 @@ pytestmark = [
 
 
 def _git(args: list[str], cwd: Path) -> None:
-    subprocess.run(["git"] + args, cwd=str(cwd), capture_output=True, check=True)
+    subprocess.run(["git"] + args, cwd=str(cwd), capture_output=True, check=True, **no_console_creationflags())
 
 
 def _init_repo(root: Path) -> str:
@@ -79,17 +80,17 @@ def _commit(
     subprocess.run(
         ["git", "commit", "-m", message],
         cwd=str(root), capture_output=True, check=True, env=env,
-    )
+    **no_console_creationflags())
     result = subprocess.run(
         ["git", "rev-parse", "HEAD"], cwd=str(root), capture_output=True, text=True, check=True,
-    )
+    **no_console_creationflags())
     return result.stdout.strip()
 
 
 def _run(args, cwd):
     result = subprocess.run(
         args, cwd=cwd, capture_output=True, text=True,
-    )
+    **no_console_creationflags())
     return result.returncode, result.stdout, result.stderr
 
 
@@ -153,10 +154,10 @@ def test_merge_commit_is_detected(repo_root):
     subprocess.run(
         ["git", "merge", "feature", "--no-edit"],
         cwd=str(repo_root), capture_output=True, check=True,
-    )
+    **no_console_creationflags())
     merge_sha = subprocess.run(
         ["git", "rev-parse", "HEAD"], cwd=str(repo_root), capture_output=True, text=True, check=True,
-    ).stdout.strip()
+    **no_console_creationflags()).stdout.strip()
 
     window = chain_attribution.bulk_commit_attribution_map(
         f"{init_sha}..HEAD", str(repo_root), _run,
@@ -220,10 +221,10 @@ def test_grep_excludes_merges(repo_root):
     subprocess.run(
         ["git", "merge", "feature2", "--no-edit", "-m", f"merge\n\nSession-Id: {sid}"],
         cwd=str(repo_root), capture_output=True, check=True,
-    )
+    **no_console_creationflags())
     merge_sha = subprocess.run(
         ["git", "rev-parse", "HEAD"], cwd=str(repo_root), capture_output=True, text=True, check=True,
-    ).stdout.strip()
+    **no_console_creationflags()).stdout.strip()
 
     attributed = chain_attribution.bulk_grep_attributed_shas(
         f"{init_sha}..HEAD", sid, str(repo_root), _run,

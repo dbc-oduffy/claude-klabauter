@@ -2,12 +2,10 @@
 coordinator_core.hooks.auto_push — naked-Python post-commit auto-push helper.
 
 Purpose: DR-059 windows-hostile-bash -> Python port of the DoE-owned bash script
-`coordinator/bin/coordinator-auto-push` (223 lines). Pushes the current branch to
-origin if it is a `work/*` branch, classifying push failures so retryable classes
-(ref-lock, network, gh-transient) get a bounded jittered retry, non-fast-forward
-gets a bounded poll for supersession (never a re-push -- see `run_push_with_retry`),
-and everything else fails loud without blocking the commit. Always exits 0 --
-auto-push must never block a commit.
+`coordinator/bin/coordinator-auto-push` (223 lines). Classifies push failures so
+retryable classes (ref-lock, network, gh-transient) get a bounded jittered
+retry and everything else fails loud without blocking the commit. Always
+exits 0 -- auto-push must never block a commit.
 
 This module is the claude-klabauter half of the auto-push reimplementation; the DoE half
 (retiring the bash script + repointing `coordinator-ensure-post-commit-hook` to
@@ -30,19 +28,36 @@ Review: coordinator:code-reviewer (P1, 2026-08-30) -- this docstring
 previously claimed `warm.push_cadence.sweep_repos` was "the current
 production entry into `run_push_with_retry`". Traced and found false:
 `sweep_repos` -> `push_outstanding` -> `coordinator_core/ops/ceremony/
-push.py` implements its own push/retry logic and never calls
-`run_push_with_retry`. `run_push_with_retry`'s only remaining callers are
-internal to this module (`_drain_dead_ref_record`, `drain_pending_push`),
-and `drain_pending_push`'s only production writer of the record it acts on
-(`_write_pending_record`, via `_hold_window`) is gravestoned -- so in
-ordinary operation no pending record is ever written for it to find, and
-`run_push_with_retry` (with it, `_maybe_publish_cockpit_contract`) never
-fires. It remains code-reachable only via the registered
-`workday.drain_pending_push` JSON-RPC op acting on a stale pre-existing
-record file, or a future re-wiring that is NOT this module's job to
-perform -- see docs/plans/2026-08-30-who-pushes-and-when.md and the
-review-integration run report for this finding's full trace and the
-question of what (if anything) should replace this wiring.
+push.py` implements its own push/retry logic and never called
+`run_push_with_retry`, whose only remaining callers were internal to this
+module (`_drain_dead_ref_record`, `drain_pending_push`) and whose only
+production writer of the record it acted on (`_write_pending_record`, via
+`_hold_window`) was already gravestoned. `run_push_with_retry` was
+code-reachable only via the registered `workday.drain_pending_push`
+JSON-RPC op acting on a stale pre-existing record file.
+
+GRAVESTONED 2026-08-30 (docs/plans/2026-08-30-who-pushes-and-when.md C2):
+`run_push_with_retry`, `drain_pending_push`, `_drain_dead_ref_record`,
+`_write_pending_record`, `_remove_pending_record`,
+`_clear_pending_record_if_branch`, and `_branch_resolves_locally` are
+deleted outright, along with the `workday.drain_pending_push` op
+(`coordinator_core/ops/workday_drain_pending_push.py`) and
+`_drain_pending_push_after_sync` (`ops/ceremony/push.py`), which had zero
+call sites. Nothing rides on this half of the subsystem: the retry
+ladder's job is done today by `ops/ceremony/push.py`'s own ladder, and the
+drain leg had no answer to "what needs it."
+
+The record's READ primitives (`_read_pending_record`, `_pending_record_
+path`, `_holder_alive`, `_record_is_stale`) are NOT gravestoned with the
+rest: `coordinator_core/orientation/regenerate_cache.py::
+emit_auto_push_health` imports the first and last of those four (aliased
+`_ap_read_pending_record`/`_ap_record_is_stale`) as a real, if now-always-
+empty, read site -- the write side that would ever populate a record for
+it to find (`_hold_window`) is already gravestoned by C8, but the
+orientation-cache consumer's import is still live and breaks module import
+outright if these four are deleted too. See
+`state/lessons/2026-08-30-a-survival-citation-needs-the-same-call-19f9f746ade3.yaml`
+for the citation-trace lesson this gravestoning follows.
 
 Behavior-preservation notes (read alongside the bash source):
   - Branch case-canonicalization (Windows case-insensitive-FS fix), the
@@ -73,9 +88,10 @@ import time
 import traceback
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Optional
 
 from coordinator_core.git.git_dir import resolve_git_common_dir
-from coordinator_core.session import core as session_core
+from coordinator_core.session.day_branch_cut_lock import holder_alive
 from coordinator_core.win_portability import no_console_creationflags
 
 
@@ -211,9 +227,8 @@ _ENV_HOST_PYTHON = "COORDINATOR_HOST_PYTHON"
 
 
 #: Generator-provenance declaration: every write in this module (push-
-#: failures.log, push-stderr-*.log, coordinator-auto-push-pending.json)
-#: lands under resolve_git_common_dir() — inside .git/ — never a tracked
-#: repo artifact.
+#: failures.log, push-stderr-*.log) lands under resolve_git_common_dir() —
+#: inside .git/ — never a tracked repo artifact.
 GENERATES: list = []
 
 MAX_ATTEMPTS = 3
@@ -310,9 +325,24 @@ _PAT_NETWORK = re.compile(
     r"SSL_connect|Temporary failure|Network is unreachable|kex_exchange_identification|"
     r"Broken pipe|early EOF|remote end hung up unexpectedly)"
 )
+# IGNORECASE is load-bearing, not tidying (2026-08-30). Real git prints
+# "fatal: Could not read from remote repository." -- capitalized -- on an SSH
+# auth/transport failure, and this pattern's `could not read from remote`
+# alternative missed it by exactly that capital C. Every such push fell through
+# the whole ladder to "unknown", which is 52 of the 185 rows (28%) in
+# example-retrieval-repo's `.git/push-failures.log` and the largest unnamed class in it
+# (memo 2026-08-30, Problem 2, Q3). The hazard the arms below record -- a
+# case-insensitive fix here silently swallowing push timeouts, whose synthesized
+# message also carries "Could not read from remote repository" -- is already
+# retired by ORDER: `_PAT_SPAWN_ERROR` and `_PAT_TIMEOUT` are both tested ahead
+# of this arm, so a timeout is classified `timeout` before it can reach here.
+# `auth` is not in `_RETRYABLE_CLASSES` and neither was `unknown`, so this
+# changes only the label an operator sees, never a retry decision -- the same
+# shape the `spawn-error` and `timeout` arms took.
 _PAT_AUTH = re.compile(
     r"(Permission denied|Authentication failed|Host key verification|publickey|"
-    r"could not read from remote|access denied)"
+    r"could not read from remote|access denied)",
+    re.IGNORECASE,
 )
 # Catch-all for server-side rejections we haven't pattern-matched yet (HTTP
 # 5xx via smart-http, branch-protection rules, org SSO, etc.). Distinct from
@@ -371,12 +401,12 @@ def classify_error(stderr_text: str) -> str:
         return "gh-transient"
     if _PAT_NETWORK.search(stderr_text):
         return "network"
-    # Ahead of _PAT_AUTH deliberately: the synthesized timeout message carries
-    # "Could not read from remote repository", and _PAT_AUTH's "could not read
-    # from remote" alternative misses it only by capitalization. Anyone fixing
-    # _PAT_AUTH to be case-insensitive (real git prints the capitalized form on
-    # SSH auth failure, so that fix is owed) would otherwise silently reclassify
-    # every push timeout as "auth" and send the operator to check credentials.
+    # Ahead of _PAT_AUTH deliberately, and now REQUIRED rather than merely
+    # deliberate: the synthesized timeout message carries "Could not read from
+    # remote repository", which _PAT_AUTH matches since it became IGNORECASE
+    # (2026-08-30, see that pattern). These two arms are what keep a push
+    # timeout from reporting as "auth" and sending the operator to check
+    # credentials -- do not reorder them below _PAT_AUTH.
     if _PAT_SPAWN_ERROR.search(stderr_text):
         return "spawn-error"
     if _PAT_TIMEOUT.search(stderr_text):
@@ -986,7 +1016,7 @@ def log_failure(
     branch: str,
     route: str,
     err_class: str,
-    attempts: int,
+    attempts: Optional[int],
     first_err: str,
     stderr_text: str,
 ) -> None:
@@ -1029,9 +1059,14 @@ def log_failure(
         forensic = "<empty>"
 
     timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    # `after ?` on `attempts is None` -- an explicit unknown, never a
+    # substituted number. Readers of this log take `after <N>` as a measured
+    # ladder depth (example-retrieval-repo-em did, memo 2026-08-30 Problem 1), so a
+    # caller that did not count its legs must say so rather than name one.
+    attempts_text = "?" if attempts is None else str(attempts)
     line = (
         f"[{timestamp}] PUSH FAILED on {branch} ({route}/{err_class} after "
-        f"{attempts}) :: {first_err or '<empty>'} :: stderr={forensic}\n"
+        f"{attempts_text}) :: {first_err or '<empty>'} :: stderr={forensic}\n"
     )
     log_path = git_dir / "push-failures.log"
     try:
@@ -1181,11 +1216,10 @@ def log_dead_ref_failure(
     Stop-time mid-session detector (`runtime-tripwire-em-check.py::
     _check_push_failures`, DoE-claude) read `push-failures.log`; keeping
     dead-ref rejections out of it is what keeps their counts meaning
-    "unrecovered failures" rather than "lines written." The pending-record
-    loop this class was introduced to close is `drain_pending_push()`'s own
-    concern (AC4-AC7) -- this function is purely the forensic trace for the
-    push attempt itself, unconditional repo_root parameter kept only for
-    call-site symmetry with `log_failure`/`log_race_resolved`.
+    "unrecovered failures" rather than "lines written." This function is
+    purely the forensic trace for the push attempt itself, unconditional
+    repo_root parameter kept only for call-site symmetry with
+    `log_failure`/`log_race_resolved`.
     """
     first_err = extract_first_err(stderr_text)
     print(
@@ -1237,8 +1271,9 @@ def _cockpit_publish_script(repo_root: str) -> Path | None:
     No repo-name allowlist, no machine-local registry lookup: the guard is
     derived from the committing repo's own working tree, so it stays
     correct even if the script is renamed or DoE-claude itself moves.
-    Deliberately a `Path.is_file()` stat, not a git call -- see
-    `run_push_with_retry`'s docstring for why that ordering matters.
+    Deliberately a `Path.is_file()` stat, not a git call -- cheap enough to
+    run unconditionally ahead of the additional git rev-parse this seam
+    would otherwise add.
     """
     try:
         candidate = Path(repo_root) / _COCKPIT_PUBLISH_SCRIPT_RELPATH
@@ -1268,7 +1303,12 @@ def _schema_touched(repo_root: str, old_remote_sha: str | None, local_sha: str) 
     return bool(out)
 
 
-def _invoke_cockpit_publish(repo_root: str, script: Path) -> None:
+def _invoke_cockpit_publish(
+    repo_root: str,
+    script: Path,
+    *,
+    timeout_secs: float = CONTRACT_PUBLISH_TIMEOUT_SECS,
+) -> None:
     """Run the DoE-owned publish script with the repo's own interpreter, cwd
     at the repo root, and let its own gates decide PUBLISH / NOOP / refuse.
 
@@ -1278,6 +1318,12 @@ def _invoke_cockpit_publish(repo_root: str, script: Path) -> None:
     refusal verdict (REFUSE_DIVERGED / REFUSE_VERSION_GATE) is information
     for a human, surfaced as one clear stderr line naming the exact
     remediation command, never as an exception or a nonzero hook exit.
+
+    `timeout_secs` -- caller-supplied bound, defaulting to
+    `CONTRACT_PUBLISH_TIMEOUT_SECS` (the interactive hook path's patience,
+    unchanged). The cadence path (`push_outstanding`) passes the per-repo
+    remaining slot budget instead, read at call time -- see that module for
+    why a second named constant was rejected in favour of this parameter.
     """
     python_exe = _resolve_python_exe() or "python3"
     subprocess = _subprocess()
@@ -1289,7 +1335,7 @@ def _invoke_cockpit_publish(repo_root: str, script: Path) -> None:
             text=True,
             check=False,
             stdin=subprocess.DEVNULL,
-            timeout=CONTRACT_PUBLISH_TIMEOUT_SECS,
+            timeout=timeout_secs,
             **no_console_creationflags(),
         )
     except Exception as exc:
@@ -1316,24 +1362,27 @@ def _maybe_publish_cockpit_contract(
     script: Path,
     old_remote_sha: str | None,
     local_sha: str | None,
+    *,
+    timeout_secs: float = CONTRACT_PUBLISH_TIMEOUT_SECS,
 ) -> None:
     """Fire the cockpit-contract publish script after a successful push, if
     (and only if) the pushed range touched the schema dir.
 
-    Called only from `run_push_with_retry`'s two success sites, only when
-    `_cockpit_publish_script` already confirmed this repo carries the
-    script. Never raises -- wraps its own body so an unexpected failure in
-    this seam (a bad git invocation, a permissions error) degrades to a
-    warning rather than propagating into `run_push_with_retry`, which would
-    risk the "never fail the hook" contract on the code path that already
-    successfully pushed the commit.
+    Called from `push_outstanding` (cadence path, `timeout_secs` bound to
+    the remaining slot budget read at call time), only when
+    `_cockpit_publish_script`
+    already confirmed this repo carries the script. Never raises -- wraps
+    its own body so an unexpected failure in this seam (a bad git
+    invocation, a permissions error) degrades to a warning rather than
+    propagating into the caller, which would risk the "never fail the hook"
+    contract on a code path that already successfully pushed the commit.
     """
     try:
         if not local_sha:
             return
         if not _schema_touched(repo_root, old_remote_sha, local_sha):
             return
-        _invoke_cockpit_publish(repo_root, script)
+        _invoke_cockpit_publish(repo_root, script, timeout_secs=timeout_secs)
     except Exception as exc:
         print(
             f"[coordinator] cockpit-contract publish check failed unexpectedly "
@@ -1345,51 +1394,32 @@ def _maybe_publish_cockpit_contract(
 
 
 # ---------------------------------------------------------------------------
-# Durable pending-push record (AC14/AC14a) -- holds a push back on a shared
-# branch instead of publishing a trivially-reversible bad commit within
-# ~60s of it landing. This section is the record's read/write/staleness
-# primitives. Lives ENTIRELY inside the detached child (called from the
-# head of `run_push_with_retry`, never from `branch_gate()`, so the parent
-# process that `git commit` waits on synchronously never pays this cost).
-#
-# Review: code-reviewer, 2026-08-30 -- the trigger/hold decision this
-# section used to describe as `_hold_window`'s lived entirely in that
-# function, gravestoned by C8 (docs/plans/2026-08-30-who-pushes-and-when.md
-# § C8); these primitives no longer have a live caller that CREATES a new
-# hold, but `_drain_dead_ref_record` still round-trips any record already
-# on disk through them, so they stay defined. `_hold_window`'s trigger was
-# narrower than plain `_shared_branch_live_count(...) > 1`: it also called
-# `_peer_commit_within_window` and skipped the hold when a foreign-session
-# commit had already landed on the branch within the window. Measured
-# 2026-08-20 on work/machine-a/2026-08-18to20 (trailing
-# 36h): 2079 commits, median inter-commit gap 20s, a median of 10 peer
-# commits land on top of any given commit within the 300s hold, and only 6
-# of 2079 commits had zero followers in that window. On a branch that busy
-# the retraction this hold pays for doesn't exist -- by the time the window
-# expires, peers have already built on the commit and rewinding it would
-# rewrite their work. `live_count > 1` inverts under load: sharing is
-# exactly what makes retraction impossible, not what threatens it. A quiet
-# shared branch (no recent foreign commits) still holds exactly as before --
-# see `_peer_commit_within_window` for the predicate and its fail-toward-
-# pushing posture.
-#
-# Do NOT reuse `_backoff_seconds`/`_no_sleep` for the hold's sleep duration
-# beyond skipping the sleep itself under the test seam -- `_backoff_seconds`
-# is error-recovery timing (ref-lock/network/gh-transient), a different
-# concern with a different timescale, and `COORDINATOR_AUTO_PUSH_NO_SLEEP`
-# must skip the sleep CALL only, never the hold DECISION (whether a record
-# gets written at all) -- silently disabling the decision under the test
-# seam would let it silently disable in a misconfigured production
-# environment too.
+# Pending-record READ primitives -- NOT gravestoned with the rest of the
+# subsystem above (C2, docs/plans/2026-08-30-who-pushes-and-when.md). Live
+# caller found post-deletion: `coordinator_core/orientation/regenerate_
+# cache.py::emit_auto_push_health` imports `_read_pending_record` and
+# `_record_is_stale` (aliased `_ap_read_pending_record`/`_ap_record_is_
+# stale`) to distinguish "auto-push is deliberately holding a push during
+# an active window" from "auto-push is lagging" in the orientation cache --
+# a real, if now-always-empty, read site (no code path writes a record any
+# more; `_hold_window`, the sole writer, was gravestoned by C8). Deleting
+# these broke that module's import outright
+# (`coordinator_core.ops::_eager_import_all` failed to register
+# `orientation.regenerate_cache`'s ops -- caught by
+# `test_no_uncounted_spawn_on_budgeted_path.py::test_registry_fast_path_
+# matches_live_registry`), which is a citation the C2 brief's own
+# reachability trace missed (same failure mode the brief's own "HOW THIS
+# GOT MISSED" note names for C8). Restored to their pre-C2 shape,
+# read-only: the WRITE/REMOVE/drain/retry side (`_write_pending_record`,
+# `_remove_pending_record`, `_clear_pending_record_if_branch`,
+# `_branch_resolves_locally`, `_drain_dead_ref_record`, `drain_pending_
+# push`, `run_push_with_retry`) had zero external callers and stays
+# deleted.
 # ---------------------------------------------------------------------------
 
 _PENDING_RECORD_NAME = "coordinator-auto-push-pending.json"
-# Default hold window (AC14: "default ~5 min").
-_HOLD_WINDOW_SECONDS = 300
-# A record is taken over (not merely drained) once its holder is confirmed
-# dead OR its hold_until is this far in the past -- the grace margin gives a
-# live holder time to actually finish pushing after waking before a peer
-# calls it stale out from under it.
+# Grace margin past a record's `hold_until` before `_record_is_stale` calls
+# it stale on timing alone (independent of holder liveness).
 _STALE_GRACE_SECONDS = 60
 
 
@@ -1407,8 +1437,7 @@ def _read_pending_record(repo_root: str) -> dict | None:
     A corrupt or partially-written record (this process crashing mid-write,
     pre-atomic-rename) reads as None -- exactly like "no record" -- rather
     than raising, so a reader always has a safe fallback: treat it as if no
-    hold is in effect and let the normal predicate/write path re-establish
-    one.
+    hold is in effect.
     """
     try:
         text = _pending_record_path(repo_root).read_text(encoding="utf-8")
@@ -1421,303 +1450,25 @@ def _read_pending_record(repo_root: str) -> dict | None:
     return record if isinstance(record, dict) else None
 
 
-def _write_pending_record(
-    repo_root: str, branch: str, sha: str | None, hold_until: float, holder_pid: int
-) -> bool:
-    """Write the pending-push record BEFORE the holder sleeps (AC14).
-
-    Writes to a pid-suffixed temp file in the same directory, then
-    `os.replace`s it into place -- atomic on both POSIX and Windows (unlike
-    a direct write, which a concurrent reader could observe mid-write as
-    invalid JSON). Returns False (never raises) on any OSError -- the
-    caller (`_drain_dead_ref_record`, the only production caller left now
-    that `_hold_window` is gravestoned by C8) treats a failed write as
-    AC14a precondition (1) unmet and falls through to the orphaned-report
-    path rather than trusting an un-recorded retarget, which would make an
-    interrupted hold indistinguishable from a silently lost push.
-    """
-    git_dir = resolve_git_common_dir(repo_root)
-    try:
-        git_dir.mkdir(parents=True, exist_ok=True)
-    except OSError:
-        return False
-    target = git_dir / _PENDING_RECORD_NAME
-    tmp = git_dir / f"{_PENDING_RECORD_NAME}.tmp-{os.getpid()}"
-    record = {
-        "branch": branch,
-        "sha": sha,
-        "hold_until": hold_until,
-        "holder_pid": holder_pid,
-    }
-    try:
-        tmp.write_text(json.dumps(record), encoding="utf-8", newline="\n")
-        os.replace(tmp, target)
-    except OSError:
-        try:
-            tmp.unlink()
-        except OSError:
-            pass
-        return False
-    return True
-
-
-def _remove_pending_record(repo_root: str) -> None:
-    """Remove the pending-push record -- only ever called after a
-    successful push (AC14: "removed only after a successful push").
-    Missing-file is not an error (idempotent, safe to call speculatively).
-    """
-    try:
-        _pending_record_path(repo_root).unlink()
-    except OSError:
-        pass
-
-
-def _clear_pending_record_if_branch(repo_root: str, branch: str) -> None:
-    """Remove the pending record iff it names `branch` -- called from every
-    success site in `run_push_with_retry` (direct success and the resolved
-    non-fast-forward race), never on a failed/exhausted push. A record for
-    a DIFFERENT branch is left untouched -- it is another branch's unfinished
-    business, not this call's to clear.
-    """
-    record = _read_pending_record(repo_root)
-    if record is not None and record.get("branch") == branch:
-        _remove_pending_record(repo_root)
-
-
-def _holder_alive(pid) -> bool | None:
-    """Best-effort holder-liveness check for the record's `holder_pid` --
-    None means "could not determine" (e.g. `MissingPsutilError` on a
-    psutil-less Windows box), in which case `_record_is_stale` falls back to
-    the hold_until+grace check alone rather than raising.
-    """
-    try:
-        return session_core.pid_alive(pid)
-    except Exception:
-        return None
-
-
 def _record_is_stale(record: dict, now: float) -> bool:
     """A pending record is stale (dead holder, or hold_until long past) --
-    taken over, never trusted (AC14). Checked before either coalescing onto
-    an existing record or draining one.
+    taken over, never trusted. Checked before either coalescing onto an
+    existing record or draining one.
+
+    Negative spec: the liveness probe is `day_branch_cut_lock.holder_alive`,
+    never a copy local to this module. `None` from it means "could not
+    determine" (e.g. `MissingPsutilError` on a psutil-less Windows box), and
+    this function then falls back to the hold_until+grace check alone rather
+    than raising. A local re-implementation here is what the prime exit
+    criterion's one-implementation clause forbids.
     """
-    alive = _holder_alive(record.get("holder_pid"))
+    alive = holder_alive(record.get("holder_pid"))
     if alive is False:
         return True
     hold_until = record.get("hold_until")
     if isinstance(hold_until, (int, float)) and now > hold_until + _STALE_GRACE_SECONDS:
         return True
     return False
-
-
-def _branch_resolves_locally(repo_root: str, branch: str) -> bool:
-    """True if `branch` still names a local ref -- `git rev-parse --verify
-    refs/heads/<branch>` succeeds. Used by `drain_pending_push` to detect a
-    record left behind by a branch rename (or any other disappearance of
-    the local ref) BEFORE attempting the push (AC4), rather than
-    discovering it only after `push_once` fails with `dead-ref`.
-    """
-    return _run_git(repo_root, ["rev-parse", "--verify", f"refs/heads/{branch}"]) is not None
-
-
-def _drain_dead_ref_record(repo_root: str, record: dict, branch: str) -> None:
-    """Resolve a pending record whose `branch` no longer resolves as a
-    local ref (AC5-AC7) -- the closed loop the record's own presence would
-    otherwise drive forever: once `hold_until` has passed, `due` stays true
-    on every later commit, so without this the record would be re-drained
-    (and, pre-AC1/AC2, re-failed into push-failures.log) on every commit
-    from here on.
-
-    `sha` can itself be `None` -- `wsc_tail._deferred_publisher_backstop`
-    writes its record before the commit it backstops has landed, so at
-    write time there is genuinely no sha to pin yet (see that function's
-    own docstring). That case is branched on FIRST, separately from the
-    "sha pinned" cases below (review: coordinator:review-code, Finding 1,
-    2026-08-19 -- a `sha=None` record used to fall into the same predicate
-    as "no payload was ever queued" and get dropped outright here,
-    silently losing the backstop's obligation on the exact compound case
-    -- swallowed step-5e spawn AND an intervening branch rename before the
-    next drain -- it exists to cover):
-      0. `sha is None` -- unknown payload, not "no payload". If a current
-         branch resolves, retarget the record onto it (same shape as case
-         2 below, just without a specific sha to check ancestry for) and
-         push: whatever the current branch's tip is now includes whatever
-         this record was backstopping, if anything landed at all, and
-         `push_once` is a harmless no-op ("everything up to date") if nothing
-         did. Only with NO current branch to retarget onto -- nothing left
-         that could hold the payload -- does this drop.
-      1. `sha` pinned and already reachable from origin's copy of the
-         CURRENT branch (typically the rename's own push, which already
-         carried the commit) -- the queued push has already landed by some
-         other path. Drop, stderr note only (AC6). Checked before case 2:
-         if the commit is already safely on origin, there is nothing left
-         to retarget-and-push, even if it also happens to be locally
-         reachable from the current branch.
-      2. `sha` pinned and reachable from the CURRENT local branch (not yet
-         on origin) -- the commits moved with the rename and the queued
-         push is still wanted, just misaddressed. Re-target the record onto
-         the current branch via `_write_pending_record` and push it (AC5);
-         that push's own success clears the just-rewritten record via
-         `_clear_pending_record_if_branch`, same as any other successful
-         push.
-      3. Reachable from nowhere this function can check -- a genuine loss
-         risk, not a rename artifact. ONE loud `push-failures.log` row
-         naming the orphaned sha, then drop (AC7): retrying can never
-         succeed (the ref that named it is gone and no live branch carries
-         it), so looping would only convert a real signal into noise.
-    """
-    sha = record.get("sha")
-    current_branch = resolve_branch(repo_root)
-
-    if sha is None:
-        if current_branch:
-            retargeted = _write_pending_record(
-                repo_root,
-                current_branch,
-                None,
-                record.get("hold_until", time.time()),
-                record.get("holder_pid", os.getpid()),
-            )
-            if retargeted:
-                print(
-                    f"coordinator-auto-push: pending push for {branch} "
-                    f"(no sha pinned yet) re-targeted to {current_branch} "
-                    "(branch rename) -- pushing.",
-                    file=sys.stderr,
-                )
-                run_push_with_retry(repo_root, current_branch)
-                return
-            # _write_pending_record failed -- same AC14a precondition-(1)
-            # reasoning as case 2's own fallthrough below: never trust a
-            # failed write, fall through to drop-with-note rather than
-            # silently losing an unknown payload.
-        print(
-            f"coordinator-auto-push: dropping pending push for {branch} -- "
-            "branch no longer resolves locally, no commit was pinned yet, "
-            "and no current branch exists to retarget onto; nothing to retry.",
-            file=sys.stderr,
-        )
-        _remove_pending_record(repo_root)
-        return
-
-    if current_branch and _is_superseded(repo_root, current_branch, sha):
-        print(
-            f"coordinator-auto-push: dropping pending push for {branch} -- "
-            "branch no longer resolves locally and the commit is already "
-            "on origin; nothing to retry.",
-            file=sys.stderr,
-        )
-        _remove_pending_record(repo_root)
-        return
-
-    if current_branch and _is_ancestor(repo_root, sha, current_branch):
-        retargeted = _write_pending_record(
-            repo_root,
-            current_branch,
-            sha,
-            record.get("hold_until", time.time()),
-            record.get("holder_pid", os.getpid()),
-        )
-        if retargeted:
-            print(
-                f"coordinator-auto-push: pending push for {branch} "
-                f"re-targeted to {current_branch} (branch rename) -- "
-                "pushing.",
-                file=sys.stderr,
-            )
-            run_push_with_retry(repo_root, current_branch)
-            return
-        # _write_pending_record failed (AC14a's own precondition-(1)
-        # contract: a failed write is never trusted) -- fall through to the
-        # orphaned-report path below rather than silently dropping a
-        # payload that IS still reachable somewhere, so the loss is at
-        # least reported once instead of vanishing unlogged.
-
-    log_failure(
-        repo_root,
-        branch,
-        "drain",
-        "dead-ref-orphaned",
-        1,
-        f"pending push for {branch} orphaned: sha {sha!r} unreachable from "
-        "the current local branch or origin; commits may be lost",
-        "",
-    )
-    _remove_pending_record(repo_root)
-
-
-def drain_pending_push(repo_root: str) -> None:
-    """Drain point for the durable pending-push record (AC14).
-
-    Idempotent and best-effort -- safe to call unconditionally on every
-    invocation of this module. Wired at the head of `run_push_with_retry`
-    (NOT `main()`), which every commit's own post-commit hook already
-    reaches via its detached respawn -- so the NEXT commit fires this for
-    free, with no new cross-repo surface and no additional host.
-
-    Three independent call sites now reach this function, matching AC14's
-    safety argument exactly:
-      1. The head of `run_push_with_retry` (below) -- every commit's own
-         post-commit hook already respawns a detached child that ends up
-         here for ITS OWN branch, so the next commit drains any due/stale
-         record for free.
-      2. Session start -- `coordinator_core.ops.session.boot_sweep`'s
-         handler calls this unconditionally as one of its boot-time
-         sweeps, so a session that starts inside (or after) a missed
-         hold-window's `hold_until` drains it before doing anything else.
-      3. Workday-start push-health -- `coordinator_core.ops.
-         workday_drain_pending_push` ("workday.drain_pending_push") is the
-         mutating sibling of the pure-read `workday.
-         surface_auto_push_failure_stats` op (which stays a zero-write
-         idempotent read per its own ratified contract -- see that
-         module's docstring). `/workday-start` invokes both: the read for
-         the failure-count surface, this op for the drain.
-    A missed drain is now recovered at the NEXT of any of these three
-    independent points, not merely the next commit -- "delay, never lose"
-    holds against session crash/sleep/power-loss as the AC's safety
-    argument requires, not just against "no further commits happen."
-
-    A record is only actioned once its hold window has elapsed (`hold_until`
-    reached) or its holder is confirmed dead (`_record_is_stale`) -- an
-    in-window, live-holder record is left alone; draining it early would
-    just race the incumbent's own wake-and-push.
-
-    Before pushing, the record's `branch` is checked for local resolvability
-    (`_branch_resolves_locally`, AC4) -- a branch that no longer resolves
-    (most commonly: renamed out from under the record by
-    `workday-start-step0`'s midnight rename) is handed to
-    `_drain_dead_ref_record` instead of `run_push_with_retry`, which would
-    otherwise fail every attempt with `dead-ref` and, since `due` stays true
-    on every commit once `hold_until` has passed, do so forever (AC5-AC7).
-
-    When the branch DOES resolve, behavior is unchanged from before AC4-AC7:
-    pushed synchronously via `run_push_with_retry(repo_root, branch)` --
-    this call IS the drain, not a new hold decision (no code path creates
-    a new hold anymore -- `_hold_window`, the only caller that did, is
-    gravestoned by C8) -- and that call's own success path removes the
-    record (`_clear_pending_record_if_branch`), so a push that fails here
-    leaves the record in place for the next drain point to retry, exactly
-    the "delay, never lose" contract this record exists to provide.
-    """
-    try:
-        record = _read_pending_record(repo_root)
-        if record is None:
-            return
-        branch = record.get("branch")
-        if not isinstance(branch, str) or not branch:
-            _remove_pending_record(repo_root)
-            return
-        now = time.time()
-        hold_until = record.get("hold_until")
-        due = isinstance(hold_until, (int, float)) and now >= hold_until
-        if not due and not _record_is_stale(record, now):
-            return
-        if not _branch_resolves_locally(repo_root, branch):
-            _drain_dead_ref_record(repo_root, record, branch)
-            return
-        run_push_with_retry(repo_root, branch)
-    except Exception:
-        pass
 
 
 def _engine_source_root_for_currency() -> "Path":
@@ -1778,139 +1529,6 @@ def _refresh_engine_currency_cache(repo_root: str) -> None:
         _skew.write_currency_cache(_Path(mirror), source)
     except Exception:
         return
-
-
-# Review: overengineering-reviewer Finding 6 -- the `if not _skip_hold:`
-# block is deleted along with the now-vacuous `_skip_hold` parameter: every
-# surviving call site already passed `_skip_hold=True` (the block's own
-# comment said so), so this changes no production behavior. This removes
-# run_push_with_retry's only call site of `_refresh_engine_currency_cache`
-# and of `drain_pending_push` -- neither call ever executed in production
-# either (same reachability trace), so `_refresh_engine_currency_cache` is
-# left defined (it has its own direct test coverage in
-# test_resolve_claude_klabauter_currency_signal.py, out of this dispatch's scope) as
-# a re-home/gravestone candidate for a follow-on chunk, not deleted here.
-def run_push_with_retry(repo_root: str, branch: str) -> None:
-    """Attempt the push up to MAX_ATTEMPTS times, retrying retryable classes
-    with a class-appropriate backoff. Logs a forensic failure entry and
-    returns (never raises) if all attempts are exhausted or a non-retryable
-    class is hit. Test seam: COORDINATOR_AUTO_PUSH_NO_SLEEP=1 skips backoff
-    sleeps so the test suite doesn't pay the seconds-scale gh-transient wait.
-
-    non-fast-forward is handled inline, not via `_RETRYABLE_CLASSES`: `push_once`
-    is issued exactly once for this class, and the rejection is checked against
-    `_is_superseded` (read-only fetch + ancestor test) -- immediately, then again
-    on each remaining attempt's existing backoff -- rather than blindly
-    resending the same push (see the "Retry policy" module comment above
-    `_backoff_seconds` for why this class needs a different retry shape than
-    ref-lock/network/gh-transient).
-
-    On a SUCCESSFUL push -- either the direct-success path or a
-    non-fast-forward race that turns out already resolved -- this also fires
-    `_maybe_publish_cockpit_contract`, gated by the cheap `_cockpit_publish_script`
-    filesystem check computed once up front (see that function's docstring
-    for why the guard must be a stat, not a git call, and why it makes this
-    a no-op in every repo but DoE-claude). Never fires on failure or on a
-    skipped push -- both of this function's `return` sites for a failed/
-    exhausted push are left untouched.
-    """
-    windows_bash = is_windows_bash()
-    # `git remote get-url origin` used to run here to derive `ssh_remote`. NOTHING
-    # consumes that flag any more, on any path: the 2026-08-06 no-shell-spawns
-    # ruling deleted the PowerShell transport, and both `push_once` and
-    # `route_label` now open with `del windows_bash, ssh_remote` -- the latter
-    # returning the constant "direct push". So the probe was one git subprocess
-    # per push, on the commit hot path, feeding a value that could not reach any
-    # output. Removed rather than left as an unread computation; the seams and
-    # signatures around it are unchanged, since they are still test surface.
-    ssh_remote = False
-    route = route_label(windows_bash, ssh_remote)
-    local_sha = _run_git(repo_root, ["rev-parse", branch])
-
-    # Cheap filesystem stat, evaluated once, BEFORE any git call this seam
-    # would otherwise add -- this is what keeps the common case (a repo with
-    # no cockpit-contract publish script at all) at zero extra subprocess
-    # cost. Only when this resolves non-None do we pay for the additional
-    # `rev-parse` below.
-    cockpit_script = _cockpit_publish_script(repo_root)
-    old_remote_sha = (
-        _run_git(repo_root, ["rev-parse", f"refs/remotes/origin/{branch}"])
-        if cockpit_script is not None
-        else None
-    )
-
-    attempt = 1
-    while attempt <= max(MAX_ATTEMPTS, REF_LOCK_ATTEMPTS):
-        succeeded, stderr_text = push_once(repo_root, branch, windows_bash, ssh_remote)
-        if succeeded:
-            _clear_pending_record_if_branch(repo_root, branch)
-            if cockpit_script is not None:
-                _maybe_publish_cockpit_contract(repo_root, cockpit_script, old_remote_sha, local_sha)
-            return
-
-        err_class = classify_error(stderr_text)
-
-        if err_class == "dead-ref":
-            # Not in _RETRYABLE_CLASSES (AC2) -- a dead local branch ref
-            # cannot self-heal by resending the same push, so report once
-            # and stop rather than falling through to the generic
-            # log_failure() path below (AC3). See log_dead_ref_failure's
-            # docstring for why this stays out of push-failures.log.
-            log_dead_ref_failure(repo_root, branch, route, attempt, stderr_text)
-            return
-
-        if err_class == "non-fast-forward":
-            if local_sha and _is_superseded(repo_root, branch, local_sha):
-                _clear_pending_record_if_branch(repo_root, branch)
-                log_race_resolved(repo_root, branch, route, attempt)
-                if cockpit_script is not None:
-                    _maybe_publish_cockpit_contract(repo_root, cockpit_script, old_remote_sha, local_sha)
-                return
-
-            # Not (yet) superseded -- poll on the remaining attempts' existing
-            # backoff rather than re-issuing `push_once`. A concurrent push
-            # already landed work we don't have; resending the same push would
-            # only collide again.
-            # MAX_ATTEMPTS verbatim, not `_attempts_for(err_class)`: this is the
-            # non-FF poll budget, a fail-loud mechanism DEC-1 keeps independent
-            # of the retry-class table above (see that comment for why raising
-            # a shared constant would have silently multiplied this budget too).
-            poll_attempt = attempt
-            while poll_attempt < MAX_ATTEMPTS:
-                print(
-                    f"coordinator-auto-push: race on {branch} (non-fast-forward, "
-                    f"attempt {poll_attempt}/{MAX_ATTEMPTS}) -- polling for supersede",
-                    file=sys.stderr,
-                )
-                if not _no_sleep():
-                    time.sleep(_backoff_seconds(err_class, poll_attempt))
-                poll_attempt += 1
-                if local_sha and _is_superseded(repo_root, branch, local_sha):
-                    _clear_pending_record_if_branch(repo_root, branch)
-                    log_race_resolved(repo_root, branch, route, poll_attempt)
-                    if cockpit_script is not None:
-                        _maybe_publish_cockpit_contract(repo_root, cockpit_script, old_remote_sha, local_sha)
-                    return
-
-            # Polls exhausted and still not superseded -- a genuine,
-            # unrecoverable-without-rebase divergence. Fail loud, as before.
-            first_err = extract_first_err(stderr_text)
-            log_failure(repo_root, branch, route, err_class, poll_attempt, first_err, stderr_text)
-            return
-
-        if attempt < _attempts_for(err_class) and err_class in _RETRYABLE_CLASSES:
-            if not _no_sleep():
-                time.sleep(_backoff_seconds(err_class, attempt))
-            attempt += 1
-            continue
-
-        first_err = extract_first_err(stderr_text)
-        log_failure(repo_root, branch, route, err_class, attempt, first_err, stderr_text)
-        return
-
-    # Unreachable in practice (the loop always returns inside), kept for
-    # clarity/defense-in-depth matching the bash `while` fallthrough.
-    return
 
 
 # ---------------------------------------------------------------------------

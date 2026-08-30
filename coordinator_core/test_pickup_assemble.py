@@ -24,6 +24,7 @@ import pytest
 import coordinator_core.pickup_assemble as pa
 import coordinator_core.pickup_assemble.apply as apply_mod
 import coordinator_core.review_assemble.exec_auth_stamp as exec_auth_stamp
+from coordinator_core.win_portability import no_console_creationflags
 
 # Real-git spawn is load-bearing: pickup_assemble's branch classifiers (handoff/
 # memo/spinoff/archived-baton) and its archive-fallback multi-hit rule read
@@ -63,6 +64,7 @@ def _git(repo: Path, *args: str, extra_env: dict[str, str] | None = None) -> sub
         timeout=15,
         stdin=subprocess.DEVNULL,
         env=_isolated_git_env(repo.parent, extra_env),
+        **no_console_creationflags(),
     )
 
 
@@ -2709,6 +2711,7 @@ def _self_lstart() -> str:
         ["ps", "-p", str(os.getpid()), "-o", "lstart="],
         capture_output=True,
         text=True,
+        **no_console_creationflags(),
     )
     lstart = result.stdout.strip()
     assert lstart, "ps -p <self> -o lstart= must succeed on a live test process"
@@ -5405,6 +5408,7 @@ def _canonical_body_sha(repo: Path, text: str) -> str:
         input=body.encode("utf-8"),
         capture_output=True,
         timeout=15,
+        **no_console_creationflags(),
     )
     assert result.returncode == 0, result.stderr
     return result.stdout.decode("utf-8").strip()

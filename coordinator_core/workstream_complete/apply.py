@@ -1263,7 +1263,11 @@ def _run_close_commit_tail(
         # outcome is unknown/failed -- any ship-stamp write already landed on
         # disk (see the block above) rides no commit, so it is reverted
         # rather than left standing for the archival sweep to act on.
-        if ship_outcome is not None and ship_outcome.stamped_paths:
+        # Review: overengineering-reviewer -- `ship_outcome` is always a
+        # value here (never None): both branches above assign one, and the
+        # `kwargs is None` path already returned before this frame is
+        # reached. Dropped the dead `is not None` guard.
+        if ship_outcome.stamped_paths:
             directives_commit_tail.revert_ship_stamps(
                 worktree_root, ship_outcome.stamped_paths, ship_backups
             )
@@ -1277,28 +1281,30 @@ def _run_close_commit_tail(
         "integrity_breach": result.integrity_breach,
         "diagnostics": list(result.diagnostics),
     }
-    if ship_outcome is not None:
-        # WRITE-LANDS-THEN-COMMIT-FAILS: the stamp is durable only once this
-        # commit is KNOWN to have succeeded -- a failed/refused commit
-        # (commit_failed True) or a no-op (no committed_sha, e.g. nothing
-        # else to stage) leaves the ship-stamp write with no commit carrying
-        # it, so it is reverted rather than reported as landed.
-        if result.commit_failed or not result.committed_sha:
-            directives_commit_tail.revert_ship_stamps(
-                worktree_root, ship_outcome.stamped_paths, ship_backups
-            )
-            reverted = ship_outcome.stamped_paths
-            landed = ()
-        else:
-            reverted = ()
-            landed = ship_outcome.stamped_paths
-        report["ship_stamp"] = {
-            "attempted": ship_outcome.attempted,
-            "stamped": list(landed),
-            "reverted": list(reverted),
-            "skipped": list(ship_outcome.skipped_paths),
-            "diagnostics": list(ship_outcome.diagnostics),
-        }
+    # Review: overengineering-reviewer -- `ship_outcome` is always-a-value
+    # here (see the earlier guard's own note); dropped the equivalent dead
+    # `is not None` check that used to wrap this block.
+    # WRITE-LANDS-THEN-COMMIT-FAILS: the stamp is durable only once this
+    # commit is KNOWN to have succeeded -- a failed/refused commit
+    # (commit_failed True) or a no-op (no committed_sha, e.g. nothing
+    # else to stage) leaves the ship-stamp write with no commit carrying
+    # it, so it is reverted rather than reported as landed.
+    if result.commit_failed or not result.committed_sha:
+        directives_commit_tail.revert_ship_stamps(
+            worktree_root, ship_outcome.stamped_paths, ship_backups
+        )
+        reverted = ship_outcome.stamped_paths
+        landed = ()
+    else:
+        reverted = ()
+        landed = ship_outcome.stamped_paths
+    report["ship_stamp"] = {
+        "attempted": ship_outcome.attempted,
+        "stamped": list(landed),
+        "reverted": list(reverted),
+        "skipped": list(ship_outcome.skipped_paths),
+        "diagnostics": list(ship_outcome.diagnostics),
+    }
     return report
 
 

@@ -37,11 +37,17 @@ unpushed-at-handoff state is swept before the predecessor actually exits.
 
 SWEEP COST BUDGET. Serial over every served repo -- N x push, not one push.
 Each repo's own push is bounded by `push_with_retry`'s existing
-`PUSH_RETRY_BUDGET_SECS` ladder deadline (reused here unmodified, not
-duplicated); the whole sweep additionally stops taking on new repos once
-`SWEEP_TOTAL_CEILING_SECS` has elapsed, so one wedged repo cannot make the
-sweep itself the next unbounded-shutdown-hang class this plan exists to
-retire. `EXIT_SWEEP_CEILING_SECS` is tighter than the idle-tick ceiling: an
+`CADENCE_PUSH_RETRY_BUDGET_SECS` ladder deadline (its OWN budget, separate
+from the interactive `PUSH_RETRY_BUDGET_SECS` -- C5, 2026-08-30, see that
+constant's own docstring), reused here unmodified, not duplicated. The
+whole sweep additionally REFUSES TO START a repo that cannot finish before
+`SWEEP_TOTAL_CEILING_SECS` elapses (`sweep_repos`'s own docstring), so
+`SWEEP_TOTAL_CEILING_SECS` is an enforced worst-case bound on the sweep's
+own occupancy, not merely a stop-taking-new-repos check that a repo
+admitted just under the deadline could still run past -- one wedged repo
+cannot make the sweep itself the next unbounded-shutdown-hang class this
+plan exists to retire. `EXIT_SWEEP_CEILING_SECS` is tighter than the
+idle-tick ceiling: an
 unbounded exit-path sweep directly lengthens warm-restart latency
 (`lifecycle.begin_shutdown`'s docstring -- a same-token successor cannot
 bind until the whole shutdown sequence completes), where the idle-tick
@@ -108,9 +114,12 @@ from typing import Callable, Iterable, List, Optional, Union
 from coordinator_core.git.git_dir import resolve_git_common_dir
 from coordinator_core.git.git_state import head_branch
 from coordinator_core.hooks.auto_push import log_failure
-from coordinator_core.ops.ceremony.push import PUSH_RETRY_BUDGET_SECS
+from coordinator_core.ops.ceremony.push import (
+    CADENCE_PUSH_RETRY_BUDGET_SECS,
+    PUSH_RETRY_BUDGET_SECS,
+)
 from coordinator_core.ops.push_outstanding import push_outstanding
-from coordinator_core.session import core as session_core
+from coordinator_core.session.day_branch_cut_lock import holder_alive
 
 __all__ = [
     "PUSH_CADENCE_INTERVAL_SECS",
@@ -126,15 +135,28 @@ __all__ = [
 #: docstring's HOST section for why that ordering matters.
 PUSH_CADENCE_INTERVAL_SECS = 600.0
 
-#: The idle-tick sweep's own ceiling: generous, since delaying the NEXT
-#: watchdog tick by this much still leaves ample room under the 900s idle
-#: deadline it never extends.
-SWEEP_TOTAL_CEILING_SECS = 60.0
+#: The idle-tick sweep's own ceiling (C5, 2026-08-30, lowered from 60.0):
+#: `sweep_repos` now refuses to START a repo it cannot finish inside this
+#: deadline (see that function's own docstring), so this is a REAL bound on
+#: worst-case occupancy, not merely a loop-exit check that still lets one
+#: last repo run past it. At `CADENCE_PUSH_RETRY_BUDGET_SECS` (6.0s) this
+#: guarantees 2 slow (has-outstanding-work, needs-the-ladder) repos served
+#: per tick -- down from 5 at the pre-C5 60.0/12.0 pairing, a deliberate
+#: 4x cut in worst-case occupancy of a thread ~50 peer sessions are queued
+#: behind, traded against a 600s (`PUSH_CADENCE_INTERVAL_SECS`) retry that
+#: makes a deferred slow repo cost one tick, not a throughput improvement.
+#: A repo with nothing outstanding costs ~0 via `push_outstanding`'s
+#: zero-spawn arm and is unaffected by this number either way.
+SWEEP_TOTAL_CEILING_SECS = 14.0
 
 #: The exit-path sweep's ceiling is tighter than the idle-tick one -- an
 #: unbounded exit sweep directly lengthens warm-restart latency (module
-#: docstring's SWEEP COST BUDGET section).
-EXIT_SWEEP_CEILING_SECS = 15.0
+#: docstring's SWEEP COST BUDGET section). Re-derived (C5, 2026-08-30) from
+#: the new `CADENCE_PUSH_RETRY_BUDGET_SECS` (6.0s) rather than left at the
+#: stale 15.0, which INVERTED this invariant once the idle ceiling dropped
+#: to 14.0 below it: 12.0 is 2x the per-repo budget, one tick tighter than
+#: the idle ceiling's own 2-repo guarantee, and still strictly under 14.0.
+EXIT_SWEEP_CEILING_SECS = 12.0
 
 #: A zero-arg callable returning the repos (worktree roots) this server has
 #: actually served, in the order first served. `on_idle_tick`'s caller
@@ -198,17 +220,8 @@ def _sweep_lock_path(repo_root: Union[str, Path]) -> Path:
     return resolve_git_common_dir(repo_root) / _SWEEP_LOCK_NAME
 
 
-def _holder_alive(pid) -> Optional[bool]:
-    if not isinstance(pid, int):
-        return None
-    try:
-        return session_core.pid_alive(pid)
-    except Exception:  # noqa: BLE001 -- unknown liveness is not a verdict
-        return None
-
-
 def _sweep_lock_is_stale(record: dict, now: float) -> bool:
-    if _holder_alive(record.get("holder_pid")) is False:
+    if holder_alive(record.get("holder_pid")) is False:
         return True
     hold_until = record.get("hold_until")
     return isinstance(hold_until, (int, float)) and now > hold_until + _SWEEP_LOCK_STALE_GRACE_SECS
@@ -325,8 +338,24 @@ def _feed_failure_detector(repo_root: Union[str, Path], outcome) -> None:
     else:
         first_err = "; ".join(outcome.unconfirmed)
         err_class = "sweep-unconfirmed"
+    # `outcome.attempts`, never a literal: this feed passed `1` for three
+    # months, and `log_failure` writes that number into `.git/push-failures.log`
+    # as `after <N>` -- which every reader takes as the ladder depth actually
+    # run. Example-retrieval-repo-em read `cadence-sweep/... after 1` beside
+    # `direct push/... after 3` and inferred an asymmetric one-attempt ladder on
+    # this leg (memo 2026-08-30). There is no such asymmetry: this leg reaches
+    # `push_with_retry` through `push_outstanding` with the same
+    # `_PUSH_MAX_RETRIES` every other caller gets. `None` renders `after ?`.
     try:
-        log_failure(str(repo_root), branch, "cadence-sweep", err_class, 1, first_err, "")
+        log_failure(
+            str(repo_root),
+            branch,
+            "cadence-sweep",
+            err_class,
+            outcome.attempts,
+            first_err,
+            "",
+        )
     except Exception:  # noqa: BLE001 -- feeding the detector must never raise
         pass
 
@@ -339,16 +368,19 @@ def _feed_failure_detector(repo_root: Union[str, Path], outcome) -> None:
 def _sweep_one(repo_root: Union[str, Path]) -> None:
     """Push exactly one repo -- declining outright if another sweeper
     already holds this repo's lock. The per-repo bound is enforced by
-    `push_with_retry`'s own `PUSH_RETRY_BUDGET_SECS`-keyed ladder deadline
-    inside `push_outstanding` itself -- see the module docstring's SWEEP
-    COST BUDGET section, not re-implemented here.
+    `push_with_retry`'s own `CADENCE_PUSH_RETRY_BUDGET_SECS`-keyed ladder
+    deadline inside `push_outstanding` itself -- see the module docstring's
+    SWEEP COST BUDGET section, not re-implemented here. Passes the
+    cadence's OWN, smaller budget (C5, 2026-08-30) -- never the interactive
+    `PUSH_RETRY_BUDGET_SECS` `push_outstanding` defaults to for every other
+    caller.
     """
     root = Path(repo_root)
     if not _acquire_sweep_lock(root):
         return
     try:
         try:
-            outcome = push_outstanding(root)
+            outcome = push_outstanding(root, budget_secs=CADENCE_PUSH_RETRY_BUDGET_SECS)
         except Exception:  # noqa: BLE001 -- a sweep push must never raise
             return
         if outcome.failed or outcome.unconfirmed:
@@ -361,17 +393,33 @@ def sweep_repos(
     repos: Iterable[Union[str, Path]],
     *,
     total_ceiling_secs: float = SWEEP_TOTAL_CEILING_SECS,
+    per_repo_budget_secs: float = CADENCE_PUSH_RETRY_BUDGET_SECS,
     clock: Callable[[], float] = time.monotonic,
 ) -> None:
     """Sweep every repo in `repos`, serially, stopping (without pushing to
     any remaining repo) once `total_ceiling_secs` has elapsed since this
     call started -- see module docstring's SWEEP COST BUDGET. Never raises:
     every per-repo step is already caught inside `_sweep_one`.
+
+    REFUSES TO START a repo that cannot finish inside the deadline (C5,
+    2026-08-30): the old check (`clock() >= deadline` at the TOP of each
+    iteration, then run a whole repo) let a repo entered just under the
+    deadline spend its full budget anyway, so the true worst case was
+    `total_ceiling_secs + per_repo_budget_secs` -- 72s at the pre-C5
+    60.0/12.0 pairing, still over the criterion's 15s bound even after
+    lowering just the ceiling. Checking `now + per_repo_budget_secs >
+    deadline` as well as `now >= deadline` makes `total_ceiling_secs` the
+    real bound: no repo this call ever touches can push it past that
+    ceiling. `per_repo_budget_secs` defaults to the cadence's own
+    `CADENCE_PUSH_RETRY_BUDGET_SECS` -- the same budget `_sweep_one` hands
+    `push_outstanding` -- so the admission guard and the actual per-repo
+    spend agree without a second number to keep in sync.
     """
     deadline = clock() + total_ceiling_secs
     seen: List[Path] = []
     for repo in repos:
-        if clock() >= deadline:
+        now = clock()
+        if now >= deadline or now + per_repo_budget_secs > deadline:
             break
         root = Path(repo)
         if root in seen:

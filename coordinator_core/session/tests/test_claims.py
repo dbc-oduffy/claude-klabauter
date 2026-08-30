@@ -49,7 +49,10 @@ from coordinator_core.session import (
     touch_record,
 )
 from coordinator_core.ops.session import safe_commit_offer
-from coordinator_core.win_portability import no_console_creationflags
+from coordinator_core.win_portability import (
+    no_console_creationflags,
+    no_console_passthrough_kwargs,
+)
 
 # Every test in this file builds its repo via `_make_repo(tmp_path)`, spawning
 # real git (init/config/add/commit) because the production code under test --
@@ -69,12 +72,20 @@ pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 
 def _make_repo(tmp_path):
-    subprocess.run(["git", "init", "-q"], cwd=tmp_path)
-    subprocess.run(["git", "config", "user.email", "t@example.com"], cwd=tmp_path)
-    subprocess.run(["git", "config", "user.name", "t"], cwd=tmp_path)
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, **no_console_passthrough_kwargs())
+    subprocess.run(
+        ["git", "config", "user.email", "t@example.com"],
+        cwd=tmp_path,
+        **no_console_passthrough_kwargs(),
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "t"], cwd=tmp_path, **no_console_passthrough_kwargs()
+    )
     (tmp_path / "README.md").write_text("x")
-    subprocess.run(["git", "add", "."], cwd=tmp_path)
-    subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=tmp_path)
+    subprocess.run(["git", "add", "."], cwd=tmp_path, **no_console_passthrough_kwargs())
+    subprocess.run(
+        ["git", "commit", "-q", "-m", "init"], cwd=tmp_path, **no_console_passthrough_kwargs()
+    )
     return tmp_path
 
 
@@ -136,6 +147,7 @@ def _self_lstart():
         ["ps", "-p", str(os.getpid()), "-o", "lstart="],
         capture_output=True,
         text=True,
+        **no_console_creationflags(),
     )
     lstart = result.stdout.strip()
     assert lstart, "ps -p <self> -o lstart= must succeed on a live test process"
@@ -389,7 +401,7 @@ class TestAtomicDedupAppendLockedBranch:
             subprocess.Popen(
                 [sys.executable, str(script), str(touched), f"path{i}.py"],
                 env=env,
-                **no_console_creationflags(),
+                **no_console_passthrough_kwargs(),
             )
             for i in range(n)
         ]
@@ -2449,8 +2461,15 @@ class TestBackfillReapedFromSession:
 def _add_and_commit_tracked(repo, rel, content):
     path = Path(repo) / rel
     path.write_text(content)
-    subprocess.run(["git", "add", rel], cwd=repo, check=True)
-    subprocess.run(["git", "commit", "-q", "-m", f"add {rel}"], cwd=repo, check=True)
+    subprocess.run(
+        ["git", "add", rel], cwd=repo, check=True, **no_console_passthrough_kwargs()
+    )
+    subprocess.run(
+        ["git", "commit", "-q", "-m", f"add {rel}"],
+        cwd=repo,
+        check=True,
+        **no_console_passthrough_kwargs(),
+    )
     return path
 
 
@@ -2725,9 +2744,14 @@ class TestRelocateTouchedPathDirectory:
         (Path(repo) / "dir").mkdir()
         _add_and_commit_tracked(repo, "dir/a.py", "claimed\n")
         (Path(repo) / "dir" / "b.py").write_text("never touched\n")
-        subprocess.run(["git", "add", "dir/b.py"], cwd=repo, check=True)
         subprocess.run(
-            ["git", "commit", "-q", "-m", "add dir/b.py"], cwd=repo, check=True
+            ["git", "add", "dir/b.py"], cwd=repo, check=True, **no_console_passthrough_kwargs()
+        )
+        subprocess.run(
+            ["git", "commit", "-q", "-m", "add dir/b.py"],
+            cwd=repo,
+            check=True,
+            **no_console_passthrough_kwargs(),
         )
         core.init("mine", cwd=str(repo))
         scope.touch("mine", "dir/a.py", cwd=str(repo))
@@ -2746,9 +2770,14 @@ class TestRelocateTouchedPathDirectory:
         repo = _make_repo(tmp_path)
         (Path(repo) / "dir").mkdir()
         (Path(repo) / "dir" / "a.py").write_text("never touched\n")
-        subprocess.run(["git", "add", "dir/a.py"], cwd=repo, check=True)
         subprocess.run(
-            ["git", "commit", "-q", "-m", "add dir/a.py"], cwd=repo, check=True
+            ["git", "add", "dir/a.py"], cwd=repo, check=True, **no_console_passthrough_kwargs()
+        )
+        subprocess.run(
+            ["git", "commit", "-q", "-m", "add dir/a.py"],
+            cwd=repo,
+            check=True,
+            **no_console_passthrough_kwargs(),
         )
         core.init("mine", cwd=str(repo))
 
@@ -2850,7 +2879,9 @@ class TestReleasePhantomClaims:
         core.init("mine", cwd=str(repo))
         staged = Path(repo) / "staged.py"
         staged.write_text("new content\n")
-        subprocess.run(["git", "add", "staged.py"], cwd=repo, check=True)
+        subprocess.run(
+            ["git", "add", "staged.py"], cwd=repo, check=True, **no_console_passthrough_kwargs()
+        )
         scope.touch("mine", "staged.py", cwd=str(repo))
         os.remove(str(staged))
 

@@ -36,6 +36,7 @@ import pytest
 
 from coordinator_core import sibling_fact
 from coordinator_core.sibling_fact import resolve_leg
+from coordinator_core.win_portability import no_console_creationflags
 
 # Declared, not excused: the `commit_ancestor` leg (f) resolves real merge-base
 # ancestry, including the "git not on PATH"/unreachable-SHA indeterminate cases, which
@@ -56,6 +57,7 @@ def _git(args: List[str], cwd: Path) -> subprocess.CompletedProcess:
         capture_output=True,
         encoding="utf-8",
         check=True,
+        **no_console_creationflags(),
     )
 
 
@@ -67,6 +69,7 @@ def _make_commit(repo: Path, message: str) -> str:
         capture_output=True,
         encoding="utf-8",
         check=True,
+        **no_console_creationflags(),
     )
     return result.stdout.strip()
 

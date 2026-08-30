@@ -38,6 +38,7 @@ import time
 import pytest
 
 from coordinator_core.warm import server
+from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -53,6 +54,7 @@ def _dead_pid() -> int:
         [sys.executable, "-c", "pass"],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
+        **no_console_creationflags(),
     )
     proc.wait(timeout=60)
     return proc.pid

@@ -32,6 +32,7 @@ import pytest
 
 from coordinator_core.ceremony_common.apply_halt import UnrecognizedDirective
 from coordinator_core.ceremony_common.cli_rejection import CliExitClass
+from coordinator_core.win_portability import no_console_creationflags
 from coordinator_core.workstream_complete import CONSUMES_MANIFEST, TransportFailure
 
 # Real git spawn is load-bearing: the no-commit-row guard's commit-coverage
@@ -808,7 +809,7 @@ def test_apply_executes_directives_from_a_successful_brief(monkeypatch: pytest.M
 
 
 def _git(args: list[str], cwd: Path) -> subprocess.CompletedProcess:
-    return subprocess.run(["git", *args], cwd=str(cwd), capture_output=True, text=True, check=True)
+    return subprocess.run(["git", *args], cwd=str(cwd), capture_output=True, text=True, check=True, **no_console_creationflags())
 
 
 def _init_repo(root: Path) -> None:
@@ -900,7 +901,8 @@ def test_no_commit_row_judgment_returns_none_once_the_row_ships(tmp_path: Path) 
     _git(["add", "docs/plans/myplan.md"], tmp_path)
     _git(["commit", "-q", "-m", "land the work C1 needed"], tmp_path)
     covering_sha = subprocess.run(
-        ["git", "rev-parse", "HEAD"], cwd=str(tmp_path), capture_output=True, text=True, check=True
+        ["git", "rev-parse", "HEAD"], cwd=str(tmp_path), capture_output=True, text=True, check=True,
+        **no_console_creationflags(),
     ).stdout.strip()
 
     plan_file.write_text(

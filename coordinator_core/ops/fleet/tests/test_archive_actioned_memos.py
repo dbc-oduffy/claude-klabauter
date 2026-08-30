@@ -211,6 +211,76 @@ def test_dest_conflict_with_different_content_is_named_and_skipped(tmp_path):
     assert reasons[cid] == _REASON_DEST_CONFLICT
 
 
+def test_inbox_paths_supplied_skips_the_directory_walk(tmp_path):
+    # (Review: coordinator:code-reviewer F3) When a caller already walked
+    # the inbox and hands the list through, `_scan_terminal_memos` must NOT
+    # re-derive it via `collect_inbox_memo_paths` — that is the whole point
+    # of the passthrough (avoids a second `iterdir` + `resolve()` pass).
+    repo = tmp_path / "r"
+    _init_repo(repo)
+    memo_path = _seed_memo(repo, "2026-01-01-actioned.md", "status: actioned\n")
+    common_dir = _common_dir(repo)
+
+    with patch(
+        "coordinator_core.ops.fleet.archive_actioned_memos.collect_inbox_memo_paths"
+    ) as collect_spy:
+        moves, skipped = plan_sweep(
+            repo, common_dir, cap=150, inbox_paths=[memo_path],
+        )
+    collect_spy.assert_not_called()
+    assert {m.candidate_id for m in moves} == {rel_id(memo_path, repo)}
+    assert skipped == []
+
+
+def test_inbox_paths_none_preserves_standalone_walk(tmp_path):
+    # (Review: coordinator:code-reviewer F3) The default `inbox_paths=None`
+    # must still fall through to `collect_inbox_memo_paths` — the
+    # passthrough parameter must not change today's standalone behaviour.
+    repo = tmp_path / "r"
+    _init_repo(repo)
+    memo_path = _seed_memo(repo, "2026-01-01-actioned.md", "status: actioned\n")
+    common_dir = _common_dir(repo)
+
+    with patch(
+        "coordinator_core.ops.fleet.archive_actioned_memos.collect_inbox_memo_paths",
+        wraps=collect_inbox_memo_paths,
+    ) as collect_spy:
+        moves, _skipped = plan_sweep(repo, common_dir, cap=150, inbox_paths=None)
+    collect_spy.assert_called_once_with(repo)
+    assert {m.candidate_id for m in moves} == {rel_id(memo_path, repo)}
+
+
+def test_inbox_paths_supplied_still_honours_live_claim_and_dirty_rails(tmp_path):
+    # (Review: coordinator:code-reviewer F3) A caller supplying `inbox_paths`
+    # bypasses `collect_inbox_memo_paths`'s own `.is_file()`/`.suffix`
+    # filtering, but must NOT bypass the exclusion rails downstream of the
+    # scan — live-claim-holder and worktree-dirty both still apply.
+    repo = tmp_path / "r"
+    _init_repo(repo)
+    live_memo = _seed_memo(repo, "2026-01-01-actioned.md", "status: actioned\n")
+    dirty_memo = _seed_memo(repo, "2026-01-02-actioned.md", "status: actioned\n")
+    dirty_memo.write_text(
+        dirty_memo.read_text(encoding="utf-8") + "\nextra\n", encoding="utf-8",
+    )
+    common_dir = _common_dir(repo)
+
+    claim_dir = _memo_claim_dir(common_dir, live_memo)
+    claim_dir.mkdir(parents=True, exist_ok=True)
+
+    scan_skipped: list = []
+    with patch(_CS_CLAIM_HOLDER_LIVE_PATCH, return_value=True):
+        moves, skipped = plan_sweep(
+            repo, common_dir, cap=150,
+            inbox_paths=[live_memo, dirty_memo],
+            scan_skipped=scan_skipped,
+        )
+
+    assert moves == []
+    reasons = {s["id"]: s["reason"] for s in skipped + scan_skipped}
+    assert reasons[rel_id(live_memo, repo)] == _SCAN_REASON_LIVE_CLAIM
+    assert reasons[rel_id(dirty_memo, repo)] == _SCAN_REASON_WORKTREE_DIRTY
+
+
 def test_idempotent_replay_second_apply_is_a_noop(tmp_path):
     repo = tmp_path / "r"
     _init_repo(repo)

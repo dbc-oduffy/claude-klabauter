@@ -173,6 +173,75 @@ class EntrypointNotWarmLoadableError(ValueError):
 _ENTRYPOINT_CWD_LOCK = threading.Lock()
 
 
+@contextlib.contextmanager
+def _borrowed_session_identity():
+    """Make the CALLER's session identity true in `os.environ` for the span of
+    one entrypoint call, and restore this process's own on the way out.
+
+    WHY THIS EXISTS, and why binding the ContextVar was not enough. Every
+    `coordinator/bin/*.py` CLI is written to run as a fresh subprocess in the
+    caller's own environment, so it resolves its session identity by reading
+    `SESSION_ENV_PRECEDENCE` out of `os.environ` directly — the
+    `prepare-commit-msg` hook does so in a deliberately hand-mirrored copy of
+    that ladder (its `_resolve_session_id`'s own docstring says why it cannot
+    import `coordinator_core` on the commit hot path). Served in-process here,
+    that environment belongs to whoever SPAWNED the warm server, not to the
+    session being served: the door's `_session_id` and
+    `session.core.session_identity_override` reach `resolve_session_id()` and
+    nothing else, so a CLI reading env stamps a stranger.
+
+    Measured live 2026-08-30 (cross-repo/inbox/2026-08-30-example-retrieval-repo-em-
+    prepare-commit-msg-stamps-warm-engine-owner-session-id.md, reproduced in
+    this repo): the same hook stamped the caller's id cold and the server
+    owner's id through the door, and every hook-path commit on a box carrying
+    the forwarder takes the warm route. `Session-Id` is load-bearing for
+    `review-brightline-gate`'s scope filter and `workstream-complete`'s
+    foreign-session guard, and it fails OPEN — the gate reports
+    `indeterminate`, never `wrong`.
+
+    Same axis, same lock, same restore discipline as the `os.chdir` and
+    `sys.argv` borrows this context manager sits beside: process-global state
+    is borrowed for exactly the span one caller is entitled to it.
+
+    Two directions, and the second is the one that matters:
+      - carried identity present -> `COORDINATOR_SESSION_ID` (tier 1, the head
+        of the ladder) is set to it and the two lower-tier names are POPPED,
+        so a leftover `CLAUDE_CODE_SESSION_ID` in the server's environment
+        cannot resurface for any CLI that reads only that name.
+      - warm-served with NO carried identity -> all three names are popped.
+        Omitting a trailer is coverage-neutral; stamping the server owner's is
+        misattribution (`session.core.carried_session_id`'s own contract:
+        a warm caller holding an empty carried id must OMIT, never substitute
+        the ambient one).
+    Cold re-entry (path 3, `entry_seam.reentrant_dispatch`) is neither: nothing
+    is bound, `os.environ` IS the caller's own, and this is a no-op.
+    """
+    from coordinator_core.session.core import (
+        SESSION_ENV_PRECEDENCE,
+        carried_session_id,
+        warm_served_request,
+    )
+
+    carried = carried_session_id()
+    if not carried and not warm_served_request():
+        yield
+        return
+
+    saved = {name: os.environ.get(name) for name in SESSION_ENV_PRECEDENCE}
+    try:
+        for name in SESSION_ENV_PRECEDENCE:
+            os.environ.pop(name, None)
+        if carried:
+            os.environ["COORDINATOR_SESSION_ID"] = carried
+        yield
+    finally:
+        for name, previous in saved.items():
+            if previous is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = previous
+
+
 def _resolve_entrypoint_script(entrypoint: str) -> Path:
     """Validates `entrypoint` against the committed allowlist and against
     `coordinator/bin/<entrypoint>.py`'s on-disk existence, returning the
@@ -398,6 +467,11 @@ def _run_entrypoint(entrypoint: str, argv: list, cwd: str) -> dict:
     way `_dispatch_argv` captures the generic dispatcher's own prints, so a
     warm pool worker's real streams are never written to.
 
+    The caller's SESSION IDENTITY is borrowed across the same span, by
+    `_borrowed_session_identity` — for the reason cwd and `sys.argv` are:
+    these CLIs read `os.environ` directly, and inside the warm server that
+    environment belongs to whoever spawned it. See that helper's docstring.
+
     The chdir/call/restore span runs under `_ENTRYPOINT_CWD_LOCK` — see that
     lock's own comment for why: `os.chdir` mutates process-global state in a
     process ~50 sessions share, so two concurrent calls with different
@@ -453,7 +527,9 @@ def _run_entrypoint(entrypoint: str, argv: list, cwd: str) -> dict:
             # calls a bare `parser.parse_args()` mid-body, and no shape read
             # off its guard would reveal that.
             sys.argv = [str(script)] + list(argv)
-            with contextlib.redirect_stdout(stdout_buf), contextlib.redirect_stderr(stderr_buf):
+            with _borrowed_session_identity(), contextlib.redirect_stdout(
+                stdout_buf
+            ), contextlib.redirect_stderr(stderr_buf):
                 try:
                     main_fn = _load_entrypoint_main(script, entrypoint)
                     exit_code = main_fn(*entrypoint_call_args(shape, script, argv))

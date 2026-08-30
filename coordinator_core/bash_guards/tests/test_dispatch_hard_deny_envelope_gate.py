@@ -30,6 +30,7 @@ pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 from coordinator_core.bash_guards import dispatch
 from coordinator_core.bash_guards import _write_bump_session_start as session_start
 from coordinator_core.session import guard_unlock_sentinel as gus
+from coordinator_core.win_portability import no_console_creationflags
 
 
 def _posix(p) -> str:
@@ -37,7 +38,7 @@ def _posix(p) -> str:
 
 
 def _git(root: str, *args: str) -> None:
-    subprocess.run(["git", *args], cwd=root, check=True, capture_output=True)
+    subprocess.run(["git", *args], cwd=root, check=True, capture_output=True, **no_console_creationflags())
 
 
 def _init_repo(tmp_path: Path, name: str) -> Path:

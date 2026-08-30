@@ -16,6 +16,8 @@ from coordinator_core.ops.scope_soak_enable import enable, main
 
 import pytest
 
+from coordinator_core.win_portability import no_console_passthrough_kwargs
+
 # Spawns a real external process; runs at cadence gates, not per-commit.
 # Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [
@@ -69,7 +71,7 @@ def test_main_wraps_enable_and_writes_stdout(tmp_path, monkeypatch, capsys):
     monkeypatch.chdir(tmp_path)
     import subprocess
 
-    subprocess.run(["git", "init", "-q"], cwd=str(tmp_path), check=True)
+    subprocess.run(["git", "init", "-q"], cwd=str(tmp_path), check=True, **no_console_passthrough_kwargs())
     rc = main([])
     captured = capsys.readouterr()
     assert rc == 0

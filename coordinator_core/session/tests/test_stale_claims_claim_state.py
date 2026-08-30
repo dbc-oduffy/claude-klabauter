@@ -28,10 +28,7 @@ from unittest import mock
 
 from coordinator_core import claim_state
 from coordinator_core.session import core, stale_claims
-from coordinator_core.win_portability import (
-    no_console_creationflags,
-    no_console_passthrough_kwargs,
-)
+from coordinator_core.win_portability import no_console_passthrough_kwargs
 
 import pytest
 

@@ -29,6 +29,7 @@ import pytest
 
 from coordinator_core.ops import workweek_trail_scope
 from coordinator_core.ops.workweek_trail_scope import main
+from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
@@ -39,7 +40,7 @@ pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 
 def _git(*args, cwd):
-    subprocess.run(["git", *args], cwd=str(cwd), check=True, capture_output=True, text=True)
+    subprocess.run(["git", *args], cwd=str(cwd), check=True, capture_output=True, text=True, **no_console_creationflags())
 
 
 def _make_fixture(base: Path):
@@ -52,12 +53,13 @@ def _make_fixture(base: Path):
     subprocess.run(
         ["git", "clone", "-q", str(origin_dir), str(seed_dir)],
         check=True, capture_output=True, text=True,
+        **no_console_creationflags(),
     )
     _git("config", "user.email", "test@test.local", cwd=seed_dir)
     _git("config", "user.name", "Test", cwd=seed_dir)
     _git("config", "commit.gpgsign", "false", cwd=seed_dir)
     subprocess.run(["git", "-C", str(seed_dir), "checkout", "-q", "-b", "main"],
-                    capture_output=True, text=True)
+                    capture_output=True, text=True, **no_console_creationflags())
     (seed_dir / ".gitkeep").write_text("")
     _git("add", "--", ".gitkeep", cwd=seed_dir)
     _git("commit", "-q", "-m", "root", cwd=seed_dir)
@@ -67,12 +69,13 @@ def _make_fixture(base: Path):
     subprocess.run(
         ["git", "clone", "-q", str(origin_dir), str(repo_dir)],
         check=True, capture_output=True, text=True,
+        **no_console_creationflags(),
     )
     _git("config", "user.email", "test@test.local", cwd=repo_dir)
     _git("config", "user.name", "Test", cwd=repo_dir)
     _git("config", "commit.gpgsign", "false", cwd=repo_dir)
     subprocess.run(["git", "-C", str(repo_dir), "checkout", "-q", "main"],
-                    capture_output=True, text=True)
+                    capture_output=True, text=True, **no_console_creationflags())
 
     (repo_dir / "state" / "review-trail").mkdir(parents=True)
     return repo_dir
@@ -89,6 +92,7 @@ def _add_commit(repo: Path, *files: str) -> str:
     result = subprocess.run(
         ["git", "-C", str(repo), "rev-parse", "HEAD"],
         check=True, capture_output=True, text=True,
+        **no_console_creationflags(),
     )
     return result.stdout.strip()
 
@@ -172,6 +176,7 @@ def test_reviewed_commits_excluded_from_staff_eng(tmp_path, monkeypatch):
     origin_sha = subprocess.run(
         ["git", "-C", str(repo), "rev-parse", "origin/main"],
         check=True, capture_output=True, text=True,
+        **no_console_creationflags(),
     ).stdout.strip()
     header = _write_header(repo, "2000-01-01")
     segments = [{"sha_range": f"{origin_sha}..{sha_c2}", "shas": [sha_c1, sha_c2], "files": ["src/alpha.py", "src/beta.py"]}]
@@ -206,6 +211,7 @@ def test_cross_segment_seam_detection(tmp_path, monkeypatch):
     origin_sha = subprocess.run(
         ["git", "-C", str(repo), "rev-parse", "origin/main"],
         check=True, capture_output=True, text=True,
+        **no_console_creationflags(),
     ).stdout.strip()
     range_a = f"{origin_sha}..{sha_a2}"
     sha_b1 = _add_commit(repo, "src/common.py", "src/bfile.py")

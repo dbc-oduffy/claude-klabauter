@@ -89,6 +89,7 @@ from coordinator_core.distill.delete_guard import (
     resolve_realized_by,
 )
 from coordinator_core.ops.distill_disposal_manifest import evaluate_candidate_receipts
+from coordinator_core.win_portability import no_console_creationflags
 
 _HAS_RG = shutil.which("rg") is not None
 _requires_rg = pytest.mark.skipif(not _HAS_RG, reason="ripgrep (rg) not installed")
@@ -115,6 +116,7 @@ def _git(repo_root: Path, *args: str) -> subprocess.CompletedProcess:
         capture_output=True,
         text=True,
         check=True,
+        **no_console_creationflags(),
     )
 
 
@@ -470,13 +472,14 @@ def _commit_dated(repo_root: Path, filename: str, content: str, date: str) -> Pa
         "GIT_AUTHOR_DATE": env_date,
         "GIT_COMMITTER_DATE": env_date,
     }
-    subprocess.run(["git", "add", filename], cwd=repo_root, check=True, capture_output=True)
+    subprocess.run(["git", "add", filename], cwd=repo_root, check=True, capture_output=True, **no_console_creationflags())
     subprocess.run(
         ["git", "commit", "-q", "-m", f"add {filename}"],
         cwd=repo_root,
         check=True,
         capture_output=True,
         env={**os.environ, **env},
+        **no_console_creationflags(),
     )
     return target
 

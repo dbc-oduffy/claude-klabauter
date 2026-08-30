@@ -121,6 +121,7 @@ from coordinator_core.ops.ceremony.branch_resolution import (
 )
 from coordinator_core.ops.ceremony.receipt_emit import is_not_yet_run, read_receipt
 from coordinator_core.ops.ceremony.pipeline_context import PipelineContext
+from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -153,14 +154,17 @@ def _wire_origin_pushing_only_current_head(root: Path, tmp_path: Path) -> None:
     subprocess.run(
         ["git", "init", "--bare", "-b", "main", str(bare)],
         capture_output=True, check=True,
+        **no_console_creationflags(),
     )
     subprocess.run(
         ["git", "remote", "add", "origin", str(bare)],
         cwd=str(root), capture_output=True, check=True,
+        **no_console_creationflags(),
     )
     push = subprocess.run(
         ["git", "push", "-u", "origin", "main"],
         cwd=str(root), capture_output=True, text=True,
+        **no_console_creationflags(),
     )
     assert push.returncode == 0, push.stderr
 
@@ -365,18 +369,23 @@ def git_repo(tmp_path) -> WscResolveRepo:
     """
     repo = WscResolveRepo(tmp_path / "repo")
     subprocess.run(["git", "init", "-b", "main"], cwd=str(repo.root),
-                   capture_output=True, check=True)
+                   capture_output=True, check=True,
+                   **no_console_creationflags(),)
     subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=str(repo.root),
-                   capture_output=True, check=True)
+                   capture_output=True, check=True,
+                   **no_console_creationflags(),)
     subprocess.run(["git", "config", "user.name", "Test"], cwd=str(repo.root),
-                   capture_output=True, check=True)
+                   capture_output=True, check=True,
+                   **no_console_creationflags(),)
     subprocess.run(["git", "config", "commit.gpgsign", "false"], cwd=str(repo.root),
-                   capture_output=True, check=True)
+                   capture_output=True, check=True,
+                   **no_console_creationflags(),)
     # Ensure at least one file so the initial commit does not fail on an empty tree
     (repo.root / ".gitkeep").write_text("", encoding="utf-8")
-    subprocess.run(["git", "add", "-A"], cwd=str(repo.root), capture_output=True, check=True)
+    subprocess.run(["git", "add", "-A"], cwd=str(repo.root), capture_output=True, check=True, **no_console_creationflags())
     subprocess.run(["git", "commit", "-m", "init"], cwd=str(repo.root),
-                   capture_output=True, check=True)
+                   capture_output=True, check=True,
+                   **no_console_creationflags(),)
     return repo
 
 
@@ -740,13 +749,15 @@ def test_session_added_plans_since_boundary_excludes_old_commit(git_repo):
     plan = git_repo.root / "docs" / "plans" / "past-plan.md"
     plan.write_text("# Past Plan\n", encoding="utf-8")
     subprocess.run(["git", "add", str(plan)], cwd=str(git_repo.root),
-                   capture_output=True, check=True)
+                   capture_output=True, check=True,
+                   **no_console_creationflags(),)
     env = os.environ.copy()
     env["GIT_COMMITTER_DATE"] = "2000-01-01T00:00:00+0000"
     subprocess.run(
         ["git", "commit", "-m", f"add past plan\n\nSession-Id: {sid}",
          "--date", "2000-01-01T00:00:00+0000"],
         cwd=str(git_repo.root), capture_output=True, check=True, env=env,
+        **no_console_creationflags(),
     )
 
     # Call _session_added_plans directly with started_at after the commit date
@@ -1071,9 +1082,11 @@ def test_scan_session_scratch_git_tracked_excluded(git_repo):
     tracked_file.parent.mkdir(parents=True, exist_ok=True)
     tracked_file.write_text("tracked content\n", encoding="utf-8")
     subprocess.run(["git", "add", str(tracked_file)], cwd=str(git_repo.root),
-                   capture_output=True, check=True)
+                   capture_output=True, check=True,
+                   **no_console_creationflags(),)
     subprocess.run(["git", "commit", "-m", "add tracked tasks file"],
-                   cwd=str(git_repo.root), capture_output=True, check=True)
+                   cwd=str(git_repo.root), capture_output=True, check=True,
+                   **no_console_creationflags(),)
     os.utime(tracked_file, (mtime_after, mtime_after))
 
     result = _scan_session_scratch(git_repo.root, started_at)
@@ -1401,7 +1414,7 @@ def test_c1_divergent_predecessor_field_rejected_by_validate():
 
 def _commit(repo_root, message, *, date=None, add=("-A",)):
     """Create a git commit in repo_root with an optional fixed author/commit date."""
-    subprocess.run(["git", "add", *add], cwd=str(repo_root), capture_output=True, check=True)
+    subprocess.run(["git", "add", *add], cwd=str(repo_root), capture_output=True, check=True, **no_console_creationflags())
     env = None
     if date is not None:
         import os as _os
@@ -1411,12 +1424,14 @@ def _commit(repo_root, message, *, date=None, add=("-A",)):
     subprocess.run(
         ["git", "commit", "-m", message],
         cwd=str(repo_root), capture_output=True, check=True, env=env,
+        **no_console_creationflags(),
     )
 
 
 def _head_sha(repo_root) -> str:
     result = subprocess.run(
         ["git", "rev-parse", "HEAD"], cwd=str(repo_root), capture_output=True, text=True, check=True,
+        **no_console_creationflags(),
     )
     return result.stdout.strip()
 

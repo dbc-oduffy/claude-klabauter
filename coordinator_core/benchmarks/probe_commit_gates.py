@@ -28,7 +28,6 @@ window -- see that class's QUANTISATION note for why a per-call snapshot pair
 reports a tick count rather than a cost.
 """
 import os
-import subprocess
 import sys
 import time
 from pathlib import Path
@@ -38,6 +37,7 @@ sys.path.insert(0, str(SRC))
 
 from coordinator_core.benchmarks import declare_benchmark_origin
 from coordinator_core.benchmarks.process_time import LiveTreeAccountant
+from coordinator_core.git.run import run_git
 from coordinator_core.ops.ceremony.commit_gates import (
     carry_gate,
     deletion_block_gate,
@@ -56,22 +56,19 @@ def _tracked_sample(root: Path, n: int) -> list:
 
     Tracked-and-present matters: a path staged for deletion changes which leg
     of `deletion_block_gate` runs, and this probe measures the ordinary case.
+
+    Sample-building, not the measured subject -- the four gate functions
+    below are what `_window` times. Routing this listing through
+    `coordinator_core.git.run` (G7) never enters a measured window.
     """
-    out = subprocess.run(
-        ["git", "ls-files", "--", "coordinator_core"],
-        cwd=root, capture_output=True, text=True,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-    ).stdout.split("\n")
+    out = run_git(["ls-files", "--", "coordinator_core"], cwd=str(root)).stdout.split("\n")
     live = [p for p in out if p.strip() and (root / p).is_file()]
     return live[:n]
 
 
 def _dirty_count(root: Path) -> int:
-    out = subprocess.run(
-        ["git", "status", "--porcelain"],
-        cwd=root, capture_output=True, text=True,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-    ).stdout
+    """Diagnostic header line only -- never inside a measured window."""
+    out = run_git(["status", "--porcelain"], cwd=str(root)).stdout
     return len([l for l in out.split("\n") if l.strip()])
 
 

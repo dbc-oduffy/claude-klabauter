@@ -41,6 +41,7 @@ from coordinator_core.bash_guards._message_size import MESSAGE_PROSE_CAP_BYTES
 from coordinator_core.session import core
 from coordinator_core.session import scope as session_scope
 from coordinator_core.session.scope import OwnerFact
+from coordinator_core.win_portability import no_console_creationflags
 
 import pytest
 
@@ -53,7 +54,7 @@ pytestmark = [
 
 
 def _git(root: str, *args: str) -> None:
-    subprocess.run(["git", *args], cwd=root, check=True, capture_output=True)
+    subprocess.run(["git", *args], cwd=root, check=True, capture_output=True, **no_console_creationflags())
 
 
 def _init_repo(tmp_path: Path) -> str:

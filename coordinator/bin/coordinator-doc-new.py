@@ -522,24 +522,48 @@ def _resolve_session_id() -> str:
     (currently: --type review-findings's fallback path, when no sidecar arrived
     pre-provisioned).
 
-    Same env var + precedence chain this file already uses for --type run-report
-    and --type subagent-sidecar's `dispatched_by` field (COORDINATOR_SESSION_ID >
-    CLAUDE_SESSION_ID > CLAUDE_CODE_SESSION_ID) -- and the same overall harness
-    session identity coordinator_core.subagent_sandbox.provision_report reads via
-    its spawn-time hook payload's `session_id` field (see that module's
-    _provision()). The EM and every subagent it spawns via the Task tool share
-    ONE harness session; provision_report captures that identity from the
-    EM-side spawn hook's payload, while this self-scaffold path reads it directly
-    from the running process's own environment -- same identity, two different
-    capture points, not two mechanisms. Falls back to the literal 'em-unknown'
-    when unset, matching this file's existing dispatched_by fallback.
+    Resolves through the canonical warm-safe resolver,
+    ``coordinator_core.ops.session_context.resolve_current_session_id``, which
+    reads the per-request identity binding first and falls back COLD to the same
+    precedence chain (COORDINATOR_SESSION_ID > CLAUDE_SESSION_ID >
+    CLAUDE_CODE_SESSION_ID) this file used to walk here directly. It is the same
+    overall harness session identity coordinator_core.subagent_sandbox
+    .provision_report reads via its spawn-time hook payload's `session_id` field
+    (see that module's _provision()). The EM and every subagent it spawns via the
+    Task tool share ONE harness session; provision_report captures that identity
+    from the EM-side spawn hook's payload, while this path resolves it for the
+    request being served -- same identity, two different capture points, not two
+    mechanisms.
+
+    WHY NOT A RAW ENV READ, which is what this was until 2026-08-30.
+    `coordinator_core.baton_assemble.apply._load_doc_new_module` loads this file
+    as a module and calls its scaffolder functions IN-PROCESS, and that module is
+    reached from the registered op `handoff.correct_body`. So these functions run
+    inside a warm server roughly 50 sessions share, where `os.environ` names
+    whoever spawned the server rather than the session whose request is being
+    served. The stamp was therefore intermittently correct -- right whenever the
+    frozen env happened to match the caller -- which is worse than constantly
+    wrong: five confirmed misattributions across claude-klabauter and example-retrieval-repo in
+    a single day, three of which reached a peer as a false ownership claim.
+    Audit: state/audits/2026-08-30-author-stamp-resolves-machine-wide.md.
+
+    Falls back to the literal 'em-unknown' when the identity does not resolve OR
+    when the engine seam is unavailable. It does NOT fall back to a local env
+    ladder: an unimportable `coordinator_core` cannot be distinguished from a warm
+    context here, and a wrong id is not a better answer than a declared unknown.
+    In practice `_ensure_engine_on_path`'s self-location rung resolves off this
+    file's own path, so the no-engine leg is a broken install, not a consumer-repo
+    cwd.
     """
-    return (
-        os.environ.get("COORDINATOR_SESSION_ID")
-        or os.environ.get("CLAUDE_SESSION_ID")
-        or os.environ.get("CLAUDE_CODE_SESSION_ID")
-        or "em-unknown"
-    )
+    try:
+        _ensure_engine_on_path()
+        from coordinator_core.ops.session_context import resolve_current_session_id
+    except Exception:  # noqa: BLE001 -- engine seam absent; declare unknown, never guess
+        return "em-unknown"
+    try:
+        return resolve_current_session_id() or "em-unknown"
+    except Exception:  # noqa: BLE001 -- a scaffold must not die on an identity seam
+        return "em-unknown"
 
 
 def _sanitize_session_segment(seg: str) -> str:
@@ -1226,13 +1250,31 @@ def _resolve_from_repo() -> str:
     return _em_id_for_root(root, paths_dict)
 
 
-def _resolve_session_display_name() -> str | None:
-    """Resolve THIS session's human-readable harness name (e.g.
-    `claude-klabauter-76`), or `None` when it can't be resolved.
+def _resolve_session_display_name(session_id: str) -> str | None:
+    """Resolve the human-readable harness name (e.g. `claude-klabauter-76`) of
+    `session_id`, or `None` when it can't be resolved. `session_id` is
+    required — every production caller already holds a resolved sid (from
+    `_resolve_session_id()`) before calling this, so an optional default here
+    would only re-open a second, independent resolution.
 
-    Reads `coordinator_core.session.harness_registry.self_record()` — the O(1)
-    single-file read of this process's own registry record, keyed off
-    `CLAUDE_PID` — and takes its `name` field directly. That name is the
+    Reads `coordinator_core.session.harness_registry.lookup(session_id)` and
+    takes the record's `name` field. warm-safe: was `self_record()` keyed on
+    `CLAUDE_PID` until 2026-08-30 — see `_resolve_session_id`'s docstring for
+    the full warm-server incident this resolver was rewritten to avoid; audit
+    `state/audits/2026-08-30-author-stamp-resolves-machine-wide.md`.
+
+    Cost, MEASURED not reasoned (2026-08-30, this box, 34 live registry
+    records): `lookup(sid)` is `snapshot().get(sid)` — a directory glob plus a
+    parse of EVERY live session's record, not the single keyed read its name
+    suggests. 4.69ms cpu / 5.18ms wall per call, against `self_record()`'s
+    1.56ms for the one file it read. A ~3ms delta, once per scaffold
+    invocation and never in a loop, is 0.6% of the 500ms brightline and
+    clears it. Do not restore the O(1) leg to buy that back: `self_record()`
+    is keyed on `CLAUDE_PID`, which is the defect. If this ever moves onto a
+    per-item path, hoist one `snapshot()` above the loop rather than reverting
+    the key.
+
+    The name this returns is the
     harness's own per-session identity (`slug(basename(cwd)) + "-" +
     one-random-byte-hex`, see `coordinator_core.session.reachability`'s module
     docstring), generated independently of whether cross-session messaging is
@@ -1257,13 +1299,14 @@ def _resolve_session_display_name() -> str | None:
         from coordinator_core.session import harness_registry as _harness_registry
     except Exception:  # noqa: BLE001 -- engine seam absent; degrade to no display name
         return None
+    if not session_id or session_id == "em-unknown":
+        return None
     try:
-        self_info = _harness_registry.self_record()
+        record = _harness_registry.lookup(session_id)
     except Exception:  # noqa: BLE001 -- registry read failed; degrade to no display name
         return None
-    if self_info is None:
+    if record is None:
         return None
-    _sid, record = self_info
     return record.name or None
 
 
@@ -1287,21 +1330,22 @@ def _resolve_plan_author() -> str:
     it is what makes the line checkable. `self_record()` already returns the
     pair, so the uuid costs nothing but was being discarded.
 
-    Fallbacks, in order — the field is required, so this never returns empty:
-    name plus uuid when both resolve; the name alone when the uuid does not
-    (`_resolve_session_id()` returning its `em-unknown` sentinel); and
-    `_resolve_from_repo()`'s repo-level identity when the registry seam gives
-    no name at all. Never fabricates either half.
+    Fallbacks — the field is required, so this never returns empty: name plus
+    uuid when the session resolves, else `_resolve_from_repo()`'s repo-level
+    identity. Never fabricates either half. Both halves now derive from a
+    SINGLE `_resolve_session_id()` result (see WHY THE UUID IS NOT OPTIONAL
+    HERE, below), so the bare-name shape (`author: claude-klabauter-d8`, a name
+    with no uuid) that a two-ladder resolution used to permit is unreachable:
+    an unresolvable session yields no name either and drops straight to the
+    repo identity.
     """
-    name = _resolve_session_display_name()
-    if not name:
-        return _resolve_from_repo()
     try:
         sid = _resolve_session_id()
     except Exception:  # noqa: BLE001 — a scaffold must not die on an identity seam
         sid = ""
-    if not sid or sid == "em-unknown":
-        return name
+    name = _resolve_session_display_name(sid)
+    if not name:
+        return _resolve_from_repo()
     return f"{name} ({sid})"
 
 
@@ -2502,7 +2546,7 @@ def _scaffold_handoff(
         # display name is a YAML trailing COMMENT, not a new field -- it
         # changes no schema shape, so it degrades to nothing (not a stray
         # placeholder) when unresolvable rather than blocking the id itself.
-        _display_name = _resolve_session_display_name()
+        _display_name = _resolve_session_display_name(_authoring_session)
         if _display_name:
             lines.append(f"# minted by {_display_name}")
         lines.append(f"authoring_session: {_yaml_quote(_authoring_session)}")
@@ -2771,16 +2815,36 @@ def _scaffold_spinoff(
     # that isn't one.
     _authoring_session_value = _resolve_session_id()
     if _authoring_session_value == "em-unknown":
-        print(
-            "coordinator-doc-new: --type spinoff could not resolve the authoring "
-            "session id (COORDINATOR_SESSION_ID / CLAUDE_SESSION_ID / "
-            "CLAUDE_CODE_SESSION_ID all unset). authoring_session must be a "
-            "machine-trustworthy fact, not a hand-typed placeholder -- set one "
-            "of those env vars and retry.",
-            file=sys.stderr,
-        )
+        # review coordinatorcode-reviewer.a30b09ca0a63129e4 finding 2: the
+        # warm leg (in_warm_served_request()) never reads os.environ, so the
+        # old env-var advice is inert there -- branch the message on warm vs.
+        # cold rather than telling every caller to set vars that can't help.
+        try:
+            _ensure_engine_on_path()
+            from coordinator_core.session.core import in_warm_served_request
+            _warm = in_warm_served_request()
+        except Exception:  # noqa: BLE001 -- engine seam absent; treat as cold
+            _warm = False
+        if _warm:
+            print(
+                "coordinator-doc-new: --type spinoff could not resolve the "
+                "authoring session id. This request ran warm and carried no "
+                "per-request session identity -- setting an env var here "
+                "will not help. Fix the dispatch/session-binding seam that "
+                "carries session_id to this request.",
+                file=sys.stderr,
+            )
+        else:
+            print(
+                "coordinator-doc-new: --type spinoff could not resolve the authoring "
+                "session id (COORDINATOR_SESSION_ID / CLAUDE_SESSION_ID / "
+                "CLAUDE_CODE_SESSION_ID all unset). authoring_session must be a "
+                "machine-trustworthy fact, not a hand-typed placeholder -- set one "
+                "of those env vars and retry.",
+                file=sys.stderr,
+            )
         sys.exit(1)
-    _display_name = _resolve_session_display_name()
+    _display_name = _resolve_session_display_name(_authoring_session_value)
     _authoring_session_line = (
         f"# minted by {_display_name}\n" if _display_name else ""
     ) + f"authoring_session: {_yaml_quote(_authoring_session_value)}"
@@ -3202,7 +3266,7 @@ def _scaffold_goal_seed(
     # an unverified ceremony.
     _authoring_session_value = _resolve_session_id()
     if _authoring_session_value != "em-unknown":
-        _display_name = _resolve_session_display_name()
+        _display_name = _resolve_session_display_name(_authoring_session_value)
         if _display_name:
             lines.append(f"# minted by {_display_name}")
         lines.append(f"authoring_session: {_yaml_quote(_authoring_session_value)}")
@@ -3366,7 +3430,7 @@ def _scaffold_roadmap_seed(
     # (matching _scaffold_roadmap_baton's identical field).
     _authoring_session_value = _resolve_session_id()
     if _authoring_session_value != "em-unknown":
-        _display_name = _resolve_session_display_name()
+        _display_name = _resolve_session_display_name(_authoring_session_value)
         if _display_name:
             lines.append(f"# minted by {_display_name}")
         lines.append(f"authoring_session: {_yaml_quote(_authoring_session_value)}")
@@ -6745,8 +6809,8 @@ def main(argv: "list[str] | None" = None) -> int:
     elif doc_type == "run-report":
         # dispatched_at: current UTC time in ISO 8601 format (matches fan-out-dispatch.sh: date -u +%Y-%m-%dT%H:%M:%SZ).
         dispatched_at = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")  # Review: code-reviewer item-5 F4 — utcnow() deprecated Python 3.12+; now(tz) is identical output
-        # dispatched_by: CLAUDE_CODE_SESSION_ID env var, falls back to 'em-unknown' (matches fan-out-dispatch.sh).
-        dispatched_by = os.environ.get("CLAUDE_CODE_SESSION_ID", "em-unknown")
+        # dispatched_by: warm-safe -- see _resolve_session_id's docstring.
+        dispatched_by = _resolve_session_id()
         content = _scaffold_run_report(
             plan_path=args.plan,
             chunk_id=args.chunk,
@@ -6756,7 +6820,7 @@ def main(argv: "list[str] | None" = None) -> int:
         )
     elif doc_type == "subagent-sidecar":
         dispatched_at = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-        dispatched_by = os.environ.get("CLAUDE_CODE_SESSION_ID", "em-unknown")
+        dispatched_by = _resolve_session_id()  # see run-report above
         content = _scaffold_subagent_sidecar(
             plan_path=args.plan,
             chunk_id=args.chunk,

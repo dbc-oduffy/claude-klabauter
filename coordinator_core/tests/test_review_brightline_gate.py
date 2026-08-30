@@ -28,6 +28,7 @@ from coordinator_core.ops.review_brightline_gate import (
     main,
 )
 from coordinator_core.session import claims
+from coordinator_core.win_portability import no_console_creationflags
 
 # Declared, not excused: per this file's module docstring, the module under test
 # itself shells out to `git` -- the parity assertions match a bash oracle byte-for-byte
@@ -42,6 +43,7 @@ def _git(repo: Path, *args: str) -> str:
         capture_output=True,
         text=True,
         check=True,
+        **no_console_creationflags(),
     ).stdout
 
 

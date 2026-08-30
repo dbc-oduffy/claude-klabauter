@@ -30,6 +30,7 @@ from coordinator_core.dispatch.provision import (
     provision_subagent_sidecar,
     main as provision_main,
 )
+from coordinator_core.win_portability import no_console_passthrough_kwargs
 
 # Spawns a real external process; runs at cadence gates, not per-commit.
 # Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
@@ -62,11 +63,19 @@ def _sanitize_expected(seg: str) -> str:
 def git_repo(tmp_path: Path) -> Path:
     """A real, empty git repo rooted at tmp_path (so resolve_git_root behaves
     exactly as it does against a production checkout)."""
-    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True, **no_console_passthrough_kwargs())
     subprocess.run(
-        ["git", "config", "user.email", "test@example.com"], cwd=tmp_path, check=True
+        ["git", "config", "user.email", "test@example.com"],
+        cwd=tmp_path,
+        check=True,
+        **no_console_passthrough_kwargs(),
     )
-    subprocess.run(["git", "config", "user.name", "Test"], cwd=tmp_path, check=True)
+    subprocess.run(
+        ["git", "config", "user.name", "Test"],
+        cwd=tmp_path,
+        check=True,
+        **no_console_passthrough_kwargs(),
+    )
     return tmp_path
 
 

@@ -1617,6 +1617,7 @@ def test_assert_baseline_not_grown_honors_explicit_frozen_as_of_sha_override(tmp
     reanchor_sha = subprocess.run(
         ["git", "-C", str(repo), "rev-parse", "HEAD"],
         capture_output=True, text=True, check=True,
+        creationflags=_NO_WINDOW,
     ).stdout.strip()
 
     # Record the explicit re-freeze point and commit it.

@@ -15,6 +15,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from coordinator_core.win_portability import no_console_creationflags, no_console_passthrough_kwargs
 
 # Spawns a real external process; runs at cadence gates, not per-commit.
 # Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
@@ -29,7 +30,7 @@ _SCRIPT = (
 
 
 def _git_init(path: Path) -> None:
-    subprocess.run(["git", "init", "-q", str(path)], check=True)
+    subprocess.run(["git", "init", "-q", str(path)], check=True, **no_console_passthrough_kwargs())
 
 
 def _make_meta_repo(tmp_path: Path) -> Path:
@@ -51,6 +52,7 @@ def _run(meta_repo: Path, home: Path, extra_env: dict | None = None) -> subproce
         capture_output=True,
         text=True,
         env=env,
+        **no_console_creationflags(),
     )
 
 

@@ -21,6 +21,7 @@ import pytest
 
 from coordinator_core.text.normalize_snippet import normalize_snippet
 from coordinator_core.testing.doe_root import resolve_doe_root
+from coordinator_core.win_portability import no_console_creationflags
 
 # Spawns a real external process; runs at cadence gates, not per-commit.
 # Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
@@ -103,7 +104,7 @@ def _bash_normalize(lib_path: str, text: str) -> str:
         capture_output=True,
         text=True,
         timeout=5,
-    )
+    **no_console_creationflags())
     return proc.stdout
 
 

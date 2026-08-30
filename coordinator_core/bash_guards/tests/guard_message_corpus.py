@@ -212,7 +212,19 @@ def fixture_scratch_spans(text: str) -> List[tuple]:
     tempdir suffix are both covered by the same span.
     """
     spans: List[tuple] = []
-    for root in FIXTURE_SCRATCH_ROOTS:
+    # Both separator forms, because a guard is free to normalise before it
+    # renders: `guard_doctrine_surface_bash_write` does `.replace(chr(92), "/")`
+    # on its resolved plugin root, so the backslash literal this tuple holds
+    # never appears in that message and the operator's username segment fell
+    # out of every span -- B7 then reported it as a leak the guard had written.
+    # Matching only the native form made the exemption HOST-SHAPED: green
+    # wherever the operator's username is not a redaction token, red where it is.
+    roots: List[str] = []
+    for _root in FIXTURE_SCRATCH_ROOTS:
+        for _variant in (_root, _root.replace(chr(92), "/")):
+            if _variant not in roots:
+                roots.append(_variant)
+    for root in roots:
         start = text.find(root)
         while start != -1:
             end = start + len(root)
@@ -400,7 +412,7 @@ def _build_advisory_only_repo(scratch_dir: Path) -> Path:
     repo = scratch_dir / "advisory-only-repo"
     repo.mkdir()
     _git = lambda *args: subprocess.run(  # noqa: E731
-        ["git", *args], cwd=str(repo), check=True, capture_output=True
+        ["git", *args], cwd=str(repo), check=True, capture_output=True, **no_console_creationflags()
     )
     _git("init", "-q")
     _git("config", "user.email", "t@t")
@@ -440,7 +452,7 @@ def _bump_confinement_anchor_repo(scratch_dir: Path) -> Path:
     anchor = scratch_dir / "anchor"
     anchor.mkdir()
     _git = lambda *args: subprocess.run(  # noqa: E731
-        ["git", *args], cwd=str(anchor), check=True, capture_output=True
+        ["git", *args], cwd=str(anchor), check=True, capture_output=True, **no_console_creationflags()
     )
     _git("init", "-q")
     _git("config", "user.email", "t@t")
@@ -472,7 +484,7 @@ def _bump_foreign_repo_write_fire_setup(
     foreign = scratch_dir / "foreign"
     foreign.mkdir()
     _git = lambda *args: subprocess.run(  # noqa: E731
-        ["git", *args], cwd=str(foreign), check=True, capture_output=True
+        ["git", *args], cwd=str(foreign), check=True, capture_output=True, **no_console_creationflags()
     )
     _git("init", "-q")
     _git("config", "user.email", "t@t")
@@ -1148,6 +1160,29 @@ CONFINEMENT_ROWS: List[CorpusRow] = [
         False,
         setup=_rehomed_subagent_spawn_shapes_setup,
     ),
+    # C4 coverage-gap closer, 2026-08-30 (two-ratchet-gates-the-work-outran):
+    # `block-fleet-delegation-creation` (dispatch.py:2215, landed 2026-08-29)
+    # had no corpus row at all. Genuinely fireable -- `check()` is a pure
+    # lexical classifier over command text (see
+    # `block_fleet_delegation_creation.py`'s own module docstring), not
+    # identity-gated, no fixture needed beyond plain command text -- so a
+    # real fire+control pair, not an exemption.
+    CorpusRow(
+        "block-fleet-delegation-creation",
+        "block-fleet-delegation-creation-fire",
+        "touch fleet-delegation.json",
+        True,
+        _DENY,
+        False,
+    ),
+    CorpusRow(
+        "block-fleet-delegation-creation",
+        "block-fleet-delegation-creation-control",
+        "touch normal_file.txt",
+        False,
+        _DENY,
+        False,
+    ),
 ]
 
 #: Sanity invariant this module itself relies on -- every one of
@@ -1236,7 +1271,7 @@ def _validate_commit_frontmatter_setup(
     export)."""
     root = scratch_dir
     _git = lambda *args: subprocess.run(  # noqa: E731
-        ["git", *args], cwd=str(root), check=True, capture_output=True
+        ["git", *args], cwd=str(root), check=True, capture_output=True, **no_console_creationflags()
     )
     _git("init", "-q")
     _git("config", "user.email", "t@t")
@@ -1904,6 +1939,28 @@ ADVISORY_REWRITE_ROWS: List[CorpusRow] = [
         False,
         setup=_bump_outside_repo_write_fire_setup,
     ),
+    # C4 coverage-gap closer, 2026-08-30 (two-ratchet-gates-the-work-outran):
+    # `stash-apply-verification-advisory` (dispatch.py:2537, landed 2026-08-30)
+    # had no corpus row. Genuinely fireable -- `check_apply_advisory` is a
+    # pure text classifier (`_STASH_WORD_RE` + subcommand match on `apply`,
+    # see `block_stash_destruction.py`'s "APPLY ADVISORY LEG"), no fixture
+    # repo needed since it never executes git, so a real fire+control pair.
+    CorpusRow(
+        "stash-apply-verification-advisory",
+        "stash-apply-verification-advisory-fire",
+        "git stash apply",
+        True,
+        _REWRITE,
+        False,
+    ),
+    CorpusRow(
+        "stash-apply-verification-advisory",
+        "stash-apply-verification-advisory-control",
+        "git status",
+        False,
+        _REWRITE,
+        False,
+    ),
 ]
 
 PLATFORM_CONDITIONED_ROWS: List[CorpusRow] = [
@@ -2421,7 +2478,7 @@ def _wg_check_claude_md_size_fire(scratch_dir: Path, mp: pytest.MonkeyPatch) -> 
 
 
 def _wg_concrete_path_citations_fire(scratch_dir: Path, mp: pytest.MonkeyPatch) -> Dict[str, Any]:
-    subprocess.run(["git", "init", "-q", str(scratch_dir)], check=True)
+    subprocess.run(["git", "init", "-q", str(scratch_dir)], check=True, **no_console_passthrough_kwargs())
     target = scratch_dir / "coordinator" / "skills" / "doc.md"
     target.parent.mkdir(parents=True)
     # Neutral stand-in, deliberately not a real codename: this guard echoes the
@@ -2741,6 +2798,44 @@ def _wg_private_git_fact_resolver_fire(
     }
 
 
+# C4 coverage-gap closer, 2026-08-30 (two-ratchet-gates-the-work-outran):
+# `block_fleet_delegation_write`/`nudge_session_display_name_as_identifier`
+# had no corpus row. Both are pure-function checks over a payload dict --
+# no fixture beyond a scratch settings-home / plain content string -- so
+# real fire+control pairs, not exemptions.
+def _wg_fleet_delegation_write_fire(
+    scratch_dir: Path, mp: pytest.MonkeyPatch
+) -> Dict[str, Any]:
+    """Fires `block_fleet_delegation_write.check`: a Write targeting the
+    resolved `<settings_home()>/fleet-delegation.json`. `COORDINATOR_
+    SETTINGS_HOME` (rung 0 of `_settings_home.settings_home`'s own
+    precedence, pure env read, no external call) is redirected to this
+    row's own scratch dir so the guard's target resolves under it rather
+    than the real machine's settings-home."""
+    mp.setenv("COORDINATOR_SETTINGS_HOME", str(scratch_dir))
+    target = scratch_dir / "fleet-delegation.json"
+    return {
+        "tool_name": "Write",
+        "tool_input": {"file_path": str(target), "content": "{}"},
+    }
+
+
+def _wg_session_display_name_as_identifier_fire(
+    scratch_dir: Path, mp: pytest.MonkeyPatch
+) -> Dict[str, Any]:
+    """Fires `nudge_session_display_name_as_identifier.check`: an
+    attribution-verb construction ("ESTABLISHED AND FIXED BY
+    claude-klabauter-49", the live incident's own shape) inside a body
+    write to an in-scope record class (`state/lessons/`)."""
+    return {
+        "tool_name": "Write",
+        "tool_input": {
+            "file_path": "state/lessons/2026-08-30-a-thing.md",
+            "content": "ESTABLISHED AND FIXED BY claude-klabauter-49.\n",
+        },
+    }
+
+
 WRITE_GUARD_ROWS: List[WriteGuardRow] = [
     WriteGuardRow("block_completion_monolith_write", "fire", True, _wg_completion_monolith_fire),
     WriteGuardRow("block_completion_monolith_write", "control", False, _wg_benign),
@@ -2791,6 +2886,10 @@ WRITE_GUARD_ROWS: List[WriteGuardRow] = [
         _wg_em_hand_edit_pending_review_fire,
     ),
     WriteGuardRow("block_em_hand_edit_pending_review_integration", "control", False, _wg_benign),
+    WriteGuardRow(
+        "block_fleet_delegation_write", "fire", True, _wg_fleet_delegation_write_fire
+    ),
+    WriteGuardRow("block_fleet_delegation_write", "control", False, _wg_benign),
     WriteGuardRow("block_goals_log_hand_write", "fire", True, _wg_goals_log_fire),
     WriteGuardRow("block_goals_log_hand_write", "control", False, _wg_benign),
     WriteGuardRow("block_home_dir_memo_delivery", "fire", True, _wg_home_dir_memo_delivery_fire),
@@ -2891,6 +2990,13 @@ WRITE_GUARD_ROWS: List[WriteGuardRow] = [
         _wg_sentinel_retained_review_sidecar_fire,
     ),
     WriteGuardRow("nudge_sentinel_retained_review_sidecar", "control", False, _wg_benign),
+    WriteGuardRow(
+        "nudge_session_display_name_as_identifier",
+        "fire",
+        True,
+        _wg_session_display_name_as_identifier_fire,
+    ),
+    WriteGuardRow("nudge_session_display_name_as_identifier", "control", False, _wg_benign),
     WriteGuardRow(
         "nudge_tasks_state_folder_split", "fire", True, _wg_tasks_state_folder_split_fire
     ),
@@ -3127,6 +3233,7 @@ from coordinator_core.hooks import subagent_sidecar_fill_check as _hook_subagent
 from coordinator_core.hooks import suggest_sonnet_research as _hook_suggest_sonnet_research
 from coordinator_core.hooks import ue_knowledge_distrust as _hook_ue_knowledge_distrust
 from coordinator_core.hooks import agent_completion_log as _hook_agent_completion_log
+from coordinator_core.hooks import agent_postuse_dispatch as _hook_agent_postuse_dispatch
 from coordinator_core.hooks import context_pressure_precompact as _hook_context_pressure_precompact
 from coordinator_core.hooks import session_heartbeat as _hook_session_heartbeat
 from coordinator_core.hooks import subagent_arrival_check as _hook_subagent_arrival_check
@@ -3137,6 +3244,7 @@ from coordinator_core.hooks import subagent_zero_tool_use_resolve as _hook_subag
 from coordinator_core.hooks import subagent_zero_tool_use_surface as _hook_subagent_zero_tool_use_surface
 from coordinator_core.hooks import track_dispatched_agents as _hook_track_dispatched_agents
 from coordinator_core.hooks import track_touched_files as _hook_track_touched_files
+from coordinator_core.win_portability import no_console_creationflags, no_console_passthrough_kwargs
 
 
 def _to_envelope_or_none(result: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
@@ -3158,6 +3266,27 @@ def _to_envelope_or_none(result: Optional[Dict[str, Any]]) -> Optional[Dict[str,
 def _fire_agent_completion_log_noop() -> Optional[Dict[str, Any]]:
     return _to_envelope_or_none(
         _hooks_asyncio.run(_hook_agent_completion_log._handler({}, repo_root=None))
+    )
+
+
+# C4 coverage-gap closer, 2026-08-30 (two-ratchet-gates-the-work-outran):
+# `agent_postuse_dispatch` (module landed 2026-08-26) had no corpus row.
+# NOT an exemption -- unlike `auto_push`/`platform_localize` (real,
+# unsafe-to-fire side effects) this fan-in's own two legs
+# (`agent_completion_log.run`, `track_dispatched_agents.run`) are BOTH
+# pure write ops that "always return no_advisory()" per their own module
+# docstrings (see the `_fire_agent_completion_log_noop`/
+# `_fire_track_dispatched_agents_noop` rows above/below, which prove each
+# leg individually) -- so this row fires the REAL merge entrypoint
+# (`asyncio.gather` over both real legs, the actual `_advisory_text`/
+# `post_advisory` merge logic this module exists for) with the identical
+# safe no-repo_root/empty-params arm those two rows already use, and
+# asserts what the module's own docstring states as fact ("Both legs are
+# write ops that return no_advisory() today, so the merge is no_advisory()
+# in practice") rather than merely citing it.
+def _fire_agent_postuse_dispatch_noop() -> Optional[Dict[str, Any]]:
+    return _to_envelope_or_none(
+        _hooks_asyncio.run(_hook_agent_postuse_dispatch._handler({}, repo_root=None))
     )
 
 
@@ -3659,6 +3788,9 @@ HOOK_ROWS: List[HookRow] = [
     HookRow("nudge_unrouted_sizing", "fire-plan-message", True, _fire_nudge_unrouted_sizing),
     # --- C12 additions: the 23 previously-uncovered hooks/ modules. ---
     HookRow("agent_completion_log", "noop-control", False, _fire_agent_completion_log_noop),
+    HookRow(
+        "agent_postuse_dispatch", "noop-control", False, _fire_agent_postuse_dispatch_noop
+    ),
     HookRow(
         "cater_subagent_start",
         "fire-missing-provisioning",

@@ -51,13 +51,11 @@ rename-with-remote-delete — stays a PM-gated ask, unchanged.
 
 from __future__ import annotations
 
-import json
 import subprocess
 import time
 from pathlib import Path
 from typing import NamedTuple, Optional
 
-from coordinator_core.git.git_dir import resolve_git_common_dir
 
 #: Every arm of the dispatch table below, named. Nothing falls off the end.
 CUT = "FRESH-CUT"
@@ -176,7 +174,17 @@ def _case_a(repo_root, machine, today, *, env, stderr) -> DayBranchAssertResult:
 #: DOCTRINE, and they get one informational line, not the escalating banner.
 _RECOGNIZED_LONG_LIVED = ("migration/", "release/", "feature/")
 
-_PENDING_RECORD_NAME = "coordinator-auto-push-pending.json"
+#: Gravestone -- the pending-push record leg (`coordinator-auto-push-pending.json`)
+#: was removed here on 2026-08-30. It asserted "the last push attempt failed and
+#: commits are sitting unpushed right now" from the presence of a file whose only
+#: production writer (`auto_push._hold_window`, via `_write_pending_record`) C8 of
+#: `docs/plans/2026-08-30-who-pushes-and-when.md` gravestoned. Post-C8 the record
+#: can never be written again, so the leg could only ever fire on a pre-C8
+#: orphan -- a permanent false RED on a maximally-trusted surface, which is what
+#: it did: it told a peer session crash insurance was off box-wide while the
+#: cadence was carrying every push. The other three legs below/above are NOT
+#: stale: `push_outstanding` still consults `auto_push.branch_gate()` and still
+#: declines `main`, a non-`work/*` branch, and an unresolvable HEAD.
 
 
 def case_b_verdict(repo_root: str, branch: str) -> DayBranchAssertResult:
@@ -187,13 +195,12 @@ def case_b_verdict(repo_root: str, branch: str) -> DayBranchAssertResult:
 
       - ``branch_gate`` (``work/*`` only): a branch that does NOT start with
         ``work/`` gets no auto-push at all, so no crash insurance.
-      - a pending-push record at
-        ``<git-common-dir>/coordinator-auto-push-pending.json`` means the last
-        auto-push attempt FAILED and is queued for retry — commits are sitting
-        unpushed right now.
+    Compliant = ``work/*`` shape. A detached HEAD is always non-compliant and
+    always warns.
 
-    Compliant = ``work/*`` shape AND no pending record. A detached HEAD is
-    always non-compliant and always warns.
+    Negative-spec — do not reintroduce a pending-push-record leg here. See the
+    gravestone above ``case_b_verdict``: the record has no writer post-C8, so
+    reading it can only produce a false RED.
     """
     if not branch:
         return DayBranchAssertResult(
@@ -233,24 +240,6 @@ def case_b_verdict(repo_root: str, branch: str) -> DayBranchAssertResult:
             ),
         )
 
-    pending = _pending_record(repo_root)
-    if pending is not None:
-        hold_until = pending.get("hold_until")
-        since = hold_until if isinstance(hold_until, (int, float)) else None
-        return DayBranchAssertResult(
-            WARN,
-            branch,
-            banner(
-                headline=f"auto-push is FAILING on {branch}",
-                detail=(
-                    "a pending-push record is on disk: the last push attempt "
-                    "failed and commits are sitting unpushed right now, so "
-                    "crash insurance is NOT in force"
-                ),
-                since=since,
-            ),
-        )
-
     return DayBranchAssertResult(COMPLIANT, branch, "")
 
 
@@ -285,20 +274,6 @@ def _humanize(secs: float) -> str:
     if secs < 5400:
         return f"{int(secs // 60)}m"
     return f"{int(secs // 3600)}h"
-
-
-def _pending_record(repo_root: str) -> Optional[dict]:
-    try:
-        text = (resolve_git_common_dir(repo_root) / _PENDING_RECORD_NAME).read_text(
-            encoding="utf-8"
-        )
-    except OSError:
-        return None
-    try:
-        record = json.loads(text)
-    except ValueError:
-        return None
-    return record if isinstance(record, dict) else None
 
 
 def _current_branch(repo_root: str) -> str:

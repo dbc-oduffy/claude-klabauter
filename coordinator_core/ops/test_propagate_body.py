@@ -60,6 +60,7 @@ from coordinator_core.ops.propagate_body import (
     _PROPAGATED_SECTION_HEADING,
     _handler,
 )
+from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -94,6 +95,7 @@ def _git(repo: Path, *args: str) -> subprocess.CompletedProcess:
         capture_output=True,
         text=True,
         check=True,
+        **no_console_creationflags(),
     )
 
 

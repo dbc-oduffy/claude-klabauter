@@ -34,6 +34,7 @@ from coordinator_core.ops.fleet.memo_check_addressee import (
 )
 
 import pytest
+from coordinator_core.win_portability import no_console_creationflags
 
 # Spawns a real external process; runs at cadence gates, not per-commit.
 # Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
@@ -124,7 +125,8 @@ def _git_common_dir(repo_root: Path) -> Path:
     import subprocess
 
     subprocess.run(
-        ["git", "init", "-b", "main"], cwd=str(repo_root), capture_output=True, check=True
+        ["git", "init", "-b", "main"], cwd=str(repo_root), capture_output=True, check=True,
+        **no_console_creationflags(),
     )
     return (repo_root / ".git").resolve()
 

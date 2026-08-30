@@ -19,6 +19,7 @@ from pathlib import Path
 
 import pytest
 
+from coordinator_core.win_portability import no_console_creationflags
 from coordinator_core.workflow_watch.render import (
     RESULT_TRUNCATE_BYTES,
     JournalRenderer,
@@ -293,6 +294,7 @@ def _run_module(tmp_path, task_id, transcript_text, cap="2", poll="0.2"):
         text=True,
         timeout=60,
         cwd=str(Path(__file__).resolve().parents[2].parent),
+        **no_console_creationflags(),
     )
     return proc, time.monotonic() - started
 

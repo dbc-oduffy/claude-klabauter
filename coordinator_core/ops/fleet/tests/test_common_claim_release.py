@@ -34,6 +34,7 @@ import pytest
 from coordinator_core.ops.fleet._common import Move, archive_and_commit, rm_and_commit
 from coordinator_core.session import core as session_core
 from coordinator_core.session import scope as session_scope
+from coordinator_core.win_portability import no_console_creationflags
 
 # Real-git spawn is load-bearing: `release_committed_claims` reads real
 # post-commit divergence/porcelain state that a mocked git cannot fake. The
@@ -47,7 +48,7 @@ pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 
 def _git(args, cwd: Path) -> None:
-    subprocess.run(["git", *args], cwd=str(cwd), capture_output=True, text=True, check=True)
+    subprocess.run(["git", *args], cwd=str(cwd), capture_output=True, text=True, check=True, **no_console_creationflags())
 
 
 def _run(coro):

@@ -29,7 +29,12 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from datetime import datetime, timedelta, timezone
+
 from coordinator_core.win_portability import no_console_creationflags
+from coordinator_core.ops.platform_outcome_records import (
+    PLATFORM_OUTCOME_STALENESS_DAYS,
+)
 
 import pytest
 
@@ -50,6 +55,13 @@ FAILURES: list[str] = []
 
 
 def _check(condition: bool, label: str) -> None:
+    """Fail the enclosing test.
+
+    Negative-spec: this MUST raise on a false condition. It previously only
+    printed and bumped a module-global counter that nothing ever asserted on,
+    which made every check routed through it decorative. Do not "restore"
+    the counting-only shape.
+    """
     global TESTS_PASSED, TESTS_FAILED
     if condition:
         TESTS_PASSED += 1
@@ -57,6 +69,7 @@ def _check(condition: bool, label: str) -> None:
         TESTS_FAILED += 1
         FAILURES.append(label)
         print(f"FAIL: {label}")
+        pytest.fail(label, pytrace=False)
 
 
 # ---------------------------------------------------------------------------
@@ -103,13 +116,28 @@ def _make_scratch_repo(tested_platforms: list[str]) -> tuple[str, str]:
 
 
 def _write_record(repo_root: str, platform: str, machine: str, surface: str, **overrides) -> None:
+    """Write one platform-outcome record.
+
+    Negative-spec: `observed_at` MUST be computed relative to `datetime.now()`,
+    never a hardcoded literal. A fixed calendar date turns any freshness-
+    dependent test vacuous the moment real time passes it out of
+    PLATFORM_OUTCOME_STALENESS_DAYS's window — silently, since nothing fails
+    loudly, the promotion this fixture is meant to exercise simply stops
+    happening. Callers that need a stale record must override `observed_at`
+    with an offset likewise derived from PLATFORM_OUTCOME_STALENESS_DAYS, not
+    a second hardcoded date.
+    """
+    fresh_observed_at = (
+        (datetime.now(timezone.utc) - timedelta(days=3))
+        .strftime("%Y-%m-%dT%H:%M:%SZ")
+    )
     record = {
         "platform": platform,
         "surface": surface,
         "command": "coordinator/scripts/setup.py --i-am-agent",
         "outcome": "pass",
         "exit_code": 0,
-        "observed_at": "2026-07-20T14:32:00Z",
+        "observed_at": fresh_observed_at,
         "machine": machine,
         "surface_sha": "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
         "invoking_repo": "coordinator-claude",
@@ -203,12 +231,17 @@ def test_grandfather_preserves_recordless_pre_existing_entry() -> None:
 def test_stale_record_does_not_promote() -> None:
     repo_root, _sha = _make_scratch_repo(tested_platforms=[])
     try:
+        stale_observed_at = (
+            (datetime.now(timezone.utc) - timedelta(days=PLATFORM_OUTCOME_STALENESS_DAYS + 10))
+            .strftime("%Y-%m-%dT%H:%M:%SZ")
+        )
         _write_record(
             repo_root,
             platform="windows",
             machine="machine-b",
             surface="standalone_setup_script",
             surface_sha="0000000000000000000000000000000000000000",  # deliberately mismatched
+            observed_at=stale_observed_at,  # also stale by the SECONDARY rule, by construction
         )
         proc = _run_generator(repo_root, write=True)
         _check(proc.returncode == 0, f"(d) generator exits 0: {proc.stderr}")

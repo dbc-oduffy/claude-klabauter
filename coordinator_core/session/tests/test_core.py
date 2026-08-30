@@ -36,6 +36,7 @@ from pathlib import Path
 import pytest
 
 from coordinator_core.session import core
+from coordinator_core.win_portability import no_console_creationflags, no_console_passthrough_kwargs
 
 # Every test in this file builds its repo via `_make_repo(tmp_path)`, spawning
 # real git (init/config/add/commit) because the production code under test --
@@ -122,12 +123,12 @@ def test_session_dir_requires_sid():
 
 
 def _make_repo(tmp_path):
-    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
-    subprocess.run(["git", "config", "user.email", "t@example.com"], cwd=tmp_path, check=True)
-    subprocess.run(["git", "config", "user.name", "t"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "config", "user.email", "t@example.com"], cwd=tmp_path, check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "config", "user.name", "t"], cwd=tmp_path, check=True, **no_console_passthrough_kwargs())
     (tmp_path / "README.md").write_text("x")
-    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
-    subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=tmp_path, check=True, **no_console_passthrough_kwargs())
 
 
 def test_sessions_dir_normal_repo_matches_legacy_dot_git_shape(tmp_path):
@@ -150,7 +151,7 @@ def test_sessions_dir_in_real_worktree_is_creatable(tmp_path):
         ["git", "worktree", "add", "-q", str(worktree), "-b", "wt1-branch"],
         cwd=repo,
         check=True,
-    )
+    **no_console_passthrough_kwargs())
 
     assert (worktree / ".git").is_file()
 
@@ -171,12 +172,12 @@ def test_sessions_dir_two_worktrees_share_one_hub(tmp_path):
         ["git", "worktree", "add", "-q", str(wt1), "-b", "wt1-branch"],
         cwd=repo,
         check=True,
-    )
+    **no_console_passthrough_kwargs())
     subprocess.run(
         ["git", "worktree", "add", "-q", str(wt2), "-b", "wt2-branch"],
         cwd=repo,
         check=True,
-    )
+    **no_console_passthrough_kwargs())
 
     assert core.sessions_dir(cwd=str(wt1)) == core.sessions_dir(cwd=str(wt2))
     assert core.sessions_dir(cwd=str(wt1)) == core.sessions_dir(cwd=str(repo))
@@ -455,7 +456,7 @@ def _self_lstart_and_epoch():
         ["ps", "-p", str(os.getpid()), "-o", "lstart="],
         capture_output=True,
         text=True,
-    )
+    **no_console_creationflags())
     lstart = result.stdout.strip()
     assert lstart, "ps -p <self> -o lstart= must succeed on a live test process"
     return lstart
@@ -911,7 +912,7 @@ class TestResolveSessionId:
         monkeypatch.delenv("COORDINATOR_SESSION_ID", raising=False)
         monkeypatch.delenv("CLAUDE_SESSION_ID", raising=False)
         monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
-        subprocess.run(["git", "init", "-q"], cwd=tmp_path)
+        subprocess.run(["git", "init", "-q"], cwd=tmp_path, **no_console_passthrough_kwargs())
         sessions_dir = tmp_path / ".git" / "coordinator-sessions"
         sessions_dir.mkdir(parents=True)
         (sessions_dir / ".current-session-id").write_text("legacy-sid")
@@ -928,7 +929,7 @@ class TestResolveSessionId:
         monkeypatch.delenv("COORDINATOR_SESSION_ID", raising=False)
         monkeypatch.delenv("CLAUDE_SESSION_ID", raising=False)
         monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
-        subprocess.run(["git", "init", "-q"], cwd=tmp_path)
+        subprocess.run(["git", "init", "-q"], cwd=tmp_path, **no_console_passthrough_kwargs())
         sessions_dir = tmp_path / ".git" / "coordinator-sessions"
         sdir = sessions_dir / "live-sid"
         sdir.mkdir(parents=True)
@@ -943,7 +944,7 @@ class TestResolveSessionId:
         monkeypatch.delenv("COORDINATOR_SESSION_ID", raising=False)
         monkeypatch.delenv("CLAUDE_SESSION_ID", raising=False)
         monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "tier3-sid")
-        subprocess.run(["git", "init", "-q"], cwd=tmp_path)
+        subprocess.run(["git", "init", "-q"], cwd=tmp_path, **no_console_passthrough_kwargs())
         sessions_dir = tmp_path / ".git" / "coordinator-sessions"
         sessions_dir.mkdir(parents=True)
         (sessions_dir / ".current-session-id").write_text("legacy-sid")
@@ -1068,12 +1069,12 @@ class TestSessionEnvPrecedenceSingleSource:
 
 class TestInit:
     def _make_repo(self, tmp_path):
-        subprocess.run(["git", "init", "-q"], cwd=tmp_path)
-        subprocess.run(["git", "config", "user.email", "t@example.com"], cwd=tmp_path)
-        subprocess.run(["git", "config", "user.name", "t"], cwd=tmp_path)
+        subprocess.run(["git", "init", "-q"], cwd=tmp_path, **no_console_passthrough_kwargs())
+        subprocess.run(["git", "config", "user.email", "t@example.com"], cwd=tmp_path, **no_console_passthrough_kwargs())
+        subprocess.run(["git", "config", "user.name", "t"], cwd=tmp_path, **no_console_passthrough_kwargs())
         (tmp_path / "README.md").write_text("x")
-        subprocess.run(["git", "add", "."], cwd=tmp_path)
-        subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=tmp_path)
+        subprocess.run(["git", "add", "."], cwd=tmp_path, **no_console_passthrough_kwargs())
+        subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=tmp_path, **no_console_passthrough_kwargs())
         return tmp_path
 
     def test_init_creates_session_files(self, tmp_path):
@@ -1152,12 +1153,12 @@ class TestInitWindowsGuard1:
     `psutil.Process`."""
 
     def _make_repo(self, tmp_path):
-        subprocess.run(["git", "init", "-q"], cwd=tmp_path)
-        subprocess.run(["git", "config", "user.email", "t@example.com"], cwd=tmp_path)
-        subprocess.run(["git", "config", "user.name", "t"], cwd=tmp_path)
+        subprocess.run(["git", "init", "-q"], cwd=tmp_path, **no_console_passthrough_kwargs())
+        subprocess.run(["git", "config", "user.email", "t@example.com"], cwd=tmp_path, **no_console_passthrough_kwargs())
+        subprocess.run(["git", "config", "user.name", "t"], cwd=tmp_path, **no_console_passthrough_kwargs())
         (tmp_path / "README.md").write_text("x")
-        subprocess.run(["git", "add", "."], cwd=tmp_path)
-        subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=tmp_path)
+        subprocess.run(["git", "add", "."], cwd=tmp_path, **no_console_passthrough_kwargs())
+        subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=tmp_path, **no_console_passthrough_kwargs())
         return tmp_path
 
     def test_windows_guard1_writes_stable_pid_with_exe_suffix_stripped(

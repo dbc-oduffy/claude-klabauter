@@ -14,6 +14,7 @@ import subprocess
 import pytest
 
 from coordinator_core.ops.resolve_swept_baton import _resolve_swept_baton_in_archive
+from coordinator_core.win_portability import no_console_passthrough_kwargs
 
 # Declared, not excused: this file spawns real git because the AC7 archiving-commit
 # resolution the module implements genuinely runs `git log` against a real repo --
@@ -27,15 +28,34 @@ pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 def _init_repo(path):
     path.mkdir(parents=True, exist_ok=True)
-    subprocess.run(["git", "init", "-q"], cwd=str(path), check=True)
-    subprocess.run(["git", "config", "user.email", "t@t"], cwd=str(path), check=True)
-    subprocess.run(["git", "config", "user.name", "t"], cwd=str(path), check=True)
+    subprocess.run(
+        ["git", "init", "-q"], cwd=str(path), check=True, **no_console_passthrough_kwargs()
+    )
+    subprocess.run(
+        ["git", "config", "user.email", "t@t"],
+        cwd=str(path),
+        check=True,
+        **no_console_passthrough_kwargs(),
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "t"],
+        cwd=str(path),
+        check=True,
+        **no_console_passthrough_kwargs(),
+    )
     return path
 
 
 def _commit_all(path, message):
-    subprocess.run(["git", "add", "-A"], cwd=str(path), check=True)
-    subprocess.run(["git", "commit", "-q", "-m", message], cwd=str(path), check=True)
+    subprocess.run(
+        ["git", "add", "-A"], cwd=str(path), check=True, **no_console_passthrough_kwargs()
+    )
+    subprocess.run(
+        ["git", "commit", "-q", "-m", message],
+        cwd=str(path),
+        check=True,
+        **no_console_passthrough_kwargs(),
+    )
 
 
 @pytest.fixture

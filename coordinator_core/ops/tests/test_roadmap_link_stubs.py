@@ -53,6 +53,7 @@ import coordinator_core.ops.roadmap_link_stubs  # noqa: F401 — fires @register
 from coordinator_core.frontmatter.schema_validate import validate_frontmatter
 from coordinator_core.ipc import _REGISTRY
 from coordinator_core.ops.roadmap_link_stubs import _SCHEMA_PATH, _handler, _run_link_stubs
+from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -80,6 +81,7 @@ def _git(repo: Path, *args: str) -> subprocess.CompletedProcess:
         capture_output=True,
         check=True,
         text=True,
+        **no_console_creationflags(),
     )
 
 

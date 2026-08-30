@@ -63,6 +63,10 @@ from coordinator_core.ops.emit.context import EmitContext
 from coordinator_core.ops.session import safe_commit_offer
 from coordinator_core.session import core
 from coordinator_core.subagent_sandbox.provision_report import main as provision_report_main
+from coordinator_core.win_portability import (
+    no_console_creationflags,
+    no_console_passthrough_kwargs,
+)
 
 # Spawns a real external process; runs at cadence gates, not per-commit.
 # Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
@@ -82,17 +86,19 @@ def _make_repo(tmp_path: Path) -> Path:
     as a passing test. `commit.gpgsign=false` is required here (unlike the
     read-only oracle tests) because this file's wrap ceremony performs a
     REAL `git commit`."""
-    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True, **no_console_passthrough_kwargs())
     subprocess.run(
-        ["git", "config", "user.email", "t@example.com"], cwd=tmp_path, check=True
+        ["git", "config", "user.email", "t@example.com"], cwd=tmp_path, check=True,
+        **no_console_passthrough_kwargs(),
     )
-    subprocess.run(["git", "config", "user.name", "t"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "config", "user.name", "t"], cwd=tmp_path, check=True, **no_console_passthrough_kwargs())
     subprocess.run(
-        ["git", "config", "commit.gpgsign", "false"], cwd=tmp_path, check=True
+        ["git", "config", "commit.gpgsign", "false"], cwd=tmp_path, check=True,
+        **no_console_passthrough_kwargs(),
     )
     (tmp_path / "README.md").write_text("x")
-    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
-    subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=tmp_path, check=True, **no_console_passthrough_kwargs())
     return tmp_path
 
 
@@ -103,6 +109,7 @@ def _dirty_status(repo: Path) -> str:
         capture_output=True,
         text=True,
         check=True,
+        **no_console_creationflags(),
     )
     return result.stdout
 

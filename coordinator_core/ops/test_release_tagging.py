@@ -15,20 +15,29 @@ from pathlib import Path
 import pytest
 
 from coordinator_core.ops import release_tagging as rt
+from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 
 def _git(repo: Path, *args: str) -> subprocess.CompletedProcess:
     return subprocess.run(
-        ["git", *args], cwd=repo, capture_output=True, text=True, check=True
+        ["git", *args],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        check=True,
+        **no_console_creationflags(),
     )
 
 
 def _init_repo_with_origin(tmp_path: Path) -> tuple[Path, Path, str]:
     bare = tmp_path / "origin.git"
     subprocess.run(
-        ["git", "init", "-q", "--bare", str(bare)], check=True, capture_output=True
+        ["git", "init", "-q", "--bare", str(bare)],
+        check=True,
+        capture_output=True,
+        **no_console_creationflags(),
     )
 
     repo = tmp_path / "repo"

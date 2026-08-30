@@ -31,7 +31,7 @@ pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 def _git(repo: Path, *args: str) -> subprocess.CompletedProcess:
     return subprocess.run(
-        ["git", *args], cwd=repo, capture_output=True, text=True, check=True
+        ["git", *args], cwd=repo, capture_output=True, text=True, check=True,
         **no_console_creationflags(),
     )
 
@@ -89,7 +89,7 @@ def gh_env(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path)
     bare = tmp_path / "hub.git"
     subprocess.run(
-        ["git", "init", "-q", "--bare", str(bare)], check=True, capture_output=True
+        ["git", "init", "-q", "--bare", str(bare)], check=True, capture_output=True,
         **no_console_creationflags(),
     )
     fake = _FakeGh({"myproj": str(bare)})

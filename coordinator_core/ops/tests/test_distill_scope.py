@@ -62,6 +62,7 @@ from coordinator_core.ops.distill_scope import (
     wiki_slugs_as_dict,
     write_scope_manifest,
 )
+from coordinator_core.win_portability import no_console_passthrough_kwargs
 
 # Spawns a real external process; runs at cadence gates, not per-commit.
 # Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
@@ -389,7 +390,7 @@ def test_dispatch_message_smoke(fixture_repo, monkeypatch):
     import coordinator_core.ipc as ipc
     import coordinator_core.ops  # noqa: F401 — triggers eager registration
 
-    subprocess.run(["git", "init", "-q"], cwd=fixture_repo, check=True)
+    subprocess.run(["git", "init", "-q"], cwd=fixture_repo, check=True, **no_console_passthrough_kwargs())
 
     msg = {
         "jsonrpc": "2.0",

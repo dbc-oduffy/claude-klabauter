@@ -39,6 +39,8 @@ from pathlib import Path
 
 import pytest
 
+from coordinator_core.win_portability import no_console_passthrough_kwargs
+
 # Declared, not excused: a subset of this file's tests (the defect-A heartbeat
 # self-heal path) spawn real git via `_git_init` because the property under test is
 # the hook's own session-hub RESOLUTION against a real committed repo, which no mock
@@ -71,12 +73,12 @@ def _cs_dir(repo_root: Path) -> Path:
 def _git_init(repo: Path) -> None:
     """Initialise a minimal committed git repo at repo (for tests needing a real
     session-hub resolution, e.g. the defect-A heartbeat self-heal)."""
-    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
-    subprocess.run(["git", "config", "user.email", "t@example.com"], cwd=repo, check=True)
-    subprocess.run(["git", "config", "user.name", "t"], cwd=repo, check=True)
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "config", "user.email", "t@example.com"], cwd=repo, check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "config", "user.name", "t"], cwd=repo, check=True, **no_console_passthrough_kwargs())
     (repo / "README.md").write_text("x")
-    subprocess.run(["git", "add", "."], cwd=repo, check=True)
-    subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=repo, check=True)
+    subprocess.run(["git", "add", "."], cwd=repo, check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=repo, check=True, **no_console_passthrough_kwargs())
 
 
 def _make_session(

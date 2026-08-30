@@ -36,6 +36,7 @@ sys.path.insert(0, str(REPO_ROOT))
 
 from coordinator_core import pickup_assemble as pa  # noqa: E402
 from coordinator_core.pickup_assemble import apply as pa_apply  # noqa: E402
+from coordinator_core.win_portability import no_console_creationflags
 
 # Spawns a real external process; runs at cadence gates, not per-commit.
 # Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
@@ -52,7 +53,7 @@ def _git(args, cwd):
         text=True,
         timeout=30,
         check=True,
-    )
+    **no_console_creationflags())
 
 
 @pytest.fixture()
@@ -78,7 +79,7 @@ def test_run_git_add_actually_stages(repo: Path):
     staged = subprocess.run(
         ["git", "-C", str(repo), "diff", "--cached", "--name-only"],
         capture_output=True, text=True, timeout=30,
-    )
+    **no_console_creationflags())
     assert "artifact.md" in staged.stdout
 
 
@@ -90,7 +91,7 @@ def test_run_git_rev_parse_head_returns_sha(repo: Path):
     real = subprocess.run(
         ["git", "-C", str(repo), "rev-parse", "HEAD"],
         capture_output=True, text=True, timeout=30,
-    )
+    **no_console_creationflags())
     assert proc.stdout.strip() == real.stdout.strip()
 
 
@@ -109,12 +110,12 @@ def test_scoped_commit_commits_new_artifact(repo: Path):
     head = subprocess.run(
         ["git", "-C", str(repo), "rev-parse", "HEAD"],
         capture_output=True, text=True, timeout=30,
-    )
+    **no_console_creationflags())
     assert sha.strip() == head.stdout.strip()
     tracked = subprocess.run(
         ["git", "-C", str(repo), "ls-files", "--", rel],
         capture_output=True, text=True, timeout=30,
-    )
+    **no_console_creationflags())
     assert rel in tracked.stdout
 
 
@@ -134,6 +135,6 @@ def test_scoped_commit_scopes_to_the_one_path(repo: Path):
     still_staged = subprocess.run(
         ["git", "-C", str(repo), "diff", "--cached", "--name-only"],
         capture_output=True, text=True, timeout=30,
-    )
+    **no_console_creationflags())
     assert "peer.txt" in still_staged.stdout
     assert "artifact.md" not in still_staged.stdout

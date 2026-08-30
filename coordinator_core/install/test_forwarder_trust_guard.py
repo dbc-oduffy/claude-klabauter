@@ -303,21 +303,21 @@ def test_py_suffixed_cli_forwarder_execs_py_target(tmp_path: Path):
     installed name never exists on disk. (Formerly exercised via the pinned
     `mint-deliverable-id.sh` -> `.py` divergence before that CLI's installed
     name was made extensionless; now a generic `.py`-suffixed CLI shape.)"""
-    forwarder = _write_forwarder(tmp_path, name="wsc-close", target="wsc-close.py")
+    forwarder = _write_forwarder(tmp_path, name="sample-tool", target="sample-tool.py")
     ml_dir = tmp_path / "machine-local"
     ml_dir.mkdir()
 
-    root = tmp_path / "wsc-close-claude-klabauter"
-    _make_claude_klabauter_fixture(root, target_name="wsc-close.py")
+    root = tmp_path / "sample-tool-claude-klabauter"
+    _make_claude_klabauter_fixture(root, target_name="sample-tool.py")
     (ml_dir / ".claude-klabauter-live-root").write_text(str(root), encoding="utf-8")
 
     result = _run(forwarder, ml_dir)
 
     assert result.returncode == 0
-    assert "TARGET_REACHED_wsc-close.py" in result.stdout
+    assert "TARGET_REACHED_sample-tool.py" in result.stdout
     content = forwarder.read_text(encoding="utf-8")
-    assert 'exec_cli("wsc-close.py")' in content
-    assert 'exec_cli("wsc-close")' not in content
+    assert 'exec_cli("sample-tool.py")' in content
+    assert 'exec_cli("sample-tool")' not in content
 
 
 # GRAVESTONE -- the `_write_agent_cmd_forwarder` body tests (deleted
@@ -591,13 +591,13 @@ def test_derive_agent_helper_target_map_py_suffixed_cli_targets_real_file(tmp_pa
     target-map value must stay the REAL on-disk filename (with `.py`) — not
     the stripped installed name, which does not exist on disk."""
     agent_bin = tmp_path / "coordinator" / "bin"
-    _touch(agent_bin / "wsc-close.py")
-    _touch(agent_bin / "wsc-close.cmd", executable=False)
+    _touch(agent_bin / "sample-tool.py")
+    _touch(agent_bin / "sample-tool.cmd", executable=False)
 
     mapping = _derive_agent_helper_target_map(agent_bin)
 
-    assert mapping["wsc-close"] == "wsc-close.py"
-    assert (agent_bin / mapping["wsc-close"]).is_file()
+    assert mapping["sample-tool"] == "sample-tool.py"
+    assert (agent_bin / mapping["sample-tool"]).is_file()
 
 
 def test_derive_agent_helper_target_map_extensionless_cli_targets_itself(tmp_path: Path):
@@ -723,8 +723,8 @@ def test_derive_agent_helper_target_map_keys_match_derive_names(tmp_path: Path):
     """The two derivations must never drift apart — same installed-name set,
     just one also exposing the resolved target."""
     agent_bin = tmp_path / "coordinator" / "bin"
-    _touch(agent_bin / "wsc-close.py")
-    _touch(agent_bin / "wsc-close.cmd", executable=False)
+    _touch(agent_bin / "sample-tool.py")
+    _touch(agent_bin / "sample-tool.cmd", executable=False)
     _touch(agent_bin / "claude-doe")
     _touch(agent_bin / "mint-deliverable-id.py")
     _touch(agent_bin / "mint-deliverable-id.cmd", executable=False)
@@ -745,8 +745,8 @@ def test_write_agent_forwarder_explicit_target_round_trip_all_kinds(tmp_path: Pa
     emitted forwarder's exec_cli(...) argument names a file that actually
     EXISTS on disk in the fixture coordinator/bin/."""
     agent_bin = tmp_path / "coordinator" / "bin"
-    _touch(agent_bin / "wsc-close.py")
-    _touch(agent_bin / "wsc-close.cmd", executable=False)
+    _touch(agent_bin / "sample-tool.py")
+    _touch(agent_bin / "sample-tool.cmd", executable=False)
     _touch(agent_bin / "review-brightline-gate.py")
     _touch(agent_bin / "claude-doe")
     _touch(agent_bin / "mint-deliverable-id.py")
@@ -774,7 +774,7 @@ def test_write_agent_forwarder_target_is_required_keyword_only(tmp_path: Path):
     must fail loudly at call time rather than silently emit a forwarder
     execing a nonexistent extensionless path."""
     with pytest.raises(TypeError):
-        _write_agent_forwarder("wsc-close", tmp_path / "wsc-close", check_only=False)
+        _write_agent_forwarder("sample-tool", tmp_path / "sample-tool", check_only=False)
 
 
 def test_forwarder_trailing_slash_and_crlf_normalized(tmp_path: Path):
@@ -833,11 +833,11 @@ def test_resolve_agent_cmd_dest_collisions_non_js_wins(colliding_pair: "tuple[st
 
 
 def test_resolve_agent_cmd_dest_collisions_no_collision_passthrough():
-    target_map = {"wsc-close": "wsc-close.py", "claude-doe": "claude-doe"}
+    target_map = {"sample-tool": "sample-tool.py", "claude-doe": "claude-doe"}
 
     resolved = _resolve_agent_cmd_dest_collisions(target_map)
 
-    assert resolved == {"wsc-close": "wsc-close.cmd", "claude-doe": "claude-doe.cmd"}
+    assert resolved == {"sample-tool": "sample-tool.cmd", "claude-doe": "claude-doe.cmd"}
 
 
 def test_resolve_agent_cmd_dest_collisions_unresolvable_raises_fatal():
@@ -900,7 +900,7 @@ def _make_install_bin_resolvers_fixture(tmp_path: Path) -> "tuple[Path, Path, Pa
     # A representative slice: a .py-suffixed CLI, an extensionless CLI, and
     # a second .py-suffixed CLI (mint-deliverable-id.py, no longer a pinned
     # special case).
-    _touch(agent_bin / "wsc-close.py")
+    _touch(agent_bin / "sample-tool.py")
     _touch(agent_bin / "review-brightline-gate.py")
     _touch(agent_bin / "claude-doe")
     _touch(agent_bin / "mint-deliverable-id.py")
@@ -946,7 +946,7 @@ def test_install_bin_resolvers_agent_helper_pairs_resolve_at_destination(
     the co-located Unix-half sibling, never the claude-klabauter-side .py file).
 
     Against the retired copy-a-source-.cmd approach this fails outright:
-    that .cmd body targeted %~dp0<target>.py (e.g. %~dp0wsc-close.py),
+    that .cmd body targeted %~dp0<target>.py (e.g. %~dp0sample-tool.py),
     which is never present at bin_dst — only inside claude-klabauter's
     own coordinator/bin/. The generator fix makes it pass by construction.
     """

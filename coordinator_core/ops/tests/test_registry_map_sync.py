@@ -45,6 +45,7 @@ from pathlib import Path
 import coordinator_core.ops  # noqa: F401 -- triggers every op module's register_op(...) side-effect
 import coordinator_core.ipc as ipc
 from coordinator_core.ops._registry_map import OP_MODULE_MAP, resolves
+from coordinator_core.win_portability import no_console_creationflags
 
 import pytest
 
@@ -210,6 +211,7 @@ def _run_subprocess_script(script: str) -> subprocess.CompletedProcess:
         timeout=60,
         cwd=project_root,
         env=env,
+        **no_console_creationflags(),
     )
 
 

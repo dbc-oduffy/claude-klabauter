@@ -46,6 +46,7 @@ from .fixtures.real_git import (
     make_peer_staged_path,
     real_git_repo,
 )
+from coordinator_core.win_portability import no_console_creationflags
 
 # Real-git spawn is load-bearing: the docstring says it plainly -- index/
 # worktree divergence and a real compare-and-swap race on update-ref cannot
@@ -57,7 +58,7 @@ pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 def _git(args: list[str], cwd: Path) -> subprocess.CompletedProcess:
     return subprocess.run(
         ["git", *args], cwd=str(cwd), capture_output=True, text=True, check=True
-    )
+    , **no_console_creationflags())
 
 
 def _write_msg(tmp_path: Path, text: str = "a commit message\n") -> Path:
@@ -433,7 +434,7 @@ def test_red_proof_empty_path_set_bare_dashdash_sweeps_whole_index(tmp_path):
     result = subprocess.run(
         ["git", "commit", "-F", str(msg_file), "--"],
         cwd=str(repo), capture_output=True, text=True,
-    )
+    **no_console_creationflags())
 
     assert result.returncode == 0
     assert _committed_files_at_head(repo) == ["file.txt"]
@@ -551,11 +552,11 @@ def test_red_proof_two_arg_update_ref_silently_orphans_peer_commit(tmp_path):
     new_sha = subprocess.run(
         ["git", "commit-tree", tree_sha, "-p", old_head, "-m", "stale commit"],
         cwd=str(repo), capture_output=True, text=True, check=True,
-    ).stdout.strip()
+    **no_console_creationflags()).stdout.strip()
     update_result = subprocess.run(
         ["git", "update-ref", "HEAD", new_sha],
         cwd=str(repo), capture_output=True, text=True,
-    )
+    **no_console_creationflags())
 
     assert update_result.returncode == 0
     head_now = _git(["rev-parse", "HEAD"], repo).stdout.strip()
@@ -693,7 +694,7 @@ def test_gap_path_outside_known_checked_is_freshly_checked_and_caught(tmp_path):
 def _committed_content_bytes_at_head(repo: Path, rel: str) -> bytes:
     result = subprocess.run(
         ["git", "show", f"HEAD:{rel}"], cwd=str(repo), capture_output=True
-    )
+    , **no_console_creationflags())
     return result.stdout
 
 

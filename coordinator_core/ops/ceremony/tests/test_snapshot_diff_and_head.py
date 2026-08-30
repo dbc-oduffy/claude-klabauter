@@ -26,6 +26,7 @@ import subprocess
 from pathlib import Path
 
 from coordinator_core.ops.ceremony import snapshot_diff_and_head
+from coordinator_core.win_portability import no_console_creationflags
 
 import pytest
 
@@ -39,7 +40,8 @@ pytestmark = [
 
 def _git(args, cwd) -> subprocess.CompletedProcess:
     return subprocess.run(
-        ["git", *args], cwd=str(cwd), check=True, capture_output=True, text=True
+        ["git", *args], cwd=str(cwd), check=True, capture_output=True, text=True,
+        **no_console_creationflags(),
     )
 
 

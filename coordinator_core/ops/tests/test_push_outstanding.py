@@ -24,7 +24,9 @@ from pathlib import Path
 
 import pytest
 
+import coordinator_core.hooks.auto_push as auto_push_mod
 import coordinator_core.ops.push_outstanding as push_outstanding_mod
+from coordinator_core.hooks.auto_push import CONTRACT_PUBLISH_TIMEOUT_SECS
 from coordinator_core.ops.ceremony.push import PushOutcome
 from coordinator_core.ops.push_outstanding import (
     _gitattributes_declares_lfs_filter,
@@ -136,6 +138,34 @@ def test_outstanding_commit_delegates_to_push_with_retry(monkeypatch, tmp_path):
         # decided one. Pinned here so dropping it fails loudly.
         "budget_secs": push_outstanding_mod.PUSH_RETRY_BUDGET_SECS,
     }
+
+
+def test_budget_secs_override_reaches_push_with_retry(monkeypatch, tmp_path):
+    """C5 (2026-08-30): `push_outstanding` accepts an optional `budget_secs`
+    keyword and passes it straight through to `push_with_retry`, unaltered
+    -- the seam `warm.push_cadence._sweep_one` uses to hand the ladder its
+    own `CADENCE_PUSH_RETRY_BUDGET_SECS` instead of the interactive default.
+    Every OTHER caller's default is pinned separately, above and below --
+    this test only pins that a non-default value actually travels."""
+    repo = _make_repo_with_remote(tmp_path)
+    _seed_file(repo, "second.txt", "more")
+    _git(["add", "--", "second.txt"], repo)
+    _git(["commit", "-q", "-m", "second"], repo)
+
+    calls = []
+
+    def _fake_push_with_retry(root, **kwargs):
+        calls.append((Path(root), kwargs))
+        return PushOutcome(exit_code=0, acted=["push"])
+
+    monkeypatch.setattr(push_outstanding_mod, "push_with_retry", _fake_push_with_retry)
+
+    outcome = push_outstanding(repo, budget_secs=6.0)
+
+    assert outcome.acted == ["push"]
+    assert len(calls) == 1
+    _, called_kwargs = calls[0]
+    assert called_kwargs["budget_secs"] == 6.0
 
 
 def test_no_upstream_ref_reads_as_outstanding_not_nothing_to_do(monkeypatch, tmp_path):
@@ -409,3 +439,167 @@ def test_push_outstanding_no_upstream_skips_predicate_pushes_normally(monkeypatc
     assert outcome.skipped == ["push:no-remote"]
     assert observed["value"] is None
     assert "GIT_LFS_SKIP_PUSH" not in os.environ
+
+
+# --- C1: fire the cockpit-contract publish from push_outstanding's success
+# path -- the publish decision (_schema_touched) is exercised for real; only
+# the actual subprocess invocation (_invoke_cockpit_publish) is monkeypatched
+# away, so these tests assert on the real `_maybe_publish_cockpit_contract`
+# wiring, not a re-implementation of it.
+# ---------------------------------------------------------------------------
+
+
+def _seed_schema_file(repo: Path, name: str = "x.json") -> None:
+    _seed_file(repo, f"coordinator/cockpit-contract/schema/{name}", "{}")
+    _git(["add", "--", f"coordinator/cockpit-contract/schema/{name}"], repo)
+    _git(["commit", "-q", "-m", "touch schema"], repo)
+
+
+def _patch_cockpit_script_present(monkeypatch, repo: Path) -> Path:
+    """Make `_cockpit_publish_script` report the DoE publish script as
+    present, without needing a real `.github/scripts/...` file on disk --
+    only its presence/absence is load-bearing for this module."""
+    dummy = repo / ".github" / "scripts" / "publish_cockpit_contract.py"
+    monkeypatch.setattr(push_outstanding_mod, "_cockpit_publish_script", lambda _root: dummy)
+    return dummy
+
+
+def _record_invoke(monkeypatch, *, raise_exc: bool = False):
+    calls = []
+
+    def _fake_invoke(repo_root, script, *, timeout_secs=CONTRACT_PUBLISH_TIMEOUT_SECS):
+        calls.append({"repo_root": repo_root, "script": script, "timeout_secs": timeout_secs})
+        if raise_exc:
+            raise RuntimeError("boom")
+
+    monkeypatch.setattr(auto_push_mod, "_invoke_cockpit_publish", _fake_invoke)
+    return calls
+
+
+def test_cockpit_publish_fires_on_schema_touched_landed_push(monkeypatch, tmp_path):
+    """A landed push whose range touches the schema dir fires the publish,
+    invoked with a caller-supplied `timeout_secs` (not the bare
+    `CONTRACT_PUBLISH_TIMEOUT_SECS` default)."""
+    repo = _make_repo_with_remote(tmp_path)
+    old_sha = _git_stdout(["rev-parse", "HEAD"], repo).strip()
+    _seed_schema_file(repo)
+    new_sha = _git_stdout(["rev-parse", "HEAD"], repo).strip()
+    _patch_cockpit_script_present(monkeypatch, repo)
+    calls = _record_invoke(monkeypatch)
+
+    def _fake_push_with_retry(root, **kwargs):
+        return PushOutcome(exit_code=0, acted=["push"], pushed_range=f"{old_sha}..{new_sha}")
+
+    monkeypatch.setattr(push_outstanding_mod, "push_with_retry", _fake_push_with_retry)
+
+    outcome = push_outstanding(repo)
+
+    assert outcome.exit_code == 0
+    assert len(calls) == 1
+    assert calls[0]["repo_root"] == str(repo)
+    assert calls[0]["timeout_secs"] != CONTRACT_PUBLISH_TIMEOUT_SECS
+    assert calls[0]["timeout_secs"] <= push_outstanding_mod.PUSH_RETRY_BUDGET_SECS
+
+
+def test_cockpit_publish_skipped_when_schema_clean(monkeypatch, tmp_path):
+    """A landed push whose range does NOT touch the schema dir must never
+    fire the publish subprocess."""
+    repo = _make_repo_with_remote(tmp_path)
+    old_sha = _git_stdout(["rev-parse", "HEAD"], repo).strip()
+    _seed_file(repo, "unrelated.txt", "not schema")
+    _git(["add", "--", "unrelated.txt"], repo)
+    _git(["commit", "-q", "-m", "unrelated"], repo)
+    new_sha = _git_stdout(["rev-parse", "HEAD"], repo).strip()
+    _patch_cockpit_script_present(monkeypatch, repo)
+    calls = _record_invoke(monkeypatch)
+
+    def _fake_push_with_retry(root, **kwargs):
+        return PushOutcome(exit_code=0, acted=["push"], pushed_range=f"{old_sha}..{new_sha}")
+
+    monkeypatch.setattr(push_outstanding_mod, "push_with_retry", _fake_push_with_retry)
+
+    outcome = push_outstanding(repo)
+
+    assert outcome.exit_code == 0
+    assert calls == []
+
+
+def test_cockpit_publish_skipped_on_failed_outcome(monkeypatch, tmp_path):
+    """A failed push outcome (`pushed_range is None`) never fires the
+    publish, even when the schema script is present."""
+    repo = _make_repo_with_remote(tmp_path)
+    _seed_schema_file(repo)
+    _patch_cockpit_script_present(monkeypatch, repo)
+    calls = _record_invoke(monkeypatch)
+
+    def _fake_push_with_retry(root, **kwargs):
+        return PushOutcome(exit_code=1, failed=["push:rejected"], pushed_range=None)
+
+    monkeypatch.setattr(push_outstanding_mod, "push_with_retry", _fake_push_with_retry)
+
+    outcome = push_outstanding(repo)
+
+    assert outcome.exit_code == 1
+    assert calls == []
+
+
+def test_cockpit_publish_raising_leaves_push_outcome_successful(monkeypatch, tmp_path):
+    """`_maybe_publish_cockpit_contract`'s never-raises contract holds even
+    when the underlying invoke raises: the push's own successful outcome is
+    returned unmodified, never converted into a failure."""
+    repo = _make_repo_with_remote(tmp_path)
+    old_sha = _git_stdout(["rev-parse", "HEAD"], repo).strip()
+    _seed_schema_file(repo)
+    new_sha = _git_stdout(["rev-parse", "HEAD"], repo).strip()
+    _patch_cockpit_script_present(monkeypatch, repo)
+    calls = _record_invoke(monkeypatch, raise_exc=True)
+
+    def _fake_push_with_retry(root, **kwargs):
+        return PushOutcome(exit_code=0, acted=["push"], pushed_range=f"{old_sha}..{new_sha}")
+
+    monkeypatch.setattr(push_outstanding_mod, "push_with_retry", _fake_push_with_retry)
+
+    outcome = push_outstanding(repo)
+
+    assert outcome.exit_code == 0
+    assert outcome.acted == ["push"]
+    assert len(calls) == 1
+
+
+def test_cockpit_publish_uses_outcome_pushed_range_not_precall_shas(monkeypatch, tmp_path):
+    """The reject-then-fetch-then-rebase case: the pre-call upstream/HEAD sha
+    pair names a schema-touching range, but `outcome.pushed_range` (what THIS
+    call actually landed, post-rebase) does not touch the schema dir -- the
+    publish must NOT fire, proving the schema check runs against the outcome
+    range and not the pre-call shas."""
+    repo = _make_repo_with_remote(tmp_path)
+    pre_call_upstream_sha = _git_stdout(["rev-parse", "HEAD"], repo).strip()
+    _seed_schema_file(repo)  # pre-call "current_sha" would touch the schema
+    pre_call_current_sha = _git_stdout(["rev-parse", "HEAD"], repo).strip()
+
+    # A separate, schema-clean commit stands in for the post-rebase landed
+    # range -- what push_with_retry reports as `pushed_range`.
+    _seed_file(repo, "unrelated.txt", "post-rebase content")
+    _git(["add", "--", "unrelated.txt"], repo)
+    _git(["commit", "-q", "-m", "post-rebase unrelated"], repo)
+    rebased_base = pre_call_current_sha
+    rebased_head = _git_stdout(["rev-parse", "HEAD"], repo).strip()
+
+    _patch_cockpit_script_present(monkeypatch, repo)
+    calls = _record_invoke(monkeypatch)
+
+    def _fake_push_with_retry(root, **kwargs):
+        return PushOutcome(
+            exit_code=0, acted=["push"], pushed_range=f"{rebased_base}..{rebased_head}"
+        )
+
+    monkeypatch.setattr(push_outstanding_mod, "push_with_retry", _fake_push_with_retry)
+
+    outcome = push_outstanding(repo)
+
+    assert outcome.exit_code == 0
+    assert calls == [], (
+        "publish fired against the pre-call sha pair "
+        f"({pre_call_upstream_sha}..{pre_call_current_sha}, schema-touching) instead of "
+        f"outcome.pushed_range ({rebased_base}..{rebased_head}, schema-clean)."
+    )

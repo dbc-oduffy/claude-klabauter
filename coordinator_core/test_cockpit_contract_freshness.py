@@ -35,6 +35,8 @@ import pytest
 import coordinator_core.workday_complete.brief as workday_brief
 import coordinator_core.workday_complete.cockpit_contract_freshness as ccf
 
+from coordinator_core.win_portability import no_console_creationflags
+
 # Real-git spawn is load-bearing: only the NETWORK-facing seams (ls-remote et
 # al.) are monkeypatched per the module docstring above — the ancestry-walk
 # and annotated-tag-peeling tests build and read ACTUAL local git repos/tags
@@ -45,12 +47,13 @@ _FAKE_ROOT = Path("/fake/doe-root")
 
 
 def _run_git(args, cwd):
-    subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True, text=True)
+    subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True, text=True, **no_console_creationflags())
 
 
 def _git_head_sha(cwd):
     result = subprocess.run(
-        ["git", "rev-parse", "HEAD"], cwd=cwd, check=True, capture_output=True, text=True
+        ["git", "rev-parse", "HEAD"], cwd=cwd, check=True, capture_output=True, text=True,
+        **no_console_creationflags(),
     )
     return result.stdout.strip()
 
@@ -457,7 +460,8 @@ def test_peel_to_commit_real_git_annotated_tag_peels_to_underlying_commit(tmp_pa
     commit_sha = _git_head_sha(repo)
     _run_git(["tag", "-a", "annotated", "-m", "release"], cwd=repo)
     tag_obj_sha = subprocess.run(
-        ["git", "rev-parse", "annotated"], cwd=repo, check=True, capture_output=True, text=True
+        ["git", "rev-parse", "annotated"], cwd=repo, check=True, capture_output=True, text=True,
+        **no_console_creationflags(),
     ).stdout.strip()
     assert tag_obj_sha != commit_sha  # sanity: annotated tags are their own object
 

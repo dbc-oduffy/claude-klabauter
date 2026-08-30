@@ -49,6 +49,7 @@ import pytest
 
 from coordinator_core.search import sources_powershell as sp
 from coordinator_core.search.engine import Unanswerable
+from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -109,6 +110,7 @@ def run_real_powershell(cmd: str, cwd) -> tuple[int, str]:
         # which would turn a CRLF-vs-LF divergence into a silent agreement --
         # same reasoning `_posix_shell.run_real` documents for its own call.
         check=False,
+        **no_console_creationflags(),
     )
     return proc.returncode, proc.stdout.decode("utf-8", errors="surrogateescape")
 

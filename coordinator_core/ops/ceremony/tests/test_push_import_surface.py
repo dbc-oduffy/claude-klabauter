@@ -48,7 +48,10 @@ def test_push_subsystem_symbols_live_at_their_new_home():
         "PUSH_STATUS_CADENCE_PENDING",
         "CEREMONY_PUSH_BUDGET_SECS",
         "PUSH_RETRY_BUDGET_SECS",
-        "_drain_pending_push_after_sync",
+        # `_drain_pending_push_after_sync` gravestoned 2026-08-30
+        # (docs/plans/2026-08-30-who-pushes-and-when.md C2) -- zero call
+        # sites, its delegate (`auto_push.drain_pending_push`) deleted in
+        # the same pass. The pin goes with it.
     ):
         assert hasattr(push_mod, name), f"push.py is missing {name!r}"
 

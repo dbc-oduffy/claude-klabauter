@@ -33,6 +33,7 @@ import yaml
 
 import coordinator_core.ops.memo_transition as _memo_mod
 from coordinator_core.ops.memo_transition import _action, _claim, _release, _resolve
+from coordinator_core.win_portability import no_console_creationflags
 
 # Real git spawn is load-bearing: this file asserts the actual `git commit`
 # lands, scoped to only the memo path (never a bare/broad pathspec) — the
@@ -49,21 +50,23 @@ def _git_init(path: Path) -> None:
     """Initialise a bare-minimum git repo so git rev-parse --show-toplevel works,
     and every subsequent commit in the repo has a working identity."""
     path.mkdir(parents=True, exist_ok=True)
-    subprocess.run(["git", "init", str(path)], check=True, capture_output=True)
+    subprocess.run(["git", "init", str(path)], check=True, capture_output=True, **no_console_creationflags())
     (path / ".gitkeep").touch()
-    subprocess.run(["git", "-C", str(path), "add", ".gitkeep"], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(path), "add", ".gitkeep"], check=True, capture_output=True, **no_console_creationflags())
     subprocess.run(
         ["git", "-C", str(path), "commit", "-m", "init", "--allow-empty-message"],
         check=True, capture_output=True,
         env={**__import__("os").environ, "GIT_AUTHOR_NAME": "test",
              "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "test",
              "GIT_COMMITTER_EMAIL": "t@t"},
+        **no_console_creationflags(),
     )
 
 
 def _head_sha(repo: Path) -> str:
     result = subprocess.run(
-        ["git", "-C", str(repo), "rev-parse", "HEAD"], check=True, capture_output=True, text=True
+        ["git", "-C", str(repo), "rev-parse", "HEAD"], check=True, capture_output=True, text=True,
+        **no_console_creationflags(),
     )
     return result.stdout.strip()
 
@@ -73,6 +76,7 @@ def _commit_files(repo: Path, sha: str) -> list[str]:
     result = subprocess.run(
         ["git", "-C", str(repo), "diff-tree", "--no-commit-id", "--name-only", "-r", sha],
         check=True, capture_output=True, text=True,
+        **no_console_creationflags(),
     )
     return [line for line in result.stdout.splitlines() if line]
 
@@ -80,7 +84,8 @@ def _commit_files(repo: Path, sha: str) -> list[str]:
 def _dirty_paths(repo: Path) -> list[str]:
     """Worktree-dirty (unstaged or untracked) paths, relative to `repo`."""
     result = subprocess.run(
-        ["git", "-C", str(repo), "status", "--porcelain"], check=True, capture_output=True, text=True
+        ["git", "-C", str(repo), "status", "--porcelain"], check=True, capture_output=True, text=True,
+        **no_console_creationflags(),
     )
     return [line[3:] for line in result.stdout.splitlines() if line]
 
@@ -149,13 +154,14 @@ def _setup_memo(tmp_path: Path, content: str, *, name: str = "memo.md") -> tuple
     memo = inbox / name
     memo.write_text(content, encoding="utf-8")
     relpath = str(memo.relative_to(repo))
-    subprocess.run(["git", "-C", str(repo), "add", relpath], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(repo), "add", relpath], check=True, capture_output=True, **no_console_creationflags())
     subprocess.run(
         ["git", "-C", str(repo), "commit", "-m", f"seed {relpath}"],
         check=True, capture_output=True,
         env={**__import__("os").environ, "GIT_AUTHOR_NAME": "test",
              "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "test",
              "GIT_COMMITTER_EMAIL": "t@t"},
+        **no_console_creationflags(),
     )
     return repo, str(memo)
 
@@ -286,6 +292,7 @@ class TestPeerDirtyFileNotSwept:
         subprocess.run(
             ["git", "-C", str(repo), "add", "cross-repo/inbox/peer-tracked.md"],
             check=True, capture_output=True,
+            **no_console_creationflags(),
         )
         subprocess.run(
             ["git", "-C", str(repo), "commit", "-m", "add peer file"],
@@ -293,6 +300,7 @@ class TestPeerDirtyFileNotSwept:
             env={**__import__("os").environ, "GIT_AUTHOR_NAME": "test",
                  "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "test",
                  "GIT_COMMITTER_EMAIL": "t@t"},
+            **no_console_creationflags(),
         )
         peer_file.write_text("peer's own concurrent modification\n", encoding="utf-8")
 

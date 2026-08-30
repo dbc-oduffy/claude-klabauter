@@ -15,6 +15,7 @@ from coordinator_core.ops.push_failure_verdict import (
     _handler,
     classify,
 )
+from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
@@ -29,6 +30,7 @@ def _git(*args: str, cwd: Path, env: dict | None = None, check: bool = True) -> 
         timeout=30,
         stdin=subprocess.DEVNULL,
         env=env,
+        **no_console_creationflags(),
     )
 
 

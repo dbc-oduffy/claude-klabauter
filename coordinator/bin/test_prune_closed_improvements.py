@@ -27,6 +27,8 @@ import io
 import os
 import sys
 
+import pytest
+
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 PASS = 0
@@ -40,11 +42,18 @@ def _pass(label: str) -> None:
 
 
 def _fail(label: str, detail: str = "") -> None:
+    """Fail the enclosing test.
+
+    Negative-spec: this MUST raise. It previously only printed and bumped a
+    module-global counter that nothing ever asserted on, which made every
+    check in this file decorative. Do not "restore" the counting-only shape.
+    """
     global FAIL
     print(f"  FAIL: {label}")
     if detail:
         print(f"    {detail}")
     FAIL += 1
+    pytest.fail(f"{label}: {detail}" if detail else label, pytrace=False)
 
 
 def _load_module():

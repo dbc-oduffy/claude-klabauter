@@ -39,6 +39,10 @@ from pathlib import Path
 import pytest
 
 from coordinator_core import dag
+from coordinator_core.win_portability import (
+    no_console_creationflags,
+    no_console_passthrough_kwargs,
+)
 
 # Declared, not excused: `dag._git_path_ever_tracked`'s contract is defined in terms
 # of actual `git log --all -- <path>` behaviour (best-effort False on any failure), not
@@ -71,10 +75,10 @@ def clear_ever_tracked_cache():
 def _init_repo(tmp_path: Path) -> Path:
     root = tmp_path / "repo"
     root.mkdir()
-    subprocess.run(["git", "init", "-q"], cwd=root, check=True)
-    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=root, check=True)
-    subprocess.run(["git", "config", "user.name", "Test"], cwd=root, check=True)
-    subprocess.run(["git", "config", "commit.gpgsign", "false"], cwd=root, check=True)
+    subprocess.run(["git", "init", "-q"], cwd=root, check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=root, check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=root, check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "config", "commit.gpgsign", "false"], cwd=root, check=True, **no_console_passthrough_kwargs())
     return root
 
 
@@ -82,10 +86,10 @@ def _commit_file(root: Path, rel_path: str, content: str = "x") -> None:
     p = root / rel_path
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(content)
-    subprocess.run(["git", "add", "--", rel_path], cwd=root, check=True)
+    subprocess.run(["git", "add", "--", rel_path], cwd=root, check=True, **no_console_passthrough_kwargs())
     subprocess.run(
         ["git", "-c", "commit.gpgsign=false", "commit", "-q", "-m", f"add {rel_path}"],
-        cwd=root, check=True,
+        cwd=root, check=True, **no_console_passthrough_kwargs(),
     )
 
 
@@ -229,16 +233,19 @@ class TestBuildGitHistoryCacheWidening:
         # means the new name never gets its own separate "A" line either).
         subprocess.run(
             ["git", "config", "diff.renames", "true"], cwd=root, check=True,
+            **no_console_passthrough_kwargs(),
         )
         _commit_file(root, "state/handoffs/old-name.md")
 
         (root / "state/handoffs/old-name.md").rename(root / "state/handoffs/new-name.md")
         subprocess.run(
             ["git", "add", "-A"], cwd=root, check=True,
+            **no_console_passthrough_kwargs(),
         )
         subprocess.run(
             ["git", "-c", "commit.gpgsign=false", "commit", "-q", "-m", "rename old to new"],
             cwd=root, check=True,
+            **no_console_passthrough_kwargs(),
         )
 
         cache = dag.build_git_history_cache(str(root))
@@ -273,13 +280,14 @@ class TestBuildGitHistoryCacheWidening:
         # that fallback subprocess is exactly the 314-spawns-per-run cost
         # this widening exists to eliminate.
         root = _init_repo(tmp_path)
-        subprocess.run(["git", "config", "diff.renames", "true"], cwd=root, check=True)
+        subprocess.run(["git", "config", "diff.renames", "true"], cwd=root, check=True, **no_console_passthrough_kwargs())
         _commit_file(root, "state/handoffs/old-name.md")
         (root / "state/handoffs/old-name.md").rename(root / "state/handoffs/new-name.md")
-        subprocess.run(["git", "add", "-A"], cwd=root, check=True)
+        subprocess.run(["git", "add", "-A"], cwd=root, check=True, **no_console_passthrough_kwargs())
         subprocess.run(
             ["git", "-c", "commit.gpgsign=false", "commit", "-q", "-m", "rename old to new"],
             cwd=root, check=True,
+            **no_console_passthrough_kwargs(),
         )
 
         cache = dag.build_git_history_cache(str(root))
@@ -433,10 +441,14 @@ class TestCacheMissIsAuthoritativeWhenComplete:
         origin_parent.mkdir()
         origin = _init_repo(origin_parent)
         _commit_file(origin, "state/handoffs/deleted-early.md")
-        subprocess.run(["git", "rm", "-q", "state/handoffs/deleted-early.md"], cwd=origin, check=True)
+        subprocess.run(
+            ["git", "rm", "-q", "state/handoffs/deleted-early.md"], cwd=origin, check=True,
+            **no_console_passthrough_kwargs(),
+        )
         subprocess.run(
             ["git", "-c", "commit.gpgsign=false", "commit", "-q", "-m", "remove deleted-early.md"],
             cwd=origin, check=True,
+            **no_console_passthrough_kwargs(),
         )
         _commit_file(origin, "state/handoffs/second.md")
 
@@ -444,10 +456,11 @@ class TestCacheMissIsAuthoritativeWhenComplete:
         subprocess.run(
             ["git", "clone", "--depth", "1", "--no-local", str(origin), str(shallow)],
             check=True, capture_output=True,
+            **no_console_creationflags(),
         )
-        subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=shallow, check=True)
-        subprocess.run(["git", "config", "user.name", "Test"], cwd=shallow, check=True)
-        subprocess.run(["git", "config", "commit.gpgsign", "false"], cwd=shallow, check=True)
+        subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=shallow, check=True, **no_console_passthrough_kwargs())
+        subprocess.run(["git", "config", "user.name", "Test"], cwd=shallow, check=True, **no_console_passthrough_kwargs())
+        subprocess.run(["git", "config", "commit.gpgsign", "false"], cwd=shallow, check=True, **no_console_passthrough_kwargs())
 
         assert dag._git_history_is_complete(str(shallow)) is False, (
             "a shallow clone must never report itself as a complete history"

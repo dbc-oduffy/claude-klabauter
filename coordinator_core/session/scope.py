@@ -54,7 +54,6 @@ import os
 import posixpath
 import re
 import shutil
-import subprocess
 import sys
 import time
 import types
@@ -63,9 +62,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Dict, List, Literal, Mapping, NamedTuple, Optional, Set, Tuple
 
+from coordinator_core.git.run import run_git
 from coordinator_core.session import core, liveness, touch_record
 from coordinator_core.session.path_dialect import canonicalize_relative_path
-from coordinator_core.win_portability import no_console_creationflags
 
 #: Matches a path bash treats as absolute: POSIX ``/…`` or a Windows/Git-Bash
 #: drive-qualified ``C:…`` form. Mirrors the bash glob test
@@ -400,14 +399,15 @@ class GitRun(NamedTuple):
     stderr: str
 
 
-#: Wall-clock bound for the one git seam below. Matches
+#: PROCESS-time budget for the one git seam below, passed straight through as
+#: `run_git`'s own `timeout=` kwarg -- the seam's ceiling is headroom added on
+#: top of this, not a replacement for it. Matches
 #: `coordinator_core.git.repo_root._TIMEOUT_SECS` deliberately -- these are the
 #: same class of call (a small local-metadata git on a hook hot path) and a
 #: second, different number here would be a budget nobody could justify against
-#: the other. `subprocess.run(timeout=)` bounds WALL CLOCK, so on a box carrying
-#: ~50 concurrent sessions this is a HANG detector, not a performance budget:
-#: it exists so a wedged git cannot hold a PreToolUse hook open indefinitely,
-#: not to enforce the brightline (which is measured in process time).
+#: the other. It exists so a wedged git cannot hold a PreToolUse hook open
+#: indefinitely, not to enforce the brightline (which is measured in process
+#: time).
 _GIT_TIMEOUT_SECS = 2.0
 
 
@@ -435,18 +435,15 @@ def _git_run(args: List[str], cwd: Optional[str] = None) -> Optional[GitRun]:
     for as long as git is willing to hang; the bound is what
     `bash_guards/tests/test_hot_path_subprocess_timeouts.py` requires of every
     spawn on that path.
+
+    Runs through `coordinator_core.git.run.run_git`, the shared spawn seam --
+    `run_git`'s own sentinels already match this function's ``None``
+    contract: ``timed_out=True`` (a genuine timeout) and ``returncode=127``
+    (git never executed -- ``OSError``) are exactly the two cases this
+    function has always collapsed to ``None``.
     """
-    try:
-        result = subprocess.run(
-            ["git", *args],
-            capture_output=True,
-            text=True,
-            cwd=cwd,
-            stdin=subprocess.DEVNULL,
-            timeout=_GIT_TIMEOUT_SECS,
-            **no_console_creationflags(),
-        )
-    except (OSError, subprocess.TimeoutExpired):
+    result = run_git(args, cwd=cwd, timeout=_GIT_TIMEOUT_SECS)
+    if result.timed_out or result.returncode == 127:
         return None
     return GitRun(result.returncode, result.stdout, result.stderr)
 

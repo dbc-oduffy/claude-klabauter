@@ -17,8 +17,9 @@ pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 from coordinator_core import lifecycle
 from coordinator_core.warm import client, skew
 from coordinator_core.win_portability import no_console_creationflags
+from coordinator_core.win_portability import no_console_passthrough_kwargs
 
-_GIT_SUBPROCESS_KWARGS = {"check": True, **no_console_creationflags()}
+_GIT_SUBPROCESS_KWARGS = {"check": True}
 
 
 def _write_head_and_ref(git_dir: Path, ref_rel: str, sha: str) -> None:
@@ -121,8 +122,8 @@ def test_client_token_raises_for_unstamped_clone_across_a_real_git_checkout(tmp_
     `.git/HEAD` -- there is no live ref signal left to observe."""
     origin = tmp_path / "origin.git"
     work = tmp_path / "work"
-    subprocess.run(["git", "init", "--quiet", "--bare", str(origin)], **_GIT_SUBPROCESS_KWARGS)
-    subprocess.run(["git", "clone", "--quiet", str(origin), str(work)], **_GIT_SUBPROCESS_KWARGS)
+    subprocess.run(["git", "init", "--quiet", "--bare", str(origin)], **_GIT_SUBPROCESS_KWARGS, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "clone", "--quiet", str(origin), str(work)], **_GIT_SUBPROCESS_KWARGS, **no_console_passthrough_kwargs())
 
     env_args = [
         "-c", "user.email=test@example.com",
@@ -130,27 +131,27 @@ def test_client_token_raises_for_unstamped_clone_across_a_real_git_checkout(tmp_
     ]
     (work / "f.txt").write_text("one\n", encoding="utf-8")
     subprocess.run(
-        ["git", "-C", str(work)] + env_args + ["add", "f.txt"], **_GIT_SUBPROCESS_KWARGS
+        ["git", "-C", str(work)] + env_args + ["add", "f.txt"], **_GIT_SUBPROCESS_KWARGS, **no_console_passthrough_kwargs()
     )
     subprocess.run(
         ["git", "-C", str(work)] + env_args + ["commit", "--quiet", "-m", "init"],
-        **_GIT_SUBPROCESS_KWARGS,
+        **_GIT_SUBPROCESS_KWARGS, **no_console_passthrough_kwargs(),
     )
     subprocess.run(
         ["git", "-C", str(work), "push", "--quiet", "origin", "HEAD:main"],
-        **_GIT_SUBPROCESS_KWARGS,
+        **_GIT_SUBPROCESS_KWARGS, **no_console_passthrough_kwargs(),
     )
     subprocess.run(
         ["git", "-C", str(work), "checkout", "--quiet", "-b", "candidate"],
-        **_GIT_SUBPROCESS_KWARGS,
+        **_GIT_SUBPROCESS_KWARGS, **no_console_passthrough_kwargs(),
     )
     subprocess.run(
         ["git", "-C", str(work), "push", "--quiet", "origin", "HEAD:candidate"],
-        **_GIT_SUBPROCESS_KWARGS,
+        **_GIT_SUBPROCESS_KWARGS, **no_console_passthrough_kwargs(),
     )
     subprocess.run(
         ["git", "-C", str(work), "checkout", "--quiet", "-B", "main", "--track", "origin/main"],
-        **_GIT_SUBPROCESS_KWARGS,
+        **_GIT_SUBPROCESS_KWARGS, **no_console_passthrough_kwargs(),
     )
 
     with pytest.raises(skew.UnstampedEngineRootError):

@@ -140,10 +140,3 @@ def test_every_decisions_key_read_by_a_directive_module_is_declared(module_path)
         "2026-08-30. Declare the key in this module's FREE_VALUE_KEYS, or add it to "
         "_NOT_FREE_VALUES here with the reason it is not caller-supplied."
     )
-
-
-def test_the_key_that_motivated_this_guard_is_declared():
-    """Pinned by name: `handoff_dispositions` is the incident above, and a
-    regression on it specifically should fail with its own name attached
-    rather than only inside the parametrised sweep."""
-    assert "handoff_dispositions" in _declared_keys()
