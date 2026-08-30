@@ -53,7 +53,7 @@ from typing import Optional
 #: is NOT viable for that reason.
 #:
 #: APPLIED ONLY WHEN THE HEAD VERB IS `sed`, and only together with
-#: `_delimiter_recurs` -- see `_is_claimable_target`. This pattern ALONE is
+#: a genuinely recurring delimiter -- see `_is_claimable_target`. This pattern ALONE is
 #: far too greedy in the one direction that must never be taken: judged
 #: against any token it rejected `state/e2e-probe-bash-write.txt` (leading
 #: `s`, a `t` recurring inside the trailing `.txt`, letters to the end), and
@@ -62,16 +62,6 @@ from typing import Optional
 #: exists to fix -- so the head-verb gate, not the pattern, is what makes
 #: this sound.
 _SED_SCRIPT_RE = re.compile(r"^[sy](.).*\1[a-zA-Z]*$")
-
-
-def _delimiter_recurs(raw: str) -> bool:
-    """True when `raw`'s second character -- a candidate `sed` delimiter --
-    appears at least three times in total, which is what an `s/a/b/` or
-    `y/abc/xyz/` form requires and what a filename does not. `state/x.txt`
-    carries a single `/` and fails here; `s/a/b/` carries three."""
-    if len(raw) < 4:
-        return False
-    return raw.count(raw[1]) >= 3
 
 
 def _is_claimable_target(raw: str, head_base: str, resolved: str) -> bool:
@@ -84,7 +74,9 @@ def _is_claimable_target(raw: str, head_base: str, resolved: str) -> bool:
     1. `head_base == "sed"` -- judged against any token, `_SED_SCRIPT_RE`
        rejected `state/e2e-probe-bash-write.txt` and by extension most of
        `state/*.txt`.
-    2. the s///-shape matches AND its delimiter genuinely recurs.
+    2. the s///-shape matches AND its delimiter genuinely recurs -- three or
+       more occurrences of the candidate delimiter, which `s/a/b/` and
+       `y/abc/xyz/` carry and a filename does not (`state/x.txt` has one `/`).
     3. `resolved` DOES NOT EXIST on disk. This is the one that makes it
        sound rather than merely narrower: `sed -i` can only edit a file that
        is already there, so a real `sed` file operand always exists and an
@@ -108,7 +100,7 @@ def _is_claimable_target(raw: str, head_base: str, resolved: str) -> bool:
         return False
     if head_base != "sed":
         return True
-    if not (_SED_SCRIPT_RE.match(raw) and _delimiter_recurs(raw)):
+    if not (_SED_SCRIPT_RE.match(raw) and len(raw) >= 4 and raw.count(raw[1]) >= 3):
         return True
     try:
         return os.path.exists(resolved)

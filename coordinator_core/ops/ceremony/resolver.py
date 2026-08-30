@@ -138,16 +138,31 @@ def find_all_consumed_handoffs(
     """Return EVERY (handoff_path, frontmatter) pair consumed by sid.
 
     Scans BOTH state/handoffs/*.md (live) AND archive/handoffs/**/*.md (swept)
-    for a frontmatter ``consumed_by: <sid>`` match, so a predecessor handoff
+    for a resolved claim holder equal to ``sid``, so a predecessor handoff
     already archived by fleet.archive_completed_handoffs is still found.
     Collects EVERY match (not the first) — a single session can DAG-pick-up N
     handoffs at once. Returns [] when none found.
 
-    Uses the anchored frontmatter check from ``get_handoff_consumed_by``
+    THE MATCH IS NOT A RAW ``consumed_by`` FRONTMATTER READ, despite the
+    accessor's legacy name. ``get_handoff_consumed_by`` is
+    ``coverage._get_handoff_consumed_by``, which is LEDGER-FIRST
+    (``claim_state.resolve_claim_state``) with a frontmatter-mirror fallback
+    that is dual-tolerant across ``claimed_by`` (canonical) and ``consumed_by``
+    (retired by DR-084 P4, still ingested per C7), ``claimed_by`` winning when
+    both are present. So a corpus carrying zero ``consumed_by`` fields — which
+    is every corpus post-migration — resolves normally through this scan.
+    Reported as a suspected always-empty predicate by doe-claude-em
+    (2026-08-30, ``cross-repo/inbox/2026-08-30-doe-claude-em-wsc-consumed-set-
+    keys-on-a-retired-field.md``) on the strength of THIS docstring's previous
+    wording plus the local variable name below; the wording was stale, the
+    behaviour was not. Do not restate the match as a ``consumed_by`` read.
+
+    Uses the anchored accessor from ``get_handoff_consumed_by``
     (re-exported from ``coordinator_core.coverage`` — the SAME definition the
     C2 idempotency guard uses) instead of a naive substring test, so resolver
-    and guard agree on one definition of consumed_by and body-prose mentions
-    of a sibling session-id (e.g. "see also sess-xyz") do not false-positive-match.
+    and guard agree on one definition of the claim holder and body-prose
+    mentions of a sibling session-id (e.g. "see also sess-xyz") do not
+    false-positive-match.
 
     Negative-spec: do NOT reintroduce ``f"consumed_by: {sid}" in text`` — that
     substring test matches ANYWHERE in the handoff body, not just frontmatter.
@@ -207,8 +222,8 @@ def find_all_consumed_handoffs(
 
     matches: list[tuple[str, dict[str, Any]]] = []
     for hf in candidates:
-        consumed_by = get_handoff_consumed_by(str(hf))
-        if consumed_by == sid:
+        claim_holder = get_handoff_consumed_by(str(hf))
+        if claim_holder == sid:
             try:
                 text = hf.read_text(encoding="utf-8")
             except OSError:

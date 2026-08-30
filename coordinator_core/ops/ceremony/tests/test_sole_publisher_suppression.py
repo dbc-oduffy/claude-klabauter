@@ -43,6 +43,8 @@ pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 from coordinator_core.hooks import auto_push
 from coordinator_core.ops.ceremony import git_native
 
+from .fixtures.real_git import real_git_repo
+
 _ENV = "COORDINATOR_AUTO_PUSH_SUPPRESS_FOR_SYNC_PUSH"
 
 
@@ -188,22 +190,11 @@ def test_deferred_publisher_span_never_touches_os_environ():
 
 
 # ---------------------------------------------------------------------------
-# `commit_authored_content` joins the same contract by a DIFFERENT mechanism
-# (2026-08-30, docs/research/spike-verdicts/2026-08-30-warm-engine-owns-the-
-# post-commit-push.md; state/bug-backlog/2026-08-30-commit-authored-content-
-# ignores-the-publisher-suppression-span.yaml).
-#
-# Every test above pins the ENV-marker mechanism, which reaches the installed
-# `post-commit` hook because `commit_scoped` shells a real `git commit`.
-# `commit_authored_content` commits via `commit-tree`/`update-ref`, which fires
-# no hooks at all -- so it calls `_replay_post_commit_auto_push` in Python, and
-# the env marker no hook is around to read cannot suppress it. These two pin the
-# same CONTRACT at that second site: a caller that will publish the commit
-# itself gets exactly one publisher, and a caller that has not opted in still
-# gets the replay it has always had.
-#
-# The regression each would catch is not hypothetical -- the second one below
-# FAILED before the fix, which is how the defect was found.
+# `commit_authored_content` joins the same contract by a different mechanism
+# -- see that function's own docstring for why. Pinned here at the second
+# site (state/bug-backlog/2026-08-30-commit-authored-content-ignores-the-
+# publisher-suppression-span.yaml); the second test below FAILED before the
+# fix.
 # ---------------------------------------------------------------------------
 
 
@@ -218,28 +209,10 @@ def _replay_calls(monkeypatch):
     return calls
 
 
-def _seeded_repo(tmp_path):
-    """A git repo with one tracked, committed file -- `commit_authored_content`
-    refuses a path absent from HEAD, so the seed commit is load-bearing."""
-    import subprocess
-
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    env = {
-        **os.environ,
-        "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
-        "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t",
-    }
-    subprocess.run(["git", "init", "-q", str(repo)], check=True, capture_output=True)
-    (repo / "f.txt").write_text("old\n", encoding="utf-8")
-    subprocess.run(["git", "-C", str(repo), "add", "f.txt"], check=True, capture_output=True)
-    subprocess.run(
-        ["git", "-C", str(repo), "commit", "-q", "-m", "seed"],
-        check=True, capture_output=True, env=env,
-    )
+def _write_msg(repo, text: str = "subject\n"):
     msg = repo / "msg.txt"
-    msg.write_text("subject\n", encoding="utf-8")
-    return repo, msg
+    msg.write_text(text, encoding="utf-8")
+    return msg
 
 
 def test_authored_content_replays_auto_push_when_nobody_claims_the_publish(tmp_path, monkeypatch):
@@ -249,13 +222,14 @@ def test_authored_content_replays_auto_push_when_nobody_claims_the_publish(tmp_p
     here is the OVER-suppressing one -- a commit nobody publishes is stranded
     unpushed, which is worse than the double push the sibling test guards.
     """
-    repo, msg = _seeded_repo(tmp_path)
+    repo = real_git_repo(tmp_path)
+    msg = _write_msg(repo)
     calls = _replay_calls(monkeypatch)
 
-    result = git_native.commit_authored_content("f.txt", "new\n", msg, repo)
+    result = git_native.commit_authored_content("seed.txt", "new\n", msg, repo)
 
     assert result.ok, result.stderr
-    assert calls == [["f.txt"]], "the default path must still replay the auto-push"
+    assert calls == [["seed.txt"]], "the default path must still replay the auto-push"
 
 
 def test_authored_content_stands_down_inside_a_deferred_publisher_span(tmp_path, monkeypatch):
@@ -267,29 +241,17 @@ def test_authored_content_stands_down_inside_a_deferred_publisher_span(tmp_path,
     this module's header describes, reached by the one commit path the env
     marker cannot travel down.
     """
-    repo, msg = _seeded_repo(tmp_path)
+    repo = real_git_repo(tmp_path)
+    msg = _write_msg(repo)
     calls = _replay_calls(monkeypatch)
 
     with git_native.deferred_publisher_span():
-        result = git_native.commit_authored_content("f.txt", "in-span\n", msg, repo)
+        result = git_native.commit_authored_content("seed.txt", "in-span\n", msg, repo)
 
     assert result.ok, result.stderr
     assert calls == [], f"replay fired inside an active publisher span: {calls}"
 
     # Additive, not a replacement: the span's scope ends with the block.
-    result2 = git_native.commit_authored_content("f.txt", "after-span\n", msg, repo)
+    result2 = git_native.commit_authored_content("seed.txt", "after-span\n", msg, repo)
     assert result2.ok, result2.stderr
-    assert calls == [["f.txt"]], "suppression outlived the span"
-
-
-def test_authored_content_per_call_flag_suppresses_without_a_span(tmp_path, monkeypatch):
-    """The per-call argument suppresses on its own, mirroring `commit_scoped`'s."""
-    repo, msg = _seeded_repo(tmp_path)
-    calls = _replay_calls(monkeypatch)
-
-    result = git_native.commit_authored_content(
-        "f.txt", "flagged\n", msg, repo, suppress_post_commit_auto_push=True
-    )
-
-    assert result.ok, result.stderr
-    assert calls == []
+    assert calls == [["seed.txt"]], "suppression outlived the span"

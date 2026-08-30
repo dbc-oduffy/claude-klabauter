@@ -295,6 +295,28 @@ from coordinator_core.tests.test_no_unbatched_per_item_git_spawn import (
 #: (verified: 0 newly-undeclared site keys), so `test_unenrolled_spawn_bearing_ops_are_declared_
 #: in_the_frozen_inventory` needed no new entries for them. 185 -> 145 enrolled rows.
 _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
+    # Enrolled 2026-08-30: each of these four resolves to a function-granular
+    # reachable spawn set that is EMPTY. An op that reaches no spawn site needs
+    # no legitimization and no static pin -- it is enrolled directly, per this
+    # file's own EM-adjudication step 2, rather than left to the residual where
+    # it reads as unaccounted-for. If any of them later grows a spawn site, that
+    # is a real regression and this enrolment is exactly what will surface it.
+    "delegation.check": (
+        "coordinator_core/ops/delegation_check.py",
+        ("_delegation_check",),
+    ),
+    "fleet.archive_sweep_status": (
+        "coordinator_core/ops/fleet/sweep_status.py",
+        ("_handler",),
+    ),
+    "fleet.mode_set": (
+        "coordinator_core/ops/fleet/mode_control.py",
+        ("_fleet_mode_set",),
+    ),
+    "fleet.mode_show": (
+        "coordinator_core/ops/fleet/mode_control.py",
+        ("_fleet_mode_show",),
+    ),
     "changelog.cited_in_range_count": (
         "coordinator_core/ops/changelog_ops.py",
         ("_cited_in_range_count",),
@@ -745,10 +767,6 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
         "coordinator_core/ops/review_mint/op.py",
         ("_review_mint_workflow",),
     ),
-    "review_trail.scan_unresolved_ubt": (
-        "coordinator_core/ops/scan_unresolved_ubt_records.py",
-        ("_scan_unresolved_ubt_handler",),
-    ),
     "roadmap.link_stubs": (
         "coordinator_core/ops/roadmap_link_stubs.py",
         ("_handler",),
@@ -876,10 +894,6 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
     "workflow.validate": (
         "coordinator_core/ops/workflow_validate.py",
         ("_workflow_validate",),
-    ),
-    "write_surface.emit_manifest": (
-        "coordinator_core/ops/write_surface_manifest.py",
-        ("_emit_write_surface_manifest",),
     ),
     #
     # -- 2026-08-25 widening: 3 more live registry ops MEASURED to have an EMPTY
@@ -1304,13 +1318,6 @@ _UNCOUNTED_MEASURED_UNREACHED: dict[tuple[str, str], str] = {}
 #: (this dict's reason for existing) into "and cannot silently grow more of them either." It
 #: does not close any (op, site) pair recorded here -- the reasoning below stays live and true.
 _CLUSTER_D2_OPEN_DISPOSITION: dict[str, tuple[tuple[str, str, str, int], ...]] = {
-    "ceremony.post_commit_tail": (
-        ("coordinator_core/hooks/auto_push.py", "_run_git", "<dynamic>", 0),
-        ("coordinator_core/hooks/auto_push.py", "push_once", "git", 0),
-        ("coordinator_core/hooks/auto_push.py", "_is_ancestor", "git", 0),
-        ("coordinator_core/hooks/auto_push.py", "_invoke_cockpit_publish", "<dynamic>", 0),
-        ("coordinator_core/hooks/auto_push.py", "_detach_and_run", "<dynamic>", 0),
-    ),
     "deliverable.cascade_terminal": (
         ("coordinator_core/hooks/auto_push.py", "_run_git", "<dynamic>", 0),
         ("coordinator_core/hooks/auto_push.py", "push_once", "git", 0),
@@ -1326,13 +1333,6 @@ _CLUSTER_D2_OPEN_DISPOSITION: dict[str, tuple[tuple[str, str, str, int], ...]] =
         ("coordinator_core/hooks/auto_push.py", "_detach_and_run", "<dynamic>", 0),
     ),
     "handoff.archive_transition": (
-        ("coordinator_core/hooks/auto_push.py", "_run_git", "<dynamic>", 0),
-        ("coordinator_core/hooks/auto_push.py", "push_once", "git", 0),
-        ("coordinator_core/hooks/auto_push.py", "_is_ancestor", "git", 0),
-        ("coordinator_core/hooks/auto_push.py", "_invoke_cockpit_publish", "<dynamic>", 0),
-        ("coordinator_core/hooks/auto_push.py", "_detach_and_run", "<dynamic>", 0),
-    ),
-    "handoff.reconcile_close_terminal": (
         ("coordinator_core/hooks/auto_push.py", "_run_git", "<dynamic>", 0),
         ("coordinator_core/hooks/auto_push.py", "push_once", "git", 0),
         ("coordinator_core/hooks/auto_push.py", "_is_ancestor", "git", 0),
@@ -1356,9 +1356,6 @@ _CLUSTER_D2_OPEN_DISPOSITION: dict[str, tuple[tuple[str, str, str, int], ...]] =
         ("coordinator_core/hooks/auto_push.py", "_invoke_cockpit_publish", "<dynamic>", 0),
         ("coordinator_core/hooks/auto_push.py", "_detach_and_run", "<dynamic>", 0),
     ),
-    "session.warm_start": (
-        ("coordinator_core/ops/ceremony/detached_spawn.py", "spawn_detached", "<dynamic>", 0),
-    ),
     "workday.drain_pending_push": (
         ("coordinator_core/hooks/auto_push.py", "_run_git", "<dynamic>", 0),
         ("coordinator_core/hooks/auto_push.py", "push_once", "git", 0),
@@ -1374,7 +1371,6 @@ _CLUSTER_D2_OPEN_DISPOSITION: dict[str, tuple[tuple[str, str, str, int], ...]] =
 #: sensitivity (this file's own registry tests already carry that dependency; this one does not
 #: need to).
 _CLUSTER_D2_OPEN_ENTRYPOINTS: dict[str, tuple[str, str]] = {
-    "ceremony.post_commit_tail": ("coordinator_core/ops/ceremony/post_commit_tail.py", "_handler"),
     "deliverable.cascade_terminal": ("coordinator_core/ops/deliverable_cascade.py", "_handler"),
     "fleet.migrate_handoff_vocabulary": (
         "coordinator_core/ops/fleet/migrate_handoff_vocabulary.py", "_handler",
@@ -1382,13 +1378,9 @@ _CLUSTER_D2_OPEN_ENTRYPOINTS: dict[str, tuple[str, str]] = {
     "handoff.archive_transition": (
         "coordinator_core/ops/handoff_archive_transition.py", "_handler",
     ),
-    "handoff.reconcile_close_terminal": (
-        "coordinator_core/ops/handoff_reconcile_close_terminal.py", "_handler",
-    ),
     "handoff.transition": ("coordinator_core/ops/handoff_transition.py", "_handler"),
     "invoke.from_argv": ("coordinator_core/ops/invoke_from_argv.py", "_invoke_from_argv"),
     "memo.transition": ("coordinator_core/ops/memo_transition.py", "_handler"),
-    "session.warm_start": ("coordinator_core/ops/session/warm_start.py", "_handler"),
     "workday.drain_pending_push": (
         "coordinator_core/ops/workday_drain_pending_push.py", "_handler",
     ),
@@ -1461,8 +1453,14 @@ def test_cluster_d2_open_disposition_matches_live_measurement():
         "_CLUSTER_D2_OPEN_DISPOSITION has drifted from the live tree's own cluster reachability "
         "(re-derive and update the dict, do not silently widen or narrow it):\n" + "\n".join(mismatches)
     )
-    assert total_pairs == 41, (
+    assert total_pairs == 30, (
         f"_CLUSTER_D2_OPEN_DISPOSITION now totals {total_pairs} (op, site) pairs, not the "
+        "30 left after the 2026-08-30 rot sweep: ceremony.post_commit_tail (5 pairs) and "
+        "handoff.reconcile_close_terminal (5 pairs) were both removed from every table in this "
+        "file, as was session.warm_start (1 pair, ops/session/warm_start.py deleted outright), "
+        "file once neither resolved to a live op -- post_commit_tail.py survives but registers "
+        "nothing, and handoff_reconcile_close_terminal.py is gone from the tree; neither key "
+        "appears in ops/_registry_map.py. 41 - 5 - 5 - 1 = 30, every pair attributed. Prior note: "
         "41 expected after queue.close's (5 pairs) and ceremony.wsc_tail's (8 pairs) kills "
         "removed their rows from the EM-measured 59 this chunk's own brief named, and "
         "workday.drain_pending_push lost its _invoke_cockpit_publish site (-1, live tree "
@@ -1543,10 +1541,6 @@ _CLUSTER_D3_OPEN_DISPOSITION: dict[str, tuple[tuple[str, str, str, int], ...]] =
     "ceremony.chunk_commits": (
         ("coordinator_core/ops/ceremony/git_native.py", "_git._invoke", "<dynamic>", 0),
     ),
-    "ceremony.post_commit_tail": (
-        ("coordinator_core/ops/ceremony/git_native.py", "_git._invoke", "<dynamic>", 0),
-        ("coordinator_core/session/scope.py", "_git_run", "git", 0),
-    ),
     "commit.exec_bit_change": (
         ("coordinator_core/ops/ceremony/git_native.py", "_git._invoke", "<dynamic>", 0),
     ),
@@ -1567,7 +1561,6 @@ _CLUSTER_D3_OPEN_DISPOSITION: dict[str, tuple[tuple[str, str, str, int], ...]] =
         ("coordinator_core/git/run.py", "run_git", "git", 0),
     ),
     "fleet.archive_completed_handoffs": (
-        ("coordinator_core/dag.py", "_git_path_ever_tracked", "git", 0),
         ("coordinator_core/git/run.py", "run_git", "git", 0),
         ("coordinator_core/ops/ceremony/git_native.py", "_git._invoke", "<dynamic>", 0),
         ("coordinator_core/session/scope.py", "_git_run", "git", 0),
@@ -1611,7 +1604,6 @@ _CLUSTER_D3_OPEN_DISPOSITION: dict[str, tuple[tuple[str, str, str, int], ...]] =
         ("coordinator_core/ops/ceremony/git_native.py", "_git._invoke", "<dynamic>", 0),
     ),
     "handoff.archive_transition": (
-        ("coordinator_core/dag.py", "_git_path_ever_tracked", "git", 0),
         ("coordinator_core/git/run.py", "run_git", "git", 0),
         ("coordinator_core/ops/ceremony/git_native.py", "_git._invoke", "<dynamic>", 0),
         ("coordinator_core/ops/ceremony/git_native.py", "_hash_object_stdin_bytes", "<dynamic>", 0),
@@ -1626,13 +1618,6 @@ _CLUSTER_D3_OPEN_DISPOSITION: dict[str, tuple[tuple[str, str, str, int], ...]] =
     ),
     "handoff.lineage_ancestry": (
         ("coordinator_core/dag.py", "_git_path_ever_tracked", "git", 0),
-    ),
-    "handoff.reconcile_close_terminal": (
-        ("coordinator_core/dag.py", "_git_path_ever_tracked", "git", 0),
-        ("coordinator_core/git/run.py", "run_git", "git", 0),
-        ("coordinator_core/ops/ceremony/git_native.py", "_git._invoke", "<dynamic>", 0),
-        ("coordinator_core/ops/ceremony/git_native.py", "_hash_object_stdin_bytes", "<dynamic>", 0),
-        ("coordinator_core/session/scope.py", "_git_run", "git", 0),
     ),
     "handoff.repoint_origin": (
         ("coordinator_core/dag.py", "_git_path_ever_tracked", "git", 0),
@@ -1671,9 +1656,6 @@ _CLUSTER_D3_OPEN_DISPOSITION: dict[str, tuple[tuple[str, str, str, int], ...]] =
     "review.snapshot_diff_and_head": (
         ("coordinator_core/ops/ceremony/git_native.py", "_git._invoke", "<dynamic>", 0),
     ),
-    "review_trail.write": (
-        ("coordinator_core/session/scope.py", "_git_run", "git", 0),
-    ),
     "schema.drift_gate": (
         ("coordinator_core/git_scope.py", "_probe_foreign_repo", "git", 0),
         ("coordinator_core/git_scope.py", "scoped_cat_file_batch", "git", 0),
@@ -1704,7 +1686,6 @@ _CLUSTER_D3_OPEN_DISPOSITION: dict[str, tuple[tuple[str, str, str, int], ...]] =
 _CLUSTER_D3_OPEN_ENTRYPOINTS: dict[str, tuple[str, str]] = {
     "baton.resolve_path_and_repo": ("coordinator_core/ops/resolve_baton_path.py", "_resolve_baton_path_and_repo"),
     "ceremony.chunk_commits": ("coordinator_core/ops/ceremony/chunk_commits.py", "_handler"),
-    "ceremony.post_commit_tail": ("coordinator_core/ops/ceremony/post_commit_tail.py", "_handler"),
     "commit.exec_bit_change": ("coordinator_core/ops/ceremony/commit_exec_bit.py", "_handler"),
     "deliverable.cascade_backstop_sweep": ("coordinator_core/ops/cascade_backstop_sweep.py", "_handler"),
     "deliverable.cascade_terminal": ("coordinator_core/ops/deliverable_cascade.py", "_handler"),
@@ -1724,7 +1705,6 @@ _CLUSTER_D3_OPEN_ENTRYPOINTS: dict[str, tuple[str, str]] = {
     "handoff.close_origin_stub": ("coordinator_core/ops/handoff_close_origin_stub.py", "_handler"),
     "handoff.has_live_children": ("coordinator_core/ops/handoff_children.py", "_handoff_has_live_children"),
     "handoff.lineage_ancestry": ("coordinator_core/ops/handoff_lineage_ancestry.py", "_handler"),
-    "handoff.reconcile_close_terminal": ("coordinator_core/ops/handoff_reconcile_close_terminal.py", "_handler"),
     "handoff.repoint_origin": ("coordinator_core/ops/handoff_repoint_origin.py", "_handler"),
     "handoff.transition": ("coordinator_core/ops/handoff_transition.py", "_handler"),
     "hooks.cater_subagent_start": ("coordinator_core/hooks/cater_subagent_start.py", "_handler"),
@@ -1735,7 +1715,6 @@ _CLUSTER_D3_OPEN_ENTRYPOINTS: dict[str, tuple[str, str]] = {
     "research.restructure_for_repeat_topic": ("coordinator_core/ops/research_dir_restructure.py", "_handler"),
     "review.freeze_diff": ("coordinator_core/ops/review_freeze_diff.py", "_handler"),
     "review.snapshot_diff_and_head": ("coordinator_core/ops/ceremony/snapshot_diff_and_head.py", "_handler"),
-    "review_trail.write": ("coordinator_core/ops/review_trail_write.py", "_review_trail_write_handler"),
     "schema.drift_gate": ("coordinator_core/ops/schema_drift_gate.py", "_handler"),
     "session.commits": ("coordinator_core/ops/session_commits.py", "_handler"),
     "session.reap_claims_for_repos": ("coordinator_core/ops/session/reap.py", "_handler_reap_claims_for_repos"),
@@ -1817,9 +1796,23 @@ def test_cluster_d3_open_disposition_matches_live_measurement():
         "_CLUSTER_D3_OPEN_DISPOSITION has drifted from the live tree's own cluster reachability "
         "(re-derive and update the dict, do not silently widen or narrow it):\n" + "\n".join(mismatches)
     )
-    assert total_pairs == 79, (
+    assert total_pairs == 65, (
         f"_CLUSTER_D3_OPEN_DISPOSITION now totals {total_pairs} (op, site) pairs, not the "
-        "79 this chunk's own live re-derivation measured (2026-08-26, D6): fleet."
+        "65 left after the 2026-08-30 rot sweep. Two reductions, both traced pair-by-pair "
+        "against the revision that set 79 (63cd18de01). FIRST, four pairs had already left "
+        "without this constant moving, which is why it was red before the sweep: "
+        "ceremony.session_instructions (-1), eol.census (-1), eol.repair (-1) and "
+        "session.boot_sweep (-2), offset by fleet.archive_completed_handoffs gaining one "
+        "(3 -> 4, the same growth that made its static pin of 5 slack and is now pinned at 4). "
+        "79 - 4 = 75, the live total at HEAD before this sweep. SECOND, the sweep removed "
+        "ceremony.post_commit_tail (-2) and handoff.reconcile_close_terminal (-5), neither of "
+        "which resolves to a live op any more, plus review_trail.write (-1, ops/review_trail_write.py "
+        "deleted outright; its writer was retired by DR-372/DR-374). THIRD, fleet.archive_completed_"
+        "handoffs and handoff.archive_transition each stopped reaching dag.py::_git_path_ever_"
+        "tracked (-2): the function still exists but now has no caller outside dag.py itself, "
+        "the same narrowing that made the former op's static pin of 5 slack. 75 - 8 - 2 = 65. "
+        "Superseded note: "
+        "79 was this chunk's own live re-derivation measured (2026-08-26, D6): fleet."
         "archive_paper_trail/fleet.archive_queue_entry/fleet.archive_release_accumulator/"
         "fleet.archive_terminal_sizings/fleet.prune_closed_bugs/fleet.reap_integrated_findings/"
         "fleet.reap_unintegrated_findings each now reach a git_native.py::_git._invoke <dynamic> "
@@ -2139,7 +2132,6 @@ _CLUSTER_D5_OPEN_ENTRYPOINTS: dict[str, tuple[str, str]] = {
     "handoff.archive_transition": ("coordinator_core/ops/handoff_archive_transition.py", "_handler"),
     "handoff.author_fork": ("coordinator_core/ops/handoff_author_fork.py", "_handler"),
     "handoff.columns": ("coordinator_core/ops/handoff_columns_query.py", "_handler"),
-    "handoff.reconcile_close_terminal": ("coordinator_core/ops/handoff_reconcile_close_terminal.py", "_handler"),
     "handoff.scaffold_from_queue": ("coordinator_core/ops/queue_scaffold_baton.py", "_handler"),
     "hooks.cater_subagent_start": ("coordinator_core/hooks/cater_subagent_start.py", "_handler"),
     "memo.fate_backfill": ("coordinator_core/ops/memo_fate_backfill.py", "_handler"),
@@ -2252,9 +2244,6 @@ _CLUSTER_D5_OPEN_DISPOSITION: dict[str, tuple[tuple[str, str, str, int], ...]] =
     "handoff.columns": (
         ("coordinator_core/ops/emit/sections/handoff_columns.py", "_resolve_shipped_in_dates", "git", 0),
     ),
-    "handoff.reconcile_close_terminal": (
-        ("coordinator_core/archive_stamp.py", "_run_git", "git", 0),
-    ),
     "handoff.scaffold_from_queue": (
         ("coordinator_core/person_resolver.py", "_git_config_uncached", "git", 0),
     ),
@@ -2340,9 +2329,12 @@ def test_cluster_d5_open_disposition_matches_live_measurement():
         "_CLUSTER_D5_OPEN_DISPOSITION has drifted from the live tree's own cluster reachability "
         "(re-derive and update the dict, do not silently widen or narrow it):\n" + "\n".join(mismatches)
     )
-    assert total_pairs == 39, (
+    assert total_pairs == 38, (
         f"_CLUSTER_D5_OPEN_DISPOSITION now totals {total_pairs} (op, site) pairs, not the "
-        "39 expected after ceremony.session_instructions's own kill (2026-08-27: a peer deleted "
+        "38 left after the 2026-08-30 rot sweep dropped handoff.reconcile_close_terminal's "
+        "single pair -- the op is deleted from the tree and absent from ops/_registry_map.py, "
+        "so its row could only ever read a missing file. 39 - 1 = 38. Superseded note: "
+        "39 was expected after ceremony.session_instructions's own kill (2026-08-27: a peer deleted "
         "coordinator_core/ops/ceremony/session_instructions.py outright at 6aaab6925, but the op's "
         "NAME survived in four string-keyed tables in this file, so this test read a missing file "
         "and three tests went red on one cause) dropped its 3 pairs "
@@ -6013,7 +6005,6 @@ def _measure_static_spawn_counts(op_names, entrypoints) -> dict[str, int]:
 _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     "plugin_health.sentinel": 26,
     "handoff.archive_transition": 12,
-    "handoff.reconcile_close_terminal": 12,
     "fleet.migrate_handoff_vocabulary": 11,
     "handoff.transition": 11,
     "fleet.reap_integrated_findings": 9,
@@ -6026,7 +6017,7 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     # the D3 cluster disposition naming the newly-reached site
     # (`coordinator_core/git/run.py::run_git`). Peer drift on this op is well-attested --
     # 10 -> 4 before this plan's handoff, 4 -> 5 during its verification run.
-    "fleet.archive_completed_handoffs": 5,
+    "fleet.archive_completed_handoffs": 4,
     "ceremony.commit": 10,
     "fleet.archive_paper_trail": 3,
     "fleet.archive_queue_entry": 3,
@@ -6039,9 +6030,8 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     "memo.transition": 9,
     "merge_assemble.apply": 1,
     "merge_assemble.brief": 1,
-    "ceremony.post_commit_tail": 7,
     "cruft_sweep.run": 8,
-    "memo.send": 8,
+    "memo.send": 2,
     "workflow.fire": 6,
     "machine.hibernate": 4,
     "orientation.regenerate_cache": 4,
@@ -6053,7 +6043,6 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     "release.cut_tag_and_publish": 3,
     "repo.clone_and_register": 3,
     "repo.create_and_push_remote": 3,
-    "review_trail.write": 3,
     "tracker.push_suggestion": 3,
     "backlog.record": 2,
     "cartography.churn": 2,
@@ -6168,7 +6157,6 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     "session.guard_hooks_kill_switch_detail": 1,
     "session.reap_claims_for_repos": 1,
     "session.resolve_chain_terminal_disposition": 1,
-    "session.warm_start": 1,
     "session_baton.promote": 1,
     "session_ledger.aggregate_chain_loe": 1,
     "strategic.generate": 1,
@@ -6193,7 +6181,6 @@ _STATIC_SPAWN_COUNT_OVER_BUDGET_THRESHOLD = 8
 _STATIC_SPAWN_COUNT_OVER_BUDGET: dict[str, int] = {
     "plugin_health.sentinel": 26,
     "handoff.archive_transition": 12,
-    "handoff.reconcile_close_terminal": 12,
     "fleet.migrate_handoff_vocabulary": 11,
     "handoff.transition": 11,
     "fleet.reap_integrated_findings": 9,

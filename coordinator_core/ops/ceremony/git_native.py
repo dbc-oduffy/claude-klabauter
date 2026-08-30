@@ -4321,9 +4321,13 @@ def _replay_post_commit_auto_push(
     env, for the same reason `commit_scoped` prefers it for its `Session-Id:`
     trailer.
 
-    `path_list=None` (`commit_authored_content`'s call, not migrated by this
-    chunk) preserves the prior behavior unchanged: `auto_push.main()` runs
-    its own `_release_claims_for_head` fallback, exactly as before.
+    `path_list=None` preserves the prior behavior unchanged: `auto_push.main()`
+    runs its own `_release_claims_for_head` fallback, exactly as before. No
+    caller in this module takes that leg any more --- `commit_authored_content`
+    was migrated 2026-08-30 and now passes its own single `normalized` path
+    plus `attributed_session_id`, so the default survives for an out-of-module
+    or future caller that genuinely does not know its paths, not as a live
+    arm.
 
     Fail-open, like `_release_claims_for_head` itself: any failure in the
     in-process release falls through to the unmigrated path (no
@@ -4747,7 +4751,6 @@ def commit_authored_content(
     *,
     deliverable_id: Optional[str] = None,
     attributed_session_id: Optional[str] = None,
-    suppress_post_commit_auto_push: bool = False,
 ) -> GitResult:
     """Commit EXACTLY `content` at `path`, reading no worktree state on
     `path` at any point (DR-272 § 3.3 bound 2) -- the sibling entrypoint to
@@ -4823,17 +4826,12 @@ def commit_authored_content(
     the committer's identity a second, independent way -- the same
     disagreeing-copies hazard `commit_scoped`'s own docstring names.
 
-    `suppress_post_commit_auto_push` -- stands down bound 5's auto-push
-    replay for THIS commit, for a caller that will publish it itself. Same
-    contract as `commit_scoped`'s parameter of the same name (see
-    `_sole_publisher_env`: "whoever sets this WILL publish the commit"), and
-    an active `deferred_publisher_span()` widens it here exactly as it does
-    there. Different mechanism, necessarily: `commit_scoped` carries
-    suppression in the env of a real `git commit` for the installed
-    `post-commit` hook to read, and this entrypoint runs no `git commit` and
-    fires no hooks, so the predicate is evaluated in Python at the replay
-    call site instead. Default `False` reproduces the prior always-replay
-    behaviour for every caller that has not opted in.
+    Bound 5's auto-push replay stands down for the duration of an active
+    `deferred_publisher_span()`, exactly as `commit_scoped` honours the same
+    span. This entrypoint reads that predicate directly off
+    `_deferred_publisher_active` at the replay call site rather than through
+    `commit_scoped`'s env-marker mechanism, because it runs no `git commit`
+    and fires no hooks for that marker to reach.
 
     Returns a `GitResult`; on success `stdout` carries the new commit SHA
     (matching `_commit_scoped_private_index`'s own contract). Failure
@@ -5060,23 +5058,9 @@ def commit_authored_content(
     # one path this function has held since its first line, plus a
     # `git status --porcelain` clean-check `--no-claim-release` then skips.
     #
-    # SUPPRESSION (2026-08-30, docs/research/spike-verdicts/2026-08-30-warm-
-    # engine-owns-the-post-commit-push.md): this entrypoint honours the same
-    # sole-publisher contract `commit_scoped` does, but it cannot inherit the
-    # MECHANISM. `_sole_publisher_env` works by putting `_AUTO_PUSH_SUPPRESS_ENV`
-    # in the env of a real `git commit`, which the installed `post-commit` hook
-    # then reads; this function never runs `git commit` at all -- `commit-tree`/
-    # `update-ref` fire no hooks, which is the whole reason the replay above
-    # exists. So the contract is honoured here in Python, against the same
-    # predicate `_sole_publisher_env` uses, rather than through an env var no
-    # hook is around to read.
-    #
-    # Before this, a caller inside `deferred_publisher_span()` -- which declares
-    # "I will publish this commit myself" -- still got this replay, i.e. the
-    # exact two-publisher race `_sole_publisher_env`'s docstring exists to
-    # remove. Proven by probe, filed as state/bug-backlog/2026-08-30-commit-
-    # authored-content-ignores-the-publisher-suppression-span.yaml.
-    if not (suppress_post_commit_auto_push or _deferred_publisher_active.get()):
+    # The suppression predicate is `_sole_publisher_env`'s own, read directly
+    # rather than through the env marker -- see this function's docstring.
+    if not _deferred_publisher_active.get():
         _replay_post_commit_auto_push(
             root, [normalized], attributed_session_id,
         )

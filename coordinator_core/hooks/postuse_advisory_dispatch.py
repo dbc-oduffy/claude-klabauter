@@ -995,18 +995,29 @@ def _check_workflow_monitor_arm_sync(session_id: str, transcript_path: str, tool
     # rather than guess a number that could disagree with the watcher's own
     # enforced cap.
     try:
-        from coordinator_core.workflow_watch import DEFAULT_CAP_MS as cap_ms
+        from coordinator_core.workflow_watch import (
+            DEFAULT_CAP_MS as cap_ms,
+            DEFAULT_CAP_SECONDS as cap_seconds,
+        )
     except Exception:
         return ""
 
-    journal_path = os.path.join(transcript_dir, run_id, "journal.jsonl")
+    # `transcriptDir` as the harness emits it ALREADY ends in the run id
+    # (observed: .../subagents/workflows/wf_<id>). Appending run_id again
+    # yields .../wf_<id>/wf_<id>/journal.jsonl, a path that never exists —
+    # the watcher would then render nothing at all. Append only when the
+    # directory does not already name the run, so both shapes resolve.
+    if os.path.basename(transcript_dir.rstrip("/\\")) == run_id:
+        journal_path = os.path.join(transcript_dir, "journal.jsonl")
+    else:
+        journal_path = os.path.join(transcript_dir, run_id, "journal.jsonl")
     monitor_command = (
         "python3 -m coordinator_core.workflow_watch"
         f" --transcript {transcript_path}"
         f" --journal {journal_path}"
         f" --task-id {task_id}"
         " --poll-interval 1"
-        f" --cap {cap_ms}"
+        f" --cap {cap_seconds}"
     )
 
     return (

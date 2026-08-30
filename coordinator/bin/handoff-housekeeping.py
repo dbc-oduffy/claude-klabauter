@@ -68,6 +68,29 @@ def _ensure_claude_klabauter_on_path() -> str:
     return root
 
 
+def _stamp_archive_sweeps_liveness(repo_root: str) -> None:
+    """Best-effort stamp the shared `archive_sweeps` housekeeping-liveness key.
+
+    The key names the ARCHIVAL JOB, not one script. `sweep-terminal-handoffs.py`
+    was its only writer, so a monitor reading it saw the manual drain's cadence
+    and nothing about the ceremony path that does the same work on the
+    `/workday-complete` spine — a repo whose archival was healthy read as 24h
+    stale, and a repo whose ceremony path was dead read as fresh after one
+    manual run. Stamped from the mutating tail only: `--dry-run` mutates
+    nothing and a plan is not a sweep (same reading the sibling CLI gives its
+    census mode).
+    """
+    try:
+        from coordinator_core.ops.ceremony.housekeeping_liveness import (
+            ARCHIVE_SWEEPS,
+            stamp_liveness,
+        )
+
+        stamp_liveness(repo_root, ARCHIVE_SWEEPS)
+    except Exception:  # noqa: BLE001 -- never raise out of a best-effort liveness stamp
+        pass
+
+
 def main(argv: "list[str] | None" = None) -> int:
     """Close finished handoffs, file them, sweep consumed. One call.
 
@@ -143,6 +166,8 @@ def main(argv: "list[str] | None" = None) -> int:
     if result.get("exit_code") != 0:
         print(f"handoff-housekeeping: {result.get('error')}", file=sys.stderr)
         return 1
+
+    _stamp_archive_sweeps_liveness(str(main_worktree_root(common_dir)))
 
     archived = result.get("archived") or []
     # `closed` is an INT from `housekeeping.cycle` (a count), where the

@@ -89,30 +89,70 @@ ARCHIVE_SWEEPS = "archive_sweeps"
 COMPLETION_SCAFFOLD = "completion_scaffold"
 ROADMAP_CALLOUT = "roadmap_callout"
 EOL_SWEEP = "eol_sweep"
+GIT_MAINTENANCE = "git_maintenance"
 
 KNOWN_CLASSES: tuple = (
     ARCHIVE_SWEEPS,
     COMPLETION_SCAFFOLD,
     ROADMAP_CALLOUT,
     EOL_SWEEP,
+    GIT_MAINTENANCE,
 )
 
 # Per-class on-demand remedy commands (C21 leg 2) -- see module negative-spec above: this
-# is a "here's the manual escape hatch" list, not a claim about automatic call sites. Only
-# ARCHIVE_SWEEPS has on-demand CLIs on disk today; every other known class maps to an empty
-# tuple and MUST render nothing (do not invent commands for classes with no CLI yet).
+# is a "here's the manual escape hatch" list, not a claim about automatic call sites.
+#
+# GIT_MAINTENANCE is the FIRST class with a real, shipped CLI behind it. The negative-spec's
+# "do not invent commands for classes with no CLI yet" is precisely what makes this entry
+# legitimate rather than an exception to it: `coordinator-git-maintenance` exists on disk
+# before this entry names it. Every other known class still maps to an empty tuple and MUST
+# render nothing.
 REMEDY_COMMANDS: Dict[str, Tuple[str, ...]] = {
     ARCHIVE_SWEEPS: (),
     COMPLETION_SCAFFOLD: (),
     ROADMAP_CALLOUT: (),
     EOL_SWEEP: (),
+    GIT_MAINTENANCE: (
+        "coordinator-git-maintenance weekly",
+        "coordinator-git-maintenance daily",
+    ),
 }
 
 # Conservative uniform default — each shed class's actual expected cadence differs (daily
-# boot_sweep vs. on-demand roadmap callout), but no chunk has landed a call site yet to
-# calibrate against; a per-class threshold is a reasonable follow-up once real cadence data
-# exists, not a blocker for landing the mechanism itself.
+# boot_sweep vs. on-demand roadmap callout), but most classes have no call site landed yet
+# to calibrate against. A class WITH real cadence data overrides it below.
 _DEFAULT_STALE_THRESHOLD_S: float = 7 * 24 * 3600.0
+
+# Per-class overrides, consulted ONLY when the caller left `stale_threshold_s` at its
+# default (see `_threshold_for`).
+#
+# GIT_MAINTENANCE: 10 days, not the uniform 7. The stamp is written by ANY successful tier
+# run, but the tier whose absence actually costs is WEEKLY — it carries the prune leg and
+# the orphan-pack sweep. A 7-day threshold equals the weekly cadence exactly, so the class
+# would read stale the instant it came due, every single cycle, and a permanently-amber
+# signal is one nobody reads. 10 days is the weekly cadence plus enough grace for a week in
+# which no ceremony happened to fire on the right day, while still going loud well before a
+# second cycle is missed.
+_CLASS_STALE_THRESHOLDS: Dict[str, float] = {
+    GIT_MAINTENANCE: 10 * 24 * 3600.0,
+}
+
+
+def _threshold_for(cls: str, requested: float) -> float:
+    """The staleness threshold for `cls`.
+
+    PRECEDENCE: an explicitly-passed `stale_threshold_s` always wins — a caller
+    that named a number meant it. The `_CLASS_STALE_THRESHOLDS` map applies only
+    when the caller left the argument at its default.
+
+    Consulted by BOTH `check_stale_detailed` and `liveness_status`. Reaching only
+    one of them would let the two accessors disagree about the same class's status
+    on the same day, which is worse than no per-class threshold at all.
+    `check_stale` needs no direct change: it delegates to `check_stale_detailed`.
+    """
+    if requested != _DEFAULT_STALE_THRESHOLD_S:
+        return requested
+    return _CLASS_STALE_THRESHOLDS.get(cls, requested)
 
 # Three-state liveness contract (see module docstring's "Three-state contract" section).
 # `STATUS_NEVER_STAMPED` is NOT a synonym for `STATUS_FRESH` -- it means "this store has
@@ -220,7 +260,7 @@ def check_stale_detailed(
             results.append((cls, f"{cls}: unparseable liveness timestamp {raw!r}"))
             continue
         age_s = (now - ts).total_seconds()
-        if age_s > stale_threshold_s:
+        if age_s > _threshold_for(cls, stale_threshold_s):
             days = age_s / 86400.0
             results.append((cls, f"{cls}: stale ({days:.1f}d since last run, last={raw})"))
     return results
@@ -269,7 +309,9 @@ def liveness_status(
             statuses[cls] = STATUS_STALE
             continue
         age_s = (now - ts).total_seconds()
-        statuses[cls] = STATUS_STALE if age_s > stale_threshold_s else STATUS_FRESH
+        statuses[cls] = (
+            STATUS_STALE if age_s > _threshold_for(cls, stale_threshold_s) else STATUS_FRESH
+        )
     return statuses
 
 

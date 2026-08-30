@@ -131,6 +131,79 @@ def apply(repo: Path, *, dry_run: bool = False) -> List[str]:
         if extend.returncode != 0:
             report[-1] += " (index not extended: %s)" % extend.stderr.strip()
 
+    report.extend(_apply_maintenance_keys(repo, dry_run=dry_run))
+    return report
+
+
+# The three keys that hand maintenance to the ceremony leg. They live HERE and
+# not in configure_git's _SETTINGS because they are actions taken against a
+# repo at install time, not declarations -- the same reason
+# `update-index --untracked-cache` lives here.
+#
+# maintenance.prefetch.enabled=false IS NOT IN THE ORIGINATING ASK. It is
+# required by the spike: git's schedules CASCADE, so `prefetch` runs at the
+# daily and weekly tiers as well as hourly, and it is the one task in this
+# otherwise network-free design that goes to the network -- a `git fetch`
+# against every remote plus two `gh auth git-credential` round-trips, 293.8 ms
+# and 11.2 processes. With prefetch enabled the daily tier measures 575.0 ms
+# and weekly 618.8 ms, both over the 500 ms brightline; with it disabled they
+# are 190.6 ms and 178.1 ms.
+#
+# THE ALTERNATIVE NOT TAKEN: pinning daily and weekly to explicit `--task=`
+# lists, the shape `git_maintenance` already gives hourly. The key wins because
+# it is one key set once per repo, versus a task list that must be kept in sync
+# with git's own strategy definition across git versions -- if a future git
+# adds a task to `--schedule=daily`, the task-list shape silently drifts back
+# open while the key shape does not.
+#
+# The key suppresses prefetch for ALL `git maintenance` invocations in this
+# repo, including manual ones and future ones no coordinator code authors --
+# not only the daily/weekly tiers the ceremony drives.
+#
+# UNINSTALL DISPOSITION, stated rather than left silent: none of the three are
+# unset on uninstall, and that is deliberate. git's compiled defaults
+# (maintenance.strategy unset, maintenance.auto true, prefetch enabled) resume
+# harmlessly the moment the keys are gone, and a coordinator-uninstalled
+# worktree reverting to git's own defaults is what an uninstall is supposed to
+# do -- not a residue needing its own removal step.
+_MAINTENANCE_KEYS: tuple[tuple[str, str], ...] = (
+    ("maintenance.strategy", "incremental"),
+    ("maintenance.auto", "false"),
+    ("maintenance.prefetch.enabled", "false"),
+)
+
+
+def _apply_maintenance_keys(repo: Path, *, dry_run: bool = False) -> List[str]:
+    """Set the three maintenance keys in `repo`, idempotently.
+
+    Honours this module's existing negative spec unchanged: a differing
+    existing value is REPORTED and left alone, never overwritten. A peer
+    machine may differ deliberately.
+
+    NEVER `git maintenance register`. Setting the keys directly is strictly
+    less: `register` additionally writes this repo's path into the
+    multi-valued `maintenance.repo` key in the operator's GLOBAL config, which
+    is read only by `git for-each-repo`, which only the scheduler runs, which
+    this design never runs. It buys nothing and costs a machine-wide
+    out-of-repo write surface.
+    """
+    report: List[str] = []
+    for key, wanted in _MAINTENANCE_KEYS:
+        current = _git(repo, "config", "--get", key).stdout.strip() or None
+        if current == wanted:
+            report.append("ok      %s = %s (already set)" % (key, wanted))
+        elif current is not None:
+            report.append(
+                "left    %s = %s (differs from %s -- not overwritten)" % (key, current, wanted)
+            )
+        elif dry_run:
+            report.append("would   %s = %s" % (key, wanted))
+        else:
+            proc = _git(repo, "config", key, wanted)
+            if proc.returncode != 0:
+                report.append("FAILED  %s: %s" % (key, proc.stderr.strip()))
+            else:
+                report.append("set     %s = %s" % (key, wanted))
     return report
 
 

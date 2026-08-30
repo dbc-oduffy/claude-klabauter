@@ -72,14 +72,61 @@ def test_does_not_clobber_a_differing_value(tmp_path):
 def test_every_setting_produces_a_report_line_always(tmp_path):
     repo = _init_repo(tmp_path)
 
+    # core.untrackedCache plus the three maintenance keys -- a caller that
+    # prints nothing on a no-op cannot tell "already correct" from "never ran",
+    # so every key reports on every call.
+    expected = 1 + len(gpc._MAINTENANCE_KEYS)
+
     fresh_report = gpc.apply(repo)
-    assert len(fresh_report) == 1
+    assert len(fresh_report) == expected, fresh_report
 
     if not gpc.filesystem_supports_untracked_cache(repo):
         pytest.skip("filesystem failed git's untracked-cache mtime probe")
 
     again_report = gpc.apply(repo)
-    assert len(again_report) == 1
+    assert len(again_report) == expected, again_report
+
+
+def test_three_maintenance_keys_land_in_the_repo(tmp_path):
+    repo = _init_repo(tmp_path)
+
+    gpc.apply(repo)
+
+    assert _config_get(repo, "maintenance.strategy") == "incremental"
+    assert _config_get(repo, "maintenance.auto") == "false"
+    # NOT in the originating ask -- required because git's schedules cascade,
+    # so prefetch runs at daily and weekly too and puts both over the 500ms bar.
+    assert _config_get(repo, "maintenance.prefetch.enabled") == "false"
+
+
+def test_maintenance_register_is_never_invoked(tmp_path, monkeypatch):
+    """`git maintenance register` writes this repo's path into the operator's
+    GLOBAL config. The design never runs the scheduler that reads it."""
+    repo = _init_repo(tmp_path)
+    invoked = []
+    real_git = gpc._git
+
+    def recording_git(r, *args, **kwargs):
+        invoked.append(args)
+        return real_git(r, *args, **kwargs)
+
+    monkeypatch.setattr(gpc, "_git", recording_git)
+    gpc.apply(repo)
+
+    assert not any("register" in a for args in invoked for a in args), invoked
+    assert not any(args[:1] == ("maintenance",) for args in invoked), invoked
+
+
+def test_a_differing_maintenance_value_is_reported_not_overwritten(tmp_path):
+    """The module's standing negative spec: a peer machine may differ
+    deliberately, and this writer never wins that argument."""
+    repo = _init_repo(tmp_path)
+    _git(repo, "config", "maintenance.strategy", "none")
+
+    report = gpc.apply(repo)
+
+    assert _config_get(repo, "maintenance.strategy") == "none"
+    assert any("left" in line and "maintenance.strategy" in line for line in report), report
 
 
 def test_dry_run_writes_nothing(tmp_path):

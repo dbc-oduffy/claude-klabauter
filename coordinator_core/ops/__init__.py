@@ -112,6 +112,7 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ("coordinator_core.ops.invoke_from_argv", 'registers "invoke.from_argv"'),
     ("coordinator_core.ops.cutover_gate", 'registers "cutover.gate"'),
     ("coordinator_core.ops.cutover_advance", 'registers "cutover.advance"'),
+    ("coordinator_core.ops.git_maintenance", 'registers "git.maintenance"'),
     (
         "coordinator_core.ops.handoff_children",
         'registers "handoff.blocked_by_dependents" (handoff.has_live_children was '

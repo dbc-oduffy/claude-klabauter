@@ -93,7 +93,24 @@ class GitSetting:
 # builtin-generic form — both files carry `from __future__ import annotations`,
 # which makes this legal.
 _SETTINGS: tuple[GitSetting, ...] = (
-    GitSetting(key="gc.autoDetach", value="false"),
+    # PER-REPO, no scope= — the 2026-08-07 per-key scope ruling recorded in the
+    # core.checkStat block directly below is what makes per-repo the default
+    # here, and this key inherits it rather than re-arguing it.
+    #
+    # gc.auto=0 turns auto-gc OFF outright. It replaces gc.autoDetach=false,
+    # which only moved auto-gc into the foreground: on a box sharing one
+    # worktree across ~50 sessions that meant RACING foreground repacks, the
+    # mechanism that left 1.1 GB of orphan .tmp-*-pack-* bodies here. Removing
+    # the producer is the fix; coordinator_core.ops.git_maintenance is the
+    # replacement leg that keeps the repo maintained from a ceremony instead.
+    #
+    # WHAT REMOVING gc.autoDetach ALSO TURNS OFF, stated because nothing else
+    # says it: maintenance.autoDetach FALLS BACK to gc.autoDetach when unset
+    # (git-maintenance(1)), so this key was silently governing auto-*maintenance*
+    # detachment too, not only auto-gc. That coupling is why removing it is safe
+    # ONLY alongside git_perf_config.apply()'s maintenance.auto=false — without
+    # that key, dropping this one hands auto-maintenance back its git default.
+    GitSetting(key="gc.auto", value="0"),
     # scope="global" per doe-claude-em's ruling (Ask 1, ruled (a)) in
     # cross-repo/inbox/2026-08-07-doe-claude-em-configure-git-per-key-scope-ruled-a.md,
     # citing coordinator/commands/uninstall.md item 14 which asserts

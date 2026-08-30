@@ -14,7 +14,7 @@ from coordinator_core.install.write_surface import StaticClause
 from coordinator_core.ops import configure_git as cg
 
 # Declared, not excused: this file spawns a real git process because the
-# hardening under test writes real git config (`gc.autoDetach`,
+# hardening under test writes real git config (`gc.auto`,
 # `core.checkStat`) and asserts idempotence against a real repeat run --
 # no mock stands in for real git-config read/write. Each test inits its own
 # throwaway repo, so `_init_repo` is not hoisted to module scope -- per-test
@@ -51,7 +51,7 @@ def test_configures_fresh_repo(tmp_path, monkeypatch):
     monkeypatch.chdir(repo)
     rc = cg.main([])
     assert rc == 0
-    assert _git(repo, "config", "--get", "gc.autoDetach").stdout.strip() == "false"
+    assert _git(repo, "config", "--get", "gc.auto").stdout.strip() == "0"
     assert _git(repo, "config", "--get", "core.checkStat").stdout.strip() == "minimal"
 
 
@@ -65,20 +65,20 @@ def test_idempotent_rerun_reports_no_change(tmp_path, monkeypatch, capsys):
     assert rc == 0
     err = capsys.readouterr().err
     assert "already hardened (no change)" in err
-    assert _git(repo, "config", "--get", "gc.autoDetach").stdout.strip() == "false"
+    assert _git(repo, "config", "--get", "gc.auto").stdout.strip() == "0"
     assert _git(repo, "config", "--get", "core.checkStat").stdout.strip() == "minimal"
 
 
 def test_partial_prior_config_only_reports_changed_key(tmp_path, monkeypatch, capsys):
     repo = _init_repo(tmp_path)
-    _git(repo, "config", "gc.autoDetach", "false")
+    _git(repo, "config", "gc.auto", "0")
     monkeypatch.chdir(repo)
 
     rc = cg.main([])
     assert rc == 0
     err = capsys.readouterr().err
     assert "core.checkStat=minimal" in err
-    assert "set repo gc.autoDetach" not in err
+    assert "set repo gc.auto" not in err
     assert _git(repo, "config", "--get", "core.checkStat").stdout.strip() == "minimal"
 
 
@@ -91,7 +91,7 @@ def test_unrecognized_first_arg_behaves_as_per_repo_mode(tmp_path, monkeypatch):
     monkeypatch.chdir(repo)
     rc = cg.main(["--globl"])
     assert rc == 0
-    assert _git(repo, "config", "--get", "gc.autoDetach").stdout.strip() == "false"
+    assert _git(repo, "config", "--get", "gc.auto").stdout.strip() == "0"
     assert _git(repo, "config", "--get", "core.checkStat").stdout.strip() == "minimal"
 
 
@@ -116,7 +116,7 @@ def test_config_set_failure_exits_1_with_partial_success(tmp_path, monkeypatch, 
     assert rc == 1
     err = capsys.readouterr().err
     assert "ERROR — failed to set core.checkStat=minimal" in err
-    assert _git(repo, "config", "--get", "gc.autoDetach").stdout.strip() == "false"
+    assert _git(repo, "config", "--get", "gc.auto").stdout.strip() == "0"
     res = subprocess.run(
         ["git", "config", "--get", "core.checkStat"],
         cwd=str(repo),
@@ -138,11 +138,11 @@ def test_global_scope_does_not_require_git_repo(tmp_path, monkeypatch):
     assert rc == 0
 
     res = subprocess.run(
-        ["git", "config", "--global", "--get", "gc.autoDetach"],
+        ["git", "config", "--global", "--get", "gc.auto"],
         capture_output=True,
         encoding="utf-8",
     )
-    assert res.stdout.strip() == "false"
+    assert res.stdout.strip() == "0"
 
     res2 = subprocess.run(
         ["git", "config", "--global", "--get", "core.checkStat"],
@@ -202,8 +202,8 @@ def test_repo_scope_setting_follows_invocation_both_modes(tmp_path, monkeypatch)
 
     assert cg.main([]) == 0
     assert (
-        _git(repo, "config", "--local", "--get", "gc.autoDetach").stdout.strip()
-        == "false"
+        _git(repo, "config", "--local", "--get", "gc.auto").stdout.strip()
+        == "0"
     )
 
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
@@ -211,11 +211,11 @@ def test_repo_scope_setting_follows_invocation_both_modes(tmp_path, monkeypatch)
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "home" / ".config"))
     assert cg.main(["--global"]) == 0
     res = subprocess.run(
-        ["git", "config", "--global", "--get", "gc.autoDetach"],
+        ["git", "config", "--global", "--get", "gc.auto"],
         capture_output=True,
         encoding="utf-8",
     )
-    assert res.stdout.strip() == "false"
+    assert res.stdout.strip() == "0"
 
 
 def test_setting_skipped_for_platform(tmp_path, monkeypatch):
@@ -238,7 +238,7 @@ def test_setting_skipped_for_platform(tmp_path, monkeypatch):
         encoding="utf-8",
     )
     assert res.returncode != 0
-    assert _git(repo, "config", "--get", "gc.autoDetach").stdout.strip() == "false"
+    assert _git(repo, "config", "--get", "gc.auto").stdout.strip() == "0"
     assert _git(repo, "config", "--get", "core.checkStat").stdout.strip() == "minimal"
 
 
@@ -369,10 +369,15 @@ def test_settings_are_gitsetting_records():
         assert isinstance(setting, cg.GitSetting)
 
     by_key = {s.key: s for s in cg._SETTINGS}
-    assert by_key["gc.autoDetach"].scope == "repo"
-    assert by_key["gc.autoDetach"].platforms is None
-    assert by_key["gc.autoDetach"].group is None
-    assert by_key["gc.autoDetach"].unset_group is None
+    assert by_key["gc.auto"].scope == "repo"
+    assert by_key["gc.auto"].platforms is None
+    assert by_key["gc.auto"].group is None
+    assert by_key["gc.auto"].unset_group is None
+
+    # gc.autoDetach only moved auto-gc into the FOREGROUND; gc.auto=0 turns it
+    # off. The old key must be gone entirely, not merely joined -- leaving it
+    # would keep governing maintenance.autoDetach by fallback.
+    assert "gc.autoDetach" not in by_key
 
     assert by_key["core.checkStat"].scope == "global"
     assert by_key["core.checkStat"].platforms is None

@@ -346,3 +346,59 @@ def test_check_stale_detailed_junk_root_returns_empty_list_and_does_not_raise(
     junk_root.mkdir()
 
     assert hl.check_stale_detailed(str(junk_root)) == []
+
+
+# --------------------------------------------------------------------------
+# C6: git_maintenance -- the first class with a shipped CLI, 10-day threshold
+# --------------------------------------------------------------------------
+
+
+def test_git_maintenance_is_a_known_class():
+    assert hl.GIT_MAINTENANCE in hl.KNOWN_CLASSES
+
+
+def test_git_maintenance_is_the_first_class_with_a_real_remedy():
+    """The module's negative-spec forbids INVENTING commands for classes with
+    no CLI. This entry is legitimate because coordinator-git-maintenance is on
+    disk before the entry names it -- the case that spec anticipates, not an
+    exception to it."""
+    assert hl.REMEDY_COMMANDS[hl.GIT_MAINTENANCE]
+    for cls in hl.KNOWN_CLASSES:
+        if cls != hl.GIT_MAINTENANCE:
+            assert hl.REMEDY_COMMANDS[cls] == (), cls
+
+
+def test_git_maintenance_uses_the_ten_day_threshold_not_the_uniform_default():
+    """7 days equals the weekly cadence exactly, so the class would read stale
+    the instant it came due, every cycle -- a permanently-amber signal nobody
+    reads."""
+    assert hl._threshold_for(hl.GIT_MAINTENANCE, hl._DEFAULT_STALE_THRESHOLD_S) == 10 * 24 * 3600.0
+    assert hl._threshold_for(hl.ARCHIVE_SWEEPS, hl._DEFAULT_STALE_THRESHOLD_S) == hl._DEFAULT_STALE_THRESHOLD_S
+
+
+def test_an_explicit_threshold_beats_the_per_class_map():
+    """A caller that named a number meant it."""
+    assert hl._threshold_for(hl.GIT_MAINTENANCE, 42.0) == 42.0
+
+
+def test_both_accessors_agree_on_git_maintenance_at_day_eight(tmp_path):
+    """THE DIVERGENCE THIS GUARDS. Reaching only one threshold-consuming
+    accessor would let check_stale_detailed and liveness_status report
+    different statuses for the same class on the same day. At day 8 both must
+    read FRESH under the 10-day threshold; under the old uniform 7-day default
+    both would have read STALE."""
+    repo = tmp_path / "repo"
+    (repo / ".git").mkdir(parents=True)
+    (repo / "state").mkdir()
+    eight_days_ago = (datetime.now(timezone.utc) - timedelta(days=8)).strftime(
+        "%Y-%m-%dT%H:%M:%SZ"
+    )
+    (repo / "state" / "housekeeping-liveness.json").write_text(
+        json.dumps({hl.GIT_MAINTENANCE: eight_days_ago}), encoding="utf-8"
+    )
+
+    detailed = dict(hl.check_stale_detailed(str(repo), [hl.GIT_MAINTENANCE]))
+    status = hl.liveness_status(str(repo), [hl.GIT_MAINTENANCE])
+
+    assert hl.GIT_MAINTENANCE not in detailed, detailed
+    assert status[hl.GIT_MAINTENANCE] == hl.STATUS_FRESH, status

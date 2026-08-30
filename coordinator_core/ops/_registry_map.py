@@ -37,6 +37,7 @@ OP_MODULE_MAP: Dict[str, str] = {
     "invoke.from_argv":                       "coordinator_core.ops.invoke_from_argv",
     "cutover.gate":                           "coordinator_core.ops.cutover_gate",
     "cutover.advance":                        "coordinator_core.ops.cutover_advance",
+    "git.maintenance":                        "coordinator_core.ops.git_maintenance",
     # decision_record.mint_id / decision_record.release_id — one module registers
     # both ops, same shared-value shape as the hooks.* / spec_backlink.* blocks.
     # Spec: state/improvement-queue/2026-08-23-nothing-allocates-dr-numbers-so-a-
