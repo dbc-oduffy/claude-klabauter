@@ -203,9 +203,48 @@ Negative-spec:
       budget, this is not a class of ops that should be born inside a rule, it is
       a finite list of specific defects, and every entry is meant to leave.
 
+§ c2_citation (added 2026-08-30, plan `2026-08-29-a-zero-is-under-one-tick-not-
+unmeasured.md`, C3) -- every one of the 18 rows this plan's own C3 chunk
+readjudicated carries a `c2_citation` dict, the sole traceable link between this
+table's hand-curated `disposition` prose and a re-runnable measurement. It is
+NOT a re-adjudication of the row -- 17 of the 18 rows are gravestones, and a
+gravestone is never reinstated whatever a fresh figure says (module docstring
+above). It exists so a reader doubting a `disposition`'s number can re-run
+`coordinator_core.telemetry.op_adjudication.adjudicate` at the SAME `t_start`
+bounds and get the same figure back, rather than trusting a hand-copied number
+with no instrument behind it.
+
+    {"route": <str|None>, "confidence": "EXACT"|"FLOOR"|"SPAWNS-UNKNOWN"|None,
+     "n": <int>, "p95_ms": <float|None>, "window": "all_time",
+     "t_start_min": <ISO-8601 str|None>, "t_start_max": <ISO-8601 str|None>,
+     "verdict": "adjudicated"|"unadjudicated"|"no_rows_in_window",
+     "outcome": "re-affirmed"|"reinstated"|"re-classified"}
+
+Selection rule: per op, the single `(route, confidence)` bucket from
+`op_adjudication.adjudicate`'s all-time arm carrying the largest `n` --
+not necessarily the bucket `op_verdicts` would convict on, since several of
+these rows have no `EXACT`/`FLOOR` bucket large enough to convict at all and
+citing the largest-n bucket regardless of confidence is more informative than
+citing nothing. `route`/`confidence`/`n`/`p95_ms`/`t_start_min`/`t_start_max`
+are all `None` and `verdict` reads `"no_rows_in_window"` for an op with zero
+matching rows in the query's population (`ceremony.post_commit_tail`,
+`write_surface.emit_manifest`) -- per this plan's own instruction, absence of
+rows is a statement about the window, never an inference that the op got
+faster.
+
+`outcome` is `"re-affirmed"` for all 18: every row's own `disposition` prose
+predates this citation and is unchanged by it -- 17 gravestones stay dead
+(kill means kill forever, module docstring above) and the one non-gravestone
+(`fleet.archive_completed_plans`, whose own disposition already reads "not a
+gravestone: the job is wanted, its host is open") is unchanged in kind. No row
+in this batch met the bar for `"reinstated"` (permanently unavailable to a
+gravestone) or `"re-classified"` (would require a row's own disposition prose
+to have been wrong about what killed it, which C3's re-read did not find).
+
 Spec backlink: docs/decisions/DR-349-one-budget-governs-every-constructed-op.md
                docs/problems/2026-08-21-the-over-budget-timeout-hitlist.md
                state/sizings/2026-08-21-lower-the-global-op-budget-to-2s-and-ado.yaml
+               state/dispatch-briefs/2026-08-29-a-zero-is-under-one-tick-not-unmeasured/C3.md
 """
 
 from __future__ import annotations
@@ -217,6 +256,7 @@ __all__ = [
     "SUSPENSION_BAR_MS",
     "OCCUPANCY_BAR_SECS",
     "SUSPENDED_OPS",
+    "OVER_BAR_OPS_PENDING_REMEDY",
     "OpSuspendedError",
     "is_suspended",
     "suspension_record",
@@ -265,6 +305,17 @@ SUSPENSION_BAR_MS = 2000.0
 # exception for its own test fixtures would be the wrong rule.
 SUSPENDED_OPS: Dict[str, Dict[str, object]] = {
     "session.boot_sweep": {
+        "c2_citation": {
+            "route": "warm_server",
+            "confidence": "EXACT",
+            "n": 35,
+            "p95_ms": 15.625,
+            "window": "all_time",
+            "t_start_min": "2026-08-25T21:34:55Z",
+            "t_start_max": "2026-08-27T12:37:10Z",
+            "verdict": "adjudicated",
+            "outcome": "re-affirmed",
+        },
         "measured": {"max_ms": 30016.6, "p50_ms": 30010.8, "n": 8},
         "note": "8/8 ended in caller_timeout at 30s.",
         "disposition": (
@@ -322,16 +373,42 @@ SUSPENDED_OPS: Dict[str, Dict[str, object]] = {
     # directly off each row's implementation this session, not inferred):
     #   spawns a subprocess:     ceremony.commit (commit_pipeline.py, git),
     #                            handoff.archive_transition (git_native._git),
-    #                            review_trail.write (subprocess.run)
-    #   does NOT spawn:          ceremony.post_commit_tail, write_surface.
-    #                            emit_manifest, deliverable.cascade_terminal,
+    #                            review_trail.write (subprocess.run),
+    #                            deliverable.cascade_terminal (2 git spawns
+    #                            PER ADVANCED CANDIDATE -- see below)
+    #   does NOT spawn:          write_surface.emit_manifest,
     #                            fleet.prune_closed_bugs, roadmap.serve,
     #                            handoff.reconcile_open
-    # The six that do not spawn are fine exactly as recorded -- their
+    #   unestablished:           ceremony.post_commit_tail -- it CALLS
+    #                            deliverable.cascade_terminal's retained
+    #                            compute in-process, so it inherits that
+    #                            row's spawns by composition. Listed as
+    #                            unestablished rather than moved: this
+    #                            session measured the cascade, not the tail.
+    # CORRECTED 2026-08-30 (state/audits/2026-08-30-the-cascade-16ms-figure-
+    # measured-a-no-op.md): `deliverable.cascade_terminal` was recorded here
+    # as non-spawning off a re-measurement that had advanced zero candidates.
+    # It spawns `git log` + `git status` per advanced candidate, unbatched,
+    # via archive_stamp.stamp_shipped_in's scope-derived leg. A row read off
+    # an implementation at a shape where the work does not run reads as
+    # spawn-free for the same reason it reads as fast.
+    # The four that do not spawn are fine exactly as recorded -- their
     # process_ms figure already covers the whole of their cost, because there
     # is no child process for `time.process_time()` to miss. The floor
-    # caveat has teeth only on the three that spawn.
+    # caveat has teeth on the four that spawn, and on the tail that composes
+    # one of them.
     "ceremony.post_commit_tail": {
+        "c2_citation": {
+            "route": None,
+            "confidence": None,
+            "n": 0,
+            "p95_ms": None,
+            "window": "all_time",
+            "t_start_min": None,
+            "t_start_max": None,
+            "verdict": "no_rows_in_window",
+            "outcome": "re-affirmed",
+        },
         "measured": {"max_ms": 1937.5, "p50_ms": 421.9, "n": 241, "unit": "process_ms"},
         "note": (
             "K-116, a consequence of the same sweep rather than its own measurement: "
@@ -347,6 +424,17 @@ SUSPENDED_OPS: Dict[str, Dict[str, object]] = {
         "spinoff": None,
     },
     "write_surface.emit_manifest": {
+        "c2_citation": {
+            "route": None,
+            "confidence": None,
+            "n": 0,
+            "p95_ms": None,
+            "window": "all_time",
+            "t_start_min": None,
+            "t_start_max": None,
+            "verdict": "no_rows_in_window",
+            "outcome": "re-affirmed",
+        },
         "measured": {"max_ms": 1562.5, "p50_ms": 1453.1, "n": 6, "unit": "process_ms"},
         "note": (
             "AST-parses every module under _SCAN_ROOTS and imports each candidate "
@@ -369,6 +457,17 @@ SUSPENDED_OPS: Dict[str, Dict[str, object]] = {
         "spinoff": None,
     },
     "deliverable.cascade_terminal": {
+        "c2_citation": {
+            "route": "warm_server",
+            "confidence": "EXACT",
+            "n": 5,
+            "p95_ms": 1218.75,
+            "window": "all_time",
+            "t_start_min": "2026-08-26T22:19:04Z",
+            "t_start_max": "2026-08-27T16:22:47Z",
+            "verdict": "unadjudicated",
+            "outcome": "re-affirmed",
+        },
         "measured": {"max_ms": 1218.8, "p50_ms": 523.4, "n": 4, "unit": "process_ms"},
         "note": (
             "Compute retained as a library in ops/deliverable_cascade.py for the "
@@ -376,21 +475,40 @@ SUSPENDED_OPS: Dict[str, Dict[str, object]] = {
             "dispatchable op is dead."
         ),
         "disposition": (
-            "JOB STILL DONE, RELOCATION MEASURED AND SOUND. The compute runs in "
+            "JOB STILL DONE, RELOCATION OVER THE BAR. The compute runs in "
             "post_commit_tail._run_deliverable_cascade and plan_status_transition."
-            "_run_cascade. Measured AT THOSE CALL SITES at 16.3ms/call process, 0 "
-            "spawns (2 runs x 3 windows, N=20/window, "
-            "state/audits/2026-08-27-what-the-laundered-libraries-cost-at-their-"
-            "new-homes.md) — well under the 200ms bar, so 'retained as a library' "
-            "is true as written rather than a place cost went to hide. RECORDED "
-            "DISCREPANCY, not resolved: the 523.4ms p50 above does not reproduce "
-            "at this call shape. Either that figure was taken against a larger-"
-            "fanout deliverable_id or the compute has since been cut; a "
-            "larger-fanout id was not tested and may cost more."
+            "_run_cascade. DISCREPANCY RESOLVED 2026-08-30 AGAINST THE RELOCATION "
+            "(state/audits/2026-08-30-the-cascade-16ms-figure-measured-a-no-op.md): "
+            "the 523.4ms p50 above REPRODUCES. The prior '16.3ms/call process, 0 "
+            "spawns' figure measured a zero-candidate no-op — 0 spawns is only "
+            "reachable when nothing advances, because the spawns are emitted by "
+            "the per-candidate advance itself. Measured at the same in-process "
+            "call shape against a 275-file handoff corpus, 2 runs: ~210ms process "
+            "and exactly 2 git spawns PER ADVANCED CANDIDATE on a ~47ms scan base "
+            "— 203-219ms at 1 candidate, 453-484ms at 2, 719-750ms at 3, 23.4s / "
+            "200 spawns at 100. Over the 200ms bar from one candidate, over the "
+            "DR-344 500ms brightline from three. The two spawns are "
+            "archive_stamp.stamp_shipped_in's scope-derived leg (git log + git "
+            "status, each scoped to that candidate's own scope paths), unbatched: "
+            "the amplification class, reached through a library call rather than "
+            "a dispatch. Nominated for its own kill-bar item, not shaved here — "
+            "the fix is a batched log/status over the union of candidate scope "
+            "paths, a rebuild of that leg rather than an edit."
         ),
         "spinoff": None,
     },
     "fleet.prune_closed_bugs": {
+        "c2_citation": {
+            "route": "warm_server",
+            "confidence": "EXACT",
+            "n": 6,
+            "p95_ms": 828.125,
+            "window": "all_time",
+            "t_start_min": "2026-08-27T09:54:29Z",
+            "t_start_max": "2026-08-29T11:28:28Z",
+            "verdict": "unadjudicated",
+            "outcome": "re-affirmed",
+        },
         "measured": {"max_ms": 828.1, "p50_ms": 468.8, "n": 2, "unit": "process_ms"},
         "note": "n=2 — thin, and recorded as thin rather than rounded up.",
         "disposition": (
@@ -403,6 +521,17 @@ SUSPENDED_OPS: Dict[str, Dict[str, object]] = {
         "spinoff": None,
     },
     "ceremony.commit": {
+        "c2_citation": {
+            "route": "warm_server",
+            "confidence": "EXACT",
+            "n": 255,
+            "p95_ms": 1562.5,
+            "window": "all_time",
+            "t_start_min": "2026-08-26T19:48:39Z",
+            "t_start_max": "2026-08-30T10:15:28Z",
+            "verdict": "adjudicated",
+            "outcome": "re-affirmed",
+        },
         "measured": {"max_ms": 1937.5, "p50_ms": 421.9, "n": 241, "unit": "process_ms"},
         "note": (
             "The repo's own commit route. ~75ms of the 421.9 is interpreter start "
@@ -453,6 +582,17 @@ SUSPENDED_OPS: Dict[str, Dict[str, object]] = {
     # convictions. A row here with a 0ms "breach" is a dial in disguise — the
     # ratchet's own evidence guard says so, and it is right.
     "eol.census": {
+        "c2_citation": {
+            "route": "in_process",
+            "confidence": "EXACT",
+            "n": 1,
+            "p95_ms": 203.125,
+            "window": "all_time",
+            "t_start_min": "2026-08-27T16:12:11Z",
+            "t_start_max": "2026-08-27T16:12:11Z",
+            "verdict": "unadjudicated",
+            "outcome": "re-affirmed",
+        },
         "measured": {"max_ms": 30007.0, "p50_ms": 30007.0, "n": 0, "unit": "WALL_CLOCK"},
         "note": (
             "p95 30,007ms -- CEILING-DOMINATED, i.e. hitting the invocation "
@@ -469,6 +609,17 @@ SUSPENDED_OPS: Dict[str, Dict[str, object]] = {
         "spinoff": None,
     },
     "eol.repair": {
+        "c2_citation": {
+            "route": "in_process",
+            "confidence": "SPAWNS-UNKNOWN",
+            "n": 9,
+            "p95_ms": 328.125,
+            "window": "all_time",
+            "t_start_min": "2026-08-27T16:12:10Z",
+            "t_start_max": "2026-08-27T17:02:09Z",
+            "verdict": "unadjudicated",
+            "outcome": "re-affirmed",
+        },
         "measured": {"max_ms": 656.2, "p50_ms": 632.7, "n": 3, "unit": "process_ms"},
         "note": (
             "609-656ms cold end-to-end through the invoke entrypoint, 219-313ms "
@@ -495,6 +646,17 @@ SUSPENDED_OPS: Dict[str, Dict[str, object]] = {
         "spinoff": None,
     },
     "roadmap.serve": {
+        "c2_citation": {
+            "route": "warm_server",
+            "confidence": "SPAWNS-UNKNOWN",
+            "n": 609,
+            "p95_ms": 484.375,
+            "window": "all_time",
+            "t_start_min": "2026-08-21T22:05:13Z",
+            "t_start_max": "2026-08-29T16:13:06Z",
+            "verdict": "adjudicated",
+            "outcome": "re-affirmed",
+        },
         "measured": {"max_ms": 578.1, "p50_ms": 406.2, "n": 585, "unit": "process_ms"},
         "note": "n=585, the best-evidenced row in this batch.",
         "disposition": (
@@ -509,6 +671,17 @@ SUSPENDED_OPS: Dict[str, Dict[str, object]] = {
         "spinoff": None,
     },
     "handoff.reconcile_open": {
+        "c2_citation": {
+            "route": "in_process",
+            "confidence": "SPAWNS-UNKNOWN",
+            "n": 21,
+            "p95_ms": 5546.875,
+            "window": "all_time",
+            "t_start_min": "2026-08-25T21:31:31Z",
+            "t_start_max": "2026-08-27T16:24:13Z",
+            "verdict": "unadjudicated",
+            "outcome": "re-affirmed",
+        },
         "measured": {"max_ms": 7250.0, "p50_ms": 320.3, "n": 42, "unit": "process_ms"},
         "note": (
             "Wall clock read p50 16193.2ms against 320.3ms process — a 50x gap "
@@ -517,6 +690,17 @@ SUSPENDED_OPS: Dict[str, Dict[str, object]] = {
         "spinoff": None,
     },
     "handoff.archive_transition": {
+        "c2_citation": {
+            "route": "warm_server",
+            "confidence": "EXACT",
+            "n": 19,
+            "p95_ms": 265.625,
+            "window": "all_time",
+            "t_start_min": "2026-08-25T21:38:05Z",
+            "t_start_max": "2026-08-27T09:49:14Z",
+            "verdict": "unadjudicated",
+            "outcome": "re-affirmed",
+        },
         "measured": {"max_ms": 828.1, "p50_ms": 250.0, "n": 24, "unit": "process_ms"},
         "note": "Closest to the line of the process-measured rows; 250.0 > 200.",
         "spinoff": None,
@@ -544,6 +728,17 @@ SUSPENDED_OPS: Dict[str, Dict[str, object]] = {
         "spinoff": None,
     },
     "review_trail.write": {
+        "c2_citation": {
+            "route": "warm_server",
+            "confidence": "SPAWNS-UNKNOWN",
+            "n": 683,
+            "p95_ms": 62.5,
+            "window": "all_time",
+            "t_start_min": "2026-08-21T21:09:09Z",
+            "t_start_max": "2026-08-29T11:17:11Z",
+            "verdict": "adjudicated",
+            "outcome": "re-affirmed",
+        },
         "measured": {"max_ms": 212.5, "p50_ms": 212.5, "n": 1, "unit": "process_ms_cold"},
         "note": (
             "Dead on DR-372/DR-374, NOT on the 200ms bar — kill-ledger K-060 "
@@ -566,11 +761,33 @@ SUSPENDED_OPS: Dict[str, Dict[str, object]] = {
     },
     # --- convicted WITHOUT process-time evidence (wall clock only) ----------
     "session.sweep_consumed_handoffs": {
+        "c2_citation": {
+            "route": "warm_server",
+            "confidence": "EXACT",
+            "n": 1,
+            "p95_ms": 0.0,
+            "window": "all_time",
+            "t_start_min": "2026-08-27T13:05:37Z",
+            "t_start_max": "2026-08-27T13:05:37Z",
+            "verdict": "unadjudicated",
+            "outcome": "re-affirmed",
+        },
         "measured": {"max_ms": 104963.8, "p50_ms": 17411.8, "n": 198, "unit": "WALL_CLOCK"},
         "note": "No process_ms rows exist for this op. Never instrumented.",
         "spinoff": None,
     },
     "cartography.churn": {
+        "c2_citation": {
+            "route": "in_process",
+            "confidence": "EXACT",
+            "n": 2,
+            "p95_ms": 0.0,
+            "window": "all_time",
+            "t_start_min": "2026-08-27T16:10:01Z",
+            "t_start_max": "2026-08-27T16:24:13Z",
+            "verdict": "unadjudicated",
+            "outcome": "re-affirmed",
+        },
         "measured": {"max_ms": 2462.0, "p50_ms": 2462.0, "n": 1, "unit": "WALL_CLOCK"},
         "note": "n=1. One sample, wall clock, no process instrumentation.",
         "disposition": (
@@ -583,11 +800,40 @@ SUSPENDED_OPS: Dict[str, Dict[str, object]] = {
         "spinoff": None,
     },
     "handoff.has_live_children": {
+        "c2_citation": {
+            "route": "warm_server",
+            "confidence": "EXACT",
+            "n": 54,
+            "p95_ms": 359.375,
+            "window": "all_time",
+            "t_start_min": "2026-08-25T21:38:05Z",
+            "t_start_max": "2026-08-29T16:12:20Z",
+            "verdict": "adjudicated",
+            "outcome": "re-affirmed",
+        },
         "measured": {"max_ms": 7120.0, "p50_ms": 1666.6, "n": 233, "unit": "WALL_CLOCK"},
         "note": (
             "Compute retained UNDECORATED in ops/handoff_children.py — "
             "handoff_close_origin_stub._try_close needs the children payload that "
-            "has_live_children_many does not return. Do not restore the decorator."
+            "has_live_children_many does not return. Do not restore the decorator. "
+            "CHILDREN-PAYLOAD QUESTION CLOSED 2026-08-30 (hnd-handoff-has-live-"
+            "children-comp-b26358): no gap. _try_close imports the single-candidate "
+            "compute directly (handoff_close_origin_stub.py:250), calls it at :987 "
+            "and reads guard_res['children'] at :1018; the compute returns that key "
+            "on every reply including the fail-closed one. No batch path reaches "
+            "_try_close — has_live_children_many has exactly one caller "
+            "(reap_in_flight_claims.py:361), which never enters this route, so the "
+            "drift the spinoff was minted to test does not exist. The compute has "
+            "FIVE in-process consumers, not one: _try_close, handoff_transition.py"
+            ":888, deliverable_cascade.py:655, fleet/migrate_handoff_vocabulary.py"
+            ":983, workstream_complete:2555 — the scope limit below is wider than "
+            "it reads. The live cost is NOT this verdict but the corpus walk under "
+            "it: _collect_handoff_paths measures 218.8ms process time over 1165 "
+            "paths (275 live + 878 archived), and two sites re-walk it PER ITEM in "
+            "a loop — post_commit_tail.py:834-839 per stamped baton (commit hot "
+            "path) and migrate_handoff_vocabulary.py:981 per target. Three batons "
+            "on one commit is 656ms process, over DR-344. Hoisting that walk is the "
+            "open item; the verdict itself is not what costs."
         ),
         "disposition": (
             "GRAVESTONE, SCOPED TO THE ARCHIVE-TIME CHECK — not to the compute. PM "
@@ -622,6 +868,17 @@ SUSPENDED_OPS: Dict[str, Dict[str, object]] = {
         "spinoff": None,
     },
     "handoff.reconcile_close_terminal": {
+        "c2_citation": {
+            "route": "in_process",
+            "confidence": "EXACT",
+            "n": 1,
+            "p95_ms": 0.0,
+            "window": "all_time",
+            "t_start_min": "2026-08-27T16:24:13Z",
+            "t_start_max": "2026-08-27T16:24:13Z",
+            "verdict": "unadjudicated",
+            "outcome": "re-affirmed",
+        },
         "measured": {"max_ms": 27947.1, "p50_ms": 3507.5, "n": 8, "unit": "WALL_CLOCK"},
         "note": "Module deleted outright; no non-test importers.",
         "disposition": (
@@ -643,6 +900,17 @@ SUSPENDED_OPS: Dict[str, Dict[str, object]] = {
         "spinoff": None,
     },
     "merge_assemble.brief": {
+        "c2_citation": {
+            "route": "warm_server",
+            "confidence": "EXACT",
+            "n": 34,
+            "p95_ms": 31.25,
+            "window": "all_time",
+            "t_start_min": "2026-08-26T21:33:35Z",
+            "t_start_max": "2026-08-27T10:47:10Z",
+            "verdict": "adjudicated",
+            "outcome": "re-affirmed",
+        },
         "measured": {"max_ms": 1357.2, "p50_ms": 1087.3, "n": 52, "unit": "WALL_CLOCK"},
         "note": "merge_assemble.apply survives in the same module and is untouched.",
         "disposition": (
@@ -657,6 +925,17 @@ SUSPENDED_OPS: Dict[str, Dict[str, object]] = {
         "spinoff": None,
     },
     "fleet.archive_completed_plans": {
+        "c2_citation": {
+            "route": "warm_server",
+            "confidence": "EXACT",
+            "n": 2,
+            "p95_ms": 0.0,
+            "window": "all_time",
+            "t_start_min": "2026-08-27T13:05:37Z",
+            "t_start_max": "2026-08-27T13:05:37Z",
+            "verdict": "unadjudicated",
+            "outcome": "re-affirmed",
+        },
         "measured": {"max_ms": 27940.0, "p50_ms": 996.1, "n": 246, "unit": "WALL_CLOCK"},
         "note": (
             "Resolved in-process by ceremony/commit_pipeline.py and tail_ops.py; "
@@ -708,6 +987,164 @@ SUSPENDED_OPS: Dict[str, Dict[str, object]] = {
     # NAME, and a name survives the deletion of the code it named. Before
     # writing one, check that the implementation you measured is the
     # implementation the key resolves to today.
+}
+
+
+# --- OTHER OVER-BAR OPS THE C2 QUERY FOUND (2026-08-30, plan `2026-08-29-a-
+# zero-is-under-one-tick-not-unmeasured.md`, C4) ---------------------------
+#
+# NOT a second SUSPENDED_OPS, and membership here does nothing operational.
+# Membership in SUSPENDED_OPS refuses dispatch (module docstring above); the
+# plan that produced this table draws a hard line between CONVICTING an op --
+# writing down that its own evidence puts it over a brightline bar -- and
+# REMEDYING it -- suspending, gravestoning, or fixing it, which that plan
+# names explicitly out of scope: "Fixing any op this plan convicts.
+# Convicting is the deliverable; each conviction's remedy is its own plan
+# under the kill-bar rule." An entry below is evidence for a reader, exactly
+# like this module's own `measured` fields, never a refusal.
+#
+# `records.query` is the one entry here entitled to `convicted: True`: EXACT
+# confidence, n=328 >= 30, and it breaches the 500ms kill bar on its own
+# current-traffic figure. Every other op below carries `convicted: False` --
+# the chunk that wrote this table is explicit that recording a thin (n < 30)
+# or floored (spawns > 0) figure AS a conviction "is the failure this chunk
+# exists to avoid".
+OVER_BAR_OPS_PENDING_REMEDY: Dict[str, Dict[str, object]] = {
+    "records.query": {
+        "convicted": True,
+        "bar": "kill",
+        "measured": {
+            "p95_ms": 859.4,
+            "n": 328,
+            "window": "24h_production",
+            "unit": "process_ms",
+        },
+        "all_time": {"p95_ms": 312.5, "n": 831},
+        "confidence": "EXACT",
+        "route": None,
+        "note": (
+            "Absent from SUSPENDED_OPS entirely. p95 859.4ms over the 500ms "
+            "kill bar on current 24h production traffic (n=328), trending "
+            "worse than its 312.5ms all-time figure (n=831). EXACT: none of "
+            "the 831 all-time rows carries a spawn, so the process-time "
+            "figure is the op's real cost, not a floor. Convicted here; the "
+            "remedy (suspend, gravestone, or fix) is a separate plan's job -- "
+            "this chunk's own scope excludes fixing what it convicts."
+        ),
+    },
+    "session.reap_claims_for_repos": {
+        "convicted": False,
+        "bar": "kill",
+        "measured": {
+            "p95_ms": 34265.6,
+            "n": 4,
+            "window": "24h_production",
+            "unit": "process_ms",
+        },
+        "confidence": "UNADJUDICATED",
+        "route": None,
+        "note": (
+            "n=4 (n=6 all-time). The most suspicious figure in the sweep -- "
+            "either the worst op on the box or an artifact, and n=4 cannot "
+            "tell you which. Recorded as unadjudicated, not convicted."
+        ),
+    },
+    "handoff.housekeeping": {
+        "convicted": False,
+        "bar": "kill",
+        "measured": {
+            "p50_ms": 3000.0,
+            "n": 4,
+            "window": "24h_production",
+            "unit": "process_ms",
+        },
+        "confidence": "UNADJUDICATED",
+        "route": None,
+        "note": (
+            "This op NAME already carries its own SUSPENDED_OPS row above -- "
+            "a gravestone, module and registrations deleted, successor "
+            "housekeeping.cycle live. This is a SEPARATE figure: 24h "
+            "production traffic still recorded against the dead name, n=4. "
+            "Not reconciled here (out of scope) and not read as evidence the "
+            "gravestone needs revisiting -- a gravestone is never reinstated "
+            "regardless of what a fresh figure says (module docstring above)."
+        ),
+    },
+    "session.safe_commit_offer": {
+        "convicted": False,
+        "bar": "kill",
+        "measured": {
+            "p95_ms": 984.4,
+            "n": 56,
+            "window": "24h_production",
+            "unit": "process_ms",
+        },
+        "confidence": "FLOOR",
+        "route": None,
+        "note": (
+            "n=56 is adjudicable, but the op SPAWNS (14 of 88 all-time rows "
+            "carry a spawn, max 6), so the figure is a FLOOR -- child CPU is "
+            "excluded, per the two universal spawn-floor lessons this plan's "
+            "Problem section cites. Recorded as over the 500ms kill bar with "
+            "the floor stated, never as a measured cost."
+        ),
+    },
+    "session.reap": {
+        "convicted": False,
+        "bar": "kill",
+        "measured": {
+            "p95_ms": 625.0,
+            "n": 6,
+            "window": "24h_production",
+            "unit": "process_ms",
+        },
+        "confidence": "UNADJUDICATED",
+        "route": None,
+        "note": "n=6. Recorded as unadjudicated, not convicted.",
+    },
+    "memo.send": {
+        "convicted": False,
+        "bar": "fix",
+        "measured": {
+            "p95_ms": 468.8,
+            "n": 48,
+            "window": "24h_production",
+            "unit": "process_ms",
+        },
+        "confidence": "FLOOR",
+        "route": None,
+        "note": (
+            "SPAWNS (54 of 136 all-time rows, max 2): a FLOOR over the 200ms "
+            "fix bar. The floor alone does not establish where it sits "
+            "against the 500ms kill bar -- child CPU is excluded and could "
+            "carry it on either side of that line."
+        ),
+    },
+    "session.warm_start": {
+        "convicted": False,
+        "bar": "fix",
+        "measured": {
+            "p50_ms": 406.2,
+            "n": 140,
+            "window": "24h_production",
+            "unit": "process_ms",
+        },
+        "confidence": "EXACT",
+        "route": "in_process",
+        "note": (
+            "Over the 200ms fix bar on its face, but this op is ALREADY "
+            "doubly gravestoned (K-032, K-061) with its module deleted -- "
+            "state/audits/2026-08-30-session-warm-start-closure-verification"
+            ".md found an overlapping figure (p50 391.8ms, n=23, spawns: 0) "
+            "to be telemetry residue of a caller still dispatching a "
+            "METHOD_NOT_FOUND name, not a live op's cost, and records that "
+            "leak as closed 2026-08-30T10:11:40Z. This chunk's larger n=140 "
+            "reading was not individually re-verified against that closure "
+            "timestamp -- recorded with that context stated rather than "
+            "convicted as a fresh finding, and NOT read as a reason to "
+            "revisit either gravestone."
+        ),
+    },
 }
 
 

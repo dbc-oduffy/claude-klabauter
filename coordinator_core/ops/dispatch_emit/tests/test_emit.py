@@ -1102,6 +1102,16 @@ def test_compose_script_commit_prompt_names_every_measured_false_refusal():
     assert "ALREADY COMMITTED" in script
     assert "THE CALL RETURNS THE SHA" in script
     assert "ON THE CALL IS A WRONG KEYWORD, NOT AN ABSENT ROUTE" in script
+    assert "IS A MISSING" in script and "blob_fallback" in script
+    assert "hash_worktree_blobs_via_spawn" in script
+    # The refusing set is a property of the TARGET repo's .gitattributes,
+    # not of file extension: an emitted script cannot know its target tree,
+    # so a file-kind list here would tell a committer dispatched into a
+    # blanket-`* text=auto` repo that the case it is about to hit does not
+    # happen (doe-claude-9f, 2026-08-30, measured both ways).
+    assert "property of the TARGET REPO" in script
+    assert "check-attr text eol" in script
+    assert "UNCONDITIONALLY" in script
 
     errors = [f for f in run_checks(script) if f.severity is Severity.ERROR]
     assert errors == []

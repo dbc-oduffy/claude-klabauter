@@ -364,6 +364,7 @@ behavior undocumented.
 
 from __future__ import annotations
 
+import os
 import re
 import shlex
 from datetime import datetime, timezone
@@ -3043,6 +3044,27 @@ def _build_reason(
 _FAIL_OPEN_LOG_RELPATH = ("state", "destructive-guard-fail-open.log")
 _NOT_ATTEMPTED = "<not-attempted>"
 
+#: Rotation cap for the fail-open log (measured incident: 80,204,921 bytes /
+#: 182,671 lines, unbounded, still appending -- see this change's plan). 5MB
+#: is small enough that a stat+rename never approaches the PreToolUse
+#: brightline (CLAUDE.md § The brightline), and large enough that rotation
+#: fires on the order of thousands of records rather than every few dozen.
+_FAIL_OPEN_LOG_MAX_BYTES = 5 * 1024 * 1024
+#: Rotated generations kept alongside the live file (`.1` newest rotated,
+#: `.3` oldest) -- a small fixed count, matching the module's "cheap and
+#: bounded" observability design intent rather than a full retention policy.
+_FAIL_OPEN_LOG_MAX_GENERATIONS = 3
+
+#: Narrowest match for the synthetic-session shape observed polluting the
+#: production log (measured incident: ~110 one-record synthetic sessions in
+#: a single 14-minute window). This is the literal prefix minted by
+#: `coordinator_core.bash_guards.tests.guard_message_corpus` (`"guard-
+#: message-corpus-%s" % uuid.uuid4().hex` and its `-audience-` variant) --
+#: that module is this package's own test corpus and the only known writer
+#: of this shape; no broader test/synthetic sentinel convention exists
+#: elsewhere in this package to follow instead.
+_SYNTHETIC_CORPUS_SESSION_PREFIX = "guard-message-corpus-"
+
 
 def _fail_open_log_path() -> Path:
     """Return the settings-home-rooted fail-open log path.
@@ -3065,6 +3087,55 @@ def _fail_open_log_path() -> Path:
     silently truncated by an unrelated orientation-cache regen cycle.
     """
     return settings_home() / Path(*_FAIL_OPEN_LOG_RELPATH)
+
+
+def _rotate_fail_open_log_if_oversized(log_path: Path) -> None:
+    """Best-effort size-based rotation, stat-and-rename only -- never a scan
+    or line count of the log body (PreToolUse hot path, CLAUDE.md § The
+    brightline). MUST NEVER raise, deny, or delay the guard verdict: this is
+    called from inside `_log_fail_open`'s own best-effort `try`, and every
+    step here is independently wrapped so one failed rename (e.g. a
+    concurrent peer session mid-rotation on the same shared machine) cannot
+    prevent the remaining shifts or the caller's own append from proceeding.
+
+    Standard oldest-first logrotate shape: drop generation N, shift N-1..1
+    up by one, then move the live file to generation 1. `os.replace` (not
+    `Path.rename`) throughout -- POSIX `rename(2)` and Windows `MoveFileEx`
+    both make `os.replace` an atomic overwrite-if-exists, unlike
+    `Path.rename`, which raises `FileExistsError` on Windows when the
+    destination is already present.
+    """
+    try:
+        if log_path.stat().st_size < _FAIL_OPEN_LOG_MAX_BYTES:
+            return
+    except OSError:
+        return
+    for gen in range(_FAIL_OPEN_LOG_MAX_GENERATIONS, 0, -1):
+        if gen == _FAIL_OPEN_LOG_MAX_GENERATIONS:
+            oldest = log_path.with_name(f"{log_path.name}.{gen}")
+            try:
+                oldest.unlink(missing_ok=True)
+            except OSError:
+                pass
+            continue
+        src = log_path.with_name(f"{log_path.name}.{gen}")
+        dst = log_path.with_name(f"{log_path.name}.{gen + 1}")
+        try:
+            if src.exists():
+                os.replace(src, dst)
+        except OSError:
+            pass
+    try:
+        os.replace(log_path, log_path.with_name(f"{log_path.name}.1"))
+    except OSError:
+        pass
+
+
+def _is_synthetic_corpus_session(session_id: str) -> bool:
+    """True for a `session_id` minted by this package's own
+    `guard_message_corpus` test corpus (see `_SYNTHETIC_CORPUS_SESSION_PREFIX`).
+    """
+    return session_id.startswith(_SYNTHETIC_CORPUS_SESSION_PREFIX)
 
 
 def _log_fail_open(
@@ -3092,17 +3163,25 @@ def _log_fail_open(
     via its own `*_present` flag -- which of the three fail-open branches
     fired, and a safely-truncated command.
 
+    A `session_id` matching `_is_synthetic_corpus_session` is dropped before
+    any rotation check or write -- this package's own test corpus must never
+    pollute the production log it is measured against.
+
     NEVER raises (PreToolUse-hook contract, matching every sibling
     best-effort writer in this codebase, e.g.
     `coordinator_core.ops.ceremony.detached_spawn._log_spawn_failure`): a
     broken observability path must never become the thing that blocks a
     tool call. Any failure -- settings-home resolution, directory
-    creation, the write itself -- is swallowed silently.
+    creation, rotation (`_rotate_fail_open_log_if_oversized`), the write
+    itself -- is swallowed silently.
     """
     try:
-        log_path = _fail_open_log_path()
-        timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         session_id = payload.get("session_id") or ""
+        if _is_synthetic_corpus_session(session_id):
+            return
+        log_path = _fail_open_log_path()
+        _rotate_fail_open_log_if_oversized(log_path)
+        timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         cwd = payload.get("cwd")
         fields = {
             "branch": branch,

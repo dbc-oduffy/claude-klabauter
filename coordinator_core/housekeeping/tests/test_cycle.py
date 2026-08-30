@@ -294,3 +294,31 @@ def test_run_reports_gate_clear_conflict_without_losing_the_cycle(repo, monkeypa
     # The rest of the cycle still ran: both pre-terminal records archived.
     assert set(result["archived"]) == {t1_id, t2_id}
     assert result["failed"] == []
+
+
+def test_run_on_a_repo_that_has_never_archived_is_not_a_traceback(tmp_path):
+    """A repo with no `archive/handoffs/` yet has an EMPTY archive, not a
+    broken one.
+
+    `build_index`'s default `onerror` re-raises, so routing an absent archive
+    root through `open_index` made the FIRST `archive-stamp-cli ship-handoff`
+    in a freshly onboarded repo raise `FileNotFoundError` out of
+    `cs_ship_handoff` -- a traceback where the contract is an error dict, and
+    a handoff left unstamped. Found while measuring this call path
+    (state/kill-ledger.md § K-022, 2026-08-30), not by a test."""
+    root = _init_repo(tmp_path / "repo")
+    _write_frontmatter(
+        root / "state" / "handoffs" / "2026-08-01_00001_plain.md",
+        {"handoff_id": "hnd-only", "deployment_state": "ready_to_fire"},
+    )
+    _git(root, "add", "-A")
+    _git(root, "commit", "-q", "-m", "fixture baseline")
+    assert not (root / "archive" / "handoffs").exists()
+
+    result = cycle.run(root, cap=150)
+
+    assert result["archived"] == []
+    assert result["failed"] == []
+    assert result["live_read_count"] == 1
+    assert result["index_rebuilt"] is False
+    assert result["index_cache_written"] is False

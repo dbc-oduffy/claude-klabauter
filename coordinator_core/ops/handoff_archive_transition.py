@@ -883,8 +883,16 @@ def _commit_retained_supersede_flip(
 # process-time bar (kill ledger K-109). The dispatchable surface is gone; this
 # body survives UNDECORATED because the archival ceremony still runs at the
 # occasions that create the work -- pickup, workstream-complete,
-# workday-complete -- through `archive_stamp._call_handoff_archive_transition`,
-# which imports this symbol by name at call time.
+# workday-complete.
+#
+# `archive_stamp._call_handoff_archive_transition` no longer imports this symbol
+# itself: since C8 (2026-08-30) it calls `housekeeping.cycle`, whose transition
+# leg imports `_handler` here. Three other live sites import this module as a
+# library too -- `ops/handoff_transition.py`, `ops/baton_drift_sweep.py`
+# (`_handoff_live_holder_session`) and `ops/fleet/migrate_handoff_vocabulary.py`
+# (`_commit_retained_supersede_flip`) -- so this body is load-bearing on four
+# routes, not one. Measured through all three `archive-stamp-cli` verbs on
+# 2026-08-30 and under the 500ms brightline on each: kill ledger K-022.
 #
 # PM ruling 2026-08-27: boot-time archival is OUT and is not coming back; the
 # lifecycle occasions above are where handoffs get archived. That makes this

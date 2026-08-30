@@ -157,6 +157,95 @@ _RATIFIED_SUSPENSIONS = frozenset({
 })
 
 
+#: The 18 rows C3 re-read against `op_adjudication.adjudicate`, 2026-08-30
+#: (plan `2026-08-29-a-zero-is-under-one-tick-not-unmeasured.md`). Fixed by
+#: that chunk's own dispatch brief, not derived from the live roster: a row
+#: added to SUSPENDED_OPS after C3 landed owes its own citation on its own
+#: schedule and this list must not silently grow to demand one of it.
+_C3_CITED_OPS = frozenset({
+    "session.boot_sweep",
+    "ceremony.post_commit_tail",
+    "write_surface.emit_manifest",
+    "deliverable.cascade_terminal",
+    "fleet.prune_closed_bugs",
+    "ceremony.commit",
+    "eol.census",
+    "eol.repair",
+    "roadmap.serve",
+    "handoff.reconcile_open",
+    "handoff.archive_transition",
+    "review_trail.write",
+    "session.sweep_consumed_handoffs",
+    "cartography.churn",
+    "handoff.has_live_children",
+    "handoff.reconcile_close_terminal",
+    "merge_assemble.brief",
+    "fleet.archive_completed_plans",
+})
+
+_C2_CONFIDENCE_LABELS = frozenset({"EXACT", "FLOOR", "SPAWNS-UNKNOWN", None})
+_C2_VERDICTS = frozenset({"adjudicated", "unadjudicated", "no_rows_in_window"})
+
+
+def test_c3_cited_ops_are_still_on_the_roster():
+    """The 18 named by C3's dispatch brief must not have quietly vanished --
+    a removal is real news (`test_reinstated_ops_are_pruned_from_the_floor`'s
+    job to police on the ratified floor), but this fixed list is a second,
+    independent check specific to the batch this plan's C3 chunk actually read.
+    """
+    live = set(op_budget_suspension.SUSPENDED_OPS)
+    missing = _C3_CITED_OPS - live
+    assert not missing, (
+        f"C3 cited these ops against the adjudication query, and they are no "
+        f"longer on the roster: {sorted(missing)}. If they earned their way "
+        f"back or were deleted, that is real news belonging in its own commit "
+        f"note, not a silent disappearance from this fixed list."
+    )
+
+
+def test_every_c3_cited_entry_carries_a_c2_citation():
+    """Prime exit criterion (plan `2026-08-29-a-zero-is-under-one-tick-not-
+    unmeasured.md`): every one of the 18 entries cites a figure produced by
+    `op_adjudication`'s query, recorded with the op, the route, the explicit
+    `t_start` bounds of its window, and its EXACT/FLOOR/SPAWNS-UNKNOWN
+    confidence label with n -- never a bare number with no instrument behind
+    it. This guard checks the SHAPE of that citation, not its numeric value
+    (this file's own negative-spec: no test here pins a measured number).
+    """
+    for op in sorted(_C3_CITED_OPS):
+        record = op_budget_suspension.SUSPENDED_OPS.get(op)
+        assert isinstance(record, dict), f"{op}: not on the roster"
+        citation = record.get("c2_citation")
+        assert isinstance(citation, dict), (
+            f"{op}: no c2_citation -- every C3-readjudicated row must cite a "
+            f"figure produced by op_adjudication.adjudicate, not a hand-derived "
+            f"number nobody can rerun"
+        )
+        assert "route" in citation, f"{op}: c2_citation missing route"
+        assert "n" in citation and isinstance(citation["n"], int), (
+            f"{op}: c2_citation missing an integer n"
+        )
+        assert citation.get("confidence") in _C2_CONFIDENCE_LABELS, (
+            f"{op}: c2_citation confidence {citation.get('confidence')!r} is not "
+            f"one of EXACT/FLOOR/SPAWNS-UNKNOWN/None"
+        )
+        assert citation.get("verdict") in _C2_VERDICTS, (
+            f"{op}: c2_citation verdict {citation.get('verdict')!r} is not a "
+            f"recognised op_adjudication verdict"
+        )
+        assert "t_start_min" in citation and "t_start_max" in citation, (
+            f"{op}: c2_citation missing its window's t_start bounds"
+        )
+        if citation.get("verdict") == "no_rows_in_window":
+            assert citation.get("n") == 0, (
+                f"{op}: no_rows_in_window citation carries a nonzero n"
+            )
+        else:
+            assert citation.get("n", 0) > 0, (
+                f"{op}: citation claims rows exist but n is not positive"
+            )
+
+
 def test_bar_is_never_raised():
     assert op_budget_suspension.SUSPENSION_BAR_MS <= _RATCHET_BAR_MS, (
         "The suspension bar was raised. It is a ratchet: lower it or leave it. "

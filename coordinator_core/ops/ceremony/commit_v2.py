@@ -77,6 +77,7 @@ from coordinator_core.git.git_state import read_tree_spine
 from coordinator_core.ipc import register_op
 from coordinator_core.ops.ceremony.commit_gates import (
     carry_gate,
+    declared_deletion_gate,
     op_scope_coverage_gate,
 )
 from coordinator_core.ops.fleet._common import check_repo_root, main_worktree_root
@@ -282,6 +283,19 @@ def _pre_commit_gates(
     in the repoint was an in-commit caller on the ceremony route, and putting
     it on the general route is not the way to give it one back.
 
+    Deletion accountability itself is NOT skipped, though -- it is covered by
+    a DIFFERENT oracle, `declared_deletion_gate` (docs/plans/2026-08-30-
+    deletion-accountability-without-the-cere.md), called explicitly below
+    rather than through the loop. `commit_v2` receives `params.deleted_paths`
+    as a structured declaration of what this commit removes -- a parameter
+    the ceremony committer never had, which is exactly why the ceremony gate
+    had to parse the commit body instead. The new gate compares that
+    declaration against staged reality directly: every in-scope staged
+    deletion must appear in `deleted_paths`, no prose required. So the ~86%
+    figure above stays true of `deletion_block_gate` specifically -- its
+    prose-body oracle is still the wrong shape for this route -- but the gap
+    it left, an undeclared deletion landing unnoticed, is now closed.
+
     WHY `dirty_tree_gate` IS NOT HERE EITHER, and this one is redundancy
     rather than blast radius. DR-227's vacuity argument already proves that
     for a SCOPED caller the only case-(c) member reachable at all is an
@@ -310,6 +324,14 @@ def _pre_commit_gates(
     gate_paths = list(paths) + list(deleted_paths)
     if not gate_paths:
         return None
+
+    # `declared_deletion_gate` needs the declaration argument the other two
+    # do not, so it does not fit the uniform `(name, gate)` loop below --
+    # called explicitly, BEFORE `commit_paths` (a refusal after the commit
+    # lands is not a refusal), passing `deleted_paths` as the declaration.
+    deletion_outcome = declared_deletion_gate(worktree_root, gate_paths, deleted_paths)
+    if not deletion_outcome.passed:
+        return "declared_deletion_gate: " + "; ".join(deletion_outcome.diagnostics[:5])
 
     # Named explicitly rather than read off `gate.__name__`: the refusal text
     # is what the caller acts on, and a decorated, wrapped, or patched gate

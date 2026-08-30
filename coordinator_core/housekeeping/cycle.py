@@ -205,11 +205,24 @@ def run(repo_root: PathLike, cap: int, *, close: bool = True) -> Dict[str, Any]:
     # `rebuilt` is reported out for the brightline gate to assert on -- it is
     # never branched on for correctness, since a cache miss and a cache hit
     # must produce the same verdicts.
+    # A repo that has never archived a handoff has no `archive/handoffs/` at
+    # all -- an EMPTY archive, not a scan failure. `build_index`'s default
+    # `onerror` re-raises (deliberately: a vanished SUBdirectory mid-walk is a
+    # gap worth failing on), so calling through it on an absent root turns the
+    # first ship/chain/supersede in a freshly onboarded repo into an uncaught
+    # FileNotFoundError out of `cs_ship_handoff` -- a traceback where the
+    # contract is an error dict, and a handoff that never gets stamped.
+    # Persistence is skipped on the same branch: an empty index cached against
+    # a directory that does not exist yet only costs the next cycle a rebuild.
     cache_path = archive_index_mod.cache_path_for(common_dir)
+    archive_dir_exists = archive_dir.is_dir()
     archive_idx: ArchiveIndex
-    archive_idx, index_rebuilt = archive_index_mod.open_index(
-        archive_dir, cache_path
-    )
+    if archive_dir_exists:
+        archive_idx, index_rebuilt = archive_index_mod.open_index(
+            archive_dir, cache_path
+        )
+    else:
+        archive_idx, index_rebuilt = ArchiveIndex(archive_dir=archive_dir), False
 
     # -- C. Close finished handoffs, under the lock, one file at a time. --
     resolver = make_resolver(records, archive_idx)
@@ -248,7 +261,11 @@ def run(repo_root: PathLike, cap: int, *, close: bool = True) -> Dict[str, Any]:
 
     # Persist for the next cycle. Best-effort by construction: a cache that
     # cannot be written costs the next cycle a rebuild, nothing else.
-    index_cache_written = archive_index_mod.save_index(archive_idx, cache_path)
+    index_cache_written = (
+        archive_index_mod.save_index(archive_idx, cache_path)
+        if archive_dir_exists
+        else False
+    )
 
     return {
         "closed": closed,

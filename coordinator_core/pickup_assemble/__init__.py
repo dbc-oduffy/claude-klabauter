@@ -1901,12 +1901,33 @@ def _repo_relative_artifact_path(artifact_path: str, repo_root: Path) -> str:
     refusal lives here rather than only in `apply`/`drop`'s handlers —
     both already call `assert_in_repo_root` on their own resolved paths
     (PM ruling D-G) and this is the same bound applied at the read path's
-    single entry point. Raises `OutOfRepoPath` for an absolute path that
-    resolves outside `repo_root`; returns a relative input unchanged.
+    single entry point. Raises `OutOfRepoPath` for:
+      - an absolute path that resolves outside `repo_root`, and
+      - a relative path carrying a literal `..` traversal component
+        (mirrors `_is_safe_elision_path`'s refusal and
+        `apply_base.reject_path_traversal`'s stated principle — a `..`
+        segment has no legitimate value in this slot, whatever it's
+        relative to).
+
+    A relative path with NO `..` component is deliberately returned
+    unchanged, uninspected, even though it has not been proven to resolve
+    inside `repo_root` here — that is intentional, not an oversight: the
+    `/<repo-basename>/<rest>` paste shape `_reanchor_repo_relative`
+    exists to recover is relative-looking on Windows but absolute on
+    POSIX, so running `assert_in_repo_root` on every relative input would
+    refuse that shape on POSIX before the reanchor tier ever ran it. The
+    remainder of `resolve_artifact`'s ladder (reanchor, sanitize, elision
+    glob, suffix match, archive fallback) re-joins this string onto
+    `repo_root` at each tier and is relied on to keep those joins inside
+    the repo; this function only closes the traversal shape that would
+    otherwise skip every one of those tiers outright.
     """
-    if not Path(artifact_path).is_absolute():
+    candidate = Path(artifact_path)
+    if not candidate.is_absolute():
+        if any(part == ".." for part in candidate.parts):
+            raise OutOfRepoPath(f"{artifact_path} carries a '..' traversal component")
         return artifact_path
-    resolved = assert_in_repo_root(Path(artifact_path), repo_root)
+    resolved = assert_in_repo_root(candidate, repo_root)
     return resolved.relative_to(repo_root.resolve()).as_posix()
 
 

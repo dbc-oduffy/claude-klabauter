@@ -248,6 +248,9 @@ from coordinator_core.guard_advisory_counter import (
     record_advisory_fire as _record_advisory_fire,
     record_deny_fire as _record_deny_fire,
 )
+from coordinator_core.bash_guards.chain_arrival_ledger import (
+    record_chain_arrival as _record_chain_arrival,
+)
 from coordinator_core.warm.caller_context import (
     resolve_caller_context as _resolve_caller_context,
 )
@@ -329,6 +332,7 @@ from coordinator_core.bash_guards.block_dev_repo_sentinel_removal import (
 )
 from coordinator_core.bash_guards.block_stash_destruction import (
     check as _check_stash_destruction,
+    check_apply_advisory as _check_stash_apply_advisory,
     MATCHERS as _matchers_stash_destruction,
 )
 from coordinator_core.bash_guards.block_subagent_stash_creation import (
@@ -1484,6 +1488,20 @@ def _evaluate_payload_json_budgeted(
     # contract").
     cmd = cmd.replace("\r", "")
 
+    # Chain-arrival record (2026-08-30,
+    # state/audits/2026-08-30-why-the-stash-guards-did-not-fire.md): one line
+    # per evaluation that reaches this point, BEFORE
+    # `guard_chain` is even built -- piggybacks on the `session_id`/`agent_id`
+    # already parsed above rather than resolving identity a second time.
+    # `_record_chain_arrival` never raises (see its own module docstring's
+    # FAIL-SILENT contract); the outer try/except here is belt-and-braces
+    # only, matching the same defensive posture every other call site in this
+    # loop takes toward its own recorder.
+    try:
+        _record_chain_arrival(session_id, bool(agent_id), cwd)
+    except Exception:  # noqa: BLE001 -- belt-and-braces; the callee already never raises
+        pass
+
     # M5 resolve-once (AC-8): computed AT MOST once per dispatch, gated on a
     # cheap substring pre-filter so the walk is skipped entirely for the
     # majority of calls no cohort-A guard would have inspected anyway (see
@@ -2422,6 +2440,23 @@ def _build_guard_chain(
         # comment above: the declaration on this module's dead `check()` leg
         # does not describe `check_advisory`'s own tool-name coverage.
         GuardEntry("block-dev-repo-sentinel-removal-advisory", lambda: _check_dev_repo_sentinel_removal_advisory(payload), False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.NOT_COST_ARGUED, matchers=COMMAND_TOOL_NAMES),
+        # `stash-apply-verification-advisory` -- the ADVISORY_REWRITE sibling
+        # of the two CONFINEMENT_DENY stash guards above, and deliberately
+        # NOT one of them. `git stash apply` used as a data-loss CHECK is a
+        # false-green generator: a clean result proves only that the
+        # OVERLAPPING files match, and says nothing about content unique to
+        # the stash when the stash's base is behind HEAD. Measured incident
+        # 2026-08-29 -- a peer read that no-op as "no data loss" and filed
+        # it, while three assertions in test_no_uncounted_spawn_on_budgeted_
+        # path.py sat red at HEAD from the content it had not looked at.
+        # ADVISORY per DR-277's default, argued rather than assumed: the
+        # harm is a wrong CONCLUSION, not lost work (the entry survives), and
+        # the command text cannot separate "verifying" from the EM's
+        # legitimate "inspecting an entry I own without popping it" -- so a
+        # deny would block real work to prevent a misreading. Ordering matches
+        # the sentinel/worktree/stash guards above for the same `offer-git-c`
+        # short-circuit reason.
+        GuardEntry("stash-apply-verification-advisory", lambda: _check_stash_apply_advisory(payload), False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.NOT_COST_ARGUED, matchers=tuple(_matchers_stash_destruction)),
         # Same ordering requirement as the sentinel/worktree/stash/branch
         # guards above, for the identical `offer-git-c` short-circuit
         # reason: that check rewrites `cd <dir> && git <sub>` into `git -C

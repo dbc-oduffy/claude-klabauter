@@ -126,6 +126,36 @@ non-identity-gated guards: any `COORDINATOR_OVERRIDE_*` escape hatch is
 settable by the very caller being constrained, and a stash entry is cheap to
 leave orphaned, so there is no legitimate need that the forward path in the
 deny message does not already serve.
+
+APPLY ADVISORY LEG (`check_apply_advisory`, appended 2026-08-30). A SEPARATE
+registered leg, ADVISORY_REWRITE band (allow + `additionalContext`), for
+`git stash apply` -- not a change to `check`'s own drop/clear hard-deny
+above. Confirmed live: a peer session verified "no data loss" after a
+stash by running `git stash apply "stash@{0}"`, got a clean no-op, and
+filed that as the finding. It was wrong: a clean `apply` proves only that
+the OVERLAPPING files matched; it says nothing about content unique to
+the stash when the stash's base is behind HEAD, which is exactly the
+shape a peer's stashed-then-superseded work takes. The correct read-only
+check, `git stash show --name-only stash@{N}`, was reached for by hand
+after the fact -- this leg is the artifact that puts it in front of the
+caller before the wrong check is typed, per this project's own north
+star: name the artifact, not "the operator remembers."
+
+DR-277 CLASS: ADVISORY, deliberately not a third hard-deny alongside
+`check`'s drop/clear. `apply` genuinely mutates the tree (unlike `show`),
+but the harm from a wrong verification finding is a false conclusion, not
+data loss -- the data survives either way, recoverable by hand, same
+argument DR-277 requires against a hard deny. Denying `apply` outright
+would also remove the EM's own legitimate use of it (restoring a
+KNOWN-own entry without popping, e.g. to inspect before deciding whether
+to drop) for a case where the tool cannot distinguish "verifying" from
+"restoring" intent from the command text alone -- an advisory nudge that
+still lets the command through fits both intents; a hard deny would only
+fit one. Neither of DR-277's two named hard-deny carve-outs (irrecoverable
+action, confinement/identity boundary) applies here: `apply` is
+recoverable (module docstring "WHY DROP/CLEAR AND NOT POP/APPLY" above)
+and this leg is not identity-gated -- it is a content nudge, not a
+boundary.
 """
 
 from __future__ import annotations
@@ -245,30 +275,44 @@ def _classify_stash_subcommand(second: Optional[str]) -> Optional[str]:
     return None
 
 
-def _evaluate_legacy(text: str) -> Optional[str]:
+def _evaluate_legacy(
+    text: str, classify=_classify_stash_subcommand
+) -> Optional[str]:
     """Narrow free-text fallback -- see module docstring "FAIL-CLOSED
     FALLBACK, narrowly scoped". Only ever called on text already known to
     contain a `stash` word; never the guard's primary classification path.
+
+    `classify` defaults to `_classify_stash_subcommand` (the drop/clear
+    hard-deny set) and is overridden by `check_apply_advisory` below to
+    reuse this exact walk for the `apply` advisory leg -- see that
+    function's own docstring for why a parametrized classifier, not a
+    second copy of this walk, is the right shape for a second leg that
+    differs only in WHICH second-level subcommand it is looking for.
     """
     for m in _STASH_WORD_RE.finditer(text):
         nxt = _NEXT_WORD_AFTER_RE.match(text, m.end())
         second = nxt.group(1).rstrip(";&|") if nxt else None
-        verdict = _classify_stash_subcommand(second)
+        verdict = classify(second)
         if verdict is not None:
             return verdict
     return None
 
 
-def _evaluate(cmd: str) -> Optional[str]:
+def _evaluate(cmd: str, classify=_classify_stash_subcommand) -> Optional[str]:
     """Primary classification: tokenize the full command (quote-aware,
     `;`/`&`/`|`-segmented), and for each segment resolve the REAL git
     subcommand from argv position via `_real_git_subcommand`. Falls back to
     `_evaluate_legacy`, scoped to the offending segment text only, on an
     unparseable segment or an unrecognized-global-option ambiguity.
+
+    `classify` -- see `_evaluate_legacy`'s docstring above; threaded through
+    unchanged so `check_apply_advisory` gets the identical shell-shape/
+    tokenization handling this function's callers already rely on, without
+    a second copy of the walk.
     """
     tokens = _tokenize_full_command(cmd)
     if tokens is None:
-        return _evaluate_legacy(cmd)
+        return _evaluate_legacy(cmd, classify)
 
     for seg_tokens, _pipe_before in _segments_from_tokens(tokens):
         if not seg_tokens:
@@ -296,7 +340,7 @@ def _evaluate(cmd: str) -> Optional[str]:
             if c_flag_positions:
                 idx = c_flag_positions[0]
                 if idx + 1 < len(working):
-                    verdict = _evaluate(working[idx + 1])
+                    verdict = _evaluate(working[idx + 1], classify)
                     if verdict is not None:
                         return verdict
                     continue
@@ -307,7 +351,7 @@ def _evaluate(cmd: str) -> Optional[str]:
         subcmd, ambiguous, remaining = _real_git_subcommand(working[1:])
         if ambiguous:
             seg_text = " ".join(shlex.quote(t) for t in seg_tokens)
-            verdict = _evaluate_legacy(seg_text)
+            verdict = _evaluate_legacy(seg_text, classify)
             if verdict is not None:
                 return verdict
             continue
@@ -326,14 +370,16 @@ def _evaluate(cmd: str) -> Optional[str]:
         # through.
         stash_remaining = _strip_leading_redirection_tokens(remaining)
         second = stash_remaining[0] if stash_remaining else None
-        verdict = _classify_stash_subcommand(second)
+        verdict = classify(second)
         if verdict is not None:
             return verdict
 
     return None
 
 
-def _evaluate_legacy_powershell(text: str) -> Optional[str]:
+def _evaluate_legacy_powershell(
+    text: str, classify=_classify_stash_subcommand
+) -> Optional[str]:
     """PowerShell-shaped free-text fallback for the `tokens is None` route
     (AC3 / Conventions (a)) -- NEVER routes to `_evaluate_legacy` above
     (bash-shaped free text, the exact spurious-deny source this plan exists
@@ -345,18 +391,22 @@ def _evaluate_legacy_powershell(text: str) -> Optional[str]:
     posture preserved, no widening of exposure. A dropped deny here is peer
     stash data loss (module docstring, 2026-07-30 incident) -- the reason
     this route strips rather than allows outright.
+
+    `classify` -- see `_evaluate_legacy`'s docstring; threaded through so
+    `check_apply_advisory` reuses this exact PowerShell-shaped fallback
+    unchanged.
     """
     stripped = strip_powershell_prose_noise(text)
     for m in _STASH_WORD_RE.finditer(stripped):
         nxt = _NEXT_WORD_AFTER_RE.match(stripped, m.end())
         second = nxt.group(1).rstrip(";&|") if nxt else None
-        verdict = _classify_stash_subcommand(second)
+        verdict = classify(second)
         if verdict is not None:
             return verdict
     return None
 
 
-def _evaluate_powershell(cmd: str) -> Optional[str]:
+def _evaluate_powershell(cmd: str, classify=_classify_stash_subcommand) -> Optional[str]:
     """PowerShell-dialect leg of classification, parallel in shape to
     `_evaluate` above but sourcing tokens from `_dialect.resolve_
     segments_for_dialect` (tree-sitter-pwsh) instead of `shlex`.
@@ -377,12 +427,14 @@ def _evaluate_powershell(cmd: str) -> Optional[str]:
     `shlex`), never `_evaluate_powershell`, so the payload dialect is never
     inherited from the outer call. `powershell -Command "..."` is not in
     `_C_FLAG_SHELL_INTERPRETERS` at all, so it does not trigger this path.
+
+    `classify` -- see `_evaluate`'s docstring; threaded through unchanged.
     """
     segments = resolve_segments_for_dialect(
         cmd, Dialect.POWERSHELL, guard_name="block_stash_destruction"
     )
     if segments is None:
-        return _evaluate_legacy_powershell(cmd)
+        return _evaluate_legacy_powershell(cmd, classify)
 
     for tokens, _pipe_before in segments:
         if not tokens:
@@ -399,7 +451,7 @@ def _evaluate_powershell(cmd: str) -> Optional[str]:
                 if idx + 1 < len(clean):
                     # Recurse into the BASH evaluator on the `-c` payload --
                     # never `_evaluate_powershell` (Conventions (c)).
-                    verdict = _evaluate(clean[idx + 1])
+                    verdict = _evaluate(clean[idx + 1], classify)
                     if verdict is not None:
                         return verdict
                     continue
@@ -410,7 +462,7 @@ def _evaluate_powershell(cmd: str) -> Optional[str]:
         subcmd, ambiguous, remaining = _real_git_subcommand(clean[1:])
         if ambiguous:
             seg_text = " ".join(clean)
-            verdict = _evaluate_legacy_powershell(seg_text)
+            verdict = _evaluate_legacy_powershell(seg_text, classify)
             if verdict is not None:
                 return verdict
             continue
@@ -422,7 +474,7 @@ def _evaluate_powershell(cmd: str) -> Optional[str]:
         # 2026-08-23 fix -- see the Bash leg's identical comment above.
         stash_remaining = _strip_leading_redirection_tokens(remaining)
         second = stash_remaining[0] if stash_remaining else None
-        verdict = _classify_stash_subcommand(second)
+        verdict = classify(second)
         if verdict is not None:
             return verdict
 
@@ -488,5 +540,90 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             "hookEventName": "PreToolUse",
             "permissionDecision": "deny",
             "permissionDecisionReason": _deny_reason(cmd, deny_kind),
+        }
+    }
+
+
+#: `apply`-ONLY -- see module docstring "APPLY ADVISORY LEG" (below,
+#: appended 2026-08-30). Never `pop`: `pop` is the EM's own sanctioned
+#: restore path (see "WHY DROP/CLEAR AND NOT POP/APPLY" above) and a
+#: successful pop already shows the operator their content landed in the
+#: tree, so there is nothing left to nudge. `apply` is the shape the
+#: incident this leg answers actually used -- an unmodified stack position
+#: checked for a clean return, read as "nothing unique in the stash",
+#: which `apply` cannot tell you (see `_advisory_reason` below).
+_ADVISORY_APPLY_KIND = "git stash apply"
+
+
+def _classify_stash_apply_subcommand(second: Optional[str]) -> Optional[str]:
+    """`classify` callable for the `apply` advisory leg -- see
+    `_evaluate`'s docstring for the parametrization this reuses. Returns
+    `_ADVISORY_APPLY_KIND` only for the literal second-level token `apply`;
+    every other token (including `None`/bare `git stash`, `pop`, `drop`,
+    `clear`, `push`, ...) is out of scope for this leg and allows.
+    """
+    if second == "apply":
+        return _ADVISORY_APPLY_KIND
+    return None
+
+
+def _advisory_reason(cmd: str) -> str:
+    cmd_safe = cmd if len(cmd) <= 200 else cmd[:200] + "..."
+    return (
+        "`git stash apply` only proves overlapping files match, not what "
+        "the stash holds.\n"
+        "Use instead: `git stash show --name-only stash@{N}` (read-only, "
+        "lists actual contents).\n\n"
+        "  Command:  %s\n"
+    ) % (cmd_safe,)
+
+
+def check_apply_advisory(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """ADVISORY_REWRITE leg (allow + `additionalContext`, never a deny) for
+    `git stash apply` -- see module docstring "APPLY ADVISORY LEG".
+
+    Reuses `_evaluate`/`_evaluate_powershell`/their `_evaluate_legacy*`
+    fallbacks UNCHANGED via the `classify` parameter (see those functions'
+    own docstrings) rather than a second tokenizer walk -- the only new
+    code here is `_classify_stash_apply_subcommand` (a one-branch
+    predicate) and this dispatch wrapper. `check` above (the drop/clear
+    hard-deny) is untouched: this is an additional registered leg, not a
+    replacement.
+
+    Never identity-gated -- fires for every caller including the main-loop
+    EM, same posture as `check` (see module docstring "WHY THE EM IS THE
+    MORE DANGEROUS CALLER HERE, NOT THE LESS" -- an EM verifying a peer's
+    stash for data loss is exactly the scenario this leg answers).
+    """
+    tool_name = payload.get("tool_name") or ""
+    dialect = dialect_from_tool_name(tool_name)
+    if dialect is None:
+        return None
+
+    tool_input = payload.get("tool_input") or {}
+    cmd = (tool_input.get("command") if isinstance(tool_input, dict) else None) or ""
+    if not cmd:
+        return None
+    cmd = cmd.replace("\r", "")
+
+    cmd_for_classification = _strip_heredoc_bodies(cmd)
+
+    if not _STASH_WORD_RE.search(cmd_for_classification):
+        return None
+
+    if dialect is Dialect.POWERSHELL:
+        advisory_kind = _evaluate_powershell(
+            cmd_for_classification, _classify_stash_apply_subcommand
+        )
+    else:
+        advisory_kind = _evaluate(cmd_for_classification, _classify_stash_apply_subcommand)
+    if advisory_kind is None:
+        return None
+
+    return {
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "allow",
+            "additionalContext": _advisory_reason(cmd),
         }
     }

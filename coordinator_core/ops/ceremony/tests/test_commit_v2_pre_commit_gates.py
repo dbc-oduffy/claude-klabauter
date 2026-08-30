@@ -141,6 +141,111 @@ def test_empty_gate_scope_skips_the_gates(tmp_path: Path, monkeypatch):
     assert called == []
 
 
+def _stage_delete(repo: Path, rel: str) -> None:
+    (repo / rel).unlink()
+    _git(["add", "--", rel], repo)
+
+
+def test_undeclared_staged_deletion_refuses_and_head_is_unmoved(tmp_path: Path):
+    """A staged deletion in scope but absent from `deleted_paths` refuses,
+    and nothing lands -- the same HEAD-unmoved pattern as the other gates.
+    """
+    repo = _init_repo(tmp_path)
+    other = repo / "other.md"
+    other.write_text("other\n", encoding="utf-8")
+    _git(["add", "--", "other.md"], repo)
+    _git(["commit", "-q", "-m", "add other"], repo)
+
+    _stage_delete(repo, "other.md")
+    before = _head(repo)
+
+    result = _call(repo, {"paths": ["other.md"], "message": "undeclared delete\n"})
+
+    assert result["committed"] is False, result
+    assert "declared_deletion_gate" in result["error"]
+    assert "other.md" in result["error"]
+    assert _head(repo) == before
+
+
+def test_declared_staged_deletion_commits(tmp_path: Path):
+    """The same staged deletion, declared in `deleted_paths`, lands."""
+    repo = _init_repo(tmp_path)
+    other = repo / "other.md"
+    other.write_text("other\n", encoding="utf-8")
+    _git(["add", "--", "other.md"], repo)
+    _git(["commit", "-q", "-m", "add other"], repo)
+
+    _stage_delete(repo, "other.md")
+    before = _head(repo)
+
+    result = _call(
+        repo,
+        {"paths": [], "deleted_paths": ["other.md"], "message": "declared delete\n"},
+    )
+
+    assert result["committed"] is True, result
+    assert _head(repo) != before
+
+
+def test_declared_deletion_fast_path_never_reads_the_index(tmp_path: Path, monkeypatch):
+    """A commit whose deletions are all declared must not read the git index
+    at all -- this is the property `_pre_commit_gates`'s process-time budget
+    now rests on (2026-08-30 plan amendment: the first cut of
+    `declared_deletion_gate` called `_staged_deletions_and_renames_in_process`
+    unconditionally, whose internal unscoped `read_index` pushed the op over
+    `PROCESS_TIME_TARGET_MS`; the candidate pre-filter added since means an
+    ordinary, correctly-declared commit never reaches that helper at all).
+    Patches the helper `declared_deletion_gate` calls internally and asserts
+    it was never invoked, not merely that the commit was fast.
+    """
+    from coordinator_core.ops.ceremony import commit_gates
+
+    repo = _init_repo(tmp_path)
+    other = repo / "other.md"
+    other.write_text("other\n", encoding="utf-8")
+    _git(["add", "--", "other.md"], repo)
+    _git(["commit", "-q", "-m", "add other"], repo)
+
+    _stage_delete(repo, "other.md")
+
+    calls = []
+
+    def _spy(*a, **k):
+        calls.append((a, k))
+        raise AssertionError("_staged_deletions_and_renames_in_process must not be called")
+
+    monkeypatch.setattr(commit_gates, "_staged_deletions_and_renames_in_process", _spy)
+
+    result = _call(
+        repo,
+        {"paths": [], "deleted_paths": ["other.md"], "message": "declared delete\n"},
+    )
+
+    assert calls == [], "declared deletion still hit the index-reading helper"
+    assert result["committed"] is True, result
+
+
+def test_staged_deletion_outside_scope_does_not_refuse(tmp_path: Path):
+    """A staged deletion the CALLER did not scope to -- a sibling session's
+    own pending deletion on a shared tree -- must never refuse this commit.
+    This is the 2026-07-01 concurrent-EM false positive, regression-pinned.
+    """
+    repo = _init_repo(tmp_path)
+    other = repo / "other.md"
+    other.write_text("other\n", encoding="utf-8")
+    _git(["add", "--", "other.md"], repo)
+    _git(["commit", "-q", "-m", "add other"], repo)
+
+    _stage_delete(repo, "other.md")  # a peer's staged deletion, out of scope
+    rel = _edit(repo, "seed.md")
+    before = _head(repo)
+
+    result = _call(repo, {"paths": [rel], "message": "own edit only\n"})
+
+    assert result["committed"] is True, result
+    assert _head(repo) != before
+
+
 def test_the_two_omitted_gates_stay_omitted():
     """Pins the omissions the spike measured. Re-adding either of these to
     `_pre_commit_gates` without revisiting that measurement is the regression

@@ -597,6 +597,135 @@ def deletion_block_gate(
     return GateOutcome(passed=not diagnostics, skipped=False, diagnostics=diagnostics)
 
 
+def declared_deletion_gate(
+    worktree_root: Union[str, Path],
+    gate_paths: Sequence[str],
+    declared_deletions: Sequence[str],
+) -> GateOutcome:
+    """Every IN-SCOPE staged deletion must be declared in `declared_deletions`.
+
+    SIBLING to `deletion_block_gate`, not a replacement -- see this module's
+    header and `docs/plans/2026-08-30-deletion-accountability-without-the-
+    cere.md`. `deletion_block_gate`'s Assertion-3 requires a "Step 2.67"
+    commit-body block, a `workstream-complete` ceremony convention the
+    general committer (`ceremony.commit_v2`) cannot assume -- measured, it
+    would refuse ~86% of this repo's commits. This gate replaces the prose
+    oracle with a structural one: `ceremony.commit_v2` receives
+    `params.deleted_paths`, an explicit declaration of what the commit
+    removes, so accountability becomes "does staged reality match the
+    declaration" with no commit-message parsing at all.
+
+    Predicate: every path in `gate_paths` STAGED FOR DELETION must appear in
+    `declared_deletions`. A declared path that is NOT staged for deletion is
+    not this gate's business -- `commit_paths` already refuses `cannot read
+    <path>` for that direction. An ordinary rename (source vacates one path,
+    destination stages at another, same batch) is not staged-for-deletion
+    reality here either -- reuses `_staged_deletions_and_renames_in_process`,
+    which already separates a pure delete from a rename source via the exact
+    (mode, sha) match test, so a plain rename never reaches this gate as an
+    undeclared deletion.
+
+    Scoped to `gate_paths` exactly, via `_staged_deletions_and_renames_in_
+    process` -- never the whole index (see that function's own contract).
+    A sibling session's own staged deletion outside `gate_paths` is not
+    this caller's business and can never trip this gate.
+
+    Skip-when-empty: an empty `gate_paths` has no bounded candidate set to
+    check and is a legitimate no-deletions-in-scope call -- skipped, not
+    scored as an ambiguous pass (mirrors `deletion_block_gate`'s own
+    skip-gate-when-empty rule).
+
+    Raises no exception: `_staged_deletions_and_renames_in_process`'s
+    `IndexParseError` (an unmerged, mid-merge-conflict index) is caught and
+    reported as a FAILING outcome naming the unmerged state -- a read this
+    gate cannot answer is a refusal, never a silent pass (same posture as
+    `dirty_tree_gate`'s F1 code-review finding, and `deletion_block_gate`'s
+    own Kept-claim read above).
+
+    CANDIDATE PRE-FILTER, so the index is read only when we are about to
+    refuse (2026-08-30 plan amendment, same day as C1/C2 -- the first cut of
+    this gate called `_staged_deletions_and_renames_in_process` unconditionally,
+    which reads the WHOLE index internally (`read_index(cwd)` has no scoping
+    parameter) and cost ~58ms on this repo, pushing `_pre_commit_gates` over
+    `commit_v2`'s 50ms `PROCESS_TIME_TARGET_MS` -- measured, not guessed:
+    `coordinator_core/benchmarks/tests/test_commit_v2_process_time_gate.py`
+    went from green to a 60.5ms bracketed mean). The gate's actual job is to
+    catch an UNDECLARED deletion, and an ordinary commit -- including every
+    commit that declares its deletions correctly -- has no candidate for
+    that at all: a `gate_paths` member that is either already declared, or
+    still present on disk, cannot possibly be an undeclared deletion, and
+    both are answerable with no index read whatsoever (`declared_deletions`
+    is an in-memory set; `os.path.exists` is a stat, not a git read). Only a
+    path that survives BOTH filters -- undeclared AND absent from the
+    worktree -- might be a genuine undeclared staged deletion, and only then
+    is `_staged_deletions_and_renames_in_process` called, scoped to that
+    narrowed candidate set (still the same helper, same rename test, same
+    unmerged-index posture -- nothing about C1's reuse mandate changes,
+    only when it runs).
+
+    Ordering is load-bearing: `declared_deletions` membership is checked
+    BEFORE `os.path.exists`, so a correct N-path deletion commit that
+    declares every one of them short-circuits per-path on the cheap set
+    membership test and never reaches a single `stat` call, let alone the
+    index read -- reversing the order would pay N stats to learn what the
+    declaration already said.
+
+    NAMED LIMIT, not an oversight: a path staged for deletion that STILL
+    EXISTS on disk (mode/content changed at the git-index level relative to
+    HEAD, but the file itself was never removed from the worktree -- an
+    unusual git-level state, not merely "not on disk") will not be seen as
+    an undeclared deletion by this fast path, because it fails the
+    `os.path.exists` filter and is never handed to the real staged-deletion
+    check. This is safe, not merely fast: `commit_paths` reads and commits
+    exactly that file's worktree bytes for any `gate_paths` member in
+    `paths`, so nothing is silently removed in that shape -- there is no
+    deletion for the caller to have failed to declare.
+
+    Zero `git` spawns on every reachable branch -- `_staged_deletions_and_
+    renames_in_process` is itself spawn-free for a non-empty `gate_scope`,
+    and the pre-filter above is a set membership test plus a stat, neither
+    of which spawns.
+    """
+    gate_scope: Set[str] = set(gate_paths)
+    if not gate_scope:
+        return GateOutcome(passed=True, skipped=True, diagnostics=[])
+
+    declared_set = set(declared_deletions)
+    root = Path(worktree_root)
+    candidates = {
+        p for p in gate_scope
+        if p not in declared_set and not (root / p).exists()
+    }
+    if not candidates:
+        return GateOutcome(passed=True, skipped=False, diagnostics=[])
+
+    try:
+        staged_deletions_set, _rename_sources_set = _staged_deletions_and_renames_in_process(
+            worktree_root, candidates
+        )
+    except IndexParseError as exc:
+        return GateOutcome(
+            passed=False,
+            skipped=False,
+            diagnostics=[
+                f"declared_deletion_gate: staged index unreadable ({exc}) -- "
+                "degraded read, gate refuses rather than guessing"
+            ],
+        )
+
+    undeclared = sorted(staged_deletions_set - declared_set)
+    if not undeclared:
+        return GateOutcome(passed=True, skipped=False, diagnostics=[])
+
+    shown = undeclared[:5]
+    diagnostics = [f"Staged deletion not declared in deleted_paths: {p}" for p in shown]
+    remainder = len(undeclared) - len(shown)
+    if remainder > 0:
+        diagnostics.append(f"...and {remainder} more -- pass them in deleted_paths")
+
+    return GateOutcome(passed=False, skipped=False, diagnostics=diagnostics)
+
+
 # ---------------------------------------------------------------------------
 # Dirty-tree gate
 # ---------------------------------------------------------------------------

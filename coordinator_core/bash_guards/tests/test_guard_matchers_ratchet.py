@@ -272,6 +272,12 @@ EXPECTED: Dict[str, _Expected] = {
     "block-dev-repo-sentinel-removal-advisory": _Expected(
         ("Bash", "PowerShell"),
     ),
+    # Full-universe from birth: the false-green it catches is dialect-neutral,
+    # and the guard reuses block_stash_destruction's existing PowerShell leg
+    # rather than declaring a Bash-only hold it would later have to widen off.
+    "stash-apply-verification-advisory": _Expected(
+        ("Bash", "PowerShell"),
+    ),
     "head-tail-plumbing-rewrite": _Expected(
         ("Bash", "PowerShell"),
     ),
@@ -449,7 +455,7 @@ def test_every_registered_guard_is_classified():
     every other assertion below passing vacuously by comparing an empty or
     partial set."""
     actual = _actual_matchers()
-    assert len(actual) == 52, sorted(actual)
+    assert len(actual) == 53, sorted(actual)
     assert set(actual) == set(EXPECTED)
 
 
@@ -491,7 +497,7 @@ def test_every_entry_is_in_exactly_one_partition_bucket():
             bucket3 += 1
         else:
             raise AssertionError("%r has an unrecognised kind %r" % (guard_id, exp.kind))
-    assert bucket1 + bucket2 + bucket3 == len(EXPECTED) == 52
+    assert bucket1 + bucket2 + bucket3 == len(EXPECTED) == 53
     assert bucket3 == 0, (
         "expected 0 dual-declaring-but-Bash-detecting entries -- C8's "
         "second pass converted all 9 (Finding 7 of the recensus record), "

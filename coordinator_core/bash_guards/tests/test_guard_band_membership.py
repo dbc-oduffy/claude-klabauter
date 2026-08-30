@@ -84,6 +84,12 @@ ADVISORY_REWRITE_NAMES = [
     # Registered immediately after `destructive-git-revert-advisory` and
     # before `offer-git-c`.
     "block-dev-repo-sentinel-removal-advisory",
+    # ADVISORY, not CONFINEMENT_DENY, and argued that way per DR-277: `git
+    # stash apply` read as a data-loss check yields a false green, but the
+    # harm is a wrong conclusion rather than lost work, and a deny would also
+    # block the EM inspecting an entry it owns. Incident:
+    # state/audits/2026-08-30-why-the-stash-guards-did-not-fire.md.
+    "stash-apply-verification-advisory",
     "offer-git-c",
     # Mechanical leg of the fleet-wide `.git/index.lock` contention
     # campaign -- registered immediately after `offer-git-c` (physical

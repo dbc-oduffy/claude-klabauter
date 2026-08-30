@@ -265,3 +265,88 @@ class TestDenyMessage:
     def test_truncates_a_very_long_command(self):
         long_cmd = "git stash drop " + ("x" * 500)
         assert "..." in _reason(guard.check(_payload(long_cmd)))
+
+
+def _advisory_context(out):
+    assert out is not None, "expected an allow+additionalContext advisory envelope"
+    hso = out["hookSpecificOutput"]
+    assert hso["hookEventName"] == "PreToolUse"
+    assert hso["permissionDecision"] == "allow"
+    return hso["additionalContext"]
+
+
+class TestApplyAdvisory:
+    """`check_apply_advisory` -- the ADVISORY_REWRITE leg for `git stash
+    apply` used as a (false-green) verification step. Never a deny: `check`
+    (the drop/clear hard-deny) is untouched by this leg."""
+
+    def test_apply_fires_the_advisory(self):
+        _advisory_context(guard.check_apply_advisory(_payload("git stash apply")))
+
+    def test_apply_with_explicit_index_fires(self):
+        _advisory_context(
+            guard.check_apply_advisory(_payload('git stash apply "stash@{0}"'))
+        )
+
+    def test_advisory_names_the_correct_read_only_alternative(self):
+        msg = _advisory_context(guard.check_apply_advisory(_payload("git stash apply")))
+        assert "git stash show --name-only" in msg
+
+    def test_advisory_states_the_overlap_fact(self):
+        msg = _advisory_context(guard.check_apply_advisory(_payload("git stash apply")))
+        assert "overlapping files match" in msg
+
+    def test_advisory_echoes_the_command(self):
+        msg = _advisory_context(guard.check_apply_advisory(_payload("git stash apply")))
+        assert "git stash apply" in msg
+
+    def test_advisory_never_names_a_bypass_key(self):
+        msg = _advisory_context(guard.check_apply_advisory(_payload("git stash apply")))
+        assert "COORDINATOR_OVERRIDE" not in msg
+        assert "override" not in msg.lower()
+
+    def test_pop_does_not_fire_the_advisory(self):
+        assert guard.check_apply_advisory(_payload("git stash pop")) is None
+
+    def test_drop_does_not_fire_the_advisory(self):
+        assert guard.check_apply_advisory(_payload("git stash drop")) is None
+
+    def test_bare_stash_does_not_fire_the_advisory(self):
+        assert guard.check_apply_advisory(_payload("git stash")) is None
+
+    def test_push_does_not_fire_the_advisory(self):
+        assert guard.check_apply_advisory(_payload("git stash push")) is None
+
+    def test_apply_advisory_does_not_disturb_the_deny_leg(self):
+        # `check` (drop/clear) is a separate registered leg -- `apply` must
+        # never trip it.
+        assert guard.check(_payload("git stash apply")) is None
+
+    def test_flag_value_false_positive_class_does_not_fire(self):
+        # Positional matching: the literal word `apply` as a FLAG VALUE
+        # (not the second-level subcommand) must not misclassify -- mirrors
+        # `TestAllowSet`'s own `-m drop` case for the deny leg.
+        assert (
+            guard.check_apply_advisory(
+                _payload("git stash push -m apply -- src/apply_handler.py")
+            )
+            is None
+        )
+
+    def test_message_size_within_cap(self):
+        from coordinator_core.bash_guards._message_size import MESSAGE_PROSE_CAP_BYTES
+
+        msg = _advisory_context(guard.check_apply_advisory(_payload("git stash apply")))
+        assert len(msg.encode("utf-8")) <= MESSAGE_PROSE_CAP_BYTES
+
+    def test_non_bash_tool_allows(self):
+        assert (
+            guard.check_apply_advisory({"tool_name": "Edit", "tool_input": {"file_path": "x"}})
+            is None
+        )
+
+    def test_empty_command_allows(self):
+        assert guard.check_apply_advisory(_payload("")) is None
+
+    def test_command_without_stash_word_allows(self):
+        assert guard.check_apply_advisory(_payload("git status --porcelain")) is None

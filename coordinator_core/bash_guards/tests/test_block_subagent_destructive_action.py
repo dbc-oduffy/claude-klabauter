@@ -3803,3 +3803,88 @@ def test_powershell_no_agent_id_allows_even_destructive():
         "session_id": "sess1",
     }
     assert guard.check(payload) is None
+
+
+# ---------------------------------------------------------------------------
+# FAIL-OPEN LOG: rotation + synthetic-corpus suppression
+# ---------------------------------------------------------------------------
+
+
+def test_synthetic_corpus_session_id_matched():
+    assert guard._is_synthetic_corpus_session("guard-message-corpus-" + "a" * 32)
+    assert guard._is_synthetic_corpus_session("guard-message-corpus-audience-em-" + "b" * 32)
+    assert not guard._is_synthetic_corpus_session("sess1")
+    assert not guard._is_synthetic_corpus_session("")
+
+
+def test_log_fail_open_suppresses_synthetic_corpus_session(tmp_path, monkeypatch):
+    log_path = tmp_path / "destructive-guard-fail-open.log"
+    monkeypatch.setattr(guard, "_fail_open_log_path", lambda: log_path)
+    guard._log_fail_open(
+        "no-agent-id-key",
+        {"session_id": "guard-message-corpus-" + "c" * 32, "cwd": "/x"},
+        "rm -rf /",
+    )
+    assert not log_path.exists()
+
+
+def test_log_fail_open_writes_real_session(tmp_path, monkeypatch):
+    log_path = tmp_path / "destructive-guard-fail-open.log"
+    monkeypatch.setattr(guard, "_fail_open_log_path", lambda: log_path)
+    guard._log_fail_open(
+        "no-agent-id-key",
+        {"session_id": "sess-real-1", "cwd": "/x"},
+        "rm -rf /",
+    )
+    assert log_path.exists()
+    text = log_path.read_text(encoding="utf-8")
+    assert "sess-real-1" in text
+    assert "FAIL-OPEN" in text
+
+
+def test_rotate_fail_open_log_noop_when_small(tmp_path):
+    log_path = tmp_path / "fail-open.log"
+    log_path.write_text("small\n", encoding="utf-8")
+    guard._rotate_fail_open_log_if_oversized(log_path)
+    assert log_path.read_text(encoding="utf-8") == "small\n"
+    assert not log_path.with_name("fail-open.log.1").exists()
+
+
+def test_rotate_fail_open_log_shifts_generations(tmp_path, monkeypatch):
+    monkeypatch.setattr(guard, "_FAIL_OPEN_LOG_MAX_BYTES", 5)
+    log_path = tmp_path / "fail-open.log"
+    log_path.write_text("current\n", encoding="utf-8")
+    log_path.with_name("fail-open.log.1").write_text("gen1\n", encoding="utf-8")
+    log_path.with_name("fail-open.log.2").write_text("gen2\n", encoding="utf-8")
+    log_path.with_name("fail-open.log.3").write_text("gen3\n", encoding="utf-8")
+
+    guard._rotate_fail_open_log_if_oversized(log_path)
+
+    assert not log_path.exists()
+    assert log_path.with_name("fail-open.log.1").read_text(encoding="utf-8") == "current\n"
+    assert log_path.with_name("fail-open.log.2").read_text(encoding="utf-8") == "gen1\n"
+    assert log_path.with_name("fail-open.log.3").read_text(encoding="utf-8") == "gen2\n"
+    # gen3 was the oldest generation and is dropped, never shifted further
+    assert not log_path.with_name("fail-open.log.4").exists()
+
+
+def test_rotate_fail_open_log_never_raises_on_missing_file(tmp_path):
+    log_path = tmp_path / "does-not-exist.log"
+    guard._rotate_fail_open_log_if_oversized(log_path)
+    assert not log_path.exists()
+
+
+def test_log_fail_open_rotates_before_appending(tmp_path, monkeypatch):
+    log_path = tmp_path / "fail-open.log"
+    monkeypatch.setattr(guard, "_fail_open_log_path", lambda: log_path)
+    monkeypatch.setattr(guard, "_FAIL_OPEN_LOG_MAX_BYTES", 10)
+    log_path.write_text("x" * 20, encoding="utf-8")
+
+    guard._log_fail_open(
+        "no-agent-id-key",
+        {"session_id": "sess-rot-1", "cwd": "/x"},
+        "rm -rf /",
+    )
+
+    assert log_path.with_name("fail-open.log.1").read_text(encoding="utf-8") == "x" * 20
+    assert "sess-rot-1" in log_path.read_text(encoding="utf-8")
