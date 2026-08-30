@@ -325,6 +325,7 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # DR-211 D4 async mandate + plan Key Decision 5.
     "fleet.archive_completed_handoffs":      "common_dir",
     "handoff.housekeeping":                  "common_dir",
+    "housekeeping.cycle":                    "common_dir",
     "fleet.aggregate_capability_index":      "common_dir",
     "fleet.reap_unintegrated_findings":      "common_dir",
     "fleet.reap_integrated_findings":        "common_dir",

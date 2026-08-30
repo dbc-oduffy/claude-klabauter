@@ -997,6 +997,33 @@ def apply(
             ),
         }
 
+    # PM ruling D-G (chunk C9): a pickup EM from a different repo than the
+    # artifact must be DENIED, by name, not merely fail to resolve a path.
+    # Hoisted to BEFORE `brief()`/`resolve_artifact` (2026-08-30): once
+    # `resolve_artifact` normalizes an absolute path itself, it raises
+    # `OutOfRepoPath` first and this named denial would become unreachable,
+    # degrading into a generic transport-fail — checked here, on the PASSED
+    # `artifact_path`, so the named reason still surfaces. Every fallback
+    # tier inside `resolve_artifact` is repo_root-anchored, so a relative
+    # input can never resolve outside `root` anyway; only an absolute (or
+    # `..`-traversal) input can trip this, same as the resolved-path check
+    # it replaces. A cross-repo memo sitting in THIS repo's own
+    # `cross-repo/inbox/` resolves UNDER `root` (it is this repo's own
+    # artifact) and is unaffected — the denial keys on containment under
+    # `root`, never on the string "cross-repo" appearing in a path.
+    if artifact_path:
+        try:
+            _assert_in_repo_root(Path(artifact_path), root)
+        except OutOfRepoPath:
+            return APPLY_EXIT_CLAIM_DENIED, {
+                "reason": "cross_repo_pickup_denied",
+                "error": (
+                    f"{artifact_path}: not under this session's repo root "
+                    f"({root}) — pickup denied"
+                ),
+                "landed": [],
+            }
+
     with _session_identity(resolved_sid):
         effective_decisions = (
             decisions if decisions is not None else _read_session_dispositions(root, resolved_sid, artifact_path)
@@ -1060,33 +1087,6 @@ def apply(
         except _UnresolvableArtifactClass as exc:
             return APPLY_EXIT_TRANSPORT_FAIL, {"error": str(exc), "landed": []}
         artifact_path_value = artifact.get("path", "")
-
-        # PM ruling D-G (chunk C9): a pickup EM from a different repo than
-        # the artifact must be DENIED, by name, not merely fail to resolve
-        # a path deep inside directive dispatch. Reuses the SAME containment
-        # bound every dispatch handler already calls (`_assert_in_repo_root`
-        # / `apply_base.reject_path_traversal`'s `OutOfRepoPath`) — no
-        # second resolution mechanism — just runs it here, once, before any
-        # directive dispatches, so a foreign-repo artifact gets a named
-        # reason instead of surfacing as a generic `APPLY_EXIT_PARTIAL_
-        # MUTATION` path error from whichever directive happened to touch
-        # the path first. A cross-repo memo sitting in THIS repo's own
-        # `cross-repo/inbox/` resolves UNDER `root` (it is this repo's own
-        # artifact) and is unaffected — the denial keys on containment
-        # under `root`, never on the string "cross-repo" appearing in a
-        # path.
-        if artifact_path_value:
-            try:
-                _assert_in_repo_root(Path(artifact_path_value), root)
-            except OutOfRepoPath:
-                return APPLY_EXIT_CLAIM_DENIED, {
-                    "reason": "cross_repo_pickup_denied",
-                    "error": (
-                        f"{artifact_path_value}: not under this session's repo root "
-                        f"({root}) — pickup denied"
-                    ),
-                    "landed": [],
-                }
 
         # 2026-07-26 defect fix (silent-discard on an already-terminal
         # artifact): `brief()` legitimately returns `directives: []` AND
@@ -1464,6 +1464,36 @@ def drop(
             ),
         }
 
+    # D-G's containment denial, on the INVERSE verb. `apply` gained this
+    # (chunk C9) and `drop` did not, so a foreign-repo drop raised an
+    # uncaught `OutOfRepoPath` out of the release/transition primitives
+    # instead of returning the named denial — a stack trace where the
+    # forward verb gives a reason. Same bound, same reason string, same
+    # exit code; a cross-repo memo in THIS repo's own `cross-repo/inbox/`
+    # resolves under `root` and is unaffected, since the denial keys on
+    # containment, never on the string "cross-repo" in a path.
+    #
+    # Hoisted to BEFORE `resolve_artifact` (2026-08-30), on the PASSED
+    # `artifact_path` rather than the resolved one: once `resolve_artifact`
+    # normalizes an absolute path itself, it raises `OutOfRepoPath` before
+    # this function ever reached its own post-resolve check, which would
+    # have surfaced as an uncaught exception instead of the named denial.
+    # Still placed BEFORE `_session_identity` and both primitives: a drop
+    # that is going to be denied must release nothing and stamp nothing, so
+    # the denial cannot be reached with the claim already half-released.
+    if artifact_path:
+        try:
+            _assert_in_repo_root(Path(artifact_path), root)
+        except OutOfRepoPath:
+            return APPLY_EXIT_CLAIM_DENIED, {
+                "reason": "cross_repo_drop_denied",
+                "error": (
+                    f"{artifact_path}: not under this session's repo root "
+                    f"({root}) — drop denied"
+                ),
+                "unclaimed": None,
+            }
+
     try:
         artifact = resolve_artifact(artifact_path, root)
     except _ArtifactUnreadable as exc:
@@ -1474,31 +1504,6 @@ def drop(
     except _UnresolvableArtifactClass as exc:
         return APPLY_EXIT_TRANSPORT_FAIL, {"error": str(exc)}
     artifact_path_value = artifact.get("path", "") or artifact_path
-
-    # D-G's containment denial, on the INVERSE verb. `apply` gained this
-    # (chunk C9) and `drop` did not, so a foreign-repo drop raised an
-    # uncaught `OutOfRepoPath` out of the release/transition primitives
-    # instead of returning the named denial — a stack trace where the
-    # forward verb gives a reason. Same bound, same reason string, same
-    # exit code; a cross-repo memo in THIS repo's own `cross-repo/inbox/`
-    # resolves under `root` and is unaffected, since the denial keys on
-    # containment, never on the string "cross-repo" in a path.
-    #
-    # Placed BEFORE `_session_identity` and both primitives: a drop that is
-    # going to be denied must release nothing and stamp nothing, so the
-    # denial cannot be reached with the claim already half-released.
-    if artifact_path_value:
-        try:
-            _assert_in_repo_root(Path(artifact_path_value), root)
-        except OutOfRepoPath:
-            return APPLY_EXIT_CLAIM_DENIED, {
-                "reason": "cross_repo_drop_denied",
-                "error": (
-                    f"{artifact_path_value}: not under this session's repo root "
-                    f"({root}) — drop denied"
-                ),
-                "unclaimed": None,
-            }
 
     with _session_identity(resolved_sid):
         # Read the stage BEFORE releasing — `release_artifact` removes the

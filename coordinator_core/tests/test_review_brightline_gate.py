@@ -61,6 +61,16 @@ def _commit_file(repo: Path, name: str, content: str, message: str) -> None:
     _git(repo, "commit", "-q", "-m", message)
 
 
+def _commit_file_with_trailer(
+    repo: Path, name: str, content: str, message: str, session_id: str
+) -> None:
+    """`_commit_file` plus a `Session-Id:` trailer — the attributed-commit
+    fixture the 2026-08-30 coverage tests build their ranges from."""
+    (repo / name).write_text(content, encoding="utf-8")
+    _git(repo, "add", name)
+    _git(repo, "commit", "-q", "-m", f"{message}\n\nSession-Id: {session_id}")
+
+
 # ---------------------------------------------------------------------------
 # _classify_surface / _sum_loc — unit-level helpers
 # ---------------------------------------------------------------------------
@@ -307,6 +317,74 @@ def test_session_id_zero_match_is_vacuous_not_fatal(tmp_path, capsys, monkeypatc
     assert "gate vacuous" in captured.err
 
 
+def test_session_id_untrailered_commits_block_a_permissive_verdict(
+    tmp_path, capsys, monkeypatch
+):
+    """2026-08-30 regression: `single-reviewer-ok` must not be issued over a
+    range the gate could not fully attribute.
+
+    Reproduces the DoE field specimen. One commit in the range carries a
+    trailer and matches; the rest carry none at all (the live shape when
+    `ceremony.commit_v2` or an `.exe`-blind hook ladder wrote them), so the
+    filter reports a small diff over work it never saw. Pre-fix this printed
+    `filtered_to=1 ... VERDICT=single-reviewer-ok` and certified the close.
+    """
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+
+    # The session's one trailered commit — small, prose-light, matches.
+    _commit_file_with_trailer(
+        repo, "small.py", "y = 2\n", "small change", "session-under-test"
+    )
+    base = _git(repo, "rev-parse", "HEAD~1").strip()
+
+    # Substantial work with NO trailer — invisible to the filter.
+    for i in range(3):
+        _commit_file(
+            repo, f"big{i}.py", "z = 1\n" * 40, f"untrailered work {i}"
+        )
+
+    monkeypatch.chdir(repo)
+
+    rc = main(["--session-id", "session-under-test", f"{base}..HEAD"])
+    captured = capsys.readouterr()
+
+    assert rc == 0
+    assert "VERDICT=indeterminate" in captured.out
+    assert "VERDICT=single-reviewer-ok" not in captured.out
+    # filtered_to stays nonzero: the discriminator is coverage, not a zero match.
+    assert "filtered_to=1" in captured.out
+    assert "no Session-Id" in captured.err
+
+
+def test_session_id_full_trailer_coverage_still_permits_single_reviewer_ok(
+    tmp_path, capsys, monkeypatch
+):
+    """The coverage check must not fire when every commit IS attributed —
+    including peer commits carrying a DIFFERENT session's trailer. Complete
+    attribution that simply excludes this session is an honest small-diff
+    answer, not a blind one."""
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+
+    _commit_file_with_trailer(
+        repo, "mine.py", "y = 2\n", "my change", "session-under-test"
+    )
+    base = _git(repo, "rev-parse", "HEAD~1").strip()
+    _commit_file_with_trailer(
+        repo, "peer.py", "z = 3\n", "peer change", "some-peer-session"
+    )
+
+    monkeypatch.chdir(repo)
+
+    rc = main(["--session-id", "session-under-test", f"{base}..HEAD"])
+    captured = capsys.readouterr()
+
+    assert rc == 0
+    assert "VERDICT=single-reviewer-ok" in captured.out
+    assert "VERDICT=indeterminate" not in captured.out
+
+
 def test_session_id_recovers_via_session_aware_floor_past_peer_commits(
     tmp_path, capsys, monkeypatch
 ):
@@ -398,6 +476,18 @@ def test_session_id_floor_at_repo_root_degrades_to_indeterminate(
 
 
 def test_session_id_filters_to_matching_commits_only(tmp_path, capsys, monkeypatch):
+    """The trailer filter selects only matching commits — `commits=1`,
+    `filtered_to=1`, the peer's untrailered commit excluded.
+
+    VERDICT is `indeterminate` rather than `single-reviewer-ok` as of
+    2026-08-30: this fixture's range deliberately contains an untrailered
+    commit ("add b (no trailer)"), which is precisely the incomplete-
+    attribution shape the coverage check in `_session_scoped` now refuses to
+    issue a permissive verdict over. The selectivity claim this test exists to
+    make is unchanged and still asserted below; only the incidental verdict
+    moved. See `test_session_id_full_trailer_coverage_still_permits_single_
+    reviewer_ok` for the same filtering against a fully-attributed range.
+    """
     repo = tmp_path / "repo"
     _init_repo(repo)
     _commit_file(repo, "b.py", "y = 2\n", "add b (no trailer)")
@@ -418,7 +508,7 @@ def test_session_id_filters_to_matching_commits_only(tmp_path, capsys, monkeypat
     assert rc == 0
     assert "commits=1" in captured.out
     assert "filtered_to=1" in captured.out
-    assert "VERDICT=single-reviewer-ok" in captured.out
+    assert "VERDICT=indeterminate" in captured.out
 
 
 def _write_governed_plan(repo_root: Path, deliverable_id: str) -> Path:

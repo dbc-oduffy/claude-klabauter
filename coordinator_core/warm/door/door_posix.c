@@ -1059,6 +1059,72 @@ int main(int argc, char **argv) {
         }
     }
 
+
+    /*
+     * ADDITIVE, AND ONLY WHEN THIS CALLER HAS AN IDENTITY (2026-08-30) --
+     * the same shape and the same reason as `_settings_home` directly
+     * above, one field over. The warm server's environment holds the
+     * session of whoever SPAWNED it, never the caller of any given
+     * request, so `session.core.resolve_session_id()` inside a served op
+     * returns the SERVER OWNER's session id. Without this field every
+     * dispatch through the native door is attributed to that stranger --
+     * and it is not only a paper-trail defect: `handoff.correct_body`
+     * passes its possession gate with `basis=author` on the identity this
+     * resolver hands it, so a caller is authorized as the author of an
+     * artifact it never wrote. Reported cross-repo by doe-claude-em
+     * (cross-repo/inbox/2026-08-29-doe-claude-em-session-identity-
+     * resolves-three-ways-one-lands-on-your-session.md and its addendum):
+     * thirteen `handoff.correct_body` writes and one `memo.send` receipt,
+     * every one stamped with a live claude-klabauter session id.
+     *
+     * WHY THE DOOR AND NOT EACH OP. `warm/client.py ::
+     * _try_warm_dispatch_inner` has stamped `_session_id` since the seam
+     * was built, and `warm/server.py :: _serve_line` already pops it and
+     * binds it through `entry_seam.per_request_state`; only the native
+     * door was silent. That asymmetry is why the same op resolves
+     * correctly cold and wrongly warm -- the shape that certifies green
+     * against the route that works. Twenty-odd ops attribute through
+     * `resolve_session_id()`; stamping at the seam fixes all of them,
+     * where patching them one at a time fixes whichever were noticed.
+     *
+     * THE PRECEDENCE IS `session.core.SESSION_ENV_PRECEDENCE`, walked in
+     * order, first non-empty wins. A door reading only one of the three
+     * would disagree with the resolver it stands in for, which is the
+     * precise defect that constant's own comment records (slice D, F1: a
+     * guard reading only COORDINATOR_SESSION_ID told a real session that
+     * had only CLAUDE_CODE_SESSION_ID set "Not your claim").
+     *
+     * THE RAW VALUE, NOT A VALIDATED ONE. `session.core.
+     * session_identity_override` already gates on UUID shape and binds
+     * nothing for a value that fails it, so a malformed id costs one
+     * no-op bind, and validating here would be a second resolver.
+     *
+     * Unset or empty is OMITTED, never sent as an empty string -- the
+     * server reads absence as "this caller could not identify itself" and
+     * binds nothing, which is today's behaviour byte-for-byte. Envelope
+     * level, sibling of `_engine_token`: transport metadata the server
+     * pops before dispatch, never an op param.
+     */
+    if (req_ok) {
+        static const char *const session_env_precedence[] = {
+            "COORDINATOR_SESSION_ID",
+            "CLAUDE_SESSION_ID",
+            "CLAUDE_CODE_SESSION_ID",
+        };
+        const size_t session_env_count =
+            sizeof(session_env_precedence) / sizeof(session_env_precedence[0]);
+        for (size_t i = 0; i < session_env_count; i++) {
+            const char *sid = getenv(session_env_precedence[i]);
+            if (sid == NULL || sid[0] == '\0') {
+                continue;
+            }
+            req_ok &= buf_append_cstr(&req, ",\"_session_id\":\"");
+            req_ok &= buf_append_json_escaped(&req, sid, strlen(sid));
+            req_ok &= buf_append_cstr(&req, "\"");
+            break;
+        }
+    }
+
     req_ok &= buf_append_cstr(&req, "}\n");
 
     if (!req_ok) {

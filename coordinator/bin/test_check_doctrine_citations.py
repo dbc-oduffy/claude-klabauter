@@ -857,6 +857,94 @@ class TemplateCorpusWideningTests(unittest.TestCase):
         self.assertEqual(findings, [])
 
 
+class RepoRelativeNonDocsCitationTests(unittest.TestCase):
+    """`snippets/`, `pipelines/`, and `templates/` citations are the same
+    defect as a bare `docs/wiki/` one and were invisible to this lint
+    (2026-08-30, doe-claude-em memo `doctrine-citation-form-is-claude-plugin-
+    root`): both forms resolve only with cwd = the citing repo's root. The
+    core pattern was `docs/<section>/...` only, so a repo-relative citation
+    prefixed with the citing repo's own top-level directory name -- 40 sites
+    in DoE-claude's `coordinator/{commands,skills,agents}` corpus at the time
+    of the memo -- passed a scan that reported clean without ever having
+    matched them."""
+
+    def setUp(self):
+        self._tmpdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmpdir.cleanup)
+        self.fixture = FixtureCorpus(self._tmpdir.name)
+        _write(os.path.join(self.fixture.doe_coordinator, "snippets", "resolve-coordinator-bin.md"))
+        _write(os.path.join(self.fixture.doe_coordinator, "pipelines", "bug-sweep", "chunk.md"))
+        _write(os.path.join(self.fixture.doe_coordinator, "templates", "onboarding.md"))
+
+    def _run(self):
+        return _module.run([self.fixture.corpus], self.fixture.tree_roots, use_default_trees=False)
+
+    def test_bare_snippets_citation_is_reported_unanchored(self):
+        self.fixture.write_corpus_file("doc.md", "See snippets/resolve-coordinator-bin.md.\n")
+        code, findings, excluded, unresolved = self._run()
+        self.assertEqual(code, 1, msg=findings)
+        self.assertEqual(len(findings), 1)
+        self.assertIn("snippets/resolve-coordinator-bin.md", findings[0])
+        self.assertIn("unanchored", findings[0])
+
+    def test_repo_relative_snippets_citation_resolves_against_its_named_tree(self):
+        self.fixture.write_corpus_file(
+            "doc.md", "See coordinator/snippets/resolve-coordinator-bin.md.\n"
+        )
+        code, findings, excluded, unresolved = self._run()
+        self.assertEqual(code, 0, msg=findings)
+
+    def test_repo_relative_snippets_citation_missing_in_its_tree_is_unresolvable(self):
+        self.fixture.write_corpus_file("doc.md", "See coordinator/snippets/absent.md.\n")
+        code, findings, excluded, unresolved = self._run()
+        self.assertEqual(code, 1)
+        self.assertEqual(len(findings), 1)
+        self.assertIn("snippets/absent.md", findings[0])
+        self.assertIn("unresolvable", findings[0])
+
+    def test_nested_pipelines_citation_is_matched(self):
+        self.fixture.write_corpus_file("doc.md", "See pipelines/bug-sweep/chunk.md.\n")
+        code, findings, excluded, unresolved = self._run()
+        self.assertEqual(code, 1, msg=findings)
+        self.assertEqual(len(findings), 1)
+        self.assertIn("pipelines/bug-sweep/chunk.md", findings[0])
+
+    def test_templates_citation_is_matched(self):
+        self.fixture.write_corpus_file("doc.md", "See coordinator/templates/onboarding.md.\n")
+        code, findings, excluded, unresolved = self._run()
+        self.assertEqual(code, 0, msg=findings)
+
+    def test_dot_md_followed_by_a_further_extension_is_not_a_citation(self):
+        # `templates/<name>.md.tmpl` names a TEMPLATE, not the document --
+        # without the extension boundary the core backtracks to `.md` and
+        # reports a dead citation to a file nobody wrote (this fired live on
+        # DoE-claude's commands/install.md:175 render-template invocation).
+        self.fixture.write_corpus_file(
+            "doc.md", "render-template coordinator/templates/onboarding.md.tmpl -o out\n"
+        )
+        code, findings, excluded, unresolved = self._run()
+        self.assertEqual(code, 0, msg=findings)
+        self.assertEqual(findings, [])
+
+    def test_trailing_sentence_punctuation_still_ends_a_citation(self):
+        # The extension boundary must reject `.md.tmpl` without also
+        # rejecting an ordinary citation at the end of a sentence.
+        self.fixture.write_corpus_file("doc.md", "See snippets/absent.md, then stop.\n")
+        code, findings, excluded, unresolved = self._run()
+        self.assertEqual(code, 1, msg=findings)
+        self.assertEqual(len(findings), 1)
+        self.assertIn("snippets/absent.md", findings[0])
+
+    def test_unrelated_top_level_directory_is_not_matched(self):
+        # Deliberately narrow: only the three doc-bearing directories the
+        # memo named widen the core. `hooks/`, `bin/`, `state/` and friends
+        # carry code paths, not doctrine citations, and matching them would
+        # turn every incidental path mention into a finding.
+        self.fixture.write_corpus_file("doc.md", "Edit hooks/scripts/does-not-exist.md.\n")
+        code, findings, excluded, unresolved = self._run()
+        self.assertEqual(code, 0, msg=findings)
+
+
 class InProcessResolveRepoPathTests(unittest.TestCase):
     """`_resolve_repo_path_shortname` must resolve via an in-process import
     of resolve-repo-path.py -- never a `python <script>` subprocess -- and

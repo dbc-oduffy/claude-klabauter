@@ -132,6 +132,29 @@ template` snippet fragments), none binary, none code. `_iter_corpus_files`
 now yields both `*.md` and `*.template` — narrower than a bare `*` glob
 (which would pull in the `.tsx`/`.ts`/`.json` siblings), wide enough to
 catch every markdown-shaped template file in the surveyed trees.
+
+Non-`docs/` citation classes (2026-08-30 fix, silent-skip class): a
+`snippets/`, `pipelines/`, or `templates/` citation resolves only with
+cwd = the citing repo's root, exactly like a bare `docs/wiki/...` one, and
+`_CITATION_RE`'s core matched `docs/<section>/...` alone — so the whole
+class was invisible and every scan reported clean on text it had never
+matched. Raised by doe-claude-em (2026-08-30 memo `doctrine-citation-form-
+is-claude-plugin-root`, 40 sites in `coordinator/{commands,skills,agents}`).
+The widening is deliberately those three directories and no more: they are
+the doc-bearing ones an agent is told to READ. `hooks/`, `bin/`, `state/`
+and friends name code and data paths, where an incidental mention is not a
+doctrine citation and matching it would trade a silent skip for noise.
+
+Extension boundary (2026-08-30, same change, false-positive class): the core
+now refuses a `.md` immediately followed by a further extension segment
+(a negative lookahead for a dot followed by an alphanumeric, immediately
+after the `.md`). `templates/CLAUDE.md.tmpl` names a TEMPLATE, not the
+document — without the boundary the greedy core backtracks to `.md` and
+reports a dead citation to a file nobody ever wrote, which is exactly what
+fired on DoE-claude's `commands/install.md:175` render-template invocation.
+Deliberately narrower than a whitespace boundary: ordinary trailing sentence
+punctuation (`docs/wiki/x.md.`, `..., x.md,`) must still terminate a
+citation.
 """
 from __future__ import annotations
 
@@ -160,7 +183,8 @@ _PREFIX_TREE_MAP: dict[str, str] = {
 
 _CITATION_RE = re.compile(
     r"""(?P<prefix>coordinator/|~/\.claude/|\$\{CLAUDE_PLUGIN_ROOT\}/|\.\./\.\./|(?:^|(?<=\s))/)?
-        (?P<core>docs/(?:wiki|decisions|plans|problems|research)/[^\s\)\]"'<>]+\.md)
+        (?P<core>(?:docs/(?:wiki|decisions|plans|problems|research)|snippets|pipelines|templates)/[^\s\)\]"'<>]+\.md)
+        (?!\.[A-Za-z0-9])
     """,
     re.VERBOSE,
 )

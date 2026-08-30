@@ -136,8 +136,25 @@ the same plan). It is NOT `ceremony.scoped_git_commit`: that op was
 DELETED 2026-08-23 over the DR-344 brightline and is registered nowhere
 outside a test fixture, so resolving it by name gets "Method not found".
 This module never owns a push: `_commit_group` never pushes, and publication
-is left to `coordinator_core.hooks.auto_push`'s post-commit git hook and
-whichever cadence checkpoint runs `push_outstanding()` next.
+is left to whichever cadence checkpoint runs `push_outstanding()` next.
+
+CORRECTED 2026-08-29 -- THE POST-COMMIT GIT HOOK IS NOT A PUBLISHER ON THIS
+PATH, and this docstring claimed it was. `commit_paths` is zero-spawn by
+construction: it writes the objects and moves the ref in-process and never
+invokes the `git` binary, so git never runs `.git/hooks/post-commit` and
+`coordinator_core.hooks.auto_push` is never reached from here. That was true
+the moment C4 repointed this module off `run_commit_pipeline` (which DID spawn
+git, and therefore did fire the hook); the sentence naming the hook survived
+the repoint and became false without anything failing. Every commit this module
+makes is therefore UNPUSHED until some session's cadence checkpoint runs
+`push_outstanding()`.
+
+That is deferral, not loss, and the reason it is survivable is worth stating so
+nobody "fixes" it by adding a spawn: `push_outstanding()` publishes every
+outstanding commit on the branch, not only the calling session's, so any peer's
+checkpoint drains this module's commits too. The failure mode it does leave is
+real but bounded -- a SessionEnd auto-commit is made as its own session dies, so
+no later checkpoint of THAT session ever runs, and the commit waits on a peer.
 
 Multi-session overlap on the SAME file remains accepted collateral, by
 explicit PM ruling — this module does not attempt conflict resolution for

@@ -166,6 +166,49 @@ Subcommands (argv[1] selects):
       `machine-local set` spawn errored or returned non-zero — surfaced so
       whatever applied the directive knows the fix did not land).
 
+  git-perf-currency [--fix]
+      Confirms `core.untrackedCache` (the one adopted git-perf setting --
+      see `coordinator_core/install/git_perf_config.py`'s module docstring
+      for the measurement bar that justifies it) is set on every registered
+      `worktree` repo, not merely the one repo `scripts/setup.py` happened to
+      be invoked from. `apply_fleet()` has always been able to sweep the
+      whole fleet; nothing ever called it after install, so every machine but
+      the one that ran the installer carries the key nowhere -- the same
+      unwired-heal drift class `hook-currency` above closed for git hooks.
+
+      Bare detector is zero-spawn: enumerates registry roots via
+      `git_perf_config._git_hook_install_registry_helpers()` (the same
+      helper `apply_fleet` itself uses), skips `mirror` targets silently and
+      reports `missing` ones exactly as `apply_fleet` does, then for each
+      `worktree` reads `.git/config` (or, for a `.git` gitlink file --
+      worktree/submodule -- resolves it to the real gitdir, following
+      `commondir` when present, since a linked worktree's config lives in
+      the COMMON dir) as plain text and checks for `untrackedcache = true`
+      under `[core]`. An unreadable config is reported, never silently
+      passed. No `git` subprocess is spawned to answer this question.
+
+      NEGATIVE SPEC: does NOT verify the index extension (`.git/index`'s
+      `UNTR` chunk), only the config key. Parsing the index binary format on
+      every cadence run to re-derive a fact `apply()` already owns would
+      fork the currency predicate between this detector and `apply()` --
+      the exact mistake `hook-currency`'s own negative spec records for a
+      different mechanism. The config key's absence is the drift signal
+      that matters: a machine that never ran the sweep has neither the key
+      nor the index extension, so the key alone is a faithful proxy for "has
+      this machine ever seen the sweep".
+
+      `--fix` calls `git_perf_config.apply_fleet()` in-process (no spawn --
+      same shape as `hook-currency`'s in-process call to
+      `ensure_hooks_fleet`) and prints its report. Idempotent by
+      construction (`apply()`'s own idempotence).
+      Exit (bare): 0 every worktree carries the key, or the registry
+      helpers/roots could not be read (degrades to pass, same "never block
+      the boot path" contract as the other bare detectors here); 1 one or
+      more worktrees are missing the key (message to stderr, remediation
+      included verbatim).
+      Exit (--fix): 0 the sweep ran and produced no `FAILED` line; 1 the
+      sweep could not run at all, or produced at least one `FAILED` line.
+
 Spec backlink: DoE-claude `coordinator/commands/workday-start.md` §§
   Step 1.10.64 (Orphaned Observer Sidecar Sweep), Step 1.10.9 (Claude-Klabauter-Bin
   Sentinel Probe), Step 5.6 (Project Post-Ceremony Command Hook).
@@ -271,7 +314,8 @@ def _usage(prog: str) -> int:
         f"usage: {prog} <subcommand> <args...>\n"
         "subcommands: observer-sidecar-scan [--dir <path>] | "
         "claude-klabauter-bin-sentinel | ceremony-hook <ceremony-name> | "
-        "mis-channelled-box | working-repo-registration [--fix] | hook-currency",
+        "mis-channelled-box | working-repo-registration [--fix] | hook-currency | "
+        "git-perf-currency [--fix]",
         file=sys.stderr,
     )
     return 2
@@ -626,65 +670,240 @@ def cmd_working_repo_registration(argv: list[str]) -> int:
 
 
 def cmd_hook_currency(argv: list[str]) -> int:
-    """Re-run the fleet hook installer so a stale generation cannot sit silently.
+    """Install/repair the coordinator git hooks in every registered repo.
 
-    Purpose: `git_hook_install.heal_fleet_hooks` compares every registered
-    repo's installed hook body against the generation this installer would
-    write, and rewrites the stale ones. It shipped with a docstring saying it
-    "can sit on a daily ceremony" and then had NO CALLER anywhere in the tree,
-    so nothing ever ran it. A hook body therefore stayed at whatever generation
-    was current when its repo was first installed.
+    Purpose: `git_hook_install.ensure_hooks_fleet` compares each registered
+    repo's installed hook against the generation the installer would write and
+    rewrites the stale ones. Its own docstring names the `/workday-start`
+    per-day self-heal as its caller; nothing actually called it, so 28 hooks
+    across 14 repos sat stale until 2026-08-29. This subcommand is that caller.
 
-    Why that is not cosmetic: the `post-commit` hook IS the auto-push. A stale
-    body whose script ladder resolves a rung to an installed `.exe` forwarder
-    and hands that path to a native `python.exe` dies on every commit, and dies
-    QUIETLY -- the commit itself always lands, only the push leg is lost. The
-    operator-visible symptom is an unpushed-commit backlog that the session
-    banner attributes to a diverged branch, which is a different defect with a
-    different fix, so the real cause survives every round of looking at it.
-    Observed 2026-08-29 on this box: both hooks sat at generation 9 against an
-    emitter at 10, and running the per-repo ensure CLI by hand repaired them in
-    one silent call.
+    Why a stale hook body is break-class: the `post-commit` hook IS the
+    auto-push. A stale body whose script ladder hands an installed `.exe`
+    forwarder to a native `python.exe` dies on every commit WITHOUT failing the
+    commit -- the push leg is lost silently and surfaces as an unpushed backlog
+    the session banner blames on a diverged branch.
 
-    Non-blocking by construction, like every probe here: the heal is
-    best-effort per repo and a failure to reach one registered target must not
-    stop the ceremony that called it. Exit is always 0.
+    Exit 1 when anything was repaired or the walk could not run, 0 when the
+    fleet was already current. That code is the signal
+    `orient_assemble/readers_health_reaper.py` keys on to emit its directive; a
+    probe that returned 0 unconditionally would make a broken walk
+    indistinguishable from a healthy fleet, which is the same silence-reads-as-
+    health shape as the dead auto-push above.
 
     Negative-spec:
-      - Does NOT install hooks into an unregistered repo. `heal_fleet_hooks`
-        walks the machine-local registry; a repo absent from it is silently
-        never healed, and that is the registry's gap to fix, not this probe's.
-      - Does NOT print on the healthy path. An all-current fleet says nothing,
-        so this can sit on a daily ceremony without teaching the operator to
-        scroll past it.
+      - Does NOT re-decide hook currency. An earlier revision carried its own
+        registry walk and a `stamp not in body` test, which already diverged
+        from `_ensure_hook`'s real predicate on APPEND-FORM bodies -- those
+        never carry the stamp by design, so the copy would have reported them
+        stale on every run, for ever. The currency decision has one owner.
+      - Does NOT spawn. `coordinator-ensure-hooks-fleet`'s entire body is
+        `return ensure_hooks_fleet(_BIN_DIR)`, so spawning an interpreter to
+        reach it buys a process and a timeout to manage and nothing else.
+      - Does NOT install into an unregistered repo: the walk reads the
+        machine-local registry, and a repo absent from it is silently never
+        healed. That is the registry's gap, not this probe's.
     """
     if argv:
         print("usage: workday-start-health-probes.py hook-currency", file=sys.stderr)
         return 2
+
     _ensure_repo_root_on_path()
-    from coordinator_core.win_portability import no_console_creationflags
+    import contextlib
+    import importlib.util
+    import io
+
+    lib_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib", "git_hook_install.py")
+    buf = io.StringIO()
+    try:
+        spec = importlib.util.spec_from_file_location("git_hook_install", lib_path)
+        if spec is None or spec.loader is None:
+            raise ImportError(f"no loader for {lib_path}")
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        with contextlib.redirect_stderr(buf):
+            mod.ensure_hooks_fleet(os.path.dirname(os.path.abspath(__file__)))
+    except Exception as exc:
+        print(f"hook-currency: COULD NOT RUN the fleet hook heal: {exc}", file=sys.stderr)
+        return 1
+
+    detail = buf.getvalue().strip()
+    if not detail:
+        return 0
+    print(detail, file=sys.stderr)
+    return 1
+
+
+_BIN_DIR = Path(_SCRIPT_DIR)
+
+
+def _resolve_gitdir(repo_root: Path) -> Path | None:
+    """Resolve `repo_root`'s real gitdir, following a `.git` gitlink file
+    (worktree/submodule) and, when present, its `commondir` pointer -- a
+    linked worktree's `config` lives in the COMMON dir, not its own private
+    gitdir. Returns None on any unreadable/malformed layout; never raises."""
+    git_path = repo_root / ".git"
+    try:
+        if git_path.is_dir():
+            gitdir = git_path
+        elif git_path.is_file():
+            text = git_path.read_text(encoding="utf-8", errors="replace").strip()
+            if not text.startswith("gitdir:"):
+                return None
+            target = text.split(":", 1)[1].strip()
+            target_path = Path(target)
+            gitdir = target_path if target_path.is_absolute() else (repo_root / target_path)
+            gitdir = gitdir.resolve()
+        else:
+            return None
+    except Exception:  # noqa: BLE001 — a health probe must never itself raise
+        return None
 
     try:
-        proc = subprocess.run(
-            [sys.executable, _sibling("coordinator-ensure-hooks-fleet")],
-            capture_output=True,
-            text=True,
-            timeout=_FIX_SPAWN_TIMEOUT,
-            **no_console_creationflags(),
-        )
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        print(f"[workday-start] WARN: hook-currency heal did not run: {exc}", file=sys.stderr)
+        commondir_file = gitdir / "commondir"
+        if commondir_file.is_file():
+            common = commondir_file.read_text(encoding="utf-8", errors="replace").strip()
+            common_path = Path(common)
+            gitdir = (common_path if common_path.is_absolute() else (gitdir / common_path)).resolve()
+    except Exception:  # noqa: BLE001
+        return None
+
+    return gitdir
+
+
+def _config_has_untracked_cache(text: str) -> bool:
+    """Text-level parse of a git config for `untrackedcache = true` under
+    `[core]`. Deliberately hand-rolled rather than shelling out to
+    `git config --get` -- see `cmd_git_perf_currency`'s NEGATIVE SPEC: this
+    reads the same fact `apply()` writes, never re-derives it from the index."""
+    in_core = False
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or line.startswith(";"):
+            continue
+        if line.startswith("["):
+            header = line.lower()
+            in_core = header.startswith("[core]") or header.startswith("[core ")
+            continue
+        if in_core and "=" in line:
+            k, _, v = line.partition("=")
+            if k.strip().lower() == "untrackedcache":
+                return v.strip().lower() == "true"
+    return False
+
+
+def _git_perf_config_key_status(repo_root: Path) -> bool | None:
+    """True/False the config key's value, or None when the config could not
+    be read at all (missing gitdir, unreadable file) -- kept distinct from
+    False ("read fine, key absent/differs") so the detector can report an
+    unreadable repo rather than silently treating it as compliant or drifted
+    the same way."""
+    gitdir = _resolve_gitdir(repo_root)
+    if gitdir is None:
+        return None
+    try:
+        text = (gitdir / "config").read_text(encoding="utf-8", errors="replace")
+    except Exception:  # noqa: BLE001
+        return None
+    return _config_has_untracked_cache(text)
+
+
+def cmd_git_perf_currency(argv: list[str]) -> int:
+    """Fleet currency of `core.untrackedCache`. See module docstring's
+    "git-perf-currency" entry for the full contract (zero-spawn bare
+    detector, in-process `--fix`, config-key-only negative spec)."""
+    fix = False
+    for arg in argv:
+        if arg == "--fix":
+            fix = True
+        else:
+            print(
+                f"workday-start-health-probes: git-perf-currency: unrecognized argument {arg!r}",
+                file=sys.stderr,
+            )
+            return 2
+
+    _ensure_repo_root_on_path()
+    from coordinator_core.install import git_perf_config
+
+    if fix:
+        try:
+            report = git_perf_config.apply_fleet(_BIN_DIR)
+        except Exception as exc:  # noqa: BLE001
+            print(
+                f"git-perf-currency --fix: COULD NOT RUN the fleet sweep: {exc}",
+                file=sys.stderr,
+            )
+            return 1
+        for line in report:
+            print(line)
+        if any(line.startswith("FAILED") for line in report):
+            return 1
         return 0
-    detail = (proc.stderr or proc.stdout or "").strip()
-    if detail:
-        print(detail, file=sys.stderr)
-    if proc.returncode != 0:
+
+    def _unwalkable(reason: str) -> int:
+        # A WALK THAT COULD NOT RUN IS NOT A CURRENT FLEET. Exiting 0 here
+        # would make a broken registry indistinguishable from a swept one --
+        # the silence-reads-as-health shape `cmd_hook_currency`'s negative
+        # spec names, and the one `apply_fleet` refuses by reporting an empty
+        # fleet explicitly. Exit 1 emits the repair directive; it does not
+        # block the ceremony, which is why this is safe on the boot path.
         print(
-            f"[workday-start] WARN: hook-currency heal exited {proc.returncode} "
-            "(non-blocking) -- auto-push may be running on a stale post-commit body",
+            f"GIT-PERF-CURRENCY PROBE: could not establish fleet currency -- {reason} "
+            "-- Fix: workday-start-health-probes.py git-perf-currency --fix",
             file=sys.stderr,
         )
-    return 0
+        return 1
+
+    try:
+        helpers = git_perf_config._git_hook_install_registry_helpers()
+    except Exception as exc:  # noqa: BLE001 — a health probe must never itself raise
+        return _unwalkable(f"registry helpers raised: {exc}")
+    if helpers is None:
+        return _unwalkable("git_hook_install registry helpers unavailable")
+    registry_repo_roots, classify_target = helpers
+
+    try:
+        roots = registry_repo_roots(str(_BIN_DIR))
+    except Exception as exc:  # noqa: BLE001
+        return _unwalkable(f"could not read the repo registry: {exc}")
+    if not roots:
+        return _unwalkable("no registered repos -- that is not the same fact as 'every repo is current'")
+
+    missing: list[tuple[str, str]] = []
+    drifted: list[tuple[str, str, str]] = []
+    for key, root in sorted(roots):
+        try:
+            kind = classify_target(root)
+        except Exception as exc:  # noqa: BLE001
+            drifted.append((key, root, f"could not classify: {exc}"))
+            continue
+        if kind == "mirror":
+            continue
+        if kind == "missing":
+            missing.append((key, root))
+            continue
+        status = _git_perf_config_key_status(Path(root))
+        if status is None:
+            drifted.append((key, root, "unreadable .git/config"))
+        elif status is False:
+            drifted.append((key, root, "core.untrackedCache not set"))
+
+    if not missing and not drifted:
+        return 0
+
+    lines = [
+        f"missing  {key} -> {root} (registry entry unreachable, not a git repo)"
+        for key, root in missing
+    ]
+    lines += [f"drift    {key} -> {root} ({reason})" for key, root, reason in drifted]
+    print(
+        "GIT-PERF-CURRENCY PROBE: core.untrackedCache is not fleet-current -- "
+        + "; ".join(lines)
+        + " -- Fix: workday-start-health-probes.py git-perf-currency --fix",
+        file=sys.stderr,
+    )
+    return 1
 
 
 _SUBCOMMANDS = {
@@ -694,6 +913,7 @@ _SUBCOMMANDS = {
     "mis-channelled-box": cmd_mis_channelled_box,
     "working-repo-registration": cmd_working_repo_registration,
     "hook-currency": cmd_hook_currency,
+    "git-perf-currency": cmd_git_perf_currency,
 }
 
 

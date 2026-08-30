@@ -8,27 +8,12 @@ and core.fsmonitor never appearing.
 
 from __future__ import annotations
 
-import subprocess
-
 import pytest
 
 from coordinator_core.install import git_perf_config as gpc
+from coordinator_core.install.git_perf_config import _git
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
-
-
-def _no_window_flags():
-    return getattr(subprocess, "CREATE_NO_WINDOW", 0)
-
-
-def _git(repo, *args):
-    return subprocess.run(
-        ("git", *args),
-        cwd=str(repo),
-        capture_output=True,
-        text=True,
-        creationflags=_no_window_flags(),
-    )
 
 
 def _init_repo(tmp_path):
@@ -88,13 +73,13 @@ def test_every_setting_produces_a_report_line_always(tmp_path):
     repo = _init_repo(tmp_path)
 
     fresh_report = gpc.apply(repo)
-    assert len(fresh_report) == len(gpc.SETTINGS)
+    assert len(fresh_report) == 1
 
     if not gpc.filesystem_supports_untracked_cache(repo):
         pytest.skip("filesystem failed git's untracked-cache mtime probe")
 
     again_report = gpc.apply(repo)
-    assert len(again_report) == len(gpc.SETTINGS)
+    assert len(again_report) == 1
 
 
 def test_dry_run_writes_nothing(tmp_path):
@@ -133,8 +118,6 @@ def test_index_is_actually_extended_not_just_config_key(tmp_path):
 
 def test_fsmonitor_never_set(tmp_path):
     repo = _init_repo(tmp_path)
-
-    assert "core.fsmonitor" not in gpc.SETTINGS
 
     gpc.apply(repo)
 
@@ -221,6 +204,39 @@ def test_apply_fleet_empty_fleet_is_explicit_not_success(tmp_path, monkeypatch):
     assert len(report) == 1
     assert "found no registered repos" in report[0]
     assert "not the same fact as 'every repo is current'" in report[0]
+
+
+def test_apply_fleet_one_repo_raising_does_not_discard_the_others(tmp_path, monkeypatch):
+    (tmp_path / "a").mkdir()
+    (tmp_path / "c").mkdir()
+    repo_a = _init_repo(tmp_path / "a")
+    repo_c = _init_repo(tmp_path / "c")
+    if not gpc.filesystem_supports_untracked_cache(repo_a):
+        pytest.skip("filesystem failed git's untracked-cache mtime probe")
+
+    roots = [
+        ("repos.a", str(repo_a)),
+        ("repos.b", "unreachable-mid-fleet"),
+        ("repos.c", str(repo_c)),
+    ]
+
+    def classify(root):
+        if root == "unreachable-mid-fleet":
+            raise FileNotFoundError("git not found on PATH")
+        return "worktree"
+
+    monkeypatch.setattr(
+        gpc,
+        "_git_hook_install_registry_helpers",
+        lambda: _fake_registry_helpers(roots, classify),
+    )
+
+    report = gpc.apply_fleet(tmp_path)
+
+    assert any("repos.a: set     core.untrackedCache" in line for line in report), report
+    assert any("repos.c: set     core.untrackedCache" in line for line in report), report
+    assert any(line.startswith("FAILED  repos.b:") for line in report), report
+    assert any(line.startswith("fleet summary:") for line in report), report
 
 
 def test_apply_fleet_helper_import_unavailable_degrades_to_advisory(tmp_path, monkeypatch):

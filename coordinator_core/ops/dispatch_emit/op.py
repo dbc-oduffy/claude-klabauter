@@ -62,19 +62,24 @@ Reply fields:
 Negative-spec:
   - Does NOT derive waves, pathspecs, or script text itself — delegates
     entirely to ``emit.emit_script``. This module's only original code is
-    the path guard and the disk write.
-  - Does NOT enumerate the tree, glob, or shell out — the sole filesystem
-    interaction beyond the guard's own resolve()/relative_to() checks is one
-    targeted ``Path.write_text()`` call on the caller-named, already-guarded
-    path. Covered by ``tests/test_no_tree_survey.py``'s AST gate (extended
-    to ``emit.py``; this module reads/writes no tree-survey surface of its
-    own to gate).
+    the path guard, the foreign-emission refusal, and the disk write.
+  - Does NOT enumerate the tree, glob, or shell out — beyond the guard's own
+    resolve()/relative_to() checks, every filesystem call targets the ONE
+    caller-named, already-guarded ``output_path``: ``is_file()``/
+    ``read_bytes()``/``stat()`` for the foreign-emission comparison and one
+    ``Path.write_text()``. Covered by ``tests/test_no_tree_survey.py``'s AST
+    gate (extended to ``emit.py``; this module reads/writes no tree-survey
+    surface of its own to gate).
+  - Does NOT make ``output_path`` unique per session. Resume addresses the
+    script by its deterministic name, so uniqueness would break resume;
+    ``ForeignEmissionError`` is the mechanism instead.
 
 Spec backlink: pln-the-emitter-turns-a-plan-spine-d08dda § C5
 """
 
 from __future__ import annotations
 
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -93,6 +98,53 @@ class PathEscapeError(ValueError):
     """Raised when ``output_path`` resolves outside ``target_root``."""
 
 
+class ForeignEmissionError(ValueError):
+    """Raised when ``output_path`` already holds a DIFFERENT session's emission.
+
+    The plan-relative default (``<plan-basename>.workflow.mjs``) is a pure
+    function of the plan, so two sessions executing the same plan target the
+    same file with no claim between them. Identical bytes are the ordinary
+    case and stay silent -- the emitter is deterministic over an unchanged
+    plan. Differing bytes mean the plan moved between the two emits, and the
+    loser is whichever session emits first and fires second: it fires a wave
+    map it never generated. Measured 2026-08-30 (runs wf_7b8b1e10-cbb /
+    wf_7c7058e4-6f1), where a peer's emit added a `Wave 1: C10, C11` phase
+    ahead of the intended C12 wave and put an explicitly-dropped cross-repo
+    memo back in play.
+
+    Negative spec: this does NOT make the path unique per session. The path is
+    addressed by name on resume (``Workflow({resumeFromRunId})`` re-reads the
+    script from disk), so uniqueness would break resume; refusal is the
+    mechanism, and ``force`` is the deliberate override.
+    """
+
+
+def _refuse_foreign_emission(output_path: Path, script: str) -> None:
+    """Refuse to overwrite an existing emission whose bytes differ from ours.
+
+    Compares against the bytes the write would actually land (``newline=""``,
+    so the script's own "
+" endings are what reaches disk) -- comparing the
+    encoded text against a file written under any other newline policy would
+    report every re-emit as foreign on Windows.
+    """
+    if not output_path.is_file():
+        return
+    existing = output_path.read_bytes()
+    ours = script.encode("utf-8")
+    if existing == ours:
+        return
+    mtime = datetime.fromtimestamp(output_path.stat().st_mtime).isoformat(timespec="seconds")
+    raise ForeignEmissionError(
+        f"{output_path} already holds a DIFFERENT emission "
+        f"(written {mtime}, {len(existing)} bytes; ours is {len(ours)} bytes) "
+        "-- refusing to overwrite. Another session emitted this plan against a "
+        "different plan state; firing or resuming this path would run a wave "
+        "map neither session generated. Coordinate with that session, name a "
+        "different output_path, or pass force=true deliberately."
+    )
+
+
 @register_op("dispatch.emit")
 def _dispatch_emit(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC "dispatch.emit" handler.
@@ -105,6 +157,9 @@ def _dispatch_emit(params: dict, repo_root: Optional[Path] = None) -> dict:
             ``output_path``'s parent directory (see module docstring).
         name (str, optional): forwarded to ``emit.emit_script``.
         description (str, optional): forwarded to ``emit.emit_script``.
+        force (bool, optional, default False): overwrite an ``output_path``
+            that already holds a different session's emission. Off by
+            default -- see ``ForeignEmissionError``.
 
     Returns:
         {"path": str, "ok": bool, "findings": [<finding dict>, ...],
@@ -120,6 +175,8 @@ def _dispatch_emit(params: dict, repo_root: Optional[Path] = None) -> dict:
         module docstring.
         PathEscapeError — if ``output_path`` resolves outside
         ``target_root``.
+        ForeignEmissionError — if ``output_path`` already holds a different
+        emission and ``force`` is not set.
     """
     plan_path = params.get("plan_path")
     if not plan_path:
@@ -157,6 +214,9 @@ def _dispatch_emit(params: dict, repo_root: Optional[Path] = None) -> dict:
     # and a CRLF-carrying .mjs is rejected by the harness Workflow surface that
     # fires it (control characters in the approval payload), making an emitted
     # script unfireable on the platform this repo treats as first-class.
+    if not params.get("force"):
+        _refuse_foreign_emission(guarded_path, script)
+
     guarded_path.write_text(script, encoding="utf-8", newline="")
 
     return {

@@ -122,6 +122,10 @@ from coordinator_core.git.git_objects import (
     _read_pack_object_at,
     _read_pack_object_by_sha,
 )
+from coordinator_core.contract.apply_base import (
+    OutOfRepoPath,
+    assert_in_repo_root,
+)
 from coordinator_core.contract.decision_object.judgment import (
     build_judgment_point as _shared_build_judgment_point,
     build_untrusted_gate_judgment_point as _shared_build_untrusted_gate_judgment_point,
@@ -1878,6 +1882,34 @@ def _literal_hit(path: Path) -> bool:
         return False
 
 
+def _repo_relative_artifact_path(artifact_path: str, repo_root: Path) -> str:
+    """Collapse the absolute-artifact-path form to the same repo-relative
+    string the rest of `resolve_artifact` is written against, instead of
+    letting it survive as a second, parallel addressing scheme.
+
+    The whole recovery ladder below this point — reanchor, sanitize,
+    elision glob, suffix match, archive fallback — takes a repo_root-
+    relative string and joins it back onto `repo_root` at each tier; an
+    absolute input that skipped this normalization silently bypassed
+    every one of those tiers (the elision defect this function exists to
+    close: `_is_safe_elision_path` refuses any absolute path outright).
+    Normalizing once, here, means the ladder has exactly one shape to be
+    written against rather than an `is_absolute()` branch duplicated at
+    each tier.
+
+    Containment is a property of resolution, not of mutation, so the
+    refusal lives here rather than only in `apply`/`drop`'s handlers —
+    both already call `assert_in_repo_root` on their own resolved paths
+    (PM ruling D-G) and this is the same bound applied at the read path's
+    single entry point. Raises `OutOfRepoPath` for an absolute path that
+    resolves outside `repo_root`; returns a relative input unchanged.
+    """
+    if not Path(artifact_path).is_absolute():
+        return artifact_path
+    resolved = assert_in_repo_root(Path(artifact_path), repo_root)
+    return resolved.relative_to(repo_root.resolve()).as_posix()
+
+
 def _reanchor_repo_relative(artifact_path: str, repo_root: Path) -> Optional[Path]:
     """Re-anchor a `/<repo-basename>/<rest>` (or bare `<repo-basename>/<rest>`)
     path at the actual repo root when it does not exist literally.
@@ -1995,6 +2027,8 @@ def resolve_artifact(artifact_path: str, repo_root: Path) -> dict[str, Any]:
     #: punctuation to sanitize and is never elided).
     _original_artifact_path = artifact_path
 
+    artifact_path = _repo_relative_artifact_path(artifact_path, repo_root)
+
     elision_resolution: Optional[dict[str, str]] = None
     if _is_elided_basename(Path(artifact_path).name):
         candidates = _resolve_elided_artifact(artifact_path, repo_root)
@@ -2044,7 +2078,7 @@ def resolve_artifact(artifact_path: str, repo_root: Path) -> dict[str, Any]:
             result = {**result, "revision_resolution": revision_resolution}
         return result
 
-    live_path = (repo_root / artifact_path) if not Path(artifact_path).is_absolute() else Path(artifact_path)
+    live_path = repo_root / artifact_path
 
     if not _literal_hit(live_path):
         reanchored = _reanchor_repo_relative(artifact_path, repo_root)
@@ -2057,11 +2091,7 @@ def resolve_artifact(artifact_path: str, repo_root: Path) -> dict[str, Any]:
         # a mutation of the working input (raw always tried first, above).
         sanitized_path = _sanitize_artifact_path_str(artifact_path)
         if sanitized_path != artifact_path:
-            candidate = (
-                (repo_root / sanitized_path)
-                if not Path(sanitized_path).is_absolute()
-                else Path(sanitized_path)
-            )
+            candidate = repo_root / sanitized_path
             if not candidate.is_file():
                 # Not routed through _literal_hit: relies on the invariant
                 # that _sanitize_artifact_path_str already stripped trailing
@@ -4128,24 +4158,35 @@ def compute_liveness_signal(
     claimed — exactly the error-recovery path, and exactly where `j1`
     ("Any peer live on this handoff/plan? Stand down?") must NOT fire
     against the caller itself. `self_session_id` closes that gap: when
-    omitted, resolves via `_session_core.resolve_session_id(str(repo_root))`
-    (same resolver `session.liveness.claim_held_by_me` uses for its own
-    `my_sid` parameter) so the one production call site needs no change;
-    passing it explicitly lets tests and TOCTOU-sensitive callers pin one
-    resolved id across a multi-check sequence instead of re-resolving.
-    Resolution failure degrades to "nothing extra excluded" (current
-    behaviour), never a raised exception — mirrors the
-    `except (OSError, ValueError): continue` tolerance already applied to
-    the per-stamp liveness check below.
+    omitted, prefers `_session_core.carried_session_id()` (C2, the-c-door-
+    sends-the-callers-session-identity) — the caller's own carried identity
+    when this call is warm-served, which is the one production call site
+    (`compute_competing_claim`, reachable from `brief`/`apply`'s
+    `@register_op` handlers) — falling back to
+    `_session_core.resolve_session_id(str(repo_root))` only when nothing was
+    carried (the cold-invocation case, where the ambient environment IS the
+    caller's own and carries no server-identity confusion). Without the
+    carried-first preference, a warm server's `os.environ` reads as
+    whoever SPAWNED it rather than the session actually being served, so
+    this self-exclusion could silently add the wrong id, mis-reading the
+    caller's own live claim as a live PEER's (`j1` firing against the
+    caller itself) or the reverse. Passing `self_session_id` explicitly
+    lets tests and TOCTOU-sensitive callers pin one resolved id across a
+    multi-check sequence instead of re-resolving. Resolution failure
+    degrades to "nothing extra excluded" (current behaviour), never a
+    raised exception — mirrors the `except (OSError, ValueError): continue`
+    tolerance already applied to the per-stamp liveness check below.
     """
     related_sessions = set(_lineage_related_sessions(repo_root, fm))
 
     self_sid = self_session_id
     if self_sid is None:
-        try:
-            self_sid = _session_core.resolve_session_id(str(repo_root))
-        except (OSError, ValueError):
-            self_sid = ""
+        self_sid = _session_core.carried_session_id()
+        if not self_sid:
+            try:
+                self_sid = _session_core.resolve_session_id(str(repo_root))
+            except (OSError, ValueError):
+                self_sid = ""
     if self_sid:
         related_sessions.add(str(self_sid))
 
@@ -4345,10 +4386,20 @@ def _primary_held_disposition(
         return "stale-claim"
 
     related_sessions = set(_lineage_related_sessions(root, target_fm))
-    try:
-        self_sid = _session_core.resolve_session_id(str(root))
-    except (OSError, ValueError):
-        self_sid = ""
+    # C2 (the-c-door-sends-the-callers-session-identity): this disposition
+    # gates a REFUSAL (`live-peer`) per this function's own docstring, so
+    # self-exclusion identity is an anti-forgery input — prefer the
+    # warm-carried caller identity over the ambient environment, which a
+    # warm server's `os.environ` reflects for whoever SPAWNED it rather
+    # than the session actually being served. Falls back to
+    # `resolve_session_id` only when nothing was carried (cold invocation,
+    # where the ambient environment IS the caller's own).
+    self_sid = _session_core.carried_session_id()
+    if not self_sid:
+        try:
+            self_sid = _session_core.resolve_session_id(str(root))
+        except (OSError, ValueError):
+            self_sid = ""
     if self_sid:
         related_sessions.add(str(self_sid))
 
@@ -7336,6 +7387,21 @@ def brief(
 
     try:
         artifact = resolve_artifact(artifact_path, root)
+    except OutOfRepoPath as exc:
+        return _emit(
+            {
+                "artifact": {"path": artifact_path, "classification": "ambiguous", "frontmatter": {}, "resolution": None},
+                "preflight": {"tree_quiescence": compute_tree_quiescence(root, []), "staleness": {}, "closure_signals": []},
+                "gates": {"claim": {}, "addressee": {}, "branch": {}, "aging_verdict": "not_applicable", "coast": compute_coast([])},
+                "directives": [],
+                "judgment_points": [],
+                "decisions": decisions,
+                "error": str(exc),
+                "narration": f"{artifact_path} resolves outside repo root {root}.",
+                "next_move": f"Pass a path inside {root}.",
+            },
+            EXIT_BUSINESS_FAIL,
+        )
     except _ArtifactUnreadable as exc:
         return _emit(
             {

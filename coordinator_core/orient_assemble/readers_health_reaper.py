@@ -12,6 +12,12 @@ Purpose, per `docs/plans/2026-07-24-computed-skills-b2-ceremony-start.md`
    the fused CLI's other subcommand, is NOT one of the three named in the
    plan's original port-scoping table and is out of scope here.)
 
+   2026-08-30: a fifth subcommand, `git-perf-currency`, is wired the same way
+   as `hook-currency` — see `_read_git_perf_currency`'s own docstring. Its
+   bare detector is zero-spawn; its emitted directive names the `--fix` form,
+   which sweeps `core.untrackedCache` fleet-wide in-process
+   (`coordinator_core.install.git_perf_config.apply_fleet`).
+
    This chunk originally also imported a THIRD subcommand, `exec-bit-check`
    (`_read_exec_bit_check`, wired to the now-deleted `check-all-shebanged-
    exec-bits.py`). Retired 2026-07-28: that probe asserted "every shebanged
@@ -123,6 +129,8 @@ _health_probes = _load_module("workday_start_health_probes", _HEALTH_PROBES_PATH
 _cmd_claude_klabauter_bin_sentinel = _health_probes.cmd_claude_klabauter_bin_sentinel
 _cmd_ceremony_hook = _health_probes.cmd_ceremony_hook
 _cmd_working_repo_registration = _health_probes.cmd_working_repo_registration
+_cmd_hook_currency = _health_probes.cmd_hook_currency
+_cmd_git_perf_currency = _health_probes.cmd_git_perf_currency
 
 
 def _read_claude_klabauter_bin_sentinel() -> ReaderResult:
@@ -142,6 +150,79 @@ def _read_claude_klabauter_bin_sentinel() -> ReaderResult:
                 "id": "d-claude-klabauter-bin-sentinel",
                 "cli": "workday-start-health-probes",
                 "args": ["claude-klabauter-bin-sentinel"],
+                "depends_on": None,
+                "already_satisfied": False,
+                "detail": detail,
+            }
+        ]
+    )
+
+
+def _read_hook_currency() -> ReaderResult:
+    """Fleet git-hook currency, modelled on `_read_working_repo_registration`.
+
+    Why this reader exists rather than the probe self-scheduling: the
+    `post-commit` hook IS the auto-push, and a hook body older than the
+    installer's current generation dies on every commit WITHOUT failing the
+    commit -- the push leg is lost silently and presents as an unpushed backlog
+    the banner blames on a diverged branch. `ensure_hooks_fleet` has always been
+    able to repair that; nothing ever called it, so 28 hooks across 14 repos sat
+    stale until 2026-08-29.
+
+    Unlike its siblings the subcommand is detector AND repair in one, because
+    `ensure_hooks_fleet` has no check-only mode and writing one would fork the
+    currency predicate it owns. That still satisfies the discharge test the
+    siblings' `--fix` split exists for -- the emitted directive names a command
+    that REPAIRS rather than one the operator must retype -- and it keeps this
+    reader spawn-free, since the heal runs in-process.
+    """
+    buf = io.StringIO()
+    with contextlib.redirect_stderr(buf):
+        exit_code = _cmd_hook_currency([])
+    if exit_code == 0:
+        return ReaderResult()
+    detail = buf.getvalue().strip() or "fleet git-hook currency check failed"
+    return ReaderResult(
+        directives=[
+            {
+                "id": "d-hook-currency",
+                "cli": "workday-start-health-probes",
+                "args": ["hook-currency"],
+                "depends_on": None,
+                "already_satisfied": False,
+                "detail": detail,
+            }
+        ]
+    )
+
+
+def _read_git_perf_currency() -> ReaderResult:
+    """Fleet `core.untrackedCache` currency, modelled exactly on
+    `_read_hook_currency`.
+
+    Why this reader exists rather than the probe self-scheduling:
+    `apply_fleet` has always been able to sweep every registered worktree,
+    but nothing besides `scripts/setup.py` ever called it, so every machine
+    but the one that ran the installer never gets `core.untrackedCache` at
+    all -- the setting lives INSIDE `.git/index` (see
+    `coordinator_core.install.git_perf_config`'s module docstring), so this
+    is not a one-time gap, it is permanent drift for every never-swept repo.
+
+    The bare detector stays zero-spawn (this reader never spawns); the
+    emitted directive names the `--fix` form, which runs
+    `git_perf_config.apply_fleet` in-process to actually sweep the fleet."""
+    buf = io.StringIO()
+    with contextlib.redirect_stderr(buf):
+        exit_code = _cmd_git_perf_currency([])
+    if exit_code == 0:
+        return ReaderResult()
+    detail = buf.getvalue().strip() or "fleet git-perf-config currency check failed"
+    return ReaderResult(
+        directives=[
+            {
+                "id": "d-git-perf-currency",
+                "cli": "workday-start-health-probes",
+                "args": ["git-perf-currency", "--fix"],
                 "depends_on": None,
                 "already_satisfied": False,
                 "detail": detail,
@@ -404,6 +485,8 @@ def collect(cadence: str, *, repo_root: str | None = None) -> ReaderResult:
     results = [
         _read_claude_klabauter_bin_sentinel(),
         _read_working_repo_registration(),
+        _read_hook_currency(),
+        _read_git_perf_currency(),
         _read_ceremony_hook(cadence),
         _read_marker_freshness(cadence),
     ]

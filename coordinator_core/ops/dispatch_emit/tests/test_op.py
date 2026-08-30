@@ -13,7 +13,11 @@ import pytest
 from coordinator_core.authz.classification import OP_CLASSIFICATION, OpClass
 from coordinator_core.ipc import _REGISTRY
 from coordinator_core.ops.dispatch_emit.emit import NoWavesError
-from coordinator_core.ops.dispatch_emit.op import PathEscapeError, _dispatch_emit
+from coordinator_core.ops.dispatch_emit.op import (
+    ForeignEmissionError,
+    PathEscapeError,
+    _dispatch_emit,
+)
 from coordinator_core.ops.dispatch_emit.pathspec import NoWritesDeclaredError
 
 _FIXTURE_PLAN = textwrap.dedent(
@@ -326,3 +330,62 @@ def test_dispatch_emit_propagates_a_pathspec_refusal(tmp_path):
 
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))
+
+
+# ---------------------------------------------------------------------------
+# Foreign-emission refusal
+# (state/bug-backlog/2026-08-30-the-emitted-workflow-mjs-is-written-to-a-
+#  557dc3eb46ab.yaml -- a peer's emit over the shared plan-relative path
+#  became what this session fired.)
+# ---------------------------------------------------------------------------
+
+
+def test_dispatch_emit_re_emitting_identical_bytes_is_silent(tmp_path):
+    """The emitter is deterministic over an unchanged plan, so the ordinary
+    re-emit must not be mistaken for a peer's."""
+    plan_path = _write_fixture_plan(tmp_path)
+    output_path = tmp_path / "emitted.mjs"
+    params = {"plan_path": str(plan_path), "output_path": str(output_path)}
+
+    first = _dispatch_emit(dict(params))
+    second = _dispatch_emit(dict(params))
+
+    assert first["path"] == second["path"]
+    assert output_path.is_file()
+
+
+def test_dispatch_emit_refuses_to_overwrite_a_different_emission(tmp_path):
+    plan_path = _write_fixture_plan(tmp_path)
+    output_path = tmp_path / "emitted.mjs"
+    output_path.write_text(
+        "// a peer's emission, generated from a different plan state",
+        encoding="utf-8",
+        newline="",
+    )
+    peer_bytes = output_path.read_bytes()
+
+    with pytest.raises(ForeignEmissionError) as excinfo:
+        _dispatch_emit(
+            {"plan_path": str(plan_path), "output_path": str(output_path)}
+        )
+
+    assert "refusing to overwrite" in str(excinfo.value)
+    # The refusal must not have written anything -- the peer's bytes stand.
+    assert output_path.read_bytes() == peer_bytes
+
+
+def test_dispatch_emit_force_overwrites_a_different_emission(tmp_path):
+    plan_path = _write_fixture_plan(tmp_path)
+    output_path = tmp_path / "emitted.mjs"
+    output_path.write_text("// a peer's emission", encoding="utf-8", newline="")
+
+    result = _dispatch_emit(
+        {
+            "plan_path": str(plan_path),
+            "output_path": str(output_path),
+            "force": True,
+        }
+    )
+
+    assert result["ok"] is True
+    assert "a peer's emission" not in output_path.read_text(encoding="utf-8")

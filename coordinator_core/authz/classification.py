@@ -413,6 +413,16 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # job replacing the three suspended legs (handoff.reconcile_open,
     # handoff.archive_transition, session.sweep_consumed_handoffs).
     "handoff.housekeeping": OpClass.MUTATING,
+    # housekeeping.cycle — MUTATING, and the SAME job as handoff.housekeeping
+    # above: the rebuilt cycle (coordinator_core/housekeeping/cycle.py) clears
+    # finished gates, files terminal handoffs into archive/handoffs/, and lands
+    # one commit for the set through fleet/_common.py :: archive_and_commit.
+    # Admitted to DR-211 § D1's sanctioned-writer list by DR-384. Classified
+    # here from the day it registers rather than the day its first caller is
+    # repointed: an op reachable through the registry with no classification is
+    # the gap this table exists to close, and both keys are live during the
+    # repoint.
+    "housekeeping.cycle": OpClass.MUTATING,
     # fleet.aggregate_capability_index — MUTATING, same single-derived-feed-file shape
     # as strategic.emit: it reads every registered sibling's authored capability
     # manifest and writes ONE aggregated projection into the invoking repo's own tree.

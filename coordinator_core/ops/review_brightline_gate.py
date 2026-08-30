@@ -617,6 +617,39 @@ def _resolve_session_floor(session_id: str) -> Optional[str]:
     return f"{earliest}^"
 
 
+def _count_untrailered_commits(range_: str) -> int:
+    """How many non-merge commits in `range_` carry no `Session-Id:` trailer.
+
+    The census the attribution-coverage check in `_session_scoped` reads. A
+    nonzero answer means the trailer substrate is incomplete over this range,
+    so `--grep`'s NEGATIVE results are unsound — a session's own commits may
+    simply be unattributed rather than absent.
+
+    Merges are excluded (`--no-merges`): they carry no trailer by construction
+    and counting them would report incomplete attribution on every range that
+    contains one.
+
+    Fail-safe on transport: a git failure returns 0 (report complete coverage)
+    rather than a fabricated shortfall. This helper only ever GATES a
+    permissive verdict, so returning 0 here degrades to the pre-2026-08-30
+    behaviour of the caller instead of flipping honest closes to
+    `indeterminate` on an unrelated git error.
+    """
+    all_out, rc = _run_git(["log", "--no-merges", "--pretty=%H", range_])
+    if rc != 0:
+        return 0
+    total = len([ln for ln in all_out.splitlines() if ln.strip()])
+
+    trailered_out, rc2 = _run_git(
+        ["log", "--no-merges", "--pretty=%H", "--grep=^Session-Id: ", range_]
+    )
+    if rc2 != 0:
+        return 0
+    trailered = len([ln for ln in trailered_out.splitlines() if ln.strip()])
+
+    return max(0, total - trailered)
+
+
 def _session_scoped(range_: str, session_id: str) -> int:
     """`--session-id`-filtered scan over `range_`.
 
@@ -703,6 +736,54 @@ def _session_scoped(range_: str, session_id: str) -> int:
     surfaces = len(surfaces_set)
 
     verdict = _verdict(loc, commits, surfaces)
+
+    # ATTRIBUTION COVERAGE (2026-08-30). A session-scoped verdict is only as
+    # sound as the trailer it filters on, and this gate had no way to tell an
+    # honest zero from a blind one. `filtered_to > 0` does not establish that
+    # the filter SAW the session: it establishes that something matched.
+    #
+    # Two live routes write no usable attribution, so this is not hypothetical:
+    # `ceremony.commit_v2` appends no `Session-Id` trailer at all, and the
+    # generated git-hook ladder that runs `coordinator-prepare-commit-msg` is
+    # `.exe`-blind under MinGit's sh (state/bug-backlog/2026-08-29-git-hook-
+    # script-ladder-is-exe-blind-so-au-2b59782d53ef.yaml — fixed in the
+    # generator, but no hook already on disk is ever regenerated, so it is
+    # still live in any repo that has not reinstalled). A session whose commits
+    # were written through either one is INVISIBLE to `--grep`, while some
+    # other session's trailered commit in the same range still matches.
+    #
+    # Measured specimen (DoE, 2026-08-30): a close of 2,234 gross LOC across 12
+    # commits and 8 surfaces reported `filtered_to=1 ... VERDICT=single-
+    # reviewer-ok`. Eleven of those commits carried no trailer to match.
+    #
+    # SCOPED TO THE PERMISSIVE DIRECTION ONLY. Incomplete attribution can only
+    # ever hide work, never invent it, so it cannot turn a mandatory partition
+    # into a spurious one — a PARTITION-MANDATORY verdict is already the
+    # conservative action and stands unchanged. It is `single-reviewer-ok` that
+    # must not be issued over a range the gate could not fully attribute: that
+    # is the under-review direction, and the sessions it affects are exactly
+    # the ones that will never notice. This also leaves AC1 intact — a
+    # prose-only close whose commits ARE all trailered still resolves
+    # `commits=0 VERDICT=single-reviewer-ok`, because the gate genuinely looked.
+    #
+    # Merges are excluded from the census: they carry no trailer by
+    # construction and are not a session's authored work.
+    if verdict == "single-reviewer-ok":
+        untrailered = _count_untrailered_commits(range_)
+        if untrailered:
+            print(
+                f"range={range_} loc={loc} commits={commits} surfaces={surfaces} "
+                f"files={files} filtered_to={filtered_count} VERDICT=indeterminate"
+            )
+            print(
+                f"note: {untrailered} commit(s) in range carry no Session-Id "
+                "trailer — session attribution is incomplete, so a permissive "
+                "verdict cannot be issued; gate vacuous, EM verify scope "
+                "manually",
+                file=sys.stderr,
+            )
+            return 0
+
     print(
         f"range={range_} loc={loc} commits={commits} surfaces={surfaces} "
         f"files={files} filtered_to={filtered_count} VERDICT={verdict}"

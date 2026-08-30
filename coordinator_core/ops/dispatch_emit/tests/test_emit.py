@@ -1100,7 +1100,8 @@ def test_compose_script_commit_prompt_names_every_measured_false_refusal():
     assert "SHARED TREE" in script
     assert "UNCHANGED DECLARED PATHS" in script
     assert "ALREADY COMMITTED" in script
-    assert "LANDED BUT UNVERIFIED SHA" in script
+    assert "THE CALL RETURNS THE SHA" in script
+    assert "ON THE CALL IS A WRONG KEYWORD, NOT AN ABSENT ROUTE" in script
 
     errors = [f for f in run_checks(script) if f.severity is Severity.ERROR]
     assert errors == []

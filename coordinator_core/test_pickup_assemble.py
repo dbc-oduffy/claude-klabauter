@@ -1208,6 +1208,62 @@ class TestElidedArtifactPath:
         assert result.decision_object["artifact"]["classification"] == "ambiguous"
 
 
+class TestAbsoluteArtifactPathForm:
+    """2026-08-30 — the absolute artifact-path form is a paste-tolerance
+    rung, not a second addressing scheme: `_repo_relative_artifact_path`
+    collapses an absolute input to the same repo-relative string the rest
+    of the recovery ladder is written against, one time, at
+    `resolve_artifact`'s entry point, instead of letting it bypass every
+    tier (elision included) via its own `is_absolute()` branches."""
+
+    def test_absolute_in_repo_path_resolves_identically_to_relative(self, tmp_path):
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        _seed_handoff(repo, "h1.md")
+
+        relative_result = pa.brief("state/handoffs/h1.md", repo_root=repo)
+        absolute_path = str(repo / "state" / "handoffs" / "h1.md")
+        absolute_result = pa.brief(absolute_path, repo_root=repo)
+
+        assert absolute_result.exit_code == pa.EXIT_OK
+        assert (
+            absolute_result.decision_object["artifact"]["path"]
+            == relative_result.decision_object["artifact"]["path"]
+            == "state/handoffs/h1.md"
+        )
+
+    def test_absolute_in_repo_path_with_elided_basename_resolves(self, tmp_path):
+        """Red before the fix: `_is_safe_elision_path` returns False for
+        any absolute path, so an absolute+elided path fell straight
+        through to the not-found error, unable to reach elision glob
+        resolution at all."""
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        _seed_handoff(repo, "2026-07-24_210324_5bdf4a2f-6fa4-464d-adb7-8d119d8e2348.md")
+
+        absolute_elided = str(repo / "state" / "handoffs" / "2026-07-24_210324_…md")
+        result = pa.brief(absolute_elided, repo_root=repo)
+
+        assert result.exit_code == pa.EXIT_OK
+        assert result.decision_object["artifact"]["classification"] == "handoff"
+        assert result.decision_object["artifact"]["path"] == (
+            "state/handoffs/2026-07-24_210324_5bdf4a2f-6fa4-464d-adb7-8d119d8e2348.md"
+        )
+
+    def test_out_of_repo_absolute_path_refused_by_name(self, tmp_path):
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        outside = tmp_path / "outside-artifact.md"
+        outside.write_text("---\nstatus: open\n---\nbody\n", encoding="utf-8")
+
+        result = pa.brief(str(outside), repo_root=repo)
+
+        assert result.exit_code == pa.EXIT_BUSINESS_FAIL
+        assert "error" in result.decision_object
+        assert str(repo) in result.decision_object["error"]
+        assert result.decision_object["artifact"]["classification"] == "ambiguous"
+
+
 # ---------------------------------------------------------------------------
 # Prose-punctuation-tolerant path resolution (2026-07-27 incident):
 # `/coordinator:pickup <path>.` with a sentence-final period reported

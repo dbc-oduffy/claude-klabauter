@@ -1,7 +1,15 @@
-"""The negative that outlives this plan: no install run emits a launcher
-whose PRIMARY PATH starts an interpreter (DR-365, docs/decisions/DR-365-
-ruling-2-governs-every-managed-launcher-class.md; docs/plans/2026-08-26-
-every-forwarder-that-can-reach-the-door-does.md C12).
+"""The negative that outlives this plan: no *agent-helper forwarder* install
+pass emits a launcher whose PRIMARY PATH starts an interpreter (DR-365,
+docs/decisions/DR-365-ruling-2-governs-every-managed-launcher-class.md;
+docs/plans/2026-08-26-every-forwarder-that-can-reach-the-door-does.md C12).
+
+Scope, stated plainly: this guard calls `_write_agent_helper_forwarders`
+directly, not `_install_bin_resolvers`/`run()`. The five hand-authored
+static-family `.cmd` shims that `_install_bin_resolvers` also drives
+(machine-local.cmd, coordinator-settings-home.cmd, platform-localize.cmd,
+resolve-coordinator-clone.cmd, claude-home.cmd) are therefore NOT covered
+by this guard -- they are a distinct writer family with their own
+primary-path shape, out of scope for this test on purpose.
 
 Worded PRIMARY PATH, deliberately, not a flat "never starts an
 interpreter": the door itself degrades to that name's own Python CLI on a
@@ -28,14 +36,13 @@ Spec backlink: docs/plans/2026-08-26-every-forwarder-that-can-reach-the-door-doe
 
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 
 import pytest
 
 from coordinator_core.install import door_install, substrate
 
-pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+pytestmark = [pytest.mark.cadence]
 
 
 def _stamp_engine_root(root: Path, *entrypoints: str) -> None:
@@ -50,6 +57,9 @@ def _stamp_engine_root(root: Path, *entrypoints: str) -> None:
 
 
 def _skip_if_no_prebuilt() -> None:
+    # Skipping here drops the guard's entire BEHAVIORAL leg on a
+    # platform/checkout with no committed prebuilt door, leaving only leg 1's
+    # structural (hasattr) coverage in place.
     if not door_install._PREBUILT_DOOR_EXE.exists():
         pytest.skip("no committed prebuilt door for this platform in this checkout")
 
