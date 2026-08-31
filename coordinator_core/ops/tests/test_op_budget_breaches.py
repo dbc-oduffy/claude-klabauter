@@ -479,3 +479,47 @@ def test_split_caller_tie_reports_the_full_caller_breakdown():
         "coordinator_core.invoke.__main__": 6,
     }
     assert finding["caller"] in finding["callers"]
+
+
+def test_headline_does_not_tell_a_network_arm_to_delete_itself():
+    """An arm the op named `*.network` spends its time on a remote, so
+    "delete it or rebuild it under the bar" is advice it cannot take —
+    and this line renders at every session boot.
+    `state/audits/2026-08-31-push-outstanding-lands-under-the-bar-in-
+    process-time.md` measured the local half of the worked example at
+    UNDER 1ms, ~630x UNDER the bar, while this surface called it the worst
+    offender on the box."""
+    summary = breach_report(
+        entries=[_complete("push.outstanding.network", 30_000.0)], now=BASE_T
+    )
+    text = summary["headline"]
+
+    assert "push.outstanding.network" in text
+    assert "delete" not in text.lower()
+    assert "round trip" in text.lower()
+    # The breach itself is still reported, not suppressed: the numbers were
+    # never the wrong part, only the imperative.
+    assert summary["totals"]["breaching_ops"] == 1
+
+
+def test_network_remedy_does_not_become_a_denylist_of_op_names():
+    """The suffix travels with the emitting op, so an arbitrary op opting in
+    needs no edit here — and an op that did NOT opt in still gets the
+    delete-or-rebuild imperative, whatever it is called."""
+    assert "round trip" in op_budget_breaches._remedy_for("anything.at.all.network")
+    assert "Delete it" in op_budget_breaches._remedy_for("push.outstanding")
+    assert "Delete it" in op_budget_breaches._remedy_for("network.thing")
+
+
+def test_network_headline_still_obeys_the_standing_register_rules():
+    """The new branch is not exempt from what governs the other one."""
+    summary = breach_report(
+        entries=[_complete("push.outstanding.network", 30_000.0)], now=BASE_T
+    )
+    text = summary["headline"]
+
+    for banned in ("timeout", "increase", "raise", "grace", "budget to", "retry"):
+        assert banned not in text.lower(), f"headline names {banned!r}: {text}"
+    for banned in ("sorry", "unfortunately", "please note", "harmless", "as normal"):
+        assert banned not in text.lower()
+    assert len(text.encode("utf-8")) <= 220

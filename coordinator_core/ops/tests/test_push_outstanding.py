@@ -81,6 +81,7 @@ def _make_repo_with_remote(tmp_path: Path, *, branch: str = "work/some-branch") 
     """A local repo, on `branch`, with a bare "remote" cloned-from origin and
     a matching `refs/remotes/origin/<branch>` tracking ref -- HEAD and the
     tracking ref start EQUAL (nothing outstanding)."""
+    tmp_path.mkdir(parents=True, exist_ok=True)
     bare = tmp_path / "bare.git"
     _git(["init", "-q", "--bare", str(bare)], tmp_path)
 
@@ -603,3 +604,118 @@ def test_cockpit_publish_uses_outcome_pushed_range_not_precall_shas(monkeypatch,
         f"({pre_call_upstream_sha}..{pre_call_current_sha}, schema-touching) instead of "
         f"outcome.pushed_range ({rebased_base}..{rebased_head}, schema-clean)."
     )
+
+
+# ---------------------------------------------------------------------------
+# decide_only -- exercising the decision without publishing
+# ---------------------------------------------------------------------------
+
+
+def _repo_with_remote(tmp_path, *, outstanding: bool):
+    """A real repo with its own bare remote, ahead by one commit or level."""
+    bare = tmp_path / "bare.git"
+    subprocess.run(["git", "init", "--bare", "-q", str(bare)], check=True)
+    work = tmp_path / "work"
+    # A `work/*` branch, not the init default: the branch gate declines
+    # anything else, which would make a "did not publish" assertion pass for
+    # the wrong reason.
+    subprocess.run(
+        ["git", "init", "-q", "--initial-branch", "work/probe", str(work)], check=True)
+    for k, v in (("user.email", "t@t"), ("user.name", "t")):
+        subprocess.run(["git", "-C", str(work), "config", k, v], check=True)
+    (work / "a.txt").write_text("one\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(work), "add", "--", "a.txt"], check=True)
+    subprocess.run(["git", "-C", str(work), "commit", "-qm", "one", "--", "a.txt"], check=True)
+    subprocess.run(["git", "-C", str(work), "remote", "add", "origin", str(bare)], check=True)
+    subprocess.run(["git", "-C", str(work), "push", "-q", "-u", "origin", "HEAD"], check=True)
+    if outstanding:
+        (work / "a.txt").write_text("two\n", encoding="utf-8")
+        subprocess.run(["git", "-C", str(work), "add", "--", "a.txt"], check=True)
+        subprocess.run(["git", "-C", str(work), "commit", "-qm", "two", "--", "a.txt"], check=True)
+    return work, bare
+
+
+def _remote_tip(bare):
+    """The bare repo's `work/probe` tip, named explicitly -- its own HEAD
+    still points at the init default, which no push here ever creates, so
+    `rev-parse HEAD` there returns the unresolved string "HEAD" and compares
+    equal to itself forever."""
+    out = subprocess.run(
+        ["git", "-C", str(bare), "rev-parse", "refs/heads/work/probe"],
+        capture_output=True, text=True, check=True)
+    return out.stdout.strip()
+
+
+def test_decide_only_does_not_publish_when_work_is_outstanding(tmp_path):
+    """The whole point: a probe or test can reach the decision without the
+    remote moving. A measurement harness that publishes is not an
+    instrument."""
+    work, bare = _repo_with_remote(tmp_path, outstanding=True)
+    before = _remote_tip(bare)
+
+    outcome = push_outstanding(work, decide_only=True)
+
+    assert _remote_tip(bare) == before, "decide_only published"
+    assert outcome.exit_code == 0
+    assert outcome.acted == []
+    assert "push:decide-only" in outcome.skipped
+    assert outcome.pushed_range is None
+
+
+def test_decide_only_still_reports_nothing_outstanding_distinctly(tmp_path):
+    """`push:decide-only` means "there was work and I declined to send it".
+    An empty tree must stay distinguishable from that, or the flag has
+    collapsed the two answers a caller needs to tell apart."""
+    work, _ = _repo_with_remote(tmp_path, outstanding=False)
+
+    outcome = push_outstanding(work, decide_only=True)
+
+    assert "push:nothing-outstanding" in outcome.skipped
+    assert "push:decide-only" not in outcome.skipped
+
+
+def test_decide_only_carries_the_lfs_verdict(tmp_path):
+    """The LFS predicate is part of the decision and costs no network, so
+    stopping before the push must not drop its verdict."""
+    work, _ = _repo_with_remote(tmp_path, outstanding=True)
+
+    outcome = push_outstanding(work, decide_only=True)
+
+    assert any(s.startswith("push:lfs-range-") for s in outcome.skipped), outcome.skipped
+
+
+def test_decide_only_appends_no_row_to_the_census_it_is_measured_against(
+    tmp_path, monkeypatch
+):
+    """A harness that appends to the population it is profiling reshapes
+    that population. NEITHER arm may be recorded for an instrument call --
+    checked on both the outstanding and the nothing-outstanding path, since
+    the early return records `_ARM_NOOP` on the ordinary route."""
+    recorded = []
+    monkeypatch.setattr(
+        push_outstanding_mod, "_record_arm_latency",
+        lambda *a, **k: recorded.append(a[0]),
+    )
+
+    ahead, _ = _repo_with_remote(tmp_path / "ahead", outstanding=True)
+    level, _ = _repo_with_remote(tmp_path / "level", outstanding=False)
+    push_outstanding(ahead, decide_only=True)
+    push_outstanding(level, decide_only=True)
+
+    assert recorded == [], f"decide_only polluted the census: {recorded}"
+
+    # Control: the ordinary route DOES record, so the assertion above is
+    # testing suppression rather than a mock that never fires.
+    push_outstanding(level)
+    assert recorded == [push_outstanding_mod._ARM_NOOP]
+
+
+def test_the_default_is_unchanged_and_still_publishes(tmp_path):
+    """`decide_only` is opt-in. No existing caller changes behaviour."""
+    work, bare = _repo_with_remote(tmp_path, outstanding=True)
+    before = _remote_tip(bare)
+
+    outcome = push_outstanding(work)
+
+    assert _remote_tip(bare) != before
+    assert outcome.acted == ["push"]

@@ -343,6 +343,7 @@ def push_outstanding(
     allow_protected_branch: bool = False,
     protected_branch_override_reason: Optional[str] = None,
     budget_secs: float = PUSH_RETRY_BUDGET_SECS,
+    decide_only: bool = False,
 ) -> PushOutcome:
     """Push `worktree_root`'s current branch iff it is ahead of its own
     upstream tracking ref -- decided at zero git spawns (see module
@@ -404,6 +405,27 @@ def push_outstanding(
     a cadence surface has commits accumulated by definition and the no-op
     case is the rare one; the laziness half survives intact and is free
     (C2, zero spawns).
+
+    `decide_only` (2026-08-31) runs the decision and STOPS -- never reaching
+    `push_with_retry`, so nothing is published. It exists because the
+    decision half is the only half a change to this repo can move
+    (`state/audits/2026-08-27-push-outstanding-breach-is-network-time.md`),
+    and until now there was no way to exercise it: measuring or testing the
+    decision meant calling the real thing and hoping the tree stayed clean.
+    On a SHARED tree that hope is unfounded -- a peer committing mid-run
+    turns an instrument into a publisher, and one did (a probe measuring
+    this op published a peer's commit on 2026-08-31, harmlessly but not
+    intentionally).
+
+    Returns `push:nothing-outstanding` when there is nothing to push, and
+    `push:decide-only` when there IS -- carrying the LFS verdict either way,
+    since that predicate is part of the decision and costs no network.
+
+    Records NO telemetry arm. A `decide_only` call is an instrument, not an
+    invocation, and `_ARM_NOOP`/`_ARM_NETWORK` rows feed the percentiles this
+    op is judged on -- letting a measurement harness append to the census it
+    is measuring is how a population gets quietly reshaped by whoever
+    profiled it most recently.
     """
     root = Path(worktree_root)
     arm_t_start = time.time()
@@ -415,7 +437,8 @@ def push_outstanding(
     if branch is not None and current_sha is not None:
         upstream_sha = _upstream_sha(root, branch)
         if upstream_sha is not None and upstream_sha == current_sha:
-            _record_arm_latency(_ARM_NOOP, arm_t_start, root)
+            if not decide_only:
+                _record_arm_latency(_ARM_NOOP, arm_t_start, root)
             return PushOutcome(exit_code=0, skipped=["push:nothing-outstanding"])
 
     lfs_note: list[str] = []
@@ -424,6 +447,9 @@ def push_outstanding(
             lfs_note.append("push:lfs-range-touched")
         else:
             lfs_note.append("push:lfs-range-clean")
+
+    if decide_only:
+        return PushOutcome(exit_code=0, skipped=["push:decide-only", *lfs_note])
 
     publish_deadline = time.monotonic() + budget_secs
     outcome = push_with_retry(
@@ -488,6 +514,10 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     Parameters (params dict), all optional:
         allow_protected_branch (bool) -- passed straight through.
         protected_branch_override_reason (str) -- passed straight through.
+        decide_only (bool) -- run the decision and stop, publishing nothing
+            and recording no telemetry arm. See `push_outstanding`'s own
+            docstring; this is how a caller asks "would you push?" without
+            a remote moving.
 
     Neither adds an override surface of its own; see `push_with_retry`'s
     docstring for what they mean and what they still refuse.
@@ -582,6 +612,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         protected_branch_override_reason=(
             params.get("protected_branch_override_reason") or None
         ),
+        decide_only=bool(params.get("decide_only") or False),
     )
 
     return {

@@ -102,6 +102,33 @@ second question has a hole this module cannot close:
   - Linux: unimplemented (`NotImplementedError` above) -- nothing is
     measured here at all, which is itself the honest answer for this
     platform rather than a silent zero.
+
+A SIXTH TRAP, and the only one that is not a leak: measuring a WARM-ENGINE
+op through the CLI door measures the DOOR, not the op. The door
+(`coordinator-invoke`) is an IPC client -- it dials a warm server that was
+already running, and a pre-existing process was never assigned to this
+module's job object, so every subprocess the op spawns and every millisecond
+it burns happen outside the measured tree. The read is real, small, and
+answers a question nobody asked.
+
+Measured, not hypothesised: `coordinator-invoke push.outstanding` read
+21.875ms at 2.0 procs/call through the door, while the same op measured
+IN-PROCESS costs UNDER 1ms at 0.00 procs/call -- the door reading is mostly
+the client's own interpreter start and contains none of the op
+(`state/audits/2026-08-31-push-outstanding-lands-under-the-bar-in-process-
+time.md`).
+
+Unlike the five traps above this is not a defect in the mechanism: the work
+is CORRECTLY outside the job, because it belongs to a process this
+measurement did not create. The defect is only ever in the caller's choice of
+what to spawn. The consequence is the same one this module exists to prevent
+-- an unconditional PASS, since the door's cost is bounded and roughly
+constant no matter how expensive the op behind it becomes.
+
+The tell is `procs_per_call`: an op known to spawn git reading 2.0 procs/call
+(interpreter plus one child) cannot have run inside the measurement. Measure
+a warm-engine op by importing and calling it in the spawned process, against
+an import-only baseline of the same shape, and take the delta.
 """
 
 from __future__ import annotations

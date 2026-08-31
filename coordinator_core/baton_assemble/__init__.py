@@ -1086,9 +1086,9 @@ def _mint_last_resort_slug() -> str:
     """The terminal fallback slug when NOTHING upstream (plan, predecessor,
     this session's own sizing object, caller-supplied title) resolves --
     `secrets.token_hex(4)` (8 hex chars), the same shortid-nonce shape
-    `coordinator_core.dispatch.provision` and `coordinator_core.subagent_
-    sandbox.provision_report` already mint with for an analogous
-    "guaranteed non-colliding, no ambient identity to derive from" case.
+    `coordinator_core.subagent_sandbox.provision_report` already mints
+    for an analogous "guaranteed non-colliding, no ambient identity to
+    derive from" case.
 
     2026-08-10 PM ruling, replacing the literal string `"untitled"`: two
     standalone handoffs minted on the same date used to collide on that one

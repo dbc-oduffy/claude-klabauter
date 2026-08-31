@@ -30,7 +30,7 @@ Key rules (HARD, from the design §receipt):
   - Declares the written receipt path via session_scope.touch_written_path
     AFTER the write succeeds (never speculatively), attributed to the RAW
     `sid` argument -- never a re-resolved current session, never agent_id.
-    Follows coordinator_core/dispatch/provision.py's existing shape. Skipped
+    Follows coordinator_core/subagent_sandbox/provision_report.py's existing shape. Skipped
     (no declaration) when `sid` or `repo_root` is unavailable, or when
     `out_path` cannot be relativized to `repo_root` -- see emit_receipt's
     inline comment. Inherits touch_written_path's phantom-live-peer guard
@@ -379,7 +379,7 @@ def emit_receipt(
     _atomic_write_json(out_path, receipt)
 
     # --- declare the write (after success, never speculatively) ---
-    # Mirrors coordinator_core/dispatch/provision.py's touch_written_path
+    # Mirrors coordinator_core/subagent_sandbox/provision_report.py's touch_written_path
     # call sites: declare the RAW sid as passed to this function, never a
     # re-resolved current session and never agent_id (see
     # session_scope.touch_written_path's own docstring for why). Only

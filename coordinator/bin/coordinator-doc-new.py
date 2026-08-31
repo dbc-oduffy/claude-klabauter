@@ -62,7 +62,8 @@ Supported types:
   subagent-sidecar   — agent-side decision-object container (schemas/decision-object.schema.json
                        subagent_sidecar schema definition) requires --plan, --chunk and --out
                        --out is REQUIRED (no default); the LIVE sidecar path is computed by
-                       coordinator_core.dispatch.provision at spawn time under
+                       coordinator_core.subagent_sandbox.provision_report at spawn time, reached
+                       from coordinator_core.hooks.cater_subagent_start on SubagentStart, under
                        state/subagent-share/<session-id>/<key>.md. This CLI branch is the
                        manual/test scaffold path only. Carries completion_status (backlinks the
                        existing query-completions surface, not a fourth store),
@@ -596,8 +597,8 @@ def _missing_out_message(type_label: str) -> str:
     sidecar types (--type run-report and --type subagent-sidecar).
 
     Neither type gains a derived default here, and this function does not add
-    one: the live path is computed by ``coordinator_core.dispatch.provision`` at
-    spawn time, and a scaffold that guessed a session-scoped path would write a
+    one: the live path is computed by ``coordinator_core.subagent_sandbox.provision_report``
+    at spawn time, and a scaffold that guessed a session-scoped path would write a
     sidecar into a directory nothing reaps (the DEC-3 rationale pinned at both
     call sites and in ``_default_path``). What differs is the *remediation named
     to the reader*, per docs/wiki/guard-messaging.md § Key Patterns — "only offer
@@ -623,7 +624,7 @@ def _missing_out_message(type_label: str) -> str:
     head = (
         f"error: --out <path> is required for --type {type_label}. "
         "There is no default output path -- the live sidecar path is computed by "
-        "coordinator_core.dispatch.provision at spawn time and travels in the dispatch brief."
+        "coordinator_core.subagent_sandbox.provision_report at spawn time and travels in the dispatch brief."
     )
     if session_id == "em-unknown":
         return (
@@ -4715,9 +4716,10 @@ def _scaffold_review_findings(slice_id: str, scope: str, spawned_at: str, lead_s
 
     This is the SOLE self-persist scaffold path -- reached only when a code-reviewer
     dispatch arrived with NO sidecar pre-provisioned by the dispatching EM (the common
-    case is engine-side spawn-time provisioning via coordinator_core.dispatch.provision /
-    coordinator_core.subagent_sandbox.provision_report, which this scaffolder never
-    duplicates). Code-reviewer returns the path in its DONE line either way.
+    case is engine-side spawn-time provisioning via
+    coordinator_core.subagent_sandbox.provision_report, reached from
+    coordinator_core.hooks.cater_subagent_start on SubagentStart, which this scaffolder
+    never duplicates). Code-reviewer returns the path in its DONE line either way.
 
     Output path: state/subagent-share/<session-id>/YYYY-MM-DD-codereview-slice<ID>-<SLUG>.md
     -- the DR-091 one-home (docs/decisions/DR-091-agent-citizenship-identity-typed-sidecar-
@@ -4848,8 +4850,8 @@ def _scaffold_subagent_sidecar(
         "<!-- Subagent-sidecar decision-object container (schemas/decision-",
         "     object.schema.json $defs/subagent_sidecar). Lives at",
         "     state/subagent-share/<session-id>/<key>.md, path owned and",
-        "     computed by coordinator_core.dispatch.provision at spawn time.",
-        "     This scaffold's --out path is caller-supplied; there is no",
+        "     computed by coordinator_core.subagent_sandbox.provision_report",
+        "     at spawn time. This scaffold's --out path is caller-supplied; there is no",
         "     default path. See docs/plans/2026-07-24-canonical-resolution-",
         "     engine.md § W2-B3. -->",
         "",
@@ -6154,8 +6156,8 @@ def main(argv: "list[str] | None" = None) -> int:
             )
             return 1
         # --out is REQUIRED — the live sidecar path is computed by
-        # coordinator_core.dispatch.provision at spawn time, exactly the same
-        # rationale as --type run-report's --out requirement above.
+        # coordinator_core.subagent_sandbox.provision_report at spawn time, exactly
+        # the same rationale as --type run-report's --out requirement above.
         if not args.out:
             print(_missing_out_message("subagent-sidecar"), file=sys.stderr)
             return 1

@@ -113,6 +113,31 @@ MAX_TAIL_BYTES = 6 * 1024 * 1024
 #: count, so a short list can never read as a clean box.
 DEFAULT_TOP_N = 20
 
+#: How an op DECLARES that one of its arms spends its time on a remote, so
+#: this view can stop prescribing a remedy that arm cannot take. An op splits
+#: its own telemetry into arms and names them itself (`push_outstanding`'s
+#: `_ARM_NOOP`/`_ARM_NETWORK` is the worked example); an arm named with this
+#: suffix is the op saying "this half is a round trip, not local work".
+#:
+#: This is deliberately NOT a denylist of op names.
+#: `telemetry.op_latency.breach_summary`'s own docstring rules that out — "no
+#: name-based denylist belongs here — a hardcoded op-name list is exactly what
+#: the `origin` field replaced" — and a central list here would be that
+#: denylist under another name, maintained away from the op it describes and
+#: stale the moment an op is renamed. The suffix travels WITH the emitting op,
+#: in the row the op itself writes, so opting in is a local edit at the arm and
+#: nothing here needs to know the op exists.
+#:
+#: What it changes is the remedy clause ONLY. A network arm still counts as a
+#: breach, still carries its stolen_ms, and still ranks — the numbers are
+#: honest and this does not hide them
+#: (`state/audits/2026-08-27-push-outstanding-breach-is-network-time.md` is
+#: explicit that the view reports what it measures). What was wrong was the
+#: imperative: "Delete it, or rebuild it under the bar" is unactionable for a
+#: cost that is one round trip to a remote, and an operator who reads it at
+#: every session boot either deletes a healthy op or learns to ignore the line.
+NETWORK_ARM_SUFFIX = ".network"
+
 #: DR-344 constraint 1 and constraint 7 — this op asserts against both.
 BRIGHTLINE_BUDGET_MS = 500.0
 PER_PROCESS_BAR_MS = 200.0
@@ -367,6 +392,26 @@ def _current_generation_paths(repo_root: Path) -> List[Path]:
         return []
 
 
+def _remedy_for(op: str) -> str:
+    """The imperative half of the headline, chosen by what the op declared.
+
+    A local op is told to delete or rebuild. An arm the op itself named with
+    `NETWORK_ARM_SUFFIX` is told the one thing that can actually move its
+    number — fewer round trips — because no amount of local work reduces a
+    remote's latency, and `headline_for`'s register rule requires the
+    alternative to be one the reader can take.
+
+    Never names a timeout, for either arm: that is `headline_for`'s standing
+    rule and a wider budget is not a fix on a network arm either.
+    """
+    if op.endswith(NETWORK_ARM_SUFFIX):
+        return (
+            "Its cost is a remote round trip, not local work — "
+            "cut round trips, or accept it and stop ranking it."
+        )
+    return "Delete it, or rebuild it under the bar."
+
+
 def headline_for(summary: dict) -> str:
     """One operator-facing line: what happened, then what to do instead.
 
@@ -393,7 +438,7 @@ def headline_for(summary: dict) -> str:
         f"{totals['stolen_ms'] / 1000.0:.1f}s stolen from the box. "
         f"Worst: {worst['op']} ({worst['stolen_ms'] / 1000.0:.1f}s, "
         f"{worst['breaches']}/{worst['attempts']}, {worst['trend']}). "
-        "Delete it, or rebuild it under the bar."
+        + _remedy_for(worst["op"])
     )
 
 

@@ -211,3 +211,173 @@ def test_resolve_addressee_never_caches_across_calls(tmp_path):
     calls["rows"] = []
     second = send_pass.resolve_addressee(repo_root, "peer-sid", build_roster=_roster)
     assert second is None
+
+
+def test_offer_row_carries_outcome_discriminator(tmp_path):
+    repo_root = str(tmp_path)
+    roster = [_verdict("peer-disc")]
+
+    send_pass.build_send_digest(repo_root, roster, "caller-disc", now=1000.0)
+
+    log = send_pass.read_send_log(repo_root, "caller-disc")
+    assert len(log) == 1
+    assert log[0]["outcome"] == "offer"
+
+
+def test_decline_writes_declination_row_same_log(tmp_path):
+    repo_root = str(tmp_path)
+
+    ok = send_pass.decline(
+        repo_root, "caller-six", "peer-six", "gate1", "not ready this tick", now=2000.0
+    )
+
+    assert ok is True
+    log = send_pass.read_send_log(repo_root, "caller-six")
+    assert len(log) == 1
+    row = log[0]
+    assert row["outcome"] == "declination"
+    assert row["gate"] == "gate1"
+    assert row["reason"] == "not ready this tick"
+    assert row["offer_key"] == send_pass.offer_key("caller-six", "peer-six")
+
+
+def test_decline_refuses_bad_gate(tmp_path):
+    repo_root = str(tmp_path)
+
+    ok = send_pass.decline(repo_root, "caller-seven", "peer-seven", "gate3", "reason", now=1.0)
+
+    assert ok is False
+    assert send_pass.read_send_log(repo_root, "caller-seven") == []
+
+
+def test_decline_refuses_empty_reason(tmp_path):
+    repo_root = str(tmp_path)
+
+    ok = send_pass.decline(repo_root, "caller-eight", "peer-eight", "gate2", "  ", now=1.0)
+
+    assert ok is False
+
+
+def test_decline_never_arms_cooldown(tmp_path):
+    """Declining is not offering -- a declined peer must still be eligible
+    on the very next digest, never held under cooldown from the decline."""
+    repo_root = str(tmp_path)
+    roster = [_verdict("peer-nine")]
+
+    send_pass.decline(repo_root, "caller-nine", "peer-nine", "gate2", "waiting", now=1000.0)
+    digest = send_pass.build_send_digest(repo_root, roster, "caller-nine", now=1001.0)
+
+    assert [e["session_id"] for e in digest["entries"]] == ["peer-nine"]
+
+
+def test_entries_carry_dwell_seconds_key(tmp_path):
+    repo_root = str(tmp_path)
+    roster = [_verdict("peer-dwell")]
+
+    digest = send_pass.build_send_digest(repo_root, roster, "caller-dwell", now=1000.0)
+
+    assert digest["entries"][0]["dwell_seconds"] is None
+
+
+def test_dwell_seconds_derived_from_receiver_state_stamp(tmp_path, monkeypatch):
+    repo_root = str(tmp_path)
+    monkeypatch.setattr(
+        send_pass.read_pass,
+        "read_receiver_state",
+        lambda sid, cwd: {"stamped_at": "2026-08-31T00:00:00Z"},
+    )
+    monkeypatch.setattr(
+        send_pass.read_pass, "_transcript_mtime_epoch", lambda sid, cwd: None
+    )
+    from datetime import datetime, timezone
+
+    stamp_epoch = datetime(2026, 8, 31, 0, 0, 0, tzinfo=timezone.utc).timestamp()
+    roster = [_verdict("peer-stamped")]
+
+    digest = send_pass.build_send_digest(
+        repo_root, roster, "caller-stamped", now=stamp_epoch + 500.0
+    )
+
+    assert digest["entries"][0]["dwell_seconds"] == 500.0
+
+
+def test_open_obligations_includes_freshly_emitted_entries(tmp_path):
+    repo_root = str(tmp_path)
+    roster = [_verdict("peer-open")]
+
+    digest = send_pass.build_send_digest(repo_root, roster, "caller-open", now=1000.0)
+
+    assert digest["open_obligations"] == ["peer-open"]
+
+
+def test_open_obligations_survive_cooldown_suppression_until_declined(tmp_path):
+    """The belt to C2's suspenders: a peer offered on an earlier tick and
+    now held by cooldown still names an open obligation -- until declined."""
+    repo_root = str(tmp_path)
+    roster = [_verdict("peer-ten")]
+
+    first = send_pass.build_send_digest(repo_root, roster, "caller-ten", now=1000.0)
+    assert first["open_obligations"] == ["peer-ten"]
+
+    second = send_pass.build_send_digest(repo_root, roster, "caller-ten", now=1001.0)
+    assert second["entries"] == []
+    assert second["open_obligations"] == ["peer-ten"]
+
+    send_pass.decline(repo_root, "caller-ten", "peer-ten", "gate1", "still mid-turn", now=1002.0)
+    third = send_pass.build_send_digest(repo_root, roster, "caller-ten", now=1003.0)
+    assert third["open_obligations"] == []
+
+
+# ---------------------------------------------------------------------------
+# DECLINATIONS -- "a tick that sends nothing records which obligation it
+# declined and why, and cannot close on an empty result". The empty-roster leg
+# is also the plan's acceptance oracle; these cover the paths it does not.
+# ---------------------------------------------------------------------------
+
+
+def test_empty_roster_declines_the_obligation_to_look(tmp_path):
+    """A tick that considered nobody must say so, not return four empty fields.
+
+    This is the shape the criterion forbids: a digest of empty lists is
+    indistinguishable from a tick that never ran.
+    """
+    digest = send_pass.build_send_digest(str(tmp_path), [], "caller-empty", now=1000.0)
+    assert digest["declined"], "an empty-roster tick closed with no declination"
+    assert any(row["reason"].startswith("roster-empty") for row in digest["declined"])
+    assert all(row.get("obligation") and row.get("reason") for row in digest["declined"])
+
+
+def test_every_suppressed_peer_gets_its_own_declination(tmp_path):
+    """DoE's wording: a declination for every roster entry it does not message,
+    naming which gate failed. One suppressed peer, one row, carrying its reason."""
+    roster = [_verdict("peer-away", reason="away", state="away")]
+    digest = send_pass.build_send_digest(str(tmp_path), roster, "caller-sup", now=1000.0)
+    assert not digest["entries"]
+    by_peer = {row["session_id"]: row for row in digest["declined"] if row["session_id"]}
+    assert "peer-away" in by_peer
+    assert by_peer["peer-away"]["reason"]
+
+
+def test_full_roster_none_eligible_still_declines_the_tick(tmp_path):
+    """A non-empty roster where nothing survives is still a tick that sent nothing.
+
+    The per-peer rows alone would let the tick close without ever saying it sent
+    to no one -- the reader would have to infer it from an empty `entries`, which
+    is precisely the inference the criterion refuses to rely on.
+    """
+    roster = [_verdict("peer-a", reason="away", state="away"),
+              _verdict("peer-b", reason="away", state="away")]
+    digest = send_pass.build_send_digest(str(tmp_path), roster, "caller-none", now=1000.0)
+    assert not digest["entries"]
+    tick_rows = [row for row in digest["declined"] if row["session_id"] is None]
+    assert tick_rows, "no tick-level declination on a roster where nothing was eligible"
+    assert "2" in tick_rows[0]["reason"], "the declination should name how many were considered"
+
+
+def test_a_tick_that_sends_declines_only_what_it_held_back(tmp_path):
+    """The converse, so `declined` is not just always-non-empty theatre: a tick
+    that actually emits carries no tick-level declination."""
+    roster = [_verdict("peer-live")]
+    digest = send_pass.build_send_digest(str(tmp_path), roster, "caller-live", now=1000.0)
+    assert digest["entries"]
+    assert [row for row in digest["declined"] if row["session_id"] is None] == []

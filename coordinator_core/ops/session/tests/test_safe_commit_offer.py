@@ -2365,11 +2365,21 @@ class TestSpawnBudget:
     """
 
     @staticmethod
-    def _commit_with_tally(repo, sid, n_files, n_groups, monkeypatch):
+    def _commit_with_tally(repo, sid, n_files, n_groups, monkeypatch, ext="txt"):
         paths = []
         for i in range(n_files):
-            rel = "f%02d.txt" % i
-            (repo / rel).write_text("body %d" % i)
+            rel = "f%02d.%s" % (i, ext)
+            # CRLF on disk is load-bearing, not cosmetic. `blob_fallback`
+            # fires when in-process staging cannot reproduce the blob git
+            # would write -- which needs the worktree bytes to DIFFER from
+            # the normalized object (CRLF on disk, LF in the store under an
+            # `eol=crlf` pin). Content with bare LF, or with no line ending
+            # at all, normalizes to itself: staging succeeds in process and
+            # the second spawn never fires. A fixture that writes either one
+            # silently measures the unpinned budget while looking like it
+            # measures the pinned one -- which is how the first pass of this
+            # budget missed the spawn the live census had already recorded.
+            (repo / rel).write_text("body %d\r\n" % i, newline="")
             scope.touch(sid, rel, cwd=str(repo))
             paths.append(rel)
 
@@ -2404,6 +2414,71 @@ class TestSpawnBudget:
         assert len(report["outcome"]["committed_paths"]) == n_files
         assert report["failed_groups"] == []
         assert len(tally) == 1, "spawn budget is ONE; got %r" % (tally,)
+
+    @pytest.mark.parametrize("n_files", [1, 3, 12])
+    def test_an_eol_pinned_path_adds_exactly_one_more_spawn(
+        self, tmp_path, monkeypatch, n_files
+    ):
+        """The CONDITIONAL second spawn, and its ceiling.
+
+        `commit_paths` cannot stage an LFS / CRLF-pinned / `[attr]` path in
+        process -- the bytes have to reach the object store through the
+        filter git owns -- so `_commit_group`'s `blob_fallback` fires. This
+        repo pins `*.cmd` and `*.ps1` to `eol=crlf`, so it is the ordinary
+        case for any ceremony committing a launcher shim, not a corner.
+
+        The property under test is that the fallback stays ONE spawn however
+        many paths it refuses: `hash_worktree_blobs_via_spawn` batches them
+        over stdin. A per-path spawn here would be per-item amplification on
+        the commit hot path, which is the whole thing this budget guards.
+
+        The first version of this budget missed the spawn entirely because
+        its fixture committed only unpinned `.txt` files. That is why the
+        unpinned arm below is asserted in the same test rather than trusted.
+        """
+        repo = _make_repo(tmp_path)
+        (repo / ".gitattributes").write_text("*.cmd text eol=crlf\n")
+        subprocess.run(
+            ["git", "add", ".gitattributes"], cwd=repo, check=True,
+            **no_console_passthrough_kwargs(),
+        )
+        subprocess.run(
+            ["git", "commit", "-q", "-m", "pin"], cwd=repo, check=True,
+            **no_console_passthrough_kwargs(),
+        )
+        core.init("mine", cwd=str(repo))
+        report, tally = self._commit_with_tally(
+            repo, "mine", n_files, 1, monkeypatch, ext="cmd"
+        )
+
+        assert report["outcome"]["status"] == "committed"
+        assert len(tally) == 2, "budget ceiling is TWO; got %r" % (tally,)
+        assert any("hash-object" in " ".join(str(a) for a in c) for c in tally)
+
+    def test_an_unpinned_path_never_reaches_the_second_spawn(
+        self, tmp_path, monkeypatch
+    ):
+        """The other half of the arm above — same fixture, same pin file, a
+        path the pin does not match. Pins the DISCRIMINATOR, so a future
+        change that makes `blob_fallback` fire unconditionally is caught.
+        """
+        repo = _make_repo(tmp_path)
+        (repo / ".gitattributes").write_text("*.cmd text eol=crlf\n")
+        subprocess.run(
+            ["git", "add", ".gitattributes"], cwd=repo, check=True,
+            **no_console_passthrough_kwargs(),
+        )
+        subprocess.run(
+            ["git", "commit", "-q", "-m", "pin"], cwd=repo, check=True,
+            **no_console_passthrough_kwargs(),
+        )
+        core.init("mine", cwd=str(repo))
+        report, tally = self._commit_with_tally(
+            repo, "mine", 3, 1, monkeypatch, ext="txt"
+        )
+
+        assert report["outcome"]["status"] == "committed"
+        assert len(tally) == 1, "unpinned paths must not pay the fallback"
 
     def test_the_one_spawn_is_the_residue_read(self, tmp_path, monkeypatch):
         """Names WHICH spawn the budget is spent on.

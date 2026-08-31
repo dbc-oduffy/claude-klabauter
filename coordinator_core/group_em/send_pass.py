@@ -85,6 +85,53 @@ NEGATIVE SPEC:
 - **No name-keyed lookup.** The only key this function accepts is a session
   id; it never accepts or resolves a bare name, which would reintroduce the
   exact stale-binding hazard it exists to close.
+
+DECLINATION (plan `2026-08-31-the-group-em-tick-carries-standing-obligations.md`
+chunk C3, wording pinned to `coordinator/skills/group-em/SKILL.md` sha
+`8583cf8f5`, DoE-claude tree): "Each tick records a DECLINATION for every
+roster entry it does not message -- which gate failed and why. A tick that
+closes on 'nothing sent' with no declination is indistinguishable from a
+tick that never looked." `decline()` writes that record, on the SAME log
+`_record_offer` writes to, distinguished by an `outcome` discriminator now
+carried on both row shapes (`"offer"` / `"declination"`). `gate` and
+`reason` are supplied by the caller -- the Group EM -- never inferred: the
+declination is a stated act, not a computed one.
+
+NEGATIVE SPEC:
+
+- **`decline` records; it does not gate, suppress, or auto-resolve.** It
+  must never become a path that decides not to send.
+- **It does not arm or extend a cooldown.** Declining is not offering --
+  conflating them would silently throttle a peer the EM chose not to
+  message this tick, via a mechanism that has nothing to do with declining.
+
+OPEN OBLIGATIONS. `build_send_digest` now also reports, as
+`open_obligations`, every peer session id this tick observed (emitted or
+held under cooldown) whose most recent log event -- across BOTH rows this
+module writes -- is an offer with no later declination. An entry emitted
+THIS tick is definitionally open (it was just offered; a declination for it
+cannot yet exist). This is the belt to C2's suspenders: a peer offered on
+an earlier tick, then held by cooldown on every tick since with the EM
+never declining it, keeps surfacing here rather than going quiet the moment
+cooldown starts suppressing its entry.
+
+DWELL TIME. Every EMITTED entry (never a suppressed row) carries
+`dwell_seconds` -- how long that peer has sat since its last observed
+activity, derived from its receiver-state `stamped_at` cross-checked
+against `read_pass._transcript_mtime_epoch` (the one place that turns a
+session id into a transcript mtime; reused rather than re-derived). The
+more RECENT of the two -- a stale `stamped_at` with a transcript that kept
+moving is evidence of later activity than the stamp alone would report --
+is treated as the last-activity instant, and `dwell_seconds` is `now` (the
+same clock this module already threads through cooldown arithmetic; no
+second clock is introduced and the wall clock is never asked directly)
+minus that instant. `None` when neither source resolves, or when the
+result would be negative (clock skew) -- never `0`, which would read as
+"just stopped" rather than "unknown". RANKS AND INFORMS ONLY: no threshold
+is applied here and no peer is withheld or reordered for its dwell -- the
+EM weighs it against what it knows, per GATE 2; a hard floor here would
+repeat the cooldown-as-eligibility conflation this module already avoids
+elsewhere.
 """
 
 from __future__ import annotations
@@ -94,9 +141,15 @@ import json
 import os
 import re
 import time
+from datetime import datetime, timezone
 from typing import Any, Callable, Optional
 
+from coordinator_core.group_em import read_pass
 from coordinator_core.session import peer_roster
+
+#: `gate` values `decline()` accepts -- which gate the EM declared against.
+#: No other value is written; `decline()` refuses anything else.
+DECLINE_GATES = frozenset({"gate1", "gate2"})
 
 #: Reader/fallback `reason` strings a nudge may be offered for. Both spell the
 #: same condition -- the peer's turn closed -- on the two `read_pass` legs
@@ -271,7 +324,11 @@ def _record_offer(
         return False
     path = send_log_path(repo_root, caller_session_id)
     line = json.dumps(
-        {"offer_key": offer_key(caller_session_id, peer_session_id), "offered_at": now},
+        {
+            "outcome": "offer",
+            "offer_key": offer_key(caller_session_id, peer_session_id),
+            "offered_at": now,
+        },
         sort_keys=True,
     )
     try:
@@ -281,6 +338,137 @@ def _record_offer(
     except OSError:
         return False
     return True
+
+
+def decline(
+    repo_root: str,
+    caller_session_id: str,
+    peer_session_id: str,
+    gate: str,
+    reason: str,
+    now: Optional[float] = None,
+) -> bool:
+    """Record a DECLINATION for `peer_session_id` on the shared send log.
+
+    `gate` is the gate the EM declared against (`"gate1"` or `"gate2"`);
+    `reason` is free prose. Both are supplied by the caller and refused if
+    absent or malformed -- neither is inferred, because the whole point is
+    that the declination is a stated act, not a computed one. Returns
+    `False` on any refusal (bad ids, bad gate, empty reason) or write
+    failure, never raises -- matching `_record_offer`'s failure contract.
+
+    NEGATIVE SPEC: records only. Never gates, suppresses, or auto-resolves
+    a send; never arms or extends the offer cooldown (see module
+    docstring's DECLINATION section) -- declining is not offering.
+    """
+    now = time.time() if now is None else now
+    if not _safe_session_id(caller_session_id) or not _safe_session_id(peer_session_id):
+        return False
+    if gate not in DECLINE_GATES:
+        return False
+    if not isinstance(reason, str) or not reason.strip():
+        return False
+    path = send_log_path(repo_root, caller_session_id)
+    line = json.dumps(
+        {
+            "outcome": "declination",
+            "offer_key": offer_key(caller_session_id, peer_session_id),
+            "declined_at": now,
+            "gate": gate,
+            "reason": reason,
+        },
+        sort_keys=True,
+    )
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "a", encoding="utf-8") as handle:
+            handle.write(line + "\n")
+    except OSError:
+        return False
+    return True
+
+
+def _log_key_is_open(log: list[dict[str, Any]], key: str) -> bool:
+    """Is this offer_key's most recent event an offer with no later declination?
+
+    Legacy rows written before this chunk carry no `outcome` at all; they
+    are read as `"offer"` rows (their only prior meaning) so an existing log
+    does not spuriously go quiet the moment this ships.
+    """
+    last_offer_at: Optional[float] = None
+    last_decline_at: Optional[float] = None
+    for record in log:
+        if record.get("offer_key") != key:
+            continue
+        outcome = record.get("outcome", "offer")
+        if outcome == "declination":
+            at = record.get("declined_at")
+            if isinstance(at, (int, float)) and not isinstance(at, bool):
+                if last_decline_at is None or at > last_decline_at:
+                    last_decline_at = at
+        else:
+            at = record.get("offered_at")
+            if isinstance(at, (int, float)) and not isinstance(at, bool):
+                if last_offer_at is None or at > last_offer_at:
+                    last_offer_at = at
+    if last_offer_at is None:
+        return False
+    if last_decline_at is not None and last_decline_at >= last_offer_at:
+        return False
+    return True
+
+
+def _parse_iso_stamp(value: Any) -> Optional[datetime]:
+    """Parse a `stamped_at`-shaped ISO8601 string. `None` on anything else.
+
+    Mirrors `read_pass._parse_iso_stamp` exactly (same shape, same
+    Z-suffix/naive-as-UTC handling) -- kept local rather than imported
+    because that symbol is private to its own module; the one clock
+    primitive this chunk is pinned to reuse is `_transcript_mtime_epoch`,
+    named explicitly in the dispatch brief.
+    """
+    if not isinstance(value, str) or not value:
+        return None
+    text = value.strip()
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed
+
+
+def _dwell_seconds(repo_root: str, peer_session_id: str, now: float) -> Optional[float]:
+    """Seconds since this peer's last observed activity, or `None`.
+
+    Reads its own receiver-state `stamped_at` and cross-checks it against
+    `read_pass._transcript_mtime_epoch(peer_session_id, repo_root)` -- the
+    later of the two is the last-activity instant (a transcript that kept
+    moving after the stamp was written is evidence of activity the stamp
+    alone would miss). `now` is the SAME clock `build_send_digest` already
+    threads through cooldown arithmetic -- never re-asked here. `None` when
+    neither source resolves or the result would be negative (clock skew);
+    never `0`, which would misreport "unknown" as "just stopped".
+    """
+    candidates: list[float] = []
+    record = read_pass.read_receiver_state(peer_session_id, repo_root)
+    if record is not None:
+        stamp_dt = _parse_iso_stamp(record.get("stamped_at"))
+        if stamp_dt is not None:
+            candidates.append(stamp_dt.timestamp())
+    transcript_epoch = read_pass._transcript_mtime_epoch(peer_session_id, repo_root)
+    if transcript_epoch is not None:
+        candidates.append(transcript_epoch)
+    if not candidates:
+        return None
+    last_activity = max(candidates)
+    dwell = now - last_activity
+    if dwell < 0:
+        return None
+    return dwell
 
 
 def _cooldown_remaining(
@@ -357,6 +545,57 @@ def resolve_addressee(
     return None
 
 
+
+def _declinations(
+    roster: list[dict[str, Any]],
+    entries: list[dict[str, Any]],
+    suppressed: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Which obligation this tick declined, and why -- one row per thing not done.
+
+    DoE's SKILL.md states the requirement first and this conforms to its wording
+    rather than growing a parallel vocabulary: "Each tick records a DECLINATION for
+    every roster entry it does not message -- which gate failed and why. A tick that
+    closes on 'nothing sent' with no declination is indistinguishable from a tick that
+    never looked, which is the failure this whole mechanism exists to end."
+
+    THE EMPTY ROSTER IS ITSELF A DECLINATION, and it is the case this function exists
+    for. A per-entry list is legitimately empty when there are no entries -- at which
+    point the digest closes on four empty fields and says nothing about WHY, which is
+    exactly the "closed on nothing sent" shape the criterion forbids. So a tick that
+    considered nobody declines the standing obligation to look, and says so. Absence of
+    candidates is a finding about the roster, never a quiet success.
+    """
+    declined: list[dict[str, Any]] = [
+        {
+            "obligation": f"message peer {row['session_id']}",
+            "reason": row["why"],
+            "session_id": row["session_id"],
+        }
+        for row in suppressed
+    ]
+    if not roster:
+        declined.append(
+            {
+                "obligation": "look at the peers this tick",
+                "reason": "roster-empty: no candidate peers were produced for this tick",
+                "session_id": None,
+            }
+        )
+    elif not entries:
+        declined.append(
+            {
+                "obligation": "send to any peer this tick",
+                "reason": (
+                    f"no-eligible-peer: {len(roster)} roster entr"
+                    f"{'y' if len(roster) == 1 else 'ies'} considered, every one suppressed"
+                ),
+                "session_id": None,
+            }
+        )
+    return declined
+
+
 def build_send_digest(
     repo_root: str,
     roster: list[dict[str, Any]],
@@ -377,6 +616,17 @@ def build_send_digest(
     Entries carry `gate1`/`gate2` as `None`; both are checked per send, in
     prose. `suppressed` says why each held peer was held, verdict reasons
     ahead of bookkeeping ones -- `away` is never filed under a ledger detail.
+    Each entry also carries `dwell_seconds` (module docstring's DWELL TIME
+    section). `open_obligations` names every session id this tick observed
+    -- emitted or cooldown-held -- that this session offered without ever
+    declining (module docstring's OPEN OBLIGATIONS section); it ranks and
+    informs, it is never gated on.
+
+    `declined` names every obligation this tick did NOT discharge and why -- one
+    row per suppressed peer, plus a row for the tick itself when it considered
+    nobody or sent to nobody. It is never empty on a tick that sent nothing, which
+    is the whole point: a digest of four empty fields cannot be told apart from a
+    tick that never looked.
 
     Known limitation -- no lock spans the log read and the per-entry appends,
     so this assumes one caller at a time per `caller_session_id`. Violate it
@@ -450,18 +700,42 @@ def build_send_digest(
             )
         )
 
+    # Dwell is attached only to the entries actually emitted (post-ceiling) --
+    # see module docstring's DWELL TIME section. A row cut by the ceiling
+    # never had its dwell computed at all, not merely discarded.
+    for entry in entries:
+        entry["dwell_seconds"] = _dwell_seconds(repo_root, entry["session_id"], now)
+
     unrecorded = [
         entry["session_id"]
         for entry in entries
         if not _record_offer(repo_root, caller_session_id, entry["session_id"], now=now)
     ]
 
+    # OPEN OBLIGATIONS -- see module docstring. Every session id this tick
+    # observed with a known, safe id (emitted this tick, or held under
+    # cooldown from an earlier one) is checked against the log AS IT STOOD
+    # before this tick's own offer writes above: an entry just emitted is
+    # open by construction (it cannot yet have a declination), and a
+    # cooldown-suppressed peer is open exactly when its last log event is an
+    # offer with no later declination -- the belt to C2's suspenders.
+    open_obligations = [entry["session_id"] for entry in entries]
+    for row in suppressed:
+        session_id = row["session_id"]
+        if row["why"] != "cooldown" or not _safe_session_id(session_id):
+            continue
+        key = offer_key(caller_session_id, session_id)
+        if _log_key_is_open(log, key):
+            open_obligations.append(session_id)
+
     return {
         "entries": entries,
         "suppressed": suppressed,
+        "declined": _declinations(roster, entries, suppressed),
         "truncated": len(eligible) > max_entries,
         "roster_size": len(roster),
         "eligible_before_ceiling": len(eligible),
         "unrecorded": unrecorded,
         "gate_declaration_required": True,
+        "open_obligations": open_obligations,
     }

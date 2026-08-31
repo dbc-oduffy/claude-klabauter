@@ -164,6 +164,115 @@ class TestTurnObligationWrite:
         assert rows[0]["op"] == "open"
         assert rows[1]["op"] == "progress"
 
+    def test_producing_session_writes_nothing_and_stays_none(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """The chunk's load-bearing negative spec, as a test rather than a comment.
+
+        A session that has not reached a turn boundary owes this ledger nothing, so no
+        intake file appears at all and `for_peer` keeps returning None -- "no ledger
+        exists", which the spec holds distinct from "nothing owed". The first
+        implementation of this sensor wrote one identical row for every session on
+        every fire; that reads as 100% coverage and nil information, and it makes None
+        unreachable for every live session. Universal identical content is universal
+        zero wearing the other hat.
+        """
+        _fake_session_dir(monkeypatch, tmp_path)
+        transcript = _write_transcript(
+            tmp_path,
+            [json.dumps({"type": "system", "subtype": "away_summary", "timestamp": "2026-08-14T00:00:00Z"})],
+        )
+        monkeypatch.setattr(
+            sensor.receiver_state,
+            "resolve_verdict",
+            lambda *a, **k: rs.Verdict(verdict="PRODUCING", reason="delegated"),
+        )
+        asyncio.run(
+            sensor._handler(
+                {"session_id": "sid-producing", "transcript_path": transcript},
+                repo_root=str(tmp_path),
+            )
+        )
+        intake_path = (
+            tmp_path / "state" / "subagent-share" / "sid-producing" / "obligations-inbound.jsonl"
+        )
+        assert not intake_path.exists()
+
+    def test_unknown_verdict_is_not_promoted_to_owing(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """Absence of evidence is never evidence of a turn boundary.
+
+        A verdict that could not be established must not manufacture an obligation --
+        the same rule the roster applies to an unreadable idle time, at the producer
+        side instead of the reader side.
+        """
+        _fake_session_dir(monkeypatch, tmp_path)
+        transcript = _write_transcript(
+            tmp_path,
+            [json.dumps({"type": "system", "subtype": "away_summary", "timestamp": "2026-08-14T00:00:00Z"})],
+        )
+        monkeypatch.setattr(
+            sensor.receiver_state,
+            "resolve_verdict",
+            lambda *a, **k: rs.Verdict(verdict="UNKNOWN", reason=None),
+        )
+        asyncio.run(
+            sensor._handler(
+                {"session_id": "sid-unclass", "transcript_path": transcript},
+                repo_root=str(tmp_path),
+            )
+        )
+        intake_path = (
+            tmp_path / "state" / "subagent-share" / "sid-unclass" / "obligations-inbound.jsonl"
+        )
+        assert not intake_path.exists()
+
+    def test_rows_discriminate_between_peers(self, tmp_path: Path, monkeypatch) -> None:
+        """Two stopped peers in different states must not produce identical rows.
+
+        `for_peer` returning the NAMES behind the count is the whole point of the
+        reader; names that are the same string for every peer cannot be ranked, which
+        is the failure this test exists to keep out.
+
+        PATCHED WITH A REAL `Verdict`, NOT A BARE STRING, and that matters. A string
+        return breaks `write_receiver_state` upstream, the handler swallows it
+        fail-soft, and NOTHING gets written -- so a negative assertion here would pass
+        without the gate under test ever running. Two of these tests did exactly that
+        before this was caught.
+
+        ASSERTED ON THE INTAKE ROWS, NOT THROUGH `for_peer`, and do not "fix" that
+        back. `for_peer` reads DoE's `next-move-ledger.jsonl`, which exists only once
+        their consumer has folded our intake in. In-process it returns None whatever
+        this sensor wrote, so an assertion through it would test their fold rather
+        than our content -- and would pass identically if this sensor wrote nothing.
+        """
+        _fake_session_dir(monkeypatch, tmp_path)
+        transcript = _write_transcript(
+            tmp_path,
+            [json.dumps({"type": "system", "subtype": "away_summary", "timestamp": "2026-08-14T00:00:00Z"})],
+        )
+        def _intake_rows(sid: str) -> list:
+            path = tmp_path / "state" / "subagent-share" / sid / "obligations-inbound.jsonl"
+            return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+
+        for sid, reason in (("sid-a", "turn-ended"), ("sid-b", "awaiting-approval")):
+            monkeypatch.setattr(
+                sensor.receiver_state,
+                "resolve_verdict",
+                lambda *a, _r=reason, **k: rs.Verdict(verdict="PAUSED", reason=_r),
+            )
+            asyncio.run(
+                sensor._handler(
+                    {"session_id": sid, "transcript_path": transcript},
+                    repo_root=str(tmp_path),
+                )
+            )
+        rows_a = _intake_rows("sid-a")
+        rows_b = _intake_rows("sid-b")
+        assert rows_a and rows_b
+        assert rows_a[0]["next_action"] != rows_b[0]["next_action"]
+
     def test_missing_repo_root_is_silent_no_op(self, tmp_path: Path, monkeypatch) -> None:
         _fake_session_dir(monkeypatch, tmp_path)
         transcript = _write_transcript(

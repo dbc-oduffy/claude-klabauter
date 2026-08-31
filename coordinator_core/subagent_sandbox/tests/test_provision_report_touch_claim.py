@@ -4,8 +4,7 @@ proves provision_report.py's four `open(doc_path, "x")` sites (session-keyed
 nonce path, session-keyed provision_key path, plan-derivable path) now
 record a `session.scope.touch()` claim for the dispatching session, closing
 the same in-process-writer hole `test_in_process_writer_claim_path.py`
-(C1's sibling seam, `coordinator_core/dispatch/provision.py`) closes for
-`provision_subagent_sidecar`.
+closes for `provision_report._provision` via its own entrypoint.
 
 Fixtures mirror the existing `test_provision_report.py`'s `git_repo` /
 `policy_path` conventions (real `git init`'d tmp_path repo, so

@@ -221,7 +221,7 @@ class TrackedFileIndex:
         """Every tracked file a dotted module name could denote, repo-rooted or not.
 
         Register rows name modules the way a reader does -- `ipc`,
-        `warm.engine_root`, `dispatch.provision` -- not as repo-rooted import
+        `warm.engine_root`, `subagent_sandbox.provision_report` -- not as repo-rooted import
         paths. Anchoring only at the repo root reports those live modules
         ABSENT, so the tail is matched at any package depth.
 

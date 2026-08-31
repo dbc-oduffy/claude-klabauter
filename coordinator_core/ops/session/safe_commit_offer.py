@@ -161,48 +161,100 @@ explicit PM ruling — this module does not attempt conflict resolution for
 two sessions that both legitimately touched one file; it only prevents ONE
 session's unattended auto-commit from sweeping a peer's UNRELATED work.
 
-BUDGET — ONE GIT SPAWN, AND WHAT IT COSTS (measured 2026-08-31, k=8,
-`benchmarks/process_time.batched_process_time_ms`, this repo). Stated here
-because an unstated cost is the one nobody defends when it grows.
+BUDGET — GIT SPAWNS, AND WHAT THEY COST (measured 2026-08-31; synthetic
+figures via `benchmarks/process_time.batched_process_time_ms` k=8, real
+figures read off this repo's `op-latency.jsonl` `kind: "process_time"` rows).
+Stated here because an unstated cost is the one nobody defends when it grows.
 
-  - SPAWN BUDGET: **1** git subprocess per call, on the mutating path and
-    the `dry_run` path alike, CONSTANT in the number of paths and the number
-    of commit groups. Verified by tallying `subprocess.Popen` across a full
-    `commit_session_offer` at 4 paths/4 groups, 12/3 and 40/8: one spawn in
-    every case. A change that makes this count scale with either input is
-    the per-item amplification the 2026-08-21 rebuild removed, reappearing.
-  - That spawn is `_current_dirty_paths`'s `git status --porcelain
-    --untracked-files=all` — the module's ONLY worktree read (see that
-    function's own negative spec). It is NOT decoration and does not fall to
-    the K-002 necessity test that cut `_commit_changed_count`'s `git show`:
-    its two products, `residue` and `reconciliation`, are structured report
-    fields a real consumer reads back
-    (`quick_wrap_assemble.__init__` folds `commit_report["residue"]` into
-    its own `commit_outcome`), and no cheaper source answers "what is dirty
-    and claimed by nobody" — `claim_index` reads claims and never the tree.
-  - TIME BUDGET: **350ms process time**, a FLOOR not a ceiling
-    (`op_budget_suspension.py`'s rule for git-spawning ops). Measured at
-    312.5ms for that one `git status` on this repo, plus ~5ms of in-process
-    claim work; ~53ms of the 312.5 is process creation itself (`git
-    --version`, same box, same k, 2 OS processes — one `subprocess.Popen`
-    here is 2 pids, git spawning its own child on Windows). Under DR-344's
-    500ms bar with ~150ms of headroom, and the headroom is the tree's, not
-    the code's: the query scales with worktree size, so a repo materially
-    dirtier than this one is where the bar gets tested.
-  - `--untracked-files=all` is NOT the cost driver and is not the place to
-    look for a saving: `-uno` measures 251.9ms against `-uall`'s 312.5ms on
-    the same tree, 60ms for correctness `_current_dirty_paths` documents as
-    load-bearing. The remaining ~260ms is the scan.
-  - A wall-clock figure convicts nothing here. `op_census.breaches` records
-    this op at max 1673.7ms `elapsed_ms` (n=6, 3 breaches, current
-    generation as of 2026-08-31); the same `git status` whose process time
-    is 312.5ms measured 503ms of wall in the same run. That gap is the ~50
-    concurrent peers on the box (CLAUDE.md § Load norm), not this op.
-  - The `blob_fallback` (`hash_worktree_blobs_via_spawn`) `_commit_group`
-    hands `commit_paths` is a SECOND potential spawn, off the budget above
-    because it fires only when in-process staging refuses a path; it is
-    one batched `git hash-object --stdin-paths` for every refused path at
-    once, never one per path.
+  - SPAWN BUDGET: **1 baseline, 2 worst case**, and CONSTANT in the number
+    of paths and the number of commit groups either way. Verified by
+    tallying `subprocess.Popen` across a full `commit_session_offer` at
+    4 paths/4 groups, 12/3 and 40/8. The live census agrees and is the
+    reason the second spawn is in this budget at all: four real invocations
+    recorded `spawns` 1, 1, 2, 2. A change that makes either count scale
+    with paths or groups is the per-item amplification the 2026-08-21
+    rebuild removed, reappearing.
+  - SPAWN 1, ALWAYS — `_current_dirty_paths`'s `git status --porcelain
+    --untracked-files=all`, the module's ONLY worktree read (see that
+    function's own negative spec). It does NOT fall to the K-002 necessity
+    test that cut `_commit_changed_count`'s `git show`: its two products,
+    `residue` and `reconciliation`, are structured report fields a real
+    consumer reads back (`quick_wrap_assemble.__init__` folds
+    `commit_report["residue"]` into its own `commit_outcome`), and no
+    cheaper source answers "what is dirty and claimed by nobody" —
+    `claim_index` reads claims and never the tree.
+  - SPAWN 2, CONDITIONAL — `hash_worktree_blobs_via_spawn`, the
+    `blob_fallback` `_commit_group` hands `commit_paths`. It fires whenever
+    the group carries a path in-process staging refuses: LFS, CRLF-pinned,
+    or any `[attr]` path (`git/commit.py`, the `refused` branch). NOT a
+    corner case in THIS repo — `.gitattributes` pins `*.cmd` and `*.ps1` to
+    `eol=crlf`, so any ceremony committing a launcher shim pays it.
+    Reproduced directly: three `.cmd` paths with the pin present spawn 2,
+    the same three without it spawn 1. Irreducible (the bytes must reach the
+    object store through the filter git owns) and already batched — ONE
+    `git hash-object -w --stdin-paths` for every refused path at once,
+    never one per path.
+    NEGATIVE SPEC: a fixture committing only unpinned paths (`.py`, `.md`, a
+    bare `.txt` in a repo with no `.gitattributes`) NEVER reaches this spawn,
+    and a budget measured on one reports 1 and means it. The first pass of
+    this budget did exactly that and had to be corrected against the census.
+    Any re-measurement here must include a pinned path.
+  - TIME BUDGET: **500ms at 1 spawn — held. Breached only at 2.** The ten
+    real `per_op_handler` rows in this repo's `op-latency.jsonl` separate
+    cleanly on spawn count, which is why the count above is the axis that
+    governs:
+
+        1 spawn (n=8):  234.4  250.0  250.0  281.2  281.2  484.4  546.9  312.5
+        2 spawns (n=2): 656.2  656.2
+
+    Median at 1 spawn is ~281ms, and 7 of 8 clear DR-344's bar. Both
+    2-spawn rows breach it. So the second spawn is not a rounding error on
+    this op's cost — it is the whole difference between passing and failing,
+    and the ~170ms it adds is `git hash-object` plus a second `conhost`.
+    The synthetic figures are much lower (312.5ms for the `git status` alone
+    on this repo, ~5ms of in-process claim work, ~183ms for the whole op
+    against a fresh tiny fixture repo) and MUST NOT be quoted as this op's
+    cost: they are a floor twice over, once for the git-spawn rule
+    (`op_budget_suspension.py`) and once for the fixture.
+    Attribution caveat, load-bearing before anyone acts on these rows:
+    `process_ms` is a delta of the SERVER's whole-process
+    `time.process_time()` taken across an `await`, so a concurrent op's CPU
+    lands in this op's sample (`op_census/timing.py` § CONSEQUENCE,
+    unresolved). The spawn COUNT in the same rows is not a clock and does
+    not carry that caveat — another reason to read this budget on the count.
+  - NOT NOMINATED FOR THE CUT, and the reasoning is recorded so it is not
+    re-opened as an oversight. The kill bar fires on process time, and the
+    2-spawn shape clears it. What follows a delete is a REQUIREMENT, not the
+    code — and the requirement survives intact: `quick_wrap_assemble` reads
+    `commit_report["residue"]` back, so deleting this op means rebuilding
+    the same `git status` behind a different name. Neither spawn is
+    decoration: one answers a question `claim_index` structurally cannot
+    (it reads claims, never the tree), the other hands bytes to a filter git
+    owns. The reducible slice is DR-373's `conhost` tax (23.4ms per spawn,
+    ~47ms on the breaching shape) — fleet-wide, PM-pending, and NOT this
+    module's to land unilaterally.
+  - ONE `subprocess.Popen` here is TWO pids, and the second one is NOT
+    git's: `git` spawns no child at all on this path (DR-373 established
+    that with `GIT_TRACE2_EVENT`, 0 `child_start` events). The second pid is
+    the `conhost.exe` Windows allocates because
+    `win_portability.no_console_creationflags` passes `CREATE_NO_WINDOW`,
+    which suppresses a console WINDOW while still allocating a console --
+    priced at 23.4ms per invocation there. So a budget test must say which
+    of the two counts it asserts on; the counts above are git processes.
+    DR-373's proposed fix (`DETACHED_PROCESS` for callers that capture,
+    which both of this module's spawns do) is PM-pending and fleet-wide;
+    when it lands this op's floor drops ~23ms per spawn with no change here.
+  - `--untracked-files=all` is NOT the cost driver and is not where a saving
+    lives: `-uno` measures 251.9ms against `-uall`'s 312.5ms on this tree,
+    60ms for correctness `_current_dirty_paths` documents as load-bearing.
+    The remaining ~260ms is the scan itself, and it scales with worktree
+    size (37,970 tracked files here) — so the headroom is the tree's, not
+    the code's.
+  - A wall-clock figure convicts nothing here, and acquits nothing either.
+    `op_census.breaches` records max 1673.7ms `elapsed_ms`; `elapsed_ms` is
+    `perf_counter()` around `_dispatch_message_impl` (wall), against ~50
+    concurrent peers (CLAUDE.md § Load norm). The process-time rows above
+    are the number that convicts.
   - `_dirty_files_under` / `_dirty_files_under_batch` (2 spawns each) are
     defined here but are NOT on any path this module's own ops take —
     `session.scope` imports them by name (see their section comment). They

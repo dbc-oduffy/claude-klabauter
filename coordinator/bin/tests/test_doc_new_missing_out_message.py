@@ -14,7 +14,7 @@ can reach (docs/wiki/guard-messaging.md § Key Patterns) — a caller with a
 resolvable session id gets the session-scoped root resolved for it; a caller
 without one gets the missing identity named, including the env vars that carry
 it. Neither arm derives an ``--out`` value: the DEC-3 no-default rule (the live
-path is computed by ``coordinator_core.dispatch.provision`` at spawn time) is
+path is computed by ``coordinator_core.subagent_sandbox.provision_report`` at spawn time) is
 unchanged, and the exit-1 refusal still fires for both sidecar types.
 
 Coverage:
@@ -132,4 +132,4 @@ def test_both_sidecar_types_still_refuse_without_out(doc_type, doc_new, monkeypa
     assert code == 1
     stderr = capsys.readouterr().err
     assert "--out <path> is required" in stderr
-    assert "coordinator_core.dispatch.provision" in stderr
+    assert "coordinator_core.subagent_sandbox.provision_report" in stderr

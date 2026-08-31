@@ -43,16 +43,19 @@ Fail-open on every arm (AC5), matching `provision_report.py`'s contract
 verbatim: `compose_catering` never raises, and a failure in any one leg
 never suppresses the other two -- each leg is independently wrapped. A
 type that resolved and is genuinely not on `policy.report_sidecar` stays
-silent for the sidecar leg -- the same "expected miss, no diagnostic"
-posture `coordinator_core.dispatch.provision._log_unenumerated_sidecar_
-miss` already takes for the sibling subagent-sidecar seam (this module
-does not duplicate that diagnostic; it is a defence-in-depth net for a
-governance gap this plan does not own). That silence is distinct from the
-population that genuinely lost a sidecar, which gets the miss notice
-instead (`_resolve_sidecar_leg`): a NAMED dispatch whose `subagent_type`
-never resolved (its `agent_type` is always the teammate NAME, never a
-policy key, so the roster lookup could never have succeeded for it
-either way), or a dispatch for which no type resolved at all.
+silent for the sidecar leg. This leg has no miss diagnostic of its own:
+the one diagnostic that ever existed for an unenumerated-sidecar miss,
+`_log_unenumerated_sidecar_miss`, lived on the deleted, uncalled
+spawn-time provisioner module and was removed with it, so its absence
+here is inherited, not a reviewed choice by this module. Whether this
+leg should log the miss is open under DoE DR-151 and out of scope for
+this module. That silence is distinct from the population that
+genuinely lost a sidecar, which gets the miss notice instead
+(`_resolve_sidecar_leg`): a NAMED dispatch whose
+`subagent_type` never resolved (its `agent_type` is always the teammate
+NAME, never a policy key, so the roster lookup could never have
+succeeded for it either way), or a dispatch for which no type resolved
+at all.
 
 The `sidecar_path: <path>` and `sidecar_provisioning: missed` marker lines
 are byte-identical to their Agent-path counterparts

@@ -3,7 +3,7 @@ coordinator_core.ops.ceremony.tests.test_receipt_emit_declares — C2.
 
 Purpose: assert emit_receipt() declares the receipt path it wrote via
 session_scope.touch_written_path, following the same shape as
-coordinator_core/dispatch/provision.py's touch_written_path call sites (raw
+coordinator_core/subagent_sandbox/provision_report.py's touch_written_path call sites (raw
 sid, after-write-only, phantom-live-peer graceful-absent).
 
 Spec backlink: state/dispatch-briefs/2026-08-20-the-close-ceremony-commits-

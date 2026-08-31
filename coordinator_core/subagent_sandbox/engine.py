@@ -517,14 +517,14 @@ def _canonical_agent_id(raw_agent_id: str, session_id: Optional[str]) -> str:
         # session/identity.py already imports resolve_effective_types FROM
         # this module, function-locally, for the identical reason. This
         # mirrors the same deferred-import discipline used at
-        # dispatch/provision.py:218 (there: resolve_roster, a different
-        # symbol, same hot-path/import-budget shape) -- a module-level
-        # import here would drag session.identity's import closure into
-        # this module's own on every import, for the same reason that site
-        # documents. Neither this module nor session/identity.py may hoist
-        # this particular import to module level without first extracting
-        # the shared resolver into a leaf module both import -- that
-        # extraction is out of scope here.
+        # session/scope.py:2802 (there: a module-scope import cycle with
+        # safe_commit_offer, same hot-path/import-budget shape) -- a
+        # module-level import here would drag session.identity's import
+        # closure into this module's own on every import, for the same
+        # reason that site documents. Neither this module nor
+        # session/identity.py may hoist this particular import to module
+        # level without first extracting the shared resolver into a leaf
+        # module both import -- that extraction is out of scope here.
         from coordinator_core.session.identity import resolve_subagent_identity
 
         resolved = resolve_subagent_identity(raw_agent_id, session_id or "")

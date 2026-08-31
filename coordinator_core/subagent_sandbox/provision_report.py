@@ -80,10 +80,9 @@ from coordinator_core.subagent_sandbox.engine import (
 #: outside this set is dropped, never escaped/encoded.
 #:
 #: ``@`` is admitted so the EM-side canonical agent id
-#: ``<name>@session-<short8>`` survives sanitization UNCHANGED. Both
-#: derived-key call sites (here and ``dispatch/provision.py``, which imports
-#: this function) gate on ``_sanitize_segment(agent_id) == agent_id``; with
-#: ``@`` dropped the canonical form silently failed that equality and fell
+#: ``<name>@session-<short8>`` survives sanitization UNCHANGED. The
+#: derived-key call site gates on ``_sanitize_segment(agent_id) == agent_id``;
+#: with ``@`` dropped the canonical form would silently fail that equality and fall
 #: through to the random-nonce path, discarding the stable collision-proof
 #: key for exactly the named-dispatch population the key exists to serve.
 #: ``@`` is neither a directory separator nor a component of ``.``/``..``,
@@ -129,11 +128,11 @@ _SIDECAR_POINTER_PREFIX = "state/subagent-share/"
 def _sidecar_pointer_path(git_root: str, raw_agent_id: str, kind: str = "report") -> Optional[Path]:
     """Pointer file for ``raw_agent_id``, or ``None`` if it cannot key one.
 
-    ``kind`` namespaces the index by PRODUCER, because two of them provision
+    ``kind`` namespaces the index by PRODUCER, because two producers write
     into ``state/subagent-share/`` for the same agent with different leaf
-    suffixes -- this module (``<key>.md``) and ``dispatch.provision``
-    (``<key>.subagent-sidecar.md``). A single flat key would hand one
-    producer's spawn the other's document.
+    suffixes -- this module (``<key>.md``) and ``coordinator-doc-new --type
+    subagent-sidecar`` (``<key>.subagent-sidecar.md``). A single flat key
+    would hand one producer's spawn the other's document.
 
     Keyed by the RAW payload ``agent_id``, never the canonicalized one, and
     this is the whole point of the index rather than an implementation detail.
@@ -1288,8 +1287,7 @@ def _provision(payload: Dict[str, Any], policy_path: Optional[str], cwd: Optiona
         if sanitized_provision_key is None:
             return None
     elif agent_id:
-        # Ported from coordinator_core.dispatch.provision._provision's
-        # `derived_key` branch (same rationale verbatim: the 2026-08-15
+        # `derived_key` branch (rationale: the 2026-08-15
         # concurrent-same-agent_type incident, and the load-bearing
         # `_sanitize_segment(derived_key)` re-check even though `agent_id`
         # already looks path-shaped -- a named-teammate id's `.+` segment
