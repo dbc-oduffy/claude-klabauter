@@ -118,7 +118,7 @@ cooldown starts suppressing its entry.
 DWELL TIME. Every EMITTED entry (never a suppressed row) carries
 `dwell_seconds` -- how long that peer has sat since its last observed
 activity, derived from its receiver-state `stamped_at` cross-checked
-against `read_pass._transcript_mtime_epoch` (the one place that turns a
+against `read_pass._transcript_activity_epoch` (the one place that turns a
 session id into a transcript mtime; reused rather than re-derived). The
 more RECENT of the two -- a stale `stamped_at` with a transcript that kept
 moving is evidence of later activity than the stamp alone would report --
@@ -421,9 +421,9 @@ def _log_key_is_open(log: list[dict[str, Any]], key: str) -> bool:
 # EM-in-scope discretionary application) -- the local `_parse_iso_stamp` copy
 # is deleted. Its stated reason for staying local ("that symbol is private to
 # its own module") was already contradicted three lines below by this same
-# module importing `read_pass._transcript_mtime_epoch`, also private. Calls
-# `read_pass._parse_iso_stamp` directly, the same way `_transcript_mtime_epoch`
-# already is.
+# module importing `read_pass._transcript_activity_epoch`, also private. Calls
+# `read_pass._parse_iso_stamp` directly, the same way the transcript-clock
+# helpers already are.
 
 
 def _dwell_seconds(
@@ -435,13 +435,23 @@ def _dwell_seconds(
     """Seconds since this peer's last observed activity, or `None`.
 
     Reads its own receiver-state `stamped_at` and cross-checks it against
-    `read_pass._transcript_mtime_epoch(peer_session_id, cwd or repo_root)` --
-    the later of the two is the last-activity instant (a transcript that kept
-    moving after the stamp was written is evidence of activity the stamp
+    `read_pass._transcript_activity_epoch(peer_session_id, cwd or repo_root)`
+    -- the later of the two is the last-activity instant (a transcript that
+    kept moving after the stamp was written is evidence of activity the stamp
     alone would miss). `now` is the SAME clock `build_send_digest` already
     threads through cooldown arithmetic -- never re-asked here. `None` when
     neither source resolves or the result would be negative (clock skew);
     never `0`, which would misreport "unknown" as "just stopped".
+
+    ONLY A TRUSTED TRANSCRIPT CLOCK MAY WIN THAT MAX. The cross-check above is
+    sound only if transcript movement means the SESSION moved, which file mtime
+    does not -- see `receiver_state.activity_epoch_from_reduced` for why and
+    for the measurement. Taking `max(stamp, mtime)` therefore let the wrong
+    number win in exactly the case the reading matters. An UNTRUSTED epoch
+    (`trusted=False`, the mtime fallback) is now used only as the sole
+    candidate, where it is the same answer this function has always given; a
+    trusted epoch competes in the max as before -- that comparison was never
+    the defect.
 
     `cwd` is the peer's OWN cwd (the roster row's `cwd`, threaded onto the
     verdict dict by `read_pass.classify_peer`), never assumed to equal
@@ -461,8 +471,10 @@ def _dwell_seconds(
         stamp_dt = read_pass._parse_iso_stamp(record.get("stamped_at"))
         if stamp_dt is not None:
             candidates.append(stamp_dt.timestamp())
-    transcript_epoch = read_pass._transcript_mtime_epoch(peer_session_id, effective_cwd)
-    if transcript_epoch is not None:
+    transcript_epoch, transcript_trusted = read_pass._transcript_activity_epoch(
+        peer_session_id, effective_cwd
+    )
+    if transcript_epoch is not None and (transcript_trusted or not candidates):
         candidates.append(transcript_epoch)
     if not candidates:
         return None

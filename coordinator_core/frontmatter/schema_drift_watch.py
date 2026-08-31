@@ -76,7 +76,10 @@ from pathlib import Path
 from typing import Any, Optional
 
 from coordinator_core.doe_root_pointer import read_doe_root_pointer
-from coordinator_core.frontmatter.schema_validate import check_schema_drift_advisory_batch
+from coordinator_core.frontmatter.schema_validate import (
+    DIRECTION_WE_AHEAD,
+    check_schema_drift_advisory_batch,
+)
 from coordinator_core.git_scope import foreign_repo_unusable_reason, scoped_cat_file_batch
 from coordinator_core.machine_resolver import registry_get
 
@@ -722,9 +725,15 @@ def _scan(
             if indeterminate
             else ""
         )
+        remediation = (
+            "Local is ahead of the pin — upstream the local change or ratify the fork; "
+            "re-vendoring discards it."
+            if any(d.get("direction") == DIRECTION_WE_AHEAD for d in drifted)
+            else "Upstream has moved since the pin — re-vendor."
+        )
         status, summary = STATUS_DRIFT, (
             f"{len(drifted)}/{checked} vendored file(s) diverge from their upstream HEAD: "
-            f"{named}{extra}. Upstream has moved since the pin — re-vendor."
+            f"{named}{extra}. {remediation}"
         )
     elif indeterminate:
         names = ", ".join(d["schema"] for d in indeterminate)

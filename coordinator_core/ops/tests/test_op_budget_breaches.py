@@ -141,6 +141,35 @@ def test_headline_states_the_fact_once_and_then_the_alternative():
     assert len(text.encode("utf-8")) <= 220
 
 
+def test_headline_names_its_unit_and_claims_no_cpu_attribution():
+    """The banner reports WALL CLOCK and must say so, never implying CPU.
+
+    `stolen_ms` is summed wall clock past the bar, not process time. This line
+    read "N s stolen from the box" until 2026-08-31, which asserts a cost
+    attribution `elapsed_ms` cannot support -- and it misled twice in one day:
+    `memo.transition` was reported as one of the worst thieves on the box
+    (140.7s stolen, 227/354 over the bar) while the job-object primitive
+    measured it at 187.5ms process / 6 procs per call, under the bar the whole
+    time. Two sessions proposed rebuilding or killing an op on this signal and
+    one retracted a published verdict.
+
+    The bar constant is PROCESS_TIME_BAR_MS, so a banner that compares a wall
+    clock figure against it without naming the axis invites exactly that
+    misread. Naming the unit is the honest interim named by
+    state/bug-backlog/2026-08-30-the-op-census-ranks-breaches-by-wall-clock.yaml;
+    it is not the fix, which needs a per-op process figure the sink cannot yet
+    supply.
+    """
+    text = breach_report(entries=[_complete("op.a", 30_000.0)], now=BASE_T)["headline"]
+
+    assert "wall-clock" in text.lower(), text
+    # The retired framing claimed CPU this unit never measured.
+    assert "stolen" not in text.lower(), text
+    # The conviction is still demanded, and still gated on the right axis.
+    assert "process time" in text.lower(), text
+    assert "delete" in text.lower(), text
+
+
 def test_headline_on_a_clean_population_asserts_nothing_extra():
     summary = breach_report(entries=[_complete("op.a", 12.0)], now=BASE_T)
 
@@ -507,8 +536,14 @@ def test_network_remedy_does_not_become_a_denylist_of_op_names():
     needs no edit here — and an op that did NOT opt in still gets the
     delete-or-rebuild imperative, whatever it is called."""
     assert "round trip" in op_budget_breaches._remedy_for("anything.at.all.network")
-    assert "Delete it" in op_budget_breaches._remedy_for("push.outstanding")
-    assert "Delete it" in op_budget_breaches._remedy_for("network.thing")
+    for op in ("push.outstanding", "network.thing"):
+        remedy = op_budget_breaches._remedy_for(op)
+        assert "delete" in remedy.lower(), remedy
+        assert "rebuild" in remedy.lower(), remedy
+        # The kill bar is gated on the axis that can carry a conviction, never
+        # softened: this line asks for process time BEFORE the delete, and must
+        # not drift into offering a wider budget instead of the delete.
+        assert "process time" in remedy.lower(), remedy
 
 
 def test_network_headline_still_obeys_the_standing_register_rules():

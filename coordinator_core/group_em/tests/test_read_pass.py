@@ -346,7 +346,7 @@ def test_classify_fallback_status_tool_use_stop_reason_still_producing(tmp_path)
         tmp_path, [{"type": "assistant", "message": {"stop_reason": "tool_use"}}]
     )
     state, _reason = read_pass.classify_fallback_status(
-        "idle", reduced, now_epoch=0.0, transcript_mtime_epoch=0.0
+        "idle", reduced, now_epoch=0.0, transcript_activity_epoch=0.0
     )
     assert state == read_pass.STATE_PRODUCING
 
@@ -494,3 +494,162 @@ def test_module_imports_no_subprocess_and_defines_no_command_constant():
     assert not hasattr(read_pass, "_CLAUDE_AGENTS_CMD")
     module = sys.modules[read_pass.__name__]
     assert "subprocess" not in getattr(module, "__dict__", {})
+
+
+# ---------------------------------------------------------------------------
+# the transcript clock: mtime is not an activity clock
+#
+# Measured 2026-08-31 across 228 transcripts touched in the prior day: 101 had
+# an mtime running ahead of their own newest timestamped record by more than a
+# minute, worst case 16 hours. These tests build the defect's own shape on
+# disk -- a real transcript with untimestamped bookkeeping rows appended and
+# mtime pushed forward -- so the assertion and the failure mode live in the
+# same place.
+# ---------------------------------------------------------------------------
+
+
+def _write_clock_transcript(tmp_path, session_id, cwd, records, mtime_epoch=None):
+    """Write a transcript where the harness would put it, optionally forcing
+    the mtime forward the way a bookkeeping rewrite does."""
+    import os
+
+    projects = tmp_path / "projects" / read_pass._PATH_SEP_RE.sub("-", cwd)
+    projects.mkdir(parents=True, exist_ok=True)
+    path = projects / f"{session_id}.jsonl"
+    with open(path, "w", encoding="utf-8") as fh:
+        for record in records:
+            fh.write(json.dumps(record) + "\n")
+    if mtime_epoch is not None:
+        os.utime(path, (mtime_epoch, mtime_epoch))
+    return str(path)
+
+
+def _patch_transcript_root(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        read_pass,
+        "_transcript_path_for",
+        lambda session_id, cwd: str(
+            tmp_path / "projects" / read_pass._PATH_SEP_RE.sub("-", cwd) / f"{session_id}.jsonl"
+        ),
+    )
+
+
+def test_activity_epoch_ignores_an_mtime_pushed_forward_by_bookkeeping(tmp_path, monkeypatch):
+    """The measured incident: a peer ends its turn, does nothing for twelve
+    minutes, and an untimestamped bookkeeping write moves mtime ~7 minutes
+    forward. The activity clock must still report the turn's own timestamp."""
+    _patch_transcript_root(monkeypatch, tmp_path)
+    last_real = datetime(2026, 8, 31, 15, 40, 48, tzinfo=timezone.utc)
+    _write_clock_transcript(
+        tmp_path,
+        "peer-stalled",
+        REPO_ROOT,
+        [
+            {"type": "assistant", "timestamp": last_real.isoformat().replace("+00:00", "Z")},
+            {"type": "last-prompt"},
+            {"type": "ai-title"},
+            {"type": "cost-state"},
+        ],
+        mtime_epoch=last_real.timestamp() + 420.0,
+    )
+
+    epoch, trusted = read_pass._transcript_activity_epoch("peer-stalled", REPO_ROOT)
+
+    assert trusted is True
+    assert epoch == last_real.timestamp()
+
+
+def test_activity_epoch_falls_back_to_mtime_untrusted_when_nothing_is_timestamped(
+    tmp_path, monkeypatch
+):
+    """An upper bound, marked as one -- never silently promoted to evidence."""
+    _patch_transcript_root(monkeypatch, tmp_path)
+    _write_clock_transcript(
+        tmp_path, "peer-no-stamps", REPO_ROOT, [{"type": "cost-state"}], mtime_epoch=1000.0
+    )
+
+    epoch, trusted = read_pass._transcript_activity_epoch("peer-no-stamps", REPO_ROOT)
+
+    assert trusted is False
+    assert epoch == 1000.0
+
+
+def test_activity_epoch_is_none_when_the_transcript_is_absent(tmp_path, monkeypatch):
+    """`None` must never be read as "has not moved" or as an age of zero."""
+    _patch_transcript_root(monkeypatch, tmp_path)
+    assert read_pass._transcript_activity_epoch("peer-missing", REPO_ROOT) == (None, False)
+
+
+def test_moved_since_is_not_answered_from_an_untrusted_clock(tmp_path, monkeypatch):
+    """The stale-snapshot guard reinstates a candidate on evidence of
+    stillness. Answering "moved" from a bookkeeping rewrite suppressed exactly
+    the parked peer it was reinstating, so an untrusted clock answers `None`
+    (cannot establish) and leaves the age verdict standing."""
+    _patch_transcript_root(monkeypatch, tmp_path)
+    stamp = datetime(2026, 8, 31, 15, 0, 0, tzinfo=timezone.utc)
+    _write_clock_transcript(
+        tmp_path,
+        "peer-bookkeeping-only",
+        REPO_ROOT,
+        [{"type": "cost-state"}],
+        mtime_epoch=stamp.timestamp() + 600.0,
+    )
+
+    assert read_pass._transcript_moved_since("peer-bookkeeping-only", REPO_ROOT, stamp) is None
+
+
+def test_moved_since_still_answers_true_on_a_real_later_record(tmp_path, monkeypatch):
+    """The guard keeps working on genuine evidence -- the correction removes
+    unearned freshness, it does not blind the check."""
+    _patch_transcript_root(monkeypatch, tmp_path)
+    stamp = datetime(2026, 8, 31, 15, 0, 0, tzinfo=timezone.utc)
+    later = (stamp + timedelta(seconds=90)).isoformat().replace("+00:00", "Z")
+    _write_clock_transcript(
+        tmp_path, "peer-really-moved", REPO_ROOT, [{"type": "assistant", "timestamp": later}]
+    )
+
+    assert read_pass._transcript_moved_since("peer-really-moved", REPO_ROOT, stamp) is True
+
+
+def test_moved_since_answers_false_from_an_untrusted_clock_that_never_passed_the_stamp(
+    tmp_path, monkeypatch
+):
+    """The bias is one-directional: a bookkeeping rewrite can only push mtime
+    FORWARD, so an untrusted mtime at or before the stamp bounds the peer's
+    true last activity at or before it too. That is real evidence of stillness
+    and reinstates the candidate; only the forward direction is unsafe."""
+    _patch_transcript_root(monkeypatch, tmp_path)
+    stamp = datetime(2026, 8, 31, 15, 0, 0, tzinfo=timezone.utc)
+    _write_clock_transcript(
+        tmp_path,
+        "peer-still",
+        REPO_ROOT,
+        [{"type": "cost-state"}],
+        mtime_epoch=stamp.timestamp() - 120.0,
+    )
+
+    assert read_pass._transcript_moved_since("peer-still", REPO_ROOT, stamp) is False
+
+
+def test_classify_peer_threads_its_activity_epoch_onto_the_verdict(tmp_path, monkeypatch):
+    """So the watch can report idle time without re-reducing the same tail in
+    the same tick (coordinator:code-reviewer, P2 double read)."""
+    _patch_transcript_root(monkeypatch, tmp_path)
+    last_real = datetime(2026, 8, 31, 15, 40, 48, tzinfo=timezone.utc)
+    _write_clock_transcript(
+        tmp_path,
+        "peer-threaded",
+        REPO_ROOT,
+        [
+            {
+                "type": "assistant",
+                "timestamp": last_real.isoformat().replace("+00:00", "Z"),
+                "message": {"stop_reason": "end_turn", "content": []},
+            }
+        ],
+    )
+    monkeypatch.setattr(read_pass, "read_receiver_state", lambda sid, root: None)
+
+    verdict = read_pass.classify_peer(REPO_ROOT, _agent(session_id="peer-threaded"))
+
+    assert verdict["activity_epoch"] == last_real.timestamp()

@@ -1085,3 +1085,34 @@ def test_named_dispatch_miss_notice_names_a_channel_that_delivers():
     assert _compose_sidecar_miss_text("/x/y.md", is_named=True) == (
         _compose_sidecar_miss_text("/x/y.md")
     )
+
+
+def test_no_miss_body_leaves_a_foreign_sidecar_write_unforbidden():
+    """Every miss body forbids writing into another agent's sidecar.
+
+    Observed 2026-08-31 (`state/bug-backlog/2026-08-31-missing-sidecar-
+    provisioning-sends-an-integrator-receipt-into-a-siblings-file.yaml`): of
+    two concurrently-dispatched integrators that got no scaffold, one skipped
+    its stamp and said so in its report; the other wrote its `integrated_from`
+    receipt into a still-running sibling's sidecar. The miss text told both
+    what to do and neither what not to do, so the receipt landed present,
+    well-formed, and about the wrong dispatch -- unreadable as an error.
+
+    The sentinel body is not exempt: a sentinel is a scaffold for findings,
+    not a receipt file, so an agent holding one still has no file of its own
+    to stamp.
+    """
+    bodies = {
+        "sentinel": _compose_sidecar_miss_text("/x/y.md"),
+        "named": _compose_sidecar_miss_text("", is_named=True),
+        "unnamed": _compose_sidecar_miss_text(""),
+    }
+    for label, body in bodies.items():
+        assert "no other agent's sidecar" in body, label
+
+    # The clause is appended ahead of the marker line, never through it --
+    # consumers key off the last line and a clause spliced after it would
+    # break every one of them.
+    assert bodies["sentinel"].rstrip().endswith(SIDECAR_PATH_MARKER_PREFIX + "/x/y.md")
+    assert bodies["named"].rstrip().endswith(SIDECAR_MISS_MARKER)
+    assert bodies["unnamed"].rstrip().endswith(SIDECAR_MISS_MARKER)

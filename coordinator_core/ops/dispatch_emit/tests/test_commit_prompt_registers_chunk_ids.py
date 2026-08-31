@@ -42,7 +42,7 @@ def test_commit_prompt_names_every_chunk_id_in_the_wave():
 def test_commit_prompt_states_the_subject_requirement():
     call = _commit_agent_call(["a.py"], "Commit wave 1", 0, ["C1"])
     assert "subject" in call.lower()
-    assert "partial" in call.lower()
+    assert "resumed agent" in call.lower()
 
 
 def test_commit_prompt_still_names_wave_and_pathspec():

@@ -440,6 +440,141 @@ def test_two_claims_scope_match_covered_by_both_plans_omits(tmp_path, monkeypatc
     assert f"Session-Id: {_SID}" in joined
 
 
+def test_scope_match_directory_entry_covers_file_beneath_it(tmp_path, monkeypatch):
+    """Regression: a `scope:` entry naming a DIRECTORY covers a committed
+    file directly beneath it, not just an exact-string match."""
+    repo = _init_repo(tmp_path)
+    monkeypatch.setenv("CLAUDE_SESSION_ID", _SID)
+    _write_plan_with_scope(
+        repo, "docs/plans/claim-a.md", "dlv-claim-a", ["coordinator_core/ops/fleet/tests"]
+    )
+    _write_plan_claim(repo, _SID, "claim-a", "2026-08-01T00:00:00Z")
+
+    (repo / "coordinator_core" / "ops" / "fleet" / "tests").mkdir(parents=True)
+    (repo / "coordinator_core" / "ops" / "fleet" / "tests" / "test_x.py").write_text(
+        "x = 1\n", encoding="utf-8"
+    )
+    msg = _msg_file(repo)
+
+    args = compute_missing_trailer_args(
+        msg, repo, paths=["coordinator_core/ops/fleet/tests/test_x.py"]
+    )
+
+    joined = " ".join(args)
+    assert "Deliverable-Id: dlv-claim-a" in joined
+
+
+def test_scope_match_directory_entry_covers_nested_deeper_file(tmp_path, monkeypatch):
+    """Directory-prefix containment is not limited to one level of nesting."""
+    repo = _init_repo(tmp_path)
+    monkeypatch.setenv("CLAUDE_SESSION_ID", _SID)
+    _write_plan_with_scope(
+        repo, "docs/plans/claim-a.md", "dlv-claim-a", ["coordinator_core/ops"]
+    )
+    _write_plan_claim(repo, _SID, "claim-a", "2026-08-01T00:00:00Z")
+
+    (repo / "coordinator_core" / "ops" / "fleet" / "tests").mkdir(parents=True)
+    (repo / "coordinator_core" / "ops" / "fleet" / "tests" / "test_x.py").write_text(
+        "x = 1\n", encoding="utf-8"
+    )
+    msg = _msg_file(repo)
+
+    args = compute_missing_trailer_args(
+        msg, repo, paths=["coordinator_core/ops/fleet/tests/test_x.py"]
+    )
+
+    joined = " ".join(args)
+    assert "Deliverable-Id: dlv-claim-a" in joined
+
+
+def test_scope_match_sibling_prefix_does_not_match(tmp_path):
+    """`coordinator_core/ops/fleet/tests` must NOT cover
+    `coordinator_core/ops/fleet/tests_helper.py` -- a naive `str.startswith`
+    would wrongly match the sibling; directory-segment comparison must not.
+    Calls the tier function directly (rather than through
+    `compute_missing_trailer_args`) so a lower, session-keyed tier's own
+    (correct) fallback resolution cannot mask this tier's own abstention."""
+    repo = _init_repo(tmp_path)
+    _write_plan_with_scope(
+        repo, "docs/plans/claim-a.md", "dlv-claim-a", ["coordinator_core/ops/fleet/tests"]
+    )
+    claims = [("docs/plans/claim-a.md", "2026-08-01T00:00:00Z")]
+
+    result = commit_trailers.resolve_deliverable_id_from_scope_match(
+        repo, ["coordinator_core/ops/fleet/tests_helper.py"], claims
+    )
+
+    assert result == ""
+
+
+def test_scope_match_exact_file_entry_still_works(tmp_path, monkeypatch):
+    """No regression on the exact-membership case this tier already handled."""
+    repo = _init_repo(tmp_path)
+    monkeypatch.setenv("CLAUDE_SESSION_ID", _SID)
+    _write_plan_with_scope(
+        repo, "docs/plans/claim-a.md", "dlv-claim-a", ["src/only_in_a.py"]
+    )
+    _write_plan_claim(repo, _SID, "claim-a", "2026-08-01T00:00:00Z")
+
+    (repo / "src").mkdir()
+    (repo / "src" / "only_in_a.py").write_text("x = 1\n", encoding="utf-8")
+    msg = _msg_file(repo)
+
+    args = compute_missing_trailer_args(msg, repo, paths=["src/only_in_a.py"])
+
+    joined = " ".join(args)
+    assert "Deliverable-Id: dlv-claim-a" in joined
+
+
+def test_scope_match_pathspec_straddling_covered_and_uncovered_abstains(tmp_path):
+    """A commit touching one path inside a plan's directory scope AND one
+    outside every claimed plan's scope still abstains -- every committed
+    path must be covered, not merely one of them. Calls the tier function
+    directly, same reasoning as the sibling-prefix test above."""
+    repo = _init_repo(tmp_path)
+    _write_plan_with_scope(
+        repo, "docs/plans/claim-a.md", "dlv-claim-a", ["coordinator_core/ops/fleet/tests"]
+    )
+    claims = [("docs/plans/claim-a.md", "2026-08-01T00:00:00Z")]
+
+    result = commit_trailers.resolve_deliverable_id_from_scope_match(
+        repo,
+        ["coordinator_core/ops/fleet/tests/test_x.py", "unrelated.py"],
+        claims,
+    )
+
+    assert result == ""
+
+
+def test_scope_match_two_covering_directory_plans_abstain(tmp_path, monkeypatch):
+    """Two claimed plans whose DIRECTORY scopes both cover the committed
+    pathspec still abstain -- the tier never picks among multiple covering
+    plans, directory containment included."""
+    repo = _init_repo(tmp_path)
+    monkeypatch.setenv("CLAUDE_SESSION_ID", _SID)
+    _write_plan_with_scope(
+        repo, "docs/plans/claim-a.md", "dlv-claim-a", ["coordinator_core/ops"]
+    )
+    _write_plan_with_scope(
+        repo, "docs/plans/claim-b.md", "dlv-claim-b", ["coordinator_core"]
+    )
+    _write_plan_claim(repo, _SID, "claim-a", "2026-08-01T00:00:00Z")
+    _write_plan_claim(repo, _SID, "claim-b", "2026-08-02T00:00:00Z")
+
+    (repo / "coordinator_core" / "ops" / "fleet").mkdir(parents=True)
+    (repo / "coordinator_core" / "ops" / "fleet" / "test_x.py").write_text(
+        "x = 1\n", encoding="utf-8"
+    )
+    msg = _msg_file(repo)
+
+    args = compute_missing_trailer_args(
+        msg, repo, paths=["coordinator_core/ops/fleet/test_x.py"]
+    )
+
+    joined = " ".join(args)
+    assert "Deliverable-Id:" not in joined
+
+
 def test_artifact_tier_omits_on_genuinely_divergent_multi_artifact_commit(
     tmp_path, monkeypatch
 ):

@@ -102,8 +102,12 @@ def test_a_vanished_row_contributes_no_fabricated_cost():
     row = _row_for(summary, "op.a")
 
     assert row["vanished"] == 1
+    assert row["breaches"] == 1
     assert row["stolen_ms"] == 0.0
     assert row["p50_ms"] is None
+    assert row["p95_ms"] is None
+    assert row["max_ms"] is None
+    assert summary["totals"]["vanished"] == 1
     assert summary["totals"]["stolen_ms"] == 0.0
 
 
@@ -194,25 +198,6 @@ def test_an_op_with_only_timeout_breaches_still_ranks_via_the_count_tiebreaker()
     row = _row_for(summary, "op.timeout_only")
     assert row["stolen_ms"] == 0.0
     assert row["breaches"] == 3
-
-
-def test_a_vanished_rows_behaviour_is_unchanged_characterisation():
-    """Characterisation test: `vanished` already excluded itself from
-    `stolen_ms` and the percentile pool before this change, and must continue
-    to do so unchanged — guards against the two kinds silently converging in
-    the wrong direction."""
-    entries = [_started("op.a", corr_id="gone", t_start=BASE_T)]
-    summary = breach_summary(entries, bar_ms=500.0, now=BASE_T + 10_000.0)
-    row = _row_for(summary, "op.a")
-
-    assert row["vanished"] == 1
-    assert row["breaches"] == 1
-    assert row["stolen_ms"] == 0.0
-    assert row["p50_ms"] is None
-    assert row["p95_ms"] is None
-    assert row["max_ms"] is None
-    assert summary["totals"]["vanished"] == 1
-    assert summary["totals"]["stolen_ms"] == 0.0
 
 
 def test_a_clean_op_is_absent_from_the_ranked_list():

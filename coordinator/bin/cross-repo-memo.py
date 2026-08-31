@@ -1623,45 +1623,6 @@ def _check_summary_over_cap(summary: str | None) -> str | None:
     return None
 
 
-def _read_body_from_file_or_stdin(
-    body_file: str | None, empty_body_ok: bool
-) -> tuple[str | None, str | None]:
-    """Shared body read + empty-body guard for every live send path.
-
-    `body_file` is `--body-file` (None / '-' / a path) — the '-' stdin
-    sentinel and an omitted --body-file both read stdin (Unix curl/tar/git
-    convention). Empty-body guard (2026-07-22 body-drop root-cause verdict
-    memo): under Claude Code's Bash tool, stdin is /dev/null — a send whose
-    heredoc never arrived on the terminal used to yield body="" with no
-    warning, silently composing a hollow frontmatter-only memo (claude-klabauter
-    1d44757c). Both transport shapes (stdin AND a zero-byte --body-file) get
-    the same guard; `empty_body_ok` (--empty-body) is the explicit opt-in
-    for a deliberately body-less memo.
-
-    Returns (body, error) — exactly one is None.
-    """
-    if body_file and body_file != "-":
-        try:
-            with open(body_file, "r", encoding="utf-8") as f:
-                body = f.read()
-        except OSError as exc:
-            return None, f"cross-repo-memo: cannot read body file: {exc}"
-        if not body.strip() and not empty_body_ok:
-            return None, (
-                f"cross-repo-memo: --body-file {body_file!r} was empty — "
-                f"pass --empty-body to send a deliberately body-less memo."
-            )
-        return body, None
-    body = sys.stdin.read()
-    if not body.strip() and not empty_body_ok:
-        return None, (
-            "cross-repo-memo: body read from stdin was empty — under Claude "
-            "Code's Bash tool stdin is /dev/null; pass --body-file <path>, "
-            "or pass --empty-body to send a deliberately body-less memo."
-        )
-    return body, None
-
-
 def _sender_identity_guard_and_warn() -> str | None:
     """Shared sender-identity guard + unregistered-sender warning.
 
@@ -2453,6 +2414,14 @@ def _cmd_draft(args: argparse.Namespace) -> int:
     if in_reply_to:
         invoke_params["in_reply_to"] = in_reply_to
 
+    # supersedes: draft-only flag, forwarded as-is — a single occurrence
+    # (action="append" list of length 1) threads the bare string, multiple
+    # occurrences thread the list. The op's own _validate_supersedes_param
+    # accepts both shapes; no CLI-side re-validation.
+    supersedes = getattr(args, "supersedes", None)
+    if supersedes:
+        invoke_params["supersedes"] = supersedes[0] if len(supersedes) == 1 else supersedes
+
     def legacy_draft() -> None:
         """Fail-loud legacy stub — mirrors _send_via_engine.legacy_send.
 
@@ -2638,7 +2607,7 @@ def _unquote_yaml_scalar(v: str) -> str:
 _SCOPED_TO_SUBKEYS = ("artifact", "version", "sha", "seam")
 
 
-def _parse_outbox_file(path: str) -> tuple[dict[str, str], str]:
+def _parse_outbox_file(path: str) -> tuple[dict[str, "str | list[str]"], str]:
     """Parse an outbox draft file into (frontmatter_dict, body_str).
 
     Spec backlink: docs/plans/2026-06-15-cross-repo-memo-draft-lifecycle.md § C2
@@ -2673,10 +2642,12 @@ def _parse_outbox_file(path: str) -> tuple[dict[str, str], str]:
         return {}, ""
 
     lines = content.splitlines()
-    fm: dict[str, str] = {}
+    fm: dict[str, "str | list[str]"] = {}
     nested_scoped_to: dict[str, str] = {}
+    supersedes_list: list[str] = []
     in_fm = False
     in_scoped_to = False
+    in_supersedes_list = False
     body_start = len(lines)
 
     for i, line in enumerate(lines):
@@ -2706,10 +2677,30 @@ def _parse_outbox_file(path: str) -> tuple[dict[str, str], str]:
                             nested_scoped_to[sub_key] = sub_v
                 continue
 
+        if in_supersedes_list:
+            # A non-indented line ends the nested sequence — re-process it as
+            # an ordinary top-level frontmatter line below (fall through).
+            # Mirrors the in_scoped_to block above, but for a bare YAML
+            # sequence (_render_extra_field's list branch — the shape
+            # memo_draft.py emits for a multi-item `--supersedes`) rather
+            # than a sub-key mapping.
+            if not line or not line[0].isspace():
+                in_supersedes_list = False
+            else:
+                stripped = line.strip()
+                if stripped.startswith("- "):
+                    item = _unquote_yaml_scalar(stripped[2:].strip())
+                    if item:
+                        supersedes_list.append(item)
+                continue
+
         if ":" in line:
             key, _, rest = line.partition(":")
             key_stripped = key.strip()
             v = rest.strip()
+            if key_stripped == "supersedes" and v == "":
+                in_supersedes_list = True
+                continue
             if key_stripped == "scoped_to" and v == "":
                 in_scoped_to = True
                 continue
@@ -2720,6 +2711,13 @@ def _parse_outbox_file(path: str) -> tuple[dict[str, str], str]:
     # over from a hand-edit or an older draft is superseded per sub-key.
     for sub_key, sub_v in nested_scoped_to.items():
         fm[f"scoped_to_{sub_key}"] = sub_v
+
+    # A nested `supersedes:` sequence (multi-item --supersedes) parses to a
+    # real list, matching the single-item bare-scalar shape's type contract
+    # (fm["supersedes"] is either a str or a list[str], never a placeholder
+    # string for the list case).
+    if supersedes_list:
+        fm["supersedes"] = supersedes_list
 
     body = "\n".join(lines[body_start:]).lstrip("\n")
     return fm, body
@@ -3508,6 +3506,17 @@ def _build_combined_parser(for_help: bool = False) -> argparse.ArgumentParser:
     draft_p.add_argument("--scoped-to-version", metavar="VERSION", default=None, help="scoped_to.version — point-in-time pin (mutually exclusive with --scoped-to-sha); use this arm when the artifact is only reachable via a publish mirror, since it is never sha-verified against the receiver's clone")
     draft_p.add_argument("--scoped-to-sha", metavar="SHA", default=None, help="scoped_to.sha — 7-40 hex chars, point-in-time pin (mutually exclusive with --scoped-to-version)")
     draft_p.add_argument("--scoped-to-seam", metavar="SEAM", default=None, help="scoped_to.seam — the boundary/interface this decision applies at")
+    # --supersedes: draft-only (send reads it off staged frontmatter — a flag
+    # there would need a second write path into an already-staged file).
+    # Repeatable (action="append"): one occurrence threads the bare string,
+    # multiple thread the list — memo_draft.py's _validate_supersedes_param
+    # already accepts both shapes, so this CLI forwards without re-validating,
+    # matching how --scoped-to-* is handled above.
+    draft_p.add_argument(
+        "--supersedes", metavar="MEMO", action="append", default=None,
+        help="OPTIONAL. Basename (or path) of a prior memo this draft supersedes. "
+             "Repeatable — pass once for a single reference, multiple times for a list.",
+    )
 
     # compose subparser (handler is _cmd_compose)
     compose_p = subparsers.add_parser(

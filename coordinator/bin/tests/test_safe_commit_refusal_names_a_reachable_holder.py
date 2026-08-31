@@ -113,7 +113,7 @@ def test_a_touch_on_another_path_is_not_this_paths_age(tmp_path, monkeypatch):
     )
     assert (
         safe_commit._holder_context(str(tmp_path), _SID, "some/file.py")
-        == "d12e25cf (stale id, no registry entry)"
+        == "d12e25cf (live, no name in the harness registry)"
     )
 
 
@@ -123,7 +123,7 @@ def test_degrades_to_the_identifier_alone_rather_than_raising(tmp_path, monkeypa
     _patch_registry(monkeypatch, {})
     assert (
         safe_commit._holder_context(str(tmp_path), _SID, "some/file.py")
-        == "d12e25cf (stale id, no registry entry)"
+        == "d12e25cf (live, no name in the harness registry)"
     )
 
 
@@ -148,14 +148,17 @@ def test_resolves_the_sid_to_the_stable_name(tmp_path, monkeypatch):
     assert rendered.startswith("claude-klabauter-2d [d12e25cf]")
 
 
-def test_an_unregistered_sid_is_marked_stale_not_printed_as_an_address(
+def test_an_unregistered_sid_is_marked_unnamed_not_printed_as_an_address(
     tmp_path, monkeypatch
 ):
     """A re-pointed session is the common case, not the exceptional one, and
-    printing its old id bare invites attribution on a stale identifier."""
+    printing its old id bare invites attribution on a stale identifier. The
+    label says what the miss is -- an unresolved name -- and never asserts
+    the holder is dead: this branch has already established it is live."""
     _patch_registry(monkeypatch, {})
     rendered = safe_commit._holder_context(str(tmp_path), _SID, "some/file.py")
-    assert "stale id" in rendered
+    assert "no name in the harness registry" in rendered
+    assert "stale" not in rendered
     assert "claude-klabauter" not in rendered
 
 

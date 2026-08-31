@@ -499,10 +499,16 @@ def _handle_act(
     acted: List[dict] = []
     failed: List[dict] = []
 
+    # `declare_move_claims` runs on EVERY exit, including the no-moves one
+    # (a second, idempotent fire plans nothing), so it cannot be imported
+    # inside the branch that commits -- that read as `UnboundLocalError` at
+    # the return below rather than as a missing import.
+    from coordinator_core.ops.fleet._common import declare_move_claims
+
     if moves:
         import asyncio
 
-        from coordinator_core.ops.fleet._common import archive_and_commit, declare_move_claims
+        from coordinator_core.ops.fleet._common import archive_and_commit
 
         n = len(moves)
         commit_subject = (

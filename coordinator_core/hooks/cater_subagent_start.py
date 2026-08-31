@@ -211,6 +211,29 @@ SIDECAR_MISS_MARKER = "sidecar_provisioning: missed"
 #: does.
 SIDECAR_MISS_NOTICE_LEAD = "Sidecar provisioning did not complete for this dispatch"
 
+#: The one act a sidecar-less agent must not take, stated because omitting it
+#: was not neutral. Observed 2026-08-31: of two `review-integrator` dispatches
+#: that got no scaffold, one skipped its stamp and said so; the other wrote its
+#: `integrated_from` receipt into a CONCURRENTLY-RUNNING sibling's sidecar. That
+#: receipt was well-formed, at column zero, in valid frontmatter, and attesting a
+#: pairing that agent never performed -- and `guard-kira-verdict-routed` and the
+#: `review_receipt` gate decide "was this review integrated?" by reading exactly
+#: that field. A receipt in the wrong file is strictly worse than a missing one,
+#: because absence is the case the guards are built to notice.
+#:
+#: It survived only because the file's real owner found foreign content in its
+#: own scaffold, declined to overwrite, and appended. A normal write would have
+#: destroyed the misfiled receipt silently.
+#:
+#: Appended to every miss body, including the sentinel one: an agent holding a
+#: sentinel still has no receipt file of its own, and the sentinel is not a
+#: substitute for one.
+#: `state/bug-backlog/2026-08-31-missing-sidecar-provisioning-sends-an-integrator-receipt-into-a-siblings-file.yaml`
+SIDECAR_MISS_NO_FOREIGN_WRITE = (
+    " Write to no other agent's sidecar: with no file of your own, skip any "
+    "receipt or stamp your role would write and say in your report that you did."
+)
+
 #: Same machine-readable "key: value" shape as `SIDECAR_PATH_MARKER_PREFIX`
 #: (AC9 amendment) -- the pointer a spilled-blocks companion file leaves in
 #: `additionalContext` in place of the inlined blocks text.
@@ -277,7 +300,11 @@ def _compose_sidecar_miss_text(sentinel_path: str = "", *, is_named: bool = Fals
             + SIDECAR_MISS_NOTICE_LEAD
             + ", but a sentinel scaffold was written for you -- persist your "
             "findings there as normal, and say in them that provisioning "
-            "missed.\n" + SIDECAR_PATH_MARKER_PREFIX + sentinel_path
+            "missed."
+            + SIDECAR_MISS_NO_FOREIGN_WRITE
+            + "\n"
+            + SIDECAR_PATH_MARKER_PREFIX
+            + sentinel_path
         )
     if is_named:
         # A NAMED teammate's final assistant text is NOT returned to the
@@ -298,7 +325,9 @@ def _compose_sidecar_miss_text(sentinel_path: str = "", *, is_named: bool = Fals
             "final reply text is not returned to the dispatcher. Deliver your "
             "findings with SendMessage to the session that dispatched you, "
             "and say in them that provisioning missed. Ending your turn "
-            "without sending delivers nothing.\n"
+            "without sending delivers nothing."
+            + SIDECAR_MISS_NO_FOREIGN_WRITE
+            + "\n"
             + SIDECAR_MISS_MARKER
         )
     return (
@@ -306,7 +335,9 @@ def _compose_sidecar_miss_text(sentinel_path: str = "", *, is_named: bool = Fals
         + SIDECAR_MISS_NOTICE_LEAD
         + " -- no "
         "scaffold exists on disk. Report your findings inline in your "
-        "reply and say in them that provisioning missed.\n"
+        "reply and say in them that provisioning missed."
+        + SIDECAR_MISS_NO_FOREIGN_WRITE
+        + "\n"
         + SIDECAR_MISS_MARKER
     )
 

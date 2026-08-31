@@ -1865,7 +1865,46 @@ async def commit_session_offer_async(
                 filtered_groups.append(filtered_group)
         resolved_groups = filtered_groups
 
-    worktree_root = core.git_root(cwd) or cwd or "."
+    # FAIL CLOSED ON AN UNRESOLVED ROOT (committer-P0, 2026-08-31).
+    # This was `core.git_root(cwd) or cwd or "."`. That fallback is the
+    # committer-P0 inversion reached by a different origin: `_commit_group`
+    # classifies a path as DELETED whenever `(Path(worktree_root) / p)` does
+    # not exist, so a `worktree_root` that is not the repo root makes EVERY
+    # declared path probe False and turns this close path into a mass
+    # deletion of the session's own claimed work.
+    #
+    # `commit_paths`' phantom-deletion refusal (62fe8736d1) does NOT rescue it
+    # here: that guard is handed this same `worktree_root`, resolves the path
+    # against the same wrong root, finds it equally absent, and never fires. A
+    # guard downstream of a bad root cannot see past it.
+    # See state/audits/2026-08-31-committer-p0-*.
+    resolved_root = core.git_root(cwd)
+    if not resolved_root:
+        detail = (
+            "git root did not resolve from %s: refusing to auto-commit. Every "
+            "declared path would classify as deleted against an unresolved "
+            "root. Nothing was committed." % (cwd or "<no cwd>")
+        )
+        return {
+            "session_id": session_id,
+            "groups": [],
+            "excluded": offer["excluded"],
+            "failed_groups": [],
+            "dropped_groups": [],
+            "residue": OrderedDict(),
+            "reconciliation": {
+                "reconciled": False,
+                "claimed_absent": [],
+                "unclaimed": [],
+            },
+            "outcome": {
+                "status": "skipped_unresolved_root",
+                "detail": detail,
+                "committed_paths": [],
+                "conflicted_paths": [],
+            },
+        }
+    worktree_root = resolved_root
     group_results = [
         await _commit_group(worktree_root, g, session_id) for g in resolved_groups
     ]

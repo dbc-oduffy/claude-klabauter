@@ -409,7 +409,7 @@ def _remedy_for(op: str) -> str:
             "Its cost is a remote round trip, not local work — "
             "cut round trips, or accept it and stop ranking it."
         )
-    return "Delete it, or rebuild it under the bar."
+    return "Confirm on process time, then delete it or rebuild it under the bar."
 
 
 def headline_for(summary: dict) -> str:
@@ -421,6 +421,27 @@ def headline_for(summary: dict) -> str:
     timeout: an op is not made correct by the caller waiting longer for it,
     and a message that says so teaches the habit this surface exists to
     remove.
+
+    NAMES ITS UNIT, and the naming is load-bearing rather than cosmetic.
+    `stolen_ms` is summed WALL CLOCK past the bar (`op_latency.breach_summary`
+    says so in its own docstring, and says why re-keying it to `process_ms`
+    would blind it to subprocess cost). CLAUDE.md convicts on process time and
+    spawn count, never wall clock, so this line reports box OCCUPANCY and says
+    which axis it is on rather than asserting a cost attribution `elapsed_ms`
+    cannot support. It previously read "N s stolen from the box", which claims
+    CPU this unit never measured: on 2026-08-30 it reported `memo.transition`
+    as one of the worst thieves on the box at 140.7s stolen, 227/354 over the
+    bar, while the job-object primitive measured 187.5ms process / 6 procs per
+    call -- under the bar the whole time. Two sessions in one day proposed
+    rebuilding or killing an op on this signal, one of them inside a write-up
+    about why wall-clock percentiles are not evidence of cost, and one
+    retracted a published verdict (914f12c6c1). This is the honest interim
+    named by `state/bug-backlog/2026-08-30-the-op-census-ranks-breaches-by-wall-clock.yaml`
+    -- report wall clock as wall clock and drop the CPU-attribution framing --
+    and it is NOT the fix, which needs a trustworthy per-op process figure the
+    sink does not yet carry (`time.process_time()` excludes children).
+    The kill bar is not softened by this: `_remedy_for` still says delete or
+    rebuild, and adds only the measurement that can carry the conviction.
     """
     totals = summary["totals"]
     bar_ms = summary["bar_ms"]
@@ -434,8 +455,8 @@ def headline_for(summary: dict) -> str:
 
     worst = summary["ops"][0]
     return (
-        f"{breaching} ops over the {bar_ms:.0f}ms bar, "
-        f"{totals['stolen_ms'] / 1000.0:.1f}s stolen from the box. "
+        f"{breaching} ops past the {bar_ms:.0f}ms bar, "
+        f"{totals['stolen_ms'] / 1000.0:.1f}s wall-clock excess. "
         f"Worst: {worst['op']} ({worst['stolen_ms'] / 1000.0:.1f}s, "
         f"{worst['breaches']}/{worst['attempts']}, {worst['trend']}). "
         + _remedy_for(worst["op"])

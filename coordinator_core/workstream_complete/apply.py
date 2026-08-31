@@ -1230,6 +1230,45 @@ def _run_close_commit_tail(
             # shared constant instead of a second inline construction, so the
             # two sites cannot drift on field values.
             ship_outcome = directives_commit_tail.EMPTY_SHIP_STAMP_OUTCOME
+
+        # THE NON-SHIPPED HALF OF THE SAME FORK, and it is here because its
+        # absence was the whole defect. `resolve_ship_stamp_candidates` above
+        # positively selects `disposition == "shipped"`; `closed`/`abandoned`/
+        # `continued` fall through it by design (nothing delivered, so nothing
+        # may claim `shipped_in`) -- and until this block existed they fell
+        # through to NOTHING AT ALL: no terminal stamp, no claim release. A
+        # baton closed on any non-shipped disposition stayed
+        # `deployment_state: in_flight` with its ledger claim held, which is
+        # indistinguishable to every downstream reader from live work. That is
+        # what let a later `/pickup` in the same session read a closed baton as
+        # inheritable and supersede the newly picked-up baton into an empty
+        # placeholder scaffold.
+        # Same placement rule as the ship half for the same reason: the write
+        # must land BEFORE the commit call, because a pathspec commit re-reads
+        # the tree at commit time. Same fold into the same `stage_paths`.
+        # `apply_close_stamps` performs the stamp and the claim release in that
+        # order internally -- the sequence is load-bearing, never incidental:
+        # the reverse leaves a window where the record reads "claim gone, still
+        # live", which is exactly the input `pickup_assemble`'s resume path acts
+        # on. See `directives_commit_tail.apply_close_stamps`.
+        close_candidates = directives_commit_tail.resolve_close_stamp_candidates(
+            worktree_root, sid, decisions
+        )
+        close_backups: dict[str, str] = {}
+        if close_candidates:
+            close_outcome, close_backups = directives_commit_tail.apply_close_stamps(
+                worktree_root, close_candidates
+            )
+            if close_outcome.disposed_paths:
+                existing = list(kwargs.get("stage_paths") or ())
+                merged = existing + [
+                    p for p in close_outcome.disposed_paths if p not in existing
+                ]
+                kwargs["stage_paths"] = merged
+        else:
+            # RAN, FOUND NOTHING TO DISPOSE -- distinguishable from "never ran",
+            # exactly as the ship half above.
+            close_outcome = directives_commit_tail.EMPTY_CLOSE_STAMP_OUTCOME
     if kwargs is None:
         # A SKIP IS REPORTED, NEVER SILENT (2026-08-27). This used to return
         # `None`, and `apply()` then folded nothing into the report at all: a
@@ -1272,6 +1311,14 @@ def _run_close_commit_tail(
             directives_commit_tail.revert_ship_stamps(
                 worktree_root, ship_outcome.stamped_paths, ship_backups
             )
+        # The disposal half rides the SAME commit, so it takes the same
+        # revert on the same unknown/failed outcome. Leaving a baton stamped
+        # terminal on a commit that never landed is the worse direction: the
+        # record would read disposed while the work is still live.
+        if close_outcome.disposed_paths:
+            directives_commit_tail.revert_close_stamps(
+                worktree_root, close_outcome.disposed_paths, close_backups
+            )
         return {"attempted": True, "commit_failed": True, "error": str(exc)}
 
     report = {
@@ -1294,17 +1341,34 @@ def _run_close_commit_tail(
         directives_commit_tail.revert_ship_stamps(
             worktree_root, ship_outcome.stamped_paths, ship_backups
         )
+        directives_commit_tail.revert_close_stamps(
+            worktree_root, close_outcome.disposed_paths, close_backups
+        )
         reverted = ship_outcome.stamped_paths
+        close_reverted = close_outcome.disposed_paths
         landed = ()
+        close_landed = ()
     else:
         reverted = ()
+        close_reverted = ()
         landed = ship_outcome.stamped_paths
+        close_landed = close_outcome.disposed_paths
     report["ship_stamp"] = {
         "attempted": ship_outcome.attempted,
         "stamped": list(landed),
         "reverted": list(reverted),
         "skipped": list(ship_outcome.skipped_paths),
         "diagnostics": list(ship_outcome.diagnostics),
+    }
+    # Reported on its own key rather than folded into `ship_stamp`: a
+    # disposal is not a ship, and a reader counting shipped batons must not
+    # see closed ones in that number.
+    report["close_stamp"] = {
+        "attempted": close_outcome.attempted,
+        "disposed": list(close_landed),
+        "reverted": list(close_reverted),
+        "skipped": list(close_outcome.skipped_paths),
+        "diagnostics": list(close_outcome.diagnostics),
     }
     return report
 

@@ -4705,14 +4705,21 @@ def compute_baton_unification_verdict(
 
 # ---------------------------------------------------------------------------
 # C5 (docs/plans/2026-08-19-batons-unify-into-one-successor.md § C5): THE
-# ACTION HALF. Routes a second pickup into `baton_assemble`'s EXISTING
-# multi-leg mint (kind="handoff", self-resolved held set -> d1 scaffolds the
-# successor with `additional_predecessors`, d6/d6* stamps every parent leg
-# `continued` + `continued_into` in the SAME `apply()` call) instead of
-# `_adopt_into_baton`'s plain append. Consumes `compute_baton_unification_
-# verdict` (C4) — this section makes exactly ONE decision of its own (the
-# routing predicate immediately below, ON as of `c09345b56`) and re-derives
-# nothing else.
+# ACTION HALF. `baton_assemble`'s EXISTING multi-leg mint (kind="handoff",
+# self-resolved held set -> d1 scaffolds the successor with
+# `additional_predecessors`, d6/d6* stamps every parent leg `continued` +
+# `continued_into` in the SAME `apply()` call), reached from `_adopt_into_
+# baton`'s plain append.
+#
+# NO LONGER REACHABLE FROM `/pickup`. `route_baton_adoption` (above) used
+# to route a second pickup into this section whenever the routing predicate
+# was on and a fresh `compute_baton_unification_verdict` (C4) said
+# "proceed" — that inference (ANY session-held claim reads as a handover)
+# was the root cause of `state/bug-backlog/2026-08-31-pickup-after-a-close-
+# supersedes-the-new-baton.yaml` and has been removed from that seam. This
+# machinery is retained only for `unify_run_batons`, below, which is
+# `/mise-en-place`'s explicit, operator-invoked per-run unification — never
+# a side effect of picking an unrelated artifact up.
 # ---------------------------------------------------------------------------
 
 
@@ -5024,49 +5031,86 @@ def _unify_into_successor(root: Path, verdict: dict[str, Any]) -> str:
 def route_baton_adoption(
     root: Path, artifact_path: str, fm: Optional[dict[str, Any]]
 ) -> None:
-    """The C5 routing seam — called from BOTH `claim_at_brief` call sites
-    in place of a bare `_adopt_into_baton`.
+    """The `/pickup` adoption seam — called from BOTH `claim_at_brief` call
+    sites in `brief()` (the handoff branch and the memo branch).
 
-    Predicate OFF (default, D-I) is a TRUE no-op: falls straight through to
-    `_adopt_into_baton`, byte-identical to pre-C5 behaviour — no verdict
-    computed, no mint, no claim move, no parent stamped.
+    UNCONDITIONAL PLAIN ADOPTION. This function used to route into C5's
+    multi-leg unification (`compute_baton_unification_verdict` /
+    `_unify_into_successor`) whenever this session already held an
+    inheritable baton. That trigger was wrong at the root: it read ANY
+    session-held claim as a "handover" with no test of whether the held
+    baton has anything to do with the artifact being picked up, and it
+    fired without requiring any close on the held leg
+    (`state/bug-backlog/2026-08-31-pickup-after-a-close-supersedes-the-new-baton.yaml`,
+    `second_instance`) — so an ordinary second `/pickup` in a session that
+    still had one baton open, unrelated and never closed, minted a
+    placeholder successor fusing both, and knocked the artifact being READ
+    out of the pickup queue by the act of reading it (`deployment_state:
+    continued`, `pickup_ready: false`). 38 corpus instances traced to this
+    since 2026-08-18.
 
-    Predicate ON:
-      - a pending unification from a prior crashed run resumes FIRST
-        (`_resume_pending_unification`) — never re-derived from a fresh
-        verdict, see that function's docstring;
-      - otherwise a fresh `compute_baton_unification_verdict` (C4) decides:
-        `"proceed"` mints/unifies (`_unify_into_successor`); `"refuse"`
-        writes NOTHING at all — not even the advisory append, since a live
-        foreign holder must not gain an `adopted_artifacts` entry either;
-        `"no-unification"` (nothing held, or nothing inheritable) falls
-        through to the ordinary `_adopt_into_baton` append, unchanged from
-        today.
+    A `/pickup` is not a `/handoff`, and the two are already documented as
+    mutually exclusive — minting a successor is `/handoff`'s job. There is
+    no ambient fact available at pickup time (a held claim, a scope
+    overlap, a lineage edge) that safely distinguishes "this really is a
+    fan-in continuation" from "this session happens to be holding
+    something else" — every such signal was exactly what the removed
+    routing already tried to use, and it was the corpus's actual failure
+    mode. So this function no longer infers unification from anything:
+    every `/pickup` is a plain advisory append via `_adopt_into_baton`,
+    unconditionally.
+
+    THE UNSOUNDNESS IS STRUCTURAL, NOT A THRESHOLD THAT COULD BE TIGHTENED.
+    `_primary_held_disposition` returns `"handover"` -> PROCEED on this
+    session's own claim, and it returns it BEFORE either scope list is
+    read -- `target_scope`/`primary_scope` and `_scopes_intersect` are
+    reached only on the live-FOREIGN-holder path below it. So for two
+    batons one session happens to hold, scope overlap is never consulted
+    at all, and there is no narrowing of that arm that would help: the
+    fact that separates a real fan-in from a coincidence is the operator's
+    INTENT, and no field on disk carries it. `unify_run_batons` is that
+    fact made into an artifact -- the operator invoking it IS the
+    declaration -- which is why the explicit route is kept and the
+    inferred one is gone rather than tuned.
+
+    REVERSES `c09345b56` (2026-08-19, "flip D-I on"), whose message records
+    the flip as coordinated with DoE-claude holding `skills/pickup/
+    SKILL.md` and `commands/mise-en-place.md` to land against it. THAT
+    DOCTRINE WAS NEVER THERE TO STRAND: checked at `DoE-claude`
+    `work/machine-a/2026-08-22to31` @ `0380f0604`, neither file mentions
+    unification or fan-in, and `git log -S` shows neither has EVER
+    contained "unification" in its history (the one historic "fan-in"
+    mention was removed at `f230ad60d`, 2026-07-23). A commit message is
+    its author's account of what a sibling repo would do, not evidence
+    the sibling did it -- this reversal was held for a day on that
+    unverified leg before anyone read the receiving tree. A memo goes to
+    them as a record, not because anything of theirs breaks. Raised
+    against this session by `claude-klabauter-67`, whose own C1/C2 fix the
+    neighbouring lie this routing was fed.
+
+    A genuine multi-baton fan-in still has an explicit, operator-invoked
+    route that this change does not touch: `/mise-en-place` (via
+    `backlog_grind_assemble.apply :: _dispatch_unify_batons` ->
+    `unify_run_batons`, below) unifies this session's currently-held
+    batons as a deliberate per-run act, never as a side effect of reading
+    an unrelated artifact. `_baton_unification_routing_enabled`,
+    `compute_baton_unification_verdict`, `_resume_pending_unification`,
+    and `_unify_into_successor` all stay — they are `unify_run_batons`'
+    machinery now, not `route_baton_adoption`'s.
     """
-    if not _baton_unification_routing_enabled():
-        _adopt_into_baton(root, artifact_path, fm)
-        return
-
-    if _resume_pending_unification(root):
-        return
-
-    verdict = compute_baton_unification_verdict(root, fm or {}, artifact_path)
-    outcome = verdict.get("verdict")
-    if outcome == "proceed":
-        _unify_into_successor(root, verdict)
-        return
-    if outcome == "refuse":
-        return
     _adopt_into_baton(root, artifact_path, fm)
 
 
 # ---------------------------------------------------------------------------
 # AC10's mutation half (docs/plans/2026-08-19-batons-unify-into-one-successor.md
 # § C10 remainder): the ONE entry point `/mise-en-place` reaches unification
-# through. It adds no unification implementation of its own — the anti-scope's
-# "do not rebuild what exists" — it composes the SAME three pieces
-# `route_baton_adoption` composes, in the same order, and differs from it only
-# in having no artifact being picked up.
+# through, and — since the guard (a) fix above — the ONLY entry point left
+# that reaches it at all. It adds no unification implementation of its own
+# — the anti-scope's "do not rebuild what exists" — it composes the SAME
+# `_resume_pending_unification` / `compute_baton_unification_verdict` /
+# `_unify_into_successor` pieces `route_baton_adoption` used to compose,
+# in the same order, and differs from that removed call shape only in
+# having no artifact being picked up.
 # ---------------------------------------------------------------------------
 
 

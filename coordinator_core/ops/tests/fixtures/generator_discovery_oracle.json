@@ -1,0 +1,1981 @@
+[
+  {
+    "detail": "bin/dr084-migrate-handoff-vocabulary.py writes through an unresolved path expression and declares no GENERATES",
+    "generator": "bin/dr084-migrate-handoff-vocabulary.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": "WRITE_TARGET_UNRESOLVED"
+  },
+  {
+    "detail": "bin/claude-klabauter-doctor-probe.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "bin/claude-klabauter-doctor-probe.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "bin/claude-klabauter-revendor-cockpit-contract.py writes through an unresolved path expression and declares no GENERATES",
+    "generator": "bin/claude-klabauter-revendor-cockpit-contract.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": "WRITE_TARGET_UNRESOLVED"
+  },
+  {
+    "detail": "bin/claude-klabauter-revendor-schema.py writes through an unresolved path expression and declares no GENERATES",
+    "generator": "bin/claude-klabauter-revendor-schema.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": "WRITE_TARGET_UNRESOLVED"
+  },
+  {
+    "detail": "coordinator/bin/append-goal-event.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator/bin/append-goal-event.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator/bin/break_glass.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator/bin/break_glass.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator/bin/check-mcp-versions.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator/bin/check-mcp-versions.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator/bin/classify-env-var-callers.py writes through an unresolved path expression and declares no GENERATES",
+    "generator": "coordinator/bin/classify-env-var-callers.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": "WRITE_TARGET_UNRESOLVED"
+  },
+  {
+    "detail": "coordinator/bin/classify-resolver-callers.py writes through an unresolved path expression and declares no GENERATES",
+    "generator": "coordinator/bin/classify-resolver-callers.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": "WRITE_TARGET_UNRESOLVED"
+  },
+  {
+    "detail": "coordinator/bin/coordinator-compute-layer-scaffold.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator/bin/coordinator-compute-layer-scaffold.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator/bin/coordinator-doc-new.py writes through an unresolved path expression and declares no GENERATES",
+    "generator": "coordinator/bin/coordinator-doc-new.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": "WRITE_TARGET_UNRESOLVED"
+  },
+  {
+    "detail": "coordinator/bin/coordinator-initiative.py writes through an unresolved path expression and declares no GENERATES",
+    "generator": "coordinator/bin/coordinator-initiative.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": "WRITE_TARGET_UNRESOLVED"
+  },
+  {
+    "detail": "coordinator/bin/coordinator-queue-append.py writes through an unresolved path expression and declares no GENERATES",
+    "generator": "coordinator/bin/coordinator-queue-append.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": "WRITE_TARGET_UNRESOLVED"
+  },
+  {
+    "detail": "coordinator/bin/coordinator-safe-commit.py writes through an unresolved path expression and declares no GENERATES",
+    "generator": "coordinator/bin/coordinator-safe-commit.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": "WRITE_TARGET_UNRESOLVED"
+  },
+  {
+    "detail": "coordinator/bin/coordinator-workflow-scaffold.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator/bin/coordinator-workflow-scaffold.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator/bin/cross-repo-memo.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator/bin/cross-repo-memo.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator/bin/cruft-sweep.py writes through an unresolved path expression and declares no GENERATES",
+    "generator": "coordinator/bin/cruft-sweep.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": "WRITE_TARGET_UNRESOLVED"
+  },
+  {
+    "detail": "coordinator/bin/cutover-cli.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator/bin/cutover-cli.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator/bin/doctor-catalog-gen.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator/bin/doctor-catalog-gen.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator/bin/emit-goal-from-artifact.py writes through an unresolved path expression and declares no GENERATES",
+    "generator": "coordinator/bin/emit-goal-from-artifact.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": "WRITE_TARGET_UNRESOLVED"
+  },
+  {
+    "detail": "coordinator/bin/extract-lessons.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator/bin/extract-lessons.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator/bin/gen-launcher-shim.py declares MUTATES = ['coordinator/bin/*.cmd', 'coordinator/bin/*.ps1'] (corpus mutator, no staleness contract)",
+    "generator": "coordinator/bin/gen-launcher-shim.py",
+    "mutates": [
+      "coordinator/bin/*.cmd",
+      "coordinator/bin/*.ps1"
+    ],
+    "pairs": [],
+    "verdict": "MUTATES_DECLARED"
+  },
+  {
+    "detail": "coordinator/bin/gen-claude-klabauter-root-pointer.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator/bin/gen-claude-klabauter-root-pointer.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator/bin/generate-exec-summary.py declares 1 pair(s)",
+    "generator": "coordinator/bin/generate-exec-summary.py",
+    "mutates": [],
+    "pairs": [
+      {
+        "artifact": "docs/exec-summary.md",
+        "generator": "coordinator/bin/generate-exec-summary.py",
+        "sources": [
+          "coordinator_core/ops/generate_exec_summary.py"
+        ],
+        "stamp_key": "generated"
+      }
+    ],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator/bin/generate-repomap.py declares 1 pair(s)",
+    "generator": "coordinator/bin/generate-repomap.py",
+    "mutates": [],
+    "pairs": [
+      {
+        "artifact": ".claude/repomap.md",
+        "generator": "coordinator/bin/generate-repomap.py",
+        "sources": [
+          "coordinator/bin/repomap/generate-repomap.py"
+        ],
+        "stamp_key": "generated"
+      }
+    ],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator/bin/generate-tested-platforms.py declares 1 pair(s)",
+    "generator": "coordinator/bin/generate-tested-platforms.py",
+    "mutates": [],
+    "pairs": [
+      {
+        "artifact": "docs/install/agent-install-manifest.json",
+        "generator": "coordinator/bin/generate-tested-platforms.py",
+        "sources": [
+          "coordinator/bin/generate-tested-platforms.py"
+        ],
+        "stamp_key": "tested_platforms"
+      }
+    ],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator/bin/install-sentinel-write.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator/bin/install-sentinel-write.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator/bin/lib/cc_invoke.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator/bin/lib/cc_invoke.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator/bin/lib/cli_shared.py writes through an unresolved path expression and declares no GENERATES",
+    "generator": "coordinator/bin/lib/cli_shared.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": "WRITE_TARGET_UNRESOLVED"
+  },
+  {
+    "detail": "coordinator/bin/lib/git_hook_install.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator/bin/lib/git_hook_install.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator/bin/measure-amplification-discriminator.py writes through an unresolved path expression and declares no GENERATES",
+    "generator": "coordinator/bin/measure-amplification-discriminator.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": "WRITE_TARGET_UNRESOLVED"
+  },
+  {
+    "detail": "coordinator/bin/merge-release-notes-derive.py writes through an unresolved path expression and declares no GENERATES",
+    "generator": "coordinator/bin/merge-release-notes-derive.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": "WRITE_TARGET_UNRESOLVED"
+  },
+  {
+    "detail": "coordinator/bin/misc-session-and-guards.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator/bin/misc-session-and-guards.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator/bin/parallel-review-gate-decision.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator/bin/parallel-review-gate-decision.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator/bin/percolate-mirror.py writes through an unresolved path expression and declares no GENERATES",
+    "generator": "coordinator/bin/percolate-mirror.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": "WRITE_TARGET_UNRESOLVED"
+  },
+  {
+    "detail": "coordinator/bin/percolate-round.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator/bin/percolate-round.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator/bin/plan-task-brief.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator/bin/plan-task-brief.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator/bin/publish-allowlist-generate.py writes through an unresolved path expression and declares no GENERATES",
+    "generator": "coordinator/bin/publish-allowlist-generate.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": "WRITE_TARGET_UNRESOLVED"
+  },
+  {
+    "detail": "coordinator/bin/publish.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator/bin/publish.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator/bin/publish_refusal_record.py writes through an unresolved path expression and declares no GENERATES",
+    "generator": "coordinator/bin/publish_refusal_record.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": "WRITE_TARGET_UNRESOLVED"
+  },
+  {
+    "detail": "coordinator/bin/record-platform-outcome.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator/bin/record-platform-outcome.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator/bin/red-set-report.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator/bin/red-set-report.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator/bin/refresh-plugin-live-install.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator/bin/refresh-plugin-live-install.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator/bin/regenerate-known-red-registry.py declares 1 pair(s)",
+    "generator": "coordinator/bin/regenerate-known-red-registry.py",
+    "mutates": [],
+    "pairs": [
+      {
+        "artifact": "state/bash-guards/known-red.json",
+        "generator": "coordinator/bin/regenerate-known-red-registry.py",
+        "sources": [
+          "coordinator/bin/regenerate-known-red-registry.py"
+        ],
+        "stamp_key": "generated"
+      }
+    ],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator/bin/regenerate-unresolved-writers.py declares 1 pair(s)",
+    "generator": "coordinator/bin/regenerate-unresolved-writers.py",
+    "mutates": [],
+    "pairs": [
+      {
+        "artifact": "state/generator-provenance/unresolved-writers.json",
+        "generator": "coordinator/bin/regenerate-unresolved-writers.py",
+        "sources": [
+          "coordinator/bin/regenerate-unresolved-writers.py"
+        ],
+        "stamp_key": "generated"
+      }
+    ],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator/bin/repomap/generate-repomap.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator/bin/repomap/generate-repomap.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator/bin/seed-marketplace-enabledplugins.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator/bin/seed-marketplace-enabledplugins.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator/bin/seed-skill-overrides.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator/bin/seed-skill-overrides.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator/bin/setup-verify.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator/bin/setup-verify.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator/bin/stitch-observer-sidecar.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator/bin/stitch-observer-sidecar.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator/bin/test-fixtures/check-workstream-complete-deletion-blocks/run-smoke.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator/bin/test-fixtures/check-workstream-complete-deletion-blocks/run-smoke.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator/bin/verify-doe-root-seam-sync.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator/bin/verify-doe-root-seam-sync.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator/bin/workday-complete-backfill-inject-anchor.py declares MUTATES = ['archive/daily-summaries/*.md'] (corpus mutator, no staleness contract)",
+    "generator": "coordinator/bin/workday-complete-backfill-inject-anchor.py",
+    "mutates": [
+      "archive/daily-summaries/*.md"
+    ],
+    "pairs": [],
+    "verdict": "MUTATES_DECLARED"
+  },
+  {
+    "detail": "coordinator/bin/workday-start-day-branch-resolve.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator/bin/workday-start-day-branch-resolve.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator/bin/workweek-complete-close.py declares MUTATES = ['state/week-changelog/*.md', 'archive/week-changelogs/**/*.md', 'archive/review-trail/**'] (corpus mutator, no staleness contract)",
+    "generator": "coordinator/bin/workweek-complete-close.py",
+    "mutates": [
+      "state/week-changelog/*.md",
+      "archive/week-changelogs/**/*.md",
+      "archive/review-trail/**"
+    ],
+    "pairs": [],
+    "verdict": "MUTATES_DECLARED"
+  },
+  {
+    "detail": "coordinator/bin/workweek-start-goal-and-priorities.py declares MUTATES = ['state/goals/*.yaml', 'state/week-changelog/*.md', 'archive/week-changelogs/**'] (corpus mutator, no staleness contract)",
+    "generator": "coordinator/bin/workweek-start-goal-and-priorities.py",
+    "mutates": [
+      "state/goals/*.yaml",
+      "state/week-changelog/*.md",
+      "archive/week-changelogs/**"
+    ],
+    "pairs": [],
+    "verdict": "MUTATES_DECLARED"
+  },
+  {
+    "detail": "coordinator_core/async_hook_status.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator_core/async_hook_status.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator_core/authz/token.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator_core/authz/token.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator_core/backlog_grind_assemble/apply.py writes through an unresolved path expression and declares no GENERATES",
+    "generator": "coordinator_core/backlog_grind_assemble/apply.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": "WRITE_TARGET_UNRESOLVED"
+  },
+  {
+    "detail": "coordinator_core/bash_guards/_alternative_liveness.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator_core/bash_guards/_alternative_liveness.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator_core/bash_guards/_dialect.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator_core/bash_guards/_dialect.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator_core/bash_guards/_write_bump_applicability.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator_core/bash_guards/_write_bump_applicability.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator_core/bash_guards/_write_bump_session_start.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator_core/bash_guards/_write_bump_session_start.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator_core/bash_guards/block_subagent_destructive_action.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator_core/bash_guards/block_subagent_destructive_action.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator_core/bash_guards/block_subagent_plan_body_bash_write.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator_core/bash_guards/block_subagent_plan_body_bash_write.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator_core/bash_guards/chain_arrival_ledger.py MUTATES pattern(s) match no currently-tracked path: ['state/chain-arrival-ledger/**/chain-arrival-ledger.jsonl*']",
+    "generator": "coordinator_core/bash_guards/chain_arrival_ledger.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": "UNDECLARED"
+  },
+  {
+    "detail": "coordinator_core/bash_guards/commit_tripwires.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator_core/bash_guards/commit_tripwires.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator_core/bash_guards/dispatch_checks.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator_core/bash_guards/dispatch_checks.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator_core/bash_guards/guard_host_subagent_bash_ban.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator_core/bash_guards/guard_host_subagent_bash_ban.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator_core/bash_guards/guard_host_subagent_bash_spawn_shapes.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator_core/bash_guards/guard_host_subagent_bash_spawn_shapes.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator_core/ceremony_common/_phantom_sweep_providers.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator_core/ceremony_common/_phantom_sweep_providers.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator_core/claims_emit.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator_core/claims_emit.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator_core/commit_ledger/store.py writes through an unresolved path expression and declares no GENERATES",
+    "generator": "coordinator_core/commit_ledger/store.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": "WRITE_TARGET_UNRESOLVED"
+  },
+  {
+    "detail": "coordinator_core/contract/cockpit_schema/emit_conformance_fixture.py writes through an unresolved path expression and declares no GENERATES",
+    "generator": "coordinator_core/contract/cockpit_schema/emit_conformance_fixture.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": "WRITE_TARGET_UNRESOLVED"
+  },
+  {
+    "detail": "coordinator_core/contract/cockpit_schema/emit_schema.py declares 1 pair(s)",
+    "generator": "coordinator_core/contract/cockpit_schema/emit_schema.py",
+    "mutates": [],
+    "pairs": [
+      {
+        "artifact": "schema/cockpit-contract.schema.json",
+        "generator": "coordinator_core/contract/cockpit_schema/emit_schema.py",
+        "sources": [
+          "coordinator_core/contract/cockpit_schema/entities",
+          "coordinator_core/contract/cockpit_schema/__init__.py"
+        ],
+        "stamp_key": "version"
+      }
+    ],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator_core/contract/emit_memo_schema.py declares 2 pair(s)",
+    "generator": "coordinator_core/contract/emit_memo_schema.py",
+    "mutates": [],
+    "pairs": [
+      {
+        "artifact": "coordinator_core/contract/cross-repo-memo.schema.json",
+        "generator": "coordinator_core/contract/emit_memo_schema.py",
+        "sources": [
+          "coordinator_core/contract/emit_memo_schema.py",
+          "coordinator_core/ops/fleet/memo_send.py"
+        ],
+        "stamp_key": "x-schema-version"
+      },
+      {
+        "artifact": "coordinator_core/contract/archived-memo.schema.json",
+        "generator": "coordinator_core/contract/emit_memo_schema.py",
+        "sources": [
+          "coordinator_core/contract/emit_memo_schema.py",
+          "coordinator_core/ops/fleet/memo_send.py"
+        ],
+        "stamp_key": "x-schema-version"
+      }
+    ],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator_core/diagnostics/contained_run.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator_core/diagnostics/contained_run.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator_core/distill/log_append.py writes through an unresolved path expression and declares no GENERATES",
+    "generator": "coordinator_core/distill/log_append.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": "WRITE_TARGET_UNRESOLVED"
+  },
+  {
+    "detail": "coordinator_core/engine_provenance_counter.py MUTATES pattern 'state/engine-provenance-counts.jsonl' names a concrete path; a fixed artifact declares GENERATES",
+    "generator": "coordinator_core/engine_provenance_counter.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": "UNDECLARED"
+  },
+  {
+    "detail": "coordinator_core/engine_root_census.py writes through an unresolved path expression and declares no GENERATES",
+    "generator": "coordinator_core/engine_root_census.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": "WRITE_TARGET_UNRESOLVED"
+  },
+  {
+    "detail": "coordinator_core/execute_plan_assemble/close_out_and_stamp.py declares MUTATES = ['docs/plans/*.md'] (corpus mutator, no staleness contract)",
+    "generator": "coordinator_core/execute_plan_assemble/close_out_and_stamp.py",
+    "mutates": [
+      "docs/plans/*.md"
+    ],
+    "pairs": [],
+    "verdict": "MUTATES_DECLARED"
+  },
+  {
+    "detail": "coordinator_core/fact_contract_gate/engine_gap_ratchet.py writes through an unresolved path expression and declares no GENERATES",
+    "generator": "coordinator_core/fact_contract_gate/engine_gap_ratchet.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": "WRITE_TARGET_UNRESOLVED"
+  },
+  {
+    "detail": "coordinator_core/git/git_objects.py writes through an unresolved path expression and declares no GENERATES",
+    "generator": "coordinator_core/git/git_objects.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": "WRITE_TARGET_UNRESOLVED"
+  },
+  {
+    "detail": "coordinator_core/git/index_write.py writes through an unresolved path expression and declares no GENERATES",
+    "generator": "coordinator_core/git/index_write.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": "WRITE_TARGET_UNRESOLVED"
+  },
+  {
+    "detail": "coordinator_core/goals/reassess_krs.py declares MUTATES = ['state/goals/*.yaml'] (corpus mutator, no staleness contract)",
+    "generator": "coordinator_core/goals/reassess_krs.py",
+    "mutates": [
+      "state/goals/*.yaml"
+    ],
+    "pairs": [],
+    "verdict": "MUTATES_DECLARED"
+  },
+  {
+    "detail": "coordinator_core/group_em/baseline.py writes through an unresolved path expression and declares no GENERATES",
+    "generator": "coordinator_core/group_em/baseline.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": "WRITE_TARGET_UNRESOLVED"
+  },
+  {
+    "detail": "coordinator_core/group_em/nomination.py writes through an unresolved path expression and declares no GENERATES",
+    "generator": "coordinator_core/group_em/nomination.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": "WRITE_TARGET_UNRESOLVED"
+  },
+  {
+    "detail": "coordinator_core/group_em/obligations.py writes through an unresolved path expression and declares no GENERATES",
+    "generator": "coordinator_core/group_em/obligations.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": "WRITE_TARGET_UNRESOLVED"
+  },
+  {
+    "detail": "coordinator_core/group_em/send_pass.py writes through an unresolved path expression and declares no GENERATES",
+    "generator": "coordinator_core/group_em/send_pass.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": "WRITE_TARGET_UNRESOLVED"
+  },
+  {
+    "detail": "coordinator_core/group_em/watch_heartbeat.py writes through an unresolved path expression and declares no GENERATES",
+    "generator": "coordinator_core/group_em/watch_heartbeat.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": "WRITE_TARGET_UNRESOLVED"
+  },
+  {
+    "detail": "coordinator_core/guard_advisory_counter.py declares MUTATES = ['state/subagent-share/**/*.jsonl'] (corpus mutator, no staleness contract)",
+    "generator": "coordinator_core/guard_advisory_counter.py",
+    "mutates": [
+      "state/subagent-share/**/*.jsonl"
+    ],
+    "pairs": [],
+    "verdict": "MUTATES_DECLARED"
+  },
+  {
+    "detail": "coordinator_core/hooks/agent_completion_log.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator_core/hooks/agent_completion_log.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator_core/hooks/agent_postuse_dispatch.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator_core/hooks/agent_postuse_dispatch.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator_core/hooks/auto_push.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator_core/hooks/auto_push.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator_core/hooks/cater_subagent_start.py writes through an unresolved path expression and declares no GENERATES",
+    "generator": "coordinator_core/hooks/cater_subagent_start.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": "WRITE_TARGET_UNRESOLVED"
+  },
+  {
+    "detail": "coordinator_core/hooks/context_pressure_precompact.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator_core/hooks/context_pressure_precompact.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator_core/hooks/em_report_altitude.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator_core/hooks/em_report_altitude.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator_core/hooks/nudge_em_code_dispatch.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator_core/hooks/nudge_em_code_dispatch.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator_core/hooks/platform_localize.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator_core/hooks/platform_localize.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator_core/hooks/postuse_advisory_dispatch.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator_core/hooks/postuse_advisory_dispatch.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator_core/hooks/subagent_review_mark.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator_core/hooks/subagent_review_mark.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator_core/hooks/subagent_zero_tool_use.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator_core/hooks/subagent_zero_tool_use.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator_core/hooks/track_dispatched_agents.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator_core/hooks/track_dispatched_agents.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator_core/hooks/track_touched_files.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator_core/hooks/track_touched_files.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator_core/housekeeping/archive_index.py writes through an unresolved path expression and declares no GENERATES",
+    "generator": "coordinator_core/housekeeping/archive_index.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": "WRITE_TARGET_UNRESOLVED"
+  },
+  {
+    "detail": "coordinator_core/install/_shared.py writes through an unresolved path expression and declares no GENERATES",
+    "generator": "coordinator_core/install/_shared.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": "WRITE_TARGET_UNRESOLVED"
+  },
+  {
+    "detail": "coordinator_core/install/dep_check.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator_core/install/dep_check.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator_core/install/detect_test_cmd.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator_core/install/detect_test_cmd.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator_core/install/door_uninstall.py writes through an unresolved path expression and declares no GENERATES",
+    "generator": "coordinator_core/install/door_uninstall.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": "WRITE_TARGET_UNRESOLVED"
+  },
+  {
+    "detail": "coordinator_core/install/fleet_env_lock.py writes through an unresolved path expression and declares no GENERATES",
+    "generator": "coordinator_core/install/fleet_env_lock.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": "WRITE_TARGET_UNRESOLVED"
+  },
+  {
+    "detail": "coordinator_core/install/forwarder_door_census.py writes through an unresolved path expression and declares no GENERATES",
+    "generator": "coordinator_core/install/forwarder_door_census.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": "WRITE_TARGET_UNRESOLVED"
+  },
+  {
+    "detail": "coordinator_core/install/forwarder_self_heal.py writes through an unresolved path expression and declares no GENERATES",
+    "generator": "coordinator_core/install/forwarder_self_heal.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": "WRITE_TARGET_UNRESOLVED"
+  },
+  {
+    "detail": "coordinator_core/install/gen_settings_hooks.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator_core/install/gen_settings_hooks.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator_core/install/host_sampler_scheduler.py writes through an unresolved path expression and declares no GENERATES",
+    "generator": "coordinator_core/install/host_sampler_scheduler.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": "WRITE_TARGET_UNRESOLVED"
+  },
+  {
+    "detail": "coordinator_core/install/live_plugin_registration.py writes through an unresolved path expression and declares no GENERATES",
+    "generator": "coordinator_core/install/live_plugin_registration.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": "WRITE_TARGET_UNRESOLVED"
+  },
+  {
+    "detail": "coordinator_core/install/sandbox_check.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator_core/install/sandbox_check.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator_core/install/scaffold_structure.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator_core/install/scaffold_structure.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator_core/install/shell_rc_guard.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator_core/install/shell_rc_guard.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator_core/install/substrate.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator_core/install/substrate.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator_core/install/uninstall_legs.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator_core/install/uninstall_legs.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator_core/op_census/module_summary.py writes through an unresolved path expression and declares no GENERATES",
+    "generator": "coordinator_core/op_census/module_summary.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": "WRITE_TARGET_UNRESOLVED"
+  },
+  {
+    "detail": "coordinator_core/op_census/spawn_bearing_ops.py writes through an unresolved path expression and declares no GENERATES",
+    "generator": "coordinator_core/op_census/spawn_bearing_ops.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": "WRITE_TARGET_UNRESOLVED"
+  },
+  {
+    "detail": "coordinator_core/ops/app_session.py writes through an unresolved path expression and declares no GENERATES",
+    "generator": "coordinator_core/ops/app_session.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": "WRITE_TARGET_UNRESOLVED"
+  },
+  {
+    "detail": "coordinator_core/ops/append_integrator_dispositions.py declares MUTATES = ['state/subagent-share/**/*.md'] (corpus mutator, no staleness contract)",
+    "generator": "coordinator_core/ops/append_integrator_dispositions.py",
+    "mutates": [
+      "state/subagent-share/**/*.md"
+    ],
+    "pairs": [],
+    "verdict": "MUTATES_DECLARED"
+  },
+  {
+    "detail": "coordinator_core/ops/assert_no_dangling_plan_backlinks.py declares MUTATES = ['**/*.md'] (corpus mutator, no staleness contract)",
+    "generator": "coordinator_core/ops/assert_no_dangling_plan_backlinks.py",
+    "mutates": [
+      "**/*.md"
+    ],
+    "pairs": [],
+    "verdict": "MUTATES_DECLARED"
+  },
+  {
+    "detail": "coordinator_core/ops/backfill_deliverable_spine.py declares MUTATES = ['state/handoffs/*.md', 'docs/plans/*.md', 'archive/specs/**/*.md', 'state/roadmap/**/OVERVIEW.md'] (corpus mutator, no staleness contract)",
+    "generator": "coordinator_core/ops/backfill_deliverable_spine.py",
+    "mutates": [
+      "state/handoffs/*.md",
+      "docs/plans/*.md",
+      "archive/specs/**/*.md",
+      "state/roadmap/**/OVERVIEW.md"
+    ],
+    "pairs": [],
+    "verdict": "MUTATES_DECLARED"
+  },
+  {
+    "detail": "coordinator_core/ops/backfill_initiative_fk.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator_core/ops/backfill_initiative_fk.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator_core/ops/bootstrap_orchestrate.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator_core/ops/bootstrap_orchestrate.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator_core/ops/ceremony/detached_spawn.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator_core/ops/ceremony/detached_spawn.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator_core/ops/ceremony/housekeeping_liveness.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator_core/ops/ceremony/housekeeping_liveness.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator_core/ops/ceremony/post_commit_tail.py writes through an unresolved path expression and declares no GENERATES",
+    "generator": "coordinator_core/ops/ceremony/post_commit_tail.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": "WRITE_TARGET_UNRESOLVED"
+  },
+  {
+    "detail": "coordinator_core/ops/ceremony/receipt_emit.py declares MUTATES = ['state/ceremony/**/*.json'] (corpus mutator, no staleness contract)",
+    "generator": "coordinator_core/ops/ceremony/receipt_emit.py",
+    "mutates": [
+      "state/ceremony/**/*.json"
+    ],
+    "pairs": [],
+    "verdict": "MUTATES_DECLARED"
+  },
+  {
+    "detail": "coordinator_core/ops/ceremony/renderers.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator_core/ops/ceremony/renderers.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator_core/ops/ceremony/snapshot_diff_and_head.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator_core/ops/ceremony/snapshot_diff_and_head.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator_core/ops/ceremony/tail_ops.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator_core/ops/ceremony/tail_ops.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator_core/ops/changelog_ops.py declares MUTATES = ['state/week-changelog/*.md'] (corpus mutator, no staleness contract)",
+    "generator": "coordinator_core/ops/changelog_ops.py",
+    "mutates": [
+      "state/week-changelog/*.md"
+    ],
+    "pairs": [],
+    "verdict": "MUTATES_DECLARED"
+  },
+  {
+    "detail": "coordinator_core/ops/check_competitor_positioning_nudge.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator_core/ops/check_competitor_positioning_nudge.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator_core/ops/completion_ops.py declares MUTATES = ['archive/completed/**/*.md', 'docs/plans/*.md'] (corpus mutator, no staleness contract)",
+    "generator": "coordinator_core/ops/completion_ops.py",
+    "mutates": [
+      "archive/completed/**/*.md",
+      "docs/plans/*.md"
+    ],
+    "pairs": [],
+    "verdict": "MUTATES_DECLARED"
+  },
+  {
+    "detail": "coordinator_core/ops/coordinator_complete_entry.py declares MUTATES = ['archive/completed/**/*.md'] (corpus mutator, no staleness contract)",
+    "generator": "coordinator_core/ops/coordinator_complete_entry.py",
+    "mutates": [
+      "archive/completed/**/*.md"
+    ],
+    "pairs": [],
+    "verdict": "MUTATES_DECLARED"
+  },
+  {
+    "detail": "coordinator_core/ops/coordinator_setup_state.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator_core/ops/coordinator_setup_state.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator_core/ops/cruft_sweep.py writes through an unresolved path expression and declares no GENERATES",
+    "generator": "coordinator_core/ops/cruft_sweep.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": "WRITE_TARGET_UNRESOLVED"
+  },
+  {
+    "detail": "coordinator_core/ops/deliverable_ledger_write.py writes through an unresolved path expression and declares no GENERATES",
+    "generator": "coordinator_core/ops/deliverable_ledger_write.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": "WRITE_TARGET_UNRESOLVED"
+  },
+  {
+    "detail": "coordinator_core/ops/dev_sync.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator_core/ops/dev_sync.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator_core/ops/dispatch_emit/op.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator_core/ops/dispatch_emit/op.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator_core/ops/distill_apply_disposal.py MUTATES pattern 'state/distillation-log.md' names a concrete path; a fixed artifact declares GENERATES",
+    "generator": "coordinator_core/ops/distill_apply_disposal.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": "UNDECLARED"
+  },
+  {
+    "detail": "coordinator_core/ops/doctor.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator_core/ops/doctor.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator_core/ops/dod_floor_ratchet.py writes through an unresolved path expression and declares no GENERATES",
+    "generator": "coordinator_core/ops/dod_floor_ratchet.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": "WRITE_TARGET_UNRESOLVED"
+  },
+  {
+    "detail": "coordinator_core/ops/emit/lma_cache.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator_core/ops/emit/lma_cache.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator_core/ops/emit/recorder.py declares MUTATES = ['state/backlog-snapshots.*.jsonl'] (corpus mutator, no staleness contract)",
+    "generator": "coordinator_core/ops/emit/recorder.py",
+    "mutates": [
+      "state/backlog-snapshots.*.jsonl"
+    ],
+    "pairs": [],
+    "verdict": "MUTATES_DECLARED"
+  },
+  {
+    "detail": "coordinator_core/ops/emit_artifact_shape_contract.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator_core/ops/emit_artifact_shape_contract.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator_core/ops/ensure_vscode_readonly.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator_core/ops/ensure_vscode_readonly.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator_core/ops/fleet/_sweep_receipt.py writes through an unresolved path expression and declares no GENERATES",
+    "generator": "coordinator_core/ops/fleet/_sweep_receipt.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": "WRITE_TARGET_UNRESOLVED"
+  },
+  {
+    "detail": "coordinator_core/ops/fleet/memo_compose.py declares MUTATES = ['state/memo-outbox/*.md'] (corpus mutator, no staleness contract)",
+    "generator": "coordinator_core/ops/fleet/memo_compose.py",
+    "mutates": [
+      "state/memo-outbox/*.md"
+    ],
+    "pairs": [],
+    "verdict": "MUTATES_DECLARED"
+  },
+  {
+    "detail": "coordinator_core/ops/fleet/memo_draft.py declares MUTATES = ['state/memo-outbox/*.md'] (corpus mutator, no staleness contract)",
+    "generator": "coordinator_core/ops/fleet/memo_draft.py",
+    "mutates": [
+      "state/memo-outbox/*.md"
+    ],
+    "pairs": [],
+    "verdict": "MUTATES_DECLARED"
+  },
+  {
+    "detail": "coordinator_core/ops/fleet/memo_reconcile_outbox.py declares MUTATES = ['state/memo-outbox/*.md', 'state/memo-outbox/sent/*.md'] (corpus mutator, no staleness contract)",
+    "generator": "coordinator_core/ops/fleet/memo_reconcile_outbox.py",
+    "mutates": [
+      "state/memo-outbox/*.md",
+      "state/memo-outbox/sent/*.md"
+    ],
+    "pairs": [],
+    "verdict": "MUTATES_DECLARED"
+  },
+  {
+    "detail": "coordinator_core/ops/fleet/memo_send.py MUTATES pattern 'state/memo-outbox/sent-ledger.jsonl' names a concrete path; a fixed artifact declares GENERATES",
+    "generator": "coordinator_core/ops/fleet/memo_send.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": "UNDECLARED"
+  },
+  {
+    "detail": "coordinator_core/ops/fleet/migrate_handoff_vocabulary.py declares MUTATES = ['state/handoffs/**/*.md', 'archive/handoffs/**/*.md'] (corpus mutator, no staleness contract)",
+    "generator": "coordinator_core/ops/fleet/migrate_handoff_vocabulary.py",
+    "mutates": [
+      "state/handoffs/**/*.md",
+      "archive/handoffs/**/*.md"
+    ],
+    "pairs": [],
+    "verdict": "MUTATES_DECLARED"
+  },
+  {
+    "detail": "coordinator_core/ops/gen_claude_doe_shim.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator_core/ops/gen_claude_doe_shim.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator_core/ops/gen_doe_root_pointer.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator_core/ops/gen_doe_root_pointer.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator_core/ops/generate_exec_summary.py declares 1 pair(s)",
+    "generator": "coordinator_core/ops/generate_exec_summary.py",
+    "mutates": [],
+    "pairs": [
+      {
+        "artifact": "docs/exec-summary.md",
+        "generator": "coordinator_core/ops/generate_exec_summary.py",
+        "sources": [
+          "coordinator_core/ops/generate_exec_summary.py"
+        ],
+        "stamp_key": "generated"
+      }
+    ],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator_core/ops/git_maintenance.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator_core/ops/git_maintenance.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator_core/ops/goal_append.py declares MUTATES = ['state/goals-log.*.jsonl'] (corpus mutator, no staleness contract)",
+    "generator": "coordinator_core/ops/goal_append.py",
+    "mutates": [
+      "state/goals-log.*.jsonl"
+    ],
+    "pairs": [],
+    "verdict": "MUTATES_DECLARED"
+  },
+  {
+    "detail": "coordinator_core/ops/handoff_repoint_origin.py declares MUTATES = ['state/handoffs/*.md'] (corpus mutator, no staleness contract)",
+    "generator": "coordinator_core/ops/handoff_repoint_origin.py",
+    "mutates": [
+      "state/handoffs/*.md"
+    ],
+    "pairs": [],
+    "verdict": "MUTATES_DECLARED"
+  },
+  {
+    "detail": "coordinator_core/ops/install_doe_claude_precommit_hook.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator_core/ops/install_doe_claude_precommit_hook.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator_core/ops/install_lfs_pre_push_hook.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator_core/ops/install_lfs_pre_push_hook.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator_core/ops/install_meta_repo_precommit_hook.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator_core/ops/install_meta_repo_precommit_hook.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator_core/ops/install_publish_repo_precommit_hook.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator_core/ops/install_publish_repo_precommit_hook.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator_core/ops/install_shell_init_guard_seam.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator_core/ops/install_shell_init_guard_seam.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator_core/ops/memo_fate_partition.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator_core/ops/memo_fate_partition.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator_core/ops/name_personas.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator_core/ops/name_personas.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator_core/ops/new_project_scaffold.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator_core/ops/new_project_scaffold.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator_core/ops/normalize_claimed_frontmatter.py declares MUTATES = ['state/handoffs/*.md', 'archive/handoffs/**/*.md', 'docs/plans/*.md', 'docs/decisions/*.md', 'state/reviews/*.md'] (corpus mutator, no staleness contract)",
+    "generator": "coordinator_core/ops/normalize_claimed_frontmatter.py",
+    "mutates": [
+      "state/handoffs/*.md",
+      "archive/handoffs/**/*.md",
+      "docs/plans/*.md",
+      "docs/decisions/*.md",
+      "state/reviews/*.md"
+    ],
+    "pairs": [],
+    "verdict": "MUTATES_DECLARED"
+  },
+  {
+    "detail": "coordinator_core/ops/normalize_env.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator_core/ops/normalize_env.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator_core/ops/percolate_preflight_scratch_publish.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator_core/ops/percolate_preflight_scratch_publish.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator_core/ops/plan_capture_persist.py declares MUTATES = ['docs/plans/*.md'] (corpus mutator, no staleness contract)",
+    "generator": "coordinator_core/ops/plan_capture_persist.py",
+    "mutates": [
+      "docs/plans/*.md"
+    ],
+    "pairs": [],
+    "verdict": "MUTATES_DECLARED"
+  },
+  {
+    "detail": "coordinator_core/ops/plan_status_transition.py declares MUTATES = ['docs/plans/*.md'] (corpus mutator, no staleness contract)",
+    "generator": "coordinator_core/ops/plan_status_transition.py",
+    "mutates": [
+      "docs/plans/*.md"
+    ],
+    "pairs": [],
+    "verdict": "MUTATES_DECLARED"
+  },
+  {
+    "detail": "coordinator_core/ops/prune_resolved_queue_entries.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator_core/ops/prune_resolved_queue_entries.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator_core/ops/queue_append.py declares MUTATES = ['state/debt-backlog/*.yaml', 'state/bug-backlog/*.yaml', 'state/improvement-queue/*.yaml', 'state/lessons/*.yaml', 'state/cross-repo-commitments/*.yaml'] (corpus mutator, no staleness contract)",
+    "generator": "coordinator_core/ops/queue_append.py",
+    "mutates": [
+      "state/debt-backlog/*.yaml",
+      "state/bug-backlog/*.yaml",
+      "state/improvement-queue/*.yaml",
+      "state/lessons/*.yaml",
+      "state/cross-repo-commitments/*.yaml"
+    ],
+    "pairs": [],
+    "verdict": "MUTATES_DECLARED"
+  },
+  {
+    "detail": "coordinator_core/ops/queue_promote.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator_core/ops/queue_promote.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator_core/ops/reap_orphaned_agent_dirs.py writes through an unresolved path expression and declares no GENERATES",
+    "generator": "coordinator_core/ops/reap_orphaned_agent_dirs.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": "WRITE_TARGET_UNRESOLVED"
+  },
+  {
+    "detail": "coordinator_core/ops/reap_stale_locks.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator_core/ops/reap_stale_locks.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator_core/ops/register_coordinator_mirror.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator_core/ops/register_coordinator_mirror.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator_core/ops/render_posture_overlay.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator_core/ops/render_posture_overlay.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator_core/ops/render_template.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator_core/ops/render_template.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator_core/ops/review_freeze_diff.py declares MUTATES = ['state/review-trail/diffs/*.diff', 'state/review-trail/diffs/*.head.sha'] (corpus mutator, no staleness contract)",
+    "generator": "coordinator_core/ops/review_freeze_diff.py",
+    "mutates": [
+      "state/review-trail/diffs/*.diff",
+      "state/review-trail/diffs/*.head.sha"
+    ],
+    "pairs": [],
+    "verdict": "MUTATES_DECLARED"
+  },
+  {
+    "detail": "coordinator_core/ops/review_mint/op.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator_core/ops/review_mint/op.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator_core/ops/scope_soak_enable.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator_core/ops/scope_soak_enable.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator_core/ops/scope_warning_resolve.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator_core/ops/scope_warning_resolve.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator_core/ops/session/fix_concrete_path_citations.py declares MUTATES = ['**/*.py', '**/*.sh', '**/*.bats', '**/*.js', '**/*.ts', '**/*.json', '**/*.yaml', '**/*.yml', '**/*.toml', '**/*.md'] (corpus mutator, no staleness contract)",
+    "generator": "coordinator_core/ops/session/fix_concrete_path_citations.py",
+    "mutates": [
+      "**/*.py",
+      "**/*.sh",
+      "**/*.bats",
+      "**/*.js",
+      "**/*.ts",
+      "**/*.json",
+      "**/*.yaml",
+      "**/*.yml",
+      "**/*.toml",
+      "**/*.md"
+    ],
+    "pairs": [],
+    "verdict": "MUTATES_DECLARED"
+  },
+  {
+    "detail": "coordinator_core/ops/session/guard_hook_generation_self_probe.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator_core/ops/session/guard_hook_generation_self_probe.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator_core/ops/session/guard_settings_integrity.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator_core/ops/session/guard_settings_integrity.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator_core/ops/session/legacy_touch_corpus_drain_check.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator_core/ops/session/legacy_touch_corpus_drain_check.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator_core/ops/session/legacy_touch_corpus_migrate.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator_core/ops/session/legacy_touch_corpus_migrate.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator_core/ops/session/migrate_touched_prefix.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator_core/ops/session/migrate_touched_prefix.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator_core/ops/session/record_pickup.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator_core/ops/session/record_pickup.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator_core/ops/session/safe_commit_offer.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator_core/ops/session/safe_commit_offer.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator_core/ops/session_baton_promote.py writes through an unresolved path expression and declares no GENERATES",
+    "generator": "coordinator_core/ops/session_baton_promote.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": "WRITE_TARGET_UNRESOLVED"
+  },
+  {
+    "detail": "coordinator_core/ops/session_hierarchy_derive.py declares MUTATES = ['state/session-hierarchy.*.json'] (corpus mutator, no staleness contract)",
+    "generator": "coordinator_core/ops/session_hierarchy_derive.py",
+    "mutates": [
+      "state/session-hierarchy.*.json"
+    ],
+    "pairs": [],
+    "verdict": "MUTATES_DECLARED"
+  },
+  {
+    "detail": "coordinator_core/ops/setup_rag_decision.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator_core/ops/setup_rag_decision.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator_core/ops/setup_seed_health_ledger.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator_core/ops/setup_seed_health_ledger.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator_core/ops/shim_usage_census.py writes through an unresolved path expression and declares no GENERATES",
+    "generator": "coordinator_core/ops/shim_usage_census.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": "WRITE_TARGET_UNRESOLVED"
+  },
+  {
+    "detail": "coordinator_core/ops/strategic/draft_writer.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator_core/ops/strategic/draft_writer.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator_core/ops/strategic/emit_writer.py declares 1 pair(s)",
+    "generator": "coordinator_core/ops/strategic/emit_writer.py",
+    "mutates": [],
+    "pairs": [
+      {
+        "artifact": "state/strategic-emission.json",
+        "generator": "coordinator_core/ops/strategic/emit_writer.py",
+        "sources": [
+          "state/strategic/self-description.yaml"
+        ],
+        "stamp_key": "emitted_at"
+      }
+    ],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator_core/ops/tracker/advance_status.py writes through an unresolved path expression and declares no GENERATES",
+    "generator": "coordinator_core/ops/tracker/advance_status.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": "WRITE_TARGET_UNRESOLVED"
+  },
+  {
+    "detail": "coordinator_core/ops/tracker/push_suggestion.py writes through an unresolved path expression and declares no GENERATES",
+    "generator": "coordinator_core/ops/tracker/push_suggestion.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": "WRITE_TARGET_UNRESOLVED"
+  },
+  {
+    "detail": "coordinator_core/ops/verify_subagent_sandbox_preamble_sync.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator_core/ops/verify_subagent_sandbox_preamble_sync.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator_core/ops/workday_complete_step2_5_dirty_tree.py MUTATES pattern '.gitignore' names a concrete path; a fixed artifact declares GENERATES",
+    "generator": "coordinator_core/ops/workday_complete_step2_5_dirty_tree.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": "UNDECLARED"
+  },
+  {
+    "detail": "coordinator_core/ops/workflow_fire/fire.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator_core/ops/workflow_fire/fire.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator_core/ops/workweek_trail_scope.py declares MUTATES = ['state/review-trail/*.json'] (corpus mutator, no staleness contract)",
+    "generator": "coordinator_core/ops/workweek_trail_scope.py",
+    "mutates": [
+      "state/review-trail/*.json"
+    ],
+    "pairs": [],
+    "verdict": "MUTATES_DECLARED"
+  },
+  {
+    "detail": "coordinator_core/ops/write_workday_start_marker.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator_core/ops/write_workday_start_marker.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator_core/orientation/abandoned_claim_signal.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator_core/orientation/abandoned_claim_signal.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator_core/orientation/expired_grant_signal.py writes through an unresolved path expression and declares no GENERATES",
+    "generator": "coordinator_core/orientation/expired_grant_signal.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": "WRITE_TARGET_UNRESOLVED"
+  },
+  {
+    "detail": "coordinator_core/orientation/regenerate_cache.py declares 1 pair(s)",
+    "generator": "coordinator_core/orientation/regenerate_cache.py",
+    "mutates": [],
+    "pairs": [
+      {
+        "artifact": "state/orientation_cache.md",
+        "generator": "coordinator_core/orientation/regenerate_cache.py",
+        "sources": [
+          "coordinator_core/orientation/regenerate_cache.py"
+        ],
+        "stamp_key": "generated_at"
+      }
+    ],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator_core/percolate/engine.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator_core/percolate/engine.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator_core/percolate/inject.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator_core/percolate/inject.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator_core/percolate/manifest.py writes through an unresolved path expression and declares no GENERATES",
+    "generator": "coordinator_core/percolate/manifest.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": "WRITE_TARGET_UNRESOLVED"
+  },
+  {
+    "detail": "coordinator_core/percolate/prune_dead_registrations.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator_core/percolate/prune_dead_registrations.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator_core/percolate/rewrite_basename.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator_core/percolate/rewrite_basename.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator_core/percolate/round.py writes through an unresolved path expression and declares no GENERATES",
+    "generator": "coordinator_core/percolate/round.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": "WRITE_TARGET_UNRESOLVED"
+  },
+  {
+    "detail": "coordinator_core/pickup_assemble/tools/corpus_diff_deliverable_evidence.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator_core/pickup_assemble/tools/corpus_diff_deliverable_evidence.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator_core/plugin_health/sentinel.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator_core/plugin_health/sentinel.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator_core/publish/time_transform.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator_core/publish/time_transform.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator_core/registry_fallback_counter.py writes through an unresolved path expression and declares no GENERATES",
+    "generator": "coordinator_core/registry_fallback_counter.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": "WRITE_TARGET_UNRESOLVED"
+  },
+  {
+    "detail": "coordinator_core/session/claims.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator_core/session/claims.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator_core/session/claude_md_grant.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator_core/session/claude_md_grant.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator_core/session/core.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator_core/session/core.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator_core/session/em_guard_grant.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator_core/session/em_guard_grant.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator_core/session/fleet_delegation.py writes through an unresolved path expression and declares no GENERATES",
+    "generator": "coordinator_core/session/fleet_delegation.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": "WRITE_TARGET_UNRESOLVED"
+  },
+  {
+    "detail": "coordinator_core/session/fleet_mode.py writes through an unresolved path expression and declares no GENERATES",
+    "generator": "coordinator_core/session/fleet_mode.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": "WRITE_TARGET_UNRESOLVED"
+  },
+  {
+    "detail": "coordinator_core/session/grant.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator_core/session/grant.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator_core/session/receiver_state.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator_core/session/receiver_state.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator_core/session/scope.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator_core/session/scope.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator_core/session/shape.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator_core/session/shape.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator_core/session_baton/store.py writes through an unresolved path expression and declares no GENERATES",
+    "generator": "coordinator_core/session_baton/store.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": "WRITE_TARGET_UNRESOLVED"
+  },
+  {
+    "detail": "coordinator_core/snippet_sync/verify.py declares MUTATES = ['**/*.md'] (corpus mutator, no staleness contract)",
+    "generator": "coordinator_core/snippet_sync/verify.py",
+    "mutates": [
+      "**/*.md"
+    ],
+    "pairs": [],
+    "verdict": "MUTATES_DECLARED"
+  },
+  {
+    "detail": "coordinator_core/subagent_sandbox/provision_report.py writes through an unresolved path expression and declares no GENERATES",
+    "generator": "coordinator_core/subagent_sandbox/provision_report.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": "WRITE_TARGET_UNRESOLVED"
+  },
+  {
+    "detail": "coordinator_core/telemetry/cost_census.py writes through an unresolved path expression and declares no GENERATES",
+    "generator": "coordinator_core/telemetry/cost_census.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": "WRITE_TARGET_UNRESOLVED"
+  },
+  {
+    "detail": "coordinator_core/text/refresh_queries.py declares MUTATES = ['**/*.md'] (corpus mutator, no staleness contract)",
+    "generator": "coordinator_core/text/refresh_queries.py",
+    "mutates": [
+      "**/*.md"
+    ],
+    "pairs": [],
+    "verdict": "MUTATES_DECLARED"
+  },
+  {
+    "detail": "coordinator_core/tracker_store.py writes through an unresolved path expression and declares no GENERATES",
+    "generator": "coordinator_core/tracker_store.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": "WRITE_TARGET_UNRESOLVED"
+  },
+  {
+    "detail": "coordinator_core/warm/breadcrumb.py writes through an unresolved path expression and declares no GENERATES",
+    "generator": "coordinator_core/warm/breadcrumb.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": "WRITE_TARGET_UNRESOLVED"
+  },
+  {
+    "detail": "coordinator_core/warm/door/build.py writes through an unresolved path expression and declares no GENERATES",
+    "generator": "coordinator_core/warm/door/build.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": "WRITE_TARGET_UNRESOLVED"
+  },
+  {
+    "detail": "coordinator_core/warm/door/build_posix.py writes through an unresolved path expression and declares no GENERATES",
+    "generator": "coordinator_core/warm/door/build_posix.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": "WRITE_TARGET_UNRESOLVED"
+  },
+  {
+    "detail": "coordinator_core/warm/front_door.py writes through an unresolved path expression and declares no GENERATES",
+    "generator": "coordinator_core/warm/front_door.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": "WRITE_TARGET_UNRESOLVED"
+  },
+  {
+    "detail": "coordinator_core/warm/front_door_routing.py writes through an unresolved path expression and declares no GENERATES",
+    "generator": "coordinator_core/warm/front_door_routing.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": "WRITE_TARGET_UNRESOLVED"
+  },
+  {
+    "detail": "coordinator_core/warm/skew.py writes through an unresolved path expression and declares no GENERATES",
+    "generator": "coordinator_core/warm/skew.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": "WRITE_TARGET_UNRESOLVED"
+  },
+  {
+    "detail": "coordinator_core/warm/supervisor.py writes through an unresolved path expression and declares no GENERATES",
+    "generator": "coordinator_core/warm/supervisor.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": "WRITE_TARGET_UNRESOLVED"
+  },
+  {
+    "detail": "coordinator_core/warm/telemetry.py writes through an unresolved path expression and declares no GENERATES",
+    "generator": "coordinator_core/warm/telemetry.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": "WRITE_TARGET_UNRESOLVED"
+  },
+  {
+    "detail": "coordinator_core/workstream_complete/directives_commit_tail.py writes through an unresolved path expression and declares no GENERATES",
+    "generator": "coordinator_core/workstream_complete/directives_commit_tail.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": "WRITE_TARGET_UNRESOLVED"
+  },
+  {
+    "detail": "coordinator_core/workstream_complete/directives_lessons_plan.py writes through an unresolved path expression and declares no GENERATES",
+    "generator": "coordinator_core/workstream_complete/directives_lessons_plan.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": "WRITE_TARGET_UNRESOLVED"
+  },
+  {
+    "detail": "coordinator_core/workstream_complete/directives_review.py declares MUTATES = ['state/ceremony/wsc-gate-verdict-memo/*.json'] (corpus mutator, no staleness contract)",
+    "generator": "coordinator_core/workstream_complete/directives_review.py",
+    "mutates": [
+      "state/ceremony/wsc-gate-verdict-memo/*.json"
+    ],
+    "pairs": [],
+    "verdict": "MUTATES_DECLARED"
+  },
+  {
+    "detail": "coordinator_core/write_guards/block_confined_agent_write.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator_core/write_guards/block_confined_agent_write.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator_core/write_guards/block_subagent_archive_write.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator_core/write_guards/block_subagent_archive_write.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator_core/write_guards/block_subagent_plan_body_write.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator_core/write_guards/block_subagent_plan_body_write.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator_core/write_guards/guard_doctrine_surface_edits.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator_core/write_guards/guard_doctrine_surface_edits.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator_core/write_guards/validate_frontmatter_schema_deny.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator_core/write_guards/validate_frontmatter_schema_deny.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  }
+]

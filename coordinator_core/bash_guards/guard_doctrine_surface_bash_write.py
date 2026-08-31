@@ -178,7 +178,15 @@ from __future__ import annotations
 import re
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
+from coordinator_core.bash_guards._command_tokenizer import (
+    normalize_executable_basename,
+    resolve_command_positions,
+)
 from coordinator_core.bash_guards._tool_names import COMMAND_TOOL_NAMES
+from coordinator_core.bash_guards._write_bump_sink_shapes import (
+    extract_interpreter_payload_write_sink_targets,
+    extract_write_sink_targets_for_segment,
+)
 
 CLASS = "hard-deny"
 MATCHERS = COMMAND_TOOL_NAMES
@@ -362,7 +370,29 @@ def _has_indirection_marker(text: str) -> bool:
 #: WHITESPACE-SEPARATED words are deliberately NOT joined: ``'a' 'b'`` is one
 #: string in Python but two arguments in shell, and folding it would invent
 #: governed mentions in ordinary commands. That is why a gap requires a ``+``.
-_LITERAL_JOIN_RE = re.compile(r"\\?['\"]\\?['\"]|\\?['\"]\s*\+\s*\\?['\"]")
+#:
+#: THIRD ALTERNATIVE -- a WORD-INTERNAL quote, i.e. one with a non-space
+#: character on BOTH sides. Pair-folding alone leaves an ODD quote standing,
+#: and one surviving quote separates the name just as well as two did.
+#: Measured live 2026-08-31, a real Bash call that was ALLOWED and created
+#: the file: ``echo probe > "$S/CLAUDE""".md``. Three adjacent quotes; the
+#: pair rule consumed two and left ``claude".md``, which matches no governed
+#: identifier. Real bash concatenates the lot and wrote ``CLAUDE.md``.
+#:
+#: This is shell semantics, not a heuristic: inside ONE word, quotes are
+#: pure delimiters and every one of them is removed -- ``a"b"c`` is the
+#: single word ``abc``. The whitespace guard above is what keeps ``'a' 'b'``
+#: two arguments, and it is preserved exactly: a quote with space on either
+#: side is not word-internal and is left alone, so a quoted target
+#: containing spaces (``> "my file.md"``) still parses as before.
+#:
+#: Direction of error, per this function's own contract: folding is applied
+#: IN ADDITION to the raw text, so a wider fold can only admit MORE commands
+#: to the sink legs, never fewer. An over-fold costs a sink-leg evaluation
+#: that then declines; an under-fold is the bypass above.
+_LITERAL_JOIN_RE = re.compile(
+    r"\\?['\"]\\?['\"]|\\?['\"]\s*\+\s*\\?['\"]|(?<=\S)\\?['\"](?=\S)"
+)
 
 #: One pass collapses every non-overlapping join; a second catches joins the
 #: first pass created by removing the quotes between them (``'a''b''c'``).
@@ -1163,7 +1193,64 @@ def _looks_commit_shaped(cmd: str) -> bool:
     return False
 
 
+def _resolved_write_sink_targets(cmd: str) -> List[str]:
+    """Every write-sink target string this command resolves to, across BOTH
+    extractors this fleet already owns: the binary/redirection table
+    (``extract_write_sink_targets_for_segment``, per tokenized segment) and
+    the interpreter-payload sink shapes
+    (``extract_interpreter_payload_write_sink_targets``, over the raw text).
+
+    REUSED, NOT RE-DERIVED. This function deliberately owns no table of its
+    own: a second copy of "which binaries write" is exactly the drift this
+    package has already paid for once. Both callees are best-effort and
+    over-inclusive by their own documented design; an over-inclusive answer
+    here can only make the deny message MORE specific, never turn a deny
+    into an allow -- this is message selection on a path ``check()`` has
+    already decided to deny.
+
+    Never raises: an unparseable command yields the binary half's empty
+    list, and the caller falls back to the redirect-token test alone."""
+    targets: List[str] = []
+    try:
+        for resolved in resolve_command_positions(cmd):
+            if not resolved.tokens:
+                continue
+            targets.extend(
+                extract_write_sink_targets_for_segment(
+                    resolved.tokens, normalize_executable_basename(resolved.tokens[0])
+                )
+            )
+    except Exception:  # noqa: BLE001 -- message selection only; see docstring
+        pass
+    try:
+        targets.extend(extract_interpreter_payload_write_sink_targets(cmd))
+    except Exception:  # noqa: BLE001 -- message selection only; see docstring
+        pass
+    return targets
+
+
 def _looks_quoted_content_shaped(cmd: str, identifiers_lower: Tuple[str, ...]) -> bool:
+    """Whether the governed name appears ONLY as quoted content -- prose,
+    a grep pattern, a commit message -- rather than as something this
+    command actually writes. Selects the "not a write target" remedy.
+
+    TWO exoneration sources, and the second is not optional. A bare
+    ``>``/``>>`` redirect is only ONE of the shapes that put a governed name
+    in a real write position; ``cp``/``mv``/``tee``/``install``/``sed -i``
+    take their destination as an ordinary positional argument, and an
+    interpreter payload takes it as a call argument. Those destinations are
+    routinely QUOTED, so ``_strip_quoted_spans`` below erases them and the
+    all-quoted test comes back True -- telling the operator "the governed
+    name is quoted content, not a write target. Edit the real destination"
+    about the destination they just named. Measured live, 2026-08-31: five
+    consecutive denials on this guard, four distinct shapes; the two
+    redirect shapes got the right remedy and the three sink shapes
+    (``Path(...).write_text``, ``cp DEST``) got this one, wrongly.
+
+    The deny itself was correct in all five -- this function has never
+    gated whether to deny, only which of three prose shapes ``_compose_deny_
+    message`` renders. That is why the fix belongs here and not in the
+    detection path."""
     mentioning_segments = [
         segment
         for segment in _split_top_level_segments(cmd)
@@ -1174,6 +1261,9 @@ def _looks_quoted_content_shaped(cmd: str, identifiers_lower: Tuple[str, ...]) -
     for segment in mentioning_segments:
         target = _redirect_target_token(segment)
         if target and _mentions_governed_identifier(target, identifiers_lower):
+            return False
+    for sink_target in _resolved_write_sink_targets(cmd):
+        if _mentions_governed_identifier(sink_target, identifiers_lower):
             return False
     return all(
         not _mentions_governed_identifier(_strip_quoted_spans(segment), identifiers_lower)

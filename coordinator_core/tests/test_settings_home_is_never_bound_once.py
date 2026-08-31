@@ -26,7 +26,17 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CORE_ROOT = REPO_ROOT / "coordinator_core"
 
-_TARGET_CALL_NAMES = {"settings_home"}
+_TARGET_CALL_NAMES = {
+    "settings_home",
+    # DERIVED READERS COUNT TOO. A caller that never names `settings_home`
+    # still freezes it by binding something computed FROM it -- measured live:
+    # `ops/emit/doe_drift.py` bound `machine_local_dir() / "registry.local.toml"`
+    # at module scope and served the first importing request's registry to every
+    # later caller, while this sweep read green. A guard that matches only the
+    # literal name selects its blind spot by the same property the defect has.
+    "machine_local_dir",
+    "settings_home_child_env",
+}
 
 
 def _bound_local_names(tree: ast.Module) -> set[str]:
@@ -67,10 +77,34 @@ def _decorator_is_cache(dec: ast.AST) -> bool:
     return False
 
 
+def _module_scope_names(tree: ast.Module) -> set[str]:
+    """Names that genuinely live at module scope -- assigned at the top level,
+    or declared `global` somewhere in the file.
+
+    Shape 5 (the lazily-populated cache) is only a defect for a name that
+    OUTLIVES the call. A function parameter defaulting to `None` and resolved
+    per call inside the body is the CORRECT shape, and reads identically to the
+    defect at the AST node the walk visits -- `root_channel_reconcile.py ::
+    reconcile_root`'s `machine_local` parameter is the measured case. Without
+    this filter the guard flags the fix it exists to recommend.
+    """
+    names: set[str] = set()
+    for stmt in tree.body:
+        if isinstance(stmt, ast.Assign):
+            names.update(t.id for t in stmt.targets if isinstance(t, ast.Name))
+        elif isinstance(stmt, ast.AnnAssign) and isinstance(stmt.target, ast.Name):
+            names.add(stmt.target.id)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Global):
+            names.update(node.names)
+    return names
+
+
 def find_violations(source: str, filename: str = "<string>") -> list[str]:
     """Return a list of human-readable violation strings, empty if none found."""
     tree = ast.parse(source, filename=filename)
     bound_names = _bound_local_names(tree)
+    module_scope_names = _module_scope_names(tree)
     violations: list[str] = []
 
     # A single pass over every node. Shapes that would otherwise need a
@@ -109,7 +143,7 @@ def find_violations(source: str, filename: str = "<string>") -> list[str]:
                 and isinstance(test.comparators[0], ast.Constant)
                 and test.comparators[0].value is None
             )
-            if is_none_check:
+            if is_none_check and test.left.id in module_scope_names:
                 cache_name = test.left.id
                 for stmt in node.body:
                     if (
@@ -329,3 +363,62 @@ def test_no_live_once_bound_settings_home_reader_in_coordinator_core():
         "found once-bound settings_home() reader(s), needs a per-call fix:\n"
         + "\n".join(all_violations)
     )
+
+
+# ---------------------------------------------------------------------------
+# DERIVED-READER LEGS. Added after an adversarial criterion-only read of HEAD
+# found a live freeze this sweep had reported clean: the literal-name matcher
+# saw no `settings_home` in `ops/emit/doe_drift.py` and so never looked at
+# `machine_local_dir() / "registry.local.toml"` bound at module scope. A guard
+# whose blind spot has the same shape as the defect is the failure this file
+# exists to prevent, so both directions are pinned here.
+# ---------------------------------------------------------------------------
+
+_DERIVED_MODULE_LEVEL = '''
+from coordinator_core._settings_home import machine_local_dir
+_REGISTRY_LOCAL = machine_local_dir() / "registry.local.toml"
+'''
+
+_DERIVED_LAZY_GLOBAL = '''
+from coordinator_core._settings_home import machine_local_dir
+_CACHE = None
+def get():
+    global _CACHE
+    if _CACHE is None:
+        _CACHE = machine_local_dir()
+    return _CACHE
+'''
+
+_PER_CALL_PARAMETER_CONTROL = '''
+from coordinator_core._settings_home import machine_local_dir
+def reconcile(machine_local=None):
+    if machine_local is None:
+        machine_local = machine_local_dir()
+    return machine_local
+'''
+
+
+def test_a_derived_reader_bound_at_module_scope_is_flagged():
+    """The measured live instance, in its pre-fix shape. `machine_local_dir()`
+    never names `settings_home`, and freezes it just the same."""
+    violations = find_violations(_DERIVED_MODULE_LEVEL, "doe_drift.py")
+
+    assert violations, "a module-level binding composed from a DERIVED reader escaped the sweep"
+
+
+def test_a_derived_reader_cached_in_a_module_global_is_flagged():
+    violations = find_violations(_DERIVED_LAZY_GLOBAL, "x.py")
+
+    assert violations, "a lazily-populated global holding a derived reader escaped the sweep"
+
+
+def test_a_per_call_parameter_default_is_not_flagged():
+    """The precision control, and the reason it is here: a parameter defaulting
+    to `None` and resolved per call INSIDE the body is the correct shape -- the
+    very fix this guard recommends. It reads identically to the lazy-global
+    defect at the `ast.If` node the walk visits, and an unfiltered matcher
+    flagged `root_channel_reconcile.py :: reconcile_root` for having taken the
+    advice."""
+    violations = find_violations(_PER_CALL_PARAMETER_CONTROL, "x.py")
+
+    assert violations == [], f"flagged the correct per-call shape: {violations}"

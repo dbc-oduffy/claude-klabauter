@@ -290,6 +290,14 @@ _FLAG_RE = re.compile(r"--[a-z][a-z0-9-]*")
 # documented behaviour rather than restore it, so they stay exempt.
 _FREE_TEXT_POSITIONAL_VERBS = frozenset({"unclaim-handoff", "unconsume-handoff"})
 
+# An OPEN FLAG TAIL: a bracketed placeholder ending in `...` that is not itself a
+# literal flag, e.g. `[disposition-flags...]`. It means the verb forwards its tail
+# to the engine verbatim and its flag vocabulary is the ENGINE's, not this file's,
+# so `_SUBCOMMAND_USAGE` cannot enumerate it and this guard has nothing to check
+# against. Deliberately does NOT match `[--exclude <path>]...` — a REPEATABLE
+# LITERAL flag, which is declared, enumerable, and stays guarded.
+_OPEN_FLAG_TAIL_RE = re.compile(r"\[[a-z][a-z0-9-]*\.\.\.\]")
+
 
 def _reject_unknown_flags(subcmd: str, rest: list[str]) -> int | None:
     """Refuse a `--`-prefixed token this verb's own usage line does not declare.
@@ -311,11 +319,34 @@ def _reject_unknown_flags(subcmd: str, rest: list[str]) -> int | None:
     VALUES ARE NOT FLAGS: the token after a recognized flag is skipped, so
     `--reason --weird` passes `--weird` through as the reason rather than
     refusing it. Only tokens in flag POSITION are checked.
+
+    AN OPEN FLAG TAIL DECLINES RATHER THAN REFUSES. `action-memo` and
+    `resolve-memo` declare `[disposition-flags...]` and forward their tail to
+    the engine verbatim, so their vocabulary lives in the engine and this
+    table cannot enumerate it. The first version of this guard derived an
+    EMPTY `known` set for them and therefore refused every documented
+    disposition flag with exit 2, making the whole memo-disposition surface
+    unreachable through this CLI until a caller resorted to invoking
+    `cs_action_memo` directly (example-retrieval-repo-df, 2026-08-31). This file's own
+    `_SUBCOMMAND_HELP_FLAGS` comment already stated the rule -- "forwards its
+    tail to the engine verbatim, and a disposition flag or value is free to be
+    any string" -- and the guard was written past it.
+
+    NOT FIXED BY FAILING OPEN ON AN EMPTY `known` SET, which was the obvious
+    shape and is wrong: a verb that legitimately takes NO flags (`claim-handoff
+    <path>`) also derives an empty set, and there refusing an undeclared flag
+    is precisely the silent-partial-write this guard exists for. The
+    discriminator is the usage line's SHAPE, not the size of the set it
+    yields. Same polarity lesson as
+    `state/lessons/2026-08-31-a-fail-safe-direction-is-only-safe-for-o.yaml`:
+    this gate REFUSES, so its uncertain direction must be to decline.
     """
     if subcmd in _FREE_TEXT_POSITIONAL_VERBS:
         return None
     usage = _SUBCOMMAND_USAGE.get(subcmd)
     if usage is None:
+        return None
+    if _OPEN_FLAG_TAIL_RE.search(usage):
         return None
     # No help-flag union: `main()` early-returns on every help form before calling
     # this, so a help flag can never reach here. Unioning them in pinned a branch
@@ -418,14 +449,36 @@ def _resolve_prose(
     naming the file sibling, rather than surfacing as some downstream mutual-
     exclusion or empty-value error.
     """
+    return _resolve_prose_pair(
+        _scan_flag_value(tail, flag),
+        _scan_flag_value(tail, f"{flag}-file"),
+        flag,
+        allow_empty=allow_empty,
+    )
+
+
+def _resolve_prose_pair(
+    inline: str | None,
+    from_file: str | None,
+    flag: str,
+    *,
+    allow_empty: bool = False,
+) -> tuple[str | None, str | None]:
+    """The half of `_resolve_prose` that does not assume a `--flag <value>` scan.
+
+    Split out for `unclaim-handoff`, whose note is POSITIONAL: its inline value
+    cannot be scanned by flag name -- that verb hard-refuses a leftover `--note`
+    precisely so the note is never mistaken for one -- but everything downstream
+    of the scan is identical (newline refusal, mutual exclusion, file read,
+    hollow-record refusal) and must not be re-rolled per verb. Callers that have
+    a flag to scan use `_resolve_prose`; this exists for the shape that has not.
+    """
     from coordinator_core.argv_fidelity import (
         ArgvFidelityError,
         refuse_newline_argv,
         resolve_body,
     )
 
-    inline = _scan_flag_value(tail, flag)
-    from_file = _scan_flag_value(tail, f"{flag}-file")
     if inline is None and from_file is None:
         return None, None
     try:
@@ -744,37 +797,20 @@ def main(argv: list[str]) -> int:
                 f"archive-stamp-cli {subcmd} <handoff_path> [note] [--reaped-from <sid>]"
                 f" — {len(tail)} positional notes given; quote the note as ONE argument"
             )
-        inline_note = tail[0] if tail else None
-        if inline_note is not None and note_from_file is not None:
-            print(
-                "archive-stamp-cli: --note and --note-file are mutually exclusive.",
-                file=sys.stderr,
-            )
+        # Refused, never truncated: a multi-line positional note arriving
+        # through the .cmd forwarder has ALREADY lost every line after the
+        # first, so the refusal only fires on a host where it survived --
+        # which is exactly where refusing it and naming --note-file keeps the
+        # two platforms writing the same frontmatter. That refusal, the mutual
+        # exclusion, and the file read are the same seam every other prose flag
+        # in this file uses; the note being positional changes where the value
+        # comes from, nothing about what is owed to it.
+        note, note_err = _resolve_prose_pair(
+            tail[0] if tail else None, note_from_file, "--note"
+        )
+        if note_err:
+            print(note_err, file=sys.stderr)
             return 2
-        if note_from_file is not None:
-            try:
-                from coordinator_core.argv_fidelity import (
-                    ArgvFidelityError,
-                    resolve_body,
-                )
-                note = resolve_body(None, note_from_file, flag_name="--note")
-            except ArgvFidelityError as exc:
-                print(f"archive-stamp-cli: --note: {exc}", file=sys.stderr)
-                return 2
-        else:
-            # Refused, never truncated: a multi-line positional note arriving
-            # through the .cmd forwarder has ALREADY lost every line after the
-            # first, so this only fires on a host where the note survived --
-            # which is exactly where refusing it and naming --note-file keeps
-            # the two platforms writing the same frontmatter.
-            if inline_note is not None and "\n" in inline_note:
-                print(
-                    "archive-stamp-cli: the note contains a newline; pass "
-                    "--note-file <path> instead.",
-                    file=sys.stderr,
-                )
-                return 2
-            note = inline_note
         return mod.cs_unclaim_handoff(handoff_path, note, reaped_from)
 
     if subcmd == "chain-archive-handoff":
@@ -846,14 +882,6 @@ def main(argv: list[str]) -> int:
             return _usage_line(_SUBCOMMAND_USAGE["repair-archived-deployment-state"])
         handoff_path, tail = rest[0], rest[1:]
 
-        def _scan_value(flag: str) -> str | None:
-            if flag not in tail:
-                return None
-            idx = tail.index(flag)
-            if idx + 1 >= len(tail):
-                return None
-            return tail[idx + 1]
-
         reason, reason_err = _resolve_prose(tail, "--reason")
         if reason_err:
             print(reason_err, file=sys.stderr)
@@ -865,7 +893,7 @@ def main(argv: list[str]) -> int:
                 file=sys.stderr,
             )
             return 2
-        deployment_state = _scan_value("--deployment-state")
+        deployment_state = _scan_flag_value(tail, "--deployment-state")
         if not deployment_state:
             print(
                 "archive-stamp-cli: repair-archived-deployment-state: "
@@ -873,9 +901,9 @@ def main(argv: list[str]) -> int:
                 file=sys.stderr,
             )
             return 2
-        continued_into = _scan_value("--continued-into")
+        continued_into = _scan_flag_value(tail, "--continued-into")
         continued_into_override = "--continued-into-override" in tail
-        closed_reason = _scan_value("--closed-reason")
+        closed_reason = _scan_flag_value(tail, "--closed-reason")
         return mod.cs_repair_archived_deployment_state(
             handoff_path,
             reason,

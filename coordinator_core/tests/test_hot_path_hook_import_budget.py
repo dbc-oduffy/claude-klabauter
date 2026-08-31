@@ -103,20 +103,28 @@ import weight. This gate is the regression guard for that lever staying paid for
 -- it fails closed if a future change quietly re-inflates one target's import
 graph, not if the number of interpreters changes.
 
-Target 3's residual (documented, not fixed by this gate): importing
-`coordinator_core.hooks.postuse_advisory_dispatch` first runs the
-`coordinator_core.hooks` package `__init__`. That package DOES carry a
+Target 3's residual -- HISTORY, not current state (see
+`state/bug-backlog/2026-08-21-postuse-advisory-dispatch-imports-765-mo-8aab68060095.yaml`
+for the full record): importing `coordinator_core.hooks.postuse_advisory_dispatch`
+first runs the `coordinator_core.hooks` package `__init__`, which carries a
 lazy-registration channel (`COORDINATOR_CORE_LAZY_OPS` / `sys.
 _coordinator_core_lazy_ops`, see its own module docstring) mirroring
-`coordinator_core.ops`'s -- but `postuse-advisory-dispatch.py` never arms it
-(unlike `preuse-bash-dispatch.py` and `preuse-write-dispatch.py`, which both call
-`_arm_lazy_ops()` before importing their target), so this entrypoint always pays
-the package's default-eager path: all 15 `hooks.*` modules import and register
-their ops (not 7 -- the wrapper script's own inline comment undercounts this;
-verified by reading `coordinator_core/hooks/__init__.py::_EAGER_HOOK_MODULES`
-directly rather than trusting that comment). Arming the lazy channel in that
-wrapper is a real available fix but is DoE-claude-tree territory (this claude-klabauter
-session is read-only there) and out of scope for this gate.
+`coordinator_core.ops`'s. At authorship, `postuse-advisory-dispatch.py` never
+armed that channel, so this entrypoint paid the package's default-eager path
+(all 15 `hooks.*` modules, 765 newly-imported modules total, 412.5ms process
+time) -- and, being DoE-claude-tree territory, was out of scope for this
+(claude-klabauter-side) gate to fix directly.
+<!-- Review: coordinator:code-reviewer ab67e1fde9751a8ff -- paragraph was stale,
+contradicting the numbers a few hundred lines below it. -->
+That gap is CLOSED: `postuse-advisory-dispatch.py` (DoE-claude tree) now calls
+`_arm_lazy_ops()` before importing its target, same as `preuse-bash-dispatch.py`
+and `preuse-write-dispatch.py`. Re-measured 2026-08-31: 73 newly-imported
+modules, 101.6ms process time / 2.00 procs per call (`batched_process_time_ms`,
+K=20) -- under CLAUDE.md's 200ms per-process bar. The fix landed entirely on
+the DoE-claude side; nothing in claude-klabauter's own tree changed, which is why this
+paragraph went stale here unnoticed -- the durable lesson for the next reader
+of a cross-tree residual note is to re-check the OTHER tree before trusting
+this file's account of it.
 
 Shape: mirrors `coordinator_core.tests.test_pickup_assemble_import_perf`
 verbatim -- read that file before touching this one. Per settled doctrine (do
@@ -344,35 +352,33 @@ _TARGETS: Sequence[_Target] = (
     _Target(
         name="hooks_postuse_advisory_dispatch",
         import_path="coordinator_core.hooks.postuse_advisory_dispatch",
-        # RE-BASELINED 2026-08-21 (C6 fix-forward, plan
-        # 2026-08-21-the-cli-bootstrap-tax-dies-at-the-interpreter-floor.md):
-        # this target's import graph grew from the 99-module authorship
-        # baseline to a MEASURED 765 modules on this machine/Python version
-        # (batched-subprocess `sys.modules` before/after diff). That is
-        # itself the finding, not an artifact of this re-baseline: firing
-        # this target costs 412.5ms of PROCESS TIME (K=20,
-        # `coordinator_core.benchmarks.process_time.batched_process_time_ms`,
-        # DR-344's instrument) -- MORE THAN 2x CLAUDE.md's "The brightline"
-        # 200ms-per-process ceiling, and this hook fires on every matching
-        # tool call (module docstring header), i.e. on the hot path. This
-        # ceiling is a REGRESSION GUARD pinned to that reality, not an
-        # endorsement of the cost -- fixing `postuse-advisory-dispatch.py`'s
-        # import weight (e.g. arming the lazy-ops channel the module
-        # docstring's residual note already describes) is out of scope for
-        # this test file; routed as its own backlog item instead. ~16%
-        # margin (matches this target's own prior-authorship convention:
-        # 99 measured -> 115 ceiling was also ~16%), 890 = 765 * ~1.163.
-        module_count_ceiling=890,
+        # RE-BASELINED 2026-08-31, DOWNWARD, because the cut landed. The
+        # 2026-08-21 baseline pinned 765 measured modules / 412.5ms process
+        # time behind an 890 ceiling, and said so explicitly -- "a REGRESSION
+        # GUARD pinned to that reality, not an endorsement of the cost" --
+        # routing the fix to its own backlog item
+        # (state/bug-backlog/2026-08-21-postuse-advisory-dispatch-imports-765-mo-8aab68060095.yaml).
+        # That item is now discharged: 73 newly-imported modules (cold
+        # subprocess `sys.modules` before/after diff, 73/73/73 over three
+        # runs) and 101.6ms process time / 2.00 procs per call
+        # (`batched_process_time_ms`, K=20, DR-344's instrument) -- UNDER
+        # CLAUDE.md's 200ms per-process bar, down from more than 2x over it.
+        #
+        # Lesson (guard_was_the_real_finding) lives in the backlog entry cited
+        # above. 85 = 73 * ~1.16, the same ~16% margin this target used at
+        # authorship (99 measured -> 115) and at the 2026-08-21 re-baseline.
+        module_count_ceiling=85,
         # Measured 0 `sys.path` growth on this machine at re-baseline time
         # (unchanged from authorship).
         sys_path_entry_ceiling=2,
-        # RE-BASELINED alongside module_count_ceiling above: `asyncio` and
-        # `yaml` are now BOTH confirmed PRESENT in this target's measured
-        # import set (part of the same growth this re-baseline records) --
-        # module docstring's "do not list a heavy module in an absence
-        # tuple before the cut that removes it lands" rule means they no
-        # longer belong in this list. `pydantic` remains confirmed absent.
-        heavy_modules_expected_absent=("pydantic",),
+        # RESTORED to the absence tuple 2026-08-31. The 2026-08-21 re-baseline
+        # removed `asyncio` and `yaml` because they were then confirmed
+        # PRESENT, citing this file's own rule -- "do not list a heavy module
+        # in an absence tuple before the cut that removes it lands". The cut
+        # has landed and both are now confirmed ABSENT from the measured import
+        # set, so the same rule puts them back: that is what makes their return
+        # a failure rather than a fact nobody notices.
+        heavy_modules_expected_absent=("pydantic", "asyncio", "yaml"),
         # RE-BASELINED: min-of-8 direct-probe samples at re-baseline time
         # ranged 328.1-375.0ms; the batched K=20 process-time figure above
         # (412.5ms) is the more reliable per-invocation estimate (job-object

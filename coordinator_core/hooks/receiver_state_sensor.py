@@ -115,10 +115,18 @@ def _run_sensor(
         reduced_lines, _any_unparseable, _cap_reached = receiver_state.reduce_transcript_tail(
             transcript_path
         )
-        transcript_mtime = _mtime_or_none(transcript_path)
+        # The newest record's own timestamp, NOT the file's mtime: the harness
+        # rewrites a stopped session's transcript with untimestamped
+        # bookkeeping rows, which moves mtime forward without the session
+        # acting (`receiver_state.activity_epoch_from_reduced`). mtime remains
+        # the fallback -- an upper bound on idleness -- for a tail in which
+        # nothing carries a timestamp at all.
+        transcript_activity = receiver_state.activity_epoch_from_reduced(reduced_lines)
+        if transcript_activity is None:
+            transcript_activity = _mtime_or_none(transcript_path)
     else:
         reduced_lines = []
-        transcript_mtime = None
+        transcript_activity = None
 
     sidecar_signal = receiver_state.delegation_evidence_from_sidecar(
         transcript_path or None, now_epoch=float(now_epoch)
@@ -130,7 +138,7 @@ def _run_sensor(
     ladder_verdict = receiver_state.classify(
         reduced_lines,
         now_epoch=float(now_epoch),
-        transcript_mtime_epoch=transcript_mtime,
+        transcript_activity_epoch=transcript_activity,
         delegation_evidence=merged_delegation_evidence,
     )
 

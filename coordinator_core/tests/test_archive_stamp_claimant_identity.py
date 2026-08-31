@@ -24,8 +24,20 @@ This module pins:
   4. `self_record()` returning None omits the key entirely.
   5. A raising `self_record()` is non-fatal: the claim still lands rc=0 with
      the lifecycle transition intact and no name written.
-  6. Re-claiming a record that already carries the fields never overwrites
-     them — the first claimant's identity is the forensic record.
+  6. Re-claiming RECONCILES `claimed_by_name` to the id beside it, and an
+     unresolvable name CLEARS a stale one rather than leaving it standing.
+     REVERSED 2026-08-31 from "never overwrites — the first claimant's identity
+     is the forensic record". That rule could not hold: the claim transition
+     overwrites `claimed_by` in the same operation, so leaving the name behind
+     manufactured a record that never existed — one session's id under another
+     session's name. Observed twice on 2026-08-31, once for 45 minutes across
+     seven interleaved commits by two sessions who could not see each other from
+     the artifact, and once carrying a live uninvolved peer's name that a
+     reconciling session would have messaged. `human_claimant` keeps
+     insert-when-absent: the operating human does not change when the claim does.
+  6b. `cs_claim_handoff` REFUSES a baton held by a different LIVE session, fails
+     open on an indeterminate liveness read, and does not refuse a DEAD holder
+     (takeover of a dead claim is the ordinary recovery path).
   7. A `self_record()` naming a DIFFERENT session than the one being stamped falls
      through to `harness_registry.lookup(claimant_sid)` and stamps the CLAIMANT's
      name, on both claim paths. `self_record()` is an ambient `CLAUDE_PID` read;
@@ -192,9 +204,27 @@ class TestHandoffClaimStampsIdentity:
         assert "claimed_by: sess-abc" in text
         assert "claimed_by_name" not in text
 
-    def test_existing_identity_is_never_overwritten(self, tmp_path, monkeypatch):
-        """The FIRST claimant's identity is the forensic record. A re-claim
-        carrying a different registry record must not rewrite it."""
+    def test_a_stale_name_is_reconciled_to_the_id_beside_it(self, tmp_path, monkeypatch):
+        """`claimed_by_name` must agree with `claimed_by`, so a re-claim rewrites it.
+
+        REVERSES `test_existing_identity_is_never_overwritten` (2026-08-30), which
+        pinned the opposite on the reasoning that "the FIRST claimant's identity is
+        the forensic record". That intent cannot hold: the claim transition
+        overwrites `claimed_by` unconditionally in the SAME operation, so leaving
+        the name behind does not preserve a forensic record — it manufactures a
+        record that never existed, one session's id under another session's name.
+        The field's own docstring says it describes WHO HOLDS THE BATON, and the
+        abandoned-claim orientation signal reads it as the current holder.
+
+        Not a hypothetical: observed twice on 2026-08-31. Once for 45 minutes
+        across seven interleaved commits by two sessions, neither able to see the
+        other from the artifact; once carrying a live, wholly uninvolved peer's
+        name, which a reconciling session would have messaged.
+        `state/bug-backlog/2026-08-31-claim-handoff-takes-a-foreign-claim-and-drop-releases-nothing.yaml`.
+
+        The PM ruling of 2026-08-30 established the FIELD; never-overwrite was an
+        implementation choice made alongside it, and is what is reversed here.
+        """
         repo = tmp_path / "repo"
         _init_repo(repo)
         hp = _seed_handoff(
@@ -208,8 +238,52 @@ class TestHandoffClaimStampsIdentity:
 
         assert rc == 0
         text = hp.read_text(encoding="utf-8")
-        assert "claimed_by_name: claude-klabauter-old" in text
-        assert _NAME not in text
+        assert "claimed_by: sess-abc" in text
+        assert _NAME in text
+        assert "claude-klabauter-old" not in text
+
+    def test_an_unresolvable_name_clears_a_stale_one_rather_than_leaving_it(
+        self, tmp_path, monkeypatch
+    ):
+        """No name for this claimant means the field is REMOVED, not left standing.
+
+        A wrong-but-plausible name is worse than an absent one: it reads as a
+        coherent holder and suppresses the lookup an empty field would prompt.
+
+        MODELLED, not merely reasoned. A record resolving with no name is a
+        first-class state in this plane: `session/reachability.py :: _resolve_one`
+        returns None on `not record.name` and its docstring names the degradation,
+        so that branch would be dead code if the state were unreachable. This is
+        the observed mismatch reached by the other route — there the claimant's
+        name resolved and was not written, here it does not resolve at all, and
+        the reconcile branch cannot cover it because there is nothing to reconcile
+        to.
+
+        A filed second instance that would have made this arm OBSERVED was
+        RETRACTED by `claude-klabauter-2d` at `21765e2d16` (they had read `name`
+        from `.git/coordinator-sessions/<sid>/meta.json`, which carries no `name`
+        key on any box). This test does not rest on it.
+        """
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        hp = _seed_handoff(
+            repo, "h6.md", extra="claimed_by_name: claude-klabauter-stale\n",
+        )
+        monkeypatch.setenv("CLAUDE_SESSION_ID", "sess-nameless")
+        _set_self_record(monkeypatch, None)
+        monkeypatch.setattr(
+            "coordinator_core.session.harness_registry.lookup",
+            lambda _sid: None,
+            raising=False,
+        )
+
+        rc = arstamp.cs_claim_handoff(str(hp))
+
+        assert rc == 0
+        text = hp.read_text(encoding="utf-8")
+        assert "claimed_by: sess-nameless" in text
+        assert "claude-klabauter-stale" not in text
+        assert "claimed_by_name" not in text
 
 
     def test_foreign_ambient_record_resolves_the_claimant_by_id(self, tmp_path, monkeypatch):
@@ -381,3 +455,87 @@ class TestBestEffortContractHolds:
         assert rc == 0
         text = hp.read_text(encoding="utf-8")
         assert text.index("claimed_by_name:") < text.index("human_claimant:")
+
+
+class TestForeignLiveClaimRefusal:
+    """`cs_claim_handoff` refuses a baton held by a DIFFERENT LIVE session.
+
+    The mutual-exclusion check lived only on the `pickup-assemble brief` path,
+    and brief also fires the pickup-supersede defect whenever the caller already
+    holds any other claim. So a session reasoning correctly about that defect
+    routes around brief, reaches `claim-handoff`, and silently takes a live
+    peer's baton. The safe-looking door was the unchecked one.
+    """
+
+    def test_a_live_foreign_holder_is_refused(self, tmp_path, monkeypatch):
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        hp = _seed_handoff(repo, "h7.md", extra="claimed_by: sess-peer\n")
+        monkeypatch.setenv("CLAUDE_SESSION_ID", "sess-mine")
+        monkeypatch.setattr(
+            "coordinator_core.session.liveness.session_live",
+            lambda sid, cwd=None: sid == "sess-peer",
+            raising=False,
+        )
+
+        rc = arstamp.cs_claim_handoff(str(hp))
+
+        assert rc == 1
+        # The refusal must not have mutated anything on the way out.
+        text = hp.read_text(encoding="utf-8")
+        assert "claimed_by: sess-peer" in text
+        assert "sess-mine" not in text
+
+    def test_a_dead_foreign_holder_is_not_refused(self, tmp_path, monkeypatch):
+        """Takeover of a DEAD holder is the ordinary recovery path. Refusing it
+        would strand every baton whose holder exited uncleanly, so only a
+        confirmed-live holder blocks."""
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        hp = _seed_handoff(repo, "h8.md", extra="claimed_by: sess-dead\n")
+        monkeypatch.setenv("CLAUDE_SESSION_ID", "sess-mine")
+        monkeypatch.setattr(
+            "coordinator_core.session.liveness.session_live",
+            lambda sid, cwd=None: False,
+            raising=False,
+        )
+
+        rc = arstamp.cs_claim_handoff(str(hp))
+
+        assert rc == 0
+        assert "claimed_by: sess-mine" in hp.read_text(encoding="utf-8")
+
+    def test_an_indeterminate_liveness_read_fails_open(self, tmp_path, monkeypatch):
+        """A liveness error must not make claiming impossible — a blocked claim
+        is a worse failure than the contention this detects, which the operator
+        can still see in the frontmatter."""
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        hp = _seed_handoff(repo, "h9.md", extra="claimed_by: sess-unknown\n")
+        monkeypatch.setenv("CLAUDE_SESSION_ID", "sess-mine")
+
+        def _boom(sid, cwd=None):
+            raise RuntimeError("registry unreadable")
+
+        monkeypatch.setattr(
+            "coordinator_core.session.liveness.session_live", _boom, raising=False
+        )
+
+        rc = arstamp.cs_claim_handoff(str(hp))
+
+        assert rc == 0
+
+    def test_reclaiming_my_own_live_claim_is_not_contention(self, tmp_path, monkeypatch):
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        hp = _seed_handoff(repo, "h10.md", extra="claimed_by: sess-mine\n")
+        monkeypatch.setenv("CLAUDE_SESSION_ID", "sess-mine")
+        monkeypatch.setattr(
+            "coordinator_core.session.liveness.session_live",
+            lambda sid, cwd=None: True,
+            raising=False,
+        )
+
+        rc = arstamp.cs_claim_handoff(str(hp))
+
+        assert rc == 0

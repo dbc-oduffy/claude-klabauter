@@ -321,11 +321,22 @@ _SCOPE_HELPER_NAMES = frozenset(
 #: 2026-08-05. Note what is NOT here: `coordinator_core/ops/session/
 #: safe_commit_offer.py` names the helper in prose only and neither imports nor
 #: calls it.
+#: RE-BASELINED 2026-08-31, and the reason is the whole record: the enclosing
+#: def changed from `_git_commit_agent_may_commit` to
+#: `_git_commit_agent_pathspec_permitted` at f864d4c716, whose own docstring
+#: declares the move "PURE MOTION, no logic change" -- LEG 3's predicate
+#: extracted so a caller already holding a resolved `(paths, include_orphans)`
+#: pair can consult it without re-parsing a command string. Still ONE call
+#: site, same file, same `allow_orphans=False`. That is a move, not the
+#: widening AC5 exists to catch: no new caller gained reach and no site's
+#: argument changed. The pin had been red since that extraction landed, which
+#: is its own small lesson -- a tripwire nobody re-baselines is a tripwire that
+#: reports nothing about the NEXT change.
 _EXPECTED_SCOPE_HELPER_CALL_SITES = frozenset(
     {
         (
             "coordinator_core/bash_guards/block_subagent_commit.py",
-            "_git_commit_agent_may_commit",
+            "_git_commit_agent_pathspec_permitted",
             "False",
         ),
     }
@@ -479,10 +490,14 @@ class TestAC5AllowOrphansDoesNotWiden:
         # seeing this census at one caller after having been two must NOT
         # "fix" it by re-adding a scoped_git_commit.py entry: that would
         # re-introduce the exact predicate C2 deliberately avoided reusing.
+        # The enclosing def is `_git_commit_agent_pathspec_permitted` since
+        # f864d4c716's PURE-MOTION extraction — see the re-baseline note on
+        # `_EXPECTED_SCOPE_HELPER_CALL_SITES`. Still ONE caller, which is what
+        # the comment above is about; the move did not make it two.
         assert set(_EXPECTED_SCOPE_HELPER_CALL_SITES) == {
             (
                 "coordinator_core/bash_guards/block_subagent_commit.py",
-                "_git_commit_agent_may_commit",
+                "_git_commit_agent_pathspec_permitted",
                 "False",
             ),
         }, "sanity check on the pinned set itself failed — see comment above"

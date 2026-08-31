@@ -252,6 +252,49 @@ class GeneratorRecord:
     mutates: tuple[str, ...] = ()
 
 
+@dataclass(frozen=True)
+class WriteSite:
+    """One write call site found while scanning a module's AST.
+
+    Fully classified against the module's own source alone (R1/R2/R5/R7's
+    exclusions, R3/R4's tmp-handle substitution, R8's local-name
+    substitution) -- never against `tracked` or `is_test_module`, both of
+    which arrive only at sweep time. `target_literal` is the resolved
+    literal target when one exists, or `None` for a write whose target
+    could not be determined statically. `via_tmp_handle` marks a site
+    reached by following R3's atomic-write idiom (a `tempfile.mkstemp`
+    handle promoted by a later `os.replace`/`Path.replace`) to its real
+    destination, rather than found directly at a write call. `excluded`
+    marks a site that contributes no signal at all -- R1/R2/R5/R7, or a
+    literal target that looks like a tmp path -- kept for observability
+    even though `_resolve` skips it unconditionally.
+    """
+
+    target_literal: str | None
+    via_tmp_handle: bool
+    excluded: bool
+
+
+@dataclass(frozen=True)
+class FileWrites:
+    """A module's write behaviour and declared provenance, derived purely
+    from its parsed source -- no git state, no pytest configuration.
+
+    `generates`/`mutates` are the raw `ast.literal_eval`d GENERATES/MUTATES
+    module-level assignments (a list, `"__MALFORMED__"`, or `None`);
+    `write_sites` are the write calls `_scan_file_writes` found, each
+    classified up to but not including tracked-set resolution.
+    `syntax_error` is carried for shape parity with a future bytes-keyed
+    cache entry that failed to parse at all -- `_scan_file_writes` always
+    takes an already-parsed `tree`, so it is always `False` here.
+    """
+
+    generates: object
+    mutates: object
+    write_sites: list[WriteSite]
+    syntax_error: bool
+
+
 def _looks_like_tmp(target: str) -> bool:
     lowered = target.lower()
     return any(marker in lowered for marker in _TMP_MARKERS)
@@ -927,8 +970,88 @@ def _replace_destination_exprs(
     return destinations
 
 
-def _module_is_generator(
-    tree: ast.AST, tracked: frozenset[str] | None, is_test_module: bool = False
+def _scan_file_writes(tree: ast.AST) -> FileWrites:
+    """Scan *tree* for write call sites and declared GENERATES/MUTATES.
+
+    Everything returned is a pure function of the module's parsed source:
+    no `tracked` set, no `is_test_module` verdict, both of which are
+    per-run inputs consumed only by `_resolve` below. The R1-R9 rules (see
+    module docstring) that decide whether a call site is excluded,
+    unresolved, or a literal candidate all run here, in AST-walk order,
+    exactly as they did before this split — `_resolve` replays that same
+    order over `write_sites` rather than re-deriving it.
+    """
+    json_module_aliases, json_dump_names = _json_bindings(tree)
+    handle_names = _handle_names(tree)
+    tmp_bases, mkstemp_names = _tmp_var_info(tree)
+    tmp_var_names = mkstemp_names | frozenset(tmp_bases)
+    scope_binds = _ScopeBindings(tree)
+    scratch_fds = _scratch_mkstemp_fds(tree, scope_binds)
+
+    sites: list[WriteSite] = []
+
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Call) and _call_is_write(node, json_module_aliases, json_dump_names)):
+            continue
+
+        func = node.func
+        is_dump = isinstance(func, ast.Attribute) and func.attr == "dump"
+        if is_dump:
+            file_arg = _dump_file_arg(node)
+            if file_arg is not None:
+                if _is_stdio_sink(file_arg):  # R1
+                    sites.append(WriteSite(target_literal=None, via_tmp_handle=False, excluded=True))
+                    continue
+                if isinstance(file_arg, ast.Name) and file_arg.id in handle_names:  # R2
+                    sites.append(WriteSite(target_literal=None, via_tmp_handle=False, excluded=True))
+                    continue
+            sites.append(WriteSite(target_literal=None, via_tmp_handle=False, excluded=False))
+            continue
+
+        if _is_fdopen_of_scratch_fd(node, scratch_fds):  # R7
+            sites.append(WriteSite(target_literal=None, via_tmp_handle=False, excluded=True))
+            continue
+
+        expr = _write_target_expr(node)
+        if expr is None:
+            sites.append(WriteSite(target_literal=None, via_tmp_handle=False, excluded=False))
+            continue
+
+        kind, literal = _resolve_target_expr(
+            expr, tmp_bases, scope_binds.at(node.lineno)
+        )
+        if kind == "excluded":  # R5 (widened by R8)
+            sites.append(WriteSite(target_literal=None, via_tmp_handle=False, excluded=True))
+            continue
+        if kind == "unresolved":
+            sites.append(WriteSite(target_literal=None, via_tmp_handle=False, excluded=False))
+            continue
+
+        assert literal is not None
+        if _looks_like_tmp(literal):
+            sites.append(WriteSite(target_literal=literal, via_tmp_handle=False, excluded=True))
+            continue
+        sites.append(WriteSite(target_literal=literal, via_tmp_handle=False, excluded=False))
+
+    if tmp_var_names:
+        for dest_expr in _replace_destination_exprs(tree, tmp_var_names):  # R3
+            kind, literal = _resolve_target_expr(dest_expr, tmp_bases)
+            if kind != "literal" or literal is None:
+                continue
+            if _looks_like_tmp(literal):
+                continue
+            sites.append(WriteSite(target_literal=literal, via_tmp_handle=True, excluded=False))
+
+    return FileWrites(
+        generates=_extract_generates(tree),
+        mutates=_extract_mutates(tree),
+        write_sites=sites,
+        syntax_error=False,
+    )
+
+
+def _resolve(
+    writes: FileWrites, tracked: frozenset[str] | None, is_test_module: bool = False
 ) -> str | None:
     """Return the basis on which this module was inferred to be a generator.
 
@@ -948,74 +1071,28 @@ def _module_is_generator(
         exempted from this basis — its writes are fixture writes (typically
         through a `tmp_path`-derived variable), not repo artifacts.
 
-    R1-R6 (see module docstring) narrow this further: a write can also
-    resolve to `"excluded"` internally (R1/R5) and contribute no signal at
-    all, and an unresolved temp-handle write can be upgraded to `tracked:`
-    by following R3/R4's atomic-write idiom to its real destination.
+    `writes.write_sites` already carries R1-R9's exclusions and the
+    R3/R4 temp-handle-to-destination upgrade, in the same order they were
+    found; this only replays that order against the two per-run inputs
+    `_scan_file_writes` could not see — `tracked` membership and
+    `is_test_module` — so the first resolvable tracked write still
+    short-circuits the rest exactly as it did before the split.
 
     Returns None when no write was found. Truthiness is unchanged from the
-    prior bool return, so the caller's `not _module_is_generator(...)` guard
-    keeps its meaning.
+    prior bool return, so the caller's `not _resolve(...)` guard keeps its
+    meaning.
     """
-    json_module_aliases, json_dump_names = _json_bindings(tree)
-    handle_names = _handle_names(tree)
-    tmp_bases, mkstemp_names = _tmp_var_info(tree)
-    tmp_var_names = mkstemp_names | frozenset(tmp_bases)
-    scope_binds = _ScopeBindings(tree)
-    scratch_fds = _scratch_mkstemp_fds(tree, scope_binds)
-
     unresolved_seen = False
 
-    for node in ast.walk(tree):
-        if not (isinstance(node, ast.Call) and _call_is_write(node, json_module_aliases, json_dump_names)):
+    for site in writes.write_sites:
+        if site.excluded:
             continue
-
-        func = node.func
-        is_dump = isinstance(func, ast.Attribute) and func.attr == "dump"
-        if is_dump:
-            file_arg = _dump_file_arg(node)
-            if file_arg is not None:
-                if _is_stdio_sink(file_arg):  # R1
-                    continue
-                if isinstance(file_arg, ast.Name) and file_arg.id in handle_names:  # R2
-                    continue
+        if site.target_literal is None:
             unresolved_seen = True
             continue
-
-        if _is_fdopen_of_scratch_fd(node, scratch_fds):  # R7
+        if tracked is not None and _normalize_target(site.target_literal) not in tracked:
             continue
-
-        expr = _write_target_expr(node)
-        if expr is None:
-            unresolved_seen = True
-            continue
-
-        kind, literal = _resolve_target_expr(
-            expr, tmp_bases, scope_binds.at(node.lineno)
-        )
-        if kind == "excluded":  # R5 (widened by R8)
-            continue
-        if kind == "unresolved":
-            unresolved_seen = True
-            continue
-
-        assert literal is not None
-        if _looks_like_tmp(literal):
-            continue
-        if tracked is not None and _normalize_target(literal) not in tracked:
-            continue
-        return f"tracked:{_normalize_target(literal)}"
-
-    if tmp_var_names:
-        for dest_expr in _replace_destination_exprs(tree, tmp_var_names):  # R3
-            kind, literal = _resolve_target_expr(dest_expr, tmp_bases)
-            if kind != "literal" or literal is None:
-                continue
-            if _looks_like_tmp(literal):
-                continue
-            if tracked is not None and _normalize_target(literal) not in tracked:
-                continue
-            return f"tracked:{_normalize_target(literal)}"
+        return f"tracked:{_normalize_target(site.target_literal)}"
 
     return "unresolved" if (unresolved_seen and not is_test_module) else None
 
@@ -1329,13 +1406,14 @@ def discover_generators(repo_root: Path) -> list[GeneratorRecord]:
                 continue
 
             rel_path = path.relative_to(repo_root).as_posix()
-            generates = _extract_generates(tree)
-            mutates = _extract_mutates(tree)
+            writes = _scan_file_writes(tree)
+            generates = writes.generates
+            mutates = writes.mutates
 
             basis: str | None = None
             if generates is None and mutates is None:
                 is_test_module = _is_test_module(rel_path, test_module_globs)
-                basis = _module_is_generator(tree, tracked, is_test_module)
+                basis = _resolve(writes, tracked, is_test_module)
                 if not basis:
                     continue
 

@@ -123,3 +123,130 @@ class TestRegistrationSuffix:
 
         assert "hooks.receiver_state_sensor" in _REGISTRY
         assert sensor.__name__.rsplit(".", 1)[-1] == "receiver_state_sensor"
+
+
+class TestTranscriptClockIsNotFileMtime:
+    """The sensor's own copy of the 2026-08-31 defect, driven end to end.
+
+    These assert THROUGH the handler, not against `classify` directly: the
+    defect was which number the sensor passed, so a test that supplies the
+    number itself could not have failed. Each case forces the file's mtime
+    forward the way a bookkeeping rewrite does, and would return the opposite
+    verdict on the pre-fix sensor.
+    """
+
+    def _tool_use_transcript(self, tmp_path: Path, stamp: str) -> str:
+        return _write_transcript(
+            tmp_path,
+            [
+                json.dumps(
+                    {
+                        "type": "assistant",
+                        "timestamp": stamp,
+                        "message": {
+                            "stop_reason": "tool_use",
+                            "content": [{"type": "tool_use", "name": "Bash"}],
+                        },
+                    }
+                ),
+                # Untimestamped bookkeeping rows -- what the harness rewrites
+                # onto a stopped session, moving mtime without the session acting.
+                json.dumps({"type": "cost-state"}),
+                json.dumps({"type": "last-prompt"}),
+            ],
+        )
+
+    def test_a_stalled_tool_call_is_paused_even_when_mtime_was_rewritten_forward(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        import os
+        from datetime import datetime, timedelta, timezone
+
+        from coordinator_core.session import core as session_core
+
+        _fake_session_dir(monkeypatch, tmp_path)
+        now = datetime(2026, 8, 31, 12, 0, 0, tzinfo=timezone.utc)
+        # The tool call went out 10 minutes ago -- far past the 90s grace.
+        stamp = (now - timedelta(seconds=600)).isoformat().replace("+00:00", "Z")
+        transcript = self._tool_use_transcript(tmp_path, stamp)
+        # ...but a bookkeeping write touched the file 5 seconds ago.
+        os.utime(transcript, (now.timestamp() - 5, now.timestamp() - 5))
+        monkeypatch.setattr(session_core, "now_epoch", lambda: int(now.timestamp()))
+
+        asyncio.run(
+            sensor._handler(
+                {"session_id": "sid-skew-1", "transcript_path": transcript},
+                repo_root=str(tmp_path),
+            )
+        )
+
+        record = rs.read_receiver_state("sid-skew-1", str(tmp_path))
+        assert record is not None
+        # Pre-fix: age = 5s, under the grace, PRODUCING:tool-in-flight.
+        assert record["verdict"] == "PAUSED"
+        assert record["reason"].startswith("tool-unanswered")
+
+    def test_a_live_tool_call_is_still_producing(self, tmp_path: Path, monkeypatch) -> None:
+        """The correction removes unearned freshness; it must not invent
+        staleness on a session that genuinely just acted."""
+        from datetime import datetime, timedelta, timezone
+
+        from coordinator_core.session import core as session_core
+
+        _fake_session_dir(monkeypatch, tmp_path)
+        now = datetime(2026, 8, 31, 12, 0, 0, tzinfo=timezone.utc)
+        stamp = (now - timedelta(seconds=10)).isoformat().replace("+00:00", "Z")
+        transcript = self._tool_use_transcript(tmp_path, stamp)
+        monkeypatch.setattr(session_core, "now_epoch", lambda: int(now.timestamp()))
+
+        asyncio.run(
+            sensor._handler(
+                {"session_id": "sid-skew-2", "transcript_path": transcript},
+                repo_root=str(tmp_path),
+            )
+        )
+
+        record = rs.read_receiver_state("sid-skew-2", str(tmp_path))
+        assert record is not None
+        assert record["verdict"] == "PRODUCING"
+
+    def test_mtime_is_still_the_fallback_when_no_line_carries_a_timestamp(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """An upper bound is better than no age evidence at all -- refusing it
+        would keep PRODUCING:tool-in-flight forever on such a tail."""
+        import os
+        from datetime import datetime, timezone
+
+        from coordinator_core.session import core as session_core
+
+        _fake_session_dir(monkeypatch, tmp_path)
+        now = datetime(2026, 8, 31, 12, 0, 0, tzinfo=timezone.utc)
+        transcript = _write_transcript(
+            tmp_path,
+            [
+                json.dumps(
+                    {
+                        "type": "assistant",
+                        "message": {
+                            "stop_reason": "tool_use",
+                            "content": [{"type": "tool_use", "name": "Bash"}],
+                        },
+                    }
+                )
+            ],
+        )
+        os.utime(transcript, (now.timestamp() - 600, now.timestamp() - 600))
+        monkeypatch.setattr(session_core, "now_epoch", lambda: int(now.timestamp()))
+
+        asyncio.run(
+            sensor._handler(
+                {"session_id": "sid-skew-3", "transcript_path": transcript},
+                repo_root=str(tmp_path),
+            )
+        )
+
+        record = rs.read_receiver_state("sid-skew-3", str(tmp_path))
+        assert record is not None
+        assert record["verdict"] == "PAUSED"
+        assert record["reason"].startswith("tool-unanswered")

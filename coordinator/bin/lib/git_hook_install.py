@@ -685,6 +685,15 @@ def _append_block(
     start_marker, _end_marker = _append_markers(header)
     return (
         f"\n{start_marker}\n"
+        # CURRENCY STAMP, inside our own markers. Without it, an installed
+        # append block was never refreshed: `_ensure_hook` saw both markers and
+        # returned `left-append-form` unconditionally, so a repo on the append
+        # path kept whatever body it was installed with forever and every later
+        # fix reached only repos that had no block yet. The whole-file branch has
+        # had this predicate all along; this leg simply never grew one. Emitted
+        # as a `#` comment so it is inert to `sh` inside a foreign hook, and
+        # compared -- never parsed -- by `_ensure_hook`.
+        f"{_hook_gen_stamp_line()}\n"
         # `_have_py`, not `[ -f ]`, on every rung below — see `_shim_body`'s
         # WINDOWS TRAP comment for the MSYS `.exe`-sibling mechanism. Emitted
         # here rather than shared: an append block lands inside a foreign hook
@@ -792,6 +801,52 @@ def _has_line(text: str, exact_line: str) -> bool:
     return any(line.strip() == exact_line for line in text.splitlines())
 
 
+def _block_extent(text: str, start_marker: str, end_marker: str):
+    """Line indices `(start, end)` of the marker-delimited block, or None.
+
+    Exact-line matching, same predicate as `_has_line` -- a marker mentioned
+    inside a string or a longer comment is not a marker.
+
+    Returns None on every shape this cannot identify UNAMBIGUOUSLY, and that is
+    the point rather than a limitation: this function's caller is about to
+    rewrite bytes inside a hook file somebody else owns, and `_ensure_hook`'s
+    own docstring is emphatic about refusing rather than guessing. A repeated
+    start marker (two installs racing, or a hand-edit), an end marker that
+    precedes its start, or either marker missing all yield None, and the caller
+    leaves the file untouched and says so.
+    """
+    lines = text.splitlines()
+    starts = [i for i, ln in enumerate(lines) if ln.strip() == start_marker]
+    ends = [i for i, ln in enumerate(lines) if ln.strip() == end_marker]
+    if len(starts) != 1 or len(ends) != 1:
+        return None
+    if ends[0] < starts[0]:
+        return None
+    return starts[0], ends[0]
+
+
+def _replace_block(text: str, start: int, end: int, block: str) -> str:
+    """Splice `block` over lines [start, end] of `text`, preserving everything
+    outside that range byte-for-byte.
+
+    Everything above the block is a foreign hook's own content and everything
+    below it may be too (our block is not necessarily last on the chain), so
+    neither side is regenerated, reordered, or re-indented -- only the extent
+    `_block_extent` positively identified is replaced. `block` is
+    `_ensure_hook`'s `append_block` argument, which carries its own leading
+    newline for the append path; that blank separator already exists in the
+    installed file here, so it is stripped rather than accumulating one blank
+    line per refresh.
+    """
+    lines = text.splitlines(keepends=True)
+    trailing_newline = text.endswith("\n")
+    replacement = block.lstrip("\n").rstrip("\n") + "\n"
+    out = "".join(lines[:start]) + replacement + "".join(lines[end + 1:])
+    if trailing_newline and not out.endswith("\n"):
+        out += "\n"
+    return out
+
+
 def _git_root() -> Optional[str]:
     """Resolve the cwd's repo root via the checked resolver
     (`repo_identity.resolve_checked_repo_root`).
@@ -852,7 +907,8 @@ def _ensure_hook(
     `outcome`: optional out-param. When supplied, exactly one classification
     string is appended describing what this call actually DID —
     `installed-absent`, `rewritten-stale`, `appended`, `already-current`,
-    `left-append-form`, `left-legacy-append-form`, `skipped-no-root`, or
+    `refreshed-append-form`, `left-append-form`, `left-legacy-append-form`,
+    `skipped-no-root`, or
     `skipped-no-helper`. Deliberately an out-param rather than a changed
     return type: this function's `-> int` is a process exit code consumed by
     two entrypoints and a hook installer must never fail loudly enough to
@@ -972,9 +1028,38 @@ def _ensure_hook(
             if not check_only:
                 _chmod_x(hook_path)
             return _note("left-legacy-append-form")
+        # Modern append form (both markers present, so the extent is
+        # positively identifiable). Currency is decided by the SAME predicate
+        # the whole-file branch uses -- `_hook_gen_stamp_line()` -- not by
+        # byte-comparing the generated block: the block interpolates a baked
+        # interpreter path that legitimately differs between machines and
+        # resolutions, and comparing it would rewrite a foreign hook on churn
+        # rather than on drift.
+        extent = _block_extent(body, start_marker, end_marker)
+        if extent is None:
+            print(
+                f"[git_hook_install] WARNING: {hook_path} carries a coordinator "
+                f"append block whose extent is ambiguous (repeated or "
+                f"out-of-order '{start_marker}' / '{end_marker}' lines) — "
+                "leaving it untouched. Repair the markers by hand to pick up "
+                "current fixes.",
+                file=sys.stderr,
+            )
+            if not check_only:
+                _chmod_x(hook_path)
+            return _note("left-append-form")
+        start_idx, end_idx = extent
+        installed = "".join(body.splitlines(keepends=True)[start_idx:end_idx + 1])
+        if _has_line(installed, _hook_gen_stamp_line()):
+            if not check_only:
+                _chmod_x(hook_path)
+            return _note("already-current")
         if not check_only:
+            _atomic_write(
+                hook_path, _replace_block(body, start_idx, end_idx, append_block)
+            )
             _chmod_x(hook_path)
-        return _note("left-append-form")
+        return _note("refreshed-append-form")
 
     if _marker_in_noncomment(body, marker):
         # Whole-file shim host (current, or a historical stale shape —
@@ -1086,7 +1171,13 @@ def ensure_prepare_commit_msg_hook(
 #: the fleet report must never swallow. `already-current` is the silent case;
 #: the two `left-*-append-form` states are neither drift nor repair (a foreign
 #: hook chain we deliberately refuse to touch) and are reported separately.
-_HEALED_OUTCOMES = frozenset({"installed-absent", "rewritten-stale", "appended"})
+#: `refreshed-append-form` joins this set for the reason the set exists: it is
+#: a repo that was carrying a stale body and just got a current one. It is NOT
+#: a `left-*` state -- those mean "a foreign chain we deliberately did not
+#: touch", and a refresh is the opposite of not touching.
+_HEALED_OUTCOMES = frozenset(
+    {"installed-absent", "rewritten-stale", "appended", "refreshed-append-form"}
+)
 
 #: `repos.*` keys whose value is a CONTAINER of repos rather than a repo. They
 #: share the `repos.` prefix but not its semantics, so the heal sweep must not

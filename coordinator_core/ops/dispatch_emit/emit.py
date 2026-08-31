@@ -516,6 +516,10 @@ _NEXT_HEADING_RE = re.compile(r"^#{1,6}\s", re.MULTILINE)
 # title + goal + one paragraph without truncating the common case, while
 # still refusing an unbounded prose blob.
 _PLAN_CONTEXT_PREAMBLE_CHAR_CAP = 900
+
+# The scaffolded sentinel `plan.schema.json` excludes from `deliverable_id`
+# by negative lookahead -- a plan still carrying it has no id yet.
+_DELIVERABLE_ID_PLACEHOLDER_PREFIX = "dlv-placeholder-replace-with"
 _TRUNCATION_SUFFIX = "…"
 
 
@@ -625,6 +629,42 @@ def _prime_exit_criterion_statement(plan_text: str) -> Optional[str]:
         return None
     collapsed = " ".join(statement.split())
     return collapsed or None
+
+
+def _plan_deliverable_id(plan_text: str) -> Optional[str]:
+    """The plan's top-level frontmatter ``deliverable_id``, or ``None``.
+
+    Parses the frontmatter as YAML for the same reason
+    ``_prime_exit_criterion_statement`` does, and is fail-soft in every
+    direction: no frontmatter, unparseable YAML, a non-mapping document, an
+    absent, null, non-string, or empty ``deliverable_id`` all return
+    ``None``.
+
+    The scaffolded placeholder (``dlv-placeholder-replace-with-...``, which
+    ``plan.schema.json`` excludes by negative lookahead) is rejected too, as
+    is any value without the ``dlv-`` prefix that schema requires. A commit
+    prompt naming no id costs one hand-written ``disposition_ref``; a commit
+    prompt naming a placeholder stamps unrewritable shared history with an
+    id that joins to nothing.
+    """
+    split = split_frontmatter(plan_text)
+    if split is None:
+        return None
+    try:
+        doc = yaml.safe_load(split.fm_text)
+    except yaml.YAMLError:
+        return None
+    if not isinstance(doc, dict):
+        return None
+    value = doc.get("deliverable_id")
+    if not isinstance(value, str):
+        return None
+    candidate = value.strip()
+    if not candidate.startswith("dlv-"):
+        return None
+    if candidate.startswith(_DELIVERABLE_ID_PLACEHOLDER_PREFIX):
+        return None
+    return candidate
 
 
 def _plan_context_preamble(context: PlanContext) -> str:
@@ -969,6 +1009,7 @@ def _commit_agent_call(
     chunk_ids: list[str] | None = None,
     results_var: Optional[str] = None,
     commit_var: str = "commitResult",
+    deliverable_id: Optional[str] = None,
 ) -> str:
     """Emit the wave's commit-agent call, plus the gate that halts the run
     when that commit did not land (see ``_commit_halt_gate``).
@@ -981,6 +1022,19 @@ def _commit_agent_call(
     and the operator has to re-register each row by hand against the
     commit log. Naming the ids here is what makes the emitted run
     close itself out.
+
+    ``deliverable_id`` is the OTHER leg of that same join, and carries
+    the identical stakes: with no id named here the committer resolves
+    one from whatever ambient session state it finds, which is a stale
+    id belonging to an unrelated workstream as often as not (observed
+    2026-08-19: `302ca5430` and `dde488e12` both landed carrying
+    ``dlv-git-amplification-hitlist-burn-down-391b0f`` while executing a
+    plan whose own id was
+    ``dlv-the-windows-commit-hook-starts-python-on-99b845``). Shared
+    history cannot be rewritten to correct a trailer after the fact --
+    the only recovery is a hand-written per-row ``disposition_ref`` --
+    so the emitter, which knows the id, names it rather than leaving it
+    to be inferred.
 
     ``results_var``, when supplied, names the JS variable
     ``_wave_agent_calls`` bound to this wave's executor return value(s)
@@ -1022,16 +1076,23 @@ def _commit_agent_call(
         f" The commit subject MUST register the chunk id(s) it delivers: {registered}."
         f" Lead the subject with ALL of them, e.g. '{registered}: <what changed>'"
         " -- a wave delivering several chunks needs every id in the subject,"
-        " not just the first; close-out registers only the ids it can read there."
-        " close-out joins on the subject's chunk-id as well as the"
-        " Deliverable-Id trailer; a wave-scoped subject leaves the plan"
-        " stamped partial."
+        " not just the first; a resumed agent finds its wave's own commit by"
+        " chunk id in the subject."
         if chunk_ids
+        else ""
+    )
+    deliverable_rule = (
+        " A Deliverable-Id trailer is attached to this commit automatically"
+        " by the prepare-commit-msg hook -- do not pass a flag for it and do"
+        " not hand-write one into the message body. If the trailer resolves"
+        " to an id you did not expect, report it; that is never grounds to"
+        " amend, reset, or re-commit."
+        if deliverable_id
         else ""
     )
     static_prompt = (
         f"Commit wave {index + 1}'s work. Pathspec: [{', '.join(pathspec)}]."
-        f"{subject_rule}"
+        f"{subject_rule}{deliverable_rule}"
         f" If `CommitOutcome.no_delta` comes back non-empty, list those paths"
         f" first and say they contributed nothing to this commit -- they are"
         f" paths you declared that were already at HEAD, and reporting only"
@@ -1042,6 +1103,8 @@ def _commit_agent_call(
         f" state the reason instead. The emitted run halts at this phase"
         f" unless that line is present, so emitting it without a landed"
         f" commit lets the next wave overwrite uncommitted work."
+        " This commit-phase prompt is composed by"
+        " coordinator_core/ops/dispatch_emit/emit.py."
     )
 
     if results_var:
@@ -1409,6 +1472,7 @@ def compose_script(
     review_roster_fragment: Optional[dict] = None,
     plan_path: Optional[str] = None,
     plan_context: Optional[PlanContext] = None,
+    deliverable_id: Optional[str] = None,
 ) -> str:
     """Compose one Workflow ``.mjs`` script text from already-derived ``waves``.
 
@@ -1432,6 +1496,12 @@ def compose_script(
     ``_wave_agent_calls`` call so each row's prompt carries the plan-context
     preamble — see ``PlanContext``/``_row_prompt``. This function never
     resolves one itself; ``emit_script`` is the sole resolution site.
+
+    ``deliverable_id`` is threaded to every ``_commit_agent_call`` the same
+    way each batch's chunk ids are -- the two together are the join
+    ``close-out-and-stamp`` needs. It is likewise resolved only in
+    ``emit_script``; a plan declaring none emits commit prompts that name
+    none, never a guessed or placeholder id.
     """
     if not waves:
         raise NoWavesError(
@@ -1492,6 +1562,7 @@ def compose_script(
                     [row.id for row in batch],
                     results_var,
                     commit_var=f"commit{results_var[0].upper()}{results_var[1:]}",
+                    deliverable_id=deliverable_id,
                 )
             )
 
@@ -1600,7 +1671,10 @@ def emit_script(
 
     ``plan_context`` (AC12) is resolved here, once, and passed to
     ``compose_script`` -> ``_wave_agent_calls`` -> ``_row_prompt`` — no
-    downstream function opens or re-parses the plan to obtain it.
+    downstream function opens or re-parses the plan to obtain it. The
+    plan's ``deliverable_id`` is resolved from the same already-read text
+    and passed alongside it, reaching every commit prompt via
+    ``compose_script`` -> ``_commit_agent_call``.
     """
     plan_path = Path(plan_path)
     rows = read_spine(plan_path)
@@ -1625,6 +1699,8 @@ def emit_script(
         fallback_title=plan_path.stem,
     )
 
+    deliverable_id = _plan_deliverable_id(plan_text) if plan_text else None
+
     return compose_script(
         waves,
         name=resolved_name,
@@ -1634,6 +1710,7 @@ def emit_script(
         review_roster_fragment=review_roster_fragment,
         plan_path=spec_path.as_posix(),
         plan_context=plan_context,
+        deliverable_id=deliverable_id,
     )
 
 

@@ -4,9 +4,21 @@ coordinator_core.pickup_assemble.tests.test_baton_unification
 Purpose: proves C5 (docs/plans/2026-08-19-batons-unify-into-one-successor.md
 § C5, "route a second pickup into baton_assemble's multi-leg path, behind a
 predicate" — shipped off, flipped ON at `c09345b56`) — THE ACTION HALF. `compute_baton_unification_verdict`
-(C4) is consumed, never re-derived; this suite exercises the routing seam
-(`route_baton_adoption`), the mint dispatch (`_unify_into_successor`), and
-crash-resume (`_resume_pending_unification`) that sit on top of it.
+(C4) is consumed, never re-derived; this suite exercises the mint dispatch
+(`_unify_into_successor`) and crash-resume (`_resume_pending_unification`)
+that sit on top of it.
+
+REROUTED THROUGH `unify_run_batons`, NOT `route_baton_adoption`, as of the
+guard (a) fix in `state/bug-backlog/2026-08-31-pickup-after-a-close-
+supersedes-the-new-baton.yaml`. `route_baton_adoption` — the `/pickup`
+seam — no longer reaches ANY of this machinery: it always does the plain
+`_adopt_into_baton` append, unconditionally, because the routing decision
+this suite used to drive through it (any session-held claim reads as a
+"handover") was the incident's root cause. `unify_run_batons` is the one
+remaining, explicit-invocation caller of this machinery
+(`/mise-en-place`'s per-run unification) and is what every call below now
+exercises — same C4/mint/resume contract, reached the way it is actually
+still reachable in production.
 
 `baton_assemble.apply` itself is MOCKED at its own module attribute
 (`coordinator_core.baton_assemble.apply.apply`) — C5 imports it at CALL time
@@ -248,26 +260,14 @@ def _baton_json_path(repo: Path) -> Path:
 # ---------------------------------------------------------------------------
 
 
-def test_predicate_off_is_true_no_op(repo, monkeypatch):
-    monkeypatch.setattr(pa, "_baton_unification_routing_enabled", lambda: False)
-    _seed_handoff(repo, "a.md", baton_role="work")
-    _make_ledger_claim(repo, "a.md", SELF_SID)
-
-    called = []
-    monkeypatch.setattr(
-        ba_apply, "apply", _fake_baton_assemble_apply_factory(repo, called)
-    )
-
-    pa.route_baton_adoption(repo, TARGET_PATH, dict(TARGET_FM))
-
-    assert called == []
-    assert not (repo / SUCCESSOR_REL).exists()
-    a_text = (repo / "state" / "handoffs" / "a.md").read_text(encoding="utf-8")
-    assert "continued" not in a_text
-    # Falls straight through to `_adopt_into_baton` — same advisory
-    # append as pre-C5.
-    baton = pa.read_baton(SELF_SID, cwd=str(repo))
-    assert baton.get("adopted_artifacts") == [TARGET_PATH]
+# NOTE: the former `test_predicate_off_is_true_no_op` here exercised
+# `route_baton_adoption`'s predicate-off fallthrough to `_adopt_into_baton`
+# (an advisory append keyed on the artifact being picked up). That call
+# shape no longer exists on this seam — `route_baton_adoption` always does
+# the plain append now, unconditionally, predicate irrelevant. The
+# equivalent coverage for `unify_run_batons` (which HAS no artifact and no
+# advisory append) is `test_run_unification_predicate_off_mutates_nothing`,
+# below.
 
 
 # ---------------------------------------------------------------------------
@@ -285,7 +285,7 @@ def test_sequential_pickup_unifies_with_predicate_on(repo, monkeypatch):
         ba_apply, "apply", _fake_baton_assemble_apply_factory(repo, called)
     )
 
-    pa.route_baton_adoption(repo, TARGET_PATH, dict(TARGET_FM))
+    pa.unify_run_batons(repo)
 
     assert len(called) == 1
     assert (repo / SUCCESSOR_REL).exists()
@@ -320,7 +320,7 @@ def test_simultaneous_pickup_degraded_ordering_unifies_with_predicate_on(repo, m
         ba_apply, "apply", _fake_baton_assemble_apply_factory(repo, called)
     )
 
-    pa.route_baton_adoption(repo, TARGET_PATH, dict(TARGET_FM))
+    pa.unify_run_batons(repo)
 
     assert len(called) == 1
     assert (repo / SUCCESSOR_REL).exists()
@@ -374,7 +374,7 @@ def test_refuse_verdict_writes_nothing(repo, monkeypatch):
         ba_apply, "apply", _fake_baton_assemble_apply_factory(repo, called)
     )
 
-    pa.route_baton_adoption(repo, TARGET_PATH, dict(TARGET_FM))
+    pa.unify_run_batons(repo)
 
     assert called == []
     assert not (repo / SUCCESSOR_REL).exists()
@@ -398,7 +398,7 @@ def test_unification_mint_failure_surfaces(repo, monkeypatch):
     monkeypatch.setattr(ba_apply, "apply", _failing_apply)
 
     with pytest.raises(RuntimeError, match="baton unification mint failed"):
-        pa.route_baton_adoption(repo, TARGET_PATH, dict(TARGET_FM))
+        pa.unify_run_batons(repo)
 
     # Nothing was left half-adopted — no advisory append landed either,
     # since the exception propagates out of `_unify_into_successor` before
@@ -437,7 +437,7 @@ def test_kill_after_parents_stamped_before_any_claim_release_resumes_same_succes
     monkeypatch.setattr(pa, "_finish_unification_claims", _boom)
 
     with pytest.raises(RuntimeError, match="simulated crash"):
-        pa.route_baton_adoption(repo, TARGET_PATH, dict(TARGET_FM))
+        pa.unify_run_batons(repo)
 
     assert len(called) == 1  # mint landed exactly once
 
@@ -451,7 +451,7 @@ def test_kill_after_parents_stamped_before_any_claim_release_resumes_same_succes
         ba_apply, "apply", _fake_baton_assemble_apply_factory(repo, called2)
     )
 
-    pa.route_baton_adoption(repo, TARGET_PATH, dict(TARGET_FM))
+    pa.unify_run_batons(repo)
 
     assert called2 == []  # RESUME path — never re-mints
     for name in ("a.md", "b.md"):
@@ -491,7 +491,7 @@ def test_kill_after_successor_claimed_before_releasing_any_parent_resumes(
     monkeypatch.setattr(pa._claims, "release_artifact", _boom_release)
 
     with pytest.raises(RuntimeError, match="simulated crash"):
-        pa.route_baton_adoption(repo, TARGET_PATH, dict(TARGET_FM))
+        pa.unify_run_batons(repo)
 
     assert len(called) == 1
     successor_claim = (
@@ -515,7 +515,7 @@ def test_kill_after_successor_claimed_before_releasing_any_parent_resumes(
         ba_apply, "apply", _fake_baton_assemble_apply_factory(repo, called2)
     )
 
-    pa.route_baton_adoption(repo, TARGET_PATH, dict(TARGET_FM))
+    pa.unify_run_batons(repo)
 
     assert called2 == []
     for name in ("a.md", "b.md"):
@@ -553,7 +553,7 @@ def test_kill_after_releasing_one_parent_before_the_other_resumes(repo, monkeypa
     monkeypatch.setattr(pa._claims, "release_artifact", _release_then_crash)
 
     with pytest.raises(RuntimeError, match="simulated crash"):
-        pa.route_baton_adoption(repo, TARGET_PATH, dict(TARGET_FM))
+        pa.unify_run_batons(repo)
 
     assert len(called) == 1
     successor_claim = (
@@ -574,7 +574,7 @@ def test_kill_after_releasing_one_parent_before_the_other_resumes(repo, monkeypa
         ba_apply, "apply", _fake_baton_assemble_apply_factory(repo, called2)
     )
 
-    pa.route_baton_adoption(repo, TARGET_PATH, dict(TARGET_FM))
+    pa.unify_run_batons(repo)
 
     assert called2 == []
     successor_claim = (

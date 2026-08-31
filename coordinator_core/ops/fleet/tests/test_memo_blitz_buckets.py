@@ -536,6 +536,34 @@ class TestSupersessionCandidates:
         assert cands[0]["basis"] == "self-declared"
         assert cands[0]["older"] == "2026-07-19-a-em-two.md"
 
+    def test_bare_slug_citation_yields_no_candidate(self, tmp_path):
+        # Replay of the 2026-08-20 escalate run's worked example. The memo
+        # names its target by bare topic-slug, which carries no file extension
+        # and so never reaches `loci`; the generic phrase "that memo" then
+        # used to resolve by date adjacency to an unrelated same-sender memo.
+        # A slug reference IS a citation: precision-over-recall means no
+        # candidate at all rather than a nearest-dated stand-in.
+        inbox = tmp_path / "inbox"
+        inbox.mkdir()
+        _write_memo(
+            inbox, "2026-08-01-a-em-distill-log-parser-discards-every-run.md",
+            sender="a-em", created="2026-08-01", body="The parser drops runs.\n",
+        )
+        _write_memo(
+            inbox, "2026-08-05-a-em-anchor-gate-green-manifest-live.md",
+            sender="a-em", created="2026-08-05", body="Dead doc anchors, fyi.\n",
+        )
+        _write_memo(
+            inbox, "2026-08-06-a-em-log-correction-the-defect-is-ours.md",
+            sender="a-em", created="2026-08-06",
+            body=(
+                "Supersedes distill-log-parser-discards-every-run, sent last "
+                "week. Do not action that memo.\n"
+            ),
+        )
+        cands = _by_kind(_build_candidates(inbox, 10, 7, TODAY), "supersession_candidate")
+        assert [c for c in cands if c["basis"] == "self-declared"] == []
+
     def test_declared_basis_carries_advisory_false(self, tmp_path):
         inbox = tmp_path / "inbox"
         inbox.mkdir()

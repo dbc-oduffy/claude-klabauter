@@ -1532,13 +1532,9 @@ def breach_summary(
         # the number is not a reading of it. Summing it into `stolen_ms`, or
         # letting it into the percentile pool, publishes a precise-looking
         # arbitrary value that every consumer then reads as measured -- and a
-        # kind marker beside a plausible number loses to the number.
-        #
-        # This is `vanished`'s rule (see BREACH_KINDS: "contributes nothing to
-        # `stolen_ms` rather than a fabricated cost") applied to the other kind
-        # that also lacks a true duration. `caller_timeout` is still counted,
-        # still a breach, and still ranks via the count tiebreaker; what it no
-        # longer does is contribute a fabricated magnitude.
+        # kind marker beside a plausible number loses to the number (see
+        # BREACH_KINDS: "contributes nothing to `stolen_ms` rather than a
+        # fabricated cost").
         if isinstance(elapsed, (int, float)) and not timed_out:
             bucket["elapsed"].append(float(elapsed))
 

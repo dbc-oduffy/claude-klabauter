@@ -144,6 +144,8 @@ from datetime import datetime, timezone
 from typing import Any, Callable, Mapping, Optional
 
 from coordinator_core.session import peer_roster
+from coordinator_core.session.receiver_state import activity_epoch_from_reduced
+from coordinator_core.session.receiver_state import parse_iso_timestamp
 from coordinator_core.session.receiver_state import classify as receiver_state_classify
 from coordinator_core.session.receiver_state import read_receiver_state
 from coordinator_core.session.receiver_state import reduce_transcript_tail
@@ -181,20 +183,16 @@ def _parse_iso_stamp(value: Any) -> Optional[datetime]:
 
     Returns `None` on anything that is not a non-empty, parseable ISO8601
     string -- missing field, wrong type, or malformed text. A naive result
-    (no explicit offset) is assumed UTC, matching this module's other
-    timestamp handling. Never raises.
+    (no explicit offset) is assumed UTC. Never raises.
+
+    Review: coordinator:overengineering-reviewer -- the body was a second
+    implementation of `receiver_state.parse_iso_timestamp`, character for
+    character. Kept as a name because this module's callers read `stamped_at`
+    (a receiver-state field) rather than a transcript `timestamp`, and that
+    distinction is worth a name; the PARSE is one implementation, over there,
+    because this module already imports that one and not the reverse.
     """
-    if not isinstance(value, str) or not value:
-        return None
-    text = value.strip()
-    if text.endswith("Z"):
-        text = text[:-1] + "+00:00"
-    try:
-        parsed = datetime.fromisoformat(text)
-    except ValueError:
-        return None
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
+    parsed = parse_iso_timestamp(value)
     return parsed
 
 
@@ -295,12 +293,15 @@ def _transcript_path_for(session_id: str, cwd: str) -> str:
 def _transcript_mtime_epoch(session_id: str, cwd: str) -> Optional[float]:
     """When this peer last wrote to its transcript, as an epoch float.
 
-    The one place that turns a session id into a transcript mtime. Two
-    callers want that number for DIFFERENT questions -- one asks whether the
-    peer moved since a stamp, the other wants its age in seconds -- so this
-    deliberately returns the raw epoch rather than a freshness verdict, and
-    each caller does its own arithmetic. Collapsing them further would fuse
-    two computations that only share a file stat.
+    The one place that turns a session id into a transcript mtime -- which is
+    NOT this module's activity clock. Review:
+    coordinator:overengineering-reviewer -- this docstring used to argue its
+    shape from "two callers want that number for DIFFERENT questions", and
+    both of those callers were rerouted through
+    `_transcript_activity_epoch` by the change that demoted mtime. What
+    remains is one number with one job: the upper bound
+    `_transcript_activity_epoch` falls back to when no record in the tail
+    carries a timestamp. Not evidence of activity, and never promoted to it.
 
     NEGATIVE SPEC: `None` means the mtime could not be established (absent or
     unreadable transcript), and it must never be read as "has not moved" or
@@ -311,6 +312,31 @@ def _transcript_mtime_epoch(session_id: str, cwd: str) -> Optional[float]:
         return os.path.getmtime(_transcript_path_for(session_id, cwd))
     except OSError:
         return None
+
+
+def _transcript_activity_epoch(session_id: str, cwd: str) -> tuple[Optional[float], bool]:
+    """When this peer last actually MOVED, as `(epoch, trusted)`.
+
+    `trusted` is True only when the number came from a record's own
+    `timestamp`. The mtime fallback is returned with `trusted=False` and is an
+    UPPER BOUND, never evidence: it is the newest moment the file could have
+    been touched, including by a bookkeeping rewrite the session did not
+    perform. Callers must not let an untrusted value win a comparison that
+    makes a peer look busier -- see `send_pass._dwell_seconds`, where doing
+    exactly that is what hid a 12-minute stall from four consecutive ticks.
+
+    `(None, False)` means nothing could be established at all -- absent or
+    unreadable transcript -- and, as with `_transcript_mtime_epoch`, must
+    never be read as "has not moved" or as an age of zero.
+
+    The clock this replaces, and the measurement that condemned it, are
+    documented once at `receiver_state.activity_epoch_from_reduced`.
+    """
+    reduced, _unparseable, _cap = reduce_transcript_tail(_transcript_path_for(session_id, cwd))
+    epoch = activity_epoch_from_reduced(reduced)
+    if epoch is not None:
+        return epoch, True
+    return _transcript_mtime_epoch(session_id, cwd), False
 
 
 def _transcript_moved_since(
@@ -325,18 +351,37 @@ def _transcript_moved_since(
     the guard exists to catch from the case it was accidentally suppressing.
 
     Returns True (moved since), False (has not moved), or None when that
-    cannot be established -- an unreadable/absent transcript or an
-    unparseable stamp. `None` is never read as "has not moved": the caller
+    cannot be established -- an unreadable/absent transcript, an unparseable
+    stamp, or a transcript whose tail carries no timestamped record and whose
+    mtime has run PAST the stamp. That last case used to answer True from file
+    mtime, which is not an activity clock (`_transcript_activity_epoch`): a
+    bookkeeping rewrite moved mtime past the stamp and this reported "the peer
+    acted" for a peer that had done nothing, suppressing exactly the candidate
+    the guard was reinstating. An untrusted mtime that has NOT passed the
+    stamp still answers False -- see the one-directional-bias note at that
+    branch. `None` is never read as "has not moved": the caller
     leaves the age verdict standing, so this can only ever REINSTATE a
     candidate on positive evidence of stillness, never admit one on the
     absence of evidence.
     """
     if stamp_dt is None:
         return None
-    mtime_epoch = _transcript_mtime_epoch(session_id, cwd)
-    if mtime_epoch is None:
+    activity_epoch, trusted = _transcript_activity_epoch(session_id, cwd)
+    if activity_epoch is None:
         return None
-    return mtime_epoch > stamp_dt.timestamp()
+    if trusted:
+        return activity_epoch > stamp_dt.timestamp()
+    # Review: coordinator:code-reviewer (P2) -- the untrusted (mtime) fallback
+    # is barred from answering "moved", never from answering "has not moved".
+    # The bias is ONE-DIRECTIONAL: a bookkeeping rewrite can only push mtime
+    # forward, and any real write is at or before it, so `mtime <= stamp`
+    # bounds the peer's true last activity at or before the stamp too -- real
+    # evidence of stillness, and the reinstatement case a blanket `None` here
+    # silently gave up. Only the forward direction is unsafe, because that is
+    # the one a rewrite can manufacture.
+    if activity_epoch <= stamp_dt.timestamp():
+        return False
+    return None
 
 
 def classify_fallback_status(
@@ -344,7 +389,7 @@ def classify_fallback_status(
     reduced_lines: Optional[list] = None,
     *,
     now_epoch: Optional[float] = None,
-    transcript_mtime_epoch: Optional[float] = None,
+    transcript_activity_epoch: Optional[float] = None,
 ) -> tuple[str, str]:
     """Map a raw harness `status` string (plus, for `idle`, the peer's already-reduced
     transcript tail) to the fallback ladder's `(state, reason)`.
@@ -362,7 +407,7 @@ def classify_fallback_status(
         verdict = receiver_state_classify(
             reduced_lines or [],
             now_epoch=now_epoch if now_epoch is not None else datetime.now(timezone.utc).timestamp(),
-            transcript_mtime_epoch=transcript_mtime_epoch,
+            transcript_activity_epoch=transcript_activity_epoch,
             delegation_evidence=False,
         )
         if verdict.verdict == "PRODUCING":
@@ -533,7 +578,7 @@ def classify_peer(
 
     status = peer.get("status")
     reduced_lines: list = []
-    transcript_mtime_epoch: Optional[float] = None
+    transcript_activity_epoch: Optional[float] = None
     if status == "idle":
         cwd = peer.get("cwd") or repo_root
         if read_tail is not None:
@@ -541,14 +586,21 @@ def classify_peer(
         else:
             transcript_path = _transcript_path_for(session_id, cwd)
             reduced_lines, _any_unparseable, _cap_reached = reduce_transcript_tail(transcript_path)
-            transcript_mtime_epoch = _transcript_mtime_epoch(session_id, cwd)
+        # Derived from the tail ALREADY reduced above -- no second read, and
+        # no `_transcript_activity_epoch` call, which would re-reduce the same
+        # file. Falls back to mtime only when no line in that tail carries a
+        # timestamp, which is the same upper-bound-not-evidence fallback
+        # `_transcript_activity_epoch` makes, kept identical on both paths.
+        transcript_activity_epoch = activity_epoch_from_reduced(list(reduced_lines or []))
+        if transcript_activity_epoch is None and read_tail is None:
+            transcript_activity_epoch = _transcript_mtime_epoch(session_id, cwd)
 
     now_epoch = (now if now is not None else datetime.now(timezone.utc)).timestamp()
     state, reason = classify_fallback_status(
         status,
         reduced_lines,
         now_epoch=now_epoch,
-        transcript_mtime_epoch=transcript_mtime_epoch,
+        transcript_activity_epoch=transcript_activity_epoch,
     )
 
     return {
@@ -559,6 +611,14 @@ def classify_peer(
         "candidate": state == STATE_PAUSED,
         "unclassifiable": False,
         "cwd": peer.get("cwd"),
+        # Review: coordinator:code-reviewer (P2, double read) -- this leg
+        # already reduced the tail and derived the epoch; threading it onto the
+        # verdict (the same way `cwd` is) lets `watch._parked_line` report the
+        # peer's idle time without re-reducing the same file in the same tick.
+        # `None` on the reader leg, which never reduced a tail to reuse -- the
+        # consumer falls back to reading, which is then a FIRST read, not a
+        # second.
+        "activity_epoch": transcript_activity_epoch,
     }
 
 

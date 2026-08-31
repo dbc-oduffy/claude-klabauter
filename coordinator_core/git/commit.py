@@ -84,7 +84,7 @@ from coordinator_core.git.content_hash import (
 )
 from coordinator_core.git.git_index import parse_index_identity
 from coordinator_core.git.git_objects import cas_ref, read_packed_ref, write_object
-from coordinator_core.git.git_state import head_sha, read_tree_spine
+from coordinator_core.git.git_state import head_sha, head_tree_sha, read_tree_spine
 from coordinator_core.git.tree_spine import (
     _ABSENT,
     _rewrite_head_spine,
@@ -161,6 +161,22 @@ class CommitOutcome(NamedTuple):
     #: must already suspect the bug to know to read the field reproduces the
     #: bug.
     no_delta: Tuple[str, ...] = ()
+    #: The subset of `no_delta` that was declared DELETED and that HEAD did
+    #: not have. Separated because the two halves of `no_delta` are not the
+    #: same fact and only one of them is benign.
+    #:
+    #: A path whose bytes already match HEAD contributed nothing and nothing
+    #: was owed. A path declared deleted that HEAD never carried is a
+    #: DECLARATION THE CALLER COULD NOT HAVE MEANT -- there was no such file
+    #: to delete -- and it is what an untracked path looks like after
+    #: `coordinator-safe-commit :: _split_paths_for_commit_v2` misclassifies
+    #: it from the wrong cwd: the new file the caller wanted committed is
+    #: silently skipped instead (`state/audits/2026-08-31-committer-p0-*`).
+    #:
+    #: Kept OUT of `no_delta`'s own membership, deliberately: `NothingToCommit`
+    #: and every existing reader key on that tuple, and narrowing it to fix a
+    #: message would change refusal behaviour. This is additive.
+    declared_absent_from_head: Tuple[str, ...] = ()
 
 
 class NothingToCommit(CommitRefused):
@@ -471,6 +487,35 @@ def commit_paths(
                 "including a peer's file added after the caller computed it"
             )
 
+    # PHANTOM DELETION -- a declared deletion for a path the worktree still
+    # has. The stale-shared-index shape this refuses (DoE-claude's
+    # `guard-phantom-staged-deletion-precommit.py`, filed against
+    # `state/bug-backlog/2026-08-28-a-stale-shared-index-arms-a-phantom-
+    # deletion-of-any-freshly-committed-path.yaml`) lands a removal in HEAD
+    # for a file that is sitting on disk, so the next reader finds the path
+    # untracked and the history saying it was deleted on purpose. That guard
+    # is a NATIVE pre-commit hook and this route fires no native hook -- 82%
+    # of commits measured on a shared branch come through here -- so the
+    # refusal has to live at the in-process seam or it covers almost nothing.
+    #
+    # Absolute, with no caller opt-out, because no caller wants the other
+    # side of it: every producer derives its deletions from absence
+    # (`publish.py`, `safe_commit_offer.py`'s `_split_paths_for_commit_v2`,
+    # `directives_commit_tail.py`), and the one that derived from HEAD
+    # membership alone (`memo_send.py`) was declaring a deletion it could not
+    # know had happened -- fixed at its own site rather than tolerated here.
+    # An untrack-but-keep ("git rm --cached") has no caller and gets no
+    # parameter: add one when a caller needs it, and name it there.
+    #
+    # One `exists()` per DECLARED deletion, never per path in the pathspec:
+    # an ordinary commit declares none and pays nothing.
+    for p in delete_list:
+        if (root / p).exists():
+            raise CommitRefused(
+                f"{p} is declared deleted but still present in the worktree "
+                "-- drop it from `deleted_paths`, or remove the file first"
+            )
+
     # DEFAULT-PATH SHAPE CHECK (C2): the sweeping/orphan/out-of-repo legs of
     # `block_subagent_commit`'s guard predicate -- see `action_guard.assert_
     # pathspec_shape_permitted`'s own docstring. Called unconditionally: every
@@ -507,7 +552,19 @@ def commit_paths(
     refused: list = []
 
     prefer_staged_set = {p.replace("\\", "/") for p in prefer_staged}
+    delete_set = set(delete_list)
     for p in path_list:
+        if p in delete_set:
+            # DECLARED DELETION WINS over the content read, and it has to win
+            # HERE rather than at the `assembled` write below: a path named in
+            # BOTH argument lists is how a caller says "this member of my
+            # pathspec is the deletion" -- the shape `run_commit_pipeline`
+            # required (its `deleted_paths` verified a claim `stage_paths`
+            # had to stage) and the shape every caller carrying that habit
+            # sends. Reading it first turned that declaration into `cannot
+            # read <path>`, a refusal naming an unreadable file for a commit
+            # that had declared the file gone.
+            continue
         entry = staged.get(p)
         if p in supplied:
             blob = supplied[p]
@@ -526,6 +583,17 @@ def commit_paths(
         else:
             try:
                 data = (root / p).read_bytes()
+            except FileNotFoundError as exc:
+                if entry is not None:
+                    # The caller named a path git still tracks and the worktree
+                    # no longer has: a deletion, undeclared. Naming the
+                    # parameter is the difference between a refusal the caller
+                    # can act on and an errno they have to guess at.
+                    raise CommitRefused(
+                        f"{p} is gone from the worktree but still tracked -- "
+                        "pass it in `deleted_paths` to commit the deletion"
+                    ) from exc
+                raise CommitRefused(f"cannot read {p}: {exc}") from exc
             except OSError as exc:
                 raise CommitRefused(f"cannot read {p}: {exc}") from exc
             try:
@@ -641,12 +709,14 @@ def commit_paths(
     # commit, one notch narrower, and the loop was already computing the fact
     # per path before discarding it.
     no_delta = []
+    declared_absent_from_head = []
     for p, val in assembled.items():
         head_dir, _, head_name = p.rpartition("/")
         head_entry = spine.get(head_dir, {}).get(head_name)
         if val is _ABSENT:
             if head_entry is None:
                 no_delta.append(p)
+                declared_absent_from_head.append(p)
         elif head_entry == val:
             no_delta.append(p)
 
@@ -667,6 +737,24 @@ def commit_paths(
             "the tree spine could not be rewritten for this pathspec -- a "
             "refusal, not a lost commit: nothing was written, HEAD is "
             "unmoved, and the shared index was never touched"
+        )
+
+    if not allow_empty and root_tree == head_tree_sha(repo):
+        # THE BACKSTOP, and it is deliberately redundant with the per-path
+        # delta pass above. That pass answers "does each declared path differ" by
+        # comparing entries; this one answers the only question the caller
+        # actually asked -- "does this commit change the repository" -- off the
+        # object git itself would compare. Any shape where the per-path
+        # comparison misses (a lookup that does not find HEAD's entry where
+        # HEAD has one, and so reads as a delta) lands an empty commit
+        # reporting `committed sha=<x>`, which is `NothingToCommit`'s whole
+        # reason to exist arriving through a door it does not watch. One
+        # object read, no spawn, and it runs before any ref moves.
+        raise NothingToCommit(
+            "nothing to commit -- the assembled tree is HEAD's own tree. "
+            "Refused: a commit with no diff reports as delivery to every "
+            "caller reading the success line. Pass allow_empty=True for a "
+            "deliberate marker commit."
         )
 
     name, email = _identity()
@@ -706,6 +794,7 @@ def commit_paths(
         staged_preferred=tuple(staged_preferred),
         worktree_over_staged=tuple(worktree_over_staged),
         no_delta=tuple(no_delta),
+        declared_absent_from_head=tuple(declared_absent_from_head),
     )
 
 

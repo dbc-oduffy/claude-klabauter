@@ -51,6 +51,7 @@ Spec backlink: coordinator_core/bash_guards/block_subagent_commit.py
 
 from __future__ import annotations
 
+import ast
 import base64
 import sys
 import time
@@ -125,34 +126,23 @@ def test_folder_resolves_the_assembly_shapes_it_claims():
         assert "scoped-git-commit" in folded.text, payload
 
 
-#: state/bash-guards/known-red.json group "fold-bomb-recursionerror-bypass"
-#: (state/bug-backlog/2026-08-07-fold-bomb-payload-bypasses-block-subagen-7aa44b2ef0a0.yaml,
-#: P1). `ast.parse` raises `RecursionError` on the deep-concatenation bomb
-#: before `_fold_python_c_payload`'s bound checks run; `except Exception`
-#: swallows it as "unparseable", and unparseable is NOT fail-closed -- so
-#: this row is a live guard BYPASS, not a stale assertion. Owner:
-#: docs/plans/2026-08-07-spawn-storm-culprit-taxonomy-and-detectors.md
-#: (`block_subagent_commit.py`). Four cells share this one root cause and
-#: clear together, never individually -- see registry.
-_KNOWN_FOLD_BOMB_BYPASS_LABELS = {"deep-concatenation"}
-
-
-def _fold_bomb_param(label, payload):
-    marks = [pytest.mark.pending_fix] if label in _KNOWN_FOLD_BOMB_BYPASS_LABELS else []
-    return pytest.param(label, payload, id=label, marks=marks)
+#: The deep-concatenation row is the one whose bound `_fold_python_c_payload`
+#: does not own: `ast.parse` exhausts CPython's recursion limit before any
+#: `_FoldBudget` exists, so the entrypoint's `RecursionError` branch is what
+#: keeps this row in the same bucket as the rest.
+_FOLD_BOMB_PAYLOADS = [
+    ("literal-repetition", "import os; os.system('a'*1000000000 + ' x')"),
+    ("pow-repetition", "import os; os.system('a'*10**9 + ' x')"),
+    ("deep-concatenation", "import os; os.system(%s)" % "+".join(["'a'"] * 4000)),
+    ("width-field-percent", "import os; os.system('%99999999d' % 1)"),
+    ("width-field-format", "import os; os.system('{:>99999999}'.format('x'))"),
+    ("nested-repetition", "import os; os.system(('a'*4000)*4000)"),
+    ("join-expansion", "import os; os.system(('x'*4000).join(['a']*4000))"),
+]
 
 
 @pytest.mark.parametrize(
-    "label,payload",
-    [
-        _fold_bomb_param("literal-repetition", "import os; os.system('a'*1000000000 + ' x')"),
-        _fold_bomb_param("pow-repetition", "import os; os.system('a'*10**9 + ' x')"),
-        _fold_bomb_param("deep-concatenation", "import os; os.system(%s)" % "+".join(["'a'"] * 4000)),
-        _fold_bomb_param("width-field-percent", "import os; os.system('%99999999d' % 1)"),
-        _fold_bomb_param("width-field-format", "import os; os.system('{:>99999999}'.format('x'))"),
-        _fold_bomb_param("nested-repetition", "import os; os.system(('a'*4000)*4000)"),
-        _fold_bomb_param("join-expansion", "import os; os.system(('x'*4000).join(['a']*4000))"),
-    ],
+    "label,payload", _FOLD_BOMB_PAYLOADS, ids=[p[0] for p in _FOLD_BOMB_PAYLOADS]
 )
 def test_folding_bomb_hits_a_bound_and_does_not_resolve(label, payload):
     """Bounds are security properties: every bomb below resolves to
@@ -175,16 +165,18 @@ def test_folding_bomb_hits_a_bound_and_does_not_resolve(label, payload):
     assert folded.opaque_sink_call is True
 
 
+_LENGTH_BOMB_PAYLOADS = [
+    ("literal-repetition", "import os; os.system('a'*1000000000)"),
+    ("deep-concatenation", "import os; os.system(%s)" % "+".join(["'a'"] * 4000)),
+    (
+        "aggregate-many-values",
+        "import os\n%sos.system(x0)" % "".join("x%d = 'a'*4000\n" % i for i in range(40)),
+    ),
+]
+
+
 @pytest.mark.parametrize(
-    "label,payload",
-    [
-        _fold_bomb_param("literal-repetition", "import os; os.system('a'*1000000000)"),
-        _fold_bomb_param("deep-concatenation", "import os; os.system(%s)" % "+".join(["'a'"] * 4000)),
-        _fold_bomb_param(
-            "aggregate-many-values",
-            "import os\n%sos.system(x0)" % "".join("x%d = 'a'*4000\n" % i for i in range(40)),
-        ),
-    ],
+    "label,payload", _LENGTH_BOMB_PAYLOADS, ids=[p[0] for p in _LENGTH_BOMB_PAYLOADS]
 )
 def test_length_bomb_latches_bounds_exceeded(label, payload):
     """The bounds that are LENGTH bounds report themselves as such, so a
@@ -218,6 +210,41 @@ def test_unparseable_payload_folds_to_nothing_and_claims_nothing():
     assert folded.parsed is False
     assert folded.text == ""
     assert folded.opaque_sink_call is False
+
+
+def _recursion_bomb_payload():
+    """A ``+`` chain long enough that `ast.parse` blows CPython's recursion
+    limit on THIS interpreter -- derived from the live limit rather than
+    pinned at a term count, so a raised limit cannot quietly turn the test
+    below into a no-op.
+    """
+    return "import os; os.system(%s)" % "+".join(["'a'"] * (sys.getrecursionlimit() * 4))
+
+
+def test_recursion_bomb_is_a_bound_hit_not_an_unparseable_payload():
+    """The one bound the folder does not own: a payload too deeply nested
+    for `ast.parse` raises before any `_FoldBudget` exists. Reporting that
+    as "unparseable" fails OPEN -- parts 13-15 then decide on text that
+    never spells the identity -- so the entrypoint reports a BOUND instead,
+    which mechanism 2 denies on.
+    """
+    payload = _recursion_bomb_payload()
+    with pytest.raises(RecursionError):
+        ast.parse(payload)
+
+    guard._fold_python_c_payload.cache_clear()
+    folded = guard._fold_python_c_payload(payload)
+    assert folded.parsed is False
+    assert folded.bounds_exceeded is True
+    assert folded.opaque_sink_call is True
+
+
+def test_recursion_bomb_command_denies(monkeypatch):
+    """The verdict the fold result exists to produce: the assembled command
+    carrying a recursion bomb DENIES for a subagent, where before the
+    RecursionError-as-unparseable fall-through ALLOWED it.
+    """
+    base._denies(monkeypatch, 'python3 -c "%s"' % _recursion_bomb_payload())
 
 
 @pytest.mark.parametrize(
@@ -727,21 +754,9 @@ _PART20_RECEIVER_QUALIFIED_ALLOW_COMMANDS = [
 ]
 
 
-#: Same live-bypass root cause as `_KNOWN_FOLD_BOMB_BYPASS_LABELS` above,
-#: applied to this test's own params without touching `_ASSEMBLY_COMMANDS`
-#: itself (other tests below reuse that list unmarked).
-_ASSEMBLED_COMMAND_PARAMS = [
-    pytest.param(
-        label,
-        cmd,
-        id=label,
-        marks=[pytest.mark.pending_fix] if label == "fold-bomb-deep-concat" else [],
-    )
-    for label, cmd in _ASSEMBLY_COMMANDS
-]
-
-
-@pytest.mark.parametrize("label,cmd", _ASSEMBLED_COMMAND_PARAMS)
+@pytest.mark.parametrize(
+    "label,cmd", _ASSEMBLY_COMMANDS, ids=[c[0] for c in _ASSEMBLY_COMMANDS]
+)
 def test_assembled_commit_command_denies(monkeypatch, label, cmd):
     """Part 16's whole point: a commit reached through a name the payload
     BUILDS -- or through a program nothing can name at all -- denies.
@@ -1738,17 +1753,10 @@ def _disable_part16(monkeypatch, mechanism_1=False, mechanism_2=False):
         monkeypatch.setattr(guard, "_has_opaque_execution_sink", lambda cmd, legs=None: False)
 
 
-@pytest.mark.pending_fix
 def test_part16_corpus_moves_exactly_the_measured_set(monkeypatch):
     """Blast-radius pin: measure every adversarial row with both mechanisms
     live and with both forced off, and assert the moving set is EXACTLY the
-    enumerated one -- currently RED for the same root cause as
-    `_KNOWN_FOLD_BOMB_BYPASS_LABELS` above: the `fold-bomb-deep-concat` row's
-    RecursionError-as-unparseable bypass moves the observed set off the
-    measured one. state/bash-guards/known-red.json group
-    "fold-bomb-recursionerror-bypass"; owner
-    docs/plans/2026-08-07-spawn-storm-culprit-taxonomy-and-detectors.md.
-    ALLOW -> DENY only; a DENY -> ALLOW entry would mean a
+    enumerated one. ALLOW -> DENY only; a DENY -> ALLOW entry would mean a
     new matcher had somehow suppressed an existing match, which it
     structurally cannot.
     """

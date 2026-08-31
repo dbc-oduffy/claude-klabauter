@@ -118,26 +118,26 @@ def _reduce(tmp_path: Path, lines: list[str]) -> list:
 class TestLadderArms:
     def test_away_summary_pauses_away(self, tmp_path: Path) -> None:
         reduced = _reduce(tmp_path, [_system_away_summary()])
-        v = rs.classify(reduced, now_epoch=0.0, transcript_mtime_epoch=None, delegation_evidence=False)
+        v = rs.classify(reduced, now_epoch=0.0, transcript_activity_epoch=None, delegation_evidence=False)
         assert v.verdict == "PAUSED"
         assert v.reason == "away"
 
     def test_ask_user_question_pauses_asking_human(self, tmp_path: Path) -> None:
         reduced = _reduce(tmp_path, [_assistant_tool_use("AskUserQuestion")])
-        v = rs.classify(reduced, now_epoch=0.0, transcript_mtime_epoch=None, delegation_evidence=False)
+        v = rs.classify(reduced, now_epoch=0.0, transcript_activity_epoch=None, delegation_evidence=False)
         assert v.verdict == "PAUSED"
         assert v.reason == "asking-human"
 
     def test_exit_plan_mode_pauses_asking_human(self, tmp_path: Path) -> None:
         reduced = _reduce(tmp_path, [_assistant_tool_use("ExitPlanMode")])
-        v = rs.classify(reduced, now_epoch=0.0, transcript_mtime_epoch=None, delegation_evidence=False)
+        v = rs.classify(reduced, now_epoch=0.0, transcript_activity_epoch=None, delegation_evidence=False)
         assert v.verdict == "PAUSED"
         assert v.reason == "asking-human"
 
     def test_other_tool_in_flight_producing_within_grace(self, tmp_path: Path) -> None:
         reduced = _reduce(tmp_path, [_assistant_tool_use("Bash")])
         v = rs.classify(
-            reduced, now_epoch=1000.0, transcript_mtime_epoch=999.0, delegation_evidence=False
+            reduced, now_epoch=1000.0, transcript_activity_epoch=999.0, delegation_evidence=False
         )
         assert v.verdict == "PRODUCING"
         assert v.reason == "tool-in-flight"
@@ -147,7 +147,7 @@ class TestLadderArms:
         v = rs.classify(
             reduced,
             now_epoch=1000.0,
-            transcript_mtime_epoch=1000.0 - rs._TOOL_UNANSWERED_GRACE_SECONDS - 1,
+            transcript_activity_epoch=1000.0 - rs._TOOL_UNANSWERED_GRACE_SECONDS - 1,
             delegation_evidence=False,
         )
         assert v.verdict == "PAUSED"
@@ -155,31 +155,31 @@ class TestLadderArms:
 
     def test_stop_hook_summary_pauses_turn_ended(self, tmp_path: Path) -> None:
         reduced = _reduce(tmp_path, [_system_stop_hook_summary()])
-        v = rs.classify(reduced, now_epoch=0.0, transcript_mtime_epoch=None, delegation_evidence=False)
+        v = rs.classify(reduced, now_epoch=0.0, transcript_activity_epoch=None, delegation_evidence=False)
         assert v.verdict == "PAUSED"
         assert v.reason == "turn-ended"
 
     def test_assistant_end_turn_pauses_turn_ended(self, tmp_path: Path) -> None:
         reduced = _reduce(tmp_path, [_assistant_end_turn()])
-        v = rs.classify(reduced, now_epoch=0.0, transcript_mtime_epoch=None, delegation_evidence=False)
+        v = rs.classify(reduced, now_epoch=0.0, transcript_activity_epoch=None, delegation_evidence=False)
         assert v.verdict == "PAUSED"
         assert v.reason == "turn-ended"
 
     def test_user_with_result_producing_mid_turn(self, tmp_path: Path) -> None:
         reduced = _reduce(tmp_path, [_user_with_result()])
-        v = rs.classify(reduced, now_epoch=0.0, transcript_mtime_epoch=None, delegation_evidence=False)
+        v = rs.classify(reduced, now_epoch=0.0, transcript_activity_epoch=None, delegation_evidence=False)
         assert v.verdict == "PRODUCING"
         assert v.reason == "mid-turn"
 
     def test_user_without_result_producing_turn_starting(self, tmp_path: Path) -> None:
         reduced = _reduce(tmp_path, [_user_turn_starting()])
-        v = rs.classify(reduced, now_epoch=0.0, transcript_mtime_epoch=None, delegation_evidence=False)
+        v = rs.classify(reduced, now_epoch=0.0, transcript_activity_epoch=None, delegation_evidence=False)
         assert v.verdict == "PRODUCING"
         assert v.reason == "turn-starting"
 
     def test_isSidechain_filtered(self, tmp_path: Path) -> None:
         reduced = _reduce(tmp_path, [_assistant_end_turn(), _sidechain_line()])
-        v = rs.classify(reduced, now_epoch=0.0, transcript_mtime_epoch=None, delegation_evidence=False)
+        v = rs.classify(reduced, now_epoch=0.0, transcript_activity_epoch=None, delegation_evidence=False)
         # Sidechain line must be filtered so the ladder falls back to the real
         # last substantive (non-sidechain) line: assistant end_turn.
         assert v.verdict == "PAUSED"
@@ -190,7 +190,7 @@ class TestLadderArms:
             tmp_path,
             [_system_away_summary(), _control_line("mode"), _control_line("last-prompt")],
         )
-        v = rs.classify(reduced, now_epoch=0.0, transcript_mtime_epoch=None, delegation_evidence=False)
+        v = rs.classify(reduced, now_epoch=0.0, transcript_activity_epoch=None, delegation_evidence=False)
         assert v.verdict == "PAUSED"
         assert v.reason == "away"
 
@@ -198,7 +198,7 @@ class TestLadderArms:
 class TestUnknownAndDelegationOverride:
     def test_unmodelled_line_yields_unknown_and_records_type(self, tmp_path: Path) -> None:
         reduced = _reduce(tmp_path, [_unmodelled_line("assistant", "image")])
-        v = rs.classify(reduced, now_epoch=0.0, transcript_mtime_epoch=None, delegation_evidence=False)
+        v = rs.classify(reduced, now_epoch=0.0, transcript_activity_epoch=None, delegation_evidence=False)
         assert v.verdict == "UNKNOWN"
         assert v.unmodelled_type == "assistant"
         assert v.unmodelled_subtype == "image"
@@ -213,7 +213,7 @@ class TestUnknownAndDelegationOverride:
         reduced = _reduce(
             tmp_path, [_system_stop_hook_summary(), _unmodelled_line("attachment", "image")]
         )
-        v = rs.classify(reduced, now_epoch=0.0, transcript_mtime_epoch=None, delegation_evidence=False)
+        v = rs.classify(reduced, now_epoch=0.0, transcript_activity_epoch=None, delegation_evidence=False)
         assert v.verdict == "PAUSED"
         assert v.reason == "turn-ended"
 
@@ -221,7 +221,7 @@ class TestUnknownAndDelegationOverride:
         self, tmp_path: Path
     ) -> None:
         reduced = _reduce(tmp_path, [_unmodelled_line("attachment", "image"), _control_line("atis-latch")])
-        v = rs.classify(reduced, now_epoch=0.0, transcript_mtime_epoch=None, delegation_evidence=False)
+        v = rs.classify(reduced, now_epoch=0.0, transcript_activity_epoch=None, delegation_evidence=False)
         assert v.verdict == "UNKNOWN"
         assert "none state-bearing" in v.reason
         assert "isSidechain" not in v.reason
@@ -233,7 +233,7 @@ class TestUnknownAndDelegationOverride:
         subagent and a 3.5s-old transcript returned UNKNOWN. Our fix (module docstring
         (c), step 7's "or UNKNOWN") must rescue this case, not only a PAUSED one."""
         reduced = _reduce(tmp_path, [_unmodelled_line()])
-        v = rs.classify(reduced, now_epoch=0.0, transcript_mtime_epoch=None, delegation_evidence=True)
+        v = rs.classify(reduced, now_epoch=0.0, transcript_activity_epoch=None, delegation_evidence=True)
         assert v.verdict == "PRODUCING"
         assert "delegated" in v.reason
 
@@ -241,13 +241,13 @@ class TestUnknownAndDelegationOverride:
         self, tmp_path: Path
     ) -> None:
         reduced = _reduce(tmp_path, [_system_away_summary()])
-        v = rs.classify(reduced, now_epoch=0.0, transcript_mtime_epoch=None, delegation_evidence=True)
+        v = rs.classify(reduced, now_epoch=0.0, transcript_activity_epoch=None, delegation_evidence=True)
         assert v.verdict == "PRODUCING"
         assert "delegated" in v.reason
 
     def test_producing_verdict_not_overridden_by_delegation(self, tmp_path: Path) -> None:
         reduced = _reduce(tmp_path, [_user_with_result()])
-        v = rs.classify(reduced, now_epoch=0.0, transcript_mtime_epoch=None, delegation_evidence=True)
+        v = rs.classify(reduced, now_epoch=0.0, transcript_activity_epoch=None, delegation_evidence=True)
         assert v.verdict == "PRODUCING"
         assert v.reason == "mid-turn"
 
@@ -392,7 +392,7 @@ class TestPrivacyReduction:
             tmp_path,
             [_assistant_end_turn(prose=self._SENTINEL)],
         )
-        v = rs.classify(reduced, now_epoch=0.0, transcript_mtime_epoch=None, delegation_evidence=False)
+        v = rs.classify(reduced, now_epoch=0.0, transcript_activity_epoch=None, delegation_evidence=False)
         ok = rs.write_receiver_state(
             "sid-privacy", verdict=v, cpu_cursor=None, stamp_iso="2026-08-14T00:00:00Z", cwd=str(tmp_path)
         )
@@ -463,7 +463,7 @@ class TestNoSleep:
     def test_classify_completes_well_inside_caller_budget(self, tmp_path: Path) -> None:
         reduced = _reduce(tmp_path, [_assistant_end_turn()])
         started = time.monotonic()
-        rs.classify(reduced, now_epoch=0.0, transcript_mtime_epoch=None, delegation_evidence=False)
+        rs.classify(reduced, now_epoch=0.0, transcript_activity_epoch=None, delegation_evidence=False)
         elapsed = time.monotonic() - started
         assert elapsed < 1.0  # well inside the 5s caller budget
 
@@ -477,21 +477,21 @@ class TestFailSoft:
     def test_missing_transcript_yields_unknown(self, tmp_path: Path) -> None:
         missing = str(tmp_path / "does-not-exist.jsonl")
         reduced, _unparseable, _cap = rs.reduce_transcript_tail(missing)
-        v = rs.classify(reduced, now_epoch=0.0, transcript_mtime_epoch=None, delegation_evidence=False)
+        v = rs.classify(reduced, now_epoch=0.0, transcript_activity_epoch=None, delegation_evidence=False)
         assert v.verdict == "UNKNOWN"
 
     def test_empty_file_yields_unknown(self, tmp_path: Path) -> None:
         path = tmp_path / "empty.jsonl"
         path.write_text("", encoding="utf-8")
         reduced, _unparseable, _cap = rs.reduce_transcript_tail(str(path))
-        v = rs.classify(reduced, now_epoch=0.0, transcript_mtime_epoch=None, delegation_evidence=False)
+        v = rs.classify(reduced, now_epoch=0.0, transcript_activity_epoch=None, delegation_evidence=False)
         assert v.verdict == "UNKNOWN"
 
     def test_unreadable_directory_path_yields_unknown(self, tmp_path: Path) -> None:
         # A directory, not a file — open() raises OSError (IsADirectoryError), which
         # _read_tail_lines must catch, not propagate.
         reduced, _unparseable, _cap = rs.reduce_transcript_tail(str(tmp_path))
-        v = rs.classify(reduced, now_epoch=0.0, transcript_mtime_epoch=None, delegation_evidence=False)
+        v = rs.classify(reduced, now_epoch=0.0, transcript_activity_epoch=None, delegation_evidence=False)
         assert v.verdict == "UNKNOWN"
 
     def test_truncated_final_line_does_not_raise(self, tmp_path: Path) -> None:
@@ -499,7 +499,7 @@ class TestFailSoft:
         path.write_text('{"type": "assistant", "message": {"stop', encoding="utf-8")
         reduced, unparseable, _cap = rs.reduce_transcript_tail(str(path))
         assert unparseable is True
-        v = rs.classify(reduced, now_epoch=0.0, transcript_mtime_epoch=None, delegation_evidence=False)
+        v = rs.classify(reduced, now_epoch=0.0, transcript_activity_epoch=None, delegation_evidence=False)
         assert v.verdict == "UNKNOWN"
 
     def test_garbage_json_does_not_raise(self, tmp_path: Path) -> None:
@@ -507,7 +507,7 @@ class TestFailSoft:
         path.write_text("not json at all\n{{{{\n", encoding="utf-8")
         reduced, unparseable, _cap = rs.reduce_transcript_tail(str(path))
         assert unparseable is True
-        v = rs.classify(reduced, now_epoch=0.0, transcript_mtime_epoch=None, delegation_evidence=False)
+        v = rs.classify(reduced, now_epoch=0.0, transcript_activity_epoch=None, delegation_evidence=False)
         assert v.verdict == "UNKNOWN"
 
 
@@ -660,3 +660,41 @@ class TestRegistration:
             eager_modules=eager_modules,
         )
         assert violations == [], f"hooks.receiver_state_sensor missing surfaces: {violations}"
+
+
+class TestActivityEpochFromReduced:
+    """The shared transcript clock, used by both planes that classify a peer
+    (`hooks/receiver_state_sensor.py` and `group_em.read_pass`). File mtime is
+    not this number: the harness rewrites a stopped session's transcript with
+    untimestamped bookkeeping rows, moving mtime without the session acting."""
+
+    def _line(self, timestamp: str):
+        return rs._ReducedLine(
+            type="assistant",
+            subtype="",
+            timestamp=timestamp,
+            stop_reason="end_turn",
+            pending_background_agent_count=0,
+            tool_names=(),
+            tool_result_markers=(),
+            parse_ok=True,
+        )
+
+    def test_returns_the_newest_parseable_timestamp(self):
+        lines = [self._line("2026-08-31T15:00:00Z"), self._line("2026-08-31T15:40:48Z")]
+        assert rs.activity_epoch_from_reduced(lines) == 1788190848.0
+
+    def test_scans_past_untimestamped_bookkeeping_rows(self):
+        """The defect's exact shape: real record, then rows the harness wrote."""
+        lines = [self._line("2026-08-31T15:40:48Z"), self._line(""), self._line("")]
+        assert rs.activity_epoch_from_reduced(lines) == 1788190848.0
+
+    def test_none_when_nothing_carries_a_timestamp(self):
+        """`None` is the caller's signal to fall back to mtime as an upper
+        bound -- never an age of zero, and never "has not moved"."""
+        assert rs.activity_epoch_from_reduced([self._line("")]) is None
+        assert rs.activity_epoch_from_reduced([]) is None
+
+    def test_malformed_timestamps_are_skipped_not_guessed_at(self):
+        lines = [self._line("2026-08-31T15:40:48Z"), self._line("not-a-timestamp")]
+        assert rs.activity_epoch_from_reduced(lines) == 1788190848.0

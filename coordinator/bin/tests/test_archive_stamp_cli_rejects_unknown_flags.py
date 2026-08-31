@@ -116,6 +116,25 @@ def test_help_is_answered_upstream_not_by_this_guard(cli):
     )
 
 
+def test_help_actually_answers_through_main(cli, capsys):
+    """The BEHAVIOURAL half, restored after review-integrator escalated that the
+    structural test above can pass for the wrong reason.
+
+    The ordering assertion greps two literals out of `main()`'s source and
+    compares their positions. A rename raises `ValueError` (loud, fine), but a
+    refactor that moves the help check into a helper while leaving both literals
+    in their original relative positions passes while proving nothing. This
+    exercises the actual control flow instead: `--help` must return 0 and print
+    usage, whatever the source looks like.
+
+    Both are kept. The structural one pins the ordering cheaply and names the
+    invariant; this one is the check that cannot be satisfied by coincidence.
+    """
+    rc = cli.main(["repark-handoff", "p.md", "--help"])
+    assert rc == 0
+    assert "usage: archive-stamp-cli repark-handoff" in capsys.readouterr().out
+
+
 def test_unknown_subcommand_is_not_this_guard_s_job(cli):
     """A verb absent from `_SUBCOMMAND_USAGE` falls through untouched — the
     existing unknown-subcommand path owns that refusal, and swallowing it here
@@ -135,3 +154,53 @@ def test_accepted_set_is_derived_not_hand_listed(cli):
     assert cli._reject_unknown_flags("stamp-shipped-in", ["p.md", "--kind", "successor"]) is None
     # ...and the same flag is NOT silently accepted on a verb that never declared it.
     assert cli._reject_unknown_flags("repark-handoff", ["p.md", "--kind", "successor"]) == 2
+
+
+@pytest.mark.parametrize(
+    ("subcmd", "argv"),
+    [
+        ("action-memo", ["m.md", "--disposition", "actioned"]),
+        ("action-memo", ["m.md", "--disposition", "partial", "--note", "why"]),
+        ("resolve-memo", ["m.md", "--note", "x"]),
+        ("resolve-memo", ["m.md", "--any-engine-flag-at-all"]),
+    ],
+)
+def test_open_flag_tail_verbs_forward_their_tail(cli, subcmd, argv):
+    """The regression example-retrieval-repo-df hit on 2026-08-31, the day this guard landed.
+
+    `action-memo` and `resolve-memo` declare `[disposition-flags...]` and forward
+    their tail to the engine verbatim, so their flag vocabulary is the ENGINE's.
+    `_SUBCOMMAND_USAGE` cannot enumerate it, `_FLAG_RE` therefore found NOTHING,
+    and an empty accepted set made the guard refuse every documented disposition
+    flag with exit 2 — the entire memo-disposition surface unreachable through
+    this CLI. The reporting session had to call `cs_action_memo` directly to
+    action a memo at all.
+
+    Note this is the guard's OWN failure direction: it refuses, so an empty
+    vocabulary must decline, never refuse-everything.
+    """
+    assert cli._reject_unknown_flags(subcmd, argv) is None
+
+
+def test_a_repeatable_literal_flag_is_not_an_open_tail(cli):
+    """The near-miss in the fix, pinned so it cannot be widened by accident.
+
+    `chain-archive-handoff`'s usage ends `[--exclude <path>]...` — an ellipsis,
+    but on a REPEATABLE LITERAL flag that IS declared and IS enumerable. A
+    fix keyed on "usage contains ..." rather than on the placeholder's shape
+    would have exempted it and silently dropped a mistyped `--exclude`.
+    """
+    assert cli._reject_unknown_flags("chain-archive-handoff", ["p.md", "--exclude", "a.md"]) is None
+    assert cli._reject_unknown_flags("chain-archive-handoff", ["p.md", "--bogus"]) == 2
+
+
+def test_a_verb_with_no_flags_still_refuses(cli):
+    """Why the fix is not "fail open when the accepted set is empty".
+
+    `claim-handoff <handoff_path>` declares no flags and so also yields an empty
+    set — but there an undeclared flag is exactly the silent partial write this
+    guard exists for. The discriminator has to be the usage line's SHAPE, not
+    the size of the set it produces.
+    """
+    assert cli._reject_unknown_flags("claim-handoff", ["p.md", "--bogus"]) == 2
+    assert cli._reject_unknown_flags("repark-handoff", ["p.md", "--gate-note", "w"]) == 2

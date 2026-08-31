@@ -104,6 +104,22 @@ _WRAPPER_INVOCATIONS = [
     (git_native.rev_parse_upstream, ("/tmp/repo",), {}),
     (git_native.rev_parse, ("/tmp/repo", "origin/main"), {}),
     (git_native.rev_list_count, ("/tmp/repo", "abc123..def456"), {}),
+    # The three below were public, spawning, and absent from this table --
+    # `test_all_public_wrappers_are_covered` was RED at HEAD naming exactly
+    # them, so every one had escaped the AC3 flag enforcement this list is
+    # the only enforcer of. All three are thin `_git()` wrappers, so they
+    # satisfy the (a) harness unchanged; nothing about them needed fixing
+    # except being listed. Each is on the push ladder's diverged-branch
+    # recovery path (`push._replay_onto_fetched_ref`), which is why they
+    # landed together and, plausibly, why they were added together without
+    # this table being touched.
+    (
+        git_native.replay_onto_print,
+        ("/tmp/repo", "origin/main", "abc123", "refs/heads/work"),
+        {},
+    ),
+    (git_native.read_tree_merge_update, ("/tmp/repo", "abc123", "def456"), {}),
+    (git_native.update_ref, ("/tmp/repo", "refs/heads/work", "def456", "abc123"), {}),
 ]
 
 

@@ -44,6 +44,15 @@ point naming the degradation (`_degraded_probe_judgment_point`). Nothing here de
 what a degraded fact MEANS; it only ensures the ceremony cannot mistake "could not
 read" for "read and clean."
 
+UNCOMMITTED-AT-GATE POSTURE (same refusal, one axis over): `session_diff_brightline`
+is COMPUTED, not degraded, for a session whose work is still in the tree — it scopes
+by `Session-Id` trailer over COMMITS, and the checklist commits in step 1, AFTER this
+gate. Its zeroes are then a true statement about commits and a false one about the
+session, so condition 2 could not fail. `_uncommitted_at_gate` consults
+`baton_assemble._compute_dirty_tree_attribution` for this session's own dirty paths
+and routes a positive (or unreadable) answer into `_closed_diff_uncommitted`, which
+fails condition 2 with the same `None` numerics rather than a trustworthy zero.
+
 Dirty-vs-clean (baton § Specification item 2): every scan that can collide with a live
 peer emits its collision state. A terminal sizing carrying a peer's uncommitted edits is
 reported `dirty: true` — detection is ours, the decision to skip rather than sweep stays
@@ -261,6 +270,67 @@ def _closed_diff() -> dict[str, Any]:
         "breached": ["degraded"],
         "under_brightline": False,
     }
+
+
+def _closed_diff_uncommitted(evidence: str) -> dict[str, Any]:
+    """Substitute for a COMPUTED `session_diff_brightline` value when this session's
+    work is not committed yet.
+
+    That fact scopes by `Session-Id` trailer over COMMITS, and the quick-wrap
+    checklist commits in step 1 — which runs AFTER this entry test. A session still
+    holding its work in the tree therefore reports zero LOC over zero surfaces and
+    PASSES condition 2 on numbers describing nothing: a condition that cannot fail,
+    which reads to the EM exactly like a condition that was tested and passed.
+    Observed 2026-08-21 on a session carrying ~516 novel LOC across 4 surfaces.
+    Distinct from `session_commit_count_attributed`'s known undercount (commits made
+    via plumbing lose the trailer) — this is work that is not committed AT ALL, the
+    normal state when the gate runs.
+
+    Reuses `_closed_diff`'s numerics-are-`None` posture wholesale: the two cases
+    differ in WHY condition 2 is unevaluable, never in how it must fail — `0` reads
+    as "genuinely clean," which is the fail-open this substitute exists to refuse.
+    Only `scoping_method`/`breached` are overridden, so the reason travels into
+    condition 2's own evidence string rather than being discarded here.
+    """
+    closed = _closed_diff()
+    closed["scoping_method"] = f"uncommitted-at-gate: {evidence}"
+    closed["breached"] = ["uncommitted-at-gate"]
+    return closed
+
+
+def _uncommitted_at_gate(root: Path) -> str | None:
+    """Why condition 2's commit-scoped counts cannot describe this session yet, or
+    `None` once they can.
+
+    Consults `baton_assemble._compute_dirty_tree_attribution` — the existing
+    session-attributed dirty-tree probe — and reads only its `mine` half. A peer's
+    uncommitted file says nothing about THIS session's diff, and on a shared worktree
+    with a dozen live sessions, reading `residue_count` would fail condition 2
+    permanently for everyone.
+
+    A degraded probe is itself a reason to fail closed: "could not establish that
+    nothing is uncommitted" is not "established that nothing is," the same DR-319 §
+    (c) posture the closed substitutes above carry. Imported inside the call, matching
+    `_resolve_session`'s own local import, so this module does not pay
+    `baton_assemble`'s import cost at every load.
+    """
+    from coordinator_core.baton_assemble import (
+        _DIRTY_TREE_EVIDENCE_PATH_CAP,
+        _compute_dirty_tree_attribution,
+    )
+
+    attribution = _compute_dirty_tree_attribution(root)
+    if attribution["degraded"]:
+        return f"attribution probe degraded — {attribution['evidence']}"
+    mine = attribution["mine"]
+    if not mine:
+        return None
+    shown = mine[:_DIRTY_TREE_EVIDENCE_PATH_CAP]
+    listing = ", ".join(shown)
+    remainder = len(mine) - len(shown)
+    if remainder > 0:
+        listing += f", and {remainder} more"
+    return f"{len(mine)} uncommitted path(s) claimed by this session: {listing}"
 
 
 def _degraded_probe_judgment_point(id_: str, label: str, evidence: str) -> dict[str, Any]:
@@ -764,6 +834,10 @@ def brief(worktree_root: Path | None = None) -> dict[str, Any]:
         else _closed_governing_plan()
     )
     diff = diff_record["value"] if not diff_record["degraded"] else _closed_diff()
+    if not diff_record["degraded"]:
+        uncommitted = _uncommitted_at_gate(root)
+        if uncommitted is not None:
+            diff = _closed_diff_uncommitted(uncommitted)
     sizings = (
         sizings_record["value"]
         if not sizings_record["degraded"]

@@ -93,6 +93,12 @@ def _stub_facts_all_computed(monkeypatch, repo: Path) -> None:
     stubbing this file used pre-cutover, since none of the five facts' own reads
     happen inside this module anymore."""
     monkeypatch.setattr(qwa, "_resolve_session", lambda root=None: (repo, repo / ".git", _SID))
+    # The uncommitted-at-gate probe shells out to `git status` through
+    # `baton_assemble._compute_dirty_tree_attribution`; the fixture worktree is a
+    # skeleton, not a repo, so an unstubbed call would read as degraded and fail c2
+    # closed in every test here. Stubbed to "committed and clean", the state these
+    # brief()-level tests model.
+    monkeypatch.setattr(qwa, "_uncommitted_at_gate", lambda root: None)
     monkeypatch.setattr(
         qwa.session_facts,
         "session_pickup_kind",
@@ -658,6 +664,109 @@ def test_degraded_diff_fails_condition_two_closed_and_visibly(tmp_path: Path):
     assert "novel_loc=None" in c2["evidence"]
     assert result["computed_failures"] == ["c2"]
     assert result["verdict"] == "review-owed"
+
+
+def test_uncommitted_work_at_gate_fails_condition_two_instead_of_passing_on_zeroes(
+    repo: Path, monkeypatch
+):
+    """`session_diff_brightline` scopes by `Session-Id` trailer over COMMITS, and the
+    checklist commits in step 1 — AFTER this gate. A session still holding its work in
+    the tree reports a COMPUTED (never degraded) all-zero diff, so condition 2 could not
+    fail: observed 2026-08-21 passing a session with ~516 novel LOC across 4 surfaces.
+    The zeroes must not read as satisfied."""
+    _stub_facts_all_computed(monkeypatch, repo)
+    monkeypatch.setattr(
+        qwa,
+        "_uncommitted_at_gate",
+        lambda root: "2 uncommitted path(s) claimed by this session: a.py, b.py",
+    )
+
+    envelope = qwa.brief()
+
+    entry_test = envelope["gates"]["entry_test"]
+    c2 = [c for c in entry_test["conditions"] if c["id"] == "c2"][0]
+    assert c2["passed"] is False
+    assert "novel_loc=None" in c2["evidence"]
+    assert "uncommitted-at-gate" in c2["evidence"]
+    assert "a.py, b.py" in c2["evidence"]
+    assert entry_test["computed_failures"] == ["c2"]
+    assert entry_test["verdict"] == "review-owed"
+    # The underlying fact travels through close_gate untouched — the substitution is
+    # this ceremony's own posture, not a rewrite of what the facade reported.
+    assert envelope["gates"]["close_gate"]["diff"]["value"]["under_brightline"] is True
+
+
+def test_uncommitted_probe_reads_this_sessions_paths_and_ignores_peer_residue(monkeypatch):
+    """`mine` is the whole signal: on a shared worktree a peer's uncommitted file says
+    nothing about THIS session's diff, and failing c2 on residue would fail it
+    permanently for every session on the branch."""
+    from coordinator_core import baton_assemble
+
+    monkeypatch.setattr(
+        baton_assemble,
+        "_compute_dirty_tree_attribution",
+        lambda root: {"degraded": False, "mine": [], "residue_count": 7},
+    )
+    assert qwa._uncommitted_at_gate(Path("/nowhere")) is None
+
+    monkeypatch.setattr(
+        baton_assemble,
+        "_compute_dirty_tree_attribution",
+        lambda root: {
+            "degraded": False,
+            "mine": ["state/handoffs/x.md", "coordinator_core/y.py"],
+            "residue_count": 7,
+        },
+    )
+    evidence = qwa._uncommitted_at_gate(Path("/nowhere"))
+    assert evidence is not None
+    assert "2 uncommitted path(s)" in evidence
+    assert "state/handoffs/x.md" in evidence and "coordinator_core/y.py" in evidence
+
+
+def test_a_degraded_attribution_probe_fails_condition_two_closed(monkeypatch):
+    """"Could not establish that nothing is uncommitted" is not "established that
+    nothing is" — the probe failing must not resolve condition 2 as satisfied."""
+    from coordinator_core import baton_assemble
+
+    monkeypatch.setattr(
+        baton_assemble,
+        "_compute_dirty_tree_attribution",
+        lambda root: {"degraded": True, "evidence": "no resolvable session id"},
+    )
+
+    evidence = qwa._uncommitted_at_gate(Path("/nowhere"))
+
+    assert evidence is not None
+    assert "probe degraded" in evidence
+    result = qwa._entry_test(
+        {"consumed_predecessor": False, "classification": "none"},
+        {"present": False},
+        qwa._closed_diff_uncommitted(evidence),
+        Path("/nowhere"),
+    )
+    c2 = [c for c in result["conditions"] if c["id"] == "c2"][0]
+    assert c2["passed"] is False
+    assert c2["breached"] == ["uncommitted-at-gate"]
+
+
+def test_closed_diff_uncommitted_carries_none_numerics_never_zero():
+    """A `0` reads as "genuinely clean" — the fail-open this substitute refuses. Same
+    posture as `_closed_diff`, which it reuses rather than restates."""
+    closed = qwa._closed_diff_uncommitted("2 uncommitted path(s) claimed by this session: a.py")
+
+    assert closed["under_brightline"] is False
+    for field in (
+        "novel_loc",
+        "gross_loc",
+        "doc_only_loc",
+        "novel_commit_count",
+        "commit_count",
+        "surface_count",
+        "novel_surface_count",
+    ):
+        assert closed[field] is None, f"{field} must be None, never a trustworthy 0"
+    assert closed["scoping_method"].startswith("uncommitted-at-gate: ")
 
 
 def test_degraded_terminal_sizings_raises_an_explicit_judgment_point(repo: Path, monkeypatch):

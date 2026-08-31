@@ -2,8 +2,9 @@
 coordinator_core.orientation.budget_breach_signal — over-bar op probe for the orientation cache.
 
 Purpose: `ops/op_budget_breaches.py` is a correctly wired instrument — it reads the
-op-latency sink, classifies the three breach kinds, ranks by time stolen from the
-box, and `headline_for` already renders an operator-facing line — but as of
+op-latency sink, classifies the three breach kinds, ranks by box occupancy past
+the bar (WALL CLOCK -- see `headline_for`, which names its own unit and why), and
+`headline_for` already renders an operator-facing line — but as of
 2026-08-26 nothing outside its own test file calls it. No hook, no ceremony, no
 cadence. It is a query surface waiting to be asked a question nobody asks.
 

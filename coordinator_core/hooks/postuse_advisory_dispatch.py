@@ -1226,9 +1226,11 @@ def _check_workflow_monitor_arm_sync(session_id: str, transcript_path: str, tool
 #
 # LAUNCHER GAP, NAMED RATHER THAN WORKED AROUND: unlike workflow-watch, no
 # settings-home launcher for `coordinator_core.group_em.watch` exists yet
-# (no `group-em-watch(.exe)` under any `<settings-home>/bin/`), and
-# `watch.py` itself ships no `argparse`/`__main__` CLI surface to invoke --
-# only the importable `main(repo_root, ...)` function. Building either is a
+# (no `group-em-watch(.exe)` under any `<settings-home>/bin/`). The other
+# half of this gap is closed: `watch.py` grew an `argparse`/`__main__` CLI at
+# f826ac0f2b, so the watch is armable by hand
+# (`python -m coordinator_core.group_em.watch --repo-root <path>`) even
+# though this leg still has no installed launcher to name. Building one is a
 # generator/launcher-chain change, outside this chunk's `writes:` scope
 # (coordinator_core/hooks/postuse_advisory_dispatch.py and its test only).
 # `_group_em_watch_launcher` therefore always resolves to `None` today, which
@@ -1247,10 +1249,21 @@ def _check_workflow_monitor_arm_sync(session_id: str, transcript_path: str, tool
 
 #: The exact prefix `coordinator_core.group_em.watch.main` prints as its
 #: first stdout line on arming (see that module's `main`, `emit(f"ARMED
-#: denominator=...")`). Matched as a plain substring, not a regex -- this
+#: peer_count=...")`). Matched as a plain substring, not a regex -- this
 #: leg only needs to know the line occurred somewhere in the transcript, not
 #: parse its fields.
-_GROUP_EM_WATCH_ARMED_MARKER = "ARMED denominator="
+#:
+#: This constant read `ARMED denominator=` until 2026-08-31 -- the field name
+#: the emitter carried at the time C10 was written, renamed on the emitter
+#: side by a review finding without this reader following. The leg is
+#: inert for an unrelated reason on every machine checked (no installed
+#: launcher, see the note above `_check_group_em_watch_arm_sync`), so the
+#: mismatch has had no observable behaviour to give it away -- stated as far
+#: as this diff establishes, not as a claim about every possible caller. What
+#: it would do the moment the leg fires: the "already armed" suppression never
+#: matches, and a crowned session that HAD armed the watch is told to arm it
+#: again.
+_GROUP_EM_WATCH_ARMED_MARKER = "ARMED peer_count="
 
 #: Review: review-integrator (finding #2) -- bound on how long a "checked,
 #: nothing to arm" conclusion (no git root / not the crown holder) is

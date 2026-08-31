@@ -580,14 +580,39 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         # these paths and they are not in the commit, which is indistinguish-
         # able from delivery on the success line alone. Bounded at five like
         # every other join in this envelope.
-        paths = ", ".join(outcome.no_delta[:5])
-        if len(outcome.no_delta) > 5:
-            paths += ", ..."
-        warnings.append(
-            f"{len(outcome.no_delta)} of {len(raw_paths) + len(raw_deleted)} "
-            f"declared path(s) contributed nothing -- already at HEAD: {paths}. "
-            "If you expected a change there, it landed elsewhere or never landed."
-        )
+        # "already at HEAD" is FALSE for a path HEAD never had. Those are
+        # split out below: a declared deletion of a file HEAD does not carry
+        # is not a benign no-op, it is a declaration the caller could not
+        # have meant, and it is what an untracked path looks like after the
+        # pathspec split misclassifies it from the wrong cwd. Collapsing the
+        # two into the reassuring sentence is how a skipped new file reads as
+        # "nothing was owed" (state/audits/2026-08-31-committer-p0-*).
+        absent = set(getattr(outcome, "declared_absent_from_head", ()))
+        matched = [p for p in outcome.no_delta if p not in absent]
+        declared = len(raw_paths) + len(raw_deleted)
+
+        if matched:
+            paths = ", ".join(matched[:5])
+            if len(matched) > 5:
+                paths += ", ..."
+            warnings.append(
+                f"{len(matched)} of {declared} declared path(s) contributed "
+                f"nothing -- already at HEAD: {paths}. If you expected a "
+                "change there, it landed elsewhere or never landed."
+            )
+
+        if absent:
+            shown = sorted(absent)
+            paths = ", ".join(shown[:5])
+            if len(shown) > 5:
+                paths += ", ..."
+            warnings.append(
+                f"{len(shown)} of {declared} declared path(s) were SKIPPED, "
+                f"not committed: declared deleted, but HEAD has no such path: "
+                f"{paths}. Nothing was deleted and nothing was added. If you "
+                "meant to commit a new file, it is still uncommitted -- check "
+                "that you invoked from the repo root."
+            )
 
     # Reported, not because reporting is what fixes it -- the repair above did
     # that -- but because a launcher's bytes changing under an operator is a

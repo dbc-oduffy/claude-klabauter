@@ -98,8 +98,20 @@ _CONTRACT_RELEASE_REF = "refs/tags/cockpit-contract-release"
 # -read-repoint.md § "bootstrap-safety invariant (load-bearing)" for the full
 # reconciliation against machine-local-registry.md's general CLI-preferred doctrine
 # (that doctrine governs generic peer-repo key reads, not this bootstrap path).
-_REGISTRY_LOCAL = machine_local_dir() / "registry.local.toml"
-_REGISTRY_BASE = machine_local_dir() / "registry.toml"
+def _registry_paths() -> tuple[Path, Path]:
+    """The local and base registry files, resolved PER CALL.
+
+    NEVER bind these at module scope. `machine_local_dir()` derives from
+    `_settings_home.settings_home()`, and under the resident warm engine this
+    module's import outlives every caller it then serves -- a module-level
+    constant freezes to whichever request happened to import it first, and
+    every later caller reads that stranger's registry. `settings_home()`
+    re-reads `os.environ` on every call precisely so a per-call reader is
+    correct for free; see `warm/entry_seam.py :: _environ_identity_borrow`,
+    which binds the caller's home for the life of one dispatch.
+    """
+    base = machine_local_dir()
+    return base / "registry.local.toml", base / "registry.toml"
 
 # Sentinel written to PIN_SHA_FILE when the ref was absent at vendor time.
 _PIN_ABSENT_SENTINEL = "ABSENT"
@@ -221,7 +233,7 @@ def resolve_doe_clone() -> Path:
 
     Raises DoeResolveError when the key is unset or the resolved path does not exist.
     """
-    for registry_path in (_REGISTRY_LOCAL, _REGISTRY_BASE):
+    for registry_path in _registry_paths():
         if not registry_path.exists():
             continue
         # Review: code-reviewer (F5) — read once, pass text to both the TOML parser and
@@ -240,7 +252,7 @@ def resolve_doe_clone() -> Path:
 
     raise DoeResolveError(
         "Cannot locate DoE clone: 'repos.doe_claude' unset or path absent in "
-        f"{_REGISTRY_LOCAL} and {_REGISTRY_BASE}.  "
+        f"{_registry_paths()[0]} and {_registry_paths()[1]}.  "
         "Set it with: machine-local set repos.doe_claude /path/to/DoE-claude"
     )
 

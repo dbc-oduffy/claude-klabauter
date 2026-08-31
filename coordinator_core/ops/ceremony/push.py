@@ -249,6 +249,14 @@ CADENCE_PUSH_RETRY_BUDGET_SECS: float = 6.0
 _CEREMONY_PUSH_HEADROOM_SECS: float = 0.8
 CEREMONY_PUSH_BUDGET_SECS: float = CEREMONY_BUDGET_SECS - _CEREMONY_PUSH_HEADROOM_SECS
 
+# Review: coordinator:code-reviewer (a72f5accd9830c935) nit -- the leading
+# underscore is package-internal-by-convention, not module-private-in-fact:
+# `post_commit_tail.py` and `consumed_handoff_stamp.py` import this name
+# directly across the module boundary by design. Do not rename it to drop
+# the underscore (three call sites plus tests, churn not worth it) and do
+# not "fix" it into a true private by moving/wrapping it -- a future reader
+# should read the leading underscore as "internal to the ceremony push
+# surface" rather than "internal to this file."
 def _ceremony_push_budget(pre_push_elapsed: Optional[float]) -> float:
     """The push ladder's budget for a ceremony op, measured from what the op
     has ALREADY SPENT rather than from a fixed slice of its ceiling.
@@ -276,10 +284,41 @@ def _ceremony_push_budget(pre_push_elapsed: Optional[float]) -> float:
     FLOOR_SECS`, one honest attempt at the remote rather than a zero budget
     that refuses to try. The outer clamp is the backstop for a genuinely
     overrunning op; this function's job is to stop being the CAUSE of one.
+
+    Negative spec for `pre_push_elapsed`: every caller stamps it at ITS OWN
+    frame's entry, so it measures only the pre-push work that frame owns and
+    is a FLOOR on the op's true elapsed, not a span anchored to dispatch. That
+    is deliberate and sound in the only direction that matters — a floor can
+    only TIGHTEN the ladder relative to the flat slice, never loosen it past
+    prior behaviour. A dispatch-anchored span would be strictly better and
+    needs a dispatch-scoped clock this engine does not have; do not read this
+    docstring as a claim that one exists.
+
+    # Review: coordinator:code-reviewer (a72f5accd9830c935) P1 -- the raw
+    # `CEREMONY_BUDGET_SECS - pre_push_elapsed` arithmetic, unclamped, HANDS
+    # OUT MORE than the flat slice for any pre_push_elapsed < 0.8s, up to
+    # nearly the whole 2.0s ceiling as pre_push_elapsed -> 0. That eats into
+    # the 0.8s `_CEREMONY_PUSH_HEADROOM_SECS` reserved for the post-push tail
+    # (post_commit_tail.py / consumed_handoff_stamp.py's remaining work after
+    # push_with_retry returns), reintroducing the mid-op overrun this budget
+    # exists to prevent, just from the tail end instead of the push leg. The
+    # tighten-only claim above is TRUE ONLY BECAUSE of the `min(...,
+    # CEREMONY_PUSH_BUDGET_SECS)` clamp below -- it is not an inherent
+    # property of the subtraction, and removing the clamp reopens the P1.
+    # This is the conservative choice for a second, compounding reason: every
+    # caller stamps `pre_push_elapsed` at its own FRAME entry (see the
+    # negative-spec paragraph above), so it is a FLOOR on the op's true
+    # elapsed since dispatch -- meaning the raw `CEREMONY_BUDGET_SECS -
+    # pre_push_elapsed` systematically OVER-estimates budget remaining. Both
+    # errors run in the same direction, so clamping to the flat slice is the
+    # correct bound, not merely a convenient one.
     """
     if pre_push_elapsed is None:
         return CEREMONY_PUSH_BUDGET_SECS
-    return max(CEREMONY_BUDGET_SECS - pre_push_elapsed, _CEREMONY_PUSH_FLOOR_SECS)
+    return max(
+        min(CEREMONY_BUDGET_SECS - pre_push_elapsed, CEREMONY_PUSH_BUDGET_SECS),
+        _CEREMONY_PUSH_FLOOR_SECS,
+    )
 
 
 #: The least a ceremony push ladder is ever given. Below one network round

@@ -1073,6 +1073,76 @@ _git_probe_deadline: contextvars.ContextVar[Optional[float]] = contextvars.Conte
 #: no probe at all.
 _GIT_PROBE_BUDGET_SPENT_RC = 127
 
+#: Precise cause of the most recent `_run_git` failure, `None` after a
+#: successful probe. `rc` alone cannot separate "git could not be executed"
+#: from "the budget was already spent" -- both are 127 by construction (see
+#: `_GIT_PROBE_BUDGET_SPENT_RC`) -- and a fail-open record that cannot name
+#: which of the two happened does not answer the question it exists to
+#: answer. A ContextVar, not a module global, for the reason
+#: `_git_probe_deadline` states: two dispatches interleave under a warm
+#: engine.
+_git_probe_last_failure: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
+    "_dispatch_checks_git_probe_last_failure", default=None
+)
+
+#: Fail-open reasons recorded by the index probes of the dispatch in flight:
+#: appended by `_record_probe_fail_open`, drained by
+#: `_take_probe_fail_open_reasons`. A tuple (immutable) so the ContextVar
+#: default cannot be mutated across contexts.
+_git_probe_fail_open_reasons: contextvars.ContextVar[Tuple[str, ...]] = (
+    contextvars.ContextVar(
+        "_dispatch_checks_git_probe_fail_open_reasons", default=()
+    )
+)
+
+
+def _record_probe_fail_open(predicate: str, probe: str, rc: int) -> None:
+    """Record WHY an index probe is failing open, and say so on stderr.
+
+    A bare `False` from a fail-open probe erases the distinction between
+    "probed the index and found nothing" and "never learned what the index
+    held" -- and that distinction is the whole of whether this guard is
+    still protecting anything. `state/bug-backlog/2026-08-21-bare-commit-
+    guard-likely-fails-open-unde-0d2276775068.yaml` records the cost: a
+    peer's staged blob committed under another session's subject, past a
+    guard whose matcher was afterwards verified correct against the exact
+    reported shape, with nothing in the record able to establish whether
+    the probe had degraded under load.
+
+    Recording only -- the fail-open POSTURE is deliberately unchanged (a
+    guard-process error must not manufacture a deny; see
+    `_bt_solo_bare_commit_index_nonempty`). What changes is legibility: the
+    reason reaches the operator through the advisory the command falls
+    through to, in `check_git_commit_safe_commit_advise`."""
+    cause = _git_probe_last_failure.get()
+    if cause is None:
+        if rc == -1:
+            cause = "the probe timed out"
+        elif rc == _GIT_PROBE_BUDGET_SPENT_RC:
+            cause = "git was unresolvable, or the probe budget was spent"
+        else:
+            cause = "git exited %d" % rc
+    reason = "%s: `git %s` failed -- %s" % (predicate, probe, cause)
+    _git_probe_fail_open_reasons.set(_git_probe_fail_open_reasons.get() + (reason,))
+    print(
+        "bash_guards.dispatch_checks: index probe failed open -- %s; the "
+        "staged set is unverified, so this command is not escalated." % reason,
+        file=sys.stderr,
+    )
+
+
+def _clear_probe_fail_open_reasons() -> None:
+    """Drop reasons left by an earlier segment or dispatch, so a fall-through
+    advisory can only ever name a probe failure of its own."""
+    _git_probe_fail_open_reasons.set(())
+
+
+def _take_probe_fail_open_reasons() -> Tuple[str, ...]:
+    """Return and clear the reasons recorded since the last clear."""
+    reasons = _git_probe_fail_open_reasons.get()
+    _git_probe_fail_open_reasons.set(())
+    return reasons
+
 
 def _arm_git_probe_deadline(budget: Optional[float] = None) -> None:
     """Open a probe budget for one dispatch. Idempotent per dispatch: a
@@ -1124,6 +1194,10 @@ def _run_git(args: List[str], cwd: Optional[str] = None, timeout: float = 2.0,
             % (_GIT_PROBE_BUDGET_SECONDS, " ".join(args[:3])),
             file=sys.stderr,
         )
+        _git_probe_last_failure.set(
+            "the guard's %.1fs git-probe budget was already spent, so this "
+            "probe was never spawned" % _GIT_PROBE_BUDGET_SECONDS
+        )
         return _GIT_PROBE_BUDGET_SPENT_RC, ""
     env = None
     if extra_env:
@@ -1141,9 +1215,15 @@ def _run_git(args: List[str], cwd: Optional[str] = None, timeout: float = 2.0,
             creationflags=_CREATIONFLAGS,
         )
     except subprocess.TimeoutExpired:
+        _git_probe_last_failure.set("the probe timed out after %.1fs" % timeout)
         return -1, ""
     except OSError:
+        _git_probe_last_failure.set("git could not be executed")
         return 127, ""
+    if result.returncode != 0:
+        _git_probe_last_failure.set("git exited %d" % result.returncode)
+    else:
+        _git_probe_last_failure.set(None)
     return result.returncode, result.stdout
 
 
@@ -7312,36 +7392,61 @@ def _bt_find_exec_python_rewrite(parsed: Dict[str, Any]) -> Optional[str]:
         "fnmatch.fnmatchcase(fn, %s)" % json.dumps(pattern) if pattern else "True"
     )
     if verb_norm == "rm":
+        # `find -exec rm {} \;` prints NOTHING on success. A progress line
+        # here is not a friendlier rewrite, it is a different command: an
+        # operator who pipes or diffs this output gets a line the original
+        # never produced. Measured against real `find` 2026-08-31 -- real
+        # emitted '', this emitted '2 file(s) removed'.
         body = (
             "import fnmatch, os\n"
-            "n = 0\n"
             "for root, dirs, files in os.walk(%s):\n"
             "    for fn in files:\n"
             "        if %s:\n"
-            "            os.remove(os.path.join(root, fn)); n += 1\n"
-            'print(n, "file(s) removed")' % (json.dumps(path), match_expr)
+            "            os.remove(os.path.join(root, fn))" % (json.dumps(path), match_expr)
         )
     elif verb_norm == "cat":
+        # `cat` CONCATENATES; it appends nothing. `print()` added one
+        # newline per file, so N matched files yielded N spurious newlines
+        # and a file with no trailing newline was silently given one.
+        # Measured 2026-08-31: real 'one\\ntwo\\nthree\\nfour', this
+        # 'one\\ntwo\\n\\nthree\\nfour\\n'.
         body = (
-            "import fnmatch, os\n"
-            "for root, dirs, files in os.walk(%s):\n"
-            "    for fn in files:\n"
-            "        if %s:\n"
-            '            print(open(os.path.join(root, fn), encoding="utf-8", errors="replace").read())'
-            % (json.dumps(path), match_expr)
-        )
-    else:  # wc -- only the `-l` (line-count) form is translated
-        if "-l" not in parsed["exec_argv"][1:]:
-            return None
-        body = (
-            "import fnmatch, os\n"
-            "total = 0\n"
+            "import fnmatch, os, sys\n"
             "for root, dirs, files in os.walk(%s):\n"
             "    for fn in files:\n"
             "        if %s:\n"
             '            with open(os.path.join(root, fn), encoding="utf-8", errors="replace") as fh:\n'
-            "                total += sum(1 for _ in fh)\n"
-            "print(total)" % (json.dumps(path), match_expr)
+            "                sys.stdout.write(fh.read())" % (json.dumps(path), match_expr)
+        )
+    else:  # wc -- only the `-l` (line-count) form is translated
+        if "-l" not in parsed["exec_argv"][1:]:
+            return None
+        # TWO defects here, and the second is the one that matters. `find
+        # -exec wc -l {} \;` runs wc PER FILE and prints `<count> <path>`
+        # for each; a bare grand total is a different answer to a different
+        # question, and a census workflow reading it gets one number where
+        # it asked for a breakdown. And the total was itself wrong: `wc -l`
+        # counts NEWLINE CHARACTERS, while iterating a file object yields a
+        # final unterminated line as a line. Measured 2026-08-31 over two
+        # files, one without a trailing newline -- real '2 ./a.txt\\n1
+        # ./sub/b.txt\\n', this '4\\n'.
+        #
+        # Not replicated, deliberately: `wc`'s column padding (which differs
+        # between GNU and BSD/msys builds, so there is no single correct
+        # spelling) and the native path separator (normalized to `/`, since
+        # the command being replaced is a POSIX one whose output uses it on
+        # every host). Structure and counts are the contract; cosmetics are
+        # not.
+        body = (
+            "import fnmatch, os\n"
+            "for root, dirs, files in os.walk(%s):\n"
+            "    for fn in files:\n"
+            "        if %s:\n"
+            "            p = os.path.join(root, fn)\n"
+            '            with open(p, "rb") as fh:\n'
+            '                n = sum(chunk.count(b"\\n") for chunk in iter(lambda: fh.read(1 << 20), b""))\n'
+            '            print("%%d %%s" %% (n, p.replace(os.sep, "/")))'
+            % (json.dumps(path), match_expr)
         )
     return "%s -c %s" % (_bt_python3_invocation(), shlex.quote(body))
 
@@ -8605,6 +8710,43 @@ def _bt_commit_has_amend_flag(seg_tokens: List[str]) -> bool:
     return False
 
 
+def _bt_commit_is_help_invocation(seg_tokens: List[str]) -> bool:
+    """True iff a `git commit` segment carries `-h` or `--help`: git prints
+    usage (or opens the manpage) and exits, staging nothing and committing
+    nothing.
+
+    Why a carve-out rather than one more shape the predicates below happen
+    to deny: a help invocation names no pathspec, so every bare-commit
+    predicate reads it as unscoped and the operator gets a deny on the one
+    `git commit` shape that cannot sweep anything. Noise on a harmless
+    command is what trains operators to stop reading guard output --
+    reported alongside a real sweep this guard did not stop
+    (`state/bug-backlog/2026-08-21-bare-commit-guard-likely-fails-open-
+    unde-0d2276775068.yaml`, SECONDARY).
+
+    Bounded by the segment's own `--` separator and skipping
+    option-with-arg VALUE tokens, on the same footing as
+    `_bt_commit_has_sweep_all_flag`: a message operand or a pathspec
+    literally named `-h` must never read as help, since the cost of a false
+    positive here is a real bare commit going unguarded. A BUNDLED short
+    cluster carrying `h` (`-sh`) is deliberately NOT matched -- git treats
+    it as help, but leaving it to today's deny costs one noisy refusal,
+    while widening the match risks the silence direction."""
+    i = 0
+    n = len(seg_tokens)
+    while i < n:
+        tok = seg_tokens[i]
+        if tok == "--":
+            break
+        if tok in ("-h", "--help"):
+            return True
+        if tok in _GIT_COMMIT_OPT_WITH_ARG:
+            i += 2
+            continue
+        i += 1
+    return False
+
+
 def _bt_commit_own_pathspec(seg_tokens: List[str]) -> Optional[List[str]]:
     """Extract WHICH staged paths a `git commit` segment will actually take,
     for Check 5 (`check_validate_commit`) to INTERSECT against the full
@@ -8899,6 +9041,9 @@ def _bt_solo_bare_commit_index_nonempty(
         extra_env = {"GIT_INDEX_FILE": index_file}
     rc, out = _run_git(["diff", "--cached", "--name-only"], cwd=cwd, extra_env=extra_env)
     if rc != 0:
+        _record_probe_fail_open(
+            "solo-bare-commit index probe", "diff --cached --name-only", rc
+        )
         return False
     return bool([ln for ln in out.splitlines() if ln])
 
@@ -9029,11 +9174,17 @@ def _bt_sweep_all_holds_unverifiable_paths(seg_tokens: List[str]) -> bool:
         ["diff", "--cached", "--name-only"], cwd=cwd, extra_env=extra_env
     )
     if rc_staged != 0:
+        _record_probe_fail_open(
+            "sweep-all staged probe", "diff --cached --name-only", rc_staged
+        )
         return False
     rc_worktree, out_worktree = _run_git(
         ["diff", "--name-only"], cwd=cwd, extra_env=extra_env
     )
     if rc_worktree != 0:
+        _record_probe_fail_open(
+            "sweep-all worktree probe", "diff --name-only", rc_worktree
+        )
         return False
     swept = {ln for ln in out_staged.splitlines() if ln} | {
         ln for ln in out_worktree.splitlines() if ln
@@ -9105,6 +9256,16 @@ def check_git_commit_safe_commit_advise(
     unlike a fail-closed hard-deny guard elsewhere in this package where a
     probe failure denies (a false silence there would be the worse outcome
     for that guard's own class).
+
+    HELP CARVE-OUT: `git commit -h`/`--help` exits before staging or
+    committing anything and is skipped ahead of every predicate -- see
+    `_bt_commit_is_help_invocation`.
+
+    FAIL-OPEN LEGIBILITY: when an index probe fails, the escalation is
+    still declined (posture unchanged), but the fall-through advisory now
+    NAMES the probe failure rather than reading identically to a clean-index
+    advisory -- `_record_probe_fail_open`, and the bug row its docstring
+    cites.
 
     AMEND GATE (example-retrieval-repo-em cross-repo memo, 2026-08-15): a segment
     carrying `--amend` is checked for HEAD ownership FIRST, ahead of the
@@ -9185,6 +9346,10 @@ def check_git_commit_safe_commit_advise(
         if not seg_tokens:
             continue
         if _bt_git_resolved_subcommand(seg_tokens) != "commit":
+            continue
+        # `continue`, not `return None`: a later segment of the same command
+        # (`git commit -h && git commit -m x`) still gets every predicate.
+        if _bt_commit_is_help_invocation(seg_tokens):
             continue
         # Amend-ownership gate (example-retrieval-repo-em cross-repo memo, Finding 2):
         # evaluated BEFORE the explicit-pathspec early return below, so a
@@ -9306,6 +9471,7 @@ def check_git_commit_safe_commit_advise(
                 )
                 + ("\n\n%s" % _commit_bare_note if _commit_bare_note else "")
             )
+        _clear_probe_fail_open_reasons()
         if _bt_compound_add_bare_commit(seg_tokens, segments, seg_index):
             return _deny(
                 (
@@ -9356,6 +9522,20 @@ def check_git_commit_safe_commit_advise(
                 )
                 + ("\n\n%s" % _commit_bare_note if _commit_bare_note else "")
             )
+        # Fail-open legibility (`_record_probe_fail_open`): reaching here
+        # after a failed index probe is NOT the same verdict as reaching here
+        # with a clean index, and until now both printed the same advisory.
+        # The escalation is still declined -- posture unchanged -- but the
+        # operator is told the staged set was never read, so a silent
+        # degradation under load stops being indistinguishable from safety.
+        _fail_open_reasons = _take_probe_fail_open_reasons()
+        _fail_open_note = (
+            "The index was NOT read (%s), so this stayed an advisory because "
+            "the guard could not check the staged set — not because it "
+            "checked and found nothing." % "; ".join(_fail_open_reasons)
+            if _fail_open_reasons
+            else ""
+        )
         return _advisory(
             (
                 "Advisory: " + _amend_body
@@ -9368,6 +9548,7 @@ def check_git_commit_safe_commit_advise(
                     % (subject_operand,)
                 )
             )
+            + ("\n\n%s" % _fail_open_note if _fail_open_note else "")
             + ("\n\n%s" % _commit_bare_note if _commit_bare_note else "")
         )
     return None

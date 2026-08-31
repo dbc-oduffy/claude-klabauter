@@ -51,7 +51,7 @@ named departures (the UNKNOWN-override fix and the CPU cursor replacing a blocki
           2. assistant + stop_reason == "tool_use":
                tool in {AskUserQuestion, ExitPlanMode}     -> PAUSED:asking-human
                else                                        -> PRODUCING:tool-in-flight,
-                 downgraded to PAUSED:tool-unanswered when transcript mtime age > grace
+                 downgraded to PAUSED:tool-unanswered when last-activity age > grace
           3. system/stop_hook_summary|turn_duration        -> PAUSED:turn-ended
           4. assistant + stop_reason == "end_turn"         -> PAUSED:turn-ended
           5. user: result-sentinel present                 -> PRODUCING:mid-turn
@@ -190,6 +190,7 @@ import json
 import os
 import re
 import tempfile
+from datetime import datetime, timezone
 from typing import Any, Optional
 
 from coordinator_core.session import core as _session_core
@@ -627,11 +628,66 @@ def merge_delegation_evidence(payload_flag: bool, sidecar_signal: "bool | None |
     return bool(sidecar_signal)
 
 
+def parse_iso_timestamp(value: Any) -> Optional[datetime]:
+    """Parse a transcript record's ISO8601 `timestamp` to a tz-aware datetime.
+
+    `None` on anything that is not a non-empty parseable string -- missing
+    field, wrong type, malformed text. A naive result is assumed UTC. Never
+    raises. `group_em.read_pass._parse_iso_stamp` delegates here rather than
+    carrying its own copy: the dependency runs one way (group_em imports this
+    module, never the reverse), so this is the end of the arrow and the right
+    home for the single implementation.
+    """
+    if not isinstance(value, str) or not value:
+        return None
+    text = value.strip()
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed
+
+
+def activity_epoch_from_reduced(reduced_lines: list[_ReducedLine]) -> Optional[float]:
+    """Epoch of the newest reduced line carrying a parseable `timestamp`, or
+    `None` when no line does.
+
+    FILE MTIME IS NOT AN ACTIVITY CLOCK, which is why this exists. The harness
+    rewrites a stopped session's transcript with UNTIMESTAMPED bookkeeping rows
+    (`cost-state`, `last-prompt`, `ai-title`, `mode`, `atis-latch`), moving
+    mtime forward without the session having done anything. Measured
+    2026-08-31 across 228 transcripts touched in the prior day: 101 had an
+    mtime ahead of their own newest timestamped record by more than a minute,
+    worst case 16 hours -- and the worst case's last line WAS timestamped, so
+    a wholesale rewrite moves it too, not only a bookkeeping append. The skew
+    concentrates on STOPPED sessions, the exact population every consumer of
+    this number exists to detect.
+
+    Homed here rather than in either caller because `_ReducedLine` is this
+    module's type and both planes that need the number (`classify` via
+    `hooks/receiver_state_sensor.py`, and `group_em.read_pass`) already hold a
+    reduced tail when they ask. Scans newest-first and stops at the first
+    parseable stamp, so it costs no I/O at either call site.
+
+    Never raises; a malformed or missing `timestamp` is skipped, not guessed
+    at.
+    """
+    for line in reversed(list(reduced_lines or [])):
+        parsed = parse_iso_timestamp(getattr(line, "timestamp", None))
+        if parsed is not None:
+            return parsed.timestamp()
+    return None
+
+
 def classify(
     reduced_lines: list[_ReducedLine],
     *,
     now_epoch: float,
-    transcript_mtime_epoch: Optional[float],
+    transcript_activity_epoch: Optional[float],
     delegation_evidence: bool,
 ) -> Verdict:
     """First-match-wins verdict ladder, ported from probe-paused.py:114-148.
@@ -639,10 +695,16 @@ def classify(
     `reduced_lines` — trailing reduced lines, OLDEST FIRST (caller's responsibility to
     order them this way; `_read_tail_lines` returns them in on-disk order already).
     `now_epoch` — caller-supplied "now", so this function is deterministic/testable.
-    `transcript_mtime_epoch` — the transcript file's on-disk mtime, used ONLY by step 2's
-    grace-window downgrade; None (mtime unavailable) is treated as "no age evidence",
-    which keeps the PRODUCING:tool-in-flight verdict rather than downgrading it (fails
-    toward NOT assuming staleness, since there is nothing to measure staleness against).
+    `transcript_activity_epoch` — when this session last actually MOVED, used ONLY by
+    step 2's grace-window downgrade; None (nothing establishable) is treated as "no age
+    evidence", which keeps the PRODUCING:tool-in-flight verdict rather than downgrading
+    it (fails toward NOT assuming staleness, since there is nothing to measure staleness
+    against). This parameter took the transcript file's raw mtime until 2026-08-31, which
+    is not an activity clock (`activity_epoch_from_reduced`): a bookkeeping rewrite moved
+    it forward on a stopped session, the computed age came out too small, and the
+    tool-unanswered downgrade silently stopped firing for the sessions it exists to
+    catch. Callers supply `activity_epoch_from_reduced(reduced_lines)`, falling back to
+    mtime as an upper bound only when no line in the tail carries a timestamp.
     `delegation_evidence` — True when the caller has independently confirmed live
     subagent delegation for this session; this function does not derive it.
 
@@ -671,7 +733,9 @@ def classify(
                 "(assistant/user/system:away_summary|stop_hook_summary|turn_duration)",
             )
     else:
-        verdict = _classify_one(last, now_epoch=now_epoch, transcript_mtime_epoch=transcript_mtime_epoch)
+        verdict = _classify_one(
+            last, now_epoch=now_epoch, transcript_activity_epoch=transcript_activity_epoch
+        )
 
     is_paused_or_unknown = verdict.verdict.startswith("PAUSED") or verdict.verdict.startswith("UNKNOWN")
     if is_paused_or_unknown and _has_live_delegation_evidence(delegation_evidence):
@@ -689,7 +753,7 @@ def classify(
 
 
 def _classify_one(
-    last: _ReducedLine, *, now_epoch: float, transcript_mtime_epoch: Optional[float]
+    last: _ReducedLine, *, now_epoch: float, transcript_activity_epoch: Optional[float]
 ) -> Verdict:
     """Steps 1-6 of the ladder, applied to the single last-substantive reduced line."""
     if last.type == "system" and last.subtype == "away_summary":
@@ -698,12 +762,12 @@ def _classify_one(
     if last.type == "assistant" and last.stop_reason == "tool_use":
         if any(name in _ASKING_HUMAN_TOOLS for name in last.tool_names):
             return Verdict("PAUSED", "asking-human")
-        if transcript_mtime_epoch is not None:
-            age = now_epoch - transcript_mtime_epoch
+        if transcript_activity_epoch is not None:
+            age = now_epoch - transcript_activity_epoch
             if age > _TOOL_UNANSWERED_GRACE_SECONDS:
                 return Verdict(
                     "PAUSED",
-                    f"tool-unanswered ({age:.1f}s since transcript mtime, "
+                    f"tool-unanswered ({age:.1f}s since last activity, "
                     f"grace {_TOOL_UNANSWERED_GRACE_SECONDS}s)",
                 )
         return Verdict("PRODUCING", "tool-in-flight")

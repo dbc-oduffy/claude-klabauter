@@ -108,6 +108,7 @@ __all__ = [
     "head_branch",
     "head_sha",
     "head_tree_sha",
+    "source_sha_suffix",
     "read_tree_spine",
     "head_blobs",
 ]
@@ -568,6 +569,41 @@ def head_sha(repo: Union[str, Path]) -> Optional[str]:
         if ref_name == ref:
             return sha
     return None
+
+
+def source_sha_suffix(repo: Union[str, Path]) -> str:
+    """The mirror-currency stamp every percolate commit subject carries:
+    `" [source <sha12>]"` for `repo`'s HEAD, or `""` when HEAD does not
+    resolve.
+
+    WHY THIS EXISTS. A percolate commit subject named the paths it carried
+    and the rows that produced them, but never the SOURCE commit those bytes
+    were cut from -- so neither party to the publish seam could tell whether
+    a given mirror was current. A consumer executing the mirror could only
+    answer "does my fix live here?" by grepping engine source for the fix's
+    own text (example-retrieval-repo-ue-addon-em, 2026-08-31: a fix committed at
+    `40abe011d` stayed live as a crash for a mirror consumer, and the only
+    available currency check was a hand-rolled grep for `if parsed.tzinfo is
+    None`). With the source sha in the subject, `git -C <mirror> log -1`
+    answers it, and `git -C <source> merge-base --is-ancestor <fix> <stamp>`
+    answers it exactly.
+
+    Lives here, beside `head_sha`, rather than in any one publish CLI: all
+    three legs that write mirror history (`publish.py`, `percolate-round.py`,
+    `percolate-mirror.py`) must emit a byte-identical stamp, because a signal
+    present on only SOME publish commits is worse than none -- a consumer
+    reading an unstamped commit cannot tell "old publisher" from "this leg
+    never stamps". Two of those legs are spawned standalone and share no
+    module import path with each other, so the only reach point common to all
+    three is the engine they each already bootstrap.
+
+    Degrades to `""` rather than raising or blocking a publish: `head_sha`
+    returns `None` on an unborn/detached-nothing HEAD, and a subject without
+    the stamp is strictly what this function's absence produced. Zero-spawn
+    by construction -- `head_sha` reads `HEAD`/`packed-refs` directly.
+    """
+    sha = head_sha(repo)
+    return f" [source {sha[:12]}]" if sha else ""
 
 
 def head_tree_sha(repo: Union[str, Path]) -> Optional[str]:

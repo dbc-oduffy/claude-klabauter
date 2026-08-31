@@ -1599,6 +1599,34 @@ def drop(
         claims_dir = root / ".git" / "coordinator-sessions" / f"{class_}-claims" / basename
         claim_is_brief_stage = claim_stage(claims_dir) == CLAIM_STAGE_BRIEF
 
+        # A brief-stage LOCK beside an apply-stage FRONTMATTER STAMP is not a
+        # brief-stage claim, and taking the lock-only arm on one is how `drop`
+        # came to report `released: true` while leaving a baton reading
+        # `status: claimed` / `deployment_state: in_flight` on disk, with the
+        # session-claim ledger empty. Two planes disagreed and the cheap one won.
+        #
+        # It is reachable because `archive-stamp-cli claim-handoff` writes the
+        # frontmatter stamp WITHOUT promoting the claim stage, so the lock says
+        # brief and the artifact says claimed. That verb is being fixed
+        # separately; this arm must not depend on it having been, because the
+        # failure here is silent and the operator's only signal is the word
+        # `released`.
+        #
+        # The stamp is the authority: if one is present the claim is apply-stage
+        # whatever the lock dir says, so fall through to the holder-gated path
+        # that actually unstamps it.
+        if claim_is_brief_stage and artifact_path_value:
+            try:
+                from coordinator_core.ops.read_frontmatter_field import (
+                    read_frontmatter_field,
+                )
+
+                _fm_holder = read_frontmatter_field(artifact_path_value, "claimed_by")
+            except Exception:  # noqa: BLE001 -- an unreadable artifact keeps prior behaviour
+                _fm_holder = ""
+            if (_fm_holder or "").strip():
+                claim_is_brief_stage = False
+
         if claim_is_brief_stage:
             # No frontmatter stamp was ever written for a brief-stage claim
             # — nothing here for a holder gate to protect. Lock-release only,

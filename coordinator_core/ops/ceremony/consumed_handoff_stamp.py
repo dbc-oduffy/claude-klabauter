@@ -192,6 +192,7 @@ import sys
 import logging
 import re
 import tempfile
+from time import perf_counter
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -208,7 +209,7 @@ from coordinator_core.ops.ceremony.push import (
     PUSH_STATUS_NOT_ATTEMPTED,
     PUSH_STATUS_PUSHED,
     derive_push_status,
-    CEREMONY_PUSH_BUDGET_SECS,
+    _ceremony_push_budget,
     push_with_retry,
     resolve_post_push_sha,
 )
@@ -1013,6 +1014,7 @@ def _commit_and_push_follow_up(
     distinct shape — `pushed=None`, `push_status=PUSH_STATUS_NOT_ATTEMPTED`,
     `error=None`.
     """
+    _pre_push_elapsed = perf_counter()
     message = _compose_follow_up_message(stamped_paths, committed_sha)
     with tempfile.NamedTemporaryFile(
         mode="w", suffix=".txt", delete=False, encoding="utf-8"
@@ -1104,8 +1106,10 @@ def _commit_and_push_follow_up(
     # main ceremony commit's push and the sibling `post_commit_tail`
     # follow-up push both go through) rather than a second inline
     # resolve/gate call site.
+    # elapsed-aware, not the flat slice — see _ceremony_push_budget.
     push_outcome = push_with_retry(
-        worktree_root, budget_secs=CEREMONY_PUSH_BUDGET_SECS
+        worktree_root,
+        budget_secs=_ceremony_push_budget(perf_counter() - _pre_push_elapsed),
     )
     push_status = derive_push_status(push_outcome)
 

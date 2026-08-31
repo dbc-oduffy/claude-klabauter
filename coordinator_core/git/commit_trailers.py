@@ -284,6 +284,29 @@ def _read_plan_scope_paths(cwd: Union[str, Path], plan_path: str) -> List[str]:
     return [_normalize_scope_path(p) for p in _extract_scope_paths(text)]
 
 
+def _path_covered_by_scope_entry(scope_entry: str, normalized_path: str) -> bool:
+    """True iff ``normalized_path`` (already ``_normalize_committed_path``-
+    shaped) is covered by ``scope_entry`` (already ``_normalize_scope_path``-
+    shaped): either they are EQUAL, or ``scope_entry`` names a directory that
+    is a proper ancestor of ``normalized_path``.
+
+    Ancestor containment is checked on ``/``-split path SEGMENTS, never a
+    bare ``str.startswith`` -- a naive prefix check would let scope entry
+    ``coordinator_core/ops/fleet/tests`` match the unrelated sibling
+    ``coordinator_core/ops/fleet/tests_helper.py`` (both start with the same
+    characters; only one is actually beneath the other as a directory).
+    """
+    if not scope_entry or not normalized_path:
+        return False
+    if scope_entry == normalized_path:
+        return True
+    entry_segments = scope_entry.split("/")
+    path_segments = normalized_path.split("/")
+    if len(path_segments) <= len(entry_segments):
+        return False
+    return path_segments[: len(entry_segments)] == entry_segments
+
+
 def resolve_deliverable_id_from_scope_match(
     cwd: Union[str, Path],
     paths: Optional[Sequence[str]],
@@ -314,6 +337,24 @@ def resolve_deliverable_id_from_scope_match(
     Deliberately measured to abstain often: this is the accepted cost of a
     strict-covered predicate that produces zero over-matches on real data,
     not a shortfall to relax.
+
+    "Covered" INCLUDES directory-prefix containment, not just exact
+    membership -- a `scope:` entry is routinely a DIRECTORY (the plan
+    scaffold's own comment invites `path/or/item/one`), and a path beneath a
+    plan's declared directory scope IS in that plan's scope by the plain
+    meaning of the entry. `_path_covered_by_scope_entry` is the sole
+    containment check: exact-equal, OR the entry is a proper ancestor
+    directory of the path (compared on `/`-joined path SEGMENTS, never a
+    bare `str.startswith`, which would wrongly let scope entry
+    `coordinator_core/ops/fleet/tests` match committed path
+    `coordinator_core/ops/fleet/tests_helper.py`). This widening does NOT
+    relax the strictness the earlier note protects -- that strictness is
+    CROSS-PLAN (never guess which plan a straddling pathspec belongs to):
+    every committed path must still be covered by ONE plan, and two-or-more
+    covering plans still abstain (see the duplicate-counting note below).
+    Directory-prefix containment only changes what "covered by" means for a
+    single entry against a single path; it never lets a pathspec straddling
+    two plans, or spilling outside every claimed plan's scope, resolve.
     """
     if not paths or not claims:
         return ""
@@ -325,7 +366,10 @@ def resolve_deliverable_id_from_scope_match(
         scope_paths = set(_read_plan_scope_paths(cwd, plan_path))
         if not scope_paths:
             continue
-        if all(p in scope_paths for p in normalized_paths):
+        if all(
+            any(_path_covered_by_scope_entry(entry, p) for entry in scope_paths)
+            for p in normalized_paths
+        ):
             covering_deliverable_ids.append(
                 _read_deliverable_id_from_frontmatter(Path(cwd) / plan_path)
             )

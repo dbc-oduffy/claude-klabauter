@@ -8,6 +8,8 @@ the POLL-ERROR coverage path, and the measured poll-interval derivation.
 
 from __future__ import annotations
 
+import io
+import json
 import pathlib
 
 import pytest
@@ -125,7 +127,7 @@ def test_poll_once_emits_parked_line_on_transition():
     ), mock.patch.object(
         watch.obligations, "for_peer", return_value=None
     ):
-        result = watch.poll_once(REPO_ROOT, "caller-1", prev_parked={"peer-1": False}, now=now, emit=emitted.append)
+        result, _declinations = watch.poll_once(REPO_ROOT, "caller-1", prev_parked={"peer-1": False}, now=now, emit=emitted.append)
 
     assert result == {"peer-1": True}
     assert len(emitted) == 1
@@ -150,7 +152,7 @@ def test_poll_once_stays_silent_on_first_sighting():
         "classify_peer",
         return_value={"state": "PAUSED", "reason": "turn-ended", "candidate": True},
     ):
-        result = watch.poll_once(REPO_ROOT, "caller-1", prev_parked={}, now=now, emit=emitted.append)
+        result, _declinations = watch.poll_once(REPO_ROOT, "caller-1", prev_parked={}, now=now, emit=emitted.append)
 
     assert result == {"peer-1": True}
     assert emitted == []
@@ -171,7 +173,7 @@ def test_poll_once_suppresses_when_cooldown_active():
     ), mock.patch.object(
         watch, "_cooldown_active", return_value=True
     ):
-        result = watch.poll_once(REPO_ROOT, "caller-1", prev_parked={"peer-1": False}, now=now, emit=emitted.append)
+        result, _declinations = watch.poll_once(REPO_ROOT, "caller-1", prev_parked={"peer-1": False}, now=now, emit=emitted.append)
 
     assert result == {"peer-1": True}
     assert emitted == []
@@ -190,7 +192,7 @@ def test_poll_once_steady_state_emits_nothing():
         "classify_peer",
         return_value={"state": "PAUSED", "reason": "turn-ended", "candidate": True},
     ):
-        result = watch.poll_once(REPO_ROOT, "caller-1", prev_parked={"peer-1": True}, now=now, emit=emitted.append)
+        result, _declinations = watch.poll_once(REPO_ROOT, "caller-1", prev_parked={"peer-1": True}, now=now, emit=emitted.append)
 
     assert result == {"peer-1": True}
     assert emitted == []
@@ -214,7 +216,10 @@ def test_cooldown_inactive_when_no_offer_recorded():
 # ---------------------------------------------------------------------------
 
 
-def test_main_emits_poll_error_and_continues():
+def test_main_emits_poll_error_and_continues(tmp_path):
+    """The repo root is a tmp_path, not the module-level `REPO_ROOT` sentinel:
+    `main` now writes this repo's heartbeat every tick, so a test driving it
+    against `/repo/root` creates that directory on the real filesystem."""
     stream_lines = []
 
     class _Stream:
@@ -231,7 +236,7 @@ def test_main_emits_poll_error_and_continues():
         watch, "poll_once", side_effect=RuntimeError("boom")
     ):
         watch.main(
-            REPO_ROOT,
+            str(tmp_path),
             caller_session_id="caller-1",
             stream=_Stream(),
             sleep_fn=lambda _s: None,
@@ -242,7 +247,7 @@ def test_main_emits_poll_error_and_continues():
     assert sum(1 for line in stream_lines if line.startswith("POLL-ERROR")) == 2
 
 
-def test_main_arms_and_reports_measured_interval():
+def test_main_arms_and_reports_measured_interval(tmp_path):
     stream_lines = []
 
     class _Stream:
@@ -256,10 +261,10 @@ def test_main_arms_and_reports_measured_interval():
     with mock.patch.object(
         watch, "_measure_snapshot_ms", return_value=(2.0, 5)
     ), mock.patch.object(
-        watch, "poll_once", return_value={}
+        watch, "poll_once", return_value=({}, [])
     ):
         watch.main(
-            REPO_ROOT,
+            str(tmp_path),
             caller_session_id="caller-1",
             stream=_Stream(),
             sleep_fn=lambda _s: None,
@@ -331,3 +336,184 @@ def test_cli_runs_a_bounded_watch_and_emits_armed(tmp_path, monkeypatch, capsys)
     )
     assert rc == 0
     assert "ARMED" in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------------------
+# two ids: the watching process is not always the crown
+# (cross-repo/inbox/2026-08-31-doe-claude-em-fleet-watch-needs-engine-side-
+# transition-events.md, question 1 -- DoE stands up a teammate to hold this
+# watch so the crown's context stays free for adjudicating)
+# ---------------------------------------------------------------------------
+
+
+def test_roster_excludes_both_the_watcher_and_the_crown():
+    """A teammate sitting in a `Monitor` poll presents exactly like a parked
+    peer, and the crown is the recipient of every line -- neither belongs in
+    the watched set."""
+    agents = [
+        {"sessionId": "watcher-1", "status": "idle", "cwd": REPO_ROOT},
+        {"sessionId": "crown-1", "status": "idle", "cwd": REPO_ROOT},
+        {"sessionId": "peer-1", "status": "idle", "cwd": REPO_ROOT},
+    ]
+    with mock.patch.object(watch.read_pass, "fetch_live_agents", return_value=agents):
+        peers = watch._current_agents(REPO_ROOT, "watcher-1", "crown-1")
+    assert [p["sessionId"] for p in peers] == ["peer-1"]
+
+
+def test_cooldown_is_read_off_the_crowns_send_log_not_the_watchers():
+    """The offer log is per-session on disk, so a watcher reading its own
+    empty log would re-flag every peer the crown already answered."""
+    seen = {}
+
+    def _fake_read_send_log(repo_root, caller_session_id):
+        seen["caller"] = caller_session_id
+        return []
+
+    agents = [{"sessionId": "peer-1", "status": "idle", "cwd": REPO_ROOT}]
+    verdict = {"session_id": "peer-1", "candidate": True, "reason": "turn-ended"}
+    with mock.patch.object(
+        watch.read_pass, "fetch_live_agents", return_value=agents
+    ), mock.patch.object(
+        watch.read_pass, "classify_peer", return_value=verdict
+    ), mock.patch.object(
+        watch.send_pass, "read_send_log", side_effect=_fake_read_send_log
+    ), mock.patch.object(
+        watch, "_parked_line", return_value="PARKED session=peer-1"
+    ):
+        watch.poll_once(
+            REPO_ROOT,
+            "watcher-1",
+            {"peer-1": False},
+            emit=lambda _line: None,
+            crown_session_id="crown-1",
+        )
+
+    assert seen["caller"] == "crown-1"
+
+
+def test_crown_session_id_defaults_to_the_calling_session():
+    """The ordinary case -- the crown holds the poller itself -- keeps
+    working with one id, unchanged."""
+    seen = {}
+
+    def _fake_read_send_log(repo_root, caller_session_id):
+        seen["caller"] = caller_session_id
+        return []
+
+    agents = [{"sessionId": "peer-1", "status": "idle", "cwd": REPO_ROOT}]
+    verdict = {"session_id": "peer-1", "candidate": True, "reason": "turn-ended"}
+    with mock.patch.object(
+        watch.read_pass, "fetch_live_agents", return_value=agents
+    ), mock.patch.object(
+        watch.read_pass, "classify_peer", return_value=verdict
+    ), mock.patch.object(
+        watch.send_pass, "read_send_log", side_effect=_fake_read_send_log
+    ), mock.patch.object(
+        watch, "_parked_line", return_value="PARKED session=peer-1"
+    ):
+        watch.poll_once(REPO_ROOT, "caller-1", {"peer-1": False}, emit=lambda _line: None)
+
+    assert seen["caller"] == "caller-1"
+
+
+# ---------------------------------------------------------------------------
+# the presence stamp: arming this watch must not read as no watch at all
+# (same memo, question 2)
+# ---------------------------------------------------------------------------
+
+
+def test_declinations_record_the_gate_that_stopped_each_peer():
+    agents = [
+        {"sessionId": "parked-1", "status": "idle", "cwd": REPO_ROOT},
+        {"sessionId": "busy-1", "status": "busy", "cwd": REPO_ROOT},
+    ]
+    verdicts = {
+        "parked-1": {"session_id": "parked-1", "candidate": True, "reason": "turn-ended"},
+        "busy-1": {"session_id": "busy-1", "candidate": False, "reason": "producing"},
+    }
+    with mock.patch.object(
+        watch.read_pass, "fetch_live_agents", return_value=agents
+    ), mock.patch.object(
+        watch.read_pass, "classify_peer", side_effect=lambda repo_root, peer, **kw: verdicts[peer["sessionId"]]
+    ), mock.patch.object(
+        watch, "_cooldown_active", return_value=True
+    ):
+        _parked, declinations = watch.poll_once(
+            REPO_ROOT,
+            "caller-1",
+            {"parked-1": False, "busy-1": False},
+            emit=lambda _line: None,
+        )
+
+    rows = {row["session_id"]: row for row in declinations}
+    assert rows["parked-1"]["gate"] == "cooldown"
+    assert rows["busy-1"]["gate"] == "not-a-candidate"
+    assert rows["busy-1"]["reason"] == "producing"
+    assert all(row["name"] is None for row in declinations)
+
+
+def test_main_stamps_the_watch_presence_record_every_tick(tmp_path):
+    """A crown that arms this runnable and stops hand-stamping must not read
+    to the rest of the fleet as a repo nobody is watching."""
+    with mock.patch.object(
+        watch, "_measure_snapshot_ms", return_value=(2.0, 5)
+    ), mock.patch.object(
+        watch, "poll_once", return_value=({}, [])
+    ):
+        watch.main(
+            str(tmp_path),
+            caller_session_id="watcher-1",
+            crown_session_id="crown-1",
+            stream=io.StringIO(),
+            sleep_fn=lambda _s: None,
+            max_iterations=1,
+        )
+
+    with open(watch.watch_heartbeat.watch_path(str(tmp_path)), encoding="utf-8") as fh:
+        record = json.load(fh)
+    assert record["holder_session_id"] == "crown-1"
+    assert record["tick_source"] == "monitor"
+
+
+def test_parked_line_reuses_the_verdicts_epoch_and_reads_no_second_time():
+    """The transcript was already reduced once by `classify_peer` this tick;
+    re-deriving the same number here was a duplicate seek-from-EOF read
+    (coordinator:code-reviewer, P2)."""
+    now = datetime(2026, 8, 31, 16, 0, 0, tzinfo=timezone.utc)
+    verdict = {
+        "session_id": "peer-1",
+        "candidate": True,
+        "reason": "turn-ended",
+        "activity_epoch": now.timestamp() - 300.0,
+    }
+
+    with mock.patch.object(
+        watch.read_pass, "_transcript_activity_epoch", side_effect=AssertionError("re-read")
+    ), mock.patch.object(
+        watch, "_stamped_age_seconds", return_value=None
+    ), mock.patch.object(
+        watch, "_obligation_summary", return_value="none"
+    ):
+        line = watch._parked_line(REPO_ROOT, "caller-1", "peer-1", verdict, REPO_ROOT, now)
+
+    assert "transcript_idle=300s" in line
+
+
+def test_parked_line_still_reads_when_the_verdict_carries_no_epoch():
+    """The reader leg reduces no tail, so there is nothing to reuse -- paying
+    one read there is a first read, not a second."""
+    now = datetime(2026, 8, 31, 16, 0, 0, tzinfo=timezone.utc)
+    verdict = {"session_id": "peer-1", "candidate": True, "reason": "turn-ended"}
+
+    with mock.patch.object(
+        watch.read_pass,
+        "_transcript_activity_epoch",
+        return_value=(now.timestamp() - 120.0, True),
+    ), mock.patch.object(
+        watch, "_stamped_age_seconds", return_value=None
+    ), mock.patch.object(
+        watch, "_obligation_summary", return_value="none"
+    ):
+        line = watch._parked_line(REPO_ROOT, "caller-1", "peer-1", verdict, REPO_ROOT, now)
+
+    assert "transcript_idle=120s" in line

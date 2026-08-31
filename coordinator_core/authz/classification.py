@@ -203,6 +203,15 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # nudge_foreground_agent_dispatch and postuse_advisory_dispatch to MUTATING — adding
     # per-session suppression state here would both violate that spec and flip this class.
     "hooks.nudge_named_agent_report_delivery": OpClass.COMPUTE_ONLY,
+    # hooks.nudge_autonomous_askuserquestion — COMPUTE_ONLY on the same five-question
+    # checklist. All file I/O is read-only (a sentinel existence check under
+    # tempfile.gettempdir(), and two read-only posture-file reads); it holds no
+    # per-session suppression sentinel (unconditional advisory, per its own module
+    # docstring's "measured retirement of the C2 content classifier"), so none of the
+    # MUTATING reclassification reasoning below (postuse_advisory_dispatch,
+    # nudge_foreground_agent_dispatch) applies. First hot-path reconstructable unit
+    # built against docs/reference/warm-hook-migration.md.
+    "hooks.nudge_autonomous_askuserquestion": OpClass.COMPUTE_ONLY,
     # hooks.postuse_advisory_dispatch — MUTATING (reclassified; was COMPUTE_ONLY).
     #
     # B-F1 had re-plumbed this op's throttle/bark-once/dedup guards from /tmp
@@ -4015,6 +4024,42 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # "mutates nothing" (single-shot decision-object computation).
     "baton_assemble.apply": OpClass.MUTATING,
     "baton_assemble.brief": OpClass.COMPUTE_ONLY,
+
+    # git.maintenance — MUTATING: `coordinator_core.ops.git_maintenance::run_tier`
+    # runs the tier's `git maintenance run` task set (gc/loose-objects/pack-refs/
+    # commit-graph/incremental-repack) plus reflog and orphan-pack reaping against
+    # the caller's repository. Every one of those rewrites git objects on disk.
+    # DR-208 five-question affirmation:
+    #   1. Writes, deletes, or reorders any state file, queue, or git object?   Yes.
+    #      Repacks and prunes objects, rewrites packed-refs and the commit-graph.
+    #   2. Writes into rag's relational store?                                  No.
+    #   3. Opens any file for write (including sentinel creation)?              Yes.
+    #      Pack/commit-graph files, and the tier's own run stamp.
+    #   4. Mutates shared mutable state outside its own module?                 Yes.
+    #      The object store is shared across every session on the box.
+    #   5. Persistent state changes observable across process boundaries?       Yes.
+    # No COMPUTE_ONLY reading is available: the op exists to do the maintenance,
+    # not to report on it. Classified here rather than by its author — the op
+    # landed without an OP_CLASSIFICATION entry, leaving the registration-quad
+    # guards red on HEAD.
+    "git.maintenance": OpClass.MUTATING,
+
+    # handoff.repair_deployment_state — MUTATING: the live-tree door registered by
+    # `coordinator_core.ops.handoff_stamp::_repair_live_deployment_state_handler`,
+    # which delegates to `_repair_deployment_state_impl` and rewrites
+    # `deployment_state` (and, on the `continued` -> `ready_to_fire` carve-out,
+    # `continued_into` and `pickup_ready`) in the frontmatter of a handoff still
+    # under state/handoffs/. Same in-place frontmatter class as handoff.transition
+    # and handoff.stamp_phase above, under the DR-212 carve-out.
+    # DR-208 five-question affirmation:
+    #   1. Writes, deletes, or reorders any state file, queue, or git object?   Yes.
+    #      In-place rewrite of one state/handoffs/*.md record's frontmatter.
+    #   2. Writes into rag's relational store?                                  No.
+    #   3. Opens any file for write (including sentinel creation)?              Yes.
+    #   4. Mutates shared mutable state outside its own module?                 Yes.
+    #      The handoff corpus is read by every peer session.
+    #   5. Persistent state changes observable across process boundaries?       Yes.
+    "handoff.repair_deployment_state": OpClass.MUTATING,
 })
 
 

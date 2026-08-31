@@ -924,6 +924,7 @@ from coordinator_core.bash_guards._command_tokenizer import (
     token_matches_binary as _token_matches_binary,
     tokenize_full_command as _tokenize_full_command,
 )
+from coordinator_core.bash_guards import _helpers
 from coordinator_core.bash_guards._helpers import (
     is_confined_findings_agent,
     is_confined_by_roster_absence,
@@ -2935,6 +2936,38 @@ _EXECUTOR_HEADER_LINE = "BLOCKED: confined coordinator:executor Bash invocation 
 
 _DEFAULT_HEADER_LINE = "BLOCKED: confined findings-agent Bash outside allowlist."
 
+#: Leg-3 headers. `_is_confined_type`'s third leg
+#: (``is_confined_by_roster_absence``) confines by ABSENCE, so it fires for
+#: agents that are not findings agents at all -- and the default header
+#: above then tells them they are one, and offers them the REVIEWER's
+#: `coordinator-doc-new --type review-findings` allowlist as their remedy.
+#:
+#: That is not a cosmetic inaccuracy; it is a wrong diagnosis that routes the
+#: reader away from the cause. Measured 2026-08-31: a `coordinator:executor`
+#: confined solely because the roster could not be read received the default
+#: header, and TWO sessions across nineteen days went looking for the
+#: executor in `_helpers._CONFINED_FINDINGS_AGENTS` -- the one set that
+#: cannot contain it, because leg 3 never names a type anywhere. The report
+#: (`2026-08-20-example-retrieval-repo-em-executor-confined-under-the-reviewer-
+#: allowlist.md`) was accurate the whole time and read as unreproducible.
+#:
+#: These REPLACE the header rather than adding a line, so the prose byte
+#: count (`_message_size`) is unaffected -- the fix is that the one sentence
+#: already being spent says something true.
+#:
+#: Deliberately NOT a verdict change. Both leg-3 confinements are argued
+#: fail-closed behaviour (an unreadable roster degrades to "cannot confirm
+#: this type is legitimate", never to "assume it is fine"), and whether an
+#: unclassifiable input should pass or refuse is a separate, open,
+#: direction-class ruling. A refusal can be honest about its cause under
+#: either answer.
+_ROSTER_UNREADABLE_HEADER_LINE = (
+    "BLOCKED: agent roster unreadable, so every type is confined until it resolves."
+)
+_TYPE_UNENUMERATED_HEADER_LINE = (
+    "BLOCKED: this dispatch identity is on no roster, so Bash is confined."
+)
+
 #: (Message-size discipline, 2026-08-03) Trimmed to prose-cap width. Moved
 #: onto ONE indented line so it lands inside the "Use instead:" cue window
 #: (see ``_deny_reason``) and is exempted from the prose byte count --
@@ -3020,11 +3053,49 @@ _TIER_A_ENUM_BLOCK = (
 )
 
 
+def _confinement_cause(effective_type: str, policy: Any) -> str:
+    """Which leg of ``_is_confined_type`` confined ``effective_type``:
+    ``"policy"``, ``"findings"``, ``"roster-unreadable"``,
+    ``"unenumerated"``, or ``""`` when none of them did.
+
+    Mirrors ``_is_confined_type``'s own leg ORDER exactly, so the cause this
+    reports is the one a reader re-deriving the verdict by hand would find
+    first. Kept as a SEPARATE function rather than widening
+    ``_is_confined_type``'s return type: that predicate is called four times
+    per dispatch across two identity legs, and only one call in the whole
+    guard -- a denial that is already being composed -- needs the cause.
+
+    COST IS PAID ONLY ON THE DENY PATH. The ``roster-unreadable`` vs
+    ``unenumerated`` split needs ``resolve_roster()``, which is real disk
+    I/O (DoE's policy YAML, ``coordinator/agents/*.md``, the plugin
+    discovery tree). That is the same call leg 3 already made to reach this
+    verdict, and it is reached only after ``check()`` has decided to deny --
+    never on an allow, and never on a command this guard has nothing to say
+    about.
+
+    Never raises: a resolver that throws yields ``"unenumerated"``, the
+    weaker of the two leg-3 claims, so a failure here can only make the
+    message less specific, never wrong."""
+    raw = getattr(policy, "bash_policy", None)
+    if effective_type and isinstance(raw, dict) and effective_type in raw:
+        return "policy"
+    if is_confined_findings_agent(effective_type):
+        return "findings"
+    if not is_confined_by_roster_absence(effective_type):
+        return ""
+    try:
+        roster, _reason = _helpers._resolve_roster_accessor()()
+    except Exception:  # noqa: BLE001 -- see docstring: degrade, never raise
+        return "unenumerated"
+    return "unenumerated" if roster is not None else "roster-unreadable"
+
+
 def _deny_reason(
     effective_type: str,
     cmd: str,
     deny_reason: str,
     suppress_retry_advice: bool = False,
+    confinement_cause: str = "",
 ) -> str:
     """The REASON block, with the header line and the three
     agent-class-specific stanzas resolved per ``effective_type`` via
@@ -3054,6 +3125,17 @@ def _deny_reason(
     cmd_safe = _sanitize_cmd_for_reason(cmd)
     overrides = _DENY_MESSAGE_STANZA_OVERRIDES.get(effective_type, {})
     header_line = overrides.get("header", _DEFAULT_HEADER_LINE)
+    # A leg-3 confinement is not a findings-agent confinement, and saying so
+    # is what stopped two sessions finding the cause -- see
+    # `_ROSTER_UNREADABLE_HEADER_LINE`'s own comment. An explicit per-type
+    # override still wins: a type with its own header (today only
+    # `coordinator:executor`) has an identity that DID resolve, so leg 3 is
+    # not why it is here.
+    if "header" not in overrides:
+        if confinement_cause == "roster-unreadable":
+            header_line = _ROSTER_UNREADABLE_HEADER_LINE
+        elif confinement_cause == "unenumerated":
+            header_line = _TYPE_UNENUMERATED_HEADER_LINE
     scaffolder_stanza = overrides.get("scaffolder", _DEFAULT_SCAFFOLDER_STANZA)
     accepted_forms_stanza = overrides.get("accepted_forms", _DEFAULT_ACCEPTED_FORMS_STANZA)
     closing_stanza = (
@@ -3434,7 +3516,13 @@ def check(payload: Dict[str, Any], policy_path: Optional[str] = None) -> Optiona
     if not deny:
         return None
 
-    reason = _deny_reason(effective_type, cmd, deny_reason, suppress_retry_advice)
+    reason = _deny_reason(
+        effective_type,
+        cmd,
+        deny_reason,
+        suppress_retry_advice,
+        confinement_cause=_confinement_cause(effective_type, policy),
+    )
     return {
         "hookSpecificOutput": {
             "hookEventName": "PreToolUse",

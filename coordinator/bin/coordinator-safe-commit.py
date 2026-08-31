@@ -547,7 +547,7 @@ def do_pathspec(args: "Args") -> None:
     # the warm-reach probe before ever reaching the cold-spawn fallback.
     require_engine_on_path(__file__)
 
-    worktree_root = os.getcwd()
+    worktree_root = _worktree_root_from_cwd()
     attempt_id = uuid.uuid4().hex
     attempt_trailer = f"Attempt-Id: {attempt_id}"
     pre_sha = _resolve_pre_sha_for_reconcile(worktree_root)
@@ -622,10 +622,16 @@ def _holder_context(worktree_root: str, sid: str, path: str) -> str:
     over 31 records, so the name is resolved HERE, at the moment of the
     refusal, never carried in from a record or a document that mentions it.
 
-    A sid with no registry entry is reported as stale rather than printed as
-    if it were an address: "coordinate with the holder(s) first" naming a
-    party the caller cannot reach is how a guard teaches the fleet to route
-    around it, which costs the true positives too.
+    A sid with no registry entry is reported as unnamed, never as dead: this
+    helper runs only inside a branch `contested_by_live_peers` has already
+    decided, so liveness is established before the name is looked up and the
+    label may not contradict it. A label reading "stale id" here produced
+    "held by live session(s) 6ab7b0d8 (stale id...)" -- self-contradicting in
+    one line, and a peer who believed the stale half left an artifact dirty
+    rather than commit it. What the miss means is that the sid has no
+    resolvable name, and the caller cannot reach the holder by one: printing
+    it bare as if it were an address is how a guard teaches the fleet to
+    route around it, which costs the true positives too.
 
     Two facts make the sid actionable, and both are already on disk:
     the holder's baton title (what they are working on, so the caller can
@@ -640,7 +646,7 @@ def _holder_context(worktree_root: str, sid: str, path: str) -> str:
     """
     bits: List[str] = []
     try:
-        _cs_core, _cs_liveness, _cs_scope, _cs_claims = _import_session()
+        _import_session()
         from coordinator_core.session import harness_registry  # noqa: PLC0415
 
         record = harness_registry.snapshot().get(sid)
@@ -650,7 +656,7 @@ def _holder_context(worktree_root: str, sid: str, path: str) -> str:
     if name:
         bits.append(f"{name} [{sid[:8]}]")
     else:
-        bits.append(f"{sid[:8]} (stale id, no registry entry)")
+        bits.append(f"{sid[:8]} (live, no name in the harness registry)")
     sessions_dir = os.path.join(worktree_root, ".git", "coordinator-sessions", sid)
     try:
         import json  # noqa: PLC0415
@@ -662,8 +668,6 @@ def _holder_context(worktree_root: str, sid: str, path: str) -> str:
     except Exception:
         pass
     try:
-        import json  # noqa: PLC0415
-
         last_ts = None
         with open(
             os.path.join(sessions_dir, "touch-record.jsonl"), encoding="utf-8"
@@ -761,10 +765,40 @@ def _refuse_contested_pathspec(paths: Sequence[str], worktree_root: str) -> None
         "holder(s) first BY NAME -- a session id re-points, a name does not. "
         "A holder releases a path it no longer needs with "
         "`session-claim-cli release-artifact artifact <path>`; "
-        "`session-claim-cli who-claims-path <path>` lists every holder.",
+        "`session-claim-cli who-claims-path <path>` lists every holder. "
+        "A holder shown without a name is live but not addressable from "
+        "here: drop that path and commit the rest -- it frees when that "
+        "session commits or releases.",
         file=sys.stderr,
     )
     sys.exit(1)
+
+
+def _worktree_root_from_cwd() -> str:
+    """The repo toplevel, walked up from the process cwd with zero spawns.
+
+    NOT `os.getcwd()`, which is what this used to be. `args.paths` are
+    repo-relative and `ceremony.commit_v2` resolves them against
+    `main_worktree_root(repo_root)`, so a caller invoked from a SUBDIRECTORY
+    made the two roots disagree: `_split_paths_for_commit_v2` probed
+    `<cwd>/<repo-relative path>`, missed, and forwarded the miss as
+    `params.deleted_paths` -- a negative existence probe becoming a positive
+    deletion declaration for a file that was never gone. Both signatures of
+    the committer-P0 fall out of that one line
+    (`state/audits/2026-08-31-committer-p0-*`).
+
+    Falls back to the cwd when no `.git` is found: this is a path
+    computation, not a gate, and the ordinary refusals downstream are what
+    report an unresolvable repo.
+    """
+    here = os.path.abspath(os.getcwd())
+    while True:
+        if os.path.exists(os.path.join(here, ".git")):
+            return here
+        parent = os.path.dirname(here)
+        if parent == here:
+            return os.path.abspath(os.getcwd())
+        here = parent
 
 
 def _split_paths_for_commit_v2(worktree_root: str, paths: Sequence[str]) -> "tuple[List[str], List[str]]":
@@ -772,16 +806,87 @@ def _split_paths_for_commit_v2(worktree_root: str, paths: Sequence[str]) -> "tup
     `ceremony.commit_v2`'s `params.paths`/`params.deleted_paths` split -- a
     distinction the killed `ceremony.commit`'s `stage_paths`/`caller_paths`
     shape never needed (`git add` handled a missing path as a deletion
-    transparently). A path absent from the worktree is treated as deleted;
-    everything else is treated as present (added/modified)."""
+    transparently).
+
+    A path absent from the worktree is treated as deleted ONLY IF HEAD carries
+    it. It used to be treated as deleted unconditionally, and that was the
+    committer-P0: a failed existence probe became a positive deletion
+    declaration, so a caller invoked from a subdirectory silently deleted every
+    path it named, and an untracked new file was silently skipped instead of
+    committed (state/audits/2026-08-31-committer-p0-*).
+
+    The root bug is fixed upstream (`_worktree_root_from_cwd`), but a probe can
+    still answer False for a file that exists -- `os.path.exists` returns False
+    on ANY OSError, including a Windows sharing violation on a file one of the
+    ~50 concurrent peers holds open. So the inference itself is closed here:
+    absent from BOTH the worktree and HEAD is not a deletion anyone could have
+    meant, and it refuses rather than guessing which."""
     present: List[str] = []
-    deleted: List[str] = []
+    missing: List[str] = []
     for p in paths:
-        if p and os.path.exists(os.path.join(worktree_root, p)):
+        if not p:
+            continue
+        if os.path.exists(os.path.join(worktree_root, p)):
             present.append(p)
-        elif p:
-            deleted.append(p)
+        else:
+            missing.append(p)
+
+    if not missing:
+        return present, []
+
+    # One batched spawn, and only when something is actually missing -- the
+    # ordinary commit names no missing path and pays nothing.
+    tracked = _paths_tracked_at_head(worktree_root, missing)
+    deleted = [p for p in missing if p in tracked]
+    unknown = [p for p in missing if p not in tracked]
+    if unknown:
+        for p in unknown:
+            print(
+                f"BLOCKED: {p} is neither in the worktree nor in HEAD -- "
+                "refusing to commit it as a deletion.",
+                file=sys.stderr,
+            )
+        print(
+            "Check the path, or run from the repo root. To commit a real "
+            "deletion the path must exist in HEAD.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
     return present, deleted
+
+
+def _paths_tracked_at_head(worktree_root: str, paths: Sequence[str]) -> "set[str]":
+    """Which of `paths` HEAD carries, in one spawn.
+
+    Fails CLOSED: if the probe cannot answer, the caller refuses rather than
+    inferring a deletion. Treating an unanswerable probe as "not a deletion"
+    would reinstate the P0 in its quieter form -- a guess dressed as a fact.
+    """
+    result = subprocess.run(
+        [
+            "git",
+            "-C",
+            worktree_root,
+            "ls-tree",
+            "-z",
+            "--name-only",
+            "HEAD",
+            "--",
+            *paths,
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        detail = (result.stderr or "").strip() or "git ls-tree failed"
+        print(
+            "BLOCKED: could not read HEAD to tell a deletion from a bad "
+            f"path: {detail}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    return {line for line in result.stdout.split("\0") if line}
 
 
 def _is_indeterminate_outcome(exc: RuntimeError) -> bool:
@@ -2773,7 +2878,7 @@ def main(argv: Sequence[str]) -> None:
         # where a preview could still intercept.
         if args.dry_run:
             present, deleted = _split_paths_for_commit_v2(
-                os.getcwd(), args.paths
+                _worktree_root_from_cwd(), args.paths
             )
             print(
                 f"DRY RUN — pathspec: would commit {len(present)} path(s) "

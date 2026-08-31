@@ -33,9 +33,10 @@ where the caller already holds the parser. The caller catches
 ArgvFidelityError and hands the message to parser.error(str(exc)), which
 prints it alongside usage and exits 2 -- the same shape
 coordinator-queue-append.py's own mutual-exclusion block already produces.
-Raising (instead of returning a body, error tuple, as cross-repo-memo.py's
-_read_body_from_file_or_stdin does) means a caller cannot forget to check
-an error return before using the resolved body.
+Raising (instead of returning a value, error tuple, as
+coordinator/bin/cross-repo-memo.py's own `_build_and_validate_scoped_to`
+does) means a caller cannot forget to check an error return before using
+the resolved body.
 
 Message register: refusal text follows docs/wiki/guard-messaging.md §
 Register -- one fact, stated once, plus the terse alternative naming
@@ -62,6 +63,7 @@ def resolve_body(
     body_file: str | None,
     *,
     flag_name: str = "--body",
+    allow_empty: bool = False,
 ) -> str:
     """Resolve a body from either an argv value or a file, losslessly.
 
@@ -74,6 +76,16 @@ def resolve_body(
 
     `flag_name` names the argv-value flag in error messages (e.g. "--body");
     the file-transport flag is always derived as f"{flag_name}-file".
+
+    `allow_empty` exists for ONE shape: a replacement text whose emptiness is
+    the caller's intent, not a hollow record. `archive-stamp-cli correct-
+    handoff-body --new-string ""` deletes the matched region, and that verb
+    accepted an empty replacement before it gained a file sibling -- refusing
+    it here would be a behaviour regression introduced by a transport fix.
+    It does NOT relax the mutual-exclusion or required-one rules above, and
+    it must never be set for a flag whose emptiness means "the caller forgot"
+    (a body, a title, a memo). Default False so the hollow-record refusal
+    stays the rule and the exception is always written down at the call site.
     """
     body_file_flag = f"{flag_name}-file"
 
@@ -98,7 +110,7 @@ def resolve_body(
                 raise ArgvFidelityError(
                     f"{body_file_flag} unreadable: {exc}"
                 ) from exc
-        if not resolved.strip():
+        if not resolved.strip() and not allow_empty:
             raise ArgvFidelityError(
                 f"{body_file_flag} resolved to an empty body; pass a "
                 f"non-empty file, '-' with non-empty stdin, or {flag_name}."
@@ -106,7 +118,7 @@ def resolve_body(
         return resolved
 
     assert body is not None  # narrowed by the two guards above
-    if not body.strip():
+    if not body.strip() and not allow_empty:
         raise ArgvFidelityError(f"{flag_name} must not be empty.")
     return body
 

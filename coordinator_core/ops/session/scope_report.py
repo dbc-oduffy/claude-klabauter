@@ -1,9 +1,32 @@
 """
 coordinator_core.ops.session.scope_report — read-only session-scope reporter,
 plus the in-process ownership helper used by the commit-confinement guard
-(`coordinator_core.bash_guards.block_subagent_commit`, C4b) and the
-`ceremony.scoped_git_commit` sink (C4c) to decide whether a candidate commit
-pathspec is safe to stage.
+(`coordinator_core.bash_guards.block_subagent_commit`, C4b) and the commit
+sink (C4c) to decide whether a candidate commit pathspec is safe to stage.
+
+CITATION NOTE, once, for every `ceremony.scoped_git_commit` reference below
+(2026-08-31, `state/handoffs/2026-08-30-the-commit-path-scoped-commits-the-
+share.md` owed item 3 — "re-home the three stale citations ... or the next
+reader will conclude the leg is dead"). THE LEG IS LIVE; ONLY THE SINK MOVED.
+`ceremony.scoped_git_commit` was DELETED over the brightline (DR-344), not
+suspended, and `coordinator_core/ops/ceremony/scoped_git_commit.py` does not
+exist. Its successors:
+
+  * the commit OP is `ceremony.commit_v2`;
+  * the in-process committer both it and `safe_commit_offer` reach is
+    `coordinator_core.git.commit :: commit_paths` (the killed
+    `commit_pipeline.run_commit_pipeline` is the other name a reader will
+    find in older prose — same replacement);
+  * `--stage-patch` / `stage_patch` is retired outright:
+    `git_native.py :: patch_touched_paths` records that `commit_paths` "has
+    no `stage_patch` concept", and the shared-index reconcile gap that memo
+    reported is closed by bound 7 in
+    `git_native.py :: _commit_scoped_private_index`.
+
+The C4c references are kept rather than rewritten because they name WHICH
+CONSUMER a given rule was written for, and rewriting them would erase the
+distinction between the guard's constraints and the sink's. Read them as
+"the commit sink", whose current identity is above.
 
 Purpose: TWO surfaces, which since the 2026-08-21 rebuild no longer share a
 source — read that as the load-bearing fact about this module, not a
@@ -334,8 +357,9 @@ def assert_paths_in_session_scope(
     remainder rather than emitting an empty list. Both lists cap at 25
     entries with a ``(+N more)`` suffix rather than truncating silently.
 
-    `already_clean` (Half 2 of the mixed-pathspec fix,
-    `coordinator_core.ops.ceremony.scoped_git_commit`'s module docstring):
+    `already_clean` (Half 2 of the mixed-pathspec fix; its spec backlink was
+    `ceremony.scoped_git_commit`'s module docstring, deleted with that op --
+    see this module's own CITATION NOTE for the successor):
     an optional caller-supplied set of paths, drawn from `paths`, already
     known to have nothing left to commit at HEAD. Advisory naming ONLY --
     never a bypass. A path in `already_clean` still goes through the
@@ -581,13 +605,55 @@ _CLASSIFICATION_INCLUDE_ORPHANS_IGNORED = (
     "include_orphans ignored — orphan, but this session has no "
     "initialization record"
 )
+#: The REMEDY half of the two classifications below, appended rather than
+#: interleaved (2026-08-31, `state/handoffs/2026-08-30-the-commit-path-scoped-
+#: commits-the-share.md` owed item 4: "give the unanswerable refusal a runnable
+#: remedy and a message distinguishable from a genuine peer conflict").
+#:
+#: `docs/wiki/guard-messaging.md` § Register: one fact, once, plus a terse
+#: alternative. The fact was already here and is unchanged; what was missing is
+#: the alternative. And per this repo's cold-path rule, a remediation names a
+#: RUNNABLE SCRIPT, never a slash command -- what fires before a session exists
+#: cannot be fixed by the surface that just failed.
+#:
+#: `session-claim-cli who-claims-path <path>` is that script (a `bin/`
+#: forwarder, on PATH). It is the right one specifically because its answer
+#: space matches the distinction this classification is about: rc=0 with rows
+#: names live/dead holders, rc=0 with NO rows is a determinate "nobody holds
+#: it", and rc=1 prints "could not be determined ... NOT a verdict that the
+#: path is unclaimed" plus the `abort_cause`. That is exactly the
+#: indeterminate-vs-unclaimed split an operator cannot make from the refusal
+#: alone, answered by a command rather than by reasoning.
+#:
+#: TRUNCATION IS EXPECTED AND CORRECT HERE. `block_subagent_commit.py`'s
+#: `_ownership_leg_summary` caps the threaded reason at ~70 bytes, so the
+#: remedy is cut in that path -- which is why it goes at the END and the
+#: discriminating token stays FIRST (see the word-order note above, and
+#: `test_indeterminate_call_names_the_degradation` which pins that the
+#: capped path still carries "indeterminate"/"adoption withheld"). The
+#: remedy is for the reader of the FULL string; the capped reader needs the
+#: discriminator, not the command.
+_REMEDY_WHO_CLAIMS = " — run: session-claim-cli who-claims-path <path>"
+
 _CLASSIFICATION_INDETERMINATE = (
     "indeterminate — adoption withheld; this call's claim reads were "
     "degraded (an unreadable peer/agent claim, or an unresolved agent-race "
     "window), so this path's own classification is unresolved, not that it "
-    "is unrecognized"
+    "is unrecognized" + _REMEDY_WHO_CLAIMS
 )
-_CLASSIFICATION_UNCLASSIFIED = "unclaimed/never classified by compute_offer"
+#: `compute_offer` is NOT the mechanism any more and has not been since
+#: 2026-08-21, when the ownership leg was rebuilt on
+#: `claim_index.classify_paths` (see that rebuild's own comment in
+#: `assert_paths_in_session_scope`). Naming a retired function in
+#: OPERATOR-FACING text sends a reader to grep for something that will not
+#: explain their refusal -- the same stale-citation shape the 2026-08-30
+#: baton is re-homing elsewhere in this path. States the condition instead,
+#: and carries the same runnable remedy: "never classified" and "genuinely
+#: unclaimed" are the two readings, and `who-claims-path` is what separates
+#: them.
+_CLASSIFICATION_UNCLASSIFIED = (
+    "unclaimed — no claim record names this path" + _REMEDY_WHO_CLAIMS
+)
 _CLASSIFICATION_ALREADY_CLEAN = (
     "already clean at HEAD -- nothing to commit; drop it from the pathspec"
 )

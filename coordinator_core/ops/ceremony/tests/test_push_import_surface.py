@@ -65,3 +65,60 @@ def test_seven_push_only_importers_still_resolve_after_the_move():
     """
     for module_name in PUSH_ONLY_IMPORTERS:
         importlib.import_module(module_name)
+
+
+def test_every_ceremony_push_site_sizes_its_ladder_from_elapsed():
+    """No ceremony push site hands `push_with_retry` the FLAT budget.
+
+    `_ceremony_push_budget` was written 2026-08-26 for a reviewer-confirmed P2
+    and wired to nothing: it had ZERO callers until 2026-08-31 while all three
+    ceremony push sites still passed `CEREMONY_PUSH_BUDGET_SECS` directly. The
+    defect it closes was therefore live everywhere it was supposed to be fixed,
+    and nothing failed -- the function imported, read correctly, and was simply
+    never called.
+
+    That is why this asserts on the CALL SITES and not on the symbol. An
+    import-surface check (the test directly above) passes in exactly the broken
+    state this pins against, because the flat constant is a legitimate symbol
+    that legitimately exists; what was wrong was who used it.
+    """
+    # Review: coordinator:code-reviewer (a72f5accd9830c935) P2 -- the prior
+    # regex (`push_with_retry\((.*?)\)`, DOTALL, non-greedy) is paren-depth-
+    # unaware: it stops at the FIRST `)` after the open paren, not the call's
+    # true close. A call site wrapping the flat constant in any expression
+    # containing an intervening `(...)` (e.g. `budget_secs=(CEREMONY_PUSH_
+    # BUDGET_SECS)`, or any helper call before it) would have its match
+    # truncated before the flat symbol's text, and the assertion would pass
+    # vacuously on exactly the regression this test exists to catch. `ast`
+    # walking is depth-aware by construction and closes that gap.
+    import ast
+    from pathlib import Path
+
+    push_mod = Path(__file__).resolve().parents[1]
+    sites = []
+    for path in sorted(push_mod.glob("*.py")):
+        if path.name == "push.py":
+            continue  # defines both; the fallback arm legitimately returns the flat slice
+        text = path.read_text(encoding="utf-8")
+        tree = ast.parse(text, filename=str(path))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            func = node.func
+            name = func.id if isinstance(func, ast.Name) else getattr(func, "attr", None)
+            if name != "push_with_retry":
+                continue
+            for kw in node.keywords:
+                if kw.arg == "budget_secs":
+                    segment = ast.get_source_segment(text, kw.value) or ""
+                    sites.append((path.name, segment))
+
+    assert sites, "no ceremony push_with_retry call sites found -- test is looking in the wrong place"
+    flat = [
+        (name, args) for name, args in sites
+        if "CEREMONY_PUSH_BUDGET_SECS" in args
+    ]
+    assert not flat, (
+        "ceremony push site(s) still pass the flat budget instead of "
+        f"_ceremony_push_budget(elapsed): {[n for n, _ in flat]}"
+    )

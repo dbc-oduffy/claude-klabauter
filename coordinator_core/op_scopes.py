@@ -167,6 +167,11 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # envelope. No file I/O of any kind; repo_root is unused (always None).
     "hooks.nudge_named_agent_report_delivery": "none",
     "hooks.postuse_advisory_dispatch":       "none",
+    # hooks.nudge_autonomous_askuserquestion — no repo state accessed: reads only
+    # params["payload"] (session_id, env, cwd, agent_id) and a tempdir sentinel
+    # keyed by session_id; repo_root is unused (always None). Same "none" class
+    # as the other repo_root-less hooks.* ops above.
+    "hooks.nudge_autonomous_askuserquestion": "none",
     # hooks.context_pressure_precompact — no repo state accessed: writes its
     # sentinel + state-snapshot only to tempfile.gettempdir(), keyed by
     # session_id, never to a repo/worktree path; repo_root is unused (always
@@ -347,6 +352,14 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # docs/decisions/DR-212-handoff-lifecycle-inplace-frontmatter-mutation-carveout.md
     "handoff.transition":                    "common_dir",
     "handoff.stamp":                         "common_dir",
+    # handoff.repair_deployment_state — keyed on git_common_dir, same class as
+    # handoff.transition/handoff.stamp above: the live-tree provenance-repair door
+    # (handoff_stamp.py::_repair_live_deployment_state_handler) resolves a single
+    # state/handoffs/*.md target in the main-worktree-rooted state/ tree and derives
+    # its worktree via main_worktree_root(common_dir), exactly as handoff_stamp.py's
+    # own _handler does. Without this entry dispatch resolves repo_root=None and the
+    # op fails outright.
+    "handoff.repair_deployment_state":       "common_dir",
     # handoff.correct_body — keyed on git_common_dir: single-file body-correction
     # op (DR-247, amended by docs/plans/2026-08-06-executing-session-can-
     # discharge-criteria.md's DR), same key-scope class as handoff.stamp/

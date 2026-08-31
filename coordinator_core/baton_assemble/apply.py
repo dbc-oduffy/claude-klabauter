@@ -791,6 +791,20 @@ def _continued_into_target_is_an_unresolved_fan_in_placeholder(
     same reason: this predicate gates a REFUSAL to write, and treating an
     unreadable target as a placeholder would refuse a supersede this
     directive has no evidence against.
+
+    WHY NOT `_is_pristine_generator_scaffold` HERE, though it answers a
+    neighbouring question. Its fail-safe direction is the same (every
+    uncertainty answers False) but the SAFETY of that direction is a property
+    of the gate, not of the predicate. It gates a DELETION, where False means
+    "leave it on disk" and the unrecoverable direction is destroying operator
+    content. This gates a REFUSAL TO WRITE, where False means "go ahead and
+    stamp" -- so its uncertainty exits (unresolvable generator, a scaffolder
+    that rejects its own recorded args, a `created:` date rolled past UTC
+    midnight) would each silently write the corrupt `continued_into` this
+    exists to prevent. A refusal gate wants a cheap total check; a deletion
+    gate wants the expensive exact one. Reconciled with `claude-klabauter-67`,
+    whose plan carries the opposite rule correctly for its own gate:
+    `state/lessons/2026-08-31-a-fail-safe-direction-is-only-safe-for-o.yaml`.
     """
     if not continued_into:
         return False

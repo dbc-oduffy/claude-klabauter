@@ -31,31 +31,6 @@ import subprocess
 import sys
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
-_QUEUE_APPEND = os.path.join(_THIS_DIR, "coordinator-queue-append.py")
-
-
-def _python_interpreter() -> str | None:
-    """Resolve a real CPython interpreter for the queue-append child.
-
-    Negative spec: `sys.executable` is NOT one. This CLI is reached through
-    `~/.coordinator-claude-settings/bin/coordinator-lesson-add.exe`, a forwarder
-    whose embedded interpreter reports ITSELF as `sys.executable`. Handing that
-    exe a script path re-enters this CLI's own argparse with the script as an
-    unknown positional -- the lesson is never written, and the exe still exits 0,
-    so every lesson captured through the installed door was silently dropped.
-    """
-    exe = sys.executable or ""
-    if os.path.basename(exe).lower().startswith("python"):
-        return exe
-    base = getattr(sys, "_base_executable", None)
-    if base and os.path.basename(base).lower().startswith("python"):
-        return base
-    import shutil
-    for name in ("python3", "python"):
-        found = shutil.which(name)
-        if found:
-            return found
-    return None
 
 
 def _bootstrap_imports() -> None:
@@ -390,8 +365,17 @@ def main(argv: "list[str] | None" = None) -> int:
             )
             return 1
 
-    interpreter = _python_interpreter()
-    if interpreter is None:
+    # `_queue_append_locator` is a sibling module in this script's own
+    # directory. Direct `__main__` execution implicitly puts _THIS_DIR on
+    # sys.path[0], but in-process dispatch (workstream_complete.apply, since
+    # this CLI is a CONSUMES_MANIFEST member) does not — mirrors the guard in
+    # coordinator-harvest-deferrals.py for the same import.
+    if _THIS_DIR not in sys.path:
+        sys.path.insert(0, _THIS_DIR)
+    from _queue_append_locator import find_cli_cmd
+
+    cli_cmd = find_cli_cmd(_THIS_DIR, "coordinator-queue-append")
+    if cli_cmd is None:
         print(
             "no python interpreter resolvable for coordinator-queue-append"
             " (sys.executable is " + repr(sys.executable) + ")"
@@ -401,7 +385,7 @@ def main(argv: "list[str] | None" = None) -> int:
         return 1
 
     cmd = [
-        interpreter, _QUEUE_APPEND,
+        *cli_cmd,
         "--schema", "lessons",
         "--title", args.title,
         "--body", args.body,

@@ -93,15 +93,25 @@ _AUTO_TIER: Literal["auto"] = "auto"
 _RETRACTED_TO_STATE = "retracted"
 _ASSERTED_STATE = "asserted"
 
-_CLOSURE_FIDELITY_DEGRADES_TO_SUGGEST: frozenset[str] = frozenset({"verify-with-effort"})
+_CLOSURE_FIDELITY_DEGRADES_TO_SUGGEST: frozenset[str] = frozenset(
+    {"verify-with-effort", "human-attested"}
+)
 """(C6) `closure_fidelity` values that force `"suggest"` regardless of what
 `evidence` otherwise satisfies — the ONE degradation branch every caller of
 `classify_code_complete_tier` shares (threaded through by the module's two
 in-module callers, `emit_code_complete_assert` and
-`detect_symmetric_retract`, per this chunk's dispatch brief). `"human-
-attested"` is deliberately NOT a member here — this chunk's remit is the
-`verify-with-effort` guarantee only; a later chunk may extend this set, but
-extending it is that chunk's decision, not an inference this one makes.
+`detect_symmetric_retract`, per this chunk's dispatch brief).
+
+`"human-attested"` was added after C6 shipped, on an adversarial read of the
+delivered code. C6's own remit was the `verify-with-effort` guarantee alone and
+it correctly declined to infer this, so the set held one member and an item
+whose classification says a HUMAN must attest it still auto-asserted on a purely
+machine-observed signal (trailer_bound + reachable). That is a false auto in the
+one axis built to prevent false autos, so it is a defect rather than a scope
+extension: a tier named for human attestation cannot be discharged by a machine
+observation. DR-closure-fidelity-tier-axis's D1-D4 never ruled on this tier,
+which is why it was available to get wrong.
+
 `"auto-observable"` items pass through unaffected: this set names what
 DEGRADES, not the closed vocabulary of `closure_fidelity` itself, which this
 module never validates (that is the caller's resolved-projection concern,

@@ -194,7 +194,7 @@ def test_silent_when_armed_marker_already_present(
     tmp_path, _crowned_repo, _installed_group_em_watch_launcher
 ):
     transcript_path = _write_transcript(
-        tmp_path, "ARMED denominator=3 claude-klabauter peers, snapshot=1.2ms, interval=5.0s\n"
+        tmp_path, "ARMED peer_count=3 claude-klabauter peers, snapshot=1.2ms, interval=5.0s\n"
     )
 
     result = pad._check_group_em_watch_arm_sync(SESSION, transcript_path)

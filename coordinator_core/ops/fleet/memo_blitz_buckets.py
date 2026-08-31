@@ -241,6 +241,36 @@ _MEMO_REFERENCE_PHRASE_RE = re.compile(
 )
 
 
+# A memo named by bare topic-slug rather than by filename. `_LOCUS_RE` requires
+# a file extension, so this citation style — the dominant one in the cross-repo
+# corpus — leaves `loci` empty, and the pass fell through to the generic-phrase
+# proximity fallback below: the 2026-08-20 escalate run over 583 open memos
+# emitted 285 self-declared/locus candidates and an independent triage
+# confirmed none of them. A slug reference is a real citation; the sender named
+# their target. Resolving slug form against same-sender filename stems is a
+# design call on this surface, so this pass declines to resolve it AND declines
+# to substitute a nearest-dated stand-in — no candidate at all.
+_SLUG_TOKEN_RE = re.compile(r"\b[a-z0-9]+(?:-[a-z0-9]+){2,}\b")
+
+
+def _cites_memo_by_slug(newer: dict, records: list[dict]) -> bool:
+    """True if `newer`'s prose names another open memo by bare topic-slug.
+
+    A token counts only when it appears inside some other open memo's filename
+    stem, so ordinary hyphenated prose does not trip it; sender ids are
+    excluded because they are substrings of every one of that sender's stems
+    and get named in prose routinely.
+    """
+    senders = {record["sender"] for record in records}
+    stems = {record["path"].stem for record in records if record is not newer}
+    for token in _SLUG_TOKEN_RE.findall(newer["text"].lower()):
+        if token in senders:
+            continue
+        if any(token in stem for stem in stems):
+            return True
+    return False
+
+
 def _has_supersession_phrase(text: str) -> bool:
     """True if `text` contains either DoE-confirmed self-declaration form."""
     return bool(
@@ -252,9 +282,10 @@ def _nearest_earlier_same_sender(newer: dict, records: list[dict]) -> Optional[d
     """The single closest-dated earlier open memo from `newer`'s own sender.
 
     Used only for the generic "the previous memo" reference form, which names
-    no specific memo — precision-over-recall means this returns the nearest
-    candidate, but the caller only accepts it when it is the UNIQUE nearest
-    (see `_self_declared_candidates`); it does not disambiguate among ties.
+    no specific memo at all — reached only when the prose cites nothing this
+    op can resolve, by basename, by declared thread, or by topic-slug (see
+    `_cites_memo_by_slug`). It returns the nearest earlier candidate and does
+    not disambiguate among ties; the caller applies no uniqueness check.
 
     Review: code-reviewer F3 — nearest-by-date is a heuristic PROXY for "the
     memo this prose refers to," with no topical correlation at all. A sender
@@ -537,11 +568,11 @@ def _self_declared_candidates(records: list[dict], seen_pairs: set[frozenset[str
     evidence: a directly-cited basename (already captured in `loci`), then
     the memo's own `in_reply_to:` frontmatter, then — only when neither
     exists — a generic "the previous/earlier memo" phrase resolved to the
-    unique nearest earlier same-sender memo. Ambiguous references — a
-    citation matching more than one same-sender memo's basename — are
-    skipped rather than guessed, and the generic phrase only resolves when
-    exactly one same-sender earlier memo exists to be it (see
-    `_nearest_earlier_same_sender`); see the precision-over-recall
+    nearest earlier same-sender memo. Ambiguous references — a citation
+    matching more than one same-sender memo's basename — are skipped rather
+    than guessed, and a memo that names its target by bare topic-slug is a
+    citation too: it yields NO candidate rather than a nearest-dated
+    stand-in (see `_cites_memo_by_slug`). See the precision-over-recall
     commentary at `_SUPERSEDING_VERB_RE`.
 
     A memo carrying `supersedes:` NEVER enters this pass at all. Ranking
@@ -591,11 +622,17 @@ def _self_declared_candidates(records: list[dict], seen_pairs: set[frozenset[str
             older = all_names.get(reply_target)
             if older is newer:
                 older = None
-        elif not cited and _MEMO_REFERENCE_PHRASE_RE.search(newer["text"]):
-            # No basename citation at all (any sender), and no declared
-            # thread — only THEN fall back to the generic "the previous memo"
-            # resolution. A citation that named a different sender's memo is
-            # not evidence for guessing a same-sender pairing instead.
+        elif (
+            not cited
+            and _MEMO_REFERENCE_PHRASE_RE.search(newer["text"])
+            and not _cites_memo_by_slug(newer, records)
+        ):
+            # No citation of ANY form — no basename, no bare topic-slug naming
+            # an open memo — and no declared thread: only THEN fall back to
+            # the generic "the previous memo" resolution. A citation that
+            # named a different sender's memo, or that named its target in a
+            # form this pass declines to resolve, is not evidence for guessing
+            # a same-sender pairing instead.
             older = _nearest_earlier_same_sender(newer, records)
         if older is None:
             continue

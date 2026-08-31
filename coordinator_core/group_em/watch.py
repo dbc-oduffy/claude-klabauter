@@ -77,9 +77,9 @@ never dies silently. A watcher that exits without a trace is
 indistinguishable from a quiet repo, the exact false-green class this plan's
 predecessor session was caught by repeatedly.
 
-DO NOT ADD A THIRD TRANSCRIPT-MTIME SITE. `read_pass._transcript_mtime_epoch`
-was extracted ahead of this chunk for exactly this reuse; this module calls
-it and does not add its own `getmtime`.
+DO NOT ADD A THIRD TRANSCRIPT-CLOCK SITE. `read_pass._transcript_activity_epoch`
+is the one place a session id becomes a last-activity instant; this module
+calls it and does not add its own `getmtime`.
 
 NEGATIVE SPEC -- what this module deliberately does not do:
 
@@ -91,7 +91,9 @@ NEGATIVE SPEC -- what this module deliberately does not do:
   adjudication -- same negative spec `read_pass`/`send_pass` already carry.
 - No send, no nudge, no write to any peer's state. This module only reads
   the registry, the receiver-state reader, transcript tails, the ledger, and
-  the send log's cooldown -- and writes stdout.
+  the send log's cooldown. It writes exactly two things: stdout, and this
+  repo's own `state/group-em-watch.json` presence stamp (`watch_heartbeat`)
+  -- a record ABOUT the watch, addressed to no peer, never a peer's state.
 - No per-peer entry point beyond `main`'s own loop; `transitions` is a pure
   function over two already-computed boolean maps, never over raw agents.
 """
@@ -107,6 +109,7 @@ from typing import Any, Callable, Iterable, Optional, TextIO
 from coordinator_core.group_em import obligations
 from coordinator_core.group_em import read_pass
 from coordinator_core.group_em import send_pass
+from coordinator_core.group_em import watch_heartbeat
 from coordinator_core.session.receiver_state import read_receiver_state
 
 #: Keep the watcher's own duty cycle far under the load norm's 200ms-needs-
@@ -162,16 +165,32 @@ def _poll_interval_seconds(snapshot_ms: float) -> float:
     return min(_POLL_INTERVAL_CEILING_SECONDS, bounded)
 
 
-def _current_agents(repo_root: str, caller_session_id: Optional[str]) -> list[dict[str, Any]]:
-    """This tick's repo-filtered, self-excluded peer set.
+def _current_agents(
+    repo_root: str,
+    caller_session_id: Optional[str],
+    crown_session_id: Optional[str] = None,
+) -> list[dict[str, Any]]:
+    """This tick's repo-filtered peer set, with the watch's own side excluded.
 
     Sourced from `read_pass.fetch_live_agents` (-> `peer_roster.build_roster`,
     already case-folded `cwd` containment -- see that module's `_normalize_path`)
-    and `read_pass.enumerate_repo_peers` (self-exclusion by session id, never
-    by name). No second enumeration and no second cwd filter is built here.
+    and `read_pass.enumerate_repo_peers` (exclusion by session id, never by
+    name). No second enumeration and no second cwd filter is built here.
+
+    TWO IDS, BECAUSE THE WATCH CAN BE HELD BY A TEAMMATE. When a crown
+    dispatches a watcher rather than holding the poller in its own session,
+    the roster must drop BOTH: the watcher (a session sitting in a `Monitor`
+    poll presents exactly like a parked peer, so a single-id exclusion has it
+    flagging itself) and the crown (which is the recipient of every line this
+    watch emits -- reporting the crown to the crown is noise by construction).
+    `enumerate_repo_peers` excludes one id per call, so it is called twice
+    rather than gaining a second parameter it does not otherwise need.
     """
     agents = read_pass.fetch_live_agents(repo_root)
-    return read_pass.enumerate_repo_peers(agents, caller_session_id)
+    peers = read_pass.enumerate_repo_peers(agents, caller_session_id)
+    if crown_session_id is not None and crown_session_id != caller_session_id:
+        peers = read_pass.enumerate_repo_peers(peers, crown_session_id)
+    return peers
 
 
 def _classify_all(
@@ -246,17 +265,42 @@ def _stamped_age_seconds(repo_root: str, session_id: str, now: datetime) -> Opti
     return read_pass._staleness_seconds(record.get("stamped_at"), now)
 
 
-def _transcript_idle_seconds(repo_root: str, session_id: str, cwd: Optional[str], now: datetime) -> Optional[float]:
-    """Seconds since this peer's transcript last moved, or `None` if unreadable.
+def _transcript_idle_seconds(
+    repo_root: str,
+    session_id: str,
+    cwd: Optional[str],
+    now: datetime,
+    activity_epoch: Optional[float] = None,
+) -> Optional[float]:
+    """Seconds since this peer last MOVED, or `None` if that is unreadable.
 
-    Calls `read_pass._transcript_mtime_epoch` -- the one place a session id
-    becomes a transcript mtime, extracted for exactly this reuse (module
-    docstring). No second `getmtime` site is added here.
+    Calls `read_pass._transcript_activity_epoch` -- the one place a session id
+    becomes a last-activity instant, extracted for exactly this reuse (module
+    docstring). No second transcript-clock site is added here.
+
+    This number appears on the PARKED line as the peer's own evidence, so it
+    must be the activity clock and not file mtime: mtime runs ahead precisely
+    when a peer is parked (see that function), which would print a stalled
+    peer as freshly active on the one surface a reader uses to overturn the
+    verdict. An untrusted (mtime-fallback) reading is still reported -- it is
+    an upper bound on idleness, so it can only ever UNDERSTATE how stuck a
+    peer is, never manufacture a stall that is not there.
+
+    `activity_epoch` is the value `classify_peer` already derived for this peer
+    this tick, threaded through on the verdict. Review:
+    coordinator:code-reviewer (P2) -- re-deriving it here read the same
+    transcript a second time in the same tick, which the module docstring's
+    single-site note did not prevent (it is one site, called twice). `None`
+    means nobody has read it yet (the reader leg, which reduces no tail), and
+    only then is a read paid here -- a first read, not a second.
     """
-    mtime_epoch = read_pass._transcript_mtime_epoch(session_id, cwd or repo_root)
-    if mtime_epoch is None:
+    if activity_epoch is None:
+        activity_epoch, _trusted = read_pass._transcript_activity_epoch(
+            session_id, cwd or repo_root
+        )
+    if activity_epoch is None:
         return None
-    return now.timestamp() - mtime_epoch
+    return now.timestamp() - activity_epoch
 
 
 def _fmt_seconds(value: Optional[float]) -> str:
@@ -294,7 +338,9 @@ def _parked_line(
 ) -> str:
     """Compose one PARKED line -- observed evidence, framed as evidence."""
     stamped_age = _stamped_age_seconds(repo_root, session_id, now)
-    transcript_idle = _transcript_idle_seconds(repo_root, session_id, cwd, now)
+    transcript_idle = _transcript_idle_seconds(
+        repo_root, session_id, cwd, now, activity_epoch=verdict.get("activity_epoch")
+    )
     obligations_summary = _obligation_summary(repo_root, session_id)
     reason = verdict.get("reason")
     return (
@@ -306,41 +352,91 @@ def _parked_line(
     )
 
 
+def _declination(session_id: str, gate: str, reason: str) -> dict[str, Any]:
+    """One heartbeat declination row.
+
+    `name` is always `None`: a name is an address that re-points, and the
+    record's reader already prefers the live registry row over any stored
+    copy (`watch_heartbeat`'s WHO THE HOLDER IS note).
+    """
+    return {"session_id": session_id, "name": None, "gate": gate, "reason": reason}
+
+
 def poll_once(
     repo_root: str,
     caller_session_id: str,
     prev_parked: dict[str, bool],
     now: Optional[datetime] = None,
     emit: Callable[[str], None] = print,
-) -> dict[str, bool]:
+    crown_session_id: Optional[str] = None,
+) -> tuple[dict[str, bool], list[dict[str, Any]]]:
     """One poll: classify, diff against `prev_parked`, emit any PARKED lines.
 
-    Returns this tick's `{session_id: parked_bool}` map -- the caller's new
-    `prev_parked` for the next call. Never raises: `main`'s loop is the
+    Returns `(parked_map, declinations)`: this tick's
+    `{session_id: parked_bool}` -- the caller's new `prev_parked` -- and this
+    tick's declination rows. Never raises: `main`'s loop is the
     coverage boundary (module docstring's POLL-ERROR contract), but this
     function is also exercised directly by tests, so it stays a plain
     computation the caller can drive without a live registry.
+
+    `crown_session_id` is the session whose OFFER LOG suppresses lines, which
+    is not necessarily the process running this poll -- see `main`. It
+    defaults to `caller_session_id`, the case where the crown holds the watch
+    itself.
+
+    The declination rows carry the `{session_id, name, gate, reason}` shape the
+    heartbeat record wants: one row per peer this tick looked at and did NOT
+    emit a line for, with the gate that stopped it -- which is what lets a
+    reader tell "looked, nothing to do" apart from "did not look".
+
+    Review: coordinator:overengineering-reviewer -- these were an out-parameter
+    on the argument that no caller had to unpack a tuple, which was already
+    false (the same change added `crown_session_id` and rewrote the call site).
+    A function whose product is split between a return value and a mutated
+    argument is harder to read for a compatibility that was never bought. Not
+    taken from the same finding: collapsing the per-peer rows to one aggregate.
+    The sibling writer this record is read by stamps a row per peer with these
+    exact gates, and a reader joining the two sources should not have to know
+    which producer wrote the tick.
     """
     now = now if now is not None else datetime.now(timezone.utc)
     now_epoch = now.timestamp()
 
-    agents = _current_agents(repo_root, caller_session_id)
+    if crown_session_id is None:
+        crown_session_id = caller_session_id
+
+    agents = _current_agents(repo_root, caller_session_id, crown_session_id)
     agents_by_id = {
         a.get("sessionId"): a for a in agents if isinstance(a.get("sessionId"), str)
     }
     verdicts = _classify_all(repo_root, agents, now=now)
     cur_parked = {sid: bool(v.get("candidate")) for sid, v in verdicts.items()}
 
-    for session_id in transitions(prev_parked, cur_parked):
-        if _cooldown_active(repo_root, caller_session_id, session_id, now_epoch):
+    declinations: list[dict[str, Any]] = []
+    transitioned = transitions(prev_parked, cur_parked)
+    for session_id in transitioned:
+        if _cooldown_active(repo_root, crown_session_id, session_id, now_epoch):
+            declinations.append(
+                _declination(session_id, "cooldown", "answered-within-cooldown")
+            )
             continue
         peer = agents_by_id.get(session_id, {})
         line = _parked_line(
-            repo_root, caller_session_id, session_id, verdicts[session_id], peer.get("cwd"), now
+            repo_root, crown_session_id, session_id, verdicts[session_id], peer.get("cwd"), now
         )
         emit(line)
 
-    return cur_parked
+    transitioned_set = set(transitioned)
+    for session_id, verdict in verdicts.items():
+        if session_id in transitioned_set:
+            continue
+        declinations.append(
+            _declination(
+                session_id, "not-a-candidate", str(verdict.get("reason") or "not-parked")
+            )
+        )
+
+    return cur_parked, declinations
 
 
 def main(
@@ -349,6 +445,7 @@ def main(
     stream: Optional[TextIO] = None,
     sleep_fn: Callable[[float], None] = time.sleep,
     max_iterations: Optional[int] = None,
+    crown_session_id: Optional[str] = None,
 ) -> None:
     """Arm the watch: print `ARMED`, then poll forever (or `max_iterations`
     times, for tests), emitting one line per PARKED transition.
@@ -358,9 +455,28 @@ def main(
     shape. Coverage: any exception raised inside one poll iteration is
     caught here, reported as a `POLL-ERROR` line, and the loop continues --
     a poll that raises must never silently end the watch (module docstring).
+
+    `crown_session_id` IS A SEPARATE ID ON PURPOSE, and defaults to
+    `caller_session_id`. Two different questions were being answered by one
+    value: which session to leave out of the watched roster (this process),
+    and whose offer log already answered a peer (the crown). They are the
+    same session only when the crown holds the poller itself. A crown that
+    dispatches a teammate to hold the watch must pass its OWN id here --
+    otherwise the watcher reads an empty send log, every offer the crown
+    already made stops suppressing a line, and one stopped peer gets nudged
+    twice. Passed explicitly rather than inferred: a dispatched process's
+    `CLAUDE_CODE_SESSION_ID` is the harness's to define, and a watch that is
+    wrong about who answered a peer is worse than one that must be told.
+
+    Each poll also stamps `state/group-em-watch.json` via `watch_heartbeat`
+    -- the presence record other sessions read. Arming this watch is
+    supposed to REPLACE hand-ticking, and until it stamped, doing the right
+    thing made the fleet's watch-presence surface report no watch at all.
     """
     if caller_session_id is None:
         caller_session_id = read_pass.caller_session_id()
+    if crown_session_id is None:
+        crown_session_id = caller_session_id
 
     # LATE-BOUND, deliberately. `stream: TextIO = sys.stdout` freezes whatever
     # stdout was at IMPORT time, so anything that replaces it afterwards -- a
@@ -382,8 +498,24 @@ def main(
     prev_parked: dict[str, bool] = {}
     iterations = 0
     while max_iterations is None or iterations < max_iterations:
+        declinations: list = []
         try:
-            prev_parked = poll_once(repo_root, caller_session_id, prev_parked, emit=emit)
+            prev_parked, declinations = poll_once(
+                repo_root,
+                caller_session_id,
+                prev_parked,
+                emit=emit,
+                crown_session_id=crown_session_id,
+            )
+            # A stamp failure is a missed tick, never a reason to stop
+            # watching -- `stamp` returns False rather than raising, and the
+            # next tick rewrites the whole record anyway.
+            watch_heartbeat.stamp(
+                repo_root,
+                holder_session_id=crown_session_id or "",
+                declinations=declinations,
+                interval_seconds=interval,
+            )
         except Exception:
             # Review: coordinatorcode-reviewer.a9e1410288878bea9 -- reporting
             # an error must never be able to fail worse than the error itself.
@@ -418,6 +550,10 @@ def _cli(argv: "list[str] | None" = None) -> int:
 
     Arm it with:
         python -m coordinator_core.group_em.watch --repo-root <path>
+
+    When a dispatched teammate holds the watch rather than the crown itself,
+    the crown's own id goes on too, or its offers stop suppressing lines:
+        python -m coordinator_core.group_em.watch --repo-root <path>             --crown-session-id <the crown's session id>
     """
     import argparse
 
@@ -441,6 +577,15 @@ def _cli(argv: "list[str] | None" = None) -> int:
              "never guessed from roster shape.",
     )
     parser.add_argument(
+        "--crown-session-id",
+        default=None,
+        help="The crown's session id, when a dispatched teammate holds the watch instead of "
+             "the crown itself. Defaults to --caller-session-id. This is the id whose offer "
+             "cooldown suppresses lines and whose name goes on the heartbeat record -- pass it "
+             "whenever the watching process is not the crown, or the same stopped peer gets "
+             "nudged twice.",
+    )
+    parser.add_argument(
         "--max-iterations",
         type=int,
         default=None,
@@ -454,6 +599,7 @@ def _cli(argv: "list[str] | None" = None) -> int:
             args.repo_root,
             caller_session_id=args.caller_session_id,
             max_iterations=args.max_iterations,
+            crown_session_id=args.crown_session_id,
         )
     except KeyboardInterrupt:
         # A stopped Monitor is an ordinary end, not a failure -- exit quietly so

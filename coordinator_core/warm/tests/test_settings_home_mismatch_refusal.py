@@ -380,3 +380,75 @@ def test_client_stamps_nothing_when_no_home_was_named(monkeypatch):
     """
     monkeypatch.delenv(settings_home_claim.SETTINGS_HOME_ENV, raising=False)
     assert settings_home_claim.SETTINGS_HOME_FIELD not in _sent_request(monkeypatch)
+
+
+# ---------------------------------------------------------------------------
+# EXIT CRITERION 3 -- the no-claim hot path pays no resolution, asserted
+# STRUCTURALLY rather than by timing. A ~50-session box's timing noise cannot
+# discriminate one absent env read, so a stopwatch cannot falsify this
+# regression; a patched-and-asserted-uncalled `settings_home` can.
+# ---------------------------------------------------------------------------
+
+
+def _counting_settings_home(monkeypatch, calls: list):
+    import coordinator_core._settings_home as _sh
+
+    real = _sh.settings_home
+
+    def _counted():
+        calls.append(1)
+        return real()
+
+    monkeypatch.setattr(_sh, "settings_home", _counted)
+
+
+def test_a_no_claim_request_never_resolves_this_servers_home(monkeypatch):
+    """The ordinary invocation -- no override anywhere, no field on the wire --
+    costs one `dict.pop` and NO `settings_home()` resolution. This is the
+    overwhelming majority of traffic and the property a tidying refactor that
+    resolves the served home unconditionally would silently regress.
+    """
+    from coordinator_core import ipc
+
+    async def _ok(msg, *, caller=None):
+        return {"jsonrpc": "2.0", "id": msg["id"], "result": "ok"}
+
+    monkeypatch.setattr(ipc, "dispatch_message", _ok)
+
+    # Build the caller BEFORE arming the probe: `resolve_caller_context` walks
+    # `machine_local_dir()` and legitimately resolves the home once, on the
+    # CLIENT side of the seam. Counting that would measure the fixture.
+    caller = caller_context.resolve_caller_context()
+    assert caller.settings_home is None, "fixture precondition: no claim carried"
+
+    calls: list = []
+    _counting_settings_home(monkeypatch, calls)
+
+    server._run_dispatch(
+        {"jsonrpc": "2.0", "id": 20, "method": "ping", "params": {}},
+        caller=caller,
+        isolated=False,
+    )
+
+    assert calls == [], "no-claim request resolved the server's own home"
+
+
+def test_the_uncalled_assertion_discriminates(monkeypatch):
+    """The pinned positive control. A guard that only ever observes zero calls,
+    over a path that may simply never have been reached, is indistinguishable
+    from a guard wired to nothing -- so assert the same probe DOES count a
+    resolution when a claim is actually carried.
+    """
+    other_home = os.path.join(os.sep, "nowhere", "some-other-settings-home")
+    caller = replace(caller_context.resolve_caller_context(), settings_home=other_home)
+
+    calls: list = []
+    _counting_settings_home(monkeypatch, calls)
+
+    server._run_dispatch(
+        {"jsonrpc": "2.0", "id": 21, "method": "ping", "params": {}},
+        caller=caller,
+        isolated=False,
+    )
+
+    assert calls, "the probe counted nothing even with a claim carried"

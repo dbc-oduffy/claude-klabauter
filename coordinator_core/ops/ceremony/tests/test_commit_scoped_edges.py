@@ -368,6 +368,21 @@ def test_worktree_excluded_report_byte_identical_fast_vs_ladder(tmp_path, monkey
         ladder_repo, "newdir/nested.txt",
         staged_content="STAGED\n", worktree_content="WORKTREE\n",
     )
+    # A new file under a NEW SUBDIRECTORY used to be the ladder trigger, and
+    # is not one any more: C6b gave `_commit_via_head_spine` its
+    # `create_missing_dirs=True` route (`_synthesize_absent_spine_dirs`),
+    # deliberately, because that shape was the one precondition-miss this
+    # branch hit at nonzero rate. The AC15 claim under test -- the exclusion
+    # report is byte-identical across both arms -- is unaffected by which
+    # trigger provokes the ladder, so this now uses the trigger that is still
+    # real: `_resolve_cas_ref_target` genuinely refuses after `git pack-refs
+    # --all` (no loose ref file for HEAD's branch until the next ref update
+    # touches it), the same repo state `test_agree_branch_commits_correctly_
+    # immediately_after_pack_refs` pins and the reason this module's own
+    # ladder was kept rather than deleted. Keeping the retired trigger asserted
+    # the ladder for a shape that correctly no longer reaches it -- a stale
+    # precondition failing against code that is right.
+    _git(["pack-refs", "--all"], ladder_repo)
     msg_file_ladder = _write_msg(tmp_path, "ladder arm\n")
     ladder_argvs = _spy_git_argvs(monkeypatch)
     ladder_result = git_native.commit_scoped(["newdir/nested.txt"], msg_file_ladder, ladder_repo)

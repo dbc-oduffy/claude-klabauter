@@ -169,6 +169,7 @@ _EAGER_HOOK_MODULES: list[str] = [
     "coordinator_core.hooks.subagent_sidecar_fill_check",  # registers "hooks.subagent_sidecar_fill_check"
     "coordinator_core.hooks.subagent_review_mark",  # registers "hooks.subagent_review_mark"
     "coordinator_core.hooks.cater_subagent_start",  # registers "hooks.cater_subagent_start"
+    "coordinator_core.hooks.nudge_autonomous_askuserquestion",  # registers "hooks.nudge_autonomous_askuserquestion"
 ]
 
 

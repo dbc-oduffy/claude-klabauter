@@ -571,15 +571,44 @@ primary job and allowed only on incidental hand-edited paths.
 
 First attempt at the fix (same-day, superseded by the paragraph below):
 passed a hard-coded ``allow_orphans=True`` at this one call site. REQUIRES_
-CHANGES on review: the SINK this guard gates
+CHANGES on review: the SINK this guard gated at the time
 (``coordinator_core.ops.ceremony.scoped_git_commit._handler``) still
-defaults ``include_orphans=False`` and only enables adoption on an
+defaulted ``include_orphans=False`` and only enabled adoption on an
 EXPLICIT ``--include-orphans``/``"include_orphans": true`` opt-in in the
 invocation itself -- a hard-coded ``True`` here PERMITTED what the sink
 still REFUSED, so the guard leg stopped enforcing the sink's own
 deliberate-opt-in requirement without actually unblocking the workload
 end-to-end (a caller that omitted the flag was allowed past the guard only
 to be refused by the op one line later).
+
+THAT SINK NO LONGER EXISTS, and the reasoning above no longer describes a
+live symmetry -- kept as the record of why the first attempt was rejected,
+corrected here rather than rewritten (2026-08-30 baton
+``state/handoffs/2026-08-30-the-commit-path-scoped-commits-the-share.md``,
+owed item 5).  ``ceremony.scoped_git_commit`` was DELETED over the
+brightline, not suspended, and its successors read no such flag: C2a
+measured ZERO occurrences of ``include_orphans`` in
+``coordinator_core/ops/ceremony/commit_v2.py`` or
+``coordinator_core/git/commit.py`` (see ``coordinator_core/git/action_
+guard.py``'s own module docstring for that measurement).  Where the
+decision lives NOW:
+
+* the orphan-adoption judgement itself is ``coordinator_core/ops/session/
+  scope_report.py :: assert_paths_in_session_scope(..., allow_orphans=)``
+  -- the function this leg already calls, and the one whose own docstring
+  carries the positive-evidence and never-relaxes-peer-claimed rules;
+* the Python-side (non-Bash) committing route reaches the same shape
+  predicate through ``coordinator_core/git/action_guard.py``, which holds
+  ``(paths, include_orphans)`` already resolved and calls
+  ``_pathspec_shape_permitted`` directly.
+
+The MIRRORING fix below therefore stands, but on a narrower reason than
+the one that produced it: not "the sink would refuse it anyway" (nothing
+downstream re-checks the flag today), but that the invocation's own
+declared intent is the only non-cooperative statement of that intent this
+guard can read.  A hard-coded ``True`` here would now be the ONLY decision
+point, which makes reading the flag more load-bearing than it was, not
+less.
 
 Fixed instead by MIRRORING the invocation's own flag: ``_resolve_git_
 commit_agent_pathspec`` (and the two per-spelling extractors it calls,
@@ -3795,6 +3824,21 @@ class _FoldedPayload(NamedTuple):
 
 _FOLD_EMPTY = _FoldedPayload(text="", opaque_sink_call=False, bounds_exceeded=False, parsed=False)
 
+#: The DEPTH bound the folder does not own: `ast.parse` exhausts CPython's
+#: recursion limit on a deeply nested payload (a 4000-term chained ``+``)
+#: and raises before any `_FoldBudget` exists to latch it. That is a bound
+#: being hit, not source the folder failed to understand, so it reports
+#: itself as one -- ``bounds_exceeded`` for the reason, ``opaque_sink_call``
+#: so mechanism 2 denies. Routing it to `_FOLD_EMPTY` instead made the
+#: guard weakest exactly where the input is most adversarial: unparseable
+#: defers to the parts 13-15 text match, which cannot see a commit identity
+#: the payload never spells contiguously, and the assembled command was
+#: ALLOWED (state/bug-backlog/2026-08-07-fold-bomb-payload-bypasses-block-
+#: subagen-7aa44b2ef0a0.yaml, P1).
+_FOLD_RECURSION_BOMB = _FoldedPayload(
+    text="", opaque_sink_call=True, bounds_exceeded=True, parsed=False
+)
+
 #: Builtins the folder evaluates itself, by reimplementing their result for
 #: constant inputs. Never resolved by calling an arbitrary object: the name
 #: must be one of these AND every argument must already have folded.
@@ -5151,7 +5195,9 @@ def _fold_python_c_payload(payload: str) -> _FoldedPayload:
     LOAD-BEARING SECURITY PROPERTIES rather than tuning knobs: this runs
     inside a PreToolUse hook on every Bash call, so exceeding a bound must
     -- and does -- resolve to "unknown", which denies, and never to a
-    partial value treated as complete.
+    partial value treated as complete. The one bound it does not own is
+    `ast.parse`'s own recursion limit; `_FOLD_RECURSION_BOMB` is how
+    hitting it is reported as a bound rather than as unparseable source.
 
     THE BUDGET IS PER PAYLOAD, NOT PER BASH CALL: a fresh `_FoldBudget` is
     built below for each payload, and one command may chain many ``python3
@@ -5165,6 +5211,8 @@ def _fold_python_c_payload(payload: str) -> _FoldedPayload:
     """
     try:
         tree = ast.parse(payload)
+    except RecursionError:
+        return _FOLD_RECURSION_BOMB
     except Exception:
         return _FOLD_EMPTY
     budget = _FoldBudget()

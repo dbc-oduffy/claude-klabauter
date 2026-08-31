@@ -3086,6 +3086,13 @@ class TestDeadHolderResidueParsing:
 
         class _Result:
             stdout = out
+            # `_dirty_paths` gained a `result.timed_out or result.returncode
+            # == 127` guard after this stub was written, and the stub was not
+            # updated -- it raised AttributeError on `.returncode` instead of
+            # exercising the rename-splitting this test is about, so the
+            # assertions below had not run against production in some time.
+            returncode = 0
+            timed_out = False
 
         monkeypatch.setattr(
             "subprocess.run", lambda *a, **k: _Result()

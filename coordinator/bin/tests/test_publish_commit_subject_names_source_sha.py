@@ -81,20 +81,100 @@ def test_stamp_degrades_to_empty_rather_than_raising(monkeypatch):
 def test_every_percolate_commit_subject_site_stamps():
     """No publish leg composes a subject without the stamp.
 
+    KEPT DELIBERATELY, against an overengineering finding that
+    `test_the_stamp_has_exactly_one_definition` below makes this redundant.
+    It does not: one shared definition guarantees that every CALLER stamps
+    identically, and guarantees nothing about a subject-composition site that
+    never calls it. A fourth leg — or a reworked existing one — that builds a
+    subject and forgets the stamp is exactly the "present on only SOME publish
+    commits" failure this file exists to prevent, and only a site-coverage
+    assertion catches it.
+
+    The finding's other half was right, and is fixed here: the previous shape
+    pinned each site's exact f-string text and failed with "re-pin this test"
+    on any unrelated reword. Sites are now located STRUCTURALLY, by the
+    enclosing function `ast` reports, so a subject can be reworded freely and
+    only MOVING or REMOVING the stamp fails this.
+
     Pinned by source inspection rather than by calling each leg: the mirror
     leg's subject is built inside an interactive commit path this test cannot
     reach without a real dest repo and a tty, and leaving it unpinned is how a
     third leg silently stops stamping.
     """
+    import ast  # noqa: PLC0415
+
     sites = {
-        "publish.py": 'f"percolate: sync {len(paths)} path(s) to {repo_root.name} ({rows})"',
-        "percolate-round.py": 'f"{added} added, {modified} modified, {removed} removed{residual})"',
-        "percolate-mirror.py": 'f"({len(targets)} row(s), {len(pathspec)} file(s))"',
+        "publish.py": "_commit_published_dests",
+        "percolate-round.py": "_build_commit_subject",
+        "percolate-mirror.py": "main",
     }
-    for filename, subject_line in sites.items():
-        text = (_BIN_DIR / filename).read_text(encoding="utf-8")
-        assert subject_line in text, f"{filename}: subject line moved — re-pin this test"
-        tail = text.split(subject_line, 1)[1]
-        assert "_source_sha_suffix()" in tail[:300], (
-            f"{filename}: commit subject composed without the currency stamp"
+    for filename, funcname in sites.items():
+        tree = ast.parse((_BIN_DIR / filename).read_text(encoding="utf-8"))
+        enclosing = [
+            n
+            for n in ast.walk(tree)
+            if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and n.name == funcname
+        ]
+        assert enclosing, (
+            f"{filename}: no function named {funcname!r} — the commit-subject "
+            f"site was renamed or moved; re-pin this test to its new home"
         )
+        stamped = any(
+            isinstance(n, ast.Call)
+            and (
+                (isinstance(n.func, ast.Name) and n.func.id == "_source_sha_suffix")
+                or (
+                    isinstance(n.func, ast.Attribute)
+                    and n.func.attr == "_source_sha_suffix"
+                )
+            )
+            for node in enclosing
+            for n in ast.walk(node)
+        )
+        assert stamped, (
+            f"{filename}: {funcname} composes a commit subject without the "
+            f"currency stamp"
+        )
+
+
+def test_the_stamp_has_exactly_one_definition():
+    """The three legs must stamp BYTE-IDENTICALLY, and two of them are
+    spawned standalone with no shared module import path, so a per-CLI copy
+    of the formatter drifts silently — the failure this whole file exists to
+    prevent, re-created one level down. The single definition lives in
+    `coordinator_core.git.git_state`, the engine all three already bootstrap;
+    each CLI keeps only a `_REPO_ROOT`-binding wrapper that delegates to it.
+
+    Asserted by source inspection because the drift is a source fact: two
+    copies that agree today pass every behavioural test and still diverge on
+    the next edit to one of them.
+    """
+    from coordinator_core.git import git_state  # noqa: PLC0415
+
+    assert callable(git_state.source_sha_suffix)
+    assert "source_sha_suffix" in git_state.__all__
+
+    body = (_BIN_DIR / "percolate-round.py").read_text(encoding="utf-8")
+    assert "from coordinator_core.git.git_state import source_sha_suffix" in body, (
+        "percolate-round.py must delegate to the engine's single definition"
+    )
+    assert 'f" [source {' not in body, (
+        "percolate-round.py re-implements the stamp format instead of delegating"
+    )
+
+    mirror = (_BIN_DIR / "percolate-mirror.py").read_text(encoding="utf-8")
+    assert 'f" [source {' not in mirror, (
+        "percolate-mirror.py re-implements the stamp format instead of "
+        "reaching it through `_round`"
+    )
+
+    # publish.py is DELIBERATELY not asserted here yet, and this exemption is
+    # the finding, not a softening of it: its own copy of the formatter is
+    # still live because the file is held by a peer claim this session must
+    # not commit around (`session-claim-cli who-claims-path` reports
+    # d12e25cf live on it; `clear-claim-if-dead` refuses). Tighten this to
+    # cover publish.py the moment that claim releases -- tracked in
+    # state/improvement-queue/. Until then the stamp has TWO definitions and
+    # `test_round_leg_stamps_the_same_shape` above is the only thing keeping
+    # them agreeing.

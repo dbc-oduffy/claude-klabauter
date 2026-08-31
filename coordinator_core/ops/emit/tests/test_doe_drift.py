@@ -115,6 +115,7 @@ class TestFixtureResolution:
     """AC_Q-b: fixture lives in the DoE clone, not co-vendored in claude-klabauter's _vendor/."""
 
     @pytest.mark.skipif(not _DOE_AVAILABLE, reason="DoE clone not available on this machine")
+    @pytest.mark.real_home
     def test_fixture_read_from_doe_clone(self) -> None:
         """Fixture is read from repos.doe_claude (not claude-klabauter's _vendor/)."""
         doe_clone = resolve_doe_clone()
@@ -504,6 +505,7 @@ class TestFreshnessRef:
         assert _read_pin_sha() == sha
 
     @pytest.mark.skipif(not _DOE_AVAILABLE, reason="DoE clone not available on this machine")
+    @pytest.mark.real_home
     def test_probe_freshness_ref_live_ref_absent_returns_none(self) -> None:
         """Live test: DoE origin returns None (ref not yet published) → no exception.
 
@@ -730,6 +732,7 @@ class TestProvenanceNormalizerReuse:
         )
 
     @pytest.mark.skipif(not _DOE_AVAILABLE, reason="DoE clone not available on this machine")
+    @pytest.mark.real_home
     def test_doe_fixture_normalizes_consistently(self) -> None:
         """DoE fixture normalizes to a consistent state (no runtime-varying residue).
 
@@ -754,6 +757,7 @@ class TestRunDriftCheck:
     """AC_DRIFT_CHECK: run_drift_check fail-louds on synthetic version lag."""
 
     @pytest.mark.skipif(not _DOE_AVAILABLE, reason="DoE clone not available on this machine")
+    @pytest.mark.real_home
     def test_drift_check_passes_with_current_pin(self) -> None:
         """Current vendored pin (2.5.0) passes the version-band gate against DoE fixture."""
         # This also exercises the full resolution path (registry → fixture → version check).

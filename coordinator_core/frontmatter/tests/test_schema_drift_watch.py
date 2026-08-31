@@ -198,6 +198,59 @@ class TestDriftDirection:
         assert report["drifted"][0]["direction"] == "we-are-ahead"
         assert f"{_SCHEMA_B} [we-are-ahead]" in report["summary"]
 
+    def test_we_are_ahead_is_not_told_to_re_vendor(
+        self, fake_doe: Path, vendored_dir: Path
+    ) -> None:
+        """The regression this branch exists to stop: re-vendoring a locally-ahead
+        file discards the local work. The remediation must name the real move."""
+        vendored = json.loads((vendored_dir / _SCHEMA_B).read_text(encoding="utf-8"))
+        vendored["extra_local_field"] = "only on our side"
+        (vendored_dir / _SCHEMA_B).write_text(json.dumps(vendored, indent=2) + "\n", encoding="utf-8")
+
+        report = scan_vendored_schema_drift(fake_doe, vendored_dir)
+
+        assert report["drifted"][0]["direction"] == "we-are-ahead"
+        assert "Upstream has moved since the pin" not in report["summary"]
+        assert (
+            "Local is ahead of the pin — upstream the local change or ratify the fork; "
+            "re-vendoring discards it."
+        ) in report["summary"]
+
+    def test_a_we_are_ahead_file_in_a_mixed_set_suppresses_the_re_vendor_line(
+        self, fake_doe: Path, vendored_dir: Path
+    ) -> None:
+        doe_schema_path = fake_doe / "coordinator" / "schemas" / _SCHEMA_A
+        doe_schema = json.loads(doe_schema_path.read_text(encoding="utf-8"))
+        doe_schema["extra_upstream_field"] = "only on DoE's side"
+        doe_schema_path.write_text(json.dumps(doe_schema, indent=2) + "\n", encoding="utf-8")
+        _git(fake_doe, "add", "-A")
+        _git(fake_doe, "commit", "-q", "-m", "DoE adds a field")
+
+        vendored = json.loads((vendored_dir / _SCHEMA_B).read_text(encoding="utf-8"))
+        vendored["extra_local_field"] = "only on our side"
+        (vendored_dir / _SCHEMA_B).write_text(json.dumps(vendored, indent=2) + "\n", encoding="utf-8")
+
+        report = scan_vendored_schema_drift(fake_doe, vendored_dir)
+
+        directions = {d["schema"]: d["direction"] for d in report["drifted"]}
+        assert directions == {_SCHEMA_A: "we-are-behind", _SCHEMA_B: "we-are-ahead"}
+        assert "Upstream has moved since the pin" not in report["summary"]
+
+    def test_we_are_behind_keeps_the_re_vendor_remediation(
+        self, fake_doe: Path, vendored_dir: Path
+    ) -> None:
+        doe_schema_path = fake_doe / "coordinator" / "schemas" / _SCHEMA_B
+        doe_schema = json.loads(doe_schema_path.read_text(encoding="utf-8"))
+        doe_schema["extra_upstream_field"] = "only on DoE's side"
+        doe_schema_path.write_text(json.dumps(doe_schema, indent=2) + "\n", encoding="utf-8")
+        _git(fake_doe, "add", "-A")
+        _git(fake_doe, "commit", "-q", "-m", "DoE adds a field")
+
+        report = scan_vendored_schema_drift(fake_doe, vendored_dir)
+
+        assert report["drifted"][0]["direction"] == "we-are-behind"
+        assert report["summary"].endswith("Upstream has moved since the pin — re-vendor.")
+
     def test_doe_addition_is_we_are_behind(self, fake_doe: Path, vendored_dir: Path) -> None:
         doe_schema_path = fake_doe / "coordinator" / "schemas" / _SCHEMA_B
         doe_schema = json.loads(doe_schema_path.read_text(encoding="utf-8"))

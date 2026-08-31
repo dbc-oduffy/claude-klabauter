@@ -68,6 +68,23 @@ Function-to-oracle map:
                                                                  because ship-handoff's
                                                                  state/handoffs/-only containment
                                                                  refuses archive/handoffs/ paths)
+    cs_repair_deployment_state <- NEW, no bash-oracle predecessor (calls
+                                                                 handoff_stamp._repair_live_deployment_state_handler
+                                                                 directly in-process — the
+                                                                 state/handoffs/-contained sibling
+                                                                 of cs_repair_archived_deployment_state
+                                                                 above, sharing the same
+                                                                 handoff_stamp._repair_deployment_state_impl
+                                                                 behind a POLICY object; also
+                                                                 reachable via the registered
+                                                                 "handoff.repair_deployment_state"
+                                                                 op, added 2026-08-31 (C2 of
+                                                                 docs/plans/2026-08-31-a-close-
+                                                                 disposes-the-baton-it-closed.md)
+                                                                 to repair a `continued` baton a
+                                                                 same-session close-then-pickup
+                                                                 race wrongly stamped, back to
+                                                                 `ready_to_fire`)
     cs_close_handoff         <- NEW, no bash-oracle predecessor (handoff.transition
                                                                  close verb — DR-084
                                                                  human/session-only
@@ -163,6 +180,8 @@ from coordinator_core.frontmatter.primitives import (
     read_fm_field,
     read_fm_field_unquoted,
     rebuild,
+    remove_fm_field,
+    replace_fm_field,
     split_frontmatter,
 )
 from coordinator_core.liveness import cs_claim_holder_live
@@ -1726,6 +1745,56 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def _foreign_live_holder_refusal(handoff_path: str, claimant_sid: str) -> "str | None":
+    """Refusal string when `handoff_path` is claimed by a DIFFERENT LIVE session,
+    else None (unclaimed, self-claimed, or held by a session confirmed dead).
+
+    Why this exists on the claim verb and not only on `pickup-assemble brief`:
+    the mutual-exclusion check lived ONLY on the brief path, and brief also fires
+    the pickup-supersede defect whenever the caller already holds any other claim
+    (`state/bug-backlog/2026-08-31-pickup-after-a-close-supersedes-the-new-baton.yaml`).
+    A session reasoning correctly about that defect routes around brief, reaches
+    `claim-handoff`, and silently takes a live peer's baton -- observed twice on
+    2026-08-31, once for 45 minutes across seven interleaved commits by two
+    sessions who could not see each other from the artifact
+    (`state/bug-backlog/2026-08-31-claim-handoff-takes-a-foreign-claim-and-drop-releases-nothing.yaml`).
+    The safe-looking door was the unchecked one; this closes it.
+
+    NEGATIVE SPEC -- a DEAD holder is not refused. Takeover of a dead session's
+    claim is the ordinary recovery path (`clear-claim-if-dead`, the reaper), and
+    refusing it here would strand every baton whose holder exited uncleanly. Only
+    a CONFIRMED-LIVE foreign holder blocks.
+
+    Fail-open on an indeterminate read, deliberately: an unresolvable liveness
+    answer, an unparseable frontmatter, or a registry error must not make claiming
+    impossible. A blocked claim is a worse failure than the contention this
+    detects, which the operator can still see in the returned frontmatter.
+    """
+    try:
+        text = Path(handoff_path).read_text(encoding="utf-8")
+        split = split_frontmatter(text)
+        if split is None:
+            return None
+        holder = (read_fm_field_unquoted(split.fm_text, "claimed_by") or "").strip()
+    except OSError:
+        return None
+    if not holder or holder == claimant_sid:
+        return None
+    try:
+        from coordinator_core.session.liveness import session_live
+
+        if not session_live(holder):
+            return None
+    except Exception:  # noqa: BLE001 -- indeterminate liveness fails open, see docstring
+        return None
+    holder_name = (read_fm_field_unquoted(split.fm_text, "claimed_by_name") or "").strip()
+    named = f" ({holder_name})" if holder_name else ""
+    return (
+        f"{handoff_path} is claimed by live session {holder}{named} -- refusing to "
+        f"take a foreign claim. Reconcile with the holder, or pick a different baton."
+    )
+
+
 def _record_claimant_identity_best_effort(
     target_path: str, worktree: Path, anchor_field: str, claimant_sid: str
 ) -> None:
@@ -1842,10 +1911,14 @@ def _record_claimant_identity_best_effort(
     fields: list[tuple[str, str, str]] = []
     if slug:
         fields.append(("human_claimant", slug, "picked_up_by"))
-    if record is not None:
-        if record.name:
-            fields.append(("claimed_by_name", record.name, anchor_field))
-    if not fields:
+    resolved_name = record.name if record is not None else None
+    name_resolved = bool(resolved_name)
+    if resolved_name:
+        fields.append(("claimed_by_name", resolved_name, anchor_field))
+    # `not name_resolved` still has work to do -- clearing a stale name -- so it
+    # is NOT an early return. Returning here on an empty `fields` is what let an
+    # unresolvable claimant leave a previous holder's name standing.
+    if not fields and name_resolved:
         return
     try:
         repo_root = _git_common_dir(worktree)
@@ -1858,9 +1931,57 @@ def _record_claimant_identity_best_effort(
                 raise MutateAbort(f"no parseable YAML frontmatter in {target_path}")
             fm_text = split.fm_text
             for key, value, anchor in fields:
-                if read_fm_field(fm_text, key) is not None:
+                # `claimed_by_name` MUST agree with the id beside it, so it is
+                # reconciled rather than insert-when-absent. The transition
+                # overwrites `claimed_by` unconditionally; leaving the name alone
+                # when present is what produced a record reading one session's id
+                # under a DIFFERENT live session's name, invisible to both for 45
+                # minutes -- whichever field a reader checked, the answer was wrong
+                # for one of them. Every other field here keeps insert-when-absent:
+                # `human_claimant` names the operating human, who does not change
+                # when the claim does.
+                if key == "claimed_by_name":
+                    if read_fm_field(fm_text, key) is not None:
+                        fm_text = replace_fm_field(fm_text, key, value, numeric_quoting=True)
+                        continue
+                elif read_fm_field(fm_text, key) is not None:
                     continue
                 fm_text = insert_fm_field(fm_text, key, value, anchor, numeric_quoting=True)
+            if not name_resolved:
+                # No name for THIS claimant, but a previous holder's is sitting
+                # there. Drop it: a wrong-but-plausible name is worse than none,
+                # because it reads as a coherent holder and suppresses the lookup
+                # an empty field would prompt.
+                #
+                # MODELLED, not merely reasoned: a record that resolves with NO name
+                # is a first-class state in this same plane. `session/reachability.py
+                # :: _resolve_one` opens `if record is None or not record.name or not
+                # record.messaging_socket_path: return None`, and its docstring names
+                # the degradation -- that branch would be dead code if the state were
+                # unreachable. This arm handles the same state one layer over, where
+                # there is nothing to reconcile to.
+                #
+                # It is the same mismatch as the observed incident above -- one
+                # session's id under another's name -- reached by the other route:
+                # there the new claimant's name resolved and simply was not written;
+                # here it does not resolve at all, so the reconcile branch cannot
+                # cover it.
+                #
+                # Reported mechanism, NOT verified in this tree: the harness derives
+                # the name after session start (`nameSource: derived` with a
+                # `nameSince`), so a claim firing before the derivation lands resolves
+                # no name. Nothing in claude-klabauter parses those keys -- recorded as the
+                # likely population, not as a measurement.
+                #
+                # A second instance WAS filed claiming a nameless session stamped an
+                # uninvolved peer's name; `claude-klabauter-2d` RETRACTED it at
+                # `21765e2d16` (they had read `name` from
+                # `.git/coordinator-sessions/<sid>/meta.json`, which carries no
+                # `name` key on any box -- the backing registry is the harness's own
+                # `sessions/<pid>.json`, and the stamp had been correct). Recorded
+                # because this arm's rationale must not rest on a withdrawn instance.
+                if read_fm_field(fm_text, "claimed_by_name") is not None:
+                    fm_text = remove_fm_field(fm_text, "claimed_by_name")
             return rebuild(split, fm_text)
 
         locked_rmw(Path(target_path), _mutate, repo_root=repo_root)
@@ -2023,6 +2144,12 @@ def cs_claim_handoff(handoff_path: str, *, return_result: bool = False) -> "int 
             file=sys.stderr,
         )
         result = {"exit_code": 1, "applied": False, "error": "could not resolve a session id"}
+        return result if return_result else result["exit_code"]
+
+    holder_error = _foreign_live_holder_refusal(handoff_path, sid)
+    if holder_error is not None:
+        print(f"cs_claim_handoff: {holder_error}", file=sys.stderr)
+        result = {"exit_code": 1, "applied": False, "error": holder_error}
         return result if return_result else result["exit_code"]
 
     ts = _now_iso()
@@ -2586,6 +2713,90 @@ def cs_repair_archived_deployment_state(
         )
     else:
         print(f"cs_repair_archived_deployment_state: {result.get('message', '')}", file=sys.stderr)
+    return rc
+
+
+# ---------------------------------------------------------------------------
+# cs_repair_deployment_state — provenance-repair verb for a LIVE (still under
+# state/handoffs/) handoff's deployment_state field. Sibling of
+# cs_repair_archived_deployment_state above; both share
+# handoff_stamp._repair_deployment_state_impl behind a POLICY object.
+# Added 2026-08-31, C2 of docs/plans/2026-08-31-a-close-disposes-the-baton-
+# it-closed.md.
+# ---------------------------------------------------------------------------
+
+def cs_repair_deployment_state(
+    handoff_path: str,
+    reason: str,
+    deployment_state: str,
+    continued_into: Optional[str] = None,
+    continued_into_override: bool = False,
+    closed_reason: Optional[str] = None,
+) -> int:
+    """Repairs ``deployment_state`` (and its state-conditional companion field)
+    on a handoff still under ``state/handoffs/`` (the live tree) — the
+    state/handoffs/-contained sibling of ``cs_repair_archived_deployment_state``
+    above. Exists specifically to repair a `continued` baton a same-session
+    close-then-pickup race wrongly stamped with no real successor, back to
+    `ready_to_fire` — see docs/plans/2026-08-31-a-close-disposes-the-baton-
+    it-closed.md.
+
+    Calls ``coordinator_core.ops.handoff_stamp._repair_live_deployment_state_handler``
+    directly in-process — that handler IS also ``@register_op``-registered as
+    ``"handoff.repair_deployment_state"`` (unlike its archived sibling), so
+    this wrapper and the registered op reach the identical code path; this
+    function exists for the same direct in-process convenience the other
+    ``cs_*`` wrappers in this module provide.
+
+    Same params, cross-field enforcement, and terminal-lock carve-outs as
+    ``cs_repair_archived_deployment_state`` — see
+    ``handoff_stamp._repair_deployment_state_impl``'s docstring for the full
+    Params/Returns/Exit-code contract and Negative-spec, and
+    ``handoff_stamp._live_door_carveout`` for the one additional carved-out
+    transition this door permits (``continued`` -> ``ready_to_fire``) that
+    the archived door refuses.
+
+    Returns 0 on a successful repair (or a byte-identical no-op — the
+    requested state already holds), 1 on any rejection (missing reason,
+    unknown deployment_state, missing/mismatched continued_into or
+    closed_reason, unresolved continued_into without override, path outside
+    state/handoffs/, file not found, malformed frontmatter, lock timeout, or
+    a current on-disk deployment_state that is terminal and not carved out).
+    """
+    hpath = Path(handoff_path)
+    worktree, repo_root = _resolve_repo_root_for(hpath)
+    if worktree is None or repo_root is None:
+        print(
+            f"cs_repair_deployment_state: could not resolve git worktree for {handoff_path}",
+            file=sys.stderr,
+        )
+        return 1
+
+    from coordinator_core.ops.handoff_stamp import (
+        _repair_live_deployment_state_handler as _repair_handler,
+    )
+
+    params: dict = {
+        "handoff_path": handoff_path,
+        "reason": reason,
+        "deployment_state": deployment_state,
+    }
+    if continued_into:
+        params["continued_into"] = continued_into
+    if continued_into_override:
+        params["continued_into_override"] = True
+    if closed_reason:
+        params["closed_reason"] = closed_reason
+
+    result = asyncio.run(_repair_handler(params, repo_root=repo_root))
+    rc = int(result.get("exit_code", 1))
+    if rc != 0:
+        print(
+            f"cs_repair_deployment_state: {result.get('error', 'unknown error')}",
+            file=sys.stderr,
+        )
+    else:
+        print(f"cs_repair_deployment_state: {result.get('message', '')}", file=sys.stderr)
     return rc
 
 

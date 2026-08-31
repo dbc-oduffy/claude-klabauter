@@ -1528,7 +1528,15 @@ def _unclaim(
     reaped_from: str | None = None,
     session_id: Optional[str] = None,
 ) -> dict:
-    """Apply unclaim transition (status: claimed→open, deployment_state→ready_to_fire).
+    """Apply unclaim transition (status: claimed→open, deployment_state→ready_to_fire,
+    or →awaiting_gate when `blocked_by` still names anyone).
+
+    A blocked node parks rather than freeing: the `ready_to_fire` stamp below is
+    unconditional, and `_apply_derived_readiness` (TIGHTEN-ONLY) corrects it to
+    `awaiting_gate` before validation. Without that, unclaiming a claimed+blocked
+    baton aborted on `_cf_ready_to_fire_no_unresolved_blocked_by` and the record
+    had no reachable resting state at all. The returned message names what
+    actually landed, not the stamp that was attempted.
 
     DR-084: writes status:open only — never the retiring status:active. Strips
     both claimed_at/claimed_by AND their retiring consumed_at/consumed_by
@@ -1788,15 +1796,36 @@ def _unclaim(
         # there is no resolution fact to retire; same reasoning as claim.
         fm = _strip_gate_evidence(fm)
 
+        # A CLAIMED, BLOCKED BATON HAD NO REACHABLE RESTING STATE. The stamp
+        # above is unconditional and never reads `blocked_by`, so unclaiming a
+        # blocked node wrote `ready_to_fire` straight into
+        # `_cf_ready_to_fire_no_unresolved_blocked_by`, which refuses it: the
+        # transition aborted, the dead holder's claim stood, and
+        # `reap-orphaned-in-flight-handoffs` re-reported rc=1 on that node every
+        # morning with nothing able to clear it. Reported by doe-claude-em
+        # 2026-08-31; routed through the small-items baton.
+        #
+        # Routing through the TIGHTEN-ONLY seam rather than adding a second
+        # readiness rule here: `_apply_derived_readiness` already parks exactly
+        # this shape to `awaiting_gate` with `pickup_ready: false`, and its own
+        # docstring argues why parking is legal and truthful while FREEING stays
+        # `gate_cascade_clear`'s alone. The park is schema-legal precisely in the
+        # branch that fires it — `_cf_awaiting_gate_needs_dependency`'s three-way
+        # OR is satisfied by the non-empty `blocked_by` that triggered it, even
+        # though `gate_dependency` was retired above.
+        fm = _apply_derived_readiness(fm, worktree)
+
         # Post-mutation schema validation gate — raise MutateAbort to skip the write.
         errors = _validate_fm(fm)
         if errors:
             details = format_validation_errors(errors)
             raise MutateAbort(f"handoff frontmatter validation failed: {details}")
 
+        landed_deployment = read_fm_field_unquoted(fm, "deployment_state") or "ready_to_fire"
         _state["applied"] = True
         _state["message"] = (
-            f"unclaimed {handoff_path} (status: open, deployment_state: ready_to_fire)"
+            f"unclaimed {handoff_path} (status: open, "
+            f"deployment_state: {landed_deployment})"
         )
         notice = _unclaim_session_ledger_notice(split.body_with_leading_newline, session_id)
         if notice:

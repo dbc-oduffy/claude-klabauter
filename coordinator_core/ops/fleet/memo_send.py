@@ -68,6 +68,15 @@ Negative-spec:
   - Does NOT trust a wire-supplied inbox path — `to` is resolved solely via
     `_memo_resolver.resolve_receiver_inbox` (registry-enumerated); the
     receiver-side write target is never wire-derived.
+  - Does NOT allow a send whose staged body is byte-identical (frontmatter
+    stripped, trailing whitespace normalised) to another `*.md` draft
+    already sitting in the same sender's `state/memo-outbox/` under a
+    DIFFERENT topic — refused via `build_setup_error_result` before any
+    write, naming the colliding topic and the outbox path. Skipped only
+    when the body is empty (the `--empty-body` opt-in path: two
+    deliberately body-less memos are not a collision). No override flag —
+    an override turns a guard into a warning, and the 2026-08-21 incident
+    passed every warning it had.
 """
 
 from __future__ import annotations
@@ -336,6 +345,50 @@ def _portable_delivered_to_form(receiver_repo_path: Path, delivered_path: Path) 
     return str(delivered_path).replace("\\", "/")
 
 
+def _normalize_body(text: str) -> str:
+    """Body text normalised for byte-identical duplicate-draft comparison.
+
+    Trailing whitespace is stripped per line, then trailing blank lines are
+    collapsed. The caller must already have stripped frontmatter — this
+    function normalises BODY text only.
+    """
+    lines = [line.rstrip() for line in text.splitlines()]
+    while lines and not lines[-1]:
+        lines.pop()
+    return "\n".join(lines)
+
+
+def _find_duplicate_draft_topic(
+    outbox_dir: Path, topic: str, normalized_body: str,
+) -> Optional[str]:
+    """Scan sibling `*.md` drafts directly in `outbox_dir` (non-recursive —
+    `sent/` is a subdirectory and is never visited) for one whose body
+    normalises byte-identical to `normalized_body` under a DIFFERENT topic.
+
+    Returns the colliding topic, or None. A candidate this cannot read or
+    parse is skipped rather than treated as a match or a failure — a
+    stray/corrupt sibling draft must not block an unrelated send.
+    """
+    try:
+        candidates = sorted(outbox_dir.glob("*.md"))
+    except OSError:
+        return None
+    for candidate in candidates:
+        other_topic = candidate.stem
+        if other_topic == topic:
+            continue
+        try:
+            other_text = candidate.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        other_body = parse_frontmatter(other_text).get("body")
+        if other_body is None:
+            continue
+        if _normalize_body(other_body) == normalized_body:
+            return other_topic
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Draft read + delivered-memo composition
 # ---------------------------------------------------------------------------
@@ -576,6 +629,26 @@ def _memo_send(params: dict, repo_root=None) -> dict:
             _MODE, dry_run, "memo.send: draft is missing required field 'to'",
         )
 
+    # Duplicate-body detector — a byte-identical body under a DIFFERENT
+    # topic in the same outbox is almost always a stale duplicate draft, not
+    # two intentional sends. Skipped for an empty body: the `--empty-body`
+    # opt-in path can legitimately stage two deliberately body-less memos,
+    # which are not a collision. Runs at the OP layer (not the CLI), so a
+    # direct `coordinator-invoke memo.send` is covered too.
+    normalized_body = _normalize_body(body)
+    if normalized_body:
+        outbox_dir = sender_worktree.joinpath(*_OUTBOX_DIRNAME)
+        colliding_topic = _find_duplicate_draft_topic(
+            outbox_dir, topic, normalized_body,
+        )
+        if colliding_topic is not None:
+            return build_setup_error_result(
+                _MODE, dry_run,
+                f"memo.send: staged body is byte-identical to draft "
+                f"{colliding_topic!r} in {outbox_dir} — rewrite this body, "
+                f"or discard the stale draft, before sending.",
+            )
+
     today = datetime.date.today().isoformat()
     # Resolved ONCE and threaded to all three carriers: the delivered memo's
     # frontmatter, the delivery commit's Session-Id: trailer, and the
@@ -736,9 +809,11 @@ def _memo_send(params: dict, repo_root=None) -> dict:
     sent_path = _sent_path(sender_worktree, topic)
     sent_path.parent.mkdir(parents=True, exist_ok=True)
     sent_path.write_text(sent_content, encoding="utf-8", newline="\n")
+    draft_removed = True
     try:
         draft_path.unlink()
     except OSError as exc:
+        draft_removed = False
         _LOG.warning(
             "memo_send: could not remove original outbox draft %s after "
             "moving it to sent/ (%s) — the sent/ copy is authoritative; a "
@@ -819,9 +894,17 @@ def _memo_send(params: dict, repo_root=None) -> dict:
     # `_head_entry_for` answers "is this in HEAD?" from the in-process tree
     # spine, so the check costs ZERO git spawns. An untracked draft has no
     # deletion to land, so dropping it loses nothing.
+    # AND ONLY IF THE MOVE ACTUALLY REMOVED IT. The unlink above degrades to a
+    # warning, so HEAD membership alone would declare a deletion for a file
+    # still sitting in the outbox -- a phantom deletion, which
+    # `git/commit.py :: commit_paths` refuses outright, turning a tolerated
+    # stale duplicate into a failed send. The leftover draft stays tracked,
+    # which is the same "stale duplicate, not data loss" the warning already
+    # accepts.
     sender_deleted = (
         [outbox_relpath]
-        if git_native._head_entry_for(sender_worktree, outbox_relpath) is not None
+        if draft_removed
+        and git_native._head_entry_for(sender_worktree, outbox_relpath) is not None
         else []
     )
 

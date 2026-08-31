@@ -182,7 +182,17 @@ FREE_VALUE_KEYS: tuple[str, ...] = ()
 class ReviewScaleDecision(NamedTuple):
     row: Optional[int]  # None iff resolved is False — never row 0/7/None-as-a-row-choice.
     scale: str  # "none" | "code-reviewer" | "partitioned" | "unresolved"
-    partition_mandatory: bool
+    #: `None` iff `resolved is False` — the same "not measured" state `row`
+    #: already carries, on the field a caller is most likely to read alone.
+    #: `False` here means MEASURED and not mandatory; a reader that saw only
+    #: `False` could not tell a genuinely small diff from an unmeasured
+    #: 976-LOC/26-commit one, and the arm is silent (rc=0), so the gate the
+    #: skill body calls mandatory failed open. Reported by
+    #: example-retrieval-repo-ue-addon-em, 2026-08-31. `None` is falsy, so every
+    #: truthiness test downstream is unchanged; only a reader that
+    #: distinguishes it — or a JSON consumer, which now sees `null` beside
+    #: `scale: "unresolved"` — sees any difference.
+    partition_mandatory: Optional[bool]
     commit_message_names_change: bool
     reason: str
     resolved: bool = True
@@ -206,7 +216,7 @@ _CHAIN_WEIGHT_CEILING = float(_BRIGHTLINE_COMMITS)
 
 def _unresolved(reason: str) -> ReviewScaleDecision:
     return ReviewScaleDecision(
-        row=None, scale="unresolved", partition_mandatory=False,
+        row=None, scale="unresolved", partition_mandatory=None,
         commit_message_names_change=False, reason=reason, resolved=False,
     )
 
@@ -235,10 +245,13 @@ def _decide_review_scale_core(
     can always be told apart from one that resolved it negatively. When an
     unresolved input cannot be ruled out of changing the selected row, this
     function returns the explicit unresolved outcome (`resolved=False`,
-    `row=None`, `scale="unresolved"`, `partition_mandatory=False`) rather
-    than defaulting toward a specific row — `partition_mandatory` stays
-    `False` on that outcome because an unresolved decision must not
-    manufacture a mandatory partition it has no evidence for. This
+    `row=None`, `scale="unresolved"`, `partition_mandatory=None`) rather
+    than defaulting toward a specific row. `partition_mandatory` is `None`,
+    not `False`, on that outcome: an unresolved decision must not
+    manufacture a mandatory partition it has no evidence for, AND it must
+    not report the absence as a measured negative. `False` said both at
+    once, and a caller reading that field alone could not tell an unmeasured
+    976-LOC/26-commit diff from a small one. This
     replaces the prior behavior, where `chain_diff_trivial=None` silently
     resolved to "not chain-end, use the per-session rows" — the opposite
     of conservative on a chain terminal, not "the conservative per-session

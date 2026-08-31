@@ -220,6 +220,7 @@ import re
 import sys
 import tempfile
 from contextlib import nullcontext
+from time import perf_counter
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Optional
@@ -243,7 +244,7 @@ from coordinator_core.ops.ceremony.push import (
     PUSH_STATUS_PUSHED,
     PUSH_STATUS_UNCONFIRMED,
     derive_push_status,
-    CEREMONY_PUSH_BUDGET_SECS,
+    _ceremony_push_budget,
     push_with_retry,
     resolve_post_push_sha,
 )
@@ -384,6 +385,7 @@ def _commit_and_push_origin_stub_close(
     a PEER's commit, not this one (lesson 2026-07-21-git-index-lock-contention;
     row 10 of docs/research/2026-07-28-is-the-jettisoned-ceremony-lock-outer-ho.md).
     """
+    _pre_push_elapsed = perf_counter()
     message = _compose_origin_stub_close_message(closed_paths, committed_sha)
     with tempfile.NamedTemporaryFile(
         mode="w", suffix=".txt", delete=False, encoding="utf-8"
@@ -467,8 +469,10 @@ def _commit_and_push_origin_stub_close(
     if push_mode != PUSH_MODE_SYNC:
         return follow_up_sha, None, PUSH_STATUS_NOT_ATTEMPTED, None
 
+    # elapsed-aware, not the flat slice — see _ceremony_push_budget.
     push_outcome = push_with_retry(
-        worktree_root, budget_secs=CEREMONY_PUSH_BUDGET_SECS
+        worktree_root,
+        budget_secs=_ceremony_push_budget(perf_counter() - _pre_push_elapsed),
     )
     push_status = derive_push_status(push_outcome)
 
@@ -1174,6 +1178,7 @@ def _run_completion_entry_fold(
 
     Returns a tail_ops-shaped `{acted, skipped, failed}` dict.
     """
+    _pre_push_elapsed = perf_counter()
     resolved = _resolve_fold_entry_path(worktree_root, entry_path)
     if resolved is None:
         return {
@@ -1237,7 +1242,10 @@ def _run_completion_entry_fold(
         }
 
     if push_mode == PUSH_MODE_SYNC:
-        push_outcome = push_with_retry(worktree_root, budget_secs=CEREMONY_PUSH_BUDGET_SECS)
+        push_outcome = push_with_retry(
+            worktree_root,
+            budget_secs=_ceremony_push_budget(perf_counter() - _pre_push_elapsed),
+        )
         push_status = derive_push_status(push_outcome)
         if push_status == PUSH_STATUS_FAILED:
             reason = push_outcome.message or "; ".join(push_outcome.failed) or "unknown push failure"

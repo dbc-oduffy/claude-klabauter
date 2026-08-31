@@ -107,6 +107,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -787,6 +788,74 @@ _CLOSED_REASONS = frozenset({"cancelled", "displaced", "stale"})
 # one caller's use of it gained a same-write bypass for one specific member.
 _TERMINAL_DEPLOYMENT_STATES = frozenset({"shipped", "continued", "closed"})
 
+# ---------------------------------------------------------------------------
+# _DeploymentStateRepairPolicy — allowed-roots PLUS permitted terminal-lock
+# carve-outs, factored out (2026-08-31, C2 of docs/plans/2026-08-31-a-close-
+# disposes-the-baton-it-closed.md) so a second, state/handoffs/-contained
+# door can share this handler's cross-field enforcement and terminal-lock
+# machinery without duplicating either. Two shapes were rejected for this
+# door (see that chunk's brief): a brand-new verb re-implementing the
+# cross-field rules (drift risk — the one genuinely subtle part of this
+# code), and silently widening `_repair_archived_deployment_state_handler`'s
+# own allowed_roots under its existing, archive-asserting op name. A POLICY
+# object naming BOTH the allowed roots and which terminal-lock carve-outs
+# apply is the third shape: the archived door keeps exactly its original
+# behavior (moving_off_shipped only), and the new live door adds exactly one
+# more carved-out transition (continued -> ready_to_fire) without touching
+# the archived door's own carve-out set.
+# ---------------------------------------------------------------------------
+
+
+def _archived_door_carveout(existing_state: Optional[str], target_state: str) -> bool:
+    """Terminal-lock carve-out for the archive/handoffs/-contained door.
+
+    Unchanged from the original, single-door behavior: only a `shipped`
+    record moving to a non-terminal target (AC13 off-shipped provenance
+    repair) bypasses the terminal lock. `continued` and `closed` remain
+    unconditionally terminal for this door.
+    """
+    return existing_state == "shipped" and target_state not in _TERMINAL_DEPLOYMENT_STATES
+
+
+def _live_door_carveout(existing_state: Optional[str], target_state: str) -> bool:
+    """Terminal-lock carve-out for the state/handoffs/-contained door.
+
+    Everything `_archived_door_carveout` permits, PLUS the one transition
+    this door exists to make: a `continued` record repaired back to
+    `ready_to_fire` (the close-disposes-the-baton-it-closed fix — a baton
+    superseded by a same-session `/pickup` was wrongly flipped `continued`
+    with no real successor). `closed` remains unconditionally terminal even
+    for this door — only the one named transition is carved out.
+    """
+    if _archived_door_carveout(existing_state, target_state):
+        return True
+    return existing_state == "continued" and target_state == "ready_to_fire"
+
+
+@dataclass(frozen=True)
+class _DeploymentStateRepairPolicy:
+    """Allowed roots PLUS permitted terminal-lock carve-outs for one repair door.
+
+    ``root_segments`` — path segments (relative to the worktree) the target
+    handoff must resolve under, e.g. ``("archive", "handoffs")``.
+    ``carveout`` — ``(existing_state, target_state) -> bool``; True bypasses
+    the terminal-lock refusal for that specific transition.
+    """
+
+    root_segments: "tuple[str, ...]"
+    carveout: Callable[[Optional[str], str], bool]
+
+
+_ARCHIVED_DEPLOYMENT_STATE_POLICY = _DeploymentStateRepairPolicy(
+    root_segments=("archive", "handoffs"),
+    carveout=_archived_door_carveout,
+)
+
+_LIVE_DEPLOYMENT_STATE_POLICY = _DeploymentStateRepairPolicy(
+    root_segments=("state", "handoffs"),
+    carveout=_live_door_carveout,
+)
+
 # Cross-repo continued_into reference shape (e.g. "claude-klabauter:docs/plans/x.md")
 # — observed in the live corpus (DoE-claude handoff 2026-07-24_112615_c0bd4682.md).
 # A colon-prefixed segment of 3+ word chars, not a URL scheme and not a
@@ -799,8 +868,17 @@ _CROSS_REPO_REF_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{2,}:(?!//)")
 
 
 def _repair_deployment_state_err(msg: str) -> dict:
-    """Error-shape helper for the repair verb — own log prefix, same envelope as _err."""
-    _LOG.warning("handoff.repair_archived_deployment_state: %s", msg)
+    """Error-shape helper shared by both deployment_state repair doors.
+
+    Review: overengineering-reviewer (2026-08-31) — dropped the
+    ``verb_label`` policy axis that used to distinguish the two doors' log
+    prefixes here; it varied a log string only, at the cost of ~19 call-site
+    edits. Error paths log a generic prefix (root context is not yet
+    resolved at usage-error time); the two success/warning log lines further
+    down ``_repair_deployment_state_impl`` carry ``root_label`` instead, once
+    it is in hand — same distinguishability, no threaded policy field.
+    """
+    _LOG.warning("handoff.repair_deployment_state: %s", msg)
     return {"exit_code": 1, "applied": False, "error": msg}
 
 
@@ -903,20 +981,30 @@ def _resolve_continued_into(worktree: Path, value: str) -> bool:
     return False
 
 
-async def _repair_archived_deployment_state_handler(
+async def _repair_deployment_state_impl(
     params: dict,
-    repo_root: Optional[Path] = None,
+    repo_root: Optional[Path],
+    policy: "_DeploymentStateRepairPolicy",
 ) -> dict:
-    """Provenance repair of ``deployment_state`` (and its state-conditional
-    companion fields) on a handoff already under ``archive/handoffs/``.
+    """Shared implementation behind both deployment_state repair doors.
 
+    Extracted (2026-08-31, C2 of docs/plans/2026-08-31-a-close-disposes-the-
+    baton-it-closed.md) from what was a single ``archive/handoffs/``-only
+    handler, so a second, ``state/handoffs/``-contained door
+    (``_repair_live_deployment_state_handler``) can reuse every cross-field
+    rule and the terminal-lock machinery byte-identically, differing ONLY in
+    ``policy.root_segments`` (which root the target must resolve under) and
+    ``policy.carveout`` (which terminal-lock transitions bypass the refusal).
     See module docstring and the sibling ``_repair_archived_shipped_in_handler``
-    for the shared narrow-door rationale.
+    for the shared narrow-door rationale; see ``_DeploymentStateRepairPolicy``
+    above for what a policy controls and why a POLICY object beats either a
+    brand-new verb or silently widening the archived door's own roots.
 
     Params:
-        handoff_path     (str)  — path to the ARCHIVED handoff file (must
-                                  resolve under ``<worktree>/archive/handoffs/``).
-                                  Required.
+        handoff_path     (str)  — path to the handoff file. Required. Must
+                                  resolve under ``<worktree>/<policy.root_segments>``
+                                  — ``archive/handoffs/`` for the archived door,
+                                  ``state/handoffs/`` for the live door.
         reason            (str)  — caller-supplied justification for the repair,
                                   non-empty. Required on every call — see
                                   ``_repair_archived_shipped_in_handler``'s
@@ -991,11 +1079,21 @@ async def _repair_archived_deployment_state_handler(
                                     ``"continued"`` (field not applicable).
         provenance_cleared (list[str]) — the subset of
                                     ``["shipped_in", "advanced_by",
-                                    "advanced_at"]`` actually removed in this
-                                    call (AC13, § off-shipped provenance
-                                    repair below). Always ``[]`` unless this
+                                    "advanced_at"]`` actually removed when this
                                     call moved the record OFF ``shipped`` to a
-                                    non-terminal target.
+                                    non-terminal target (AC13, § off-shipped
+                                    provenance repair below), PLUS
+                                    ``"continued_into"`` when this call is the
+                                    live door's ``continued`` ->
+                                    ``ready_to_fire`` repair (§ C2 below).
+                                    Always ``[]`` for every other call.
+        pickup_ready_restored (bool) — True only on the live door's
+                                    ``continued`` -> ``ready_to_fire`` repair
+                                    (§ C2 below); always False otherwise,
+                                    including on the archived door (this key
+                                    exists on every response for envelope
+                                    consistency, but only that one transition
+                                    ever sets it).
         reason       (str)        — echoes the caller-supplied reason, present
                                     on every exit_code 0 response.
         message      (str)        — human-readable outcome description
@@ -1025,6 +1123,17 @@ async def _repair_archived_deployment_state_handler(
     ``deployment_state == "shipped"``. One ``_mutate``/one ``locked_rmw``
     write means neither intermediate is ever the on-disk state — the caller
     (C6) never sequences this by hand.
+
+    § C2 live-door carve-out (2026-08-31): the live door's ONE additional
+    terminal-lock exception, alongside the unchanged off-shipped repair
+    above. A record whose ``deployment_state`` is ``continued`` may be
+    repaired to ``ready_to_fire`` ONLY — same one-write discipline as the
+    off-shipped repair: clearing ``continued_into`` and restoring
+    ``pickup_ready: true`` land in the SAME write as the ``deployment_state``
+    flip, because the schema's continued-requires-continued_into rule fires
+    only while ``deployment_state == "continued"``. The archived door's
+    policy carve-out does not include this transition — ``continued`` stays
+    unconditionally terminal there, unchanged.
 
     Negative-spec (repair verb, hard-won — mirrors
     ``_repair_archived_shipped_in_handler``'s):
@@ -1062,22 +1171,30 @@ async def _repair_archived_deployment_state_handler(
         docstring. A record repaired OFF shipped lands back in non-terminal
         territory and is deliberately NOT extinguished — it re-enters normal
         lifecycle progression (a later legitimate ship advances it again).
-      - Does NOT extend archived-record mutability to any other field — only
+      - Does NOT extend either door's mutability to any other field — only
         ``deployment_state``, ``continued_into``, ``closed_reason``, and (on
-        the off-shipped provenance-repair path only) ``shipped_in``/
-        ``advanced_by``/``advanced_at`` are ever touched, and the latter
-        three are only ever CLEARED, never stamped with a caller-supplied
-        value — this door still never resolves ship evidence or an advancing
-        deliverable of its own. Does NOT extend to any other archived
-        lifecycle verb — ``archive/handoffs/`` remains closed to
-        ``handoff.transition``/``handoff.stamp``/``handoff.archive_transition``/
-        etc. Archival otherwise remains a freeze.
+        the off-shipped provenance-repair path or the live door's
+        ``continued`` -> ``ready_to_fire`` repair) ``shipped_in``/
+        ``advanced_by``/``advanced_at``/``continued_into``/``pickup_ready``
+        are ever touched, and shipped_in/advanced_by/advanced_at/
+        continued_into are only ever CLEARED, never stamped with a
+        caller-supplied value — neither door ever resolves ship evidence,
+        an advancing deliverable, or a successor of its own. Does NOT extend
+        to any other lifecycle verb on either root: the archived door's
+        ``archive/handoffs/`` remains closed to ``handoff.transition``/
+        ``handoff.stamp``/``handoff.archive_transition``/etc., and the live
+        door's own registration (``handoff.repair_deployment_state``) is the
+        ONLY additional door onto ``state/handoffs/`` this chunk adds — every
+        other field on a live record stays reachable only through the
+        existing lifecycle verbs. Archival otherwise remains a freeze.
       - Does NOT perform the live-children guard
         (``handoff.has_live_children``) — that guard exists to decide whether
         an ACTIVE handoff is safe to archive; a handoff already sitting in
         ``archive/handoffs/`` has, by definition, already passed (or
         deliberately bypassed) that decision. Re-running it here would be
-        re-litigating a decision this verb has no authority to reverse.
+        re-litigating a decision this verb has no authority to reverse. (The
+        live door's records were never archived in the first place, so this
+        point is a no-op for it, not a gap.)
     """
     handoff_path_raw: str = params.get("handoff_path") or ""
     reason: str = (params.get("reason") or "").strip()
@@ -1097,49 +1214,49 @@ async def _repair_archived_deployment_state_handler(
     if target_state not in _ARCHIVED_DEPLOYMENT_STATES:
         return _repair_deployment_state_err(
             f"rejected unknown deployment_state {target_state!r} — must be one "
-            f"of {sorted(_ARCHIVED_DEPLOYMENT_STATES)}"
-        )
+            f"of {sorted(_ARCHIVED_DEPLOYMENT_STATES)}")
     if target_state == "continued" and not continued_into:
         return _repair_deployment_state_err(
             "deployment_state 'continued' requires 'continued_into' (successor "
             "handoff id-or-path) — mirrors handoff-archived.schema.json's own "
-            "cross-field rule; this verb never resolves a successor of its own"
-        )
+            "cross-field rule; this verb never resolves a successor of its own")
     if target_state != "continued" and continued_into:
         return _repair_deployment_state_err(
             f"'continued_into' was supplied but deployment_state is "
             f"{target_state!r}, not 'continued' — rejected rather than silently "
-            "written to a state it does not apply to"
-        )
+            "written to a state it does not apply to")
     if target_state != "continued" and continued_into_override:
         return _repair_deployment_state_err(
             f"'continued_into_override' was supplied but deployment_state is "
             f"{target_state!r}, not 'continued' — rejected; the override only "
-            "applies to the continued_into resolution check"
-        )
+            "applies to the continued_into resolution check")
     if target_state == "closed" and not closed_reason:
         return _repair_deployment_state_err(
             "deployment_state 'closed' requires 'closed_reason' "
             "(cancelled|displaced|stale) — mirrors handoff-archived.schema.json's "
-            "own cross-field rule"
-        )
+            "own cross-field rule")
     if target_state == "closed" and closed_reason not in _CLOSED_REASONS:
         return _repair_deployment_state_err(
             f"rejected unknown closed_reason {closed_reason!r} — must be one of "
-            f"{sorted(_CLOSED_REASONS)}"
-        )
+            f"{sorted(_CLOSED_REASONS)}")
     if target_state != "closed" and closed_reason:
         return _repair_deployment_state_err(
             f"'closed_reason' was supplied but deployment_state is "
             f"{target_state!r}, not 'closed' — rejected rather than silently "
-            "written to a state it does not apply to"
-        )
+            "written to a state it does not apply to")
 
     if repo_root is None:
+        # NO DOOR NAME IN THIS MESSAGE, DELIBERATELY. `_repair_deployment_state_impl`
+        # is shared by BOTH doors, so a hardcoded op name here is wrong for one of
+        # them: this literal used to read `handoff.repair_archived_deployment_state`
+        # and was returned verbatim to callers of the LIVE door, naming an op they
+        # had not invoked. It is caller-facing `error` text, not a log line — the
+        # generic log prefix lives in `_repair_deployment_state_err`, and the two
+        # door-distinguishing lines further down carry `root_label` once resolved.
+        # Review: coordinator:code-reviewer (slice B, Finding 1, P1).
         return _repair_deployment_state_err(
-            "handoff.repair_archived_deployment_state: repo_root is required "
-            "(no founding root available)"
-        )
+            "repair_deployment_state: repo_root is required "
+            "(no founding root available)")
 
     worktree = main_worktree_root(repo_root)
 
@@ -1159,35 +1276,36 @@ async def _repair_archived_deployment_state_handler(
                 "(with 'reason' explaining why, e.g. a successor deleted by a "
                 "distill sweep and recovered from git history, or a cross-repo "
                 "reference) if this is a deliberate, verified exception rather "
-                "than a fabricated/guessed value"
-            )
+                "than a fabricated/guessed value")
 
     p = Path(handoff_path_raw)
     if not p.is_absolute():
         p = worktree / p
 
-    # Archived-root access belongs to THIS verb only among handoff_stamp.py's
-    # OWN handlers — a per-call local, never merged into _handler's
-    # state/handoffs/-only allowed_roots above. Same shape as
-    # _repair_archived_shipped_in_handler's own allowed_roots. NOTE
-    # (2026-08-06, docs/plans/2026-08-06-executing-session-can-discharge-
+    # Root access belongs to THIS door's own policy — a per-call local, never
+    # merged into `_handler`'s state/handoffs/-only allowed_roots above (nor,
+    # for the live-door policy, is IT merged back into that unrelated
+    # allowed_roots either — this is its own narrow root, policy-selected).
+    # Same shape as _repair_archived_shipped_in_handler's own allowed_roots.
+    # NOTE (2026-08-06, docs/plans/2026-08-06-executing-session-can-discharge-
     # criteria.md chunk C2): this "never merged" claim is now false for the
     # SIBLING op coordinator_core.ops.handoff_correct_body — see that
     # module's own comment above this file's other repair handler for the
     # full note.
-    allowed_roots = [worktree / "archive" / "handoffs"]
+    root_label = "/".join(policy.root_segments) + "/"
+    allowed_roots = [worktree.joinpath(*policy.root_segments)]
     p = contained_path(p, allowed_roots)
     if p is None:
         return _repair_deployment_state_err(
-            f"handoff_path does not resolve under archive/handoffs/: {handoff_path_raw!r}"
-        )
+            f"handoff_path does not resolve under {root_label}: {handoff_path_raw!r}")
 
     if not p.is_file():
-        return _repair_deployment_state_err(f"archived handoff not found on disk: {handoff_path_raw}")
+        return _repair_deployment_state_err(f"handoff not found on disk under {root_label}: {handoff_path_raw}")
 
     _applied = [False]
     _prior_state: list[Optional[str]] = [None]
     _cleared_provenance: list[list[str]] = [[]]
+    _pickup_ready_restored = [False]
 
     def _mutate(old_text: str) -> str:
         split = split_frontmatter(old_text)
@@ -1214,29 +1332,40 @@ async def _repair_archived_deployment_state_handler(
         moving_off_shipped = (
             existing_state == "shipped" and target_state not in _TERMINAL_DEPLOYMENT_STATES
         )
+        # Live-door carve-out (C2): a `continued` record repaired back to
+        # `ready_to_fire`. Symmetric to moving_off_shipped above — computed
+        # unconditionally so its companion-field clearing (continued_into,
+        # pickup_ready — see below) fires whenever the transition actually
+        # happens, on whichever door permitted it.
+        moving_off_continued = (
+            existing_state == "continued" and target_state not in _TERMINAL_DEPLOYMENT_STATES
+        )
+        carved_out = policy.carveout(existing_state, target_state)
 
         # Enforced precondition (E1): refuse unless the record's CURRENT
-        # on-disk deployment_state is non-terminal or absent, UNLESS this is
-        # the off-shipped provenance repair carved out above. A terminal
-        # state otherwise means this record was already validly archived —
-        # mutating it is the exact harm this door's containment
-        # (archive/handoffs/-only) otherwise stays silent about. Checked
-        # before the no-op comparison below on purpose: a same-target-as-
-        # current call against an already-terminal record must still refuse
-        # (exit_code 1), not silently succeed as a no-op — that refusal is
-        # what makes the transition self-extinguishing (see
-        # _TERMINAL_DEPLOYMENT_STATES docstring) for every state but the
-        # carved-out shipped -> non-terminal repair path.
-        if existing_state in _TERMINAL_DEPLOYMENT_STATES and not moving_off_shipped:
+        # on-disk deployment_state is non-terminal or absent, UNLESS this
+        # transition is one of THIS door's own carve-outs (policy.carveout).
+        # A terminal state otherwise means this record was already validly
+        # archived/finalized — mutating it is the exact harm this door's
+        # containment otherwise stays silent about. Checked before the no-op
+        # comparison below on purpose: a same-target-as-current call against
+        # an already-terminal record must still refuse (exit_code 1), not
+        # silently succeed as a no-op — that refusal is what makes the
+        # transition self-extinguishing (see _TERMINAL_DEPLOYMENT_STATES
+        # docstring) for every state but each door's own carved-out paths.
+        if existing_state in _TERMINAL_DEPLOYMENT_STATES and not carved_out:
             raise MutateAbort(
                 f"refusing repair: {handoff_path_raw} already carries a "
                 f"terminal deployment_state ({existing_state!r}) — this door "
                 "only repairs a record whose current deployment_state is "
                 "non-terminal (awaiting_gate/ready_to_fire/in_flight) or "
-                "absent, OR a 'shipped' record being moved OFF shipped to a "
-                "non-terminal target (provenance repair, AC13); a terminal "
-                "state means the record was already validly archived and "
-                "mutating it is outside this door's reach, by design"
+                "absent, OR one of this door's own carved-out terminal "
+                "transitions (e.g. a 'shipped' record moved OFF shipped to a "
+                "non-terminal target — provenance repair, AC13; on the live "
+                "door only, also a 'continued' record moved back to "
+                "'ready_to_fire'); a terminal state otherwise means the "
+                "record was already validly finalized and mutating it is "
+                "outside this door's reach, by design"
             )
 
         # Byte-identical no-op: requested state (and its companion field,
@@ -1298,6 +1427,31 @@ async def _repair_archived_deployment_state_handler(
                 if read_fm_field(fm_text, _field) is not None:
                     fm_text = remove_fm_field(fm_text, _field)
                     _provenance_cleared.append(_field)
+
+        # Live-door companion clear (C2): moving OFF continued in this SAME
+        # write also clears `continued_into` (the successor pointer this
+        # repair proves was never real for THIS record — a same-session
+        # supersede, not a genuine succession) and restores `pickup_ready:
+        # true` (the positive pickup-authorized signal a wrongly-`continued`
+        # baton lost). Same one-write rationale as the shipped provenance
+        # clear above: `continued`'s own cross-field rule requires
+        # `continued_into` while `deployment_state == "continued"`, so a
+        # clear-then-flip or flip-then-clear split would persist an
+        # intermediate state the validator rejects (or accepts by accident).
+        # `moving_off_continued` is False on the archived door for every
+        # existing caller — this block is unreachable there.
+        if moving_off_continued:
+            if read_fm_field(fm_text, "continued_into") is not None:
+                fm_text = remove_fm_field(fm_text, "continued_into")
+                _provenance_cleared.append("continued_into")
+            if read_fm_field(fm_text, "pickup_ready") is not None:
+                fm_text = replace_fm_field(fm_text, "pickup_ready", "true")
+            else:
+                fm_text = insert_fm_field(
+                    fm_text, "pickup_ready", "true", after_key="deployment_state"
+                )
+            _pickup_ready_restored[0] = True
+
         _cleared_provenance[0] = _provenance_cleared
 
         _applied[0] = True
@@ -1314,14 +1468,14 @@ async def _repair_archived_deployment_state_handler(
 
     if _applied[0] and target_state == "continued" and not continued_into_verified:
         _LOG.warning(
-            "handoff.repair_archived_deployment_state: wrote unverified continued_into "
+            "handoff.repair_deployment_state (%s): wrote unverified continued_into "
             "%r into %s under continued_into_override=True — reason: %s",
-            continued_into, p, reason,
+            root_label, continued_into, p, reason,
         )
     if _applied[0]:
         _LOG.info(
-            "handoff.repair_archived_deployment_state: repaired %s (was %r, now %r) — reason: %s",
-            p, _prior_state[0], target_state, reason,
+            "handoff.repair_deployment_state (%s): repaired %s (was %r, now %r) — reason: %s",
+            root_label, p, _prior_state[0], target_state, reason,
         )
         message = (
             f"repaired deployment_state in {handoff_path_raw}: "
@@ -1329,8 +1483,10 @@ async def _repair_archived_deployment_state_handler(
         )
         if _cleared_provenance[0]:
             message += (
-                f"; cleared shipped provenance ({', '.join(_cleared_provenance[0])})"
+                f"; cleared ({', '.join(_cleared_provenance[0])})"
             )
+        if _pickup_ready_restored[0]:
+            message += "; restored pickup_ready: true"
     else:
         message = (
             f"deployment_state in {handoff_path_raw} already {target_state!r} "
@@ -1344,6 +1500,76 @@ async def _repair_archived_deployment_state_handler(
         "new_state": target_state,
         "continued_into_verified": continued_into_verified,
         "provenance_cleared": _cleared_provenance[0],
+        "pickup_ready_restored": _pickup_ready_restored[0],
         "reason": reason,
         "message": message,
     }
+
+
+# ---------------------------------------------------------------------------
+# _repair_archived_deployment_state_handler — thin wrapper preserving this
+# handler's original name, signature, and behavior byte-for-byte. Deliberately
+# NOT @register_op-registered (same DR-208/op_scopes CI-plumbing reason as
+# _repair_archived_shipped_in_handler) — still called directly in-process by
+# coordinator_core.archive_stamp.cs_repair_archived_deployment_state, exactly
+# as before this door was split behind a POLICY object. See
+# _repair_deployment_state_impl and _ARCHIVED_DEPLOYMENT_STATE_POLICY above
+# for what changed (nothing observable for this door) and why (C2 of
+# docs/plans/2026-08-31-a-close-disposes-the-baton-it-closed.md).
+# ---------------------------------------------------------------------------
+
+
+async def _repair_archived_deployment_state_handler(
+    params: dict,
+    repo_root: Optional[Path] = None,
+) -> dict:
+    """Provenance repair of ``deployment_state`` on a handoff already under
+    ``archive/handoffs/``. See ``_repair_deployment_state_impl`` for the full
+    Params/Returns/Exit-code contract and Negative-spec — this wrapper only
+    binds ``policy=_ARCHIVED_DEPLOYMENT_STATE_POLICY`` (archive/handoffs/-only
+    root, moving_off_shipped-only carve-out — unchanged from this handler's
+    original, single-door behavior).
+    """
+    return await _repair_deployment_state_impl(
+        params, repo_root, _ARCHIVED_DEPLOYMENT_STATE_POLICY
+    )
+
+
+# ---------------------------------------------------------------------------
+# _repair_live_deployment_state_handler — the second, state/handoffs/-
+# contained door this chunk (C2) exists to add. Registered as
+# "handoff.repair_deployment_state" (op-registry + authz/classification.py
+# MUTATING, per this chunk's WIRING OWED) — this is the invocation surface
+# C3 (the backfill chunk) reaches the verb through; the archived door above
+# stays un-registered, called only in-process, exactly as before.
+# ---------------------------------------------------------------------------
+
+
+@register_op("handoff.repair_deployment_state")
+async def _repair_live_deployment_state_handler(
+    params: dict,
+    repo_root: Optional[Path] = None,
+) -> dict:
+    """Provenance repair of ``deployment_state`` on a handoff still under
+    ``state/handoffs/`` (the live tree) — sibling door to
+    ``_repair_archived_deployment_state_handler``, sharing its entire
+    cross-field enforcement and terminal-lock machinery via
+    ``_repair_deployment_state_impl``. See that function for the full
+    Params/Returns/Exit-code contract and Negative-spec.
+
+    THE ONE BEHAVIORAL DIFFERENCE from the archived door: this policy's
+    ``carveout`` (``_live_door_carveout``) additionally permits a
+    ``continued`` record to repair back to ``ready_to_fire`` — refused by
+    the archived door's carve-out by design (see that door's own
+    Negative-spec) — because this door exists specifically to fix a baton a
+    same-session ``/pickup`` wrongly flipped ``continued`` with no real
+    successor (docs/plans/2026-08-31-a-close-disposes-the-baton-it-closed.md).
+    That one additional transition ALSO clears the record's stale
+    ``continued_into`` and restores ``pickup_ready: true`` in the same
+    write — see ``moving_off_continued`` in ``_repair_deployment_state_impl``.
+    ``closed`` remains unconditionally terminal for this door too; only the
+    one named transition is carved out.
+    """
+    return await _repair_deployment_state_impl(
+        params, repo_root, _LIVE_DEPLOYMENT_STATE_POLICY
+    )

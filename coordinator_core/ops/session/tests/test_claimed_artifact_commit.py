@@ -300,3 +300,116 @@ class TestDirtyPathAlreadyDirtyFromAnotherWriterFailsClosed:
             ["git", "status", "--porcelain"], cwd=repo, capture_output=True, text=True
         , **no_console_creationflags()).stdout
         assert "contested.py" in status  # withheld, never committed
+
+
+class TestUnresolvedGitRootFailsClosed:
+    """committer-P0 (2026-08-31): `worktree_root` was
+    `core.git_root(cwd) or cwd or "."`.
+
+    `_commit_group` classifies a declared path as DELETED whenever
+    `(Path(worktree_root) / p).exists()` is False, so a root that is not the
+    repo root makes EVERY claimed path probe False -- and this close path
+    commits a mass deletion of the session's own work under the session's own
+    message. `commit_paths`' phantom-deletion refusal cannot rescue it: it is
+    handed the same bad root, resolves the same absent paths, and never
+    fires.
+
+    Root cause and both signatures:
+    `state/audits/2026-08-31-committer-p0-root-cause-cwd-probe-becomes-
+    deletion.md`.
+    """
+
+    @staticmethod
+    def _core_without_git_root(value):
+        """A stand-in for THIS module's `core` binding only.
+
+        `core.git_root` is read by half the session package; patching the
+        function on the shared module would degrade `compute_offer`'s own
+        claim reads and the call would short-circuit as
+        `skipped_indeterminate` -- green for the wrong reason. Swapping the
+        module reference `safe_commit_offer` itself holds keeps the blast
+        radius at the one call site under test.
+        """
+
+        class _Shim:
+            def __getattr__(self, name):
+                return getattr(core, name)
+
+            def git_root(self, *args, **kwargs):
+                return value
+
+        return _Shim()
+
+    @pytest.mark.parametrize("unresolved", [None, ""])
+    def test_unresolved_root_commits_nothing_and_leaves_head_unmoved(
+        self, tmp_path, monkeypatch, unresolved
+    ):
+        import asyncio
+
+        repo = _make_repo(tmp_path)
+        core.init("mine", cwd=str(repo))
+        (repo / "mine.py").write_text("m")
+        scope.touch("mine", "mine.py", cwd=str(repo))
+
+        head_before = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, text=True,
+            **no_console_creationflags(),
+        ).stdout.strip()
+
+        monkeypatch.setattr(
+            safe_commit_offer, "core", self._core_without_git_root(unresolved)
+        )
+        report = asyncio.run(
+            safe_commit_offer.commit_session_offer_async("mine", cwd=str(repo))
+        )
+
+        assert report["outcome"]["status"] == "skipped_unresolved_root"
+        assert report["outcome"]["committed_paths"] == []
+        assert report["reconciliation"]["reconciled"] is False
+        assert report["groups"] == []
+        assert report["failed_groups"] == []
+
+        # The return value is not the evidence that matters -- a commit that
+        # deleted the file would still report an empty `committed_paths` on
+        # some other status. Ask git.
+        head_after = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, text=True,
+            **no_console_creationflags(),
+        ).stdout.strip()
+        assert head_after == head_before
+
+        status = subprocess.run(
+            ["git", "status", "--porcelain"], cwd=repo, capture_output=True, text=True,
+            **no_console_creationflags(),
+        ).stdout
+        assert "mine.py" in status  # never committed, and never deleted
+        assert (repo / "mine.py").exists()
+
+    def test_a_resolvable_root_still_commits(self, tmp_path):
+        """The early return must fire on an unresolved root and nothing
+        else -- a guard that also fires on the healthy path silently stops
+        every close ceremony from committing."""
+        import asyncio
+
+        repo = _make_repo(tmp_path)
+        core.init("mine", cwd=str(repo))
+        (repo / "mine.py").write_text("m")
+        scope.touch("mine", "mine.py", cwd=str(repo))
+
+        head_before = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, text=True,
+            **no_console_creationflags(),
+        ).stdout.strip()
+
+        report = asyncio.run(
+            safe_commit_offer.commit_session_offer_async("mine", cwd=str(repo))
+        )
+
+        assert report["outcome"]["status"] == "committed"
+        assert report["outcome"]["committed_paths"] == ["mine.py"]
+
+        head_after = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, text=True,
+            **no_console_creationflags(),
+        ).stdout.strip()
+        assert head_after != head_before

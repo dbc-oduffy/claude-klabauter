@@ -732,6 +732,7 @@ def _pool_dispatch_worker(msg: dict, caller: Optional[CallerContext]) -> dict:
     session_id = caller.session_id if caller is not None else None
     caller_pid = caller.pid if caller is not None else None
     settings_home_for_bind = caller.settings_home if caller is not None else None
+    _repair_settings_home_to_pristine()
     try:
         with per_request_state(
             session_id=session_id,
@@ -1005,6 +1006,45 @@ def _bind_null_std_streams() -> None:
             setattr(sys, name, open(os.devnull, "w", encoding="utf-8", newline="\n"))
 
 
+_PRISTINE_HOME_UNCAPTURED = object()
+
+_worker_pristine_settings_home: object = _PRISTINE_HOME_UNCAPTURED
+"""This worker process's own `COORDINATOR_SETTINGS_HOME` disposition, captured
+once at process start -- `None` for "the spawner had none set", a `str` for the
+value it did have, and `_PRISTINE_HOME_UNCAPTURED` in any process that never ran
+`_worker_process_init` (the accept process, and every test importing this module
+directly), where repair must not fire.
+
+WHY A CAPTURE AND NOT A TRUST OF THE `finally`. `per_request_state`'s borrow
+restores on the way out, and that restore is correct for every reader that lives
+and dies inside the task. It does not cover a reader that OUTLIVES the task
+boundary: a background thread, an `atexit` handler, or a child process spawned
+inside the borrowed block keeps reading the borrowed home after the restore
+runs. Nor does it cover a restore that never runs at all -- `os._exit`, a
+C-level crash -- which leaves a POOLED, REUSED worker permanently mis-homed for
+whichever caller lands on it next, silently and in the direction that disarms
+guards (`bash_guards/_blanket_disarm.py :: marker_path`). Verifying at task
+entry makes that state unreachable rather than remembered.
+"""
+
+
+def _repair_settings_home_to_pristine() -> None:
+    """Return this worker's `COORDINATOR_SETTINGS_HOME` to its captured
+    process-start disposition, before the next request's borrow opens.
+
+    A no-op in the ordinary case (nothing leaked, the value already matches),
+    and a no-op in any process that never captured -- repair fires only where a
+    pristine disposition is actually known, so the accept process and direct
+    importers are untouched.
+    """
+    if _worker_pristine_settings_home is _PRISTINE_HOME_UNCAPTURED:
+        return
+    if _worker_pristine_settings_home is None:
+        os.environ.pop("COORDINATOR_SETTINGS_HOME", None)
+    else:
+        os.environ["COORDINATOR_SETTINGS_HOME"] = str(_worker_pristine_settings_home)
+
+
 def _worker_process_init() -> None:
     """`ProcessPoolExecutor`'s `initializer=` -- runs once per worker
     process, before that process ever dispatches a request, so the
@@ -1015,6 +1055,9 @@ def _worker_process_init() -> None:
     `_ServerContext.serve_forever`) for the SAME reason, on the process that
     now actually does the dispatching.
     """
+    global _worker_pristine_settings_home
+    _worker_pristine_settings_home = os.environ.get("COORDINATOR_SETTINGS_HOME")
+
     _bind_null_std_streams()
     threading.Thread(
         target=_exit_with_parent,

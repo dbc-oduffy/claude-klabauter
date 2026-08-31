@@ -1983,6 +1983,30 @@ def _clear_path_claim_if_dead(
     for the same reason ``scoped_git_commit`` already refuses it, so partially
     clearing it would accomplish nothing.
 
+    THAT PARAGRAPH IS THE DECISION, AND IT WAS REVISITED ON 2026-08-31 AND
+    KEPT (`state/bug-backlog/2026-08-31-clear-claim-if-dead-refuses-per-path-
+    what-it-decided-per-row.yaml`). Recorded because the shape reads like an
+    oversight to anyone who reaches the code before this docstring: the
+    dead/live split IS computed here and IS discarded, which looks like a bug
+    and is not. What a partial release would buy is narrow -- the path would
+    be free the moment the live peer releases, rather than needing a second
+    reap pass then -- and it is bought at the cost of removing the early
+    return that the TOCTOU bracket below currently relies on (a sid reading
+    dead in pass 1 and live in pass 2 would fall inside ``dead_sids`` and be
+    cleared, unless that set also subtracts the union of both liveness reads).
+    Not worth it on that trade; revisit with the row, not from the code.
+
+    ALSO NOT THIS FUNCTION'S PROBLEM, stated because two sessions reached for
+    it that way on 2026-08-31: a BATON's claim is ``handoff`` class, which
+    ``clear_claim_if_dead`` routes to the mkdir-based classed-claim store
+    above, never here. Those claims hold exactly one session_id each (measured:
+    124 claim dirs, 124 ``session_id`` files) so no multi-claimant refusal can
+    apply to them, and a dead-holder baton clears one at a time today. An
+    abandoned baton is blocked by the absence of a BULK route
+    (``session.reap_claims_for_repos``, killed over the brightline), which is
+    `state/bug-backlog/2026-08-31-no-working-path-releases-an-abandoned-claim.
+    yaml`, not this arm.
+
     THE CALLING SESSION IS NOT A PEER, and excluding it is the whole point of
     this entrypoint rather than a relaxation of it. The reasoning above holds
     only while the live claimant is someone else: ``scoped_git_commit`` never
@@ -2042,9 +2066,31 @@ def _clear_path_claim_if_dead(
 
     live = _live_ones(claimants)
     if live:
+        # The whole-path refusal above `live` is DELIBERATE (see this
+        # function's own docstring). What was wrong was this message, and
+        # only this message: naming the live claimants and stopping reads as
+        # "go negotiate with them", which on a shared surface the caller
+        # cannot do -- they usually have no channel to that peer, and there
+        # is nothing to negotiate, because releasing the dead row would not
+        # make the path committable anyway. Reported by doe-claude-em
+        # (cross-repo/inbox/2026-08-31-doe-claude-em-clear-claim-if-dead-is-
+        # path-scoped-not-row-scoped.md), who named this as the third
+        # instance that day, across three surfaces, of a remedy assuming a
+        # caller state that is false.
+        #
+        # `docs/wiki/guard-messaging.md` § Register: one fact, once, plus a
+        # terse alternative. The fact is that the row is KEPT and why; the
+        # alternative is the condition under which it clears, plus the one
+        # command that reports on it. The claimant sids are deliberately NOT
+        # listed here -- they were the whole source of the false reading, and
+        # `who-claims-path` prints them with liveness beside each, which is
+        # strictly more than this line could carry.
         print(
-            f"cs_clear_claim_if_dead: refusing to clear path claim {path!r} "
-            f"-- live claimant(s) {', '.join(sorted(live))}",
+            f"cs_clear_claim_if_dead: keeping path claim {path!r} -- "
+            f"{len(live)} live claimant(s) still hold it, and a dead row "
+            "beside a live one is kept by design: releasing it would not "
+            "free the path. Clears once the last live claimant releases. "
+            f"Who holds it: session-claim-cli who-claims-path {path}",
             file=sys.stderr,
         )
         return False
@@ -2061,10 +2107,17 @@ def _clear_path_claim_if_dead(
         return False
     live2 = _live_ones(claimants2)
     if live2:
+        # Distinct from the refusal above, and the distinction is the whole
+        # value of this line: that one is a STANDING state (a live peer holds
+        # the path, and will until it releases), this one is a RACE (a
+        # claimant went live inside the bracket). A race is worth retrying;
+        # the standing state is not, and telling them apart is what stops a
+        # caller retrying forever against the first or giving up on the
+        # second. Same register: the fact, then the terse alternative.
         print(
-            f"cs_clear_claim_if_dead: aborting clear of path claim {path!r} "
-            f"-- claimant became live after TOCTOU re-read "
-            f"({', '.join(sorted(live2))})",
+            f"cs_clear_claim_if_dead: aborted clear of path claim {path!r} "
+            f"-- {len(live2)} claimant(s) went live inside the check. "
+            "Nothing was released. Safe to retry.",
             file=sys.stderr,
         )
         return False

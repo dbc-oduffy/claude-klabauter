@@ -610,6 +610,47 @@ def test_c6_closure_fidelity_is_required_keyword_only_on_all_three_callers():
         (False, None),
     ],
 )
+def test_human_attested_never_yields_auto(
+    trailer_bound, reachable_on_default_branch
+):
+    """`human-attested` must degrade exactly like `verify-with-effort`.
+
+    D1-D4 never ruled on this tier, and the original C6 frozenset held only
+    `verify-with-effort`, so an item whose classification says a HUMAN must
+    attest it still auto-asserted on a purely machine-observed signal. That is
+    a false auto in the one axis built to prevent false autos. Same adversarial
+    shape as the verify-with-effort case: the control proves these inputs do
+    yield `auto` for an auto-observable item, so the assertion below is a real
+    degradation rather than a vacuous check.
+    """
+    evidence = tcp.CodeCompleteEvidence(
+        sha="f" * 40,
+        trailer_bound=trailer_bound,
+        reachable_on_default_branch=reachable_on_default_branch,
+    )
+    auto_observable_tier = tcp.classify_code_complete_tier(
+        evidence, closure_fidelity="auto-observable"
+    )
+    if trailer_bound and reachable_on_default_branch is True:
+        assert auto_observable_tier == "auto"
+
+    assert (
+        tcp.classify_code_complete_tier(evidence, closure_fidelity="human-attested")
+        != "auto"
+    )
+
+
+@pytest.mark.parametrize(
+    "trailer_bound, reachable_on_default_branch",
+    [
+        (True, True),  # the ONLY combination that yields "auto" for auto-observable
+        (False, True),
+        (True, False),
+        (True, None),
+        (False, False),
+        (False, None),
+    ],
+)
 def test_c6_verify_with_effort_never_yields_auto(
     trailer_bound, reachable_on_default_branch
 ):

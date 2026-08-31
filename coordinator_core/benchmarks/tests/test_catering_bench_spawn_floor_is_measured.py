@@ -36,22 +36,23 @@ def _pin_floor(monkeypatch, floor: int) -> None:
     monkeypatch.setattr(bench, "_measure_procs_floor", lambda: floor)
 
 
-def test_one_child_derives_to_one_against_a_two_floor(monkeypatch):
-    """This box's actual readings: floor 2.0, one-child fixture 3.0."""
-    _pin_floor(monkeypatch, 2)
-    assert bench._derive_spawn_count(3.0) == 1
+def test_the_same_reading_derives_differently_under_a_different_floor(monkeypatch):
+    """The portability claim, which is the entire point of measuring the floor
+    rather than writing a literal: a `procs_per_call` of 2.0 is ONE child where
+    the bench was written (floor 1) and ZERO children on this box (floor 2).
+    A per-environment constant cannot express that, and the literal `1` that
+    was here read correctly in the first environment and silently wrong in the
+    second.
 
-
-def test_one_child_derives_to_one_against_a_one_floor(monkeypatch):
-    """The environment the bench was written in. The same derivation must hold
-    there without an edit -- that is the whole point of measuring the floor."""
+    One test, three assertions, because the three readings are one claim --
+    asserting each separately would be asserting that Python subtracts.
+    """
     _pin_floor(monkeypatch, 1)
     assert bench._derive_spawn_count(2.0) == 1
 
-
-def test_a_childless_reading_derives_to_zero(monkeypatch):
     _pin_floor(monkeypatch, 2)
     assert bench._derive_spawn_count(2.0) == 0
+    assert bench._derive_spawn_count(3.0) == 1
 
 
 def test_a_reading_below_the_floor_floors_at_zero_rather_than_going_negative(

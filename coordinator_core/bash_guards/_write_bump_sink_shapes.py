@@ -634,13 +634,40 @@ _PYTHON_C_FLAG_INTERPRETERS = frozenset({"python", "python3"})
 
 #: Quoted-string literal, single- or double-quoted, with escape support --
 #: matched with a NEGATIVE LOOKBEHIND against an immediately preceding
-#: identifier character so a prefixed string (`f'...'`, `r'...'`, `b'...'`,
-#: or a bare variable name butted up against a quote) never matches. This is
-#: the fail-open direction the plan's own AC5 names ("an f-string ... yields
-#: NOTHING") -- this module has no Python parser and does not evaluate an
-#: f-string's interpolated value, so treating one as a literal path would be
-#: simply wrong, not merely imprecise.
-_PY_QUOTED_LITERAL = r"(?<![A-Za-z0-9_])('(?:[^'\\]|\\.)*'|\"(?:[^\"\\]|\\.)*\")"
+#: identifier character, so a bare variable name butted up against a quote
+#: never matches.
+#:
+#: VALUE-PRESERVING PREFIXES ARE ADMITTED; `f` IS NOT. The prefix set below
+#: (`r`/`b`/`u`, and the `rb`/`br` pairs, either case) names exactly those
+#: prefixes whose literal TEXT is the value -- for `r'...'` more literally
+#: than for a plain quote, not less. `f'...'` stays excluded, and that
+#: exclusion is the one the plan's AC5 actually argues for ("an f-string ...
+#: yields NOTHING"): this module has no Python parser, does not evaluate an
+#: interpolation, and treating an f-string as a literal path would be simply
+#: wrong. Lumping `r` in with `f` was collateral from one lookbehind serving
+#: both -- a raw string interpolates nothing. `fr`/`rf` stay excluded too:
+#: the lookbehind still sees the `f` on either arm.
+#:
+#: NOT A SINK-TABLE WIDENING. No new write shape is recognized here.
+#: ``Path(r'x').write_text(...)`` is the SAME shape as ``Path('x').
+#: write_text(...)``; only the string-literal reader was failing to see its
+#: own literal. On Windows -- first-class in this repo -- a raw string is the
+#: idiomatic spelling for a backslash path, which is precisely the absolute,
+#: repo-crossing shape ``bump_outside_repo_write`` exists to catch, so the
+#: gap sat directly under this module's own purpose. Measured 2026-08-31:
+#: ``Path(r'S/X.md').write_text('x')`` and ``open(r'S/X.md','w')`` each
+#: yielded NO target while their unprefixed twins yielded one.
+#:
+#: The escape alternation is unchanged and stays correct for a raw string's
+#: SPAN; the captured value is used as ``group(...)[1:-1]`` with no
+#: unescaping anywhere in this module, so raw and cooked literals of the
+#: same text yield the identical string.
+_PY_LITERAL_PREFIX = r"(?:[rRbBuU]|[rR][bB]|[bB][rR])?"
+_PY_QUOTED_LITERAL = (
+    r"(?<![A-Za-z0-9_])"
+    + _PY_LITERAL_PREFIX
+    + r"('(?:[^'\\]|\\.)*'|\"(?:[^\"\\]|\\.)*\")"
+)
 
 #: `open(<path>, <mode>)` -- positional `mode` argument, checked below
 #: (`_mode_allows_write`) for a `w`/`a`/`x` character; a read-only mode

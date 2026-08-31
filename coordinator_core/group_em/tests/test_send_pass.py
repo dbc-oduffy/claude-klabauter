@@ -289,7 +289,7 @@ def test_dwell_seconds_derived_from_receiver_state_stamp(tmp_path, monkeypatch):
         lambda sid, cwd: {"stamped_at": "2026-08-31T00:00:00Z"},
     )
     monkeypatch.setattr(
-        send_pass.read_pass, "_transcript_mtime_epoch", lambda sid, cwd: None
+        send_pass.read_pass, "_transcript_activity_epoch", lambda sid, cwd: (None, False)
     )
     from datetime import datetime, timezone
 
@@ -307,7 +307,7 @@ def test_dwell_seconds_uses_peer_cwd_not_repo_root(tmp_path, monkeypatch):
     """Finding 1 (coordinator:code-reviewer, P1): a peer whose `cwd` is a
     subdirectory of `repo_root` (permitted by `build_roster`'s "within
     repo_root" filter) must have ITS OWN cwd threaded to
-    `_transcript_mtime_epoch`, matching `read_pass.classify_peer`'s own
+    `_transcript_activity_epoch`, matching `read_pass.classify_peer`'s own
     `peer.get("cwd") or repo_root` pattern -- else `_transcript_path_for`
     looks up the wrong encoded path and dwell silently degrades to `None`
     forever for exactly this population."""
@@ -320,12 +320,12 @@ def test_dwell_seconds_uses_peer_cwd_not_repo_root(tmp_path, monkeypatch):
 
     seen_cwds: list = []
 
-    def fake_transcript_mtime(sid, cwd):
+    def fake_transcript_activity(sid, cwd):
         seen_cwds.append(cwd)
-        return 500.0 if cwd == peer_cwd else None
+        return (500.0, True) if cwd == peer_cwd else (None, False)
 
     monkeypatch.setattr(
-        send_pass.read_pass, "_transcript_mtime_epoch", fake_transcript_mtime
+        send_pass.read_pass, "_transcript_activity_epoch", fake_transcript_activity
     )
 
     roster = [_verdict("peer-nested", cwd=peer_cwd)]
@@ -354,12 +354,13 @@ def test_dwell_seconds_prefers_more_recent_of_stamp_and_transcript(tmp_path, mon
         lambda sid, root: {"stamped_at": "2026-08-31T00:00:00Z"},
     )
 
-    # Transcript is NEWER than the stamp -- dwell must be measured from the
-    # transcript, not the stale stamp.
+    # Transcript is NEWER than the stamp AND trusted (read off a record's own
+    # `timestamp`) -- dwell must be measured from the transcript, not the
+    # stale stamp.
     monkeypatch.setattr(
         send_pass.read_pass,
-        "_transcript_mtime_epoch",
-        lambda sid, cwd: stamp_epoch + 200.0,
+        "_transcript_activity_epoch",
+        lambda sid, cwd: (stamp_epoch + 200.0, True),
     )
     roster = [_verdict("peer-newer-transcript")]
     digest = send_pass.build_send_digest(
@@ -371,8 +372,8 @@ def test_dwell_seconds_prefers_more_recent_of_stamp_and_transcript(tmp_path, mon
     # (more recent) stamp, not the stale transcript.
     monkeypatch.setattr(
         send_pass.read_pass,
-        "_transcript_mtime_epoch",
-        lambda sid, cwd: stamp_epoch - 200.0,
+        "_transcript_activity_epoch",
+        lambda sid, cwd: (stamp_epoch - 200.0, True),
     )
     roster2 = [_verdict("peer-newer-stamp")]
     digest2 = send_pass.build_send_digest(
@@ -501,3 +502,53 @@ def test_non_cooldown_declinations_do_not_pay_for_dwell(tmp_path, monkeypatch):
     row = next(r for r in digest["suppressed"] if r["session_id"] == "peer-away")
     assert row["dwell_seconds"] is None
     assert all("dwell_seconds" in r for r in digest["suppressed"])
+
+
+def test_an_untrusted_transcript_clock_never_wins_the_dwell_max(tmp_path, monkeypatch):
+    """The 2026-08-31 defect, pinned. `max(stamp, mtime)` let file mtime --
+    which the harness moves forward with untimestamped bookkeeping rows on
+    STOPPED peers -- win exactly when the reading matters, reporting a stalled
+    peer as freshly active. An untrusted epoch may not make a peer look
+    busier, however recent it looks."""
+    from datetime import datetime, timezone
+
+    repo_root = str(tmp_path)
+    stamp_epoch = datetime(2026, 8, 31, 0, 0, 0, tzinfo=timezone.utc).timestamp()
+
+    monkeypatch.setattr(
+        send_pass.read_pass,
+        "read_receiver_state",
+        lambda sid, root: {"stamped_at": "2026-08-31T00:00:00Z"},
+    )
+    monkeypatch.setattr(
+        send_pass.read_pass,
+        "_transcript_activity_epoch",
+        lambda sid, cwd: (stamp_epoch + 420.0, False),
+    )
+
+    digest = send_pass.build_send_digest(
+        repo_root, [_verdict("peer-skewed-mtime")], "caller-untrusted", now=stamp_epoch + 500.0
+    )
+
+    # 500s of real dwell, not the 80s the skewed mtime would have reported.
+    assert digest["entries"][0]["dwell_seconds"] == 500.0
+
+
+def test_an_untrusted_transcript_clock_is_still_used_when_it_is_the_only_source(
+    tmp_path, monkeypatch
+):
+    """Refusing it outright would report `None` (unknown) for every peer with
+    no receiver-state record -- strictly less information than the upper bound
+    this function has always given. It loses the comparison; it is not
+    discarded."""
+    repo_root = str(tmp_path)
+    monkeypatch.setattr(send_pass.read_pass, "read_receiver_state", lambda sid, root: None)
+    monkeypatch.setattr(
+        send_pass.read_pass, "_transcript_activity_epoch", lambda sid, cwd: (500.0, False)
+    )
+
+    digest = send_pass.build_send_digest(
+        repo_root, [_verdict("peer-mtime-only")], "caller-only-source", now=1000.0
+    )
+
+    assert digest["entries"][0]["dwell_seconds"] == 500.0
