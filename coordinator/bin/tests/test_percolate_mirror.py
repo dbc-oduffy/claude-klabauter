@@ -391,10 +391,14 @@ def test_percolate_mirror_denies_fast_on_contended_repo_root(tmp_path, monkeypat
     )
     elapsed = time.monotonic() - start
 
+    # Content contract (holder named, mechanism page present, override
+    # key/re-run imperative absent) is asserted once, directly on
+    # `wire_contract.lock_busy_message`
+    # (test_wire_contract_publish_contention.py); this leg only checks the
+    # per-entrypoint exit code, deny-at-once timing, and that the holder
+    # metadata for THIS row's destination is folded in.
     assert rc == _mod._round._EXIT_LOCK_BUSY
     assert elapsed < 1.0
     err = capsys.readouterr().err
     assert "X:/claude-klabauter" in err
     assert "pid=4242" in err
-    assert "COORDINATOR_ALLOW_PERCOLATE_QUEUE" not in err
-    assert "Re-run" not in err and "re-run" not in err.lower() and "retry" not in err.lower()

@@ -8,12 +8,14 @@ predicate reconstitutes the silent-shim trap one level down".
 
 Given one guard envelope (the return shape `dispatch.GuardEntry.fn()` or
 any of the five `_hook_envelope` builders produce), this module answers
-four questions: how many prose bytes did the guard actually spend on ITS
+five questions: how many prose bytes did the guard actually spend on ITS
 OWN advisory content (`prose_bytes`), how many bytes were exempted as a
 concrete offered alternative (`exempt_bytes`, e.g. a backtick command or an
 indented rewrite block), how many bytes are FOUND DATA the guard is
 echoing back rather than authoring (`data_bytes` -- see "FOUND DATA vs.
-AUTHORED PROSE" below), and is this cell a "speaker" at all
+AUTHORED PROSE" below), how many are RELAYED PROSE it carries verbatim
+from a document another plane owns (`relayed_bytes` -- see "RELAYED PROSE
+vs. AUTHORED PROSE" below), and is this cell a "speaker" at all
 (`is_speaker`). It does not decide liveness (that is
 `_alternative_liveness`'s job, a different question over the same text) and
 it does not run on the production dispatch hot path (Anti-scope) -- it is
@@ -102,6 +104,36 @@ pass as data with no path shape at all -- word count alone disqualifies
 sentences, but does not by itself prove a token is a PATH. Slash-shaped
 tokens only.
 
+RELAYED PROSE vs. AUTHORED PROSE (`relayed_bytes`) -- the fourth
+accounting class, for a FIXED DOCUMENT this repo neither authors nor can
+edit, carried verbatim inside a message. `cater_subagent_start` is the
+motivating case and, today, the only one: every SubagentStart catering
+message ends with the whole of `snippets/agent-role-dispatched.md`, the
+coordinator-claude plane's role framing for dispatched workers (2456 bytes
+measured). Charged as prose it made that one cell 2659 bytes -- 12x the cap
+and 4.7x the next-largest cell in its band -- and, pooled, dragged the
+whole `directory:hooks` band mean to 459b against a 277b corpus mean. None
+of those bytes are a sentence anyone in this repo wrote or could shorten:
+the file lives in a different plane, in a different checkout, and its
+length there is its function (it is a prompt preamble, not an advisory).
+
+The justification is `_provenance_marker_bytes`'s own, verbatim and for
+the same reason: the span is FIXED per firing, identical on every message
+that carries it, and "counting a constant against a per-guard prose cap
+would charge [the cell] for a byte cost no individual guard can do
+anything about". The marker is 14 bytes and this is 2456, which changes
+the size of the distortion, never its kind.
+
+ABUSE RESISTANCE, the same axis the data class is held to: this class is
+keyed BY IDENTITY against a live read of the real artifact, through the
+hook's own `_load_role_append` loader -- never a pattern, never a keyword,
+never a hand-copied transcription a drifting file would silently orphan. A
+guard author cannot bring prose under the cap by writing anything, because
+the only text this class recognizes is a document they would have to edit
+in another repo to change, and editing it there changes what is subtracted
+here in exactly the same measure. The population is therefore not "spans
+that look relayed" but "the one document a hook demonstrably relays".
+
 NEGATIVE SPEC -- `MESSAGE_PROSE_CAP_BYTES` is `220`, not `440`. The prior
 `2 x 220` derivation double-budgeted a ceiling as though it were a measured
 sentence and inverted the duty-of-care incentive (rewarding a guard for
@@ -169,9 +201,15 @@ class MessageSizeMeasurement:
 
     `data_bytes` is FOUND DATA (paths/values the guard is echoing back),
     measured and reported but never counted against `prose_bytes`/the cap
-    -- see module docstring "FOUND DATA vs. AUTHORED PROSE". Invariant:
-    `prose_bytes == max(0, total_bytes - exempt_bytes - tail_bytes -
-    data_bytes)`.
+    -- see module docstring "FOUND DATA vs. AUTHORED PROSE".
+
+    `relayed_bytes` is RELAYED PROSE (a fixed document this repo neither
+    authors nor can edit, carried verbatim inside a message) -- see module
+    docstring "RELAYED PROSE". Also measured and reported, never counted
+    against `prose_bytes`/the cap.
+
+    Invariant: `prose_bytes == max(0, total_bytes - relayed_bytes -
+    exempt_bytes - tail_bytes - data_bytes)`.
     """
 
     total_bytes: int
@@ -182,6 +220,7 @@ class MessageSizeMeasurement:
     band: Optional[str]
     is_speaker: bool
     over_cap: bool
+    relayed_bytes: int = 0
 
 
 def proxy_band(directory: str) -> str:
@@ -530,6 +569,81 @@ def _provenance_marker_bytes(text: str) -> int:
     return len(marker.encode("utf-8")) if text.startswith(marker) else 0
 
 
+def _resolve_relayed_role_append() -> str:
+    """The `snippets/agent-role-dispatched.md` body `cater_subagent_start`
+    appends verbatim to every SubagentStart catering message, resolved BY
+    IDENTITY through that hook's own loader -- a live read of the real
+    artifact, never a hand-copied transcription of its prose (the same
+    discipline `_OVERRIDE_NOTE_TAIL` above holds itself to).
+
+    Fails open to `""` on any resolution or read failure, exactly as the
+    hook itself does -- a host with no coordinator-claude plugin emits no
+    role text either, so there is nothing to recognize and nothing to
+    subtract, which is already correct.
+    """
+    try:
+        from coordinator_core.hooks.cater_subagent_start import _load_role_append
+
+        return _load_role_append()
+    except Exception:
+        return ""
+
+
+#: Resolved ONCE AT IMPORT, exactly as `_OVERRIDE_NOTE_TAIL` above is, and
+#: for a sharper reason than symmetry.
+#:
+#: The loader resolves through `claude_config_dir()`, which reads the
+#: `CLAUDE_CONFIG_DIR` environment variable -- and this corpus's own fixtures
+#: monkeypatch that variable to a scratch directory while a row fires
+#: (`guard_message_corpus.py`'s per-cell `MonkeyPatch` scope). A lazily-cached
+#: resolution therefore latches whatever the environment happened to say at
+#: the first `measure_envelope` call in the process: resolve during a patched
+#: row and the constant is `""` for the entire run, silently charging the
+#: relayed document as prose again. That is not hypothetical -- it is how the
+#: first version of this constant was written, and it measured correctly in a
+#: two-file run and wrongly in the full suite, which is the worst possible
+#: shape for a measurement bug (order-dependent, green in the narrow run a
+#: reviewer would repeat).
+#:
+#: Import time is the one moment that cannot be inside a fixture's patch:
+#: pytest imports every test module during COLLECTION, before any test body
+#: runs. The ~430ms `cater_subagent_start` import is paid once per process,
+#: and no production module imports `_message_size` (grep-verified: every
+#: reference outside this package's tests is a comment), so nothing on a
+#: dispatch hot path pays it at all.
+_RELAYED_ROLE_APPEND: str = _resolve_relayed_role_append()
+
+
+def _relayed_role_append_text() -> str:
+    """The relayed document this module recognizes, as resolved at import.
+
+    A function rather than a bare constant read so a test can pin the
+    identity source (`monkeypatch.setattr(msz, "_RELAYED_ROLE_APPEND", ...)`)
+    without depending on whether the host running the suite happens to have
+    a coordinator-claude checkout.
+    """
+    return _RELAYED_ROLE_APPEND
+
+
+def _split_relayed_prose(text: str) -> Tuple[int, str]:
+    """Algorithm step 5: locate any relayed-prose document carried verbatim
+    inside `text`, and return `(its byte length, text with it removed)`.
+
+    Returning the REMAINDER, rather than only a byte count the way
+    `_tail_bytes` does, is what keeps the module docstring's "accounting
+    classes must never double-subtract the same bytes" rule true here. The
+    relayed document contains backtick spans of its own that
+    `_exempt_span_bytes` would otherwise also claim, and those bytes are
+    already subtracted whole as relayed prose -- the override-note tail has
+    no such interior structure, which is why that one can be counted in
+    place.
+    """
+    relayed = _relayed_role_append_text()
+    if not relayed or relayed not in text:
+        return 0, text
+    return len(relayed.encode("utf-8")), text.replace(relayed, "", 1)
+
+
 def measure_envelope(
     envelope: Optional[Dict[str, Any]],
     *,
@@ -557,15 +671,17 @@ def measure_envelope(
     """
     text = _extract_prose_text(envelope)
     total_bytes = len(text.encode("utf-8"))
-    exempt_bytes = _exempt_span_bytes(text) + _provenance_marker_bytes(text)
-    tail_bytes = _tail_bytes(text)
-    data_bytes = _data_block_bytes(text)
-    prose_bytes = max(0, total_bytes - exempt_bytes - tail_bytes - data_bytes)
+    relayed_bytes, authored = _split_relayed_prose(text)
+    exempt_bytes = _exempt_span_bytes(authored) + _provenance_marker_bytes(authored)
+    tail_bytes = _tail_bytes(authored)
+    data_bytes = _data_block_bytes(authored)
+    prose_bytes = max(0, total_bytes - relayed_bytes - exempt_bytes - tail_bytes - data_bytes)
     return MessageSizeMeasurement(
         total_bytes=total_bytes,
         exempt_bytes=exempt_bytes,
         tail_bytes=tail_bytes,
         data_bytes=data_bytes,
+        relayed_bytes=relayed_bytes,
         prose_bytes=prose_bytes,
         band=resolve_band(band),
         is_speaker=prose_bytes > 0,

@@ -314,7 +314,7 @@ def _usage(prog: str) -> int:
         f"usage: {prog} <subcommand> <args...>\n"
         "subcommands: observer-sidecar-scan [--dir <path>] | "
         "claude-klabauter-bin-sentinel | ceremony-hook <ceremony-name> | "
-        "mis-channelled-box | working-repo-registration [--fix] | hook-currency | "
+        "mis-channelled-box | working-repo-registration [--fix] | hook-currency [--check-only] | "
         "git-perf-currency [--fix]",
         file=sys.stderr,
     )
@@ -681,7 +681,8 @@ def cmd_working_repo_registration(argv: list[str]) -> int:
 
 
 def cmd_hook_currency(argv: list[str]) -> int:
-    """Install/repair the coordinator git hooks in every registered repo.
+    """Install/repair the coordinator git hooks in every registered repo, or
+    (with `--check-only`) DETECT staleness without writing anything.
 
     Purpose: `git_hook_install.ensure_hooks_fleet` compares each registered
     repo's installed hook against the generation the installer would write and
@@ -695,12 +696,21 @@ def cmd_hook_currency(argv: list[str]) -> int:
     commit -- the push leg is lost silently and surfaces as an unpushed backlog
     the session banner blames on a diverged branch.
 
-    Exit 1 when anything was repaired or the walk could not run, 0 when the
-    fleet was already current. That code is the signal
-    `orient_assemble/readers_health_reaper.py` keys on to emit its directive; a
-    probe that returned 0 unconditionally would make a broken walk
-    indistinguishable from a healthy fleet, which is the same silence-reads-as-
-    health shape as the dead auto-push above.
+    Exit 1 when anything was repaired (or, under `--check-only`, would need
+    repair) or the walk could not run; 0 when the fleet was already current.
+    That code is the signal `orient_assemble/readers_health_reaper.py` keys on
+    to emit its directive; a probe that returned 0 unconditionally would make a
+    broken walk indistinguishable from a healthy fleet, which is the same
+    silence-reads-as-health shape as the dead auto-push above.
+
+    `--check-only`: threads `check_only=True` into `ensure_hooks_fleet`, which
+    threads it into `_ensure_hook` -- the SAME currency predicate
+    (`_hook_gen_stamp_line()`), the write just does not happen. Added
+    2026-08-31 (C1+C2 of docs/plans/2026-08-31-orient-assemble-stops-running-
+    a-fleet-re.md) so the orient-assemble read path can ask "is the fleet
+    current?" without repairing fourteen sibling repositories as a side
+    effect of orienting a session. The repairing bare form (no flag) is
+    UNCHANGED -- default-false is byte-identical to every existing caller.
 
     Negative-spec:
       - Does NOT re-decide hook currency. An earlier revision carried its own
@@ -715,9 +725,13 @@ def cmd_hook_currency(argv: list[str]) -> int:
         machine-local registry, and a repo absent from it is silently never
         healed. That is the registry's gap, not this probe's.
     """
-    if argv:
-        print("usage: workday-start-health-probes.py hook-currency", file=sys.stderr)
-        return 2
+    check_only = False
+    for arg in argv:
+        if arg == "--check-only":
+            check_only = True
+        else:
+            print("usage: workday-start-health-probes.py hook-currency [--check-only]", file=sys.stderr)
+            return 2
 
     _ensure_repo_root_on_path()
     import contextlib
@@ -733,7 +747,7 @@ def cmd_hook_currency(argv: list[str]) -> int:
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
         with contextlib.redirect_stderr(buf):
-            mod.ensure_hooks_fleet(os.path.dirname(os.path.abspath(__file__)))
+            mod.ensure_hooks_fleet(os.path.dirname(os.path.abspath(__file__)), check_only=check_only)
     except Exception as exc:
         print(f"hook-currency: COULD NOT RUN the fleet hook heal: {exc}", file=sys.stderr)
         return 1

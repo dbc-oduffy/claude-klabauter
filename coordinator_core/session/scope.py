@@ -1494,6 +1494,89 @@ def project_peer_claims(
     return claimed
 
 
+def contested_by_live_peers(
+    paths: "List[str] | Set[str] | Tuple[str, ...]",
+    sid: str,
+    cwd: Optional[str] = None,
+) -> Dict[str, List[str]]:
+    """Which of *paths* a LIVE peer session (not ``sid``) still holds an
+    unreleased TOUCH on. Returns ``{path: [peer_sid, ...]}`` -- empty when
+    nothing is contested.
+
+    The narrow half of :func:`compute_scope`'s Step 3, extracted because the
+    explicit-pathspec commit route cannot afford the whole thing: measured
+    on this repo 2026-08-31, ``compute_scope`` costs 437ms process time
+    (it enumerates ~900 orphans and mtime-scans the tree) against a 500ms
+    end-to-end brightline, while this peer-sink read over the same corpus
+    costs 78ms and answers the only question that route actually asks --
+    "does anyone else still own a path I am about to commit?".
+
+    Answers ONLY about the named paths. It does not compute a scope, does
+    not classify orphans, and must never be grown into a second
+    ``compute_scope``: a caller wanting the full set-math has one already.
+
+    FAILS OPEN, ALWAYS. Every read is best-effort and an unreadable sink,
+    an absent session hub, or an unresolvable ``sid`` returns ``{}`` --
+    "could not establish contest" is not "contested". This sits on the
+    commit hot path every live session shares, where turning a read failure
+    into a refusal would wedge the fleet on a bookkeeping outage.
+    ``project_live_claims`` already drops a RELEASE and a dead session's
+    TOUCH, so liveness needs no second gate here.
+    """
+    wanted = {p for p in paths if p}
+    if not wanted or not sid:
+        return {}
+    try:
+        base = core.sessions_dir(cwd)
+        if not base or not os.path.isdir(base):
+            return {}
+        peer_sinks: List[str] = []
+        for entry in sorted(os.listdir(base)):
+            if entry == sid or entry in liveness._NON_SESSION_DIR_NAMES:
+                continue
+            peer_dir = os.path.join(base, entry)
+            if not os.path.isdir(peer_dir):
+                continue
+            sink = os.path.join(peer_dir, touch_record.RECORD_FILENAME)
+            if os.path.isfile(sink):
+                peer_sinks.append(sink)
+        if not peer_sinks:
+            return {}
+    except Exception:
+        return {}
+
+    # Two passes, because the cheap answer and the complete answer are not
+    # the same read. `project_live_claims` folds its inputs last-verb-wins
+    # ACROSS streams, so ONE merged call over every peer sink answers "is
+    # anything contested at all" for 78ms (measured, this repo 2026-08-31)
+    # but names only the most recent claimant -- and the incident this gate
+    # exists for had TWO peers holding one file, where a refusal naming one
+    # of them sends the caller to coordinate with half the people it needs
+    # to. The per-sink pass below costs 140ms and names all of them, so it
+    # runs ONLY once the merged pass has proved there is something to name.
+    # Uncontested is the overwhelmingly common case and pays the 78ms only.
+    try:
+        merged = touch_record.project_live_claims(*peer_sinks, cwd=cwd)
+    except Exception:
+        return {}
+    if not any(
+        path in wanted and event.session_id != sid
+        for path, event in merged.claims.items()
+    ):
+        return {}
+
+    contested: Dict[str, List[str]] = {}
+    for sink in peer_sinks:
+        try:
+            projection = touch_record.project_live_claims(sink, cwd=cwd)
+        except Exception:
+            continue
+        for path, event in projection.claims.items():
+            if path in wanted and event.session_id != sid:
+                contested.setdefault(path, []).append(event.session_id)
+    return {path: sorted(set(owners)) for path, owners in contested.items()}
+
+
 def project_self_scope(lines: List[str]) -> Set[str]:
     """Self-facing projection over the CALLING session's own raw
     touched.txt lines (compute_scope Step 1, claims.my_agent_touched,

@@ -99,6 +99,21 @@ CLASSIFICATION LADDER:
   (`classify_fallback_status`). `STATE_PAUSED` is the only candidate outcome on
   this leg; `STATE_PRODUCING` and `STATE_UNKNOWN` are not.
 - Any other harness status string classifies straight to `STATE_UNKNOWN`.
+- A reader `PRODUCING` verdict is cross-checked against its own `stamped_at`
+  using the SAME evidence the idle-side PAUSED guard above already reads --
+  `_transcript_moved_since` -- never a second comparison and never against
+  `now` (defect 4, state/dispatch-briefs/2026-08-31-the-group-em-tick-
+  carries-standing-obligations/C7.md): `write_receiver_state` has exactly one
+  writer (the Stop hook), so a session that stops taking turns leaves this
+  verdict frozen forever with nothing to refresh it. If the peer's own
+  transcript has grown since `stamped_at`, the frozen PRODUCING verdict no
+  longer describes the peer and resolves to `STATE_UNKNOWN` -- NEVER
+  `STATE_PAUSED` (a stale PRODUCING is "could not classify", not "guessed
+  idle"). Because plain `STATE_UNKNOWN` rows are invisible to
+  `build_candidate_roster`, this case is additionally marked
+  `unclassifiable: True` and surfaced in the roster payload (reason
+  `stale-producing-unresolved`) rather than silently dropped -- the exact gap
+  that left a stopped peer invisible to the Group EM for over an hour.
 
 CLASSIFIER COLLAPSE (overengineering review finding 1, 2026-08-30): this
 module used to carry its own second bounded transcript reader and classifier
@@ -277,6 +292,27 @@ def _transcript_path_for(session_id: str, cwd: str) -> str:
     return os.path.join(projects_root, encoded_cwd, f"{session_id}.jsonl")
 
 
+def _transcript_mtime_epoch(session_id: str, cwd: str) -> Optional[float]:
+    """When this peer last wrote to its transcript, as an epoch float.
+
+    The one place that turns a session id into a transcript mtime. Two
+    callers want that number for DIFFERENT questions -- one asks whether the
+    peer moved since a stamp, the other wants its age in seconds -- so this
+    deliberately returns the raw epoch rather than a freshness verdict, and
+    each caller does its own arithmetic. Collapsing them further would fuse
+    two computations that only share a file stat.
+
+    NEGATIVE SPEC: `None` means the mtime could not be established (absent or
+    unreadable transcript), and it must never be read as "has not moved" or
+    as an age of zero. Absence of evidence is not evidence of stillness --
+    every caller here fails toward leaving its existing verdict standing.
+    """
+    try:
+        return os.path.getmtime(_transcript_path_for(session_id, cwd))
+    except OSError:
+        return None
+
+
 def _transcript_moved_since(
     session_id: str, cwd: str, stamp_dt: Optional[datetime]
 ) -> Optional[bool]:
@@ -297,9 +333,8 @@ def _transcript_moved_since(
     """
     if stamp_dt is None:
         return None
-    try:
-        mtime_epoch = os.path.getmtime(_transcript_path_for(session_id, cwd))
-    except OSError:
+    mtime_epoch = _transcript_mtime_epoch(session_id, cwd)
+    if mtime_epoch is None:
         return None
     return mtime_epoch > stamp_dt.timestamp()
 
@@ -375,6 +410,7 @@ def classify_peer(
             "state": STATE_UNKNOWN,
             "reason": "no-session-id",
             "candidate": False,
+            "unclassifiable": False,
         }
 
     reader_record = read_receiver_state(session_id, repo_root)
@@ -439,12 +475,53 @@ def classify_peer(
             )
         else:
             reason = reader_reason
+
+        # Defect 4 close: a frozen PRODUCING verdict (typically the step-7
+        # delegation override, `classify`'s "delegated (overrides ...)"
+        # reason) is never rewritten once the session stops taking turns --
+        # `write_receiver_state` has exactly one writer, the Stop hook, and a
+        # stopped session never fires it again. Freshness is knowable from
+        # the SAME evidence bd96b64b already reads for the idle-side PAUSED
+        # guard above (`_transcript_moved_since`: has the peer's own
+        # transcript grown since `stamped_at`?) -- reused verbatim, not a
+        # second comparison, and never against `now` (a clock threshold is
+        # exactly what bd96b64b replaced). A transcript that kept moving
+        # after the verdict was frozen is positive evidence the frozen
+        # PRODUCING snapshot no longer describes the peer's current state.
+        #
+        # NEGATIVE SPEC: this must resolve to UNKNOWN, never PAUSED -- a
+        # stale PRODUCING is "could not classify", not "guessed idle". And
+        # UNKNOWN alone is invisible to `build_candidate_roster` (only
+        # `candidate: True` rows survive), so this is surfaced as an
+        # explicit `unclassifiable: True` row instead of a silent drop --
+        # the Group EM is told "no verdict, and why" rather than nothing.
+        if reader_verdict == STATE_PRODUCING:
+            stamp_dt = _parse_iso_stamp(reader_record.get("stamped_at"))
+            moved = _transcript_moved_since(
+                session_id, peer.get("cwd") or repo_root, stamp_dt
+            )
+            if moved is True:
+                return {
+                    "session_id": session_id,
+                    "source": "reader",
+                    "state": STATE_UNKNOWN,
+                    "reason": (
+                        "stale-producing-unresolved (frozen "
+                        f"{reader_reason!r} at stamped_at="
+                        f"{reader_record.get('stamped_at')!r}, transcript "
+                        "active since)"
+                    ),
+                    "candidate": False,
+                    "unclassifiable": True,
+                }
+
         return {
             "session_id": session_id,
             "source": "reader",
             "state": reader_verdict,
             "reason": reason,
             "candidate": reader_verdict == STATE_PAUSED and not contradicted,
+            "unclassifiable": False,
         }
 
     status = peer.get("status")
@@ -457,10 +534,7 @@ def classify_peer(
         else:
             transcript_path = _transcript_path_for(session_id, cwd)
             reduced_lines, _any_unparseable, _cap_reached = reduce_transcript_tail(transcript_path)
-            try:
-                transcript_mtime_epoch = os.path.getmtime(transcript_path)
-            except OSError:
-                transcript_mtime_epoch = None
+            transcript_mtime_epoch = _transcript_mtime_epoch(session_id, cwd)
 
     now_epoch = (now if now is not None else datetime.now(timezone.utc)).timestamp()
     state, reason = classify_fallback_status(
@@ -476,6 +550,7 @@ def classify_peer(
         "state": state,
         "reason": reason,
         "candidate": state == STATE_PAUSED,
+        "unclassifiable": False,
     }
 
 
@@ -486,14 +561,21 @@ def build_candidate_roster(
     now: Optional[datetime] = None,
     read_tail: Optional[Callable[[str, str], list[str]]] = None,
 ) -> list[dict[str, Any]]:
-    """Present the bounded, paused-only candidate population.
+    """Present the bounded candidate population, plus any peer this pass
+    could not classify at all.
 
     Read-only end to end: enumerates via `fetch_live_agents` (or the injected
-    `agents`, for tests), classifies each surviving peer, and returns only
-    the verdicts marked `candidate`. `STATE_PRODUCING` and `STATE_UNKNOWN`
-    peers are never included here, and never folded into each other -- this
-    is a candidate list for a human to adjudicate, not a filtered verdict
-    about who "shouldn't" be paused.
+    `agents`, for tests), classifies each surviving peer, and returns the
+    verdicts marked `candidate` UNION the verdicts marked `unclassifiable`
+    (defect 4: a stale, frozen PRODUCING reader verdict -- see
+    `classify_peer`'s reader leg). A plain `STATE_PRODUCING` or
+    `STATE_UNKNOWN` peer that classify_peer could NOT further distinguish is
+    still never included here, and the two rows are never folded into each
+    other -- callers branch on `candidate` to decide nudge eligibility and on
+    `unclassifiable` to decide whether "no row for this peer" would have been
+    a silent drop rather than a genuine all-clear. This is a candidate list
+    for a human to adjudicate, not a filtered verdict about who "shouldn't"
+    be paused.
     """
     if agents is None:
         agents = fetch_live_agents(repo_root)
@@ -504,4 +586,8 @@ def build_candidate_roster(
     verdicts = [
         classify_peer(repo_root, peer, now=now, read_tail=read_tail) for peer in peers
     ]
-    return [verdict for verdict in verdicts if verdict["candidate"]]
+    return [
+        verdict
+        for verdict in verdicts
+        if verdict["candidate"] or verdict.get("unclassifiable")
+    ]

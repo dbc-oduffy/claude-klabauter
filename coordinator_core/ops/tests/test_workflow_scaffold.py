@@ -108,6 +108,30 @@ def test_each_pattern_emits_conformant_shape(pattern):
     assert HOUSE_PATTERNS[pattern] in script
 
 
+@pytest.mark.parametrize("pattern", sorted(HOUSE_PATTERNS.keys()))
+def test_phase_and_agent_calls_are_top_level_not_wrapped(pattern):
+    """The harness Workflow contract executes the script BODY's top-level
+    statements only and never calls a `run` export — see
+    coordinator_core/ops/dispatch_emit/emit.py module docstring § Top-level
+    body, never a defined-but-uninvoked wrapper. A `phase()`/`agent()` call
+    emitted inside `async function run(ctx) { ... }` is dead code: the
+    scaffolded script would spawn zero agents while reporting success."""
+    result = _scaffold(
+        name="demo",
+        description="a demo workflow",
+        phases=[{"title": "Collect", "detail": ""}],
+        pattern=pattern,
+    )
+    script = result["script"]
+
+    assert "async function run" not in script
+    assert "function run(" not in script
+
+    lines = [line.strip() for line in script.splitlines() if line.strip()]
+    assert "phase('Collect');" in lines
+    assert any(line.startswith("await agent(") for line in lines)
+
+
 # ---------------------------------------------------------------------------
 # (b) pattern omitted -> pipeline-default (DoE consult note 3)
 # ---------------------------------------------------------------------------

@@ -26,7 +26,6 @@ from typing import Optional
 import pytest
 import yaml
 
-from coordinator_core.dispatch.provision import _build_sidecar_text
 from coordinator_core.win_portability import no_console_passthrough_kwargs
 from coordinator_core.frontmatter.schema_validate import parse_frontmatter
 from coordinator_core.frontmatter.schema_validate import parse_yaml
@@ -778,9 +777,14 @@ def test_build_doc_text_divergence_is_object_not_array() -> None:
 # ---------------------------------------------------------------------------
 
 #: Each entry is (label, doc_text_producer, divergence_field_name). The
-#: producer takes no args and returns the full frontmatter+body doc text --
-#: closing the class (both provisioners that write a divergence-shaped
-#: field) rather than just this module's own instance.
+#: producer takes no args and returns the full frontmatter+body doc text.
+#: Single-entry as of docs/plans/2026-08-31-the-provisioner-nothing-calls.md
+#: C1: the register used to close the class of "both provisioners that write
+#: a divergence-shaped field", but the deleted per-package provisioner's own
+#: sidecar-text builder's module was deleted as an unreachable duplicate of
+#: `provision_report`, not repointed -- `provision_report` is now the only
+#: provisioner that writes a divergence-shaped field, so one row correctly
+#: closes the class.
 #: Declaration for the register-aging sweep (C5,
 #: `docs/plans/2026-08-26-every-register-either-derives-or-fails-on-its-dead-rows.md`):
 #: every dotted-shaped row in `_DIVERGENCE_EMITTERS` names a symbol living inside a parent
@@ -792,17 +796,6 @@ _DIVERGENCE_EMITTERS = [
         "provision_report._build_doc_text",
         lambda: _build_doc_text(agent_type=REPORT_SIDECAR_TYPE, spawned_at="2026-07-13T00:00:00Z"),
         "divergence",
-    ),
-    (
-        "dispatch.provision._build_sidecar_text",
-        lambda: _build_sidecar_text(
-            agent_type=REPORT_SIDECAR_TYPE,
-            spawned_at="2026-07-13T00:00:00Z",
-            plan_path="example-plan-fixture-not-a-real-path",
-            chunk_id="C1",
-            dispatched_by="lead-session",
-        ),
-        "divergence_from_plan",
     ),
 ]
 
@@ -826,9 +819,12 @@ def test_divergence_field_parses_as_object_under_restricted_yaml_parser(
     sidecar. Block style (key on its own line, nested ``diverged:`` indented
     below) is the only shape that round-trips through ``parse_yaml`` as a
     dict -- see that module's docstring negative-spec. Parametrized over
-    every emitter that writes a divergence-shaped field (``provision_report``
-    and ``dispatch.provision``) so a future emitter reintroducing flow style
-    fails here too, closing the class rather than just this one instance.
+    every emitter that writes a divergence-shaped field -- today only
+    ``provision_report`` (the sibling per-package provisioner module was
+    deleted as an unreachable duplicate of this same writer, see
+    docs/plans/2026-08-31-the-provisioner-nothing-calls.md C1) -- so a
+    future emitter reintroducing flow style fails here too, closing the
+    class rather than just this one instance.
 
     NOTE: ``test_build_doc_text_divergence_is_object_not_array`` above uses
     ``yaml.safe_load`` (full-spec PyYAML), which DOES support flow-style
@@ -2019,9 +2015,12 @@ def test_the_pointer_index_is_untracked_and_outside_the_reaped_tree(
 
     pointer = _sidecar_pointer_path(str(git_repo), BARE_HEX_AGENT_ID)
     assert pointer is not None and pointer.is_file()
-    # Namespaced by producer: `dispatch.provision` writes the same agent a
-    # sidecar with a different leaf suffix, and a shared flat key would hand
-    # one producer's spawn the other's document.
+    # Namespaced by producer: the deleted per-package provisioner module used to
+    # write the same agent a sidecar with a different leaf suffix, and a
+    # shared flat key would have handed one producer's spawn the other's
+    # document -- kept namespaced by producer rather than flattened now that
+    # `provision_report` is the sole producer, so a future re-introduction of
+    # a second producer does not silently collide.
     assert (
         pointer.parent
         == git_repo / ".git" / "coordinator-sessions" / ".agent-sidecars" / "report"

@@ -130,6 +130,7 @@ from coordinator_core.bash_guards._dialect import (
     tokenize_command,
 )
 from coordinator_core.bash_guards._tool_names import COMMAND_TOOL_NAMES
+from coordinator_core.bash_guards._verdict import record_silent
 
 CLASS = "hard-deny"
 # Widened 2026-08-19 (subagent-boundary MATCHERS parity, see
@@ -264,6 +265,11 @@ def _evaluate(cmd: str) -> Optional[str]:
     """
     tokens = _tokenize_full_command(cmd)
     if tokens is None:
+        record_silent(
+            "block-subagent-grant-acquisition",
+            "_tokenize_full_command returned None (unparsed PowerShell "
+            "here-string or backtick-continuation shape)",
+        )
         return None
 
     for seg_tokens, _pipe_before in _segments_from_tokens(tokens):

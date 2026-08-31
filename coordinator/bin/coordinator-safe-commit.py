@@ -497,9 +497,14 @@ def do_pathspec(args: "Args") -> None:
     `params.paths`/`params.deleted_paths` are split from `args.paths` via
     `_split_paths_for_commit_v2` (a path absent from the worktree is a
     deletion) -- this wrapper's whole job here is "commit exactly these
-    paths", so nothing narrows or widens that set. No session id,
-    orphan-claim, or handoff-scope machinery applies to this explicit-path
-    form, mirroring the killed CLI's own scope. There is no in-process
+    paths", so nothing narrows or widens that set. No orphan-claim or
+    handoff-scope machinery applies to this explicit-path form, mirroring
+    the killed CLI's own scope. OWNERSHIP is no longer in that exemption:
+    `_refuse_contested_pathspec` runs ahead of the dispatch and refuses a
+    path a live peer still holds (see its docstring for the incident that
+    closed the gap). It does not narrow the set either -- it refuses the
+    whole call, so "commit exactly these paths, or none of them" still
+    holds. There is no in-process
     fallback for an unregistered op any more: `ceremony.commit_v2` not being
     registered is a real, reportable failure now, not something to route
     around by re-entering a killed handler (see this plan's own note on why
@@ -546,6 +551,8 @@ def do_pathspec(args: "Args") -> None:
     attempt_id = uuid.uuid4().hex
     attempt_trailer = f"Attempt-Id: {attempt_id}"
     pre_sha = _resolve_pre_sha_for_reconcile(worktree_root)
+
+    _refuse_contested_pathspec(args.paths, worktree_root)
 
     present_paths, deleted_paths = _split_paths_for_commit_v2(worktree_root, args.paths)
     message = f"{args.subject}\n\n{attempt_trailer}"
@@ -599,6 +606,80 @@ def do_pathspec(args: "Args") -> None:
         print(f"WARNING: {warning}", file=sys.stderr)
 
     print(f"committed sha={result.get('sha')}", file=sys.stderr)
+
+
+def _refuse_contested_pathspec(paths: Sequence[str], worktree_root: str) -> None:
+    """The ownership gate the explicit-pathspec form never had.
+
+    `do_pathspec`'s own docstring states the anti-scope it inherited from
+    the killed `scoped-git-commit` CLI -- "no session id, orphan-claim, or
+    handoff-scope machinery applies to this explicit-path form" -- and
+    `main`'s dispatch comment still says the delegate "does its own
+    session/ownership gating". That delegate is gone (DR-344 killed it
+    2026-08-23) and its replacement, `ceremony.commit_v2`, is a thin
+    envelope over `commit.commit_paths` that gates nothing: it releases
+    claims AFTER the commit and checks none before it. So the one commit
+    route doctrine mandates was the one route with no ownership check on
+    it, while `check_validate_commit`'s whole Check-5 apparatus -- peer
+    claims, foreign hunks, the C11 content-hash refusal -- guards only what
+    its own regex matches, a literal `git commit`.
+
+    Measured 2026-08-31 on work/machine-a/2026-08-18to31: sessions d12e25cf
+    and 1ad288d0 each held uncommitted hunks in
+    `coordinator_core/workstream_complete/__init__.py`; e74e4ce8 committed
+    the whole file at 40abe011d0 for an unrelated fix and landed both,
+    under a message describing neither and, for one of them, without its
+    regression tests. Nothing warned any of the three, and e74e4ce8's
+    session dir carries no `scope-warnings.log` for it. Check 5's C11 hash
+    arm could not have caught this even had it run: e74e4ce8 wrote the file
+    LAST, so its own recorded hash matched disk exactly, and that arm only
+    ever sees a peer edit landing AFTER this session's last write. A peer's
+    hunk already sitting in a file this session then edits is invisible to
+    it. Live-peer CLAIMS are the signal that was available and unread.
+
+    REFUSES rather than warning: a warning on stderr competes with
+    `ceremony.commit_v2`'s own warnings beside a `committed sha=` line for a
+    commit that has already landed, and what has landed on a shared branch
+    a peer then commits on top of is not revertible by the session that
+    noticed. Refusing costs the caller a round-trip; warning costs someone
+    else their work.
+
+    FAILS OPEN on everything -- an unresolvable session id, an unreadable
+    sink, any exception -- via `contested_by_live_peers`'s own contract plus
+    the ring here. ~62ms process time when nothing is contested (the common
+    case), ~140ms when something is; both inside the 500ms brightline this
+    route already spends a `cc_invoke` round trip against.
+    """
+    try:
+        cs_core, _cs_liveness, cs_scope, _cs_claims = _import_session()
+        # NOT `resolve_session_id` (this file's own helper): that one is
+        # fail-CLOSED by design and exits(1) on an ambiguous or unavailable
+        # identity. Here an unresolved identity must mean "cannot establish
+        # a contest", never "refuse the commit" -- so the lib call alone,
+        # with no auto-detect fallback and no exit.
+        session_id = cs_core.resolve_session_id()
+        if not session_id:
+            return
+        contested = cs_scope.contested_by_live_peers(
+            list(paths), session_id, worktree_root
+        )
+    except Exception:
+        return
+    if not contested:
+        return
+    for path in sorted(contested):
+        owners = ", ".join(o[:8] for o in contested[path])
+        print(
+            f"BLOCKED: {path} is also held by live session(s) {owners} -- "
+            "committing it lands their uncommitted work under your message.",
+            file=sys.stderr,
+        )
+    print(
+        "Drop the named path(s) from the pathspec, or coordinate with the "
+        "holder(s) first.",
+        file=sys.stderr,
+    )
+    sys.exit(1)
 
 
 def _split_paths_for_commit_v2(worktree_root: str, paths: Sequence[str]) -> "tuple[List[str], List[str]]":
@@ -2585,9 +2666,14 @@ def main(argv: Sequence[str]) -> None:
         sys.exit(1)
 
     if args.paths:
-        # Pathspec-passthrough (Defect 1): the delegate (`scoped-git-commit`)
-        # does its own session/ownership gating — no need to resolve THIS
-        # wrapper's session id or run the self-heal lock reap first.
+        # Pathspec-passthrough (Defect 1). This comment used to read "the
+        # delegate (`scoped-git-commit`) does its own session/ownership
+        # gating — no need to resolve THIS wrapper's session id". That
+        # delegate was killed by DR-344 and its replacement gates nothing,
+        # so for three months the sentence excused an absence it described
+        # as coverage; `_refuse_contested_pathspec` (called inside
+        # `do_pathspec`) is now what actually holds it. The lock reap is
+        # still deliberately skipped here.
         #
         # 2026-08-28, real incident #3 of the same class as the two this
         # file's module docstring already records: this branch dispatched

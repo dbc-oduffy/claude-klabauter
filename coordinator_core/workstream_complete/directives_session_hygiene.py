@@ -731,11 +731,13 @@ def parse_plan_acceptance_criteria_table(text: str) -> Optional[dict[str, int]]:
     2026-08-26: 226 recent plans use the table row, 21 use checkboxes. The
     checkbox parser is therefore correct for handoffs and structurally blind to
     the format ~91% of plans actually use, which is how
-    `compute_landed_reconciliation_gate` came to report `indeterminate` — "is
-    status: landed but its Acceptance Criteria heading has no checkboxes" — on
-    a plan whose 16 criteria were all visibly met. A gate that cannot read the
-    dominant format is not a conservative gate; it is a gate that abstains
-    exactly when asked to work.
+    `compute_landed_reconciliation_gate` came to abstain — "is status: landed
+    but its Acceptance Criteria heading has no checkboxes" — on a plan whose 16
+    criteria were all visibly met. A gate that cannot read the dominant format
+    is not a conservative gate; it is a gate that abstains exactly when asked
+    to work. (That abstention used to be `indeterminate`, and `indeterminate`
+    blocks the terminal stamp; a heading with NEITHER grammar is now
+    `not-applicable` instead. This parser is why the case is rare either way.)
 
     The shared checkbox parser is deliberately NOT widened to cover both: it is
     also leg A of `consumed_handoff_completeness`, where the checkbox contract

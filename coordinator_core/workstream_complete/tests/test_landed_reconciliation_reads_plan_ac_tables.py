@@ -189,14 +189,20 @@ def test_gate_still_warns_on_a_landed_table_plan_with_an_open_row(tmp_path: Path
     assert gate.total_count == 2
 
 
-def test_gate_is_still_indeterminate_when_neither_grammar_is_present(tmp_path: Path) -> None:
+def test_gate_is_not_applicable_when_neither_grammar_is_present(tmp_path: Path) -> None:
+    """An AC heading carrying neither grammar is an EMPTY OPTIONAL SECTION,
+    not an unknown. `plan.schema.json` 2.13.0 states the `## Acceptance
+    Criteria` table "is never mechanically gated"; `indeterminate` here
+    raised a block on `d-stamp-plan-implemented` whose one disposition
+    resolves `[]`, so no operator action could clear it."""
     plan = tmp_path / "plan.md"
     plan.write_text("---\nstatus: landed\n---\n\n## Acceptance Criteria\n\nprose only.\n\n## Tasks\n",
                     encoding="utf-8")
 
     gate = compute_landed_reconciliation_gate("plan", plan)
 
-    assert gate.verdict == "indeterminate"
+    assert gate.verdict == "not-applicable"
+    assert gate.warn_text is None
     assert "neither checkboxes nor" in gate.summary_line
 
 

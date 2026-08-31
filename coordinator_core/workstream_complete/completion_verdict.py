@@ -196,9 +196,10 @@ def landed_reconciliation(payload: Mapping[str, Any]) -> GateReading:
 
     TOTAL mapping (`LandedReconciliationGate.verdict` -> `GateReading.status`):
         "applicable"     -> "open"            (landed, at least one AC unticked)
-        "not-applicable" -> "not-applicable"  (not landed, or landed with every AC ticked)
-        "indeterminate"  -> "indeterminate"   (no governing plan resolved / unreadable /
-                                                landed with no parseable AC section)
+        "not-applicable" -> "not-applicable"  (not landed, landed with every AC ticked, or
+                                                landed with no AC grammar at all)
+        "indeterminate"  -> "indeterminate"   (no governing plan resolved / plan unreadable /
+                                                AC rows with unreadable status tokens)
         anything else    -> "indeterminate", reason names the unrecognised value.
     Missing "verdict" key -> "indeterminate", reason names the missing key.
 

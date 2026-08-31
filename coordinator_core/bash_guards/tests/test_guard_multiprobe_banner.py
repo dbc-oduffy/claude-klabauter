@@ -615,13 +615,48 @@ class TestDispatchReachability:
             "session_id": "sess-ac15-reverted",
             "cwd": "/repo",
         }
-        result = dispatch.evaluate_payload_json(json.dumps(payload))
-        assert result is None, (
-            "reverting guard.MATCHERS to Bash-only should have made this "
-            "PowerShell payload unreachable through the real dispatch "
-            "chain -- if this still produces a verdict, the test above is "
-            "not actually proving chain-level reachability"
+
+        # RETARGETED 2026-08-30. This asserted `result is None` -- that a
+        # Bash-only revert makes a PowerShell payload unreachable. That is
+        # unsatisfiable by construction, and has been since C1 landed the
+        # normalization this file's own sibling test depends on:
+        # `dispatch.evaluate_payload_json` computes
+        # `_gating_tool_name = "Bash" if _raw_tool_name in COMMAND_TOOL_NAMES
+        # else _raw_tool_name`, so BOTH command tool names gate as "Bash"
+        # against the master gate AND against every `entry.matchers`. A
+        # Bash-only entry therefore still runs on a PowerShell payload --
+        # deliberately, that being how "guards fire under both tool names"
+        # was implemented -- and each guard re-checks the dialect itself.
+        #
+        # What this test can still prove, and what the sibling above actually
+        # rests on, is that the revert reaches the CHAIN: the built entry
+        # carries the reverted matchers rather than a stale import-time copy.
+        # Measured, not assumed: the entry below reads ('Bash',) here while
+        # the PowerShell-declaring siblings still read both.
+        chain = dispatch._build_guard_chain(
+            cmd=cmd,
+            session_id="sess-ac15-reverted",
+            cwd="/repo",
+            payload=payload,
+            policy_file=None,
+            host_is_windows=None,
+            resolved=None,
         )
+        entries = {e.name: e.matchers for e in chain}
+        assert entries["multiprobe-banner"] == ("Bash",), (
+            "the revert did not reach the built chain entry -- if this "
+            "entry still declares PowerShell, `_matchers_multiprobe_banner` "
+            "is no longer what the registration reads, and the sibling "
+            "test above is not proving what it claims"
+        )
+        assert "PowerShell" in entries["plumbing-and-loops"], (
+            "control: a guard that did NOT revert must still declare both, "
+            "or this assertion would pass against a chain that lost "
+            "PowerShell everywhere for an unrelated reason"
+        )
+        # And the payload still reaches a verdict, because gating normalized
+        # it to "Bash" -- the fact that makes the original assertion wrong.
+        assert dispatch.evaluate_payload_json(json.dumps(payload)) is not None
 
 
 class TestCrashPropagatesForFailClosed:

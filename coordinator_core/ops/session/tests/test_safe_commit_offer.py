@@ -2346,3 +2346,81 @@ class TestReconciliation:
         assert offer["ownership"]["degraded"] is False
         assert rec["reconciled"] is True
         assert rec["claimed_absent"] == ["transient.py"]
+
+
+class TestSpawnBudget:
+    """The module docstring's § BUDGET, pinned as a test rather than prose.
+
+    A budget nothing checks is a number that drifts. This is the DR-344
+    surface for this op: `session.safe_commit_offer` sits on the commit hot
+    path every close ceremony crosses, so a spawn that starts scaling with
+    the path or group count is per-item amplification reappearing in the
+    exact module the 2026-08-21 rebuild removed it from.
+
+    Counts `subprocess.Popen` rather than process time: process time on a
+    box carrying ~50 concurrent sessions is a floor by construction
+    (`op_budget_suspension.py`'s rule for git-spawning ops), so it cannot be
+    asserted on; the spawn COUNT is deterministic and is the axis that
+    actually governs the cost.
+    """
+
+    @staticmethod
+    def _commit_with_tally(repo, sid, n_files, n_groups, monkeypatch):
+        paths = []
+        for i in range(n_files):
+            rel = "f%02d.txt" % i
+            (repo / rel).write_text("body %d" % i)
+            scope.touch(sid, rel, cwd=str(repo))
+            paths.append(rel)
+
+        tally = []
+        real_popen = subprocess.Popen
+
+        class CountingPopen(real_popen):
+            def __init__(self, args, *a, **kw):
+                tally.append(args if isinstance(args, str) else list(args))
+                super().__init__(args, *a, **kw)
+
+        monkeypatch.setattr(subprocess, "Popen", CountingPopen)
+        per = max(1, len(paths) // n_groups)
+        groups = [
+            {"paths": paths[i:i + per], "message": "budget group %d" % (i // per)}
+            for i in range(0, len(paths), per)
+        ]
+        report = safe_commit_offer.commit_session_offer(sid, str(repo), groups)
+        return report, tally
+
+    @pytest.mark.parametrize("n_files,n_groups", [(4, 4), (12, 3), (40, 8)])
+    def test_one_git_spawn_regardless_of_paths_or_groups(
+        self, tmp_path, monkeypatch, n_files, n_groups
+    ):
+        repo = _make_repo(tmp_path)
+        core.init("mine", cwd=str(repo))
+        report, tally = self._commit_with_tally(
+            repo, "mine", n_files, n_groups, monkeypatch
+        )
+
+        assert report["outcome"]["status"] == "committed"
+        assert len(report["outcome"]["committed_paths"]) == n_files
+        assert report["failed_groups"] == []
+        assert len(tally) == 1, "spawn budget is ONE; got %r" % (tally,)
+
+    def test_the_one_spawn_is_the_residue_read(self, tmp_path, monkeypatch):
+        """Names WHICH spawn the budget is spent on.
+
+        A count alone would stay green if `_current_dirty_paths`'s read were
+        swapped for some other single git call — and the residue read is the
+        one this module can justify (its `residue`/`reconciliation` products
+        are read back by `quick_wrap_assemble`), so the identity is the
+        property worth pinning, not just the arithmetic.
+        """
+        repo = _make_repo(tmp_path)
+        core.init("mine", cwd=str(repo))
+        _report, tally = self._commit_with_tally(repo, "mine", 3, 1, monkeypatch)
+
+        assert len(tally) == 1
+        argv = tally[0]
+        assert argv[0] == "git"
+        assert "status" in argv
+        assert "--porcelain" in argv
+        assert "--untracked-files=all" in argv

@@ -108,12 +108,13 @@ def _wire_common_fakes(publish_mod, monkeypatch, tmp_path, row_dests: "dict[str,
 @pytest.mark.spawns_process
 def test_publish_denies_fast_under_default_zero_wait(tmp_path, monkeypatch):
     """A contended dest refuses INSTANTLY under the default wait (no
-    `COORDINATOR_ALLOW_PERCOLATE_QUEUE`), and the printed refusal:
-      - names the holder (the underlying `LockTimeout`'s own text),
-      - points at the mechanism page,
-      - never names the override env var or a value to set it to,
-      - never carries a re-run/retry imperative.
-    Exit code stays 75 (EX_TEMPFAIL) -- unchanged by C3."""
+    `COORDINATOR_ALLOW_PERCOLATE_QUEUE`). Exit code stays 75 (EX_TEMPFAIL) --
+    unchanged by C3. The refusal TEXT's content contract (holder named,
+    mechanism page present, override key/re-run imperative absent) is
+    asserted once, directly on `wire_contract.lock_busy_message`
+    (test_wire_contract_publish_contention.py) -- this suite only checks
+    that publish.py's own `[publish.py] BUSY:` prefix wraps that builder's
+    output, never re-deriving the builder's own content claims."""
     import coordinator_core.locked_write as locked_write
 
     publish_mod = _load_publish_module()
@@ -135,17 +136,7 @@ def test_publish_denies_fast_under_default_zero_wait(tmp_path, monkeypatch):
     assert rc == 75
     err = buf.getvalue()
     assert "[publish.py] BUSY:" in err
-    # Holder named -- the underlying LockTimeout's own text is folded in.
-    assert "held by another round" in err
     assert "third-party-holder" in err
-    # Mechanism page named.
-    assert "docs/reference/percolate-lock-contention.md" in err
-    # Override-key token absent.
-    assert "COORDINATOR_ALLOW_PERCOLATE_QUEUE" not in err
-    assert locked_write.CONTENDED_LOCK_WAIT_ENV not in err
-    # No re-run imperative.
-    assert "re-run" not in err.lower()
-    assert "waited" not in err.lower()
 
 
 @pytest.mark.spawns_process

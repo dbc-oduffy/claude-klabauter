@@ -190,6 +190,98 @@ def test_missing_stamped_at_fails_closed_not_a_candidate():
 
 
 # ---------------------------------------------------------------------------
+# defect 4 -- a frozen PRODUCING reader verdict must not silently hide a
+# stopped peer from the roster (state/dispatch-briefs/2026-08-31-the-group-
+# em-tick-carries-standing-obligations/C7.md)
+# ---------------------------------------------------------------------------
+
+
+def test_stale_producing_snapshot_resolves_unknown_and_unclassifiable():
+    """`write_receiver_state` has one writer (the Stop hook); a session that
+    never takes another turn leaves this verdict frozen. Transcript growth
+    after `stamped_at` is positive evidence the frozen PRODUCING verdict no
+    longer describes the peer -- must resolve UNKNOWN, never PAUSED, and be
+    flagged `unclassifiable` rather than silently dropped."""
+    now = datetime(2026, 8, 30, 18, 39, 22, tzinfo=timezone.utc)
+    stamped_at = (now - timedelta(seconds=3600)).isoformat().replace("+00:00", "Z")
+    with mock.patch.object(
+        read_pass,
+        "read_receiver_state",
+        return_value={
+            "verdict": "PRODUCING",
+            "reason": "delegated (overrides PAUSED: turn-ended)",
+            "stamped_at": stamped_at,
+        },
+    ), mock.patch.object(read_pass, "_transcript_moved_since", return_value=True):
+        verdict = read_pass.classify_peer(REPO_ROOT, _agent(status="idle"), now=now)
+    assert verdict["state"] == read_pass.STATE_UNKNOWN
+    assert verdict["state"] != read_pass.STATE_PAUSED
+    assert verdict["candidate"] is False
+    assert verdict["unclassifiable"] is True
+    assert "stale-producing" in verdict["reason"]
+
+
+def test_stale_producing_snapshot_reaches_the_roster_payload_though_not_a_candidate():
+    now = datetime(2026, 8, 30, 18, 39, 22, tzinfo=timezone.utc)
+    stamped_at = (now - timedelta(seconds=3600)).isoformat().replace("+00:00", "Z")
+    with mock.patch.object(
+        read_pass,
+        "read_receiver_state",
+        return_value={
+            "verdict": "PRODUCING",
+            "reason": "delegated (overrides PAUSED: turn-ended)",
+            "stamped_at": stamped_at,
+        },
+    ), mock.patch.object(read_pass, "_transcript_moved_since", return_value=True):
+        roster = read_pass.build_candidate_roster(
+            REPO_ROOT,
+            agents=[_agent(session_id="peer-1", status="idle")],
+            caller_session_id_value="caller",
+            now=now,
+        )
+    assert len(roster) == 1
+    assert roster[0]["unclassifiable"] is True
+    assert roster[0]["candidate"] is False
+
+
+def test_producing_snapshot_not_moved_since_stays_producing_not_unclassifiable():
+    """No evidence the frozen verdict has gone stale -- must not be flagged."""
+    now = datetime(2026, 8, 30, 18, 39, 22, tzinfo=timezone.utc)
+    stamped_at = (now - timedelta(seconds=3600)).isoformat().replace("+00:00", "Z")
+    with mock.patch.object(
+        read_pass,
+        "read_receiver_state",
+        return_value={
+            "verdict": "PRODUCING",
+            "reason": "delegated (overrides PAUSED: turn-ended)",
+            "stamped_at": stamped_at,
+        },
+    ), mock.patch.object(read_pass, "_transcript_moved_since", return_value=False):
+        verdict = read_pass.classify_peer(REPO_ROOT, _agent(status="idle"), now=now)
+    assert verdict["state"] == read_pass.STATE_PRODUCING
+    assert verdict["unclassifiable"] is False
+    assert verdict["candidate"] is False
+
+
+def test_producing_snapshot_indeterminate_movement_stays_producing_not_unclassifiable():
+    """`None` (unreadable transcript / unparseable stamp) leaves the frozen
+    verdict standing -- never manufactured into a stale/unclassifiable claim."""
+    now = datetime(2026, 8, 30, 18, 39, 22, tzinfo=timezone.utc)
+    with mock.patch.object(
+        read_pass,
+        "read_receiver_state",
+        return_value={
+            "verdict": "PRODUCING",
+            "reason": "delegated (overrides PAUSED: turn-ended)",
+            "stamped_at": "not-a-timestamp",
+        },
+    ), mock.patch.object(read_pass, "_transcript_moved_since", return_value=None):
+        verdict = read_pass.classify_peer(REPO_ROOT, _agent(status="idle"), now=now)
+    assert verdict["state"] == read_pass.STATE_PRODUCING
+    assert verdict["unclassifiable"] is False
+
+
+# ---------------------------------------------------------------------------
 # classifier collapse (overengineering review finding 1): the fallback leg's
 # idle arm now calls receiver_state.reduce_transcript_tail + receiver_state.classify
 # directly, rather than carrying a second bounded reader/classifier. These

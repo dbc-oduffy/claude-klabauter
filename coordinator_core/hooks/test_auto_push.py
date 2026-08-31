@@ -837,13 +837,6 @@ def test_windows_ssh_powershell_fallback_constant_removed():
     assert not hasattr(auto_push, "WINDOWS_SSH_POWERSHELL_FALLBACK")
 
 
-def test_route_label_always_reports_direct_push():
-    # Even for Windows+SSH, route_label must report "direct push" -- there is
-    # no fallback seam left to flip.
-    assert auto_push.route_label(True, True) == "direct push"
-    assert auto_push.route_label(False, False) == "direct push"
-
-
 def test_push_once_spawns_no_powershell_even_on_windows_ssh(monkeypatch, tmp_path):
     # Strengthened post-condition: for the Windows+SSH combination that used
     # to route through powershell.exe, push_once must invoke plain `git`,

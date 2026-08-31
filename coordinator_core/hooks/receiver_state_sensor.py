@@ -13,6 +13,18 @@ Write target: `.git/coordinator-sessions/<session_id>/receiver-state.json` — a
 per-session sibling file (module docstring of `session.receiver_state`; never
 `meta.json`, never `state/`). Classification: MUTATING (it writes).
 
+SECOND WRITE, as of chunk C1 (docs/plans/2026-08-31-the-group-em-tick-carries-
+standing-obligations.md): this same fire also appends this session's own
+turn-boundary row to `state/subagent-share/<session_id>/obligations-inbound.jsonl`
+via `coordinator_core.group_em.obligations.record` — the intake appender DoE's
+own drain claims, folds, and deletes. `open` once per session (idempotent on
+`obligation_id`), `progress` on every later fire so the row keeps reading as
+moving. This is the ONLY producer wired to this seam deliberately, per the
+plan's own reused-not-new-hook rule: `open`/`progress` semantics are generic
+("this session had a turn boundary"), not a claim about what the session
+was doing — see `obligations.py`'s own module docstring for the full contract
+and the coverage numbers this closes.
+
 Input (flat scalar, via `hooks/_payload.py::field()`; "" treated as absent):
     session_id       — the coordinator session identifier whose OWN transcript/state
                         this invocation evaluates. Required; a missing session_id is a
@@ -73,8 +85,16 @@ from __future__ import annotations
 from coordinator_core.ipc import register_op
 from coordinator_core.hooks._envelope import no_advisory
 from coordinator_core.hooks._payload import field
+from coordinator_core.group_em import obligations
 from coordinator_core.session import core as _session_core
 from coordinator_core.session import receiver_state
+
+#: Stable per-session obligation id for the generic turn-boundary row this
+#: sensor writes -- see `_record_turn_obligation`. One per session, so
+#: `open` stays idempotent across every Stop/SubagentStop this session ever
+#: fires (DoE's own `open_obligation` no-ops a re-open against an id that is
+#: already open, never duplicating).
+_TURN_OBLIGATION_SEAM = "hooks.receiver_state_sensor"
 
 
 def _run_sensor(
@@ -143,6 +163,56 @@ def _run_sensor(
         stamp_iso=stamp_iso,
         cwd=cwd,
     )
+
+    _record_turn_obligation(repo_root, session_id, now_epoch)
+
+
+def _record_turn_obligation(repo_root: "str | None", session_id: str, now_epoch: float) -> None:
+    """Append this session's own turn-boundary intake row (chunk C1, closing
+    the 92% ledger-coverage gap): `open` once per session (idempotent on
+    `obligation_id` -- DoE's own consumer no-ops a re-open against an id
+    already open), `progress` on every later Stop/SubagentStop so the row
+    keeps reading as moving rather than stalled.
+
+    Reads `obligations.for_peer` first to decide open-vs-progress rather
+    than emitting `open` unconditionally on every fire -- a no-op `open` row
+    would still validate and still cost an intake append every turn for the
+    lifetime of the session, for no signal `progress` does not already
+    carry.
+
+    Fail-soft, matching this module's own contract: any exception here is
+    caught by the caller's own try/except (`_handler`, AC12) and this
+    function additionally never raises past `obligations.record`'s own
+    False-on-failure return -- there is nothing here that surfaces a write
+    failure to the caller, by design.
+    """
+    if repo_root is None:
+        return
+    obligation_id = session_id
+    existing = obligations.for_peer(repo_root, session_id)
+    is_open = bool(existing) and any(
+        row.get("obligation_id") == obligation_id for row in existing
+    )
+    if is_open:
+        obligations.record(
+            repo_root,
+            session_id,
+            "progress",
+            obligation_id,
+            producer=_TURN_OBLIGATION_SEAM,
+            now=now_epoch,
+        )
+    else:
+        obligations.record(
+            repo_root,
+            session_id,
+            "open",
+            obligation_id,
+            seam=_TURN_OBLIGATION_SEAM,
+            next_action="review this session's own next move",
+            producer=_TURN_OBLIGATION_SEAM,
+            now=now_epoch,
+        )
 
 
 def _mtime_or_none(path: str) -> "float | None":

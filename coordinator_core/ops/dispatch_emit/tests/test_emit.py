@@ -304,6 +304,41 @@ def test_preflight_call_carries_the_commit_agents_charter_model():
     assert "model: 'haiku'" in preflight_block
 
 
+def test_preflight_call_binds_its_result_and_gates_the_run():
+    # Before this gate, `await agent(...)` discarded the preflight verdict
+    # and every later phase followed unconditionally, even a BLOCKED report.
+    script = compose_script(_two_wave_fixture(), name="wf", description="two waves")
+    assert "const preflightResult = await agent(" in script
+    assert "if (/^[*_]{0,2}PREFLIGHT-BLOCKED" in script
+    assert "return { halted:" in script
+
+
+def test_preflight_blocked_token_match_is_anchored_not_substring():
+    import re
+
+    from coordinator_core.ops.dispatch_emit.emit import _preflight_halt_gate
+
+    gate = _preflight_halt_gate("preflightResult", "Preflight: commit claimability")
+    match = re.search(r"if \((/.*/m)\.test\(String\(preflightResult", gate)
+    assert match is not None
+    pattern = match.group(1)[1:-2]  # strip leading "/" and trailing "/m"
+
+    # A quotation of the prompt's own instruction text -- carrying the
+    # literal token mid-sentence, never at line-start -- must NOT match.
+    quoting_prompt_back = (
+        "Every path is claimable. (The instructions said to end my report "
+        "with the line 'PREFLIGHT-BLOCKED <reason>' if any path were "
+        "refused, but none was, so I am not doing that.)"
+    )
+    assert re.search(pattern, quoting_prompt_back, re.MULTILINE) is None
+
+    # A genuine BLOCKED verdict, token anchored at line start, must match.
+    genuine_blocked = (
+        "Checked every path.\nPREFLIGHT-BLOCKED some/path.py refused by claim conflict"
+    )
+    assert re.search(pattern, genuine_blocked, re.MULTILINE) is not None
+
+
 # ---------------------------------------------------------------------------
 # model: 'sonnet' on every agent() call (AC11) — WARN-tier, not caught by AC5
 # ---------------------------------------------------------------------------
@@ -1203,7 +1238,9 @@ def test_commit_phase_binds_its_result_and_gates_the_next_wave():
     script = compose_script(_two_wave_fixture(), name="wf", description="two waves")
     assert "const commitWave1Results = await agent(" in script
     assert "const commitWave2Results = await agent(" in script
-    assert script.count("return { halted:") == 2
+    # 2 commit-phase gates + 1 preflight gate (AC14's own halt, added
+    # alongside this fix -- see test_preflight_call_binds_its_result_and_gates_the_run)
+    assert script.count("return { halted:") == 3
 
 
 def test_commit_gate_halts_on_null_and_on_a_tokenless_report():
@@ -1393,3 +1430,32 @@ def test_commit_gate_precedes_the_next_wave_phase():
 def test_gated_script_still_passes_the_workflow_contract_checker():
     script = compose_script(_two_wave_fixture(), name="wf", description="two waves")
     assert_zero_errors(script)
+
+
+def test_commit_prompt_tells_the_agent_a_claim_is_not_a_refusal_condition():
+    """Measured 2026-08-31: a wave-2 commit agent declined ALL SEVEN paths of
+    its pathspec citing a claim held by a session 13 hours idle with both
+    recorded pids dead, which had touched exactly ONE of the seven. The
+    sanctioned route then committed all seven without complaint -- because
+    `commit_paths` performs no ownership or claim check at all, so the
+    "route is declining" was the agent's own inference. The prompt must say
+    so, and must name both the liveness and the per-path narrowing checks,
+    or the same halt recurs on every shared-tree run.
+    """
+    from coordinator_core.ops.dispatch_emit import emit as _emit
+
+    prompt = _emit._COMMIT_AGENT_CONTRACT if hasattr(_emit, "_COMMIT_AGENT_CONTRACT") else None
+    if prompt is None:
+        import inspect
+
+        prompt = inspect.getsource(_emit)
+
+    assert "A CLAIM IS NOT A REFUSAL CONDITION" in prompt
+    # The route's own silence is the load-bearing fact -- without it the agent
+    # can still read its inference as the engine speaking.
+    assert "performs NO ownership or claim check" in prompt
+    # Liveness leg.
+    assert "absent from the process table" in prompt
+    # Per-path leg: one hit must not generalise across the pathspec.
+    assert "touch-record.jsonl" in prompt
+    assert "refuse ONLY the claimed paths and commit the" in prompt

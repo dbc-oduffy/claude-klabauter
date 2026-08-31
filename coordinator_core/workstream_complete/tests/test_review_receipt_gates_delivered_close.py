@@ -698,3 +698,72 @@ def test_kira_sidecar_with_foreign_session_id_still_blocks(monkeypatch, tmp_path
     jp_ids = {jp["id"] for jp in decision_object["judgment_points"]}
     assert "jp-review-receipt-block-stamp" in jp_ids
     assert "jp-review-receipt-block-stamp" in _depends_on(_stamp_directive(decision_object))
+
+
+def test_date_only_stamped_at_does_not_crash_the_whole_brief(monkeypatch, tmp_path):
+    """A hand-written receipt carrying a date-only `stamped_at` must degrade,
+    never raise.
+
+    Reported 2026-08-31 by example-retrieval-repo-ue-addon-em with a reproduction.
+    `_parse_review_receipt_timestamp` returned `fromisoformat` unmodified, so
+    `2026-08-31` parsed SUCCESSFULLY into a naive datetime -- never reaching the
+    `None` degrade path the docstring promises -- and the unconditional
+    `stamped_at > now` comparison against an aware `datetime.now(timezone.utc)`
+    raised `TypeError`. That escaped to `brief()`'s structural backstop, so the
+    close computed none of its eight keys: one hand-authored sidecar took down the
+    entire ceremony, with an error naming no file, no field, and no gate.
+
+    The assertion is deliberately about `brief()` returning AT ALL, not about the
+    gate's verdict. The defect was never in the gate's logic -- it was that the
+    exception escaped the gate and killed everything around it, so a test pinned to
+    `blocks is True/False` would pass against a fix that left the blast radius
+    intact.
+    """
+    _patch_gate(monkeypatch, _gate())
+    _write_clean_plan(tmp_path, "date-only-stamp-plan")
+    sidecar_dir = tmp_path / "state" / "subagent-share" / _SID
+    sidecar_dir.mkdir(parents=True, exist_ok=True)
+    (sidecar_dir / f"{_KIRA_TYPE.replace(':', '')}.deadbeef03.md").write_text(
+        f"---\nstatus: complete\nagent_type: {_KIRA_TYPE}\nlead_session_id: {_SID}\n"
+        "commits: []\n"
+        "review_receipt:\n"
+        f"  session_id: '{_SID}'\n"
+        "  agent_id: 'deadbeef03'\n"
+        f"  agent_type: '{_KIRA_TYPE}'\n"
+        "  stamped_at: '2026-08-31'\n"
+        "---\n\n## Findings\n\nNo overengineering found.\n",
+        encoding="utf-8",
+    )
+
+    decision_object = wsc.brief(
+        decisions={"governing_plan_slug": "date-only-stamp-plan", "subject": "x"},
+        repo_root=tmp_path,
+    )
+
+    assert decision_object["gates"]["review_receipt"] is not None
+    assert "review_receipt" in decision_object["gates"]
+
+
+def test_naive_timestamp_is_normalized_to_utc_aware(monkeypatch, tmp_path):
+    """The parser's own contract: an aware datetime or `None`, never naive.
+
+    Pins the fix at the parser rather than at either call site. There are two
+    consumers and only one of them is guarded by a claim window, so a call-site
+    fix at the windowed comparison alone would leave the unconditional
+    `stamped_at > now` site live -- which is the site that actually raised in the
+    reported incident.
+    """
+    from datetime import datetime, timezone
+
+    assert wsc._parse_review_receipt_timestamp("2026-08-31").tzinfo is not None
+    assert wsc._parse_review_receipt_timestamp("2026-08-31") == datetime(
+        2026, 8, 31, tzinfo=timezone.utc
+    )
+    assert wsc._parse_review_receipt_timestamp("2026-08-30T22:34:29Z").tzinfo is not None
+    assert wsc._parse_review_receipt_timestamp("garbage") is None
+    assert wsc._parse_review_receipt_timestamp("") is None
+    assert wsc._parse_review_receipt_timestamp(None) is None
+    # The comparison that raised, now total over every value the parser returns.
+    for raw in ("2026-08-31", "2026-08-30T22:34:29Z", "2026-08-31T09:05:12.022931+00:00"):
+        parsed = wsc._parse_review_receipt_timestamp(raw)
+        assert isinstance(parsed > datetime.now(timezone.utc), bool)

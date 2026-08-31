@@ -11,7 +11,10 @@ isolation, before any corpus (C3) or gate (C5) is built on top of it:
   (c) the speaker predicate (`prose_bytes > 0`) returning `False` on a
       synthetic zero-prose non-`None` envelope -- the exact silent-shim
       trap `dispatch._resolve_suppressed_envelope` reconstitutes on
-      non-Windows hosts (plan's own "single most important correction").
+      non-Windows hosts (plan's own "single most important correction");
+  (d) relayed prose subtracted BY IDENTITY the same way (b) is -- a
+      document another plane owns, carried verbatim, is not bytes this
+      repo's author chose (`TestRelayedProse`).
 """
 
 from __future__ import annotations
@@ -375,6 +378,165 @@ class TestFoundDataVsAuthoredProse:
         assert result.exempt_bytes > 0
         assert result.data_bytes == 0
         assert result.prose_bytes == result.total_bytes - result.exempt_bytes
+
+
+class TestRelayedProse:
+    """`relayed_bytes`: a fixed document this repo neither authors nor can
+    edit, carried verbatim inside a message, subtracted BY IDENTITY -- see
+    the module docstring's "RELAYED PROSE vs. AUTHORED PROSE".
+
+    Every test below pins the identity source through
+    `_RELAYED_ROLE_APPEND_CACHE` rather than depending on whether this host
+    happens to have a coordinator-claude plugin checkout: the class's
+    behaviour is the thing under test, not the fleet's install state. The
+    live-resolution path itself is covered by
+    `test_live_resolution_fails_open_to_zero_on_an_unresolvable_host`
+    below, and end-to-end by the corpus's own
+    `cater_subagent_start/fire-missing-provisioning` cell.
+    """
+
+    _RELAYED = "## Your Role\n\nYou are a dispatched worker, not the EM.\nRun `x` and report back.\n"
+
+    def _pin(self, monkeypatch, text: str) -> None:
+        monkeypatch.setattr(msz, "_RELAYED_ROLE_APPEND", text)
+
+    def test_relayed_document_is_not_charged_as_prose(self, monkeypatch):
+        self._pin(monkeypatch, self._RELAYED)
+        own = "Provisioning missed. Say so in your report."
+        envelope = _envelope(additional_context=own + "\n\n" + self._RELAYED)
+        result = msz.measure_envelope(envelope)
+        assert result.relayed_bytes == len(self._RELAYED.encode("utf-8"))
+        assert result.prose_bytes < len(self._RELAYED.encode("utf-8"))
+        assert result.prose_bytes == (
+            result.total_bytes
+            - result.relayed_bytes
+            - result.exempt_bytes
+            - result.tail_bytes
+            - result.data_bytes
+        )
+
+    def test_a_message_carrying_only_relayed_prose_still_speaks(self, monkeypatch):
+        """The population must not shrink. A cell whose authored prose is
+        near-zero but which still emits text is a speaker with a small
+        number, never a cell that vanishes from the corpus -- silently
+        dropping it is exactly the exclusion `guard_message_exemptions`
+        exists to prevent."""
+        self._pin(monkeypatch, self._RELAYED)
+        envelope = _envelope(additional_context="Missed.\n\n" + self._RELAYED)
+        result = msz.measure_envelope(envelope)
+        assert result.is_speaker is True
+        assert 0 < result.prose_bytes < 50
+
+    def test_absent_relayed_document_subtracts_nothing(self, monkeypatch):
+        self._pin(monkeypatch, self._RELAYED)
+        envelope = _envelope(additional_context="An ordinary advisory with no relayed document.")
+        result = msz.measure_envelope(envelope)
+        assert result.relayed_bytes == 0
+        assert result.prose_bytes == result.total_bytes
+
+    def test_empty_identity_source_subtracts_nothing(self, monkeypatch):
+        """A host that resolves no snippet emits no relayed text either, so
+        `""` must never match-and-subtract everywhere (`"" in text` is
+        always True -- the guard against that is load-bearing)."""
+        self._pin(monkeypatch, "")
+        envelope = _envelope(additional_context="An ordinary advisory.")
+        result = msz.measure_envelope(envelope)
+        assert result.relayed_bytes == 0
+        assert result.prose_bytes == result.total_bytes
+
+    def test_paraphrase_of_the_relayed_document_is_still_charged(self, monkeypatch):
+        """ABUSE RESISTANCE: the class is keyed by IDENTITY, not by
+        resemblance. Near-identical text an author wrote themselves is
+        prose, and stays charged."""
+        self._pin(monkeypatch, self._RELAYED)
+        near = self._RELAYED.replace("dispatched worker", "dispatched agent")
+        envelope = _envelope(additional_context=near)
+        result = msz.measure_envelope(envelope)
+        assert result.relayed_bytes == 0
+        assert result.prose_bytes > 0
+
+    def test_a_second_copy_is_charged_as_prose(self, monkeypatch):
+        """Only ONE occurrence is subtracted, matching where the hook
+        appends it -- the same rule `_provenance_marker_bytes` holds for
+        the provenance marker. A guard quoting the document a second time
+        is authoring prose and SHOULD be charged for it."""
+        self._pin(monkeypatch, self._RELAYED)
+        envelope = _envelope(additional_context=self._RELAYED + self._RELAYED)
+        result = msz.measure_envelope(envelope)
+        assert result.relayed_bytes == len(self._RELAYED.encode("utf-8"))
+        assert result.prose_bytes > 0
+
+    def test_relayed_and_exempt_never_double_subtract(self, monkeypatch):
+        """The relayed document carries backtick spans of its own
+        (`` `x` `` above). Those bytes are subtracted whole as relayed
+        prose; `_exempt_span_bytes` must not also claim them, or
+        `prose_bytes` would be understated by the overlap."""
+        self._pin(monkeypatch, self._RELAYED)
+        envelope = _envelope(additional_context=self._RELAYED)
+        result = msz.measure_envelope(envelope)
+        assert result.exempt_bytes == 0
+        assert result.relayed_bytes + result.prose_bytes == result.total_bytes
+
+    def test_resolution_fails_open_to_empty_when_the_loader_raises(self, monkeypatch):
+        """The loader's own failure arm: a resolver that raises must
+        degrade to `""`, never propagate -- measurement is not a place a
+        missing sibling checkout can raise from."""
+        from coordinator_core.hooks import cater_subagent_start
+
+        def _boom() -> str:
+            raise OSError("no coordinator-claude checkout on this host")
+
+        monkeypatch.setattr(cater_subagent_start, "_load_role_append", _boom)
+        assert msz._resolve_relayed_role_append() == ""
+
+    def test_resolution_reads_the_real_artifact_not_a_copy(self, monkeypatch):
+        """Identity, not transcription: whatever the hook's own loader
+        returns is exactly what this module recognizes. A future edit to
+        `agent-role-dispatched.md` therefore needs no change here -- the
+        failure mode this pins out is someone pasting the snippet's text
+        into this module and letting the two drift apart."""
+        from coordinator_core.hooks import cater_subagent_start
+
+        monkeypatch.setattr(
+            cater_subagent_start, "_load_role_append", lambda: "SENTINEL ROLE TEXT"
+        )
+        assert msz._resolve_relayed_role_append() == "SENTINEL ROLE TEXT"
+
+    def test_identity_is_resolved_at_import_not_on_first_measurement(self):
+        """THE REGRESSION THIS CLASS EXISTS TO PREVENT, and the reason
+        `_RELAYED_ROLE_APPEND` is a module constant rather than a lazily
+        filled cache.
+
+        The loader resolves through `claude_config_dir()`, which reads
+        `CLAUDE_CONFIG_DIR` -- and `guard_message_corpus.py` monkeypatches
+        that variable to a scratch dir while a row fires. A cache filled on
+        first use therefore latches `""` whenever the first measurement in
+        the process lands inside one of those patched windows, and every
+        later cell silently charges the relayed document as prose again.
+        The first version of this code did exactly that: it measured
+        correctly running two files and wrongly running the directory,
+        because row order decided it.
+
+        Resolving at import removes the window rather than narrowing it --
+        pytest imports test modules during collection, before any fixture
+        can patch anything. This test pins the SHAPE (a module-level
+        constant, already resolved) rather than a value, so it stays
+        meaningful on a host with no snippet at all.
+        """
+        assert isinstance(msz._RELAYED_ROLE_APPEND, str)
+        assert not hasattr(msz, "_RELAYED_ROLE_APPEND_CACHE"), (
+            "the lazily-filled cache is back; it latches whatever "
+            "CLAUDE_CONFIG_DIR said at the first measurement"
+        )
+
+    def test_a_patched_config_dir_cannot_change_what_is_recognized(self, monkeypatch):
+        """The same regression from the caller's side: patching
+        `CLAUDE_CONFIG_DIR` mid-run (what the corpus fixtures do) must not
+        change this module's answer, because the answer was already
+        resolved."""
+        before = msz._relayed_role_append_text()
+        monkeypatch.setenv("CLAUDE_CONFIG_DIR", "/nonexistent-scratch-root")
+        assert msz._relayed_role_append_text() == before
 
 
 class TestOverCap:

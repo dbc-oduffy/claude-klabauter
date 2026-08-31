@@ -4312,9 +4312,16 @@ def test_landed_reconciliation_gate_indeterminate_when_no_governing_plan(monkeyp
     assert "INDETERMINATE" in gate["summary_line"]
 
 
-def test_landed_reconciliation_gate_indeterminate_on_landed_plan_with_no_ac_heading(monkeypatch, tmp_path):
+def test_landed_reconciliation_gate_not_applicable_on_landed_plan_with_no_ac_heading(monkeypatch, tmp_path):
     """A `status: landed` plan with no `## Acceptance Criteria` heading at
-    all has nothing to reconcile against -- indeterminate, never raises."""
+    all has nothing to reconcile against -- `not-applicable`, never
+    `indeterminate`. `plan.schema.json` (2.13.0) states in its own
+    `gated_exit_criteria` description that the AC table "is never
+    mechanically gated"; a plan without one is schema-valid and complete,
+    so the previous `indeterminate` verdict raised a block whose single
+    disposition resolves `[]` and which no operator action could ever
+    clear. The fact is still surfaced on `summary_line`; it just does not
+    gate."""
     _patch_gate(monkeypatch, _gate("single-session", consumed_handoff_paths=()))
     plan_path = tmp_path / "docs" / "plans" / "headless-plan.md"
     plan_path.parent.mkdir(parents=True, exist_ok=True)
@@ -4327,7 +4334,70 @@ def test_landed_reconciliation_gate_indeterminate_on_landed_plan_with_no_ac_head
     gate = decision_object["gates"]["landed_reconciliation"]
 
     assert gate["applies"] is False
-    assert gate["verdict"] == "indeterminate"
+    assert gate["verdict"] == "not-applicable"
+    assert gate["warn_text"] is None
+    assert "no ## Acceptance Criteria heading" in gate["summary_line"]
+
+
+def test_landed_reconciliation_gate_no_ac_heading_never_blocks_the_implemented_stamp(
+    monkeypatch, tmp_path
+):
+    """The wall, pinned shut. A `status: landed` plan with no AC grammar
+    must reach `d-stamp-plan-implemented` ungated: no judgment point, no
+    `depends_on` edge, and `_directive_gate_open` open. Regression guard
+    for cross-repo memo `2026-08-30-example-retrieval-repo-em-landed-reconciliation-
+    gate-blind-to-gated-exit-criteria.md`, where this shape (the ordinary
+    spec-dispatch plan, criteria in frontmatter rather than a body table)
+    took the `indeterminate` arm and blocked the terminal stamp with a
+    disposition resolving `[]` -- unresolvable by construction."""
+    _patch_gate(monkeypatch, _gate("single-session", consumed_handoff_paths=()))
+    plan_path = tmp_path / "docs" / "plans" / "gated-exit-criteria-plan.md"
+    plan_path.parent.mkdir(parents=True, exist_ok=True)
+    plan_path.write_text(
+        "---\ntitle: \"a plan\"\nstatus: landed\n"
+        "gated_exit_criteria:\n  - brightline: multi-os-first-class\n"
+        "    statement: runs on Windows and macOS\n    met: true\n"
+        "---\n\n# a plan\n\nno AC section here.\n",
+        encoding="utf-8",
+    )
+    decision_object = wsc.brief(
+        decisions={"governing_plan_slug": "gated-exit-criteria-plan", "subject": "x"},
+        repo_root=tmp_path,
+    )
+
+    jp_ids = {jp["id"] for jp in decision_object["judgment_points"]}
+    assert "jp-landed-reconciliation-block-stamp" not in jp_ids
+
+    stamp_directive = next(
+        d for d in decision_object["directives"] if d["id"] == "d-stamp-plan-implemented"
+    )
+    depends_on = stamp_directive["depends_on"]
+    depends_on = [depends_on] if isinstance(depends_on, str) else (depends_on or [])
+    assert "jp-landed-reconciliation-block-stamp" not in depends_on
+
+    # Wire-path proof: `apply_halt._directive_gate_open` consults ONLY the
+    # ids listed in `depends_on`, so an absent edge is the whole mechanism.
+    # Asserting the directive is outright open would over-claim -- other,
+    # unrelated gates (e.g. `jp-review-receipt-block-stamp`) legitimately
+    # hold it in this fixture, and this test owns one edge, not the stamp.
+    for dep in depends_on:
+        assert "landed-reconciliation" not in dep
+
+
+def test_landed_reconciliation_gate_not_applicable_on_ac_heading_with_no_rows(monkeypatch, tmp_path):
+    """Same rule one step in: an AC heading carrying neither `- [ ]`
+    checkboxes nor `| ACn |` table rows is an empty optional section, not
+    an unknown -- `not-applicable`, no block."""
+    _patch_gate(monkeypatch, _gate("single-session", consumed_handoff_paths=()))
+    _write_plan_landed_with_acs(tmp_path, "empty-ac-plan", "See the frontmatter array.\n")
+
+    decision_object = wsc.brief(
+        decisions={"governing_plan_slug": "empty-ac-plan", "subject": "x"}, repo_root=tmp_path
+    )
+
+    assert decision_object["gates"]["landed_reconciliation"]["verdict"] == "not-applicable"
+    jp_ids = {jp["id"] for jp in decision_object["judgment_points"]}
+    assert "jp-landed-reconciliation-block-stamp" not in jp_ids
 
 
 def test_landed_reconciliation_gate_blocks_the_implemented_stamp_when_firing(monkeypatch, tmp_path):
@@ -4392,24 +4462,31 @@ def test_landed_reconciliation_gate_blocks_the_implemented_stamp_when_firing(mon
 
 def test_landed_reconciliation_gate_indeterminate_blocks_the_implemented_stamp(monkeypatch, tmp_path):
     """Mirrors `test_open_spine_row_gate_indeterminate_still_blocks_the_
-    implemented_stamp`: `verdict: indeterminate` (a `landed` plan with no
-    `## Acceptance Criteria` heading, here) also has `warn_text is None`,
+    implemented_stamp`: `verdict: indeterminate` (a `landed` plan whose AC
+    row carries a status token this module refuses to guess at, here) also
+    has `warn_text is None`,
     exactly like the genuinely-reconciled case -- keying the trigger on
     `warn_text` alone (or on `applies`, which is also False here) would let
     a terminal `implemented` stamp sail through precisely when the
     landed/AC state could not be read. The block must fire, and its
     message must say the state could not be determined rather than naming
-    an open/total split it does not have."""
+    an open/total split it does not have.
+
+    The fixture is deliberately an UNREADABLE-ROW plan, not the
+    no-AC-heading plan this test used before: an absent AC table is now
+    `not-applicable` (nothing an operator could do would clear a block on
+    it), while an unreadable status token is discharged by editing the
+    row -- which is what keeps this block a gate rather than a wall."""
     _patch_gate(monkeypatch, _gate("single-session", consumed_handoff_paths=()))
-    plan_path = tmp_path / "docs" / "plans" / "headless-landed-plan.md"
-    plan_path.parent.mkdir(parents=True, exist_ok=True)
-    plan_path.write_text(
-        "---\ntitle: \"a plan\"\nstatus: landed\n---\n\n# a plan\n\nno AC section here.\n",
-        encoding="utf-8",
+    _write_plan_landed_with_acs(
+        tmp_path,
+        "headless-landed-plan",
+        "| AC | criterion | status |\n| --- | --- | --- |\n| AC1 | a thing | mostly there |\n",
     )
     decision_object = wsc.brief(
         decisions={"governing_plan_slug": "headless-landed-plan", "subject": "x"}, repo_root=tmp_path
     )
+    assert decision_object["gates"]["landed_reconciliation"]["verdict"] == "indeterminate"
 
     jp_ids = {jp["id"] for jp in decision_object["judgment_points"]}
     assert "jp-landed-reconciliation-block-stamp" in jp_ids

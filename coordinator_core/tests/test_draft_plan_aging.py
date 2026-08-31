@@ -227,6 +227,50 @@ def test_prefix_normalization_resolves_scope_path(tmp_path, monkeypatch):
     assert has_work is True
 
 
+def test_completion_entry_deliverable_id_match_suppresses_no_scope_touch(tmp_path, monkeypatch):
+    # Defect 1: a plan delivered entirely through commits that never touch a
+    # scope-cited path still reads as real work when a completion entry
+    # under archive/completed/ carries the same deliverable_id.
+    _init_git_repo(tmp_path)
+    scope_dir = tmp_path / "scope-touched"
+    scope_dir.mkdir()
+    (scope_dir / "file.md").write_text("original\n", encoding="utf-8")
+    _commit(tmp_path, "initial commit", days_ago=40)
+
+    completed = tmp_path / "archive" / "completed" / "2026-07"
+    completed.mkdir(parents=True)
+    (completed / "2026-07-20-shipped-elsewhere.md").write_text(
+        '---\ntitle: "Shipped"\ndeliverable_id: dlv-shared-work-abc123\nchain: "x"\nstatus: pending-release\n---\n\nBody.\n',
+        encoding="utf-8",
+    )
+
+    monkeypatch.chdir(tmp_path)
+    _write_plan(
+        tmp_path / "plan.md",
+        (_TODAY - timedelta(days=20)).isoformat(),
+        scope_lines=["scope-touched/file.md"],
+    )
+    (tmp_path / "plan.md").write_text(
+        (tmp_path / "plan.md").read_text(encoding="utf-8").replace(
+            "status: draft\n", "status: draft\ndeliverable_id: dlv-shared-work-abc123\n"
+        ),
+        encoding="utf-8",
+    )
+
+    has_work, err = _has_recent_real_work_commit("plan.md")
+    assert err is None
+    assert has_work is True
+
+
+def test_no_completion_entry_match_still_uses_scope_arm(tmp_path, monkeypatch):
+    # No archive/completed/ directory at all: degrades to empty set, scope-
+    # path arm alone still governs (no crash, no false suppress).
+    monkeypatch.chdir(tmp_path)
+    p = _write_plan(tmp_path / "plan.md", (_TODAY - timedelta(days=20)).isoformat())
+    has_work, err = _has_recent_real_work_commit(str(p))
+    assert (has_work, err) == (False, None)
+
+
 # ---------------------------------------------------------------------------
 # _has_active_baton (bats 6)
 # ---------------------------------------------------------------------------
@@ -276,6 +320,36 @@ def test_no_handoffs_dir_returns_false(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     has_baton, err = _has_active_baton("plan.md")
     assert (has_baton, err) == (False, None)
+
+
+def test_scope_frontmatter_only_reference_suppresses(tmp_path, monkeypatch):
+    # Defect 2: a plan named only in a baton's structured scope: frontmatter
+    # list, never in narrative prose, must still be found.
+    handoffs = tmp_path / "state" / "handoffs"
+    handoffs.mkdir(parents=True)
+    (handoffs / "baton.md").write_text(
+        '---\ntitle: "Baton"\nstatus: open\ncreated: 2026-07-15\n'
+        "scope:\n  - plan.md\n  - other/file.md\n---\n\n"
+        "No narrative mention of the plan at all.\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    has_baton, err = _has_active_baton("plan.md")
+    assert (has_baton, err) == (True, None)
+
+
+def test_scope_frontmatter_prefix_variant_normalized(tmp_path, monkeypatch):
+    handoffs = tmp_path / "state" / "handoffs"
+    handoffs.mkdir(parents=True)
+    (handoffs / "baton.md").write_text(
+        '---\ntitle: "Baton"\nstatus: open\ncreated: 2026-07-15\n'
+        "scope:\n  - plugins/coordinator-claude/docs/plans/plan.md\n---\n\n"
+        "No narrative mention.\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    has_baton, err = _has_active_baton("docs/plans/plan.md")
+    assert (has_baton, err) == (True, None)
 
 
 # ---------------------------------------------------------------------------

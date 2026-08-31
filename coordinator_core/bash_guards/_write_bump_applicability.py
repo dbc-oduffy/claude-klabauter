@@ -197,6 +197,24 @@ GENERATES = []
 
 _REGISTRY_REPOS_PREFIX = "repos."
 
+#: `repos.*` keys whose value is a CONTAINER of repos, not a repo. They carry
+#: the prefix but not its semantics, and enumerating one as a repo root is a
+#: correctness bug, not a cosmetic one: `repos.fleet_root` resolves to a bare
+#: drive root on this box, so `target_is_registered_repo` answered True for
+#: EVERY path on that drive, and rule B7's foreign-root leg (which reads this
+#: same enumeration) compiled it to a two-character, case-insensitive
+#: drive-letter pattern -- reporting the tail of the English word "prefi|x:|"
+#: as an absolute foreign repo root. Measured 2026-08-30.
+#:
+#: The concept is NOT new here: `coordinator/bin/lib/git_hook_install.py`
+#: already carries `_CONTAINER_REGISTRY_KEYS` with the identical membership
+#: and reasoning (its heal sweep would otherwise report a correct entry as a
+#: broken repo). Duplicated rather than imported because this module sits on
+#: the PreToolUse hot path and must not pull `coordinator/bin/lib` into its
+#: import graph; `test_container_registry_keys_agree_across_holders` pins the
+#: two copies together so they cannot drift silently.
+_CONTAINER_REGISTRY_KEYS = frozenset({"repos.fleet_root"})
+
 #: Prefix every enumerated registry key must carry to be treated as a
 #: publish-destination entry -- `publish.mirrors.<name>.path` /
 #: `publish.mirrors.<name>.owner`, disjoint from `_REGISTRY_REPOS_PREFIX` by
@@ -706,6 +724,8 @@ def _all_registered_repo_roots(env: Optional[dict] = None) -> list:
     roots = []
     for key, value in merged.items():
         if not key.startswith(_REGISTRY_REPOS_PREFIX):
+            continue
+        if key in _CONTAINER_REGISTRY_KEYS:
             continue
         if isinstance(value, list):
             value = "\n".join(str(i) for i in value)

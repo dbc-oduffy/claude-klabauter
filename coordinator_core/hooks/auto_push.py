@@ -851,31 +851,6 @@ def branch_gate(branch: str) -> tuple[bool, str | None]:
     return False, msg
 
 
-# ---------------------------------------------------------------------------
-# Transport
-# ---------------------------------------------------------------------------
-
-def is_windows_bash() -> bool:
-    """MSYSTEM (Git Bash) or OS=Windows_NT -- mirrors the bash detection."""
-    return bool(os.environ.get("MSYSTEM")) or os.environ.get("OS") == "Windows_NT"
-
-
-def is_ssh_remote(remote_url: str) -> bool:
-    """git@host or ssh:// URLs need the SSH agent."""
-    return remote_url.startswith("git@") or remote_url.startswith("ssh://")
-
-
-def route_label(windows_bash: bool, ssh_remote: bool) -> str:
-    """Informational label only -- transport choice lives in push_once().
-
-    Native `git push` is the sole transport on every platform (the retired
-    PowerShell fallback is documented, not live -- see "Transport history"
-    above), so this always reports "direct push". Signature retained (params
-    unused) so callers/tests keep passing windows_bash/ssh_remote context.
-    """
-    del windows_bash, ssh_remote
-    return "direct push"
-
 
 def _log_push_attempt_duration(branch: str, duration_secs: float, outcome: str) -> None:
     """Record one `git push` attempt's observed wall-clock duration and

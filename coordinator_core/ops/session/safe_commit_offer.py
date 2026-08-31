@@ -161,6 +161,54 @@ explicit PM ruling — this module does not attempt conflict resolution for
 two sessions that both legitimately touched one file; it only prevents ONE
 session's unattended auto-commit from sweeping a peer's UNRELATED work.
 
+BUDGET — ONE GIT SPAWN, AND WHAT IT COSTS (measured 2026-08-31, k=8,
+`benchmarks/process_time.batched_process_time_ms`, this repo). Stated here
+because an unstated cost is the one nobody defends when it grows.
+
+  - SPAWN BUDGET: **1** git subprocess per call, on the mutating path and
+    the `dry_run` path alike, CONSTANT in the number of paths and the number
+    of commit groups. Verified by tallying `subprocess.Popen` across a full
+    `commit_session_offer` at 4 paths/4 groups, 12/3 and 40/8: one spawn in
+    every case. A change that makes this count scale with either input is
+    the per-item amplification the 2026-08-21 rebuild removed, reappearing.
+  - That spawn is `_current_dirty_paths`'s `git status --porcelain
+    --untracked-files=all` — the module's ONLY worktree read (see that
+    function's own negative spec). It is NOT decoration and does not fall to
+    the K-002 necessity test that cut `_commit_changed_count`'s `git show`:
+    its two products, `residue` and `reconciliation`, are structured report
+    fields a real consumer reads back
+    (`quick_wrap_assemble.__init__` folds `commit_report["residue"]` into
+    its own `commit_outcome`), and no cheaper source answers "what is dirty
+    and claimed by nobody" — `claim_index` reads claims and never the tree.
+  - TIME BUDGET: **350ms process time**, a FLOOR not a ceiling
+    (`op_budget_suspension.py`'s rule for git-spawning ops). Measured at
+    312.5ms for that one `git status` on this repo, plus ~5ms of in-process
+    claim work; ~53ms of the 312.5 is process creation itself (`git
+    --version`, same box, same k, 2 OS processes — one `subprocess.Popen`
+    here is 2 pids, git spawning its own child on Windows). Under DR-344's
+    500ms bar with ~150ms of headroom, and the headroom is the tree's, not
+    the code's: the query scales with worktree size, so a repo materially
+    dirtier than this one is where the bar gets tested.
+  - `--untracked-files=all` is NOT the cost driver and is not the place to
+    look for a saving: `-uno` measures 251.9ms against `-uall`'s 312.5ms on
+    the same tree, 60ms for correctness `_current_dirty_paths` documents as
+    load-bearing. The remaining ~260ms is the scan.
+  - A wall-clock figure convicts nothing here. `op_census.breaches` records
+    this op at max 1673.7ms `elapsed_ms` (n=6, 3 breaches, current
+    generation as of 2026-08-31); the same `git status` whose process time
+    is 312.5ms measured 503ms of wall in the same run. That gap is the ~50
+    concurrent peers on the box (CLAUDE.md § Load norm), not this op.
+  - The `blob_fallback` (`hash_worktree_blobs_via_spawn`) `_commit_group`
+    hands `commit_paths` is a SECOND potential spawn, off the budget above
+    because it fires only when in-process staging refuses a path; it is
+    one batched `git hash-object --stdin-paths` for every refused path at
+    once, never one per path.
+  - `_dirty_files_under` / `_dirty_files_under_batch` (2 spawns each) are
+    defined here but are NOT on any path this module's own ops take —
+    `session.scope` imports them by name (see their section comment). They
+    do not enter this budget, and a reader must not "fix" this module by
+    routing its answer through them.
+
 Spec backlink: DoE-claude state/sizings/2026-07-31-safe-commit-offer-at-
 session-stop-events.yaml
 """

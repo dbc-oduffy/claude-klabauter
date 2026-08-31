@@ -244,15 +244,78 @@ def _normalize_prefix(path: str) -> str:
     return path
 
 
-def _has_recent_real_work_commit(file: str) -> Tuple[Optional[bool], Optional[str]]:
-    """Condition 3b: does ANY normalized scope path have a real-work commit
-    (non-mechanical subject) within the aging window?
+_COMPLETED_ARCHIVE_DIR = os.path.join("archive", "completed")
 
-    Returns (True, None) if a real-work commit was found (NOT stale-toward
-    on this condition), (False, None) if none was found (including the
-    no-scope-block case, which is definitionally False — no plan-doc-level
-    git-log fallback), or (None, diagnostic) on a git-log invocation failure
-    (distinct from a valid empty result).
+
+def _load_completed_deliverable_ids(root: str = _COMPLETED_ARCHIVE_DIR) -> frozenset:
+    """Read every `archive/completed/**/*.md` completion entry's frontmatter
+    `deliverable_id:` scalar ONCE, returning the set of ids that have a
+    shipped completion entry.
+
+    Join-key choice (defect 1 fix): `deliverable_id` equality, not `chain:`
+    slug or `commits:` list membership. This is the SAME join key
+    `resolve_plan_owner`/`list_orphaned` already use to link a plan to its
+    owning handoff elsewhere in this module, and R2 (2026-08-04, see
+    `resolve_plan_owner`'s docstring) rules out a second join key that can
+    disagree with it — `chain:` is a human-authored slug with no uniqueness
+    guarantee across unrelated workstreams, and `commits:` is a short-SHA
+    list that only proves activity, not identity. A completion entry's own
+    `deliverable_id:` frontmatter scalar (present on entries authored after
+    the carry-observability fix, `_CARRY_OBSERVABILITY_FIX_LANDED_ON`) is
+    the same value the plan itself carries, so equality is a direct,
+    unambiguous join with no secondary-key disagreement risk.
+
+    Called at most once per `scan()`/CLI invocation (see `scan()`'s
+    threading of the result into `check_one`) — never once per plan, to stay
+    inside the 200ms-per-process / no-second-full-corpus-scan brightline
+    budget named in the dispatch brief. Missing directory or unreadable file
+    degrades to an empty/partial set, never an exception (same degrade-not-
+    crash idiom as the rest of this module).
+    """
+    ids = set()
+    if not os.path.isdir(root):
+        return frozenset()
+    for dirpath, _dirnames, filenames in os.walk(root):
+        for name in sorted(filenames):
+            if not name.endswith(".md"):
+                continue
+            path = os.path.join(dirpath, name)
+            try:
+                entry_text = Path(path).read_text(encoding="utf-8")
+            except OSError:
+                continue
+            entry_deliverable_id = extract_frontmatter_scalar(entry_text, "deliverable_id")
+            if entry_deliverable_id:
+                ids.add(entry_deliverable_id)
+    return frozenset(ids)
+
+
+def _has_recent_real_work_commit(
+    file: str, completed_deliverable_ids: Optional[frozenset] = None
+) -> Tuple[Optional[bool], Optional[str]]:
+    """Condition 3b: does ANY normalized scope path have a real-work commit
+    (non-mechanical subject) within the aging window, OR does this plan's own
+    `deliverable_id` match a shipped `archive/completed/` completion entry?
+
+    The completion-entry arm closes defect 1: a plan delivered entirely
+    through commits that never touch one of its own `scope:`-cited paths
+    (the common case) previously read as having no real work at all. Both
+    arms are ORed — the completion-entry match is additive, not a
+    replacement for the pre-existing scope-path git-log arm.
+
+    *completed_deliverable_ids*, when given, is the pre-loaded
+    `_load_completed_deliverable_ids()` result — callers in a per-plan loop
+    (`scan()`) MUST pass this through rather than letting each call rebuild
+    it, to avoid a second full-corpus read per plan. When omitted (the
+    default), this function loads it itself — preserving the original
+    single-call signature for direct callers/tests.
+
+    Returns (True, None) if a real-work commit or a completion-entry match
+    was found (NOT stale-toward on this condition), (False, None) if neither
+    was found (including the no-scope-block case, which is definitionally
+    False on the scope-path arm alone — no plan-doc-level git-log fallback),
+    or (None, diagnostic) on a git-log invocation failure (distinct from a
+    valid empty result).
     """
     try:
         text = Path(file).read_text(encoding="utf-8")
@@ -260,6 +323,13 @@ def _has_recent_real_work_commit(file: str) -> Tuple[Optional[bool], Optional[st
         # Mirrors the bash oracle's awk `2>/dev/null` silent-degrade: an
         # unreadable file yields an empty scope-path list, not a crash.
         text = ""
+
+    if completed_deliverable_ids is None:
+        completed_deliverable_ids = _load_completed_deliverable_ids()
+    plan_deliverable_id = extract_frontmatter_scalar(text, "deliverable_id")
+    if plan_deliverable_id and plan_deliverable_id in completed_deliverable_ids:
+        return True, None
+
     raw_scope_paths = _read_scope_paths(text)
     scope_paths = [_normalize_prefix(p) for p in raw_scope_paths if p]
 
@@ -313,6 +383,16 @@ def _has_active_baton(file: str) -> Tuple[Optional[bool], Optional[str]]:
     """Condition 3c: does any non-'claimed' handoff in state/handoffs/*.md
     reference this plan (its own on-disk path, as given) in its body?
 
+    Also matches a plan referenced ONLY in a baton's structured `scope:`
+    frontmatter list, never in narrative prose (defect 2 fix) — the
+    pre-existing `plan_path in hf_text` scan is a raw substring match over
+    the full handoff body and is blind to that case. Reuses this module's
+    existing `_read_scope_paths` reader (the same one used for a plan's own
+    scope block) rather than adding a third YAML-block reader, and
+    `_normalize_prefix`-normalizes both the handoff's scope entries and the
+    plan's own path before comparing, since a scope entry may carry the
+    `plugins/coordinator-claude/` prefix variant.
+
     Returns (True, None) if an active baton is found (suppresses STALE),
     (False, None) otherwise. On a state/handoffs/ read failure, returns
     (None, diagnostic).
@@ -354,11 +434,26 @@ def _has_active_baton(file: str) -> Tuple[Optional[bool], Optional[str]]:
         if plan_path in hf_text:
             return True, None
 
+        hf_scope_paths = {_normalize_prefix(p) for p in _read_scope_paths(hf_text) if p}
+        if _normalize_prefix(plan_path) in hf_scope_paths:
+            return True, None
+
     return False, None
 
 
-def check_one(file: str, today: Optional[date] = None) -> Tuple[str, int]:
+def check_one(
+    file: str,
+    today: Optional[date] = None,
+    completed_deliverable_ids: Optional[frozenset] = None,
+) -> Tuple[str, int]:
     """Evaluate the draft-plan staleness predicate for one plan file.
+
+    *completed_deliverable_ids*: pre-loaded `_load_completed_deliverable_ids()`
+    result, threaded through to `_has_recent_real_work_commit`. `scan()`
+    loads this once per invocation and passes it to every `check_one` call in
+    its loop — never rebuilt per plan (brightline: no second full-corpus scan
+    per plan). Left `None` for direct/test callers, which rebuild it once,
+    internally, on that single call.
 
     Returns (stdout_line_or_empty, rc). rc is 0 (not stale / no error) or 2
     (parse error / internal error). A non-empty stdout_line signals STALE.
@@ -398,7 +493,7 @@ def check_one(file: str, today: Optional[date] = None) -> Tuple[str, int]:
         return "", 0
 
     # Condition 3b: recent real-work commit check.
-    has_recent_work, err = _has_recent_real_work_commit(file)
+    has_recent_work, err = _has_recent_real_work_commit(file, completed_deliverable_ids)
     if err is not None:
         print(err, file=sys.stderr)
         return "", 2
@@ -443,11 +538,13 @@ def scan(target: str, today: Optional[date] = None) -> Tuple[List[str], int]:
             return [], 0
         files = [target]
 
+    completed_deliverable_ids = _load_completed_deliverable_ids()
+
     lines: List[str] = []
     stale_count = 0
     parse_error = False
     for f in files:
-        line, rc = check_one(f, today)
+        line, rc = check_one(f, today, completed_deliverable_ids)
         if rc == 2:
             parse_error = True
         if line:

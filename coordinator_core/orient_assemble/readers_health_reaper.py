@@ -169,16 +169,24 @@ def _read_hook_currency() -> ReaderResult:
     able to repair that; nothing ever called it, so 28 hooks across 14 repos sat
     stale until 2026-08-29.
 
-    Unlike its siblings the subcommand is detector AND repair in one, because
-    `ensure_hooks_fleet` has no check-only mode and writing one would fork the
-    currency predicate it owns. That still satisfies the discharge test the
-    siblings' `--fix` split exists for -- the emitted directive names a command
-    that REPAIRS rather than one the operator must retype -- and it keeps this
-    reader spawn-free, since the heal runs in-process.
+    Calls the `--check-only` form (C1+C2 of docs/plans/2026-08-31-orient-
+    assemble-stops-running-a-fleet-re.md): `ensure_hooks_fleet` gained a
+    check-only mode reusing the SAME currency predicate `_ensure_hook`
+    already computed and discarded on the already-current path
+    (`_hook_gen_stamp_line()`) — this reader no longer repairs fourteen
+    sibling repositories' `.git/hooks` as a side effect of orienting a
+    session. Detection and repair still cannot drift apart: the emitted
+    `d-hook-currency` directive is UNCHANGED and still names the repairing
+    bare form (`workday-start-health-probes hook-currency`), matching the
+    siblings' discharge test (a directive names a command that REPAIRS,
+    never one the operator must retype). At day cadence nothing is lost —
+    `/workday-start` Step -0.45 already repairs the fleet before this reader
+    runs. This reader stays spawn-free either way, since the walk runs
+    in-process.
     """
     buf = io.StringIO()
     with contextlib.redirect_stderr(buf):
-        exit_code = _cmd_hook_currency([])
+        exit_code = _cmd_hook_currency(["--check-only"])
     if exit_code == 0:
         return ReaderResult()
     detail = buf.getvalue().strip() or "fleet git-hook currency check failed"

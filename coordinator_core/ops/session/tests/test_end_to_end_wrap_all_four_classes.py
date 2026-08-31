@@ -1,18 +1,27 @@
 """
 coordinator_core.ops.session.tests.test_end_to_end_wrap_all_four_classes
+(module filename retained per this plan's `writes:` scope, which names this
+exact path — the test FUNCTION below is renamed; see the class count below)
 
 C7 (docs/plans/2026-08-05-in-process-writers-declare-their-writes.md) — the
 plan's closing proof, AC9. This is the chunk that proves the PLAN, not any
 one chunk's individual claim: C1-C6 author no part of this file.
 
-Builds a fixture tree containing freshly-written artifacts of the THREE
-surviving (of an original four)
-in-process-writer classes this plan fixed, each produced by its REAL
-writer (never hand-placed — a hand-placed file proves nothing about
-whether the writer itself claims what it wrote):
+Builds a fixture tree containing freshly-written artifacts of the in-process-writer
+surface this plan fixed, each produced by its REAL writer (never hand-placed —
+a hand-placed file proves nothing about whether the writer itself claims what
+it wrote). Of the original four writer classes this file once exercised, only
+one writer module survives — `coordinator_core.subagent_sandbox.provision_report`
+— reached through its two live entrypoints:
 
-  1. C1 — coordinator_core.dispatch.provision.provision_subagent_sidecar
-     (state/subagent-share/<sid>/...)
+  1. C1 — coordinator_core.subagent_sandbox.provision_report._provision, the
+     in-process call the spawn path uses directly (state/subagent-share/<sid>/...).
+     `docs/decisions/` (see chunk C3 of
+     `docs/plans/2026-08-31-the-provisioner-nothing-calls.md`) records that the
+     dedicated per-package provisioner module this leg used to
+     exercise separately was deleted as an unreachable duplicate of this same
+     writer, not repointed — so this leg and Class 2 below now share one real
+     writer, exercised via two different entrypoints.
   2. C2 — coordinator_core.subagent_sandbox.provision_report (CLI `main`,
      the real spawn-time entrypoint) (state/subagent-share/<sid>/...)
   3. C3 — REMOVED (state/kill-ledger.md K-007, 2026-08-19): was
@@ -28,15 +37,15 @@ whether the writer itself claims what it wrote):
 Then runs a real wrap ceremony — `safe_commit_offer.commit_session_offer`,
 the only wrap mechanism actually landed as of this chunk (C6's claim-aware
 Step 2.5 branch is still `pending` in the plan's own AC8 row) — and asserts
-NONE of the four remain dirty afterward.
+NONE of the fixtures remain dirty afterward.
 
 Negative half, in the SAME tree (both halves or the proof is worthless):
 a live peer session's own artifact, written under `state/subagent-share/
-<their-id>/` by the SAME real C1 writer (`provision_subagent_sidecar`),
+<their-id>/` by the SAME real Class 1 writer (`provision_report._provision`),
 must still be correctly refused by the closing session's wrap — reported
 (attributed to the peer, `ownership["peer"]`/`excluded`) but never
 committed. A wrap that swept a peer's file would satisfy "leaves none of
-the four classes dirty" while being exactly the cross-session sweep
+the fixtures dirty" while being exactly the cross-session sweep
 incident this plan exists to prevent (see the plan's Anti-scope section).
 
 Spec backlink: pln-in-process-engine-writers-decl-33016a § C7 (AC9)
@@ -57,11 +66,11 @@ import yaml
 
 import coordinator_core.ipc as ipc
 import coordinator_core.ops  # noqa: F401 — populates _REGISTRY (artifact.emit)
-from coordinator_core.dispatch.provision import provision_subagent_sidecar
 from coordinator_core.ipc import dispatch_message
 from coordinator_core.ops.emit.context import EmitContext
 from coordinator_core.ops.session import safe_commit_offer
 from coordinator_core.session import core
+from coordinator_core.subagent_sandbox.provision_report import _provision
 from coordinator_core.subagent_sandbox.provision_report import main as provision_report_main
 from coordinator_core.win_portability import (
     no_console_creationflags,
@@ -124,7 +133,7 @@ def _write_policy(tmp_path: Path, *eligible_types: str) -> Path:
 
 
 
-def test_wrap_leaves_none_of_the_four_classes_dirty_and_refuses_peer_artifact(
+def test_wrap_leaves_none_of_the_surviving_writer_fixtures_dirty_and_refuses_peer_artifact(
     tmp_path, monkeypatch, capsys, exercise_suspended_op
 ) -> None:
     repo_root = tmp_path / "repo"
@@ -137,13 +146,18 @@ def test_wrap_leaves_none_of_the_four_classes_dirty_and_refuses_peer_artifact(
     core.init(peer_id, cwd=str(repo))
 
     # -----------------------------------------------------------------
-    # Class 1 — dispatch/provision.py's real provision_subagent_sidecar,
+    # Class 1 — subagent_sandbox/provision_report.py's real `_provision`,
     # once for the closing session (mine), once for a live peer (negative
-    # half). Same real writer, two different dispatching sessions.
+    # half). Same real writer, two different dispatching sessions. Was
+    # the now-deleted per-package provisioner's own sidecar-provisioning function until
+    # docs/plans/2026-08-31-the-provisioner-nothing-calls.md C1 deleted that
+    # module as an unreachable duplicate of this same writer -- Class 1 and
+    # Class 2 below now exercise the SAME module via two different
+    # entrypoints (direct in-process call vs. CLI `main`), not two writers.
     # -----------------------------------------------------------------
     c1_policy = _write_policy(tmp_path, C1_ELIGIBLE_TYPE)
 
-    c1_mine_rel = provision_subagent_sidecar(
+    c1_mine_rel = _provision(
         {"agent_type": C1_ELIGIBLE_TYPE, "session_id": session_id},
         str(c1_policy),
         str(repo),
@@ -151,7 +165,7 @@ def test_wrap_leaves_none_of_the_four_classes_dirty_and_refuses_peer_artifact(
     assert c1_mine_rel is not None, "fixture failure: C1 sidecar (mine) was not provisioned"
     assert (repo / c1_mine_rel).is_file()
 
-    peer_rel = provision_subagent_sidecar(
+    peer_rel = _provision(
         {"agent_type": C1_ELIGIBLE_TYPE, "session_id": peer_id},
         str(c1_policy),
         str(repo),
@@ -181,8 +195,7 @@ def test_wrap_leaves_none_of_the_four_classes_dirty_and_refuses_peer_artifact(
     # Class 3 — workstream_complete/chain_partition_verdict_store.py's
     # write_verdict_record — is REMOVED (state/kill-ledger.md K-007,
     # 2026-08-19): the module and the gate that drove it are gone, so the
-    # class has no writer left to exercise. Three classes remain; the
-    # sweep's contract over them is unchanged.
+    # class has no writer left to exercise.
     # -----------------------------------------------------------------
     # Class 4 — ops/artifact_emit.py's "artifact.emit" op — is REMOVED
     # (state/kill-ledger.md, PM ruling 2026-08-23: CUT IN FULL, and
@@ -197,12 +210,14 @@ def test_wrap_leaves_none_of_the_four_classes_dirty_and_refuses_peer_artifact(
     # skipped, so the file does not carry a permanently-red assertion about
     # a mechanism that no longer exists.
     #
-    # Two classes remain; the sweep's contract over them is unchanged.
+    # One real writer module remains (provision_report), exercised through
+    # its two live entrypoints (Class 1's direct call, Class 2's CLI). The
+    # peer-exclusion negative half below still proves what it always proved.
     # -----------------------------------------------------------------
 
     # -----------------------------------------------------------------
-    # Pre-wrap sanity: every one of the four newly-written files (three
-    # classes + the peer's) is genuinely dirty in the working tree.
+    # Pre-wrap sanity: every one of the three newly-written files (Class 1 +
+    # Class 2 + the peer's) is genuinely dirty in the working tree.
     # -----------------------------------------------------------------
     before = _dirty_status(repo)
     for rel in (c1_mine_rel, c2_rel, peer_rel):

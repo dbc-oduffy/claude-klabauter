@@ -13,6 +13,7 @@ import asyncio
 import json
 from pathlib import Path
 
+from coordinator_core.group_em import obligations
 from coordinator_core.hooks import receiver_state_sensor as sensor
 from coordinator_core.session import receiver_state as rs
 
@@ -104,6 +105,76 @@ class TestHandlerWritesSiblingFile:
             sensor._handler(
                 {"session_id": "sid-h4", "transcript_path": "whatever"},
                 repo_root=str(tmp_path),
+            )
+        )
+        assert result == {}
+
+
+class TestTurnObligationWrite:
+    def test_first_fire_opens_obligation(self, tmp_path: Path, monkeypatch) -> None:
+        _fake_session_dir(monkeypatch, tmp_path)
+        transcript = _write_transcript(
+            tmp_path,
+            [json.dumps({"type": "system", "subtype": "away_summary", "timestamp": "2026-08-14T00:00:00Z"})],
+        )
+        asyncio.run(
+            sensor._handler(
+                {"session_id": "sid-obl1", "transcript_path": transcript},
+                repo_root=str(tmp_path),
+            )
+        )
+        intake_path = tmp_path / "state" / "subagent-share" / "sid-obl1" / "obligations-inbound.jsonl"
+        assert intake_path.exists()
+        rows = [json.loads(line) for line in intake_path.read_text(encoding="utf-8").splitlines()]
+        assert len(rows) == 1
+        assert rows[0]["op"] == "open"
+        assert rows[0]["session_id"] == "sid-obl1"
+        assert rows[0]["obligation_id"] == "sid-obl1"
+        assert rows[0]["producer"]
+
+    def test_second_fire_progresses_rather_than_reopens(self, tmp_path: Path, monkeypatch) -> None:
+        _fake_session_dir(monkeypatch, tmp_path)
+        transcript = _write_transcript(
+            tmp_path,
+            [json.dumps({"type": "system", "subtype": "away_summary", "timestamp": "2026-08-14T00:00:00Z"})],
+        )
+
+        def _fire():
+            asyncio.run(
+                sensor._handler(
+                    {"session_id": "sid-obl2", "transcript_path": transcript},
+                    repo_root=str(tmp_path),
+                )
+            )
+
+        _fire()
+        # Simulate the peer's ledger now carrying the opened, undischarged
+        # record `obligations.for_peer` would report -- the sensor's own
+        # decision of open-vs-progress reads through this reader.
+        monkeypatch.setattr(
+            obligations,
+            "for_peer",
+            lambda repo_root, session_id: [{"obligation_id": session_id, "discharged_at": None, "fired": False}],
+        )
+        _fire()
+
+        intake_path = tmp_path / "state" / "subagent-share" / "sid-obl2" / "obligations-inbound.jsonl"
+        rows = [json.loads(line) for line in intake_path.read_text(encoding="utf-8").splitlines()]
+        assert len(rows) == 2
+        assert rows[0]["op"] == "open"
+        assert rows[1]["op"] == "progress"
+
+    def test_missing_repo_root_is_silent_no_op(self, tmp_path: Path, monkeypatch) -> None:
+        _fake_session_dir(monkeypatch, tmp_path)
+        transcript = _write_transcript(
+            tmp_path,
+            [json.dumps({"type": "system", "subtype": "away_summary", "timestamp": "2026-08-14T00:00:00Z"})],
+        )
+        # No repo_root -- must not raise, and obviously cannot write under it.
+        result = asyncio.run(
+            sensor._handler(
+                {"session_id": "sid-obl3", "transcript_path": transcript},
+                repo_root=None,
             )
         )
         assert result == {}

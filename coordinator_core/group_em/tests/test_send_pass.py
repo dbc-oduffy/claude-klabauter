@@ -117,3 +117,97 @@ def test_no_per_peer_public_entry_point():
     for name in public_names:
         lowered = name.lower()
         assert not any(f in lowered for f in forbidden_substrings), name
+
+
+class _FakeRow:
+    def __init__(self, session_id, name):
+        self.session_id = session_id
+        self.name = name
+
+
+def test_resolve_addressee_returns_live_name(tmp_path):
+    repo_root = str(tmp_path)
+    rows = [_FakeRow("peer-sid", "claude-klabauter-e0")]
+
+    name = send_pass.resolve_addressee(
+        repo_root, "peer-sid", build_roster=lambda repo_root: rows
+    )
+
+    assert name == "claude-klabauter-e0"
+
+
+def test_resolve_addressee_refuses_on_repoint(tmp_path):
+    """A name that no longer maps to the queried session id must refuse,
+    not fall back to the last-known name or the bare session id -- this is
+    the exact re-point failure C9 exists to close."""
+    repo_root = str(tmp_path)
+    # The live roster now shows a DIFFERENT session id under that peer's old
+    # slot -- the queried (now-stale) session id is absent entirely.
+    rows = [_FakeRow("peer-sid-NEW", "claude-klabauter-e0")]
+
+    name = send_pass.resolve_addressee(
+        repo_root, "peer-sid-OLD", build_roster=lambda repo_root: rows
+    )
+
+    assert name is None
+
+
+def test_resolve_addressee_refuses_when_session_absent(tmp_path):
+    repo_root = str(tmp_path)
+
+    name = send_pass.resolve_addressee(
+        repo_root, "gone-sid", build_roster=lambda repo_root: []
+    )
+
+    assert name is None
+
+
+def test_resolve_addressee_refuses_when_row_has_no_name(tmp_path):
+    repo_root = str(tmp_path)
+    rows = [_FakeRow("peer-sid", None)]
+
+    name = send_pass.resolve_addressee(
+        repo_root, "peer-sid", build_roster=lambda repo_root: rows
+    )
+
+    assert name is None
+
+
+def test_resolve_addressee_refuses_on_unsafe_session_id(tmp_path):
+    repo_root = str(tmp_path)
+
+    name = send_pass.resolve_addressee(
+        repo_root, "../escape", build_roster=lambda repo_root: []
+    )
+
+    assert name is None
+
+
+def test_resolve_addressee_refuses_on_roster_read_failure(tmp_path):
+    repo_root = str(tmp_path)
+
+    def _raise(repo_root):
+        raise RuntimeError("registry unavailable")
+
+    name = send_pass.resolve_addressee(repo_root, "peer-sid", build_roster=_raise)
+
+    assert name is None
+
+
+def test_resolve_addressee_never_caches_across_calls(tmp_path):
+    """Every call re-reads the roster -- a name resolved once must not be
+    reused once the live roster no longer confirms it."""
+    repo_root = str(tmp_path)
+    calls = {"rows": [_FakeRow("peer-sid", "claude-klabauter-e0")]}
+
+    def _roster(repo_root):
+        return calls["rows"]
+
+    first = send_pass.resolve_addressee(repo_root, "peer-sid", build_roster=_roster)
+    assert first == "claude-klabauter-e0"
+
+    # The peer re-pointed away between calls -- the resolver must not have
+    # memoized the earlier answer.
+    calls["rows"] = []
+    second = send_pass.resolve_addressee(repo_root, "peer-sid", build_roster=_roster)
+    assert second is None

@@ -22,6 +22,7 @@ import json
 
 from coordinator_core.bash_guards import block_subagent_grant_acquisition as guard
 from coordinator_core.bash_guards import dispatch
+from coordinator_core.bash_guards import _verdict
 
 
 def _payload(command, agent_id=None, agent_type=None):
@@ -260,3 +261,25 @@ class TestScopeEqualsEnforcement:
                 agent_id="a1",
             )
         ) is None
+
+
+class TestUnparseableCommandRecordsSilent:
+    """An `_tokenize_full_command`-unparseable PowerShell shape must not
+    silently return an unrecorded `None` -- it must declare a SILENT verdict
+    on the out-of-band channel (`_verdict.record_silent`), so the miss is
+    observable rather than indistinguishable from a genuine clean verdict."""
+
+    _HERESTRING_APOSTROPHE = "$x = @'\nit's a note\n'@"
+    _BACKTICK_UNTERMINATED = "python3 -c `\n  'unterminated payload"
+
+    def test_powershell_herestring_records_silent(self):
+        with _verdict.collecting() as silences:
+            out = guard.check(_payload(self._HERESTRING_APOSTROPHE, agent_id="a1"))
+        assert out is None
+        assert _verdict.was_silent("block-subagent-grant-acquisition", silences)
+
+    def test_powershell_backtick_continuation_records_silent(self):
+        with _verdict.collecting() as silences:
+            out = guard.check(_payload(self._BACKTICK_UNTERMINATED, agent_id="a1"))
+        assert out is None
+        assert _verdict.was_silent("block-subagent-grant-acquisition", silences)

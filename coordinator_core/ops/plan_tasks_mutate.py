@@ -676,6 +676,40 @@ def _dump_rows(rows: list) -> str:
 # ---------------------------------------------------------------------------
 
 
+def _parse_rows_or_abort(body: str, verb: str) -> list:
+    """Parse a LOCATED spine body, refusing the write when it does not parse.
+
+    `locate_fenced_block` blanks HTML comments length-preservingly for its
+    own scan but slices `body` from the ORIGINAL source, so a comment (or
+    any other malformation) written INSIDE the fence locates cleanly and
+    only fails here. Left as a bare `yaml.safe_load`, that raised a
+    `yaml.YAMLError` straight through `locked_rmw` as an uncaught
+    traceback; downstream readers (`plan_tasks_render.load_rows`) degrade
+    the same body to MALFORMED and every spine CLI then reports a visibly
+    present spine as absent, first noticed at `/execute-plan`.
+
+    Negative-spec: this is a parse gate, not a schema gate — shape and
+    cross-field rules stay `_validate_all`'s and `schema_validate.py`'s.
+    It names the 1-based line WITHIN the fence body, not the file, because
+    that is the offset the caller's own error mark carries; a file-line
+    translation would be a second, driftable computation.
+    """
+    try:
+        rows = yaml.safe_load(body) or []
+    except yaml.YAMLError as exc:
+        mark = getattr(exc, "problem_mark", None)
+        where = f" at line {mark.line + 1} of the fenced block" if mark else ""
+        problem = getattr(exc, "problem", None) or str(exc)
+        raise MutateAbort(
+            f"{verb}: task spine does not parse as YAML{where}: {problem}. "
+            "The fence is present and renders, but its body is not loadable — "
+            "fix the block before writing to it."
+        ) from exc
+    if not isinstance(rows, list):
+        raise MutateAbort(f"{verb}: task spine body is not a YAML list")
+    return rows
+
+
 def _add_task(plan_path: str, task: dict, worktree: Path, repo_root: Path) -> dict:
     """Apply the add-task verb: append `task` as a new row to the task spine.
 
@@ -733,9 +767,7 @@ def _add_task(plan_path: str, task: dict, worktree: Path, repo_root: Path) -> di
             return new_text
 
         # LOCATED
-        rows = yaml.safe_load(result.body) or []
-        if not isinstance(rows, list):
-            raise MutateAbort("add-task: task spine body is not a YAML list")
+        rows = _parse_rows_or_abort(result.body, "add-task")
 
         existing_ids = {row.get("id") for row in rows if isinstance(row, dict)}
         if task["id"] in existing_ids:
@@ -843,9 +875,7 @@ def _stamp(plan_path: str, updates: list, worktree: Path, repo_root: Path) -> di
         plan_fm = parse_frontmatter(old_text).get("frontmatter")
         plan_created = plan_fm.get("created") if isinstance(plan_fm, dict) else None
 
-        rows = yaml.safe_load(result.body) or []
-        if not isinstance(rows, list):
-            raise MutateAbort("stamp: task spine body is not a YAML list")
+        rows = _parse_rows_or_abort(result.body, "stamp")
 
         rows_by_id = {row.get("id"): row for row in rows if isinstance(row, dict)}
 
@@ -1449,9 +1479,7 @@ def _resolve(
         # check below), just no longer ALSO demanded of the spine as it
         # stood before this call, which is the half of the old contract
         # that was unsatisfiable.
-        rows = yaml.safe_load(result.body) or []
-        if not isinstance(rows, list):
-            raise MutateAbort("resolve: task spine body is not a YAML list")
+        rows = _parse_rows_or_abort(result.body, "resolve")
 
         rows_by_id = {row.get("id"): row for row in rows if isinstance(row, dict)}
 

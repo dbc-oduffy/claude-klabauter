@@ -140,6 +140,31 @@ def test_telemetry_failure_never_breaks_dispatch(monkeypatch):
     handler = ipc._lazy_import_and_lookup("schema.describe")
     assert handler is not None
 
+def test_unmapped_op_lands_a_real_record_on_disk_via_caller_cwd(tmp_path, monkeypatch):
+    """End-to-end through the REAL sink: `_lazy_import_and_lookup` must thread
+    a caller cwd it already has in hand into `_record_registry_fallback` ->
+    `record_registry_fallback`, whose own `cwd=None` default falls straight
+    through `resolve_git_root_cheap(None)`'s first guard and silently skips
+    the write. A mocked sink would reproduce exactly that blindness.
+    """
+    monkeypatch.setattr(fbc, "resolve_git_root_cheap", lambda cwd=None: cwd)
+    monkeypatch.setattr(
+        "coordinator_core.ops.session_context.resolve_current_session_id",
+        lambda: "sid-real",
+    )
+
+    msg = {ipc._CALLER_CWD_FIELD: str(tmp_path)}
+    handler = ipc._lazy_import_and_lookup("definitely.not.a.real.op", msg)
+
+    assert handler is None, "precondition: the op is genuinely unregistered"
+    path = _counts_path(tmp_path, "sid-real")
+    assert path.exists(), "record_registry_fallback must have written through to disk"
+    record = json.loads(path.read_text(encoding="utf-8").strip().splitlines()[-1])
+    assert record["op"] == "definitely.not.a.real.op"
+    assert record["stage"] == fbc.STAGE_SAFE_FALLBACK
+    assert record["mapped"] is False
+
+
 def test_every_hooks_key_maps_to_the_shared_package_value():
     """The hooks-stage exclusion is only safe while every `hooks.*` key maps to
     the SAME shared package value, which makes step 1 a guaranteed no-op for

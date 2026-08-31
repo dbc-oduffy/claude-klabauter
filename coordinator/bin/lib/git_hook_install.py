@@ -144,6 +144,36 @@ def _resolve_machine_local_bin(bin_dir: str) -> Optional[str]:
     return which("machine-local")
 
 
+#: Machine-local registry answers already read this process, keyed
+#: `(ml_bin, key)`. Holds negative results too — an unset key is an answer,
+#: and re-spawning to be told "unset" again costs the same as being told a
+#: value.
+#:
+#: Why a cache and not just a hoist: the reads are loop-invariant but the loop
+#: is a FLEET WALK, and the call sites are scattered across body generation
+#: (`_shim_body`, `_append_block`) and resolution (`_resolve_coord_bin`,
+#: `_resolve_claude_klabauter_bin_sh`) rather than gathered at the top. Hoisting would
+#: mean threading a resolved value through two public entrypoints and every
+#: body-template helper; caching the one primitive they all funnel through
+#: covers present and future callers alike.
+#:
+#: Measured 2026-08-31, `_read_hook_currency` over 19 registered repos:
+#: 36 spawns, 1.906s process time. One `machine-local get` is 0.606s wall /
+#: 0.172s cpu, and 35 of the 36 asked for `repos.claude_klabauter` — the same
+#: key, the same answer, 35 times. This is what kept `orient-assemble brief`
+#: over the door's 40s ceiling; removing the fleet REPAIR did not touch it,
+#: because the cost was always the walk rather than the write.
+#:
+#: Staleness, named rather than hidden: process-lifetime, and the warm engine
+#: is long-lived, so a registry edit made after a read is not seen until the
+#: engine restarts. Accepted because the registry is install-time
+#: configuration and because `_ml_get` is already best-effort by contract
+#: (15s timeout, any failure yields None, callers must handle None). Bust it
+#: with `_ML_GET_CACHE.clear()` if a caller ever re-points the registry
+#: in-process; nothing does today.
+_ML_GET_CACHE: dict = {}
+
+
 def _ml_get(ml_bin: Optional[str], key: str) -> Optional[str]:
     """Best-effort `machine-local get <key>` — returns stripped stdout, or None
     on any failure (missing binary, missing key, timeout, non-zero exit).
@@ -162,6 +192,9 @@ def _ml_get(ml_bin: Optional[str], key: str) -> Optional[str]:
     on the session-boot / hook-install path and must never block."""
     if not ml_bin:
         return None
+    cache_key = (ml_bin, key)
+    if cache_key in _ML_GET_CACHE:
+        return _ML_GET_CACHE[cache_key]
     try:
         out = subprocess.run(
             [*resolve_launchable(ml_bin), "get", key],
@@ -171,7 +204,11 @@ def _ml_get(ml_bin: Optional[str], key: str) -> Optional[str]:
             **no_console_creationflags(),
         )
         val = (out.stdout or "").strip()
-        return val or None
+        # Cached on the CLEAN-EXIT path only. A failure below is a broken
+        # resolver or a timeout, not an answer about the key, and caching it
+        # would pin one bad moment for the life of the process.
+        _ML_GET_CACHE[cache_key] = val or None
+        return _ML_GET_CACHE[cache_key]
     except OSError as exc:
         print(
             f"[git_hook_install] WARNING: could not execute machine-local "
@@ -767,6 +804,8 @@ def _ensure_hook(
     header: str,
     root: Optional[str] = None,
     outcome: Optional[List[str]] = None,
+    *,
+    check_only: bool = False,
 ) -> int:
     """Idempotent install/repair of a single git hook. Always returns 0.
 
@@ -776,6 +815,14 @@ def _ensure_hook(
     Passing it explicitly is what lets one invocation heal a repo other than
     the one it is running inside; see `ensure_hooks_fleet` for why that
     matters.
+
+    `check_only`: keyword-only, default False (byte-identical behaviour to
+    every existing caller). When True, this function reaches the SAME
+    classification via the SAME code path (`_hook_gen_stamp_line()`, the one
+    currency predicate) and returns it via `outcome` without performing the
+    write (`_atomic_write`/`_chmod_x`) that classification would otherwise
+    trigger. One predicate, two behaviours — see C1 of
+    docs/plans/2026-08-31-orient-assemble-stops-running-a-fleet-re.md.
 
     `outcome`: optional out-param. When supplied, exactly one classification
     string is appended describing what this call actually DID —
@@ -843,15 +890,42 @@ def _ensure_hook(
         # Broken coordinator install — not this helper's to diagnose. Still
         # classified rather than silently 0: on the fleet path this is the
         # difference between "that repo is fine" and "we could not even try".
+        #
+        # Loud stderr WARNING (2026-08-31, P1 item (b) of state/bug-backlog/
+        # 2026-08-14-a-prepare-commit-msg-outage-permanently-07d3a77f3d56.yaml):
+        # this same `_resolve_coord_bin`/`_helper_present` probe is the ONLY
+        # check standing between "target script present" and "target script
+        # deleted from disk", and it runs on every call BEFORE the installed
+        # hook's own generation-stamp currency is even read — so it already
+        # catches the "shim body says current, but its target is gone" case
+        # as a strict subset of "no fresh candidate resolves". The gap was
+        # never detection, it was silence: the single-repo entrypoint
+        # (coordinator-ensure-prepare-commit-msg-hook.py) calls this function
+        # without collecting `outcome`, so `skipped-no-helper` used to return
+        # bare 0 with nothing printed anywhere — a re-run "self-healed"
+        # nothing and said nothing, forever. Printing here (independent of
+        # whether the caller collects `outcome`) is what actually surfaces
+        # the missing-target state on the session-boot self-heal path, not
+        # only on the fleet driver's aggregated report.
+        print(
+            f"[git_hook_install] WARNING: {hook_name} target '{script_name}' "
+            f"not found under resolved bin dir '{coord_bin}' — hook "
+            "install/repair skipped this run. If a hook is already installed "
+            "here, it is UNCHANGED and may still be pointing at a script "
+            "that no longer exists on disk; commits may silently stop being "
+            "pushed / annotated until the target is restored.",
+            file=sys.stderr,
+        )
         return _note("skipped-no-helper")
 
     hook_path = os.path.join(root, ".git", "hooks", hook_name)
 
     # Hook absent → install canonical bash-free shim.
     if not os.path.exists(hook_path):
-        os.makedirs(os.path.dirname(hook_path), exist_ok=True)
-        _atomic_write(hook_path, fresh_body)
-        _chmod_x(hook_path)
+        if not check_only:
+            os.makedirs(os.path.dirname(hook_path), exist_ok=True)
+            _atomic_write(hook_path, fresh_body)
+            _chmod_x(hook_path)
         return _note("installed-absent")
 
     body = _read(hook_path)
@@ -870,9 +944,11 @@ def _ensure_hook(
                 "block by hand to pick up current fixes.",
                 file=sys.stderr,
             )
-            _chmod_x(hook_path)
+            if not check_only:
+                _chmod_x(hook_path)
             return _note("left-legacy-append-form")
-        _chmod_x(hook_path)
+        if not check_only:
+            _chmod_x(hook_path)
         return _note("left-append-form")
 
     if _marker_in_noncomment(body, marker):
@@ -883,16 +959,19 @@ def _ensure_hook(
         # wholesale rewrite here can only ever replace content WE generated.
         first_line = body.splitlines()[0] if body else ""
         if first_line == "#!/bin/sh" and _has_line(body, _hook_gen_stamp_line()):
-            _chmod_x(hook_path)
+            if not check_only:
+                _chmod_x(hook_path)
             return _note("already-current")
         # Stale shim form → rewrite atomically to current bash-free form.
-        _atomic_write(hook_path, fresh_body)
-        _chmod_x(hook_path)
+        if not check_only:
+            _atomic_write(hook_path, fresh_body)
+            _chmod_x(hook_path)
         return _note("rewritten-stale")
 
     # Marker absent (or only in a comment) → append, preserving the existing chain.
-    _atomic_write(hook_path, body + append_block + "\n")
-    _chmod_x(hook_path)
+    if not check_only:
+        _atomic_write(hook_path, body + append_block + "\n")
+        _chmod_x(hook_path)
     return _note("appended")
 
 
@@ -919,10 +998,14 @@ def ensure_prepare_commit_msg_hook(
     bin_dir: str,
     root: Optional[str] = None,
     outcome: Optional[List[str]] = None,
+    *,
+    check_only: bool = False,
 ) -> int:
     """Install/repair .git/hooks/prepare-commit-msg → synchronous coordinator-prepare-commit-msg.
 
     `root`/`outcome` are pass-throughs to `_ensure_hook` — see its docstring.
+    `check_only` is a pass-through too: default False is byte-identical to
+    every existing caller.
     """
     if root is None:
         root = _git_root()
@@ -966,6 +1049,7 @@ def ensure_prepare_commit_msg_hook(
         header=header,
         root=root,
         outcome=outcome,
+        check_only=check_only,
     )
 
 
@@ -1065,9 +1149,21 @@ def _is_coordinator_worktree(root: str) -> bool:
     )
 
 
-def ensure_hooks_fleet(bin_dir: str) -> int:
+def ensure_hooks_fleet(bin_dir: str, *, check_only: bool = False) -> int:
     """Install/repair the coordinator prepare-commit-msg hook in EVERY
-    registered repo, and say what changed. Always returns 0.
+    registered repo, and say what changed. Always returns 0 — that is true
+    in BOTH forms; `check_only` changes what is written to disk, never this
+    function's own return contract (see `_ensure_hook`'s own `check_only`
+    docstring for the exit-code signal that actually distinguishes clean
+    from dirty, which lives one layer up in `cmd_hook_currency`).
+
+    `check_only`: keyword-only, default False (byte-identical to every
+    existing caller). When True, every classification below is reached via
+    the exact same walk and the exact same `_ensure_hook`/currency
+    predicate — only the write is skipped (threaded through
+    `ensure_prepare_commit_msg_hook`). The `healed`/`missing` stderr report
+    is unchanged in shape: at `check_only=True` it names what WOULD be
+    repaired, not what was.
 
     The defect this closes (2026-08-08): the per-day self-heal added to
     `/workday-start` — itself the replacement for the boot hook killed by the
@@ -1115,7 +1211,7 @@ def ensure_hooks_fleet(bin_dir: str) -> int:
             ("prepare-commit-msg", ensure_prepare_commit_msg_hook),
         ):
             states: List[str] = []
-            fn(bin_dir, root=root, outcome=states)
+            fn(bin_dir, root=root, outcome=states, check_only=check_only)
             state = states[0] if states else "unknown"
             if state in _HEALED_OUTCOMES:
                 healed.append(f"{key} {label}: {state}")

@@ -55,6 +55,36 @@ NEGATIVE SPEC -- deliberately absent:
   entry; there is deliberately no function that offers one peer in isolation,
   so the per-peer firehose stays unreachable from this module's API rather
   than merely discouraged. Do not add one, even as a private helper.
+
+ADDRESS RESOLUTION (`resolve_addressee`, plan `2026-08-31-the-group-em-tick-
+carries-standing-obligations.md` chunk C9). A digest entry's `session_id` is
+read-side truth as of the tick that built it; a re-point (the same NAME
+resolving to a different, newer session) between digest build and the
+prose-gated send is a live, dated, first-party failure mode -- not a
+theorised one -- and it propagates silently: a stale binding read as current
+looks delivered even when it lands on the wrong session. `resolve_addressee`
+is the one function that re-resolves a name against the LIVE registry, at
+call time, rather than trusting any held or logged binding.
+
+**It is a refusal function, not a lookup with a fallback.** It returns the
+current `name` for `peer_session_id` only if today's live roster still maps
+that exact session id to a name; every other case -- the session id is gone,
+unresolved, or the roster cannot be read -- is `None`. `None` must never
+degrade to "send to the peer_session_id anyway" or "send to the last-known
+name anyway": both are the exact failure this function exists to close.
+
+NEGATIVE SPEC:
+
+- **No caching, no memoized binding.** Every call re-reads
+  `peer_roster.build_roster`; there is no reuse of a name resolved on an
+  earlier tick or an earlier call in the same digest.
+- **Not a sender.** This module still sends nothing (see the module-level
+  NEGATIVE SPEC above) -- `resolve_addressee` only answers "what name is
+  this session id live under right now", for a caller elsewhere to use as
+  the send target or to refuse the send on `None`.
+- **No name-keyed lookup.** The only key this function accepts is a session
+  id; it never accepts or resolves a bare name, which would reintroduce the
+  exact stale-binding hazard it exists to close.
 """
 
 from __future__ import annotations
@@ -64,7 +94,9 @@ import json
 import os
 import re
 import time
-from typing import Any, Optional
+from typing import Any, Callable, Optional
+
+from coordinator_core.session import peer_roster
 
 #: Reader/fallback `reason` strings a nudge may be offered for. Both spell the
 #: same condition -- the peer's turn closed -- on the two `read_pass` legs
@@ -288,6 +320,41 @@ def _suppressed(session_id, why, reason=None, obligations=None, remaining=None):
         "undischarged_obligations": obligations,
         "cooldown_remaining_seconds": remaining,
     }
+
+
+def resolve_addressee(
+    repo_root: str,
+    peer_session_id: str,
+    build_roster: Optional[Callable[..., list]] = None,
+) -> Optional[str]:
+    """The live `name` bound to `peer_session_id` right now, or `None`.
+
+    Re-reads the live registry (`peer_roster.build_roster`) on every call --
+    never a cached or previously-logged binding -- and returns the `name`
+    off the row whose `session_id` still equals `peer_session_id` today.
+    `None` covers every other case: the session id is not in today's roster,
+    the row it's still in carries no usable `name`, or the roster read
+    itself failed. `None` is a REFUSAL -- the caller must not fall back to
+    addressing `peer_session_id` (a bare session id is not a `SendMessage`
+    target -- see the `no-persisted-address` rule this module already
+    carries) or to any name recorded earlier.
+
+    `build_roster` is a test-injection seam: `(repo_root=...) -> list[PeerRow]`,
+    standing in for `peer_roster.build_roster` without touching the live
+    registry in a test. `None` (the default) calls the real thing.
+    """
+    if not _safe_session_id(peer_session_id):
+        return None
+    roster_fn = build_roster if build_roster is not None else peer_roster.build_roster
+    try:
+        rows = roster_fn(repo_root=repo_root)
+    except Exception:
+        return None
+    for row in rows:
+        if getattr(row, "session_id", None) == peer_session_id:
+            name = getattr(row, "name", None)
+            return name if isinstance(name, str) and name else None
+    return None
 
 
 def build_send_digest(

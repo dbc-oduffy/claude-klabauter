@@ -3387,6 +3387,57 @@ def _commit_scoped_private_index(
         finally:
             temp_index.unlink(missing_ok=True)
 
+    # Bound 6 (sibling to `commit_authored_content`'s own -- see its
+    # comment above `new_commit_sha`'s single-path `update-index
+    # --add --cacheinfo`, and `commit_authored_new_file`'s `refresh_
+    # shared_index` docstring) -- refresh the SHARED index for every path
+    # this commit just landed, so it does not read as a staged reversion of
+    # itself: without this, a brand-new path this branch just committed is
+    # present in HEAD and on disk but absent from `.git/index`, which `git
+    # status` reports as a staged deletion (`D  path`) alongside an
+    # untracked copy (`?? path`) -- the next unrelated bare `git commit` by
+    # any peer session lands that phantom deletion for real. Additive only:
+    # `--add --cacheinfo` writes exactly the paths handed to it and cannot
+    # clobber a peer's already-staged content for a DIFFERENT path -- a peer
+    # with staged content for one of THESE paths already has an entry this
+    # call legitimately supersedes with what HEAD now holds for it.
+    # ONE spawn for the whole committed set (never per-path -- this
+    # module's own amplification gate,
+    # `test_no_unbatched_per_item_git_spawn.py`): every `(mode, sha, path)`
+    # rides its own repeated `--cacheinfo` flag on ONE `update-index`
+    # invocation (verified: git accepts `--cacheinfo` multiple times in a
+    # single call), never a `--cacheinfo` spawn per path. `--index-info`
+    # over stdin was tried first, to dodge the argv-length ceiling the
+    # `absent`-removal `git rm --pathspec-from-file` above exists for -- it
+    # does not survive `_git()`'s hardcoded `text=True` stdin pipe on this
+    # platform: a `\n`-delimited payload arrives at git with an
+    # inserted `\r` (empirically reproduced, isolated to the `text=True`
+    # stdin write, not file I/O), so every line silently reads as "Ignoring
+    # path" instead of adding the entry. `check_ignore()`'s own `--stdin -z`
+    # sidesteps exactly this by using NUL rather than newline delimiters;
+    # `--index-info`'s own record format has no NUL-delimited form to
+    # borrow that trick from. Argv is therefore the tested-safe form here;
+    # a caller landing a commit large enough to blow the ~32K-char Windows
+    # argv cap on THIS refresh alone is not a shape any known
+    # `commit_scoped` caller produces today (unlike the unbounded `absent`
+    # deletion set that motivated the pathspec-file route). `absent` paths
+    # are deliberately excluded -- they were never added here, so there is
+    # nothing to refresh for them; a stale shared-index entry for a
+    # genuinely deleted path is a pre-existing, separately-tracked hazard,
+    # not this one. Best-effort like the sibling's own bound 6: the CAS
+    # above already landed the commit by the time this runs, so a refresh
+    # failure must never be reported as this function's own failure --
+    # that would discard a commit that genuinely succeeded and could send a
+    # caller into a spurious retry/duplicate commit.
+    if tree_input:
+        cacheinfo_args: List[str] = []
+        for path, (mode, sha) in tree_input.items():
+            cacheinfo_args += ["--cacheinfo", f"{mode},{sha},{path}"]
+        _git(
+            ["update-index", "--add", *cacheinfo_args],
+            cwd=root,
+        )
+
     # `staged_paths` is exactly the resolved staged-blob subset of
     # `diverged` -- `diverged` is the set that had unstaged working-tree
     # modifications (`commit_scoped()` only reaches this function when

@@ -1870,7 +1870,7 @@ def get_op_handler(name: str, msg: Any = None) -> Optional[Callable]:
         )
     handler = _REGISTRY.get(name)
     if handler is None:
-        handler = _lazy_import_and_lookup(name)
+        handler = _lazy_import_and_lookup(name, msg)
     return handler
 
 
@@ -1913,7 +1913,9 @@ def register_op(name: str, handler: Optional[Callable] = None) -> Callable:
     return _decorator
 
 
-def _record_registry_fallback(method: str, stage: str, mapped: bool) -> None:
+def _record_registry_fallback(
+    method: str, stage: str, mapped: bool, cwd: Optional[str] = None
+) -> None:
     """Count one escalation past the targeted-import fast path — never raise.
 
     Deliberately swallowing: an op must not fail to resolve because its
@@ -1921,19 +1923,25 @@ def _record_registry_fallback(method: str, stage: str, mapped: bool) -> None:
     CANNOT-BREAK-DISPATCH CONTRACT). Imports are function-local and the write
     is unconditional-cost only on a path already paying for a 233-module
     sweep, so this adds nothing measurable to the fast path it is absent from.
+
+    `cwd` is threaded through from whatever repo root the caller already has
+    in hand (e.g. the JSON-RPC envelope's `_caller_cwd` field) — never
+    re-resolved here, since `record_registry_fallback`'s own `cwd=None`
+    default falls straight through `resolve_git_root_cheap(None)`'s first
+    guard and skips the write entirely (no exception, no signal it happened).
     """
     try:
         from coordinator_core import registry_fallback_counter as _fbc
         from coordinator_core.ops.session_context import resolve_current_session_id
 
         _fbc.record_registry_fallback(
-            method, stage, resolve_current_session_id() or "", mapped=mapped
+            method, stage, resolve_current_session_id() or "", mapped=mapped, cwd=cwd
         )
     except Exception:  # noqa: BLE001 -- see docstring; telemetry never breaks dispatch
         pass
 
 
-def _lazy_import_and_lookup(method: str) -> Optional[Callable]:
+def _lazy_import_and_lookup(method: str, msg: Any = None) -> Optional[Callable]:
     """Import the owning module for *method* on a registry MISS, then re-check.
 
     Lazy op registration (F6 / claude-klabauter-windows-portability § C4): imports fire each
@@ -2031,8 +2039,12 @@ def _lazy_import_and_lookup(method: str) -> Optional[Callable]:
     # above) and retry. Never-worse invariant.
     from coordinator_core.ops import _eager_import_all
 
+    _caller_cwd = resolve_caller_cwd(msg) if isinstance(msg, dict) else None
     _record_registry_fallback(
-        method, "safe-fallback", mapped=module_path is not None
+        method,
+        "safe-fallback",
+        mapped=module_path is not None,
+        cwd=str(_caller_cwd) if _caller_cwd is not None else None,
     )
     _eager_import_all()
     return _REGISTRY.get(method)

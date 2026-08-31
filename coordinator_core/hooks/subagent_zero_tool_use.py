@@ -99,6 +99,116 @@ from coordinator_core.lifecycle import git_common_dir, main_worktree_root
 GENERATES: list = []
 
 
+def _last_assistant_text(transcript_path: str) -> str:
+    """Return the text of the finishing agent's LAST assistant message, or "".
+
+    Companion read to `_count_tool_use_blocks`, kept a separate pass rather than
+    folded into it: the two want opposite scan directions (forward count vs.
+    reverse "last one wins"), and a shared single-pass implementation would
+    have to buffer the whole file to find the tail regardless. Tail-reads only
+    the last 512KB — the tail-seek discipline of
+    `hooks.nudge_harness_directive_dispatch.last_assistant_text`, not re-
+    derived: this hook is on the same hot Stop-adjacent path, and a
+    megabyte-scale transcript must not be read in full just to find its last
+    line.
+
+    Failure modes all resolve to "": absent/unreadable file, no assistant
+    entry at all, or an assistant entry whose content is neither a string nor
+    a list of text blocks. Never raises.
+    """
+    try:
+        size = os.path.getsize(transcript_path)
+        with open(transcript_path, "rb") as fh:
+            if size > 512_000:
+                fh.seek(size - 512_000)
+                fh.readline()  # discard the partial line the seek landed inside
+            raw = fh.read()
+        text = raw.decode("utf-8", errors="replace")
+        lines = text.splitlines()
+    except OSError:
+        return ""
+
+    for line in reversed(lines):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            entry = json.loads(line)
+        except (json.JSONDecodeError, ValueError):
+            continue
+        if not isinstance(entry, dict) or entry.get("type") != "assistant":
+            continue
+        msg = entry.get("message")
+        content = msg.get("content") if isinstance(msg, dict) else None
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            texts = [
+                block.get("text", "")
+                for block in content
+                if isinstance(block, dict)
+                and block.get("type") == "text"
+                and isinstance(block.get("text"), str)
+            ]
+            joined = "\n".join(t for t in texts if t)
+            if joined:
+                return joined
+        # This assistant entry carried no usable text (tool_use-only turn) —
+        # keep walking backward for an earlier one that did.
+        continue
+    return ""
+
+
+#: Heading this op splices into the finishing agent's own report sidecar.
+#: Presence of this exact literal is also this op's own idempotency guard
+#: (see `_persist_final_report_sync`) — do not reword without updating both.
+_PERSISTED_REPORT_HEADING = "## Persisted final report (SubagentStop)\n\n"
+
+
+def _persist_final_report_sync(worktree_root: str, agent_id: str, text: str) -> None:
+    """Best-effort: append `text` to this agent's already-provisioned report
+    sidecar, so a lost final-report message is still visible where the
+    parent reads before it would otherwise default.
+
+    Reuses `subagent_sandbox.provision_report`'s existing pointer index
+    (`_read_sidecar_pointer`, kind="report") to find the sidecar this SAME
+    agent_id was provisioned at spawn time — the established
+    `state/subagent-share/<session_id>/` convention, not a new location.
+    No sidecar was provisioned (ineligible agent type, or provisioning
+    itself failed) is the common, silent no-op case: nothing to append to.
+
+    Every failure mode is a silent no-op, never a raise: absent text, no
+    provisioned sidecar, an unreadable/unwritable sidecar file, or an
+    import failure reaching the pointer index. Idempotent per sidecar via
+    `_PERSISTED_REPORT_HEADING`'s presence check, so a duplicate SubagentStop
+    delivery for the same agent never double-appends.
+    """
+    if not text or not agent_id:
+        return
+    try:
+        from coordinator_core.subagent_sandbox.provision_report import _read_sidecar_pointer
+    except Exception:  # noqa: BLE001 -- Stop path must never brick on an import
+        return
+    try:
+        rel = _read_sidecar_pointer(worktree_root, agent_id, kind="report")
+    except Exception:  # noqa: BLE001 -- pointer resolution reaches foreign code
+        rel = None
+    if not rel:
+        return
+    sidecar_path = Path(worktree_root) / rel
+    try:
+        existing = sidecar_path.read_text(encoding="utf-8")
+    except OSError:
+        return
+    if _PERSISTED_REPORT_HEADING in existing:
+        return
+    try:
+        with open(sidecar_path, "a", encoding="utf-8", newline="\n") as fh:
+            fh.write("\n" + _PERSISTED_REPORT_HEADING + text.strip() + "\n")
+    except OSError:
+        return
+
+
 def _count_tool_use_blocks(transcript_path: str) -> int | None:
     """Return the verified tool_use content-block count, or None on UNKNOWN.
 
@@ -210,6 +320,13 @@ async def _handler(params: dict, repo_root=None) -> dict:
     writes nothing, returns no_advisory() — never a count, never confusable with a
     verified zero.
 
+    Second, independent side-effect: persists the finishing agent's last
+    assistant-message text into its own already-provisioned report sidecar
+    (see `_persist_final_report_sync`) — closes the gap where a dispatched
+    agent's final report is lost in transit and the parent silently defaults
+    instead of seeing a visible gap. This leg is a pure best-effort append
+    and never influences this op's return value or the tool_use-count write.
+
     Inputs (flat scalar, extracted via _payload.field(); "" treated as absent):
         session_id, agent_id, agent_type, agent_transcript_path, hook_event_name.
     """
@@ -242,6 +359,18 @@ async def _handler(params: dict, repo_root=None) -> dict:
         _worktree_root = str(main_worktree_root(_sessions_base.parent))
     except Exception:  # noqa: BLE001 -- init resolves it itself on this arm
         _worktree_root = ""
+
+    # Independent leg (AC: robustness) — persists the finishing agent's last
+    # assistant text into its own report sidecar, if one was provisioned, so a
+    # lost final-report message is not a silent gap. Never affects the
+    # tool_use-count durable write above or below: failure here is swallowed
+    # entirely inside _persist_final_report_sync.
+    if _worktree_root:
+        _final_text = await asyncio.to_thread(_last_assistant_text, transcript_path)
+        if _final_text:
+            await asyncio.to_thread(
+                _persist_final_report_sync, _worktree_root, agent_id, _final_text
+            )
 
     recorded_at = (
         datetime.datetime.now(tz=datetime.timezone.utc)

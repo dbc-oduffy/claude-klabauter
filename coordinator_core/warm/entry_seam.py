@@ -77,12 +77,19 @@ import contextvars
 import os
 from typing import Any, Iterator, List, Optional
 
-from coordinator_core.session.core import (
-    _UUID_RE,
-    session_identity_override,
-    warm_served_request,
-)
 from coordinator_core.session.declared_writes import collecting
+
+# `coordinator_core.session.core` is NOT imported here, and must not be.
+# `try_warm_guard_dispatch` -- the warm-reach entry point this module is the
+# door for -- never touches it, but `session.core` drags `tempfile` (and so
+# `shutil`, `bz2`, `lzma`, `random`, `weakref`), `json`, `datetime` and
+# `git.repo_root` in behind it: ~13ms of the 20ms import-CPU ceiling
+# `tests/test_warm_reach_import_ceiling.py` pins, paid by every hook fire
+# that only wanted to knock on the door. The three names it provides are
+# needed by `per_request_state` and `_environ_identity_borrow` alone, which
+# import them at call time. That is not a hot-path trade: both run inside a
+# warm-server dispatch, a process that has already imported `session.core`
+# for its own dispatch core, so the deferred import is a `sys.modules` hit.
 
 __all__ = [
     "per_request_state",
@@ -227,6 +234,8 @@ def _environ_identity_borrow(
         yield
         return
 
+    from coordinator_core.session.core import _UUID_RE
+
     saved = {name: os.environ.get(name) for name in _ENV_BORROWED_NAMES}
     try:
         valid_sid = session_id if session_id and _UUID_RE.fullmatch(session_id) else None
@@ -348,6 +357,11 @@ def per_request_state(
     unconditionally on every leg, since that bind is thread-safe regardless
     of process isolation.
     """
+    from coordinator_core.session.core import (
+        session_identity_override,
+        warm_served_request,
+    )
+
     warm_scope: "contextlib.AbstractContextManager[object]"
     if warm_served is None:
         warm_scope = contextlib.nullcontext()
@@ -362,8 +376,6 @@ def per_request_state(
                     with collecting_diagnostics(diagnostics):
                         yield declared
 
-
-from dataclasses import dataclass
 
 
 # ---------------------------------------------------------------------------
@@ -415,7 +427,6 @@ from dataclasses import dataclass
 METHOD_NOT_FOUND = -32601
 
 
-@dataclass(frozen=True)
 class WarmGuardOutcome:
     """The result of one `try_warm_guard_dispatch` attempt.
 
@@ -428,10 +439,40 @@ class WarmGuardOutcome:
     a `METHOD_NOT_FOUND` envelope) -- `response` is always `None` in that
     case, and the caller falls through to its existing cold path exactly
     as it would on any other warm miss.
+
+    WRITTEN OUT BY HAND RATHER THAN AS A `@dataclass(frozen=True)`, which
+    is what it was until 2026-08-31. `dataclasses` pulls `copy` and
+    `inspect` (and so `ast`, `dis`, `tokenize`) in behind it -- ~6.5ms
+    against the 20ms import-CPU ceiling
+    `tests/test_warm_reach_import_ceiling.py` pins on this entry point,
+    spent on one immutable two-field record. The generated `__init__`,
+    `__eq__`, `__hash__` and `__repr__` are reproduced below with the same
+    semantics; whole-outcome `==` comparison is contract, not convenience
+    (the entry-seam suites assert on it).
     """
 
-    hit: bool
-    response: Optional[dict] = None
+    __slots__ = ("hit", "response")
+
+    def __init__(self, hit: bool, response: Optional[dict] = None) -> None:
+        object.__setattr__(self, "hit", hit)
+        object.__setattr__(self, "response", response)
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        raise AttributeError(f"{type(self).__name__} is frozen: cannot set {name!r}")
+
+    def __delattr__(self, name: str) -> None:
+        raise AttributeError(f"{type(self).__name__} is frozen: cannot delete {name!r}")
+
+    def __eq__(self, other: object) -> bool:
+        if other.__class__ is not self.__class__:
+            return NotImplemented
+        return (self.hit, self.response) == (other.hit, other.response)
+
+    def __hash__(self) -> int:
+        return hash((self.hit, self.response))
+
+    def __repr__(self) -> str:
+        return f"WarmGuardOutcome(hit={self.hit!r}, response={self.response!r})"
 
 
 def _trigger_listener_boot() -> None:

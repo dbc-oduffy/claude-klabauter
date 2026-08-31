@@ -162,13 +162,20 @@ def _spy_git_argvs(monkeypatch) -> list[list[str]]:
 
 def _assert_fast_arm(argvs: list[list[str]]) -> None:
     """The fast (spine-rewrite) arm issues NONE of the ladder's own
-    per-commit spawns -- `read-tree`, per-path `update-index --cacheinfo`,
-    `write-tree`, `commit-tree`."""
+    per-commit spawns -- `read-tree`, `write-tree`, `commit-tree` -- and AT
+    MOST ONE `update-index --cacheinfo` spawn: P0 (state/scratch/bug-blitz/
+    blitz-20260831-091047) added a single post-CAS SHARED-index refresh
+    (`--add` plus one repeated `--cacheinfo` flag per committed path, ONE
+    spawn total) common to both arms of `_commit_scoped_private_index`, so
+    a lone such call no longer discriminates fast from ladder the way it
+    did before that fix -- the ladder's own PER-PATH `--cacheinfo` loop
+    (N separate spawns for N paths) plus its `read-tree`/`write-tree`/
+    `commit-tree` calls are what still do."""
     assert not any(a[:1] == ["read-tree"] for a in argvs), argvs
     assert not any(a[:1] == ["write-tree"] for a in argvs), argvs
     assert not any(a[:1] == ["commit-tree"] for a in argvs), argvs
     cacheinfo_calls = [a for a in argvs if len(a) > 1 and a[0] == "update-index" and "--cacheinfo" in a]
-    assert cacheinfo_calls == [], cacheinfo_calls
+    assert len(cacheinfo_calls) <= 1, cacheinfo_calls
 
 
 def _assert_ladder_arm(argvs: list[list[str]]) -> None:
@@ -821,3 +828,44 @@ def test_commit_scoped_cold_end_to_end_budget(tmp_path):
         "budget-manifest.json rationale, `_c10_cold_end_to_end_rationale`), a bypass "
         "surface outside this chunk's writes scope, deliberately not gated here."
     )
+
+
+# ---------------------------------------------------------------------------
+# P0 (state/scratch/bug-blitz/blitz-20260831-091047): a brand-new path
+# committed through `_commit_scoped_private_index` -- via `supplied_blobs`,
+# never `git add`-ed, so the SHARED index has no entry for it at all before
+# this call -- must not leave that path present in HEAD/worktree but absent
+# from `.git/index`. That shape reads to `git status` as a staged deletion
+# (`D  path`) alongside an untracked copy (`?? path`), and a peer's next
+# unrelated bare `git commit` lands the phantom deletion for real.
+# ---------------------------------------------------------------------------
+
+
+def test_new_path_via_supplied_blob_lands_in_shared_index_not_just_head(tmp_path, monkeypatch):
+    repo = real_git_repo(tmp_path)
+    new_path = "brand_new.txt"
+    content = "brand new, never staged\n"
+    (repo / new_path).write_text(content, encoding="utf-8")
+    # `hash-object -w` writes the loose blob only -- unlike `git add`, it
+    # never touches `.git/index` -- so the shared index genuinely has no
+    # entry for `new_path` before `commit_scoped` runs.
+    blob_sha = _git(["hash-object", "-w", "--", new_path], repo).stdout.strip()
+    msg_file = _write_msg(tmp_path)
+
+    result = git_native.commit_scoped(
+        [new_path], msg_file, repo,
+        known_checked={new_path}, known_diverged={new_path},
+        supplied_blobs={new_path: blob_sha},
+    )
+
+    assert result.ok, result.stderr
+    porcelain = _porcelain(repo)
+    assert not any(new_path in line and line.startswith("D") for line in porcelain), (
+        f"phantom staged deletion of {new_path!r} in git status --porcelain: {porcelain!r}"
+    )
+    ls_files = _git(["ls-files", "--", new_path], repo).stdout.splitlines()
+    assert new_path in ls_files, (
+        f"{new_path!r} committed to HEAD but never resynced into the shared "
+        f"index: `git ls-files` == {ls_files!r}"
+    )
+    _assert_ac2_oracle(repo)

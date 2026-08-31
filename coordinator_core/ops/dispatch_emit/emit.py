@@ -862,6 +862,21 @@ _PROVENANCE_HEADING = (
     "scoped-commit route commits only the paths in the pathspec and cannot "
     "sweep peer-staged work into your commit. Never unstage, revert, or "
     "commit a peer's paths, and never ask for the index to be cleared."
+    "\n\nA CLAIM IS NOT A REFUSAL CONDITION, AND THE ROUTE NEVER RAISES ONE. "
+    "`commit_paths` performs NO ownership or claim check -- see `coordinator_core/"
+    "git/commit.py`'s guarded-seam header, which records that this route cannot "
+    "reach the ownership leg at all. So a claim you discovered by inspecting "
+    "session state is YOUR inference, never the route declining. Before treating "
+    "one as blocking, establish two things: (1) the holder is ALIVE -- a recorded "
+    "pid absent from the process table, or a `meta.json` `last_activity` hours "
+    "old, is a stale claim from a dead session, and this repo carries dozens of "
+    "them; (2) the holder actually touched THE PATH at issue -- read its "
+    "`touch-record.jsonl` rather than generalising one hit across your whole "
+    "pathspec. Measured 2026-08-31: a wave was declined in full over a claim held "
+    "by a session 13 hours idle with both pids dead that had touched ONE of seven "
+    "paths; the sanctioned route then committed all seven without complaint. If "
+    "both conditions genuinely hold, refuse ONLY the claimed paths and commit the "
+    "remainder -- a live peer editing one file is not a reason to strand six."
     "\n\nUNCHANGED DECLARED PATHS: a path in the pathspec that this wave's "
     "executor legitimately did not change (reported as examined-but-unchanged) "
     "must be DROPPED from the pathspec and the remainder committed. A chunk "
@@ -1139,6 +1154,9 @@ def _commit_halt_gate(commit_var: str, phase_title: str) -> str:
     )
 
 
+_PREFLIGHT_BLOCKED_TOKEN = "PREFLIGHT-BLOCKED"
+
+
 def _preflight_agent_call(pathspec: list[str], phase_title: str) -> str:
     """Compose the preflight phase's ``phase()`` + ``agent()`` call (AC14).
 
@@ -1146,6 +1164,11 @@ def _preflight_agent_call(pathspec: list[str], phase_title: str) -> str:
     (``coordinator:git-commit-agent``) against the UNION of every commit
     phase's pathspec, asked to verify claimability only -- no staging, no
     commit. See module docstring § Commit-claimability preflight.
+
+    The call's result is bound to a variable and gated by
+    ``_preflight_halt_gate`` (see there for why an unbound ``await agent(...)``
+    is not decorative-only -- it discards the one verdict the phase exists to
+    produce). Mirrors ``_commit_agent_call``/``_commit_halt_gate``'s shape.
     """
     phase_call = f"  phase({_js_string_literal(phase_title)});"
     prompt = (
@@ -1157,10 +1180,13 @@ def _preflight_agent_call(pathspec: list[str], phase_title: str) -> str:
         f"every path in [{', '.join(pathspec)}] is currently claimable and "
         "committable by you. If any path would be refused, report BLOCKED "
         "immediately, naming the refused paths and the denial reason, "
-        "before any further phase runs."
+        "before any further phase runs -- and end your report with the line "
+        f"'{_PREFLIGHT_BLOCKED_TOKEN} <reason>'. If every path is claimable, "
+        "do NOT emit that line."
     )
+    preflight_var = "preflightResult"
     call = (
-        "  await agent("
+        f"  const {preflight_var} = await agent("
         f"{_js_string_literal(prompt)}, "
         "{ "
         f"label: {_js_string_literal('preflight:commit-claimability')}, "
@@ -1169,7 +1195,37 @@ def _preflight_agent_call(pathspec: list[str], phase_title: str) -> str:
         f"{_model_opt(_COMMIT_AGENT_TYPE)} "
         "});"
     )
-    return f"{phase_call}\n{call}"
+    gate = _preflight_halt_gate(preflight_var, phase_title)
+    return f"{phase_call}\n{call}\n{gate}"
+
+
+def _preflight_halt_gate(preflight_var: str, phase_title: str) -> str:
+    """The JS that stops the run when ``preflight_var``'s report is BLOCKED.
+
+    Mirrors ``_commit_halt_gate``'s shape and its anchored-regex lesson: a
+    bare ``.includes(token)`` fails OPEN, because the prompt itself carries
+    the literal token text ("end your report with the line
+    '{_PREFLIGHT_BLOCKED_TOKEN} <reason>'"), so an agent that merely echoes
+    or quotes its own instructions back would satisfy a substring test
+    without ever having found a refused path.
+
+    The match requires the token at the start of a line, followed by a real
+    reason (one or more non-newline characters) -- the prompt's own
+    placeholder text is the literal string ``<reason>``, but the anchor is
+    line-start plus the token, not the placeholder shape, so this does not
+    depend on the agent avoiding that literal string.
+    """
+    reason = (
+        f"{phase_title} reported a claimability blocker -- halting before "
+        "any wave writes over a path that would be refused."
+    )
+    return (
+        f"  if (/^[*_]{{0,2}}{_PREFLIGHT_BLOCKED_TOKEN}[*_]{{0,2}}"
+        f" +\\S.*$/m.test(String({preflight_var} ?? \"\"))) {{\n"
+        f"    return {{ halted: {_js_string_literal(reason)} + "
+        f'" Agent report: " + String({preflight_var} ?? "agent returned null") }};\n'
+        "  }"
+    )
 
 
 def _test_agent_call(scope: list[str], phase_title: str) -> str:

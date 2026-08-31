@@ -412,10 +412,7 @@ def test_held_dest_denies_at_once_naming_holder_not_dirty_tree_usage(tmp_path, m
     subprocess call ever happens — the lock boundary sits before both."""
     dest = tmp_path / "dest"
 
-    # Force `_bootstrap_engine()` now, in this process, so `_mod._push_held_lock`
-    # is the real `coordinator_core.locked_write.held_lock` before the test
-    # acquires it as "another round" holding the dest.
-    _mod._bootstrap_engine()
+    import time
 
     with _mod._push_held_lock(
         dest, holder_label="percolate-round:alpha", timeout=0.0
@@ -428,13 +425,22 @@ def test_held_dest_denies_at_once_naming_holder_not_dirty_tree_usage(tmp_path, m
         argv = ["alpha", "--percolate-root", str(tmp_path / "percolate-root")]
         parser = _mod._build_parser()
         args = parser.parse_args(argv)
+        start = time.monotonic()
         rc = _mod._cmd_push(args)
+        elapsed = time.monotonic() - start
 
     assert rc == _mod._EXIT_LOCK_BUSY
     assert rc != _mod._EXIT_USAGE
+    assert elapsed < 1.0, f"deny-at-once took {elapsed}s"
     err = capsys.readouterr().err
     assert "held by another round" in err
     assert "percolate-push:alpha" in err or "another round" in err
+    assert "docs/reference/percolate-lock-contention.md" in err
+    assert "COORDINATOR_ALLOW_PERCOLATE_QUEUE" not in err
+    assert "COORDINATOR_LOCK_WAIT_SECS" not in err
+    assert "Re-run" not in err
+    assert "retry" not in err
+    assert "try again" not in err
     status_calls = [c for c in spy.calls if "status" in c and "--porcelain=v2" in c]
     push_calls = [c for c in spy.calls if c[:1] == ["git"] and "push" in c]
     assert status_calls == []

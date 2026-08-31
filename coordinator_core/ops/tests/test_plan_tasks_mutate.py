@@ -3707,3 +3707,49 @@ def test_resolve_writing_a_newly_invalid_touched_row_still_refused(tmp_path):
         "the post-loop _validate_all gate must never produce a silent "
         "partial write"
     )
+
+
+# ---------------------------------------------------------------------------
+# Write-time parse refusal — an unparseable, LOCATED spine body
+# ---------------------------------------------------------------------------
+
+_PLAN_UNPARSEABLE_SPINE = _PLAN_WITH_TASKS.replace(
+    "    Do the first thing.\n",
+    "    Do the first thing.\n<!-- an annotation written INSIDE the fence -->\n",
+)
+
+
+@pytest.mark.parametrize(
+    "params",
+    [
+        {"verb": "add-task", "task": _valid_task("C2")},
+        {"verb": "stamp", "updates": [{"id": "C1", "fields": {"surface": "other/path.py"}}]},
+    ],
+    ids=["add-task", "stamp"],
+)
+def test_unparseable_spine_refuses_the_write_naming_the_line(tmp_path, params):
+    """A fence that locates but does not parse aborts cleanly, naming the line.
+
+    `locate_fenced_block` blanks HTML comments for its own scan but slices
+    `body` from the original source, so this spine reaches the verb as
+    LOCATED and only fails at `yaml.safe_load`. Before the refusal it raised
+    an uncaught `yaml.YAMLError` through `locked_rmw`; the contract now is a
+    normal exit_code=1 abort, byte-unchanged on disk.
+    """
+    repo = _make_git_repo(tmp_path)
+    plan = _seed_plan(repo, "unparseable.md", _PLAN_UNPARSEABLE_SPINE)
+    original = plan.read_text(encoding="utf-8")
+
+    result = _run(_handler(
+        {"plan_path": str(plan), **params},
+        repo_root=repo / ".git",
+    ))
+
+    assert result["exit_code"] == 1, result
+    assert result["applied"] is False
+    error = result.get("error", "")
+    assert "does not parse as YAML" in error, error
+    assert "line" in error, "the abort must name the offending line in the fenced block"
+    assert plan.read_text(encoding="utf-8") == original, (
+        "file must be byte-unchanged after a parse abort"
+    )

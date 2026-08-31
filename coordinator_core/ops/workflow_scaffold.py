@@ -135,15 +135,18 @@ def _compose_script(name: str, description: str, phases: list, pattern: str) -> 
 
     template = HOUSE_PATTERNS[pattern]
 
+    # Top-level, never `async function run(ctx) { ... }` -- the harness
+    # Workflow contract executes the script BODY directly and never looks
+    # for, defines, or calls a `run` export; see
+    # coordinator_core/ops/dispatch_emit/emit.py module docstring §
+    # Top-level body, never a defined-but-uninvoked wrapper.
     return (
         f"{meta_block}\n"
-        "async function run(ctx) {\n"
         f"{phase_calls}\n"
         f"{agent_calls}\n"
         "\n"
-        f"  // house pattern: {pattern}\n"
+        f"// house pattern: {pattern}\n"
         f"{template}"
-        "}\n"
     )
 
 

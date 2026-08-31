@@ -482,3 +482,202 @@ class TestStoreDirIsAnInitialisedSessionDir:
         ))
 
         assert not (_cs_dir(tmp_path) / sid).exists()
+
+
+# ---------------------------------------------------------------------------
+# Final-report persistence — independent second leg
+# ---------------------------------------------------------------------------
+
+def _text_line(text: str, extra_tool_use: int = 0) -> str:
+    """Build a JSONL assistant line carrying a `text` content block."""
+    content = [{"type": "text", "text": text}]
+    content += [{"type": "tool_use", "name": "Bash", "input": {}} for _ in range(extra_tool_use)]
+    return json.dumps({"type": "assistant", "message": {"role": "assistant", "content": content}})
+
+
+def _provision_report_sidecar(tmp_path: Path, session_id: str, agent_id: str) -> Path:
+    """Provision a minimal report sidecar + pointer, mirroring
+    `subagent_sandbox.provision_report`'s own on-disk shape well enough for
+    `_read_sidecar_pointer` to resolve it — without invoking the full
+    provisioner (out of this test's footprint)."""
+    rel = f"state/subagent-share/{session_id}/report.md"
+    sidecar_path = tmp_path / rel
+    sidecar_path.parent.mkdir(parents=True, exist_ok=True)
+    sidecar_path.write_text("---\nstatus: open\n---\n\n## Run notes\n\n", encoding="utf-8")
+
+    pointer_dir = tmp_path / ".git" / "coordinator-sessions" / ".agent-sidecars" / "report"
+    pointer_dir.mkdir(parents=True, exist_ok=True)
+    (pointer_dir / agent_id).write_text(rel + "\n", encoding="utf-8")
+    return sidecar_path
+
+
+class TestFinalReportPersistence:
+    def test_normal_finish_persists_last_assistant_text_to_the_sidecar(
+        self, tmp_path: Path
+    ) -> None:
+        from coordinator_core.hooks.subagent_zero_tool_use import _handler
+
+        ctx = _ctx(tmp_path)
+        sid = "sess-final-report-0001"
+        agent_id = "executor-agent-01"
+        sidecar_path = _provision_report_sidecar(tmp_path, sid, agent_id)
+
+        transcript = tmp_path / "transcript.jsonl"
+        lines = [
+            _text_line("first turn, not the last"),
+            _text_line("DONE: everything landed", extra_tool_use=1),
+        ]
+        transcript.write_text("\n".join(lines) + "\n")
+
+        _run(_handler(
+            {
+                "session_id": sid,
+                "agent_id": agent_id,
+                "agent_type": "executor",
+                "agent_transcript_path": str(transcript),
+                "hook_event_name": "SubagentStop",
+            },
+            repo_root=ctx.repo_root,
+        ))
+
+        body = sidecar_path.read_text(encoding="utf-8")
+        assert "## Persisted final report (SubagentStop)" in body
+        assert "DONE: everything landed" in body
+        assert "first turn, not the last" not in body
+
+    def test_second_call_does_not_double_append(self, tmp_path: Path) -> None:
+        from coordinator_core.hooks.subagent_zero_tool_use import _handler
+
+        ctx = _ctx(tmp_path)
+        sid = "sess-final-report-idem"
+        agent_id = "executor-agent-idem"
+        sidecar_path = _provision_report_sidecar(tmp_path, sid, agent_id)
+
+        transcript = tmp_path / "transcript.jsonl"
+        transcript.write_text(_text_line("only reply") + "\n")
+
+        payload = {
+            "session_id": sid,
+            "agent_id": agent_id,
+            "agent_type": "executor",
+            "agent_transcript_path": str(transcript),
+            "hook_event_name": "SubagentStop",
+        }
+        _run(_handler(dict(payload), repo_root=ctx.repo_root))
+        _run(_handler(dict(payload), repo_root=ctx.repo_root))
+
+        body = sidecar_path.read_text(encoding="utf-8")
+        assert body.count("## Persisted final report (SubagentStop)") == 1
+
+    def test_no_provisioned_sidecar_is_a_silent_no_op(self, tmp_path: Path) -> None:
+        from coordinator_core.hooks.subagent_zero_tool_use import _handler
+
+        ctx = _ctx(tmp_path)
+        sid = "sess-no-sidecar-0001"
+        transcript = tmp_path / "transcript.jsonl"
+        transcript.write_text(_text_line("nobody will read this") + "\n")
+
+        result = _run(_handler(
+            {
+                "session_id": sid,
+                "agent_id": "agent-with-no-sidecar",
+                "agent_type": "executor",
+                "agent_transcript_path": str(transcript),
+                "hook_event_name": "SubagentStop",
+            },
+            repo_root=ctx.repo_root,
+        ))
+        assert result == {}
+        assert not (tmp_path / "state" / "subagent-share").exists()
+
+    def test_missing_transcript_is_a_silent_no_op(self, tmp_path: Path) -> None:
+        from coordinator_core.hooks.subagent_zero_tool_use import _handler
+
+        ctx = _ctx(tmp_path)
+        sid = "sess-missing-transcript-0001"
+        agent_id = "agent-missing-transcript"
+        sidecar_path = _provision_report_sidecar(tmp_path, sid, agent_id)
+        before = sidecar_path.read_text(encoding="utf-8")
+
+        missing = tmp_path / "does-not-exist.jsonl"
+        result = _run(_handler(
+            {
+                "session_id": sid,
+                "agent_id": agent_id,
+                "agent_type": "executor",
+                "agent_transcript_path": str(missing),
+                "hook_event_name": "SubagentStop",
+            },
+            repo_root=ctx.repo_root,
+        ))
+        assert result == {}
+        assert sidecar_path.read_text(encoding="utf-8") == before
+
+    def test_empty_transcript_is_a_silent_no_op(self, tmp_path: Path) -> None:
+        from coordinator_core.hooks.subagent_zero_tool_use import _handler
+
+        ctx = _ctx(tmp_path)
+        sid = "sess-empty-transcript-0001"
+        agent_id = "agent-empty-transcript"
+        sidecar_path = _provision_report_sidecar(tmp_path, sid, agent_id)
+        before = sidecar_path.read_text(encoding="utf-8")
+
+        transcript = tmp_path / "transcript.jsonl"
+        transcript.write_text("")
+
+        _run(_handler(
+            {
+                "session_id": sid,
+                "agent_id": agent_id,
+                "agent_type": "executor",
+                "agent_transcript_path": str(transcript),
+                "hook_event_name": "SubagentStop",
+            },
+            repo_root=ctx.repo_root,
+        ))
+        assert sidecar_path.read_text(encoding="utf-8") == before
+
+    def test_transcript_with_no_assistant_message_is_a_silent_no_op(
+        self, tmp_path: Path
+    ) -> None:
+        from coordinator_core.hooks.subagent_zero_tool_use import _handler
+
+        ctx = _ctx(tmp_path)
+        sid = "sess-no-assistant-0001"
+        agent_id = "agent-no-assistant"
+        sidecar_path = _provision_report_sidecar(tmp_path, sid, agent_id)
+        before = sidecar_path.read_text(encoding="utf-8")
+
+        transcript = tmp_path / "transcript.jsonl"
+        transcript.write_text(
+            json.dumps({"type": "user", "message": {"content": "hi"}}) + "\n"
+        )
+
+        _run(_handler(
+            {
+                "session_id": sid,
+                "agent_id": agent_id,
+                "agent_type": "executor",
+                "agent_transcript_path": str(transcript),
+                "hook_event_name": "SubagentStop",
+            },
+            repo_root=ctx.repo_root,
+        ))
+        assert sidecar_path.read_text(encoding="utf-8") == before
+
+    def test_last_assistant_text_direct_unit(self, tmp_path: Path) -> None:
+        """Unit-level pin on `_last_assistant_text` itself, independent of
+        the sidecar-persistence plumbing above."""
+        from coordinator_core.hooks.subagent_zero_tool_use import _last_assistant_text
+
+        assert _last_assistant_text(str(tmp_path / "absent.jsonl")) == ""
+
+        empty = tmp_path / "empty.jsonl"
+        empty.write_text("")
+        assert _last_assistant_text(str(empty)) == ""
+
+        transcript = tmp_path / "t.jsonl"
+        transcript.write_text(
+            "\n".join([_text_line("earlier"), _text_line("later, the real one")]) + "\n"
+        )
+        assert _last_assistant_text(str(transcript)) == "later, the real one"

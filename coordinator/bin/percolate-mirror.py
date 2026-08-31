@@ -691,8 +691,10 @@ def main(argv: Optional[List[str]] = None) -> int:
             print(f"  pushed:    {repo_root}")
             return _round._EXIT_OK
     except _round._RoundLockTimeout as exc:
+        from percolate.wire_contract import lock_busy_message  # noqa: PLC0415 - engine bound by _bootstrap_engine() above
+
         print(
-            f"percolate-mirror: {_round._lock_busy_message(repo_root, exc)}",
+            f"percolate-mirror: {lock_busy_message(repo_root, exc)}",
             file=sys.stderr,
         )
         return _round._EXIT_LOCK_BUSY

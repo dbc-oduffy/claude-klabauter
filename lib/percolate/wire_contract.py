@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import os
 
+from coordinator_core import publish_lane
 from coordinator_core.locked_write import contended_lock_wait_secs
 
 #: D1 fix — inherited-holder handoff env var. `percolate-round.py` writes
@@ -30,9 +31,6 @@ INHERITED_LOCK_ROOTS_ENV = "PERCOLATE_ROUND_INHERITED_LOCK_ROOTS"
 #: wait, which then resolves through `contended_lock_wait_secs()` — same
 #: clamp, same 180s ceiling, no second source of truth for that number.
 COORDINATOR_ALLOW_PERCOLATE_QUEUE_ENV = "COORDINATOR_ALLOW_PERCOLATE_QUEUE"
-
-_FALSY = ("", "0", "false", "no", "off")
-
 
 def lock_busy_message(dest: str, exc: Exception) -> str:
     """One refusal line for a contended per-destination lock — the single
@@ -85,13 +83,18 @@ def publish_contention_wait_secs() -> float:
     A 0.0 wait still enters `_acquire_flock`, whose first action is a
     `_plat_try_lock` attempt before any deadline arithmetic — so a 0 wait is
     one try, not zero tries, and an uncontended acquire is unaffected
-    (measured 2.8ms).
+    (LEG 3 of `docs/plans/2026-08-30-a-second-percolate-round-stops-sleeping.falsifier.py`
+    measures it; 1.7-2.9ms across runs, against 2.8ms on the pre-change baseline).
 
-    Truthiness follows `coordinator_core.publish_lane.env_declares_lane`'s
-    shape exactly: absent, empty, ``0``, ``false``, ``no``, ``off`` are all
-    off, rather than inventing a third parsing convention.
+    Truthiness is delegated to `coordinator_core.publish_lane.env_declares_lane`
+    itself (fed this env var's own raw value under `PUBLISH_LANE_ENV`'s key,
+    via a synthetic one-entry `environ` mapping) rather than a second copy of
+    its falsy-string tuple — staff-eng-review finding 5: two in-tree copies
+    of one truthiness convention drift the first time either one changes.
+    An unset key needs no branch of its own: `env_declares_lane` reads an
+    empty value as falsy, so absent and explicitly-off resolve identically.
     """
-    raw = os.environ.get(COORDINATOR_ALLOW_PERCOLATE_QUEUE_ENV)
-    if raw is None or raw.strip().lower() in _FALSY:
+    raw = os.environ.get(COORDINATOR_ALLOW_PERCOLATE_QUEUE_ENV, "")
+    if not publish_lane.env_declares_lane({publish_lane.PUBLISH_LANE_ENV: raw}):
         return 0.0
     return contended_lock_wait_secs()

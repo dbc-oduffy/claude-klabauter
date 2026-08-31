@@ -226,11 +226,14 @@ import os
 import re
 import subprocess
 import sys
+import traceback
 from datetime import datetime, timezone
 from pathlib import Path
 from types import ModuleType
 from typing import Any, Mapping, NamedTuple, Optional, Sequence
 
+from coordinator_core.frontmatter.body_blocks import LocateStatus
+from coordinator_core.ops.plan_tasks_render import load_rows
 from coordinator_core.ceremony_common.json_payload_flag import (
     detect_conflicting_payload_channels,
     resolve_json_payload_flag,
@@ -1797,7 +1800,12 @@ def build_landed_reconciliation_block_stamp_judgment_point(gate: "LandedReconcil
     `gate.verdict`, never on whether `gate.warn_text` is set (`warn_text`
     is `None` on `indeterminate` too, so a message-keyed trigger would fail
     open exactly when the plan cannot be read); the `indeterminate` arm
-    BLOCKS, and its message says the state could not be determined rather
+    BLOCKS -- and every cause that reaches it is one a plan edit clears
+    (`compute_landed_reconciliation_gate`'s own docstring enumerates them;
+    a landed plan with no `## Acceptance Criteria` grammar is NOT among
+    them, because nothing an operator can do would clear a block raised on
+    an optional table's absence) -- and its message says the state could
+    not be determined rather
     than naming an open/total split it does not have; and the open/total
     counts quoted in the `applicable` question below are read directly off
     `gate` -- the single derivation `compute_landed_reconciliation_gate`
@@ -2026,13 +2034,34 @@ def _parse_review_receipt_timestamp(value: Any) -> Optional[datetime]:
     timestamp read in this module. A `None` result is treated by the
     caller as "cannot be bounded", never as "out of window" — the window
     check only excludes a receipt it can positively place outside the
-    bounds."""
+    bounds.
+
+    Returns an AWARE datetime or `None`, never a naive one. A date-only
+    stamp (`2026-08-31`) parses successfully into a naive value, so it
+    never reaches the `None` path above and instead poisons both consumers,
+    which compare against aware values — `stamped_at > now` at the second
+    site is unconditional, so it raises with no claim window in play at
+    all. The exception escapes to `brief()`'s structural backstop, which
+    computes none of its keys: one hand-authored receipt takes down the
+    whole close. Reported 2026-08-31 by example-retrieval-repo-ue-addon-em with a
+    reproduction; theirs was hand-written because the dispatch it belonged
+    to lost its provisioned sidecar. UTC is the right assumption rather
+    than a guess: every seam-written receipt in this repo is stamped from
+    `datetime.now(timezone.utc)`.
+
+    Negative spec: a date-only stamp is normalized, NOT rejected. Rejecting
+    it would trade a crash for a block, which is the same failure wearing a
+    better error message; the docstring's degrade-never-raise contract is
+    the one this function keeps."""
     if not isinstance(value, str) or not value.strip():
         return None
     try:
-        return datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+        parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
     except ValueError:
         return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed
 
 
 def _resolve_baton_claim_window_start(root: Path, gate: "SessionShapeGate") -> Optional[str]:
@@ -2414,6 +2443,39 @@ _LANDED_RECONCILIATION_INDETERMINATE_SUMMARY = (
     "signal, check by hand whether this session's governing plan is landed with open ACs"
 )
 
+# A `landed` plan carrying NO `## Acceptance Criteria` grammar at all is
+# `not-applicable`, not `indeterminate`. `plan.schema.json` (2.13.0) says so
+# in its own `gated_exit_criteria` description: the `## Acceptance Criteria`
+# table "is never mechanically gated" — it is optional, reviewer-facing prose,
+# and the schema's top-level `required` is `title`/`created`/`author`/`status`
+# only. A plan that never had one is schema-valid and complete, so there is no
+# hand-check to ask for and nothing an operator could ever do to discharge a
+# block raised on its absence: the `indeterminate` arm's single disposition
+# resolves `[]`, so blocking here made `d-stamp-plan-implemented` permanently
+# unreachable for the whole spec-dispatch plan shape (cross-repo memo
+# `2026-08-30-example-retrieval-repo-em-landed-reconciliation-gate-blind-to-gated-exit-
+# criteria.md`; 3 of 8 `status: landed` plans in the reporting repo). The fact
+# is still SURFACED — the summary line below names it — it just does not gate.
+# What stays `indeterminate` (and stays blocking) is every arm an operator CAN
+# discharge by editing the plan and re-running: an unreadable plan file, and an
+# AC section whose rows carry statuses this module refuses to guess at.
+_LANDED_RECONCILIATION_NO_CRITERIA_SUMMARY = (
+    "Landed-plan reconciliation: not applicable — {reason}; the ## Acceptance "
+    "Criteria table is optional and never mechanically gated (plan.schema.json), "
+    "so there is nothing to reconcile against"
+)
+
+
+def _landed_reconciliation_no_criteria(reason: str) -> "LandedReconciliationGate":
+    return LandedReconciliationGate(
+        applies=False,
+        open_count=0,
+        total_count=0,
+        warn_text=None,
+        summary_line=_LANDED_RECONCILIATION_NO_CRITERIA_SUMMARY.format(reason=reason),
+        verdict="not-applicable",
+    )
+
 _LANDED_RECONCILIATION_WARN_TEMPLATE = """WARN [landed-plan-reconciliation]: {plan_ref} is status: landed with {open} of {total} acceptance criteria unticked.
 Reconcile and stamp now: tick each remaining AC once its work is verified landed, or resolve the outstanding item via `python3 coordinator/bin/plan-tasks-resolve`.
 
@@ -2427,10 +2489,12 @@ class LandedReconciliationGate(NamedTuple):
     warn_text: Optional[str]
     summary_line: str
     #: Same three-way split as `OpenSpineRowGate.verdict` — "applicable"
-    #: (landed, at least one AC unticked), "not-applicable" (not landed, or
-    #: landed with every AC ticked), "indeterminate" (no governing plan
-    #: resolved, the plan file unreadable, or a landed plan with no
-    #: parseable `## Acceptance Criteria` section to reconcile against).
+    #: (landed, at least one AC unticked), "not-applicable" (not landed,
+    #: landed with every AC ticked, or landed with no `## Acceptance
+    #: Criteria` grammar at all — see `_LANDED_RECONCILIATION_NO_CRITERIA_
+    #: SUMMARY` for why an absent AC table is not a defect to gate on),
+    #: "indeterminate" (no governing plan resolved, the plan file
+    #: unreadable, or AC rows this module refuses to guess a status for).
     verdict: str = "not-applicable"
 
 
@@ -2449,10 +2513,22 @@ def compute_landed_reconciliation_gate(
     governing_plan_slug: Optional[str],
     governing_plan_path: Optional[Path],
 ) -> LandedReconciliationGate:
-    """AC9 (pln-landed-fires-at-spine-resoluti-ac7e89, C3) — surfaces "this
-    session's governing plan is `landed` and its ACs are not reconciled" as
-    a read-only OFFER, never a blocker: no judgment point, no directive
-    dependency edge, no exit code. Mirrors `directives_spine_worklist.
+    """AC9 (pln-landed-fires-at-spine-resoluti-ac7e89, C3) — computes "this
+    session's governing plan is `landed` and its ACs are not reconciled".
+
+    THIS FUNCTION IS READ-ONLY; THE GATE IT COMPUTES IS NOT ADVISORY.
+    An earlier version of this docstring called the gate "a read-only OFFER,
+    never a blocker: no judgment point, no directive dependency edge, no exit
+    code". That was true of the original AC9 wiring and is false of shipped
+    behaviour: `build_directives`' assembly layer promotes any verdict other
+    than `not-applicable` into `jp-landed-reconciliation-block-stamp` and hangs
+    a `depends_on` edge off `d-stamp-plan-implemented`, so `applicable` and
+    `indeterminate` both BLOCK the terminal stamp. The stale sentence cost a
+    peer repo a verify pass; keep this paragraph accurate with the call site
+    (`build_landed_reconciliation_block_stamp_judgment_point` and its wiring
+    comment) or delete it, never both.
+
+    Mirrors `directives_spine_worklist.
     compute_open_spine_row_gate`'s degrade-never-raise shape and its
     `applies`/`verdict` split (see that function's own docstring for the
     rationale behind splitting `not-applicable` from `indeterminate`).
@@ -2464,12 +2540,16 @@ def compute_landed_reconciliation_gate(
     checkbox parser.
 
     Degrades to `indeterminate`, never raises, on: no governing plan
-    resolved, an unreadable/non-UTF-8 plan file, or a `landed` plan whose
-    body carries no parseable `## Acceptance Criteria` section (no heading,
-    or a heading with zero checkboxes) — there is nothing to reconcile
-    against, and that is a fact worth flagging by hand, not a clean close.
-    A NON-landed plan, or a landed plan with every AC ticked, is the
-    ordinary `not-applicable` case."""
+    resolved, an unreadable/non-UTF-8 plan file, or AC rows whose status
+    tokens this module refuses to guess at. Every one of those is a state
+    an operator discharges by fixing the plan (or resolving the governing
+    plan) and re-running — which is what makes the block they raise a gate
+    rather than a wall.
+
+    A NON-landed plan, a landed plan with every AC ticked, and a landed
+    plan carrying no `## Acceptance Criteria` grammar at all are the
+    `not-applicable` cases. The last of those is deliberately NOT
+    `indeterminate` — see `_LANDED_RECONCILIATION_NO_CRITERIA_SUMMARY`."""
     if not governing_plan_slug or governing_plan_path is None:
         return _landed_reconciliation_indeterminate("no governing plan resolved for this session")
 
@@ -2488,8 +2568,8 @@ def compute_landed_reconciliation_gate(
 
     checkbox_parsed = directives_session_hygiene.parse_consumed_handoff_acceptance_criteria(source)
     if checkbox_parsed is None:
-        return _landed_reconciliation_indeterminate(
-            f"governing plan {governing_plan_slug} is status: landed but carries no "
+        return _landed_reconciliation_no_criteria(
+            f"governing plan {governing_plan_slug} is status: landed and carries no "
             "## Acceptance Criteria heading"
         )
     # Checkboxes are the HANDOFF spelling; plans overwhelmingly carry their
@@ -2500,8 +2580,8 @@ def compute_landed_reconciliation_gate(
     # shadow a real table): if both parses find rows, the larger `total` wins.
     table_parsed = directives_session_hygiene.parse_plan_acceptance_criteria_table(source)
     if checkbox_parsed["total"] == 0 and (table_parsed is None or table_parsed["total"] == 0):
-        return _landed_reconciliation_indeterminate(
-            f"governing plan {governing_plan_slug} is status: landed but its Acceptance "
+        return _landed_reconciliation_no_criteria(
+            f"governing plan {governing_plan_slug} is status: landed and its Acceptance "
             "Criteria heading carries neither checkboxes nor | ACn | table rows"
         )
     if table_parsed is not None and table_parsed["total"] > checkbox_parsed["total"]:
@@ -3751,6 +3831,89 @@ def _expand_untracked(
     return members
 
 
+def _dispatched_chunk_shas_missing_from_slices(
+    root: Path,
+    governing_plan,
+    slice_shas: "set[str]",
+) -> "tuple[list[dict[str, str]], list[dict[str, str]]]":
+    """Plan-spine chunk commits this session's workstream delivered that
+    `Session-Id` attribution did not reach.
+
+    THE DEFECT THIS CLOSES. `_session_owned_shas` selects by `Session-Id`
+    trailer, which is the only sound peer-exclusion selector on a shared
+    branch (see its own docstring). But the trailer names the COMMITTER, and
+    a chunk committed by a git-commit-agent dispatched inside a background
+    Workflow is committed by that agent's own process: `commit_trailers.
+    _resolve_session_id` omits rather than guesses, so the commit lands with
+    NO trailer at all and drops out of the measurement silently. Measured
+    2026-08-31: `ed344842186b` (C3, 5 files, 309 insertions -- the largest
+    chunk of its workstream) was absent from `commit_slices` while the
+    EM-committed `1f5dc47b9a` minutes earlier on the same branch was present.
+    The gate still reported `resolved: true, partition_mandatory: true` over
+    the narrowed set, which is worse than refusing: the close reads fully
+    reviewed while the biggest diff reached no reviewer, and "slice, never
+    narrow" cannot defend against a narrowing nobody is told about.
+
+    The plan's own `## Tasks` spine is the authority the trailer is not. A
+    `disposition: coded` row's `disposition_ref` is this session's recorded
+    statement that the named sha delivered that chunk, so a resolved row
+    whose sha is missing from the slices is a measurement gap, not a peer's
+    commit.
+
+    Returns `(recoverable, conflicting)`.
+
+    - `recoverable` -- missing shas that exist and carry NO `Session-Id`
+      trailer. Unattributed is exactly the dispatched-committer signature,
+      and folding them in widens review scope, which is the safe direction.
+    - `conflicting` -- missing shas carrying a DIFFERENT session's trailer.
+      Never folded in: `disposition_ref` is hand-written and the
+      anti-self-attestation gate cannot catch a row pointing at a peer's
+      commit, so this is surfaced for a human rather than swept into scope
+      (and a foreign trailer inside a `--sha-range` is refused downstream
+      anyway).
+
+    A sha that does not resolve against this repo is skipped by both arms --
+    a typo in a hand-written `disposition_ref` is a plan defect, and the
+    spine worklist gate is what reports it.
+    """
+    if governing_plan is None:
+        return [], []
+    try:
+        source = Path(governing_plan.path).read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError, AttributeError, TypeError):
+        return [], []
+    result = load_rows(source)
+    if result.status is not LocateStatus.LOCATED:
+        return [], []
+
+    recoverable: list[dict[str, str]] = []
+    conflicting: list[dict[str, str]] = []
+    for row in result.rows:
+        if str(row.get("disposition") or "").strip() != "coded":
+            continue
+        ref = str(row.get("disposition_ref") or "").strip()
+        chunk_id = str(row.get("id") or "").strip()
+        if not ref or not chunk_id:
+            continue
+        resolved = _run_git_read_only(["rev-parse", "--verify", f"{ref}^{{commit}}"], root)
+        if not resolved:
+            continue
+        full = resolved.strip().splitlines()[0].strip()
+        if full in slice_shas:
+            continue
+        trailer = _run_git_read_only(
+            ["log", "-1", "--format=%(trailers:key=Session-Id,valueonly)", full], root
+        )
+        owner = (trailer or "").strip()
+        entry = {"chunk": chunk_id, "sha": full}
+        if owner:
+            entry["committed_by"] = owner
+            conflicting.append(entry)
+        else:
+            recoverable.append(entry)
+    return recoverable, conflicting
+
+
 def _measure_session_review_scale_inputs(
     root: Path,
     session_start_time: Any,
@@ -4621,6 +4784,47 @@ def brief(decisions: Optional[dict[str, Any]] = None, repo_root: Optional[Path] 
     # None` — the slices list stays empty either way, so it cannot be read as
     # "resolved, zero") and when the caller overrode `commit_count`, since the
     # slices then describe a different population than the override does.
+    # ATTRIBUTION GAP -- fold in chunk commits the `Session-Id` selector could
+    # not see, BEFORE the brightline is decided. A workflow-dispatched commit
+    # agent commits under its own process, so its commits carry no trailer and
+    # vanish from `review_scale_commit_slices`; deciding the scale over that
+    # narrowed set is how a close reports `resolved: true` across a scope
+    # missing its largest diff. See `_dispatched_chunk_shas_missing_from_
+    # slices` for the measured case. Recoverable (untrailered) shas join the
+    # measurement so the brightline counts the real workstream; conflicting
+    # (foreign-trailered) ones never do, and are surfaced on the payload
+    # instead.
+    review_scale_attribution_gap: dict[str, Any] = {"recovered": [], "conflicting": []}
+    if measured_commit_count is not None:
+        _recoverable, _conflicting = _dispatched_chunk_shas_missing_from_slices(
+            root, governing_plan, {s["sha"] for s in review_scale_commit_slices}
+        )
+        review_scale_attribution_gap = {
+            "recovered": _recoverable,
+            "conflicting": _conflicting,
+        }
+        for _entry in _recoverable:
+            _numstat = _run_git_read_only(
+                ["show", "--numstat", "--format=%H", _entry["sha"]], root
+            )
+            if _numstat is None:
+                continue
+            _surfaces: set[str] = set()
+            measured_gross_loc = (measured_gross_loc or 0) + _accumulate_numstat(_numstat, _surfaces)
+            _entry_code_loc = _accumulate_code_loc_numstat(_numstat)
+            measured_code_loc = (measured_code_loc or 0) + _entry_code_loc
+            measured_commit_count += 1
+            review_scale_commit_slices.append(
+                {
+                    "sha": _entry["sha"],
+                    "sha_range": f"{_entry['sha']}~1..{_entry['sha']}",
+                    "diff_loc": _entry_code_loc,
+                    "attributed_via": f"plan-spine {_entry['chunk']} (no Session-Id trailer)",
+                }
+            )
+        if _recoverable:
+            review_scale_commit_slices.sort(key=lambda s: s["sha"] not in {e["sha"] for e in _recoverable})
+
     zero_diff_commit_count: Optional[int] = None
     if measured_commit_count is not None and decisions.get("commit_count") is None:
         zero_diff_commit_count = sum(
@@ -4784,6 +4988,14 @@ def brief(decisions: Optional[dict[str, Any]] = None, repo_root: Optional[Path] 
     # spine gate above is silent by construction once every row has left
     # `open` (the same state `landed` requires) and this was the only
     # remaining contradicting signal, advisory-only.
+    #
+    # Every verdict this promotes must be one an operator can discharge:
+    # the judgment point's single disposition resolves `[]`, so the ONLY
+    # exit is making the gate go quiet on the next `brief()`. That holds
+    # for `applicable` (reconcile the ACs) and for each `indeterminate`
+    # cause (fix or resolve the plan) -- and is exactly why a landed plan
+    # with no `## Acceptance Criteria` grammar is `not-applicable` and
+    # never reaches here (`_LANDED_RECONCILIATION_NO_CRITERIA_SUMMARY`).
     landed_reconciliation_gate = compute_landed_reconciliation_gate(
         governing_plan.slug if governing_plan else None,
         governing_plan.path if governing_plan else None,
@@ -4946,6 +5158,23 @@ def brief(decisions: Optional[dict[str, Any]] = None, repo_root: Optional[Path] 
         review_scale_payload["uncommitted_code_loc"] = (
             max(0, measured_code_loc - _sliced_code_loc) if measured_code_loc is not None else None
         )
+        # Never silent, even when fully recovered: the EM needs to know the
+        # trailer did not cover its own workstream, because the same gap
+        # reappears on the next dispatched commit.
+        if review_scale_attribution_gap["recovered"] or review_scale_attribution_gap["conflicting"]:
+            review_scale_payload["attribution_gap"] = review_scale_attribution_gap
+        if review_scale_attribution_gap["conflicting"]:
+            review_scale_payload["remediation"] = (
+                "plan-spine rows resolve to commits carrying ANOTHER session's Session-Id: "
+                + ", ".join(
+                    f"{e['chunk']}->{e['sha'][:10]} (committed_by {e['committed_by'][:8]})"
+                    for e in review_scale_attribution_gap["conflicting"]
+                )
+                + ". These are NOT folded into review scope. Either the row's "
+                "`disposition_ref` points at a peer's commit (fix the row), or the work "
+                "genuinely landed under another session (say so at close) — do not review "
+                "around them silently."
+            )
 
 
     # C2, pln-one-completion-verdict-for-wor-ea96e2: `gates.completion_
@@ -5064,13 +5293,25 @@ def _main_brief(rest: list[str]) -> int:
         print(json.dumps(dict(failure)))
         return EXIT_TRANSPORT_FAIL
     except Exception as exc:  # noqa: BLE001 - structural backstop, mirrors pickup_assemble Finding 4b
+        # The traceback goes to stderr HERE because `next_move` below asks the
+        # operator to report one. It used to ask for a traceback this backstop
+        # never printed, so the only way to obtain it was to call `brief()`
+        # in-process from a Python REPL -- which requires reading engine source
+        # to know is possible. Reported 2026-08-31 by example-retrieval-repo-ue-addon-em,
+        # for whom it cost most of the diagnosis: the advice "re-run" is also
+        # wrong for a deterministic input-shaped failure, so an operator
+        # following the message verbatim retries a fixed number of times and
+        # learns nothing. Naming the shape of the cause is what makes the
+        # retry advice honest.
+        traceback.print_exc()
         print(f"workstream-complete-assemble: unexpected failure: {exc}", file=sys.stderr)
         failure = emit(
             build_envelope(
                 narration=f"brief() raised an unexpected exception: {exc}.",
                 next_move=(
-                    "Re-run; if this repeats, report the traceback — this is a structural "
-                    "backstop firing, not an enumerated failure mode."
+                    "Traceback is on stderr. A structural backstop, not an enumerated failure "
+                    "mode: if it repeats identically, the cause is an artifact this close reads, "
+                    "not the invocation — re-running will not clear it."
                 ),
             )
         )

@@ -1593,9 +1593,11 @@ def _make_repo_with_upstream(
     return repo
 
 
-def _write_failure_log_line(repo: Path, branch: str, err_class: str, when: _datetime) -> None:
+def _write_failure_log_line(
+    repo: Path, branch: str, err_class: str, when: _datetime, *, route: str = "direct push"
+) -> None:
     stamp = when.strftime("%Y-%m-%dT%H:%M:%SZ")
-    line = f"[{stamp}] PUSH FAILED on {branch} (direct push/{err_class} after 2) :: some detail :: stderr=<empty>\n"
+    line = f"[{stamp}] PUSH FAILED on {branch} ({route}/{err_class} after 2) :: some detail :: stderr=<empty>\n"
     logf = repo / ".git" / "push-failures.log"
     with open(logf, "a", encoding="utf-8", newline="\n") as fh:
         fh.write(line)
@@ -1648,3 +1650,100 @@ def _time_delta_seconds(seconds: float):
     from datetime import timedelta
 
     return timedelta(seconds=seconds)
+
+
+# ---------------------------------------------------------------------------
+# The cadence grace and the three outstanding-work classes (2026-08-30).
+# Moved here from coordinator/tests/test_orientation_auto_push_health.py
+# (overengineering-review 2026-08-31, EM-adjudicated APPLY 5): these were
+# already in-process tests of `emit_auto_push_health` calling the function
+# directly, landed in the subprocess/end-to-end file instead of here, which
+# forced a second backdating fixture (`_setup_repo`/`_AGED_SECS`) to be built
+# beside `_make_repo_with_upstream`/`_AGED_UNPUSHED_SECS` above. Moved, not
+# extracted -- no new shared cross-suite helper; these tests now reuse this
+# file's own existing fixture.
+# ---------------------------------------------------------------------------
+
+
+def test_fresh_commit_inside_cadence_window_is_silent(tmp_path: Path) -> None:
+    """Fleet-wide false positive, 2026-08-30. C6/C7 deleted the per-commit
+    detached push; `warm.push_cadence` publishes on a 600s tick instead, so a
+    just-committed repo is unpushed BY DESIGN. The unchanged `unpushed >= 1`
+    trigger fired on every healthy repo on the box -- 3 of 14 at the moment it
+    was caught -- putting "auto-push lagging" into the boot context of sessions
+    with nothing wrong with them, which is what teaches a reader to skip the
+    line on the repos that ARE stale."""
+    repo = _make_repo_with_upstream(tmp_path, branch="work/test/cadence-fresh", unpushed=2, age_secs=0)
+    assert mod.emit_auto_push_health(repo) == ""
+
+
+def test_commit_older_than_two_cadence_intervals_still_warns(tmp_path: Path) -> None:
+    """The other half of the pair above: the grace silences the cadence's own
+    normal latency, never a genuine publish failure. Guards against "fixing" the
+    fleet noise by widening the bound until nothing reports at all."""
+    repo = _make_repo_with_upstream(tmp_path, branch="work/test/cadence-stale", unpushed=1, age_secs=3000)
+    line = mod.emit_auto_push_health(repo)
+    assert "auto-push lagging" in line
+    assert "1 unpushed commit" in line
+
+
+def test_cadence_sweep_failure_class_can_reach_the_line(tmp_path: Path) -> None:
+    """`_LASTCLASS_RE` matched only the direct-push/trampoline routes, so once
+    the cadence became the primary publisher its own failure rows could never
+    render a class -- the surface reported the count and dropped the reason."""
+    repo = _make_repo_with_upstream(tmp_path, branch="work/test/cadence-nff", unpushed=1, age_secs=3000)
+    recent = _datetime.now(_timezone.utc) - _time_delta_seconds(30)
+    _write_failure_log_line(
+        repo, "work/test/cadence-nff", "non-fast-forward", recent, route="cadence-sweep"
+    )
+    assert "reconcile" in mod.emit_auto_push_health(repo)
+
+
+def test_non_work_branch_is_reported_not_silent(tmp_path: Path) -> None:
+    """`branch_gate` publishes `work/*` only, deliberately -- so a repo on any
+    other branch accumulates commits no automation will ever take. Reporting
+    nothing made that indistinguishable from a healthy repo: three repos on
+    `main` were each holding 4 commits for 5 hours with no signal anywhere."""
+    repo = _make_repo_with_upstream(tmp_path, branch="scratch/test", unpushed=2, age_secs=3000)
+    line = mod.emit_auto_push_health(repo)
+    assert "2 unpushed commit" in line
+    assert "`work/*` only" in line
+    assert "git push origin scratch/test" in line
+
+
+def test_branch_without_upstream_is_reported(tmp_path: Path) -> None:
+    """A branch that has never been pushed has no upstream ref, so the
+    upstream-relative count `push_outstanding` and this signal both used could
+    not be computed at all -- and the whole unpublished branch went unreported.
+    Counts against every remote ref instead, which is the honest question when
+    there is no upstream to diff against.
+
+    Negative spec (subsumes the deleted `test_no_upstream_remedy_is_adopt_not_
+    retry`): the remedy for an unadopted branch is `push -u`, never a bare
+    retry -- a plain `git push` on a branch with no upstream does not create
+    one under `push.default = simple`, so the retry phrasing every other class
+    uses would send the reader in a circle."""
+    repo = _make_repo_with_upstream(tmp_path, branch="work/test/2026-05-27", unpushed=1, age_secs=3000)
+    subprocess.run(
+        ["git", "checkout", "-q", "-b", "work/test/never-pushed"],
+        cwd=str(repo), check=True, **no_console_passthrough_kwargs(),
+    )
+    line = mod.emit_auto_push_health(repo)
+    assert "no upstream" in line
+    assert "git push -u origin work/test/never-pushed" in line
+
+
+def test_detached_head_is_silent(tmp_path: Path) -> None:
+    """`origin/HEAD` resolves on a normal clone, so a detached HEAD would
+    otherwise report against the remote's DEFAULT branch -- a count for a branch
+    the tree is not on."""
+    repo = _make_repo_with_upstream(tmp_path, branch="work/test/2026-05-27", unpushed=1, age_secs=3000)
+    sha = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=str(repo), capture_output=True, text=True, check=True,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    ).stdout.strip()
+    subprocess.run(
+        ["git", "checkout", "-q", "--detach", sha],
+        cwd=str(repo), check=True, **no_console_passthrough_kwargs(),
+    )
+    assert mod.emit_auto_push_health(repo) == ""

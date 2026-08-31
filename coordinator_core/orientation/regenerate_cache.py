@@ -217,10 +217,7 @@ from coordinator_core.ops.ceremony.detached_spawn import (
 )
 from coordinator_core.win_portability import same_path
 from coordinator_core.telemetry import op_latency
-from coordinator_core.warm.push_cadence import (
-    PUSH_CADENCE_INTERVAL_SECS,
-    SWEEP_TOTAL_CEILING_SECS,
-)
+from coordinator_core.warm.push_cadence import PUSH_CADENCE_INTERVAL_SECS
 from coordinator_core.ops.ceremony.housekeeping_liveness import (
     ARCHIVE_SWEEPS,
     REMEDY_COMMANDS,
@@ -884,6 +881,18 @@ def emit_recent_commits(repo_root: Path) -> List[str]:
 # `coordinator_core` unimportable). Admitted here so that class reaches a
 # reader at all; kept lexically distinct from the two real routes so no one
 # reads it as a remote rejecting a push.
+#
+# Negative-spec (overengineering-review 2026-08-31, EM-adjudicated REJECT of
+# the reviewer's "narrow to the live writer" suggestion): `direct push`,
+# `powershell ssh push`, and `trampoline` have no LIVE writer as of this
+# revision -- only `cadence-sweep` does (`warm.push_cadence._feed_failure_
+# detector`). They are kept anyway. `.git/push-failures.log` is an
+# append-only forensic record, and this fleet runs multiple machines whose
+# installed engine images update at different times -- a peer machine still
+# on a pre-C6/C7 image writes these routes TODAY, and this repo's own log
+# already carries 152 such rows. Parsing a row this box no longer writes is
+# nearly free; failing to parse one a peer wrote is a silent misreport. Do
+# not re-narrow this regex to the current box's live writer alone.
 _LASTCLASS_RE = re.compile(r"\((direct push|cadence-sweep|powershell ssh push|trampoline)/([a-z-]+) after")
 
 _ACTION_MAP = {
@@ -895,6 +904,20 @@ _ACTION_MAP = {
     "gh-size-limit": "see .git/push-failures.log; resolve, then push",
     "gh-lfs-quota": "see .git/push-failures.log; resolve, then push",
     "timeout": "push timed out — retry: git push (see .git/push-failures.log if it recurs)",
+    # `cadence-sweep`'s two classes (`_feed_failure_detector` in
+    # warm/push_cadence.py -- the sole non-test caller of `log_failure`).
+    # OBSERVED vs NEVER-OBSERVED is the whole point: `sweep-failed` is a push
+    # that was attempted and failed, so a plain retry is correct. `sweep-
+    # unconfirmed` means the push TIMED OUT and its outcome was never
+    # observed -- the work may already have landed, so a bare retry risks a
+    # confusing no-op or a spurious non-fast-forward; reconcile against the
+    # remote first (see ops/push_outstanding.py / ops/ceremony/push.py for
+    # what "unconfirmed" means on this leg).
+    "sweep-failed": "push failed — retry: git push",
+    "sweep-unconfirmed": (
+        "push timed out and its outcome was never confirmed — check whether it "
+        "landed (git fetch && git log origin/<branch>..HEAD) before retrying"
+    ),
     # Both trampoline classes: nothing reached the remote, so "retry the push"
     # is the wrong instruction -- the install is what is broken, and the
     # commits still need pushing by hand once it is fixed.
@@ -921,16 +944,6 @@ _FAILURE_RECENCY_SECONDS = 900
 #: The cadence's own publish latency, under which unpushed commits are NORMAL
 #: and `emit_auto_push_health` stays silent.
 #:
-#: THE DEFECT THIS CLOSES. Until C6/C7 (2026-08-30, docs/plans/2026-08-30-who-
-#: pushes-and-when.md) every commit was published by its own detached child, so
-#: any unpushed commit really was a failed push and a bare `unpushed >= 1` was a
-#: sound trigger. That publisher is deleted. `warm.push_cadence` now publishes on
-#: a `PUSH_CADENCE_INTERVAL_SECS` tick, which makes a just-committed repo
-#: unpushed BY DESIGN -- so the unchanged trigger fired on healthy repos across
-#: the whole fleet, putting "auto-push lagging" into the boot context of every
-#: session whose last commit was inside the cadence window. That is how a real
-#: multi-hour lag gets read as noise.
-#:
 #: TWO intervals, not one: `push_cadence.sweep_repos` refuses to START a repo it
 #: cannot finish inside `SWEEP_TOTAL_CEILING_SECS`, so a repo deferred by that
 #: ceiling costs exactly one extra interval before its next attempt. A one-
@@ -942,7 +955,7 @@ _FAILURE_RECENCY_SECONDS = 900
 #: how old the unpushed WORK may be before there is anything to report. A repo
 #: with a fresh failure logged but no commit older than this grace is still
 #: silent here -- the cadence has not yet had its second attempt.
-_CADENCE_GRACE_SECONDS = 2 * PUSH_CADENCE_INTERVAL_SECS + SWEEP_TOTAL_CEILING_SECS
+_CADENCE_GRACE_SECONDS = 2 * PUSH_CADENCE_INTERVAL_SECS
 
 _LOG_TS_RE = re.compile(r"^\[([^\]]+)\]")
 
@@ -965,21 +978,19 @@ def emit_auto_push_health(repo_root: Path) -> str:
     """One line naming work this repo is holding that nothing is going to
     publish on its own, or "" when there is nothing to say.
 
-    THREE OUTSTANDING-WORK CLASSES, not one (2026-08-30). Until this revision
-    the two below `work/*`-with-an-upstream returned "" and reported NOTHING,
-    ever -- which is the loudest failure mode a health signal has, because an
-    empty section reads as "checked, fine" rather than "not checked":
+    THREE OUTSTANDING-WORK CLASSES, not one. The two below `work/*`-with-an-
+    upstream previously returned "" and reported NOTHING, ever -- which is the
+    loudest failure mode a health signal has, because an empty section reads
+    as "checked, fine" rather than "not checked":
 
       * NO UPSTREAM -- the branch has never been pushed at all. `warm.push_
         cadence` publishes through `push_outstanding`, which compares HEAD to
         an upstream ref that does not exist, so the whole branch is outstanding
-        and unreported. Measured on this box: one repo carrying a 5-hour-old
-        branch that had never left the machine.
+        and unreported.
       * NON-`work/*` BRANCH -- `hooks.auto_push.branch_gate` publishes `work/*`
         only, deliberately (this function does NOT relitigate that policy). But
         a repo sitting on `main` therefore accumulates commits no automation
-        will ever take, and said so nowhere. Measured: three repos, 4 commits
-        each, 5 hours old.
+        will ever take, and said so nowhere.
 
     NEGATIVE SPEC: this reports; it never pushes and never widens what the
     cadence is willing to publish. The remedy string is the operator's, because

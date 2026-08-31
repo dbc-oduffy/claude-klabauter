@@ -158,6 +158,13 @@ def brief(cadence: str, *, repo_root: str | None = None) -> dict[str, Any]:
     seam calls all four unconditionally for every cadence. Read-only;
     performs no disk mutation and no git fetch (the reap-family's one
     accepted `--dry-run` subprocess is documented in `readers_health_reaper.py`).
+    This claim used to be false: `readers_health_reaper._read_hook_currency`
+    ran `ensure_hooks_fleet` unconditionally, rewriting stale `prepare-commit-
+    msg` hooks across every registered repo as a side effect of orienting a
+    session. Fixed 2026-08-31 (C1+C2 of docs/plans/2026-08-31-orient-assemble-
+    stops-running-a-fleet-re.md): that reader now calls the `--check-only`
+    form, so this claim is a fact `test_readers_perform_no_disk_mutation.py`
+    enforces, not prose the next reader added has to remember to keep true.
 
     `repo_root` is keyword-only and forwarded uniformly to every reader
     (mirrors `backlog_grind_assemble`'s `run_id` threading precedent — see
