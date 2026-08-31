@@ -1472,7 +1472,12 @@ def discover_generators(repo_root: Path) -> list[GeneratorRecord]:
                         continue
                     if not entry.name.endswith(".py"):
                         continue
-                    if not entry.is_file(follow_symlinks=False):
+                    # Review: coordinatorcode-reviewer — follow_symlinks=True
+                    # here restores pre-C6 parity (rglob + path.stat() both
+                    # followed symlinks); is_dir(follow_symlinks=False) above
+                    # stays as-is, both for cycle safety and because rglob
+                    # never descended into a symlinked dir either.
+                    if not entry.is_file():
                         continue
                     file_stat = entry.stat()
                 except OSError:

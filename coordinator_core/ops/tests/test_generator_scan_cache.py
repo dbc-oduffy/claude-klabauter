@@ -66,12 +66,12 @@ def test_load_invalid_json_returns_empty(tmp_path: Path) -> None:
     assert cache.load(tmp_path) == {}
 
 
-def test_load_truncated_body_returns_empty(tmp_path: Path) -> None:
-    cache_path = cache._cache_path(tmp_path)
-    cache_path.parent.mkdir(parents=True, exist_ok=True)
-    full = json.dumps({"schema": 2, "entries": {"x": {"mtime_ns": 1, "size": 1, "writes": {}}}})
-    cache_path.write_text(full[: len(full) // 2], encoding="utf-8")
-    assert cache.load(tmp_path) == {}
+# Review: coordinatorcode-reviewer -- test_load_truncated_body_returns_empty
+# removed here: it lands on the same except-JSONDecodeError branch as
+# test_load_invalid_json_returns_empty above, and its own justification (a
+# concurrent half-written read) is already structurally impossible given
+# save()'s os.replace atomicity, covered from the writer side by
+# test_atomic_write_leaves_no_stray_temp_file below.
 
 
 def test_load_wrong_schema_returns_empty(tmp_path: Path) -> None:
@@ -206,6 +206,39 @@ def test_corrupt_cache_warm_run_returns_full_correct_set(tmp_path: Path) -> None
     assert recovered == baseline
 
 
+# Review: coordinatorcode-reviewer -- symlink parity with the pre-C6 sweep
+# (rglob + path.stat()/is_file(), both of which follow symlinks by default).
+def test_symlinked_py_file_is_swept(tmp_path: Path) -> None:
+    real_path = _write_fixture_module(tmp_path, "gen_a.py", _DECLARED_GENERATOR_SOURCE)
+    sweep_dir = tmp_path / "coordinator_core"
+    link_path = sweep_dir / "gen_a_link.py"
+    try:
+        link_path.symlink_to(real_path)
+    except OSError as exc:
+        pytest.skip(f"symlink creation requires elevated privilege on this host: {exc}")
+
+    records = discover_generators(tmp_path)
+    keys = {record.generator for record in records}
+    assert any(key.endswith("gen_a_link.py") for key in keys)
+
+
+def test_symlinked_directory_is_not_recursed_into(tmp_path: Path) -> None:
+    sweep_dir = tmp_path / "coordinator_core"
+    sweep_dir.mkdir(parents=True, exist_ok=True)
+    real_dir = tmp_path / "real_generators"
+    real_dir.mkdir()
+    (real_dir / "gen_a.py").write_text(_DECLARED_GENERATOR_SOURCE, encoding="utf-8")
+    link_dir = sweep_dir / "link_dir"
+    try:
+        link_dir.symlink_to(real_dir, target_is_directory=True)
+    except OSError as exc:
+        pytest.skip(f"symlink creation requires elevated privilege on this host: {exc}")
+
+    records = discover_generators(tmp_path)
+    keys = {record.generator for record in records}
+    assert not any("link_dir" in key for key in keys)
+
+
 def test_resolution_reruns_against_changed_tracked_set(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -296,6 +329,9 @@ def test_tracked_paths_memo_invalidates_on_index_signature_change(tmp_path: Path
         gp.subprocess.run = _spy_run
         assert index_path.exists()
         gp._tracked_paths(tmp_path)
+        # Review: coordinatorcode-reviewer -- assert the bound directly
+        # rather than resting on reading the overwrite-on-miss assignment.
+        assert len(gp._TRACKED_PATHS_MEMO) == 1
     finally:
         gp.subprocess.run = original_run
 

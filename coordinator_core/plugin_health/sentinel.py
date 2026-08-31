@@ -1442,8 +1442,21 @@ def probe_p19(lib_dir: Optional[Path], coordinator_root: Optional[Path]) -> List
     except Exception:  # noqa: BLE001 — advisory contract: never raise out of the probe (the Staff Engineer F6)
         return _absent
 
-    if result in ("current", "source_is_live", "offline"):
+    if result in ("current", "source_is_live"):
         return []
+    if result == "offline":
+        # "offline" previously collapsed into the same [] as "current", so a
+        # doctor-last-run.json consumer could not tell "checked, up to date"
+        # from "network unreachable, never checked" — the network-outage case
+        # silently masqueraded as currency. Advisory severity (never affects
+        # verdict) but now a distinguishable ProbeNote instead of nothing.
+        return [
+            ProbeNote(
+                "P-19",
+                "advisory",
+                f"{plugin} release-currency check could not reach network — currency unverified",
+            )
+        ]
     if result.startswith("behind-clone"):
         parts = result.split()
         n = parts[1] if len(parts) > 1 else "?"

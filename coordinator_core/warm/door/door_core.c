@@ -450,6 +450,38 @@ int parse_response_envelope(
 }
 
 /* =========================================================================
+ * Caller-declared stdin payload -- see door_core.h for the full contract
+ * (the mode gate, the bound's rationale, and why autodetection is
+ * rejected).
+ * ========================================================================= */
+
+door_stdin_status_t door_drain_stdin_bounded(
+    door_stdin_reader_t reader, void *reader_ctx, buf_t *out, size_t max_bytes
+) {
+    char chunk[DOOR_STDIN_READ_CHUNK_BYTES];
+    for (;;) {
+        long n = reader(reader_ctx, chunk, sizeof(chunk));
+        if (n < 0) return DOOR_STDIN_READ_ERROR;
+        if (n == 0) return DOOR_STDIN_READ_OK; /* end of stream */
+        /* Checked BEFORE the append -- a too-large payload never has any
+         * of its excess bytes copied into `out`. This is what makes the
+         * refusal a refusal rather than a truncation. */
+        if (out->len + (size_t)n > max_bytes) return DOOR_STDIN_READ_TOO_LARGE;
+        if (!buf_append(out, chunk, (size_t)n)) return DOOR_STDIN_READ_ERROR;
+    }
+}
+
+int build_hook_deny_envelope(buf_t *out, const char *reason) {
+    int ok = 1;
+    ok &= buf_append_cstr(out,
+        "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\","
+        "\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"");
+    ok &= buf_append_json_escaped(out, reason, strlen(reason));
+    ok &= buf_append_cstr(out, "\"}}\n");
+    return ok;
+}
+
+/* =========================================================================
  * The safety classification -- see door_core.h for the full source trail.
  * ========================================================================= */
 

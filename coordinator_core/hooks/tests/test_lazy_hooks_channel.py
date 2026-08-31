@@ -165,12 +165,19 @@ _BARE_IMPORT_THEN_EAGER_HOOKS_REGISTRY_SCRIPT = textwrap.dedent(
     bare = sorted(k for k in ipc._REGISTRY if k.startswith("hooks."))
     print("BARE:" + ",".join(bare))
 
-    expected = sorted(
-        "hooks." + m.rsplit(".", 1)[-1] for m in hooks._EAGER_HOOK_MODULES
-    )
+    listed = sorted(hooks._EAGER_HOOK_MODULES)
     hooks._eager_import_all()
     registered = sorted(k for k in ipc._REGISTRY if k.startswith("hooks."))
-    print("EXPECTED:" + ",".join(expected))
+    # Own the op -> module edge directly rather than deriving an op NAME from
+    # a module name: one module may register several ops (stop_dispatch
+    # registers five -- itself plus four residue/wrapper keys), so a
+    # name-derived expectation is not the invariant. What must hold is that
+    # the two SETS of MODULES agree.
+    owners = sorted({
+        getattr(ipc._REGISTRY[k], "__module__", "?") for k in registered
+    })
+    print("LISTED:" + ",".join(listed))
+    print("OWNERS:" + ",".join(owners))
     print("REGISTERED:" + ",".join(registered))
     """
 )
@@ -225,16 +232,27 @@ def test_bare_import_registers_nothing_then_eager_import_all_registers_the_full_
         f"bare `import coordinator_core.hooks` registered ops it should not "
         f"have under the retired-flag, lazy-only-mode contract: {bare!r}"
     )
-    expected = lines["EXPECTED"].split(",")
+    listed = lines["LISTED"].split(",")
+    owners = lines["OWNERS"].split(",")
     registered = lines["REGISTERED"].split(",")
-    assert registered == expected, (
-        f"_eager_import_all() registration diverged from _EAGER_HOOK_MODULES: "
-        f"expected {expected!r}, got {registered!r}"
+    assert registered, "eager import registered no hooks.* ops at all"
+    unlisted = sorted(set(owners) - set(listed))
+    assert not unlisted, (
+        f"a hooks.* op is registered by a module absent from "
+        f"_EAGER_HOOK_MODULES, so _eager_import_all() will not force it and "
+        f"any caller relying on that routine for completeness silently misses "
+        f"it: {unlisted!r}"
+    )
+    silent = sorted(set(listed) - set(owners))
+    assert not silent, (
+        f"_EAGER_HOOK_MODULES lists module(s) that registered no hooks.* op: "
+        f"{silent!r} -- either the module lost its @register_op handler or the "
+        f"list carries an entry that never belonged in it"
     )
     source_literal_count = _count_eager_hook_modules_source_literal()
-    assert len(expected) == source_literal_count, (
-        f"runtime _EAGER_HOOK_MODULES yielded {len(expected)} hooks.* ops but "
-        f"the source literal in coordinator_core/hooks/__init__.py holds "
+    assert len(listed) == source_literal_count, (
+        f"runtime _EAGER_HOOK_MODULES holds {len(listed)} modules but the "
+        f"source literal in coordinator_core/hooks/__init__.py holds "
         f"{source_literal_count} entries -- these must never diverge silently"
     )
 
@@ -460,9 +478,13 @@ _POISONED_MODULE_SCRIPT = textwrap.dedent(
 
     import coordinator_core.ipc as ipc
     registered = [k for k in ipc._REGISTRY if k.startswith("hooks.")]
-    assert len(registered) == real_module_count, (
+    # Count MODULES that registered, not ops: one module may register several
+    # ops, so an op count is not the resilience signal. The signal is that
+    # every real module still got imported despite the poisoned entry.
+    owners = {getattr(ipc._REGISTRY[k], "__module__", "?") for k in registered}
+    assert len(owners) == real_module_count, (
         f"a poisoned extra module must not block the real {real_module_count} "
-        f"hooks.* registrations, got {len(registered)}: {registered!r}"
+        f"hook module registrations, got {len(owners)}: {sorted(owners)!r}"
     )
     print("POISONED_MODULE_RESILIENCE_OK")
     """

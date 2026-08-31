@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -215,3 +216,30 @@ def test_declared_plan_disagreement_predicate(
     declared: str | None, stem: str, expected: bool
 ) -> None:
     assert _declared_plan_disagrees_with_stem(declared, stem) is expected
+
+
+def test_case_difference_follows_the_filesystem_not_the_bytes() -> None:
+    """Two stems differing only in case agree iff the platform's paths do.
+
+    Reachable through the reuse call site, which compares a `plan:` line an
+    earlier dispatch wrote against a stem this one derived -- two independent
+    origins for one plan. On NTFS `A-Plan.md` and `a-plan` are the same file,
+    so refusing the reuse is spurious; on ext4 they are two plans, so agreeing
+    would blind the guard to a real clobber. `os.path.normcase` is the axis
+    that tracks whichever this is, so the expectation is derived from it here
+    rather than hardcoded to one platform.
+    """
+    same_file_here = os.path.normcase("A-Plan") == os.path.normcase("a-plan")
+
+    assert _declared_plan_disagrees_with_stem("docs/plans/A-Plan.md", "a-plan") is (
+        not same_file_here
+    )
+    assert _declared_plan_disagrees_with_stem("docs/plans/a-plan.md", "A-Plan") is (
+        not same_file_here
+    )
+
+
+def test_case_folding_does_not_swallow_a_real_disagreement() -> None:
+    """Whatever the platform, two genuinely different plans still disagree."""
+    assert _declared_plan_disagrees_with_stem("docs/plans/A-Plan.md", "b-plan") is True
+    assert _declared_plan_disagrees_with_stem("docs/plans/a-plan.md", "B-PLAN") is True

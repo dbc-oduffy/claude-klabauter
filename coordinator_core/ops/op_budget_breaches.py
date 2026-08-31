@@ -79,6 +79,7 @@ __all__ = [
     "DEAD_DIAL_LEDGER_OK",
     "DEAD_DIAL_MIN_ATTEMPTS",
     "DEFAULT_TOP_N",
+    "MAX_HEADLINE_BYTES",
     "MAX_TAIL_BYTES",
     "MAX_TELEMETRY_ROWS",
     "PER_PROCESS_BAR_MS",
@@ -141,6 +142,22 @@ NETWORK_ARM_SUFFIX = ".network"
 #: DR-344 constraint 1 and constraint 7 — this op asserts against both.
 BRIGHTLINE_BUDGET_MS = 500.0
 PER_PROCESS_BAR_MS = 200.0
+
+#: The register cap `headline_for` is held to (`docs/wiki/guard-messaging.md`
+#: § Register). Structural, not test-observed: `headline_for` computes the
+#: byte budget left for the op name AFTER every fixed-width field (counts,
+#: `bar_ms`, the two `stolen_ms` figures, `trend`, the remedy clause) and
+#: elides the op name to fit, so a longer registered op name shrinks the
+#: display rather than growing the banner past this cap. Review finding:
+#: `state/subagent-share/d49845f9-5fa3-4ee1-97cd-816c1ae75793/coordinatorcode-reviewer.a6a0df83ba2cb4da6.md`
+#: (Finding 3) — the prior cap was arithmetic the author had to re-verify by
+#: hand on every wording change, with no guard against a longer op name.
+MAX_HEADLINE_BYTES = 220
+
+#: Appended when `_fit_op_name` elides an op name — never a claim the op is
+#: unknown, only that the display cut it short. Single-character and ASCII
+#: so it never itself becomes the reason a byte budget is missed.
+_OP_TRUNC_MARKER = "~"
 
 #: What `trend` reads when the generation was read from the tail and older
 #: rows in it went unread. `_trend` splits the rows IT WAS GIVEN into two
@@ -412,6 +429,29 @@ def _remedy_for(op: str) -> str:
     return "Confirm on process time, then delete it or rebuild it under the bar."
 
 
+def _fit_op_name(op: str, budget_bytes: int) -> str:
+    """Elide `op` from the tail so it fits in `budget_bytes` UTF-8 bytes.
+
+    Truncates by encoded bytes, not characters, because the caller's budget
+    is itself byte-denominated (`MAX_HEADLINE_BYTES`) and a character slice
+    of a multi-byte op name could still overflow it. Degrades the DISPLAY
+    only — the op name a caller would delete or rebuild is unaffected;
+    `_remedy_for` is resolved against the untruncated `op` before this runs.
+    """
+    if budget_bytes <= 0:
+        return ""
+    op_bytes = op.encode("utf-8")
+    if len(op_bytes) <= budget_bytes:
+        return op
+    marker_bytes = _OP_TRUNC_MARKER.encode("utf-8")
+    keep = budget_bytes - len(marker_bytes)
+    if keep <= 0:
+        return _OP_TRUNC_MARKER[:budget_bytes]
+    # errors="ignore" drops a byte-split multi-byte char at the cut point
+    # rather than raising — a display truncation must never crash the op.
+    return op_bytes[:keep].decode("utf-8", errors="ignore") + _OP_TRUNC_MARKER
+
+
 def headline_for(summary: dict) -> str:
     """One operator-facing line: what happened, then what to do instead.
 
@@ -454,13 +494,22 @@ def headline_for(summary: dict) -> str:
         )
 
     worst = summary["ops"][0]
-    return (
+    remedy = _remedy_for(worst["op"])
+    prefix = (
         f"{breaching} ops past the {bar_ms:.0f}ms bar, "
         f"{totals['stolen_ms'] / 1000.0:.1f}s wall-clock excess. "
-        f"Worst: {worst['op']} ({worst['stolen_ms'] / 1000.0:.1f}s, "
-        f"{worst['breaches']}/{worst['attempts']}, {worst['trend']}). "
-        + _remedy_for(worst["op"])
+        f"Worst: "
     )
+    suffix = (
+        f" ({worst['stolen_ms'] / 1000.0:.1f}s, "
+        f"{worst['breaches']}/{worst['attempts']}, {worst['trend']}). "
+        + remedy
+    )
+    # Structural cap: the op name is the only unbounded-length field in this
+    # line, so it is the one elided to make the 220-byte register cap hold
+    # for every registered op name, not just the ones exercised by a test.
+    op_budget = MAX_HEADLINE_BYTES - len(prefix.encode("utf-8")) - len(suffix.encode("utf-8"))
+    return prefix + _fit_op_name(worst["op"], op_budget) + suffix
 
 
 def breach_report(

@@ -1622,9 +1622,17 @@ def drop(
                 )
 
                 _fm_holder = read_frontmatter_field(artifact_path_value, "claimed_by")
-            except Exception:  # noqa: BLE001 -- an unreadable artifact keeps prior behaviour
-                _fm_holder = ""
-            if (_fm_holder or "").strip():
+            except Exception:  # noqa: BLE001 -- unreadable is "cannot tell", not "no holder"
+                # Review: code-reviewer (Finding 4) — a bare `_fm_holder = ""`
+                # here reads exactly like "confirmed no stamp", which retakes
+                # the brief-stage-only lock-release arm on a transient read
+                # failure — the same silent-`released: true`-over-a-stamped-
+                # baton bug this whole block exists to close. An unreadable
+                # artifact must NOT be assumed unstamped: fall through to the
+                # holder-gated path below instead of taking the cheap arm.
+                claim_is_brief_stage = False
+                _fm_holder = None
+            if _fm_holder is not None and (_fm_holder or "").strip():
                 claim_is_brief_stage = False
 
         if claim_is_brief_stage:

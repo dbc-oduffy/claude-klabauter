@@ -1616,6 +1616,7 @@ def _group(**over):
         "error": None,
         "commit_failed": False,
         "reason": None,
+        "declared_absent_from_head": [],
     }
     group.update(over)
     return group
@@ -1672,6 +1673,65 @@ class TestRenderReportCounts:
         assert "changed (" not in rendered, (
             "the retired changed-count wording must not resurface"
         )
+
+    def test_a_phantom_deletion_is_named_on_a_group_that_did_commit(
+        self, tmp_path, monkeypatch
+    ):
+        """A path absent from both the worktree and HEAD is reported SKIPPED
+        even when the rest of its group committed.
+
+        The committer P0 (2026-08-31) turned a negative existence probe into a
+        positive deletion declaration. `commit_paths` already refuses to commit
+        such a path; this pins the other half -- that the refusal is VISIBLE on
+        this route, not only on the `commit_v2` ceremony route. A silent skip
+        beside a successful commit reads as a clean commit, which is the shape
+        that let four phantom deletions land unnoticed.
+        """
+        repo = _make_repo(tmp_path)
+
+        def _no_spawn(*a, **k):
+            raise AssertionError("no subprocess should be spawned by _render_report")
+
+        monkeypatch.setattr(safe_commit_offer.subprocess, "run", _no_spawn)
+
+        rendered = safe_commit_offer._render_report(
+            _report(
+                _group(
+                    paths=["one.py", "two.py"],
+                    committed=True,
+                    sha="a" * 40,
+                    push_state="pushed",
+                    declared_absent_from_head=["ghost.py"],
+                )
+            ),
+            str(repo),
+        )
+
+        assert "SKIPPED 1 declared path(s)" in rendered
+        assert "ghost.py" in rendered
+
+    def test_no_phantom_deletion_adds_no_skipped_line(self, tmp_path, monkeypatch):
+        """The ordinary commit says nothing about phantom deletions."""
+        repo = _make_repo(tmp_path)
+
+        def _no_spawn(*a, **k):
+            raise AssertionError("no subprocess should be spawned by _render_report")
+
+        monkeypatch.setattr(safe_commit_offer.subprocess, "run", _no_spawn)
+
+        rendered = safe_commit_offer._render_report(
+            _report(
+                _group(
+                    paths=["one.py"],
+                    committed=True,
+                    sha="b" * 40,
+                    push_state="pushed",
+                )
+            ),
+            str(repo),
+        )
+
+        assert "SKIPPED" not in rendered
 
     def test_equal_counts_still_render_both_labelled(self, tmp_path, monkeypatch):
         """Equal named-vs-committed path counts still render the plain

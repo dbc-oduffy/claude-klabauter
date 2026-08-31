@@ -1289,6 +1289,17 @@ def test_run_report_legacy_shape_excludes_execution_capability() -> None:
     assert "## Execution capability" not in text
 
 
+def test_run_report_emits_literal_run_report_heading_before_exit_interview() -> None:
+    """run-report-citizenship obligation: the deliverable lands under a
+    literal ``## Run Report`` heading, before ``## Exit interview``."""
+    text = _build_run_report_doc_text(
+        "coordinator:executor", "2026-08-11T00:00:00Z", "sess-run-report-heading"
+    )
+    assert text.index("## Completion") < text.index("## Run Report") < text.index(
+        "## Exit interview"
+    )
+
+
 def test_run_report_templates_are_untouched_by_the_findings_convergence() -> None:
     """Negative-spec guard (inbound memo item 3, adopted): `## Observations` is
     right for a run report. The defect was never that run-report says

@@ -158,6 +158,13 @@ _GOVERNING_PLAN_SLUG_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 # sink as --governing-plan-slug (sid6 = sid[-6:] spliced into entry_filename)
 # but was missing the adjacent flag's allowlist guard; validate at parse time.
 _SID_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+#: A git object name as `--commits` / `--claim-shas-from` will accept it.
+#: Bounded 7-40 to match git's own abbreviation floor and full-sha length --
+#: shorter is ambiguous in any real repo, longer is not a sha at all. NOT
+#: resolved against the object database here: a backfill routinely reconstructs
+#: a record for work on a branch this checkout may not hold, and refusing an
+#: unresolvable sha would make the tool useless in exactly its own use case.
+_SHA_RE = re.compile(r"^[0-9a-fA-F]{7,40}$")
 
 # A2 hardening — every subprocess call into a still-bash/node sibling gets a
 # bounded timeout + stdin guard, never present in the bash oracle (which had
@@ -278,7 +285,9 @@ def scaffold_residue_fields(entry_path: str) -> List[str]:
     return residue
 
 
-def resolve_entry_path(repo_root: str, sid: str, chain_slug: str) -> str:
+def resolve_entry_path(
+    repo_root: str, sid: str, chain_slug: str, for_date: Optional[date] = None
+) -> str:
     """Derives TODAY's canonical filename (`{yyyymmdd}-{chain_slug or
     'adhoc'}-{sid6}.md` under `archive/completed/{yyyymm}/`) — the path
     `main()` writes to on a fresh (non-stand-down) run. This is NOT
@@ -290,7 +299,12 @@ def resolve_entry_path(repo_root: str, sid: str, chain_slug: str) -> str:
     uses — including that stand-down case — must call
     `resolve_effective_entry_path`, not this function directly. Never
     re-derived a second time — see module Negative-spec."""
-    today = date.today()
+    # `for_date` is the BACKFILL date (--for-date), defaulting to today for
+    # every ordinary close. Threaded as a parameter rather than re-read from
+    # `date.today()` here: `main()` and `resolve_effective_entry_path` must
+    # agree on ONE date, and a second `date.today()` call in this function is
+    # also a live midnight-rollover race for a close that starts at 23:59:59.
+    today = for_date or date.today()
     yyyymm = today.strftime("%Y-%m")
     yyyymmdd = today.strftime("%Y-%m-%d")
     sid6 = sid[-6:]
@@ -361,7 +375,9 @@ def _refuse_if_live_foreign_entry_holder(entry_path: str, repo_root: str, closin
     )
 
 
-def resolve_effective_entry_path(repo_root: str, sid: str, chain_slug: str) -> tuple[str, Optional[str]]:
+def resolve_effective_entry_path(
+    repo_root: str, sid: str, chain_slug: str, for_date: Optional[date] = None
+) -> tuple[str, Optional[str]]:
     """THE single resolution of the path `main()` actually reads/writes for
     a given session — the SAME decision `main()` makes between standing
     down onto an existing chain entry (`_idempotency_guard`'s date/sid-
@@ -389,22 +405,30 @@ def resolve_effective_entry_path(repo_root: str, sid: str, chain_slug: str) -> t
         `main()` treats this marker as a hard error and must NOT print it
         to stdout (that print is precisely what would hand the path
         downstream to `d-reconcile-completion-commits`).
-      - ``marker is None``: `entry_path` is today's freshly-derived
-        canonical path (either `chain_slug` is empty, or no existing entry
-        was found) — the path `main()` will write to.
+      - ``marker is None``: `entry_path` is the freshly-derived canonical
+        path for `for_date` (default today) — either `chain_slug` is empty,
+        or no existing entry was found — the path `main()` will write to.
+
+    `for_date` (--for-date, the backfill mode) moves ONLY the derived path.
+    The idempotency guard above is date-independent BY CONSTRUCTION — it
+    scans `chain_slug` frontmatter across the whole `archive/completed/`
+    tree — so a backfill for an old date still stands down onto an existing
+    entry for that chain wherever it lives, and cannot mint a second entry
+    for a chain that already has one. That property is what makes backfill
+    safe to expose at all; do not "optimize" the guard to the target month.
     """
     completed_dir = os.path.join(repo_root, "archive", "completed")
     if chain_slug:
         existing_path, marker = _idempotency_guard(repo_root, completed_dir, chain_slug)
         if existing_path == "UNRECOVERABLE":
-            return resolve_entry_path(repo_root, sid, chain_slug), "UNRECOVERABLE"
+            return resolve_entry_path(repo_root, sid, chain_slug, for_date), "UNRECOVERABLE"
         if existing_path:
             refusal = _refuse_if_live_foreign_entry_holder(existing_path, repo_root, sid)
             if refusal is not None:
                 print(f"skip: resolve_effective_entry_path: {refusal}", file=sys.stderr)
                 return existing_path, "FOREIGN-LIVE"
             return existing_path, marker
-    return resolve_entry_path(repo_root, sid, chain_slug), None
+    return resolve_entry_path(repo_root, sid, chain_slug, for_date), None
 
 _USAGE = """Usage: coordinator-complete-entry --sid <SID> --disposition <disp> [OPTIONS]
 
@@ -433,6 +457,27 @@ Options:
   --help
       Show this message.
 
+Backfill mode (reconstructing the record of a session that has ended):
+  --for-date <YYYY-MM-DD>
+      Author the entry as of that date rather than today: it sets the
+      archive/completed/<yyyy-mm>/ directory, the filename date segment, and
+      created:. Required by the three flags below. May not be in the future.
+      The idempotency guard is date-independent, so a backfill still stands
+      down onto an existing entry for the same chain wherever it lives.
+  --commits <sha,sha,...>
+      Seed commits: with these shas (7-40 hex, comma-separated, de-duplicated,
+      order preserved). The only path that seeds this field -- on a live close
+      commits: is [] and belongs to the reconcile step.
+  --claim-shas-from <file>
+      As --commits, reading whitespace-separated shas from a file instead.
+      Mutually exclusive with --commits.
+  --authored-by-unknown
+      OMIT authored_by rather than stamping --sid. For a reconstructed entry
+      whose real session id is unknown -- never fabricate one, it would pollute
+      the coverage sweep's known-session set. Omitted rather than written null
+      because the schema types the field `string` and does not require it, so
+      absent is valid and null is not.
+
 Exit codes:
   0  entry written, or idempotent no-op (entry already exists for this chain slug)
   1  argument error
@@ -452,6 +497,10 @@ def _parse_args(argv: List[str]):
     consumed_handoff = ""
     governing_plan_slug = ""
     nature_val = ""
+    for_date: Optional[date] = None
+    commits: List[str] = []
+    commits_source = ""
+    authored_by_unknown = False
 
     i = 0
     n = len(argv)
@@ -500,6 +549,65 @@ def _parse_args(argv: List[str]):
             nature_val = argv[i + 1]
             i += 2
             continue
+        if a == "--for-date":
+            if i + 1 >= n or not argv[i + 1]:
+                print("ERROR: --for-date requires a value", file=sys.stderr)
+                return None, 1
+            try:
+                for_date = date.fromisoformat(argv[i + 1])
+            except ValueError:
+                print(
+                    f"ERROR: --for-date must be YYYY-MM-DD; got: '{argv[i + 1]}'",
+                    file=sys.stderr,
+                )
+                return None, 1
+            i += 2
+            continue
+        if a in ("--commits", "--claim-shas-from"):
+            if i + 1 >= n or not argv[i + 1]:
+                print(f"ERROR: {a} requires a value", file=sys.stderr)
+                return None, 1
+            if commits_source:
+                print(
+                    "ERROR: --commits and --claim-shas-from are mutually exclusive "
+                    f"(already supplied {commits_source})",
+                    file=sys.stderr,
+                )
+                return None, 1
+            if a == "--commits":
+                raw_shas = argv[i + 1].split(",")
+            else:
+                try:
+                    raw_shas = Path(argv[i + 1]).read_text(encoding="utf-8").split()
+                except OSError as exc:
+                    print(f"ERROR: --claim-shas-from: {exc}", file=sys.stderr)
+                    return None, 1
+            seen: set[str] = set()
+            for token in raw_shas:
+                token = token.strip()
+                if not token:
+                    continue
+                if not _SHA_RE.match(token):
+                    print(
+                        f"ERROR: {a}: '{token}' is not a hex sha (7-40 chars)",
+                        file=sys.stderr,
+                    )
+                    return None, 1
+                # De-duplicated but ORDER-PRESERVING: the memo's own hand-built
+                # entries are read by the coverage sweep as a flat membership
+                # set, so order carries no meaning to the consumer -- but it
+                # carries meaning to a HUMAN diffing a reconstructed entry
+                # against `git log`, and sorting would destroy that for free.
+                if token not in seen:
+                    seen.add(token)
+                    commits.append(token)
+            commits_source = a
+            i += 2
+            continue
+        if a == "--authored-by-unknown":
+            authored_by_unknown = True
+            i += 1
+            continue
         if a in ("--help", "-h"):
             print(_USAGE)
             return None, 0
@@ -532,6 +640,33 @@ def _parse_args(argv: List[str]):
         print(f"ERROR: --nature '{nature_val}' is not a valid completion nature.", file=sys.stderr)
         print("Valid values: roadmap | bugfix | tech-debt | infra", file=sys.stderr)
         return None, 1
+    # The three backfill flags are gated on --for-date, and the gate is the
+    # point rather than tidiness. `commits:` is otherwise owned exclusively by
+    # the reconcile step (see this module's own Negative-spec), and
+    # `authored_by` is what `_refuse_if_live_foreign_entry_holder` keys on --
+    # so seeding either on a LIVE close would let a session hand-write fields
+    # two guards depend on. Reconstructing a dead session's record is the one
+    # case where nothing else can supply them, and --for-date is what declares
+    # that case.
+    if commits_source and for_date is None:
+        print(
+            f"ERROR: {commits_source} requires --for-date (backfill mode) — on a live "
+            "close, commits: is seeded by the reconcile step, not by hand",
+            file=sys.stderr,
+        )
+        return None, 1
+    if authored_by_unknown and for_date is None:
+        print(
+            "ERROR: --authored-by-unknown requires --for-date (backfill mode)",
+            file=sys.stderr,
+        )
+        return None, 1
+    if for_date is not None and for_date > date.today():
+        print(
+            f"ERROR: --for-date is in the future: {for_date.isoformat()}",
+            file=sys.stderr,
+        )
+        return None, 1
 
     return (
         {
@@ -540,6 +675,9 @@ def _parse_args(argv: List[str]):
             "consumed_handoff": consumed_handoff,
             "governing_plan_slug": governing_plan_slug,
             "nature_val": nature_val,
+            "for_date": for_date,
+            "commits": commits,
+            "authored_by_unknown": authored_by_unknown,
         },
         None,
     )
@@ -978,6 +1116,8 @@ def _write_entry(
     rollup_sentence: str,
     yyyymmdd: str,
     deliverable_id: str,
+    commits: Optional[List[str]] = None,
+    authored_by_unknown: bool = False,
 ) -> bool:
     """Writes (or idempotent-preserving re-writes) the completion-entry
     scaffold at `entry_path`. Returns `True` when the file was written,
@@ -1042,11 +1182,42 @@ def _write_entry(
         lines.append(f'deliverable_id: "{_dlv_id_esc}"')
     else:
         lines.append("deliverable_id: null")
-    lines.append("commits: []")
+    if commits:
+        # The ONLY path that seeds this field, and it exists because the
+        # session whose commits these are is gone: `reconcile-completion-
+        # commits` resolves its session-id from the CURRENT live session, so
+        # composed with a hardcoded `date.today()` there was no supported way
+        # to author a dead session's record at all (example-cockpit-repo-em,
+        # cross-repo/archive/2026-07-30-example-cockpit-repo-em-completion-entry-
+        # backfill-mode-and-obligation-gap.md § 2 — /workday-complete Step 9
+        # instructed an action its own toolchain could not perform, and they
+        # covered 231 orphaned commits by hand-writing frontmatter instead,
+        # which is how schema drift starts). Gated on --for-date; every live
+        # close still writes `commits: []` and leaves the field to reconcile.
+        lines.append("commits:")
+        for sha in commits:
+            lines.append(f'  - "{sha}"')
+    else:
+        lines.append("commits: []")
     lines.append("status: pending-release")
     lines.append(f"chain_terminal: {'true' if chain_terminal else 'false'}")
-    _sid_esc = sid.replace('"', '\\"')
-    lines.append(f'authored_by: "{_sid_esc}"')
+    if authored_by_unknown:
+        # OMITTED, not `null`, and the difference is schema-enforced rather
+        # than stylistic: `completion-entry.schema.json` (1.4.0) types
+        # `authored_by` as `string` and does NOT list it in `required`, so an
+        # absent key is valid and `authored_by: null` fails validation
+        # ("expected string, got null" -- measured, 2026-08-31). The requester
+        # asked for present-as-null (their D9), but their REASON was that a
+        # fabricated session UUID pollutes the coverage sweep's
+        # `known_session_ids` set and makes a reconstructed entry
+        # indistinguishable from a real session's. Omission serves that reason
+        # exactly, costs a schema bump nobody needs, and is indistinguishable
+        # to every consumer: `_refuse_if_live_foreign_entry_holder` does
+        # `if not authored_by`, which treats absent and null identically.
+        pass
+    else:
+        _sid_esc = sid.replace('"', '\\"')
+        lines.append(f'authored_by: "{_sid_esc}"')
     lines.append(loe_block)
     lines.append("---")
     lines.append("")
@@ -1081,6 +1252,9 @@ def main(argv: List[str]) -> int:
     consumed_handoff = parsed["consumed_handoff"]
     governing_plan_slug = parsed["governing_plan_slug"]
     nature_val = parsed["nature_val"]
+    for_date = parsed["for_date"]
+    seeded_commits = parsed["commits"]
+    authored_by_unknown = parsed["authored_by_unknown"]
 
     repo_root = git_root()
     if not repo_root:
@@ -1100,7 +1274,10 @@ def main(argv: List[str]) -> int:
     repo_root = str(Path(repo_root))
 
     completed_dir = os.path.join(repo_root, "archive", "completed")
-    today = date.today()
+    # ONE date for the whole run -- the entry's directory, its filename and its
+    # `created:` all derive from this single value, so a backfill cannot land a
+    # 2026-07-28 entry under a 2026-08 directory.
+    today = for_date or date.today()
     yyyymm = today.strftime("%Y-%m")
     yyyymmdd = today.strftime("%Y-%m-%d")
 
@@ -1108,7 +1285,9 @@ def main(argv: List[str]) -> int:
 
     chain_slug = governing_plan_slug
 
-    entry_path, stand_down_marker = resolve_effective_entry_path(repo_root, sid, chain_slug)
+    entry_path, stand_down_marker = resolve_effective_entry_path(
+        repo_root, sid, chain_slug, for_date
+    )
     if stand_down_marker == "UNRECOVERABLE":
         print(
             f"ERROR: existing entry detected for chain '{chain_slug}' but path unrecoverable",
@@ -1154,6 +1333,8 @@ def main(argv: List[str]) -> int:
         rollup_sentence,
         yyyymmdd,
         deliverable_id,
+        seeded_commits,
+        authored_by_unknown,
     )
 
     print(entry_path)

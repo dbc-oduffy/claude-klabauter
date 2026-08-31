@@ -625,6 +625,10 @@ def _consumed_handoff_completeness_fixture() -> tuple[list[dict[str, Any]], list
         "id": "jp-consumed-handoff-completeness",
         "dispositions": [
             {
+                "value": "verified-complete-proceed",
+                "resolves": list(_CONSUMED_HANDOFF_COMPLETENESS_RESOLVED_IDS),
+            },
+            {
                 "value": "override-known-in-flight",
                 "resolves": list(_CONSUMED_HANDOFF_COMPLETENESS_RESOLVED_IDS),
             },
@@ -705,6 +709,38 @@ def test_consumed_handoff_completeness_override_known_in_flight_clears_all_four(
     monkeypatch.setattr(ws_apply, "_load_cli_module", lambda cli_name: modules[cli_name])
     directives, judgment_points = _consumed_handoff_completeness_fixture()
     decisions = {"jp-consumed-handoff-completeness": {"disposition": "override-known-in-flight"}}
+
+    exit_code, report = ws_apply._execute_directives(directives, judgment_points, decisions)
+
+    assert exit_code == int(ws_apply.WorkstreamApplyExitCode.SUCCESS)
+    for directive_id in _CONSUMED_HANDOFF_COMPLETENESS_RESOLVED_IDS:
+        assert directive_id in report["landed"], directive_id
+    assert report["blocked"] == []
+    assert report["failed"] == []
+
+
+def test_consumed_handoff_completeness_verified_complete_clears_all_four(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The third arm (2026-08-31) has to CLEAR, not merely record: it exists
+    because `d-stamp-plan-implemented` was reachable only by asserting
+    in-flight-ness, and an honest arm that resolved nothing would leave the
+    circularity exactly where it was. Apply-side proof that the two clearing
+    arms are interchangeable in effect and differ only in the claim recorded."""
+
+    def producer_main(argv: list[str]) -> int:
+        print("archive/completed/2026-07/entry.md")
+        return 0
+
+    modules = {
+        "wsc-coverage-gate-runner": _fake_module(lambda argv: 0, "fake_coverage_gate_runner"),
+        "coordinator-fold-execution-record": _fake_module(lambda argv: 0, "fake_coverage_gate_runner_standalone"),
+        "coordinator-harvest-deferrals": _fake_module(lambda argv: 0, "fake_harvest"),
+        "coordinator-complete-entry": _fake_module(producer_main, "fake_complete_entry"),
+    }
+    monkeypatch.setattr(ws_apply, "_load_cli_module", lambda cli_name: modules[cli_name])
+    directives, judgment_points = _consumed_handoff_completeness_fixture()
+    decisions = {"jp-consumed-handoff-completeness": {"disposition": "verified-complete-proceed"}}
 
     exit_code, report = ws_apply._execute_directives(directives, judgment_points, decisions)
 

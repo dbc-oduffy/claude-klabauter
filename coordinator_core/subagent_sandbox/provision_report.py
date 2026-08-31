@@ -294,10 +294,28 @@ def _declared_plan_disagrees_with_stem(declared_plan: Optional[str], plan_stem: 
     An absent or empty ``plan:`` cannot disagree -- four of the five lenses
     stamp no such key -- so it is not a refusal; this guard only ever fires
     on a positively contradictory identity claim.
+
+    Compared through ``os.path.normcase``, which is identity on POSIX and
+    lowercases on Windows -- so the comparison is exactly as case-sensitive as
+    the filesystem underneath it. Two stems differing only in case name the
+    SAME plan on NTFS and DIFFERENT plans on ext4, and this guard must agree
+    with whichever it is running on. The reuse call site (the second caller
+    below) is what makes this reachable: it reads a `plan:` line an EARLIER
+    dispatch wrote, so the two sides have independent origins and can differ
+    in case for one real plan. Folding unconditionally would blind the guard
+    to a genuine POSIX clobber; comparing raw bytes spuriously refuses a
+    legitimate Windows reuse. `normcase` is neither.
+
+    Negative-spec: this does NOT normalize anything else. Quote-stripping in
+    ``_plan_frontmatter_value`` remains deliberately loose (it strips either
+    end independently rather than requiring a matched pair), which is safe
+    only while this module stays the sole writer of the ``plan:`` line, as it
+    is today. Should a second writer appear, that read is the thing to
+    tighten -- not this comparison.
     """
     if not declared_plan:
         return False
-    return Path(declared_plan).stem != plan_stem
+    return os.path.normcase(Path(declared_plan).stem) != os.path.normcase(plan_stem)
 
 
 def _read_stdin() -> str:
@@ -627,6 +645,8 @@ def _build_run_report_doc_text(
         + "<!-- Prose companion to the `divergence` frontmatter field -- leave blank while divergence.diverged is false. -->\n\n"
         + "## Completion\n\n"
         + "- [ ] Complete — flip this box when done; the frontmatter `status:` field remains authoritative.\n\n"
+        + "## Run Report\n\n"
+        + "<!-- Your completion report, in full, before you return it inline -- this is the recovery copy that survives a truncated reply or an idle-out (run-report-citizenship). -->\n\n"
         + _exit_interview_section()
     )
 
@@ -1236,17 +1256,17 @@ def _provision_plan_derivable_doc(
 
     doc_path = plan_sidecars_dir / f"{plan_stem}.{lens}.md"
     spawned_at = datetime.now(timezone.utc).isoformat()
+    # Review: overengineering-reviewer flagged (and this integration verified)
+    # a since-removed second `_declared_plan_disagrees_with_stem` call here
+    # that re-scanned this skeleton's own `plan:` line. It cannot fire
+    # independently of the check above: the sole `_TEMPLATE_REGISTRY` builder
+    # that emits `plan:` at all writes it verbatim as `f"plan: {plan_path or
+    # ''}"`, so the value this call would re-derive is byte-identical to
+    # `plan_path`, already checked. Removed to drop a full-document
+    # split-and-scan from a per-dispatch hook path.
     doc_text = _build_doc_text(
         agent_type, spawned_at, doc_type, lead_session_id=session_id, plan_path=plan_path
     )
-
-    if _declared_plan_disagrees_with_stem(_plan_frontmatter_value(doc_text), plan_stem):
-        print(
-            f"provision_report: refusing to write {doc_path.name} -- its plan: "
-            "frontmatter names a different plan than its filename stem",
-            file=sys.stderr,
-        )
-        return None
 
     plan_sidecars_dir.mkdir(parents=True, exist_ok=True)
 

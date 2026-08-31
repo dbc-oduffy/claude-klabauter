@@ -80,3 +80,21 @@ def test_nothing_to_commit_still_raises_when_every_path_is_no_delta(repo):
     assert _head(repo) == before
 
 
+
+
+def test_the_field_defaults_empty_on_a_bare_outcome():
+    """`declared_absent_from_head` defaults to `()` on a hand-built outcome.
+
+    Restored after the de-dup above removed it (Review: code-reviewer nit).
+    Every other test reaches the field through `commit_paths`, which always
+    populates it explicitly, so nothing else pins the default. A reader who
+    later drops it would turn every consumer's `for p in
+    outcome.declared_absent_from_head` into a `TypeError` on the one path that
+    builds an outcome without it. Zero spawns -- no `git`, no repo, no
+    fixture -- so it costs nothing to keep.
+    """
+    outcome = gcommit.CommitOutcome(
+        sha="0" * 40, staged_preferred=(), worktree_over_staged=()
+    )
+
+    assert outcome.declared_absent_from_head == ()

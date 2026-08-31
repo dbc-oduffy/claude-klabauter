@@ -268,6 +268,76 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # Fan-in over agent_completion_log + track_dispatched_agents: MUTATING by union.
     "hooks.agent_postuse_dispatch": OpClass.MUTATING,
     "hooks.track_dispatched_agents": OpClass.MUTATING,
+    # hooks.sessionend_archive_session — MUTATING: moves the session's claim
+    # directory to <sessions_dir>/.archive/<sid>-<date>/ via
+    # coordinator_core.session.scope.archive(), and best-effort archives every
+    # .agents/<agent_id>/ dir the session dispatched. A filesystem move, not a
+    # read.
+    "hooks.sessionend_archive_session": OpClass.MUTATING,
+    # hooks.watchdog_undischarged_next_move — MUTATING (per this chunk's own
+    # dispatch brief SCOPE DECISION, decided explicitly rather than defaulted).
+    # Five-question checklist, opposite of nudge_autonomous_askuserquestion's
+    # COMPUTE_ONLY answers on every axis:
+    #   1. Writes/reorders a state file?  YES — rewrites next-move-ledger.jsonl
+    #      (open/discharge/mark-fired) and deletes obligations-inbound.jsonl
+    #      after folding it.
+    #   2. Writes rag's relational store?  No — state/subagent-share/ session-
+    #      runtime bookkeeping, the same directory
+    #      coordinator_core.group_em.obligations already writes/reads.
+    #   3. Opens any file for write?  YES.
+    #   4. Mutates shared mutable state outside its own module?  YES — the
+    #      ledger is durable, cross-call, cross-session-lifetime state; a
+    #      later Stop call (or coordinator_core.group_em.send_pass /
+    #      obligations, already shipped) reads what this call wrote.
+    #   5. Side effects observable across process boundaries?  YES.
+    # See this module's own docstring above for the full worked example this
+    # mirrors (the "watchdog-undischarged-next-move.py" chunk C4 dispatch
+    # brief's own justification requirement).
+    "hooks.watchdog_undischarged_next_move": OpClass.MUTATING,
+    # hooks.plan_persistence_check — MUTATING (per this chunk's own dispatch
+    # brief). Five-question checklist:
+    #   1. Writes/reorders a state file?  YES — scaffolds/writes a plan under
+    #      docs/plans/ (via plan_capture_persist.persist_captured_plan or the
+    #      raw-write fallback) and appends a row to docs/README.md.
+    #   2. Writes rag's relational store?  No — docs/plans/ and docs/README.md
+    #      are ordinary tracked repo files, not rag's store.
+    #   3. Opens any file for write?  YES.
+    #   4. Mutates shared mutable state outside its own module?  YES — the
+    #      written plan file and README row are read by every later session
+    #      touching that repo's docs/ tree.
+    #   5. Side effects observable across process boundaries?  YES.
+    "hooks.plan_persistence_check": OpClass.MUTATING,
+    # hooks.runtime_tripwire_em_check — MUTATING. PostToolUse(Agent) leg only.
+    # Five-question checklist:
+    #   1. Writes/reorders a state file?  YES — writes/advances two per-session
+    #      cursor files under <git common dir>/coordinator-sessions/<sid>/
+    #      (push-failures-cursor.txt, hooks-json-boot-hash.txt).
+    #   2. Writes rag's relational store?  No — git-common-dir session
+    #      bookkeeping, not state/'s substrate.
+    #   3. Opens any file for write?  YES.
+    #   4. Mutates shared mutable state outside its own module?  YES — a later
+    #      call for the same session reads the cursor this call wrote.
+    #   5. Side effects observable across process boundaries?  YES.
+    "hooks.runtime_tripwire_em_check": OpClass.MUTATING,
+    # hooks.guard_kira_verdict_routed (C3) — COMPUTE_ONLY: reads sidecar
+    # frontmatter under state/subagent-share/<session_id>/ only; writes
+    # nothing of its own (verbatim port of guard-kira-verdict-routed.py's
+    # read-only decision logic).
+    "hooks.guard_kira_verdict_routed": OpClass.COMPUTE_ONLY,
+    # hooks.stop_em_report_altitude / hooks.nudge_harness_directive_dispatch /
+    # hooks.nudge_unrouted_sizing (C3) — MUTATING: each wraps a library op()
+    # that writes its own per-session fire-once sentinel file under the git
+    # common dir (or a demo/test override dir) before returning an advisory.
+    "hooks.stop_em_report_altitude": OpClass.MUTATING,
+    "hooks.nudge_harness_directive_dispatch": OpClass.MUTATING,
+    "hooks.nudge_unrouted_sizing": OpClass.MUTATING,
+    # hooks.stop_dispatch (C3) — MUTATING by union: composes
+    # hooks.runtime_tripwire_em_check, hooks.watchdog_undischarged_next_move,
+    # hooks.receiver_state_sensor, and the three sentinel-writing wrappers
+    # immediately above, all MUTATING; hooks.guard_kira_verdict_routed is the
+    # only read-only leg. See coordinator_core/hooks/stop_dispatch.py's own
+    # module docstring for the full eight-leg disposition.
+    "hooks.stop_dispatch": OpClass.MUTATING,
     "hooks.subagent_zero_tool_use": OpClass.MUTATING,
     # hooks.subagent_review_mark — MUTATING, same session-runtime write class as
     # hooks.subagent_zero_tool_use directly above (same SubagentStop event, same

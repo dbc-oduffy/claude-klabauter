@@ -39,8 +39,8 @@ a module-level import of anything under `coordinator_core.ops.*` here would
 trip that cycle. This module is a leaf specifically so it cannot.
 
 Cost (hot path — `coverage.py`'s DAG fixpoint, and
-`ceremony/commit_gates.py::_build_known_scope` runs this per handoff on the
-commit gate): `resolve_claim_state` takes an optional pre-resolved
+`ops/dirty_tree_gate.py::_build_known_scope` runs this per handoff on the
+dirty-tree gate): `resolve_claim_state` takes an optional pre-resolved
 `common_dir`, matching `handoff_claim_dir`'s own existing signature, so a
 caller that already has `common_dir` in hand (the hot-path callers do) never
 triggers a second resolution. `lifecycle.git_common_dir` is itself

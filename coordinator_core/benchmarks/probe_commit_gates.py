@@ -1,6 +1,9 @@
-"""Measure each of the four gates `run_commit_pipeline` ran before landing a
-commit -- `deletion_block_gate`, `dirty_tree_gate`, `carry_gate`,
-`op_scope_coverage_gate` -- in-process, against a ceremony-sized path set.
+"""Measure each of the three gates `run_commit_pipeline` ran before landing a
+commit -- `deletion_block_gate`, `carry_gate`, `op_scope_coverage_gate` --
+in-process, against a ceremony-sized path set. (A fourth gate,
+`dirty_tree_gate`, was probed here until its deletion under the brightline
+kill bar -- it had zero production callers of its own, unlike the other
+three, and was removed outright rather than carried forward.)
 
 THE QUESTION THIS ANSWERS, and it is the one the P1 asks rather than a
 general benchmark: `run_commit_pipeline` was killed at the 500ms brightline
@@ -12,12 +15,11 @@ through, so the choice needs a per-gate number first. The P1 is the
 
 MEASURED AGAINST THE LIVE REPO, NOT A SYNTHETIC FIXTURE, and that is the
 whole methodology. Only `deletion_block_gate` scales with the path set it is
-handed; the other three scale with the REPO -- `dirty_tree_gate` runs
-`git status --porcelain` over the whole worktree, `carry_gate` reads staged
+handed; the other two scale with the REPO -- `carry_gate` reads staged
 `state/handoffs` records, `op_scope_coverage_gate` parses the registry map.
 A 40-file temp repo of the shape `probe_commit_pipeline.py` builds would
 report their cost at a tree size no ceremony commit ever runs against, and
-would understate the three that matter most. All four are READ-ONLY
+would understate the two that matter most. All three are READ-ONLY
 classifiers, so measuring them here mutates nothing.
 
 CEREMONY-SIZED IS MEASURED, NOT GUESSED: over this repo's last 300 commits
@@ -41,7 +43,6 @@ from coordinator_core.git.run import run_git
 from coordinator_core.ops.ceremony.commit_gates import (
     carry_gate,
     deletion_block_gate,
-    dirty_tree_gate,
     op_scope_coverage_gate,
 )
 
@@ -110,8 +111,6 @@ def main(n=12):
         cases = (
             ("deletion_block_gate",
              lambda: deletion_block_gate(msg, paths, cwd=root)),
-            ("dirty_tree_gate",
-             lambda: dirty_tree_gate(root, paths)),
             ("carry_gate",
              lambda: carry_gate(root, paths)),
             ("op_scope_coverage_gate",
@@ -121,14 +120,13 @@ def main(n=12):
             ms, procs, wall = _window(fn, n)
             print(f"{label:28s} {size:5d}  {ms:8.2f} {procs:6.2f}  {wall:8.2f}")
 
-        def all_four():
+        def all_three():
             deletion_block_gate(msg, paths, cwd=root)
-            dirty_tree_gate(root, paths)
             carry_gate(root, paths)
             op_scope_coverage_gate(root, paths)
 
-        ms, procs, wall = _window(all_four, n)
-        print(f"{'ALL FOUR (reinstate shape)':28s} {size:5d}  {ms:8.2f} {procs:6.2f}  {wall:8.2f}")
+        ms, procs, wall = _window(all_three, n)
+        print(f"{'ALL THREE (reinstate shape)':28s} {size:5d}  {ms:8.2f} {procs:6.2f}  {wall:8.2f}")
         print()
 
 

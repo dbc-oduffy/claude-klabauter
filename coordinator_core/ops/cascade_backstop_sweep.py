@@ -2,12 +2,15 @@
 coordinator_core.ops.cascade_backstop_sweep — JSON-RPC "deliverable.cascade_backstop_sweep"
 operation (C6c; AC6d).
 
-Purpose: `/update-docs` and `/distill` already walk this material as a periodic
-maintenance pass — this op gives them a SHARED, read-only re-derivation of what
+Purpose: standalone, on-demand read-only re-derivation of what
 `deliverable.cascade_terminal` (C6) would have produced for every terminal
 deliverable this repo already knows about, so a missed event (a stamp that
 landed while the cascade was broken, or a pre-existing strand like
 Example-cockpit-repo's four instances) is caught rather than silently persisting.
+No `/update-docs`/`/distill` composer exists or is owed — verified against
+the current tree (zero invocation sites under coordinator/commands,
+coordinator/pipelines, coordinator/skills); this op is invoked directly,
+same delivery-shape choice as `coordinator/bin/reaper-resting-batons.py`.
 
 HARD BOUNDARY (Anti-scope, second bullet): this sweep REPORTS. It does not
 flip, and it never will. By construction a sweep is SCANNING rather than
@@ -90,8 +93,10 @@ NEGATIVE-SPEC:
   - Does NOT build C11's cockpit ground-truth fixture (that chunk's own
     surface) and does NOT write `docs/decisions/*` (C-DR's own surface).
   - Does NOT wire itself into any auto-firing hook, cron, or commit-path
-    trigger — it is read-only compute a slash command composes on demand,
-    exactly like `ceremony.update_docs_scan`.
+    trigger, and has no slash-command or periodic-maintenance-pass composer
+    — standalone/on-demand by design, not a gap: same posture as
+    `coordinator/bin/reaper-resting-batons.py`. Building one is a separate,
+    PM-ratified decision, not implied by this op's existence.
 """
 
 from __future__ import annotations

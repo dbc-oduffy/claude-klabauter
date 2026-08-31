@@ -88,7 +88,7 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             "actor": str,
             "source_observation_id": str | None (optional),
             "closure_fidelity": str (optional — one of
-                `CLOSURE_FIDELITY_VALUES`; omitted means
+                `tracker_entities.CLOSURE_FIDELITY_VALUES`; omitted means
                 `DEFAULT_CLOSURE_FIDELITY`),
             "repo_root": str (optional — D3 consistency check only),
         }
@@ -163,6 +163,12 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     # inline membership check; re-raised as ValueError to preserve this op's
     # documented wire contract (see docstring `Raises:`).
     try:
+        # Review: code-reviewer -- the guard's message hardcodes
+        # "item_closure_fidelity_set" as the payload noun even though this
+        # call validates a tracker.assert_code_complete wire param, not an
+        # item_closure_fidelity_set construction; accepted as a mild,
+        # non-blocking inaccuracy rather than widening the shared guard's
+        # signature for its other caller (tracker_entities.py set()).
         reject_invalid_closure_fidelity(closure_fidelity, action="assert code_complete for")
     except TrackerEntityError as exc:
         raise ValueError(str(exc)) from exc

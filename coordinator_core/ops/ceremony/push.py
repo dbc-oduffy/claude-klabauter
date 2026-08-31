@@ -1001,9 +1001,8 @@ def _rebase_onto_fetched_ref(
     `_replay_onto_fetched_ref` (a worktree-free replay plus a two-way
     read-tree that touches no peer's file), and only the clean case takes
     the `git rebase --onto` path below. Detection is unchanged --
-    `git_native.status_porcelain()`, the same native seam
-    `commit_gates.dirty_tree_gate` already uses for this exact question,
-    never a raw `git status` shell-out. A porcelain check that itself fails
+    `git_native.status_porcelain()`, the native porcelain seam, never a raw
+    `git status` shell-out. A porcelain check that itself fails
     to run (indeterminate) still falls through to the ordinary rebase
     attempt below rather than guessing dirty/clean.
 

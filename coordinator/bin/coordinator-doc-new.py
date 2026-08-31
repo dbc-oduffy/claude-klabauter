@@ -6739,6 +6739,34 @@ def main(argv: "list[str] | None" = None) -> int:
         )
         return 1
 
+    # --goals is scoped to goal-seed/roadmap-seed only (same posture as
+    # --additional-predecessor/--summary/--deliverable-ids above): refused
+    # fail-loud for every other --type. Before this block, a caller could
+    # pass --goals to e.g. --type handoff and it would parse, exit 0, and
+    # never be read or emitted -- the same silent-drop the 2026-08-18
+    # cross-repo/inbox memo reported (verified still open for this flag
+    # specifically: only goal-seed/roadmap-seed's scaffold calls ever read
+    # args.goals).
+    if args.goals and doc_type not in ("goal-seed", "roadmap-seed"):
+        print(
+            f"coordinator-doc-new: --goals is not accepted for --type {doc_type}. "
+            "--goals is scoped to --type goal-seed and --type roadmap-seed.",
+            file=sys.stderr,
+        )
+        return 1
+
+    # --scope is review-findings-scoped only, same posture. Before this
+    # block, --scope silently parsed and was dropped for every --type but
+    # review-findings -- the same silent-drop pattern the memo above
+    # reported for --goals.
+    if args.scope and doc_type != "review-findings":
+        print(
+            f"coordinator-doc-new: --scope is not accepted for --type {doc_type}. "
+            "--scope is scoped to --type review-findings.",
+            file=sys.stderr,
+        )
+        return 1
+
     _parsed_carried_items: list[dict] | None = None
     if args.carried_items is not None:
         import json as _json

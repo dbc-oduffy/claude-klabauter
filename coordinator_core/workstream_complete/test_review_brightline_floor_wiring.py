@@ -363,7 +363,23 @@ def test_caller_floor_with_zero_trailer_matches_still_retries_session_floor(monk
     captured = capsys.readouterr()
     assert rc == 0
     assert "recovered via session-aware floor" in captured.err
-    assert "VERDICT=indeterminate" not in captured.out
+    # NOT `VERDICT=indeterminate not in out` any more. That assertion was
+    # written before the untrailered-commit census (2026-08-30) landed in
+    # `review_brightline_gate`: a `single-reviewer-ok` over a range carrying
+    # commits with no `Session-Id` trailer is now demoted to `indeterminate`,
+    # because incomplete attribution can only hide work and a permissive
+    # verdict must not be issued over a range the gate could not fully
+    # attribute. This fixture's noise commits are deliberately untrailered, so
+    # the retry range contains exactly what that census refuses on, and the
+    # test was red at HEAD against a guard that is behaving correctly.
+    #
+    # What this test is FOR is the retry composition, and that is what is
+    # pinned now: the gate fell through to the session-aware floor, recovered
+    # the trailer-tagged commit, and REPORTED ON THE RETRY RANGE rather than
+    # the caller's empty one. The verdict that range then earns belongs to the
+    # census rule, not to this test.
+    assert f"range={session_a}^..HEAD" in captured.out
+    assert "filtered_to=1" in captured.out
 
 
 # ---------------------------------------------------------------------------

@@ -591,12 +591,30 @@ class TestFindExecRewriteMessageAccuracy:
         assert "BASH-SPAWN ADVISORY" in guard_hso["additionalContext"]
         assert "auto-rewritten single-process equivalent" not in guard_hso["additionalContext"]
 
-    def test_advisory_for_untranslatable_verb_names_that_verb(self):
+    def test_a_verb_with_no_python_translation_is_offered_the_posix_plus_form(self):
+        """SUPERSEDED PREMISE, corrected 2026-08-31. This row asserted that an
+        untranslatable verb gets prose and no runnable command -- true until C2
+        (`e8a0043e66`) added `_FIND_EXEC_BATCH_EQUIVALENT_VERBS`. `chmod` has no
+        PYTHON translation and still does not; what it has now is a MEASURED
+        batch equivalence, so the guard offers the POSIX `+` form. Untranslatable
+        and unbatchable are different properties and the old assertion conflated
+        them -- which is why C2 landed without this file going red.
+        """
         cmd = 'find . -name "*.bak" -exec chmod 644 {} \\;'
         result = dispatch_checks.check_find_exec_rewrite(cmd, "sess-bx12")
         hso = _hso(result)
-        assert "updatedInput" not in hso
+        assert hso["updatedInput"]["command"] == "find . -name '*.bak' -exec chmod 644 '{}' +"
         assert "chmod" in hso["additionalContext"]
+
+    def test_a_verb_on_neither_list_still_gets_prose_and_names_itself(self):
+        """The row the test above used to be. A verb with no python translation
+        AND no measured batch equivalence gets an advisory naming it -- never a
+        guessed rewrite."""
+        cmd = 'find . -name "*.bak" -exec frobnicate {} \\;'
+        result = dispatch_checks.check_find_exec_rewrite(cmd, "sess-bx12")
+        hso = _hso(result)
+        assert "updatedInput" not in hso
+        assert "frobnicate" in hso["additionalContext"]
 
 
 class TestGrepViaBashRewriteMessageAccuracy:

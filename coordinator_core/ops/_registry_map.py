@@ -91,6 +91,18 @@ OP_MODULE_MAP: Dict[str, str] = {
     "hooks.subagent_sidecar_fill_check":      "coordinator_core.hooks",
     "hooks.cater_subagent_start":             "coordinator_core.hooks",
     "hooks.nudge_autonomous_askuserquestion": "coordinator_core.hooks",
+    "hooks.sessionend_archive_session":       "coordinator_core.hooks",
+    "hooks.watchdog_undischarged_next_move":  "coordinator_core.hooks",
+    "hooks.plan_persistence_check":           "coordinator_core.hooks",
+    "hooks.runtime_tripwire_em_check":        "coordinator_core.hooks",
+    # hooks.stop_dispatch + the residue/wrapper ops it registers alongside
+    # itself (C3, docs/plans/2026-08-31-six-hook-scripts-become-engine-ops.md):
+    # one module import registers all five keys.
+    "hooks.stop_dispatch":                    "coordinator_core.hooks",
+    "hooks.guard_kira_verdict_routed":        "coordinator_core.hooks",
+    "hooks.stop_em_report_altitude":          "coordinator_core.hooks",
+    "hooks.nudge_harness_directive_dispatch": "coordinator_core.hooks",
+    "hooks.nudge_unrouted_sizing":            "coordinator_core.hooks",
     "backlog.record":                         "coordinator_core.ops.emit.recorder",
     "goal.append":                            "coordinator_core.ops.goal_append",
     "goal.close_day":                         "coordinator_core.ops.goal_close_day",

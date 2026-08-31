@@ -243,6 +243,16 @@
  * `coordinator-invoke.py` for it. */
 #define DOOR_DEFAULT_ENTRYPOINT_W L"coordinator-invoke"
 
+/* Token-pastes `L` onto a narrow string-literal MACRO's expansion, rather
+ * than a hand-duplicated `L"..."` literal -- so the two doors' shared
+ * env-var/value names (`door_core.h`'s `DOOR_STDIN_MODE_ENV_NAME` /
+ * `DOOR_STDIN_MODE_HOOK_VALUE`) have exactly one spelling each, never a
+ * Windows-wide copy that could drift from the POSIX narrow one. The
+ * indirection through `DOOR_WIDEN` (rather than pasting `DOOR_WIDEN2`
+ * directly) is required for `L##x` to see `x` already macro-expanded. */
+#define DOOR_WIDEN2(x) L##x
+#define DOOR_WIDEN(x) DOOR_WIDEN2(x)
+
 /* SHA-1 (`sha1_hex16`) and the growable byte buffer (`buf_t`,
  * `buf_append*`) now live in `door_core.c`, shared verbatim with the
  * POSIX door. `sha1_hex16` is still byte-identical to Python's
@@ -567,6 +577,83 @@ static int quote_arg_w(buf_t *out_u8, const wchar_t *arg) {
 }
 
 /* =========================================================================
+ * Caller-declared stdin payload -- mode gate, the platform read primitive,
+ * and the hook-mode fail-closed disposition. Full contract in door_core.h;
+ * this section is only the Windows-specific half (env-var idiom, the
+ * `ReadFile` reader callback, and the write of the shared envelope bytes).
+ * ========================================================================= */
+
+/* Set once, at the very top of `main`, from the caller's own declaration
+ * (`DOOR_STDIN_MODE_ENV_NAME`) -- never sniffed from the pipe handle (see
+ * door_core.h for why). `fall_through`, below, reads this flag as its
+ * FIRST statement precisely because it is the single choke point every
+ * pre-delivery doubt and the one post-delivery `is_provably_undispatched`
+ * jump in this file already funnels through (directly, or via
+ * `fall_through_and_free`) -- so gating there, once, covers every existing
+ * call site and any added later without a second edit. */
+static int g_door_hook_mode = 0;
+
+/* True iff the caller declared hook mode. `GetEnvironmentVariableW` mirrors
+ * the read shape this file already uses for `COORDINATOR_SETTINGS_HOME`/
+ * session-id lookups (see those sites) rather than introducing `_wgetenv`
+ * (deprecated by the UCRT). A value that does not fit `value` or does not
+ * match exactly is "not hook mode" -- there is no third state. */
+static int door_stdin_mode_is_hook(void) {
+    wchar_t value[32];
+    DWORD got = GetEnvironmentVariableW(
+        DOOR_WIDEN(DOOR_STDIN_MODE_ENV_NAME), value, 32);
+    if (got == 0 || got >= 32) return 0;
+    return wcscmp(value, DOOR_WIDEN(DOOR_STDIN_MODE_HOOK_VALUE)) == 0;
+}
+
+/* `door_stdin_reader_t` for the Windows standard-input handle. Reaching
+ * this callback at all means hook mode was declared -- an ordinary
+ * blocking `ReadFile` is correct here (door_core.h's own docs on why the
+ * NO-mode-declared case must never reach a read call at all, not this
+ * one). `ERROR_BROKEN_PIPE` is the writer closing its end -- true
+ * end-of-stream for a pipe, mapped to the same `0` a POSIX `read()` returns
+ * at EOF so `door_drain_stdin_bounded`'s shared loop needs no platform
+ * branch. */
+static long door_stdin_read_chunk(void *reader_ctx, char *buf, size_t cap) {
+    (void)reader_ctx;
+    HANDLE h = GetStdHandle(STD_INPUT_HANDLE);
+    if (h == NULL || h == INVALID_HANDLE_VALUE) return -1;
+    DWORD got = 0;
+    if (!ReadFile(h, buf, (DWORD)cap, &got, NULL)) {
+        return (GetLastError() == ERROR_BROKEN_PIPE) ? 0 : -1;
+    }
+    return (long)got;
+}
+
+/* Forward declaration -- `write_all` is defined below (used by
+ * `emit_indeterminate`, further down still), needed here one section
+ * earlier by `emit_hook_deny` immediately below. */
+static int write_all(HANDLE h, const char *data, size_t len);
+
+/* Same split as `emit_indeterminate` below: the envelope's bytes are built
+ * in `door_core.c` (shared, so the two doors cannot drift in what they
+ * tell an operator), only the write is Windows-specific. Exit 0, matching
+ * the shape every Bash guard in this repo already returns for a decided
+ * `deny` verdict -- a nonzero exit here would tell the hook runner THIS
+ * PROCESS failed, not that the tool call was denied. On the one failure
+ * this cannot recover from (no memory to build 512 bytes), it falls back
+ * to the hook contract's OTHER deny signal -- a diagnostic on stderr plus
+ * a nonzero exit -- rather than risk an empty stdout reading as "no
+ * opinion" (silently allow) on a guard's hot path. */
+static int emit_hook_deny(const char *reason) {
+    buf_t out;
+    if (!buf_init(&out, 512) || !build_hook_deny_envelope(&out, reason)) {
+        fwprintf(stderr, L"door: hook-mode deny (could not build the envelope)\n");
+        free(out.data);
+        return 2;
+    }
+    HANDLE hout = GetStdHandle(STD_OUTPUT_HANDLE);
+    write_all(hout, out.data, out.len);
+    free(out.data);
+    return 0;
+}
+
+/* =========================================================================
  * Fallback -- the one path that must never fail to at least try. Spawns
  * the original Python entrypoint with the original argv, unchanged, and
  * propagates its exit code. A fallback IS normal operation and the exit
@@ -591,6 +678,25 @@ static int quote_arg_w(buf_t *out_u8, const wchar_t *arg) {
  * function itself performs no resolution of its own, matching the rest
  * of this file's "resolve once, upstream" discipline. */
 static int fall_through(int argc, wchar_t **wargv, const wchar_t *engine_root_w) {
+    /* HOOK MODE INVERTS THIS FUNCTION'S ENTIRE PURPOSE (door_core.h ::
+     * build_hook_deny_envelope). Every fall-through in this file --
+     * pre-delivery doubt, and the one post-delivery
+     * `is_provably_undispatched` jump in `do_fallback` -- reaches this
+     * function directly or via `fall_through_and_free`, so checking the
+     * flag HERE, first, is what makes the inversion cover every existing
+     * call site (and any added later) without a second edit at each one.
+     * `argc`/`wargv`/`engine_root_w` go unused on this leg -- the caller
+     * declared no argv grammar is going to run here, only a decision. */
+    if (g_door_hook_mode) {
+        (void)argc;
+        (void)wargv;
+        (void)engine_root_w;
+        return emit_hook_deny(
+            "coordinator-door: could not deliver this request to the "
+            "resident engine; denying rather than falling through to the "
+            "cold entrypoint in hook mode");
+    }
+
     const wchar_t *root = (engine_root_w != NULL) ? engine_root_w : BUILD_ENGINE_ROOT_W;
 
     /* `engine_root_w`, when supplied, was already validated by
@@ -1001,7 +1107,53 @@ int main(void) {
      * startup this build ends up linked against. */
     int argc = 0;
     wchar_t **wargv = CommandLineToArgvW(GetCommandLineW(), &argc);
-    if (!wargv) return fall_through(1, NULL, NULL);
+
+    /* THE MODE GATE (door_core.h), read once, before anything else in this
+     * function -- including before the `!wargv` check right below, since
+     * `fall_through` itself now reads this flag as its first statement and
+     * must see the caller's declaration regardless of which exit this
+     * function ultimately takes. */
+    g_door_hook_mode = door_stdin_mode_is_hook();
+
+    /* THE READ ITSELF, gated on the flag above and nowhere else -- an
+     * ordinary caller (mode not declared) never reaches this block, so its
+     * cost and its blocking hazard are both zero for every existing
+     * invocation (door_core.h's own docs on why this must be a caller
+     * declaration, never a peek). Read BEFORE engine-root resolution
+     * because it depends on none of it, and so that a caller who declared
+     * hook mode gets a decided verdict even when the engine root itself
+     * cannot be resolved -- that failure now denies too, via
+     * `fall_through`'s own hook-mode check. */
+    buf_t stdin_payload;
+    int have_stdin_payload = 0;
+    if (g_door_hook_mode) {
+        if (!buf_init(&stdin_payload, 4096)) {
+            LocalFree(wargv);
+            return emit_hook_deny("coordinator-door: out of memory reading stdin");
+        }
+        door_stdin_status_t stdin_status = door_drain_stdin_bounded(
+            door_stdin_read_chunk, NULL, &stdin_payload, DOOR_STDIN_MAX_BYTES);
+        if (stdin_status != DOOR_STDIN_READ_OK) {
+            free(stdin_payload.data);
+            LocalFree(wargv);
+            return emit_hook_deny(
+                stdin_status == DOOR_STDIN_READ_TOO_LARGE
+                    ? "coordinator-door: stdin payload exceeded the bound; refusing"
+                    : "coordinator-door: stdin read failed; refusing");
+        }
+        have_stdin_payload = 1;
+    }
+    /* From here to the request-build site further below, every pre-delivery
+     * fall-through call site frees its own intermediate allocations but not
+     * `stdin_payload.data` -- if one of them fires while `have_stdin_payload`
+     * is still set, those bytes (at most `DOOR_STDIN_MAX_BYTES`, one
+     * allocation) are reclaimed by the process exit that immediately
+     * follows every one of those returns, not leaked across calls. */
+
+    if (!wargv) {
+        if (have_stdin_payload) free(stdin_payload.data);
+        return fall_through(1, NULL, NULL);
+    }
 
     /* THE ONE RESOLUTION both legs read this image's own name from (C0) --
      * see `resolve_own_basename`'s own comment. Called unconditionally,
@@ -1161,6 +1313,26 @@ int main(void) {
         }
     }
     req_ok &= buf_append_cstr(&req, "\"");
+
+    /* HOOK MODE'S PAYLOAD (door_core.h). Inside `params`, sibling of
+     * `argv`/`cwd` above -- an OP ARGUMENT, exactly like `entrypoint`
+     * below and UNLIKE the envelope-level `_caller`/`_settings_home`
+     * fields further down: the payload is what the served op reads to do
+     * its job, never transport metadata the server pops before dispatch.
+     * Freed immediately after appending -- `buf_append_json_escaped`
+     * copies the bytes, so `stdin_payload.data` has no further use. */
+    if (req_ok && have_stdin_payload) {
+        req_ok &= buf_append_cstr(&req, ",\"stdin\":\"");
+        if (req_ok) {
+            req_ok &= buf_append_json_escaped(
+                &req, stdin_payload.data, stdin_payload.len);
+        }
+        req_ok &= buf_append_cstr(&req, "\"");
+    }
+    if (have_stdin_payload) {
+        free(stdin_payload.data);
+        have_stdin_payload = 0;
+    }
 
     /* ADDITIVE, NOT ALWAYS PRESENT (C0). Omitted entirely when this image's
      * own resolved name is the default `coordinator-invoke` -- the server

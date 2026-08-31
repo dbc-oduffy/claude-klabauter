@@ -265,6 +265,37 @@ class TestHandoffClaimStampsIdentity:
         assert "claude-klabauter-stale" not in text
         assert "claimed_by_name" not in text
 
+    def test_a_raising_lookup_leaves_an_existing_name_untouched(self, tmp_path, monkeypatch):
+        """Finding 1/5, P1: a `harness_registry.lookup` RAISE is "cannot tell",
+        not "this claimant genuinely has no name" — the two must not collapse
+        into the same removal branch. The sibling test above (`lookup` returning
+        `None` cleanly) cannot catch this: it never distinguishes a raise from a
+        clean miss, which is exactly the gap the destructive removal arm had.
+        Pinned against the unfixed behaviour: it deletes the field."""
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        hp = _seed_handoff(
+            repo, "h6b.md", extra="claimed_by_name: claude-klabauter-real\n",
+        )
+        monkeypatch.setenv("CLAUDE_SESSION_ID", "sess-registry-down")
+        _set_self_record(monkeypatch, None)
+
+        def _boom(_sid):
+            raise RuntimeError("registry unreachable")
+
+        monkeypatch.setattr(
+            "coordinator_core.session.harness_registry.lookup", _boom, raising=False
+        )
+
+        rc = arstamp.cs_claim_handoff(str(hp))
+
+        assert rc == 0
+        text = hp.read_text(encoding="utf-8")
+        assert "claimed_by: sess-registry-down" in text
+        # A transient registry error must leave the pre-existing name alone —
+        # deleting it here would strand exactly the identity this stamp exists
+        # to preserve, on nothing more than a momentary read failure.
+        assert "claimed_by_name: claude-klabauter-real" in text
 
     def test_foreign_ambient_record_resolves_the_claimant_by_id(self, tmp_path, monkeypatch):
         """The warm-door shape: the carried id is the caller's, the ambient record is
@@ -504,6 +535,33 @@ class TestForeignLiveClaimRefusal:
         rc = arstamp.cs_claim_handoff(str(hp))
 
         assert rc == 0
+
+    def test_a_non_utf8_handoff_fails_open_instead_of_crashing(self, tmp_path, monkeypatch):
+        """Finding 2, P1. `UnicodeDecodeError` is a `ValueError` subclass, not an
+        `OSError` — a bare `except OSError` around `_foreign_live_holder_refusal`'s
+        fence-bounded read let a non-UTF-8 handoff crash the caller outright
+        instead of failing open, as the function's own docstring promises ("an
+        unparseable frontmatter ... must not make claiming impossible").
+
+        Exercises `_foreign_live_holder_refusal` directly rather than through
+        `cs_claim_handoff`: the full claim path's own frontmatter MUTATION read
+        (`handoff_transition._claim` -> `locked_write.locked_rmw`) opens with
+        plain `encoding="utf-8"` and would itself raise on a corrupt handoff —
+        a separate, pre-existing gap on an unrelated read path, out of this
+        finding's scope (the module docstring's Negative-spec: this module does
+        not reimplement frontmatter-mutation logic). This test isolates the one
+        read this finding actually fixed.
+
+        Pinned against the unfixed behaviour: it raises `UnicodeDecodeError`."""
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        hp = _seed_handoff(repo, "h-badenc.md", extra="claimed_by: sess-peer\n")
+        raw = hp.read_bytes()
+        hp.write_bytes(raw + b"\xff\xfe garbage\n")
+
+        result = arstamp._foreign_live_holder_refusal(str(hp), "sess-mine")
+
+        assert result is None
 
     def test_reclaiming_my_own_live_claim_is_not_contention(self, tmp_path, monkeypatch):
         repo = tmp_path / "repo"

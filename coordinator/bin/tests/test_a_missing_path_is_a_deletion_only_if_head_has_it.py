@@ -151,3 +151,42 @@ def test_a_mixed_pathspec_refuses_and_names_only_the_bogus_path(tmp_path, capsys
     assert "BLOCKED: pkg/never.py is neither in the worktree nor in HEAD" in err
     assert "pkg/gone.py is neither" not in err
     assert "pkg/kept.py is neither" not in err
+
+
+def test_an_absent_directory_is_refused_not_called_a_deleted_file(tmp_path, capsys):
+    """A directory absent from the worktree is `unknown`, never a deletion.
+
+    Without `-r`, `git ls-tree --name-only HEAD -- pkg` returns the single
+    tree entry `pkg`, which exact-matches the caller's operand -- so the
+    directory would be classified as tracked-at-HEAD and forwarded into
+    `deleted_paths`, a field `ceremony.commit_v2` expects to carry file paths
+    only. `-r` expands the listing to the tree's file entries (`pkg/kept.py`,
+    ...), none of which match the bare directory name, so it falls to the
+    refusal instead.
+
+    Review: code-reviewer Finding 2 on the committer-P0 slice.
+    """
+    root = _repo(tmp_path)
+    import shutil
+
+    shutil.rmtree(root / "pkg")
+
+    with pytest.raises(SystemExit) as exc:
+        safe_commit._split_paths_for_commit_v2(str(root), ["pkg"])
+
+    assert exc.value.code == 1
+    err = capsys.readouterr().err
+    assert "BLOCKED: pkg is neither in the worktree nor in HEAD" in err
+
+
+def test_ls_tree_still_reports_the_files_a_real_deletion_names(tmp_path):
+    """`-r` must not cost the ordinary case: a deleted FILE still resolves."""
+    root = _repo(tmp_path)
+    (root / "pkg" / "gone.py").unlink()
+
+    present, deleted = safe_commit._split_paths_for_commit_v2(
+        str(root), ["pkg/kept.py", "pkg/gone.py"]
+    )
+
+    assert present == ["pkg/kept.py"]
+    assert deleted == ["pkg/gone.py"]

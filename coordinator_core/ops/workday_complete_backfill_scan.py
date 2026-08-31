@@ -470,7 +470,31 @@ def _rev_parse_parent(root: str, sha: str) -> str:
 def _scan_full_day_union(root: str, day: str, prev_day: str, out: List[str]) -> None:
     """Full-day union span (AC3/DEC-3): union of `git log --no-merges` across
     work/*/* ∪ main ∪ HEAD (local + origin), deduped by SHA. base = parent of
-    the oldest commit, tip = newest, count = unique non-merge commit count."""
+    the oldest commit, tip = newest, count = unique non-merge commit count,
+    shas = the explicit union commit list, oldest-first.
+
+    `count` and `base..tip` describe DIFFERENT COMMIT SETS, and always did.
+    `count` is the size of a time-windowed union across many refs; `base..tip`
+    is topological single-ref ancestry, so walking it drops commits on sibling
+    branches that are not ancestors of `tip`, and picks up ancestors of `tip`
+    from outside the day window. A reader who recomputed `count` from
+    `base..tip` and found them equal was lucky, not correct.
+
+    `count` keeps its documented meaning (AC3/DEC-3) verbatim. Redefining it to
+    mean "commits in base..tip" was the other available fix and is the worse
+    one: it silently falsifies what every prior reader reasoned from. So the
+    ROW changed instead — a fifth column carries the union commit list. It is
+    the authoritative answer to "which commits", `len(shas) == count` holds by
+    construction, and it is the first time the two halves of a row can be
+    checked against each other at all.
+
+    `base`/`tip` are unchanged, for the two consumers that read them
+    (`workday-complete-close.py backfill-dispatch-rows` and
+    `workday-complete-backfill-anchor.py run`). Both take `cols[0]`/`cols[3]`
+    under a `len(cols) < 4` guard, so the fifth column is forward-compatible by
+    construction. Treat them as an anchor pair, never as a description of the
+    union: do not re-derive the union from them.
+    """
     refs = _collect_union_refs(root)
     if not refs:
         return
@@ -513,7 +537,8 @@ def _scan_full_day_union(root: str, day: str, prev_day: str, out: List[str]) -> 
     if tip is None or oldest is None:
         return
     base = _rev_parse_parent(root, oldest)
-    out.append(f"{day}\t{len(entries)}\t{base}\t{tip}")
+    shas = ",".join(sha for _ts, sha in sorted(entries, key=lambda e: e[0]))
+    out.append(f"{day}\t{len(entries)}\t{base}\t{tip}\t{shas}")
 
 
 # ---------------------------------------------------------------------------

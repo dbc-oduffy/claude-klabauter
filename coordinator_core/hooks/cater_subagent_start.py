@@ -58,16 +58,29 @@ succeeded for it either way), or a dispatch for which no type resolved
 at all.
 
 The `sidecar_path: <path>` and `sidecar_provisioning: missed` marker LINES
-are byte-identical to their Agent-path counterparts
-(`_compose_sidecar_offer_text` / `_compose_sidecar_miss_text` in
-`enforce-agent-dispatch-mode.py`) minus that hook's DoE-local
-`_message_envelope.compose`/`render` prose-capping wrapper, which this repo
-does not own or import -- so a consuming agent's exact-line marker match
-(`coordinator/agents/code-reviewer.md` § HARD RULE step 1) behaves
-identically on both paths. The surrounding prose is NOT claimed verbatim:
-`SIDECAR_MISS_NO_FOREIGN_WRITE` (added 2026-08-31, see its own docstring)
-is appended to every `_compose_sidecar_miss_text` body in THIS repo only,
-with no matching cross-repo memo yet filed to add it to DoE's counterpart --
+are the contract a consuming agent exact-line matches on
+(`coordinator/agents/code-reviewer.md` § HARD RULE step 1); keep them
+byte-stable, and prefer a literal over a constant when asserting them so
+that contract stays visible at the assertion.
+
+NO AGENT-PATH COUNTERPART EXISTS TO BE IDENTICAL TO, and this paragraph
+used to claim one. Earlier revisions cited
+`_compose_sidecar_offer_text` / `_compose_sidecar_miss_text` in DoE's
+`enforce-agent-dispatch-mode.py` as the surviving twin of these strings.
+Those functions are GONE: that hook's own docstring says sidecar
+provisioning is "retired from this leg entirely" (read at DoE-claude
+`work/machine-a/2026-08-22to31`, file at `d29ee0aa9d`), and the identifiers
+appear nowhere under `X:/DoE-claude/coordinator/hooks/`. `SubagentStart`
+is the SOLE catering path for every child, as this docstring's own opening
+already states -- the two halves contradicted each other and the citation
+half was the stale one.
+
+Consequence worth stating, because a reviewer, an integrator and the EM
+all reasoned about a divergence from code that does not exist: appending
+`SIDECAR_MISS_NO_FOREIGN_WRITE` (2026-08-31) diverges this prose from
+NOTHING, and no cross-repo memo is owed for it. A memo drafted on that
+premise was discarded unsent after one grep against DoE's clone. Do not
+re-derive the obligation from this paragraph's history --
 that divergence is intentional here and unresolved there, tracked
 separately from the marker-line guarantee above.
 

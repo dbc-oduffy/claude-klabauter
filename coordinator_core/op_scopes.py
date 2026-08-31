@@ -172,6 +172,48 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # keyed by session_id; repo_root is unused (always None). Same "none" class
     # as the other repo_root-less hooks.* ops above.
     "hooks.nudge_autonomous_askuserquestion": "none",
+    # hooks.sessionend_archive_session — repo_root handler arg is unused
+    # (always None): the handler threads params["payload"]["cwd"] straight
+    # into coordinator_core.session.scope.archive()'s own `cwd` parameter,
+    # which resolves its own git-common-dir via sessions_dir(cwd) internally
+    # (same self-resolving shape as the pre-port CLI's ambient process cwd).
+    # Same "none" class as the other repo_root-less hooks.* ops above.
+    "hooks.sessionend_archive_session": "none",
+    # hooks.watchdog_undischarged_next_move — repo_root handler arg is unused
+    # (always None): the handler resolves its OWN repo root from
+    # params["payload"]["cwd"] (coordinator_core.git.repo_root.show_toplevel,
+    # zero-spawn) for the ledger under state/subagent-share/<session_id>/,
+    # and its own git dir (coordinator_core.git.git_dir.resolve_git_dir) for
+    # the sizing-object touch-record lookup — never the framework-supplied
+    # _origin_worktree. Same "none" class as the other repo_root-less
+    # hooks.* ops above, despite being MUTATING (see its own classification
+    # entry — scope and mutating-ness are independent axes).
+    "hooks.watchdog_undischarged_next_move": "none",
+    # hooks.plan_persistence_check — repo_root handler arg is unused; the
+    # handler resolves its own target repo(s) from payload["cwd"]/
+    # payload["env"]["CLAUDE_PROJECT_DIR"] via a non-spawning git-toplevel
+    # walk, exactly like hooks.sessionend_archive_session above.
+    "hooks.plan_persistence_check": "none",
+    # hooks.runtime_tripwire_em_check — PostToolUse(Agent) leg only. repo_root
+    # handler arg is unused; the handler resolves its own git root from
+    # payload["cwd"] (coordinator_core.git.repo_root.show_toplevel,
+    # zero-spawn), and its own git COMMON dir
+    # (coordinator_core.git.git_dir.resolve_git_common_dir) for both the
+    # push-failures cursor and the hooks.json-staleness cursor. Same "none"
+    # class as the other repo_root-less hooks.* ops above.
+    "hooks.runtime_tripwire_em_check": "none",
+    # hooks.stop_dispatch (C3) and its four residue/wrapper legs
+    # (guard_kira_verdict_routed, stop_em_report_altitude,
+    # nudge_harness_directive_dispatch, nudge_unrouted_sizing) — repo_root
+    # handler arg unused for all five: each leg resolves its own repo root
+    # from params["payload"]["cwd"] (or has no repo-root need at all, e.g.
+    # the two nudge wrappers over a pure-transcript detector). Same "none"
+    # class as the other repo_root-less hooks.* ops above.
+    "hooks.stop_dispatch": "none",
+    "hooks.guard_kira_verdict_routed": "none",
+    "hooks.stop_em_report_altitude": "none",
+    "hooks.nudge_harness_directive_dispatch": "none",
+    "hooks.nudge_unrouted_sizing": "none",
     # hooks.context_pressure_precompact — no repo state accessed: writes its
     # sentinel + state-snapshot only to tempfile.gettempdir(), keyed by
     # session_id, never to a repo/worktree path; repo_root is unused (always

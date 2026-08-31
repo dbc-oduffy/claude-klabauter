@@ -2922,3 +2922,121 @@ def test_traversal_shaped_created_rejected_on_workstream_event() -> None:
             return
 
 
+# ---------------------------------------------------------------------------
+# C6 — --title/--why/--body newline-argv refusal and the --why-file leg
+#
+# Plan: prose flags travel as files through the .cmd forwarder. --title earns
+# the refusal only (no file sibling — the slug-derived output filename cannot
+# carry a newline losslessly). --why earns a --why-file sibling, matching
+# --body-file's shape. --body had a --body-file sibling but NO
+# refuse_newline_argv call on its inline path (staff-eng-verified gap) — an
+# inline --body with a real newline was silently truncated rather than
+# refused; this closes that gap.
+# ---------------------------------------------------------------------------
+
+
+def test_title_newline_argv_refused() -> None:
+    """A newline-bearing inline --title is refused outright — it has no
+    -file alternative, so the refusal message must not invent one."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        result = _run_cli(
+            [
+                "--schema", "bug-backlog",
+                "--title", "First line\nSecond line",
+                "--body", "Body prose.",
+                "--status", "open",
+                "--severity", "P3",
+                "--surface", "coordinator/bin/coordinator-queue-append.py",
+            ],
+            env={"QUEUE_APPEND_OUTPUT_ROOT": tmpdir},
+            cwd=tmpdir,
+        )
+        assert result.returncode != 0, "expected refusal for a newline-bearing inline --title"
+        assert "--title" in result.stderr, f"stderr did not name --title: {result.stderr!r}"
+        assert "--title-file" not in result.stderr, (
+            f"--title has no file sibling; stderr must not invent one: {result.stderr!r}"
+        )
+
+
+def test_body_newline_argv_refused() -> None:
+    """VERIFIED GAP closure: an inline --body carrying a real newline is
+    refused outright and names --body-file — it must NOT be silently
+    truncated to its first line."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        result = _run_cli(
+            [
+                "--schema", "bug-backlog",
+                "--title", "Body newline refusal entry",
+                "--body", "First line.\nSecond line that must not be dropped.",
+                "--status", "open",
+                "--severity", "P3",
+                "--surface", "coordinator/bin/coordinator-queue-append.py",
+            ],
+            env={"QUEUE_APPEND_OUTPUT_ROOT": tmpdir},
+            cwd=tmpdir,
+        )
+        assert result.returncode != 0, "expected refusal for a newline-bearing inline --body"
+        assert "--body-file" in result.stderr, f"stderr did not name --body-file: {result.stderr!r}"
+
+        # No entry was written — the refusal must fire before any file write,
+        # not merely after a truncated one landed on disk.
+        expected_dir = os.path.join(tmpdir, "state", "bug-backlog")
+        yaml_files = os.listdir(expected_dir) if os.path.isdir(expected_dir) else []
+        assert not yaml_files, f"a refused --body must not write an entry; found {yaml_files}"
+
+
+def test_why_newline_argv_refused() -> None:
+    """A newline-bearing inline --why is refused and names --why-file."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        result = _run_cli(
+            _lessons_required_args() + ["--why", "First line\nSecond line"],
+            env={"QUEUE_APPEND_OUTPUT_ROOT": tmpdir},
+            cwd=tmpdir,
+        )
+        assert result.returncode != 0, "expected refusal for a newline-bearing inline --why"
+        assert "--why-file" in result.stderr, f"stderr did not name --why-file: {result.stderr!r}"
+
+
+def test_why_file_roundtrips_multiline_value_byte_for_byte() -> None:
+    """--why-file carries a multi-line rationale byte-exact, with no --why
+    flag present at all."""
+    why_input = "First line of rationale.\n\nThird line after a blank one.\nFourth line."
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        why_path = os.path.join(tmpdir, "why.txt")
+        with open(why_path, "w", encoding="utf-8") as fh:
+            fh.write(why_input)
+
+        result = _run_cli(
+            _lessons_required_args() + ["--why-file", why_path],
+            env={"QUEUE_APPEND_OUTPUT_ROOT": tmpdir},
+            cwd=tmpdir,
+        )
+        assert result.returncode == 0, f"CLI exited {result.returncode}: {result.stderr!r}"
+
+        expected_dir = os.path.join(tmpdir, "state", "lessons")
+        yaml_files = [f for f in os.listdir(expected_dir) if f.endswith(".yaml")]
+        assert len(yaml_files) == 1, f"expected 1 YAML file; found {yaml_files}"
+
+        parsed = _parse_yaml_file(os.path.join(expected_dir, yaml_files[0]))
+        assert parsed.get("why") == why_input, (
+            f"why roundtrip mismatch: expected {why_input!r}, got {parsed.get('why')!r}"
+        )
+
+
+def test_why_and_why_file_are_mutually_exclusive() -> None:
+    """Two --why sources is an ambiguity, not a precedence question — refuse."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        why_path = os.path.join(tmpdir, "why.txt")
+        with open(why_path, "w", encoding="utf-8") as fh:
+            fh.write("from the file")
+
+        result = _run_cli(
+            _lessons_required_args() + ["--why", "from argv", "--why-file", why_path],
+            env={"QUEUE_APPEND_OUTPUT_ROOT": tmpdir},
+            cwd=tmpdir,
+        )
+        assert result.returncode != 0, "expected refusal when both --why sources are supplied"
+        assert "mutually exclusive" in result.stderr, f"stderr did not name the conflict: {result.stderr!r}"
+
+

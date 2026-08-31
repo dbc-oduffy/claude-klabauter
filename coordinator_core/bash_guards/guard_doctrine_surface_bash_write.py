@@ -916,6 +916,92 @@ _ASSIGN_NAME_RE = re.compile(r"^\s*([A-Za-z_][A-Za-z0-9_]*)=")
 _VAR_DEREF_RE = re.compile(r"\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?")
 
 
+#: Bound on `_expand_local_assignments`'s fixed-point loop. An alias chain
+#: longer than the number of assignments cannot exist, so this only stops a
+#: pathological command from spinning; it never truncates a real one.
+_EXPANSION_MAX_ROUNDS = 8
+
+
+def _local_assignment_values(segments: "list[str]") -> "dict[str, str]":
+    """Literal values assigned to names in this command's own segments.
+
+    Only LITERAL right-hand sides are collected -- a value containing a
+    command substitution, a backtick, or a glob is left out entirely, because
+    its runtime value is not knowable from the text and guessing at it is how
+    a guard starts denying commands for reasons it cannot state.
+    """
+    values: "dict[str, str]" = {}
+    for segment in segments:
+        match = _ASSIGN_NAME_RE.match(segment)
+        if not match:
+            continue
+        raw = segment[match.end():].strip()
+        # One token only: `N=foo bar` assigns `foo` and runs `bar`.
+        raw = raw.split()[0] if raw.split() else ""
+        if not raw:
+            continue
+        if any(ch in raw for ch in ("`", "*", "?", "(", ")")) or "$(" in raw:
+            continue
+        if (raw[:1], raw[-1:]) in (("'", "'"), ('"', '"')) and len(raw) >= 2:
+            raw = raw[1:-1]
+        if "$" in raw and not _VAR_DEREF_RE.search(raw):
+            continue
+        values[match.group(1)] = raw
+    return values
+
+
+def _expand_local_assignments(cmd: str) -> str:
+    """`cmd` with `$NAME`/`${NAME}` replaced by values assigned in `cmd`.
+
+    THE CLASS THIS CLOSES. `_mentions_governed_identifier` is a substring
+    test, so it needs the governed name to appear CONTIGUOUSLY. A command can
+    split it across an assignment boundary and never satisfy that:
+
+        N=CLAUDE; echo probe > "$SOME_DIR/$N.md"
+
+    The stem sits in an assignment and the suffix is a separate literal, so
+    `CLAUDE.md` appears nowhere, no leg of this guard is ever reached, and the
+    write lands. Measured as a LIVE bypass through the armed hook on
+    2026-08-31 -- allowed, with the governed-named file on disk afterwards.
+
+    This is NOT a table of evasion shapes, which is what
+    `state/bug-backlog/2026-08-31-variable-expansion-still-evades-the-doct-
+    5764bcce7a61.yaml` correctly said could never close the class. It resolves
+    the command to what it will actually RUN and lets the existing legs judge
+    that. A variable can be assembled from arbitrary fragments, but every
+    fragment that decides the sink has to be in the command for the shell to
+    run it too -- so following the assignments follows the class, not a
+    spelling of it.
+
+    WHY THIS DOES NOT MANUFACTURE FALSE DENIALS. Only literal assignments
+    from this same command are substituted, so the expansion is what the
+    operator wrote, not a guess: if `N=CLAUDE` and the command writes
+    `"$N.md"`, then `CLAUDE.md` is the file that gets created. A value whose
+    runtime content is unknowable (command substitution, backtick, glob) is
+    deliberately NOT collected -- an unresolvable variable expands to
+    nothing here and the command is judged exactly as it is today.
+
+    An environment variable this command does not itself assign is likewise
+    left alone: `$SOME_DIR` above stays literal, which is correct, because
+    the directory does not decide governance -- the basename does.
+    """
+    segments = _split_top_level_segments(cmd)
+    values = _local_assignment_values(segments)
+    if not values:
+        return cmd
+
+    expanded = cmd
+    for _ in range(_EXPANSION_MAX_ROUNDS):
+        def _sub(match: "re.Match[str]") -> str:
+            return values.get(match.group(1), match.group(0))
+
+        nxt = _VAR_DEREF_RE.sub(_sub, expanded)
+        if nxt == expanded:
+            break
+        expanded = nxt
+    return expanded
+
+
 def _governed_bound_variables(
     segments: "list[str]", identifiers_lower: Tuple[str, ...]
 ) -> "set[str]":
@@ -1143,8 +1229,24 @@ def is_denied_bash_write(cmd: str, identifiers_lower: Tuple[str, ...]) -> bool:
     ...EXCEPT a segment satisfying the point-7 git carve-out, the point-7
     wrapper-family mirror, the point-9 grant-CLI carve-out, or the point-11
     interpreter-read-shape carve-out."""
-    if not identifiers_lower or not _mentions_governed_identifier(cmd, identifiers_lower):
+    if not identifiers_lower:
         return False
+    if not _mentions_governed_identifier(cmd, identifiers_lower):
+        # The governed name may be split across an assignment boundary
+        # (`N=CLAUDE; echo x > "$D/$N.md"`), where a substring test finds
+        # nothing and every leg below is skipped. Resolve the command to
+        # what it will actually run and re-ask ONCE. If the resolved form
+        # still does not mention a governed identifier, nothing changes --
+        # this cannot widen the guard for a command that was never about a
+        # governed surface. See `_expand_local_assignments`.
+        expanded = _expand_local_assignments(cmd)
+        if expanded == cmd or not _mentions_governed_identifier(
+            expanded, identifiers_lower
+        ):
+            return False
+        # Judge the RESOLVED command from here: every leg below asks what
+        # this command writes, and the resolved form is what writes it.
+        cmd = expanded
 
     segments = _split_top_level_segments(cmd)
     quoted_heredoc_bodies = _quoted_heredoc_bodies(cmd)

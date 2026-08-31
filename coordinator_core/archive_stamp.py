@@ -1771,12 +1771,23 @@ def _foreign_live_holder_refusal(handoff_path: str, claimant_sid: str) -> "str |
     detects, which the operator can still see in the returned frontmatter.
     """
     try:
-        text = Path(handoff_path).read_text(encoding="utf-8")
+        # Review: code-reviewer (P1 Finding 2) — this read holds TWO properties
+        # together and neither may be dropped: (1) fence-bounded (the hand-rolled
+        # split_frontmatter + read_fm_field_unquoted pair, kept over
+        # read_frontmatter_field specifically because that shared reader is not
+        # fence-bounded and can match a `claimed_by:` occurring outside the
+        # frontmatter fence — a correctness regression on a security-shaped
+        # check); (2) fail-open on ANY unreadable/undecodable input, per this
+        # function's own docstring. `errors="replace"` closes the encoding gap
+        # (UnicodeDecodeError is a ValueError subclass, not an OSError, so a
+        # bare `except OSError` let a non-UTF-8 handoff crash the claim instead
+        # of failing open) without giving up fence-boundedness.
+        text = Path(handoff_path).read_text(encoding="utf-8", errors="replace")
         split = split_frontmatter(text)
         if split is None:
             return None
         holder = (read_fm_field_unquoted(split.fm_text, "claimed_by") or "").strip()
-    except OSError:
+    except (OSError, UnicodeDecodeError):
         return None
     if not holder or holder == claimant_sid:
         return None
@@ -1898,6 +1909,7 @@ def _record_claimant_identity_best_effort(
         parsed = harness_registry.self_record()
     except Exception:  # noqa: BLE001 — best-effort; a registry read failure is not a claim failure
         parsed = None
+    lookup_raised = False
     if parsed is not None and parsed[0] == claimant_sid:
         record = parsed[1]
     else:
@@ -1906,12 +1918,23 @@ def _record_claimant_identity_best_effort(
 
             record = harness_registry.lookup(claimant_sid)
         except Exception:  # noqa: BLE001 — best-effort; a registry read is not a claim
+            # Review: code-reviewer (P1 Finding 1) — a raise here means "cannot
+            # tell", NOT "this claimant genuinely has no name". Folding both into
+            # `record = None` made the removal arm below indistinguishable from a
+            # clean no-name lookup, so a transient registry error deleted a real,
+            # existing `claimed_by_name`. `lookup_raised` keeps the two states
+            # apart: only a clean, successful lookup returning no name may clear
+            # the field; a raise must leave whatever is already on disk untouched.
             record = None
+            lookup_raised = True
 
     fields: list[tuple[str, str, str]] = []
     if slug:
         fields.append(("human_claimant", slug, "picked_up_by"))
     resolved_name = record.name if record is not None else None
+    # `name_resolved` gates ONLY the insert-fields loop above (skip inserting an
+    # empty value); the destructive removal arm below must additionally check
+    # `not lookup_raised` — see Finding 1 comment above `lookup_raised`.
     name_resolved = bool(resolved_name)
     if resolved_name:
         fields.append(("claimed_by_name", resolved_name, anchor_field))
@@ -1942,7 +1965,7 @@ def _record_claimant_identity_best_effort(
                 elif read_fm_field(fm_text, key) is not None:
                     continue
                 fm_text = insert_fm_field(fm_text, key, value, anchor, numeric_quoting=True)
-            if not name_resolved:
+            if not name_resolved and not lookup_raised:
                 # No name for THIS claimant, but a previous holder's is sitting
                 # there. Drop it: a wrong-but-plausible name is worse than none,
                 # because it reads as a coherent holder and suppresses the lookup

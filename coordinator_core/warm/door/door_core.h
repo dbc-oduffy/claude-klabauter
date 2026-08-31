@@ -117,6 +117,103 @@ int parse_response_envelope(
 );
 
 /* =========================================================================
+ * Caller-declared stdin payload -- bounded, mode-gated, shared verbatim by
+ * both transport legs. Spec backlink:
+ * docs/plans/2026-08-31-the-door-reads-stdin-and-the-payload-lands-flat.md
+ * § C1, and the spike it rests on:
+ * docs/research/spike-verdicts/2026-08-31-door-bounded-stdin-read.md.
+ *
+ * THE MODE GATE, AND WHY IT IS NOT AUTODETECTED. The spike measured two
+ * hazards an autodetecting door would hit: (1) an unconditional stdin read
+ * against a writer that never closes NEVER RETURNS -- still blocked at
+ * 3.0s, measured -- which on the Bash hot path is a hang of every Bash
+ * call on the box, strictly worse than the fall-through this work fixes;
+ * (2) `PeekNamedPipe` returning 0 does not mean "no payload", it means
+ * "the writer has not written yet", so a peek-based autodetect cannot
+ * distinguish a caller that sent nothing from one whose payload is
+ * microseconds behind -- and a guard that conflates those two silently
+ * truncates a real payload to empty. Both platform doors therefore gate
+ * the read on a CALLER DECLARATION (`DOOR_STDIN_MODE_ENV_NAME`, below),
+ * never on a peek of the handle. */
+#define DOOR_STDIN_MODE_ENV_NAME "COORDINATOR_DOOR_STDIN_MODE"
+#define DOOR_STDIN_MODE_HOOK_VALUE "hook"
+
+/* Total payload ceiling. NOT derived from any measurement taken on this
+ * box -- the spike's cost figures (flat ~0.1ms p50 from 1KB to 256KB) do
+ * not gate this number at all, they only established that cost is not the
+ * constraint. 1 MiB is a generous ceiling for a JSON hook payload, chosen
+ * as a round bound comfortably above anything a Bash guard constructs,
+ * while still small enough that holding a refused payload in memory for
+ * the length of one refusal is a non-event. */
+#define DOOR_STDIN_MAX_BYTES (1024u * 1024u)
+
+/* One incremental read call's own ceiling -- deliberately far below the
+ * OS pipe-buffer deadlock point the spike measured (a single-threaded
+ * `write(64KB)` blocked before the reader ever ran). `door_drain_stdin_
+ * bounded` below never attempts to read the whole payload in one call. */
+#define DOOR_STDIN_READ_CHUNK_BYTES 8192
+
+typedef enum {
+    DOOR_STDIN_READ_OK = 0,
+    DOOR_STDIN_READ_TOO_LARGE = 1,
+    DOOR_STDIN_READ_ERROR = 2,
+} door_stdin_status_t;
+
+/* One platform read call: writes up to `cap` bytes into `buf`, returning
+ * the count read (0 at end-of-stream) or a negative value on a hard read
+ * error. Each door supplies its own (`ReadFile` on the Windows standard-
+ * input handle; `read(0, ...)` on POSIX) -- this header only describes the
+ * shape, per door_core.h's own "opens no handle" constraint (see the top
+ * of this file). An ordinary BLOCKING read is the correct implementation
+ * on both sides: reaching this callback at all means the caller already
+ * declared a payload is coming (the mode gate above), which is the one
+ * case the spike's blocking hazard does not apply to. */
+typedef long (*door_stdin_reader_t)(void *reader_ctx, char *buf, size_t cap);
+
+/* Drains `reader` to end-of-stream into `out` (already `buf_init`'d by the
+ * caller), refusing rather than truncating the instant the running total
+ * would exceed `max_bytes`. The bound check happens BEFORE the bytes are
+ * appended, on every chunk -- "enforced inside the loop" means a payload
+ * exceeding the bound never has any of its excess copied into `out`, and
+ * a single read of the whole payload is never attempted (the deadlock
+ * hazard above).
+ *
+ * This function never decides WHETHER to read -- that is the mode gate,
+ * resolved by each platform door from `DOOR_STDIN_MODE_ENV_NAME` before
+ * this is ever called. */
+door_stdin_status_t door_drain_stdin_bounded(
+    door_stdin_reader_t reader, void *reader_ctx, buf_t *out, size_t max_bytes
+);
+
+/* Builds `{"hookSpecificOutput":{"hookEventName":"PreToolUse",
+ * "permissionDecision":"deny","permissionDecisionReason":"<reason>"}}`
+ * into `out` (which the caller must `buf_init` first), appending a
+ * trailing newline. Returns 1 on success.
+ *
+ * THE HOOK-MODE FAIL-CLOSED DISPOSITION. `door.c`'s and `door_posix.c`'s
+ * shipped safety property is "on any doubt, fall through to the cold
+ * Python entrypoint" (see either file's own module docstring) -- exactly
+ * right for an ordinary op invocation, exactly wrong for a guard: a hook
+ * that falls through has not been consulted, and for a PreToolUse hook
+ * the fall-through cost is an interpreter start on every Bash call, the
+ * very thing the door exists to avoid. A caller that declared hook mode
+ * (`DOOR_STDIN_MODE_HOOK_VALUE`) gets THIS envelope at every point that
+ * would otherwise fall through, instead -- the same
+ * `{"hookSpecificOutput":...}` shape every Bash guard in this repo already
+ * authors for a deny verdict (e.g.
+ * `coordinator_core/bash_guards/block_approval_sentinel_creation.py`),
+ * with a reason naming the door so a transcript reader can tell which
+ * layer refused.
+ *
+ * DR-367 ("cold fall-through succeeds, loudly") is NOT reversed by this.
+ * Its own non-license clause already excludes a warm server that is
+ * reachable and answers no -- a hook whose endpoint is dead (unreachable)
+ * is the case DR-367 never covered, and denying is the correct answer for
+ * it precisely because a caller that declared hook mode asked to be
+ * guarded, not merely dispatched. */
+int build_hook_deny_envelope(buf_t *out, const char *reason);
+
+/* =========================================================================
  * The safety classification -- the reason this file exists as shared code
  * rather than as two ports.
  * ========================================================================= */

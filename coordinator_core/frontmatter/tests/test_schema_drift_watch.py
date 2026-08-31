@@ -216,7 +216,7 @@ class TestDriftDirection:
             "re-vendoring discards it."
         ) in report["summary"]
 
-    def test_a_we_are_ahead_file_in_a_mixed_set_suppresses_the_re_vendor_line(
+    def test_a_we_are_ahead_file_in_a_mixed_set_keeps_both_remediation_lines(
         self, fake_doe: Path, vendored_dir: Path
     ) -> None:
         doe_schema_path = fake_doe / "coordinator" / "schemas" / _SCHEMA_A
@@ -234,7 +234,15 @@ class TestDriftDirection:
 
         directions = {d["schema"]: d["direction"] for d in report["drifted"]}
         assert directions == {_SCHEMA_A: "we-are-behind", _SCHEMA_B: "we-are-ahead"}
-        assert "Upstream has moved since the pin" not in report["summary"]
+        # Both remediations, because the batch carries drift in both directions.
+        # A single global line keyed off `any(we-ahead)` used to swallow the
+        # re-vendor instruction here, leaving the genuinely-stale _SCHEMA_A
+        # told to upstream a change it does not have.
+        assert "Upstream has moved since the pin — re-vendor." in report["summary"]
+        assert (
+            "Local is ahead of the pin — upstream the local change or ratify the "
+            "fork; re-vendoring discards it."
+        ) in report["summary"]
 
     def test_we_are_behind_keeps_the_re_vendor_remediation(
         self, fake_doe: Path, vendored_dir: Path

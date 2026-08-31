@@ -42,6 +42,7 @@ from coordinator_core.bash_guards._write_bump_marker import (
     resolve_gitdir,
 )
 from coordinator_core.bash_guards._write_bump_sink_shapes import WRITE_SINK_BINARIES
+from coordinator_core.testing.home_sandbox import sandbox_home
 from coordinator_core.win_portability import no_console_creationflags
 
 # Spawns a real external process; runs at cadence gates, not per-commit.
@@ -240,7 +241,15 @@ def _set_anchor(monkeypatch, env, session_id: str, extra: dict | None = None) ->
     `CLAUDE_PROJECT_DIR` is left unset throughout; `HOME` is still set (to an
     unrelated scratch dir) so `_anchor_is_under_claude_home` resolves to "not
     under" rather than fail-opening on an unresolvable home."""
-    monkeypatch.setenv("HOME", str(env["home"]))
+    # `sandbox_home`, not a bare HOME setenv: `_clean_bump_env` deletes HOME
+    # *and* USERPROFILE, and on Windows `expanduser` reads USERPROFILE first --
+    # so HOME alone leaves `Path.home()` with nothing to read. `claude_config_dir()`
+    # then raises RuntimeError("Could not determine home directory") inside
+    # `resolve_plugin_root_loud`, and a guard-chain test here fails on a Windows
+    # host while passing on POSIX, where HOME alone IS what expanduser reads.
+    # The docstring above always intended a resolvable home; this delivers one on
+    # both platforms, and names the sandbox rather than inheriting conftest's.
+    sandbox_home(monkeypatch, env["home"])
     for k, v in (extra or {}).items():
         monkeypatch.setenv(k, v)
     session_start.write_session_start_record(session_id, launch_cwd=str(env["anchor"]))

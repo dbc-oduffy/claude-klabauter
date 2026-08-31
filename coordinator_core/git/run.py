@@ -420,26 +420,80 @@ def run_git(
     if not spawn_counter.audit_hook_installed():
         spawn_counter.bump()
 
+    # HAND-ROLLED OVER `Popen`, deliberately -- and this comment used to say
+    # the exact opposite, for a reason that was half right.
+    #
+    # What it said: "`subprocess.run`'s own timeout path kills the child and
+    # -- on Windows -- re-drains it with a second `communicate()` before
+    # re-raising, and `Popen.__exit__` then closes every pipe." Every clause
+    # of that is TRUE (`Lib/subprocess.py:556`, under `if _mswindows:`). The
+    # conclusion drawn from it was wrong: that second `communicate()` takes
+    # NO timeout. Windows accumulates output on reader threads and drains
+    # them by joining, so if a reader never reaches EOF the join never
+    # returns -- and `kill()` does not close a pipe whose write end a
+    # grandchild inherited. `run()` therefore hangs FOREVER on the very path
+    # that exists to enforce the bound, and `timeout=` becomes advisory on
+    # the platform this repo calls first-class.
+    #
+    # MEASURED, not reasoned: caught live 2026-08-31 with
+    # `faulthandler.dump_traceback_later(60)`, main thread parked at
+    # `subprocess.py:556` beneath `subagent_sandbox.engine ::
+    # _resolve_git_root_uncached` (`timeout=2.0`) on the PreToolUse(Bash)
+    # chain. An external `timeout 600` could not reap it either: SIGTERM
+    # cannot land while the main thread sits in `Thread.join()`. Intermittent
+    # -- it depends on whether the spawned `git` left an inherited handle
+    # open, not on anything here.
+    # -> state/bug-backlog/2026-08-31-subprocess-run-s-timeout-does-not-bound-466bceff0ba5.yaml
+    #
+    # The pipe-leak hazard the old comment raised is real and is answered
+    # HERE rather than by delegating: `Popen` is used as a context manager,
+    # so `__exit__` closes stdin/stdout/stderr on every path including the
+    # timeout one, and the kill leg never re-reads. A timed-out git call
+    # discards whatever the dead child wrote -- the caller gets
+    # `timed_out=True` and no bytes, which is what every branch reading this
+    # result already does with a timeout.
+    # `mode_kwargs` was built for `subprocess.run`, whose `input=` has no
+    # `Popen` equivalent: fed stdin becomes `stdin=PIPE` at construction plus
+    # the bytes at `communicate`. Split here rather than reshaping the block
+    # above, so the mode/DEVNULL reasoning it carries stays in one place.
+    fed_input = mode_kwargs.pop("input", None)
+    if fed_input is not None:
+        mode_kwargs["stdin"] = subprocess.PIPE
+    wall = _wall_bound(timeout, remote)
     try:
-        # NOT hand-rolled over `Popen`, deliberately. `subprocess.run`'s own
-        # timeout path kills the child and -- on Windows -- re-drains it with
-        # a second `communicate()` before re-raising, and `Popen.__exit__`
-        # then closes every pipe. A wrapper that reimplements the timeout
-        # around a raw `Popen` is how a fed stdin leaks a pipe on the failure
-        # path, so the wrapping stops here.
-        completed = subprocess.run(
+        with subprocess.Popen(
             ["git", *args],
             cwd=cwd,
-            capture_output=True,
-            timeout=_wall_bound(timeout, remote),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             env=dict(env) if env is not None else None,
             **mode_kwargs,
             **no_console_creationflags(),
-        )
-    except subprocess.TimeoutExpired:
-        return GitResult(returncode=-1, stdout="", stderr="", timed_out=True)
+        ) as proc:
+            try:
+                stdout, stderr = proc.communicate(input=fed_input, timeout=wall)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                # BOUNDED, and never a second `communicate()`. `wait` only
+                # reaps the process; it does not join the reader threads, so
+                # an inherited handle cannot park us here. The bound is the
+                # scheduling-headroom term alone -- reaping a killed process
+                # is not work, so anything beyond it means the kill itself
+                # did not take, and returning is still the right move.
+                try:
+                    proc.wait(timeout=_SPAWN_SCHEDULING_HEADROOM_SECS)
+                except subprocess.TimeoutExpired:
+                    pass
+                return GitResult(returncode=-1, stdout="", stderr="", timed_out=True)
     except OSError:
         return GitResult(returncode=127, stdout="", stderr="", timed_out=False)
+
+    completed = subprocess.CompletedProcess(
+        args=["git", *args],
+        returncode=proc.returncode,
+        stdout=stdout,
+        stderr=stderr,
+    )
     return GitResult(
         returncode=completed.returncode,
         stdout=_as_text(completed.stdout),

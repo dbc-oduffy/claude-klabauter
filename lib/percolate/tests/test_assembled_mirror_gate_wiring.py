@@ -15,8 +15,11 @@ Run: python -m pytest coordinator/lib/percolate/tests/test_assembled_mirror_gate
 from __future__ import annotations
 
 import importlib.util
+import io
 import sys
 from pathlib import Path
+
+import io
 
 import pytest
 
@@ -251,12 +254,18 @@ class TestEndOfRunAssembledMirrorGateLeg:
         assert "known debt, tracked separately" not in captured.out
         assert "no claim about the tree" in captured.err
 
-    def test_exempted_row_with_isolation_unverified_result_still_fails(
+    def test_exempted_row_with_isolation_unverified_result_is_covered(
         self, tmp_path, monkeypatch, capsys
     ):
-        """Same rule for the OTHER incomplete shape: a result refused before
-        a subprocess ever ran carries no content verdict either, so it must
-        not be absorbed by a declared exemption."""
+        """The OTHER incomplete shape is NOT the same rule, and gating it
+        alongside the timeout above shut a real publish lane for five days
+        (cross-repo/inbox/2026-08-31-doe-claude-em-mirror-gate-completeness-
+        reclosed-the-oss-lane.md). `isolation_unverified` is a pure function
+        of the destination tree's contents, not of the box: a mirror that
+        structurally never carries `coordinator_core/` refuses this way on
+        every round, on an idle box, forever -- exactly the standing, named
+        tradeoff the ledger exists to let an operator declare. So a declared
+        exemption DOES cover it: WARN, and `ok` stays True."""
         repo_root = tmp_path / "repo"
         # Deliberately no coordinator_core/ dir -- isolation_unverified.
         repo_root.mkdir(parents=True, exist_ok=True)
@@ -266,8 +275,32 @@ class TestEndOfRunAssembledMirrorGateLeg:
         monkeypatch.setattr(
             publish,
             "_load_assembled_mirror_gate_exemptions",
-            lambda: {"claude-klabauter": "known debt, tracked separately"},
+            lambda: {"claude-klabauter": "non-engine mirror, declared"},
         )
+
+        sink = io.StringIO()
+        ok = publish.dispatch_end_of_run_assembled_mirror_gate(
+            [repo_root],
+            rows_by_repo_root={repo_root: [_ResolvedTargetStub("claude-klabauter")]},
+            target_filtered=False,
+            out=sink,
+        )
+        assert ok is True
+        assert "non-engine mirror, declared" in sink.getvalue()
+        assert "no claim about the tree" not in capsys.readouterr().err
+
+    def test_unexempted_isolation_unverified_result_still_fails(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        """The declaration is what reopens the lane, never the refusal shape
+        itself: an undeclared root refusing ISOLATION UNVERIFIED stays
+        fatal."""
+        repo_root = tmp_path / "repo"
+        repo_root.mkdir(parents=True, exist_ok=True)
+        (repo_root / "pytest.ini").write_text(
+            "[pytest]\ntestpaths = .\n", encoding="utf-8", newline="\n"
+        )
+        monkeypatch.setattr(publish, "_load_assembled_mirror_gate_exemptions", dict)
 
         ok = publish.dispatch_end_of_run_assembled_mirror_gate(
             [repo_root],
@@ -276,8 +309,133 @@ class TestEndOfRunAssembledMirrorGateLeg:
         )
         assert ok is False
         captured = capsys.readouterr()
-        assert "known debt, tracked separately" not in captured.err
-        assert "no claim about the tree" in captured.err
+        assert "assembled-mirror gate FAILED" in captured.err
+
+    def test_declared_scope_excludes_engine_and_tree_lacks_it_is_not_applicable(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        """The new discriminator's first arm: declared scope never claimed
+        coordinator_core, the tree carries none either -- NOT-APPLICABLE,
+        never a refusal, `ok` stays True."""
+        repo_root = tmp_path / "repo"
+        repo_root.mkdir(parents=True, exist_ok=True)
+        (repo_root / "pytest.ini").write_text(
+            "[pytest]\ntestpaths = .\n", encoding="utf-8", newline="\n"
+        )
+        monkeypatch.setattr(
+            publish,
+            "_declared_repo_roots_carrying_coordinator_core",
+            lambda: (set(), {repo_root}),
+        )
+        monkeypatch.setattr(publish, "_load_assembled_mirror_gate_exemptions", dict)
+
+        sink = io.StringIO()
+        ok = publish.dispatch_end_of_run_assembled_mirror_gate(
+            [repo_root],
+            rows_by_repo_root={repo_root: [_ResolvedTargetStub("some-oss-row")]},
+            target_filtered=False,
+            out=sink,
+        )
+        assert ok is True
+        assert "NOT APPLICABLE" in sink.getvalue()
+        captured = capsys.readouterr()
+        assert "assembled-mirror gate FAILED" not in captured.err
+
+    def test_declared_scope_includes_engine_and_tree_lacks_it_still_refuses(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        """The second arm: declared scope DOES claim coordinator_core for
+        this repo_root, tree lacks it -- NOT absolved. Still the
+        pre-existing isolation_unverified refusal."""
+        repo_root = tmp_path / "repo"
+        repo_root.mkdir(parents=True, exist_ok=True)
+        (repo_root / "pytest.ini").write_text(
+            "[pytest]\ntestpaths = .\n", encoding="utf-8", newline="\n"
+        )
+        monkeypatch.setattr(
+            publish,
+            "_declared_repo_roots_carrying_coordinator_core",
+            lambda: ({repo_root}, {repo_root}),
+        )
+        monkeypatch.setattr(publish, "_load_assembled_mirror_gate_exemptions", dict)
+
+        ok = publish.dispatch_end_of_run_assembled_mirror_gate(
+            [repo_root],
+            rows_by_repo_root={repo_root: [_ResolvedTargetStub("claude-klabauter")]},
+            target_filtered=False,
+        )
+        assert ok is False
+        captured = capsys.readouterr()
+        assert "assembled-mirror gate FAILED" in captured.err
+
+    def test_narrow_door_regression_declared_scope_ignores_this_runs_row_subset(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        """THE point of the whole change: `rows_by_repo_root` here holds only
+        ONE non-engine row (as a `--target`-filtered invocation would), but
+        the UNFILTERED declared scope still claims coordinator_core for this
+        repo_root -- must still refuse, never read as not-applicable just
+        because this invocation's own row subset omits the engine row.
+        Fails without the fix (a per-invocation reading of `rows_by_repo_
+        root` would have called this not-applicable)."""
+        repo_root = tmp_path / "repo"
+        repo_root.mkdir(parents=True, exist_ok=True)
+        (repo_root / "pytest.ini").write_text(
+            "[pytest]\ntestpaths = .\n", encoding="utf-8", newline="\n"
+        )
+        monkeypatch.setattr(
+            publish,
+            "_declared_repo_roots_carrying_coordinator_core",
+            lambda: ({repo_root}, {repo_root}),
+        )
+        monkeypatch.setattr(publish, "_load_assembled_mirror_gate_exemptions", dict)
+
+        sink = io.StringIO()
+        ok = publish.dispatch_end_of_run_assembled_mirror_gate(
+            [repo_root],
+            rows_by_repo_root={repo_root: [_ResolvedTargetStub("claude-klabauter-bin")]},
+            target_filtered=True,
+            out=sink,
+        )
+        assert ok is False
+        assert "NOT APPLICABLE" not in sink.getvalue()
+        captured = capsys.readouterr()
+        assert "assembled-mirror gate FAILED" in captured.err
+
+    def test_declared_scope_lookup_failure_is_incomplete_never_not_applicable(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        """A `TargetsError` resolving the declared row set must NOT be read
+        as 'coordinator_core is not in scope' -- that would let a broken
+        targets file silently waive this gate on itself. Falls back to the
+        safe default (as if every destination declares the engine), so a
+        missing coordinator_core/ directory keeps refusing."""
+        repo_root = tmp_path / "repo"
+        repo_root.mkdir(parents=True, exist_ok=True)
+        (repo_root / "pytest.ini").write_text(
+            "[pytest]\ntestpaths = .\n", encoding="utf-8", newline="\n"
+        )
+
+        def _raise(*args, **kwargs):
+            raise publish.TargetsError("boom: targets file unreadable", 2)
+
+        monkeypatch.setattr(
+            publish, "_declared_repo_roots_carrying_coordinator_core", _raise
+        )
+        monkeypatch.setattr(publish, "_load_assembled_mirror_gate_exemptions", dict)
+
+        sink = io.StringIO()
+        ok = publish.dispatch_end_of_run_assembled_mirror_gate(
+            [repo_root],
+            rows_by_repo_root={repo_root: [_ResolvedTargetStub("claude-klabauter")]},
+            target_filtered=False,
+            out=sink,
+        )
+        assert ok is False
+        assert "NOT APPLICABLE" not in sink.getvalue()
+        captured = capsys.readouterr()
+        assert "could not resolve the declared target row set" in captured.err
+        assert "assembled-mirror gate FAILED" in captured.err
 
     def test_missing_repo_root_is_a_hard_failure(self, tmp_path, capsys):
         repo_root = tmp_path / "does-not-exist"

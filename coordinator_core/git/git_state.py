@@ -782,11 +782,13 @@ def head_blobs(repo: Union[str, Path], paths: Sequence[str]) -> Dict[str, Tuple[
     #
     # Why it is worth a cache at all: a single `ceremony.scoped_git_commit`
     # called this three times on identical arguments (measured 2026-08-23 --
-    # `_reject_stale_index_paths`, `commit_gates.dirty_tree_gate`, and
-    # `git_native._head_blobs`), and on this box a spawn IS the cost of the
-    # call (`git --version`, doing nothing, ranges 15.3ms to 279.3ms under
-    # the load norm). Three identical `ls-tree` spawns per commit is a
-    # missing cache, not a mechanism that needs rebuilding.
+    # `_reject_stale_index_paths`, the now-deleted `commit_gates.dirty_tree_
+    # gate` (killed under the brightline kill bar, zero production callers),
+    # and `git_native._head_blobs`), and on this box a spawn IS the cost of
+    # the call (`git --version`, doing nothing, ranges 15.3ms to 279.3ms
+    # under the load norm). Three identical `ls-tree` spawns per commit was
+    # a missing cache, not a mechanism that needs rebuilding; the cache
+    # itself is unaffected by that caller's later deletion.
     #
     # `head_sha()` is spawn-free (it reads `.git/HEAD` plus the loose ref or
     # `packed-refs`), so the key costs file reads, never a process.
@@ -817,9 +819,7 @@ def head_blobs(repo: Union[str, Path], paths: Sequence[str]) -> Dict[str, Tuple[
         # exist in HEAD" and is consumed as exactly that:
         #
         #   `commit_gates.deletion_block_gate`'s Kept-claim leg reads an
-        #   absent entry as "not at HEAD" and BLOCKS a legitimate commit;
-        #   `dirty_tree_gate` recomputes staged-ness against this dict and
-        #   misclassifies every staged path at once.
+        #   absent entry as "not at HEAD" and BLOCKS a legitimate commit.
         #
         # Worse, the memo below would then cache that empty answer under
         # HEAD's own sha, so one unreadable read poisons every caller until

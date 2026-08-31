@@ -429,6 +429,21 @@ def test_probe_p19_maps_current_to_empty(tmp_path, monkeypatch):
     assert notes == []
 
 
+def test_probe_p19_maps_offline_to_distinguishable_note(tmp_path, monkeypatch):
+    """offline must not collapse into the same [] as current — a
+    doctor-last-run.json reader needs to tell "checked, current" apart from
+    "network unreachable, never checked"."""
+    sentinel_mod = _sentinel_module()
+    monkeypatch.setattr(
+        "coordinator_core.plugin_health.release_currency.release_currency_probe",
+        lambda plugin, repo, root: "offline",
+    )
+    notes = sentinel_mod.probe_p19(tmp_path, tmp_path)
+    assert len(notes) == 1
+    assert notes[0].severity == "advisory"
+    assert "unverified" in notes[0].message
+
+
 def test_probe_p19_maps_behind_clone(tmp_path, monkeypatch):
     sentinel_mod = _sentinel_module()
     monkeypatch.setattr(

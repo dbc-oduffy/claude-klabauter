@@ -172,8 +172,10 @@ def test_commit_no_summary_emitted_and_summary_present_excluded(repo, monkeypatc
 
     row = next(ln for ln in out.splitlines() if ln.startswith("2026-03-10\t"))
     fields = row.split("\t")
-    assert len(fields) == 4  # <day>\t<count>\t<base>\t<tip>, no machine column
+    # <day>\t<count>\t<base>\t<tip>\t<shas>, no machine column
+    assert len(fields) == 5
     assert fields[1] == "2"  # commit count
+    assert len(fields[4].split(",")) == int(fields[1])
     assert fields[2] != fields[3]  # baseline != tip (root-commit fallback did not fire)
     assert len(fields[2]) >= 7  # well-formed sha
 
@@ -243,11 +245,12 @@ def test_ac1_one_uncovered_day_emits_exactly_one_row(repo, monkeypatch, capsys):
     lines = [ln for ln in out.splitlines() if ln]
     assert len(lines) == 1
     fields = lines[0].split("\t")
-    assert len(fields) == 4
-    day, count, base, tip = fields
+    assert len(fields) == 5
+    day, count, base, tip, shas = fields
     assert day == "2026-03-10"
     assert count == "1"
     assert len(base) >= 7 and len(tip) >= 7
+    assert shas.split(",") == [tip]  # the lone commit of the day IS the union
     # Root-commit-fallback case: the sole commit here IS the repo's root commit,
     # so `git rev-parse {sha}^` fails and `_rev_parse_parent` falls back to `sha`
     # itself — base and tip are the same SHA.
@@ -484,14 +487,58 @@ def test_ac3_full_day_union_span_picks_global_base_and_tip(repo, monkeypatch, ca
     lines = [ln for ln in out.splitlines() if ln.startswith(f"{day}\t")]
     assert len(lines) == 1
     fields = lines[0].split("\t")
-    assert len(fields) == 4
-    _, count, base, tip = fields
+    assert len(fields) == 5
+    _, count, base, tip, shas = fields
 
     assert count == "3"  # m1_early + main_mid + m2_late, deduped union across refs
     assert base == root_sha  # parent of the GLOBAL oldest commit (m1_early), not m2's own base
     assert tip == m2_late  # GLOBAL newest commit, not main's or m1's own tip
     assert tip != m1_early
     assert tip != main_mid
+
+    # The fifth column is the explicit union, oldest-first, and it is the only
+    # field that answers "which commits" without lying.
+    assert shas.split(",") == [m1_early, main_mid, m2_late]
+    assert len(shas.split(",")) == int(count)
+
+
+def test_ac3_the_sha_column_names_commits_the_base_tip_range_does_not_contain(
+    repo, monkeypatch, capsys
+):
+    """`count` and `base..tip` describe different commit sets — this pins the
+    divergence rather than papering over it.
+
+    Three commits on three refs off one shared root: only the newest is an
+    ancestor of `tip`, so `git rev-list base..tip` returns ONE commit while
+    `count` is 3. Both are correct about different questions. Before the fifth
+    column existed there was no field a consumer could read to get the union,
+    and a consumer that recomputed `count` from `base..tip` would silently
+    under-report by two.
+    """
+    day = "2026-03-16"
+    root_sha = _commit_on(repo, "2026-03-13", "shared root", fname="rootc.txt")
+    m1_early = _branch_commit_from(repo, f"work/m1/{day}", root_sha, day, "08:00:00Z", "m1 early", "c1.txt")
+    _git(repo, "checkout", "main", "-q")
+    main_mid = _commit_on(repo, day, "main mid", fname="c2.txt", time_="12:00:00Z")
+    m2_late = _branch_commit_from(repo, f"work/m2/{day}", root_sha, day, "20:00:00Z", "m2 late", "c3.txt")
+
+    rc = _run_scan(repo, monkeypatch, capsys, lookback=1, today="2026-03-17")
+    out = capsys.readouterr().out
+    assert rc == 0
+
+    line = next(ln for ln in out.splitlines() if ln.startswith(f"{day}\t"))
+    _, count, base, tip, shas = line.split("\t")
+
+    in_range = _git(repo, "rev-list", f"{base}..{tip}").split()
+    assert len(in_range) == 1 and in_range[0] == m2_late
+    assert int(count) == 3
+    assert len(in_range) != int(count)
+
+    union = shas.split(",")
+    assert sorted(union) == sorted([m1_early, main_mid, m2_late])
+    assert len(union) == int(count)
+    # The two the range drops are exactly the ones only the sha column carries.
+    assert m1_early not in in_range and main_mid not in in_range
 
 
 # ---------------------------------------------------------------------------

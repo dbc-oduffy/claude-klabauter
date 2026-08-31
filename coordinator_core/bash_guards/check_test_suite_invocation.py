@@ -416,7 +416,7 @@ _OVERRIDE_ENV_VAR = "COORDINATOR_OVERRIDE_TEST_SUITE_INVOCATION"
 #: set, which are lowercase-only shell command names by Unix convention.
 _RUNNER_PREFILTER_RE = re.compile(
     r"\b(pytest|py\.test|unittest|nose2|npm|pnpm|yarn|bun|npx|jest|vitest|"
-    r"mocha|jasmine|ava|cargo|nextest|go|make|tox|nox|"
+    r"mocha|jasmine|ava|cargo|nextest|go|make|tox|nox|node|"
     r"(?i:invoke-pester))\b"
 )
 
@@ -1576,6 +1576,96 @@ def _pester_path_values(args: Sequence[str]) -> List[str]:
     return values
 
 
+#: Source extensions Node's test runner can be pointed at as a single file.
+#: `.py` is `_is_real_scope`'s own terminal test and is Python-specific, so a
+#: JS/TS filename with no directory separator (`node --test x.test.js`, run
+#: from the directory holding it) failed every one of that predicate's arms
+#: and classified as a whole-suite run. That is a FALSE DENIAL of the most
+#: precisely-scoped invocation this runner has, which is the opposite of what
+#: widening the prefilter was for.
+_NODE_TEST_FILE_SUFFIXES = (".js", ".mjs", ".cjs", ".ts", ".mts", ".cts", ".jsx", ".tsx")
+
+
+def _is_node_scope(arg: str, testpaths: Sequence[str],
+                   cwd: Optional[str]) -> bool:
+    """``_is_real_scope`` plus JS/TS single-file recognition.
+
+    Every discriminator that matters is `_is_real_scope`'s and is deferred
+    to first -- `.`/`..` rejection, testpaths-root and testpaths-ancestor
+    rejection (a positional that selects the whole suite while wearing a
+    scope's clothing), node-id form, and the on-disk existence fallback for
+    a bare name. This adds ONE arm: a filename ending in a Node-loadable
+    source suffix is a file, therefore a scope, by the same reasoning that
+    makes `.py` one on the pytest side.
+
+    It cannot re-admit anything `_is_real_scope` rejected as too broad: the
+    testpaths checks run FIRST and return False before this arm is reached,
+    so a testpaths root that happened to end in `.js` still classifies as
+    the whole suite."""
+    if _is_real_scope(arg, testpaths, cwd):
+        return True
+    token = arg.replace("\\", "/")
+    norm = _norm_path(token.split("::", 1)[0])
+    if not norm or norm in (".", ".."):
+        return False
+    for tp in testpaths:
+        if norm == tp or tp == norm or tp.startswith(norm + "/"):
+            return False
+    return norm.lower().endswith(_NODE_TEST_FILE_SUFFIXES)
+
+
+def _classify_node_test(args: Sequence[str], testpaths: Sequence[str],
+                        cwd: Optional[str]) -> Optional[str]:
+    """``node --test`` -- Node's own built-in test runner.
+
+    Same bypass class as ``_classify_tox_nox``'s: ``node`` was not in
+    ``_RUNNER_PREFILTER_RE`` at all, so NO ``node --test`` shape reached
+    this guard -- not the classification leg, not the Layer-3 subagent
+    identity deny, not the Tier-F/U grant check. ``check()`` never reaches
+    any of them for a command the prefilter does not match. Reported as
+    ``cross-repo/archive/2026-08-11-doe-claude-em-tier-u-node-runner-
+    unclassified.md``, confirmed live by dominant-shard3 group 4.
+
+    THE RULE IS THE ONE EVERY OTHER RUNNER ALREADY GETS, not a new one:
+    a positional operand naming a file or directory IS scope (DR-088's
+    Tier T is "the files, directories, or node ids the caller authored or
+    touched"), and its absence is an unscoped runner invocation, which is
+    Tier U by DR-088's disjunct and by DoE's own R1 ruling that tier is a
+    property of the invocation's SHAPE. So a bare ``node --test`` -- which
+    discovers and runs every test file under the cwd -- is Tier U, and
+    ``node --test tests/`` or ``node --test x.test.js`` is scoped, exactly
+    as ``pytest`` bare vs ``pytest tests/`` already classify.
+
+    ONLY ``--test`` COUNTS. Plain ``node script.js`` is running a program,
+    not invoking a test runner, and classifying it would make this guard
+    fire on every node invocation in the fleet. ``--test`` is the flag that
+    makes node a runner, so it is the flag that makes this leg apply.
+
+    NEGATIVE SPEC -- this deliberately does NOT deny ``node --test
+    <path>/run.js``, the specific invocation the reporting memo asked
+    about, and that is a RULING rather than an oversight. That operand
+    names a file, so it is scoped by the same test that permits ``pytest
+    tests/test_one.py``. The unboundedness the memo was reaching for lives
+    INSIDE ``run.js``, which fans out to a whole plugin ecosystem -- a fact
+    no text classifier can see, and one that no filename heuristic can
+    infer without also denying a genuinely single-file ``node --test
+    foo.test.js``. The reporting repo's two ceremony surfaces claim this
+    guard denies that invocation; they overclaim, and the correction is
+    theirs. See ``docs/decisions/DR-395-...`` for the split: the classifier
+    was wrong about the shapes it could not see, the prose is wrong about
+    the one it can."""
+    if "--test" not in args:
+        return None
+    positionals = [tok for tok in args if not tok.startswith("-")]
+    if positionals:
+        return (
+            None
+            if any(_is_node_scope(a, testpaths, cwd) for a in positionals)
+            else "node --test"
+        )
+    return "node --test"
+
+
 def _classify_pester(args: Sequence[str], cwd: Optional[str]) -> Optional[str]:
     """``Invoke-Pester`` with no target runs every ``*.tests.ps1`` Pester
     discovers under the current directory -- the PowerShell-native
@@ -1658,6 +1748,8 @@ def _classify_tokens(tokens: Sequence[str], testpaths: Sequence[str],
         return _classify_make(args)
     if base in _TOX_NOX_BASES:
         return _classify_tox_nox(base, args)
+    if base == "node":
+        return _classify_node_test(args, testpaths, cwd)
     if base.lower() == "invoke-pester":
         return _classify_pester(args, cwd)
     return None

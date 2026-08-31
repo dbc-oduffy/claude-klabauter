@@ -748,6 +748,18 @@ def _queue_body_args(idx: int, lesson: Mapping[str, Any], repo_root: Optional[Pa
     return ["--body-file", _spool_body_to_file(repo_root, body)]
 
 
+#: The scope values `coordinator-lesson-add` will accept. Authority is
+#: DOWNSTREAM of this module -- lesson-add forwards `--scope` verbatim to the
+#: record-writing CLI, whose enum is the real gate, and the same three values
+#: are hard-coded at `coordinator/bin/coordinator-queue-append.py`'s own
+#: `_VALID_LESSON_SCOPES`. Duplicated here rather than imported because that is
+#: a bin script, not an importable module; if a fourth value is ever added,
+#: this set is one of three places that must move together, and the reason it
+#: is worth the duplication is that the alternative -- discovering the mismatch
+#: at dispatch -- costs a PARTIAL_MUTATION after the commit tail has landed.
+_VALID_LESSON_SCOPES = frozenset({"universal", "project", "wiki-only"})
+
+
 def _iter_capturable_lessons(
     decisions: dict[str, Any],
 ) -> "list[tuple[int, Mapping[str, Any], bool]]":
@@ -781,6 +793,26 @@ def _iter_capturable_lessons(
                 f"key(s) {missing!r} (required: {list(_LESSON_REQUIRED_KEYS)!r}). "
                 "Supply them and re-run apply — this is a malformed decisions "
                 "map, not a ceremony failure, and nothing has been written."
+            )
+        scope = str(lesson.get("scope") or "").strip()
+        if scope not in _VALID_LESSON_SCOPES:
+            # VALIDATED HERE, BEFORE THE COMMIT TAIL, because the cost of
+            # validating it downstream was measured: example-market-data-repo-em
+            # supplied `scope: "local"`, the assembler forwarded it unchecked,
+            # `coordinator-lesson-add` rejected it, BOTH lesson directives
+            # returned exit 1 -- and the commit tail had ALREADY SUCCEEDED, so
+            # apply returned exit 4 (PARTIAL_MUTATION) on a ceremony that
+            # looked done while both lessons were silently lost. They found it
+            # by grepping state/lessons/ afterwards (cross-repo/archive/
+            # 2026-08-11-example-market-data-repo-em-workstream-complete-engine-
+            # defects.md, defect 2). A caller-supplied value the engine can
+            # check must not be checked by a subprocess that runs after the
+            # irreversible half.
+            raise ValueError(
+                f"decisions[{_KEY_LESSONS!r}][{idx}] has scope {scope!r}, which "
+                f"is not one of {sorted(_VALID_LESSON_SCOPES)!r}. Supply a valid "
+                "scope and re-run apply — this is a malformed decisions map, not "
+                "a ceremony failure, and nothing has been written."
             )
         supplied = [k for k in ("body", "body_file") if str(lesson.get(k) or "").strip()]
         if len(supplied) != 1:

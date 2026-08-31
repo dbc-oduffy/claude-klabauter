@@ -719,8 +719,22 @@ def _build_parser(change_kind_values: tuple[str, ...]) -> argparse.ArgumentParse
     )
     parser.add_argument(
         "--title",
-        required=True,
-        help="One-line lesson title (bold heading in lessons.md format).",
+        default=None,
+        help=(
+            "One-line lesson title (bold heading in lessons.md format). "
+            "Exactly one of --title / --title-file is required."
+        ),
+    )
+    parser.add_argument(
+        "--title-file",
+        dest="title_file",
+        default=None,
+        help=(
+            "Read the lesson title from PATH ('-' for stdin) instead of --title. "
+            "Exactly one of --title / --title-file is required. The only title "
+            "transport that survives every launcher leg intact — see --title's "
+            "own refusal for why."
+        ),
     )
     parser.add_argument(
         "--body",
@@ -846,6 +860,8 @@ def main(argv: list[str] | None = None) -> int:
     from coordinator_core.argv_fidelity import ArgvFidelityError, refuse_newline_argv, resolve_body
 
     try:
+        refuse_newline_argv(args.title, flag_name="--title")
+        args.title = resolve_body(args.title, args.title_file, flag_name="--title")
         refuse_newline_argv(args.body, flag_name="--body")
         args.body = resolve_body(args.body, args.body_file)
     except ArgvFidelityError as exc:

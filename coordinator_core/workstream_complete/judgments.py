@@ -935,15 +935,30 @@ def build_review_dispatch_vehicle_choice_judgment_point(
     Workflow instead of hand-dispatching -- a discretionary vehicle
     choice, bounded and optional but still a real "which mechanism" call.
 
-    The recommendation is `hand-dispatch` because the Workflow vehicle
-    bypasses sidecar provisioning: the provisioner runs in a `PreToolUse`
-    hook matched on the `Agent` tool, and a Workflow-internal ``agent()``
-    spawn is not an `Agent` tool call, so a ``report_sidecar``-eligible
-    reviewer arrives with no ``sidecar_path`` and correctly refuses to
-    review. Recommending a vehicle that silently strips context an agent
-    type declares as spawn-provided is the failure this default exists to
-    avoid -- see `test_review_dispatch_vehicle_choice_does_not_recommend_
-    the_provisioning_bypassing_vehicle`.
+    RETIRED GROUND, recorded because it stood here from 2026-08-16 until
+    2026-08-31 and reads as current if you do not know it moved: this
+    recommendation used to rest on the Workflow vehicle bypassing sidecar
+    provisioning -- the provisioner ran in a `PreToolUse` hook matched on
+    the `Agent` tool, a Workflow-internal ``agent()`` spawn is not an
+    `Agent` tool call, so a ``report_sidecar``-eligible reviewer arrived
+    with no ``sidecar_path`` and correctly refused to review. That is no
+    longer true. Catering was retired from that hook at DoE `10cd4cda9`
+    (2026-08-21) and `SubagentStart` is now the sole catering path for
+    every child, Agent-tool and Workflow ``agent()`` spawn alike -- see
+    ``coordinator_core/hooks/cater_subagent_start.py``. Both vehicles
+    provision identically today.
+
+    The recommendation stays `hand-dispatch`, on the ground that survives:
+    a hand dispatch is observable while it runs, so a reviewer that stops
+    or returns empty is seen and re-dispatched within the same round,
+    where a background wave surfaces the same failure only at collection.
+    That is a weaker reason than the provisioning one it replaces, and it
+    is deliberately not restated as a strong one. Flipping the default to
+    `review-wave-workflow` now needs its own evidence -- a measured
+    comparison of the two vehicles post-`SubagentStart` -- and NOT merely
+    the observation that the old objection died. Nobody has run that
+    comparison; until someone does, the default is a weak preference, not
+    a finding.
 
     `partition_resolves_ids`: see `build_review_partition_strategy_
     judgment_point`."""
@@ -951,12 +966,12 @@ def build_review_dispatch_vehicle_choice_judgment_point(
         {
             "disposition": "hand-dispatch",
             "rationale": (
-                "the background-Workflow vehicle bypasses the Agent-tool PreToolUse "
-                "hook that provisions report sidecars, so report_sidecar-eligible "
-                "reviewers spawn without the sidecar_path their own contract requires "
-                "and return unable to review; choose the Workflow vehicle only after "
-                "explicitly pre-provisioning each eligible agent's sidecar path and "
-                "injecting it into the workflow brief"
+                "a hand dispatch is observable while it runs, so a reviewer that "
+                "stops or returns empty is caught and re-dispatched in the same "
+                "round, where a background wave surfaces the same failure only at "
+                "collection; a weak preference on wave count and remaining context "
+                "budget, not a strong one -- both vehicles provision sidecars "
+                "identically since SubagentStart became the sole catering path"
             ),
         },
         id="review-dispatch-vehicle-choice",

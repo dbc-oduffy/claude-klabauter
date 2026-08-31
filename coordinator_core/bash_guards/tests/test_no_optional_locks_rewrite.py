@@ -214,3 +214,59 @@ class TestMultiLineBailsRatherThanMisplace:
 
     def test_multiline_command_not_rewritten(self):
         assert _check("git status\necho done") is None
+
+
+# ---------------------------------------------------------------------------
+# `--quiet` is the phantom-clearing probe, and rewriting it is harmful
+# ---------------------------------------------------------------------------
+#
+# Item 1 of DoE-claude's 2026-08-12 six-defect bundle, re-verified 2026-08-31
+# and the one item of that bundle's five that reproduced.
+#
+# An ordinary `git diff` refreshes the index stat-cache and WRITES IT BACK,
+# which is how a stat-cache phantom heals. `--no-optional-locks` suppresses
+# that write-back, so a rewritten `--quiet` probe can never clear the phantom
+# it exists to probe for: every subsequent probe re-reads dirty, forever.
+# `commit_gates`' own EOL-phantom probe path runs through this rewriter.
+#
+# Distinct from the `--cached`/`--staged` exclusions above, which are excluded
+# because the flag would be INERT. This one is excluded because the flag does
+# HARM -- the two sets answer different questions and are deliberately not one.
+
+
+def _rewrites(cmd: str) -> bool:
+    """Did the guard decide to insert `--no-optional-locks` into `cmd`?"""
+    import shlex
+
+    from coordinator_core.bash_guards.guard_no_optional_locks import (
+        _rewrite_insertion_index,
+    )
+
+    return _rewrite_insertion_index(shlex.split(cmd)) is not None
+
+
+def test_diff_quiet_is_not_rewritten() -> None:
+    assert _rewrites("git diff --quiet") is False
+    assert _rewrites("git diff --quiet -- some/path.md") is False
+
+
+def test_diff_quiet_exclusion_survives_flag_order() -> None:
+    """The exclusion is membership over the whole arg list, not a check of
+    the first token -- a probe written with the pathspec first, or with an
+    unrelated flag ahead of `--quiet`, is the same probe."""
+    assert _rewrites("git diff -- some/path.md --quiet") is False
+    assert _rewrites("git diff --no-color --quiet -- a.md") is False
+
+
+def test_an_ordinary_diff_is_still_rewritten() -> None:
+    """The counterpart: this exclusion must be narrow. If a plain `git diff`
+    stopped being rewritten, the guard would have lost its whole purpose
+    rather than gained a correct exclusion."""
+    assert _rewrites("git diff") is True
+    assert _rewrites("git diff -- some/path.md") is True
+
+
+def test_status_is_unaffected_by_the_diff_only_exclusion() -> None:
+    """`--quiet` is a `git diff` concern. `git status --quiet` is not a
+    phantom-clearing probe and must keep being rewritten."""
+    assert _rewrites("git status") is True

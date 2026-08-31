@@ -655,7 +655,6 @@ _GRANDFATHERED_RUNNER_MODULES: frozenset[str] = frozenset(
         "coordinator_core/review_assemble/residue.py",
         "coordinator_core/session/shape.py",
         "coordinator_core/session_attribution.py",
-        "coordinator_core/subagent_sandbox/engine.py",
         "coordinator_core/warm/skew.py",
         "coordinator_core/workday_complete/cockpit_contract_freshness.py",
         "coordinator_core/workstream_complete/__init__.py",
@@ -752,7 +751,7 @@ _GRANDFATHERED_DIALS: frozenset = frozenset(
 #: all. Lowering either is free and is the point; raising either is the
 #: deliberate, reviewable act of arguing that the tree needs one more private
 #: git runner than it had yesterday.
-_PINNED_RUNNER_CEILING = 191
+_PINNED_RUNNER_CEILING = 190
 _PINNED_DIAL_CEILING = 68
 
 
@@ -1061,25 +1060,38 @@ def test_stdin_input_runs_in_binary_mode_and_is_never_newline_translated(monkeyp
 
     recorded = {}
 
-    class _Completed:
+    # Double repointed to `Popen` (see the sibling test below for why). The
+    # asserted properties are unchanged -- stdin bytes reach git unaltered and
+    # feeding stdin selects binary mode -- but the kwarg they travel in moved:
+    # `Popen` takes `stdin=PIPE` at construction and the bytes at
+    # `communicate`, where `run()` took a single `input=`.
+    class _Proc:
         returncode = 0
-        stdout = b"a/b\0c/d\0"
-        stderr = b""
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def communicate(self, input=None, timeout=None):
+            recorded["input"] = input
+            return (b"a/b\0c/d\0", b"")
 
     def _record(argv, **kwargs):
         recorded["argv"] = argv
         recorded["kwargs"] = kwargs
-        return _Completed()
+        return _Proc()
 
-    monkeypatch.setattr(subprocess, "run", _record)
+    monkeypatch.setattr(subprocess, "Popen", _record)
 
     payload = b"a/b\0c/d\0"
     result = git_run.run_git(["check-ignore", "-z", "--stdin"], input=payload)
 
-    assert recorded["kwargs"]["input"] == payload, "stdin bytes must reach git unaltered"
+    assert recorded["input"] == payload, "stdin bytes must reach git unaltered"
     assert "encoding" not in recorded["kwargs"], "feeding stdin must not select text mode"
     assert "errors" not in recorded["kwargs"], "feeding stdin must not select text mode"
-    assert "stdin" not in recorded["kwargs"], "input= and stdin= are mutually exclusive"
+    assert recorded["kwargs"]["stdin"] == subprocess.PIPE, "fed stdin is a pipe"
     assert recorded["argv"][0] == "git"
     # Binary mode returns bytes; the seam decodes so callers still see str.
     assert result.stdout == "a/b\0c/d\0"
@@ -1093,22 +1105,37 @@ def test_a_call_without_stdin_keeps_text_mode_and_a_closed_stdin(monkeypatch):
 
     recorded = {}
 
-    class _Completed:
+    # DOUBLE REPOINTED 2026-08-31 from `subprocess.run` to `subprocess.Popen`.
+    # The seam stopped delegating its timeout to `run()`, because on Windows
+    # `run()`'s timeout path re-drains the killed child with an UNBOUNDED
+    # second `communicate()` and can hang forever (measured; see `run_git`'s
+    # own comment). The properties asserted here are the originals -- text
+    # mode, and a CLOSED stdin so a prompting git cannot block on an inherited
+    # terminal -- only the call they are observed on moved.
+    class _Proc:
         returncode = 0
-        stdout = "ok\n"
-        stderr = ""
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def communicate(self, input=None, timeout=None):
+            recorded["input"] = input
+            return ("ok\n", "")
 
     def _record(argv, **kwargs):
         recorded["kwargs"] = kwargs
-        return _Completed()
+        return _Proc()
 
-    monkeypatch.setattr(subprocess, "run", _record)
+    monkeypatch.setattr(subprocess, "Popen", _record)
     git_run.run_git(["rev-parse", "HEAD"])
 
     assert recorded["kwargs"]["encoding"] == "utf-8"
     assert recorded["kwargs"]["errors"] == "replace"
     assert recorded["kwargs"]["stdin"] == subprocess.DEVNULL
-    assert "input" not in recorded["kwargs"]
+    assert recorded["input"] is None
 
 
 def test_str_input_raises_type_error_before_any_spawn(monkeypatch):

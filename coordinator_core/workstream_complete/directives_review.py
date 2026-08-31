@@ -354,6 +354,23 @@ def _decide_review_scale_core(
     # reviewable LOC rows 1-3 already discriminate on — not `gross_loc`'s
     # raw diff-stat sum. `gross_loc` stays an accepted parameter (unused by
     # this predicate now) for callers not yet threading `code_loc` through.
+    #
+    # HOW BOTH ARE MEASURED, cited here because the definition crosses a repo
+    # boundary and the divergence was accruing with no citation at either end.
+    # doe-claude-em asked us to adopt or counter their C5 ruling (cross-repo/
+    # archive/2026-08-29-doe-claude-em-review-scale-ships-no-brightline-
+    # inputs.md, ask (b)): sum PER-OWNED-COMMIT diffs (`<sha>~1..<sha>` each),
+    # never a range over oldest..newest. ADOPTED, 2026-08-31 — and this engine
+    # already computed it that way independently, for the same reason. See
+    # `__init__.py :: _measure_session_review_scale_inputs`, whose own
+    # Negative-spec is "never widen either leg back to a branch-scoped range":
+    # on a shared branch a range spans every peer commit interleaved between
+    # base and HEAD. Their measured cost of getting it wrong by hand was 33,246
+    # gross LOC reported where the per-owned-commit sum is 16,037.
+    #
+    # So the two planes agree, and the citation is the deliverable — a reader
+    # who finds a number that disagrees with these should suspect a RANGE
+    # measurement before suspecting either engine.
     effective_code_loc = code_loc if code_loc is None else code_loc * baton_multiplier
     # 2026-08-20 (same memo as the `code_loc_resolved_zero` note below): the
     # commit-count arm is a proxy for ACCUMULATED RISK, and a commit with a
@@ -400,11 +417,52 @@ def _decide_review_scale_core(
             f", baton_count={baton_count} multiplier applied" if baton_multiplier != 1 else ""
         )
         scope_note = f", commit_count_scope={commit_count_scope}" if commit_count_scope is not None else ""
+        # THE REASON STRING NAMES WHICH ARM TRIPPED, AND SAYS SO WHEN AN INPUT
+        # WAS NEVER MEASURED. `brightline_known_true` is an OR of three
+        # independently sufficient arms, so row 4 is legitimately reachable
+        # with one input still `None` -- a resolved proxy that trips is
+        # dispositive, and no later measurement can un-trip it. That verdict is
+        # sound. What was NOT sound was printing the unmeasured input as though
+        # it were a measurement: `code_loc=None` inside "big-diff brightline
+        # hit" reads as a measurement that came back empty, which is what sent
+        # an EM hand-measuring gross LOC across a shared-branch RANGE and
+        # reporting 33,246 where the per-owned-commit sum is 16,037 (doe-claude-
+        # em, cross-repo/archive/2026-08-29-doe-claude-em-review-scale-ships-no-
+        # brightline-inputs.md). Naming the tripped arm tells the reader the
+        # verdict does not depend on what is missing.
+        tripped = [
+            name
+            for name, value, floor in (
+                ("code_loc", effective_code_loc, _BRIGHTLINE_LOC),
+                ("commits", effective_commit_count, _BRIGHTLINE_COMMITS),
+                ("surfaces", effective_surface_count, _BRIGHTLINE_SURFACES),
+            )
+            if value is not None and value >= floor
+        ]
+        unmeasured = [
+            name
+            for name, value in (
+                ("code_loc", code_loc), ("commits", commit_count), ("surfaces", surface_count),
+            )
+            if value is None
+        ]
+        measured_note = ", ".join(
+            f"{name}={value}"
+            for name, value in (
+                ("code_loc", code_loc), ("commits", commit_count), ("surfaces", surface_count),
+            )
+            if value is not None
+        )
+        unmeasured_note = (
+            f"; {', '.join(unmeasured)} not measured, and cannot change this verdict"
+            if unmeasured
+            else ""
+        )
         return ReviewScaleDecision(
             row=4, scale="partitioned", partition_mandatory=True, commit_message_names_change=False,
             reason=(
-                f"big-diff brightline hit (code_loc={code_loc}, commits={commit_count}, "
-                f"surfaces={surface_count}{multiplier_note}{scope_note})"
+                f"big-diff brightline hit on {'+'.join(tripped)} "
+                f"({measured_note}{multiplier_note}{scope_note}){unmeasured_note}"
             ),
         )
 

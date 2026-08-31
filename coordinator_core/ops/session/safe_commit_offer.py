@@ -443,6 +443,15 @@ class GroupResult(TypedDict):
     # benign-no-op reason (e.g. "empty-commit-set"), threaded through so
     # `_render_report`'s benign branch can say WHY, not merely that it was a
     # no-op. `None` on a landed commit or a genuine `commit_failed`.
+    declared_absent_from_head: List[str]  # Review: code-reviewer (Finding 1,
+    # 8f787b71-c) — `outcome.declared_absent_from_head` (commit.py), threaded
+    # through so a claimed path this call classified as a phantom deletion
+    # (absent from the worktree AND from HEAD) is operator-visible here too,
+    # not just on the `commit_v2` ceremony route. `_commit_group` already
+    # does not commit these (caught by `commit_paths`' own logic); this key
+    # only carries the visibility half of the fix. `[]` when nothing was
+    # skipped as a phantom deletion, including on the `CommitRefused`/
+    # `FilterUnsupported` branch, where no `outcome` exists to read it from.
 
 
 class DroppedGroup(TypedDict):
@@ -1701,6 +1710,7 @@ async def _commit_group(
             "error": str(exc),
             "commit_failed": True,
             "reason": None,
+            "declared_absent_from_head": [],
         }
     return {
         "paths": group["paths"],
@@ -1711,6 +1721,7 @@ async def _commit_group(
         "error": None,
         "commit_failed": False,
         "reason": None,
+        "declared_absent_from_head": list(outcome.declared_absent_from_head),
     }
 
 
@@ -2486,6 +2497,23 @@ def _render_report(report: CommitOfferReport, worktree_root: Optional[str] = Non
             lines.append(
                 "committed %s (%s) — %s — %s" % (sha, push, g["message"], tail)
             )
+            absent = g.get("declared_absent_from_head") or []
+            if absent:
+                # Review: code-reviewer (Finding 1, 8f787b71-c) — mirrors
+                # commit_v2._render_outcome's SKIPPED warning: a phantom
+                # deletion this group named alongside paths that DID commit
+                # is not itself a failure, but silently dropping it here is
+                # the exact class of silent-skip the committer-P0 fix exists
+                # to kill.
+                sample = sorted(absent)[:5]
+                tail_absent = ", ".join(sample)
+                if len(absent) > 5:
+                    tail_absent += ", ..."
+                lines.append(
+                    "  SKIPPED %d declared path(s) — absent from both the "
+                    "worktree and HEAD, not committed as a deletion: %s"
+                    % (len(absent), tail_absent)
+                )
         elif g["commit_failed"]:
             detail = g.get("error") or "commit failed"
             lines.append("NOT committed — %s — %s" % (g["message"], detail))

@@ -32,8 +32,9 @@ Negative-spec:
     which files the caller intends to sweep. It has no opinion on staleness
     beyond handing back a `(mtime_ns, size)`-keyed entry for the caller to
     compare against its own fresh `stat()`.
-  - This module is not wired into `discover_generators` -- that wiring is a
-    separate change. This module's only consumers are its own tests.
+  - This module does not decide when it is called -- `discover_generators`
+    is its only production consumer, wired in via C4, and calls `load`/
+    `save` on every sweep run.
 """
 
 from __future__ import annotations

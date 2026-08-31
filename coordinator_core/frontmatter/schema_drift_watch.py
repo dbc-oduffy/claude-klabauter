@@ -725,12 +725,23 @@ def _scan(
             if indeterminate
             else ""
         )
-        remediation = (
-            "Local is ahead of the pin — upstream the local change or ratify the fork; "
-            "re-vendoring discards it."
-            if any(d.get("direction") == DIRECTION_WE_AHEAD for d in drifted)
-            else "Upstream has moved since the pin — re-vendor."
+        # Review: coordinator:code-reviewer Finding 1 — a single global remediation
+        # keyed off any() dropped the re-vendor instruction whenever the batch also
+        # contained a we-ahead file. Emit per-direction remediation instead, so a
+        # mixed batch keeps both instructions.
+        has_ahead = any(d.get("direction") == DIRECTION_WE_AHEAD for d in drifted)
+        has_behind_or_unknown = any(
+            d.get("direction") != DIRECTION_WE_AHEAD for d in drifted
         )
+        remediation_parts = []
+        if has_ahead:
+            remediation_parts.append(
+                "Local is ahead of the pin — upstream the local change or ratify the "
+                "fork; re-vendoring discards it."
+            )
+        if has_behind_or_unknown:
+            remediation_parts.append("Upstream has moved since the pin — re-vendor.")
+        remediation = " ".join(remediation_parts)
         status, summary = STATUS_DRIFT, (
             f"{len(drifted)}/{checked} vendored file(s) diverge from their upstream HEAD: "
             f"{named}{extra}. {remediation}"

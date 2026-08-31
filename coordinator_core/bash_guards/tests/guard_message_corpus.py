@@ -87,6 +87,7 @@ module's corpus rows.
 from __future__ import annotations
 
 import importlib
+import json as _json
 import os
 import shutil
 import subprocess
@@ -3220,6 +3221,9 @@ import asyncio as _hooks_asyncio
 
 from coordinator_core.hooks import block_unenumerated_agent_type as _hook_block_unenumerated_agent_type
 from coordinator_core.hooks import cater_subagent_start as _hook_cater_subagent_start
+from coordinator_core.hooks import nudge_autonomous_askuserquestion as _hook_nudge_autonomous_askuserquestion
+from coordinator_core.hooks import plan_persistence_check as _hook_plan_persistence_check
+from coordinator_core.hooks import watchdog_undischarged_next_move as _hook_watchdog_undischarged_next_move
 from coordinator_core.hooks import coordinator_reminder as _hook_coordinator_reminder
 from coordinator_core.hooks import enforce_agent_model_pin as _hook_enforce_agent_model_pin
 from coordinator_core.hooks import nudge_em_code_dispatch as _hook_nudge_em_code_dispatch
@@ -3306,6 +3310,76 @@ def _fire_subagent_review_mark_noop() -> Optional[Dict[str, Any]]:
     return _to_envelope_or_none(
         _hooks_asyncio.run(_hook_subagent_review_mark._handler({}, repo_root=None))
     )
+
+
+# --- AC10 coverage-gap closers, 2026-08-31. Three hooks modules landed
+# between 2026-08-18 and 2026-08-31 with neither a corpus row nor a named
+# exemption, which `test_ac10_coverage_gap_is_empty_or_named_exemption`
+# reports red. Two get real firing rows below; `sessionend_archive_session`
+# gets a named exemption instead (see REGISTER_COVERAGE_EXEMPTIONS -- its
+# only entrypoint archives a REAL session claim directory, and it emits no
+# agent-facing text at all).
+
+
+def _fire_nudge_autonomous_askuserquestion() -> Optional[Dict[str, Any]]:
+    """`_compose_advisory` is pure -- it renders the standing ask-bar advisory
+    from a posture string with no I/O, no session lookup, and no sentinel
+    read. Called directly rather than through `_handler`, which would need a
+    posture-resolving fixture (a settings file plus a sentinel) to reach the
+    same text: the lighter path `_fire_nudge_unrouted_sizing` above already
+    establishes for this corpus."""
+    text = _hook_nudge_autonomous_askuserquestion._compose_advisory("default")
+    return {"hookSpecificOutput": {"additionalContext": text}}
+
+
+def _fire_plan_persistence_check_persisted() -> Optional[Dict[str, Any]]:
+    """`_persisted_text` is pure -- it renders the post-persist advisory from a
+    prefilled commit command, no I/O. Called directly, the lighter path, and
+    deliberately NOT through `_handler`: that arm WRITES a real
+    `docs/plans/<date>-<slug>.md` into the calling repo, which a corpus row
+    must never do (same reasoning that keeps `auto_push` exempted, except this
+    module has a composer to call, so it gets a row instead of an
+    exemption)."""
+    text = _hook_plan_persistence_check._persisted_text(
+        'git add -- docs/plans/2026-01-01-corpus.md && '
+        'git commit -m "plan: corpus" -- docs/plans/2026-01-01-corpus.md'
+    )
+    return {"hookSpecificOutput": {"additionalContext": text}}
+
+
+def _fire_watchdog_undischarged_next_move_stop() -> Optional[Dict[str, Any]]:
+    """The Stop leg, fired end-to-end against a throwaway repo root.
+
+    Not a lighter path, because there is no composer to call: the advisory
+    text is built inline inside `_handle_stop`, so anything short of firing
+    that function would be this corpus asserting against a copy of the
+    literal rather than the message the operator actually receives. The
+    fixture is a scratch dir with a `.git` directory (enough for the op's
+    zero-spawn `show_toplevel` walk) and one seeded undischarged ledger
+    record; every write it makes lands inside that dir."""
+    with tempfile.TemporaryDirectory(dir=_neutral_scratch_parent()) as tmp:
+        os.makedirs(os.path.join(tmp, ".git"), exist_ok=True)
+        session_id = "corpus-watchdog-session"
+        share = os.path.join(tmp, "state", "subagent-share", session_id)
+        os.makedirs(share, exist_ok=True)
+        record = {
+            "obligation_id": "corpus-obligation-1",
+            "seam": "corpus-seam",
+            "next_action": "/handoff",
+            "discharged": False,
+            "fired": False,
+        }
+        with open(os.path.join(share, "next-move-ledger.jsonl"), "w", encoding="utf-8") as handle:
+            handle.write(_json.dumps(record) + "\n")
+        return _to_envelope_or_none(
+            _hook_watchdog_undischarged_next_move._handle_stop(
+                {
+                    "session_id": session_id,
+                    "cwd": tmp,
+                    "transcript_path": os.path.join(tmp, "transcript.jsonl"),
+                }
+            )
+        )
 
 
 # --- (2) auto_push -- no register_op, no hookSpecificOutput/_envelope import
@@ -3789,6 +3863,24 @@ HOOK_ROWS: List[HookRow] = [
         _fire_cater_subagent_start_missing_provisioning,
     ),
     HookRow("subagent_review_mark", "noop-control", False, _fire_subagent_review_mark_noop),
+    HookRow(
+        "plan_persistence_check",
+        "fire-persisted-advisory",
+        True,
+        _fire_plan_persistence_check_persisted,
+    ),
+    HookRow(
+        "nudge_autonomous_askuserquestion",
+        "fire-advisory",
+        True,
+        _fire_nudge_autonomous_askuserquestion,
+    ),
+    HookRow(
+        "watchdog_undischarged_next_move",
+        "fire-stop-undischarged",
+        True,
+        _fire_watchdog_undischarged_next_move_stop,
+    ),
     HookRow(
         "block_unenumerated_agent_type",
         "fire-unenumerated-deny",

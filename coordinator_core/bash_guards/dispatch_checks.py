@@ -7478,8 +7478,138 @@ def _bt_find_exec_python_rewrite(parsed: Dict[str, Any]) -> Optional[str]:
     return "%s -c %s" % (_bt_python3_invocation(), shlex.quote(body))
 
 
+def _bt_parse_for_loop_find(tokens: List[str]) -> Optional[Dict[str, Any]]:
+    """Parse `for f in $(find <path> [-name <pat>]); do <verb> "$f"; done`.
+
+    C5 of `docs/plans/2026-08-31-the-batched-form-the-guard-never-offers.md`.
+    The shape forks one process per match exactly as `-exec ... \\;` does, so
+    the spawn-budget harm this guard exists to prevent is fully present --
+    and until now fully unguarded, because `_bt_parse_find_exec_segment`
+    requires a literal `-exec` token a for-loop-wrapped find never carries.
+    The falsifier caught the guard's docstring CLAIMING to cover this shape
+    (corrected at C3); this closes the coverage that claim asserted.
+
+    DELIBERATELY NARROW, and the narrowness is the design. The plan's own
+    `case_against` argued -- correctly -- that general command-substitution
+    and loop-body parsing already belongs to
+    `guard_grep_via_bash._substitutable_rewrite`, and that building a second
+    general parser here would be the parallel-surface mistake. So this does
+    not parse loop bodies in general. It recognises ONE canonical shape and
+    returns None for everything else: a single-command body, a single
+    `$f`-style operand, no pipes, no redirects, no chaining inside the body.
+    Anything richer is not a batching question and is not answered here.
+
+    Returns ``{"path", "name_pattern", "verb_argv", "var"}`` or None.
+    """
+    if not tokens or tokens[0] != "for" or "do" not in tokens or "done" not in tokens:
+        return None
+    if len(tokens) < 6 or tokens[2] != "in":
+        return None
+
+    var = tokens[1]
+    do_idx = tokens.index("do")
+    done_idx = tokens.index("done")
+    if done_idx < do_idx:
+        return None
+
+    # --- the iterated command substitution -------------------------------
+    head = tokens[3:do_idx]
+    while head and head[-1] == ";":
+        head = head[:-1]
+    if not head or not head[0].startswith("$("):
+        return None
+    if head[0][2:] != "find":
+        return None
+    if not head[-1].endswith(")"):
+        return None
+    find_argv = [head[0][2:]] + head[1:]
+    find_argv[-1] = find_argv[-1][:-1]
+    if any("$(" in tok for tok in find_argv[1:]):
+        return None
+
+    path = None
+    name_pattern = None
+    i = 1
+    while i < len(find_argv):
+        tok = find_argv[i]
+        if tok == "-name":
+            if i + 1 >= len(find_argv):
+                return None
+            name_pattern = find_argv[i + 1].strip("'\"")
+            i += 2
+            continue
+        if tok == "-type":
+            i += 2
+            continue
+        if tok.startswith("-"):
+            # An option this parser does not model -- refuse rather than
+            # emit a rewrite that drops it. Silently changing what a
+            # command matches is the one failure worse than staying quiet.
+            return None
+        if path is None:
+            path = tok
+            i += 1
+            continue
+        return None
+    if path is None:
+        return None
+
+    # --- the loop body ---------------------------------------------------
+    body = tokens[do_idx + 1:done_idx]
+    while body and body[-1] == ";":
+        body = body[:-1]
+    if not body or ";" in body or "|" in body or "&&" in body:
+        return None
+    if any(tok in (">", ">>", "<", "&") for tok in body):
+        return None
+
+    deref = {"$" + var, "${" + var + "}", '"$' + var + '"', '"${' + var + '}"'}
+    operand_idx = [i for i, tok in enumerate(body) if tok.strip('"') in
+                   {"$" + var, "${" + var + "}"} or tok in deref]
+    if len(operand_idx) != 1 or operand_idx[0] != len(body) - 1:
+        # The loop variable must be the FINAL operand -- the same
+        # placeholder-final precondition `_bt_find_exec_batch_rewrite`
+        # applies to `{}`, and for the identical reason: anything else is
+        # not the shape `-exec ... +` is equivalent to.
+        return None
+
+    verb_argv = body[:-1]
+    if not verb_argv or any("$" in tok for tok in verb_argv):
+        return None
+
+    return {
+        "path": path,
+        "name_pattern": name_pattern,
+        "verb_argv": verb_argv,
+        "var": var,
+    }
+
+
+def _bt_for_loop_find_batch_rewrite(parsed: Dict[str, Any]) -> Optional[str]:
+    """The `-exec ... +` equivalent of a parsed for-loop find, or None.
+
+    Reuses `_FIND_EXEC_BATCH_EQUIVALENT_VERBS` -- C2's MEASURED allowlist --
+    rather than minting a second table. A verb off that list gets no offer,
+    exactly as it does on the `-exec` side: never a guessed batch.
+    """
+    verb_argv = parsed["verb_argv"]
+    verb_norm = _normalize_executable_basename(verb_argv[0])
+    if verb_norm not in _FIND_EXEC_BATCH_EQUIVALENT_VERBS:
+        return None
+    if verb_norm == "git" and (len(verb_argv) < 2 or verb_argv[1] != "add"):
+        return None
+    argv = ["find", parsed["path"]]
+    if parsed["name_pattern"]:
+        argv += ["-name", parsed["name_pattern"]]
+    argv += ["-exec"] + list(verb_argv)
+    # `{}` and `+` are find's own syntax, never operands to quote --
+    # `shlex.join` would emit `'{}'`, which find does not recognise as the
+    # placeholder.
+    return "%s {} +" % (" ".join(shlex.quote(a) for a in argv),)
+
+
 def _bt_find_exec_batch_rewrite(tokens: List[str], parsed: Dict[str, Any]) -> Optional[str]:
-    """Offer the POSIX `+` batched form for a verb this session measured as
+    r"""Offer the POSIX `+` batched form for a verb this session measured as
     batch-equivalent (`_FIND_EXEC_BATCH_EQUIVALENT_VERBS`), gated on `{}`
     being the FINAL token of the exec'd argv -- `+` only batches when the
     placeholder is last; a `{}` mid-argv (`-exec cmd {} -flag \;`) is not
@@ -7513,13 +7643,14 @@ def check_find_exec_rewrite(
     founding incident's 879-process stall on Windows (DoE
     ``state/plan-sidecars/2026-07-28-bash-tax-negative-space.md``).
 
-    This function only fires on a segment carrying a literal `-exec` token
-    (`_bt_parse_find_exec_segment` requires it); the
-    `for f in $(find ...); do <binary> "$f"; done` sibling never reaches
-    that check regardless of `_BT_Shape.FOR_LOOP` classification above, and
-    is not covered here -- widening this parser to that shape is a
-    different guard's job (`guard_grep_via_bash` already owns
-    substitutable-residue rewriting for it).
+    Two shapes reach this check. The `-exec` family is parsed by
+    `_bt_parse_find_exec_segment`, which requires a literal `-exec` token.
+    The `for f in $(find ...); do <binary> "$f"; done` sibling carries no
+    such token and is parsed separately by `_bt_parse_for_loop_find` (C5)
+    -- ONE canonical shape, not a general loop-body parser: general
+    command-substitution and loop-body rewriting stays
+    `guard_grep_via_bash._substitutable_rewrite`'s job, and this does not
+    duplicate it.
 
     Auto-rewrites to a single `python3 -c` process (zero per-match forks)
     when the exec'd verb is translatable (rm/cat/wc -l); otherwise advises
@@ -7566,6 +7697,46 @@ def check_find_exec_rewrite(
     _find_exec_note = operator_override_note(
         "COORDINATOR_ALLOW_FIND_EXEC", payload=payload, git_root=git_root
     )
+
+    for_loop = _bt_parse_for_loop_find(classification.tokens)
+    if for_loop is not None:
+        loop_batch = _bt_for_loop_find_batch_rewrite(for_loop)
+        whole_command = classification.tokens[-1] == "done"
+        verb = for_loop["verb_argv"][0]
+        if loop_batch and whole_command:
+            return _allow_rewrite(
+                loop_batch,
+                (
+                    "Auto-rewritten: 'for f in $(find ...); do %s \"$f\"; done' "
+                    "forks one process PER MATCH -- the same spawn storm as "
+                    "'-exec ... ;'. The POSIX '+' form batches matches into as "
+                    "few invocations as ARG_MAX allows, with identical output "
+                    "for this verb." % (verb,)
+                )
+                + (" %s" % _find_exec_note if _find_exec_note else ""),
+            )
+        if loop_batch:
+            return _advisory(
+                (
+                    "Advisory: 'for f in $(find ...); do %s \"$f\"; done' forks "
+                    "one process PER MATCH -- '%s' does the same work in as few "
+                    "invocations as ARG_MAX allows, but this loop runs alongside "
+                    "OTHER work in the same command, so no full-command "
+                    "auto-rewrite is offered." % (verb, loop_batch)
+                )
+                + (" %s" % _find_exec_note if _find_exec_note else "")
+            )
+        return _advisory(
+            (
+                "Advisory: 'for f in $(find ...); do %s \"$f\"; done' forks one "
+                "process PER MATCH -- the founding-incident 879-process shape on "
+                "Windows. '%s' is not on the measured batch-equivalent verb list, "
+                "so no '+' form is offered: batching it could change its output. "
+                "A single python3 -c os.walk(...) loop does the enumeration in "
+                "one process." % (verb, verb)
+            )
+            + (" %s" % _find_exec_note if _find_exec_note else "")
+        )
     for tokens, _pipe_before in segments:
         if not tokens or not _bt_token_matches_binary(tokens[0], "find"):
             continue

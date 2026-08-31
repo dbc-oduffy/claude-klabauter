@@ -314,8 +314,20 @@ def main(argv: "list[str] | None" = None) -> int:
         ),
     )
     parser.add_argument(
-        "--title", required=True, metavar="TEXT",
-        help="One-line lesson title (required).",
+        "--title", default=None, metavar="TEXT",
+        help=(
+            "One-line lesson title. Exactly one of --title / --title-file "
+            "is required."
+        ),
+    )
+    parser.add_argument(
+        "--title-file", dest="title_file", default=None, metavar="PATH",
+        help=(
+            "Read the lesson title from PATH ('-' for stdin) instead of "
+            "--title. Exactly one of --title / --title-file is required. "
+            "The only title transport that survives every launcher leg "
+            "intact — see --title's own refusal for why."
+        ),
     )
     parser.add_argument(
         "--body", default=None, metavar="TEXT",
@@ -361,6 +373,14 @@ def main(argv: "list[str] | None" = None) -> int:
         ),
     )
     parser.add_argument(
+        "--why-file", dest="why_file", default=None, metavar="PATH",
+        help=(
+            "Read --why from PATH ('-' for stdin) instead of an inline "
+            "value (optional). The only --why transport that survives "
+            "every launcher leg intact — see --why's own refusal for why."
+        ),
+    )
+    parser.add_argument(
         "--how-to-apply", dest="how_to_apply", default=None, metavar="TEXT",
         help=(
             "Actionable guidance for applying this lesson in future situations (optional). "
@@ -374,11 +394,19 @@ def main(argv: "list[str] | None" = None) -> int:
 
     args = parser.parse_args(argv)
 
-    from coordinator_core.argv_fidelity import ArgvFidelityError, refuse_newline_argv, resolve_body
+    from coordinator_core.argv_fidelity import (
+        ArgvFidelityError,
+        refuse_newline_argv,
+        resolve_body,
+        resolve_optional_prose,
+    )
 
     try:
         refuse_newline_argv(args.body, flag_name="--body")
         args.body = resolve_body(args.body, args.body_file)
+        refuse_newline_argv(args.title, flag_name="--title")
+        args.title = resolve_body(args.title, args.title_file, flag_name="--title")
+        args.why = resolve_optional_prose(args.why, args.why_file, flag_name="--why")
     except ArgvFidelityError as exc:
         parser.error(str(exc))
 

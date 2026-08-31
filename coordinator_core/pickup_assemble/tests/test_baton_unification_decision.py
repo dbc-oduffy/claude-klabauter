@@ -298,6 +298,33 @@ def test_unreadable_held_claim_is_counted_in_its_own_bucket(tmp_path, monkeypatc
     assert result["verdict"] == "no-unification"
 
 
+def test_unreadable_sole_skip_names_itself_in_reason_and_message(tmp_path, monkeypatch):
+    """When an unreadable held baton is the ONLY reason nothing unified, the
+    verdict says so by name.
+
+    The counter alone was not enough. `unreadable_skipped` reached the returned
+    dict, but the reason/message ladder had no arm for it, so a sole-unreadable
+    verdict fell through to `nothing-inheritable` / "No inheritable held baton"
+    -- the exact text a run with no held baton at all emits. Every reader of the
+    message (rather than the dict) therefore saw the pre-fix silence, which is
+    the failure the counter was added to end.
+    """
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    _make_ledger_claim(repo, "ghost.md", SELF_SID)
+    monkeypatch.setattr(
+        pa._liveness, "live_session_verdicts", lambda root: {SELF_SID: (True, "meta")}
+    )
+
+    result = pa.compute_baton_unification_verdict(repo, TARGET_FM, TARGET_PATH)
+
+    assert result["reason"] == "unreadable-held-skipped"
+    assert "unreadable" in result["message"]
+    assert "No inheritable held baton" not in result["message"], (
+        "a sole-unreadable skip must not render as the no-baton-at-all message"
+    )
+
+
 def test_unreadable_bucket_is_surfaced_on_every_verdict_shape(tmp_path, monkeypatch):
     """The bucket is only countable if it is present on every return —
     a key that appears solely on the path that incremented it cannot be

@@ -1054,19 +1054,92 @@ def test_consumed_handoff_completeness_leg_a_open_blocks(monkeypatch, tmp_path):
     # dropped from `resolves` in the ceremony.wsc_tail /
     # completion.reconcile_commits kills, 2026-08-23, along with the
     # directives themselves.)
-    assert jp["dispositions"] == [
-        {
-            "value": "override-known-in-flight",
-            "resolves": [
-                "d-claim-plan-execution-lock",
-                "d-stamp-plan-implemented",
-                "d-harvest-deferrals-1",
-                "d-complete-entry",
-            ],
-        },
-        {"value": "stop-and-handoff", "resolves": []},
+    # `verified-complete-proceed` leads on a leg-A-only block (2026-08-31) --
+    # see build_consumed_handoff_completeness_judgment_point's docstring for
+    # why the honest arm has to exist and why it is offered here.
+    assert [d["value"] for d in jp["dispositions"]] == [
+        "verified-complete-proceed",
+        "override-known-in-flight",
+        "stop-and-handoff",
     ]
+    for disposition in jp["dispositions"][:2]:
+        assert disposition["resolves"] == [
+            "d-claim-plan-execution-lock",
+            "d-stamp-plan-implemented",
+            "d-harvest-deferrals-1",
+            "d-complete-entry",
+        ]
+    assert jp["dispositions"][-1]["resolves"] == []
+    # Every arm carries `guidance`: the two clearing arms resolve the SAME
+    # four directives, so without it the record is the only thing telling
+    # them apart and the EM has nothing to pick on.
+    assert all(d.get("guidance") for d in jp["dispositions"])
     assert jp["recommendation"] is None
+
+
+def test_leg_b_live_child_withholds_the_verified_complete_arm(monkeypatch, tmp_path):
+    """A live successor handoff still naming this predecessor makes
+    "verified complete" false, so that arm is not offered -- the EM is left
+    with the override, whose claim can be true, and the default stop. The
+    conditionality is the point: a blanket third arm would let an EM record
+    "complete" in front of the one piece of evidence that contradicts it."""
+    _write_ac_handoff(tmp_path, "state/handoffs/x.md", "## Acceptance criteria\n\n- [x] one\n")
+    _patch_gate(monkeypatch, _gate("chain-terminal", consumed_handoff="state/handoffs/x.md", consumed_handoff_paths=("state/handoffs/x.md",)))
+    _patch_leg_b(monkeypatch, {"exit_code": 0, "referenced": True, "children": ["state/handoffs/y.md"]})
+
+    decision_object = wsc.brief(decisions={"subject": "a commit subject"}, repo_root=tmp_path)
+
+    jp = next(j for j in decision_object["judgment_points"] if j["id"] == "jp-consumed-handoff-completeness")
+    assert [d["value"] for d in jp["dispositions"]] == [
+        "override-known-in-flight",
+        "stop-and-handoff",
+    ]
+
+
+def test_leg_b_live_child_withholds_the_arm_even_when_another_element_is_leg_a_only(
+    monkeypatch, tmp_path
+):
+    """AC6's plural set, applied to the new arm: the condition is "no
+    BLOCKING element fires leg B", never "this element". One in-flight
+    successor anywhere in the consumed set makes the whole close not
+    verifiably complete, so a second element blocking on leg A alone does
+    not earn the arm back."""
+    _write_ac_handoff(tmp_path, "state/handoffs/x.md", "## Acceptance criteria\n\n- [x] one\n- [ ] two\n")
+    _write_ac_handoff(tmp_path, "state/handoffs/z.md", "## Acceptance criteria\n\n- [x] one\n")
+    _patch_gate(
+        monkeypatch,
+        _gate(
+            "chain-terminal",
+            consumed_handoff="state/handoffs/x.md",
+            consumed_handoff_paths=("state/handoffs/x.md", "state/handoffs/z.md"),
+        ),
+    )
+    # Leg A blocks on x (one unticked box); leg B blocks on both, so the
+    # withholding condition is met via z as well as x.
+    _patch_leg_b(monkeypatch, {"exit_code": 0, "referenced": True, "children": ["state/handoffs/y.md"]})
+
+    decision_object = wsc.brief(decisions={"subject": "a commit subject"}, repo_root=tmp_path)
+
+    jp = next(j for j in decision_object["judgment_points"] if j["id"] == "jp-consumed-handoff-completeness")
+    assert "verified-complete-proceed" not in [d["value"] for d in jp["dispositions"]]
+
+
+def test_the_verified_complete_arm_names_the_absent_ac_reconciliation_step(monkeypatch, tmp_path):
+    """The memo's second-half finding (the ceremony asks an EM to clear a
+    gate about acceptance criteria while giving them no step at which to
+    reconcile them) is NOT closed by this disposition, and its `guidance`
+    has to say so -- an arm reading "verified complete" with nothing
+    disclaiming what it verified is exactly the false-record problem the
+    third arm was added to end."""
+    _write_ac_handoff(tmp_path, "state/handoffs/x.md", "## Acceptance criteria\n\n- [x] one\n- [ ] two\n")
+    _patch_gate(monkeypatch, _gate("chain-terminal", consumed_handoff="state/handoffs/x.md", consumed_handoff_paths=("state/handoffs/x.md",)))
+    _patch_leg_b(monkeypatch, {"exit_code": 1, "referenced": False})
+
+    decision_object = wsc.brief(decisions={"subject": "a commit subject"}, repo_root=tmp_path)
+
+    jp = next(j for j in decision_object["judgment_points"] if j["id"] == "jp-consumed-handoff-completeness")
+    guidance = next(d for d in jp["dispositions"] if d["value"] == "verified-complete-proceed")["guidance"]
+    assert "does not verify" in guidance
 
 
 def test_consumed_handoff_completeness_leg_b_live_child_blocks_wsc_tail(monkeypatch, tmp_path):
@@ -1375,9 +1448,14 @@ def test_session_handoff_leg_a_not_applicable_when_no_deliverable_id(monkeypatch
     assert "indeterminate:" not in gate_evidence["summary_line"]
 
 
-def test_session_handoff_leg_a_not_applicable_when_deliverable_id_unresolved(monkeypatch, tmp_path):
+def test_session_handoff_leg_a_indeterminate_when_deliverable_id_unresolved(monkeypatch, tmp_path):
     # No plan anywhere carries this deliverable_id -- the gate must reach a
     # verdict (AC12) without any docs/plans/ population at all, not raise.
+    # 2026-08-08 correction (cross-repo/archive/2026-08-08-doe-claude-em-
+    # leg-a-correction-our-premise-was-wrong-keep-the-verdict-fix.md): a
+    # zero-candidate join is `indeterminate`, not `not-applicable` -- it is
+    # non-blocking either way (leg A only fires on "open"), but it must not
+    # read as verified-clear.
     _write_session_handoff(tmp_path, "state/handoffs/x.md", "dlv-no-such-plan")
     _patch_gate(monkeypatch, _gate("chain-terminal", consumed_handoff="state/handoffs/x.md", consumed_handoff_paths=("state/handoffs/x.md",)))
     _patch_leg_b(monkeypatch, {"exit_code": 1, "referenced": False})
@@ -1387,8 +1465,8 @@ def test_session_handoff_leg_a_not_applicable_when_deliverable_id_unresolved(mon
     gate_evidence = decision_object["gates"]["consumed_handoff_completeness"]
     assert gate_evidence["blocks"] is False
     leg_a = gate_evidence["elements"][0]["leg_a"]
-    assert leg_a["verdict"] == "not-applicable"
-    assert "does not resolve to exactly one docs/plans" in leg_a["detail"]
+    assert leg_a["verdict"] == "indeterminate"
+    assert "zero candidates" in leg_a["detail"]
 
 
 def test_session_handoff_leg_a_not_applicable_when_joined_plan_status_terminal(monkeypatch, tmp_path):
@@ -1640,8 +1718,19 @@ def test_consumed_handoff_completeness_fires_on_single_session_disposition_with_
 
     jp_ids = {jp["id"] for jp in decision_object["judgment_points"]}
     assert "jp-consumed-handoff-completeness" in jp_ids
-    wsc_tail = next(d for d in decision_object["directives"] if d["id"] == "d-run-wsc-tail")
-    assert "jp-consumed-handoff-completeness" in _depends_on_list(wsc_tail)
+    # The `depends_on` half of this test asserted the edge on `d-run-wsc-tail`,
+    # killed with the rest of Step 3's commit-tail wiring (ceremony.wsc_tail,
+    # 2026-08-23): `next(...)` raised StopIteration and this test was red at
+    # HEAD. DROPPED rather than repointed at a surviving member, because on
+    # this fixture there is no surviving member to point at -- a single-session
+    # close with no governing plan emits none of the four directives
+    # `build_directives` gates, so the point fires and hangs its edge on
+    # nothing. That is a real observation about the gate and not what this test
+    # is for: its subject, stated above, is that the gate keys on "a consumed
+    # handoff resolved on disk" and never on `disposition`, which the
+    # membership assertion above proves on its own. The gate-nothing shape is
+    # filed separately (state/bug-backlog/2026-08-31-jp-consumed-handoff-
+    # completeness-can-fire-gating-nothing.yaml).
 
 
 # ---------------------------------------------------------------------------
@@ -2540,22 +2629,36 @@ def test_session_shape_is_uncertain_returns_false_for_a_memo_predecessor_detecti
 
 
 def test_review_dispatch_vehicle_choice_does_not_recommend_the_provisioning_bypassing_vehicle():
-    """A recommended dispatch vehicle must not strip context an agent type
-    declares as spawn-provided.
+    """The recommendation must not rest on the provisioning bypass, which
+    no longer exists.
 
-    Report sidecars are provisioned by a `PreToolUse` hook matched on the
-    `Agent` tool; a Workflow-internal ``agent()`` spawn never traverses it,
-    so a ``report_sidecar``-eligible reviewer arrives with no
-    ``sidecar_path`` and refuses to review. Recommending `review-wave-
-    workflow` once burned a full reviewer wave for zero findings. Both
-    vehicles stay offered -- the Workflow one is usable with explicit
-    pre-provisioning -- but it is not what an EM gets by default.
+    This test used to assert `"provision" in rationale` -- pinning the
+    claim that a Workflow ``agent()`` spawn skips sidecar provisioning.
+    That was true until DoE `10cd4cda9` (2026-08-21) retired catering from
+    the `Agent`-tool `PreToolUse` hook; `SubagentStart` is now the sole
+    catering path for both vehicles (``coordinator_core/hooks/
+    cater_subagent_start.py``). So the old assertion pinned a false
+    statement INTO place: it would have failed the moment someone
+    corrected the rationale, and passed for as long as the lie stood.
+
+    The recommendation itself survives on a weaker, still-true ground
+    (a hand dispatch is observable while it runs). Both dispositions stay
+    offered. Flipping the default needs a measured comparison of the two
+    vehicles post-`SubagentStart`, not merely the death of the old
+    objection -- so this test pins the default AND pins the dead reason
+    out of the rationale, and does not assert the default is optimal.
     """
     jp = judgments.build_review_dispatch_vehicle_choice_judgment_point()
     offered = {d["value"] for d in jp["dispositions"]}
     assert offered == {"hand-dispatch", "review-wave-workflow"}
     assert jp["recommendation"]["disposition"] == "hand-dispatch"
-    assert "provision" in jp["recommendation"]["rationale"]
+
+    rationale = jp["recommendation"]["rationale"]
+    # The retired ground must not reappear as a live justification.
+    assert "bypasses" not in rationale
+    assert "without the sidecar_path" not in rationale
+    # The surviving ground must actually be stated.
+    assert "observable" in rationale
 
 
 def test_all_judgment_points_carry_the_shared_constructor_shape(monkeypatch, tmp_path):
@@ -4637,7 +4740,15 @@ def test_decisions_template_governing_plan_keys_stay_none_when_unresolved(monkey
     assert template["governing_plan_path"] is None
 
 
-def test_decisions_template_prefills_stage_paths_from_gates_candidates(monkeypatch, tmp_path):
+def test_decisions_template_stage_paths_candidates_is_dead_with_its_consumer(monkeypatch, tmp_path):
+    """`gates.stage_paths_candidates` had exactly one consumer,
+    `d-run-wsc-tail`, killed 2026-08-23; `build_directives` now hard-codes the
+    source to `None` (see its own `stage_paths_candidates: Optional[list[str]]
+    = None` and the comment above it). This test asserted the pre-fill still
+    happened and was red at HEAD. Inverted rather than deleted: the wiring is
+    still present and still emitted, so what needs pinning is that it stays
+    inert -- a future edit re-populating it would silently re-introduce a
+    pre-fill nothing reads."""
     _patch_gate(monkeypatch, _gate("single-session", consumed_handoff_paths=()))
     monkeypatch.setattr(
         wsc.directives_memo_lifecycle,
@@ -4647,10 +4758,8 @@ def test_decisions_template_prefills_stage_paths_from_gates_candidates(monkeypat
         ],
     )
     decision_object = wsc.brief(decisions={"subject": "a commit subject"}, repo_root=tmp_path)
-    candidates = decision_object["gates"]["stage_paths_candidates"]
-    assert candidates == ["state/some-file.md"]
-    template = decision_object["preflight"]["decisions_template"]
-    assert template["stage_paths"] == candidates
+    assert decision_object["gates"]["stage_paths_candidates"] is None
+    assert decision_object["preflight"]["decisions_template"]["stage_paths"] is None
 
 
 def test_decisions_template_stage_paths_stays_none_when_caller_already_supplied_it(monkeypatch, tmp_path):
@@ -4932,7 +5041,24 @@ def test_brief_explicit_repo_root_never_refused_but_records_informational_verdic
 
 
 def _wsc_landing_directive() -> dict[str, Any]:
-    return {"id": "d-x", "cli": "wsc-tail", "args": [], "depends_on": None, "already_satisfied": False}
+    """A minimal directive that ACTUALLY DISPATCHES, for the repo-identity
+    tests below -- which are about the identity check, not about verb
+    admission. It named `wsc-tail`, which left
+    `ASSEMBLER_DISPATCHABLE["workstream_complete"]` with the ceremony.wsc_tail
+    kill (2026-08-23); `_execute_directives`' whole-run admission pre-pass then
+    returned `DIRECTIVE_FAILED` before any identity code ran, so all three
+    tests were red at HEAD and the mismatch one could never have reached its
+    `TransportFailure`. Repointed at an admitted verb: any member of that set
+    works, and `coordinator-harvest-deferrals` is picked because these tests
+    stub `_dispatch_directive` wholesale, so nothing behind the name executes.
+    """
+    return {
+        "id": "d-x",
+        "cli": "coordinator-harvest-deferrals",
+        "args": [],
+        "depends_on": None,
+        "already_satisfied": False,
+    }
 
 
 def _wsc_stub_dispatch_directive(monkeypatch) -> None:
@@ -5416,7 +5542,12 @@ def test_commit_count_unmeasured_on_call_one_never_argues_for_less_review(
         "an unmeasured call must not name a brightline row -- naming one would "
         f"assert a scope it never measured: {review_scale}"
     )
-    assert review_scale["partition_mandatory"] is False
+    # `None`, not `False` -- an unresolved decision must not report the
+    # absence of a measurement as a measured negative (`directives_review.
+    # py :: _unresolved`). This read `is False` against that sentinel and
+    # was failing at HEAD; the assertion's point (an unmeasured call never
+    # asserts a mandatory partition) is satisfied at least as strictly.
+    assert review_scale["partition_mandatory"] is None
     assert "not yet resolved" in review_scale["reason"], review_scale["reason"]
     assert "cannot be ruled out" in review_scale["reason"], (
         "the unresolved reason must say row 4 is NOT ruled out; anything softer "

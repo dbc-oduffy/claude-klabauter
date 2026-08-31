@@ -3,15 +3,17 @@
 
 Spec backlink: docs/plans/2026-08-31-prose-flags-travel-as-files-through-the.md § C2
 
-WHY THIS IS `designed_red`. The probe (`prose_transport_probe.py`, landed
+RULING (C12, 2026-08-31). The probe (`prose_transport_probe.py`, landed
 verbatim in its recorded form during plan review) measured 13 uncovered
 (entrypoint, flag) pairs at `baseline_ref a7eb44bf99` -- every declared
 prose-bearing flag on a `.cmd`-forwarded `coordinator/bin` entrypoint that
-lacks an unconditional, flag-scoped newline refusal (Rule 1). This module
-asserts the probe reports ZERO such pairs, which is false on landing: the
-guard predates the burn-down work it guards. It carries `designed_red` so
-the fast tier stays green while that work lands; C12 removes the marker
-once the count reaches zero.
+lacks an unconditional, flag-scoped newline refusal (Rule 1). C2-C10 burned
+that worklist to zero; this module asserts the probe reports ZERO such
+pairs on the fast tier, unconditionally, with no `designed_red` marker. A
+future prose-bearing flag added to a `.cmd`-forwarded entrypoint without a
+newline refusal (or a `--<flag>-file` remedy routed through
+`refuse_newline_argv`) turns this RED on the fast tier -- that is the
+guard doing its job, not a regression to wave back in with a new marker.
 
 NEGATIVE SPEC
     - No exemption list, allowlist, or per-pair skip anywhere in this
@@ -20,8 +22,8 @@ NEGATIVE SPEC
       gone, a parity exemption outliving its scope call, a stale wsc-tail
       allowlist row) -- an entry outlives its reason and the guard
       certifies a defect instead of catching one. The ONLY sanctioned
-      not-yet-green state is the `designed_red` marker itself, visible in
-      one place (this module) and removed in one commit (C12).
+      not-yet-green state was the `designed_red` marker itself; C12 removed
+      it once the probe reported zero, and no successor marker replaces it.
     - Does not re-author or re-derive `prose_transport_probe.py`'s scoring
       predicates (`declared`, `flag_refused`, `flag_legged`) -- invokes the
       probe as the script it is written to be (its own docstring names
@@ -50,16 +52,16 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 PROBE_PATH = Path(__file__).resolve().parent / "prose_transport_probe.py"
 
 
-@pytest.mark.designed_red
 @pytest.mark.spawns_process
 def test_no_uncovered_prose_flag_transport_pairs():
     """Rule 1 gate: the probe must report zero UNREFUSED (entrypoint, flag)
     pairs among declared prose-bearing flags on `.cmd`-forwarded
     `coordinator/bin` entrypoints.
 
-    RED on landing (13 uncovered pairs at baseline_ref a7eb44bf99). C12
-    burns the worklist to zero and removes the `designed_red` marker; this
-    assertion itself never changes shape.
+    Was RED on landing (13 uncovered pairs at baseline_ref a7eb44bf99). C12
+    confirmed the worklist reached zero and removed the `designed_red`
+    marker; this assertion itself never changed shape and now binds on the
+    fast tier.
     """
     result = subprocess.run(
         [sys.executable, str(PROBE_PATH), str(REPO_ROOT)],

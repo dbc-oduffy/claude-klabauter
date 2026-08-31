@@ -317,33 +317,32 @@ def _resolve_git_root_uncached(cwd: Optional[str] = None) -> Optional[str]:
     for the seam's own (different, and for its callers correct) caching
     policy.
     """
-    try:
-        result = subprocess.run(
-            ["git", "rev-parse", "--show-toplevel"],
-            capture_output=True,
-            encoding="utf-8",
-            errors="replace",
-            cwd=cwd,
-            # House value (dispatch_checks._run_git) -- every dispatch calls
-            # this on the identity-gated guard path, so an unbounded spawn
-            # here (a hung git behind a contended/slow disk, a network
-            # filesystem, or a stale index lock) stalls PreToolUse(Bash)
-            # forever before the user's own command ever runs. 2026-08-05
-            # hardening pass (PM ruling: "spawn sites need to have timeouts,
-            # that can save a machine from getting degraded-stuck").
-            timeout=2.0,
-            # Windows console-popup suppression; no-op on POSIX
-            # (CREATE_NO_WINDOW is Windows-only).
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        # Timeout joins the pre-existing OSError leg of this fail-open
-        # contract (see docstring above) -- a hung git is indistinguishable
-        # from "no git repo here" to every caller of resolve_git_root.
+    # ROUTED ONTO `git.run.run_git`, 2026-08-31. This site is the one MEASURED
+    # instance of the Windows unbounded-drain hang: `subprocess.run`'s timeout
+    # path re-drains the killed child with a `communicate()` that takes no
+    # timeout, so the 2.0s below bounded nothing here and this function -- on
+    # the PreToolUse(Bash) chain -- could park forever. That is the exact
+    # outcome the timeout was added to prevent, reached THROUGH the timeout.
+    # `run_git` now bounds it; see its own comment for the mechanism and
+    # state/bug-backlog/2026-08-31-subprocess-run-s-timeout-does-not-bound-466bceff0ba5.yaml
+    # for the captured trace.
+    #
+    # STILL EXACTLY ONE SPAWN, which is why the caching contract below is
+    # undisturbed: `run_git` spawns once per call and never walks. The three
+    # pinning tests named above count `subprocess.Popen` calls, and `run_git`
+    # goes through `Popen` too, so they keep counting the same thing. What
+    # changed is what BOUNDS the spawn, never whether there is one -- the
+    # NOT-converted-to-`git.repo_root` note above still holds, and for its
+    # original reason: that seam WALKS before spawning.
+    from coordinator_core.git.run import run_git
+
+    outcome = run_git(["rev-parse", "--show-toplevel"], cwd=cwd, timeout=2.0)
+    # Timeout joins the pre-existing failure legs of this fail-open contract
+    # (see docstring above) -- a hung git is indistinguishable from "no git
+    # repo here" to every caller of resolve_git_root.
+    if outcome.timed_out or outcome.returncode != 0:
         return None
-    if result.returncode != 0:
-        return None
-    root = result.stdout.strip()
+    root = outcome.stdout.strip()
     if not root:
         return None
     # `git rev-parse --show-toplevel` always emits forward-slash paths (even on

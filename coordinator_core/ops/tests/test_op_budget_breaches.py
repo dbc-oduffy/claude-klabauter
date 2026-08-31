@@ -558,3 +558,48 @@ def test_network_headline_still_obeys_the_standing_register_rules():
     for banned in ("sorry", "unfortunately", "please note", "harmless", "as normal"):
         assert banned not in text.lower()
     assert len(text.encode("utf-8")) <= 220
+
+
+def _worst_case_summary(op):
+    """A summary shaped like `headline_for` expects, with every numeric
+    field pushed to a realistic-worst magnitude at once — a box bad enough
+    to log 4-digit breach/attempt counts and hundreds of seconds stolen, the
+    scale the commit under review's own worked example (227/354 breaches,
+    431.4s stolen) is already within an order of magnitude of."""
+    return {
+        "totals": {"breaching_ops": 9999, "stolen_ms": 999_999.9, "attempts": 0, "vanished": 0, "in_flight": 0},
+        "bar_ms": 500.0,
+        "ops": [
+            {
+                "op": op,
+                "stolen_ms": 999_999.9,
+                "breaches": 9999,
+                "attempts": 9999,
+                "trend": op_budget_breaches.TREND_WINDOW_LIMITED,  # longest trend value
+            }
+        ],
+    }
+
+
+def test_headline_stays_under_cap_for_the_longest_registered_op_name():
+    """Structural, not test-observed (review finding 3,
+    `coordinatorcode-reviewer.a6a0df83ba2cb4da6.md`): the longest op name
+    actually in this repo's registry, `research.verify_scout_inventory_completeness`
+    (44 chars — the shape of `session.resolve_chain_terminal_disposition`),
+    combined with worst-case digit counts on every other field, must not
+    push the banner past the 220-byte register cap."""
+    op = "research.verify_scout_inventory_completeness"
+    text = headline_for(_worst_case_summary(op))
+
+    assert len(text.encode("utf-8")) <= 220, (len(text.encode("utf-8")), text)
+
+
+def test_headline_stays_under_cap_for_an_op_name_longer_than_any_registered():
+    """A deliberately longer-than-realistic op name must still degrade the
+    display, never the cap — `_fit_op_name` elides it rather than letting
+    the banner grow past 220 bytes."""
+    op = "workstream." + ("x" * 120) + ".unrealistically_long_arm_name"
+    text = headline_for(_worst_case_summary(op))
+
+    assert len(text.encode("utf-8")) <= 220, (len(text.encode("utf-8")), text)
+    assert text.endswith("Confirm on process time, then delete it or rebuild it under the bar.")

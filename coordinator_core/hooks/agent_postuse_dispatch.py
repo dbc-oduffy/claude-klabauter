@@ -56,6 +56,26 @@ hardcoding an empty return: a leg that grows an advisory later must not need
 this module edited to be heard, which is exactly the silent-drop shape
 `_EAGER_HOOK_MODULES` exists to close off one level up.
 
+PAYLOAD FLATTENING — engine-side, per-op, not a caller-side stub.
+The HTTP hook transport forwards the harness's raw, nested `PostToolUse`
+payload verbatim (`{session_id, tool_name, tool_input: {...},
+tool_response: {...}}`) — it has no stub to pre-flatten it, unlike the
+`command`-registration transport whose shell stub already extracts the flat
+scalars each leg wants. `_flatten_hook_payload` derives those flat scalars
+HERE, so both transports can reach this op with the same effect. It does not
+widen either leg's accepted shape — a payload it cannot interpret raises
+`CallerFacingValidationError`, preserving the `-32602` a malformed payload
+already got before this adapter existed.
+
+PER-OP, NOT A SHARED `hooks.*` BOUNDARY. `docs/decisions/DR-foreign-op-
+registration-seam.md` (C3 of this op's own plan) settled the adjacent
+question — a foreign op registers by declared import into `OP_MODULE_MAP`,
+one entry per op key, never through a shared registration boundary that
+would also be the natural home for a shared payload adapter. With no such
+boundary, flattening lives beside the one op that needs it; a second hook
+op with the same nested-payload shape gets its own adapter, not a shared one
+inferred from this module.
+
 Negative-spec:
     - NO handler-level `tool_name` gate. The registration's matcher is exactly
       `Agent`; re-checking it here would be a second copy of somebody else's
@@ -68,6 +88,9 @@ Negative-spec:
       by the process boundary.
     - DOES NOT re-implement either leg. If a behaviour question is asked of this
       module, the answer is in the leg's own module.
+    - DOES NOT widen the op to accept an arbitrary shape. `_flatten_hook_payload`
+      raises `CallerFacingValidationError` (-> `-32602`) on a payload it cannot
+      derive flat scalars from; it never silently degrades to an empty flat dict.
 """
 
 from __future__ import annotations
@@ -75,7 +98,7 @@ from __future__ import annotations
 import asyncio
 import sys
 
-from coordinator_core.ipc import register_op
+from coordinator_core.ipc import CallerFacingValidationError, register_op
 from coordinator_core.hooks._envelope import no_advisory, post_advisory
 from coordinator_core.hooks import agent_completion_log, track_dispatched_agents
 
@@ -93,6 +116,80 @@ _LEGS = (
     ("agent_completion_log", agent_completion_log.run),
     ("track_dispatched_agents", track_dispatched_agents.run),
 )
+
+
+def _flatten_hook_payload(params: dict) -> dict:
+    """Derive the legs' flat-scalar fields from a raw, nested `PostToolUse(Agent)` payload.
+
+    The flat-union shape both legs already read via `_payload.field()` —
+    `description`, `subagent_type`, `name`, `dispatched_agent_id`,
+    `dispatched_agent_id_snake`, `dispatched_model`, plus whatever top-level
+    scalars a caller already sends (`session_id`) — is left ALONE when no
+    nested `tool_input`/`tool_response` object is present: that is today's
+    caller-side-stub shape (the `command` transport) and must keep working
+    unchanged.
+
+    When either nested key is present, this derives:
+        description                -> tool_input.description
+        subagent_type               -> tool_input.subagent_type
+        name                        -> tool_input.name
+        dispatched_agent_id         -> tool_response.agentId
+        dispatched_agent_id_snake   -> tool_response.agent_id
+        dispatched_model            -> tool_response.resolvedModel
+                                        or tool_response.model
+                                        or tool_input.model
+
+    merged OVER a copy of the original params, so a top-level scalar the
+    caller already sent flat (`session_id`) survives the merge untouched.
+
+    Raises:
+        CallerFacingValidationError: `params` is not a dict, or a present
+        `tool_input`/`tool_response` key is not itself an object -- a shape
+        this adapter cannot derive flat scalars from. This is the "genuinely
+        malformed payload" the -32602 contract must still refuse; widening
+        the handler to accept it silently is the one thing this adapter must
+        not do (see module Negative-spec).
+    """
+    if not isinstance(params, dict):
+        raise CallerFacingValidationError(
+            "hooks.agent_postuse_dispatch: params must be an object, got "
+            f"{type(params).__name__}"
+        )
+
+    if "tool_input" not in params and "tool_response" not in params:
+        # Already the flat-union shape this op has always accepted -- pass
+        # through unchanged, no caller is broken by this adapter existing.
+        return params
+
+    # `or {}` would defeat the refusal below for every FALSY non-object --
+    # `[]`, `""`, `0` would each become `{}` and validate clean, so the guard
+    # would fire only on truthy junk like `[1, 2]`. Default the ABSENT key
+    # only, and let every present value reach the isinstance check as it came.
+    tool_input = params.get("tool_input", {})
+    tool_response = params.get("tool_response", {})
+    if tool_input is None:
+        tool_input = {}
+    if tool_response is None:
+        tool_response = {}
+    if not isinstance(tool_input, dict) or not isinstance(tool_response, dict):
+        raise CallerFacingValidationError(
+            "hooks.agent_postuse_dispatch: 'tool_input'/'tool_response' must be "
+            "objects when present, got "
+            f"tool_input={type(tool_input).__name__} tool_response={type(tool_response).__name__}"
+        )
+
+    flat = dict(params)
+    flat["description"] = tool_input.get("description")
+    flat["subagent_type"] = tool_input.get("subagent_type")
+    flat["name"] = tool_input.get("name")
+    flat["dispatched_agent_id"] = tool_response.get("agentId")
+    flat["dispatched_agent_id_snake"] = tool_response.get("agent_id")
+    flat["dispatched_model"] = (
+        tool_response.get("resolvedModel")
+        or tool_response.get("model")
+        or tool_input.get("model")
+    )
+    return flat
 
 
 def _advisory_text(result) -> str:
@@ -123,10 +220,18 @@ async def _handler(params: dict, repo_root=None) -> dict:
     on-disk side-effects, and the return is `no_advisory()` unless a leg grows
     prose (see the module docstring's merge contract).
 
-    Inputs are the union of the legs' own flat-scalar fields and are passed
-    through verbatim; this module reads none of them itself. See
-    `agent_completion_log._handler` and `track_dispatched_agents._handler` for
-    the field lists and their defaults.
+    Inputs are the union of the legs' own flat-scalar fields, either sent
+    flat already (the `command`-transport caller-side stub) or derived HERE
+    from a raw nested `PostToolUse` payload by `_flatten_hook_payload` (the
+    HTTP transport, which has no stub). Either way the legs themselves still
+    read none of this module's logic — see `agent_completion_log._handler`
+    and `track_dispatched_agents._handler` for the field lists and defaults.
+
+    `_flatten_hook_payload` runs OUTSIDE the `asyncio.gather` below and is not
+    caught by its `return_exceptions=True` — a payload this adapter cannot
+    derive flat scalars from raises `CallerFacingValidationError` straight
+    into the caller as `-32602`, the same disposition a malformed payload
+    already got before this adapter existed.
 
     A leg that raises is logged to stderr and treated as having emitted no
     advisory; its sibling still runs and still returns. `asyncio.gather` with
@@ -134,8 +239,10 @@ async def _handler(params: dict, repo_root=None) -> dict:
     leg cancels the merge and the second leg's write is lost, which the two
     separate processes this op replaces would never have done.
     """
+    flat_params = _flatten_hook_payload(params)
+
     results = await asyncio.gather(
-        *(leg(params, repo_root) for _label, leg in _LEGS),
+        *(leg(flat_params, repo_root) for _label, leg in _LEGS),
         return_exceptions=True,
     )
 

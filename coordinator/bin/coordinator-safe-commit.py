@@ -123,8 +123,11 @@ commit` was ITSELF killed 2026-08-27 (200ms process-time bar,
 again, to `ceremony.commit_v2` (docs/plans/2026-08-27-something-must-commit-
 ceremony-commit-v2.md, C7) — see `do_pathspec`'s own docstring for the
 current wiring. Incompatible with `--blanket`, `--scope-from`,
-`--include-orphans`, `--allow-out-of-scope-dirty`, and `--body-file` (the op
-has no body/orphan-claim/handoff-scope support of its own).
+`--include-orphans`, and `--allow-out-of-scope-dirty` (the op has no
+orphan-claim/handoff-scope support of its own). `--body-file` WAS on that
+list and is not any more (2026-08-31): the exclusion cited the killed
+`scoped-git-commit`, while `ceremony.commit_v2`'s `message` is a plain
+string this caller already composes.
 
 Negative-spec: `--dry-run` must NEVER reach `git add`/`git commit` and must
 be gated in EVERY mode branch, the `-- <paths>` pathspec form included --
@@ -342,7 +345,9 @@ through the `ceremony.commit_v2` op
 `scoped-git-commit` CLI (DR-344, 2026-08-23) nor the killed `ceremony.commit`
 op it repointed to before (2026-08-27, 200ms process-time bar).
 Still incompatible with --blanket, --scope-from, --include-orphans,
---allow-out-of-scope-dirty, and --body-file.
+and --allow-out-of-scope-dirty. --body-file IS supported here (2026-08-31):
+put a long message in a file so its prose never enters the command string,
+where the harness's own destructive-action scan reads argv.
 
 Whether a caller may commit at all is enforced by the
 coordinator_core/bash_guards/block_subagent_commit.py PreToolUse(Bash)
@@ -447,11 +452,23 @@ def parse_args(argv: Sequence[str]) -> Args:
             raise UsageError("`-- <paths>` cannot be combined with --include-orphans.")
         if args.allow_out_of_scope_dirty:
             raise UsageError("`-- <paths>` cannot be combined with --allow-out-of-scope-dirty.")
-        if args.body_file:
-            raise UsageError(
-                "`-- <paths>` cannot be combined with --body-file "
-                "(scoped-git-commit has no body support)."
-            )
+        # `--body-file` IS supported on this form as of 2026-08-31. The
+        # refusal that stood here cited `scoped-git-commit`, a CLI DR-344
+        # killed on 2026-08-23; this form has routed through
+        # `ceremony.commit_v2` since 2026-08-27, whose `message` param is a
+        # plain string that `do_pathspec` already composes. Nothing needed
+        # building -- the constraint had outlived the thing that imposed it,
+        # which is the killed-name-persists-in-a-string-keyed-check class.
+        #
+        # It is not merely a tidy-up. `-- <paths>` is the ONLY form scoped-
+        # commit discipline permits, so while this refusal stood, every
+        # sanctioned commit had to put its entire prose in argv -- where the
+        # harness's own destructive-action scan reads it as operands. A
+        # commit message describing a path separator was refused as
+        # `Remove-Item on system path '/'`; rewording let the identical
+        # commit through. That scan is not ours to fix, but handing it the
+        # prose was, and `--body-file` is how a caller stops.
+        pass
 
     if args.body_file:
         try:
@@ -555,7 +572,18 @@ def do_pathspec(args: "Args") -> None:
     _refuse_contested_pathspec(args.paths, worktree_root)
 
     present_paths, deleted_paths = _split_paths_for_commit_v2(worktree_root, args.paths)
-    message = f"{args.subject}\n\n{attempt_trailer}"
+    # Body BEFORE the trailer: `Attempt-Id:` is a trailer, and git's own
+    # trailer parsing reads the LAST paragraph. Composing them the other way
+    # round would push the trailer into the middle of the message, where
+    # `commit_reconcile`'s post-indeterminate search cannot find it -- and
+    # that search is the only thing standing between a timed-out commit and
+    # a blind retry that double-commits.
+    body = args.body.strip() if args.body else ""
+    message = (
+        f"{args.subject}\n\n{body}\n\n{attempt_trailer}"
+        if body
+        else f"{args.subject}\n\n{attempt_trailer}"
+    )
     params = {
         "paths": present_paths,
         "deleted_paths": deleted_paths,
@@ -861,6 +889,17 @@ def _paths_tracked_at_head(worktree_root: str, paths: Sequence[str]) -> "set[str
     Fails CLOSED: if the probe cannot answer, the caller refuses rather than
     inferring a deletion. Treating an unanswerable probe as "not a deletion"
     would reinstate the P0 in its quieter form -- a guess dressed as a fact.
+
+    `-r` (Review: coordinator:code-reviewer Finding 2, 8f787b71-c) -- without
+    it, a directory pathspec absent from the worktree but present in HEAD
+    matches its single tree-mode (040000) entry by that exact directory
+    name, and `_split_paths_for_commit_v2` would classify the directory
+    itself as a "deleted file" and forward it into `deleted_paths`, which
+    `ceremony.commit_v2` expects to hold file paths only. `-r` expands the
+    listing to the tree's recursive file entries (`dir/file.txt`, ...),
+    which never exact-match the bare directory name the caller asked about,
+    so an absent directory now falls into the `unknown` branch below and is
+    refused rather than silently misclassified as a file deletion.
     """
     result = subprocess.run(
         [
@@ -868,6 +907,7 @@ def _paths_tracked_at_head(worktree_root: str, paths: Sequence[str]) -> "set[str
             "-C",
             worktree_root,
             "ls-tree",
+            "-r",
             "-z",
             "--name-only",
             "HEAD",

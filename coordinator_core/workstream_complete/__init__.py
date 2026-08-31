@@ -233,6 +233,7 @@ from types import ModuleType
 from typing import Any, Mapping, NamedTuple, Optional, Sequence
 
 from coordinator_core.frontmatter.body_blocks import LocateStatus
+from coordinator_core.wire_paths import plans_dir as _plans_dir
 from coordinator_core.ops.plan_tasks_render import load_rows
 from coordinator_core.ceremony_common.json_payload_flag import (
     detect_conflicting_payload_channels,
@@ -1653,10 +1654,24 @@ def build_review_scale_judgment_point(
     if decision.resolved and decision.row in (1, 2):
         return None
     if decision.resolved:
+        rationale = f"review scale row {decision.row} ({decision.scale}): {decision.reason}"
+        if decision.partition_mandatory:
+            # 2026-08-13-doe-claude-em-dispatch-authorization-clause-on-mandatory-
+            # dispatch-judgment-points.md: the recommendation string is the one
+            # surface a recall failure of the harness's unattributed
+            # dispatch-restriction line cannot route around, since it is read
+            # at the instant the EM has already stopped to resolve this point.
+            # Framed as satisfaction, never precedence (five prior prose
+            # restatements lost on a precedence framing).
+            rationale += (
+                " These dispatches are requested by the PM's invocation of this "
+                "skill; a harness line permitting dispatch \"unless the user "
+                "requested it\" is satisfied, not overridden."
+            )
         return build_judgment_point(
             {
                 "disposition": "acknowledge-scale",
-                "rationale": f"review scale row {decision.row} ({decision.scale}): {decision.reason}",
+                "rationale": rationale,
             },
             id="jp-review-scale",
             question="What review scale does decide_review_scale select for this close, and is it resolved?",
@@ -2273,24 +2288,27 @@ def build_review_receipt_block_stamp_judgment_point(gate: ReviewReceiptGate) -> 
     )
 
 
-def _resolve_session_handoff_plan_by_deliverable_id(root: Path, deliverable_id: str) -> Optional[Path]:
+def _resolve_session_handoff_plan_by_deliverable_id(root: Path, deliverable_id: str) -> list[Path]:
     """Resolves a `kind: session-handoff` baton's `deliverable_id`
-    frontmatter to the single `docs/plans/*.md` file whose own frontmatter
+    frontmatter to every `docs/plans/*.md` file whose own frontmatter
     `deliverable_id` matches it — the SAME primary-key join
     `draft_plan_aging.resolve_plan_owner` performs in the opposite direction
     (plan -> owning handoff).
 
-    Returns `None` when no plan carries a matching `deliverable_id`, or
-    when more than one does — an ambiguous join is not this function's
-    call to arbitrate; it degrades to "unresolved" the same as no match at
-    all. Never raises: an unreadable/non-UTF-8 plan file is skipped, not
-    fatal to the scan."""
-    plans_dir = root / "docs" / "plans"
-    if not plans_dir.is_dir():
-        return None
+    Returns the full list of matches — zero, one, or more — so the caller
+    can distinguish "nothing to look at" (zero candidates) from "ambiguous
+    join" (2+ candidates) rather than collapsing both into one "unresolved"
+    signal (cross-repo/archive/2026-08-08-doe-claude-em-leg-a-correction-
+    our-premise-was-wrong-keep-the-verdict-fix.md: both cases previously
+    emitted the identical "does not resolve to exactly one" string). Never
+    raises: an unreadable/non-UTF-8 plan file is skipped, not fatal to the
+    scan."""
+    plans_directory = _plans_dir(root)
+    if not plans_directory.is_dir():
+        return []
 
     matches: list[Path] = []
-    for plan_path in sorted(plans_dir.glob("*.md")):
+    for plan_path in sorted(plans_directory.glob("*.md")):
         try:
             plan_text = plan_path.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):
@@ -2304,9 +2322,7 @@ def _resolve_session_handoff_plan_by_deliverable_id(root: Path, deliverable_id: 
         if plan_deliverable_id == deliverable_id:
             matches.append(plan_path)
 
-    if len(matches) != 1:
-        return None
-    return matches[0]
+    return matches
 
 
 def _evaluate_session_handoff_leg_a(root: Path, frontmatter: dict[str, Any]) -> dict[str, Any]:
@@ -2335,12 +2351,17 @@ def _evaluate_session_handoff_leg_a(root: Path, frontmatter: dict[str, Any]) -> 
 
     Falls back to `not-applicable` — a fourth verdict, deliberately
     distinct from `indeterminate` (see this function's caller's docstring)
-    — for every case where there is nothing to hold this handoff to: no
-    `deliverable_id`, a `deliverable_id` that resolves to no (or more than
-    one) plan, an unreadable/non-UTF-8 plan, or a plan whose own `status:`
-    is terminal. `detail` always names which of those fired, and — for
-    `open` — which plan path and status it evaluated, so a reader can see
-    where the verdict came from."""
+    — only when there is genuinely nothing to hold this handoff to: no
+    `deliverable_id` at all, an unreadable/non-UTF-8 plan, or a plan whose
+    own `status:` is terminal. A `deliverable_id` that resolves to ZERO
+    plans, or to MORE THAN ONE, is NOT nothing-to-look-at — ambiguity and
+    absence are both `indeterminate` (2026-08-08 correction: both cases
+    previously emitted the identical "does not resolve to exactly one"
+    string and were silently treated as `not-applicable`, masking real
+    collisions). `detail` always names which case fired — for the
+    ambiguous case, every colliding plan path; for `open`, which plan path
+    and status it evaluated — so a reader can see where the verdict came
+    from."""
     deliverable_id = frontmatter.get("deliverable_id")
     if not deliverable_id or not isinstance(deliverable_id, str):
         return {
@@ -2349,14 +2370,29 @@ def _evaluate_session_handoff_leg_a(root: Path, frontmatter: dict[str, Any]) -> 
             "open": None,
             "total": None,
         }
-    resolved_plan = _resolve_session_handoff_plan_by_deliverable_id(root, deliverable_id)
-    if resolved_plan is None:
+    matched_plans = _resolve_session_handoff_plan_by_deliverable_id(root, deliverable_id)
+    if not matched_plans:
         return {
-            "verdict": "not-applicable",
-            "detail": f"deliverable_id {deliverable_id!r} does not resolve to exactly one docs/plans/*.md",
+            "verdict": "indeterminate",
+            "detail": (
+                f"deliverable_id {deliverable_id!r} matches no plan under docs/plans/ "
+                "(zero candidates)"
+            ),
             "open": None,
             "total": None,
         }
+    if len(matched_plans) > 1:
+        colliding = ", ".join(f"docs/plans/{p.name}" for p in matched_plans)
+        return {
+            "verdict": "indeterminate",
+            "detail": (
+                f"deliverable_id {deliverable_id!r} matches {len(matched_plans)} plans "
+                f"under docs/plans/ (ambiguous): {colliding}"
+            ),
+            "open": None,
+            "total": None,
+        }
+    resolved_plan = matched_plans[0]
     try:
         plan_text = resolved_plan.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError):
@@ -2637,11 +2673,10 @@ def _evaluate_consumed_handoff_completeness_element(root: Path, raw_path: str) -
                             `session-handoff` never resolves this verdict.
         "not-applicable" — `kind: session-handoff` ONLY: this baton kind
                             does not carry acceptance criteria of its own,
-                            and no `deliverable_id` join led anywhere
-                            still open — no `deliverable_id`, a
-                            `deliverable_id` resolving to no (or more than
-                            one) plan, an unreadable/non-UTF-8 plan, or a
-                            joined plan whose own `status:` is terminal
+                            and there is genuinely nothing to hold this
+                            handoff to — no `deliverable_id` at all, an
+                            unreadable/non-UTF-8 plan, or a joined plan
+                            whose own `status:` is terminal
                             (`_LEG_A_TERMINAL_PLAN_STATUS`) AND carries no
                             `close_out_last_partial:` marker — a terminal
                             plan that STILL carries that marker resolves
@@ -2650,18 +2685,11 @@ def _evaluate_consumed_handoff_completeness_element(root: Path, raw_path: str) -
                             attempt found the plan not fully shipped, so
                             its `status:` cannot be trusted the way an
                             ordinary terminal plan's can — see
-                            _evaluate_session_handoff_leg_a. Deliberately
-                            distinct from `indeterminate`: for the
-                            no-`deliverable_id`/no-join/unreadable-plan
-                            branches this is "there was nothing to look
-                            at, and that is correct"; for the C4
-                            uncleared-marker branch (which DOES read the
-                            plan and the marker) it is "what the gate
-                            found was affirmatively untrustworthy, not
-                            merely absent" — either way the verdict
-                            legitimately reads as verified-clear, unlike
-                            `indeterminate` — see
-                            _evaluate_session_handoff_leg_a. Never blocks.
+                            _evaluate_session_handoff_leg_a. A
+                            `deliverable_id` resolving to NO plan, or to
+                            MORE THAN ONE, does NOT land here (2026-08-08
+                            correction) — see the `indeterminate` bullet
+                            below. Never blocks.
         "indeterminate"  — for every kind EXCEPT `session-handoff`, one of
                             AC3b's three named leg-A holes: the handoff
                             could not be resolved/read at all, C3 found no
@@ -2670,9 +2698,14 @@ def _evaluate_consumed_handoff_completeness_element(root: Path, raw_path: str) -
                             heading with no checkboxes is not verifiable
                             completeness, so it does NOT count as a pass.
                             `session-handoff` ALSO resolves this verdict
-                            (C4, 2026-08-08) when the `deliverable_id` join
-                            led to a plan whose `status:` is terminal but
-                            which still carries an uncleared
+                            when the `deliverable_id` join matches ZERO
+                            plans, or MORE THAN ONE (2026-08-08 correction:
+                            both previously collapsed into `not-applicable`
+                            behind the identical "does not resolve to
+                            exactly one" string, silently treating a real
+                            ambiguity as nothing-to-look-at), or when the
+                            join led to a plan whose `status:` is terminal
+                            but which still carries an uncleared
                             `close_out_last_partial:` marker — the marker
                             records that its own status cannot be trusted
                             as self-attestation, so a terminal-looking
@@ -2800,6 +2833,19 @@ def compute_consumed_handoff_completeness_gate(
     )
 
 
+#: The four directives this gate blocks, named once and shared by every
+#: disposition that clears it. `__init__.py`'s assembly layer hangs the
+#: matching `depends_on` edges off these same four ids (see the
+#: `consumed_handoff_completeness_gate.blocks` branch in `build_directives`);
+#: the two lists are the same fact stated at both ends and must not drift.
+_CONSUMED_HANDOFF_COMPLETENESS_RESOLVES = (
+    "d-claim-plan-execution-lock",
+    "d-stamp-plan-implemented",
+    "d-harvest-deferrals-1",
+    "d-complete-entry",
+)
+
+
 def build_consumed_handoff_completeness_judgment_point(gate: ConsumedHandoffCompletenessGate) -> dict[str, Any]:
     """AC3/AC4 — blocks the remaining four attribution/tail directives when
     `gate.blocks` is True (`d-run-wsc-tail` and `d-reconcile-completion-
@@ -2818,7 +2864,43 @@ def build_consumed_handoff_completeness_judgment_point(gate: ConsumedHandoffComp
     in-flight` names d-claim-plan-execution-lock, d-stamp-plan-implemented,
     d-harvest-deferrals-1, and d-complete-entry in `resolves`, and
     `stop-and-handoff` is the inert arm matching SKILL.md's own
-    mutual-exclusion rule."""
+    mutual-exclusion rule.
+
+    `verified-complete-proceed` (2026-08-31) is the third arm, and it exists
+    because the other two named the wrong world for the commonest way this
+    gate fires. Leg A's `session-handoff` arm blocks when the consumed
+    predecessor's `deliverable_id`-joined plan is at a non-terminal
+    `status:`, and `d-stamp-plan-implemented` — gated here — is the ONLY
+    directive that writes a terminal plan status. On a continuation chain,
+    where the predecessor's plan and this session's governing plan are the
+    same file, the ceremony cannot reach its own stamper on a first pass, and
+    `override-known-in-flight` was the sole arm that resolved anything. An EM
+    closing a finished workstream therefore had to assert in-flight-ness —
+    the honest answer and the working answer were different answers, which is
+    how an override stops meaning anything. Reported by example-retrieval-repo-em
+    (`cross-repo/archive/2026-08-14-example-retrieval-repo-em-wsc-plan-stamp-gate-is-
+    circular.md`, option 1 of the three shapes offered there; their own
+    same-day correction withdrew the worked example, so weight it as a design
+    defect found by reading).
+
+    OFFERED ONLY WHEN NO BLOCKING ELEMENT FIRES LEG B, and that condition is
+    the whole reason this is not a blanket third arm. Leg A blocking is a
+    record that was never written; leg B blocking is a live successor handoff
+    that names this predecessor, and "verified complete" is simply false in
+    front of one. Where both could be claimed the gate offers only the arm
+    whose claim can be true, so the disposition an EM picks stays evidence of
+    what they actually found.
+
+    The other two shapes the memo offered were considered and not taken.
+    Exempting `d-stamp-plan-implemented` from the gate (option 2) drops the
+    leg-B protection with the leg-A one — a live successor is exactly when
+    the terminal stamp must not fire, and one directive id cannot carry two
+    block conditions here. An AC-reconciliation step (option 3) is the memo's
+    own second-half finding — the ceremony asks an EM to clear a gate about
+    acceptance criteria while giving them no step at which to reconcile them
+    — and is a ceremony feature, not a disposition-set fix; `guidance` on
+    this arm names that gap explicitly rather than implying the disposition
+    closes it."""
     blocking = [e for e in gate.elements if e["blocks"]]
     lines = []
     for e in blocking:
@@ -2828,29 +2910,60 @@ def build_consumed_handoff_completeness_judgment_point(gate: ConsumedHandoffComp
         if e["leg_b"]["verdict"] == "live-child":
             reasons.append(f"leg B: {e['leg_b']['detail']}")
         lines.append(f"  - {e['handoff']}: {'; '.join(reasons)}")
+    live_child_blocking = [e for e in blocking if e["leg_b"]["verdict"] == "live-child"]
     question = (
         "The following consumed handoff(s) are not verifiably complete — unticked acceptance "
         "criteria and/or a live successor handoff still names them as predecessor:\n"
         + "\n".join(lines)
         + "\nPer SKILL.md's mutual-exclusion rule ('/workstream-complete and /handoff are "
         "mutually exclusive. In-flight work → STOP and invoke /handoff instead'), the default "
-        "is to stop. Proceed with /workstream-complete anyway?"
+        "is to stop. Proceed with /workstream-complete anyway, and on which claim?"
     )
+
+    dispositions = []
+    if not live_child_blocking:
+        dispositions.append(
+            build_disposition(
+                "verified-complete-proceed",
+                resolves=list(_CONSUMED_HANDOFF_COMPLETENESS_RESOLVES),
+                guidance=(
+                    "The work IS finished; what the gate found is a record that was never "
+                    "written — typically a governing plan left at a non-terminal `status:` "
+                    "that `d-stamp-plan-implemented` is itself the remedy for. Pick this only "
+                    "after checking each criterion above against HEAD by hand; the ceremony "
+                    "has no AC-reconciliation step and this disposition does not verify "
+                    "anything on your behalf. Same four directives as "
+                    "`override-known-in-flight` — the difference is which claim the record "
+                    "carries."
+                ),
+            )
+        )
+    dispositions.append(
+        build_disposition(
+            "override-known-in-flight",
+            resolves=list(_CONSUMED_HANDOFF_COMPLETENESS_RESOLVES),
+            guidance=(
+                "The work is genuinely still in flight and you are proceeding anyway, "
+                "knowing that. Correct whenever a live successor still names this "
+                "predecessor — the only arm offered in that case."
+            ),
+        )
+    )
+    dispositions.append(
+        build_disposition(
+            "stop-and-handoff",
+            resolves=[],
+            guidance=(
+                "The default. Stop here and invoke /handoff; nothing is stamped and nothing "
+                "is closed."
+            ),
+        )
+    )
+
     return build_untrusted_gate_judgment_point(
         id="jp-consumed-handoff-completeness",
         question=question,
-        dispositions=[
-            build_disposition(
-                "override-known-in-flight",
-                resolves=[
-                    "d-claim-plan-execution-lock",
-                    "d-stamp-plan-implemented",
-                    "d-harvest-deferrals-1",
-                    "d-complete-entry",
-                ],
-            ),
-            build_disposition("stop-and-handoff", resolves=[]),
-        ],
+        dispositions=dispositions,
         evidence="gates.consumed_handoff_completeness.elements",
         reason=(
             "A consumed handoff resolved on disk with unticked acceptance criteria and/or a "
@@ -3976,7 +4089,7 @@ def _measure_session_review_scale_inputs(
 
     ``commit_slices_out`` (A, docs/plans/2026-08-08-the-engine-asks-for-
     facts-it-already-holds.md C-followup): when not ``None``, appended
-    IN PLACE with one ``{"sha": ..., "sha_range": "<sha>^..<sha>", "diff_
+    IN PLACE with one ``{"sha": ..., "sha_range": "<sha>~1..<sha>", "diff_
     loc": <int>}`` dict per session-owned commit, oldest-first, derived
     from `_split_per_commit_numstat` over the SAME `git show` text this
     function already fetches for `gross_loc`/`code_loc` (no second spawn).

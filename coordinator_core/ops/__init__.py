@@ -224,13 +224,22 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ),
     (
         "coordinator_core.ops.ceremony.post_commit_tail",
-        'registers "ceremony.post_commit_tail" (C3a, 2026-07-23 wsc-tail-slim-down: '
-        "extraction of wsc_tail's steps 5c/5d into one standalone op, still invoked "
-        "in-process by wsc_tail.py)",
+        # KILLED as an op (K-116, 422ms p50 against the 200ms bar) -- the name is
+        # deliberately not advertised here. The module stays eagerly imported
+        # because `workstream_complete/apply.py` calls `fold_completion_entry_commit`
+        # from it directly and its `run()` is retained undecorated for wsc_tail's
+        # in-process path. Do not restore a `registers "..."` claim for it.
+        "no reachable op; imported for its in-process helpers only",
     ),
     ("coordinator_core.session_ledger.aggregate_chain_loe", 'registers "session_ledger.aggregate_chain_loe"'),
     ("coordinator_core.ops.records_query", 'registers "records.query"'),
-    ("coordinator_core.ops.record_history", 'registers "records.history"'),
+    (
+        "coordinator_core.ops.record_history",
+        # KILLED (max 2062ms against the 2000ms bar); its sole caller was the CLI
+        # trampoline `coordinator/bin/query-record-history.py`, which now surfaces
+        # the refusal. Nothing this module declares dispatches.
+        "no reachable op; `records.history` was killed under the budget",
+    ),
     (
         "coordinator_core.ops.read_sizing_object_fields",
         'registers "sizing.read_object_fields" -- shipped PRESENT-BUT-DEAD: '
@@ -280,7 +289,12 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ("coordinator_core.ops.backfill_reference_edges", 'registers "fleet.backfill_reference_edges"'),
     ("coordinator_core.ops.fleet.reap_unintegrated_findings", 'registers "fleet.reap_unintegrated_findings"'),
     ("coordinator_core.ops.fleet.reap_integrated_findings", 'registers "fleet.reap_integrated_findings"'),
-    ("coordinator_core.ops.session.reap", 'registers "session.reap", "session.reap_claims_for_repos", "session.audit_unreapable"'),
+    (
+        "coordinator_core.ops.session.reap",
+        # `session.reap_claims_for_repos` is KILLED (max 34266ms) and is struck from
+        # this claim rather than left advertised; the other two still dispatch.
+        'registers "session.reap", "session.audit_unreapable"',
+    ),
     ("coordinator_core.ops.session.guard_settings_integrity", 'registers "session.guard_settings_integrity"'),
     ("coordinator_core.ops.session.record_pickup", 'registers "session.record_pickup"'),
     ("coordinator_core.ops.session.scope_report", 'registers "session.scope_report"'),

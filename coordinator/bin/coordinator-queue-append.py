@@ -1556,7 +1556,20 @@ Spec backlink: docs/plans/2026-06-25-example-initiative-tc-2-queues-lessons-cons
         metavar="TEXT",
         help=(
             "(lessons) Root-cause explanation — why this matters and what breaks without it. Optional. "
-            "author-supplied; do NOT LLM-extract from existing prose."
+            "author-supplied; do NOT LLM-extract from existing prose. A newline-bearing "
+            "inline value is refused -- pass --why-file for anything multi-line."
+        ),
+    )
+    parser.add_argument(
+        "--why-file",
+        dest="why_file",
+        default=None,
+        metavar="PATH",
+        help=(
+            "(lessons) Read --why from a UTF-8 file instead of argv. Mutually "
+            "exclusive with --why. The lossless transport for a multi-line "
+            "rationale -- see --body-file's doc-comment for why an inline value "
+            "carrying a real newline cannot survive the .cmd launcher leg."
         ),
     )
     parser.add_argument(
@@ -1801,6 +1814,48 @@ def main(argv: "list[str] | None" = None) -> int:
 
     parser = _build_parser()
     args = parser.parse_args()
+
+    from coordinator_core.argv_fidelity import (
+        ArgvFidelityError,
+        refuse_newline_argv,
+        resolve_optional_prose,
+    )
+
+    # --title earns the refusal but has no file sibling -- the slug derived
+    # from it (_slug_from_title) feeds the output filename, which cannot
+    # carry a newline losslessly, so an explicit remedy is passed rather
+    # than letting the seam name a --title-file that does not exist.
+    try:
+        refuse_newline_argv(
+            args.title,
+            flag_name="--title",
+            remedy=(
+                "pass a single-line --title (the slug-derived output filename "
+                "cannot carry a newline losslessly, so this flag has no "
+                "file-based alternative by design)."
+            ),
+        )
+    except ArgvFidelityError as exc:
+        parser.error(str(exc))
+
+    # --why (lessons) is a free-form rationale sentence -- earns a lossless
+    # --why-file leg like --body-file, resolved the same way.
+    try:
+        args.why = resolve_optional_prose(args.why, args.why_file, flag_name="--why")
+    except ArgvFidelityError as exc:
+        parser.error(str(exc))
+
+    # VERIFIED GAP (staff-eng review, the Staff Engineer) -- --body already has a
+    # --body-file sibling but had NO refuse_newline_argv call on the inline
+    # path: a newline-bearing inline --body was silently truncated by
+    # cmd.exe's own command-line parse rather than refused (exactly the
+    # failure mode this seam exists to close). Same unconditional refusal
+    # --title/--why get above, ahead of the existing mutual-exclusion check
+    # below.
+    try:
+        refuse_newline_argv(args.body, flag_name="--body")
+    except ArgvFidelityError as exc:
+        parser.error(str(exc))
 
     # --body-file: the argv-immune body transport.
     #

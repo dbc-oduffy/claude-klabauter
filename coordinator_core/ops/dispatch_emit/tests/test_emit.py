@@ -1437,10 +1437,21 @@ def test_commit_prompt_tells_the_agent_a_claim_is_not_a_refusal_condition():
     its pathspec citing a claim held by a session 13 hours idle with both
     recorded pids dead, which had touched exactly ONE of the seven. The
     sanctioned route then committed all seven without complaint -- because
-    `commit_paths` performs no ownership or claim check at all, so the
-    "route is declining" was the agent's own inference. The prompt must say
-    so, and must name both the liveness and the per-path narrowing checks,
-    or the same halt recurs on every shared-tree run.
+    `commit_paths` performs no ownership or claim check at all. The prompt
+    must name both the liveness and the per-path narrowing checks, or the
+    same halt recurs on every shared-tree run.
+
+    AMENDED 2026-08-31 (second incident, same run). This test previously
+    pinned the sentence "A CLAIM IS NOT A REFUSAL CONDITION, AND THE ROUTE
+    NEVER RAISES ONE", and that sentence was FALSE at the layer that
+    actually stops the agent. `commit_paths` checks no claims, but a
+    PreToolUse guard in front of it does, and refuses before the route is
+    reached. Two further waves halted on exactly that -- one on a dead
+    session's claim, one on an orphan record -- with the prompt telling
+    each agent that the refusal it was holding could not exist. Pinning a
+    reassurance that contradicts an observable denial is worse than pinning
+    nothing, so the assertion now pins the two-layer truth plus the
+    recovery verbs, which is what an agent needs to get unstuck alone.
     """
     from coordinator_core.ops.dispatch_emit import emit as _emit
 
@@ -1450,12 +1461,19 @@ def test_commit_prompt_tells_the_agent_a_claim_is_not_a_refusal_condition():
 
         prompt = inspect.getsource(_emit)
 
-    assert "A CLAIM IS NOT A REFUSAL CONDITION" in prompt
-    # The route's own silence is the load-bearing fact -- without it the agent
-    # can still read its inference as the engine speaking.
+    # The two layers, named as two -- this is the correction.
+    assert "A CLAIM CAN REFUSE YOU, BUT ONLY A GUARD RAISES IT" in prompt
     assert "performs NO ownership or claim check" in prompt
+    assert "PreToolUse guard sits IN FRONT of the" in prompt
+    # The old sentence must not come back: it is the defect, not a phrasing.
+    assert "THE ROUTE NEVER RAISES ONE" not in prompt
     # Liveness leg.
     assert "absent from the process table" in prompt
     # Per-path leg: one hit must not generalise across the pathspec.
     assert "touch-record.jsonl" in prompt
     assert "refuse ONLY the claimed paths and commit the" in prompt
+    # The recovery, without which the agent can diagnose and still not move.
+    assert "who-claims-path" in prompt
+    assert "clear-claim-if-dead" in prompt
+    # And why that verb is safe to hand a haiku agent unsupervised.
+    assert "no-op against a LIVE holder" in prompt

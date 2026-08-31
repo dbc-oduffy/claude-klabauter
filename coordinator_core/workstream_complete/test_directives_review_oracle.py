@@ -69,7 +69,13 @@ def test_arm_never_downgrades_an_unresolved_row4_input():
     decision = decide_review_scale(**kwargs, oracle_report=_report(_CHAIN_WEIGHT_CEILING * 10))
     assert decision.scale == "unresolved"
     assert decision.resolved is False
-    assert decision.partition_mandatory is False
+    # `None`, not `False` -- the unresolved outcome must not report the
+    # absence of a measurement as a measured negative (`_unresolved`, and
+    # `_decide_review_scale_core`'s own docstring). This assertion read
+    # `is False` against that sentinel and was failing at HEAD; AC11/B4's
+    # actual requirement is that the arm never SETS the flag, which `None`
+    # satisfies at least as strictly as `False` did.
+    assert decision.partition_mandatory is None
 
 
 def test_arm_never_downgrades_or_repartitions_an_already_reviewed_row():

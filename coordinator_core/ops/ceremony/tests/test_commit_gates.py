@@ -28,10 +28,6 @@ contract):
                                    is flagged, not silently treated as a path.
   parse_step267_blocks_*       -- blank-line-inside-block grouping, block-header
                                    termination.
-  dirty_tree_gate porcelain classification -- staged skip, EOL-phantom skip,
-                                   known-concurrent-owner (handoff scope:) skip,
-                                   unattributable report, rename destination-only
-                                   handling.
 
 Spec backlink: pln-rebuild-the-wsc-commit-ceremon-f7c2a0 § C3 (AC10).
 """
@@ -45,23 +41,19 @@ import pytest
 
 from coordinator_core.ops.ceremony import commit_gates as _cg
 from coordinator_core.ops.ceremony.commit_gates import (
-    DirtyTreeOutcome,
     GateOutcome,
     ParsedBlocks,
     carry_gate,
     deletion_block_gate,
-    dirty_tree_gate,
     has_step267_block,
     op_scope_coverage_gate,
     parse_step267_blocks,
 )
-from coordinator_core.ops.ceremony.git_native import status_porcelain as _status_porcelain
 from coordinator_core.win_portability import no_console_creationflags
 
-# Real-git spawn is load-bearing: dirty_tree_gate classifies real porcelain
-# output (staged/EOL-phantom/rename-destination-only), which a mocked git
-# cannot faithfully reproduce. Per-test repo fixtures since these tests
-# mutate the index and HEAD.
+# Real-git spawn is load-bearing: these gates classify real staged/HEAD
+# state, which a mocked git cannot faithfully reproduce. Per-test repo
+# fixtures since these tests mutate the index and HEAD.
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 _EM_DASH = " — "
@@ -413,296 +405,6 @@ def test_deletion_gate_unmerged_index_entry_refuses_not_crashes(tmp_path):
     outcome = deletion_block_gate(msg, gate_paths=["conflict.md"], cwd=repo)
     assert outcome.passed is False
     assert any("staged index unreadable" in d for d in outcome.diagnostics)
-
-
-# ---------------------------------------------------------------------------
-# dirty_tree_gate -- porcelain classification
-# ---------------------------------------------------------------------------
-
-
-def test_dirty_tree_gate_staged_path_skipped(tmp_path):
-    repo = _init_repo(tmp_path)
-    _seed_file(repo, "README.md", "x")
-    _git(["add", "--", "README.md"], repo)
-    _git(["commit", "-q", "-m", "seed"], repo)
-
-    _seed_file(repo, "new.txt", "new content")
-    _git(["add", "--", "new.txt"], repo)
-
-    outcome = dirty_tree_gate(repo)
-    assert outcome.passed is True
-    assert outcome.unattributable == []
-
-
-def test_dirty_tree_gate_untracked_unattributable(tmp_path):
-    repo = _init_repo(tmp_path)
-    _seed_file(repo, "README.md", "x")
-    _git(["add", "--", "README.md"], repo)
-    _git(["commit", "-q", "-m", "seed"], repo)
-
-    _seed_file(repo, "orphan.txt", "unstaged orphan")
-
-    outcome = dirty_tree_gate(repo)
-    assert outcome.passed is False
-    assert outcome.unattributable == ["orphan.txt"]
-
-
-def test_dirty_tree_gate_unmerged_index_entry_refuses_not_crashes(tmp_path):
-    """F1 (code-review, P1): `read_index` raises `IndexParseError` on ANY
-    unmerged (stage != 0) index entry -- an ordinary mid-merge-conflict repo
-    state. This gate's read is unconditional (unlike deletion_block_gate's
-    Kept-claim-gated read), so this is the more directly reachable of the
-    two sites. Must degrade to the gate's own "unattributable" verdict, never
-    propagate the raise and crash the commit op."""
-    repo = _make_conflicted_repo(tmp_path)
-
-    outcome = dirty_tree_gate(repo)
-    assert outcome.passed is False
-    assert len(outcome.unattributable) == 1
-    assert "index unreadable" in outcome.unattributable[0]
-
-
-def test_dirty_tree_gate_eol_phantom_skipped(tmp_path):
-    repo = _init_repo(tmp_path)
-    _seed_file(repo, "phantom.txt", "same content")
-    _git(["add", "--", "phantom.txt"], repo)
-    _git(["commit", "-q", "-m", "seed"], repo)
-
-    # Re-write identical content -- a tracked-unstaged worktree entry whose
-    # `git diff --quiet` exits 0 (content equals index): the EOL-phantom case.
-    (repo / "phantom.txt").write_text("same content", encoding="utf-8")
-
-    outcome = dirty_tree_gate(repo)
-    assert outcome.passed is True
-    assert outcome.unattributable == []
-
-
-def test_dirty_tree_gate_batched_phantom_filter_preserves_per_path_resolution(tmp_path):
-    """C1 (docs/plans/2026-08-07-n-plus-one-git-spawn-class-and-
-    amplification-gate.md): the EOL-phantom filter now runs ONE batched
-    `git diff --name-only` over every tracked-unstaged candidate instead of
-    one `git diff --quiet` per porcelain line. This pins that the batch
-    still resolves per-path correctly: a real edit right next to a
-    same-content rewrite (phantom) in the SAME batch must not cross-
-    contaminate -- the real edit stays unattributable, the phantom stays
-    skipped."""
-    repo = _init_repo(tmp_path)
-    _seed_file(repo, "phantom.txt", "same content")
-    _seed_file(repo, "real-edit.txt", "original content")
-    _git(["add", "--", "phantom.txt", "real-edit.txt"], repo)
-    _git(["commit", "-q", "-m", "seed"], repo)
-
-    # phantom.txt: rewritten with IDENTICAL content -- a phantom, absent from
-    # `git diff --name-only`'s output.
-    (repo / "phantom.txt").write_text("same content", encoding="utf-8")
-    # real-edit.txt: genuinely changed -- present in `git diff --name-only`'s
-    # output, and has no attributable owner.
-    (repo / "real-edit.txt").write_text("changed content", encoding="utf-8")
-
-    outcome = dirty_tree_gate(repo)
-    assert outcome.passed is False
-    assert outcome.unattributable == ["real-edit.txt"]
-
-
-def test_dirty_tree_gate_known_concurrent_owner_skipped(tmp_path):
-    repo = _init_repo(tmp_path)
-    _seed_file(repo, "README.md", "x")
-    # Seed both directories as tracked (a placeholder each) so git status
-    # reports individual file paths below rather than collapsing an
-    # entirely-untracked directory into a single "dirname/" porcelain line.
-    _seed_file(repo, "peers/.keep", "x")
-    _seed_file(repo, "state/handoffs/.keep", "x")
-    _git(["add", "--", "README.md", "peers/.keep", "state/handoffs/.keep"], repo)
-    _git(["commit", "-q", "-m", "seed"], repo)
-
-    handoff = repo / "state" / "handoffs" / "2026-07-16_120000_peer.md"
-    handoff.write_text(
-        "---\n"
-        "status: open\n"
-        "claimed_by: peer-session-id\n"
-        "scope:\n"
-        "  - peers/owned-file.txt\n"
-        "category: workstream\n"
-        "---\n"
-        "\n# peer handoff\n",
-        encoding="utf-8",
-    )
-    _git(["add", "--", "state/handoffs/2026-07-16_120000_peer.md"], repo)
-    _git(["commit", "-q", "-m", "seed: peer handoff"], repo)
-
-    _seed_file(repo, "peers/owned-file.txt", "peer-owned unstaged content")
-    _seed_file(repo, "orphan.txt", "no owner")
-
-    outcome = dirty_tree_gate(repo)
-    # peers/owned-file.txt is skipped (case b, in scope of a claimed
-    # handoff); orphan.txt has no attributable owner (case c).
-    assert outcome.passed is False
-    assert "peers/owned-file.txt" not in outcome.unattributable
-    assert outcome.unattributable == ["orphan.txt"]
-
-
-def test_dirty_tree_gate_rename_destination_only(tmp_path):
-    repo = _init_repo(tmp_path)
-    _seed_file(repo, "old-name.txt", "renameable content that is long enough to be detected")
-    _git(["add", "--", "old-name.txt"], repo)
-    _git(["commit", "-q", "-m", "seed"], repo)
-
-    _git(["mv", "old-name.txt", "new-name.txt"], repo)
-
-    outcome = dirty_tree_gate(repo)
-    assert outcome.passed is True
-    assert outcome.unattributable == []
-
-
-# ---------------------------------------------------------------------------
-# dirty_tree_gate -- gate_paths scoping (2026-07-22: sibling repo's
-# ceremony.wsc_tail dogfood run on a shared branch reported ~33 unattributable
-# peer paths, none inside the caller's own stage_paths -- see module
-# docstring/negative-spec for the full incident)
-# ---------------------------------------------------------------------------
-
-
-def test_dirty_tree_gate_peer_path_outside_scope_not_tripped(tmp_path):
-    repo = _init_repo(tmp_path)
-    _seed_file(repo, "README.md", "x")
-    _git(["add", "--", "README.md"], repo)
-    _git(["commit", "-q", "-m", "seed"], repo)
-
-    # A peer session's in-flight file, no owning handoff -- the exact shape
-    # the 2026-07-22 incident reported: unattributable, but outside this
-    # caller's own gate_paths.
-    _seed_file(repo, "peer-session-file.txt", "peer's in-flight work")
-
-    outcome = dirty_tree_gate(repo, gate_paths=["tasks/my-feature/todo.md"])
-    assert outcome.passed is True
-    assert outcome.unattributable == []
-
-
-def test_dirty_tree_gate_in_scope_path_still_tripped_fail_closed_guard(tmp_path):
-    """NOT a demonstration of a live signal at today's single call site --
-    `commit_pipeline.run_commit_pipeline` can never actually produce a
-    `gate_paths` entry that reaches case (c) here, because every path it
-    stages is caught by case (a) first and the one path shape that CAN
-    reach case (c) (an unstaged `deleted_paths` claim) is already blocked
-    by `deletion_block_gate` Assertion-1 with a better diagnostic -- see
-    module negative-spec. This test guards the FAIL-CLOSED property itself
-    (scoping narrows, it does not blind) against a future widening of
-    `compute_gate_paths` or a future caller hand-building `gate_paths`.
-    """
-    repo = _init_repo(tmp_path)
-    _seed_file(repo, "README.md", "x")
-    # Seed the directory as tracked (a placeholder) so git status reports the
-    # individual file path below rather than collapsing an entirely-untracked
-    # directory into a single "dirname/" porcelain line.
-    _seed_file(repo, "tasks/my-feature/.keep", "x")
-    _git(["add", "--", "README.md", "tasks/my-feature/.keep"], repo)
-    _git(["commit", "-q", "-m", "seed"], repo)
-
-    _seed_file(repo, "tasks/my-feature/forgot-to-stage.md", "content")
-    _seed_file(repo, "peer-session-file.txt", "peer's in-flight work")
-
-    outcome = dirty_tree_gate(repo, gate_paths=["tasks/my-feature/forgot-to-stage.md"])
-    assert outcome.passed is False
-    assert outcome.unattributable == ["tasks/my-feature/forgot-to-stage.md"]
-
-
-def test_dirty_tree_gate_none_gate_paths_preserves_unfiltered_behaviour(tmp_path):
-    """`gate_paths=None` (the default) -- unfiltered, matching the original
-    pre-2026-07-22 behaviour and the unscoped `ops.dirty_tree_gate` CLI
-    trampoline's shape.
-    """
-    repo = _init_repo(tmp_path)
-    _seed_file(repo, "README.md", "x")
-    _git(["add", "--", "README.md"], repo)
-    _git(["commit", "-q", "-m", "seed"], repo)
-
-    _seed_file(repo, "orphan.txt", "no owner")
-
-    outcome = dirty_tree_gate(repo, gate_paths=None)
-    assert outcome.passed is False
-    assert outcome.unattributable == ["orphan.txt"]
-
-
-def test_dirty_tree_gate_scoped_autocrlf_dirty_clean_tracked_path_not_flagged(tmp_path):
-    """DR-227 (2026-08-26 follow-up): the reverted `da156a723` attempt hashed
-    on-disk worktree bytes and compared them to the index sha, which
-    misclassified ~81% of clean tracked files as diverged on this repo's
-    `core.autocrlf=true` (measured 326/400 MISMATCH). This pins that the
-    scoped fast path never inspects content or stat bytes at all -- a clean,
-    committed, autocrlf-normalized file inside `gate_paths` is never flagged,
-    because classification here is index-membership vs on-disk-existence
-    only, with nothing for autocrlf's byte-level normalization to disturb."""
-    repo = _init_repo(tmp_path)
-    _git(["config", "core.autocrlf", "true"], repo)
-    _seed_file(repo, "crlf.txt", "line one\nline two\n")
-    _git(["add", "--", "crlf.txt"], repo)
-    _git(["commit", "-q", "-m", "seed"], repo)
-
-    outcome = dirty_tree_gate(repo, gate_paths=["crlf.txt"])
-    assert outcome.passed is True
-    assert outcome.unattributable == []
-
-
-def test_dirty_tree_gate_scoped_unstaged_deletion_still_reported(tmp_path):
-    """DR-227's one reachable member: an index entry whose worktree path
-    vacated without ever being `git rm`ed. Must still report through the
-    zero-spawn scoped fast path -- `deletion_block_gate` Assertion-1 already
-    blocks this case earlier with a better diagnostic, but this gate's own
-    fail-closed contract does not change: it must still classify it as
-    unattributable, not silently pass just because the enumeration
-    mechanism changed."""
-    repo = _init_repo(tmp_path)
-    _seed_file(repo, "doomed.txt", "content")
-    _git(["add", "--", "doomed.txt"], repo)
-    _git(["commit", "-q", "-m", "seed"], repo)
-
-    (repo / "doomed.txt").unlink()
-
-    outcome = dirty_tree_gate(repo, gate_paths=["doomed.txt"])
-    assert outcome.passed is False
-    assert outcome.unattributable == ["doomed.txt"]
-
-
-def test_dirty_tree_gate_scoped_peer_dirty_path_excluded_even_with_own_hit(tmp_path):
-    """DR-227 fail-closed pairing, exercised alongside a genuine hit: a
-    peer's own dirty (untracked) file entirely outside this caller's
-    `gate_paths` must be excluded even when this caller's own scoped
-    candidate genuinely reports -- not merely down-ranked, absent from
-    `unattributable` altogether (module negative-spec, DR-227)."""
-    repo = _init_repo(tmp_path)
-    _seed_file(repo, "README.md", "x")
-    _git(["add", "--", "README.md"], repo)
-    _git(["commit", "-q", "-m", "seed"], repo)
-
-    _seed_file(repo, "peer-session-file.txt", "peer's in-flight work")
-    _seed_file(repo, "mine.txt", "my own untracked file")
-
-    outcome = dirty_tree_gate(repo, gate_paths=["mine.txt"])
-    assert outcome.passed is False
-    assert outcome.unattributable == ["mine.txt"]
-    assert "peer-session-file.txt" not in outcome.unattributable
-
-
-def test_dirty_tree_gate_empty_gate_paths_scopes_to_nothing_and_passes(tmp_path):
-    """`gate_paths=[]` (empty, non-None) is DELIBERATELY NOT the same as
-    `None` -- it scopes to nothing, so every otherwise-unattributable path
-    is excluded and the gate always passes. This is the sentinel
-    correction that closes the original 2026-07-22 incident all the way:
-    `commit_pipeline.compute_gate_paths` legitimately returns `[]` (not
-    `None`) whenever a caller supplies empty `stage_paths`/`deleted_paths`
-    -- exactly a `/workstream-complete` invocation with no local changes of
-    its own on a shared branch.
-    """
-    repo = _init_repo(tmp_path)
-    _seed_file(repo, "README.md", "x")
-    _git(["add", "--", "README.md"], repo)
-    _git(["commit", "-q", "-m", "seed"], repo)
-
-    _seed_file(repo, "orphan.txt", "no owner")
-
-    outcome = dirty_tree_gate(repo, gate_paths=[])
-    assert outcome.passed is True
-    assert outcome.unattributable == []
 
 
 # ---------------------------------------------------------------------------
@@ -1133,74 +835,32 @@ def test_op_scope_gate_registry_map_present_but_unreadable_refuses(tmp_path, mon
 # ---------------------------------------------------------------------------
 # C3 equivalence fixture -- pre-re-point vs post-re-point parity
 #
-# C3 re-pointed dirty_tree_gate's staged classification and
-# deletion_block_gate's Kept-claim (Assertion-2) HEAD-membership leg onto
-# `coordinator_core.git.git_state` (read_index / head_blobs) with no `git`
-# process, but landed with NO new tests -- the 48 pre-existing tests above
-# predate the re-point and were never written to catch it changing an
+# C3 re-pointed deletion_block_gate's Kept-claim (Assertion-2)
+# HEAD-membership leg onto `coordinator_core.git.git_state` (head_blobs) with
+# no `git` process, but landed with NO new tests -- the pre-existing tests
+# above predate the re-point and were never written to catch it changing an
 # answer. This section is that missing equivalence proof: an oracle,
 # reconstructed verbatim from the pre-re-point implementation (recovered via
 # `git show 69f92af34^:coordinator_core/ops/ceremony/commit_gates.py`), run
-# side-by-side with the live gate over every shape the re-point's own
-# module docstring calls out as load-bearing (mode-only divergence, content
-# divergence, staged/worktree/add/delete, a clean path, a path with a
-# space, a non-ASCII path, a CRLF EOL-phantom, a symlink, and a submodule
+# side-by-side with the live gate over the shapes the re-point's own module
+# docstring calls out as load-bearing for the Kept-claim leg (a clean path,
+# a path with a space, a non-ASCII path, a symlink, and a submodule
 # gitlink).
 #
-# The oracle reuses every helper the re-point did NOT touch
-# (`_build_known_scope`, `_diff_name_only_worktree`, `_porcelain_path`,
-# `parse_step267_blocks`, `_parse_name_status_deletions`,
-# `_parse_name_status_rename_sources`) and only re-implements the two legs
-# that changed: `dirty_tree_gate`'s X-column staged check (was `git status
-# --porcelain`'s own X char), and `deletion_block_gate`'s Kept-claim
+# (This section originally also covered `dirty_tree_gate`'s companion
+# staged-classification re-point with a matching oracle and a wider shape
+# set -- mode-only divergence, content divergence, staged/worktree/add/
+# delete, a CRLF EOL-phantom. That half was deleted alongside
+# `dirty_tree_gate` itself under the brightline kill bar: the function had
+# no production caller, so its equivalence proof went with it. The
+# `deletion_block_gate` half below is untouched and still current.)
+#
+# The oracle reuses `parse_step267_blocks`, `_parse_name_status_deletions`,
+# and `_parse_name_status_rename_sources` (helpers the re-point did NOT
+# touch) and only re-implements the one leg that changed: the Kept-claim
 # HEAD-membership check (was an unscoped `git ls-tree -r HEAD --name-only`
 # walk, not the blob-type-filtered `head_blobs()`).
 # ---------------------------------------------------------------------------
-
-
-def _old_dirty_tree_gate(worktree_root, gate_paths=None) -> DirtyTreeOutcome:
-    """Oracle: `dirty_tree_gate` as it read BEFORE C3 -- staged classified by
-    `git status --porcelain`'s own X column, not index-vs-HEAD comparison.
-    """
-    root = Path(worktree_root)
-    known_scope = _cg._build_known_scope(root)
-    scoped = gate_paths is not None
-    gate_scope = set(gate_paths) if gate_paths else set()
-
-    if scoped and not gate_scope:
-        return DirtyTreeOutcome(passed=True, unattributable=[])
-
-    status_result = _status_porcelain(root, sorted(gate_scope) if scoped else None)
-    parsed_lines = []
-    phantom_candidates = []
-    for line in status_result.stdout.splitlines():
-        if not line:
-            continue
-        xy = line[:2]
-        path = _cg._porcelain_path(line)
-        x_char = xy[0] if xy else " "
-        parsed_lines.append((x_char, path))
-        if x_char == " ":
-            phantom_candidates.append(path)
-
-    real_diff_paths = set()
-    if phantom_candidates:
-        diff_result = _cg._diff_name_only_worktree(root, phantom_candidates)
-        real_diff_paths = {p for p in diff_result.stdout.splitlines() if p}
-
-    unattributable = []
-    for x_char, path in parsed_lines:
-        if x_char not in (" ", "?"):
-            continue
-        if x_char == " " and path not in real_diff_paths:
-            continue
-        if path in known_scope:
-            continue
-        if scoped and path not in gate_scope:
-            continue
-        unattributable.append(path)
-
-    return DirtyTreeOutcome(passed=not unattributable, unattributable=unattributable)
 
 
 def _old_deletion_block_gate(
@@ -1277,66 +937,7 @@ def _git_stdout(args, cwd) -> str:
     ).stdout.strip()
 
 
-# --- dirty_tree_gate shape builders ----------------------------------------
-
-
-def _shape_mode_toggle(tmp_path):
-    """Pure mode-only divergence: `--chmod=+x` on the INDEX entry, no
-    worktree write -- this repo runs core.filemode=false, so a worktree
-    `chmod` would never reach git's own dirty classification at all."""
-    repo = _init_repo(tmp_path)
-    _seed_file(repo, "exec-me.sh", "echo hi\n")
-    _git(["add", "--", "exec-me.sh"], repo)
-    _git(["commit", "-q", "-m", "seed"], repo)
-    _git(["update-index", "--chmod=+x", "exec-me.sh"], repo)
-    return repo
-
-
-def _shape_content_divergence(tmp_path):
-    repo = _init_repo(tmp_path)
-    _seed_file(repo, "diverge.txt", "original\n")
-    _git(["add", "--", "diverge.txt"], repo)
-    _git(["commit", "-q", "-m", "seed"], repo)
-    (repo / "diverge.txt").write_text("changed unstaged\n", encoding="utf-8")
-    return repo
-
-
-def _shape_staged_only(tmp_path):
-    repo = _init_repo(tmp_path)
-    _seed_file(repo, "staged.txt", "v1\n")
-    _git(["add", "--", "staged.txt"], repo)
-    _git(["commit", "-q", "-m", "seed"], repo)
-    _seed_file(repo, "staged.txt", "v2\n")
-    _git(["add", "--", "staged.txt"], repo)
-    return repo
-
-
-def _shape_worktree_only(tmp_path):
-    repo = _init_repo(tmp_path)
-    _seed_file(repo, "worktree-only.txt", "base\n")
-    _git(["add", "--", "worktree-only.txt"], repo)
-    _git(["commit", "-q", "-m", "seed"], repo)
-    _seed_file(repo, "worktree-only.txt", "edited unstaged\n")
-    return repo
-
-
-def _shape_add(tmp_path):
-    repo = _init_repo(tmp_path)
-    _seed_file(repo, "README.md", "x")
-    _git(["add", "--", "README.md"], repo)
-    _git(["commit", "-q", "-m", "seed"], repo)
-    _seed_file(repo, "brand-new.txt", "new\n")
-    _git(["add", "--", "brand-new.txt"], repo)
-    return repo
-
-
-def _shape_delete(tmp_path):
-    repo = _init_repo(tmp_path)
-    _seed_file(repo, "to-delete.txt", "bye\n")
-    _git(["add", "--", "to-delete.txt"], repo)
-    _git(["commit", "-q", "-m", "seed"], repo)
-    _git(["rm", "-q", "to-delete.txt"], repo)
-    return repo
+# --- deletion_block_gate Kept-claim shape builders --------------------------
 
 
 def _shape_clean(tmp_path):
@@ -1362,22 +963,6 @@ def _shape_nonascii_path(tmp_path):
     _git(["add", "--", "café-résumé.txt"], repo)
     _git(["commit", "-q", "-m", "seed"], repo)
     _seed_file(repo, "café-résumé.txt", "edited\n")
-    return repo
-
-
-def _shape_crlf_eol_phantom(tmp_path):
-    """core.autocrlf=true here -- a naive on-disk hash disagrees with the
-    index OID on a measured 24.5% of clean blobs; this is the shape
-    `_diff_name_only_worktree`'s EOL-phantom filter exists to suppress."""
-    repo = _init_repo(tmp_path)
-    _git(["config", "core.autocrlf", "true"], repo)
-    content = b"line1\r\nline2\r\n"
-    p = repo / "crlf.txt"
-    p.write_bytes(content)
-    _git(["add", "--", "crlf.txt"], repo)
-    _git(["commit", "-q", "-m", "seed"], repo)
-    # Re-write byte-identical content -- a tracked-unstaged phantom.
-    p.write_bytes(content)
     return repo
 
 
@@ -1414,104 +999,6 @@ def _shape_gitlink(tmp_path):
     _git(["update-index", "--add", "--cacheinfo", f"160000,{head_sha},vendor/sub"], repo)
     _git(["commit", "-q", "-m", "add gitlink"], repo)
     return repo
-
-
-_DIRTY_TREE_SHAPES = [
-    pytest.param(_shape_mode_toggle, id="mode_toggle_chmod"),
-    pytest.param(_shape_content_divergence, id="content_divergence"),
-    pytest.param(_shape_staged_only, id="staged_only"),
-    pytest.param(_shape_worktree_only, id="worktree_only"),
-    pytest.param(_shape_add, id="add"),
-    pytest.param(_shape_delete, id="delete"),
-    pytest.param(_shape_clean, id="clean_path"),
-    pytest.param(_shape_space_path, id="path_with_space"),
-    pytest.param(_shape_nonascii_path, id="nonascii_path"),
-    pytest.param(_shape_crlf_eol_phantom, id="crlf_eol_phantom"),
-    pytest.param(_shape_symlink, id="symlink_120000"),
-    pytest.param(_shape_gitlink, id="gitlink_160000"),
-]
-
-
-#: KNOWN, REPORTED DIVERGENCE (executor report, REGRESSION-2 fix): the
-#: pre-re-point oracle keys `_diff_name_only_worktree`'s EOL-phantom lookup
-#: on `git status --porcelain`'s own C-QUOTED path (`"a dir/has space.txt"`)
-#: -- that quoted literal never matches the real (unquoted) worktree path as
-#: a `git diff --name-only` pathspec, so the oracle's `real_diff_paths`
-#: lookup misses and the genuinely dirty space-containing path is silently
-#: swallowed as an EOL phantom (passed). The live gate (now reading `-z`,
-#: unquoted) resolves the same lookup correctly and reports the path
-#: unattributable -- a CORRECT answer, not bug-for-bug parity with the buggy
-#: oracle.
-#:
-#: 2026-08-26: `nonascii_path` JOINS this set, and the reason it was excluded
-#: was half the picture. The prior note had it that git's pathspec parser
-#: unquotes a C-quoted octal literal on the INPUT side, so `nonascii_path` fed
-#: to `git diff --name-only` matched and both implementations agreed. Input was
-#: never the problem. `git diff --name-only` also EMITS C-quoted paths, so
-#: `real_diff_paths` held `"caf\303\251-r\303\251sum\303\251.txt"` while the
-#: loop tested the raw `café-résumé.txt` -- the plain-text membership check
-#: missed, and the path was swallowed as an EOL phantom. Both agreed because
-#: BOTH were wrong: a genuinely dirty non-ASCII path passed the dirty-tree
-#: gate silently. That is a fail-OPEN in the gate whose whole job is refusing
-#: to commit over unattributable dirt.
-#:
-#: It is fixed by deletion rather than by a decoder: `dirty_tree_gate` no
-#: longer runs the EOL-phantom filter at all, because its candidate list now
-#: comes from `diff-files` (which hashes content before emitting, so no
-#: phantom reaches it -- measured 0 leaked, 0 real diffs missed) instead of
-#: from `git status --porcelain` (which reports on stat alone). No quoted
-#: output is parsed anywhere on the path, so the whole bug class is gone.
-#: The live gate now reports the dirty non-ASCII path; the oracle still
-#: swallows it. → docs/research/2026-08-26-the-ceremony-budget-is-spent-on-
-#: one-git-status.md
-_DIRTY_TREE_KNOWN_ORACLE_QUOTING_BUG_IDS = {"path_with_space", "nonascii_path"}
-
-
-@pytest.mark.parametrize("shape", _DIRTY_TREE_SHAPES)
-def test_dirty_tree_gate_matches_pre_c3_oracle(tmp_path, shape, request):
-    """AC (undischarged by C3): `dirty_tree_gate`'s re-pointed staged
-    classification returns a SET-IDENTICAL answer to the pre-re-point
-    (`git status --porcelain` X-column) implementation, across every shape
-    named in the C3 dispatch brief.
-
-    EXCEPT `_DIRTY_TREE_KNOWN_ORACLE_QUOTING_BUG_IDS` -- see that constant's
-    docstring: the oracle itself misclassifies a quoted dirty path as a
-    phantom, and the live gate's more-correct answer is asserted directly
-    instead of parity with that bug.
-    """
-    case_id = request.node.callspec.id
-    repo = shape(tmp_path)
-    live = dirty_tree_gate(repo)
-    oracle = _old_dirty_tree_gate(repo)
-
-    if case_id in _DIRTY_TREE_KNOWN_ORACLE_QUOTING_BUG_IDS:
-        assert oracle.unattributable == [], (
-            f"oracle={oracle!r} -- expected the oracle's C-quoted lookup to "
-            "keep silently swallowing this path as a phantom; if this now "
-            "fails, the oracle's own bug may have been fixed elsewhere and "
-            "this special-case should be removed"
-        )
-        assert live.unattributable != [], (
-            f"live={live!r} -- expected the live (unquoted, `-z`) gate to "
-            "correctly report this genuinely dirty path as unattributable"
-        )
-        return
-
-    assert live.unattributable == oracle.unattributable
-    assert live.passed == oracle.passed
-
-
-def test_dirty_tree_gate_crlf_phantom_still_suppressed(tmp_path):
-    """The load-bearing assertion named in the brief: the EOL-phantom filter
-    must still suppress a CRLF phantom under core.autocrlf=true, on the LIVE
-    gate (not just parity with the oracle above)."""
-    repo = _shape_crlf_eol_phantom(tmp_path)
-    outcome = dirty_tree_gate(repo)
-    assert outcome.passed is True
-    assert outcome.unattributable == []
-
-
-# --- deletion_block_gate Kept-claim shape builders --------------------------
 
 
 def _kept_claim_message(path: str) -> str:

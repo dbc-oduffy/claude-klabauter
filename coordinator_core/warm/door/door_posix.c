@@ -805,6 +805,72 @@ static int read_line_bounded(int fd, buf_t *resp) {
 }
 
 /* =========================================================================
+ * Caller-declared stdin payload -- mode gate, the platform read primitive,
+ * and the hook-mode fail-closed disposition. Full contract in door_core.h;
+ * this section is only the POSIX-specific half (getenv, the `read(0, ...)`
+ * reader callback, and the write of the shared envelope bytes) -- door.c
+ * carries door.c's own, sharing every constant and the drain loop through
+ * `door_core.h`/`door_core.c` so the two legs cannot recognise a different
+ * declaration or drift in what a too-large payload does.
+ * ========================================================================= */
+
+/* Set once, at the very top of `main`, from the caller's own declaration --
+ * never sniffed from the socket fd. `fall_through`, below, reads this flag
+ * as its FIRST statement, the single choke point every fall-through in
+ * this file already reaches, so gating there covers every existing call
+ * site (and any added later) without a second edit. */
+static int g_door_hook_mode = 0;
+
+/* True iff the caller declared hook mode via `DOOR_STDIN_MODE_ENV_NAME`
+ * (door_core.h), by VALUE, matching `DOOR_STDIN_MODE_HOOK_VALUE` exactly --
+ * no third state, no partial match. */
+static int door_stdin_mode_is_hook(void) {
+    const char *value = getenv(DOOR_STDIN_MODE_ENV_NAME);
+    return value != NULL && strcmp(value, DOOR_STDIN_MODE_HOOK_VALUE) == 0;
+}
+
+/* `door_stdin_reader_t` for POSIX standard input. Reaching this callback at
+ * all means hook mode was declared -- an ordinary blocking `read()` is
+ * correct here (door_core.h's own docs on why the NO-mode-declared case
+ * must never reach a read call at all, not this one). `EINTR` retries in
+ * place, matching this file's other read loops; `0` is true end-of-stream,
+ * the same value `door_drain_stdin_bounded`'s shared loop already treats
+ * as "stop" on the Windows side via `ERROR_BROKEN_PIPE`. */
+static long door_stdin_read_chunk(void *reader_ctx, char *buf, size_t cap) {
+    (void)reader_ctx;
+    for (;;) {
+        ssize_t n = read(STDIN_FILENO, buf, cap);
+        if (n < 0) {
+            if (errno == EINTR) continue;
+            return -1;
+        }
+        return (long)n;
+    }
+}
+
+/* Same split as `emit_indeterminate` below: the envelope's bytes are built
+ * in `door_core.c` (shared, so the two doors cannot drift in what they
+ * tell an operator), only the write is POSIX-specific. Exit 0, matching
+ * the shape every Bash guard in this repo already returns for a decided
+ * `deny` verdict -- a nonzero exit here would tell the hook runner THIS
+ * PROCESS failed, not that the tool call was denied. On the one failure
+ * this cannot recover from (no memory to build 512 bytes), it falls back
+ * to the hook contract's OTHER deny signal -- a diagnostic on stderr plus
+ * a nonzero exit -- rather than risk an empty stdout reading as "no
+ * opinion" (silently allow) on a guard's hot path. */
+static int emit_hook_deny(const char *reason) {
+    buf_t out;
+    if (!buf_init(&out, 512) || !build_hook_deny_envelope(&out, reason)) {
+        fprintf(stderr, "door: hook-mode deny (could not build the envelope)\n");
+        free(out.data);
+        return 2;
+    }
+    write_all_fd(STDOUT_FILENO, out.data, out.len);
+    free(out.data);
+    return 0;
+}
+
+/* =========================================================================
  * Post-delivery refusal
  * ========================================================================= */
 
@@ -844,6 +910,24 @@ static int emit_indeterminate(const char *detail) {
  * fatal cases: no engine it can name at all, and no interpreter it can
  * launch at all. */
 static int fall_through(int argc, char **argv, const char *engine_root) {
+    /* HOOK MODE INVERTS THIS FUNCTION'S ENTIRE PURPOSE (door_core.h ::
+     * build_hook_deny_envelope), the same inversion door.c's own
+     * `fall_through` applies -- see that file's comment for the full
+     * rationale. Every fall-through in this file reaches this function
+     * directly, so checking the flag HERE, first, covers every existing
+     * call site (and any added later) without a second edit. `argc`/
+     * `argv`/`engine_root` go unused on this leg -- the caller declared no
+     * argv grammar is going to run here, only a decision. */
+    if (g_door_hook_mode) {
+        (void)argc;
+        (void)argv;
+        (void)engine_root;
+        return emit_hook_deny(
+            "coordinator-door: could not deliver this request to the "
+            "resident engine; denying rather than falling through to the "
+            "cold entrypoint in hook mode");
+    }
+
     const char *root = (engine_root != NULL) ? engine_root : BUILD_ENGINE_ROOT;
 
     /* `engine_root`, when supplied, was already validated by
@@ -1001,6 +1085,44 @@ int main(int argc, char **argv) {
      * envelope, which is the one outcome no caller can interpret. */
     signal(SIGPIPE, SIG_IGN);
 
+    /* THE MODE GATE (door_core.h), read once, before anything else in this
+     * function, mirroring door.c's own ordering -- `fall_through` reads this
+     * flag as its first statement and must see the caller's declaration
+     * regardless of which exit this function ultimately takes. */
+    g_door_hook_mode = door_stdin_mode_is_hook();
+
+    /* THE READ ITSELF, gated on the flag above and nowhere else -- an
+     * ordinary caller (mode not declared) never reaches this block, so its
+     * cost and its blocking hazard are both zero for every existing
+     * invocation. Read before engine-root resolution because it depends on
+     * none of it, and so a caller who declared hook mode gets a decided
+     * verdict even when the engine root cannot be resolved -- that failure
+     * now denies too, via `fall_through`'s own hook-mode check.
+     *
+     * From this point to the request-build site further below, every
+     * pre-delivery fall-through call site frees its own intermediate
+     * allocations but not `stdin_payload.data` -- if one fires while
+     * `have_stdin_payload` is still set, those bytes (at most
+     * `DOOR_STDIN_MAX_BYTES`, one allocation) are reclaimed by the process
+     * exit that immediately follows every one of those returns. */
+    buf_t stdin_payload;
+    int have_stdin_payload = 0;
+    if (g_door_hook_mode) {
+        if (!buf_init(&stdin_payload, 4096)) {
+            return emit_hook_deny("coordinator-door: out of memory reading stdin");
+        }
+        door_stdin_status_t stdin_status = door_drain_stdin_bounded(
+            door_stdin_read_chunk, NULL, &stdin_payload, DOOR_STDIN_MAX_BYTES);
+        if (stdin_status != DOOR_STDIN_READ_OK) {
+            free(stdin_payload.data);
+            return emit_hook_deny(
+                stdin_status == DOOR_STDIN_READ_TOO_LARGE
+                    ? "coordinator-door: stdin payload exceeded the bound; refusing"
+                    : "coordinator-door: stdin read failed; refusing");
+        }
+        have_stdin_payload = 1;
+    }
+
     /* Resolved once, unconditionally, before any branch splits -- see
      * `resolve_own_basename`'s own comment. Every `fall_through` call in
      * this file reads `door_entrypoint_basename()`, so it must be populated
@@ -1134,7 +1256,27 @@ int main(int argc, char **argv) {
             req_ok &= buf_append_json_escaped(&req, cwd, strlen(cwd));
         }
     }
-    req_ok &= buf_append_cstr(&req, "\"},\"_engine_token\":\"");
+    req_ok &= buf_append_cstr(&req, "\"");
+
+    /* HOOK MODE'S PAYLOAD (door_core.h). Inside `params`, sibling of
+     * `argv`/`cwd` above -- an OP ARGUMENT, never transport metadata,
+     * mirroring exactly where door.c places the same field. Freed
+     * immediately after appending -- `buf_append_json_escaped` copies the
+     * bytes, so `stdin_payload.data` has no further use. */
+    if (req_ok && have_stdin_payload) {
+        req_ok &= buf_append_cstr(&req, ",\"stdin\":\"");
+        if (req_ok) {
+            req_ok &= buf_append_json_escaped(
+                &req, stdin_payload.data, stdin_payload.len);
+        }
+        req_ok &= buf_append_cstr(&req, "\"");
+    }
+    if (have_stdin_payload) {
+        free(stdin_payload.data);
+        have_stdin_payload = 0;
+    }
+
+    req_ok &= buf_append_cstr(&req, "},\"_engine_token\":\"");
     req_ok &= buf_append_cstr(&req, engine_token);
     req_ok &= buf_append_cstr(&req, "\"");
 

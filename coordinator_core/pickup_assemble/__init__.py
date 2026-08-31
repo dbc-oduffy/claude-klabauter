@@ -4639,6 +4639,13 @@ def compute_baton_unification_verdict(
             no_unify_reason = "only-target-held"
         elif unstamped_skipped:
             no_unify_reason = "unstamped-role-skipped"
+        elif unreadable_skipped:
+            # Review: coordinator:code-reviewer ab96d9461a4ded513 Finding 1 —
+            # unreadable_skipped was threaded into the returned dict but the
+            # reason/message ladder fell through to "nothing-inheritable"
+            # when it was the sole skip reason, silently matching the
+            # pre-fix no-counter behaviour for message readers.
+            no_unify_reason = "unreadable-held-skipped"
         elif disposed_skipped:
             no_unify_reason = "all-held-disposed"
         else:
@@ -4662,10 +4669,15 @@ def compute_baton_unification_verdict(
                     "not yet stamped (C7 pending)."
                     if unstamped_skipped
                     else (
-                        f"{len(disposed_skipped)} held baton(s) already disposed — "
-                        "nothing left to unify."
-                        if disposed_skipped
-                        else "No inheritable held baton — nothing to unify."
+                        f"{unreadable_skipped} held baton(s) skipped — unreadable "
+                        "(missing file, malformed frontmatter, or unresolvable path)."
+                        if unreadable_skipped
+                        else (
+                            f"{len(disposed_skipped)} held baton(s) already disposed — "
+                            "nothing left to unify."
+                            if disposed_skipped
+                            else "No inheritable held baton — nothing to unify."
+                        )
                     )
                 )
             ),
