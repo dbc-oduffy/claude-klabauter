@@ -469,7 +469,7 @@ def test_run_close_commit_and_release_claims_releases_on_commit_failure_too(
     that committed cleanly. Forces `run_close_commit` to RAISE (mirrors the
     "or raises outright" branch `run_close_commit_and_release_claims`'s own
     docstring names — a `finally`, not an `if result.ok:` branch, is what
-    this pins) by monkeypatching `run_commit_pipeline` itself, and asserts
+    this pins) by monkeypatching the `commit_paths` seam itself, and asserts
     the claim is released and the exception still propagates unmodified."""
     root = hooks_live_repo
     sid = "c5-claim-release-failure-test-session"
@@ -483,12 +483,25 @@ def test_run_close_commit_and_release_claims_releases_on_commit_failure_too(
     claim_dir = common_dir / "coordinator-sessions" / "plan-claims" / slug
     assert claim_dir.is_dir()
 
+    # The staged path must EXIST: `run_close_commit` drops a `stage_paths`
+    # entry that is neither on disk nor in `deleted_paths`, and an empty
+    # `present_paths` short-circuits to a benign no-op BEFORE the commit seam
+    # -- so a fixture naming a non-existent file can never reach the raise
+    # this test exists to force, and fails as DID NOT RAISE.
+    (root / "irrelevant.txt").write_text("staged" + chr(10), encoding="utf-8")
+
     def _raise(*_args, **_kwargs):
         raise RuntimeError("simulated commit-step failure")
 
-    monkeypatch.setattr(
-        "coordinator_core.ops.ceremony.commit_pipeline.run_commit_pipeline", _raise
-    )
+    # SEAM UPDATED 2026-08-31: this patched `ops.ceremony.commit_pipeline.
+    # run_commit_pipeline`, a module killed out of the tree. The patch target
+    # is resolved by `monkeypatch.setattr`'s own import, so its disappearance
+    # surfaced as a collection-time ImportError, never as the ruling below
+    # going unpinned -- and this file is `cadence`-marked, so the fast tier
+    # never ran it. `run_close_commit` imports `commit_paths` INSIDE the
+    # function, so patching it on its source module is what intercepts the
+    # call; patching a name bound at module import time would not.
+    monkeypatch.setattr("coordinator_core.git.commit.commit_paths", _raise)
 
     with pytest.raises(RuntimeError, match="simulated commit-step failure"):
         directives_commit_tail.run_close_commit_and_release_claims(

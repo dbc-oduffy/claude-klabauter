@@ -351,3 +351,52 @@ def test_close_coverage_advisory_directive_is_always_already_satisfied_and_ungat
     assert advisory["already_satisfied"] is True
     assert advisory["depends_on"] is None
     assert not any(d.get("depends_on") == "d-close-coverage-advisory" for d in directives)
+
+
+def test_call_one_unresolved_scale_names_stage_paths_as_its_unlock(repo, monkeypatch):
+    """An unresolved review scale must name the input that RESOLVES it.
+
+    `decide_review_scale`'s `reason` names `code_loc`/`commit_count`/
+    `surface_count` — all three are OUTPUTS of the measurement gated on
+    `decisions["stage_paths"]`, and none is a value a caller can supply. An
+    EM told to "supply the missing input named in `reason`" therefore has
+    nothing to supply, and hand-sums the diff instead. That is not merely
+    slower: a hand count uses different definitions than the engine's (gross
+    LOC over a commit span, versus noise-excluded `code_loc` per owned sha),
+    so the two paths can return different verdicts for the same tree.
+
+    This pins the remediation onto the gate itself rather than into SKILL.md
+    prose, so the route travels with the envelope that reports the problem.
+    """
+    sid = "44444444-4444-4444-4444-444444444444"
+    (repo / ".git" / "coordinator-sessions" / sid).mkdir(parents=True)
+    _patch_gate_with_sid(monkeypatch, sid)
+
+    review_scale = wsc.brief(decisions={}, repo_root=repo)["gates"]["review_scale"]
+
+    assert review_scale["resolved"] is False
+    remediation = review_scale.get("remediation")
+    assert remediation, (
+        "an unresolved review scale must carry a remediation naming its unlock; "
+        f"got: {review_scale}"
+    )
+    assert "stage_paths" in remediation, (
+        f"remediation must name the input that actually resolves the gate: {remediation}"
+    )
+
+
+def test_resolved_scale_carries_no_remediation(repo, monkeypatch):
+    """The remediation is a defect report, not a standing field: once the
+    measurement has run there is nothing to remediate, and a field that
+    persists past its own condition trains readers to ignore it."""
+    sid = "55555555-5555-5555-5555-555555555555"
+    (repo / ".git" / "coordinator-sessions" / sid).mkdir(parents=True)
+    _patch_gate_with_sid(monkeypatch, sid)
+
+    review_scale = wsc.brief(
+        decisions={"stage_paths": []}, repo_root=repo
+    )["gates"]["review_scale"]
+
+    assert "remediation" not in review_scale, (
+        f"a gate whose measurement ran carries no remediation: {review_scale}"
+    )

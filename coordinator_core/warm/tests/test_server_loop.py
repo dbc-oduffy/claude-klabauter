@@ -1003,6 +1003,48 @@ def test_serve_line_with_no_carried_identity_strips_rather_than_falls_back(monke
     assert session_core.resolve_session_id() == session_a
 
 
+def test_serve_line_with_no_carried_pid_never_hands_on_the_servers_own(monkeypatch):
+    """Sibling of the no-carried-IDENTITY test above, on the axis that has a
+    fallback rung where the other two do not.
+
+    `resolve_caller_context` resolves `session_id`/`agent_id` to `None` on an
+    absent payload, but gives `pid` an `os.getpid()` rung. That rung is right
+    CLIENT-side (`warm.client`, `warm.hook_http`: the process there IS the
+    caller) and wrong in this server. Once the seam began SETTING
+    `CLAUDE_PID` from the carried pid rather than only popping it, a request
+    with no `_caller` would have stamped THIS ENGINE's pid into the
+    dispatch -- and `harness_registry.self_record()` keys off that name and
+    nothing else, so the dispatch would classify as the engine owner. That is
+    the misattribution the governing plan closed, re-entering through the one
+    field with a fallback.
+
+    Drives the REAL `_handle_connection`/`_serve_line` path rather than
+    calling the strip helper directly: a test that calls the helper stays
+    green when the call site is deleted, which is the false-green shape
+    state/lessons/2026-08-31-retiring-a-key-turns-its-absence-assertions-green.yaml
+    names. This one goes red when the wiring goes."""
+    import os as _os
+
+    seen: list = []
+
+    def _dispatch(msg: dict, *, caller=None, isolated=False) -> dict:
+        seen.append(caller.pid if caller is not None else "<no caller>")
+        return {"jsonrpc": "2.0", "id": msg["id"], "result": "ok"}
+
+    server._handle_connection(
+        _FakeIO([_frame(id_="req-1")]),  # no _caller field at all
+        version_state=_FakeVersionState(),
+        server_sha="x",
+        close_listener=lambda: None,
+        drain=lambda: None,
+        in_flight=server.InFlightCounter(),
+        dispatch=_dispatch,
+    )
+
+    assert seen == [None], f"expected no pid handed on; got {seen!r}"
+    assert seen != [str(_os.getpid())]
+
+
 # ---------------------------------------------------------------------------
 # Accept-and-queue (docs/plans/2026-08-19-the-fired-path-reaches-the-engine.md
 # § C5, AC7/AC8): `_enqueue_connection` claims the in-flight slot at ENQUEUE,

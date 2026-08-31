@@ -1648,7 +1648,11 @@ def test_lock_timeout_fails_loud_before_real_run(tmp_path, monkeypatch):
     assert _mod._EXIT_LOCK_BUSY != _mod._EXIT_FAIL
     err = buf.getvalue()
     assert "is held by another round" in err
-    assert "COORDINATOR_LOCK_WAIT_SECS" in err
+    # B6 pointer-only rewrite (C2/C3): names the mechanism page, never the
+    # override env var — the old shape invited exactly the respawn-pressure
+    # loop this refusal exists to stop.
+    assert "COORDINATOR_LOCK_WAIT_SECS" not in err
+    assert "docs/reference/percolate-lock-contention.md" in err
 
     real_run_calls = [
         c for c in spy.calls
@@ -2615,7 +2619,24 @@ def test_inherited_root_does_not_deadlock(tmp_path, monkeypatch):
     NOT re-attempt to acquire A when A's realpath is named in
     `PERCOLATE_ROUND_INHERITED_LOCK_ROOTS`. Root B (a second row's dest,
     NOT held by anyone) must still get acquired and the row loop reached for
-    both rows -- proves the skip is per-root, not a blanket disable."""
+    both rows -- proves the skip is per-root, not a blanket disable.
+
+    C3 re-verify (staff-eng finding 8) -- under the new default 0s
+    contention wait (`percolate.wire_contract.publish_contention_wait_secs`,
+    deny-at-once unless `COORDINATOR_ALLOW_PERCOLATE_QUEUE` is set), this
+    test doubles as BOTH re-verify observables the inherited-holder handoff
+    needs:
+      (a) the parent-handed realpath and the child-computed `_lock_root`
+          resolve to the SAME key for the registered target -- asserted
+          directly below via `locked_write._lock_key`, not merely inferred
+          from `rc == 0`.
+      (b) an end-to-end leg -- Step 4 (root B, genuinely uncontended)
+          completes green under a 0 wait, which is the assertion that
+          actually catches a re-entrancy regression: a bug that made the
+          child re-attempt root A's already-held lock would now fail FAST
+          (instant refusal, not a 180s stall) and this test's `rc == 0`
+          would flip to `75` immediately.
+    """
     import coordinator_core.locked_write as locked_write
 
     publish_mod = _load_publish_module_for_lock_test()
@@ -2631,12 +2652,11 @@ def test_inherited_root_does_not_deadlock(tmp_path, monkeypatch):
     # parameter on the real generator function `@contextmanager` wraps
     # (`held_lock.__wrapped__`), so its default lives in that function's own
     # `__kwdefaults__` and is safely patchable without touching any call
-    # site.
+    # site. Governs the PARENT's own `_round_held_lock` acquisition below;
+    # `publish.py`'s own lock loop no longer reads this at all -- its wait
+    # now resolves via `publish_contention_wait_secs()` (0.0 by default,
+    # deny-at-once), which is exactly the C3 behaviour under re-verify here.
     monkeypatch.setitem(locked_write.held_lock.__wrapped__.__kwdefaults__, "timeout", 1.0)
-    # `publish.py`'s lock loop passes `timeout=` explicitly (the contended-wait
-    # knob), so the kwdefaults patch above no longer reaches it -- without this
-    # the test would sit out the real 180s wait rather than the intended 1s.
-    monkeypatch.setenv(locked_write.CONTENDED_LOCK_WAIT_ENV, "1")
 
     # `publish_mod.main` runs IN-PROCESS below (no subprocess spawn despite
     # this test's `spawns_process` marker), so `os.getppid()` observed
@@ -2648,6 +2668,9 @@ def test_inherited_root_does_not_deadlock(tmp_path, monkeypatch):
         f"{os.getppid()}={os.path.realpath(str(root_a))}",
     )
 
+    # (a) parent-handed realpath vs. child-computed `_lock_root` -- same key.
+    assert locked_write._lock_key(root_a) == locked_write._lock_key(Path(os.path.realpath(str(root_a))))
+
     rows_reached: list = []
     _wire_lock_test_fakes(
         publish_mod, monkeypatch, tmp_path,
@@ -2658,6 +2681,8 @@ def test_inherited_root_does_not_deadlock(tmp_path, monkeypatch):
     with _mod._round_held_lock(Path(root_a), holder_label="percolate-round:test-target"):
         rc = publish_mod.main(["row-a,row-b"])
 
+    # (b) end-to-end: root B (uncontended) completes green under the new 0
+    # wait; root A's skip is what keeps this from stalling/deadlocking.
     assert rc == 0
     assert rows_reached == ["row-a", "row-b"]
     assert "PERCOLATE_ROUND_INHERITED_LOCK_ROOTS" not in os.environ
@@ -2683,10 +2708,11 @@ def test_non_inherited_root_still_locked(tmp_path, monkeypatch):
     _init_git_repo_for_lock(root_b)
 
     monkeypatch.setitem(locked_write.held_lock.__wrapped__.__kwdefaults__, "timeout", 1.0)
-    # `publish.py`'s lock loop passes `timeout=` explicitly (the contended-wait
-    # knob), so the kwdefaults patch above no longer reaches it -- without this
-    # the test would sit out the real 180s wait rather than the intended 1s.
-    monkeypatch.setenv(locked_write.CONTENDED_LOCK_WAIT_ENV, "1")
+    # `publish.py`'s lock loop passes `timeout=` explicitly, resolved via
+    # `percolate.wire_contract.publish_contention_wait_secs()` (0.0 by
+    # default, deny-at-once) rather than `CONTENDED_LOCK_WAIT_ENV` -- the
+    # kwdefaults patch above governs only the fixture's OWN `held_lock` call
+    # below, not publish.py's lock loop. A held root now refuses instantly.
 
     monkeypatch.setenv(
         "PERCOLATE_ROUND_INHERITED_LOCK_ROOTS",
@@ -2724,10 +2750,11 @@ def test_inherited_root_pid_mismatch_still_locked(tmp_path, monkeypatch):
     _init_git_repo_for_lock(root_a)
 
     monkeypatch.setitem(locked_write.held_lock.__wrapped__.__kwdefaults__, "timeout", 1.0)
-    # `publish.py`'s lock loop passes `timeout=` explicitly (the contended-wait
-    # knob), so the kwdefaults patch above no longer reaches it -- without this
-    # the test would sit out the real 180s wait rather than the intended 1s.
-    monkeypatch.setenv(locked_write.CONTENDED_LOCK_WAIT_ENV, "1")
+    # `publish.py`'s lock loop passes `timeout=` explicitly, resolved via
+    # `percolate.wire_contract.publish_contention_wait_secs()` (0.0 by
+    # default, deny-at-once) rather than `CONTENDED_LOCK_WAIT_ENV` -- the
+    # kwdefaults patch above governs only the fixture's OWN `held_lock` call
+    # below, not publish.py's lock loop. A held root now refuses instantly.
 
     # A syntactically well-formed token, but with a PID that cannot be the
     # true parent (`os.getppid()` inside `main` below is this test
@@ -2768,10 +2795,11 @@ def test_inherited_root_malformed_token_still_locked(tmp_path, monkeypatch):
     _init_git_repo_for_lock(root_a)
 
     monkeypatch.setitem(locked_write.held_lock.__wrapped__.__kwdefaults__, "timeout", 1.0)
-    # `publish.py`'s lock loop passes `timeout=` explicitly (the contended-wait
-    # knob), so the kwdefaults patch above no longer reaches it -- without this
-    # the test would sit out the real 180s wait rather than the intended 1s.
-    monkeypatch.setenv(locked_write.CONTENDED_LOCK_WAIT_ENV, "1")
+    # `publish.py`'s lock loop passes `timeout=` explicitly, resolved via
+    # `percolate.wire_contract.publish_contention_wait_secs()` (0.0 by
+    # default, deny-at-once) rather than `CONTENDED_LOCK_WAIT_ENV` -- the
+    # kwdefaults patch above governs only the fixture's OWN `held_lock` call
+    # below, not publish.py's lock loop. A held root now refuses instantly.
 
     # No `=` delimiter at all -- the pre-fix bare-realpath format.
     monkeypatch.setenv(

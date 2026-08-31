@@ -491,7 +491,11 @@ def _resolve_doe_claude_target(target: str) -> Optional[str]:
         return None
 
     if _canon(toplevel) != canon_doe_root:
-        # foreign-identity: NOT-REACHABLE — install-time-only pre-commit hook installer, deliberately invoked, not ambient to a example-retrieval-repo EM (same basis as audit rows 6/11/12)
+        # foreign-identity: NOT-REACHABLE — basis: DELIBERATE INVOCATION, not true
+        # unreachability. Install-time-only pre-commit hook installer (the operator
+        # runs the claude-klabauter installer/`setup.py` deliberately); a third-repo session
+        # cannot hit this ambiently, but an installing operator CAN reach it by
+        # running the installer (same basis as audit rows 6/11/12).
         print(f"{_PROG}: not DoE-claude ({toplevel}) — skipping.", file=sys.stderr)
         return None
     return toplevel

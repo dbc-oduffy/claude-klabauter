@@ -4619,9 +4619,14 @@ def _install_claude_klabauter_seed_wiki_page(claude_klabauter_root: Path, settin
     page under ``coordinator-claude/docs/wiki/`` -- the same directory
     ``_install_seed_wikis`` populates from DoE's own manifest -- is a
     namespace choice made unilaterally by this chunk (`docs/plans/
-    2026-08-30-the-engine-stops-naming-its-own-repo.md` chunk C2); whether
-    DoE ratifies claude-klabauter writing into that directory rides in chunk C1's
-    cross-repo memo, not here.
+    2026-08-30-the-engine-stops-naming-its-own-repo.md` chunk C2). Chunk
+    C1's cross-repo memo carrying this namespace choice to DoE was SENT and
+    is committed in DoE-claude's own tree at `DoE-claude@56998ae14`; what
+    remains outstanding is DoE's ANSWER, not delivery -- tracked in the
+    plan's own `## Open at close-out` section, not restated here.
+    # Review: coordinator:code-reviewer (a11777c9823b0017b) Finding 2 --
+    # corrected: the memo was sent, not deferred; only the reply is
+    # outstanding.
 
     Single named file, not manifest-driven, unlike ``_install_seed_wikis``:
     there is exactly one claude-klabauter-sourced page today and no analogue to

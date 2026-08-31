@@ -395,6 +395,53 @@ def test_marker_present_but_unparseable_refuses(tmp_path, monkeypatch, capsys):
 
 
 # ---------------------------------------------------------------------------
+# Dest-lock predicate (this chunk) — a round holding the dest denies the
+# push at once, naming the holder, rather than either sleeping on it or
+# refusing with the dirty-tree `_EXIT_USAGE` message a mid-write dest would
+# otherwise produce first.
+# ---------------------------------------------------------------------------
+
+def test_held_dest_denies_at_once_naming_holder_not_dirty_tree_usage(tmp_path, monkeypatch, capsys):
+    """Fixture shape matches what the field actually produces: another round
+    holds the real advisory lock on `dest` AND has left the dest dirty
+    (`_STATUS_DIRTY`) — the in-flight-write shape, not a lock held over an
+    otherwise-clean tree. Before this chunk, `_check_dest_state` ran
+    unlocked and refused first with `_EXIT_USAGE` and a dirty-dest message;
+    the operator never saw the intended lock-busy refusal. Asserts
+    `_EXIT_LOCK_BUSY` (75), not `_EXIT_USAGE`, and that no status/push
+    subprocess call ever happens — the lock boundary sits before both."""
+    dest = tmp_path / "dest"
+
+    # Force `_bootstrap_engine()` now, in this process, so `_mod._push_held_lock`
+    # is the real `coordinator_core.locked_write.held_lock` before the test
+    # acquires it as "another round" holding the dest.
+    _mod._bootstrap_engine()
+
+    with _mod._push_held_lock(
+        dest, holder_label="percolate-round:alpha", timeout=0.0
+    ):
+        monkeypatch.setenv("COORDINATOR_ALLOW_PERCOLATE_QUEUE", "0")
+        spy = _SubprocessSpy(dest=str(dest), status_stdout=_STATUS_DIRTY)
+        monkeypatch.setattr(_mod.subprocess, "run", spy)
+        monkeypatch.delenv("COORDINATOR_SESSION_ID", raising=False)
+
+        argv = ["alpha", "--percolate-root", str(tmp_path / "percolate-root")]
+        parser = _mod._build_parser()
+        args = parser.parse_args(argv)
+        rc = _mod._cmd_push(args)
+
+    assert rc == _mod._EXIT_LOCK_BUSY
+    assert rc != _mod._EXIT_USAGE
+    err = capsys.readouterr().err
+    assert "held by another round" in err
+    assert "percolate-push:alpha" in err or "another round" in err
+    status_calls = [c for c in spy.calls if "status" in c and "--porcelain=v2" in c]
+    push_calls = [c for c in spy.calls if c[:1] == ["git"] and "push" in c]
+    assert status_calls == []
+    assert push_calls == []
+
+
+# ---------------------------------------------------------------------------
 # No code path in either module creates or clears an `allow-xrepo-write`
 # marker — asserted both by source-level scan and behaviourally.
 # ---------------------------------------------------------------------------

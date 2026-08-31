@@ -42,9 +42,9 @@ NATIVE committer that builds no argv at all. `coordinator_core/git/commit.py
 land a commit by writing git objects and swapping a ref in process -- no
 subprocess, no string anywhere reading `"commit"`. That is not "a string
 built at runtime" (the blind spot above); it is no string, ever. The sixth
-mechanism (below) closes this by keying on the ref-move CALLEE (`cas_ref`)
-instead of a string constant -- the first mechanism this module keys on
-what a call DOES rather than what strings it carries.
+mechanism (`cas_ref_landing`, see `_CAS_REF_CALL_NAMES` below) closes this
+by keying on the ref-move CALLEE instead of a string constant -- the one
+mechanism in `_MECHANISM_ROWS` whose required-constant slot is `None`.
 
 Runtime tradeoff (EM-ratified, 2026-08-11 chunk C3b follow-up): the brief
 asked for "well under a second". After `os.walk` directory pruning and a
@@ -71,22 +71,15 @@ ALLOWLIST below). Same site, same settled reason; only the name was wrong.
 Recorded here so a future pass does not "fix" this allowlist key back to
 the plan's stale name.
 
-The SIXTH mechanism (2026-08-30, chunk C2) differs from the first five in
-KIND, not just in name. Mechanisms one through five all ask what STRINGS a
-call carries -- a literal `"commit"`/`"commit-tree"` constant reachable from
-the call's own argument tree. The sixth instead asks what the call DOES: it
-keys on the OUTCOME -- a call to `coordinator_core/git/git_objects.py
-::cas_ref`, the ref-move primitive every native (zero-spawn) committer
-lands through (`coordinator_core/git/commit.py::commit_paths`, and
-`ops/ceremony/git_native.py::_commit_via_head_spine`, the DR-211 rewrite's
-own in-process spine committer). Tracked alongside the existing
-`update-ref` argv shape as its own mechanism (`_CAS_REF_CALL_NAMES`), not
-folded into the fifth (`commit_tree_plumbing`) bucket, because the fifth
-still keys on a string (`"commit-tree"`) reachable from a subprocess call's
-argv -- this one keys on a callee name with no string requirement at all.
-See the AST-vs-grep tradeoff note above for why this mechanism had to be
-added: a native committer builds no argv, so no string-constant approach
-could ever see it.
+The SIXTH mechanism (2026-08-30, chunk C2, `cas_ref_landing`) is every
+other row's `(callee-names, required-constant, mechanism)` shape with the
+required-constant slot empty (`None`) rather than one of a different kind:
+`coordinator_core/git/git_objects.py::cas_ref` is the ref-move primitive
+every native (zero-spawn) committer lands through
+(`coordinator_core/git/commit.py::commit_paths`,
+`ops/ceremony/git_native.py::_commit_via_head_spine`), and its callee name
+alone is match enough -- no string constant to require. See
+`_MECHANISM_ROWS` below.
 """
 
 from __future__ import annotations
@@ -109,44 +102,21 @@ CORE_ROOT = Path(__file__).resolve().parents[3]
 _EXCLUDED_DIR_SEGMENTS = {"tests", "__pycache__"}
 
 # The commit-construction mechanisms this enumerator must independently
-# catch -- see MECHANISM_EXPECTED_NONEMPTY below (the `expected_mechanisms`
-# set in `test_enumerator_catches_all_four_mechanisms`), which asserts each
-# bucket is non-empty so a change that silently narrows the walk to only
-# one shape (a false-green) fails loudly. Four of these are STRING-keyed
-# (this block, plus `_COMMIT_TREE_PLUMBING_CONSTANTS` below); the sixth
-# (`_CAS_REF_CALL_NAMES`, further below) is OUTCOME-keyed and differs in
-# KIND, not degree -- see the module docstring's tradeoff note.
+# catch -- see the `expected_mechanisms` set in
+# `test_enumerator_catches_all_four_mechanisms`, which asserts each bucket
+# is non-empty so a change that silently narrows the walk to only one shape
+# (a false-green) fails loudly.
 _ASYNCIO_EXEC_NAMES = {"create_subprocess_exec"}
 _RUN_GIT_HELPER_NAMES = {"_run_git"}
 _GIT_NATIVE_UNDERSCORE_GIT = {"_git"}
 _COMMIT_SCOPED_NAMES = {"commit_scoped"}
 
-#: The FIFTH mechanism (2026-08-26). DR-211's plumbing rewrite moved fleet
-#: archival off `git commit` onto `git write-tree` + `git commit-tree` +
-#: `git update-ref`. Those sites still call `create_subprocess_exec`, so the
-#: callee-name filter kept matching them -- but the argv carries the literal
-#: `"commit-tree"`, and the mechanism tag below keyed on an EXACT `"commit"`
-#: constant, which `"commit-tree"` is not. Two live commit paths
-#: (`_common.py::archive_and_commit`, `::rm_and_commit`) therefore fell out of
-#: the tripwire entirely while reading as covered.
-#:
-#: Tagged as its own mechanism rather than folded into the asyncio bucket
-#: because it IS a different shape: it moves the ref directly and fires no
-#: hooks, which is the whole reason the release-coverage question for it is
-#: still open (see the DELIBERATELY RETAINED note in the allowlist below --
-#: that decision stays the plumbing rewrite's to make; this constant only
-#: restores the enumerator's ability to SEE the sites).
-_COMMIT_TREE_PLUMBING_CONSTANTS = {"commit-tree"}
-
-#: The SIXTH mechanism (2026-08-30, chunk C2). Differs from the first five
-#: in KIND, not degree: mechanisms one through five ask what STRINGS a call
-#: carries; this one asks what the call DOES. A native (zero-spawn)
-#: committer builds no argv at all -- no `"commit"`, no `"commit-tree"`,
-#: nothing this walk's string-constant filter could ever see -- so it is
-#: caught instead by its OUTCOME: a call to `git_objects.cas_ref`, the
-#: ref-move primitive every native committer lands through. See the module
-#: docstring's tradeoff note for why the string-constant approach is
-#: structurally blind to this shape.
+#: The SIXTH mechanism (2026-08-30, chunk C2). Every other row keys on a
+#: (callee-names, required-string-constant) pair; this is that same pair
+#: with the constant slot empty -- a native (zero-spawn) committer builds
+#: no argv at all, so it is matched on the callee alone: a call to
+#: `git_objects.cas_ref`, the ref-move primitive every native committer
+#: lands through.
 _CAS_REF_CALL_NAMES = {"cas_ref"}
 
 _ALL_TRACKED_CALLEE_NAMES = (
@@ -155,6 +125,32 @@ _ALL_TRACKED_CALLEE_NAMES = (
     | _GIT_NATIVE_UNDERSCORE_GIT
     | _COMMIT_SCOPED_NAMES
     | _CAS_REF_CALL_NAMES
+)
+
+# One row per mechanism: (callee-names, required-string-constant-or-None,
+# mechanism-name). A call matches the first row whose names it falls in and
+# whose required constant (if any) is reachable from its own argument tree
+# -- order matters for the commit/commit-tree pair sharing a name-group: a
+# call carrying both must keep the earlier, more specific tag.
+#
+# `commit_tree_plumbing` is the FIFTH mechanism (2026-08-26): DR-211's
+# rewrite moved fleet archival off `git commit` onto `git write-tree` +
+# `git commit-tree` + `git update-ref`. Those sites still call
+# `create_subprocess_exec`, so only the `"commit-tree"` constant separates
+# them from the asyncio row above. Whether that plumbing shape needs release
+# coverage is still open -- see the DELIBERATELY RETAINED note in the
+# allowlist below; this row only lets the enumerator SEE the sites.
+_MECHANISM_ROWS = (
+    (_ASYNCIO_EXEC_NAMES, "commit", "asyncio_create_subprocess_exec"),
+    (_RUN_GIT_HELPER_NAMES, "commit", "_run_git_helper"),
+    (_GIT_NATIVE_UNDERSCORE_GIT, "commit", "git_native._git"),
+    (
+        _ASYNCIO_EXEC_NAMES | _RUN_GIT_HELPER_NAMES | _GIT_NATIVE_UNDERSCORE_GIT,
+        "commit-tree",
+        "commit_tree_plumbing",
+    ),
+    (_COMMIT_SCOPED_NAMES, None, "commit_scoped"),
+    (_CAS_REF_CALL_NAMES, None, "cas_ref_landing"),
 )
 
 
@@ -231,31 +227,18 @@ class _EnclosingFunctionTracker(ast.NodeVisitor):
     def visit_Call(self, node: ast.Call):  # noqa: N802
         name = _callee_name(node)
         if name in _ALL_TRACKED_CALLEE_NAMES:
-            if name in _COMMIT_SCOPED_NAMES:
-                self.found.append((self.stack[-1], "commit_scoped", node))
-                self.generic_visit(node)
-                return
-            if name in _CAS_REF_CALL_NAMES:
-                # OUTCOME-keyed, not string-keyed: no `"commit"`/`"commit-tree"`
-                # constant is required or checked -- the callee name alone is
-                # the ref-move outcome this mechanism tracks.
-                self.found.append((self.stack[-1], "cas_ref_landing", node))
-                self.generic_visit(node)
-                return
-            constants = set(_string_constants(node))
-            if "commit" in constants:
-                if name in _ASYNCIO_EXEC_NAMES:
-                    mechanism = "asyncio_create_subprocess_exec"
-                elif name in _RUN_GIT_HELPER_NAMES:
-                    mechanism = "_run_git_helper"
-                else:
-                    mechanism = "git_native._git"
-                self.found.append((self.stack[-1], mechanism, node))
-            elif constants & _COMMIT_TREE_PLUMBING_CONSTANTS:
-                # Checked AFTER the exact-`"commit"` branch so a site carrying
-                # both spellings keeps its original tag rather than being
-                # silently reclassified by the new one.
-                self.found.append((self.stack[-1], "commit_tree_plumbing", node))
+            constants: set | None = None
+            for names, required_constant, mechanism in _MECHANISM_ROWS:
+                if name not in names:
+                    continue
+                if required_constant is None:
+                    self.found.append((self.stack[-1], mechanism, node))
+                    break
+                if constants is None:
+                    constants = set(_string_constants(node))
+                if required_constant in constants:
+                    self.found.append((self.stack[-1], mechanism, node))
+                    break
         self.generic_visit(node)
 
 
@@ -557,14 +540,7 @@ def test_enumerator_catches_all_four_mechanisms():
     one shape of commit-argv construction is worse than no enumerator, since
     it reads as coverage it does not have. Assert each of the unrelated
     mechanisms independently contributes at least one site (the
-    `expected_mechanisms` row set below, this module's MECHANISM_EXPECTED_
-    NONEMPTY convention).
-
-    Name kept ("...all_four...") for the fifth-mechanism precedent this
-    module already established: `commit_tree_plumbing` replaced
-    `asyncio_create_subprocess_exec` in `expected_mechanisms` without
-    renaming the test, reasoned inline below. The sixth mechanism
-    (`cas_ref_landing`, chunk C2) extends the same set the same way.
+    `expected_mechanisms` row set below).
     """
     sites = _enumerate_commit_sites()
     by_mechanism: dict[str, list[str]] = {}

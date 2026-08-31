@@ -68,7 +68,7 @@ from coordinator_core.bash_guards import dispatch
 from coordinator_core.bash_guards import dispatch_checks as dc
 from coordinator_core.bash_guards import guard_multiprobe_banner as guard
 from coordinator_core.bash_guards._dialect import Dialect
-from coordinator_core.bash_guards._helpers import OVERRIDE_KEYS_DOC
+from coordinator_core.bash_guards._helpers import OVERRIDE_KEYS_DOC_DISPLAY
 from coordinator_core.bash_guards._tool_names import COMMAND_TOOL_NAMES
 
 #: Same bridge-to-C8 skip pattern as
@@ -182,7 +182,10 @@ class TestMultiProbeBannerVerdict:
         # opening sentence). `operator_override_note` no longer interpolates
         # the bare `COORDINATOR_OVERRIDE_MULTIPROBE_BANNER` key; it renders
         # a doc pointer only. Asserting the literal key was stale.
-        assert OVERRIDE_KEYS_DOC in ctx
+        # RETARGETED 2026-08-30 (DR-290 form 1 -> form 2): the rendered
+        # message carries the DISPLAY constant (the settings-root pointer),
+        # not the repo-root-relative RESOLUTION form this asserted.
+        assert OVERRIDE_KEYS_DOC_DISPLAY in ctx
 
     def test_banner_command_advises_on_posix(self):
         out = guard.check(_payload(_BANNER_CMD_CONFIRMED), host_is_windows=False)

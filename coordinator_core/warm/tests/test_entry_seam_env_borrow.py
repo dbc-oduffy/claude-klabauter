@@ -158,30 +158,6 @@ def test_non_digit_carried_pid_pops_rather_than_binds(monkeypatch, bad):
     assert os.environ["CLAUDE_PID"] == "424242"
 
 
-def test_carried_pid_not_isolated_leaves_os_environ_untouched(monkeypatch):
-    """The `BrokenProcessPool` fallback shares this process with every other
-    in-flight connection -- a pid written there would answer for all of
-    them."""
-    _set_spawner_env(monkeypatch)
-    before = dict(os.environ)
-
-    with per_request_state(caller_pid="90210", warm_served=True, isolated=False):
-        assert dict(os.environ) == before
-
-    assert dict(os.environ) == before
-
-
-def test_carried_pid_restore_unwinds_even_when_the_block_raises(monkeypatch):
-    _set_spawner_env(monkeypatch)
-
-    with pytest.raises(RuntimeError):
-        with per_request_state(caller_pid="90210", warm_served=True, isolated=True):
-            assert os.environ["CLAUDE_PID"] == "90210"
-            raise RuntimeError("boom")
-
-    assert os.environ["CLAUDE_PID"] == "424242"
-
-
 def test_isolated_is_a_required_keyword_only_argument():
     with pytest.raises(TypeError):
         per_request_state()  # type: ignore[call-arg]

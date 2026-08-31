@@ -112,6 +112,59 @@ def test_fresh_paused_snapshot_with_idle_status_is_still_a_candidate():
     assert verdict["reason"] == "turn-ended"
 
 
+def test_stale_snapshot_but_transcript_still_reinstates_the_candidate():
+    """A parked peer is not disqualified for having sat still.
+
+    `receiver-state.json` is written at turn end, so a genuinely parked
+    session's snapshot only ages. Judging on age alone permanently hid every
+    peer idle longer than the p50 pin -- exactly the peers a Group EM exists
+    to surface. Evidence of stillness (transcript untouched since the
+    snapshot) reinstates candidacy however old the snapshot is.
+    """
+    now = datetime(2026, 8, 30, 18, 39, 22, tzinfo=timezone.utc)
+    stamped_at = (now - timedelta(seconds=3600)).isoformat().replace("+00:00", "Z")
+    with mock.patch.object(
+        read_pass,
+        "read_receiver_state",
+        return_value={"verdict": "PAUSED", "reason": "turn-ended", "stamped_at": stamped_at},
+    ), mock.patch.object(read_pass, "_transcript_moved_since", return_value=False):
+        verdict = read_pass.classify_peer(REPO_ROOT, _agent(status="idle"), now=now)
+    assert verdict["candidate"] is True
+    assert verdict["reason"] == "turn-ended"
+
+
+def test_stale_snapshot_with_moved_transcript_stays_out_defect_b_preserved():
+    """The mid-turn peer defect B exists for is still never a candidate.
+
+    Audit peer 30342983 was mid-turn on a ~210s-old snapshot while the
+    harness read `idle`. A transcript newer than the snapshot is that peer:
+    it has acted since, so the snapshot is genuinely misleading.
+    """
+    now = datetime(2026, 8, 30, 18, 39, 22, tzinfo=timezone.utc)
+    stamped_at = (now - timedelta(seconds=210)).isoformat().replace("+00:00", "Z")
+    with mock.patch.object(
+        read_pass,
+        "read_receiver_state",
+        return_value={"verdict": "PAUSED", "reason": "turn-ended", "stamped_at": stamped_at},
+    ), mock.patch.object(read_pass, "_transcript_moved_since", return_value=True):
+        verdict = read_pass.classify_peer(REPO_ROOT, _agent(status="idle"), now=now)
+    assert verdict["candidate"] is False
+    assert verdict["reason"] == "stale-snapshot-contradicts-paused"
+
+
+def test_unreadable_transcript_leaves_the_age_verdict_standing():
+    """No evidence of stillness is never read AS stillness."""
+    now = datetime(2026, 8, 30, 18, 39, 22, tzinfo=timezone.utc)
+    stamped_at = (now - timedelta(seconds=210)).isoformat().replace("+00:00", "Z")
+    with mock.patch.object(
+        read_pass,
+        "read_receiver_state",
+        return_value={"verdict": "PAUSED", "reason": "turn-ended", "stamped_at": stamped_at},
+    ), mock.patch.object(read_pass, "_transcript_moved_since", return_value=None):
+        verdict = read_pass.classify_peer(REPO_ROOT, _agent(status="idle"), now=now)
+    assert verdict["candidate"] is False
+
+
 def test_indeterminate_staleness_fails_closed_not_a_candidate():
     now = datetime(2026, 8, 30, 18, 39, 22, tzinfo=timezone.utc)
     with mock.patch.object(

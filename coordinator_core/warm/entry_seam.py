@@ -174,17 +174,11 @@ def collecting_diagnostics(into: Optional[List[str]] = None) -> Iterator[List[st
 # because this helper trusts its caller's word for free.
 #
 # `CLAUDE_PID` is borrowed whenever `isolated`, on the SAME terms as the two
-# lower-tier session vars: this server process's own `CLAUDE_PID` names
-# whoever spawned it, and `harness_registry.self_record()` resolves through
-# that name with no other discriminator -- left in place it attributes an
-# isolated dispatch's own self-classification to the spawner, the identical
-# misattribution shape `COORDINATOR_SESSION_ID` closes. When the request
-# carries the CALLER's own pid (`caller_context.CallerContext.pid`, on the
-# wire since C1b) that value is SET here, which is what actually closes the
-# three `self_record()` defects
-# `state/audits/2026-08-30-warm-identity-cohort-sweep.md` names; when it does
-# not, the name is popped and nothing is fabricated -- popping only refuses
-# to let a stranger's pid answer on this dispatch's behalf.
+# lower-tier session vars, and is the axis that closes the three
+# `self_record()` defects `state/audits/2026-08-30-warm-identity-cohort-
+# sweep.md` names -- see `per_request_state`'s `caller_pid` parameter
+# docstring below for the full argument (why its own axis, not a field of
+# `session_id`).
 #
 # The carried pid is re-validated as a decimal digit string before it is
 # bound, for the same reason `session_id` is re-validated against
@@ -200,8 +194,11 @@ _ENV_BORROWED_NAMES = _ENV_ALL_SESSION_NAMES + (_ENV_CLAUDE_PID_NAME,)
 
 
 @contextlib.contextmanager
+# Review: overengineering-reviewer (finding 5) -- `caller_pid`'s `= None`
+# default was unreachable (one private call site, positional) and
+# inconsistent with its siblings, neither of which defaults.
 def _environ_identity_borrow(
-    session_id: Optional[str], isolated: bool, caller_pid: Optional[str] = None
+    session_id: Optional[str], isolated: bool, caller_pid: Optional[str]
 ) -> Iterator[None]:
     """Mirror the caller's carried identity into `os.environ` for the life
     of one ISOLATED dispatch, restored in a `finally` regardless of how the
@@ -223,9 +220,8 @@ def _environ_identity_borrow(
     (`caller_context.CallerContext.pid`). Bound to `CLAUDE_PID` when it is a
     decimal digit string; absent, `None`, or any other shape pops the name
     instead, which is the pre-existing behaviour and never a fabricated
-    value. Its own axis rather than a field of `session_id` because
-    `harness_registry.self_record()` keys off the pid alone, so a request
-    carrying one and not the other must still close the defect it can.
+    value. See `per_request_state`'s `caller_pid` parameter for why this is
+    its own axis rather than a field of `session_id`.
     """
     if not isolated:
         yield
@@ -241,8 +237,8 @@ def _environ_identity_borrow(
         else:
             for name in _ENV_ALL_SESSION_NAMES:
                 os.environ.pop(name, None)
-        if caller_pid is not None and str(caller_pid).isdigit():
-            os.environ[_ENV_CLAUDE_PID_NAME] = str(caller_pid)
+        if caller_pid is not None and caller_pid.isdigit():
+            os.environ[_ENV_CLAUDE_PID_NAME] = caller_pid
         else:
             os.environ.pop(_ENV_CLAUDE_PID_NAME, None)
         yield
@@ -320,6 +316,17 @@ def per_request_state(
     needs in order to classify an isolated dispatch as the CALLER rather than
     as the engine owner. Omitted/`None` pops the name, the behaviour every
     caller had before this axis existed.
+
+    ITS OWN AXIS RATHER THAN A FIELD OF `session_id`, which is the question
+    the module comment above defers here: `self_record()` keys off the pid
+    ALONE, so a request carrying one and not the other must still close the
+    defect it can. Folding the pid into the session-id axis would make a
+    valid pid unreachable whenever the session id was absent or failed its
+    UUID gate -- two independent facts sharing one gate, where the caller
+    that has only one of them is precisely the case the axis exists for.
+    Passing the whole `CallerContext` was the other candidate and is worse
+    here: four of its five fields have no consumer in this seam, and it
+    would import `warm.caller_context` into a surface ~47 call sites reach.
 
     `isolated` is a REQUIRED keyword-only argument, with no default: every
     call site must declare its own execution shape rather than inheriting a

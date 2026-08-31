@@ -350,7 +350,7 @@ def _spawn_cost_clause(tool_name: str) -> str:
     `ForEach-Object`/`%` per-object pipeline cost, not `bash.exe`'s
     per-spawn one.
     """
-    if tool_name == "PowerShell":
+    if dialect_from_tool_name(tool_name) is Dialect.POWERSHELL:
         return "a ForEach-Object/% pipeline stage runs its block once per input object on this host"
     return "bash.exe costs 200-500ms per spawn on this host"
 

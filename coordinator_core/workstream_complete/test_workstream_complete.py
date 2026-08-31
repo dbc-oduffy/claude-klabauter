@@ -5415,15 +5415,33 @@ def _cv_readings(
     }
 
 
-def test_completion_verdict_ac8_all_four_not_applicable_is_indeterminate_never_complete():
-    """AC8: nothing was measured (all four census gates `not-applicable`),
-    so `verdict` must be `indeterminate`, never `complete` -- `complete`
-    requires positive evidence (>=1 `clean`)."""
+def test_completion_verdict_ac8_all_four_not_applicable_is_never_complete():
+    """AC8's guarantee, unchanged: nothing was measured (all four census
+    gates `not-applicable`), so `verdict` must NEVER be `complete` --
+    `complete` requires positive evidence (>=1 `clean`).
+
+    The headline value on this census is `not-applicable`, not
+    `indeterminate` (2026-08-31): the rollup used to be the one layer
+    contradicting the rule every per-gate reader obeys -- `not-applicable`
+    is nothing to look at, `indeterminate` is tried-and-could-not. The
+    `never complete` assertion below is the load-bearing half of this test
+    and must survive any future change to the value itself."""
     payload = _cv.compose_completion_verdict(_cv_readings())
-    assert payload["verdict"] == "indeterminate"
+    assert payload["verdict"] != "complete"
+    assert payload["verdict"] == "not-applicable"
     assert payload["clean_count"] == 0
     assert payload["not_applicable_count"] == 4
     assert payload["indeterminate_gates"] == []
+
+
+def test_completion_verdict_empty_census_is_indeterminate_not_not_applicable():
+    """An EMPTY census -- no census gate present in `readings` at all --
+    stays `indeterminate`. Nothing was read, which is a different fact
+    from everything having been read and found inapplicable, and the
+    `not-applicable` arm must not swallow it."""
+    payload = _cv.compose_completion_verdict({"review_scale": _CV_NA})
+    assert payload["verdict"] == "indeterminate"
+    assert payload["not_applicable_count"] == 0
 
 
 @pytest.mark.parametrize(

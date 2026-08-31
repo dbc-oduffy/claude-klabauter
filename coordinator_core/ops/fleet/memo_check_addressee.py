@@ -178,12 +178,11 @@ def compute_check_addressee_candidate(self_root: Path, to: str) -> dict:
         if central_ids is None:
             central_ids = read_central_receiver_ids()
         if central_check_id in central_ids:
-            # foreign-identity: NOT-REACHABLE — fleet memo op, operator-invoked, not ambient (audit row 26)
             note = (
                 f"receiver {to!r} is a central receiver id "
-                f"(identity.centralReceiverIds) that resolves to the DoE-claude "
-                f"repo, but none of the manifest's central receiver ids is "
-                f"registered in the machine-local registry."
+                f"(identity.centralReceiverIds) that resolves to a central "
+                f"hub repo, but none of the manifest's central receiver ids "
+                f"is registered in the machine-local registry."
             )
         else:
             suggestion = suggest_nearest_receiver(to, all_repos)

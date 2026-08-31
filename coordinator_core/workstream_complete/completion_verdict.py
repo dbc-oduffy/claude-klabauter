@@ -529,11 +529,34 @@ def compose_completion_verdict(readings: Mapping[str, GateReading]) -> dict[str,
     only:
         any reading "open"                            -> "incomplete"
         elif >=1 "clean" AND no "indeterminate"        -> "complete"
+        elif every reading "not-applicable"            -> "not-applicable"
         else                                           -> "indeterminate"
     AC8: `complete` requires POSITIVE EVIDENCE — a census with zero
-    `clean` readings (e.g. all four `not-applicable`) falls into the
-    `else` arm above and reads `indeterminate`, never `complete`, because
-    the `elif` guard requires a `clean_count` of 1 or more.
+    `clean` readings never reads `complete`, because the `elif` guard
+    requires a `clean_count` of 1 or more. That guarantee is unchanged.
+
+    `not-applicable` (2026-08-31, cross-repo/inbox/2026-08-30-example-retrieval-repo-
+    em-brightline-gate-discards-computed-scale-inputs.md follow-up) is the
+    fourth headline value, and it is AC8's own distinction carried up to
+    the rollup rather than a relaxation of it. An all-`not-applicable`
+    census used to read `indeterminate`, which made this rollup the one
+    layer that contradicts the rule every per-gate reader here obeys:
+    `not-applicable` is nothing to look at and stays silent, same as
+    `clean`; `indeterminate` is the gate tried to look and could not (see
+    the tripwire `NOT-APPLICABLE-SPANS-TWO-SILENCES`). Collapsing the two
+    at the headline threw away a distinction this payload's own
+    `clean_count`/`not_applicable_count`/`indeterminate_gates[]` still
+    carried, and it did it on the close where nothing applied — so that
+    close could never read anything but `indeterminate`, and a verdict
+    that is always `indeterminate` is one an EM learns to skip past. That
+    training effect is the harm, not the word.
+
+    The positive-evidence guarantee survives intact because this arm is
+    NOT `complete` and never becomes it: it asserts only that the census
+    found nothing to check, which is exactly what it measured. An EMPTY
+    census (no census gate present in `readings` at all) stays
+    `indeterminate` — nothing was read, which is a different fact from
+    everything having been read and found inapplicable.
 
     `indeterminate_gates[]` names every census gate whose reading is
     `indeterminate`, ALWAYS populated regardless of the top-level
@@ -571,6 +594,8 @@ def compose_completion_verdict(readings: Mapping[str, GateReading]) -> dict[str,
         verdict = "incomplete"
     elif clean_count >= 1 and not indeterminate_gates:
         verdict = "complete"
+    elif census_statuses and not_applicable_count == len(census_statuses):
+        verdict = "not-applicable"
     else:
         verdict = "indeterminate"
 

@@ -337,3 +337,64 @@ def test_list_prints_row_set_and_publishes_nothing(tmp_path, monkeypatch, capsys
     assert order == []
     out = capsys.readouterr().out
     assert "claude-klabauter-bin" in out
+
+
+# ---------------------------------------------------------------------------
+# C2 — a contended row's `repo_root` refuses at once, naming that row's
+# destination via the same `_lock_busy_message` builder `percolate-round.py`
+# uses (the mirror takes exactly ONE lock, on the resolved worktree root, so
+# a contended sweep refuses as a whole rather than per-row -- see C2's brief,
+# "the per-row abort-vs-continue question is moot, not open").
+# ---------------------------------------------------------------------------
+
+
+class _TimeoutLockCtx:
+    def __init__(self, target, **kwargs):
+        pass
+
+    def __enter__(self):
+        raise _mod._round._RoundLockTimeout(
+            "Could not acquire lock for X:/claude-klabauter within 0.0s "
+            "(held by: pid=4242 holder='peer:percolate-round' "
+            "acquired_at=2026-08-30T00:00:00+00:00)"
+        )
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+
+def test_percolate_mirror_denies_fast_on_contended_repo_root(tmp_path, monkeypatch, capsys):
+    """Third leg (brief's own numbering): a row's `repo_root` held by a peer
+    round refuses in well under a second and names that row's destination
+    plus the holder — never a 180s sleep."""
+    targets = [
+        "claude-klabauter-publish-repo-toplevel",
+        "claude-klabauter-bin",
+        "claude-klabauter",
+    ]
+    monkeypatch.setattr(
+        _mod, "_mirror_groups", lambda root: {"X:/claude-klabauter": targets}
+    )
+    monkeypatch.setattr(_mod._round, "_resolve_dest", lambda t, r: "X:/claude-klabauter")
+    monkeypatch.setattr(_mod._round, "_resolve_repo_root", lambda d: "X:/claude-klabauter")
+    monkeypatch.setattr(
+        _mod._round,
+        "_round_held_lock",
+        lambda target, **kw: _TimeoutLockCtx(target, **kw),
+    )
+
+    import time
+
+    start = time.monotonic()
+    rc = _mod.main(
+        ["claude-klabauter", "--percolate-root", str(tmp_path), "--invocation-authorized"]
+    )
+    elapsed = time.monotonic() - start
+
+    assert rc == _mod._round._EXIT_LOCK_BUSY
+    assert elapsed < 1.0
+    err = capsys.readouterr().err
+    assert "X:/claude-klabauter" in err
+    assert "pid=4242" in err
+    assert "COORDINATOR_ALLOW_PERCOLATE_QUEUE" not in err
+    assert "Re-run" not in err and "re-run" not in err.lower() and "retry" not in err.lower()

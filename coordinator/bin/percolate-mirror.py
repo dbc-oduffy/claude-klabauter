@@ -539,7 +539,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         with _round._round_held_lock(
             Path(repo_root),
             holder_label=f"percolate-mirror:{Path(mirror_root).name}",
-            timeout=_round._round_lock_wait_secs(),
+            timeout=_round.publish_contention_wait_secs(),
         ):
             # The destination-dirtiness preflight is GONE (plan AC5). It existed
             # only because a stdout-derived pathspec could not tell this round's

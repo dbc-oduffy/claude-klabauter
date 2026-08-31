@@ -251,6 +251,28 @@ _CURL_OUTPUT_RE = re.compile(r"\bcurl\b.{0,200}?(-o\b|--output\b)", re.DOTALL)
 _WGET_OUTPUT_RE = re.compile(r"\bwget\b.{0,200}?(-O\b|--output-document\b)", re.DOTALL)
 _SED_WRITE_SCRIPT_RE = re.compile(r"\bsed\b.{0,200}?\bw\s+\S", re.DOTALL)
 
+#: PowerShell's own write verbs. `MATCHERS` has declared `"PowerShell"` since
+#: this guard was written, but every marker above it is a POSIX shape, so a
+#: `Set-Content CLAUDE.md x` reached no write marker at all and the guard
+#: bare-cleaned on the dialect it claimed to cover -- exactly the
+#: declaration-without-capability gap
+#: `test_no_false_clean_on_unparsed_dialect.py` exists to name. Measured
+#: 2026-08-30: `Set-Content`/`Add-Content`/`Out-File` all missed, while the
+#: bash-idiom `echo x > <gov>` denied.
+#:
+#: Cmdlet names are matched case-insensitively (PowerShell itself is), and
+#: each is anchored at a token boundary so `Set-ContentType` is not one.
+#: `Set-Item`/`New-Item`/`Remove-Item`/`Move-Item`/`Copy-Item` are the
+#: item-level writes; `Tee-Object` mirrors `tee`; the `>`/`>>` operators are
+#: already covered by `_BARE_REDIRECT_RE`, which is dialect-neutral.
+_PS_WRITE_CMDLET_RE = re.compile(
+    r"(?<![\w-])(?:"
+    r"Set-Content|Add-Content|Out-File|Tee-Object|Set-Item|New-Item"
+    r"|Remove-Item|Move-Item|Copy-Item|Rename-Item|Clear-Content"
+    r")(?![\w-])",
+    re.IGNORECASE,
+)
+
 
 def _redirect_target_token(segment: str) -> Optional[str]:
     """The token immediately following the last real (non-fd-duplication,
@@ -305,6 +327,7 @@ def _has_write_marker(text: str) -> bool:
         _CURL_OUTPUT_RE,
         _WGET_OUTPUT_RE,
         _SED_WRITE_SCRIPT_RE,
+        _PS_WRITE_CMDLET_RE,
     ):
         if pattern.search(text) or pattern.search(folded):
             return True

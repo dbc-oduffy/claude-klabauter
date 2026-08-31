@@ -278,6 +278,16 @@ EXPECTED: Dict[str, _Expected] = {
     "stash-apply-verification-advisory": _Expected(
         ("Bash", "PowerShell"),
     ),
+    # Registered full-universe and dialect-reading from birth, but never
+    # classified here -- which is what the ratchet caught (2026-08-30: the
+    # guard is in `guard_roster()` and absent from this table). No `kind`:
+    # `block_fleet_delegation_creation` imports `dialect_from_tool_name` and
+    # routes a recognized non-bash dialect through
+    # `_detector.evaluate_for_dialect`, so it genuinely detects on both
+    # dialects rather than merely declaring both.
+    "block-fleet-delegation-creation": _Expected(
+        ("Bash", "PowerShell"),
+    ),
     "head-tail-plumbing-rewrite": _Expected(
         ("Bash", "PowerShell"),
     ),
@@ -437,13 +447,18 @@ def _compare(
 
 def test_discovery_found_the_expected_scope():
     """Guards the guard: pins the module-level-`MATCHERS`-declaring
-    population this module's docstring derives -- 27 modules (25 full +
+    population this module's docstring derives -- 28 modules (26 full +
     2 Bash-only) -- not the plan's own unverified 19/5 estimate. This is a
     documentation fact about module declarations, distinct from (and
-    smaller than) the 52-entry population `_actual_matchers()` enforces
-    (see `test_every_registered_guard_is_classified`)."""
+    smaller than) the 54-entry population `_actual_matchers()` enforces
+    (see `test_every_registered_guard_is_classified`).
+
+    Both counts rose by one on 2026-08-30 with
+    `block_fleet_delegation_creation`, which had been live in
+    `guard_roster()` and in this scan while classified in neither pin --
+    the drift this pin exists to make loud, working as intended."""
     stems = _scoped_module_stems()
-    assert len(stems) == 27, sorted(stems)
+    assert len(stems) == 28, sorted(stems)
     assert "block_stash_destruction" in stems
     assert "guard_powershell_via_bash" in stems
     assert "block_dev_repo_sentinel_removal" not in stems
@@ -455,7 +470,7 @@ def test_every_registered_guard_is_classified():
     every other assertion below passing vacuously by comparing an empty or
     partial set."""
     actual = _actual_matchers()
-    assert len(actual) == 53, sorted(actual)
+    assert len(actual) == 54, sorted(actual)
     assert set(actual) == set(EXPECTED)
 
 
@@ -497,7 +512,7 @@ def test_every_entry_is_in_exactly_one_partition_bucket():
             bucket3 += 1
         else:
             raise AssertionError("%r has an unrecognised kind %r" % (guard_id, exp.kind))
-    assert bucket1 + bucket2 + bucket3 == len(EXPECTED) == 53
+    assert bucket1 + bucket2 + bucket3 == len(EXPECTED) == 54
     assert bucket3 == 0, (
         "expected 0 dual-declaring-but-Bash-detecting entries -- C8's "
         "second pass converted all 9 (Finding 7 of the recensus record), "

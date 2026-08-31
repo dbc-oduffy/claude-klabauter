@@ -203,6 +203,49 @@ _PS_COMMAND_FOR: Dict[str, Callable[[Any], str]] = {
     ),
     "guard_no_optional_locks": lambda mod: "git status",
     "guard_reap_stale_git_lock": lambda mod: "git status",
+    # The four below entered this table on 2026-08-30, when the meta-test
+    # `test_every_powershell_declared_guard_has_a_fixture` was found red:
+    # each declares `MATCHERS = COMMAND_TOOL_NAMES` (PowerShell included) and
+    # had no fixture, so BOTH property tests KeyError'd rather than
+    # certifying anything. Each command below was measured against its own
+    # guard under this file's own `_powershell_payload` shape before being
+    # written here -- not invented from the module's prose.
+    #
+    # Same positional-target `New-Item <target>` form as the sentinel-
+    # creation guards above, and for the same reason.
+    "block_fleet_delegation_creation": (
+        lambda mod: f"New-Item {mod._TARGET_BASENAME}"
+    ),
+    # The scaffold mechanism invoked with `--root <Claude Home>`, which is
+    # exactly what this guard refuses. Claude Home is computed at fixture
+    # time rather than written as a literal: a machine-absolute path in this
+    # file would be wrong on every other host and trips the concrete-path
+    # citation sweep.
+    "guard_repo_setup_claude_home_refusal": (
+        lambda mod: (
+            "python3 -m coordinator_core.install.scaffold_structure --root "
+            + os.path.join(os.path.expanduser("~"), ".claude").replace("\\", "/")
+        )
+    ),
+    # A spawn shape this guard's classifier recognises, under the PowerShell
+    # tool name. NOT a PowerShell-native cmdlet, deliberately and with the
+    # gap named: `Get-ChildItem -Recurse` and `Select-String` (the PS-native
+    # equivalents of the `find`/`grep` spawns this guard exists to refuse)
+    # were both measured MISS on 2026-08-30 -- the shared shape classifier
+    # has no PS-native rows for them. That is a finding against
+    # `_shape_classifier`, filed rather than papered over here; this fixture
+    # discharges what AC1 asks of THIS guard (a PowerShell payload reaches a
+    # verdict) without pretending the PS-native shapes are covered.
+    "guard_host_subagent_bash_spawn_shapes": lambda mod: "rg TODO",
+    # A PowerShell-native write cmdlet at a governed surface. This one was
+    # a MISS until 2026-08-30: the guard declared PowerShell but carried
+    # only POSIX write markers, so `Set-Content <gov>` bare-cleaned. The
+    # capability landed with `_PS_WRITE_CMDLET_RE` in the same session that
+    # authored this row -- the fixture and the capability are deliberately
+    # the same change, since a fixture proving nothing is worse than none.
+    "guard_doctrine_surface_bash_write": (
+        lambda mod: "Set-Content CLAUDE.md 'corrupted'"
+    ),
 }
 
 
@@ -304,6 +347,31 @@ _MONKEYPATCH_FOR: Dict[str, Callable[[Any, pytest.MonkeyPatch], Dict[str, Any]]]
     "block_noncanonical_branch_creation": lambda mod, mp: (
         _hazard_repo_monkeypatch(mod, mp) or {}
     ),
+    # OPT-IN gate, not a dialect question: this guard returns None for any
+    # repo whose `coordinator.local.md` does not declare
+    # `subagent_bash_spawn_shapes: deny`, so without these two seams the
+    # fixture never reaches `classify_command` under EITHER dialect and the
+    # clean says nothing about PowerShell. Patched at the same two seams the
+    # guard's own `check` consults, in the order it consults them.
+    "guard_host_subagent_bash_spawn_shapes": lambda mod, mp: (
+        mp.setattr(mod, "_repo_config", lambda cwd=None: "structural-test-config"),
+        mp.setattr(mod, "_policy_is_deny", lambda config: True),
+        {},
+    )[-1],
+    # `governed_surfaces` is a REQUIRED positional this guard's caller
+    # (`dispatch.py`) resolves per call -- `_call_guard` cannot infer it, and
+    # omitting it is a TypeError, not a clean. Supplied here as the four
+    # governed doctrine surfaces, matching what the live resolver hands the
+    # guard; `check` fails OPEN on an empty list, so a real value is what
+    # makes this fixture exercise anything.
+    "guard_doctrine_surface_bash_write": lambda mod, mp: {
+        "governed_surfaces": [
+            "CLAUDE.md",
+            "MEMORY.md",
+            "coordinator.local.md",
+            "AGENTS.md",
+        ]
+    },
 }
 
 

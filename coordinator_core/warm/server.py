@@ -207,6 +207,8 @@ from coordinator_core.warm import (
     skew,
     telemetry,
 )
+from dataclasses import replace
+
 from coordinator_core.warm.caller_context import CallerContext
 from coordinator_core.warm.engine_root import current_engine_clone
 from coordinator_core.warm.entry_seam import per_request_state
@@ -502,13 +504,11 @@ def _run_dispatch(msg: dict, *, caller: Optional[CallerContext] = None, isolated
     before this call -- docs/plans/2026-08-30-every-op-runs-in-the-callers-
     environment.md § C1b), has its `session_id` AND its `pid` bound for the
     duration of the dispatch via `per_request_state`'s own `session_id` /
-    `caller_pid` parameters -- see that seam's docstring for the full
-    identity-attribution defect this closes. Two parameters rather than one
-    because `harness_registry.self_record()` keys off the pid alone, so a
-    session-id-only bind leaves the three defects
-    `state/audits/2026-08-30-warm-identity-cohort-sweep.md` enumerates
-    standing. `None` (no identity carried) is a no-op bind on both axes,
-    reproducing today's server-resolves-its-own-env behaviour exactly.
+    `caller_pid` parameters -- see that seam's `caller_pid` docstring for the
+    full identity-attribution defect this closes and why it is two
+    parameters rather than one. `None` (no identity carried) is a no-op bind
+    on both axes, reproducing today's server-resolves-its-own-env behaviour
+    exactly.
 
     `isolated` (C3, defaults `False`) is threaded straight through to
     `entry_seam.per_request_state`'s own required `isolated` argument. This
@@ -986,6 +986,42 @@ def _worker_process_init() -> None:
     _preload_op_registry()
 
 
+def _strip_ambient_pid(
+    caller: CallerContext, caller_payload: object
+) -> CallerContext:
+    """Drop `pid` unless the WIRE actually carried one -- never let this
+    server's own pid answer on an unidentified caller's behalf.
+
+    `resolve_caller_context` gives `pid` an `os.getpid()` fallback rung, and
+    that rung is correct where it was designed to fire: CLIENT-side, in
+    `warm.client` and `warm.hook_http`, where this process genuinely IS the
+    caller. Its own docstring says so and names the exclusion in terms --
+    the rung exists "for a genuinely fresh dispatch (payload absent
+    entirely) rather than for a server reading an incomplete wire payload."
+    This IS that server, so the rung must not fire here.
+
+    WHY THIS IS NOT DEFENSIVE PADDING. `session_id` and `agent_id` have no
+    ambient rung at all, so the no-identity path resolves them to `None` and
+    binds nothing -- the omit-never-substitute contract. `pid` breaks that
+    symmetry, and once `entry_seam._environ_identity_borrow` began SETTING
+    `CLAUDE_PID` from the carried pid rather than only popping it, the
+    asymmetry became load-bearing: a request arriving with no `_caller` at
+    all (older client, or a transport that cannot identify its caller) would
+    have stamped THIS ENGINE's pid into the dispatch's environment, and
+    `harness_registry.self_record()` -- which keys off `CLAUDE_PID` and
+    nothing else -- would have classified the dispatch as the engine owner.
+    That is the exact misattribution docs/plans/2026-08-30-every-op-runs-in-
+    the-callers-environment.md exists to close, re-entering through the one
+    field that has a fallback. Popping (the pre-C1b behaviour) resolves
+    nothing and is safe; substituting is worse than either.
+    """
+    if isinstance(caller_payload, Mapping):
+        carried = caller_payload.get("pid")
+        if isinstance(carried, str) and carried:
+            return caller
+    return replace(caller, pid=None)
+
+
 def _untrusted_caller_response(request_id) -> dict:
     """JSON-RPC 2.0 error envelope for a request that carried no
     `_engine_token` field at all.
@@ -1198,6 +1234,7 @@ def _serve_line(
     caller = caller_context.resolve_caller_context(
         caller_payload if isinstance(caller_payload, Mapping) else None
     )
+    caller = _strip_ambient_pid(caller, caller_payload)
 
     if client_token is None:
         _write_and_release(_untrusted_caller_response(request_id))

@@ -23,7 +23,7 @@ import pytest
 from coordinator_core.bash_guards import _verdict
 from coordinator_core.bash_guards import block_dev_repo_sentinel_removal as guard
 from coordinator_core.bash_guards import dispatch
-from coordinator_core.bash_guards._helpers import OVERRIDE_KEYS_DOC
+from coordinator_core.bash_guards._helpers import OVERRIDE_KEYS_DOC_DISPLAY
 
 
 SENTINEL = ".coordinator-dev-repo"
@@ -235,7 +235,8 @@ class TestDenyMessageDiscipline:
         # Asserting a pasteable `KEY=1` literal was stale against that
         # doctrine.
         reason = _deny_reason(guard.check(_payload("rm %s" % SENTINEL)))
-        assert OVERRIDE_KEYS_DOC in reason
+        # RETARGETED 2026-08-30 (DR-290 form 1 -> form 2).
+        assert OVERRIDE_KEYS_DOC_DISPLAY in reason
 
 
 class TestNotIdentityGated:

@@ -1685,8 +1685,12 @@ def build_review_scale_judgment_point(
         question=(
             "What review scale does decide_review_scale select for this close, and is it "
             "resolved? It is not resolved here — settle it rather than proceeding without "
-            "it: supply the missing input named in `reason` and recompute, or resolve the "
-            "scale by hand off SKILL.md's table and partition the review on that basis."
+            "it. When `gates['review_scale'].remediation` is present it names the exact "
+            "unlock: re-run with `decisions[\"stage_paths\"]` (`[]` is a valid, resolving "
+            "answer) and the gate resolves itself. Resolving the scale by hand off "
+            "SKILL.md's table is the fallback for when that re-run still cannot resolve "
+            "it, not the first move — a hand count uses different definitions than the "
+            "engine's and can return a different verdict for the same tree."
         ),
         dispositions=[
             build_disposition("resolve-input-and-recompute", resolves=[]),
@@ -4908,6 +4912,28 @@ def brief(decisions: Optional[dict[str, Any]] = None, repo_root: Optional[Path] 
     # its `--review-slice` list branch, removed in the ceremony.wsc_tail
     # kill, 2026-08-23).
     review_scale_payload = review_scale_decision._asdict()
+    # AN UNRESOLVED SCALE MUST NAME ITS OWN UNLOCK, NOT JUST ITS MISSING INPUTS.
+    # `decide_review_scale`'s `reason` names `code_loc`/`commit_count`/
+    # `surface_count` — MEASUREMENT OUTPUTS, none of which a caller supplies.
+    # The one input that actually unblocks them is `decisions["stage_paths"]`,
+    # which gates the measurement above; `[]` is a valid answer (this session
+    # has no uncommitted files) and resolves the committed leg in full. Without
+    # this key the EM reads "supply the missing input named in reason", has no
+    # way to supply it, and hand-sums the diff instead — the failure this field
+    # exists to end. Hand-summation does not merely cost time: it produces
+    # numbers that disagree with the engine's own definitions (a close measured
+    # gross LOC over an oldest..newest range where the engine measures
+    # noise-excluded `code_loc` per owned sha), so the two paths can return
+    # different verdicts for the same tree.
+    if not review_scale_decision.resolved and measurement_paths is None:
+        review_scale_payload["remediation"] = (
+            "measurement not run: `decisions[\"stage_paths\"]` is absent, and it gates "
+            "the row-4 brightline measurement. Re-run `brief` with that key to resolve "
+            "this gate exactly — `[]` is a valid, resolving answer when this session "
+            "has no uncommitted files. Do NOT hand-sum the diff: `code_loc`, "
+            "`commit_count` and `surface_count` are outputs of that measurement, not "
+            "values a caller supplies, and a hand count uses different definitions."
+        )
     if measured_commit_count is not None:
         for _slice in review_scale_commit_slices:
             _slice["scope_kind"] = "diff"

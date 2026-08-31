@@ -120,5 +120,5 @@ def _ctx(*, plugin_root):
     from coordinator_core.warm.caller_context import CallerContext
 
     return CallerContext(
-        plugin_root=plugin_root, cwd=None, session_id=None, agent_id=None
+        plugin_root=plugin_root, cwd=None, session_id=None, agent_id=None, pid=None
     )

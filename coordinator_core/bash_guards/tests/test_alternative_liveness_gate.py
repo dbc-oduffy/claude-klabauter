@@ -261,7 +261,12 @@ def test_fire_guard_isolates_from_a_pre_existing_session_latch(monkeypatch):
 EXPECTED_UNVERIFIABLE_COUNTS: Dict[str, int] = {
     "check_sed_range_read_advise": 2,  # "the Read tool" + Read(...) -- both harness capability, no structured oracle
     "check_cat_heredoc_write_advise": 1,  # "the Write tool" -- same reason
-    "check_heredoc_repo_write_advise": 1,  # "the Write tool" -- same reason
+    # check_heredoc_repo_write_advise's row was REMOVED (2026-08-30), the same
+    # shrink-not-raise move the head_tail row below records: its "the Write
+    # tool" capability marker is no longer emitted, so the measured count is
+    # 0 and the key belongs absent rather than set to 0. UNVERIFIABLE
+    # shrinking is the only honest direction of travel, per this module's own
+    # docstring. If the marker reappears, restore the row with the reason.
     # H11's narrowed `guard_grep_via_bash` (2026-07-30, docs/plans/2026-07-30-
     # os-aware-guard-advisory-defaults.md) names "dispatching an Explore or
     # general-purpose subagent" as its fallback -- a real, dispatchable
@@ -306,6 +311,26 @@ EXPECTED_UNVERIFIABLE_COUNTS: Dict[str, int] = {
     # -- genuinely ambiguous, not dead, per this module's own UNVERIFIABLE
     # contract.
     "block_approval_sentinel_creation": 10,
+    # Same message shape, same count, same reason as the row above:
+    # `block_fleet_delegation_creation`'s REASON_DIRECT copy names `grep`
+    # bare plus the identical nine `git <query-subcommand>` forms, each
+    # EXECUTED for real in `probe_command`'s throwaway non-git tmp dir,
+    # where they exit 128 / grep's usage error. Ambiguous, not dead. Entered
+    # this table on 2026-08-30 with the guard's first `LIVE_TRIGGERS` row --
+    # the count was measured, not predicted, and it is a property of the
+    # probe's tmp dir rather than of this host.
+    "block_fleet_delegation_creation": 10,
+    # Same shape as the `guard_grep_via_bash` row above: this guard's decline
+    # copy names answering "in-process", which is a real capability
+    # (`guard_inprocess_search`'s own genuine zero-fork answer, and the reason
+    # this guard declines that family at all) -- but the manifest is keyed
+    # `<guard>::<marker>` precisely so one guard's true claim cannot validate
+    # another's same-worded one, and no
+    # `guard_host_subagent_bash_spawn_shapes::in-process` entry exists yet.
+    # UNVERIFIABLE, not DEAD: unproven, not false. Close it by adding the
+    # manifest entry -- a human-reviewed capability record, not a pin bump.
+    # Entered with this guard's first LIVE_TRIGGERS row, 2026-08-30.
+    "guard_host_subagent_bash_spawn_shapes": 1,
 }
 
 #: the Director of Engineering's review (finding 6, "UNVERIFIABLE is an ungated sink"): pin a

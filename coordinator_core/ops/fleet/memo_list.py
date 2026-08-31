@@ -640,7 +640,11 @@ def _resolve_candidate(
         return candidate
 
     if to.strip().lower() in _read_central_receiver_ids():
-        # foreign-identity: NOT-REACHABLE — fleet memo op, operator-invoked, not ambient (audit row 26)
+        # foreign-identity: NOT-REACHABLE — basis: DELIBERATE INVOCATION, not true
+        # unreachability. `memo.list` resolution mode (`to` supplied) is only reached
+        # via a `memo.send --dry-run`/`memo.list --to` preview an operator deliberately
+        # types; unlike `memo.check_addressee`, no `/pickup` code path calls it
+        # ambiently (audit row 26).
         return {
             "id": to,
             "receiver": to,

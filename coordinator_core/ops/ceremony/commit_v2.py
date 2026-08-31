@@ -256,26 +256,17 @@ def _guard_class_relay_step(
     return {"transitions": transitions, "skips": skips}
 
 
-def _release_committed_claims_step(worktree_root: Path, released: list) -> None:
+def _release_committed_claims_step(worktree_root: Path, released: list[str]) -> None:
     """Runs AFTER `commit_paths` has already landed the commit -- like
     `_guard_class_relay_step`, this step cannot refuse, delay, or fail it
-    (NEGATIVE SPEC). Releases this session's own `T` claims on `released`
-    (the exact `raw_paths + raw_deleted` this commit covered) via
-    `session_scope.release_committed_claims`, so the default committer no
-    longer leaves the claim ledger growing monotonically underneath it
-    (docs/dispatch-briefs/2026-08-30-the-default-committer-releases-its-
-    claims/C1.md).
+    (NEGATIVE SPEC).
 
     `sid` comes from `session_core.resolve_session_id`, which can resolve to
     the SPAWNING session's identity inside the resident warm server (env
     tiers 1-3) rather than the true caller's -- the same exposure
     `detached_render_commit.py` and `post_commit_tail.py` already carry
     through the same function; not a new class introduced here, and the
-    transport fix is routed separately. An empty/unresolvable sid is
-    skipped explicitly (never guessed), and any exception here is caught
-    and degraded to a debug log -- the claim is simply RETAINED, which is
-    the safe residue: it never turns an already-landed commit into a
-    reported failure.
+    transport fix is routed separately.
     """
     if not released:
         return

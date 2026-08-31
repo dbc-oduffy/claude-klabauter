@@ -18,7 +18,6 @@ path is.
 
 from __future__ import annotations
 
-import inspect
 from pathlib import Path
 
 import pytest
@@ -72,25 +71,14 @@ def _measure(text: str):
     return measure_envelope(envelope)
 
 
-# ---------------------------------------------------------------------------
-# Axis 3 declaration -- the call site itself must carry a SUBJECT/NOT-FOREIGN
-# comment (module docstring "AXIS 3", C3's identical per-site declaration
-# shape) so a future path added to either renderer cannot silently start
-# leaking a fourth repo identity without a reviewer seeing an undeclared
-# render.
-# ---------------------------------------------------------------------------
-
-
-def test_em_message_call_site_declares_axis_3_classification():
-    source = inspect.getsource(message.render_em_message)
-    assert "SUBJECT" in source
-    assert "NOT-FOREIGN" in source
-
-
-def test_subagent_message_call_site_declares_axis_3_classification():
-    source = inspect.getsource(message.render_subagent_message)
-    assert "SUBJECT" in source
-    assert "NOT-FOREIGN" in source
+# Review: overengineering-reviewer (finding 4) -- dropped
+# test_em_message_call_site_declares_axis_3_classification and its subagent
+# twin. Both asserted only that a comment string was present in source,
+# duplicating the declaration-presence pinning now owned by
+# coordinator_core/tests/test_foreign_identity_subject_exemptions.py
+# (well-formedness + count, extended per findings 1/2), without protecting
+# any rendered output. The prose-byte-cap and session_repo-renders-once
+# cases below pin the actual rendered text and are kept.
 
 
 # ---------------------------------------------------------------------------

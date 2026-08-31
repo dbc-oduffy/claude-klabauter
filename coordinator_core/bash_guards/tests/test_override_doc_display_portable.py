@@ -67,8 +67,20 @@ class TestOverrideKeysDocDisplayIsPortable:
     def test_constant_is_not_an_absolute_path(self) -> None:
         assert not _looks_like_an_absolute_path(h.OVERRIDE_KEYS_DOC_DISPLAY)
 
-    def test_constant_is_repo_qualified_relative_form(self) -> None:
-        assert h.OVERRIDE_KEYS_DOC_DISPLAY == "claude-klabauter " + h.OVERRIDE_KEYS_DOC
+    def test_constant_is_the_settings_root_pointer_form(self) -> None:
+        """RETARGETED 2026-08-30, DR-290 form 1 -> form 2 (`the engine stops
+        naming its own repo` plan, C2). This asserted the repo-qualified
+        relative form (`claude-klabauter docs/reference/...`), which was itself
+        the foreign-repo-identity leak that plan closed: it named this repo
+        unconditionally to a reader sitting in some other tree. The constant
+        now carries the settings-root pointer, which resolves for every
+        reader because `install/substrate.py :: _install_seed_wikis` copies
+        the page there at install time. The two constants stay distinct --
+        the resolution form below is still what a caller joins to a repo
+        root."""
+        assert h.OVERRIDE_KEYS_DOC_DISPLAY.startswith("~/.coordinator-claude-settings/")
+        assert h.OVERRIDE_KEYS_DOC_DISPLAY.endswith("/guard-override-keys.md")
+        assert "claude-klabauter" not in h.OVERRIDE_KEYS_DOC_DISPLAY
         assert not os.path.isabs(h.OVERRIDE_KEYS_DOC)
 
     def test_resolver_returns_the_portable_constant_unconditionally(self) -> None:

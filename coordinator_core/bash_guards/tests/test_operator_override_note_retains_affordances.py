@@ -29,6 +29,7 @@ from pathlib import Path
 
 from coordinator_core.bash_guards._helpers import (
     OVERRIDE_KEYS_DOC,
+    OVERRIDE_KEYS_DOC_DISPLAY,
     operator_override_note,
 )
 
@@ -113,7 +114,13 @@ def test_note_points_at_the_reference_doc():
     """The note's whole job now is to be a pointer -- if it stops naming the
     doc, a reader has no path from the one-liner to the full content."""
     note = _note()
-    assert OVERRIDE_KEYS_DOC in note, (
+    # RETARGETED 2026-08-30 (DR-290 form 1 -> form 2): the note renders the
+    # DISPLAY constant, which is now the settings-root pointer; asserting the
+    # RESOLUTION form (`docs/reference/...`, what a caller joins to a repo
+    # root) was asserting a string the message never carried once form 2
+    # landed. The property under test is unchanged -- the note must still
+    # name a path a reader can follow.
+    assert OVERRIDE_KEYS_DOC_DISPLAY in note, (
         "the in-message note must name the reference doc path -- otherwise "
         "the relayable routes and the CONFINEMENT_DENY caveat are unreachable "
         "from the message the agent actually sees"

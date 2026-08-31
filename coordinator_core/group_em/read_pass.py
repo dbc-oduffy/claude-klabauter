@@ -277,6 +277,33 @@ def _transcript_path_for(session_id: str, cwd: str) -> str:
     return os.path.join(projects_root, encoded_cwd, f"{session_id}.jsonl")
 
 
+def _transcript_moved_since(
+    session_id: str, cwd: str, stamp_dt: Optional[datetime]
+) -> Optional[bool]:
+    """Has this peer written to its transcript since `stamp_dt`?
+
+    The evidence question behind the idle-side stale-snapshot guard: an old
+    snapshot is only misleading if the peer ACTED after it was written. A
+    parked session's snapshot ages without the session moving; a mid-turn
+    session's transcript keeps growing. Comparing the two separates the case
+    the guard exists to catch from the case it was accidentally suppressing.
+
+    Returns True (moved since), False (has not moved), or None when that
+    cannot be established -- an unreadable/absent transcript or an
+    unparseable stamp. `None` is never read as "has not moved": the caller
+    leaves the age verdict standing, so this can only ever REINSTATE a
+    candidate on positive evidence of stillness, never admit one on the
+    absence of evidence.
+    """
+    if stamp_dt is None:
+        return None
+    try:
+        mtime_epoch = os.path.getmtime(_transcript_path_for(session_id, cwd))
+    except OSError:
+        return None
+    return mtime_epoch > stamp_dt.timestamp()
+
+
 def classify_fallback_status(
     status: Any,
     reduced_lines: Optional[list] = None,
@@ -360,16 +387,46 @@ def classify_peer(
 
         # Idle-side close (defect B): a stale PAUSED snapshot with harness
         # `idle` is exactly the failure mode `live_busy_contradicts` cannot
-        # see. Staleness is measured against the reader record's OWN write
-        # time (`stamped_at`) -- never a status field -- and an indeterminate
+        # see -- the audit's peer 30342983 was mid-turn while the harness read
+        # `idle`, so live status is NOT trustworthy corroboration here.
+        # Staleness is measured against the reader record's OWN write time
+        # (`stamped_at`) -- never a status field -- and an indeterminate
         # staleness fails CLOSED (never a candidate), same as an
         # over-threshold one. See `STALE_SNAPSHOT_SECONDS`'s docstring for the
         # p50 pin.
+        #
+        # AGE ALONE IS NOT THE QUESTION (2026-08-30). Age was standing in for
+        # "has this peer done anything since the snapshot?", and it answers
+        # that question wrongly in one direction: `receiver-state.json` is
+        # written by the peer's Stop hook at turn end, so a genuinely PARKED
+        # peer's snapshot does nothing but age. Past 108s every such peer was
+        # disqualified permanently, and the longer one sat stuck the more
+        # certain the roster was to hide it -- measured live on this box, the
+        # roster oscillated 0 -> 3 -> 0 across consecutive ticks and read
+        # empty while five peers sat idle, one blocked for hours on a gate
+        # only the Group EM could clear.
+        #
+        # The transcript answers it directly. A peer that has written nothing
+        # since its snapshot has not moved, however old the snapshot is; a
+        # peer whose transcript is NEWER than its snapshot has acted since,
+        # which is the mid-turn case defect B exists to catch and catches it
+        # on evidence rather than on elapsed time. Fail-closed is preserved
+        # end to end: an unreadable transcript mtime leaves the age verdict
+        # standing, and an unresolvable `stamped_at` is still never a
+        # candidate.
         staleness = None
         stale_idle_contradicts = False
         if reader_verdict == STATE_PAUSED and live_status == "idle":
             staleness = _staleness_seconds(reader_record.get("stamped_at"), now)
             stale_idle_contradicts = staleness is None or staleness > STALE_SNAPSHOT_SECONDS
+            if stale_idle_contradicts and staleness is not None:
+                stamp_dt = _parse_iso_stamp(reader_record.get("stamped_at"))
+                moved = _transcript_moved_since(
+                    session_id, peer.get("cwd") or repo_root, stamp_dt
+                )
+                # `None` = could not establish; leave the age verdict standing.
+                if moved is False:
+                    stale_idle_contradicts = False
 
         contradicted = live_busy_contradicts or stale_idle_contradicts
         if live_busy_contradicts:

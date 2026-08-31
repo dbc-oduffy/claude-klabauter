@@ -43,6 +43,7 @@ from __future__ import annotations
 
 import inspect
 
+from coordinator_core.bash_guards._helpers import OVERRIDE_KEYS_DOC_DISPLAY
 from coordinator_core.bash_guards import dispatch_checks
 from coordinator_core.bash_guards import guard_grep_via_bash as guard
 
@@ -187,7 +188,10 @@ class TestPartialRewriteStillAdvises:
         ctx = out["additionalContext"]
         assert "blanket-disarm marker" not in ctx
         assert "COORDINATOR_OVERRIDE_GREP_VIA_BASH_GUARD" not in ctx
-        assert "docs/reference/guard-override-keys.md" in ctx
+        # RETARGETED 2026-08-30 (DR-290 form 1 -> form 2): the message
+        # carries the settings-root DISPLAY pointer, not the repo-root-
+        # relative resolution form.
+        assert OVERRIDE_KEYS_DOC_DISPLAY in ctx
 
 
 # ---------------------------------------------------------------------------
@@ -327,7 +331,10 @@ class TestGnuOnlyConstructStillAdvises:
         ctx = out["additionalContext"]
         assert "blanket-disarm marker" not in ctx
         assert "COORDINATOR_OVERRIDE_GREP_VIA_BASH_GUARD" not in ctx
-        assert "docs/reference/guard-override-keys.md" in ctx
+        # RETARGETED 2026-08-30 (DR-290 form 1 -> form 2): the message
+        # carries the settings-root DISPLAY pointer, not the repo-root-
+        # relative resolution form.
+        assert OVERRIDE_KEYS_DOC_DISPLAY in ctx
 
 
 # ---------------------------------------------------------------------------

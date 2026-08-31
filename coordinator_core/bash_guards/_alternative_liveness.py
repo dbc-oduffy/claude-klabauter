@@ -156,6 +156,11 @@ from coordinator_core.bash_guards import guard_longlived_branch_naming
 from coordinator_core.bash_guards import guard_multiprobe_banner
 from coordinator_core.bash_guards import guard_offer_git_c
 from coordinator_core.bash_guards import guard_plumbing_and_loops
+from coordinator_core.bash_guards import block_fleet_delegation_creation
+from coordinator_core.bash_guards import guard_doctrine_surface_bash_write
+from coordinator_core.bash_guards import guard_repo_setup_claude_home_refusal
+from coordinator_core.bash_guards import guard_host_subagent_bash_ban
+from coordinator_core.bash_guards import guard_host_subagent_bash_spawn_shapes
 from coordinator_core.daily_day import local_day
 
 _PROBE_TIMEOUT_SEC = 10
@@ -332,6 +337,36 @@ def _payload(cmd: str, agent_id: Optional[str] = "deadbeef0123", agent_type: Opt
     if agent_type is not None:
         d["agent_type"] = agent_type
     return d
+
+
+def _trigger_host_subagent_policy_guard(
+    module: Any, policy_key: str, cmd: str
+) -> Optional[Dict[str, Any]]:
+    """Drive an OPT-IN host-subagent guard by giving it the one thing it
+    requires: a repo whose `coordinator.local.md` declares the policy.
+
+    Both `guard_host_subagent_bash_ban` and `guard_host_subagent_bash_spawn_
+    shapes` return `None` for any session whose repo has not opted in, so a
+    bare command string probes nothing about them -- they were in neither
+    registry until 2026-08-30 for exactly that reason.
+
+    The config file is the whole fixture: `_repo_config` walks up from `cwd`
+    for `coordinator.local.md` and `_policy_is_deny` scans its frontmatter.
+    NO `git init` -- neither guard consults a git root, and the `git`-shaped
+    trigger rows in this module are the ones that time out first on a loaded
+    box (measured 2026-08-30). A `mkdtemp` plus one small write is the whole
+    cost, cleaned up before returning.
+    """
+    scratch = tempfile.mkdtemp(prefix="altlive-policy-")
+    try:
+        config = Path(scratch) / "coordinator.local.md"
+        config.write_text(
+            "---\n%s: deny\n---\n\nAltlive probe fixture.\n" % policy_key,
+            encoding="utf-8",
+        )
+        return module.check(_payload(cmd, agent_id="deadbeef0123", cwd=scratch))
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
 
 
 def _run(argv: List[str], cwd: str, timeout: int = _PROBE_TIMEOUT_SEC) -> None:
@@ -689,6 +724,48 @@ LIVE_TRIGGERS: Dict[str, Callable[[], Optional[Dict[str, Any]]]] = {
     ),
     "block_illegal_filename": lambda: block_illegal_filename.check(
         _payload("echo x > bad:name.txt", agent_id=None)
+    ),
+    # The three rows below closed a registry gap this gate caught on
+    # 2026-08-30: each module has a top-level `check()` and was in neither
+    # `LIVE_TRIGGERS` nor `UNTRIGGERED`, so its alternatives were never
+    # probed for liveness at all. Every trigger was measured against its own
+    # guard before being written here.
+    "block_fleet_delegation_creation": lambda: block_fleet_delegation_creation.check(
+        _payload("touch fleet-delegation.json", agent_id=None)
+    ),
+    # `--root <Claude Home>` is exactly the write this guard refuses. Claude
+    # Home is resolved at call time, never written as a literal -- a
+    # machine-absolute path here would be wrong on every other host.
+    "guard_repo_setup_claude_home_refusal": lambda: guard_repo_setup_claude_home_refusal.check(
+        _payload(
+            "python3 -m coordinator_core.install.scaffold_structure --root "
+            + os.path.join(os.path.expanduser("~"), ".claude").replace(chr(92), "/"),
+            agent_id=None,
+        )
+    ),
+    # `governed_surfaces` is a REQUIRED positional the live caller
+    # (`dispatch.resolve_governed_authoring_surfaces`) resolves per call;
+    # this row supplies the same four surfaces rather than letting the guard
+    # fail open on an empty list, which would probe nothing.
+    "guard_doctrine_surface_bash_write": lambda: guard_doctrine_surface_bash_write.check(
+        _payload("echo x > CLAUDE.md", agent_id=None),
+        ["CLAUDE.md", "MEMORY.md", "coordinator.local.md", "AGENTS.md"],
+    ),
+    # Both opt-in guards, driven through the policy fixture rather than
+    # named untriggerable: the gate's UNTRIGGERED pin is a SUPPRESSION
+    # ceiling, and a guard that can actually be exercised belongs above it.
+    "guard_host_subagent_bash_ban": lambda: _trigger_host_subagent_policy_guard(
+        guard_host_subagent_bash_ban, "subagent_bash_policy", "rg TODO"
+    ),
+    # A LOOP shape, not a bare search: this guard DECLINES (returns None) on
+    # anything `guard_inprocess_search` can answer in-process, so `rg TODO`
+    # and friends probe nothing here even with the policy on -- measured
+    # 2026-08-30 against this same fixture. A per-item loop is the shape its
+    # deny actually exists for.
+    "guard_host_subagent_bash_spawn_shapes": lambda: _trigger_host_subagent_policy_guard(
+        guard_host_subagent_bash_spawn_shapes,
+        "subagent_bash_spawn_shapes",
+        "for f in *.py; do wc -l $f; done",
     ),
     "check_raw_pid_liveness": lambda: check_raw_pid_liveness.check(
         _payload("k" + "ill -0 $PID", agent_id=None)
