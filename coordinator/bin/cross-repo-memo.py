@@ -2330,6 +2330,20 @@ def reconcile_indeterminate_draft(
     )
 
 
+def _supersedes_invoke_value(supersedes: "list[str] | None") -> "str | list[str] | None":
+    """Reduce argparse's `--supersedes` accumulation to the op's invoke shape.
+
+    A single occurrence (a length-1 list, `action="append"`'s minimum) threads
+    the bare string the op's `_validate_supersedes_param` accepts for one
+    value; two-plus occurrences thread the list as-is. Returns None for an
+    absent/empty flag so the caller can skip the key entirely rather than
+    threading a falsy placeholder.
+    """
+    if not supersedes:
+        return None
+    return supersedes[0] if len(supersedes) == 1 else supersedes
+
+
 def _cmd_draft(args: argparse.Namespace) -> int:
     """Handle: cross-repo-memo draft <topic> --to <em> --title <line> --kind <k> [--summary] [--in-reply-to]
 
@@ -2356,6 +2370,38 @@ def _cmd_draft(args: argparse.Namespace) -> int:
     topic = args.topic
     to = args.to
     title = args.title
+
+    # C3 (docs/plans/2026-08-31-prose-flags-travel-as-files-through-the...):
+    # --title has no --title-file sibling (see the flag definition's comment
+    # for why), so it gets ONLY the newline refusal — a value already
+    # truncated by cmd.exe's own LF-truncating parse must be refused, never
+    # silently written as a corrupted title. --summary gets the full
+    # resolve_optional_prose treatment (refusal + --summary-file leg) since a
+    # summary is prose an agent types, quotes included. refuse_newline_argv
+    # is also called directly for --summary (mirrors priority-set.py's
+    # _resolve_note) so the flag-scoped refusal is visible to a source-level
+    # scan of THIS file, not only inside resolve_optional_prose's own body —
+    # resolve_optional_prose performs the identical check itself, so this is
+    # belt-and-suspenders, never a behavior difference.
+    #
+    # require_colocated_engine_on_path is needed FIRST: this CLI is invoked
+    # with cwd set to the SENDER repo (an arbitrary EM working tree, never
+    # this engine checkout), so `import coordinator_core...` would otherwise
+    # ModuleNotFoundError there — cross-repo-memo.py lives inside the engine
+    # checkout itself (coordinator/bin/), so the colocated (self-location)
+    # resolver is the right one.
+    cc_invoke.require_colocated_engine_on_path(__file__)
+    from coordinator_core.argv_fidelity import ArgvFidelityError, refuse_newline_argv, resolve_optional_prose
+
+    summary_inline = getattr(args, "summary", None)
+    summary_file = getattr(args, "summary_file", None)
+    try:
+        refuse_newline_argv(title, flag_name="--title")
+        refuse_newline_argv(summary_inline, flag_name="--summary")
+        summary = resolve_optional_prose(summary_inline, summary_file, flag_name="--summary")
+    except ArgvFidelityError as exc:
+        print(f"cross-repo-memo draft: {exc}", file=sys.stderr)
+        return 2
 
     # Validate topic slug (reuse existing guard — path traversal prevention).
     if not _TOPIC_SLUG_RE.fullmatch(topic):
@@ -2394,7 +2440,7 @@ def _cmd_draft(args: argparse.Namespace) -> int:
         "topic": topic,
         "to": to,
         "title": title,
-        "summary": getattr(args, "summary", None),
+        "summary": summary,
         "kind": getattr(args, "kind", None),
         "classify_receiver": True,
         # Root-cause fix (2026-07-21, state/bug-backlog/2026-07-21-cross-repo-memo-
@@ -2418,9 +2464,9 @@ def _cmd_draft(args: argparse.Namespace) -> int:
     # (action="append" list of length 1) threads the bare string, multiple
     # occurrences thread the list. The op's own _validate_supersedes_param
     # accepts both shapes; no CLI-side re-validation.
-    supersedes = getattr(args, "supersedes", None)
-    if supersedes:
-        invoke_params["supersedes"] = supersedes[0] if len(supersedes) == 1 else supersedes
+    supersedes_value = _supersedes_invoke_value(getattr(args, "supersedes", None))
+    if supersedes_value is not None:
+        invoke_params["supersedes"] = supersedes_value
 
     def legacy_draft() -> None:
         """Fail-loud legacy stub — mirrors _send_via_engine.legacy_send.
@@ -2604,10 +2650,19 @@ def _unquote_yaml_scalar(v: str) -> str:
 # flattened to fm["scoped_to_<subkey>"] on read so downstream code
 # (_scoped_to_errors, _validate_outbox_frontmatter, the send params) needs no
 # change; see _parse_outbox_file's docstring for the two accepted shapes.
+#
+# Review: overengineering-reviewer — a nested `supersedes:` YAML-sequence
+# reader (in_supersedes_list state, supersedes_list accumulator, the
+# dict[str, str | list[str]] return-type widening) was removed here. No CLI
+# consumer read fm["supersedes"]: the two call sites of this function's
+# return value read only `to` and `scoped_to_*`, and the op layer does its
+# own parse_frontmatter on the delivered draft. `--supersedes` itself still
+# reaches the engine via the argparse flag + `_cmd_draft` threading below
+# (untouched) — this file only removed the dead round-trip-back-out reader.
 _SCOPED_TO_SUBKEYS = ("artifact", "version", "sha", "seam")
 
 
-def _parse_outbox_file(path: str) -> tuple[dict[str, "str | list[str]"], str]:
+def _parse_outbox_file(path: str) -> tuple[dict[str, str], str]:
     """Parse an outbox draft file into (frontmatter_dict, body_str).
 
     Spec backlink: docs/plans/2026-06-15-cross-repo-memo-draft-lifecycle.md § C2
@@ -2642,12 +2697,10 @@ def _parse_outbox_file(path: str) -> tuple[dict[str, "str | list[str]"], str]:
         return {}, ""
 
     lines = content.splitlines()
-    fm: dict[str, "str | list[str]"] = {}
+    fm: dict[str, str] = {}
     nested_scoped_to: dict[str, str] = {}
-    supersedes_list: list[str] = []
     in_fm = False
     in_scoped_to = False
-    in_supersedes_list = False
     body_start = len(lines)
 
     for i, line in enumerate(lines):
@@ -2677,30 +2730,10 @@ def _parse_outbox_file(path: str) -> tuple[dict[str, "str | list[str]"], str]:
                             nested_scoped_to[sub_key] = sub_v
                 continue
 
-        if in_supersedes_list:
-            # A non-indented line ends the nested sequence — re-process it as
-            # an ordinary top-level frontmatter line below (fall through).
-            # Mirrors the in_scoped_to block above, but for a bare YAML
-            # sequence (_render_extra_field's list branch — the shape
-            # memo_draft.py emits for a multi-item `--supersedes`) rather
-            # than a sub-key mapping.
-            if not line or not line[0].isspace():
-                in_supersedes_list = False
-            else:
-                stripped = line.strip()
-                if stripped.startswith("- "):
-                    item = _unquote_yaml_scalar(stripped[2:].strip())
-                    if item:
-                        supersedes_list.append(item)
-                continue
-
         if ":" in line:
             key, _, rest = line.partition(":")
             key_stripped = key.strip()
             v = rest.strip()
-            if key_stripped == "supersedes" and v == "":
-                in_supersedes_list = True
-                continue
             if key_stripped == "scoped_to" and v == "":
                 in_scoped_to = True
                 continue
@@ -2711,13 +2744,6 @@ def _parse_outbox_file(path: str) -> tuple[dict[str, "str | list[str]"], str]:
     # over from a hand-edit or an older draft is superseded per sub-key.
     for sub_key, sub_v in nested_scoped_to.items():
         fm[f"scoped_to_{sub_key}"] = sub_v
-
-    # A nested `supersedes:` sequence (multi-item --supersedes) parses to a
-    # real list, matching the single-item bare-scalar shape's type contract
-    # (fm["supersedes"] is either a str or a list[str], never a placeholder
-    # string for the list case).
-    if supersedes_list:
-        fm["supersedes"] = supersedes_list
 
     body = "\n".join(lines[body_start:]).lstrip("\n")
     return fm, body
@@ -3482,8 +3508,20 @@ def _build_combined_parser(for_help: bool = False) -> argparse.ArgumentParser:
     )
     draft_p.add_argument("topic", metavar="TOPIC", help="Topic slug (lowercase-alphanum + dashes)")
     draft_p.add_argument("--to", required=True, metavar="RECEIVER_EM_ID", help="Receiver-EM identifier")
+    # --title has NO --title-file sibling: every real call site surveyed
+    # (bin/cross-repo-memo.md, cross-repo/README.md, and every historical
+    # `draft ... --title "..."` invocation under archive/ and cross-repo/)
+    # carries a plain one-line summary with no embedded quote — a title is
+    # a heading, not free prose, so the newline-refusal half of the C3
+    # remedy (below, in main()) is the whole fix here; adding a file leg
+    # for a shape that never occurs would be unused surface, not safety.
     draft_p.add_argument("--title", required=True, metavar="ONE_LINE", help="One-line memo title")
     draft_p.add_argument("--summary", metavar="TEXT", default=None, help=f"One-line tl;dr (≤{_SUMMARY_MAX_CHARS} chars)")
+    draft_p.add_argument(
+        "--summary-file", metavar="PATH", default=None,
+        help="Read --summary from PATH instead ('-' for stdin) — lossless transport "
+             "for a summary that legitimately carries a quote; mutually exclusive with --summary.",
+    )
     # REQUIRED, matching `send`'s own gate on the same field: a kindless
     # draft is an artifact this CLI's own send verb refuses. See
     # memo_draft.py::_validate_draft_params for the full note.

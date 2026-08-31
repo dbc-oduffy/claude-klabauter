@@ -99,6 +99,40 @@ def test_resolve_body_custom_flag_name_in_messages():
 # ---------------------------------------------------------------------------
 
 
+def test_refuse_newline_argv_default_message_names_the_file_sibling():
+    """The default assumes a -file sibling exists, which is right for most callers."""
+    with pytest.raises(ArgvFidelityError) as exc:
+        refuse_newline_argv("a\nb", flag_name="--body")
+    assert "pass --body-file instead." in str(exc.value)
+
+
+def test_refuse_newline_argv_remedy_replaces_the_file_sibling_suggestion():
+    """A flag denied a file leg must not be sent to one that does not exist.
+
+    `coordinator-doc-new --title` is the live case: it earns the refusal but has
+    no `--title-file`, and before `remedy` existed it hand-rolled its own
+    `parser.error` purely to avoid this message -- which also cost it coverage,
+    since the transport probe credits only refusals routed through the seam.
+    """
+    with pytest.raises(ArgvFidelityError) as exc:
+        refuse_newline_argv(
+            "a\nb", flag_name="--title", remedy="pass a single-line --title."
+        )
+    msg = str(exc.value)
+    assert msg == "--title contains a newline; pass a single-line --title."
+    assert "--title-file" not in msg
+
+
+def test_refuse_newline_argv_remedy_is_inert_on_a_clean_value():
+    """`remedy` must not change WHEN the refusal fires, only what it says."""
+    assert refuse_newline_argv(
+        "one line", flag_name="--title", remedy="pass a single-line --title."
+    ) is None
+    assert refuse_newline_argv(
+        None, flag_name="--title", remedy="pass a single-line --title."
+    ) is None
+
+
 def test_resolve_optional_prose_both_absent_returns_none():
     assert resolve_optional_prose(None, None, flag_name="--summary") is None
 

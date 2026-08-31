@@ -217,6 +217,30 @@ PLACEHOLDER_TYPE = "unknown"
 AMBIGUOUS_TYPE = "AMBIGUOUS"
 
 
+def _fold_agent_type(value: str) -> str:
+    """Agent-type spelling folded FOR COMPARISON ONLY -- never for the write.
+
+    Two call sites feed one dispatch: `SubagentStart` sends the real
+    `agent_type`, `PostToolUse(Agent)` sends `tool_input.subagent_type`. If
+    they ever spell one agent differently -- a `coordinator:` namespace on
+    one side, a case difference -- the exact `==` below sends an ORDINARY
+    dispatch to the AMBIGUOUS arm, which four bash guards read as hostile.
+    That the class varies in spelling is not speculative: two DoE hooks
+    already fold it (`guard-review-integrator-sidecar-intake.py ::
+    _normalize_subagent_type` for the namespace,
+    `offer-exploration-tier-dispatch.py` for case).
+
+    Reported by doe-claude-em 2026-08-18 with the sample size stated rather
+    than rounded: zero AMBIGUOUS rows across 8 post-change dispatches --
+    not reproduced, and not disproved either.
+
+    COMPARISON ONLY is the whole constraint. Consumers keying on column 3
+    need the exact real spelling on disk, so nothing here reaches `cols[2]`;
+    every write below stores the caller's own value.
+    """
+    return value.split(":")[-1].strip().casefold()
+
+
 def _resolve_row_collision(
     existing_cols: list[str],
     model: str,
@@ -256,8 +280,13 @@ def _resolve_row_collision(
     while len(cols) < 3:
         cols.append("")
     existing_type = cols[2]
+    # Folded for the COMPARISON only (see `_fold_agent_type`); every write
+    # below stores the caller's own spelling, never the folded one.
+    existing_folded = _fold_agent_type(existing_type)
+    incoming_folded = _fold_agent_type(subagent_type)
+    placeholder_folded = _fold_agent_type(PLACEHOLDER_TYPE)
 
-    if existing_type == subagent_type:
+    if existing_folded == incoming_folded:
         # A real type at create time must not strand model at the placeholder:
         # upgrade cols[1] here rather than relying on a later enrich leg that,
         # for a Workflow agent() spawn, never fires (no PostToolUse Agent call).
@@ -265,10 +294,10 @@ def _resolve_row_collision(
             cols[1] = model
             return cols
         return None
-    if subagent_type == PLACEHOLDER_TYPE:
+    if incoming_folded == placeholder_folded:
         return None
 
-    if existing_type == PLACEHOLDER_TYPE:
+    if existing_folded == placeholder_folded:
         cols[2] = subagent_type
         if model != PLACEHOLDER_TYPE:
             cols[1] = model

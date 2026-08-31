@@ -464,6 +464,36 @@ def test_scope_match_directory_entry_covers_file_beneath_it(tmp_path, monkeypatc
     assert "Deliverable-Id: dlv-claim-a" in joined
 
 
+def test_scope_match_leading_slash_entry_covers_path_beneath_it(tmp_path, monkeypatch):
+    """Regression (review-integrator override of coordinatorcode-reviewer
+    af3dcdba64a143dbb P3): a `scope:` entry authored with a leading `/`
+    (absolute-looking, intended repo-relative) must still cover a
+    committed path beneath it -- an unstripped leading `/` left the
+    entry's segments as `["", ...]`, which could never prefix-match a
+    normalized (always-relative) committed path, so this tier abstained
+    and a lower, session-keyed tier answered with the WRONG
+    deliverable_id instead of correctly resolving this one."""
+    repo = _init_repo(tmp_path)
+    monkeypatch.setenv("CLAUDE_SESSION_ID", _SID)
+    _write_plan_with_scope(
+        repo, "docs/plans/claim-a.md", "dlv-claim-a", ["/coordinator_core/ops"]
+    )
+    _write_plan_claim(repo, _SID, "claim-a", "2026-08-01T00:00:00Z")
+
+    (repo / "coordinator_core" / "ops" / "fleet" / "tests").mkdir(parents=True)
+    (repo / "coordinator_core" / "ops" / "fleet" / "tests" / "test_x.py").write_text(
+        "x = 1\n", encoding="utf-8"
+    )
+    msg = _msg_file(repo)
+
+    args = compute_missing_trailer_args(
+        msg, repo, paths=["coordinator_core/ops/fleet/tests/test_x.py"]
+    )
+
+    joined = " ".join(args)
+    assert "Deliverable-Id: dlv-claim-a" in joined
+
+
 def test_scope_match_directory_entry_covers_nested_deeper_file(tmp_path, monkeypatch):
     """Directory-prefix containment is not limited to one level of nesting."""
     repo = _init_repo(tmp_path)

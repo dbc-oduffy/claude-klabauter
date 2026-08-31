@@ -592,3 +592,56 @@ class TestSessionIdValidation:
         assert not (gitdir.parent / "escape").exists()
         dedupe_root = gitdir / "advisory-dedupe"
         assert not dedupe_root.exists() or not any(dedupe_root.rglob("guard__aaa"))
+
+
+class TestTheRewriteBlockDoesNotReKeyTheShape:
+    """The `Example:` rewrite block is the SECOND inlining of the operator's
+    command, so it varies per invocation and — before this — landed in the
+    hash, giving a fresh key per firing and leaving dedupe inert for exactly
+    the guard family the `Command:`-line strip was written to rescue.
+
+    Origin: cross-repo/archive/2026-08-18-doe-claude-em-advisory-dedupe-inert.md,
+    measured off 28 sessions' `.git/advisory-dedupe/` markers.
+    """
+
+    @staticmethod
+    def _ctx(cmd: str) -> dict:
+        return {
+            "hookSpecificOutput": {
+                "additionalContext": (
+                    "This shape spawns a subprocess per iteration.\n\n"
+                    f"Command: {cmd}\n\n"
+                    f"Example: rewrite `{cmd}` as a single bounded call\n\n"
+                    "See the wiki for this guard's override keys.\n"
+                )
+            }
+        }
+
+    def test_two_commands_of_one_shape_share_a_key(self):
+        a = _advisory_dedupe.advisory_dedupe_key("g", self._ctx("grep -r foo ."))
+        b = _advisory_dedupe.advisory_dedupe_key("g", self._ctx("grep -r bar /other/path"))
+
+        assert a is not None
+        assert a == b
+
+    def test_a_different_explanation_still_keys_differently(self):
+        shape_a = _advisory_dedupe.advisory_dedupe_key("g", self._ctx("grep -r foo ."))
+        other = {
+            "hookSpecificOutput": {
+                "additionalContext": (
+                    "This shape rewrites history irreversibly.\n\n"
+                    "Command: grep -r foo .\n\n"
+                    "Example: rewrite `grep -r foo .` as a single bounded call\n\n"
+                    "See the wiki for this guard's override keys.\n"
+                )
+            }
+        }
+
+        assert shape_a != _advisory_dedupe.advisory_dedupe_key("g", other)
+
+    def test_a_builder_that_echoes_nothing_still_keys(self):
+        envelope = {
+            "hookSpecificOutput": {"additionalContext": "No command echoed at all."}
+        }
+
+        assert _advisory_dedupe.advisory_dedupe_key("g", envelope) is not None

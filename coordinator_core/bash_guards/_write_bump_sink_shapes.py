@@ -662,6 +662,18 @@ _PYTHON_C_FLAG_INTERPRETERS = frozenset({"python", "python3"})
 #: SPAN; the captured value is used as ``group(...)[1:-1]`` with no
 #: unescaping anywhere in this module, so raw and cooked literals of the
 #: same text yield the identical string.
+#:
+#: WHY THE FAMILY IS WIDER THAN THE EVIDENCE (Kira, 2026-08-31). ``r`` is the
+#: only prefix with a measured defect behind it; ``b``/``u``/``rb``/``br`` are
+#: admitted by the same value-preserving argument in the paragraph above, not
+#: by any observed shape. They are in because EXCLUDING them would need its
+#: own justification -- a ``b'...'`` path operand is legal Python and its span
+#: and captured value behave identically here -- not because anyone was seen
+#: writing one. ``f``/``fr``/``rf`` remain deliberately OUT and that IS
+#: evidence-backed: an f-string's value is not knowable from its span, so
+#: reading one would yield a target that is not the path written. If this
+#: alternation is ever narrowed, narrow it to ``[rR]`` and keep the f-string
+#: exclusion; do not narrow by deleting the lookbehind.
 _PY_LITERAL_PREFIX = r"(?:[rRbBuU]|[rR][bB]|[bB][rR])?"
 _PY_QUOTED_LITERAL = (
     r"(?<![A-Za-z0-9_])"

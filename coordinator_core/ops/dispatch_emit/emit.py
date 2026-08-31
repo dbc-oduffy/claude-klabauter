@@ -1015,17 +1015,20 @@ def _commit_agent_call(
     when that commit did not land (see ``_commit_halt_gate``).
 
     ``chunk_ids`` is load-bearing, not cosmetic: `close-out-and-stamp`
-    joins a commit to a plan chunk on TWO legs -- the ``Deliverable-Id:``
-    trailer AND a subject that registers the chunk-id. A wave-scoped
-    subject ("Commit wave 2's work") satisfies only the first, so a fully
-    executed plan stamps `partial` with every chunk reading uncommitted,
-    and the operator has to re-register each row by hand against the
-    commit log. Naming the ids here is what makes the emitted run
-    close itself out.
+    verifies a commit against a plan chunk via pure sha-ancestry evidence
+    -- a `disposition: coded` spine row's own `disposition_ref` field
+    (see `close_out_and_stamp.py`'s module docstring), never a commit
+    message or subject parse. A wave-scoped subject ("Commit wave 2's
+    work") carries no chunk-id registration itself; naming the ids in
+    the prompt is what lets the committing agent write a correct
+    `disposition_ref` back onto each chunk's spine row, which is what
+    makes the emitted run close itself out.
 
-    ``deliverable_id`` is the OTHER leg of that same join, and carries
-    the identical stakes: with no id named here the committer resolves
-    one from whatever ambient session state it finds, which is a stale
+    ``deliverable_id`` carries the identical stakes, on a separate axis
+    (the Deliverable-Id trailer, attached by the commit route itself --
+    see ``deliverable_rule`` below -- rather than the subject/spine
+    join above): with no id named here the committer resolves one from
+    whatever ambient session state it finds, which is a stale
     id belonging to an unrelated workstream as often as not (observed
     2026-08-19: `302ca5430` and `dde488e12` both landed carrying
     ``dlv-git-amplification-hitlist-burn-down-391b0f`` while executing a
@@ -1083,7 +1086,8 @@ def _commit_agent_call(
     )
     deliverable_rule = (
         " A Deliverable-Id trailer is attached to this commit automatically"
-        " by the prepare-commit-msg hook -- do not pass a flag for it and do"
+        " by the commit route itself (ceremony.commit_v2's apply_missing_trailers"
+        " call, not a git hook) -- do not pass a flag for it and do"
         " not hand-write one into the message body. If the trailer resolves"
         " to an id you did not expect, report it; that is never grounds to"
         " amend, reset, or re-commit."
@@ -1103,6 +1107,13 @@ def _commit_agent_call(
         f" state the reason instead. The emitted run halts at this phase"
         f" unless that line is present, so emitting it without a landed"
         f" commit lets the next wave overwrite uncommitted work."
+        # Review: overengineering-reviewer flagged this sentence as
+        # unconditional payload for a reader who cannot act on it —
+        # dispositioned "accepted" in the sidecar, but the dispatching EM
+        # overrode: three separate repos have misattributed this exact
+        # wording to DoE-claude's CLI, and this sentence's audience is
+        # precisely the reader who wants it corrected. Left in place by EM
+        # decision, not an oversight.
         " This commit-phase prompt is composed by"
         " coordinator_core/ops/dispatch_emit/emit.py."
     )

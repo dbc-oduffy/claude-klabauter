@@ -49,6 +49,16 @@ _FULLY_ENABLED = {
 }
 
 
+#: The global settings file's passing shape: every UE key explicitly off.
+#: An ABSENT key passes too (see `_global_settings_is_ue_off`); this spells
+#: them out so the test distinguishes "off" from "never written".
+_GLOBAL_UE_OFF = {
+    "example-game-repo-control@example-game-workbench-repo": False,
+    "example-game-repo@example-game-workbench-repo": False,
+    "game-dev@example-game-workbench-repo": False,
+}
+
+
 def _setup_success_tree(tmp_path):
     example_game_repo_dir = tmp_path / "example-game-repo-repo"
     example_retrieval_repo = tmp_path / "example-retrieval-repo-repo"
@@ -57,7 +67,11 @@ def _setup_success_tree(tmp_path):
         d.mkdir(parents=True, exist_ok=True)
     _write_settings(str(example_game_repo_dir / ".claude" / "settings.json"), _FULLY_ENABLED)
     _write_settings(str(example_retrieval_repo / ".claude" / "settings.json"), _FULLY_ENABLED)
-    _write_settings(str(home / ".claude" / "settings.json"), _FULLY_ENABLED)
+    # The GLOBAL file is UE-OFF, and that is the passing shape. It used to be
+    # seeded `_FULLY_ENABLED` here because the verifier demanded `true` in it --
+    # the exact state per-project gating forbids, which is why a correct machine
+    # reported three WRONG lines on every close ceremony.
+    _write_settings(str(home / ".claude" / "settings.json"), _GLOBAL_UE_OFF)
     return example_game_repo_dir, example_retrieval_repo, home
 
 
@@ -191,3 +205,46 @@ def test_success_all_expected(monkeypatch, tmp_path, capsys):
     out = capsys.readouterr().out
     assert rc == 0
     assert "all known UE-context dirs carry the expected override" in out
+
+
+def test_a_ue_enabled_global_settings_file_is_the_drift(monkeypatch, tmp_path, capsys):
+    """The inverse assertion, and the whole point of the 2026-08-31 correction:
+    `~/.claude/settings.json` enabling a UE plugin is drift, not compliance.
+
+    Origin: cross-repo/archive/2026-08-14-doe-claude-em-ue-override-verifier-
+    asserts-global-true.md.
+    """
+    example_game_repo_dir, example_retrieval_repo, home = _setup_success_tree(tmp_path)
+    _write_settings(str(home / ".claude" / "settings.json"), _FULLY_ENABLED)
+    _seed_registry(
+        tmp_path,
+        **{
+            "repos.example_game_workbench_repo": str(example_game_repo_dir),
+            "repos.example_retrieval_repo": str(example_retrieval_repo),
+        },
+    )
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+
+    rc = vuo.main([])
+
+    err = capsys.readouterr().err
+    assert rc == 1
+    assert "expected off" in err
+
+
+def test_a_global_settings_file_with_no_ue_keys_passes(monkeypatch, tmp_path, capsys):
+    """Absent is not enabled — an unwritten key must not read as drift."""
+    example_game_repo_dir, example_retrieval_repo, home = _setup_success_tree(tmp_path)
+    _write_settings(str(home / ".claude" / "settings.json"), {})
+    _seed_registry(
+        tmp_path,
+        **{
+            "repos.example_game_workbench_repo": str(example_game_repo_dir),
+            "repos.example_retrieval_repo": str(example_retrieval_repo),
+        },
+    )
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+
+    assert vuo.main([]) == 0

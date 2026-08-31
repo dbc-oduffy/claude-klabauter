@@ -196,15 +196,35 @@ def advisory_dedupe_key(guard_name: str, envelope: Optional[Dict[str, Any]]) -> 
     this module's dedupe purposes:
     ``<guard_name>__<sha256(normalized additionalContext)[:16]>``.
 
-    "Normalized" strips any ``Command:``-labeled line (``_COMMAND_LINE_RE``)
-    before hashing -- ``_generic_advisory``
-    (``guard_plumbing_and_loops.py``) inlines the literal offending command
-    into exactly such a line, and hashing it verbatim would key dedupe on
-    the command INSTANCE rather than the guard's SHAPE, defeating dedupe for
-    the guard family that repeats the same shape against many different
-    commands (module docstring, "CORRECTED"). Builders that never echo the
-    command (``_platform_verdict.platform_verdict_for_shape``) are
-    unaffected -- the strip is a no-op when there is no such line.
+    "Normalized" strips TWO per-invocation spans before hashing, because the
+    advisory family this dedupe exists for inlines the operator's command
+    TWICE.
+
+    1. Any ``Command:``-labeled line (``_COMMAND_LINE_RE``) --
+       ``_generic_advisory`` (``guard_plumbing_and_loops.py``) inlines the
+       literal offending command there, and hashing it verbatim would key
+       dedupe on the command INSTANCE rather than the guard's SHAPE
+       (module docstring, "CORRECTED").
+    2. The terse-alternative span (``terse_alternative_text``, i.e. the
+       ``Example:``/``Use instead:`` rewrite block) -- the SECOND inlining,
+       and the one that kept dedupe inert after fix 1. That block is built
+       FROM the operator's command, so it varies per invocation, is not
+       ``Command:``-labeled, and survived normalization straight into the
+       hash. Measured by doe-claude-em 2026-08-18 off 28 sessions'
+       ``.git/advisory-dedupe/`` markers: the command-echoing shapes
+       accumulated a fresh key per firing, while the shapes that never echo
+       (``_platform_verdict.platform_verdict_for_shape``) held at a 1-2 key
+       ceiling -- the control case, dedupe collapsing as designed.
+
+    Stripping the alternative rather than the whole tail is deliberate: two
+    firings of one guard whose explanation is identical and whose suggested
+    rewrite differs ARE the same shape, which is what dedupe keys on. The
+    explanatory prose that distinguishes one guard's advisory from another's
+    stays in the hash. Reuses ``terse_alternative_text``'s own span
+    arithmetic rather than a second cue-window implementation.
+
+    Builders that echo neither are unaffected -- both strips are no-ops when
+    their span is absent.
 
     Returns ``None`` (never dedupe-eligible) whenever ``envelope`` is not a
     dict, carries no ``hookSpecificOutput`` dict, or that dict's
@@ -224,6 +244,9 @@ def advisory_dedupe_key(guard_name: str, envelope: Optional[Dict[str, Any]]) -> 
     if not guard_name:
         return None
     normalized = _COMMAND_LINE_RE.sub("", ctx)
+    alternative = terse_alternative_text(normalized)
+    if alternative:
+        normalized = normalized.replace(alternative, "")
     digest = hashlib.sha256(normalized.encode("utf-8", errors="replace")).hexdigest()[:16]
     return "%s__%s" % (guard_name, digest)
 

@@ -3068,10 +3068,24 @@ def _confinement_cause(effective_type: str, policy: Any) -> str:
     COST IS PAID ONLY ON THE DENY PATH. The ``roster-unreadable`` vs
     ``unenumerated`` split needs ``resolve_roster()``, which is real disk
     I/O (DoE's policy YAML, ``coordinator/agents/*.md``, the plugin
-    discovery tree). That is the same call leg 3 already made to reach this
-    verdict, and it is reached only after ``check()`` has decided to deny --
-    never on an allow, and never on a command this guard has nothing to say
-    about.
+    discovery tree). It is reached only after ``check()`` has decided to
+    deny -- never on an allow, and never on a command this guard has
+    nothing to say about.
+
+    NEGATIVE SPEC -- do NOT collapse this into ``_is_confined_type`` as
+    ``bool(_confinement_cause(...))``, however plainly the two ladders read
+    as one. Reviewed and rejected (Kira, 2026-08-31) on a premise that does
+    not hold: the leg-3 arm below resolves the roster a SECOND time, after
+    ``is_confined_by_roster_absence`` already resolved it to return True.
+    ``_helpers._resolve_roster_accessor`` caches the IMPORT, not the
+    result, and ``resolve_roster`` itself is uncached -- so the second call
+    is a second full three-tree walk. ``_is_confined_type`` runs four times
+    per dispatch across two identity legs; routing it through here would
+    make every roster-absence-confined dispatch pay eight walks where it
+    now pays four, on a surface whose per-process budget is 500ms. The
+    duplication is deliberate, and the desync it risks is pinned by
+    ``test_confinement_cause_ladder_matches_predicate`` rather than by a
+    shared body.
 
     Never raises: a resolver that throws yields ``"unenumerated"``, the
     weaker of the two leg-3 claims, so a failure here can only make the

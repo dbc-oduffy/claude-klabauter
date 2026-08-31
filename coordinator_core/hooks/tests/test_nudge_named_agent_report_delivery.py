@@ -170,3 +170,62 @@ def test_op_is_registered() -> None:
     from coordinator_core.ipc import get_op_handler
 
     assert get_op_handler("hooks.nudge_named_agent_report_delivery") is not None
+
+
+# --------------------------------------------------------------------------------------
+# A sidecar-provisioned dispatch is never suppressed, however well its brief reads.
+#
+# doe-claude-em session `36630d4c` (2026-08-10) briefed all four named reviewers with
+# both suppression tokens present; three of the four returned findings by SendMessage
+# and left the provisioned sidecar at its 703-byte scaffold, so `review-integrator`
+# refused on its empty-scaffold intake and every finding needed a round trip.
+# Origin: cross-repo/archive/2026-08-10-doe-claude-em-named-teammate-advisory-
+# suppression-inversion.md.
+# --------------------------------------------------------------------------------------
+
+
+def test_a_sidecar_brief_still_fires_even_when_it_names_sendmessage_main() -> None:
+    result = _run({
+        "tool_name": "Agent",
+        "tool_input": {
+            "name": "code-reviewer",
+            "prompt": "Write findings to the sidecar, then SendMessage to main.",
+        },
+    })
+
+    assert "NAMED DISPATCH" in _advisory_text(result)
+
+
+def test_a_subagent_share_path_counts_as_a_sidecar() -> None:
+    result = _run({
+        "tool_name": "Agent",
+        "tool_input": {
+            "name": "code-reviewer",
+            "prompt": "Findings go in state/subagent-share/x.md; SendMessage main after.",
+        },
+    })
+
+    assert "NAMED DISPATCH" in _advisory_text(result)
+
+
+def test_a_correct_non_sidecar_brief_is_still_suppressed() -> None:
+    result = _run({
+        "tool_name": "Agent",
+        "tool_input": {
+            "name": "scout",
+            "prompt": "SendMessage to main with your answer when done.",
+        },
+    })
+
+    assert result.get("hookSpecificOutput", {}).get("additionalContext") in (None, "")
+
+
+def test_the_advisory_names_what_an_unfilled_scaffold_costs() -> None:
+    result = _run({
+        "tool_name": "Agent",
+        "tool_input": {"name": "code-reviewer", "prompt": "review it"},
+    })
+
+    text = _advisory_text(result)
+    assert "review-integrator" in text
+    assert "scaffold" in text

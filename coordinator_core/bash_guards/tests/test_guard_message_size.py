@@ -403,7 +403,13 @@ def test_ac7a_speaker_selection_excludes_suppression_manufactured_zero_prose_cel
     WINDOWS_COST_ONLY advisory is suppressed off-Windows -- manufactures the
     exact rewrite-leg-only, zero-prose, non-`None` envelope § Problem's
     correction warns about. `_select_speakers` must exclude it."""
-    cmd = "find . -type f -exec rm {} +"
+    # `\;`, not `+`, and the terminator is load-bearing for the FIXTURE only:
+    # this case needs any real speaking envelope out of `find-exec-rewrite` so
+    # the suppression path has something to manufacture from, and the guard
+    # stopped speaking to `+` shapes at C1 of the 2026-08-31 batched-form plan
+    # (an already-batched command gets a silent allow, because the "forks one
+    # process PER MATCH" claim is false of it). Nothing here is about find.
+    cmd = "find . -type f -exec rm {} \\;"
     sid = "ac7a-suppressed-rewrite-only-%s" % uuid.uuid4().hex
     capture = capture_one_guard(
         "find-exec-rewrite",

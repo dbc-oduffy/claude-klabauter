@@ -96,6 +96,49 @@ class TestWrongBodyCollisionRefused:
         assert "earlier-topic" in capsys.readouterr().err
 
 
+class TestCorruptSiblingDraftIsSkipped:
+    def test_non_utf8_sibling_draft_is_skipped_and_send_still_succeeds(
+        self, tmp_path, monkeypatch,
+    ):
+        """A stray/corrupt sibling draft with non-UTF-8 bytes must be skipped
+        by the duplicate-body scan, not raise out of it — module docstring
+        `_find_duplicate_draft_topic`: "A candidate this cannot read or parse
+        is skipped rather than treated as a match or a failure — a
+        stray/corrupt sibling draft must not block an unrelated send."
+
+        Review: coordinatorcode-reviewer Finding 1/2 — pins the fix for
+        `except OSError:` (too narrow; `UnicodeDecodeError` is a `ValueError`
+        subclass) missing this exact case. Fails against the pre-fix
+        `except OSError:` and passes once widened to `(OSError, ValueError)`.
+        """
+        sender_repo = _make_sender_git_repo(tmp_path)
+        receiver_repo = _make_receiver_git_repo(tmp_path)
+        claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": receiver_repo})
+        monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
+
+        # The send's own draft — an unrelated body.
+        _write_draft(
+            sender_repo, "later-topic",
+            body="An entirely unrelated body about something else.\n",
+        )
+        # A corrupt sibling draft directly in the outbox, non-UTF-8 bytes —
+        # never committed/tracked, mirroring an on-disk-only stray file.
+        outbox = sender_repo / "state" / "memo-outbox"
+        (outbox / "corrupt-sibling.md").write_bytes(b"\xff\xfe\x00garbage not utf-8")
+
+        result = _memo_send(
+            {"dry_run": False, "topic": "later-topic"}, repo_root=sender_repo,
+        )
+
+        assert result["exit_code"] == 0, result
+        assert len(result["acted"]) == 1
+        inbox_files = [
+            p for p in (receiver_repo / "cross-repo" / "inbox").glob("*.md")
+            if p.name != ".gitkeep"
+        ]
+        assert len(inbox_files) == 1
+
+
 class TestDifferentBodiesSendCleanly:
     def test_two_drafts_with_genuinely_different_bodies_both_send(
         self, tmp_path, monkeypatch,

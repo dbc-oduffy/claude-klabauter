@@ -119,41 +119,63 @@ def _refusing_helpers(src):
             names.append(name)
     return names
 
+# Functions in `coordinator_core.argv_fidelity` that THEMSELVES call
+# refuse_newline_argv on their inline argument. Membership is a claim about
+# that module's source and is pinned by test_prose_flag_transport_coverage.py
+# -- adding a name here that does not refuse silently re-opens the over-credit
+# staff-eng finding 1 closed.
+#
+# resolve_body is DELIBERATELY ABSENT and must stay absent. Verified at source
+# and stated in resolve_optional_prose's own docstring: resolve_body does NOT
+# call refuse_newline_argv; only resolve_optional_prose wires the two together.
+# Crediting resolve_body would mark a flag refused that accepts newlines --
+# the precise false-negative direction this instrument exists to prevent.
+_REFUSING_SEAM_FUNCS = ("resolve_optional_prose",)
+
+def _seam_refusers(src):
+    """Names from _REFUSING_SEAM_FUNCS this file actually imports from the seam.
+
+    Requires a real import of `coordinator_core.argv_fidelity` in the source, so
+    a same-named local function in some other file is not silently credited.
+    """
+    if "coordinator_core.argv_fidelity" not in src:
+        return []
+    return [n for n in _REFUSING_SEAM_FUNCS if n in src]
+
 def flag_refused(src, flag):
     """Rule 1: an unconditional newline refusal SCOPED to this flag.
 
-    Two shapes count, and they are the same claim reached two ways:
+    Three shapes count, and they are one claim reached three ways:
 
-      direct    -- `refuse_newline_argv(...)` naming the flag, via
-                   `flag_name="--<flag>"` or the flag literal inside the
-                   same call's parens.
-      delegated -- the flag literal passed to a same-file helper whose own
-                   body calls `refuse_newline_argv` (see `_refusing_helpers`).
+      direct     -- `refuse_newline_argv(...)` naming the flag, via
+                    `flag_name="--<flag>"` or the flag literal in the same call.
+      local      -- the flag literal passed to a same-file helper whose own body
+                    calls `refuse_newline_argv` (see `_refusing_helpers`).
+      seam       -- the flag literal passed to a `coordinator_core.argv_fidelity`
+                    function that refuses internally (see `_REFUSING_SEAM_FUNCS`).
 
-    Does NOT match a refusal call for a DIFFERENT flag elsewhere in the file
-    -- that whole-file disjunction was the instrument's second defect (see
-    module docstring), and neither shape above reintroduces it: both require
-    this flag's own literal at the call site.
+    None of the three reintroduces the whole-file disjunction that was this
+    instrument's second defect: every arm requires THIS flag's own literal at
+    the call site, so a refusal for a different flag elsewhere credits nothing.
 
-    // Review: staff-eng (the Staff Engineer) found the whole-file OR. The delegated arm
-    // was added after HIS correction, because the corrected predicate then
-    // reported `archive-stamp-cli --reason` UNREFUSED -- a flag verified at
-    // source to be refused on every invocation, through
-    // `_resolve_prose(tail, flag)` -> `refuse_newline_argv(inline,
-    // flag_name=flag)`. That is a false positive in the GATING column, and
-    // it is the expensive direction: the criterion "0 unrefused" becomes
-    // unreachable by correct code, and an executor driving toward it would
-    // inline a redundant refusal beside a working one to satisfy a regex --
-    // the falsifier dictating worse code, which is the failure this
-    // instrument exists to prevent. It does not trace call graphs; it credits
-    // one level of same-file delegation, which is the only level the shape
-    // this plan mandates actually uses.
+    // Review: staff-eng (the Staff Engineer) found the whole-file OR. The `local` arm was
+    // added after that correction, when the corrected predicate began reporting
+    // `archive-stamp-cli --reason` unrefused. The `seam` arm was added after
+    // executing C3-C16, when the SAME defect surfaced one level up: routing
+    // through the shared seam is the shape C1 exists to provide and the plan
+    // pushes every entrypoint toward, and the probe could not see it. Three
+    // separate executors bent their code toward the measurement because of it --
+    // C3 inlined a redundant `refuse_newline_argv` beside `resolve_optional_prose`
+    // and said so in its report, C4 chose `parser.error()` over the seam, C10
+    // picked its resolver to be "source-visible" to this regex. An oracle that
+    // makes correct code score badly does not merely mis-measure; it dictates
+    // worse code, and it did.
     """
     direct = r'refuse_newline_argv\([^)]*(?:flag_name\s*=\s*["\']--%s["\']|["\']--%s["\'])' % (
         re.escape(flag), re.escape(flag))
     if re.search(direct, src, re.S):
         return True
-    for helper in _refusing_helpers(src):
+    for helper in list(_refusing_helpers(src)) + list(_seam_refusers(src)):
         delegated = r'\b%s\s*\([^)]*["\']--%s["\']' % (re.escape(helper), re.escape(flag))
         if re.search(delegated, src, re.S):
             return True

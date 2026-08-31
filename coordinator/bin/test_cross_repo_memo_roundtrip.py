@@ -478,3 +478,144 @@ def test_send_partial_delivery_exits_1() -> None:
 
     if rc != 1:
         raise AssertionError(f"{name}: sender_committed=False should exit 1, got {rc}")
+
+
+# ---------------------------------------------------------------------------
+# Test 6 — C3 (docs/plans/2026-08-31-prose-flags-travel-as-files-through-
+# the.md): a newline-bearing --title is refused (exit 2), never silently
+# glued into a short-of-intent title. Fires before any engine call or repo
+# check, so no fixture/engine dependency is needed.
+# ---------------------------------------------------------------------------
+
+def test_draft_title_with_newline_refused() -> None:
+    name = "test_draft_title_with_newline_refused"
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        sender_repo = _make_git_repo(tmpdir, "sender_repo")
+        claude_home = os.path.join(tmpdir, "claude_home")
+        os.makedirs(claude_home, exist_ok=True)
+        mock_impl = _make_mock_machine_local(tmpdir, None)
+        env = {"MACHINE_LOCAL_IMPL": mock_impl, "CLAUDE_HOME": claude_home}
+
+        result = _run_dispatcher_in_repo(
+            sender_repo,
+            [
+                "draft", "newline-title-topic",
+                "--to", "claude-central-em",
+                "--title", "line one\nline two",
+                "--kind", "fyi",
+            ],
+            env=env,
+        )
+
+        if result.returncode != 2:
+            raise AssertionError(
+                f"{name}: newline-bearing --title should exit 2, got "
+                f"{result.returncode}. stdout={result.stdout!r} stderr={result.stderr!r}"
+            )
+        if "--title" not in result.stderr or "newline" not in result.stderr:
+            raise AssertionError(f"{name}: refusal message should name --title and newline: {result.stderr!r}")
+
+        outbox_path = os.path.join(sender_repo, "state", "memo-outbox", "newline-title-topic.md")
+        if os.path.exists(outbox_path):
+            raise AssertionError(f"{name}: no draft should be written on a refused --title: {outbox_path}")
+
+
+# ---------------------------------------------------------------------------
+# Test 7 — C3: --summary and --summary-file are mutually exclusive; supplying
+# both is refused (exit 2) before any engine call.
+# ---------------------------------------------------------------------------
+
+def test_draft_summary_and_summary_file_mutually_exclusive() -> None:
+    name = "test_draft_summary_and_summary_file_mutually_exclusive"
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        sender_repo = _make_git_repo(tmpdir, "sender_repo")
+        claude_home = os.path.join(tmpdir, "claude_home")
+        os.makedirs(claude_home, exist_ok=True)
+        mock_impl = _make_mock_machine_local(tmpdir, None)
+        env = {"MACHINE_LOCAL_IMPL": mock_impl, "CLAUDE_HOME": claude_home}
+
+        summary_file = os.path.join(tmpdir, "summary.txt")
+        with open(summary_file, "w", encoding="utf-8") as f:
+            f.write("a summary from a file")
+
+        result = _run_dispatcher_in_repo(
+            sender_repo,
+            [
+                "draft", "dual-summary-topic",
+                "--to", "claude-central-em",
+                "--title", "A one-line title",
+                "--summary", "an inline summary",
+                "--summary-file", summary_file,
+                "--kind", "fyi",
+            ],
+            env=env,
+        )
+
+        if result.returncode != 2:
+            raise AssertionError(
+                f"{name}: --summary + --summary-file together should exit 2, got "
+                f"{result.returncode}. stdout={result.stdout!r} stderr={result.stderr!r}"
+            )
+        if "mutually exclusive" not in result.stderr:
+            raise AssertionError(f"{name}: refusal should name mutual exclusion: {result.stderr!r}")
+
+
+# ---------------------------------------------------------------------------
+# Test 8 — C3: --summary-file resolves losslessly from a file, threading the
+# file's content as the summary the same way an inline --summary would.
+# Requires the real engine (memo.draft) to observe the written frontmatter,
+# so it SKIPs loud like the other real-op tests above when unresolvable.
+# ---------------------------------------------------------------------------
+
+def test_draft_summary_file_resolves_into_draft() -> None:
+    name = "test_draft_summary_file_resolves_into_draft"
+
+    claude_klabauter_root = _resolve_test_claude_klabauter_root()
+    if claude_klabauter_root is None:
+        skip_test(name, "the engine root is unresolvable on this machine — cannot exercise the real memo.draft op")
+        return
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        sender_repo = _make_git_repo(tmpdir, "sender_repo")
+        receiver_repo = _make_git_repo(tmpdir, "receiver_repo")
+        env, _ = _fixture_envs(tmpdir, sender_repo, receiver_repo)
+        env["COORDINATOR_ENGINE_ROOT"] = claude_klabauter_root
+
+        summary_file = os.path.join(tmpdir, "summary.txt")
+        summary_text = "a summary carrying a \"quote\" that a file leg makes lossless"
+        with open(summary_file, "w", encoding="utf-8") as f:
+            f.write(summary_text)
+
+        draft_result = _run_dispatcher_in_repo(
+            sender_repo,
+            [
+                "draft", "summary-file-topic",
+                "--to", "claude-central-em",
+                "--title", "Summary-file resolution test memo",
+                "--summary-file", summary_file,
+                "--kind", "fyi",
+            ],
+            env=env,
+        )
+        if draft_result.returncode != 0:
+            raise AssertionError(
+                f"{name}: draft with --summary-file failed: exit {draft_result.returncode}, "
+                f"stdout={draft_result.stdout!r} stderr={draft_result.stderr!r}"
+            )
+
+        outbox_path = os.path.join(sender_repo, "state", "memo-outbox", "summary-file-topic.md")
+        if not os.path.isfile(outbox_path):
+            raise AssertionError(f"{name}: outbox file missing after draft: {outbox_path}")
+        with open(outbox_path, encoding="utf-8") as f:
+            content = f.read()
+        # The frontmatter writer YAML-escapes an embedded '"' (backslash-escaped
+        # double-quote) -- the content is carried losslessly, just not byte-
+        # identical to the raw file text. Assert on the YAML-escaped form.
+        yaml_escaped_summary = summary_text.replace('"', '\\"')
+        if yaml_escaped_summary not in content:
+            raise AssertionError(
+                f"{name}: draft frontmatter should carry the file-sourced summary "
+                f"(YAML-escaped): {content!r}"
+            )

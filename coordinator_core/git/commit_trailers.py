@@ -242,16 +242,23 @@ def _normalize_scope_path(raw_path: str) -> str:
     forward-slash-separated, no leading ``./``, no trailing ``/``. A
     ``scope:`` list is plan-author-written text, not machine-normalized
     like the committed pathspec is, so an entry authored with a leading
-    ``./``, a trailing slash, or (rare on this codebase, but cheap to
-    handle) backslash separators would otherwise never match a normalized
-    committed path and the strict-containment check in
+    ``./``, a leading ``/``, a trailing slash, or (rare on this codebase,
+    but cheap to handle) backslash separators would otherwise never match
+    a normalized committed path and the strict-containment check in
     ``resolve_deliverable_id_from_scope_match`` would silently abstain --
     see that finding (review-integrator P2, slice B,
     coordinatorcode-reviewer-f5f569aa.md) for the full asymmetry. Never
     raises; a blank/whitespace-only entry normalizes to ``""``."""
+    # Review: coordinatorcode-reviewer af3dcdba64a143dbb (P3, override APPLY) --
+    # an unstripped leading "/" left `["", "coordinator_core", "ops"]` as the
+    # entry's segments, which can never prefix-match an always-relative
+    # committed path; this tier then abstained and a lower, session-keyed
+    # tier answered with a WRONG deliverable_id instead of "no id".
     normalized = raw_path.strip().replace("\\", "/")
     if normalized.startswith("./"):
         normalized = normalized[2:]
+    if normalized.startswith("/"):
+        normalized = normalized.lstrip("/")
     if len(normalized) > 1:
         normalized = normalized.rstrip("/")
     return normalized

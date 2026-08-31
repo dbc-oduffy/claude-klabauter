@@ -13,18 +13,22 @@ accepts. This file verifies two things without a real engine invocation:
   1. Argparse wiring: `--supersedes` parses on `draft` (repeatable,
      default None) and is ABSENT from `send` (see the module's own comment:
      `send` reads the value off staged frontmatter, not a flag).
-  2. Round-trip: the frontmatter shape `memo_draft.py`'s
-     `compose_draft_frontmatter` emits for `supersedes` (a bare quoted
-     scalar for one item, a nested YAML sequence via `_render_extra_field`
-     for two-plus — see coordinator_core/ops/fleet/memo_draft.py:620-629)
-     parses back through `cross-repo-memo.py`'s own `_parse_outbox_file` as
-     the same shape: a bare string for one, a list for two.
+  2. Threading: `_supersedes_invoke_value` — the function `_cmd_draft` calls
+     to reduce argparse's accumulated `--supersedes` list to the op's invoke
+     shape — returns a bare string for one occurrence, a list for two-plus,
+     and None when the flag is absent.
+
+Review: overengineering-reviewer (2026-08-31) — this file previously also
+pinned a round-trip through `_parse_outbox_file`'s nested-`supersedes:`
+YAML-sequence reader; that reader had no CLI consumer (both call sites of
+`_parse_outbox_file`'s return value read only `to` and `scoped_to_*`) and
+was deleted from `cross-repo-memo.py`, so those two tests were dropped with
+it rather than left pinning dead code.
 
 Negative-spec: does NOT invoke the real `memo.draft` op or spawn a
-subprocess — `_cmd_draft`'s `invoke_params` threading and
-`_parse_outbox_file`'s parsing are pure functions of argparse.Namespace /
-file text, so this test exercises them directly. No `--supersedes` value is
-threaded onto `send_p` — asserting its absence there is part of AC1.
+subprocess — `_cmd_draft`'s `invoke_params` threading is a pure function of
+argparse.Namespace, so this test exercises it directly. No `--supersedes`
+value is threaded onto `send_p` — asserting its absence there is part of AC1.
 """
 
 from __future__ import annotations
@@ -32,7 +36,6 @@ from __future__ import annotations
 import importlib.util
 import os
 import sys
-import textwrap
 from importlib.machinery import SourceFileLoader
 
 import pytest
@@ -102,15 +105,15 @@ def test_supersedes_absent_from_send_subparser(mod):
 
 
 def test_cmd_draft_threads_bare_string_for_single_supersedes(mod):
+    # Review: overengineering-reviewer — rewritten to call the extracted
+    # _supersedes_invoke_value helper (the actual threading logic _cmd_draft
+    # calls) instead of transcribing its one-liner into the test body, so
+    # this test can fail for a change to the real threading path.
     ns = mod._build_parser().parse_args(
         ["draft", "my-topic", "--to", "some-em", "--title", "t", "--kind", "fyi",
          "--supersedes", "2026-08-01-first.md"]
     )
-    supersedes = getattr(ns, "supersedes", None)
-    invoke_params: dict = {}
-    if supersedes:
-        invoke_params["supersedes"] = supersedes[0] if len(supersedes) == 1 else supersedes
-    assert invoke_params["supersedes"] == "2026-08-01-first.md"
+    assert mod._supersedes_invoke_value(ns.supersedes) == "2026-08-01-first.md"
 
 
 def test_cmd_draft_threads_list_for_multiple_supersedes(mod):
@@ -118,66 +121,13 @@ def test_cmd_draft_threads_list_for_multiple_supersedes(mod):
         ["draft", "my-topic", "--to", "some-em", "--title", "t", "--kind", "fyi",
          "--supersedes", "2026-08-01-first.md", "--supersedes", "2026-08-02-second.md"]
     )
-    supersedes = getattr(ns, "supersedes", None)
-    invoke_params: dict = {}
-    if supersedes:
-        invoke_params["supersedes"] = supersedes[0] if len(supersedes) == 1 else supersedes
-    assert invoke_params["supersedes"] == [
+    assert mod._supersedes_invoke_value(ns.supersedes) == [
         "2026-08-01-first.md", "2026-08-02-second.md",
     ]
 
 
-def test_parse_outbox_file_roundtrips_bare_string_supersedes(mod, tmp_path):
-    # Mirrors memo_draft.py::compose_draft_frontmatter's single-item rendering
-    # (a _yaml_quote'd inline scalar — coordinator_core/ops/fleet/memo_draft.py:629).
-    outbox = tmp_path / "my-topic.md"
-    outbox.write_text(
-        textwrap.dedent("""\
-            ---
-            title: "t"
-            from: "me-em"
-            to: "some-em"
-            created: 2026-08-31
-            status: draft
-            delivery_mode: receiver-repo
-            summary: "(no summary provided)"
-            kind: "fyi"
-            supersedes: "2026-08-01-first.md"
-            ---
-            body text
-            """),
-        encoding="utf-8",
+def test_supersedes_invoke_value_absent_returns_none(mod):
+    ns = mod._build_parser().parse_args(
+        ["draft", "my-topic", "--to", "some-em", "--title", "t", "--kind", "fyi"]
     )
-    fm, body = mod._parse_outbox_file(str(outbox))
-    assert fm["supersedes"] == "2026-08-01-first.md"
-    assert body.strip() == "body text"
-
-
-def test_parse_outbox_file_roundtrips_list_supersedes(mod, tmp_path):
-    # Mirrors memo_draft.py::compose_draft_frontmatter's multi-item rendering
-    # (a nested YAML sequence via _render_extra_field/_render_yaml_block —
-    # coordinator_core/ops/fleet/memo_draft.py:627,
-    # coordinator_core/ops/fleet/_memo_compose.py:420-427).
-    outbox = tmp_path / "my-topic.md"
-    outbox.write_text(
-        textwrap.dedent("""\
-            ---
-            title: "t"
-            from: "me-em"
-            to: "some-em"
-            created: 2026-08-31
-            status: draft
-            delivery_mode: receiver-repo
-            summary: "(no summary provided)"
-            kind: "fyi"
-            supersedes:
-              - "2026-08-01-first.md"
-              - "2026-08-02-second.md"
-            ---
-            body text
-            """),
-        encoding="utf-8",
-    )
-    fm, body = mod._parse_outbox_file(str(outbox))
-    assert fm["supersedes"] == ["2026-08-01-first.md", "2026-08-02-second.md"]
-    assert body.strip() == "body text"
+    assert mod._supersedes_invoke_value(ns.supersedes) is None

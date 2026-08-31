@@ -9,11 +9,14 @@ Spec backlink:
     `docs/plans/2026-08-19-windows-commit-hook-starts-python-once.md` whose
     own id is `dlv-the-windows-commit-hook-starts-python-on-99b845`.
 
-    `close-out-and-stamp` joins a commit to a plan chunk on TWO legs: the
-    `Deliverable-Id:` trailer AND a subject registering the chunk-id. The
-    chunk-id leg is already emitted (see
-    `test_commit_prompt_registers_chunk_ids.py`); this file covers the other
-    one. A commit prompt that names no id leaves the committer to resolve one
+    `close-out-and-stamp` verifies a commit against a plan chunk via pure
+    sha-ancestry evidence (a `disposition: coded` row's own
+    `disposition_ref`), never a subject or trailer parse -- the chunk-id
+    rule and the Deliverable-Id rule are two independent prompt legs, not
+    a join `close-out-and-stamp` itself performs. The chunk-id leg is
+    already emitted (see `test_commit_prompt_registers_chunk_ids.py`);
+    this file covers the other one. A commit prompt that names no id
+    leaves the committer to resolve one
     from ambient session state, and shared history cannot be rewritten once
     pushed -- the only recovery is a hand-written per-row `disposition_ref`.
 
@@ -71,16 +74,20 @@ def _write_plan(tmp_path: Path, deliverable_line: str) -> Path:
 def test_commit_prompt_names_no_flag_and_states_the_trailer_is_automatic():
     """`scoped-git-commit` has no `--deliverable-id` flag (verified against
     `coordinator_core/git/commit.py :: commit_paths`'s own signature) -- the
-    trailer is attached by the `prepare-commit-msg` hook's resolver ladder
-    (`coordinator_core/git/commit_trailers.py :: _resolve_deliverable_id`).
-    The prompt must say so, never instruct a flag that does not exist."""
+    trailer is attached by the commit route itself, via
+    `ceremony.commit_v2`'s `apply_missing_trailers` call
+    (`coordinator_core/git/commit_trailers.py :: apply_missing_trailers`),
+    NOT by any git hook -- `commit_paths` lands via `commit-tree` plumbing,
+    which fires no hooks. The prompt must say so, never instruct a flag
+    that does not exist and never name `prepare-commit-msg`."""
     call = _commit_agent_call(
         ["a.py"], "Commit wave 1", 0, ["C1"], deliverable_id="dlv-a-plan-99b845"
     )
     assert "--deliverable-id" not in call
+    assert "prepare-commit-msg" not in call
     lowered = call.lower()
     assert "automatically" in lowered
-    assert "prepare-commit-msg" in lowered
+    assert "apply_missing_trailers" in lowered or "commit_v2" in lowered
 
 
 def test_commit_prompt_treats_a_mismatched_trailer_as_a_report_not_a_refusal():
@@ -100,7 +107,7 @@ def test_absent_deliverable_id_emits_no_dangling_rule():
     """Back-compat, and the same shape the chunk-id leg takes: a plan
     declaring no id must not emit the trailer rule at all."""
     call = _commit_agent_call(["a.py"], "Commit wave 1", 0, ["C1"])
-    assert "prepare-commit-msg" not in call
+    assert "apply_missing_trailers" not in call
     assert "--deliverable-id" not in call
 
 
@@ -111,23 +118,24 @@ def test_deliverable_id_rule_is_additive_to_the_chunk_id_leg():
         ["a.py"], "Commit wave 2", 1, ["C2", "C3"], deliverable_id="dlv-a-plan-99b845"
     )
     assert "C2, C3" in call
-    assert "prepare-commit-msg" in call
+    assert "apply_missing_trailers" in call
 
 
 def test_emit_script_names_no_deliverable_id_flag_for_a_declared_plan(tmp_path):
-    """The trailer is hook-attached, never emitted as a CLI flag, whether or
+    """The trailer is attached by the commit route itself
+    (`apply_missing_trailers`), never emitted as a CLI flag, whether or
     not the plan declares an id."""
     plan_path = _write_plan(tmp_path, "deliverable_id: dlv-a-plan-that-declares-99b845")
     script = emit_script(plan_path, repo_root=tmp_path)
     assert "--deliverable-id" not in script
-    assert "prepare-commit-msg" in script
+    assert "apply_missing_trailers" in script
 
 
 def test_emit_script_names_no_id_for_a_plan_that_declares_none(tmp_path):
     plan_path = _write_plan(tmp_path, "deliverable_id: null")
     script = emit_script(plan_path, repo_root=tmp_path)
     assert "--deliverable-id" not in script
-    assert "prepare-commit-msg" not in script
+    assert "apply_missing_trailers" not in script
 
 
 def test_the_scaffolded_placeholder_is_never_forwarded(tmp_path):
@@ -139,7 +147,7 @@ def test_the_scaffolded_placeholder_is_never_forwarded(tmp_path):
     )
     script = emit_script(plan_path, repo_root=tmp_path)
     assert "--deliverable-id" not in script
-    assert "prepare-commit-msg" not in script
+    assert "apply_missing_trailers" not in script
 
 
 def test_plan_deliverable_id_is_fail_soft_on_every_malformed_shape():

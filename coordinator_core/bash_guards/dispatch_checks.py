@@ -7092,6 +7092,31 @@ def check_validate_commit(
 
 _FIND_EXEC_TRANSLATABLE_VERBS = frozenset({"rm", "cat", "wc"})
 
+#: Verbs where `-exec VERB ARGS {} +` is byte-identical in effect to running
+#: `-exec VERB ARGS {} \;` once per match -- a per-verb property, answered by
+#: measurement, never by rule. Deliberately a SEPARATE table from
+#: `_FIND_EXEC_TRANSLATABLE_VERBS` above: that table hand-writes a semantic
+#: equivalence to a python3 rewrite (a harder, more error-prone claim -- all
+#: three shipped entries were found wrong by measurement); this table only
+#: asks "does the '+' form's OUTPUT match the concatenation of the ';'
+#: form's per-match output", which is the narrower, purely batch-equivalence
+#: question. Widening one table by reasoning about the other is the mistake
+#: this module comment exists to head off.
+#:
+#: Measured (GNU findutils 4.11.0, this session, three files, no ARG_MAX
+#: pressure) 2026-08-31:
+#:   rm, cat, chmod, chown, touch, git add -- `+` output identical to `;`.
+#:   head, tail -- `+` prepends '==> path <==' banners the `;` form never
+#:     emits.
+#:   wc -- `+` appends a grand-total line the `;` form never emits.
+#:   grep -- multi-operand `+` prefixes every hit with 'path:' the
+#:     single-operand `;` form never emits.
+#: Anything not on this allowlist fails safe to the unchanged prose advisory
+#: below -- never a guessed batch form.
+_FIND_EXEC_BATCH_EQUIVALENT_VERBS = frozenset(
+    {"rm", "cat", "chmod", "chown", "touch", "git"}
+)
+
 
 def _bt_parse_find_exec_segment(tokens: List[str]) -> Optional[Dict[str, Any]]:
     """`tokens` is one already-tokenized SEGMENT (post
@@ -7453,26 +7478,57 @@ def _bt_find_exec_python_rewrite(parsed: Dict[str, Any]) -> Optional[str]:
     return "%s -c %s" % (_bt_python3_invocation(), shlex.quote(body))
 
 
+def _bt_find_exec_batch_rewrite(tokens: List[str], parsed: Dict[str, Any]) -> Optional[str]:
+    """Offer the POSIX `+` batched form for a verb this session measured as
+    batch-equivalent (`_FIND_EXEC_BATCH_EQUIVALENT_VERBS`), gated on `{}`
+    being the FINAL token of the exec'd argv -- `+` only batches when the
+    placeholder is last; a `{}` mid-argv (`-exec cmd {} -flag \;`) is not
+    this shape and this function returns `None` for it, same as an
+    unrecognized verb. Returns `None` (no suggestion, no rewrite) on either
+    miss -- never a guessed batch form for a verb not on the allowlist."""
+    exec_argv = parsed["exec_argv"]
+    if not exec_argv or exec_argv[-1] != "{}":
+        return None
+    verb_norm = _normalize_executable_basename(exec_argv[0])
+    if verb_norm not in _FIND_EXEC_BATCH_EQUIVALENT_VERBS:
+        return None
+    if verb_norm == "git" and (len(exec_argv) < 2 or exec_argv[1] != "add"):
+        # Only `git add` is on the measured allowlist (same shape as `rm`);
+        # any other git subcommand is an unmeasured claim this function
+        # never guesses at.
+        return None
+    exec_idx = tokens.index("-exec")
+    new_tokens = tokens[: exec_idx + 1] + exec_argv + ["+"]
+    return shlex.join(new_tokens)
+
+
 def check_find_exec_rewrite(
     cmd: str,
     session_id: str = "",
     payload: Optional[Dict[str, Any]] = None,
     git_root: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
-    """BX-16 shape 1 (flagship) -- `find ... -exec <binary> {} ;` and its
-    `for f in $(find ...); do <binary> "$f"; done` sibling both fork ONE
+    """BX-16 shape 1 (flagship) -- `find ... -exec <binary> {} ;` forks ONE
     CHILD PROCESS PER MATCH, which is the exact mechanism behind the
     founding incident's 879-process stall on Windows (DoE
     ``state/plan-sidecars/2026-07-28-bash-tax-negative-space.md``).
+
+    This function only fires on a segment carrying a literal `-exec` token
+    (`_bt_parse_find_exec_segment` requires it); the
+    `for f in $(find ...); do <binary> "$f"; done` sibling never reaches
+    that check regardless of `_BT_Shape.FOR_LOOP` classification above, and
+    is not covered here -- widening this parser to that shape is a
+    different guard's job (`guard_grep_via_bash` already owns
+    substitutable-residue rewriting for it).
 
     Auto-rewrites to a single `python3 -c` process (zero per-match forks)
     when the exec'd verb is translatable (rm/cat/wc -l); otherwise advises
     with a generic os.walk skeleton rather than guessing at an arbitrary
     binary's semantics. Never denies -- see this section's module comment.
 
-    shell-doc-ok: the two spellings above are the real bash command shapes
-    this check matches; re-rendering them would leave the docstring unable to
-    name what it detects.
+    shell-doc-ok: the spelling above is the real bash command shape this
+    check matches; re-rendering it would leave the docstring unable to name
+    what it detects.
     """
     if not cmd:
         return None
@@ -7538,6 +7594,27 @@ def check_find_exec_rewrite(
                 )
                 + (" %s" % _find_exec_note if _find_exec_note else ""),
             )
+        batch_rewrite = _bt_find_exec_batch_rewrite(tokens, parsed)
+        if rewrite and batch_rewrite:
+            # Translatable AND batch-equivalent, in a chained command. The
+            # python translation cannot be offered here -- substituting it
+            # would drop the other work in the command -- but the `+` form
+            # is a SEGMENT-local edit, so it survives chaining and is
+            # runnable as-is. Naming it is what keeps this branch from
+            # being the one place the guard states a problem and hands back
+            # only prose; the untranslatable sibling below already does it.
+            return _advisory(
+                (
+                    "Advisory: 'find ... -exec %s ... {} ;' (segment: %s) "
+                    "forks one process PER MATCH -- the POSIX '+' form (%s) "
+                    "batches matches with identical output for this verb. "
+                    "The python3 rewrite is not offered: this segment runs "
+                    "alongside OTHER work, and replacing the whole command "
+                    "would drop it."
+                    % (parsed["exec_argv"][0], " ".join(tokens), batch_rewrite)
+                )
+                + (" %s" % _find_exec_note if _find_exec_note else "")
+            )
         if rewrite:
             return _advisory(
                 (
@@ -7550,6 +7627,31 @@ def check_find_exec_rewrite(
                     "full-command auto-rewrite is offered -- replacing the "
                     "whole command would silently drop that other work."
                     % (parsed["exec_argv"][0], " ".join(tokens))
+                )
+                + (" %s" % _find_exec_note if _find_exec_note else "")
+            )
+        if batch_rewrite and single_segment:
+            return _allow_rewrite(
+                batch_rewrite,
+                (
+                    "Auto-rewritten: 'find ... -exec %s ... {} ;' forks one "
+                    "process PER MATCH -- the POSIX '+' form batches matches "
+                    "into as few invocations as ARG_MAX allows, with "
+                    "identical output for this verb."
+                    % (parsed["exec_argv"][0],)
+                )
+                + (" %s" % _find_exec_note if _find_exec_note else ""),
+            )
+        if batch_rewrite:
+            return _advisory(
+                (
+                    "Advisory: 'find ... -exec %s ... {} ;' (segment: %s) "
+                    "forks one process PER MATCH -- the POSIX '+' form (%s) "
+                    "batches matches with identical output for this verb, "
+                    "but this find-exec segment runs alongside OTHER work in "
+                    "the same command, so no full-command auto-rewrite is "
+                    "offered."
+                    % (parsed["exec_argv"][0], " ".join(tokens), batch_rewrite)
                 )
                 + (" %s" % _find_exec_note if _find_exec_note else "")
             )

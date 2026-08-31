@@ -2,7 +2,7 @@
 coordinator_core.ops.verify_ue_overrides — plain module, no registered op.
 
 Purpose: walks the machine-local-registered UE-context directories
-(repos.example_game_workbench_repo, repos.example_retrieval_repo, $HOME/.claude, optional
+(repos.example_game_workbench_repo, repos.example_retrieval_repo, optional
 repos.example-sim-repo) and asserts each carries the expected UE plugin override keys in its
 .claude/settings.json enabledPlugins object. Exits 0 on success, 1 with diagnostic
 output on failure. This is a MANUAL diagnostic — per docs/wiki/per-project-plugin-
@@ -24,11 +24,16 @@ machine-local keys consumed (must be set in registry.local.toml):
 If a required key is not set, this fails loud with a remediation hint — a missing
 registry value is a configuration gap that needs fixing, not a silent skip.
 
+It ALSO asserts the inverse for `$HOME/.claude/settings.json`: every UE plugin key
+must be OFF there. Per-project gating puts the opt-in in each UE repo and requires the
+global file to stay off, so a `true` in it is the drift.
+
 Negative-spec (faithfully reproduced bash-oracle behavior — do NOT "fix" mid-port):
-    - `$HOME/.claude` has no `.claude` sub-directory of its own; its settings.json path
-      is `$HOME/.claude/settings.json` directly, unlike the other UE-context dirs which
-      use `<dir>/.claude/settings.json`. Preserved verbatim (the bash oracle's special-
-      cased branch for this one entry).
+    - `$HOME/.claude` was carried in the walked dir list, with a special-cased
+      settings path, and asserted UE-ON like the genuine UE repos. CORRECTED
+      2026-08-31, not preserved: it is not a UE-context dir (no `.uproject`, never
+      had one), and demanding `true` there flagged correct config as drift on every
+      close ceremony. See `_global_settings_is_ue_off`.
     - A missing resolved directory is a hard FAIL (not a silent skip) — the old bash
       shape silently continued past a stale/wrong registry path; this port keeps the
       fail-loud replacement behavior, not the original silent-continue.
@@ -100,6 +105,30 @@ def _read_enabled_plugin(settings_path: str, key: str) -> str:
     return "missing" if val is None else str(val)
 
 
+def _global_settings_is_ue_off(settings: str) -> bool:
+    """The GLOBAL settings file must have every UE plugin key OFF.
+
+    The inverse of what the rest of this module asserts, and deliberately so:
+    per-project plugin gating puts the opt-in in each UE repo and requires
+    `~/.claude/settings.json` to stay off, so a `true` here is the drift --
+    not the compliance this verifier used to demand of it.
+
+    Absent file or absent key is PASS: the requirement is "not enabled", and
+    an unwritten key is not enabled. Only a literal `true` fails.
+    """
+    ok = True
+    for key in _EXPECTED_KEYS + _EITHER_VENDOR_GAME_DEV:
+        if _read_enabled_plugin(settings, key) == "true":
+            print(
+                f"WRONG: {settings} [{key}] = true (expected off -- the global "
+                "settings file must not enable UE plugins; the opt-in belongs "
+                "in each UE repo)",
+                file=sys.stderr,
+            )
+            ok = False
+    return ok
+
+
 def main(argv: List[str], script_dir: Optional[str] = None) -> int:
     """CLI entrypoint: verify-ue-overrides (no positional args consumed; argv unused,
     kept for trampoline-call symmetry with other ported ops).
@@ -149,14 +178,30 @@ def main(argv: List[str], script_dir: Optional[str] = None) -> int:
     # `home_claude_dir` below must be the SAME string as the list entry — the
     # loop compares against it by equality to special-case this one directory.
     home = str(home_dir())
-    named_dirs: List[str] = [example_game_repo_root, example_retrieval_repo_root, os.path.join(home, ".claude")]
+    # `$HOME/.claude` IS NOT A UE-CONTEXT DIR, and demanding `true` there was
+    # the drift engine itself. Per-project plugin gating (ratified; DoE-claude
+    # `coordinator/docs/wiki/per-project-plugin-gating.md` § Files Involved)
+    # requires the GLOBAL settings file to be UE-OFF and each UE repo to carry
+    # its own opt-in. This verifier asserted the exact state that design
+    # forbids, in the exact file it names, and it is wired into a close
+    # ceremony -- so every run flagged correct config as drift and invited a
+    # re-bootstrap that would undo the gating. `~/.claude` has no `.uproject`
+    # and never did; it was bootstrapped into this list in 2026-05 alongside
+    # the genuine UE repos, and the bash->Python port carried it faithfully.
+    # Reported by doe-claude-em 2026-08-14 with the three WRONG lines it
+    # produced against a correct machine.
+    #
+    # It moves to its own assertion below rather than being dropped, because a
+    # silent skip cannot catch the re-bootstrap that turns it back on.
+    named_dirs: List[str] = [example_game_repo_root, example_retrieval_repo_root]
 
     example_sim_repo_root = _ml_get("repos.example-sim-repo")
     if example_sim_repo_root:
         named_dirs.append(example_sim_repo_root)
 
     fail = False
-    home_claude_dir = os.path.join(home, ".claude")
+    if not _global_settings_is_ue_off(os.path.join(home, ".claude", "settings.json")):
+        fail = True
 
     for dir_path in named_dirs:
         if not os.path.isdir(dir_path):
@@ -176,10 +221,7 @@ def main(argv: List[str], script_dir: Optional[str] = None) -> int:
             fail = True
             continue
 
-        if dir_path == home_claude_dir:
-            settings = os.path.join(dir_path, "settings.json")
-        else:
-            settings = os.path.join(dir_path, ".claude", "settings.json")
+        settings = os.path.join(dir_path, ".claude", "settings.json")
 
         if not os.path.isfile(settings):
             print(

@@ -172,6 +172,7 @@ from __future__ import annotations
 import ast
 import fnmatch
 import json
+import os
 import stat as stat_module
 import subprocess
 import tomllib
@@ -433,7 +434,59 @@ def _call_is_write(
     return False
 
 
+_TRACKED_PATHS_MEMO: dict[str, tuple[tuple[int, int], frozenset[str]]] = {}
+
+
 def _tracked_paths(repo_root: Path) -> frozenset[str] | None:
+    """Return the repo's tracked-path set, memoized in-process against the
+    git index's identity.
+
+    Building this frozenset from `git ls-files` output costs ~109ms of our
+    own process time on this repo's 38k-entry index (the spawn's own CPU is
+    excluded from `process_time`; this is entirely our parse and set build),
+    and the warm engine keeps the process alive across calls -- so the fix
+    is a module-level in-memory dict, never a second on-disk cache, keyed on
+    `.git/index`'s `(st_mtime_ns, st_size)`. Every tracked-set change moves
+    that signature (verified empirically: add, commit, rm --cached, and
+    stage-rewrite each moved it; an unrelated edit that only touches a
+    tracked file's contents did not, correctly, since the tracked SET was
+    unchanged); the one false-negative direction -- an index rewrite that
+    does not change the tracked set still moving the signature -- causes a
+    safe extra recompute, not a stale answer.
+
+    Negative-spec: this memo is keyed on the git INDEX's identity, never on
+    the resulting frozenset's bytes or on any tracked file's own mtime --
+    keying on file identity would silently serve a stale tracked set across
+    a `git add`/`git rm --cached` with no code path to invalidate it. If
+    `.git/index` is missing or unstatable, the memo is skipped entirely and
+    the tracked set is recomputed fresh -- never served from a key that
+    cannot be verified current.
+
+    ONE ENTRY PER REPO ROOT, replaced on every miss -- never one entry per
+    index signature. This process is long-lived by design and peers commit
+    constantly, so an accumulating memo would retain a 38k-string frozenset
+    per signature seen and leak without bound. Only the current signature is
+    ever worth holding; a superseded one can never be hit again.
+
+    `git ls-files` emits POSIX separators on every platform, so its output
+    needs no path normalization -- routing it through `PureWindowsPath` was
+    a no-op that would also reinterpret a backslash inside a legal POSIX
+    filename as a separator.
+    """
+    resolved_root = str(repo_root.resolve())
+    index_path = repo_root / ".git" / "index"
+    try:
+        index_stat = index_path.stat()
+    except OSError:
+        cache_key = None
+    else:
+        cache_key = (index_stat.st_mtime_ns, index_stat.st_size)
+
+    if cache_key is not None:
+        memo = _TRACKED_PATHS_MEMO.get(resolved_root)
+        if memo is not None and memo[0] == cache_key:
+            return memo[1]
+
     try:
         result = subprocess.run(
             ["git", "-C", str(repo_root), "ls-files"],
@@ -446,11 +499,16 @@ def _tracked_paths(repo_root: Path) -> frozenset[str] | None:
         return None
     if result.returncode != 0:
         return None
-    return frozenset(
-        PureWindowsPath(line.strip()).as_posix()
+    tracked = frozenset(
+        line.strip()
         for line in result.stdout.splitlines()
         if line.strip()
     )
+
+    if cache_key is not None:
+        _TRACKED_PATHS_MEMO[resolved_root] = (cache_key, tracked)
+
+    return tracked
 
 
 def _normalize_target(target: str) -> str:
@@ -1415,52 +1473,75 @@ def discover_generators(repo_root: Path) -> list[GeneratorRecord]:
     new_entries: dict = {}
     cache_dirty = False
 
+    prefix_len = len(str(repo_root)) + 1
+
     for sweep_dir in _SWEEP_DIRS:
-        root = repo_root / sweep_dir
-        if not root.exists():
+        start = os.path.join(str(repo_root), *sweep_dir.split("/"))
+        if not os.path.isdir(start):
             continue
 
-        for path in sorted(root.rglob("*.py")):
+        sweep_records: list[GeneratorRecord] = []
+
+        stack = [start]
+        while stack:
             try:
-                stat = path.stat()
+                dir_entries = list(os.scandir(stack.pop()))
             except OSError:
                 continue
-            if not stat_module.S_ISREG(stat.st_mode):
-                continue
-
-            key = generator_scan_cache.rel_key(repo_root, path)
-            cached = cached_entries.get(key)
-            if (
-                cached is not None
-                and cached["mtime_ns"] == stat.st_mtime_ns
-                and cached["size"] == stat.st_size
-            ):
-                writes = cached["writes"]
-            else:
-                writes = _scan_or_reuse_file_writes(path)
-                cache_dirty = True
-
-            new_entries[key] = {
-                "mtime_ns": stat.st_mtime_ns,
-                "size": stat.st_size,
-                "writes": writes,
-            }
-
-            if writes.syntax_error:
-                continue
-
-            rel_path = path.relative_to(repo_root).as_posix()
-            generates = writes.generates
-            mutates = writes.mutates
-
-            basis: str | None = None
-            if generates is None and mutates is None:
-                is_test_module = _is_test_module(rel_path, test_module_globs)
-                basis = _resolve(writes, tracked, is_test_module)
-                if not basis:
+            for entry in dir_entries:
+                try:
+                    if entry.is_dir(follow_symlinks=False):
+                        stack.append(entry.path)
+                        continue
+                    if not entry.name.endswith(".py"):
+                        continue
+                    if not entry.is_file(follow_symlinks=False):
+                        continue
+                    file_stat = entry.stat()
+                except OSError:
+                    continue
+                if not stat_module.S_ISREG(file_stat.st_mode):
                     continue
 
-            records.append(_build_record(rel_path, generates, repo_root, basis, mutates=mutates, tracked=tracked))
+                path = Path(entry.path)
+                key = entry.path[prefix_len:].replace("\\", "/")
+                cached = cached_entries.get(key)
+                if (
+                    cached is not None
+                    and cached["mtime_ns"] == file_stat.st_mtime_ns
+                    and cached["size"] == file_stat.st_size
+                ):
+                    writes = cached["writes"]
+                else:
+                    writes = _scan_or_reuse_file_writes(path)
+                    cache_dirty = True
+
+                new_entries[key] = {
+                    "mtime_ns": file_stat.st_mtime_ns,
+                    "size": file_stat.st_size,
+                    "writes": writes,
+                }
+
+                if writes.syntax_error:
+                    continue
+
+                rel_path = key
+                generates = writes.generates
+                mutates = writes.mutates
+
+                basis: str | None = None
+                if generates is None and mutates is None:
+                    is_test_module = _is_test_module(rel_path, test_module_globs)
+                    basis = _resolve(writes, tracked, is_test_module)
+                    if not basis:
+                        continue
+
+                sweep_records.append(
+                    _build_record(rel_path, generates, repo_root, basis, mutates=mutates, tracked=tracked)
+                )
+
+        sweep_records.sort(key=lambda record: record.generator)
+        records.extend(sweep_records)
 
     if cache_dirty or set(new_entries) != set(cached_entries):
         generator_scan_cache.save(repo_root, new_entries)

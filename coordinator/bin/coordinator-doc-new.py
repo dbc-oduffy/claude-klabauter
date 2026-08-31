@@ -5647,8 +5647,22 @@ Spec backlink (workflow): pln-workflow-skeleton-stamper-maki-adab0d
             "truncated) when blank or over the handoff schema's 140-char cap — "
             "the caller fixes it here rather than authoring frontmatter the "
             "validator will then reject. Handoff-scoped: refused fail-loud for "
-            "every other --type. "
+            "every other --type. A newline-bearing inline value is refused "
+            "outright (the .cmd forwarder's argv re-expansion cannot carry one "
+            "intact) — pass --summary-file instead. "
             "Spec: docs/plans/2026-08-19-promote-fills-its-own-placeholders.md"
+        ),
+    )
+    parser.add_argument(
+        "--summary-file",
+        dest="summary_file",
+        default=None,
+        metavar="PATH",
+        help=(
+            "(handoff) Read --summary from PATH ('-' for stdin) instead of the "
+            "inline flag. Mutually exclusive with --summary. The lossless leg "
+            "for a summary the .cmd forwarder's un-re-quoted argv expansion "
+            "would otherwise corrupt."
         ),
     )
     parser.add_argument(
@@ -5935,6 +5949,59 @@ def main(argv: "list[str] | None" = None) -> int:
 
     parser = _build_parser()
     args = parser.parse_args(argv)
+
+    # Prose-flag argv fidelity (post-parse, ahead of any id mint below): a
+    # newline-bearing --title/--summary reaching this CLI through its
+    # generated .cmd forwarder has already been silently truncated by
+    # cmd.exe's own LF-at-parse-time cut, before this process's first line
+    # runs — refuse outright rather than mint an id or write a scaffold off
+    # the truncated remainder.
+    #
+    # --title earns the newline refusal but deliberately has NO --title-file
+    # sibling: the title is slugged into a durable deliverable/handoff/
+    # completion id (_slug_from_title, via _mint_deliverable_id_from_title /
+    # _mint_artifact_id_from_title below), and that mint path forecloses a
+    # legitimate multi-line or quote-bearing title by its own design — there
+    # is nothing a file leg could losslessly carry that the slug path would
+    # accept anyway. Checked against args.title (pre-placeholder-default) so
+    # the refusal fires only on a caller-supplied value, never the literal
+    # placeholder strings this file defaults to below.
+    #
+    # --summary is prose comparable to cross-repo-memo --summary (which
+    # earns a --summary-file sibling): it is free-form frontmatter prose
+    # with no id-mint dependency, so a lossless file transport is added
+    # rather than merely refusing the newline.
+    from coordinator_core.argv_fidelity import (
+        ArgvFidelityError,
+        refuse_newline_argv,
+        resolve_optional_prose,
+    )
+
+    # --title earns the refusal but has no file sibling, so it passes an
+    # explicit `remedy` rather than letting the seam name a "--title-file"
+    # that does not exist. This routes through the seam deliberately: the
+    # hand-rolled parser.error this replaces produced the same refusal but
+    # was invisible to the transport probe, which credits only refusals it
+    # can see.
+    try:
+        refuse_newline_argv(
+            args.title,
+            flag_name="--title",
+            remedy=(
+                "pass a single-line --title (the id-mint path, _slug_from_title, "
+                "cannot carry a newline losslessly, so this flag has no "
+                "file-based alternative by design)."
+            ),
+        )
+    except ArgvFidelityError as exc:
+        parser.error(str(exc))
+
+    try:
+        args.summary = resolve_optional_prose(
+            args.summary, args.summary_file, flag_name="--summary"
+        )
+    except ArgvFidelityError as exc:
+        parser.error(str(exc))
 
     doc_type = args.doc_type
 

@@ -272,3 +272,45 @@ def test_success_path_writes_both_artifacts_with_no_breadcrumb(git_repo, capsys)
     assert dispatched.exists()
     assert VALID_AGENT_ID in dispatched.read_text(encoding="utf-8")
     assert backpointer.read_text(encoding="utf-8").strip() == VALID_SESSION_ID
+
+
+class TestTypeSpellingIsFoldedForTheComparisonOnly:
+    """One dispatch reaches this resolver from two call sites — `SubagentStart`
+    with the real `agent_type`, `PostToolUse(Agent)` with
+    `tool_input.subagent_type`. An exact `==` sent an ordinary dispatch to the
+    AMBIGUOUS arm whenever those two spelled one agent differently, and four
+    bash guards read AMBIGUOUS as hostile.
+
+    Origin: cross-repo/archive/2026-08-18-doe-claude-em-normalize-the-type-
+    comparison-not-the-write.md.
+    """
+
+    def test_namespaced_and_bare_spellings_are_one_type(self):
+        assert (
+            tda._resolve_row_collision(
+                ["a1", "opus", "coordinator:code-reviewer"], "opus", "code-reviewer"
+            )
+            is None
+        )
+
+    def test_case_differences_are_one_type(self):
+        assert (
+            tda._resolve_row_collision(["a1", "opus", "Code-Reviewer"], "opus", "code-reviewer")
+            is None
+        )
+
+    def test_two_genuinely_different_types_still_go_ambiguous(self):
+        cols = tda._resolve_row_collision(
+            ["a1", "opus", "coordinator:code-reviewer"], "opus", "coordinator:test-runner"
+        )
+
+        assert cols is not None
+        assert cols[2] == tda.AMBIGUOUS_TYPE
+
+    def test_the_stored_spelling_is_never_folded(self):
+        cols = tda._resolve_row_collision(
+            ["a1", "opus", tda.PLACEHOLDER_TYPE], "opus", "coordinator:Code-Reviewer"
+        )
+
+        assert cols is not None
+        assert cols[2] == "coordinator:Code-Reviewer"

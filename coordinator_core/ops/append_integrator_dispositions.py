@@ -672,9 +672,22 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--rationale-stdin",
+        action="store_true",
+        help=(
+            "Read the block's prose ### Rationale section from stdin. PREFER THIS over "
+            "--rationale-file: it needs no path, so no concurrent session can clobber it."
+        ),
+    )
+    parser.add_argument(
         "--rationale-file",
         default=None,
-        help="Optional path to a file whose content becomes the block's prose ### Rationale section.",
+        help=(
+            "Path to a file whose content becomes the block's prose ### Rationale section. "
+            "Prefer --rationale-stdin — a caller-chosen path is shared state, and a "
+            "concurrent session that reuses it replaces this rationale with its own, "
+            "silently and with a correct exit code."
+        ),
     )
     parser.add_argument(
         "--root",
@@ -698,7 +711,19 @@ def main(argv: Optional[List[str]] = None) -> int:
     }
 
     rationale: Optional[str] = None
-    if args.rationale_file:
+    if args.rationale_stdin and args.rationale_file:
+        print(
+            "append-integrator-dispositions: --rationale-stdin and --rationale-file are "
+            "mutually exclusive; pass one.",
+            file=sys.stderr,
+        )
+        return 2
+    if args.rationale_stdin:
+        # No path, so nothing for a concurrent session to clobber -- the whole reason
+        # this channel exists (see --rationale-file's help, and
+        # state/bug-backlog/2026-08-31-concurrent-sessions-collide-on-a-shared.yaml).
+        rationale = sys.stdin.read()
+    elif args.rationale_file:
         try:
             rationale = Path(args.rationale_file).read_text(encoding="utf-8")
         except OSError as exc:

@@ -378,12 +378,25 @@ def _find_duplicate_draft_topic(
         if other_topic == topic:
             continue
         try:
+            # Review: coordinatorcode-reviewer — widened from `except OSError:`.
+            # UnicodeDecodeError (raised by read_text on non-UTF-8 bytes) is a
+            # ValueError subclass, not an OSError, so a single non-UTF-8
+            # sibling draft used to raise straight out of this scan and block
+            # an unrelated send — contradicting this function's own
+            # "must not block an unrelated send" contract. parse_frontmatter
+            # itself never raises (catches internally, falls back to
+            # {"frontmatter": None, "body": content}), so ValueError here only
+            # ever catches the decode failure — kept broad rather than
+            # UnicodeDecodeError-only in case that changes.
             other_text = candidate.read_text(encoding="utf-8")
-        except OSError:
+        except (OSError, ValueError):
             continue
+        # Review: coordinatorcode-reviewer — dropped the dead
+        # `other_body is None: continue` guard. parse_frontmatter's `body` is
+        # always a str (falls back to the whole file text when frontmatter is
+        # absent/unparseable), so that branch never fired; the real
+        # unreadable-sibling skip is the except clause above.
         other_body = parse_frontmatter(other_text).get("body")
-        if other_body is None:
-            continue
         if _normalize_body(other_body) == normalized_body:
             return other_topic
     return None

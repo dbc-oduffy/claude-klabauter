@@ -2,7 +2,19 @@
 coordinator_core.ops.review_brightline_gate — mechanical partition-vs-single
 review gate for /workstream-complete Step 2.9.
 
-Prints: `range=… loc=… commits=… surfaces=… files=… [filtered_to=…] VERDICT={PARTITION-MANDATORY|single-reviewer-ok|indeterminate}`
+Prints: `range=… loc=… commits=… surfaces=… files=… [filtered_to=…] basis=code-only VERDICT={PARTITION-MANDATORY|single-reviewer-ok|indeterminate}`
+
+`basis=code-only` DISCLOSES THE FILTER, and it is on the line because the line is the
+surface everyone reads. `_is_prose_bearing_path` runs before anything is counted, so every
+number above excludes `.md`/`.yaml`/`.yml` — and an EM who hand-derives the same range gets
+a much larger figure and reads the gate as under-measuring. That happened: a 2026-08-27
+close reported `loc=225 commits=4 VERDICT=single-reviewer-ok` against a hand count of 990
+gross LOC / 6 commits, and was filed as a suspected range-derivation defect for a day. Both
+numbers were right about different things. `filtered_to=` did not cover this: it reads as a
+file count, not as notice that a filter changed the basis of every other number. The filter
+itself is the correct contract and is unchanged.
+The hazard the disclosure exists for is the REVERSE of that session's: an EM who trusts the
+gate, sees a figure that looks wrong, and reconciles toward LESS review.
 to stdout, reading the diff over a git range (or a `--session-id`-filtered
 subset of it) and comparing gross LOC / commit count / surface-bucket count
 against fixed thresholds. `VERDICT=indeterminate` is the `--session-id`
@@ -695,7 +707,7 @@ def _session_scoped(range_: str, session_id: str) -> int:
     if filtered_count == 0:
         print(
             f"range={range_} loc=0 commits=0 surfaces=0 files=0 "
-            f"filtered_to=0 VERDICT=indeterminate"
+            f"filtered_to=0 basis=code-only VERDICT=indeterminate"
         )
         print(
             "note: session-id matched 0 commits in range — gate vacuous, "
@@ -773,7 +785,7 @@ def _session_scoped(range_: str, session_id: str) -> int:
         if untrailered:
             print(
                 f"range={range_} loc={loc} commits={commits} surfaces={surfaces} "
-                f"files={files} filtered_to={filtered_count} VERDICT=indeterminate"
+                f"files={files} filtered_to={filtered_count} basis=code-only VERDICT=indeterminate"
             )
             print(
                 f"note: {untrailered} commit(s) in range carry no Session-Id "
@@ -786,7 +798,7 @@ def _session_scoped(range_: str, session_id: str) -> int:
 
     print(
         f"range={range_} loc={loc} commits={commits} surfaces={surfaces} "
-        f"files={files} filtered_to={filtered_count} VERDICT={verdict}"
+        f"files={files} filtered_to={filtered_count} basis=code-only VERDICT={verdict}"
     )
     return 0
 
@@ -809,7 +821,7 @@ def _unfiltered(range_: str) -> int:
     verdict = _verdict(loc, commits, surfaces)
     print(
         f"range={range_} loc={loc} commits={commits} surfaces={surfaces} "
-        f"files={files} VERDICT={verdict}"
+        f"files={files} basis=code-only VERDICT={verdict}"
     )
     return 0
 

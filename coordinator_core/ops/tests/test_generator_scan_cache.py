@@ -240,8 +240,91 @@ def test_resolution_reruns_against_changed_tracked_set(
     assert module_path.exists()
 
 
+def test_tracked_paths_memo_returns_equal_frozenset_second_call(tmp_path: Path) -> None:
+    gp._TRACKED_PATHS_MEMO.clear()
+    gp.subprocess.run(
+        ["git", "init", "-q", str(tmp_path)],
+        capture_output=True,
+        creationflags=getattr(gp.subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    (tmp_path / "a.txt").write_text("x", encoding="utf-8")
+    gp.subprocess.run(
+        ["git", "-C", str(tmp_path), "add", "a.txt"],
+        capture_output=True,
+        creationflags=getattr(gp.subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    assert (tmp_path / ".git" / "index").exists()
+
+    calls: list[Path] = []
+    original_run = gp.subprocess.run
+
+    def _spy_run(*args, **kwargs):
+        calls.append(args)
+        return original_run(*args, **kwargs)
+
+    gp.subprocess.run = _spy_run
+    try:
+        first = gp._tracked_paths(tmp_path)
+        second = gp._tracked_paths(tmp_path)
+    finally:
+        gp.subprocess.run = original_run
+
+    assert first == second
+    assert len(calls) == 1
+
+
+def test_tracked_paths_memo_invalidates_on_index_signature_change(tmp_path: Path) -> None:
+    gp._TRACKED_PATHS_MEMO.clear()
+    gp.subprocess.run(
+        ["git", "init", "-q", str(tmp_path)],
+        capture_output=True,
+        creationflags=getattr(gp.subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    index_path = tmp_path / ".git" / "index"
+
+    calls: list[Path] = []
+    original_run = gp.subprocess.run
+
+    def _spy_run(*args, **kwargs):
+        calls.append(args)
+        return original_run(*args, **kwargs)
+
+    gp.subprocess.run = _spy_run
+    try:
+        gp._tracked_paths(tmp_path)
+        (tmp_path / "a.txt").write_text("x", encoding="utf-8")
+        gp.subprocess.run = original_run
+        gp.subprocess.run(
+            ["git", "-C", str(tmp_path), "add", "a.txt"],
+            capture_output=True,
+            creationflags=getattr(gp.subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        gp.subprocess.run = _spy_run
+        assert index_path.exists()
+        gp._tracked_paths(tmp_path)
+    finally:
+        gp.subprocess.run = original_run
+
+    assert len(calls) == 2
+
+
+def test_tracked_paths_missing_index_computes_fresh_and_does_not_raise(tmp_path: Path) -> None:
+    gp._TRACKED_PATHS_MEMO.clear()
+    # No `.git` directory at all under tmp_path -- `.git/index` is unstatable.
+    result = gp._tracked_paths(tmp_path)
+    assert result is None or isinstance(result, frozenset)
+
+
 @pytest.mark.cadence
 def test_warm_discover_generators_process_time_under_bar() -> None:
+    """AC1: warm `discover_generators` clears the 500ms brightline bar.
+
+    Measured on this box after C6's `os.scandir` sweep replaced
+    `rglob`+`stat`+`relative_to`: min of 7 samples (`time.process_time()`,
+    each preceded by one untimed warm call) was ~359ms, down from the
+    pre-C6 warm figure of 531ms. Threshold below is intentionally left at
+    500ms, not tightened to the observed figure -- see module docstring.
+    """
     discover_generators(REPO_ROOT)
 
     start = time.process_time()

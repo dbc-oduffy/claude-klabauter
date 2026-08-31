@@ -894,6 +894,55 @@ class TestCliEntrypoint:
         assert rc == 0
         assert "## Integrator Dispositions" in sidecar.read_text(encoding="utf-8")
 
+    def test_cli_rationale_from_stdin_lands_in_the_block(self, tmp_path, monkeypatch):
+        """The pathless channel: prose arrives on stdin, so there is no
+        caller-chosen path for a concurrent session to clobber.
+
+        Spec backlink: state/bug-backlog/2026-08-31-concurrent-sessions-collide-on-a-shared.yaml
+        """
+        import io as _io
+
+        sidecar = _write_sidecar(
+            tmp_path, "sess-abc", "codereview-sliceA.md",
+            agent_type="coordinator:code-reviewer", body=_FINDINGS_BODY,
+        )
+        monkeypatch.setattr(
+            mod.sys, "stdin", _io.StringIO("F1 applied verbatim; the precedence read was right.")
+        )
+        rc = mod.main([
+            "--sidecar", str(sidecar),
+            "--applied", "F1",
+            "--rationale-stdin",
+            "--root", str(tmp_path),
+        ])
+        assert rc == 0
+        text = sidecar.read_text(encoding="utf-8")
+        # Under the Rationale heading, not merely somewhere in the file -- a
+        # substring check would pass on prose landing in the wrong section.
+        assert "### Rationale" in text
+        after = text.split("### Rationale", 1)[1]
+        assert "the precedence read was right" in after
+
+    def test_cli_refuses_both_rationale_channels_at_once(self, tmp_path, capsys):
+        """Two sources for one field is a caller bug, not something to resolve by
+        precedence -- silently picking one is how the wrong prose lands."""
+        sidecar = _write_sidecar(
+            tmp_path, "sess-abc", "codereview-sliceA.md",
+            agent_type="coordinator:code-reviewer", body=_FINDINGS_BODY,
+        )
+        rationale = tmp_path / "rationale.txt"
+        rationale.write_text("from the file", encoding="utf-8")
+        rc = mod.main([
+            "--sidecar", str(sidecar),
+            "--applied", "F1",
+            "--rationale-stdin",
+            "--rationale-file", str(rationale),
+            "--root", str(tmp_path),
+        ])
+        assert rc == 2
+        assert "mutually exclusive" in capsys.readouterr().err
+        assert "## Integrator Dispositions" not in sidecar.read_text(encoding="utf-8")
+
     def test_cli_misuse_exits_one(self, tmp_path):
         sidecar = _write_sidecar(
             tmp_path, "sess-abc", "codereview-sliceA.md",

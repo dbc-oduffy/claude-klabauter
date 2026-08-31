@@ -176,16 +176,35 @@ def resolve_optional_prose(
     )
 
 
-def refuse_newline_argv(value: str | None, *, flag_name: str) -> None:
+def refuse_newline_argv(
+    value: str | None,
+    *,
+    flag_name: str,
+    remedy: str | None = None,
+) -> None:
     """Raise ArgvFidelityError if `value` contains a newline.
 
     `value` is expected to be an argv-sourced string (e.g. args.body) --
     file-sourced text is never passed here, since a file is expected to
     carry real newlines. Does nothing when `value` is None (flag absent).
+
+    `remedy` names what the caller should do instead, for the flags that
+    earn the refusal but have NO `-file` sibling. The default message
+    assumes one exists and names it, which is right for most callers and
+    WRONG for a flag deliberately denied a file leg -- it would send the
+    operator to a flag that does not exist, a worse failure than the one
+    being refused. That is not hypothetical: `coordinator-doc-new --title`
+    is denied a file leg because the id-mint path cannot carry a newline
+    losslessly, and it hand-rolled its own `parser.error` specifically to
+    avoid this function's message. A caller forced to route around the seam
+    is also invisible to the transport probe, which credits a flag as
+    refused only where it can see the seam -- so the wrong message cost a
+    correct refusal its coverage as well as its accuracy.
     """
     if value is None:
         return
     if "\n" in value:
         raise ArgvFidelityError(
-            f"{flag_name} contains a newline; pass {flag_name}-file instead."
+            f"{flag_name} contains a newline; "
+            + (remedy or f"pass {flag_name}-file instead.")
         )

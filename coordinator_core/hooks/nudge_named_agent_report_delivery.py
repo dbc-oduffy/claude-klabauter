@@ -90,6 +90,24 @@ from coordinator_core.hooks._payload import field
 # false NEGATIVE here costs only a redundant advisory on an already-correct brief, while a
 # false positive silences the case this hook exists for. Ordering-independent (the two
 # tokens may appear either way round) and case-insensitive.
+# A SIDECAR-PROVISIONED DISPATCH IS NEVER SUPPRESSED, however well its brief
+# is worded. The suppression below assumes a brief naming SendMessage-to-main is
+# correctly briefed and needs no warning. For a sidecar dispatch that premise is
+# wrong in the direction that costs work: doe-claude-em session `36630d4c`
+# (2026-08-10) briefed all four named reviewers with both tokens present, and
+# three of the four returned findings by SendMessage while leaving the
+# provisioned sidecar at its 703-byte scaffold. `review-integrator` then refused
+# on its empty-scaffold intake guard, correctly, and every finding needed a
+# round trip to recover -- in exactly the fan-out shape partitioned review
+# mandates.
+#
+# The gap is audience, not wording: the advisory addresses the EM WRITING the
+# brief, while the agent READING it substitutes the message for the write --
+# reasonably, since every sidecar-writing agent definition says to write
+# findings and then return a pointer, and for a teammate the return IS
+# SendMessage. A correctly-worded brief is not evidence the file will be
+# written, so this is the one case the suppression must not cover.
+_SIDECAR_RE = re.compile(r"sidecar|subagent-share", re.I)
 _SENDMESSAGE_RE = re.compile(r"sendmessage", re.I)
 _MAIN_TARGET_RE = re.compile(r"\bmain\b", re.I)
 
@@ -102,6 +120,10 @@ NAMED DISPATCH — this agent's final text will NOT reach you (advisory; proceed
   (a) No mid-flight contact -> DROP `name`.
   (b) Mid-flight contact -> KEEP `name`, brief: SendMessage "main" with a POINTER ONLY
       (sidecar path + one-line verdict, not the report restated).
+
+A sidecar left at its scaffold is not a delivered report: `review-integrator`
+refuses an empty-scaffold intake, so the findings cannot be applied or
+recorded. The pointer is the message; the file is the report.
 
 Either is fine.\
 """
@@ -118,7 +140,9 @@ def _handler(params: dict, repo_root=None) -> dict:
 
     Returns:
         no_advisory()      — not an Agent call, no `name`, or the brief already routes
-                             its report through SendMessage-to-main.
+                             its report through SendMessage-to-main AND provisions
+                             no sidecar (`_SIDECAR_RE`: a sidecar dispatch is never
+                             suppressed, however well its brief is worded).
         allow_advisory(...) — named dispatch whose brief has no delivery channel.
 
     Never blocks and never rewrites: the dispatch proceeds as written in every branch.
@@ -137,7 +161,12 @@ def _handler(params: dict, repo_root=None) -> dict:
     # Already-correct briefs stay silent — see _SENDMESSAGE_RE's note on why this
     # suppression is deliberately generous rather than precise.
     prompt = tool_input.get("prompt")
-    if isinstance(prompt, str) and _SENDMESSAGE_RE.search(prompt) and _MAIN_TARGET_RE.search(prompt):
+    if (
+        isinstance(prompt, str)
+        and _SENDMESSAGE_RE.search(prompt)
+        and _MAIN_TARGET_RE.search(prompt)
+        and not _SIDECAR_RE.search(prompt)
+    ):
         return no_advisory()
 
     return allow_advisory("PreToolUse", _ADVISORY.format(name=name.strip()))

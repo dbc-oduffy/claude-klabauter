@@ -801,3 +801,40 @@ def _recording_plan_oracle(seen_plan_batons):
     return _inner
 
 
+def test_the_verdict_line_discloses_that_its_numbers_are_code_only(
+    tmp_path, capsys, monkeypatch
+):
+    """Every number on the line excludes `.md`/`.yaml`/`.yml`, and nothing on it
+    said so. An EM hand-deriving the same range got 990 gross LOC / 6 commits
+    against the gate's `loc=225 commits=4`, and filed a suspected
+    range-derivation defect for a day. `filtered_to=` did not cover it -- it
+    reads as a file count, not as notice that a filter changed the basis of
+    every other number.
+
+    Origin: cross-repo/archive/2026-08-28-doe-claude-em-brightline-verdict-does-
+    not-disclose-its-prose-filter.md.
+    """
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    _commit_file(repo, "b.py", "y = 2\n", "add b")
+    monkeypatch.chdir(repo)
+
+    rc = main(["HEAD~1..HEAD"])
+    captured = capsys.readouterr()
+
+    assert rc == 0
+    assert "basis=code-only" in captured.out
+    assert "VERDICT=" in captured.out
+
+
+def test_a_prose_only_commit_still_discloses_the_basis(tmp_path, capsys, monkeypatch):
+    """The indeterminate arm is where the disclosure matters most: everything
+    was filtered out, so a reader seeing zeros needs to know why."""
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    _commit_file(repo, "notes.md", "prose\n", "add prose")
+    monkeypatch.chdir(repo)
+
+    main(["HEAD~1..HEAD"])
+
+    assert "basis=code-only" in capsys.readouterr().out
