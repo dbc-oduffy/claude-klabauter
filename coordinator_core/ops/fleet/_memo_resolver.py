@@ -79,7 +79,8 @@ Functions:
   - `read_redirect_aliases() -> set[str]`
         Lowercased, stripped `identity.redirectAliases` from the DoE manifest —
         the set of receiver ids that redirect to *self* (e.g. `.claude-em`,
-        `coordinator-claude`, all redirecting to `claude-central-em`). Graceful
+        `coordinator-claude`, all redirecting to `centralReceiverIds[0]` —
+        `doe-claude-em` today). Graceful
         degradation: returns `set()` if the manifest does not resolve, is
         unparseable, or the field is absent from a given manifest.
         Never raises. Consumed by `memo.check_addressee`'s redirect-MATCH path
@@ -407,7 +408,10 @@ def read_redirect_aliases() -> set[str]:
     identity.get("redirectAliases", []): receiver ids that
     redirect to *self* (e.g. DoE's `.claude-em` / `claude-home` /
     `coordinator-claude` / `coordinator-claude-em`, all redirecting to
-    `claude-central-em`). DoE promoted `identity.redirectAliases` into the
+    `centralReceiverIds[0]`, `doe-claude-em` today — NOT to
+    `claude-central-em`, which DoE retired outright at their b787bf0f0
+    (2026-08-26) and which no longer resolves at all). DoE promoted
+    `identity.redirectAliases` into the
     manifest 2026-07-21; a manifest that lacks the field (or is absent/
     unreadable) still degrades to `set()` per the graceful-degradation
     contract below.
@@ -887,9 +891,10 @@ def canonical_receiver_id(receiver_em_id: str) -> str:
 
     See module docstring's Public API entry for the full contract. Existence of
     this function answers the addressee-gate verifiability problem: a receiver
-    seat is addressable via several aliases (`claude-central-em`, `central-em`,
-    `central`, `doe-claude-em`, plus redirect aliases like `coordinator-claude`)
-    that all fan in to ONE registered repo — without canonicalization, a memo's
+    seat is addressable via several aliases (`doe-claude-em`, plus redirect
+    aliases like `coordinator-claude` / `coordinator-claude-em` / `.claude-em`
+    / `claude-home`) that all fan in to ONE registered repo — without
+    canonicalization, a memo's
     stamped `to:` echoes whichever alias the sender typed, and a reader cannot
     verify by inspection that two differently-addressed memos went to the same
     seat.

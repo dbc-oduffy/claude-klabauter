@@ -1,17 +1,18 @@
 """
 coordinator_core.hooks.postuse_advisory_dispatch — PostToolUse advisory dispatcher op.
 
-Purpose: Folds five PostToolUse advisory checks — context-pressure, runtime-tripwire,
-a one-time first-Agent-dispatch sidecar advisory, the unauthorized-handoff nudge, and
-the workflow-monitor arming advisory — into a single in-process op, eliminating
-bash.exe spawns per tool call on Windows. Context-pressure and runtime-tripwire fire
-on ALL PostToolUse events (no tool_name gate — both checks are universal); the
-first-Agent-dispatch advisory fires only on tool_name == "Agent", and only once per
-session; the unauthorized-handoff nudge only on tool_name == "Write" with a
-handoff/spinoff file_path; the workflow-monitor arming advisory only on
+Purpose: Folds six PostToolUse advisory checks — context-pressure, runtime-tripwire,
+a one-time first-Agent-dispatch sidecar advisory, the unauthorized-handoff nudge, the
+workflow-monitor arming advisory, and the Group EM watch arming advisory — into a
+single in-process op, eliminating bash.exe spawns per tool call on Windows.
+Context-pressure, runtime-tripwire, and the Group EM watch arming check fire on ALL
+PostToolUse events (no tool_name gate — all three are universal, cheap to
+short-circuit); the first-Agent-dispatch advisory fires only on tool_name == "Agent",
+and only once per session; the unauthorized-handoff nudge only on tool_name == "Write"
+with a handoff/spinoff file_path; the workflow-monitor arming advisory only on
 tool_name == "Workflow", and only once per task id per session. The latter three
 narrow themselves internally — no handler-level tool_name gate is applied to the
-universal two.
+universal three.
 
 The session-scoped checks run concurrently via asyncio.gather. Whichever fire have
 their additionalContext texts merged with a blank-line separator into ONE
@@ -19,9 +20,10 @@ post_advisory() call (a PostToolUse hook must emit at most one JSON object). Whe
 fire, no_advisory() is returned.
 
 Port of: postuse-advisory-dispatch.sh (DoE 2f8b8450, 2026-07-16). The first-Agent-
-dispatch sidecar advisory and the workflow-monitor arming advisory have no bash-era
-equivalent — added directly here. The unauthorized-handoff nudge is a fan-in of DoE's
-separate PostToolUse(Write) registration, whose logic already lived in this engine
+dispatch sidecar advisory, the workflow-monitor arming advisory, and the Group EM
+watch arming advisory have no bash-era equivalent — added directly here. The
+unauthorized-handoff nudge is a fan-in of DoE's separate PostToolUse(Write)
+registration, whose logic already lived in this engine
 (coordinator_core.hooks.nudge_unauthorized_handoff, still registered as its own op for
 direct callers) — folding it here drops Write's registration count by one.
 
@@ -33,10 +35,13 @@ Translation notes:
                                     (tool_name + file_path + content + transcript_path)
     (new) workflow-monitor-arm  → _check_workflow_monitor_arm_sync
                                     (session_id + transcript_path + tool_name)
+    (new) group-em-watch-arm    → _check_group_em_watch_arm_sync
+                                    (session_id + transcript_path)
     jq merge logic               → plain string concatenation + post_advisory()
-    All five return str advisory text or "" — "" means "did not fire".
+    All six return str advisory text or "" — "" means "did not fire".
 
-Spec backlink: pln-pcore-04-advisory-hook-ops-mak-b219a8 § C7
+Spec backlink: pln-pcore-04-advisory-hook-ops-mak-b219a8 § C7,
+docs/plans/2026-08-31-the-group-em-tick-carries-standing-obligations.md § C10
 """
 
 from __future__ import annotations
@@ -1187,6 +1192,183 @@ def _check_workflow_monitor_arm_sync(session_id: str, transcript_path: str, tool
 
 
 # ---------------------------------------------------------------------------
+# _check_group_em_watch_arm_sync
+#
+# New (no bash-era equivalent): once-per-session advisory that arms
+# `coordinator_core.group_em.watch` (C2, docs/plans/2026-08-31-the-group-em-
+# tick-carries-standing-obligations.md) for a session that holds the Group EM
+# crown for its repo and has never armed that watch -- the population C2's
+# own docstring names as undischarged: "a crowned Group EM that armed nothing
+# and then stopped ticking". Modelled directly on
+# _check_workflow_monitor_arm_sync (same sentinel-guarded, fail-open-to-
+# silence contract, same _portable_arg quoting reuse) per this chunk's own
+# spec (plan § C10) rather than a second composition path.
+#
+# CROWN CHECK is a real, current fact: `group_em.nomination.read_record`
+# read fresh against this tool call, joined on this session's own id -- never
+# cached, never inferred from a prior tick.
+#
+# NEVER-ARMED DETECTION IS A NAMED, BOUNDED STOPGAP, NOT THE C10 SPEC'S FULL
+# ASK. The C10 brief's late-added constraint is explicit that "is a watch
+# armed" is the wrong question -- a record of an arming event is a record of
+# the last boundary, never of now, and only a COUNT of live subscriptions or
+# a standing poller answers "is it live right now". That signal does not
+# exist in this repo: it is doe-claude-41's C3 (their plan), scoped out here
+# per the C10 brief's "we own the PUSH, they own the RECORD" split, and
+# building a second one here would be the duplication that split exists to
+# prevent. So this leg answers the narrower, honestly-answerable question in
+# C10's own title -- "a crowned session that never armed it" -- by scanning
+# THIS session's own transcript for the watch's own one-time `ARMED` line
+# (see `coordinator_core.group_em.watch.main`) and staying silent the moment
+# it has appeared even once. It cannot and does not claim to catch a watch
+# that armed and later died with its session; that gap is the same one C2's
+# own docstring names as undischarged by any chunk in this spine.
+#
+# LAUNCHER GAP, NAMED RATHER THAN WORKED AROUND: unlike workflow-watch, no
+# settings-home launcher for `coordinator_core.group_em.watch` exists yet
+# (no `group-em-watch(.exe)` under any `<settings-home>/bin/`), and
+# `watch.py` itself ships no `argparse`/`__main__` CLI surface to invoke --
+# only the importable `main(repo_root, ...)` function. Building either is a
+# generator/launcher-chain change, outside this chunk's `writes:` scope
+# (coordinator_core/hooks/postuse_advisory_dispatch.py and its test only).
+# `_group_em_watch_launcher` therefore always resolves to `None` today, which
+# is the correct fail-open-to-silence outcome per `_portable_arg`'s own
+# doctrine: a command naming a launcher/entrypoint that cannot run is worse
+# than silence. Reported as the concrete follow-up in this chunk's own report
+# rather than invented here.
+# ---------------------------------------------------------------------------
+
+#: The exact prefix `coordinator_core.group_em.watch.main` prints as its
+#: first stdout line on arming (see that module's `main`, `emit(f"ARMED
+#: denominator=...")`). Matched as a plain substring, not a regex -- this
+#: leg only needs to know the line occurred somewhere in the transcript, not
+#: parse its fields.
+_GROUP_EM_WATCH_ARMED_MARKER = "ARMED denominator="
+
+
+def _group_em_watch_arm_sentinel_path(tmpdir: str, session_id: str) -> str:
+    return os.path.join(tmpdir, f"group-em-watch-arm-advisory-{session_id}")
+
+
+def _group_em_watch_launcher() -> str | None:
+    """Absolute path to an installed `group-em-watch` launcher, or None.
+
+    Mirrors `_workflow_watch_launcher` exactly (same `.exe`/bare-name probe
+    under `<settings-home>/bin/`, same reasoning for probing on-disk
+    existence rather than `os.name`). Returns None today -- no such launcher
+    has been generated yet (see the module-level comment above this
+    function's call site) -- and the caller emits NOTHING in that case,
+    never a command naming a launcher that is not installed.
+    """
+    try:
+        from coordinator_core._settings_home import settings_home
+
+        bin_dir = settings_home() / "bin"
+    except Exception:
+        return None
+    for candidate in (bin_dir / "group-em-watch.exe", bin_dir / "group-em-watch"):
+        try:
+            if candidate.is_file():
+                return str(candidate)
+        except OSError:
+            continue
+    return None
+
+
+def _check_group_em_watch_arm_sync(session_id: str, transcript_path: str) -> str:
+    """Once-per-session advisory: arm `group_em.watch` for a crowned session
+    that has never armed it. Returns non-empty advisory text when it fires;
+    "" on every early-exit path (no session_id, sentinel already written, no
+    git root, no/foreign crown record, transcript unreadable, the watch's own
+    ARMED marker already present, or no installed launcher). Never raises —
+    fail-open on all I/O errors, same posture as the other checks in this
+    module (see the durable-state comment above _advisory_state_path).
+    """
+    if not session_id:
+        return ""
+
+    tmpdir = _tempfile().gettempdir()
+    sentinel = _group_em_watch_arm_sentinel_path(tmpdir, session_id)
+    if os.path.isfile(sentinel):
+        return ""
+
+    try:
+        from coordinator_core.git import repo_root as _repo_root_seam
+
+        git_root = _repo_root_seam.show_toplevel() or ""
+    except Exception:
+        return ""  # git absent/erroring -- no repo to check a crown against
+    if not git_root:
+        return ""
+
+    try:
+        from coordinator_core.group_em import nomination as _group_em_nomination
+
+        record = _group_em_nomination.read_record(git_root)
+    except Exception:
+        return ""
+    if not isinstance(record, dict) or record.get("session_id") != session_id:
+        return ""  # not the crown holder for this repo -- nothing to arm
+
+    if not transcript_path or not os.path.isfile(transcript_path):
+        return ""  # cannot establish never-armed -- fail toward silence
+    try:
+        with open(transcript_path, encoding="utf-8", errors="ignore") as fh:
+            transcript_text = fh.read()
+    except Exception:
+        return ""
+    if _GROUP_EM_WATCH_ARMED_MARKER in transcript_text:
+        return ""  # armed at least once this session -- see module comment
+        # on the named decay gap this leg does not attempt to close.
+
+    watcher_path = _group_em_watch_launcher()
+    if watcher_path is None:
+        print(
+            "postuse_advisory_dispatch: group_em_watch_arm found no "
+            "group-em-watch launcher under the settings home -- staying "
+            "silent rather than emitting a command that cannot run.",
+            file=sys.stderr,
+        )
+        return ""
+
+    formatted = [_portable_arg(v) for v in (watcher_path, git_root)]
+    if any(arg is None for arg in formatted):
+        print(
+            "postuse_advisory_dispatch: group_em_watch_arm cannot emit a "
+            "shell-safe command for these paths -- staying silent rather "
+            "than emitting one that would tokenize differently per shell",
+            file=sys.stderr,
+        )
+        return ""
+    q_watcher, q_repo_root = formatted
+    monitor_command = f"{q_watcher} --repo-root {q_repo_root}"
+
+    # Sentinel LAST, after the advisory is fully composed -- same reasoning
+    # as _check_workflow_monitor_arm_sync's own sentinel placement: anything
+    # raising after an early sentinel write would strand this leg silent
+    # forever for the rest of the session.
+    try:
+        with open(sentinel, "w", encoding="utf-8", newline="\n") as fh:
+            fh.write(str(int(time.time())))
+    except Exception:
+        try:
+            os.remove(sentinel)
+        except Exception:
+            pass
+        return ""
+
+    return (
+        "GROUP EM WATCH: this session holds the Group EM crown for this repo"
+        " and no watch on the standing peer registry has been armed this"
+        " session -- arm it now rather than depending on a tick you remember"
+        " to re-run."
+        f' Paste: Monitor(command="{monitor_command}", persistent=true).'
+        " Armed persistent, the watch runs for the life of this session and"
+        " never needs re-arming."
+    )
+
+
+# ---------------------------------------------------------------------------
 # Failure isolation for the fold
 # ---------------------------------------------------------------------------
 
@@ -1237,26 +1419,26 @@ async def _leg_text(label: str, coro) -> str:
 async def _handler(params: dict, repo_root=None) -> dict:
     """PostToolUse advisory dispatcher: folds context-pressure + runtime-tripwire +
     the first-Agent-dispatch sidecar advisory + the unauthorized-handoff nudge +
-    the workflow-monitor arming advisory.
+    the workflow-monitor arming advisory + the Group EM watch arming advisory.
 
-    Context-pressure and runtime-tripwire fire on ALL PostToolUse events (no
-    tool_name gate — both are universal). The first-Agent-dispatch advisory only
-    fires the first time tool_name == "Agent" in a session — its own internal gate
-    plus a durable once-per-session sentinel (see _check_first_agent_dispatch_sync),
-    not a handler-level tool_name gate applied to the other two. The
-    unauthorized-handoff nudge gates internally on tool_name == "Write" plus a
-    handoff/spinoff file_path, the same narrowing shape. The workflow-monitor
-    arming advisory gates internally on tool_name == "Workflow" plus a durable
-    once-per-task sentinel (see _check_workflow_monitor_arm_sync), the same
-    narrowing shape again. Merges whichever fire (blank-line separator,
-    cp/rt/first-agent-dispatch/unauthorized-handoff/workflow-monitor-arm order),
-    or returns no_advisory() when none fire.
+    Context-pressure, runtime-tripwire, and the Group EM watch arming check fire on
+    ALL PostToolUse events (no tool_name gate — all three are universal). The
+    first-Agent-dispatch advisory only fires the first time tool_name == "Agent" in a
+    session — its own internal gate plus a durable once-per-session sentinel (see
+    _check_first_agent_dispatch_sync), not a handler-level tool_name gate applied to
+    the other three. The unauthorized-handoff nudge gates internally on
+    tool_name == "Write" plus a handoff/spinoff file_path, the same narrowing shape.
+    The workflow-monitor arming advisory gates internally on tool_name == "Workflow"
+    plus a durable once-per-task sentinel (see _check_workflow_monitor_arm_sync), the
+    same narrowing shape again. Merges whichever fire (blank-line separator,
+    cp/rt/first-agent-dispatch/unauthorized-handoff/workflow-monitor-arm/
+    group-em-watch-arm order), or returns no_advisory() when none fire.
 
-    Merge contract (mirrors postuse-advisory-dispatch.sh, extended for the third,
-    fourth, and fifth checks):
-        N of 5 fire → post_advisory("\\n\\n".join of the N non-empty texts, in
+    Merge contract (mirrors postuse-advisory-dispatch.sh, extended for the third
+    through sixth checks):
+        N of 6 fire → post_advisory("\\n\\n".join of the N non-empty texts, in
                        cp/rt/first-agent-dispatch/unauthorized-handoff/
-                       workflow-monitor-arm order)
+                       workflow-monitor-arm/group-em-watch-arm order)
         none fire   → no_advisory()
 
     Folding the fourth check in retires DoE's separate PostToolUse(Write)
@@ -1267,31 +1449,37 @@ async def _handler(params: dict, repo_root=None) -> dict:
     fourth check stays silent and the other three are unaffected.
 
     Negative-spec:
-        Context-pressure and runtime-tripwire DO NOT gate on tool_name —
-        PostToolUse fires on every tool and both checks are universal (not
-        tool-name-scoped). The first-Agent-dispatch, unauthorized-handoff, and
-        workflow-monitor-arm advisories DO gate on tool_name internally ("Agent",
-        "Write", and "Workflow" respectively) — their own internal early-exits,
-        not handler-level gates applied to the universal two.
+        Context-pressure, runtime-tripwire, and the Group EM watch arming check DO
+        NOT gate on tool_name — PostToolUse fires on every tool and all three checks
+        are universal (not tool-name-scoped). The first-Agent-dispatch,
+        unauthorized-handoff, and workflow-monitor-arm advisories DO gate on
+        tool_name internally ("Agent", "Write", and "Workflow" respectively) — their
+        own internal early-exits, not handler-level gates applied to the universal
+        three.
         DOES NOT gate the unauthorized-handoff nudge on session_id — its
         predicate is the Write payload alone, so it runs ahead of the
         session-scoped short-circuit rather than being swallowed by it.
         DOES NOT block execution — PostToolUse is advisory only.
-        DOES NOT arm the Monitor call itself — the workflow-monitor-arm check
-        only names the call for the EM to paste; it never dispatches, spawns,
-        or writes into the shared advisory-hook-state-{session_id}.json (its
-        once-per-task sentinel is its own disjoint file, matching the
-        first-Agent-dispatch and runtime-tripwire checks' own disjoint
-        sentinels — see the module-level state-management comment above
-        _advisory_state_path for why sharing that file across concurrent legs
-        is the regression this avoids).
+        DOES NOT arm the Monitor call itself — the workflow-monitor-arm and
+        group-em-watch-arm checks only name the call for the EM to paste; neither
+        ever dispatches, spawns, or writes into the shared
+        advisory-hook-state-{session_id}.json (each's once-per-task/once-per-session
+        sentinel is its own disjoint file, matching the first-Agent-dispatch and
+        runtime-tripwire checks' own disjoint sentinels — see the module-level
+        state-management comment above _advisory_state_path for why sharing that
+        file across concurrent legs is the regression this avoids).
+        DOES NOT detect whether the Group EM watch is CURRENTLY live — only
+        whether it has never been armed this session (see the module-level comment
+        above _check_group_em_watch_arm_sync for the named, cross-plane-scoped gap
+        this leaves open).
         WRITES durable per-session dedup/throttle state to tempdir (see the
         module-level state-management comment above _advisory_state_path) —
         this op is classified MUTATING, not COMPUTE_ONLY (reversing the B-F1
         in-memory re-plumb, which never survived the fresh-process-per-fire
         execution model). See coordinator_core/authz/classification.py.
 
-    Spec backlink: pln-pcore-04-advisory-hook-ops-mak-b219a8 § C7
+    Spec backlink: pln-pcore-04-advisory-hook-ops-mak-b219a8 § C7,
+    docs/plans/2026-08-31-the-group-em-tick-carries-standing-obligations.md § C10
     """
     # asyncio deferred to first use here (not module scope) — this is the only function
     # in the module touching the asyncio namespace at runtime. Spec:
@@ -1327,7 +1515,7 @@ async def _handler(params: dict, repo_root=None) -> dict:
         uh_text = await _leg_text("unauthorized_handoff", uh_coro)
         return post_advisory(uh_text) if uh_text else no_advisory()
 
-    # Run all four checks concurrently — they use disjoint sentinel namespaces.
+    # Run all five checks concurrently — they use disjoint sentinel namespaces.
     #
     # `return_exceptions=True` IS THE FAILURE-ISOLATION BUY-BACK, and it is not the
     # same concern as the ordering/latency argument above. This fold replaced FOUR
@@ -1335,7 +1523,7 @@ async def _handler(params: dict, repo_root=None) -> dict:
     # raising script could not suppress the other three's advisories. A bare `gather`
     # gives that away silently — it propagates the first exception and abandons its
     # siblings' results, so a single unreadable transcript or sentinel takes down all
-    # four legs at once. All four read transcripts and sentinel files off a shared
+    # five legs at once. All five read transcripts and sentinel files off a shared
     # disk on a box running ~50 concurrent sessions, so a transient read failure is
     # the expected case, not the exotic one.
     #
@@ -1352,6 +1540,7 @@ async def _handler(params: dict, repo_root=None) -> dict:
         asyncio.to_thread(
             _check_workflow_monitor_arm_sync, session_id, transcript_path, tool_name
         ),
+        asyncio.to_thread(_check_group_em_watch_arm_sync, session_id, transcript_path),
         return_exceptions=True,
     )
     labels = (
@@ -1360,12 +1549,13 @@ async def _handler(params: dict, repo_root=None) -> dict:
         "first_agent_dispatch",
         "unauthorized_handoff",
         "workflow_monitor_arm",
+        "group_em_watch_arm",
     )
-    cp_text, rt_text, ad_text, uh_text, wm_text = (
+    cp_text, rt_text, ad_text, uh_text, wm_text, ge_text = (
         _text_or_breadcrumb(label, result) for label, result in zip(labels, results)
     )
 
-    texts = [text for text in (cp_text, rt_text, ad_text, uh_text, wm_text) if text]
+    texts = [text for text in (cp_text, rt_text, ad_text, uh_text, wm_text, ge_text) if text]
     if texts:
         return post_advisory("\n\n".join(texts))
     return no_advisory()

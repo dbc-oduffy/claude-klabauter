@@ -927,3 +927,48 @@ class TestScopedCommit:
         from coordinator_core.git_lock_retry import DEFAULT_MAX_ATTEMPTS
 
         assert len(add_calls) == DEFAULT_MAX_ATTEMPTS
+
+
+class TestDecisionsShorthandNormalization:
+    """A bare-string `--decisions` value used to read as "no disposition
+    chosen": the directive stayed gated and the run reported the judgment
+    point UNRESOLVED, indistinguishable from a genuine withheld
+    authorization. That is how `backlog-grind-assemble apply bug-blitz
+    --wave-path ... --granularity per-item` silently landed no commit
+    directive (bug-blitz run bb-20260831-100946)."""
+
+    def test_bare_string_disposition_resolves_the_directive(self, tmp_path):
+        directives = [{"id": "d1", "cli": "noop-cli", "depends_on": "j1"}]
+        exit_code, report = apply_base.execute_directives(
+            directives, [_JP_TWO_WAY], tmp_path, _DISPATCH_TABLE, decisions={"j1": "accept"}
+        )
+        assert exit_code == apply_base.APPLY_EXIT_OK
+        assert report["landed"] == ["d1"]
+
+    def test_bare_string_naming_a_non_resolving_disposition_still_gates(self, tmp_path):
+        directives = [{"id": "d1", "cli": "noop-cli", "depends_on": "j1"}]
+        exit_code, report = apply_base.execute_directives(
+            directives, [_JP_TWO_WAY], tmp_path, _DISPATCH_TABLE, decisions={"j1": "reject"}
+        )
+        assert exit_code == apply_base.APPLY_EXIT_HALTED_AT_JUDGMENT
+        assert report["unresolved_judgment_points"] == ["j1"]
+
+    def test_object_form_is_never_rewritten(self):
+        entry = {"disposition": "accept", "note": "kept"}
+        normalized, malformed = apply_base.normalize_decisions({"j1": entry})
+        assert normalized["j1"] is entry
+        assert malformed == []
+
+    def test_object_without_a_disposition_key_is_left_alone(self):
+        normalized, malformed = apply_base.normalize_decisions({"j1": {}})
+        assert normalized == {"j1": {}}
+        assert malformed == []
+
+    def test_non_str_non_dict_entry_refuses_the_whole_run_by_name(self, tmp_path):
+        directives = [{"id": "d1", "cli": "noop-cli", "depends_on": "j1"}]
+        exit_code, report = apply_base.execute_directives(
+            directives, [_JP_TWO_WAY], tmp_path, _DISPATCH_TABLE, decisions={"j1": 42}
+        )
+        assert exit_code == apply_base.APPLY_EXIT_TRANSPORT_FAIL
+        assert "j1" in report["error"]
+        assert report["landed"] == []

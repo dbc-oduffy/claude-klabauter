@@ -3020,6 +3020,54 @@ def resolve_lineage(
                 if _adopted:
                     lineage["output_path"] = _adopted
                     lineage["adopted_scaffold"] = _adopted
+
+        # Foreign-repo lineage guard (bug-blitz P1,
+        # foreign-repo-lineage-inheritance): `artifact_path` resolving
+        # OUTSIDE the session's own `root` must not silently donate its
+        # lineage (`predecessor_handoff`, `deliverable_id`) to this
+        # successor -- direction (b) from the entry this closes. Compared
+        # by WORKTREE toplevel (own `.git`, via the same in-process
+        # `resolve_repo_root` walk `root` itself is established through
+        # elsewhere in this engine), not the git COMMON dir: a linked
+        # worktree of the same repo is still a distinct checkout with its
+        # own lineage scope, matching how `root` is scoped throughout this
+        # module. `resolve_repo_root` never spawns a subprocess (in-process
+        # upward `.git` walk only), so this stays zero-spawn on the common
+        # path. Normalizes away relative/absolute/`..`/drive-letter-case
+        # spelling differences for a same-repo hit -- both sides resolve to
+        # the SAME on-disk worktree root before comparison, so a foreign
+        # verdict requires the two roots to be genuinely different
+        # directories, never a spelling artifact.
+        _foreign_repo_artifact = False
+        if _artifact_frontmatter_abs_path is not None:
+            try:
+                _artifact_repo_root = resolve_repo_root(_artifact_frontmatter_abs_path.parent)
+            except (OSError, RuntimeError):
+                _artifact_repo_root = None
+            try:
+                _session_repo_root = root.resolve()
+            except (OSError, RuntimeError):
+                _session_repo_root = None
+            if _artifact_repo_root is not None and _session_repo_root is not None:
+                _foreign_repo_artifact = _artifact_repo_root.resolve() != _session_repo_root
+        lineage["foreign_repo_artifact"] = _foreign_repo_artifact
+        if _foreign_repo_artifact:
+            # Reference, not inheritance: the artifact is carried as a
+            # CITATION (the resolved absolute path -- a bare boolean flag
+            # would tell the reader nothing useful about what was excluded),
+            # a fresh LOCAL deliverable_id is minted (never the foreign
+            # artifact's own, and never a carry from any rung sourced off
+            # it), and no supersede write is armed against a file this
+            # session does not own.
+            lineage["foreign_repo_citation"] = str(_artifact_frontmatter_abs_path)
+            lineage["predecessor"] = None
+            lineage["predecessor_id"] = None
+            lineage["predecessor_handoff"] = None
+            _foreign_mint_slug = _sanitize_mint_slug(
+                title or Path(lineage["output_path"]).stem
+            )
+            lineage["deliverable_id"], _ = _mint_deliverable_id(slug=_foreign_mint_slug)
+            lineage["discovery"] = "foreign-repo-mint"
     elif kind == "spinoff":
         # 2026-07-27 break-class fix (live /spinoff run self-stamped
         # origin_handoff onto its own freshly-minted file): the sanctioned

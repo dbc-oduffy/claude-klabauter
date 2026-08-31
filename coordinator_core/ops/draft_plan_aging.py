@@ -247,7 +247,9 @@ def _normalize_prefix(path: str) -> str:
 _COMPLETED_ARCHIVE_DIR = os.path.join("archive", "completed")
 
 
-def _load_completed_deliverable_ids(root: str = _COMPLETED_ARCHIVE_DIR) -> frozenset:
+# Review: overengineering-reviewer — dropped the `root` param; no caller ever
+# passed it, and it was a config axis R2 was written to close off.
+def _load_completed_deliverable_ids() -> frozenset:
     """Read every `archive/completed/**/*.md` completion entry's frontmatter
     `deliverable_id:` scalar ONCE, returning the set of ids that have a
     shipped completion entry.
@@ -273,10 +275,12 @@ def _load_completed_deliverable_ids(root: str = _COMPLETED_ARCHIVE_DIR) -> froze
     crash idiom as the rest of this module).
     """
     ids = set()
-    if not os.path.isdir(root):
+    if not os.path.isdir(_COMPLETED_ARCHIVE_DIR):
         return frozenset()
-    for dirpath, _dirnames, filenames in os.walk(root):
-        for name in sorted(filenames):
+    for dirpath, _dirnames, filenames in os.walk(_COMPLETED_ARCHIVE_DIR):
+        # Review: overengineering-reviewer — unsorted; the result feeds a
+        # set, so ordering is unobservable, and this is a budgeted path.
+        for name in filenames:
             if not name.endswith(".md"):
                 continue
             path = os.path.join(dirpath, name)
@@ -290,8 +294,11 @@ def _load_completed_deliverable_ids(root: str = _COMPLETED_ARCHIVE_DIR) -> froze
     return frozenset(ids)
 
 
+# Review: overengineering-reviewer — required, not Optional[...]=None; the
+# self-load branch had no production consumer and was where a future
+# in-loop caller would silently re-pay the full-corpus read.
 def _has_recent_real_work_commit(
-    file: str, completed_deliverable_ids: Optional[frozenset] = None
+    file: str, completed_deliverable_ids: frozenset
 ) -> Tuple[Optional[bool], Optional[str]]:
     """Condition 3b: does ANY normalized scope path have a real-work commit
     (non-mechanical subject) within the aging window, OR does this plan's own
@@ -303,12 +310,13 @@ def _has_recent_real_work_commit(
     arms are ORed — the completion-entry match is additive, not a
     replacement for the pre-existing scope-path git-log arm.
 
-    *completed_deliverable_ids*, when given, is the pre-loaded
-    `_load_completed_deliverable_ids()` result — callers in a per-plan loop
-    (`scan()`) MUST pass this through rather than letting each call rebuild
-    it, to avoid a second full-corpus read per plan. When omitted (the
-    default), this function loads it itself — preserving the original
-    single-call signature for direct callers/tests.
+    *completed_deliverable_ids* is the pre-loaded
+    `_load_completed_deliverable_ids()` result — required, not optional:
+    callers in a per-plan loop (`scan()`) MUST pass this through rather than
+    letting each call rebuild it, to avoid a second full-corpus read per
+    plan. There is no self-loading default; direct callers/tests pass the
+    result of a single `_load_completed_deliverable_ids()` call (or an empty
+    `frozenset()`) explicitly.
 
     Returns (True, None) if a real-work commit or a completion-entry match
     was found (NOT stale-toward on this condition), (False, None) if neither
@@ -324,8 +332,6 @@ def _has_recent_real_work_commit(
         # unreadable file yields an empty scope-path list, not a crash.
         text = ""
 
-    if completed_deliverable_ids is None:
-        completed_deliverable_ids = _load_completed_deliverable_ids()
     plan_deliverable_id = extract_frontmatter_scalar(text, "deliverable_id")
     if plan_deliverable_id and plan_deliverable_id in completed_deliverable_ids:
         return True, None
@@ -441,10 +447,15 @@ def _has_active_baton(file: str) -> Tuple[Optional[bool], Optional[str]]:
     return False, None
 
 
+# Review: overengineering-reviewer — completed_deliverable_ids is keyword-only
+# and required, not Optional[...]=None: every production caller already
+# passes it, and an optional self-loading default is exactly the shape a
+# future in-loop caller silently reacquires the per-plan corpus through.
 def check_one(
     file: str,
     today: Optional[date] = None,
-    completed_deliverable_ids: Optional[frozenset] = None,
+    *,
+    completed_deliverable_ids: frozenset,
 ) -> Tuple[str, int]:
     """Evaluate the draft-plan staleness predicate for one plan file.
 
@@ -452,8 +463,7 @@ def check_one(
     result, threaded through to `_has_recent_real_work_commit`. `scan()`
     loads this once per invocation and passes it to every `check_one` call in
     its loop — never rebuilt per plan (brightline: no second full-corpus scan
-    per plan). Left `None` for direct/test callers, which rebuild it once,
-    internally, on that single call.
+    per plan).
 
     Returns (stdout_line_or_empty, rc). rc is 0 (not stale / no error) or 2
     (parse error / internal error). A non-empty stdout_line signals STALE.
@@ -544,7 +554,7 @@ def scan(target: str, today: Optional[date] = None) -> Tuple[List[str], int]:
     stale_count = 0
     parse_error = False
     for f in files:
-        line, rc = check_one(f, today, completed_deliverable_ids)
+        line, rc = check_one(f, today, completed_deliverable_ids=completed_deliverable_ids)
         if rc == 2:
             parse_error = True
         if line:

@@ -85,14 +85,29 @@ import pytest
 
 _BIN_DIR = Path(__file__).resolve().parent.parent
 
-_ENGINE_MODULE_PREFIXES = (
-    "coordinator_core",
-    "coordinator_registry",
-    "cc_invoke",
-    "repo_identity",
-    "cli_shared",
-    "op_trampoline",
-)
+def _bin_lib_module_names() -> frozenset[str]:
+    """Every bare name that only resolves once `coordinator/bin/lib` is on
+    `sys.path` -- read off the directory, never hand-enumerated.
+
+    Negative-spec: this is NOT a curated list of "the risky ones". The set of
+    names that need the bootstrap IS the set of modules in that directory, so
+    a literal tuple here is a copy that goes stale silently the moment a
+    sibling is added. It did: the tuple this replaced named six modules out of
+    thirty-one, and the twenty-five it omitted were unguarded --
+    `check-no-illegal-paths.py` (`coordinator_safe_name`),
+    `check-multi-event-hook-hardcoded-event.py` (`coordinator_data_root`), and
+    `workday-start-handoff-triage.py` (`records_query`) all shipped the
+    ModuleNotFoundError this guard exists to catch, past a green run.
+    """
+    lib_dir = _BIN_DIR / "lib"
+    return frozenset(
+        p.stem
+        for p in lib_dir.glob("*.py")
+        if p.stem != "__init__" and not p.stem.startswith("test_")
+    )
+
+
+_ENGINE_MODULE_PREFIXES = ("coordinator_core", *sorted(_bin_lib_module_names()))
 
 
 def _is_engine_import(module: str) -> bool:
@@ -322,6 +337,82 @@ def test_no_new_bootstrap_dominance_violations():
     moment it lands."""
     live = {(v.path, v.func, v.shape, v.detail) for v in _live_violations()}
     _assert_no_new(live)
+
+
+def _bootstraps_anywhere(tree: ast.AST, source: str) -> bool:
+    """True if the module puts `coordinator/bin/lib` on `sys.path` by ANY of
+    the three shapes the corpus actually uses.
+
+    1. `import lib` -- the sanctioned idiom (`lib/__init__.py` is the single
+       mutation site; see its module docstring).
+    2. An explicit `sys.path` insert/append -- the preamble that idiom
+       replaced. Still present in a handful of files and still effective, so
+       it counts as bootstrapped here even though the negative-spec in
+       `lib/__init__.py` asks new code not to write it.
+    3. `spec_from_file_location("lib", ...)` -- `coordinator-doc-new.py`'s
+       by-location import, which exists precisely because a bare `import lib`
+       can bind `coordinator/lib` instead on an unlucky `sys.path` order.
+    """
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import) and any(a.name == "lib" for a in node.names):
+            return True
+    if "sys.path.insert" in source or "sys.path.append" in source:
+        return True
+    return "spec_from_file_location" in source and '"lib"' in source
+
+
+def _unbootstrapped_modules() -> list[tuple[str, str]]:
+    """`(filename, module)` for every `coordinator/bin/*.py` CLI that imports a
+    `bin/lib` sibling while bootstrapping nowhere in the file.
+
+    Why this is separate from the dominance analysis: that analysis returns
+    early on `if not bootstrap_names` -- a module carrying no bootstrap at all
+    is not an unsafe path through a bootstrap, it is a module with no
+    bootstrap to be unsafe about, and it was skipped as out of scope. That
+    early return is the blind spot the whole class shipped through. Dominance
+    asks "does the bootstrap reach here"; this asks the prior question, "is
+    there one".
+    """
+    lib_names = _bin_lib_module_names()
+    out: list[tuple[str, str]] = []
+    for path in sorted(_BIN_DIR.glob("*.py")):
+        if path.name.startswith("test_"):
+            continue
+        source = path.read_text(encoding="utf-8", errors="replace")
+        try:
+            tree = ast.parse(source)
+        except SyntaxError:
+            continue
+        if _bootstraps_anywhere(tree, source):
+            continue
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+                if node.module.split(".")[0] in lib_names:
+                    out.append((path.name, node.module))
+            elif isinstance(node, ast.Import):
+                for alias in node.names:
+                    if alias.name.split(".")[0] in lib_names:
+                        out.append((path.name, alias.name))
+    return sorted(set(out))
+
+
+def test_no_bin_lib_import_without_any_bootstrap():
+    """A `bin/` CLI may not import a `bin/lib` sibling while bootstrapping
+    nowhere in the file.
+
+    `bin/lib` is not a package and sits on no default path, so such an import
+    raises `ModuleNotFoundError` the moment its line is reached -- at import
+    time if module-level, on first call if deferred, which is why three of
+    these reached the fleet with `--help` and `py_compile` both green.
+    """
+    found = _unbootstrapped_modules()
+    rendered = "\n".join(f"  {name} imports `{mod}`" for name, mod in found)
+    assert found == [], (
+        f"{len(found)} `coordinator/bin/*.py` import(s) of a `bin/lib` sibling with no "
+        f"bootstrap anywhere in the file -- each raises ModuleNotFoundError when reached. "
+        f"Add `import lib  # noqa: F401` before the import (in the same function, if the "
+        f"import is deferred):\n{rendered}"
+    )
 
 
 def test_population_examined_is_nonzero_and_matches_corpus():

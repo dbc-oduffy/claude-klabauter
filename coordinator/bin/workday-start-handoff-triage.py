@@ -345,6 +345,7 @@ _AWAITING_GATE_WHERE = "deployment_state=awaiting_gate AND status=open"
 
 
 def _cmd_ready(args: argparse.Namespace) -> int:
+    import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
     from records_query import query_records  # noqa: PLC0415 (deliberate: avoid import cost on unrelated subcommands)
 
     explicit_root = getattr(args, "repo_root", None)
@@ -361,6 +362,7 @@ def _cmd_ready(args: argparse.Namespace) -> int:
 
 
 def _cmd_awaiting_gate(args: argparse.Namespace) -> int:
+    import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
     from records_query import query_records  # noqa: PLC0415
 
     explicit_root = getattr(args, "repo_root", None)

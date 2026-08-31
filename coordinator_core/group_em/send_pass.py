@@ -547,9 +547,11 @@ def resolve_addressee(
 
 
 def _declinations(
+    repo_root: str,
     roster: list[dict[str, Any]],
     entries: list[dict[str, Any]],
     suppressed: list[dict[str, Any]],
+    now: float,
 ) -> list[dict[str, Any]]:
     """Which obligation this tick declined, and why -- one row per thing not done.
 
@@ -565,21 +567,42 @@ def _declinations(
     exactly the "closed on nothing sent" shape the criterion forbids. So a tick that
     considered nobody declines the standing obligation to look, and says so. Absence of
     candidates is a finding about the roster, never a quiet success.
+
+    A COOLDOWN DECLINATION CARRIES THE PEER'S DWELL, and that pairing is the point.
+    Cooldown is an eligibility gate applied BEFORE dwell ranks anything, so a peer
+    parked ten minutes is held by the same rule that protects one messaged ninety
+    seconds ago. That ordering is deliberate -- re-offering to a peer you just messaged
+    is nagging, and dwell "ranks and informs, it never suppresses" is this module's
+    standing rule, which cuts both ways. But the EM cannot weigh a hold it cannot see.
+    Observed live 2026-08-31: a peer parked 10.4m identified correctly by the roster and
+    then suppressed on cooldown, with nothing in the digest saying how long it had been
+    parked. So the declination names both, and the judgement stays with the reader.
+
+    Dwell is computed only for cooldown holds, not for every suppression: `away` and
+    `unusable-session-id` are not decisions anyone would overturn on dwell, and each
+    computation is two reads per peer.
     """
-    declined: list[dict[str, Any]] = [
-        {
-            "obligation": f"message peer {row['session_id']}",
-            "reason": row["why"],
-            "session_id": row["session_id"],
-        }
-        for row in suppressed
-    ]
+    declined: list[dict[str, Any]] = []
+    for row in suppressed:
+        peer = row["session_id"]
+        dwell = None
+        if row["why"] == "cooldown" and isinstance(peer, str) and _safe_session_id(peer):
+            dwell = _dwell_seconds(repo_root, peer, now)
+        declined.append(
+            {
+                "obligation": f"message peer {peer}",
+                "reason": row["why"],
+                "session_id": peer,
+                "dwell_seconds": dwell,
+            }
+        )
     if not roster:
         declined.append(
             {
                 "obligation": "look at the peers this tick",
                 "reason": "roster-empty: no candidate peers were produced for this tick",
                 "session_id": None,
+                "dwell_seconds": None,
             }
         )
     elif not entries:
@@ -591,6 +614,7 @@ def _declinations(
                     f"{'y' if len(roster) == 1 else 'ies'} considered, every one suppressed"
                 ),
                 "session_id": None,
+                "dwell_seconds": None,
             }
         )
     return declined
@@ -731,7 +755,7 @@ def build_send_digest(
     return {
         "entries": entries,
         "suppressed": suppressed,
-        "declined": _declinations(roster, entries, suppressed),
+        "declined": _declinations(repo_root, roster, entries, suppressed, now),
         "truncated": len(eligible) > max_entries,
         "roster_size": len(roster),
         "eligible_before_ceiling": len(eligible),

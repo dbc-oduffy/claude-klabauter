@@ -608,6 +608,86 @@ def do_pathspec(args: "Args") -> None:
     print(f"committed sha={result.get('sha')}", file=sys.stderr)
 
 
+def _holder_context(worktree_root: str, sid: str, path: str) -> str:
+    """One holder's identity, rendered so the caller can act on the refusal.
+
+    A bare `sid[:8]` is not an address, and worse, it is stale by default: a
+    session RE-POINTS its id while keeping its name (measured 2026-08-31 by
+    claude-klabauter-ad: six re-points across five of twelve peers in one
+    shift, one session twice). So the sid printed here can name a session
+    that no longer exists under it, and attributing on one produced a
+    three-hop misattribution that reached a peer's execution wave as a false
+    premise that same day. `harness_registry.snapshot()` holds the stable
+    name -- the thing `SendMessage` actually accepts -- and answers in 5.4ms
+    over 31 records, so the name is resolved HERE, at the moment of the
+    refusal, never carried in from a record or a document that mentions it.
+
+    A sid with no registry entry is reported as stale rather than printed as
+    if it were an address: "coordinate with the holder(s) first" naming a
+    party the caller cannot reach is how a guard teaches the fleet to route
+    around it, which costs the true positives too.
+
+    Two facts make the sid actionable, and both are already on disk:
+    the holder's baton title (what they are working on, so the caller can
+    tell live work from residue), and how long the TOUCH has gone
+    unreleased. An 11h-old claim on a file whose work is committed reads
+    differently from a 2-minute-old one, and the caller currently cannot
+    distinguish them.
+
+    Best-effort in every part: an unreadable baton, a missing sink, or any
+    exception degrades to the bare sid rather than raising. This runs only
+    in the already-contested branch, never on the common path.
+    """
+    bits: List[str] = []
+    try:
+        _cs_core, _cs_liveness, _cs_scope, _cs_claims = _import_session()
+        from coordinator_core.session import harness_registry  # noqa: PLC0415
+
+        record = harness_registry.snapshot().get(sid)
+    except Exception:
+        record = None
+    name = getattr(record, "name", None) if record is not None else None
+    if name:
+        bits.append(f"{name} [{sid[:8]}]")
+    else:
+        bits.append(f"{sid[:8]} (stale id, no registry entry)")
+    sessions_dir = os.path.join(worktree_root, ".git", "coordinator-sessions", sid)
+    try:
+        import json  # noqa: PLC0415
+
+        with open(os.path.join(sessions_dir, "baton.json"), encoding="utf-8") as fh:
+            title = (json.load(fh) or {}).get("title")
+        if title:
+            bits.append(f'"{str(title)[:70]}"')
+    except Exception:
+        pass
+    try:
+        import json  # noqa: PLC0415
+
+        last_ts = None
+        with open(
+            os.path.join(sessions_dir, "touch-record.jsonl"), encoding="utf-8"
+        ) as fh:
+            for line in fh:
+                line = line.strip()
+                if not line or path not in line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                except Exception:
+                    continue
+                if rec.get("path") == path and rec.get("verb") == "T":
+                    last_ts = rec.get("ts") or last_ts
+        if last_ts:
+            hours = (time.time() - float(last_ts)) / 3600.0
+            bits.append(
+                f"held {hours:.1f}h" if hours >= 1 else f"held {hours * 60:.0f}m"
+            )
+    except Exception:
+        pass
+    return " ".join(bits)
+
+
 def _refuse_contested_pathspec(paths: Sequence[str], worktree_root: str) -> None:
     """The ownership gate the explicit-pathspec form never had.
 
@@ -668,7 +748,9 @@ def _refuse_contested_pathspec(paths: Sequence[str], worktree_root: str) -> None
     if not contested:
         return
     for path in sorted(contested):
-        owners = ", ".join(o[:8] for o in contested[path])
+        owners = "; ".join(
+            _holder_context(worktree_root, o, path) for o in contested[path]
+        )
         print(
             f"BLOCKED: {path} is also held by live session(s) {owners} -- "
             "committing it lands their uncommitted work under your message.",
@@ -676,7 +758,10 @@ def _refuse_contested_pathspec(paths: Sequence[str], worktree_root: str) -> None
         )
     print(
         "Drop the named path(s) from the pathspec, or coordinate with the "
-        "holder(s) first.",
+        "holder(s) first BY NAME -- a session id re-points, a name does not. "
+        "A holder releases a path it no longer needs with "
+        "`session-claim-cli release-artifact artifact <path>`; "
+        "`session-claim-cli who-claims-path <path>` lists every holder.",
         file=sys.stderr,
     )
     sys.exit(1)

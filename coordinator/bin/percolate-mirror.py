@@ -629,9 +629,15 @@ def main(argv: Optional[List[str]] = None) -> int:
                 )
                 return _round._EXIT_CONFIRM_REQUIRED
 
+            # Third leg of the same mirror history, so it carries the same
+            # currency stamp the other two do -- a signal present on only
+            # SOME publish commits is worse than none, because a consumer
+            # reading an unstamped one cannot tell "old publisher" from
+            # "this leg never stamps".
             subject = (
                 f"percolate publish: {Path(mirror_root).name} "
                 f"({len(targets)} row(s), {len(pathspec)} file(s))"
+                f"{_round._source_sha_suffix()}"
             )
             print(f"=== percolate-mirror {mirror_root} — commit ({len(pathspec)} file(s)) ===")
             # `ceremony.scoped_git_commit` was KILLED 2026-08-23 (DR-344) and

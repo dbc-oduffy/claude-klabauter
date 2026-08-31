@@ -295,6 +295,46 @@ def judgment_points_by_id(judgment_points: list[dict[str, Any]]) -> dict[str, di
     return {jp["id"]: jp for jp in judgment_points if jp.get("id")}
 
 
+def normalize_decisions(decisions: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
+    """Widens the shorthand `{jp_id: "<disposition value>"}` into the
+    `{jp_id: {"disposition": "<value>"}}` shape
+    `disposition_resolves_directive` reads, and names every entry that is
+    neither.
+
+    Purpose: a bare-string entry is what every CLI caller actually types
+    (`--decisions '{"j-bug-blitz-commit-readiness": "ready-to-commit"}'`),
+    and before this it was read as "no disposition chosen" — the directive
+    stayed gated and the run reported the judgment point as UNRESOLVED.
+    That report is indistinguishable from a genuine "the EM has not
+    authorised this yet", so a wrong-shaped payload read as a policy
+    decision: `backlog-grind-assemble apply bug-blitz --wave-path ...
+    --granularity per-item` landed no commit directive and said nothing
+    about why (bug-blitz run bb-20260831-100946, DoE-claude memo
+    2026-08-31-doe-claude-em-blitz-apply-verb-emits-no-commit-directive).
+
+    Negative spec:
+    - A dict entry is NEVER rewritten, including one carrying no
+      `disposition` key. Across dispositions, `resolves` is what encodes
+      terminal-vs-non-terminal; a caller that spelled the dict shape and
+      omitted `disposition` made an authored choice not to pick one, and
+      widening that would fabricate a decision.
+    - A non-str, non-dict entry is NEVER coerced — it is returned in the
+      malformed list so the caller can refuse the run by name, because the
+      silent-gate reading is exactly the defect this function exists to
+      remove.
+    """
+    normalized: dict[str, Any] = {}
+    malformed: list[str] = []
+    for jp_id, entry in decisions.items():
+        if isinstance(entry, dict):
+            normalized[jp_id] = entry
+        elif isinstance(entry, str):
+            normalized[jp_id] = {"disposition": entry}
+        else:
+            malformed.append(str(jp_id))
+    return normalized, malformed
+
+
 def disposition_resolves_directive(
     jp: dict[str, Any], decisions: dict[str, Any], directive_id: str
 ) -> bool:
@@ -861,7 +901,17 @@ def execute_directives(
     `report["results"]` / `report["landed"]` — a directive blocked by an
     unresolved judgment point never appears in either.
     """
-    decisions = decisions or {}
+    decisions, malformed_decisions = normalize_decisions(decisions or {})
+    if malformed_decisions:
+        return APPLY_EXIT_TRANSPORT_FAIL, {
+            "error": (
+                "malformed --decisions entries for judgment point(s) "
+                f"{sorted(malformed_decisions)} — each value must be a "
+                'disposition string ("<value>") or an object '
+                '({"disposition": "<value>"})'
+            ),
+            "landed": [],
+        }
     jp_by_id = judgment_points_by_id(judgment_points)
 
     if not directives:

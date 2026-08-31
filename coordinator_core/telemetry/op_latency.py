@@ -290,9 +290,6 @@ def double_routed_corr_ids(entries) -> set:
     return doubled
 
 
-# See atomic_append.IS_WINDOWS for why this is os.name and not platform.system().
-_IS_WINDOWS = atomic_append.IS_WINDOWS
-
 _logger = None
 
 
@@ -1323,12 +1320,50 @@ def breach_summary(
     most damage to the shared box sort first.
 
     Ranking is `stolen_ms` DESCENDING, never raw breach count. `stolen_ms` is
-    the summed process time an op took PAST the bar
-    (``sum(elapsed_ms - bar_ms)`` over its `over_bar` and `caller_timeout`
-    rows) -- frequency times cost by construction. One 30s breach outranks
-    fifty 520ms ones because that is what the ~50 sessions queued behind it
-    actually paid; a raw count inverts that. Ties break on total breach count,
-    then op name, so the order is deterministic across runs.
+    the summed WALL-CLOCK time an op took PAST the bar
+    (``sum(elapsed_ms - bar_ms)`` over its `over_bar` rows) -- frequency times
+    cost by construction. One 30s breach outranks fifty 520ms ones because
+    that is what the ~50 sessions queued behind it actually paid; a raw count
+    inverts that. Ties break on total breach count, then op name, so the order
+    is deterministic across runs.
+
+    WALL CLOCK, SAID PLAINLY, because this line said "process time" until
+    2026-08-31 and was false. `elapsed_ms` is `perf_counter()`
+    (`ipc.py :: _dispatch_message_impl`, which takes both clocks one line
+    apart and keeps CPU in a separate `process_ms` key). The mislabel was
+    worse than a wrong word: CLAUDE.md § The brightline forbids concluding on
+    wall clock, so a reader auditing whether this instrument obeys that rule
+    was told yes BY THIS FILE. Read `stolen_ms` as "box occupancy past the
+    bar", which is a real and useful quantity, and never as CPU.
+
+    NEGATIVE SPEC -- DO NOT "FIX" THIS BY RE-KEYING ONTO THE SINK'S
+    `process_ms`. That was the obvious next move and it is wrong, measured
+    2026-08-31 rather than argued:
+
+      - The join is not the obstacle: every `complete` row carrying a
+        `corr_id` pairs 1:1 with a `per_op_handler` `process_time` row
+        (7,771/7,771 here; 304/304 for the over-bar population).
+      - `process_ms` comes from `time.process_time()`, which EXCLUDES child
+        processes. A child burning 396ms of pure CPU shows as 15.6ms in the
+        parent -- the spawn overhead alone. A ~350ms `git status` shows as
+        0.0ms.
+      - So re-keying collapses `stolen_ms` from 587.8s to 0.7s over the same
+        rows -- not an instrument getting honest, an instrument going blind
+        to subprocess cost. That is precisely the cost the brightline exists
+        to police ("git justifies itself per use -- process creation is the
+        cost"), so the re-key would invert the rule it appears to satisfy.
+
+    A child-inclusive re-key needs job-object accounting at the RECORDING
+    site (`benchmarks/process_time.py` already does this correctly, and
+    `LiveTreeAccountant` exists to bracket a warm-server op including its git
+    children) -- a change to the writer, not a re-key in this reader.
+    Separately, `process_ms` is a whole-process delta taken across an
+    `await`, so it also absorbs concurrent ops' CPU
+    (`op_census/timing.py` § CONSEQUENCE, unresolved): it is wrong in both
+    directions for a spawning op, not merely incomplete.
+
+    A `caller_timeout` row contributes nothing to `stolen_ms` -- see the
+    accumulation site for why a deadline is not a measurement.
 
     The three breach kinds (`BREACH_KINDS`) are counted separately and never
     merged away: `breaches` is their sum and is reported ALONGSIDE the three,
@@ -1477,22 +1512,37 @@ def breach_summary(
         if isinstance(t_start, (int, float)):
             complete_t_starts.append(float(t_start))
         elapsed = entry.get("elapsed_ms")
-        if isinstance(elapsed, (int, float)):
-            bucket["elapsed"].append(float(elapsed))
 
         # A "timeout" outcome is its OWN kind and is checked first: it is a
         # breach whatever its elapsed_ms says, and classifying it by elapsed
         # would fold it into over_bar and lose the may-still-have-committed
         # distinction this view exists to preserve.
         breached = True
-        if entry.get("outcome") == "timeout":
+        timed_out = entry.get("outcome") == "timeout"
+        if timed_out:
             bucket["caller_timeout"] += 1
         elif isinstance(elapsed, (int, float)) and float(elapsed) >= bar_ms:
             bucket["over_bar"] += 1
         else:
             breached = False
 
-        if breached and isinstance(elapsed, (int, float)):
+        # A caller_timeout's `elapsed_ms` is the DEADLINE, not a measurement of
+        # the handler -- which by this view's own `caller_timeout` note kept
+        # running past it and may still have committed. The occupancy is real;
+        # the number is not a reading of it. Summing it into `stolen_ms`, or
+        # letting it into the percentile pool, publishes a precise-looking
+        # arbitrary value that every consumer then reads as measured -- and a
+        # kind marker beside a plausible number loses to the number.
+        #
+        # This is `vanished`'s rule (see BREACH_KINDS: "contributes nothing to
+        # `stolen_ms` rather than a fabricated cost") applied to the other kind
+        # that also lacks a true duration. `caller_timeout` is still counted,
+        # still a breach, and still ranks via the count tiebreaker; what it no
+        # longer does is contribute a fabricated magnitude.
+        if isinstance(elapsed, (int, float)) and not timed_out:
+            bucket["elapsed"].append(float(elapsed))
+
+        if breached and not timed_out and isinstance(elapsed, (int, float)):
             bucket["stolen_ms"] += max(0.0, float(elapsed) - bar_ms)
         if isinstance(t_start, (int, float)):
             bucket["timeline"].append((float(t_start), breached))

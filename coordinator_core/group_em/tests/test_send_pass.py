@@ -11,6 +11,7 @@ cutting.
 from __future__ import annotations
 
 import json
+import pytest
 import os
 
 
@@ -381,3 +382,38 @@ def test_a_tick_that_sends_declines_only_what_it_held_back(tmp_path):
     digest = send_pass.build_send_digest(str(tmp_path), roster, "caller-live", now=1000.0)
     assert digest["entries"]
     assert [row for row in digest["declined"] if row["session_id"] is None] == []
+
+
+def test_cooldown_declination_carries_dwell_so_the_hold_is_weighable(tmp_path, monkeypatch):
+    """Observed live 2026-08-31: the roster correctly identified a peer parked
+    10.4m and the digest suppressed it on cooldown, with nothing saying how long
+    it had been parked. Cooldown outranking dwell is deliberate -- re-offering to
+    a peer you just messaged is nagging -- but the EM cannot weigh a hold it
+    cannot see, so the declination names both.
+    """
+    repo_root = str(tmp_path)
+    roster = [_verdict("peer-held")]
+    send_pass.build_send_digest(repo_root, roster, "caller-dw", now=1000.0)
+
+    monkeypatch.setattr(send_pass, "_dwell_seconds", lambda r, p, n: 624.0)
+    digest = send_pass.build_send_digest(repo_root, roster, "caller-dw", now=1060.0)
+
+    held = [row for row in digest["suppressed"] if row["why"] == "cooldown"]
+    assert held, "expected the second tick to hold the peer on cooldown"
+    row = next(r for r in digest["declined"] if r["session_id"] == "peer-held")
+    assert row["reason"] == "cooldown"
+    assert row["dwell_seconds"] == 624.0
+
+
+def test_non_cooldown_declinations_do_not_pay_for_dwell(tmp_path, monkeypatch):
+    """`away` is not a hold anyone would overturn on dwell, and each computation
+    is two reads per peer. Every row still carries the key, `None` where
+    inapplicable, so a consumer never key-checks by variant."""
+    monkeypatch.setattr(
+        send_pass, "_dwell_seconds", lambda *a: pytest.fail("dwell computed for a non-cooldown hold")
+    )
+    roster = [_verdict("peer-away", reason="away", state="away")]
+    digest = send_pass.build_send_digest(str(tmp_path), roster, "caller-away", now=1000.0)
+    row = next(r for r in digest["declined"] if r["session_id"] == "peer-away")
+    assert row["dwell_seconds"] is None
+    assert all("dwell_seconds" in r for r in digest["declined"])

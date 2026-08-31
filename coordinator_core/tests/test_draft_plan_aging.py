@@ -19,6 +19,7 @@ import pytest
 from coordinator_core.ops.draft_plan_aging import (
     _has_active_baton,
     _has_recent_real_work_commit,
+    _load_completed_deliverable_ids,
     _is_sidecar_file,
     _normalize_prefix,
     _read_scope_paths,
@@ -102,33 +103,33 @@ def test_read_scope_paths_empty_when_no_scope_block():
 
 def test_13d_under_boundary_silent(tmp_path):
     p = _write_plan(tmp_path / "plan.md", (_TODAY - timedelta(days=13)).isoformat())
-    line, rc = check_one(str(p), _TODAY)
+    line, rc = check_one(str(p), _TODAY, completed_deliverable_ids=frozenset())
     assert (line, rc) == ("", 0)
 
 
 def test_status_implemented_never_stale(tmp_path):
     p = _write_plan(tmp_path / "plan.md", (_TODAY - timedelta(days=40)).isoformat(), status="implemented")
-    line, rc = check_one(str(p), _TODAY)
+    line, rc = check_one(str(p), _TODAY, completed_deliverable_ids=frozenset())
     assert (line, rc) == ("", 0)
 
 
 def test_status_reviewed_never_stale(tmp_path):
     p = _write_plan(tmp_path / "plan.md", (_TODAY - timedelta(days=40)).isoformat(), status="reviewed")
-    line, rc = check_one(str(p), _TODAY)
+    line, rc = check_one(str(p), _TODAY, completed_deliverable_ids=frozenset())
     assert (line, rc) == ("", 0)
 
 
 def test_exit_2_missing_created_field(tmp_path):
     p = tmp_path / "plan.md"
     p.write_text('---\ntitle: "Missing created"\nstatus: draft\n---\n\n# Body\n', encoding="utf-8")
-    line, rc = check_one(str(p), _TODAY)
+    line, rc = check_one(str(p), _TODAY, completed_deliverable_ids=frozenset())
     assert rc == 2
     assert line == ""
 
 
 def test_unparseable_created_date_exits_2(tmp_path):
     p = _write_plan(tmp_path / "plan.md", "not-a-date")
-    line, rc = check_one(str(p), _TODAY)
+    line, rc = check_one(str(p), _TODAY, completed_deliverable_ids=frozenset())
     assert rc == 2
 
 
@@ -148,7 +149,7 @@ def test_mechanical_commit_does_not_suppress_reclaim(tmp_path, monkeypatch):
 
     _write_plan(tmp_path / "plan.md", (_TODAY - timedelta(days=20)).isoformat(), scope_lines=["scope-touched/file.md"])
     monkeypatch.chdir(tmp_path)
-    has_work, err = _has_recent_real_work_commit("plan.md")
+    has_work, err = _has_recent_real_work_commit("plan.md", frozenset())
     assert err is None
     assert has_work is False
 
@@ -164,7 +165,7 @@ def test_mechanical_commit_pickup_frontmatter_does_not_suppress(tmp_path, monkey
 
     _write_plan(tmp_path / "plan.md", (_TODAY - timedelta(days=20)).isoformat(), scope_lines=["scope-touched/file.md"])
     monkeypatch.chdir(tmp_path)
-    has_work, err = _has_recent_real_work_commit("plan.md")
+    has_work, err = _has_recent_real_work_commit("plan.md", frozenset())
     assert err is None
     assert has_work is False
 
@@ -180,7 +181,7 @@ def test_real_work_commit_suppresses(tmp_path, monkeypatch):
 
     _write_plan(tmp_path / "plan.md", (_TODAY - timedelta(days=20)).isoformat(), scope_lines=["scope-touched/file.md"])
     monkeypatch.chdir(tmp_path)
-    has_work, err = _has_recent_real_work_commit("plan.md")
+    has_work, err = _has_recent_real_work_commit("plan.md", frozenset())
     assert err is None
     assert has_work is True
 
@@ -188,7 +189,7 @@ def test_real_work_commit_suppresses(tmp_path, monkeypatch):
 def test_no_scope_block_returns_false_no_git_call(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     p = _write_plan(tmp_path / "plan.md", (_TODAY - timedelta(days=20)).isoformat())
-    has_work, err = _has_recent_real_work_commit(str(p))
+    has_work, err = _has_recent_real_work_commit(str(p), frozenset())
     assert (has_work, err) == (False, None)
 
 
@@ -201,7 +202,7 @@ def test_git_log_failure_returns_diagnostic(tmp_path, monkeypatch):
 
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("GIT_CEILING_DIRECTORIES", str(tmp_path))
-    has_work, err = _has_recent_real_work_commit("plan.md")
+    has_work, err = _has_recent_real_work_commit("plan.md", frozenset())
     assert has_work is None
     assert err is not None
     assert "git log failed" in err
@@ -222,7 +223,7 @@ def test_prefix_normalization_resolves_scope_path(tmp_path, monkeypatch):
         (_TODAY - timedelta(days=20)).isoformat(),
         scope_lines=["plugins/coordinator-claude/coordinator/bin/tool.sh"],
     )
-    has_work, err = _has_recent_real_work_commit("plan.md")
+    has_work, err = _has_recent_real_work_commit("plan.md", frozenset())
     assert err is None
     assert has_work is True
 
@@ -257,7 +258,7 @@ def test_completion_entry_deliverable_id_match_suppresses_no_scope_touch(tmp_pat
         encoding="utf-8",
     )
 
-    has_work, err = _has_recent_real_work_commit("plan.md")
+    has_work, err = _has_recent_real_work_commit("plan.md", _load_completed_deliverable_ids())
     assert err is None
     assert has_work is True
 
@@ -267,7 +268,7 @@ def test_no_completion_entry_match_still_uses_scope_arm(tmp_path, monkeypatch):
     # path arm alone still governs (no crash, no false suppress).
     monkeypatch.chdir(tmp_path)
     p = _write_plan(tmp_path / "plan.md", (_TODAY - timedelta(days=20)).isoformat())
-    has_work, err = _has_recent_real_work_commit(str(p))
+    has_work, err = _has_recent_real_work_commit(str(p), frozenset())
     assert (has_work, err) == (False, None)
 
 

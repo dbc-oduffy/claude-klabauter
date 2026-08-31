@@ -137,6 +137,84 @@ def test_stolen_ms_counts_only_time_past_the_bar():
     assert row["stolen_ms"] == pytest.approx(1_200.0)
 
 
+def test_a_caller_timeout_contributes_no_fabricated_cost_to_stolen_ms():
+    """A `caller_timeout` row's `elapsed_ms` is the caller's own deadline, not
+    a measurement of the handler — which may still be running or may still
+    have committed. It must not be summed into `stolen_ms`; an `over_bar` row
+    on the same op still contributes normally."""
+    entries = [
+        _complete("op.a", 30_000.0, outcome="timeout"),
+        _complete("op.a", 1_500.0, outcome="ok"),
+    ]
+    row = _row_for(breach_summary(entries, bar_ms=500.0, now=BASE_T), "op.a")
+
+    assert row["stolen_ms"] == pytest.approx(1_000.0)
+
+
+def test_a_caller_timeout_row_is_excluded_from_the_percentile_pool():
+    """The timeout row carries no true duration, so it must not enter the
+    percentile pool — `p50_ms`/`p95_ms`/`max_ms` must read as if only the
+    non-timeout rows existed."""
+    entries = [
+        _complete("op.a", 30_000.0, outcome="timeout"),
+        _complete("op.a", 1_500.0, outcome="ok"),
+    ]
+    row = _row_for(breach_summary(entries, bar_ms=500.0, now=BASE_T), "op.a")
+
+    assert row["p50_ms"] == pytest.approx(1_500.0)
+    assert row["p95_ms"] == pytest.approx(1_500.0)
+    assert row["max_ms"] == pytest.approx(1_500.0)
+
+
+def test_a_caller_timeout_is_still_counted_as_a_breach_despite_zero_cost():
+    """The fix must not make a timeout disappear — that would be a different
+    bug in the opposite direction. `caller_timeout` is still incremented,
+    `breaches` still includes it, and the op still surfaces in `breaching_ops`
+    and `totals`."""
+    entries = [_complete("op.a", 30_000.0, outcome="timeout")]
+    summary = breach_summary(entries, bar_ms=500.0, now=BASE_T)
+    row = _row_for(summary, "op.a")
+
+    assert row["caller_timeout"] == 1
+    assert row["breaches"] == 1
+    assert summary["totals"]["caller_timeout"] == 1
+    assert summary["totals"]["breaching_ops"] == 1
+
+
+def test_an_op_with_only_timeout_breaches_still_ranks_via_the_count_tiebreaker():
+    """An op whose only breaches are timeouts has `stolen_ms == 0.0` but must
+    not drop out of the ranked list — it still ranks, via the `-breaches`
+    tiebreaker, alongside a genuinely `stolen_ms`-bearing op."""
+    entries = [_complete("op.timeout_only", 30_000.0, outcome="timeout") for _ in range(3)]
+    entries.append(_complete("op.slow", 9_000.0))
+
+    summary = breach_summary(entries, bar_ms=500.0, now=BASE_T)
+
+    assert {row["op"] for row in summary["ops"]} == {"op.timeout_only", "op.slow"}
+    row = _row_for(summary, "op.timeout_only")
+    assert row["stolen_ms"] == 0.0
+    assert row["breaches"] == 3
+
+
+def test_a_vanished_rows_behaviour_is_unchanged_characterisation():
+    """Characterisation test: `vanished` already excluded itself from
+    `stolen_ms` and the percentile pool before this change, and must continue
+    to do so unchanged — guards against the two kinds silently converging in
+    the wrong direction."""
+    entries = [_started("op.a", corr_id="gone", t_start=BASE_T)]
+    summary = breach_summary(entries, bar_ms=500.0, now=BASE_T + 10_000.0)
+    row = _row_for(summary, "op.a")
+
+    assert row["vanished"] == 1
+    assert row["breaches"] == 1
+    assert row["stolen_ms"] == 0.0
+    assert row["p50_ms"] is None
+    assert row["p95_ms"] is None
+    assert row["max_ms"] is None
+    assert summary["totals"]["vanished"] == 1
+    assert summary["totals"]["stolen_ms"] == 0.0
+
+
 def test_a_clean_op_is_absent_from_the_ranked_list():
     """The list is a deletion queue. Padding it with compliant ops buries
     the ones that need action."""

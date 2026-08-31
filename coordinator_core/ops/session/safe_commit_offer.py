@@ -199,18 +199,21 @@ Stated here because an unstated cost is the one nobody defends when it grows.
     and a budget measured on one reports 1 and means it. The first pass of
     this budget did exactly that and had to be corrected against the census.
     Any re-measurement here must include a pinned path.
-  - TIME BUDGET: **500ms at 1 spawn — held. Breached only at 2.** The ten
-    real `per_op_handler` rows in this repo's `op-latency.jsonl` separate
-    cleanly on spawn count, which is why the count above is the axis that
-    governs:
+  - TIME BUDGET: **the read-only path holds 500ms; the full commit path
+    reaches 656ms.** The real `per_op_handler` rows in this repo's
+    `op-latency.jsonl` separate on WHICH PATH RAN, not on spawn count:
 
-        1 spawn (n=8):  234.4  250.0  250.0  281.2  281.2  484.4  546.9  312.5
-        2 spawns (n=2): 656.2  656.2
+        full commit (n=4):  312.5  546.9  656.2  656.2
+        dry_run     (n=6):  234.4  250.0  250.0  281.2  281.2  484.4
 
-    Median at 1 spawn is ~281ms, and 7 of 8 clear DR-344's bar. Both
-    2-spawn rows breach it. So the second spawn is not a rounding error on
-    this op's cost — it is the whole difference between passing and failing,
-    and the ~170ms it adds is `git hash-object` plus a second `conhost`.
+    An earlier pass of this block read the same rows as splitting on spawn
+    count, because the two 2-spawn rows are also the two most expensive. They
+    are not expensive BECAUSE of the second spawn: `git hash-object
+    --stdin-paths` measures 39.1ms against `git --version`'s 28.1ms on this
+    box, so the fallback costs ~11ms of work over a bare process start. The
+    commit path is dearer because it reads the tree spine, writes objects and
+    the index, renders, and runs three diagnostic sinks. Do not price the
+    conditional spawn off the gap between those two blocks.
     The synthetic figures are much lower (312.5ms for the `git status` alone
     on this repo, ~5ms of in-process claim work, ~183ms for the whole op
     against a fresh tiny fixture repo) and MUST NOT be quoted as this op's
@@ -222,10 +225,19 @@ Stated here because an unstated cost is the one nobody defends when it grows.
     lands in this op's sample (`op_census/timing.py` § CONSEQUENCE,
     unresolved). The spawn COUNT in the same rows is not a clock and does
     not carry that caveat — another reason to read this budget on the count.
+  - THE SCAN IS THE DOMINANT TERM, and that is what reopened DR-385.
+    `git status --porcelain -uall` measures 312-392ms on this repo against a
+    656ms worst-case op; everything else here is in-process
+    (`claim_index` spawns nothing). `core.untrackedCache` is already adopted
+    (`install/git_perf_config.py`) and is in every figure above. This op is
+    the named over-500ms caller with the scan dominant that DR-385 set as
+    its own revival condition — see that record's § Reopening, 2026-08-31,
+    including an order-permuted in-place measurement (~-100ms, NOT the
+    -181ms its isolated-clone arm predicted) and the correctness probe.
+    Nothing is enabled: the daemon is a PM call under CLAUDE.md § Load norm.
   - NOT NOMINATED FOR THE CUT, and the reasoning is recorded so it is not
-    re-opened as an oversight. The kill bar fires on process time, and the
-    2-spawn shape clears it. What follows a delete is a REQUIREMENT, not the
-    code — and the requirement survives intact: `quick_wrap_assemble` reads
+    re-opened as an oversight. What follows a delete is a REQUIREMENT, not
+    the code — and the requirement survives intact: `quick_wrap_assemble` reads
     `commit_report["residue"]` back, so deleting this op means rebuilding
     the same `git status` behind a different name. Neither spawn is
     decoration: one answers a question `claim_index` structurally cannot

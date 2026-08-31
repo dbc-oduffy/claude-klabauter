@@ -334,7 +334,7 @@ def poll_once(
 def main(
     repo_root: str,
     caller_session_id: Optional[str] = None,
-    stream: TextIO = sys.stdout,
+    stream: Optional[TextIO] = None,
     sleep_fn: Callable[[float], None] = time.sleep,
     max_iterations: Optional[int] = None,
 ) -> None:
@@ -350,8 +350,15 @@ def main(
     if caller_session_id is None:
         caller_session_id = read_pass.caller_session_id()
 
+    # LATE-BOUND, deliberately. `stream: TextIO = sys.stdout` freezes whatever
+    # stdout was at IMPORT time, so anything that replaces it afterwards -- a
+    # harness wrapping the stream, a test capturing it -- is written past rather
+    # than to. For a process whose entire product is its stdout lines, a stream
+    # captured before the caller existed is the wrong one by default.
+    out = sys.stdout if stream is None else stream
+
     def emit(line: str) -> None:
-        print(line, file=stream, flush=True)
+        print(line, file=out, flush=True)
 
     snapshot_ms, denominator = _measure_snapshot_ms(repo_root)
     interval = _poll_interval_seconds(snapshot_ms)
@@ -368,3 +375,68 @@ def main(
         if max_iterations is not None and iterations >= max_iterations:
             break
         sleep_fn(interval)
+
+
+def _cli(argv: "list[str] | None" = None) -> int:
+    """Command-line entrypoint, so the watch can actually be ARMED.
+
+    THIS IS NOT OPTIONAL PLUMBING -- it is what makes this module the thing the
+    plan says it is. C2 describes a runnable the Group EM arms once with the
+    harness `Monitor` tool, and `Monitor` takes a COMMAND. A module exposing only
+    an importable `main()` cannot be named in one, so the standing watch shipped
+    unarmable: every test green, the mechanism inert. C10's executor found this
+    from the other side (its advisory had no launcher to compose a command from)
+    and correctly reported it rather than widening its own scope to fix it.
+
+    Same defect class this repo already took once on the sibling plane --
+    cross-repo/inbox/2026-08-30-doe-claude-em-workflow-watch-command-is-unrunnable-outside-the-engine.md.
+    A watch you cannot spell on a command line is a watch nobody runs.
+
+    Arm it with:
+        python -m coordinator_core.group_em.watch --repo-root <path>
+    """
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        prog="python -m coordinator_core.group_em.watch",
+        description=(
+            "Standing Group EM watch: emit one line per claude-klabauter peer entering a "
+            "parked state, until the session ends or the Monitor is stopped."
+        ),
+    )
+    parser.add_argument(
+        "--repo-root",
+        required=True,
+        help="Repository root to watch. Taken as an argument, never derived from cwd -- "
+             "the watch runs under a harness tool whose working directory is not ours.",
+    )
+    parser.add_argument(
+        "--caller-session-id",
+        default=None,
+        help="Session arming the watch. Defaults to the harness's own session id; "
+             "never guessed from roster shape.",
+    )
+    parser.add_argument(
+        "--max-iterations",
+        type=int,
+        default=None,
+        help="Stop after N poll iterations instead of running until the session ends. "
+             "For probes and tests; omit for a real arm.",
+    )
+    args = parser.parse_args(argv)
+
+    try:
+        main(
+            args.repo_root,
+            caller_session_id=args.caller_session_id,
+            max_iterations=args.max_iterations,
+        )
+    except KeyboardInterrupt:
+        # A stopped Monitor is an ordinary end, not a failure -- exit quietly so
+        # the run does not read as a crash in whatever armed it.
+        return 0
+    return 0
+
+
+if __name__ == "__main__":  # pragma: no cover - exercised via _cli in tests
+    raise SystemExit(_cli())

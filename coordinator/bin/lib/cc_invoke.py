@@ -1848,8 +1848,18 @@ def _try_in_process_warm_reach(
 
     Returns the JSON-RPC response dict on a warm hit; returns None on
     EVERY miss (warm disabled, no pipe, busy, someone else's pipe, a stale
-    ENGINE_SKEW server, read-deadline expiry, ...) or when warmth is
-    disabled outright. Never raises.
+    ENGINE_SKEW server, read-deadline expiry, `coordinator_core` not
+    importable at all, ...) or when warmth is disabled outright.
+
+    Never raises — but note WHY, because the reasoning was wrong once and
+    the wrongness was invisible. `try_warm_dispatch` never raising covers
+    the DISPATCH CALL; it says nothing about the three `coordinator_core`
+    imports that precede it, and those are what a bare interpreter with no
+    engine on its import graph actually hits. Three /workday-start health
+    probes hard-crashed on exactly that
+    (`ModuleNotFoundError: No module named 'coordinator_core'`) while every
+    other engine CLI in the same ceremony ran fine. Each import site is now
+    guarded and degrades to the cold spawn.
 
     Mirrors `coordinator_core/invoke/__main__.py :: _dispatch_argv_body`'s
     own steps 6/6a — that function is the oracle for this shape; read it at
@@ -1881,14 +1891,27 @@ def _try_in_process_warm_reach(
 
     Step 4: imports `try_warm_dispatch` from `coordinator_core.warm.client`
     and returns its result directly — `try_warm_dispatch` itself never
-    raises (module docstring), so this function inherits that guarantee.
+    raises (module docstring). That inheritance covers the call and NOT the
+    import, which is why the import carries its own ImportError guard.
     """
-    from coordinator_core.warm.settings import is_warm_enabled
+    try:
+        from coordinator_core.warm.settings import is_warm_enabled
+    except ImportError:
+        # `coordinator_core` is not on this interpreter's import graph. Warmth
+        # is an optimisation with a cold spawn underneath it, and the cold
+        # spawn resolves the engine for itself — so an interpreter that cannot
+        # import the engine in-process takes that path rather than aborting the
+        # caller. Narrowed to ImportError, and to the import alone: anything
+        # `is_warm_enabled()` itself raises is a real defect and propagates.
+        return None
 
     if not is_warm_enabled():
         return None
 
-    from coordinator_core.op_scopes import WORKTREE_SCOPED_OPS
+    try:
+        from coordinator_core.op_scopes import WORKTREE_SCOPED_OPS
+    except ImportError:
+        return None
 
     msg: dict[str, Any] = {
         "jsonrpc": "2.0",
@@ -1900,7 +1923,10 @@ def _try_in_process_warm_reach(
         msg["_origin_worktree"] = repo_root
     msg["_caller_cwd"] = os.getcwd()
 
-    from coordinator_core.warm.client import try_warm_dispatch
+    try:
+        from coordinator_core.warm.client import try_warm_dispatch
+    except ImportError:
+        return None
 
     return try_warm_dispatch(msg)
 

@@ -8,6 +8,10 @@ the POLL-ERROR coverage path, and the measured poll-interval derivation.
 
 from __future__ import annotations
 
+import pathlib
+
+import pytest
+
 from datetime import datetime, timezone
 from unittest import mock
 
@@ -280,3 +284,40 @@ def test_poll_interval_floors_at_5_seconds_for_a_fast_snapshot():
 def test_poll_interval_scales_with_measured_cost_above_the_floor():
     # 1000x multiplier: 10ms measured -> 10s interval.
     assert watch._poll_interval_seconds(10.0) == 10.0
+
+
+# ---------------------------------------------------------------------------
+# ARMABILITY -- the watch must be nameable in a `Monitor` command line, or the
+# whole mechanism is inert however green its unit tests are.
+# ---------------------------------------------------------------------------
+
+
+def test_module_has_a_command_line_entrypoint():
+    """`Monitor` takes a COMMAND, so a module with only an importable `main()`
+    cannot be armed. This test exists because that is exactly how this module
+    first shipped: fully tested, fully inert."""
+    import coordinator_core.group_em.watch as watch_mod
+
+    assert hasattr(watch_mod, "_cli")
+    source = pathlib.Path(watch_mod.__file__).read_text(encoding="utf-8")
+    assert '__name__ == "__main__"' in source
+
+
+def test_cli_requires_repo_root_rather_than_guessing_cwd(capsys):
+    """The watch runs under a harness tool whose working directory is not ours,
+    so a cwd default would silently watch the wrong tree."""
+    with pytest.raises(SystemExit) as excinfo:
+        watch._cli([])
+    assert excinfo.value.code != 0
+    assert "--repo-root" in capsys.readouterr().err
+
+
+def test_cli_runs_a_bounded_watch_and_emits_armed(tmp_path, monkeypatch, capsys):
+    """End to end through the entrypoint an operator would actually type."""
+    monkeypatch.setattr(watch, "_measure_snapshot_ms", lambda repo_root: (4.6, 3))
+    monkeypatch.setattr(watch, "_current_agents", lambda repo_root, sid: [])
+    rc = watch._cli(
+        ["--repo-root", str(tmp_path), "--caller-session-id", "sid-cli", "--max-iterations", "1"]
+    )
+    assert rc == 0
+    assert "ARMED" in capsys.readouterr().out

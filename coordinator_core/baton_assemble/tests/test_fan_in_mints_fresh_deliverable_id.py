@@ -181,3 +181,93 @@ def test_sanitizer_does_not_truncate():
     make the id harder to trace back to the successor it names."""
     raw = "a" * 120
     assert ba._sanitize_mint_slug(raw) == raw
+
+
+# ---------------------------------------------------------------------------
+# Foreign-repo lineage guard (bug-blitz P1,
+# foreign-repo-lineage-inheritance): an `artifact_path` resolving OUTSIDE the
+# session's own `root` is carried as a citation, never inherited lineage.
+# ---------------------------------------------------------------------------
+
+
+def _mark_repo(root: Path) -> None:
+    (root / ".git").mkdir(parents=True, exist_ok=True)
+
+
+def test_foreign_repo_artifact_yields_citation_fresh_id_and_no_predecessor(tmp_path):
+    session_root = tmp_path / "repo"
+    foreign_root = tmp_path / "foreign"
+    _mark_repo(session_root)
+    _mark_repo(foreign_root)
+
+    foreign_artifact = _write_predecessor(
+        foreign_root,
+        "state/handoffs/foreign.md",
+        "DEL-FOREIGN",
+        "pln-foreign-aaa111",
+        handoff_id="hnd-foreign-aaa111",
+    )
+
+    lineage = ba.resolve_lineage("handoff", str(foreign_artifact), session_root)
+
+    assert lineage["foreign_repo_artifact"] is True
+    assert lineage["foreign_repo_citation"] == str(foreign_artifact.resolve())
+    assert lineage["deliverable_id"] != "DEL-FOREIGN"
+    assert lineage["discovery"] == "foreign-repo-mint"
+    assert lineage["predecessor"] is None
+    assert lineage["predecessor_id"] is None
+    assert lineage["predecessor_handoff"] is None
+
+    directives = ba._build_directives("handoff", lineage, root=session_root)
+    assert not any(d["cli"] == "handoff.supersede_predecessor" for d in directives)
+
+
+def test_local_artifact_still_inherits_lineage_unchanged(tmp_path):
+    """Regression half: same-repo pickup is byte-identical to pre-fix
+    behaviour -- the guard must never fire for a genuinely local artifact."""
+    session_root = tmp_path / "repo"
+    _mark_repo(session_root)
+
+    primary = _write_predecessor(
+        session_root,
+        "state/handoffs/primary.md",
+        "DEL-LOCAL",
+        "pln-local-aaa111",
+        handoff_id="hnd-local-aaa111",
+    )
+
+    lineage = ba.resolve_lineage("handoff", str(primary), session_root)
+
+    assert lineage["foreign_repo_artifact"] is False
+    assert "foreign_repo_citation" not in lineage
+    assert lineage["deliverable_id"] == "DEL-LOCAL"
+    assert lineage["predecessor"] is not None
+
+    directives = ba._build_directives("handoff", lineage, root=session_root)
+    assert any(d["cli"] == "handoff.supersede_predecessor" for d in directives)
+
+
+def test_same_repo_different_spelling_is_not_misread_as_foreign(tmp_path):
+    """A same-repo artifact reached via a `..`-laden relative spelling must
+    normalize to the SAME worktree root as `root` itself -- not be misread
+    as foreign merely because the two path strings differ."""
+    session_root = tmp_path / "repo"
+    _mark_repo(session_root)
+
+    primary = _write_predecessor(
+        session_root,
+        "state/handoffs/primary.md",
+        "DEL-SPELLING",
+        "pln-spelling-aaa111",
+        handoff_id="hnd-spelling-aaa111",
+    )
+
+    respelled = (
+        session_root / "state" / "handoffs" / ".." / "handoffs" / "primary.md"
+    )
+
+    lineage = ba.resolve_lineage("handoff", str(respelled), session_root)
+
+    assert lineage["foreign_repo_artifact"] is False
+    assert lineage["deliverable_id"] == "DEL-SPELLING"
+    assert lineage["predecessor"] is not None
