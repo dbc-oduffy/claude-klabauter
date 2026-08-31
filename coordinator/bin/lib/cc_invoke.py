@@ -128,6 +128,43 @@ class ProvenanceDivergenceError(RuntimeError):
     """
 
 
+class WarmDispatchIndeterminate(RuntimeError):
+    """Marks a MUTATING op whose request was delivered to the warm engine and
+    never answered (JSON-RPC -32004), distinct from an op that failed.
+
+    THE POINT IS THE DISCRIMINATION, NOT THE NAME. `-32004` is the one refusal
+    that says nothing about whether the write landed, and the client cannot
+    narrow it: `warm/client.py :: _try_warm_dispatch_inner` sets `delivered`
+    immediately after `flush()`, and that function's own zero-byte branch
+    concedes what flush proves — "the bytes left THIS process into the pipe
+    buffer -- it never proved the server read them". There is no acknowledgement
+    between the kernel pipe buffer and the server's dispatch, so delivered-then-
+    stalled and died-mid-flight are indistinguishable at that layer BY
+    CONSTRUCTION. Nothing downstream can recover the answer from the envelope.
+
+    What a caller CAN do is reconcile against the artifact the op would have
+    written, if it knows the path — which is why this is a distinct type rather
+    than another `RuntimeError`. A caller that owns a deterministic target path
+    (`cross-repo-memo draft` computes `state/memo-outbox/<topic>.md` from argv,
+    before dispatch) catches this by name and stats it, turning "may or may not
+    have landed" into a definite answer. A caller that does not know its target
+    path keeps the existing `except RuntimeError` behaviour unchanged.
+
+    Negative-spec: catching this is NOT licence to retry or to re-run the op
+    cold. Re-executing a delivered mutation is the double-execution the refusal
+    exists to prevent (`state/bug-backlog/2026-08-19-scoped-git-commit-still-
+    reports-a-landed-d4c7d9dc8e14.yaml`). Reconcile, then report; never re-send.
+
+    Subclasses RuntimeError, so every existing `except RuntimeError` caller
+    still catches it unchanged — same pattern as `StructuralPinError` and
+    `ProvenanceDivergenceError` above.
+    """
+
+    def __init__(self, message: str, op: str = "") -> None:
+        super().__init__(message)
+        self.op = op
+
+
 # ---------------------------------------------------------------------------
 # Lazy op registration is unconditional as of 2026-08-22 (the
 # import-path-costs-nothing sprint): coordinator_core.ops never eagerly
@@ -1417,6 +1454,40 @@ _IMPORT_ERROR_TOKENS = ("importerror", "modulenotfounderror", "no module named")
 _OP_ERROR_DETAIL_CAP = 2000
 
 
+#: `warm.client.WARM_DISPATCH_INDETERMINATE`, restated rather than imported.
+#: `_raise_on_process_failure` runs on a path that is ALREADY failing and whose
+#: docstring forbids it acquiring a second failure mode of its own, so it may not
+#: pay an import that can raise. Kept honest by
+#: `coordinator/bin/tests/test_cc_invoke_indeterminate.py`, which asserts this
+#: equals the engine's own constant — if the engine renumbers, that test fails
+#: rather than this rung silently ceasing to match.
+_WARM_DISPATCH_INDETERMINATE_CODE = -32004
+
+
+def _stdout_error_code(stdout_text: str):
+    """The JSON-RPC `error.code` on a child's stdout envelope, or None.
+
+    Sibling of `_op_error_detail` below, which renders the same envelope for a
+    human; this one recovers the single field the ladder ROUTES on. Split rather
+    than folded into that function because their contracts differ: the detail
+    string is best-effort presentation, while a wrong answer here reclassifies a
+    failure. Never raises — same standing as its sibling, for the same reason.
+    """
+    text = (stdout_text or "").strip()
+    if not text:
+        return None
+    try:
+        parsed = json.loads(text)
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(parsed, dict):
+        return None
+    err = parsed.get("error")
+    if isinstance(err, dict):
+        return err.get("code")
+    return None
+
+
 def _op_error_detail(stdout_text: str) -> str:
     """Recover the engine's own failure text from a nonzero-exit child's STDOUT.
 
@@ -1560,6 +1631,23 @@ def _raise_on_process_failure(
             raise StructuralPinError(f"{message}\n{detail}" if detail else message)
         if any(tok in detail.lower() for tok in _IMPORT_ERROR_TOKENS):
             raise _engine_wont_start("stdout")
+        if _stdout_error_code(stdout_text) == _WARM_DISPATCH_INDETERMINATE_CODE:
+            # THE COLD SPAWN IS HOW THIS SHAPE USUALLY ARRIVES, which is not
+            # obvious and is why the rung is here rather than only on the warm
+            # branch. `cc_invoke` warm-reaches first; on a miss it spawns
+            # `coordinator_core.invoke`, and THAT child warm-reaches again
+            # (`invoke/__main__ :: _wait_for_warm_boot`). A server that takes the
+            # child's bytes and never answers produces the -32004 envelope
+            # THERE, printed to stdout with exit 1 per `_exit_code_for_response`
+            # -- so it lands on this ladder, never on rung (4).
+            message = (
+                f"cc_invoke: warm dispatch indeterminate (op={op}, rc={rc}) — the "
+                "request was delivered and never answered; the op MAY have "
+                "completed. Reconcile against real state before re-running."
+            )
+            raise WarmDispatchIndeterminate(
+                f"{message}\n{detail}" if detail else message, op=op
+            )
         message = (
             f"cc_invoke: invoke process exited {rc} (op={op}) — op or dispatch error\n"
             f"  stderr: {stderr_text.strip()}"
@@ -2017,8 +2105,9 @@ def _apply_warm_envelope(
             WARM_DISPATCH_INDETERMINATE = None
         if WARM_DISPATCH_INDETERMINATE is not None and code == WARM_DISPATCH_INDETERMINATE:
             # (1a) delivered-but-unanswered mutation -- refuse, never spawn.
-            raise RuntimeError(
-                f"cc_invoke: warm dispatch indeterminate (op={op}): {message}"
+            raise WarmDispatchIndeterminate(
+                f"cc_invoke: warm dispatch indeterminate (op={op}): {message}",
+                op=op,
             )
 
         try:

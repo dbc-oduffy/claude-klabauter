@@ -437,6 +437,56 @@ def read_redirect_aliases() -> set[str]:
         return set()
 
 
+def read_retired_central_receiver_ids() -> dict[str, str]:
+    """Return `{retired id: live successor id}` from the DoE manifest, lowercased.
+
+    Third projection over `read_doe_identity()`, beside
+    `read_central_receiver_ids()` and `read_redirect_aliases()` — same ladder,
+    same graceful-degradation-to-empty contract.
+
+    THESE ARE NOT ALIASES, AND NOTHING HERE MAKES THEM RESOLVE. DoE retired
+    `claude-central-em`, `central-em` and `central` from
+    `identity.centralReceiverIds` at their b787bf0f0 (2026-08-26); their absence
+    is the operative rule and a send to one must keep failing loudly. This map
+    is consulted ONLY after resolution has already failed, to say WHERE the seat
+    went. Promoting any key here back into `centralReceiverIds` would undo a
+    ratified decision — see the manifest's own `_retiredCentralReceiverIdsNote`,
+    which exists to stop exactly that "fix".
+
+    Why the map lives in the manifest rather than as a literal here: this
+    module's readers do not hardcode identity strings, because a second copy of
+    DoE's identity data in this tree is the drift `identity.redirectAliases` was
+    promoted in 2026-07-21 to prevent (their `_redirectAliasesNote` records that
+    sequence as a mistake not to repeat). Landed on their side at 7f5ff0531 in
+    reply to `cross-repo/inbox/2026-08-31-doe-claude-em-retired-central-ids-
+    successor-map-landed.md`.
+
+    Graceful degradation: `{}` if the manifest does not resolve, is unparseable,
+    or predates the field — mirrors both sibling readers exactly.
+    """
+    try:
+        retired: dict[str, str] = {}
+        raw = read_doe_identity().get("retiredCentralReceiverIds", {})
+        if not isinstance(raw, dict):
+            return {}
+        for dead, successor in raw.items():
+            if (
+                isinstance(dead, str)
+                and isinstance(successor, str)
+                and dead.strip()
+                and successor.strip()
+            ):
+                retired[dead.strip().lower()] = successor.strip().lower()
+        return retired
+    except Exception as exc:
+        _LOG.warning(
+            "_memo_resolver: failed to read retired central receiver ids from "
+            "DoE manifest: %s",
+            exc,
+        )
+        return {}
+
+
 def read_registry_repos() -> dict[str, str]:
     """Read repos.* keys from the machine-local registry (baseline + local layer).
 
@@ -1154,11 +1204,42 @@ def suggest_nearest_receiver(
     docstring for why that is a distinct, narrower guarantee than this
     function provides.)
 
+    A RETIRED CENTRAL ID IS ANSWERED FROM THE MAP, NEVER FROM EDIT DISTANCE.
+    `read_retired_central_receiver_ids()` is consulted first, because fuzzy
+    matching a retired id produces a confidently wrong answer rather than no
+    answer: measured 2026-08-31 against this box's 20 registered repos,
+    `claude-central-em` scored closest to `example-game-workbench-repo-em` and
+    `central-em` to `example-retrieval-repo-em`, so the most-cited dead address in this
+    tree advised the operator toward an unrelated team. A retirement that looks
+    like a typo is worse than one that looks like a retirement.
+
+    This does NOT make a retired id resolve — the send still fails, which is the
+    ratified behaviour (DoE b787bf0f0). Only the advisory text changes. Note
+    that `unique_nearest_receiver` deliberately does NOT consult the map: it is
+    the auto-accept surface, and auto-accepting a retired address would silently
+    redirect a send the retirement exists to stop.
+
     Returns:
         The single closest candidate (case-preserved), or `None` if nothing is
         within a reasonable edit-distance similarity threshold (cutoff 0.5) or
         the registry has no candidates at all.
     """
+    successor = read_retired_central_receiver_ids().get(
+        receiver_em_id.strip().lower()
+    )
+    if successor is not None:
+        # The function's standing invariant is that it never suggests an id that
+        # would ALSO fail to resolve (see `_nearest_receiver_matches`). A
+        # successor is only better than the fuzzy answer if it is registered on
+        # THIS machine; where it is not, fall through rather than trade a wrong
+        # suggestion for an unreachable one.
+        if convention_repo_key(successor) in all_repos:
+            return successor
+        aliases = read_receiver_aliases()
+        shortname = successor[:-3] if successor.endswith("-em") else successor
+        if shortname in aliases and ("repos." + aliases[shortname]) in all_repos:
+            return successor
+
     matches = _nearest_receiver_matches(receiver_em_id, all_repos, n=1)
     return matches[0] if matches else None
 
@@ -1181,9 +1262,29 @@ def unique_nearest_receiver(
     `suggest_nearest_receiver` would still offer its top-ranked pick; auto-
     accept requires uniqueness, not just a best-of ranking.
 
+    A RETIRED CENTRAL ID NEVER AUTO-ACCEPTS, on any machine. Not a belt-and-
+    braces guard — without it the outcome is REGISTRY-SIZE DEPENDENT, which is
+    how it was missed. Against this box's 20 registered repos both
+    `doe-claude-em` and a second repo clear the 0.5 cutoff for
+    `claude-central-em`, so the ambiguity gate returns `None` and nothing
+    happens. Against a machine registering only a handful, `doe-claude-em` is
+    the sole match, the gate reports it unambiguous, and `memo.draft` would
+    SILENTLY ACCEPT a send addressed to an id DoE deliberately retired —
+    reinstating by edit-distance accident the redirect they declined to
+    provide (b787bf0f0: the aliases "stop resolving and now fail loudly at
+    send"). The correct routing target being the same string does not make
+    this correct: it is a ratified refusal being skipped, and it would appear
+    only on some machines.
+
+    `suggest_nearest_receiver` consults the same map to IMPROVE its advice;
+    this one consults it to REFUSE. Opposite uses, one source of truth.
+
     Returns:
         The single unambiguous candidate (case-preserved), or `None` when zero
-        or multiple candidates clear the cutoff.
+        or multiple candidates clear the cutoff, or when `receiver_em_id` is a
+        retired central id.
     """
+    if receiver_em_id.strip().lower() in read_retired_central_receiver_ids():
+        return None
     matches = _nearest_receiver_matches(receiver_em_id, all_repos, n=2)
     return matches[0] if len(matches) == 1 else None

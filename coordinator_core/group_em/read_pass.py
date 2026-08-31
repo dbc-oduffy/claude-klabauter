@@ -411,6 +411,11 @@ def classify_peer(
             "reason": "no-session-id",
             "candidate": False,
             "unclassifiable": False,
+            # Review: coordinator:code-reviewer (finding 1) -- `cwd` threaded
+            # onto every verdict row so `send_pass._dwell_seconds` can use the
+            # peer's own cwd (`peer.get("cwd") or repo_root`), matching this
+            # module's own pattern, instead of always assuming `repo_root`.
+            "cwd": peer.get("cwd"),
         }
 
     reader_record = read_receiver_state(session_id, repo_root)
@@ -513,6 +518,7 @@ def classify_peer(
                     ),
                     "candidate": False,
                     "unclassifiable": True,
+                    "cwd": peer.get("cwd"),
                 }
 
         return {
@@ -522,6 +528,7 @@ def classify_peer(
             "reason": reason,
             "candidate": reader_verdict == STATE_PAUSED and not contradicted,
             "unclassifiable": False,
+            "cwd": peer.get("cwd"),
         }
 
     status = peer.get("status")
@@ -551,6 +558,7 @@ def classify_peer(
         "reason": reason,
         "candidate": state == STATE_PAUSED,
         "unclassifiable": False,
+        "cwd": peer.get("cwd"),
     }
 
 

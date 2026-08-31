@@ -91,6 +91,16 @@ from coordinator_core.tracker_entities import (
     normalize_alias,
 )
 
+DEFAULT_CLOSURE_FIDELITY = "verify-with-effort"
+"""The fold-seed default for `fold_closure_fidelity` (C4, per
+DR-closure-fidelity-tier-axis.md D4). D4 ratifies `closure_fidelity` as
+non-nullable and always-defaulting: every reachable item folds to a
+concrete value, never `null`/absent, whether or not it carries an
+`item_closure_fidelity_set` event (D1) or even an `item_created` event.
+`verify-with-effort` is the conservative middle tier — the one tier that
+can never auto-assert — mirroring `tracker_completion_policy`'s existing
+`None`-degrades-to-`suggest`-never-to-`auto` posture (D4)."""
+
 _MEMBERSHIP_EVENT_KINDS = frozenset({"item_project_added", "item_project_retracted"})
 _PERSON_EVENT_KINDS = frozenset({"item_person_added", "item_person_retracted"})
 _PERSON_REGISTRY_EVENT_KINDS = frozenset(
@@ -179,6 +189,51 @@ def fold_membership_wire(*, repo_root: Path) -> dict[str, list[str]]:
     """
     folded = fold_membership(repo_root=repo_root)
     return {item_id: sorted(projects) for item_id, projects in folded.items()}
+
+
+def fold_closure_fidelity(*, repo_root: Path) -> dict[str, str]:
+    """Fold every item's `closure_fidelity` classification from
+    `tracker_store.read_events` (C4, per DR-closure-fidelity-tier-axis.md
+    D1/D4).
+
+    `item_closure_fidelity_set` (D1) has no retraction counterpart — the
+    fold takes the LATEST such event (in `read_events`' own ratified
+    `(applied_at, observed_at, id)` order, never re-derived here) as the
+    item's current value, last-write-wins, the same pattern
+    `fold_person_registry` uses for a single current value rather than the
+    add/discard set shape `fold_membership` uses for a two-state edge.
+
+    Totality (D4): every item REACHABLE in the stream by ANY event that
+    carries an `item_id` — `item_created`, an `item_project_*` or
+    `item_person_*` edge event, or `item_closure_fidelity_set` itself —
+    folds to a concrete `closure_fidelity` value, never absent. This is
+    deliberately broader than `fold_membership`'s own seeding (which only
+    seeds via `item_created` and the membership-event kinds it folds): an
+    item known to the stream ONLY through, say, an `item_project_added`
+    event and never classified at all must still fold to
+    `DEFAULT_CLOSURE_FIDELITY` here — `fold_membership`'s own docstring
+    warns against "simplifying" seeding on the theory that one event kind
+    covers reachability, and that warning applies here across every event
+    kind that can name an item, not only `item_created`.
+
+    Returns `DEFAULT_CLOSURE_FIDELITY` for any reachable item with no
+    `item_closure_fidelity_set` event of its own (D4) — never `None`/absent.
+    """
+    events = tracker_store.read_events(repo_root=repo_root)
+
+    closure_fidelity: dict[str, str] = {}
+    for event in events:
+        item_id = event.get("item_id")
+        if not item_id:
+            continue
+        if event.get("kind") == "item_closure_fidelity_set":
+            value = event.get("closure_fidelity")
+            if value:
+                closure_fidelity[item_id] = value
+        else:
+            closure_fidelity.setdefault(item_id, DEFAULT_CLOSURE_FIDELITY)
+
+    return closure_fidelity
 
 
 def fold_person_membership(*, repo_root: Path) -> dict[str, set[tuple[str | None, str]]]:

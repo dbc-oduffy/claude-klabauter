@@ -3645,7 +3645,7 @@ _FROZEN_UNENROLLED_SPAWN_SITES: frozenset = frozenset(
         ("coordinator_core/ops/distill_apply_disposal.py", "_run_git", "git", 0),
         ("coordinator_core/ops/draft_plan_aging.py", "_batch_git_commit_epochs", "git", 0),
         ("coordinator_core/ops/draft_plan_aging.py", "_git_commit_epoch", "git", 0),
-        ("coordinator_core/ops/draft_plan_aging.py", "_has_recent_real_work_commit", "git", 0),
+        ("coordinator_core/ops/draft_plan_aging.py", "_has_real_work_or_completion_match", "git", 0),
         ("coordinator_core/ops/ensure_python3_exe_shim.py", "_classify_python3", "python3", 0),
         ("coordinator_core/ops/hibernate_machine.py", "_run_binary", "<dynamic>", 0),
         ("coordinator_core/ops/hibernate_machine.py", "hibernate", "pmset", 0),
@@ -5376,12 +5376,13 @@ _NAMED_ARGV0_DISPOSITIONS_C: dict[tuple[str, str, str, int], str] = {
     ),
     (
         "coordinator_core/ops/draft_plan_aging.py",
-        "_has_recent_real_work_commit",
+        "_has_real_work_or_completion_match",
         "git",
         0,
     ): (
-        "2026-08-23 exempt -- `check_one`'s Condition-3b recent-real-work-"
-        "commit check, one call per plan file scanned by the CLI `scan`/"
+        "2026-08-23 exempt -- `check_one`'s Condition-3b real-work-or-"
+        "completion check (renamed from `_has_recent_real_work_commit` "
+        "2026-08-31), one call per plan file scanned by the CLI `scan`/"
         "`main` entry; same non-reachable scope as this file's other two "
         "sites."
     ),

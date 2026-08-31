@@ -217,13 +217,17 @@ int parse_response_envelope(
  *     warm-loadability verdict, and spending an interpreter start to
  *     rediscover the same absence buys nothing.
  *
- *   -32008 SETTINGS_HOME_MISMATCH: `warm/server.py :: _serve_line` compares
- *     the request's `_settings_home` claim against its own resolution and
- *     returns AFTER the skew check but strictly BEFORE it calls `dispatch`.
- *     No handler was reached, so nothing could have mutated -- the same
- *     class of proof as -32002, and for the same structural reason: the
- *     refusing branch and the dispatching branch are the two arms of one
- *     `if` in one function.
+ *   -32008 SETTINGS_HOME_MISMATCH: `warm/server.py :: _run_dispatch` compares
+ *     the request's carried `_settings_home` claim against its own resolution,
+ *     gated on `isolated == False`, strictly BEFORE it opens per-request state
+ *     or calls a handler. No handler was reached, so nothing could have
+ *     mutated -- the same class of proof as -32002, and for the same
+ *     structural reason: the refusing branch and the dispatching branch are
+ *     the two arms of one `if` in one function. (Moved here from
+ *     `_serve_line` by docs/plans/2026-08-31-the-settings-home-crosses-the-
+ *     warm-boundary.md § C2, so the same guarantee also covers the
+ *     `BrokenProcessPool` fallback and the default `dispatch=` leg, neither
+ *     of which `_serve_line`'s prior placement reached.)
  *
  *     THIS ONE IS ALSO THE CORRECTIVE ACTION, not merely a safe abandon.
  *     The server refuses because it resolved its settings home once, at

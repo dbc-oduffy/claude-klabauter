@@ -521,6 +521,17 @@ def _run_dispatch(msg: dict, *, caller: Optional[CallerContext] = None, isolated
     `isolated=False` explicitly, matching this default, because that fallback
     still executes in THIS shared process.
 
+    THE SETTINGS-HOME GATE (C2). Before any of the above, when `isolated` is
+    `False` and `caller.settings_home` names a home this server did not
+    resolve at spawn, this function returns `_settings_home_refusal(...)`
+    without ever opening `per_request_state` or calling `dispatch_message`
+    -- see the gate's own inline comment for the full placement rationale
+    and `_settings_home_refusal`'s docstring for why pre-dispatch matters.
+    An `isolated=True` caller (`_pool_dispatch_worker`) never reaches this
+    gate: it already gets the claimed home mirrored into its OWN process's
+    `os.environ` via `per_request_state`'s `settings_home` axis below, which
+    is what lets it serve that home instead of merely refusing it.
+
     STDOUT CAPTURE (W9). A handler `print()` here is not the transport --
     unlike `invoke.__main__`'s cold path, this process's stdout is never the
     JSON-RPC channel (the pipe is). But left unredirected it either lands on
@@ -547,6 +558,30 @@ def _run_dispatch(msg: dict, *, caller: Optional[CallerContext] = None, isolated
         resolve_request_repo,
     )
 
+    # THE SETTINGS-HOME GATE (C2, docs/plans/2026-08-31-the-settings-home-
+    # crosses-the-warm-boundary.md). Gated on `isolated=False` -- an isolated
+    # call already gets the caller's home mirrored into its own process's
+    # `os.environ` for the block's duration (`per_request_state`'s own sixth
+    # axis, below), so it needs no refusal; it is the SHARED, unisolated
+    # process (this accept-thread call, or `_pool_dispatch`'s own
+    # `BrokenProcessPool` fallback) that cannot honour two callers' homes at
+    # once and must say so instead of silently answering against its own.
+    # Checked BEFORE any op work -- before `per_request_state` is even
+    # opened -- so a refused request provably never reached `dispatch_
+    # message`; see `_settings_home_refusal`'s own docstring for why that
+    # placement is what lets `door_core.c :: is_provably_undispatched`
+    # re-run the call cold. Moved here from `_serve_line` (C2's own body):
+    # a check that ran only in `_serve_line` never covered the default
+    # `dispatch=` leg `_handle_connection` carries when no explicit
+    # `dispatch=self._pool_dispatch` is bound, nor the fallback above, both
+    # of which call THIS function directly.
+    if not isolated and caller is not None and caller.settings_home is not None:
+        from coordinator_core._settings_home import settings_home as _resolve_settings_home
+
+        served_home = str(_resolve_settings_home())
+        if not settings_home_claim.claims_agree(caller.settings_home, served_home):
+            return _settings_home_refusal(msg.get("id") if isinstance(msg, dict) else None, caller.settings_home, served_home)
+
     diagnostics: list = []
     _handler_stdout = _io.StringIO()
     _handler_stderr = _io.StringIO()
@@ -571,12 +606,14 @@ def _run_dispatch(msg: dict, *, caller: Optional[CallerContext] = None, isolated
     _caller_route = "coordinator_core.warm.server._run_dispatch"
     session_id = caller.session_id if caller is not None else None
     caller_pid = caller.pid if caller is not None else None
+    settings_home_for_bind = caller.settings_home if caller is not None else None
     try:
         with per_request_state(
             session_id=session_id,
             caller_pid=caller_pid,
             diagnostics=diagnostics,
             warm_served=True,
+            settings_home=settings_home_for_bind,
             isolated=isolated,
         ):
             with contextlib.redirect_stdout(_handler_stdout), contextlib.redirect_stderr(_handler_stderr):
@@ -694,12 +731,14 @@ def _pool_dispatch_worker(msg: dict, caller: Optional[CallerContext]) -> dict:
     _caller_route = "coordinator_core.warm.server._pool_dispatch_worker"
     session_id = caller.session_id if caller is not None else None
     caller_pid = caller.pid if caller is not None else None
+    settings_home_for_bind = caller.settings_home if caller is not None else None
     try:
         with per_request_state(
             session_id=session_id,
             caller_pid=caller_pid,
             diagnostics=diagnostics,
             warm_served=True,
+            settings_home=settings_home_for_bind,
             isolated=True,
         ):
             with contextlib.redirect_stdout(_handler_stdout), contextlib.redirect_stderr(_handler_stderr):
@@ -1093,14 +1132,19 @@ def _settings_home_refusal(request_id, claim: str, resolved: str) -> dict:
     which is why this is a refusal rather than a warning, and why the posture
     matches the guard directories' own stated default on ambiguity: deny.
 
-    BEFORE `dispatch`, AND THAT IS THE LOAD-BEARING PART. `_serve_line` runs
-    this check ahead of the dispatch call, so a refused request provably never
-    reached `coordinator_core.ipc.dispatch_message` and cannot have mutated
-    anything. That is what earns -32008 its place in `door_core.c ::
+    BEFORE `dispatch`, AND THAT IS THE LOAD-BEARING PART. `_run_dispatch` runs
+    this check, gated on `isolated=False`, strictly before it opens
+    `entry_seam.per_request_state` or calls `dispatch_message` -- so a refused
+    request provably never reached a handler and cannot have mutated anything.
+    That is what earns -32008 its place in `door_core.c ::
     is_provably_undispatched`, which lets the native door fall through and run
     the call COLD -- in the caller's own process, where `settings_home()`
     resolves the home the caller actually named. The refusal is the honest
-    answer on this side of the pipe; the cold leg is the working one.
+    answer on this side of the pipe; the cold leg is the working one. (Prior
+    to C2, docs/plans/2026-08-31-the-settings-home-crosses-the-warm-boundary.md,
+    this same comparison ran in `_serve_line`; moved to cover the
+    `BrokenProcessPool` fallback and the default `dispatch=` leg, neither of
+    which `_serve_line`'s own placement ever reached.)
 
     NOT `skew.evict_on_skew`, for the same reason `_untrusted_caller_response`
     is not: a caller naming another home is evidence about the CALLER's
@@ -1181,13 +1225,16 @@ def _serve_line(
 
     Pops `_settings_home` (the caller's own resolved settings home, stamped
     by `warm.client._try_warm_dispatch_inner` and by the native door only
-    when that caller EXPLICITLY set `COORDINATOR_SETTINGS_HOME`) and refuses
-    the request outright when it names a home this server does not serve --
-    after the skew check, before `dispatch`. Absent (no override in the
-    caller's environment, which is every ordinary invocation) is not a
-    mismatch and costs one `dict.pop`; see `_settings_home_refusal` for the
-    defect and `warm/settings_home_claim.py` for why absence may never
-    refuse.
+    when that caller EXPLICITLY set `COORDINATOR_SETTINGS_HOME`) and joins it
+    onto `caller` (`dataclasses.replace(caller, settings_home=claimed_home)`)
+    rather than comparing it here -- the mismatch check itself now lives in
+    `_run_dispatch`, gated on `isolated=False`, so it is reached from every
+    unisolated dispatch leg `dispatch=` might be bound to, not only this
+    function's own call site. Absent (no override in the caller's
+    environment, which is every ordinary invocation) is not a mismatch and
+    costs one `dict.pop`, no `settings_home()` resolution; see
+    `_settings_home_refusal` for the defect and `warm/settings_home_claim.py`
+    for why absence may never refuse.
 
     `mark_invocation` runs for EVERY frame this function is handed,
     including a skew-evicting one -- `warm.idle`'s own module docstring
@@ -1265,33 +1312,27 @@ def _serve_line(
         )
         return
 
-    # AFTER skew, BEFORE dispatch. After skew because a stale server's
-    # generation is the more fundamental disagreement and evicting is the
-    # stronger response; before dispatch because the whole value of this
-    # refusal is that it is provably pre-dispatch -- see
-    # `_settings_home_refusal`'s own docstring, and `door_core.c ::
-    # is_provably_undispatched`, which relies on exactly that placement to let
-    # the native door re-run the call cold.
-    #
     # The field is POPPED, not merely read, like `_engine_token` and
     # `_caller` above it: `dispatch_message` validates the envelope it is
-    # handed, and transport metadata must never reach an op's params.
+    # handed, and transport metadata must never reach an op's params. The
+    # claim itself is carried forward by joining it onto `caller` rather than
+    # compared here -- the comparison now lives in `_run_dispatch`, gated on
+    # `isolated=False`, so it covers every unisolated dispatch leg (the
+    # default `dispatch=` this function itself carries, AND `_pool_dispatch`'s
+    # own `BrokenProcessPool` fallback), not only the one leg `_serve_line`
+    # happens to sit in front of. See `_settings_home_refusal`'s own docstring
+    # for why pre-dispatch placement is load-bearing, and `_run_dispatch`'s
+    # for the new gate itself.
     #
-    # Costs nothing when nothing is claimed. `request_claim` is a dict lookup;
-    # this server's own `settings_home()` is resolved only once a claim is
-    # actually present, so the ordinary invocation -- no override anywhere,
-    # which is every user-path call -- pays one `dict.pop` and no resolution.
+    # Costs nothing when nothing is claimed: `request_claim` is a dict lookup
+    # and this server's own `settings_home()` is never resolved here at all
+    # any more -- resolution happens, if at all, inside `_run_dispatch`, once
+    # a claim is actually present on `caller`. The ordinary invocation -- no
+    # override anywhere, which is every user-path call -- still pays exactly
+    # one `dict.pop`.
     claimed_home = settings_home_claim.request_claim(msg)
     msg.pop(settings_home_claim.SETTINGS_HOME_FIELD, None)
-    if claimed_home is not None:
-        from coordinator_core._settings_home import settings_home as _resolve_settings_home
-
-        served_home = str(_resolve_settings_home())
-        if not settings_home_claim.claims_agree(claimed_home, served_home):
-            _write_and_release(
-                _settings_home_refusal(request_id, claimed_home, served_home)
-            )
-            return
+    caller = replace(caller, settings_home=claimed_home)
 
     try:
         from coordinator_core.ipc import resolve_request_repo

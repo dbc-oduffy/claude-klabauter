@@ -110,6 +110,15 @@ def machine_slug() -> str:
 EVENTS_DIR_RELPATH = "state/sovereign-tracker"
 EVENTS_SHARD_GLOB = "events.*.jsonl"
 
+#: Frontmatter `kind:` label for a tracker event delivered to a peer repo.
+#: Lives here because DR-241's write-target confinement bound requires the
+#: sanctioned name be reached through this module's own API/constant and never
+#: a duplicated literal — a rule the guard enforces by banning the literal in
+#: every allowlisted referencer. `push_suggestion._deliver_envelope` built the
+#: same string inline, which is the duplication the bound exists to forbid.
+#: This is an envelope LABEL, not a write target; it names no path.
+EVENT_KIND_FRONTMATTER_LABEL = "sovereign-tracker-event"
+
 
 class _UnknownObservedSet:
     """Sentinel for "the bytes that justified this claim are not the bytes

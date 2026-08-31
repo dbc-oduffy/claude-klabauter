@@ -120,6 +120,17 @@ from coordinator_core.session.receiver_state import read_receiver_state
 _POLL_INTERVAL_FLOOR_SECONDS = 5.0
 _POLL_INTERVAL_MEASURED_MULTIPLIER = 1000.0
 
+# Review: coordinatorcode-reviewer.a9e1410288878bea9 -- `_poll_interval_seconds`
+# is measured exactly once, at arm time, and reused unchanged for the rest of
+# the session. A single transient arm-time spike (disk contention, the box
+# momentarily at 50-70 concurrent sessions) can commit the watch to an
+# unreasonably long cadence with no correction for the rest of the session --
+# a measurement taken once cannot be trusted to be representative forever.
+# This ceiling bounds how far one bad sample can push the interval; it does
+# NOT introduce periodic re-measurement inside the loop (that would be a
+# design change to the backoff, considered and deliberately not done here).
+_POLL_INTERVAL_CEILING_SECONDS = 300.0
+
 #: `send_pass.build_send_digest`'s own default -- the watch reuses the SAME
 #: clock rather than a second cooldown window, per the module docstring.
 _COOLDOWN_SECONDS = send_pass.DEFAULT_COOLDOWN_SECONDS
@@ -147,7 +158,8 @@ def _poll_interval_seconds(snapshot_ms: float) -> float:
     measurement taken this call.
     """
     derived = (snapshot_ms / 1000.0) * _POLL_INTERVAL_MEASURED_MULTIPLIER
-    return max(_POLL_INTERVAL_FLOOR_SECONDS, derived)
+    bounded = max(_POLL_INTERVAL_FLOOR_SECONDS, derived)
+    return min(_POLL_INTERVAL_CEILING_SECONDS, bounded)
 
 
 def _current_agents(repo_root: str, caller_session_id: Optional[str]) -> list[dict[str, Any]]:
@@ -360,9 +372,12 @@ def main(
     def emit(line: str) -> None:
         print(line, file=out, flush=True)
 
-    snapshot_ms, denominator = _measure_snapshot_ms(repo_root)
+    snapshot_ms, peer_count = _measure_snapshot_ms(repo_root)
     interval = _poll_interval_seconds(snapshot_ms)
-    emit(f"ARMED denominator={denominator} claude-klabauter peers, snapshot={snapshot_ms:.1f}ms, interval={interval:.1f}s")
+    # Review: coordinatorcode-reviewer.a9e1410288878bea9 -- the ARMED line is
+    # operator-facing; "denominator" is an internal metric name from the
+    # interval derivation and reads oddly next to "peers" on that surface.
+    emit(f"ARMED peer_count={peer_count} claude-klabauter peers, snapshot={snapshot_ms:.1f}ms, interval={interval:.1f}s")
 
     prev_parked: dict[str, bool] = {}
     iterations = 0
@@ -370,7 +385,16 @@ def main(
         try:
             prev_parked = poll_once(repo_root, caller_session_id, prev_parked, emit=emit)
         except Exception:
-            emit("POLL-ERROR " + traceback.format_exc(limit=1).strip().replace("\n", " | "))
+            # Review: coordinatorcode-reviewer.a9e1410288878bea9 -- reporting
+            # an error must never be able to fail worse than the error itself.
+            # A broken stream at the moment a poll raises would otherwise
+            # propagate out of `main` uncaught, ending the watch silently --
+            # exactly the "indistinguishable from a quiet repo" failure this
+            # module's COVERAGE contract exists to prevent.
+            try:
+                emit("POLL-ERROR " + traceback.format_exc(limit=1).strip().replace("\n", " | "))
+            except Exception:
+                pass
         iterations += 1
         if max_iterations is not None and iterations >= max_iterations:
             break

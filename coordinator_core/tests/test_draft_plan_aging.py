@@ -18,7 +18,7 @@ import pytest
 
 from coordinator_core.ops.draft_plan_aging import (
     _has_active_baton,
-    _has_recent_real_work_commit,
+    _has_real_work_or_completion_match,
     _load_completed_deliverable_ids,
     _is_sidecar_file,
     _normalize_prefix,
@@ -29,7 +29,7 @@ from coordinator_core.ops.draft_plan_aging import (
 )
 from coordinator_core.win_portability import no_console_passthrough_kwargs
 
-# Declared, not excused: `_has_recent_real_work_commit` reads real git log/commit
+# Declared, not excused: `_has_real_work_or_completion_match` reads real git log/commit
 # timestamps to decide plan staleness -- the property under test is that real-commit
 # recency signal, which no mock reproduces. Tests build/mutate their own repo per test
 # (distinct commit histories per aging scenario), so the fixture is not hoisted to
@@ -134,7 +134,7 @@ def test_unparseable_created_date_exits_2(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# _has_recent_real_work_commit — F0 mechanical-denylist + real-work (bats 3, 4, 5)
+# _has_real_work_or_completion_match — F0 mechanical-denylist + real-work (bats 3, 4, 5)
 # ---------------------------------------------------------------------------
 
 
@@ -149,7 +149,7 @@ def test_mechanical_commit_does_not_suppress_reclaim(tmp_path, monkeypatch):
 
     _write_plan(tmp_path / "plan.md", (_TODAY - timedelta(days=20)).isoformat(), scope_lines=["scope-touched/file.md"])
     monkeypatch.chdir(tmp_path)
-    has_work, err = _has_recent_real_work_commit("plan.md", frozenset())
+    has_work, err = _has_real_work_or_completion_match("plan.md", frozenset())
     assert err is None
     assert has_work is False
 
@@ -165,7 +165,7 @@ def test_mechanical_commit_pickup_frontmatter_does_not_suppress(tmp_path, monkey
 
     _write_plan(tmp_path / "plan.md", (_TODAY - timedelta(days=20)).isoformat(), scope_lines=["scope-touched/file.md"])
     monkeypatch.chdir(tmp_path)
-    has_work, err = _has_recent_real_work_commit("plan.md", frozenset())
+    has_work, err = _has_real_work_or_completion_match("plan.md", frozenset())
     assert err is None
     assert has_work is False
 
@@ -181,7 +181,7 @@ def test_real_work_commit_suppresses(tmp_path, monkeypatch):
 
     _write_plan(tmp_path / "plan.md", (_TODAY - timedelta(days=20)).isoformat(), scope_lines=["scope-touched/file.md"])
     monkeypatch.chdir(tmp_path)
-    has_work, err = _has_recent_real_work_commit("plan.md", frozenset())
+    has_work, err = _has_real_work_or_completion_match("plan.md", frozenset())
     assert err is None
     assert has_work is True
 
@@ -189,7 +189,7 @@ def test_real_work_commit_suppresses(tmp_path, monkeypatch):
 def test_no_scope_block_returns_false_no_git_call(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     p = _write_plan(tmp_path / "plan.md", (_TODAY - timedelta(days=20)).isoformat())
-    has_work, err = _has_recent_real_work_commit(str(p), frozenset())
+    has_work, err = _has_real_work_or_completion_match(str(p), frozenset())
     assert (has_work, err) == (False, None)
 
 
@@ -202,7 +202,7 @@ def test_git_log_failure_returns_diagnostic(tmp_path, monkeypatch):
 
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("GIT_CEILING_DIRECTORIES", str(tmp_path))
-    has_work, err = _has_recent_real_work_commit("plan.md", frozenset())
+    has_work, err = _has_real_work_or_completion_match("plan.md", frozenset())
     assert has_work is None
     assert err is not None
     assert "git log failed" in err
@@ -223,7 +223,7 @@ def test_prefix_normalization_resolves_scope_path(tmp_path, monkeypatch):
         (_TODAY - timedelta(days=20)).isoformat(),
         scope_lines=["plugins/coordinator-claude/coordinator/bin/tool.sh"],
     )
-    has_work, err = _has_recent_real_work_commit("plan.md", frozenset())
+    has_work, err = _has_real_work_or_completion_match("plan.md", frozenset())
     assert err is None
     assert has_work is True
 
@@ -258,7 +258,7 @@ def test_completion_entry_deliverable_id_match_suppresses_no_scope_touch(tmp_pat
         encoding="utf-8",
     )
 
-    has_work, err = _has_recent_real_work_commit("plan.md", _load_completed_deliverable_ids())
+    has_work, err = _has_real_work_or_completion_match("plan.md", _load_completed_deliverable_ids())
     assert err is None
     assert has_work is True
 
@@ -268,8 +268,62 @@ def test_no_completion_entry_match_still_uses_scope_arm(tmp_path, monkeypatch):
     # path arm alone still governs (no crash, no false suppress).
     monkeypatch.chdir(tmp_path)
     p = _write_plan(tmp_path / "plan.md", (_TODAY - timedelta(days=20)).isoformat())
-    has_work, err = _has_recent_real_work_commit(str(p), frozenset())
+    has_work, err = _has_real_work_or_completion_match(str(p), frozenset())
     assert (has_work, err) == (False, None)
+
+
+def test_completion_no_match_falls_through_to_git_log_failure(tmp_path, monkeypatch):
+    # Review: code-reviewer (Finding 3a) — a completion-entry NON-match must
+    # not swallow the pre-existing git-log-failure (None, diagnostic) path;
+    # the early-return only fires on an actual match.
+    scope_dir = tmp_path / "scope-touched"
+    scope_dir.mkdir()
+    (scope_dir / "file.md").write_text("x\n", encoding="utf-8")
+    _write_plan(
+        tmp_path / "plan.md",
+        (_TODAY - timedelta(days=20)).isoformat(),
+        scope_lines=["scope-touched/file.md"],
+    )
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("GIT_CEILING_DIRECTORIES", str(tmp_path))
+    has_work, err = _has_real_work_or_completion_match(
+        "plan.md", frozenset({"dlv-unrelated-other-plan"})
+    )
+    assert has_work is None
+    assert err is not None
+    assert "git log failed" in err
+
+
+def test_completion_match_skips_git_log_call_entirely(tmp_path, monkeypatch):
+    # Review: code-reviewer (Finding 3b) — a completion-entry match returns
+    # early and must never invoke `git log` at all; also guards the
+    # brightline claim that a completion hit costs zero spawns.
+    def _forbidden_run(*args, **kwargs):
+        raise AssertionError("git log must not be invoked on a completion-entry match")
+
+    monkeypatch.setattr(subprocess, "run", _forbidden_run)
+
+    scope_dir = tmp_path / "scope-touched"
+    scope_dir.mkdir()
+    (scope_dir / "file.md").write_text("x\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    p = _write_plan(
+        tmp_path / "plan.md",
+        (_TODAY - timedelta(days=20)).isoformat(),
+        scope_lines=["scope-touched/file.md"],
+    )
+    p.write_text(
+        p.read_text(encoding="utf-8").replace(
+            "status: draft\n", "status: draft\ndeliverable_id: dlv-shared-work-abc123\n"
+        ),
+        encoding="utf-8",
+    )
+
+    has_work, err = _has_real_work_or_completion_match(
+        "plan.md", frozenset({"dlv-shared-work-abc123"})
+    )
+    assert (has_work, err) == (True, None)
 
 
 # ---------------------------------------------------------------------------

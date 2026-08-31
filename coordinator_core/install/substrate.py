@@ -1598,9 +1598,14 @@ def _write_dispatch_root_bake(engine_root: Path, root: str, resolution_class: st
 # removing only this side would desynchronise the guarded pair rather than
 # retire it. Follow-up: shrink both sets together in a chunk that owns
 # `coordinator/bin/gen-launcher-shim.py`.
+# Membership rule: stated in full beside the mirrored set
+# (`gen-launcher-shim.py::_RAW_CMDLINE_ENTRYPOINTS`), not restated here, so
+# the two cannot drift in their REASONS the way they drifted in their members.
+# 2026-08-31: `coordinator-write-review-trail.py` dropped from BOTH sets --
+# `review_trail.write` was gravestoned K-060 and the file is gone. See the
+# other set's comment for why the pair-equality guard could not catch it.
 _RAW_CMDLINE_TARGETS = frozenset(
     {
-        "coordinator-write-review-trail.py",
         "cross-repo-memo.py",
         "freeze-review-diff.py",
         "parallel-review-gate-decision.py",

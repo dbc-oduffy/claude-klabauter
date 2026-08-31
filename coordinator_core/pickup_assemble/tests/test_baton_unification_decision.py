@@ -18,6 +18,9 @@ Coverage:
     signal, never an input to this verdict
   - a held baton skipped for an ABSENT `baton_role` axis is COUNTED and
     surfaced (`unstamped_skipped`), never silently dropped
+  - a held claim that resolves to nothing readable (the claim-outlives-the-
+    file residue a hand repair leaves behind) is COUNTED in its own bucket
+    (`unreadable_skipped`), and does not contaminate `unstamped_skipped`
   - all four `pickup_assemble` dispositions (`live-peer` / `live-unrelated`
     / `handover` / `stale-claim`), one test per arm
 
@@ -267,6 +270,56 @@ def test_unstamped_role_axis_skip_is_counted_not_silent(tmp_path, monkeypatch):
     assert result["reason"] == "unstamped-role-skipped"
     assert result["unstamped_skipped"] == 1
     assert result["inheritable"] == []
+
+
+def test_unreadable_held_claim_is_counted_in_its_own_bucket(tmp_path, monkeypatch):
+    """A claim ledger row whose baton is not on disk — the residue a
+    frontmatter-only repair leaves behind, since deleting the file never
+    touches the ledger. It resolves to nothing readable, so it is excluded
+    from inheritance; with no counter it moved NOTHING in the verdict, and
+    the second leg of such a repair could not be verified from any surface.
+    It must land in `unreadable_skipped`, and never in `unstamped_skipped`,
+    which is the absent-role-axis case only."""
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    # Deliberately NO `_seed_handoff` — the claim outlives the file.
+    _make_ledger_claim(repo, "ghost.md", SELF_SID)
+    monkeypatch.setattr(
+        pa._liveness, "live_session_verdicts", lambda root: {SELF_SID: (True, "meta")}
+    )
+
+    result = pa.compute_baton_unification_verdict(repo, TARGET_FM, TARGET_PATH)
+
+    assert result["held"]["primary"] == "state/handoffs/ghost.md"
+    assert result["unreadable_skipped"] == 1
+    assert result["unstamped_skipped"] == 0
+    assert result["disposed_skipped"] == []
+    assert result["inheritable"] == []
+    assert result["verdict"] == "no-unification"
+
+
+def test_unreadable_bucket_is_surfaced_on_every_verdict_shape(tmp_path, monkeypatch):
+    """The bucket is only countable if it is present on every return —
+    a key that appears solely on the path that incremented it cannot be
+    read as "zero residue" by a caller checking the others."""
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+
+    nothing_held = pa.compute_baton_unification_verdict(repo, TARGET_FM, TARGET_PATH)
+    assert nothing_held["reason"] == "nothing-held"
+    assert nothing_held["unreadable_skipped"] == 0
+
+    _seed_handoff(repo, "preexisting.md", baton_role="work")
+    _make_ledger_claim(repo, "preexisting.md", SELF_SID)
+    _seed_handoff(repo, "target.md", baton_role="work")
+    _make_ledger_claim(repo, "target.md", SELF_SID)
+    monkeypatch.setattr(
+        pa._liveness, "live_session_verdicts", lambda root: {SELF_SID: (True, "meta")}
+    )
+
+    proceeding = pa.compute_baton_unification_verdict(repo, TARGET_FM, TARGET_PATH)
+    assert proceeding["verdict"] == "proceed"
+    assert proceeding["unreadable_skipped"] == 0
 
 
 # ---------------------------------------------------------------------------

@@ -84,6 +84,21 @@ class CallerContext:
     warm-identity cohort sweep (`state/audits/2026-08-30-warm-identity-cohort-sweep.md`)
     names three live defects that misattribute self-classification for exactly that
     reason -- a session-id-only fix leaves them standing.
+
+    `settings_home` (added by docs/plans/2026-08-31-the-settings-home-crosses-the-warm-
+    boundary.md § C2) is the sixth field: the caller's own `COORDINATOR_SETTINGS_HOME`
+    claim, when it explicitly set one. Unlike the other five fields, it is never read off
+    the `_caller` payload `resolve_caller_context` parses below -- it rides its own
+    top-level `_settings_home` wire field (`warm/settings_home_claim.py`,
+    `SETTINGS_HOME_FIELD`), because that field predates this dataclass and both wire
+    producers (`warm.client`, `door.c`) already stamp it independently of `_caller`.
+    `_serve_line` pops it via `settings_home_claim.request_claim` and joins it onto the
+    already-resolved `CallerContext` with `dataclasses.replace` before handing the object
+    to `dispatch` -- see that module's own body for why joining here, rather than a sixth
+    parallel parameter threaded next to `caller`, is required rather than merely tidy. No
+    ambient fallback rung: absence means "this caller has no opinion", never this
+    process's own resolved home (see `warm/settings_home_claim.py`'s own "ABSENCE IS NOT A
+    MISMATCH").
     """
 
     plugin_root: Optional[str]
@@ -91,6 +106,7 @@ class CallerContext:
     session_id: Optional[str]
     agent_id: Optional[str]
     pid: Optional[str]
+    settings_home: Optional[str] = None
 
 
 def resolve_caller_context(payload: Optional[Mapping[str, Any]] = None) -> CallerContext:

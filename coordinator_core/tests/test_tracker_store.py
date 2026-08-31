@@ -1085,6 +1085,80 @@ def _tracker_scope_string_literals(
     return literals
 
 
+_TRACKER_STORE_WRITE_API_NAMES = frozenset({"append_event", "append_events", "shard_path"})
+
+
+def _references_tracker_store_write_api_in_code(text: str) -> bool:
+    """Return whether *text* touches one of ``tracker_store``'s WRITE-API
+    names (``append_event``/``append_events``/``shard_path``) from EXECUTABLE
+    code, as an ``Attribute``/``Name``/import binding.
+
+    DR-241 is a WRITE carve-out (see its own title and D2 bounds); the
+    top-level referencer bound is scoped to that write API, not to any
+    reference to ``tracker_store`` at all — a read-only referencer (e.g.
+    ``tracker_envelope.py``, which only calls ``tracker_store.read_events``
+    and names ``EVENTS_SHARD_GLOB``) was never what the allowlist gates (see
+    DR-241 § Amendment, dated 2026-08-31). This is deliberately an AST check
+    of the three write-API names themselves, not a read/write "vibe" or a
+    docstring heuristic, so a module that later grows a write call becomes
+    visible to the guard again immediately. Modeled on
+    ``_references_tracker_store_in_code`` above, reusing ``_executable_lines``'
+    documentation-is-not-code discipline so a module merely NAMING one of
+    these identifiers in a docstring/comment is not flagged.
+    """
+    tree = ast.parse(text)
+    executable_linenos = {lineno for lineno, _ in _executable_lines(text)}
+
+    # A write-API NAME collides with unrelated identifiers elsewhere in the
+    # repo (e.g. `coordinator_core.session.touch_record.append_event` is a
+    # completely different function) — this check must only fire when the
+    # name is actually bound to THIS module's tracker_store, never on a bare
+    # name-string match. Track (1) local names bound to the tracker_store
+    # module itself (`import ... tracker_store [as X]` /
+    # `from ... import tracker_store [as X]`), so `X.append_event(...)`
+    # attribute access is recognized, and (2) local names bound by importing
+    # a write-API symbol directly FROM tracker_store
+    # (`from coordinator_core.tracker_store import append_event`).
+    module_aliases: "set[str]" = set()
+    direct_write_bindings: "set[str]" = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name == "coordinator_core.tracker_store" or alias.name.endswith(
+                    ".tracker_store"
+                ):
+                    module_aliases.add(alias.asname or alias.name.rsplit(".", 1)[-1])
+        elif isinstance(node, ast.ImportFrom):
+            mod = getattr(node, "module", None) or ""
+            if mod == "coordinator_core.tracker_store" or mod.endswith(".tracker_store"):
+                for alias in node.names:
+                    if alias.name in _TRACKER_STORE_WRITE_API_NAMES:
+                        direct_write_bindings.add(alias.asname or alias.name)
+            elif mod in ("coordinator_core", "coordinator_core."):
+                for alias in node.names:
+                    if alias.name == "tracker_store":
+                        module_aliases.add(alias.asname or alias.name)
+
+    if not module_aliases and not direct_write_bindings:
+        return False
+
+    for node in ast.walk(tree):
+        if node.__class__ not in (ast.Attribute, ast.Name):
+            continue
+        if node.lineno not in executable_linenos:
+            continue
+        if (
+            isinstance(node, ast.Attribute)
+            and node.attr in _TRACKER_STORE_WRITE_API_NAMES
+            and isinstance(node.value, ast.Name)
+            and node.value.id in module_aliases
+        ):
+            return True
+        if isinstance(node, ast.Name) and node.id in direct_write_bindings:
+            return True
+    return False
+
+
 def _references_tracker_store_in_code(text: str) -> bool:
     """Return whether *text* references ``tracker_store`` from EXECUTABLE
     code — an import, a ``Name``/``Attribute`` access — as opposed to merely
@@ -1137,6 +1211,8 @@ def _tracker_store_referencer_offenders(
     *,
     recursive: bool,
     use_ast_check: bool = False,
+    exclude_tests_dirs: bool = False,
+    write_api_only: bool = False,
 ) -> "list[str]":
     """Return the sorted list of *.py files under *scan_dir* that reference
     ``tracker_store`` but are not in *allowed* (paths relative to
@@ -1157,12 +1233,37 @@ def _tracker_store_referencer_offenders(
     false positive on a module (e.g. ``ipc.py``) that only NAMES
     ``tracker_store`` in a narrative docstring/backlink comment, never in
     executable code.
+
+    *exclude_tests_dirs* drops any file whose path (relative to *repo_root*)
+    has a ``tests`` path component (``**/tests/**``) from the REFERENCER
+    bound — a test module is not a registered store-writing op, so it is not
+    a referencer this bound governs. This is scoped to the ``tests/``
+    DIRECTORY component, never to a ``test_*.py`` filename glob anywhere,
+    which would be an unbounded wildcard exemption. Excluded test modules
+    stay fully visible to ``_confinement_check_for_file`` — the write-target
+    confinement bound does not drop for them, only this referencer bound
+    does (DR-241 § Amendment, dated 2026-08-31).
+
+    *write_api_only* selects ``_references_tracker_store_write_api_in_code``
+    over ``_references_tracker_store_in_code`` — DR-241's referencer bound
+    gates the WRITE API (``append_event``/``append_events``/``shard_path``),
+    not any reference to ``tracker_store`` at all; a read-only referencer
+    (e.g. ``tracker_envelope.py``) is out of scope for this bound (DR-241
+    § Amendment, dated 2026-08-31).
     """
     offenders: "list[str]" = []
     iterator = scan_dir.rglob("*.py") if recursive else scan_dir.glob("*.py")
     for py_file in iterator:
+        rel = py_file.relative_to(repo_root).as_posix()
+        if exclude_tests_dirs and "/tests/" in f"/{rel}":
+            continue
         text = py_file.read_text(encoding="utf-8")
-        if use_ast_check:
+        if write_api_only:
+            referenced = (
+                any(name in text for name in _TRACKER_STORE_WRITE_API_NAMES)
+                and _references_tracker_store_write_api_in_code(text)
+            )
+        elif use_ast_check:
             referenced = "tracker_store" in text and _references_tracker_store_in_code(
                 text
             )
@@ -1170,7 +1271,6 @@ def _tracker_store_referencer_offenders(
             referenced = "tracker_store" in text
         if not referenced:
             continue
-        rel = py_file.relative_to(repo_root).as_posix()
         if rel not in allowed:
             offenders.append(rel)
     return sorted(offenders)
@@ -1246,7 +1346,11 @@ class TestAffirmationEraBoundedRegistrationGuard:
         ops_dir = Path(_PROJECT_ROOT) / "coordinator_core" / "ops"
         repo_root = Path(_PROJECT_ROOT)
         offenders = _tracker_store_referencer_offenders(
-            ops_dir, repo_root, _ALLOWED_TRACKER_STORE_REFERENCERS, recursive=True
+            ops_dir,
+            repo_root,
+            _ALLOWED_TRACKER_STORE_REFERENCERS,
+            recursive=True,
+            exclude_tests_dirs=True,
         )
         assert offenders == [], (
             "coordinator_core/ops/ module(s) reference tracker_store outside "
@@ -1275,6 +1379,7 @@ class TestAffirmationEraBoundedRegistrationGuard:
             _ALLOWED_TRACKER_STORE_REFERENCERS,
             recursive=False,
             use_ast_check=True,
+            write_api_only=True,
         )
         assert offenders == [], (
             "top-level coordinator_core/ module(s) reference tracker_store "
@@ -1630,6 +1735,138 @@ class TestTopLevelWalkBiteTest:
         assert offenders == ["coordinator_core/offender_aliased.py"], (
             "an aliased tracker_store import evaded the AST-aware top-level "
             f"walk: {offenders!r}"
+        )
+
+    def test_read_only_referencer_is_not_flagged_when_write_api_only(self, tmp_path):
+        # DR-241 § Amendment (2026-08-31): the top-level referencer bound
+        # gates the WRITE API only. A module that only calls
+        # tracker_store.read_events (never append_event/append_events/
+        # shard_path) must NOT be flagged under write_api_only=True — this
+        # is the exact shape of the real repo's tracker_envelope.py.
+        repo_root = tmp_path
+        core_dir = repo_root / "coordinator_core"
+        core_dir.mkdir()
+        (core_dir / "reader_only.py").write_text(
+            "from coordinator_core import tracker_store\n\n"
+            "def do_read(repo_root):\n"
+            "    return list(tracker_store.read_events(repo_root=repo_root))\n",
+            encoding="utf-8",
+        )
+        offenders = _tracker_store_referencer_offenders(
+            core_dir,
+            repo_root,
+            frozenset(),
+            recursive=False,
+            use_ast_check=True,
+            write_api_only=True,
+        )
+        assert offenders == [], (
+            "a read-only tracker_store referencer (read_events only) was "
+            f"wrongly flagged under the write-API-only bound: {offenders!r}"
+        )
+
+    def test_write_api_referencer_is_still_caught_when_write_api_only(self, tmp_path):
+        # Flip side of the test above: a module that DOES call
+        # append_event/append_events/shard_path must still be flagged under
+        # write_api_only=True, proving the narrowing did not become
+        # decorative (staff-eng Finding 7 discipline, brief (b)).
+        repo_root = tmp_path
+        core_dir = repo_root / "coordinator_core"
+        core_dir.mkdir()
+        (core_dir / "writer_offender.py").write_text(
+            "from coordinator_core import tracker_store\n\n"
+            "def do_write(repo_root):\n"
+            "    return tracker_store.append_event({}, repo_root=repo_root)\n",
+            encoding="utf-8",
+        )
+        offenders = _tracker_store_referencer_offenders(
+            core_dir,
+            repo_root,
+            frozenset(),
+            recursive=False,
+            use_ast_check=True,
+            write_api_only=True,
+        )
+        assert offenders == ["coordinator_core/writer_offender.py"], (
+            "a real write-API (append_event) referencer evaded the "
+            f"write-API-only bound: {offenders!r}"
+        )
+
+
+class TestOpsTreeTestsDirExclusionBiteTest:
+    """Proves brief (a)'s narrowing directly: a synthetic ops/ tree with a
+    ``tests/`` subdirectory module that references ``tracker_store`` drops
+    out of the REFERENCER bound (``exclude_tests_dirs=True``) while staying
+    fully visible to ``_confinement_check_for_file`` — the write-target
+    confinement bound never drops for it. Mirrors ``TestTopLevelWalkBiteTest``'s
+    synthetic tmp_path discipline (sat-01b Finding 2)."""
+
+    def test_tests_dir_module_drops_from_referencer_bound_but_not_confinement(
+        self, tmp_path
+    ):
+        repo_root = tmp_path
+        ops_dir = repo_root / "coordinator_core" / "ops" / "tracker"
+        tests_dir = ops_dir / "tests"
+        tests_dir.mkdir(parents=True)
+        offender = tests_dir / "test_something.py"
+        offender.write_text(
+            "from coordinator_core import tracker_store\n\n"
+            "def test_do_write(tmp_path):\n"
+            "    return tracker_store.append_event({}, repo_root=tmp_path)\n",
+            encoding="utf-8",
+        )
+
+        # Half 1: the REFERENCER bound drops for the excluded test module.
+        offenders = _tracker_store_referencer_offenders(
+            ops_dir,
+            repo_root,
+            frozenset(),
+            recursive=True,
+            exclude_tests_dirs=True,
+        )
+        assert offenders == [], (
+            "a tests/-directory module was still flagged by the referencer "
+            f"bound despite exclude_tests_dirs=True: {offenders!r}"
+        )
+
+        # Half 2: the excluded test module STAYS subject to the write-target
+        # confinement bound — a test that hand-builds the real store's
+        # write-target literal is still the hazard this preserves.
+        offender.write_text(
+            "SOVEREIGN_LITERAL = 'sovereign-tracker'\n\n"
+            "def test_do_write():\n"
+            "    return SOVEREIGN_LITERAL\n",
+            encoding="utf-8",
+        )
+        with pytest.raises(AssertionError):
+            _confinement_check_for_file(
+                offender, "coordinator_core/ops/tracker/tests/test_something.py"
+            )
+
+    def test_non_test_ops_module_still_caught_by_referencer_bound(self, tmp_path):
+        # Flip side: a REAL (non-test) ops module referencing tracker_store
+        # must still be flagged even with exclude_tests_dirs=True — proves
+        # the narrowing is scoped to `**/tests/**`, not a blanket pass.
+        repo_root = tmp_path
+        ops_dir = repo_root / "coordinator_core" / "ops" / "tracker"
+        ops_dir.mkdir(parents=True)
+        offender = ops_dir / "unaffirmed_op.py"
+        offender.write_text(
+            "from coordinator_core import tracker_store\n\n"
+            "def do_write(repo_root):\n"
+            "    return tracker_store.append_event({}, repo_root=repo_root)\n",
+            encoding="utf-8",
+        )
+        offenders = _tracker_store_referencer_offenders(
+            ops_dir,
+            repo_root,
+            frozenset(),
+            recursive=True,
+            exclude_tests_dirs=True,
+        )
+        assert offenders == ["coordinator_core/ops/tracker/unaffirmed_op.py"], (
+            "a real (non-test) ops module referencing tracker_store evaded "
+            f"the referencer bound: {offenders!r}"
         )
 
 

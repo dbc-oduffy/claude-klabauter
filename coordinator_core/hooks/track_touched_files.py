@@ -454,7 +454,7 @@ async def _handler(params: dict, repo_root=None) -> dict:
     Bash call" — an attribution race that falsely claims a peer's path), and a pre/post
     ``git status`` delta (same race, plus two git spawns on a hot path). Widening this
     matcher is a doctrine reversal in a repo claude-klabauter does not own; it needs a decision
-    record and a memo to claude-central-em BEFORE any code, never after.
+    record and a memo to DoE-claude BEFORE any code, never after.
 
     All disk I/O is dispatched via asyncio.to_thread(). Per-file asyncio.Lock (D6)
     serialises concurrent append invocations on shared files in the singleton engine.

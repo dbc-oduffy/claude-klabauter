@@ -316,8 +316,11 @@ _TOPIC_SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9\-]*$")
 # Spec backlink: docs/plans/2026-05-23-cross-repo-inbox-archive-restructure.md § B2
 #
 # The DoE-claude repo (repos.doe_claude in the machine-local registry) is the
-# authoritative delivery target for central memos. `--to claude-central-em`
-# (or any alias) resolves to repos.doe_claude — NOT to ~/.claude.
+# authoritative delivery target for central memos. `--to doe-claude-em` (or a
+# redirect alias) resolves to repos.doe_claude — NOT to ~/.claude. The legacy
+# ids `claude-central-em` / `central-em` / `central` no longer resolve at all:
+# DoE retired them from identity.centralReceiverIds (their b787bf0f0), and a
+# send to one fails loudly on purpose.
 #
 # Guards BOTH the receiver path resolver (_resolve_receiver_path) AND the sender
 # identity (em_id_for_root emits the canonical central identity — see
@@ -2298,6 +2301,74 @@ def _print_route_mutation_failure_reasons(exc: BaseException) -> None:
             print(f"  op stderr: {op_stderr_stripped}", file=sys.stderr)
 
 
+#: Exit codes for a `draft` that ended indeterminate. Deliberately distinct
+#: from the rejection codes 1/2/3 (`publish_target_rejected` / `unknown_receiver`
+#: + collision / `registry_error` + `ambiguous_receiver`) — an indeterminate is
+#: not a rejection, and a caller that collapses them re-acquires the ambiguity
+#: this whole branch exists to remove.
+DRAFT_INDETERMINATE_LANDED = 4      # the draft IS on disk; do not re-run `draft`
+DRAFT_INDETERMINATE_NO_WRITE = 5    # nothing new landed; re-running `draft` is safe
+
+
+def reconcile_indeterminate_draft(
+    target_path: str, existed_before: bool, topic: str
+) -> "tuple[int, str]":
+    """Answer, by stat, the question a `-32004` envelope structurally cannot.
+
+    `WarmDispatchIndeterminate` means the request reached the warm engine and
+    the engine never answered — and `warm/client.py` cannot narrow that, because
+    it marks `delivered` after `flush()` and flush only proves the bytes left
+    THIS process into the pipe buffer (that module's own zero-byte branch says
+    so). There is no acknowledgement between kernel buffer and dispatch, so the
+    envelope covers both a landed write and no write at all.
+
+    `memo.draft` is reconcilable anyway, because its entire effect is one path
+    that is a pure function of argv: `<sender_root>/state/memo-outbox/
+    <topic>.md`. Stat it and the ambiguity is gone.
+
+    `existed_before` is what makes the answer sound, and is why the caller must
+    sample it BEFORE dispatch. A bare post-hoc `exists()` cannot tell "my write
+    landed" from "a draft for this topic was already sitting there and the op
+    refused on collision" — both leave a file at the same path.
+
+    Returns `(exit_code, operator_note)`. Three outcomes, never two:
+      - appeared (not there before, there now) -> LANDED. The op ran.
+      - was already there -> genuinely undecidable BY STAT, and reported as
+        undecidable rather than guessed. Reported under the NO_WRITE code
+        because that is the safe half: it steers to reading the file, not to
+        re-running. The file's own `created:`/`to:` settle it, and `memo.draft`
+        is O_EXCL + collision-checked, so a re-run cannot clobber either way.
+      - absent -> nothing landed. Re-running `draft` is safe.
+
+    Negative-spec: this NEVER retries and never re-runs the op cold. Re-executing
+    a delivered mutation is the double-execution the refusal exists to prevent
+    (`state/bug-backlog/2026-08-19-scoped-git-commit-still-reports-a-landed-
+    d4c7d9dc8e14.yaml`). It only reports.
+    """
+    exists_now = os.path.exists(target_path)
+    if exists_now and not existed_before:
+        return (
+            DRAFT_INDETERMINATE_LANDED,
+            f"RECONCILED — the draft DID land at {target_path} despite the error "
+            f"above. Do NOT re-run `draft`; it would refuse on collision. "
+            f"Continue with `cross-repo-memo compose {topic}` / `send {topic}`, "
+            f"or `discard {topic}` to start over.",
+        )
+    if existed_before:
+        return (
+            DRAFT_INDETERMINATE_NO_WRITE,
+            f"RECONCILED — a draft was ALREADY at {target_path} before this call, "
+            f"so the stat cannot tell you whether this call refused on collision "
+            f"or never ran. Read that file's `created:`/`to:` before assuming "
+            f"either; nothing was clobbered in any case.",
+        )
+    return (
+        DRAFT_INDETERMINATE_NO_WRITE,
+        f"RECONCILED — NO draft was written; {target_path} does not exist. "
+        f"Nothing landed, so re-running `draft` is safe.",
+    )
+
+
 def _cmd_draft(args: argparse.Namespace) -> int:
     """Handle: cross-repo-memo draft <topic> --to <em> --title <line> --kind <k> [--summary] [--in-reply-to]
 
@@ -2398,8 +2469,33 @@ def _cmd_draft(args: argparse.Namespace) -> int:
             "engine to draft cross-repo memos."
         )
 
+    # RECONCILE KEY, computed BEFORE dispatch because after a -32004 there is
+    # nothing left to compute it from. `memo.draft` writes exactly one path,
+    # `<sender_root>/state/memo-outbox/<topic>.md` (memo_draft.py's own
+    # `outbox_dir / f"{topic}.md"`), and it is a pure function of argv — so the
+    # one fact a delivered-but-unanswered mutation destroys is recoverable by
+    # stat, without the engine answering anything. `_draft_existed_before`
+    # separates "my write landed" from "a draft was already sitting there",
+    # which a post-hoc stat alone cannot tell apart.
+    _draft_target = os.path.join(sender_root, "state", "memo-outbox", f"{topic}.md")
+    _draft_existed_before = os.path.exists(_draft_target)
+
     try:
         result = cc_invoke.route_mutation("memo.draft", invoke_params, sender_root, legacy_draft)
+    except cc_invoke.WarmDispatchIndeterminate as exc:
+        # The refusal is correct and is NOT retried here — re-running a
+        # delivered mutation is the double-execution it exists to prevent. What
+        # this branch adds is the answer the envelope cannot carry: one stat,
+        # reported as two distinguishable outcomes with two distinct exit codes,
+        # so no caller can receive "it may or may not have landed".
+        print(f"cross-repo-memo draft: {exc}", file=sys.stderr)
+        code, note = reconcile_indeterminate_draft(
+            _draft_target, _draft_existed_before, topic
+        )
+        print(f"cross-repo-memo draft: {note}", file=sys.stderr)
+        if code == DRAFT_INDETERMINATE_LANDED:
+            print(_draft_target)
+        return code
     except RuntimeError as exc:
         # route_mutation raises RouteMutationError (a RuntimeError subclass
         # with a `.result` attribute) on ANY non-zero exit_code — both the

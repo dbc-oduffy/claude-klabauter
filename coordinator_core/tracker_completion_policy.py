@@ -93,6 +93,20 @@ _AUTO_TIER: Literal["auto"] = "auto"
 _RETRACTED_TO_STATE = "retracted"
 _ASSERTED_STATE = "asserted"
 
+_CLOSURE_FIDELITY_DEGRADES_TO_SUGGEST: frozenset[str] = frozenset({"verify-with-effort"})
+"""(C6) `closure_fidelity` values that force `"suggest"` regardless of what
+`evidence` otherwise satisfies — the ONE degradation branch every caller of
+`classify_code_complete_tier` shares (threaded through by the module's two
+in-module callers, `emit_code_complete_assert` and
+`detect_symmetric_retract`, per this chunk's dispatch brief). `"human-
+attested"` is deliberately NOT a member here — this chunk's remit is the
+`verify-with-effort` guarantee only; a later chunk may extend this set, but
+extending it is that chunk's decision, not an inference this one makes.
+`"auto-observable"` items pass through unaffected: this set names what
+DEGRADES, not the closed vocabulary of `closure_fidelity` itself, which this
+module never validates (that is the caller's resolved-projection concern,
+per the module docstring's import-light negative-spec)."""
+
 
 @dataclass(frozen=True)
 class CodeCompleteEvidence:
@@ -119,10 +133,25 @@ class CodeCompleteEvidence:
 
 def classify_code_complete_tier(
     evidence: CodeCompleteEvidence,
+    *,
+    closure_fidelity: str,
 ) -> str:
     """Classify a `code_complete` observation's tier (AC1, AC2).
 
-    Returns `"auto"` iff `evidence.trailer_bound` is true AND
+    `closure_fidelity` is REQUIRED and keyword-only, no default (C6) —
+    this module cannot resolve an item's `closure_fidelity` itself (its
+    own negative-spec forbids the `coordinator_core.ops`/`tracker_store`
+    imports that would let it read the item's projected state), so
+    resolving it is explicitly the CALLER's job; a default of `None` or
+    `"auto-observable"` is exactly how the "`verify-with-effort` never
+    auto-asserts" guarantee would silently lapse for any caller that
+    forgets to pass it, so no default exists.
+
+    Returns `"suggest"` immediately if `closure_fidelity` is a member of
+    `_CLOSURE_FIDELITY_DEGRADES_TO_SUGGEST` — checked BEFORE the evidence
+    predicate below, so a `verify-with-effort` item can never reach
+    `"auto"` no matter how strong its `evidence` is. Otherwise returns
+    `"auto"` iff `evidence.trailer_bound` is true AND
     `evidence.reachable_on_default_branch is True` — an explicit identity
     check against `True`, not a truthy check, so that `None` (indeterminate)
     never satisfies the condition. Returns `"suggest"` for every other
@@ -135,6 +164,8 @@ def classify_code_complete_tier(
     `"suggest"` (unchanged by this widening; see the two branches above),
     it is only the TYPE that no longer over-asserts a two-value universe.
     """
+    if closure_fidelity in _CLOSURE_FIDELITY_DEGRADES_TO_SUGGEST:
+        return _SUGGEST_TIER
     if evidence.trailer_bound and evidence.reachable_on_default_branch is True:
         return _AUTO_TIER
     return _SUGGEST_TIER
@@ -194,6 +225,7 @@ def detect_symmetric_retract(
     *,
     actor: str,
     source_observation_id: str,
+    closure_fidelity: str,
 ) -> dict | None:
     """Build a `code_complete` retract PAYLOAD from a verified revert
     observation (C2, D3, D4) — pure, no disk access, no `repo_root`. Mirrors
@@ -204,6 +236,22 @@ def detect_symmetric_retract(
     is out of scope for this plan (D4) — it lands with sat-06/sat-07's
     ingest, which is the caller that will eventually own `repo_root` and the
     decision of WHEN to call this function.
+
+    `closure_fidelity` is REQUIRED and keyword-only, threaded straight into
+    the internal `classify_code_complete_tier` call below (C6) — the SAME
+    shared classifier and the SAME `_CLOSURE_FIDELITY_DEGRADES_TO_SUGGEST`
+    gate `emit_code_complete_assert` uses, not a parallel branch. This is a
+    DELIBERATE, tested consequence (staff-eng Finding 3), not a silent
+    side-effect: a `verify-with-effort` revert's `revert_tier` degrades to
+    `"suggest"` under this gate the same way an assert would, so it fails
+    the `revert_tier != _AUTO_TIER` check below and this function returns
+    `None` — retract detection for that item is suppressed, not merely its
+    assert path. This function does NOT carve out a separate "retract-only"
+    posture that would let a `verify-with-effort` revert retract even though
+    a `verify-with-effort` assert cannot; reusing one shared classifier for
+    both callers, per this chunk's brief, means both degrade together. See
+    `test_c6_*` in the test module for the explicit regression guard over
+    this consequence.
 
     *revert_evidence* describes the REVERT commit itself, not the completing
     commit it undoes: `revert_evidence.sha` is the revert's own sha, and
@@ -272,7 +320,9 @@ def detect_symmetric_retract(
     `generation` at all, leaving that entirely to `_emit`/`_emit_batch`'s
     stamping, exactly as `transition_event`'s own closed field set requires.
     """
-    revert_tier = classify_code_complete_tier(revert_evidence)
+    revert_tier = classify_code_complete_tier(
+        revert_evidence, closure_fidelity=closure_fidelity
+    )
     if revert_tier != _AUTO_TIER:
         return None
 
@@ -295,11 +345,18 @@ def emit_code_complete_assert(
     actor: str,
     source_observation_id: str | None = None,
     repo_root: Path,
+    closure_fidelity: str,
 ) -> dict:
     """Classify a `code_complete` observation (`classify_code_complete_tier`)
     and emit its ASSERT through `tracker_transitions.emit_transition` (C4,
     D4) — the ONE seam in this plan's scope that touches `repo_root` or
     performs any I/O; every other function in this module is pure.
+
+    `closure_fidelity` is REQUIRED and keyword-only (C6), threaded straight
+    into `classify_code_complete_tier` — resolving an item's
+    `closure_fidelity` from its projected state is the CALLER's job, not
+    this module's (see the module docstring's import-light negative-spec
+    and `classify_code_complete_tier`'s own docstring).
 
     Covers the `code_complete` ASSERT path only. C2's
     `detect_symmetric_retract` builds a retract PAYLOAD but this function
@@ -320,7 +377,7 @@ def emit_code_complete_assert(
     mechanism is sat-03's, already shipped, and is NOT reimplemented here;
     see `test_ac8_*` in the test module for the regression guard over it.
     """
-    tier = classify_code_complete_tier(evidence)
+    tier = classify_code_complete_tier(evidence, closure_fidelity=closure_fidelity)
     return tracker_transitions.emit_transition(
         item_id,
         "code_complete",

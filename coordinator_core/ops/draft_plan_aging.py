@@ -286,7 +286,11 @@ def _load_completed_deliverable_ids() -> frozenset:
             path = os.path.join(dirpath, name)
             try:
                 entry_text = Path(path).read_text(encoding="utf-8")
-            except OSError:
+            # Review: code-reviewer (Finding 1) — UnicodeDecodeError is a
+            # ValueError subclass, not an OSError; without it, one malformed
+            # file in the 657-entry externally-authored corpus crashed the
+            # whole scan(), taking staleness detection down for every plan.
+            except (OSError, UnicodeDecodeError):
                 continue
             entry_deliverable_id = extract_frontmatter_scalar(entry_text, "deliverable_id")
             if entry_deliverable_id:
@@ -297,7 +301,12 @@ def _load_completed_deliverable_ids() -> frozenset:
 # Review: overengineering-reviewer — required, not Optional[...]=None; the
 # self-load branch had no production consumer and was where a future
 # in-loop caller would silently re-pay the full-corpus read.
-def _has_recent_real_work_commit(
+# Review: code-reviewer (Finding 2) — renamed from
+# `_has_recent_real_work_commit`: the completion-entry arm below has no time
+# bound (deliberate — delivered work isn't stale regardless of age), so
+# "recent" no longer describes half of what this function returns. Only the
+# git-log arm stays windowed; see docstring.
+def _has_real_work_or_completion_match(
     file: str, completed_deliverable_ids: frozenset
 ) -> Tuple[Optional[bool], Optional[str]]:
     """Condition 3b: does ANY normalized scope path have a real-work commit
@@ -309,6 +318,11 @@ def _has_recent_real_work_commit(
     (the common case) previously read as having no real work at all. Both
     arms are ORed — the completion-entry match is additive, not a
     replacement for the pre-existing scope-path git-log arm.
+
+    Only the git-log arm is windowed (`AGING_THRESHOLD_DAYS`, 14 days). The
+    completion-entry arm is deliberately unbounded — a plan shipped years
+    ago that still matches a completion entry is real, delivered work
+    regardless of age, so it is not subject to the aging window at all.
 
     *completed_deliverable_ids* is the pre-loaded
     `_load_completed_deliverable_ids()` result — required, not optional:
@@ -355,7 +369,7 @@ def _has_recent_real_work_commit(
             **_CREATIONFLAGS,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
-        print(f"skip: _has_recent_real_work_commit: result = subprocess.run( failed: {exc}", file=sys.stderr)
+        print(f"skip: _has_real_work_or_completion_match: result = subprocess.run( failed: {exc}", file=sys.stderr)
         return None, (
             f"{_PROG}: {file}: git log failed on scope paths ({' '.join(scope_paths)}): {exc}"
         )
@@ -460,7 +474,7 @@ def check_one(
     """Evaluate the draft-plan staleness predicate for one plan file.
 
     *completed_deliverable_ids*: pre-loaded `_load_completed_deliverable_ids()`
-    result, threaded through to `_has_recent_real_work_commit`. `scan()`
+    result, threaded through to `_has_real_work_or_completion_match`. `scan()`
     loads this once per invocation and passes it to every `check_one` call in
     its loop — never rebuilt per plan (brightline: no second full-corpus scan
     per plan).
@@ -503,7 +517,7 @@ def check_one(
         return "", 0
 
     # Condition 3b: recent real-work commit check.
-    has_recent_work, err = _has_recent_real_work_commit(file, completed_deliverable_ids)
+    has_recent_work, err = _has_real_work_or_completion_match(file, completed_deliverable_ids)
     if err is not None:
         print(err, file=sys.stderr)
         return "", 2

@@ -251,7 +251,7 @@ class TestAC6DR258MatcherBehavioural:
         assert _touch_record_entries(common_dir, params["session_id"]) == [], (
             "a Bash-tool-shaped payload recorded a claim — the DR-258 matcher "
             "widened to include Bash, which is the doctrine reversal DR-258 "
-            "forecloses without a decision record + memo to claude-central-em"
+            "forecloses without a decision record + memo to DoE-claude"
         )
 
     @pytest.mark.parametrize("tool_name", ["Write", "Edit", "MultiEdit", "NotebookEdit"])
@@ -287,7 +287,7 @@ class TestAC6DR258MatcherSourceGrepSecondLayer:
         assert 'if tool_name not in ("Write", "Edit", "MultiEdit", "NotebookEdit"):' in text, (
             "track_touched_files._handler's DR-258 matcher tuple changed — "
             "widening/narrowing this matcher needs a decision record and a "
-            "memo to claude-central-em BEFORE any code (see _handler's own "
+            "memo to DoE-claude BEFORE any code (see _handler's own "
             "NAMED LIMIT docstring section)"
         )
 

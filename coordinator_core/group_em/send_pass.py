@@ -141,7 +141,6 @@ import json
 import os
 import re
 import time
-from datetime import datetime, timezone
 from typing import Any, Callable, Optional
 
 from coordinator_core.group_em import read_pass
@@ -418,48 +417,51 @@ def _log_key_is_open(log: list[dict[str, Any]], key: str) -> bool:
     return True
 
 
-def _parse_iso_stamp(value: Any) -> Optional[datetime]:
-    """Parse a `stamped_at`-shaped ISO8601 string. `None` on anything else.
-
-    Mirrors `read_pass._parse_iso_stamp` exactly (same shape, same
-    Z-suffix/naive-as-UTC handling) -- kept local rather than imported
-    because that symbol is private to its own module; the one clock
-    primitive this chunk is pinned to reuse is `_transcript_mtime_epoch`,
-    named explicitly in the dispatch brief.
-    """
-    if not isinstance(value, str) or not value:
-        return None
-    text = value.strip()
-    if text.endswith("Z"):
-        text = text[:-1] + "+00:00"
-    try:
-        parsed = datetime.fromisoformat(text)
-    except ValueError:
-        return None
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
-    return parsed
+# Review: overengineering-reviewer (finding #6, confidence 8 AUTO-FIX,
+# EM-in-scope discretionary application) -- the local `_parse_iso_stamp` copy
+# is deleted. Its stated reason for staying local ("that symbol is private to
+# its own module") was already contradicted three lines below by this same
+# module importing `read_pass._transcript_mtime_epoch`, also private. Calls
+# `read_pass._parse_iso_stamp` directly, the same way `_transcript_mtime_epoch`
+# already is.
 
 
-def _dwell_seconds(repo_root: str, peer_session_id: str, now: float) -> Optional[float]:
+def _dwell_seconds(
+    repo_root: str,
+    peer_session_id: str,
+    now: float,
+    cwd: Optional[str] = None,
+) -> Optional[float]:
     """Seconds since this peer's last observed activity, or `None`.
 
     Reads its own receiver-state `stamped_at` and cross-checks it against
-    `read_pass._transcript_mtime_epoch(peer_session_id, repo_root)` -- the
-    later of the two is the last-activity instant (a transcript that kept
+    `read_pass._transcript_mtime_epoch(peer_session_id, cwd or repo_root)` --
+    the later of the two is the last-activity instant (a transcript that kept
     moving after the stamp was written is evidence of activity the stamp
     alone would miss). `now` is the SAME clock `build_send_digest` already
     threads through cooldown arithmetic -- never re-asked here. `None` when
     neither source resolves or the result would be negative (clock skew);
     never `0`, which would misreport "unknown" as "just stopped".
+
+    `cwd` is the peer's OWN cwd (the roster row's `cwd`, threaded onto the
+    verdict dict by `read_pass.classify_peer`), never assumed to equal
+    `repo_root` -- `_transcript_path_for` encodes the exact cwd into the
+    harness's per-project transcript directory, so a peer whose cwd is a
+    subdirectory of `repo_root` (permitted by `build_roster`'s "within
+    repo_root" filter) needs its own cwd here, matching the fallback
+    `peer.get("cwd") or repo_root` pattern `classify_peer`/
+    `_transcript_moved_since` already use. Review: coordinator:code-reviewer
+    (finding 1) -- this previously always passed `repo_root`, silently
+    degrading `dwell_seconds` to `None` forever for any such peer.
     """
+    effective_cwd = cwd or repo_root
     candidates: list[float] = []
     record = read_pass.read_receiver_state(peer_session_id, repo_root)
     if record is not None:
-        stamp_dt = _parse_iso_stamp(record.get("stamped_at"))
+        stamp_dt = read_pass._parse_iso_stamp(record.get("stamped_at"))
         if stamp_dt is not None:
             candidates.append(stamp_dt.timestamp())
-    transcript_epoch = read_pass._transcript_mtime_epoch(peer_session_id, repo_root)
+    transcript_epoch = read_pass._transcript_mtime_epoch(peer_session_id, effective_cwd)
     if transcript_epoch is not None:
         candidates.append(transcript_epoch)
     if not candidates:
@@ -498,15 +500,26 @@ def _cooldown_remaining(
     return remaining
 
 
-def _suppressed(session_id, why, reason=None, obligations=None, remaining=None):
+def _suppressed(session_id, why, reason=None, obligations=None, remaining=None, dwell=None):
     """One `suppressed` row. Every row carries the same keys -- `None` where
-    inapplicable -- so a consumer never has to key-check by variant."""
+    inapplicable -- so a consumer never has to key-check by variant.
+
+    Review: overengineering-reviewer (finding #4, EM-ratified partial) --
+    `obligation`/`dwell_seconds` folded in here rather than round-tripped
+    through a separate `declined` row. Per-peer declination was a pure
+    projection of this row (`reason` was verbatim `row["why"]`); a consumer
+    wanting the per-peer declination now reads it off `suppressed` directly.
+    `obligation` is the same `f"message peer {session_id}"` shape every
+    reader already derived from `session_id` alone.
+    """
     return {
         "session_id": session_id,
         "why": why,
         "reason": reason,
         "undischarged_obligations": obligations,
         "cooldown_remaining_seconds": remaining,
+        "obligation": f"message peer {session_id}",
+        "dwell_seconds": dwell,
     }
 
 
@@ -547,55 +560,34 @@ def resolve_addressee(
 
 
 def _declinations(
-    repo_root: str,
     roster: list[dict[str, Any]],
     entries: list[dict[str, Any]],
-    suppressed: list[dict[str, Any]],
-    now: float,
 ) -> list[dict[str, Any]]:
-    """Which obligation this tick declined, and why -- one row per thing not done.
+    """Tick-level declinations only -- one row per thing the TICK ITSELF declined,
+    never a per-peer row.
 
-    DoE's SKILL.md states the requirement first and this conforms to its wording
-    rather than growing a parallel vocabulary: "Each tick records a DECLINATION for
-    every roster entry it does not message -- which gate failed and why. A tick that
-    closes on 'nothing sent' with no declination is indistinguishable from a tick that
-    never looked, which is the failure this whole mechanism exists to end."
+    Review: overengineering-reviewer (finding #4, EM-ratified partial) -- the
+    per-peer declination previously emitted here was a pure projection of
+    `suppressed` (`reason` was verbatim `row["why"]`, `obligation` was derivable
+    from `session_id` alone); those rows are gone from this function, and a
+    consumer now reads a peer's declination off `suppressed` directly, which
+    now carries `obligation`/`dwell_seconds` itself (see `_suppressed`).
 
-    THE EMPTY ROSTER IS ITSELF A DECLINATION, and it is the case this function exists
-    for. A per-entry list is legitimately empty when there are no entries -- at which
-    point the digest closes on four empty fields and says nothing about WHY, which is
-    exactly the "closed on nothing sent" shape the criterion forbids. So a tick that
-    considered nobody declines the standing obligation to look, and says so. Absence of
-    candidates is a finding about the roster, never a quiet success.
-
-    A COOLDOWN DECLINATION CARRIES THE PEER'S DWELL, and that pairing is the point.
-    Cooldown is an eligibility gate applied BEFORE dwell ranks anything, so a peer
-    parked ten minutes is held by the same rule that protects one messaged ninety
-    seconds ago. That ordering is deliberate -- re-offering to a peer you just messaged
-    is nagging, and dwell "ranks and informs, it never suppresses" is this module's
-    standing rule, which cuts both ways. But the EM cannot weigh a hold it cannot see.
-    Observed live 2026-08-31: a peer parked 10.4m identified correctly by the roster and
-    then suppressed on cooldown, with nothing in the digest saying how long it had been
-    parked. So the declination names both, and the judgement stays with the reader.
-
-    Dwell is computed only for cooldown holds, not for every suppression: `away` and
-    `unusable-session-id` are not decisions anyone would overturn on dwell, and each
-    computation is two reads per peer.
+    What survives is genuinely new information, not derivable from `entries` +
+    `suppressed`: THE EMPTY ROSTER IS ITSELF A DECLINATION, and it is the case
+    this function exists for. DoE's SKILL.md: "Each tick records a DECLINATION
+    for every roster entry it does not message -- which gate failed and why. A
+    tick that closes on 'nothing sent' with no declination is indistinguishable
+    from a tick that never looked, which is the failure this whole mechanism
+    exists to end." A per-entry list is legitimately empty when there are no
+    entries -- at which point the digest must still say WHY, which is exactly
+    the "closed on nothing sent" shape the criterion forbids. So a tick that
+    considered nobody, or sent to nobody, declines the standing obligation to
+    look/send and says so; that fact belongs to the tick, not to any peer row,
+    and `declined` stays non-empty on a tick that sent nothing (the promoted
+    acceptance test's own exit criterion).
     """
     declined: list[dict[str, Any]] = []
-    for row in suppressed:
-        peer = row["session_id"]
-        dwell = None
-        if row["why"] == "cooldown" and isinstance(peer, str) and _safe_session_id(peer):
-            dwell = _dwell_seconds(repo_root, peer, now)
-        declined.append(
-            {
-                "obligation": f"message peer {peer}",
-                "reason": row["why"],
-                "session_id": peer,
-                "dwell_seconds": dwell,
-            }
-        )
     if not roster:
         declined.append(
             {
@@ -646,10 +638,13 @@ def build_send_digest(
     declining (module docstring's OPEN OBLIGATIONS section); it ranks and
     informs, it is never gated on.
 
-    `declined` names every obligation this tick did NOT discharge and why -- one
-    row per suppressed peer, plus a row for the tick itself when it considered
-    nobody or sent to nobody. It is never empty on a tick that sent nothing, which
-    is the whole point: a digest of four empty fields cannot be told apart from a
+    `declined` names what the TICK ITSELF declined and why -- roster-empty or
+    no-eligible-peer only (§ `_declinations`, finding #4). A peer's own
+    declination is a projection of its `suppressed` row and lives there
+    (`obligation`/`dwell_seconds` on each `suppressed` entry) rather than
+    round-tripped through a second collection. `declined` is never empty on a
+    tick that sent nothing, which is the whole point: a digest that closed on
+    nothing sent, with nothing saying why, would be indistinguishable from a
     tick that never looked.
 
     Known limitation -- no lock spans the log read and the per-entry appends,
@@ -688,7 +683,14 @@ def build_send_digest(
         if remaining > 0:
             suppressed.append(
                 _suppressed(
-                    peer_session_id, "cooldown", reason, obligations, remaining
+                    peer_session_id,
+                    "cooldown",
+                    reason,
+                    obligations,
+                    remaining,
+                    dwell=_dwell_seconds(
+                        repo_root, peer_session_id, now, cwd=verdict.get("cwd")
+                    ),
                 )
             )
             continue
@@ -703,6 +705,7 @@ def build_send_digest(
                 "trigger": "paused-turn-ended-uncontradicted-by-live-status",
                 "gate1": None,
                 "gate2": None,
+                "cwd": verdict.get("cwd"),
             }
         )
 
@@ -728,7 +731,9 @@ def build_send_digest(
     # see module docstring's DWELL TIME section. A row cut by the ceiling
     # never had its dwell computed at all, not merely discarded.
     for entry in entries:
-        entry["dwell_seconds"] = _dwell_seconds(repo_root, entry["session_id"], now)
+        entry["dwell_seconds"] = _dwell_seconds(
+            repo_root, entry["session_id"], now, cwd=entry.get("cwd")
+        )
 
     unrecorded = [
         entry["session_id"]
@@ -755,7 +760,7 @@ def build_send_digest(
     return {
         "entries": entries,
         "suppressed": suppressed,
-        "declined": _declinations(repo_root, roster, entries, suppressed, now),
+        "declined": _declinations(roster, entries),
         "truncated": len(eligible) > max_entries,
         "roster_size": len(roster),
         "eligible_before_ceiling": len(eligible),

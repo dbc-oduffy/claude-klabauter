@@ -34,6 +34,30 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 _QUEUE_APPEND = os.path.join(_THIS_DIR, "coordinator-queue-append.py")
 
 
+def _python_interpreter() -> str | None:
+    """Resolve a real CPython interpreter for the queue-append child.
+
+    Negative spec: `sys.executable` is NOT one. This CLI is reached through
+    `~/.coordinator-claude-settings/bin/coordinator-lesson-add.exe`, a forwarder
+    whose embedded interpreter reports ITSELF as `sys.executable`. Handing that
+    exe a script path re-enters this CLI's own argparse with the script as an
+    unknown positional -- the lesson is never written, and the exe still exits 0,
+    so every lesson captured through the installed door was silently dropped.
+    """
+    exe = sys.executable or ""
+    if os.path.basename(exe).lower().startswith("python"):
+        return exe
+    base = getattr(sys, "_base_executable", None)
+    if base and os.path.basename(base).lower().startswith("python"):
+        return base
+    import shutil
+    for name in ("python3", "python"):
+        found = shutil.which(name)
+        if found:
+            return found
+    return None
+
+
 def _bootstrap_imports() -> None:
     """Bind every non-stdlib dependency at module scope, called from main()
     so module import stays inert (C6d import-motion).
@@ -366,8 +390,18 @@ def main(argv: "list[str] | None" = None) -> int:
             )
             return 1
 
+    interpreter = _python_interpreter()
+    if interpreter is None:
+        print(
+            "no python interpreter resolvable for coordinator-queue-append"
+            " (sys.executable is " + repr(sys.executable) + ")"
+            " — run coordinator-queue-append.py directly",
+            file=sys.stderr,
+        )
+        return 1
+
     cmd = [
-        sys.executable, _QUEUE_APPEND,
+        interpreter, _QUEUE_APPEND,
         "--schema", "lessons",
         "--title", args.title,
         "--body", args.body,
@@ -404,6 +438,12 @@ def main(argv: "list[str] | None" = None) -> int:
         env=subprocess_identity_env(),
         **no_console_passthrough_kwargs(),
     )
+    if result.returncode != 0:
+        print(
+            "coordinator-queue-append exited " + str(result.returncode)
+            + " — no lesson was written",
+            file=sys.stderr,
+        )
     return result.returncode
 
 

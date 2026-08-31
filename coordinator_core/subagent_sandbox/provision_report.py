@@ -249,6 +249,57 @@ def _resolve_plan_sidecar_stem(plan_path: str) -> Optional[str]:
     return _sanitize_segment(Path(plan_path).stem)
 
 
+#: Top-level ``plan:`` frontmatter key of a plan-derived sidecar -- anchored at
+#: column 0 so ``_frontmatter``'s indented sub-keys (``divergence:``'s
+#: ``diverged``, ``dispatch_feed:``'s members) can never match it.
+_PLAN_FRONTMATTER_RE = re.compile(r"^plan:[ \t]*(.*?)[ \t]*$")
+
+
+def _plan_frontmatter_value(doc_text: str) -> Optional[str]:
+    """The leading frontmatter block's ``plan:`` value, or ``None``.
+
+    Scans only between the opening ``---`` and the first closing ``---``: a
+    ``plan:`` line in the BODY of a filled-in sidecar (a findings entry
+    quoting the plan, say) is not an identity claim and must not be read as
+    one. Hand-scanned rather than parsed -- this is a PreToolUse-Agent hook,
+    cold on every dispatch fleet-wide, and the module's stdlib-only,
+    no-PyYAML discipline (``_yaml_quoted_scalar``) applies to the read side
+    for the same reason it applies to the write side.
+    """
+    lines = doc_text.split("\n")
+    if not lines or lines[0].strip() != "---":
+        return None
+    for line in lines[1:]:
+        if line.strip() == "---":
+            return None
+        match = _PLAN_FRONTMATTER_RE.match(line)
+        if match:
+            return match.group(1).strip("'\"") or None
+    return None
+
+
+def _declared_plan_disagrees_with_stem(declared_plan: Optional[str], plan_stem: str) -> bool:
+    """True iff ``declared_plan`` names a plan whose own stem is not
+    ``plan_stem`` -- the mechanically-detectable shape of the 2026-08-07
+    clobber (state/bug-backlog/2026-08-07-lens-sidecar-provisioning-clobbers-
+    a-peer-plans-sidecar.yaml), where a sidecar's filename said one plan and
+    its ``plan:`` frontmatter said another.
+
+    Compared UNSANITIZED on purpose: ``plan_stem`` has already been through
+    ``_sanitize_segment``, so a plan filename the whitelist silently REWROTE
+    (rather than rejected) lands under a stem naming a different plan than
+    the payload asked for, and that rewrite is exactly a disagreement this
+    must catch, not tolerate.
+
+    An absent or empty ``plan:`` cannot disagree -- four of the five lenses
+    stamp no such key -- so it is not a refusal; this guard only ever fires
+    on a positively contradictory identity claim.
+    """
+    if not declared_plan:
+        return False
+    return Path(declared_plan).stem != plan_stem
+
+
 def _read_stdin() -> str:
     return sys.stdin.read()
 
@@ -1142,9 +1193,11 @@ def _provision_plan_derivable_doc(
     doc_type: Optional[str],
     session_id: str,
     plan_path: Optional[str] = None,
-) -> str:
+) -> Optional[str]:
     """Write (or idempotently reuse) the deterministic plan-derivable
-    sidecar for one of the four G2 emitters; return its repo-relative path.
+    sidecar for one of the four G2 emitters; return its repo-relative path,
+    or ``None`` when the stem-agreement guard refuses (caller falls open to
+    the session-keyed home).
 
     Same exclusive-create-then-idempotent-hit discipline as the
     ``provision_key`` branch in ``_provision`` below: a re-dispatch against
@@ -1156,15 +1209,46 @@ def _provision_plan_derivable_doc(
     false-positive-arbitration feedback loop) stays an agent-side concern
     per canonical spec § 2.7 -- this module never renames or deletes an
     existing plan-sidecar file.
+
+    Stem-agreement guard (state/bug-backlog/2026-08-07-lens-sidecar-
+    provisioning-clobbers-a-peer-plans-sidecar.yaml): this refuses to write,
+    or to hand back, a plan-derived sidecar whose declared plan identity
+    disagrees with the filename stem it would sit under -- checked against
+    the payload's own ``plan_path``, against the skeleton about to be
+    written, and against an EXISTING file on the idempotent-hit path. The
+    last is the one that stops a clobber COMPOUNDING: a sidecar whose
+    ``plan:`` already names a different plan than its filename is a peer
+    plan's artifact holding this plan's content, and handing it to another
+    emitter to append to writes the same wrong artifact a second time.
+    Refusal is a fail-open to the session-keyed home, never a dropped
+    sidecar and never a rename -- this module still never renames or deletes
+    an existing plan-sidecar file.
     """
+    if _declared_plan_disagrees_with_stem(plan_path, plan_stem):
+        print(
+            f"provision_report: plan_path {plan_path!r} disagrees with plan-sidecar "
+            f"stem {plan_stem!r}, falling back to the session-keyed home",
+            file=sys.stderr,
+        )
+        return None
+
     plan_sidecars_dir = Path(git_root) / "state" / "plan-sidecars"
-    plan_sidecars_dir.mkdir(parents=True, exist_ok=True)
 
     doc_path = plan_sidecars_dir / f"{plan_stem}.{lens}.md"
     spawned_at = datetime.now(timezone.utc).isoformat()
     doc_text = _build_doc_text(
         agent_type, spawned_at, doc_type, lead_session_id=session_id, plan_path=plan_path
     )
+
+    if _declared_plan_disagrees_with_stem(_plan_frontmatter_value(doc_text), plan_stem):
+        print(
+            f"provision_report: refusing to write {doc_path.name} -- its plan: "
+            "frontmatter names a different plan than its filename stem",
+            file=sys.stderr,
+        )
+        return None
+
+    plan_sidecars_dir.mkdir(parents=True, exist_ok=True)
 
     try:
         with open(doc_path, "x", encoding="utf-8", newline="\n") as handle:
@@ -1183,7 +1267,19 @@ def _provision_plan_derivable_doc(
         # clobbering it -- mirrors the provision_key idempotent branch
         # below, for the same reason (deterministic path, no nonce). No
         # touch-claim here: this call did not actually write the bytes.
-        pass
+        try:
+            existing_text = doc_path.read_text(encoding="utf-8")
+        except OSError:
+            existing_text = ""
+        if _declared_plan_disagrees_with_stem(
+            _plan_frontmatter_value(existing_text), plan_stem
+        ):
+            print(
+                f"provision_report: refusing to reuse {doc_path.name} -- its plan: "
+                "frontmatter names a different plan than its filename stem",
+                file=sys.stderr,
+            )
+            return None
 
     return f"state/plan-sidecars/{plan_stem}.{lens}.md"
 
@@ -1259,7 +1355,10 @@ def _provision(payload: Dict[str, Any], policy_path: Optional[str], cwd: Optiona
                 doc_type = lens
             else:
                 doc_type = payload.get("type") or None
-            return _provision_plan_derivable_doc(
+            # A refusal from the stem-agreement guard is NOT a dropped
+            # sidecar: it falls through to the session-keyed path below,
+            # the same fail-open direction an unsanitizable plan_path takes.
+            plan_sidecar = _provision_plan_derivable_doc(
                 git_root=git_root,
                 plan_stem=plan_stem,
                 lens=lens,
@@ -1268,6 +1367,8 @@ def _provision(payload: Dict[str, Any], policy_path: Optional[str], cwd: Optiona
                 session_id=str(session_id),
                 plan_path=str(plan_path),
             )
+            if plan_sidecar is not None:
+                return plan_sidecar
 
     sanitized_session_id = _sanitize_segment(str(session_id))
     sanitized_label = _sanitize_segment(str(effective_label))

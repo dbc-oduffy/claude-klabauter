@@ -13,17 +13,19 @@ Write target: `.git/coordinator-sessions/<session_id>/receiver-state.json` — a
 per-session sibling file (module docstring of `session.receiver_state`; never
 `meta.json`, never `state/`). Classification: MUTATING (it writes).
 
-SECOND WRITE, as of chunk C1 (docs/plans/2026-08-31-the-group-em-tick-carries-
-standing-obligations.md): this same fire also appends this session's own
+Review: overengineering-reviewer (finding #3, EM-ratified) — chunk C1 previously
+added a SECOND WRITE here: this fire also appended this session's own
 turn-boundary row to `state/subagent-share/<session_id>/obligations-inbound.jsonl`
-via `coordinator_core.group_em.obligations.record` — the intake appender DoE's
-own drain claims, folds, and deletes. `open` once per session (idempotent on
-`obligation_id`), `progress` on every later fire so the row keeps reading as
-moving. This is the ONLY producer wired to this seam deliberately, per the
-plan's own reused-not-new-hook rule: `open`/`progress` semantics are generic
-("this session had a turn boundary"), not a claim about what the session
-was doing — see `obligations.py`'s own module docstring for the full contract
-and the coverage numbers this closes.
+via `coordinator_core.group_em.obligations.record`. Removed: the row's content
+was synthesized from this sensor's own verdict, and `watch._parked_line`
+already renders that same verdict live from `read_pass.classify_peer` on the
+same line — so the ledger round-tripped a fact its only reader independently
+had. `94522cf8bb` had already narrowed WHO gets a row (gating on an actual
+turn boundary); this removal finishes that by not writing a self-restating
+row at all. `coordinator_core.group_em.obligations` — `for_peer` and `record`
+— is untouched: it is still consumed by `watch.py` and remains the producer-
+side contract with the sibling repo (landed at 764e6c198). Only this sensor's
+synthetic self-write is gone.
 
 Input (flat scalar, via `hooks/_payload.py::field()`; "" treated as absent):
     session_id       — the coordinator session identifier whose OWN transcript/state
@@ -85,28 +87,8 @@ from __future__ import annotations
 from coordinator_core.ipc import register_op
 from coordinator_core.hooks._envelope import no_advisory
 from coordinator_core.hooks._payload import field
-from coordinator_core.group_em import obligations
 from coordinator_core.session import core as _session_core
 from coordinator_core.session import receiver_state
-
-#: Stable per-session obligation id for the turn-boundary row this sensor
-#: writes -- see `_record_turn_obligation`. One per session, so `open` stays
-#: idempotent across every Stop/SubagentStop this session ever fires (DoE's
-#: own `open_obligation` no-ops a re-open against an id already open, never
-#: duplicating).
-_TURN_OBLIGATION_SEAM = "hooks.receiver_state_sensor"
-
-#: Bare verdict tags on which this sensor writes NOTHING. A PRODUCING session
-#: has not reached a turn boundary and owes this ledger nothing yet; an UNKNOWN
-#: one has no established state, and absence of evidence is never promoted to
-#: evidence of a boundary. See `_record_turn_obligation`'s negative spec.
-#:
-#: These are `Verdict.verdict`, the BARE TAG -- the full set is PAUSED,
-#: PRODUCING, UNKNOWN, and the descriptive half lives in `Verdict.reason` as a
-#: separate field. Compare against `.verdict`, never against the dataclass:
-#: `str(Verdict(...))` is a repr, so a membership test on it silently never
-#: matches and this gate would pass everything through.
-_NOT_A_TURN_BOUNDARY = frozenset({"PRODUCING", "UNKNOWN"})
 
 
 def _run_sensor(
@@ -175,96 +157,6 @@ def _run_sensor(
         stamp_iso=stamp_iso,
         cwd=cwd,
     )
-
-    _record_turn_obligation(repo_root, session_id, now_epoch, final_verdict)
-
-
-def _turn_obligation_action(verdict) -> str:
-    """What this session owes, in words that DIFFER between two stopped peers.
-
-    Carries `Verdict.reason`, not just the bare tag. Every peer that reaches a turn
-    boundary reads PAUSED, so the tag alone would make every row in the fleet
-    identical -- which is the failure `_record_turn_obligation`'s negative spec
-    exists to prevent, reintroduced one field further in.
-    """
-    tag = getattr(verdict, "verdict", None) or "UNKNOWN"
-    reason = getattr(verdict, "reason", None)
-    if reason:
-        return f"stopped at turn boundary: {tag} ({reason})"
-    return f"stopped at turn boundary: {tag}"
-
-
-def _record_turn_obligation(
-    repo_root: "str | None", session_id: str, now_epoch: float, verdict: "str | None"
-) -> None:
-    """Append this session's own turn-boundary intake row (chunk C1, closing
-    the ledger-coverage gap): `open` once per session (idempotent on
-    `obligation_id` -- DoE's own consumer no-ops a re-open against an id
-    already open), `progress` on every later Stop/SubagentStop so the row
-    keeps reading as moving rather than stalled.
-
-    Reads `obligations.for_peer` first to decide open-vs-progress rather
-    than emitting `open` unconditionally on every fire -- a no-op `open` row
-    would still validate and still cost an intake append every turn for the
-    lifetime of the session, for no signal `progress` does not already
-    carry.
-
-    NEGATIVE SPEC, load-bearing, and the reason this function is gated on
-    `verdict` at all. The first implementation wrote one row for EVERY
-    session on every fire, with a constant `next_action`. That closes the
-    coverage gap on paper and destroys the thing the gap was worth closing:
-    every peer then reads one identical row, so `for_peer` returns names
-    that cannot discriminate between peers and the digest cannot rank on
-    them. It also makes `None` unreachable for any live session, and `None`
-    means "no ledger exists", which the chunk's own spec calls load-bearing
-    and distinct from "nothing owed". Universal identical content is the
-    same failure as universal zero, inverted -- coverage at 100%, information
-    at nil.
-
-    So a row is written only at an ACTUAL turn boundary. A session that is
-    PRODUCING has not reached one and owes this ledger nothing yet; a session
-    whose verdict could not be established is not promoted to owing something
-    either, because absence of evidence is never evidence of a boundary. Both
-    keep reading `None`, correctly, and the rows that do exist name the
-    population the digest is for: sessions that stopped.
-
-    Fail-soft, matching this module's own contract: any exception here is
-    caught by the caller's own try/except (`_handler`, AC12) and this
-    function additionally never raises past `obligations.record`'s own
-    False-on-failure return -- there is nothing here that surfaces a write
-    failure to the caller, by design.
-    """
-    if repo_root is None:
-        return
-    tag = getattr(verdict, "verdict", None)
-    if not tag or tag in _NOT_A_TURN_BOUNDARY:
-        return
-    obligation_id = session_id
-    existing = obligations.for_peer(repo_root, session_id)
-    is_open = bool(existing) and any(
-        row.get("obligation_id") == obligation_id for row in existing
-    )
-    if is_open:
-        obligations.record(
-            repo_root,
-            session_id,
-            "progress",
-            obligation_id,
-            producer=_TURN_OBLIGATION_SEAM,
-            now=now_epoch,
-        )
-    else:
-        obligations.record(
-            repo_root,
-            session_id,
-            "open",
-            obligation_id,
-            seam=_TURN_OBLIGATION_SEAM,
-            next_action=_turn_obligation_action(verdict),
-            producer=_TURN_OBLIGATION_SEAM,
-            now=now_epoch,
-        )
-
 
 def _mtime_or_none(path: str) -> "float | None":
     """os.stat().st_mtime, or None on any OSError. Blocking — see `_run_sensor`."""

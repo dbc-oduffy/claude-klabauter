@@ -1195,6 +1195,145 @@ def test_withdrawal_event_accepts_a_same_shard_id(monkeypatch):
     assert payload["withdraws"] == "evt-this-machine-abc123"
 
 
+# ---------------------------------------------------------------------------
+# C5 — evidence.probe per DR-closure-fidelity-tier-axis D2/D3, plus the
+# additivity proof for a widen that adds no new schema key.
+# ---------------------------------------------------------------------------
+
+
+def test_probe_result_error_is_refused_with_typed_error():
+    with pytest.raises(tt.TrackerTransitionError):
+        tt.transition_event(
+            "item-probe-1",
+            "code_complete",
+            "asserted",
+            actor="reconciler",
+            evidence={"sha": "abc123", "probe": {"probe_result": "error"}},
+            tier="suggest",
+            source_observation_id="obs-probe-1",
+        )
+
+
+def test_probe_present_but_not_error_is_accepted():
+    payload = tt.transition_event(
+        "item-probe-2",
+        "code_complete",
+        "asserted",
+        actor="reconciler",
+        evidence={"sha": "abc123", "probe": {"probe_result": "ok"}},
+        tier="suggest",
+        source_observation_id="obs-probe-2",
+    )
+    assert payload["evidence"]["probe"]["probe_result"] == "ok"
+
+
+def test_evidence_with_no_probe_key_is_unaffected_by_the_guard():
+    payload = tt.transition_event(
+        "item-probe-3",
+        "code_complete",
+        "asserted",
+        actor="reconciler",
+        evidence={"sha": "abc123"},
+        tier="suggest",
+        source_observation_id="obs-probe-3",
+    )
+    assert "probe" not in payload["evidence"]
+
+
+def test_null_evidence_round_trips_byte_identical_and_idempotency_unchanged(
+    repo_root,
+):
+    """Additivity proof, arm 1: `evidence: null`. Round-trips through
+    `emit_transition`/`_emit` and reads back identical, and the
+    (source_observation_id, evidence_sha) null-SHA dedup arm still keys on
+    `source_observation_id` alone — replaying the same payload dedups to
+    the SAME stored event, exactly as it did before `probe` existed as a
+    concept anywhere in this module.
+    """
+    first = tt.emit_transition(
+        "item-probe-null",
+        "qa_verified",
+        "verified",
+        actor="reconciler",
+        evidence=None,
+        tier="auto",
+        source_observation_id="obs-probe-null",
+        repo_root=repo_root,
+    )
+    assert first["evidence"] is None
+
+    events = tracker_store.read_events(repo_root=repo_root)
+    assert len(events) == 1
+    stored = events[0]
+    assert stored["evidence"] is None
+    assert stored == first
+
+    second = tt.emit_transition(
+        "item-probe-null",
+        "qa_verified",
+        "verified",
+        actor="reconciler",
+        evidence=None,
+        tier="auto",
+        source_observation_id="obs-probe-null",
+        repo_root=repo_root,
+    )
+    assert second["id"] == first["id"]
+    assert len(tracker_store.read_events(repo_root=repo_root)) == 1
+
+
+def test_full_six_key_evidence_round_trips_byte_identical_and_idempotency_unchanged(
+    repo_root,
+):
+    """Additivity proof, arm 2: the full section 4.3 six-key `evidence`
+    object, with no `probe` key present. Round-trips through
+    `emit_transition`/`_emit` and reads back identical, and the
+    (generation, evidence.sha) `code_complete` assert-arm dedup key is
+    unchanged — it is not keyed on `probe`, so replaying the SAME six-key
+    evidence object still dedups to the SAME stored event.
+    """
+    six_key_evidence = {
+        "kind": "commit",
+        "sha": "deadbeef",
+        "reachable_default_branch": True,
+        "reverts_sha": None,
+        "citation": "some/path.py:42",
+        "confidence": 0.9,
+    }
+
+    first = tt.emit_transition(
+        "item-probe-six-key",
+        "code_complete",
+        "asserted",
+        actor="reconciler",
+        evidence=six_key_evidence,
+        tier="auto",
+        source_observation_id="obs-probe-six-key",
+        repo_root=repo_root,
+    )
+    assert first["evidence"] == six_key_evidence
+    assert "probe" not in first["evidence"]
+
+    events = tracker_store.read_events(repo_root=repo_root)
+    assert len(events) == 1
+    stored = events[0]
+    assert stored["evidence"] == six_key_evidence
+    assert stored == first
+
+    second = tt.emit_transition(
+        "item-probe-six-key",
+        "code_complete",
+        "asserted",
+        actor="reconciler",
+        evidence=dict(six_key_evidence),
+        tier="auto",
+        source_observation_id="obs-probe-six-key",
+        repo_root=repo_root,
+    )
+    assert second["id"] == first["id"]
+    assert len(tracker_store.read_events(repo_root=repo_root)) == 1
+
+
 def test_withdrawal_and_withdrawn_row_both_present_in_shard(repo_root):
     queued = tt.emit_transition(
         "item-withdraw-2",

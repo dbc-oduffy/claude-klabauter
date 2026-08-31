@@ -90,6 +90,7 @@ EVENT_KINDS: frozenset[str] = frozenset(
         "project_created",
         "item_project_added",
         "item_project_retracted",
+        "item_closure_fidelity_set",
         "item_person_added",
         "item_person_retracted",
         "person_created",
@@ -113,6 +114,16 @@ ITEM_PERSON_ROLES: frozenset[str] = frozenset(
 """The closed role enum for `item_person` (C4 deliverable #3). Nothing else
 rides in an `item_person_added`/`item_person_retracted` payload's `role`
 field for this plan."""
+
+CLOSURE_FIDELITY_VALUES: frozenset[str] = frozenset(
+    {"auto-observable", "verify-with-effort", "human-attested"}
+)
+"""The closed classification enum for `item_closure_fidelity_set` (C3
+deliverable, per DR-closure-fidelity-tier-axis.md D1/D4). Nothing else rides
+in an `item_closure_fidelity_set` payload's `closure_fidelity` field for
+this plan. No retraction counterpart exists (D1): a re-classification emits
+a fresh `item_closure_fidelity_set` event with a different value rather than
+a retract-then-add pair — see the emitter docstring below."""
 
 _ITEM_ID_SLUG_MAX = 32
 _ITEM_ID_NONCE_HEX_LEN = 6  # secrets.token_hex(3) == 6 hex chars
@@ -322,6 +333,43 @@ def reject_invalid_role(role: str, *, action: str) -> None:
             f"cannot {action} item_person with role {role!r} — role must be "
             f"one of {sorted(ITEM_PERSON_ROLES)!r}"
         )
+
+
+def reject_invalid_closure_fidelity(closure_fidelity: str, *, action: str) -> None:
+    """Guard for `item_closure_fidelity_set` payload construction (C3, per
+    DR-closure-fidelity-tier-axis.md D1).
+
+    Raises ``TrackerEntityError`` unless *closure_fidelity* is one of the
+    closed ``CLOSURE_FIDELITY_VALUES`` enum values — ``auto-observable`` /
+    ``verify-with-effort`` / ``human-attested``. Mirrors
+    ``reject_invalid_role``'s shape.
+    """
+    if closure_fidelity not in CLOSURE_FIDELITY_VALUES:
+        raise TrackerEntityError(
+            f"cannot {action} item_closure_fidelity_set with "
+            f"closure_fidelity {closure_fidelity!r} — closure_fidelity must "
+            f"be one of {sorted(CLOSURE_FIDELITY_VALUES)!r}"
+        )
+
+
+def item_closure_fidelity_set(item_id: str, closure_fidelity: str) -> dict:
+    """Construct an ``item_closure_fidelity_set`` payload (C3, per
+    DR-closure-fidelity-tier-axis.md D1).
+
+    A single-valued classification event, not a membership add/discard pair
+    — a re-classification emits a fresh event carrying a different value;
+    there is no retraction counterpart (D1: "no retraction counterpart by
+    design"). The fold takes the latest (by ``applied_at``) as current.
+
+    Raises ``TrackerEntityError`` if *closure_fidelity* is outside the
+    closed ``CLOSURE_FIDELITY_VALUES`` enum.
+    """
+    reject_invalid_closure_fidelity(closure_fidelity, action="set")
+    return {
+        "kind": "item_closure_fidelity_set",
+        "item_id": item_id,
+        "closure_fidelity": closure_fidelity,
+    }
 
 
 def item_person_added(item_id: str, person_id: str, role: str) -> dict:
@@ -642,6 +690,27 @@ def emit_item_project_retracted(item_id: str, project_id: str, *, repo_root: Pat
     return _emit(
         payload, item_id_or_pair=(item_id, project_id), repo_root=repo_root
     )
+
+
+def emit_item_closure_fidelity_set(
+    item_id: str, closure_fidelity: str, *, repo_root: Path
+) -> dict:
+    """Build an ``item_closure_fidelity_set`` payload (C1) and append it as
+    one event (C3, per DR-closure-fidelity-tier-axis.md D1).
+
+    Raises ``TrackerEntityError`` before emitting if *closure_fidelity* is
+    outside the closed ``CLOSURE_FIDELITY_VALUES`` enum (inherited from
+    ``item_closure_fidelity_set``).
+
+    No retraction counterpart exists (D1) — a re-classification is a fresh
+    call to this same emitter with a different *closure_fidelity*, folded
+    last-write-wins by ``applied_at``, not a retract-then-add pair. This
+    mirrors ``fold_membership``'s own precedent for folding a single
+    current value, not the ``item_project_added``/``item_project_retracted``
+    add/discard shape.
+    """
+    payload = item_closure_fidelity_set(item_id, closure_fidelity)
+    return _emit(payload, item_id_or_pair=item_id, repo_root=repo_root)
 
 
 # --- C4: item_person emission — three-part (item_id, person_id, role) key ---

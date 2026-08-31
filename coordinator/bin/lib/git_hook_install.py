@@ -617,8 +617,16 @@ def _shim_body(
         # `baton-assemble apply`.
         # Pure parameter expansion, never `cygpath` in a subshell: this runs on
         # every commit, and a spawn here is a DR-344 cost the hook must not pay.
-        # /c/Users/... -> C:/Users/... ; the MSYS single-letter drive form is the
+        # /c/Users/... -> c:/Users/... ; the MSYS single-letter drive form is the
         # only shape $HOME or $COORDINATOR_SETTINGS_HOME ever takes here.
+        # LOWERCASE `c:` -- this line read "-> C:/Users/..." until 2026-08-31
+        # and was wrong. The expansion relocates the drive letter, it does not
+        # upcase it. Harmless (Windows drive letters are case-insensitive, so
+        # the native python.exe resolves either), but corrected because a
+        # reader who trusts the wording writes a test asserting `C:` and
+        # watches it fail against a fix that works -- which is exactly what
+        # happened while `test_append_block_msys_normalisation_actually_
+        # transforms_the_path` was being written.
         'case "$SCRIPT" in /?/*) _sd="${SCRIPT#/}"; '
         'SCRIPT="${_sd%%/*}:/${_sd#*/}" ;; esac\n'
         f"{invoke_line}\n"
@@ -708,6 +716,23 @@ def _append_block(
         '[ -n "$_PY" ] || echo "[coordinator] WARNING: hook installed but no '
         'python3/python/py interpreter found on PATH — commits are NOT being '
         'auto-pushed / annotated by this hook" 1>&2; '
+        # MSYS drive-letter normalisation on `$_T`, mirroring `_shim_body`'s
+        # identical expansion on `$SCRIPT` — see its WINDOWS TRAP comment for
+        # the full mechanism. Every rung above resolves `_T` under git's MSYS
+        # `sh`, which reads /c/Users/... happily; `{invoke_expr}` then hands
+        # that same string to a NATIVE python.exe, which has no /c mount and
+        # takes the leading slash as repo-relative. The rung passes its own
+        # existence test and execs a path rooted at the repo drive.
+        # `_shim_body` has carried this fix since the memo that reported it;
+        # this leg did not, and the two emitters' own docstrings say they must
+        # change together (pinned by
+        # `test_both_hook_emitters_normalise_msys_drive_letters`).
+        # Scratch var is `_td`, not `_shim_body`'s `_sd`: an append block lands
+        # inside a foreign hook and must not collide with names above it.
+        # Pure parameter expansion, never `cygpath` — this runs on every
+        # commit, and a spawn here is a DR-344 cost the hook must not pay.
+        'case "$_T" in /?/*) _td="${_T#/}"; '
+        '_T="${_td%%/*}:/${_td#*/}" ;; esac; '
         f'[ -n "$_PY" ] && _have_py "$_T" && {invoke_expr}; fi; }}'
     )
 

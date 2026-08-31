@@ -84,9 +84,20 @@ def test_no_engine_at_all_returns_none(cc_invoke_mod, monkeypatch):
 def test_each_import_site_degrades_independently(cc_invoke_mod, monkeypatch, blocked):
     """Each of the three sites carries its own guard.
 
-    Guarding only the first would still crash a partial install — and a
-    partial install is not hypothetical here, since the three modules come
-    from two different subpackages.
+    The justification differs per site and is not uniform — the first draft of
+    this docstring claimed "two different subpackages" for all three, which is
+    only true of the first two (Kira, 2026-08-31):
+
+      1. `coordinator_core.warm.settings` — the real reported failure. Nothing
+         has been proven importable yet when this runs.
+      2. `coordinator_core.op_scopes` — a DIFFERENT subpackage from (1), so (1)
+         succeeding proves nothing about it. This guard is load-bearing.
+      3. `coordinator_core.warm.client` — same subpackage as (1), so (1)
+         succeeding does make an ImportError here unlikely. Kept anyway, and
+         honestly labelled: it is belt-and-braces against a partially-installed
+         or partially-shadowed `warm` package, not a distinct failure anyone has
+         seen. Cheap, and the alternative is an unguarded import in a function
+         whose contract is "never raises".
     """
     _block(monkeypatch, blocked)
     assert cc_invoke_mod._try_in_process_warm_reach("engine.drift", {}, ".") is None

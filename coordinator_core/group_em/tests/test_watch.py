@@ -238,7 +238,7 @@ def test_main_emits_poll_error_and_continues():
             max_iterations=2,
         )
 
-    assert any(line.startswith("ARMED denominator=3") for line in stream_lines)
+    assert any(line.startswith("ARMED peer_count=3") for line in stream_lines)
     assert sum(1 for line in stream_lines if line.startswith("POLL-ERROR")) == 2
 
 
@@ -267,7 +267,7 @@ def test_main_arms_and_reports_measured_interval():
         )
 
     armed_line = stream_lines[0]
-    assert armed_line.startswith("ARMED denominator=5 claude-klabauter peers, snapshot=2.0ms")
+    assert armed_line.startswith("ARMED peer_count=5 claude-klabauter peers, snapshot=2.0ms")
     # interval = max(floor, 1000 * snapshot_s) = max(5.0, 1000 * 0.002) = 5.0
     assert "interval=5.0s" in armed_line
 
@@ -284,6 +284,16 @@ def test_poll_interval_floors_at_5_seconds_for_a_fast_snapshot():
 def test_poll_interval_scales_with_measured_cost_above_the_floor():
     # 1000x multiplier: 10ms measured -> 10s interval.
     assert watch._poll_interval_seconds(10.0) == 10.0
+
+
+def test_poll_interval_ceilings_a_transient_arm_time_spike():
+    # A single bad arm-time sample (e.g. 2000ms) must not commit the watch
+    # to a ~33-minute cadence for the whole session.
+    assert watch._poll_interval_seconds(2000.0) == watch._POLL_INTERVAL_CEILING_SECONDS
+
+
+def test_poll_interval_ceiling_is_well_above_a_normal_measurement():
+    assert watch._POLL_INTERVAL_CEILING_SECONDS > 30.0
 
 
 # ---------------------------------------------------------------------------

@@ -360,6 +360,55 @@ def _verify_single_invocation_succeeds(script: str) -> None:
     )
 
 
+_PROCS_FLOOR: "Optional[int]" = None
+
+
+def _measure_procs_floor() -> int:
+    """`procs_per_call` for a child that spawns NOTHING, measured in this
+    environment rather than assumed from a constant.
+
+    WHY THIS IS MEASURED AND NOT A LITERAL. `spawn_count` was derived as
+    `procs_per_call - 1`, encoding "the job object counts the one interpreter
+    child, so subtract it". That models the environment this bench was
+    written in, where a childless `python -c pass` read `1.0` -- the figure
+    `_verify_spawn_count_derivation`'s docstring still cites. It reads `2.0`
+    here, deterministically (5/5, 2026-08-31), so something in this
+    environment contributes a process the derivation never modelled and every
+    `spawn_count` would come out one too high.
+
+    Subtracting a MEASURED floor is immune to whichever process that is, and
+    to it appearing or disappearing again -- swapping the literal `1` for a
+    literal `2` would just re-date the same defect. This is the same failure
+    the guard below already exists to catch: a fact that was true at the
+    boundary where it was written, read as true now.
+
+    Measured once per process and memoized: the floor is a property of the
+    environment, and this bench runs on a box where ~50 peers are spawning
+    too, so it must not cost a process per sample.
+    """
+    global _PROCS_FLOOR
+    if _PROCS_FLOOR is None:
+        timed = batched_process_time_ms([sys.executable, "-c", "pass"], k=1, cwd=_REPO_ROOT)
+        if timed["rc"] != 0:
+            raise RuntimeError(
+                "catering_path_bench: childless floor fixture (python -c pass) "
+                "exited %r -- cannot calibrate spawn_count" % (timed["rc"],)
+            )
+        _PROCS_FLOOR = int(round(timed["procs_per_call"]))
+    return _PROCS_FLOOR
+
+
+def _derive_spawn_count(procs_per_call: float) -> int:
+    """Processes this invocation spawned BEYOND a childless one.
+
+    Never negative: a reading below the floor means the primitive saw less
+    than a bare interpreter, which is an instrument fault, not negative
+    spawning -- it floors at 0 and `_measure_one_sample` records the raw
+    `procs_per_call` alongside so the two are distinguishable.
+    """
+    return max(0, int(round(procs_per_call)) - _measure_procs_floor())
+
+
 def _measure_one_sample(script: str) -> Tuple[float, float, float, float, int, float]:
     """Two cold launches of the byte-identical *script*: one untimed to
     capture the self-reported `(import_cpu_ms, compose_cpu_ms)` JSON line,
@@ -377,12 +426,14 @@ def _measure_one_sample(script: str) -> Tuple[float, float, float, float, int, f
     figure-without-its-invocation-shape defect this plan has withdrawn three
     figures for. Record both; interpret the raw one.
 
-    `spawn_count` is `procs_per_call - 1`: both the Windows job object's
-    `TotalProcesses` and Darwin's `_darwin_one_invocation` seen-set count
-    the interpreter child itself as one process (module docstring,
-    `_verify_spawn_count_derivation`), and this baseline reports additional
-    processes spawned FROM it (e.g. `resolve_git_root`'s `git rev-parse`),
-    matching the plan's "1 spawn/fire" framing.
+    `spawn_count` is `procs_per_call` minus a MEASURED childless floor
+    (`_measure_procs_floor`), not minus the literal `1` it used to subtract.
+    Both the Windows job object's `TotalProcesses` and Darwin's
+    `_darwin_one_invocation` seen-set count the interpreter child itself, but
+    how many OTHER processes a bare launch contributes is an environment
+    property that has already changed once under this bench (floor 1.0 when
+    written, 2.0 measured 2026-08-31). This baseline reports processes spawned
+    FROM the child (e.g. `resolve_git_root`'s `git rev-parse`).
     """
     if not (IS_WINDOWS or IS_DARWIN):
         raise NotImplementedError(
@@ -413,28 +464,33 @@ def _measure_one_sample(script: str) -> Tuple[float, float, float, float, int, f
         float(breakdown["compose_cpu_ms"]),
         float(timed["process_time_ms"]),
         float(timed["wall_ms"]),
-        max(0, int(round(timed["procs_per_call"])) - 1),
+        _derive_spawn_count(timed["procs_per_call"]),
         float(timed["procs_per_call"]),
     )
 
 
 def _verify_spawn_count_derivation() -> None:
-    """AC22: `spawn_count = procs_per_call - 1` (`_measure_one_sample`)
-    encodes a WINDOWS fact -- the job object counts the parent process, so
-    subtracting it yields children. Whether Darwin's `procs_per_call` also
-    includes the root is a property of `process_time.py`'s own Darwin
-    implementation, not an assumption safe to carry over unchecked -- so
-    this checks it against a known-truth fixture and asserts the answer
-    rather than trusting the Windows framing on a platform it was never
-    derived from.
+    """AC22: `spawn_count` (`_measure_one_sample`) is a DERIVATION, and this
+    checks it against a known-truth fixture rather than trusting it. The
+    fixture is `python -> python -c pass`: exactly one real child, whatever
+    else the environment contributes.
 
-    The fixture is `python -> python -c pass`, DERIVED (not
-    observed-then-blessed) at `1 root interpreter + 1 child = 2.0`
-    root-inclusive. If this platform's `procs_per_call` ever excluded the
-    root it would measure `1.0` here, `spawn_count` would come out `0`
-    instead of the one real child, and every figure this baseline reports
-    would be off by one, silently, in a bench nobody would think to
-    distrust -- this raises loud instead.
+    The derivation subtracts a measured childless floor
+    (`_measure_procs_floor`), so this verifies the pair -- floor and fixture
+    -- rather than a literal. That pairing is the point: the check used to
+    assert the fixture read `2.0` root-inclusive, and it does not here. This
+    box reads a `2.0` FLOOR and a `3.0` one-child fixture (deterministic 5/5,
+    2026-08-31), so the old assertion refused to run the whole bench on the
+    platform that needed it -- the second time this same guard has been
+    correct about a broken premise and wrong about which premise
+    (see the `python -> git --version` note below). Calibrating instead of
+    asserting a constant makes the check survive an environment that adds or
+    drops a background process.
+
+    Still raises loud when the pair disagrees: if the fixture does not derive
+    to exactly one child against the measured floor, every figure this
+    baseline reports is off by an unknown amount, in a bench nobody would
+    think to distrust.
 
     WHY NOT `python -> git --version`, which this fixture used until
     2026-08-25 and which `test_process_time_posix.py ::
@@ -460,16 +516,17 @@ def _verify_spawn_count_derivation() -> None:
             "catering_path_bench: spawn_count derivation fixture "
             "(python -> python -c pass) exited %r" % (timed["rc"],)
         )
-    spawn_count = max(0, int(round(timed["procs_per_call"])) - 1)
+    floor = _measure_procs_floor()
+    spawn_count = _derive_spawn_count(timed["procs_per_call"])
     if spawn_count != 1:
         raise RuntimeError(
             "catering_path_bench: spawn_count derivation is WRONG on this "
-            "platform -- python -> python -c pass fixture measured "
-            "procs_per_call=%r, so spawn_count = procs_per_call - 1 = %r, "
-            "expected exactly 1 (the one real child interpreter). If this "
-            "platform's process count excludes the root, the '- 1' in "
-            "_measure_one_sample silently under-reports every spawn_count "
-            "figure by one." % (timed["procs_per_call"], spawn_count)
+            "platform -- childless floor measured procs_per_call=%r and the "
+            "python -> python -c pass fixture measured procs_per_call=%r, so "
+            "spawn_count = %r, expected exactly 1 (the one real child "
+            "interpreter). The floor and the fixture disagree about what one "
+            "child costs, so every spawn_count this baseline reports is off "
+            "by an unknown amount." % (floor, timed["procs_per_call"], spawn_count)
         )
 
 

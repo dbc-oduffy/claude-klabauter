@@ -77,6 +77,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import subprocess
 import sys
 import threading
@@ -737,6 +738,78 @@ def _reconcile_claim_from_ledger(
     return True, None
 
 
+#: `coordinator-doc-new.py` only ever writes this key when it received one or
+#: more `--additional-predecessor` flags -- never on an ordinary single
+#: continuation. Anchored to line-start so a body paragraph merely mentioning
+#: the phrase (outside the frontmatter block this is matched against) cannot
+#: false-positive.
+_FM_ADDITIONAL_PREDECESSORS_RE = re.compile(r"^additional_predecessors:", re.MULTILINE)
+
+
+def _continued_into_target_is_an_unresolved_fan_in_placeholder(
+    repo_root: Path, continued_into: str
+) -> bool:
+    """P0 guard (b),
+    state/bug-backlog/2026-08-31-pickup-after-a-close-supersedes-the-new-baton.yaml:
+    a `continued_into` target that is BOTH still carrying an unreplaced
+    `coordinator-doc-new` scaffold title/summary AND a multi-parent fan-in
+    mint (`additional_predecessors:` present) can never be the record of
+    anything a predecessor was superseded INTO -- it is not a successor, it
+    is an empty stub nobody will ever return to finish (the filed
+    incident's `#/second_instance`: `predecessor:`/`additional_predecessors:`
+    fused two unrelated batons under a `title: "PLACEHOLDER --- replace with
+    one-line handoff title"` successor, minted by `pickup_assemble.
+    _unify_into_successor`'s own self-brief, which supplies no `--title` and
+    hands control back to no one).
+
+    SCOPED TO THE FAN-IN SHAPE, NOT PLACEHOLDER-TITLE ALONE. An ORDINARY
+    single-predecessor `/handoff` ALSO mints its successor with the SAME
+    default PLACEHOLDER title/summary -- d1 (the scaffold) and d6 (this
+    supersede) land in the SAME `apply()` run, before the operator has had
+    any chance to fill the title in. A bare placeholder-title check would
+    refuse every legitimate `/handoff` continuation in existence
+    (`test_predecessor_back_edge.py`'s real-`apply()` harness caught exactly
+    this on first pass). What the incident actually names is a successor
+    minted with NO OPERATOR ON THE OTHER END to ever replace the
+    placeholder -- and `additional_predecessors:` (only ever written when
+    `coordinator-doc-new.py` receives one or more `--additional-predecessor`
+    flags, i.e. a genuine multi-baton fan-in, never on an ordinary single
+    continuation) is the one on-disk fact that distinguishes the two: a
+    C5-unification mint always carries it, an ordinary continuation never
+    does.
+
+    Mirrors `coordinator-doc-new.py`'s own `_is_placeholder_title` predicate
+    (anchored at the start, case-sensitive -- a legitimate title merely
+    containing the word "placeholder" must not trip this) rather than
+    importing it: that module is a CLI entry point outside this directive's
+    dependency graph, and the predicate is one line, stable, and owned by
+    that file's own docstring as the canonical definition this mirrors.
+
+    FAIL-SAFE toward "not a placeholder": an unreadable file, absent
+    frontmatter, or a missing `title` field answers False -- the same
+    direction `_is_pristine_generator_scaffold` fails safe in, and for the
+    same reason: this predicate gates a REFUSAL to write, and treating an
+    unreadable target as a placeholder would refuse a supersede this
+    directive has no evidence against.
+    """
+    if not continued_into:
+        return False
+    try:
+        text = (repo_root / continued_into).read_text(encoding="utf-8")
+    except OSError:
+        return False
+    split = split_frontmatter(text)
+    if split is None:
+        return False
+    if not _FM_ADDITIONAL_PREDECESSORS_RE.search(split.fm_text):
+        return False
+    title = read_fm_field_unquoted(split.fm_text, "title")
+    if title and title.startswith("PLACEHOLDER"):
+        return True
+    summary = read_fm_field_unquoted(split.fm_text, "summary")
+    return bool(summary and summary.startswith("PLACEHOLDER"))
+
+
 def _dispatch_handoff_supersede_predecessor(args: list[str], repo_root: Path) -> dict[str, Any]:
     """kind=handoff's d6 (2026-07-27, computed-skills-b4 plan C1 -- the
     push-side succession writer): the fix for a continuation baton's
@@ -896,6 +969,28 @@ def _dispatch_handoff_supersede_predecessor(args: list[str], repo_root: Path) ->
                 successor_abs.unlink()
             except FileNotFoundError:
                 pass
+
+    if _continued_into_target_is_an_unresolved_fan_in_placeholder(repo_root, continued_into):
+        print(
+            "baton-assemble apply: handoff.supersede_predecessor degraded -- "
+            f"{continued_into!r} is a multi-parent fan-in mint still carrying "
+            f"an unreplaced PLACEHOLDER title/summary, so it cannot be the "
+            f"record of anything: refusing to stamp {predecessor_path!r} "
+            "continued_into it. The predecessor was left exactly as it was; "
+            "replace the successor's title/summary and re-run if this "
+            "unification is genuine.",
+            file=sys.stderr,
+        )
+        return {
+            "cli": "handoff.supersede_predecessor",
+            "args": args,
+            "result": None,
+            "degraded": {
+                "reason": "continued-into-target-is-placeholder",
+                "predecessor": predecessor_path,
+                "continued_into": continued_into,
+            },
+        }
 
     from coordinator_core.archival import claimed_or_shipped_at_path
 

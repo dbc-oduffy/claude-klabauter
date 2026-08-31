@@ -62,6 +62,8 @@ from coordinator_core.tracker_completion_policy import (
     CodeCompleteEvidence,
     emit_code_complete_assert,
 )
+from coordinator_core.tracker_entities import CLOSURE_FIDELITY_VALUES
+from coordinator_core.tracker_projection import DEFAULT_CLOSURE_FIDELITY
 
 # ---------------------------------------------------------------------------
 # JSON-RPC handler
@@ -82,6 +84,9 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             "reachable_on_default_branch": bool | None,
             "actor": str,
             "source_observation_id": str | None (optional),
+            "closure_fidelity": str (optional — one of
+                `CLOSURE_FIDELITY_VALUES`; omitted means
+                `DEFAULT_CLOSURE_FIDELITY`),
             "repo_root": str (optional — D3 consistency check only),
         }
         ->      the stored transition event dict `emit_code_complete_assert`
@@ -142,6 +147,20 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
 
     source_observation_id = params.get("source_observation_id")
 
+    # An item whose closure_fidelity the caller does not declare folds to
+    # DEFAULT_CLOSURE_FIDELITY ("verify-with-effort") per
+    # DR-closure-fidelity-tier-axis D4, which is the tier that can never
+    # auto-assert. Defaulting here fails SAFE: the absent-input case degrades
+    # to suggest rather than minting a false auto. Resolving the real value
+    # from projected state stays the caller's job -- this module holds its
+    # negative-spec import boundary and does not read the store to find it.
+    closure_fidelity = params.get("closure_fidelity", DEFAULT_CLOSURE_FIDELITY)
+    if closure_fidelity not in CLOSURE_FIDELITY_VALUES:
+        raise ValueError(
+            "tracker.assert_code_complete: closure_fidelity must be one of "
+            f"{sorted(CLOSURE_FIDELITY_VALUES)}, got {closure_fidelity!r}"
+        )
+
     evidence = CodeCompleteEvidence(
         sha=sha,
         trailer_bound=trailer_bound,
@@ -154,6 +173,7 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         evidence,
         actor=actor,
         source_observation_id=source_observation_id,
+        closure_fidelity=closure_fidelity,
         repo_root=worktree,
     )
     return event

@@ -353,9 +353,8 @@ def _bootstraps_anywhere(tree: ast.AST, source: str) -> bool:
        by-location import, which exists precisely because a bare `import lib`
        can bind `coordinator/lib` instead on an unlucky `sys.path` order.
     """
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import) and any(a.name == "lib" for a in node.names):
-            return True
+    if _contains_import_lib(tree):
+        return True
     if "sys.path.insert" in source or "sys.path.append" in source:
         return True
     return "spec_from_file_location" in source and '"lib"' in source

@@ -76,7 +76,8 @@ actioned it) — never by looking for a surviving local draft.
 ## Example — memo to central EM
 
 ```sh
-cross-repo-memo draft claude-klabauter-rag-boundary-note --to claude-central-em --kind fyi \n    --title "claude-klabauter/rag boundary: state/ reconciliation item"
+cross-repo-memo --list-receivers          # resolve the current id; never type one from memory
+cross-repo-memo draft claude-klabauter-rag-boundary-note --to doe-claude-em --kind fyi \n    --title "claude-klabauter/rag boundary: state/ reconciliation item"
 # write the body into the printed outbox path, then:
 cross-repo-memo send claude-klabauter-rag-boundary-note
 ```

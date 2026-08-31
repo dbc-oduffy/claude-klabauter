@@ -249,6 +249,21 @@ def _coerce_dates_to_strings(obj: Any) -> Any:
     before validation. This is a one-way normalisation — does not affect the
     caller's original dict.
 
+    THIS LENIENCY IS CROSS-REPO CONTRACT, NOT AN IMPLEMENTATION DETAIL, and
+    tightening it breaks a repo we do not own. DoE-claude imports this module
+    BY FILE PATH and calls `validate_frontmatter_obj`; their whole artifact
+    corpus runs through it (`coordinator/tests/test_artifact_corpus_validates_
+    against_schema.py` on their side), so a date rejected here fails records
+    that are correct on disk. Standing ruling, DoE PM + claude-klabauter PM, cross-repo
+    memo 2026-08-06. Pinned by `tests/test_validate_frontmatter_obj.py ::
+    TestValidateFrontmatterObjTypeStringDateAcceptanceRegression`.
+
+    The pin is named for the PUBLIC entry point, not for this helper, which is
+    why grepping this function's name turns up no test and reads as unguarded —
+    a reader did exactly that on 2026-08-31 and concluded the contract had no
+    coverage. It has coverage; this pointer is here so the next grep lands on
+    it.
+
     Negative-spec: does not handle YAML anchors or custom tag objects.
     """
     if isinstance(obj, datetime.datetime):

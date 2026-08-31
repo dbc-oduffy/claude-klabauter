@@ -424,6 +424,36 @@ def test_invalid_severity_value_names_valid_set() -> None:
             raise AssertionError(f"{name}: " + (f"valid severity value {value!r} missing from rejection output: {combined!r}"))
 
 
+def test_invalid_lesson_scope_names_valid_set() -> None:
+    """An invalid --scope must be REFUSED BY NAME, never dropped silently.
+
+    Regression: --scope reached schema validation, which rejected it and exited 1 with
+    nothing on stderr. To a caller not inspecting the return code that is indistinguishable
+    from success, so a lesson read as filed when it had been dropped. Reported from a live
+    session that lost one to `--scope global`.
+    """
+    name = "Test 4e — --scope global is rejected and the valid lesson-scope set is named"
+    with tempfile.TemporaryDirectory() as tmpdir:
+        result = _run_cli(
+            [
+                "--schema", "lessons",
+                "--title", "scope enum probe",
+                "--body", "scope enum probe",
+                "--scope", "global",
+            ],
+            env={"QUEUE_APPEND_OUTPUT_ROOT": tmpdir},
+            cwd=tmpdir,
+        )
+    if result.returncode == 0:
+        raise AssertionError(f"{name}: " + ("expected non-zero exit for --scope global; got 0"))
+    combined = result.stdout + result.stderr
+    if not combined.strip():
+        raise AssertionError(f"{name}: " + ("rejection produced NO diagnostic — the silent-exit-1 regression"))
+    for value in ("universal", "project", "wiki-only"):
+        if value not in combined:
+            raise AssertionError(f"{name}: " + (f"valid scope {value!r} missing from rejection output: {combined!r}"))
+
+
 # ---------------------------------------------------------------------------
 # Test 5 — Valid write: exits 0, file exists at expected path, YAML has required fields
 # ---------------------------------------------------------------------------

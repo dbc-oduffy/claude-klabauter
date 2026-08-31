@@ -553,3 +553,97 @@ def test_append_block_emits_no_shell_errors_when_nothing_resolves(tmp_path):
     assert "not found" in result.stderr  # the coordinator WARNING, checked below
     for line in result.stderr.splitlines():
         assert "[coordinator] WARNING" in line, f"unexpected shell error: {line!r}"
+
+
+# ---------------------------------------------------------------------------
+# MSYS drive-letter normalisation — BOTH emitters (2026-08-31).
+#
+# `_shim_body` has carried the `case "$SCRIPT" in /?/*)` expansion since the
+# memo that reported the defect; `_append_block` did not, so a hook installed
+# by the append leg resolved `_T` under MSYS `sh` (which reads /c/Users/...
+# happily) and handed that string to a NATIVE python.exe, which has no /c
+# mount and reads the leading slash as repo-relative. The rung passes its own
+# existence test and execs a path rooted at the repo drive — a silent wrong
+# answer, which is why both emitters' docstrings say they must change
+# together. These pin that they do.
+# ---------------------------------------------------------------------------
+
+
+def test_both_hook_emitters_normalise_msys_drive_letters():
+    """Neither emitter may hand a POSIX-absolute path to a native python.
+
+    A TEXT-level guard on purpose, in addition to the executable one below:
+    it names both emitters, so deleting the expansion from either one fails
+    here with a message saying which, rather than only failing whichever
+    end-to-end case happens to cover it.
+    """
+    shim = _shim_body("/fake/coord/bin", "coordinator-prepare-commit-msg", "hdr")
+    append = _append_block(*_APPEND_BLOCK_ARGS)
+
+    for label, body, var in (
+        ("_shim_body", shim, "SCRIPT"),
+        ("_append_block", append, "_T"),
+    ):
+        assert f'case "${var}" in /?/*)' in body, (
+            f"{label} does not normalise the MSYS drive-letter form on ${var}. "
+            "Under git's MSYS sh a /c/Users/... path passes every existence "
+            "test and then execs against a native python.exe that has no /c "
+            "mount. Both emitters carry this expansion or neither is correct "
+            "-- see their own docstrings."
+        )
+
+
+def test_append_block_msys_normalisation_actually_transforms_the_path():
+    """The expansion is executed, not merely present.
+
+    `${_td%%/*}` / `${_td#*/}` is easy to write subtly wrong (a `%` for a `#`
+    silently yields the wrong half), and a substring assertion cannot tell a
+    correct expansion from a broken one. This runs the real fragment under
+    the real `sh` and checks the transform.
+    """
+    sh = _sh()
+    if not sh:
+        import pytest
+
+        pytest.skip("no POSIX sh available on this host")
+
+    append = _append_block(*_APPEND_BLOCK_ARGS)
+    match = re.search(r'case "\$_T" in /\?/\*\).*?esac', append, re.S)
+    assert match, "the normalisation fragment is not in _append_block's output"
+
+    script = f'_T="/c/Users/someone/bin/tool"\n{match.group(0)}\nprintf %s "$_T"\n'
+    result = subprocess.run([sh, "-c", script], capture_output=True, text=True)
+
+    assert result.returncode == 0, result.stderr
+    # LOWERCASE `c:`, and that is correct. The expansion is pure parameter
+    # substitution -- it relocates the drive letter, it does not upcase it,
+    # and Windows drive letters are case-insensitive so `c:/` resolves
+    # identically to `C:/` for the native python.exe this exists to feed.
+    # Asserted explicitly because BOTH emitters' comments say "-> C:/Users/..."
+    # (corrected 2026-08-31): a reader who trusts that wording writes exactly
+    # this test and watches it fail on a fix that is working.
+    assert result.stdout == "c:/Users/someone/bin/tool", (
+        f"expansion produced {result.stdout!r}, not the relocated drive form"
+    )
+
+
+def test_append_block_msys_normalisation_leaves_a_windows_path_alone():
+    """A path that is already `C:/...` must pass through untouched -- the
+    `case` arm matches a SINGLE-character first segment (`/?/`), so `/c/x`
+    converts and `C:/x` does not re-enter. Pins that the guard is not merely
+    absent-on-Windows but inert there."""
+    sh = _sh()
+    if not sh:
+        import pytest
+
+        pytest.skip("no POSIX sh available on this host")
+
+    append = _append_block(*_APPEND_BLOCK_ARGS)
+    match = re.search(r'case "\$_T" in /\?/\*\).*?esac', append, re.S)
+    assert match
+
+    script = f'_T="C:/Users/someone/bin/tool"\n{match.group(0)}\nprintf %s "$_T"\n'
+    result = subprocess.run([sh, "-c", script], capture_output=True, text=True)
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == "C:/Users/someone/bin/tool"

@@ -29,9 +29,11 @@ import pytest
 from coordinator_core import tracker_entities, tracker_store
 from coordinator_core.tracker_entities import (
     ALIAS_NAMESPACES,
+    CLOSURE_FIDELITY_VALUES,
     EVENT_KINDS,
     RESERVED_PROJECT_ID,
     TrackerEntityError,
+    emit_item_closure_fidelity_set,
     emit_item_created,
     emit_item_project_added,
     emit_item_project_retracted,
@@ -40,6 +42,7 @@ from coordinator_core.tracker_entities import (
     emit_person_created,
     emit_person_merged,
     emit_project_created,
+    item_closure_fidelity_set,
     item_created,
     item_project_added,
     mint_item_id,
@@ -48,6 +51,7 @@ from coordinator_core.tracker_entities import (
     person_alias_added,
     person_alias_retracted,
     project_created,
+    reject_invalid_closure_fidelity,
     reject_invalid_namespace,
     reject_reserved_project,
 )
@@ -72,6 +76,7 @@ def test_event_kinds_closed_set_extended():
         "project_created",
         "item_project_added",
         "item_project_retracted",
+        "item_closure_fidelity_set",
         "item_person_added",
         "item_person_retracted",
         "person_created",
@@ -429,6 +434,95 @@ def test_ac17_item_project_retracted_raises_for_foreign_repo_item(repo_root):
         emit_item_project_retracted("itm-not-created-here", "proj-alpha", repo_root=repo_root)
 
     assert tracker_store.read_events(repo_root=repo_root) == []
+
+
+# --- C3: closure_fidelity enum and its attachment to an item, per
+# DR-closure-fidelity-tier-axis.md D1/D4 ---
+
+
+def test_closure_fidelity_values_is_exactly_the_closed_three():
+    assert CLOSURE_FIDELITY_VALUES == {
+        "auto-observable",
+        "verify-with-effort",
+        "human-attested",
+    }
+
+
+def test_reject_invalid_closure_fidelity_rejects_outside_the_enum():
+    with pytest.raises(TrackerEntityError):
+        reject_invalid_closure_fidelity("some-other-value", action="set")
+
+
+def test_reject_invalid_closure_fidelity_accepts_every_enum_member():
+    for value in CLOSURE_FIDELITY_VALUES:
+        reject_invalid_closure_fidelity(value, action="set")
+
+
+def test_item_closure_fidelity_set_payload_shape():
+    payload = item_closure_fidelity_set("itm-x", "auto-observable")
+    assert payload == {
+        "kind": "item_closure_fidelity_set",
+        "item_id": "itm-x",
+        "closure_fidelity": "auto-observable",
+    }
+
+
+def test_item_closure_fidelity_set_rejects_invalid_value():
+    with pytest.raises(TrackerEntityError):
+        item_closure_fidelity_set("itm-x", "bogus")
+
+
+def test_emit_item_closure_fidelity_set_round_trips_through_read_events(repo_root):
+    item_id, _ = _make_item(repo_root)
+    stored = emit_item_closure_fidelity_set(
+        item_id, "human-attested", repo_root=repo_root
+    )
+    assert _EVENT_ID_RE.match(stored["id"]), stored["id"]
+    assert stored["kind"] == "item_closure_fidelity_set"
+    assert stored["item_id"] == item_id
+    assert stored["closure_fidelity"] == "human-attested"
+    assert stored["applied_at"]
+    assert stored["observed_at"]
+
+    events = tracker_store.read_events(repo_root=repo_root)
+    matching = [e for e in events if e["kind"] == "item_closure_fidelity_set"]
+    assert len(matching) == 1
+    assert matching[0]["id"] == stored["id"]
+
+
+def test_emit_item_closure_fidelity_set_refuses_invalid_value(repo_root):
+    item_id, _ = _make_item(repo_root)
+    with pytest.raises(TrackerEntityError):
+        emit_item_closure_fidelity_set(item_id, "bogus", repo_root=repo_root)
+
+    # Never a silent skip: no event of this kind was written.
+    events = tracker_store.read_events(repo_root=repo_root)
+    assert not any(e["kind"] == "item_closure_fidelity_set" for e in events)
+
+
+def test_emit_item_closure_fidelity_set_reclassification_lands_two_distinct_events(
+    repo_root,
+):
+    """D1: no retraction counterpart -- a re-classification is a fresh
+    `item_closure_fidelity_set` call with a different value, folded
+    last-write-wins by applied_at, not a retract-then-add pair."""
+    item_id, _ = _make_item(repo_root)
+    first = emit_item_closure_fidelity_set(
+        item_id, "auto-observable", repo_root=repo_root
+    )
+    second = emit_item_closure_fidelity_set(
+        item_id, "verify-with-effort", repo_root=repo_root
+    )
+
+    assert first["id"] != second["id"]
+
+    events = tracker_store.read_events(repo_root=repo_root)
+    matching = [e for e in events if e["kind"] == "item_closure_fidelity_set"]
+    assert len(matching) == 2
+    assert [e["closure_fidelity"] for e in matching] == [
+        "auto-observable",
+        "verify-with-effort",
+    ]
 
 
 # --- sat-05 C5a: person/alias/merge emission-layer tests ---

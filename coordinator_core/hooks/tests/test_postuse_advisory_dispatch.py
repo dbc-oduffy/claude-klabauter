@@ -121,13 +121,18 @@ def test_silent_without_session_id(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_silent_when_no_git_root(tmp_path, monkeypatch):
+def test_silent_when_no_git_root(tmp_path, monkeypatch, _installed_group_em_watch_launcher):
+    # Review: review-integrator (finding #1, EM-ratified P1) -- without the
+    # launcher fixture this test short-circuited on the launcher probe
+    # before ever reaching the git-root check it is named for.
     monkeypatch.setattr("coordinator_core.git.repo_root.show_toplevel", lambda: "")
     transcript_path = _write_transcript(tmp_path, "irrelevant content\n")
     assert pad._check_group_em_watch_arm_sync(SESSION, transcript_path) == ""
 
 
-def test_silent_when_git_seam_raises(tmp_path, monkeypatch):
+def test_silent_when_git_seam_raises(tmp_path, monkeypatch, _installed_group_em_watch_launcher):
+    # Review: review-integrator (finding #1, EM-ratified P1) -- see
+    # test_silent_when_no_git_root above.
     def _boom():
         raise RuntimeError("git absent")
 
@@ -136,7 +141,9 @@ def test_silent_when_git_seam_raises(tmp_path, monkeypatch):
     assert pad._check_group_em_watch_arm_sync(SESSION, transcript_path) == ""
 
 
-def test_silent_when_no_nomination_record(tmp_path, monkeypatch):
+def test_silent_when_no_nomination_record(tmp_path, monkeypatch, _installed_group_em_watch_launcher):
+    # Review: review-integrator (finding #1, EM-ratified P1) -- see
+    # test_silent_when_no_git_root above.
     repo_root = str(tmp_path / "repo")
     os.makedirs(repo_root, exist_ok=True)
     monkeypatch.setattr(
@@ -146,7 +153,9 @@ def test_silent_when_no_nomination_record(tmp_path, monkeypatch):
     assert pad._check_group_em_watch_arm_sync(SESSION, transcript_path) == ""
 
 
-def test_silent_when_crown_held_by_another_session(tmp_path, monkeypatch):
+def test_silent_when_crown_held_by_another_session(tmp_path, monkeypatch, _installed_group_em_watch_launcher):
+    # Review: review-integrator (finding #1, EM-ratified P1) -- see
+    # test_silent_when_no_git_root above.
     repo_root = str(tmp_path / "repo")
     os.makedirs(repo_root, exist_ok=True)
     nomination_dir = tmp_path / "group-em-records"
@@ -193,7 +202,12 @@ def test_silent_when_armed_marker_already_present(
     assert result == ""
 
 
-def test_returns_empty_not_raises_on_unreadable_transcript(tmp_path, _crowned_repo):
+def test_returns_empty_not_raises_on_unreadable_transcript(
+    tmp_path, _crowned_repo, _installed_group_em_watch_launcher
+):
+    # Review: review-integrator (finding #1, EM-ratified P1) -- without the
+    # launcher fixture this test short-circuited on the launcher probe
+    # before ever reaching the transcript-read logic it is named for.
     missing_path = os.path.join(tempfile.gettempdir(), "does-not-exist-group-em-watch.jsonl")
     assert not os.path.isfile(missing_path)
 
@@ -202,7 +216,9 @@ def test_returns_empty_not_raises_on_unreadable_transcript(tmp_path, _crowned_re
     assert result == ""
 
 
-def test_silent_without_transcript_path(tmp_path, _crowned_repo):
+def test_silent_without_transcript_path(tmp_path, _crowned_repo, _installed_group_em_watch_launcher):
+    # Review: review-integrator (finding #1, EM-ratified P1) -- see
+    # test_returns_empty_not_raises_on_unreadable_transcript above.
     assert pad._check_group_em_watch_arm_sync(SESSION, "") == ""
 
 

@@ -39,7 +39,7 @@ The failure mode is therefore SILENT INERTNESS: their authoring gate
 stops running and every plan still commits green. Nobody gets a red test.
 
 That fail-open is their call and the right one for a write-time hook; the
-obligation it creates is ours. Give claude-central-em a heads-up before
+obligation it creates is ours. Give DoE-claude a heads-up before
 touching either name — same standing arrangement as
 `coordinator_core.contract.cockpit_schema.emit_schema` (see CLAUDE.md
 § Architecture), and the same reason: a sibling's capability depends on a

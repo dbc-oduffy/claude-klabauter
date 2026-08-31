@@ -90,6 +90,7 @@ silently-discarded expression statement, not the module __doc__ — see
 tasks/2026-07-16-clean-slate-recon/PORTER-BRIEF-ADDENDUM.md § 1)."""
 
 import os
+import re
 import sys
 
 _TRANSPORT_FAIL = 3
@@ -186,7 +187,8 @@ _SUBCOMMAND_USAGE = {
     ),
     "repark-handoff": "archive-stamp-cli repark-handoff <handoff_path>",
     "unclaim-handoff": (
-        "archive-stamp-cli unclaim-handoff <handoff_path> [note] [--reaped-from <sid>]\n"
+        "archive-stamp-cli unclaim-handoff <handoff_path> [note] [--note-file <path>] "
+        "[--reaped-from <sid>]\n"
         "  NOTE — [note] and --reaped-from share one token stream with no `--`\n"
         "  separator: a note whose literal text is the string \"--reaped-from\"\n"
         "  cannot be passed positionally (it is parsed as the flag and, absent a\n"
@@ -196,7 +198,8 @@ _SUBCOMMAND_USAGE = {
     ),
     # Deprecated alias — retained-for-compat, not advertised in _SUBCOMMANDS.
     "unconsume-handoff": (
-        "archive-stamp-cli unconsume-handoff <handoff_path> [note] [--reaped-from <sid>]\n"
+        "archive-stamp-cli unconsume-handoff <handoff_path> [note] [--note-file <path>] "
+        "[--reaped-from <sid>]\n"
         "  NOTE — [note] and --reaped-from share one token stream with no `--`\n"
         "  separator: a note whose literal text is the string \"--reaped-from\"\n"
         "  cannot be passed positionally (it is parsed as the flag and, absent a\n"
@@ -213,17 +216,24 @@ _SUBCOMMAND_USAGE = {
     ),
     "repair-archived-shipped-in": (
         "archive-stamp-cli repair-archived-shipped-in <handoff_path> "
-        "--reason <reason> (--sha <SHA> | --unset)"
+        "(--reason <reason> | --reason-file <path>) (--sha <SHA> | --unset)"
     ),
     "repair-archived-deployment-state": (
         "archive-stamp-cli repair-archived-deployment-state <handoff_path> "
-        "--reason <reason> --deployment-state <state> "
+        "(--reason <reason> | --reason-file <path>) --deployment-state <state> "
         "[--continued-into <successor>] [--continued-into-override] "
         "[--closed-reason <cancelled|displaced|stale>]"
     ),
     "correct-handoff-body": (
         "archive-stamp-cli correct-handoff-body <handoff_path> "
-        "--old-string <old> --new-string <new>\n"
+        "(--old-string <old> | --old-string-file <path>) "
+        "(--new-string <new> | --new-string-file <path>)\n"
+        "  PROSE TRAVELS AS A FILE ON WINDOWS: the .cmd forwarder truncates a "
+        "multi-line inline value at the first newline, silently. A newline-bearing "
+        "--old-string/--new-string is REFUSED here and names its -file sibling; a "
+        "single-line value containing a quote or a space is corrupted before this "
+        "process starts and cannot be detected -- prefer the -file form for prose. "
+        "See docs/wiki/windows-first-class.md.\n"
         "  THE AUTHORSHIP GATE IS ANTI-ACCIDENT, NOT ANTI-ADVERSARY (DR-247 § 3): "
         "authorship is a caller-controlled env-var lookup inside a caller-spawned "
         "subprocess, not an enforced access-control boundary; the real control is "
@@ -272,6 +282,161 @@ def _scan_repeatable_flag(tail: list[str], flag: str) -> tuple[list[str] | None,
     return (values or None), None
 
 
+_FLAG_RE = re.compile(r"--[a-z][a-z0-9-]*")
+
+# Verbs taking a FREE-TEXT positional whose value can legitimately begin with
+# `--`, so an unrecognized flag there is not distinguishable from the text.
+# Their usage lines already document that collision; strictness would change
+# documented behaviour rather than restore it, so they stay exempt.
+_FREE_TEXT_POSITIONAL_VERBS = frozenset({"unclaim-handoff", "unconsume-handoff"})
+
+
+def _reject_unknown_flags(subcmd: str, rest: list[str]) -> int | None:
+    """Refuse a `--`-prefixed token this verb's own usage line does not declare.
+
+    Every verb here hand-slices `argv` and reads the positionals it wants
+    (`rest[0]`, `rest[1]`, an order-independent scan for its own flags); nothing
+    ever looked at what was left over. So `repark-handoff <path> --gate-note "..."`
+    reparked the handoff, discarded the note, and exited 0 — the caller is told
+    the write succeeded, and the part they cared about is gone. That is the
+    failure this refuses: a silent partial write reported as a full one, not a
+    typo-catcher.
+
+    THE ACCEPTED SET IS DERIVED FROM `_SUBCOMMAND_USAGE`, NEVER HAND-LISTED. That
+    table is already the declared contract, and a second copy of it here would go
+    stale the first time a verb gained a flag — the same defect shape as a
+    hand-copied module list. A flag that works but is undocumented is a
+    documentation bug this correctly surfaces.
+
+    VALUES ARE NOT FLAGS: the token after a recognized flag is skipped, so
+    `--reason --weird` passes `--weird` through as the reason rather than
+    refusing it. Only tokens in flag POSITION are checked.
+    """
+    if subcmd in _FREE_TEXT_POSITIONAL_VERBS:
+        return None
+    usage = _SUBCOMMAND_USAGE.get(subcmd)
+    if usage is None:
+        return None
+    # No help-flag union: `main()` early-returns on every help form before calling
+    # this, so a help flag can never reach here. Unioning them in pinned a branch
+    # nothing exercises (Kira, 2026-08-31).
+    known = set(_FLAG_RE.findall(usage))
+    i = 0
+    while i < len(rest):
+        tok = rest[i]
+        if tok in known:
+            i += 2  # skip this flag's value; a value may itself look like a flag
+            continue
+        if tok.startswith("--"):
+            print(
+                f"archive-stamp-cli: {subcmd}: unrecognized option {tok}\n"
+                f"usage: {usage}",
+                file=sys.stderr,
+            )
+            return 2
+        i += 1
+    return None
+
+
+# --- Prose transport: the `.cmd` forwarder is lossy, so prose gets a file leg ---
+#
+# `%*` in a generated `.cmd` launcher is an UN-RE-QUOTED expansion, and cmd.exe
+# truncates its whole command line at the first LF during its own parse. A
+# multi-line `--new-string` therefore reaches this process holding only line 1,
+# with no signal anywhere: example-cockpit-repo-em measured
+# `archive-stamp-cli.cmd correct-handoff-body --old-string <one line>
+# --new-string <20 lines>` exiting 0, printing "applied body correction", and
+# writing line 1 glued onto the text it was meant to replace
+# (`cross-repo/archive/2026-08-21-example-cockpit-repo-em-cmd-wrapper-eats-argv-and-
+# wsc-tail-exit-3-hides-a-landed-commit.md` § 1). The corrupted file was
+# committed and reported as done.
+#
+# REMEDY CHOSEN DELIBERATELY, NOT DEFAULTED. The other candidate was enrolling
+# this entrypoint in `gen-launcher-shim.py::_RAW_CMDLINE_ENTRYPOINTS` /
+# `substrate.py::_RAW_CMDLINE_TARGETS` -- the `%CMDCMDLINE%` capture-and-recover
+# mechanism. Rejected on three measured grounds, all already written down
+# elsewhere in this tree:
+#   1. Recovery cannot work for this payload shape. `docs/wiki/windows-first-
+#      class.md` § "Quote-and-space-bearing payloads" records the measurement:
+#      PowerShell never distinguished literal-payload quotes from batch-syntax
+#      quotes on the way in, so recovering argv from the raw command line is
+#      genuinely ambiguous once a value contains a space -- widening the raw-
+#      cmdline set "would recover the unspaced case and silently mis-recover
+#      the spaced one". A body correction is prose; spaces are certain.
+#   2. Enrolment is not free, and this is a hot-path CLI. Every invocation of an
+#      enrolled target pays a per-invocation capture file (mkdir + write + read
+#      + unlink). `archive-stamp-cli` runs on every pickup claim and every
+#      close; the 50-70-concurrent-session load norm makes that cost fleet-wide,
+#      paid by every verb to protect four.
+#   3. The membership rule beside `_RAW_CMDLINE_ENTRYPOINTS` already routes this
+#      case away from itself, in its own words: "when a payload is prose rather
+#      than a rev, prefer the `--<flag>-file <path>` sibling
+#      `docs/wiki/windows-first-class.md` rules for, which removes the exposure
+#      instead of recovering from it."
+#
+# So: a `--<flag>-file <path>` sibling for every prose-bearing flag, plus a hard
+# refusal (never a silent truncation) when the inline form carries a newline.
+# The seam is `coordinator_core.argv_fidelity`, shared with the three CLIs
+# already on this pattern -- not a fourth local shape.
+#
+# NOT COVERED HERE, deliberately: a SINGLE-LINE prose value containing a quote
+# or a space is still corrupted by `%*`, and no refusal in this file can see it
+# (the damage is done before this process's first line runs). The file leg is
+# the escape; `docs/wiki/windows-first-class.md` is the ruling. The newline
+# refusal closes the silent-truncation half -- the half measured destroying a
+# committed artifact.
+
+
+def _scan_flag_value(tail: list[str], flag: str) -> str | None:
+    """Order-independent scan for `flag <value>`, mirroring the --sha idiom used
+    throughout this file. Returns None when the flag is absent OR trails with no
+    value; every caller here already refuses on a missing required value."""
+    if flag not in tail:
+        return None
+    idx = tail.index(flag)
+    if idx + 1 >= len(tail):
+        return None
+    return tail[idx + 1]
+
+
+def _resolve_prose(
+    tail: list[str],
+    flag: str,
+    *,
+    allow_empty: bool = False,
+) -> tuple[str | None, str | None]:
+    """Resolve `flag` from its inline form or its `<flag>-file` sibling.
+
+    Returns `(value, error_message)` -- exactly one is non-None, except when the
+    flag is absent in BOTH forms, which yields `(None, None)` so the caller
+    emits its own verb-specific "required" refusal and usage line unchanged.
+
+    Delegates to `coordinator_core.argv_fidelity` (imported lazily: this file
+    must answer `--help` and a usage error without a resolvable CLAUDE_KLABAUTER_ROOT, so
+    nothing engine-side may be imported at module scope). `refuse_newline_argv`
+    runs FIRST -- a newline-bearing inline value is refused on its own terms,
+    naming the file sibling, rather than surfacing as some downstream mutual-
+    exclusion or empty-value error.
+    """
+    from coordinator_core.argv_fidelity import (
+        ArgvFidelityError,
+        refuse_newline_argv,
+        resolve_body,
+    )
+
+    inline = _scan_flag_value(tail, flag)
+    from_file = _scan_flag_value(tail, f"{flag}-file")
+    if inline is None and from_file is None:
+        return None, None
+    try:
+        refuse_newline_argv(inline, flag_name=flag)
+        return resolve_body(
+            inline, from_file, flag_name=flag, allow_empty=allow_empty
+        ), None
+    except ArgvFidelityError as exc:
+        return None, f"archive-stamp-cli: {flag}: {exc}"
+
+
 def main(argv: list[str]) -> int:
     if not argv:
         return _usage("archive-stamp-cli")
@@ -286,6 +451,12 @@ def main(argv: list[str]) -> int:
     if subcmd in _SUBCOMMAND_USAGE and any(t in _SUBCOMMAND_HELP_FLAGS for t in rest):
         print(f"usage: {_SUBCOMMAND_USAGE[subcmd]}")
         return 0
+
+    # After the help early-returns (a help request must still answer), before the
+    # engine import (a usage error must not need a resolvable CLAUDE_KLABAUTER_ROOT).
+    _bad_flag = _reject_unknown_flags(subcmd, rest)
+    if _bad_flag is not None:
+        return _bad_flag
 
     try:
         mod = _import_module()
@@ -534,6 +705,25 @@ def main(argv: list[str]) -> int:
                     f"archive-stamp-cli {subcmd} <handoff_path> [note] [--reaped-from <sid>]"
                     " — --reaped-from may only be given once"
                 )
+        # --note-file: the lossless leg for a note the .cmd forwarder would
+        # truncate, and simultaneously the escape for the collision the usage
+        # line documents (a note whose own text begins with `--` cannot be
+        # passed positionally). Stripped here, BEFORE the leftover-flag guard
+        # below, which would otherwise refuse it as a corrupted note.
+        note_from_file: str | None = None
+        if "--note-file" in tail:
+            idx = tail.index("--note-file")
+            if idx + 1 >= len(tail):
+                return _usage_line(_SUBCOMMAND_USAGE[subcmd])
+            note_from_file = tail[idx + 1]
+            tail = tail[:idx] + tail[idx + 2:]
+            if "--note-file" in tail:
+                return _usage(
+                    f"archive-stamp-cli {subcmd} <handoff_path> [note] "
+                    "[--note-file <path>] [--reaped-from <sid>]"
+                    " -- --note-file may only be given once"
+                )
+
         # The same silent-corruption class the --reaped-from repeat fix above
         # closed, generalized: ANY unrecognized `--flag` left in the tail
         # became the note verbatim, and any further positional was dropped
@@ -554,7 +744,37 @@ def main(argv: list[str]) -> int:
                 f"archive-stamp-cli {subcmd} <handoff_path> [note] [--reaped-from <sid>]"
                 f" — {len(tail)} positional notes given; quote the note as ONE argument"
             )
-        note = tail[0] if tail else None
+        inline_note = tail[0] if tail else None
+        if inline_note is not None and note_from_file is not None:
+            print(
+                "archive-stamp-cli: --note and --note-file are mutually exclusive.",
+                file=sys.stderr,
+            )
+            return 2
+        if note_from_file is not None:
+            try:
+                from coordinator_core.argv_fidelity import (
+                    ArgvFidelityError,
+                    resolve_body,
+                )
+                note = resolve_body(None, note_from_file, flag_name="--note")
+            except ArgvFidelityError as exc:
+                print(f"archive-stamp-cli: --note: {exc}", file=sys.stderr)
+                return 2
+        else:
+            # Refused, never truncated: a multi-line positional note arriving
+            # through the .cmd forwarder has ALREADY lost every line after the
+            # first, so this only fires on a host where the note survived --
+            # which is exactly where refusing it and naming --note-file keeps
+            # the two platforms writing the same frontmatter.
+            if inline_note is not None and "\n" in inline_note:
+                print(
+                    "archive-stamp-cli: the note contains a newline; pass "
+                    "--note-file <path> instead.",
+                    file=sys.stderr,
+                )
+                return 2
+            note = inline_note
         return mod.cs_unclaim_handoff(handoff_path, note, reaped_from)
 
     if subcmd == "chain-archive-handoff":
@@ -594,15 +814,14 @@ def main(argv: list[str]) -> int:
         if not rest:
             return _usage_line(_SUBCOMMAND_USAGE["repair-archived-shipped-in"])
         handoff_path, tail = rest[0], rest[1:]
-        reason: str | None = None
-        if "--reason" in tail:
-            idx = tail.index("--reason")
-            if idx + 1 >= len(tail):
-                return _usage_line(_SUBCOMMAND_USAGE["repair-archived-shipped-in"])
-            reason = tail[idx + 1]
+        reason, reason_err = _resolve_prose(tail, "--reason")
+        if reason_err:
+            print(reason_err, file=sys.stderr)
+            return 2
         if not reason:
             print(
-                "archive-stamp-cli: repair-archived-shipped-in: --reason <reason> is required",
+                "archive-stamp-cli: repair-archived-shipped-in: --reason <reason> "
+                "(or --reason-file <path>) is required",
                 file=sys.stderr,
             )
             return 2
@@ -635,11 +854,14 @@ def main(argv: list[str]) -> int:
                 return None
             return tail[idx + 1]
 
-        reason = _scan_value("--reason")
+        reason, reason_err = _resolve_prose(tail, "--reason")
+        if reason_err:
+            print(reason_err, file=sys.stderr)
+            return 2
         if not reason:
             print(
                 "archive-stamp-cli: repair-archived-deployment-state: "
-                "--reason <reason> is required",
+                "--reason <reason> (or --reason-file <path>) is required",
                 file=sys.stderr,
             )
             return 2
@@ -668,25 +890,31 @@ def main(argv: list[str]) -> int:
             return _usage_line(_SUBCOMMAND_USAGE["correct-handoff-body"])
         handoff_path, tail = rest[0], rest[1:]
 
-        def _scan_value(flag: str) -> str | None:
-            if flag not in tail:
-                return None
-            idx = tail.index(flag)
-            if idx + 1 >= len(tail):
-                return None
-            return tail[idx + 1]
-
-        old_string = _scan_value("--old-string")
+        # `allow_empty` differs between the two, and the difference is this
+        # verb's semantics, not an oversight: an empty --old-string matches
+        # nothing and is a caller error, while an empty --new-string is how a
+        # correction DELETES the matched region. This verb accepted an empty
+        # replacement before it gained a file sibling; refusing it now would be
+        # a behaviour regression smuggled in on a transport fix.
+        old_string, err = _resolve_prose(tail, "--old-string")
+        if err:
+            print(err, file=sys.stderr)
+            return 2
         if old_string is None:
             print(
-                "archive-stamp-cli: correct-handoff-body: --old-string <old> is required",
+                "archive-stamp-cli: correct-handoff-body: --old-string <old> "
+                "(or --old-string-file <path>) is required",
                 file=sys.stderr,
             )
             return 2
-        new_string = _scan_value("--new-string")
+        new_string, err = _resolve_prose(tail, "--new-string", allow_empty=True)
+        if err:
+            print(err, file=sys.stderr)
+            return 2
         if new_string is None:
             print(
-                "archive-stamp-cli: correct-handoff-body: --new-string <new> is required",
+                "archive-stamp-cli: correct-handoff-body: --new-string <new> "
+                "(or --new-string-file <path>) is required",
                 file=sys.stderr,
             )
             return 2

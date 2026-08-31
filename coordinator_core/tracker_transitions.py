@@ -104,6 +104,25 @@ treat absence as version 1, so sat-02's already-written entity events keep
 validating unmodified — do NOT retro-fit `schema_version` onto entity
 events, and do NOT change `tracker_entities.py`.
 
+`evidence.probe` (C5, DR-closure-fidelity-tier-axis D2/D3): a documented,
+STRUCTURALLY UNVALIDATED optional sub-key of `evidence` — consistent with
+`evidence`'s own five §4.3 keys (`kind`, `sha`, `reachable_default_branch`,
+`reverts_sha`, `citation`, `confidence`), none of which this module
+shape-validates beyond `.get("sha")` reads. D2 chose documentation over a
+validator for the same reason: validating exactly one sub-key while its
+siblings stay unvalidated is an asymmetry with no existing precedent. The
+ONE exception (D3, a ratification, not part of D2's unvalidated-shape
+choice): `evidence.probe.probe_result` must never be `"error"` —
+Cockpit's T4/T6 forbid ever persisting a probe error, so a probe that
+errored has NO representation in `evidence.probe` at all (the caller
+omits `probe` entirely rather than recording the failure). This one value
+is rejected by `reject_probe_error`, called from `transition_event` — a
+narrow, targeted guard against a single forbidden sentinel, not a general
+schema validator; every other shape a caller puts under `evidence.probe`
+passes through unexamined, same as every other `evidence` key. No
+producer of `evidence.probe` lands in this plan (see the plan's Out of
+scope) — this module only carries the contract and the one guard.
+
 Negative-spec:
   - Do NOT write policy: auto-assert rules, SHA-reachability verification,
     tier decisions, and symmetric-retract logic are all sat-04's remit, not
@@ -166,6 +185,13 @@ paragraph. `auto` and `direct` both stamp; `emit_snapshot_event` is a
 third, deliberately untouched call site (see that function's docstring)."""
 
 
+_PROBE_RESULT_ERROR = "error"
+"""D3 (DR-closure-fidelity-tier-axis, ratification): the one `probe_result`
+value `evidence.probe` may never carry. Not a closed enum of admitted
+values — D2 leaves the rest of `probe` unvalidated — just this one
+forbidden sentinel."""
+
+
 class TrackerTransitionError(Exception):
     """Raised for a malformed or contract-violating tracker-transition
     operation — the transition-axis analogue of
@@ -176,6 +202,8 @@ class TrackerTransitionError(Exception):
         closed `TRANSITION_AXES` enum.
       - `reject_invalid_tier` — a payload naming a `tier` outside the
         closed `TRANSITION_TIERS` enum.
+      - `reject_probe_error` — a payload whose `evidence.probe.probe_result`
+        is `"error"` (D3 — that state must never be persisted).
     """
 
 
@@ -209,6 +237,35 @@ def reject_invalid_tier(tier: str, *, action: str = "construct") -> None:
         )
 
 
+def reject_probe_error(evidence: dict | None, *, action: str = "construct") -> None:
+    """Guard for D3 (DR-closure-fidelity-tier-axis): raises
+    `TrackerTransitionError` if *evidence* carries a `probe` sub-dict whose
+    `probe_result` is `"error"`.
+
+    Deliberately narrow — this is NOT a general shape validator for
+    `evidence.probe` (D2 leaves that structurally unvalidated, matching the
+    rest of the §4.3 `evidence` contract's unvalidated siblings). It checks
+    exactly one forbidden value and nothing else about `probe`'s shape: a
+    non-dict `probe`, a `probe` missing `probe_result`, or any
+    `probe_result` value other than `"error"` all pass through untouched.
+    A non-dict *evidence*, or an *evidence* with no `probe` key, also
+    passes through untouched — this guard only fires on the one shape it
+    exists to forbid.
+    """
+    if not isinstance(evidence, dict):
+        return
+    probe = evidence.get("probe")
+    if not isinstance(probe, dict):
+        return
+    if probe.get("probe_result") == _PROBE_RESULT_ERROR:
+        raise TrackerTransitionError(
+            f"cannot {action} transition event with evidence.probe."
+            f"probe_result={_PROBE_RESULT_ERROR!r} — cockpit's T4/T6 forbid "
+            f"ever persisting a probe error (D3); omit `probe` entirely for "
+            f"an errored observation instead"
+        )
+
+
 def transition_event(
     item_id: str,
     axis: str,
@@ -226,8 +283,12 @@ def transition_event(
     its C2-shaped `_emit` writer).
 
     Raises `TrackerTransitionError` if *axis* is outside the closed
-    `TRANSITION_AXES` enum, or if *tier* is outside the closed
-    `TRANSITION_TIERS` enum.
+    `TRANSITION_AXES` enum, if *tier* is outside the closed
+    `TRANSITION_TIERS` enum, or if *evidence* carries
+    `probe.probe_result == "error"` (D3 — see `reject_probe_error`).
+    *evidence* is otherwise passed through unexamined — `probe`, like
+    every other `evidence` key, is documented shape, not validated shape
+    (D2).
 
     `from_state` is `null` on an axis's first event. AC7: a `manual_close`
     event with `to_state == "reopened"` and `from_state is None` is LEGAL —
@@ -241,6 +302,7 @@ def transition_event(
     """
     reject_invalid_axis(axis, action="construct")
     reject_invalid_tier(tier, action="construct")
+    reject_probe_error(evidence, action="construct")
     return {
         "item_id": item_id,
         "axis": axis,

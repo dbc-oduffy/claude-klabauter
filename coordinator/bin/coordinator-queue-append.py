@@ -395,6 +395,10 @@ def _schema_cli_validate(schema_name: str, fields: dict) -> tuple[bool, list[str
 # universal patterns destined for claude-klabauter's central improvement queue / lessons
 # store (docs/wiki/state-placement-law.md § Taxonomy "Central/global state").
 _VALID_QUEUE_SCOPES = ("central", "project")
+# Mirrors the `scope` enum in frontmatter/schemas/lesson-entry.schema.json. Duplicated
+# deliberately: the schema rejects an invalid value downstream with no diagnostic the
+# caller can act on, so the CLI owes its own named refusal at the boundary.
+_VALID_LESSON_SCOPES = ("universal", "project", "wiki-only")
 
 # output_dir routing: maps schema name → state/<queue> directory.
 # Derived from the applies_to glob in each coordinator/schemas/*.yaml file
@@ -1930,6 +1934,18 @@ def main(argv: "list[str] | None" = None) -> int:
             )
             return 1
         queue_scope = args.queue_scope
+
+    # Validate --scope (lessons only; fail-loud on invalid). Without this the value
+    # reaches schema validation, which rejects it and exits 1 with NOTHING on stderr --
+    # indistinguishable from success to anyone not checking the return code, so a lesson
+    # reads as filed when it was dropped. Same fail-loud shape as --queue-scope above.
+    if args.scope is not None and args.scope not in _VALID_LESSON_SCOPES:
+        print(
+            f"error: invalid --scope value: '{args.scope}'. "
+            f"Valid values: {', '.join(_VALID_LESSON_SCOPES)}.",
+            file=sys.stderr,
+        )
+        return 1
 
     # Review: code-reviewer — F1: schema guard for --queue-scope; only improvement-queue supports it.
     # --queue-scope central on debt-backlog or bug-backlog would silently redirect those entries

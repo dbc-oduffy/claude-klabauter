@@ -717,16 +717,16 @@ LAUNCHER_PARITY_EXEMPTIONS: dict[str, str] = {
     "coordinator/bin/autonomous-verb.cmd": (
         "LF in the index under an eol=crlf attr; awaiting a renormalize pass"
     ),
-    # -- Orphaned launcher --------------------------------------------------
-    # Targets `coordinator/bin/tests/run-fast-tests.py`, which does not exist
-    # (the tests/ directory ships `run-full-tests.py` only). Regenerating
-    # would produce a launcher for a nonexistent entrypoint -- i.e. laundering
-    # an orphan into fresh-looking output. It wants deleting or repointing,
-    # which is a scope call, not a regeneration.
-    "coordinator/bin/tests/run-fast-tests.cmd": (
-        "orphan: invokes run-fast-tests.py, which does not exist; "
-        "needs deletion or repointing, not regeneration"
-    ),
+    # -- Orphaned launcher (RESOLVED 2026-08-31, row deleted) ---------------
+    # `coordinator/bin/tests/run-fast-tests.cmd` lived here, exempt because it
+    # invoked a `run-fast-tests.py` that does not exist and "wants deleting or
+    # repointing, which is a scope call, not a regeneration". That scope call
+    # was made at `3dde0bed8c` -- the orphan launcher was deleted -- and the
+    # row outlived its file, so `test_no_parity_exemption_is_stale` went red.
+    # Same shape as the `coordinator-settings-home.ps1` row recorded just
+    # below, and the third instance of this class caught in this file's
+    # history: an entry naming a path that is gone reads as deliberate
+    # coverage while covering nothing.
     # -- Not generator output at all ----------------------------------------
     # (2026-08-14, plan pln-windows-first-class-the-gate-m-c64274 C5) The
     # `coordinator/bin/coordinator-settings-home.ps1` row lived here, marked
@@ -1057,6 +1057,42 @@ def test_raw_cmdline_entrypoints_matches_substrate_targets():
         f"{sorted(gen_basenames)}) and substrate.py's _RAW_CMDLINE_TARGETS "
         f"({sorted(_RAW_CMDLINE_TARGETS)}) have drifted -- extend both sets "
         "together."
+    )
+
+
+def test_raw_cmdline_members_all_exist():
+    """Every raw-cmdline allowlist member names a file that is actually in the
+    tree.
+
+    THE GAP THIS CLOSES, and why the sibling guard structurally cannot.
+    `test_raw_cmdline_entrypoints_matches_substrate_targets` compares the two
+    sets TO EACH OTHER. Two sets can agree perfectly on a target that no
+    longer exists, and an entry naming a non-existent target renders nothing
+    -- so the residue is inert at runtime and invisible to a parity check.
+    That is not hypothetical: it has now happened twice on this pair.
+    `scoped-git-commit` was deleted at `47c78a3a5` and left in both sets until
+    2026-08-28; `coordinator-write-review-trail.py` outlived its op's
+    gravestone (`review_trail.write`, K-060, 2026-08-27) in both sets until
+    2026-08-31, when THIS test was written because the baton that found it
+    observed the sets are "kept in sync by convention" and that being
+    byte-equal is not the same as being right.
+
+    Keyed off `gen`'s set because its members are repo-relative paths, which
+    are checkable without re-deriving a bin directory; `substrate`'s bare
+    filenames are covered transitively by the pair-equality guard above.
+    """
+    gen = _load_gen_launcher_shim()
+    repo_root = Path(__file__).resolve().parents[1]
+
+    missing = sorted(
+        rel for rel in gen._RAW_CMDLINE_ENTRYPOINTS if not (repo_root / rel).is_file()
+    )
+    assert not missing, (
+        "raw-cmdline allowlist names target(s) with no file in the tree: "
+        f"{missing}. A member whose file is gone renders nothing, so it is "
+        "inert at runtime and invisible to the pair-equality guard -- remove "
+        "it from BOTH sets together, the way `scoped-git-commit` (2026-08-28) "
+        "and `coordinator-write-review-trail.py` (2026-08-31) were."
     )
 
 

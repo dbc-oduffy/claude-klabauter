@@ -182,6 +182,7 @@ def test_handler_asserts_auto_tier_when_trailer_bound_and_reachable(tmp_path):
                 "trailer_bound": True,
                 "reachable_on_default_branch": True,
                 "actor": "a",
+                "closure_fidelity": "auto-observable",
             },
             repo_root=repo,
         )
@@ -203,6 +204,7 @@ def test_handler_asserts_suggest_tier_when_not_reachable(tmp_path):
                 "trailer_bound": True,
                 "reachable_on_default_branch": False,
                 "actor": "a",
+                "closure_fidelity": "auto-observable",
             },
             repo_root=repo,
         )
@@ -210,6 +212,53 @@ def test_handler_asserts_suggest_tier_when_not_reachable(tmp_path):
     assert result["axis"] == "code_complete"
     assert result["to_state"] == "asserted"
     assert result["tier"] == "suggest"
+
+
+
+def test_handler_defaults_to_verify_with_effort_and_never_auto_asserts(tmp_path):
+    """Omitting `closure_fidelity` must degrade to suggest, never auto.
+
+    This is the op-surface leg of the plan's headline guarantee: the inputs
+    below (trailer_bound + reachable) are exactly the ones that yield `auto`
+    for an auto-observable item, so a regression that reinstated an
+    auto-observable default would flip this to `auto` and be caught here.
+    """
+    repo = _make_git_repo(tmp_path / "repo")
+    item_id = _make_item(repo)
+
+    result = _run(
+        _handler(
+            {
+                "item_id": item_id,
+                "sha": "deadbeef",
+                "trailer_bound": True,
+                "reachable_on_default_branch": True,
+                "actor": "a",
+            },
+            repo_root=repo,
+        )
+    )
+    assert result["tier"] == "suggest"
+
+
+def test_handler_rejects_unknown_closure_fidelity(tmp_path):
+    repo = _make_git_repo(tmp_path / "repo")
+    item_id = _make_item(repo)
+
+    with pytest.raises(ValueError, match="closure_fidelity must be one of"):
+        _run(
+            _handler(
+                {
+                    "item_id": item_id,
+                    "sha": "deadbeef",
+                    "trailer_bound": True,
+                    "reachable_on_default_branch": True,
+                    "actor": "a",
+                    "closure_fidelity": "not-a-tier",
+                },
+                repo_root=repo,
+            )
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -258,6 +307,7 @@ def test_command_type_smoke_resolves_non_none_repo_root(tmp_path):
                     "trailer_bound": True,
                     "reachable_on_default_branch": True,
                     "actor": "a",
+                    "closure_fidelity": "auto-observable",
                 },
                 "_origin_worktree": str(repo),
             }

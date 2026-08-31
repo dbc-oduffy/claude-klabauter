@@ -74,7 +74,7 @@ here does not raise on their side; it silently stops matching, and the next
 triage run hands their ceremony one un-suppressed, oversized cluster as a
 themed-baton candidate instead of the disposal their policy intended. A
 signal-set rename is a cross-repo contract change -- coordinate it with
-claude-central-em via a cross-repo memo before touching these values, don't
+DoE-claude via a cross-repo memo before touching these values, don't
 just rename and ship.
 """
 

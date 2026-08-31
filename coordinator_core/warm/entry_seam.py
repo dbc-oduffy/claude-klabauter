@@ -197,7 +197,8 @@ _ENV_LOWER_TIER_SESSION_NAMES = ("CLAUDE_SESSION_ID", "CLAUDE_CODE_SESSION_ID")
 _ENV_TOP_TIER_SESSION_NAME = "COORDINATOR_SESSION_ID"
 _ENV_ALL_SESSION_NAMES = (_ENV_TOP_TIER_SESSION_NAME,) + _ENV_LOWER_TIER_SESSION_NAMES
 _ENV_CLAUDE_PID_NAME = "CLAUDE_PID"
-_ENV_BORROWED_NAMES = _ENV_ALL_SESSION_NAMES + (_ENV_CLAUDE_PID_NAME,)
+_ENV_SETTINGS_HOME_NAME = "COORDINATOR_SETTINGS_HOME"
+_ENV_BORROWED_NAMES = _ENV_ALL_SESSION_NAMES + (_ENV_CLAUDE_PID_NAME, _ENV_SETTINGS_HOME_NAME)
 
 
 @contextlib.contextmanager
@@ -205,7 +206,10 @@ _ENV_BORROWED_NAMES = _ENV_ALL_SESSION_NAMES + (_ENV_CLAUDE_PID_NAME,)
 # default was unreachable (one private call site, positional) and
 # inconsistent with its siblings, neither of which defaults.
 def _environ_identity_borrow(
-    session_id: Optional[str], isolated: bool, caller_pid: Optional[str]
+    session_id: Optional[str],
+    isolated: bool,
+    caller_pid: Optional[str],
+    settings_home: Optional[str] = None,
 ) -> Iterator[None]:
     """Mirror the caller's carried identity into `os.environ` for the life
     of one ISOLATED dispatch, restored in a `finally` regardless of how the
@@ -229,6 +233,15 @@ def _environ_identity_borrow(
     instead, which is the pre-existing behaviour and never a fabricated
     value. See `per_request_state`'s `caller_pid` parameter for why this is
     its own axis rather than a field of `session_id`.
+
+    `settings_home` is the sixth axis: a caller-carried `COORDINATOR_SETTINGS_
+    HOME` claim, bound for the block's duration under `isolated=True` only, on
+    the same inherit-on-absent and shape-gate-or-pop terms as `caller_pid`.
+    Shape gate: non-empty and `os.path.isabs` — a value failing that gate is
+    treated as "no carried home" and the name is POPPED, never mirrored,
+    exactly as an out-of-shape `caller_pid` is popped rather than bound. The
+    path is never `stat`-ed here (see the module's own anti-scope note); shape
+    validation only.
     """
     if not isolated:
         yield
@@ -250,6 +263,11 @@ def _environ_identity_borrow(
             os.environ[_ENV_CLAUDE_PID_NAME] = caller_pid
         else:
             os.environ.pop(_ENV_CLAUDE_PID_NAME, None)
+        if settings_home is not None:
+            if settings_home and os.path.isabs(settings_home):
+                os.environ[_ENV_SETTINGS_HOME_NAME] = settings_home
+            else:
+                os.environ.pop(_ENV_SETTINGS_HOME_NAME, None)
         yield
     finally:
         for name, value in saved.items():
@@ -267,6 +285,7 @@ def per_request_state(
     diagnostics: Optional[List[str]] = None,
     warm_served: Optional[bool] = None,
     caller_pid: Optional[str] = None,
+    settings_home: Optional[str] = None,
     isolated: bool,
 ) -> Iterator[List[str]]:
     """Open one request's worth of explicit, Token/reset-scoped state.
@@ -337,6 +356,17 @@ def per_request_state(
     here: four of its five fields have no consumer in this seam, and it
     would import `warm.caller_context` into a surface ~47 call sites reach.
 
+    `settings_home` is the sixth axis: a caller-carried `COORDINATOR_SETTINGS_
+    HOME` claim, mirrored into `os.environ` for the block's duration under
+    `isolated=True` only (`_environ_identity_borrow`, same `finally` restore
+    as the other borrowed names), on the same inherit-on-absent terms as
+    `warm_served` and the same shape-gate-or-pop terms as `caller_pid`: a
+    value that is empty, `None`, or not `os.path.isabs` is treated as "no
+    carried home" and the name is POPPED rather than mirrored — a
+    caller-supplied string that failed its shape gate must never become the
+    value every ambient `settings_home()` reader downstream trusts. The path
+    is never `stat`-ed here; shape validation only, no existence check.
+
     `isolated` is a REQUIRED keyword-only argument, with no default: every
     call site must declare its own execution shape rather than inheriting a
     silently-safe one. `True` means this dispatch owns a process no
@@ -368,7 +398,7 @@ def per_request_state(
     else:
         warm_scope = warm_served_request(bool(warm_served))
     with warm_scope, session_identity_override(session_id):
-        with _environ_identity_borrow(session_id, isolated, caller_pid):
+        with _environ_identity_borrow(session_id, isolated, caller_pid, settings_home):
             with collecting(into) as declared:
                 if diagnostics is None:
                     yield declared

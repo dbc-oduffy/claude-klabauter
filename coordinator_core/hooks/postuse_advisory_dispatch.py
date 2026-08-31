@@ -1236,6 +1236,13 @@ def _check_workflow_monitor_arm_sync(session_id: str, transcript_path: str, tool
 # doctrine: a command naming a launcher/entrypoint that cannot run is worse
 # than silence. Reported as the concrete follow-up in this chunk's own report
 # rather than invented here.
+#
+# INERT-BY-CONSTRUCTION: this leg cannot fire until a launcher-chain change
+# lands (queued at state/improvement-queue/2026-08-31-group-em-watch-has-no-
+# installed-launcher-*.yaml). `_check_group_em_watch_arm_sync` probes the
+# launcher FIRST, before any other read, precisely so that fact is established
+# at the cheapest possible cost per call rather than after a repo-root walk,
+# a nomination read, and a whole-file transcript read.
 # ---------------------------------------------------------------------------
 
 #: The exact prefix `coordinator_core.group_em.watch.main` prints as its
@@ -1245,9 +1252,27 @@ def _check_workflow_monitor_arm_sync(session_id: str, transcript_path: str, tool
 #: parse its fields.
 _GROUP_EM_WATCH_ARMED_MARKER = "ARMED denominator="
 
+#: Review: review-integrator (finding #2) -- bound on how long a "checked,
+#: nothing to arm" conclusion (no git root / not the crown holder) is
+#: trusted before the walk+read is paid again. Not "once per session": that
+#: outcome for the crown check is mutable mid-session (see the call site's
+#: comment), so this is a load-norm bound, not a durable fact cache.
+_GROUP_EM_WATCH_CHECKED_TTL_SECONDS = 300
+
 
 def _group_em_watch_arm_sentinel_path(tmpdir: str, session_id: str) -> str:
     return os.path.join(tmpdir, f"group-em-watch-arm-advisory-{session_id}")
+
+
+def _group_em_watch_checked_sentinel_path(tmpdir: str, session_id: str) -> str:
+    # Review: review-integrator (finding #2, EM-ratified break-class) -- a
+    # SEPARATE sentinel from the "armed" one above. That one means "the
+    # advisory fired, never re-check"; this one means "checked this session,
+    # concluded there is nothing to arm, for a STABLE reason -- never
+    # re-check". Kept distinct so a later crown claim or a later-installed
+    # launcher can still be distinguished from "already armed" if either
+    # sentinel is ever inspected independently.
+    return os.path.join(tmpdir, f"group-em-watch-checked-noop-{session_id}")
 
 
 def _group_em_watch_launcher() -> str | None:
@@ -1283,8 +1308,32 @@ def _check_group_em_watch_arm_sync(session_id: str, transcript_path: str) -> str
     ARMED marker already present, or no installed launcher). Never raises —
     fail-open on all I/O errors, same posture as the other checks in this
     module (see the durable-state comment above _advisory_state_path).
+
+    The "no git root"/"not crowned" outcomes are additionally bounded by a
+    `_GROUP_EM_WATCH_CHECKED_TTL_SECONDS` recheck sentinel (review-integrator
+    finding #2) so a non-crowned session does not re-pay the repo-root walk
+    and nomination read on every single call for its whole lifetime; this is
+    a cost bound, not a permanent cache, because a session can become the
+    crown holder mid-session.
     """
     if not session_id:
+        return ""
+
+    # Review: overengineering-reviewer (finding #2, EM-ratified break-class) --
+    # the launcher probe is the cheapest check AND today the only one that can
+    # decide this leg's outcome (no launcher is installed by any generator
+    # path yet), so it runs FIRST and short-circuits before the sentinel
+    # check, the repo-root walk, the nomination read, or the whole-file
+    # transcript read -- none of which should be paid, per PostToolUse event,
+    # for a guaranteed empty string.
+    watcher_path = _group_em_watch_launcher()
+    if watcher_path is None:
+        print(
+            "postuse_advisory_dispatch: group_em_watch_arm found no "
+            "group-em-watch launcher under the settings home -- staying "
+            "silent rather than emitting a command that cannot run.",
+            file=sys.stderr,
+        )
         return ""
 
     tmpdir = _tempfile().gettempdir()
@@ -1292,13 +1341,46 @@ def _check_group_em_watch_arm_sync(session_id: str, transcript_path: str) -> str
     if os.path.isfile(sentinel):
         return ""
 
+    # Review: review-integrator (finding #2, EM-ratified break-class) -- the
+    # "armed" sentinel above only ever gets written on the success path, so
+    # once a launcher ships, a non-crowned session would re-pay the
+    # repo-root walk + nomination read below on EVERY PostToolUse event for
+    # its whole lifetime (no tool_name gate is possible here, unlike the
+    # Workflow-arm leg, because this leg's crown fact is not tied to any one
+    # tool call). "Not crowned" is NOT a stable fact for a session, though:
+    # `group_em.nomination.claim` can supersede a dead incumbent mid-session
+    # (see that module's own docstring), so a session that starts uncrowned
+    # can legitimately become the crown holder later. A permanent negative
+    # cache would silently disable this leg for that exact recovery case.
+    # So this is a bounded RECHECK, not a permanent suppression: skip the
+    # walk+read for `_GROUP_EM_WATCH_CHECKED_TTL_SECONDS`, then pay it again.
+    # Transient errors (git seam/nomination-read raising, unreadable/missing
+    # transcript) never refresh this sentinel -- those must be retried on the
+    # very next call, per the fail-soft contract the rest of this module
+    # already keeps.
+    checked_sentinel = _group_em_watch_checked_sentinel_path(tmpdir, session_id)
+    try:
+        checked_age = time.time() - os.path.getmtime(checked_sentinel)
+    except OSError:
+        checked_age = None
+    if checked_age is not None and checked_age < _GROUP_EM_WATCH_CHECKED_TTL_SECONDS:
+        return ""
+
+    def _touch_checked_sentinel() -> None:
+        try:
+            with open(checked_sentinel, "w", encoding="utf-8", newline="\n") as fh:
+                fh.write(str(int(time.time())))
+        except Exception:
+            pass  # best-effort -- worst case this leg re-pays the walk sooner
+
     try:
         from coordinator_core.git import repo_root as _repo_root_seam
 
         git_root = _repo_root_seam.show_toplevel() or ""
     except Exception:
-        return ""  # git absent/erroring -- no repo to check a crown against
+        return ""  # git absent/erroring -- transient, do not cache; retry next call
     if not git_root:
+        _touch_checked_sentinel()  # no repo here -- stable for this session's cwd
         return ""
 
     try:
@@ -1306,8 +1388,9 @@ def _check_group_em_watch_arm_sync(session_id: str, transcript_path: str) -> str
 
         record = _group_em_nomination.read_record(git_root)
     except Exception:
-        return ""
+        return ""  # transient I/O error -- do not cache; retry next call
     if not isinstance(record, dict) or record.get("session_id") != session_id:
+        _touch_checked_sentinel()  # not the crown holder right now -- recheck after the TTL
         return ""  # not the crown holder for this repo -- nothing to arm
 
     if not transcript_path or not os.path.isfile(transcript_path):
@@ -1320,16 +1403,6 @@ def _check_group_em_watch_arm_sync(session_id: str, transcript_path: str) -> str
     if _GROUP_EM_WATCH_ARMED_MARKER in transcript_text:
         return ""  # armed at least once this session -- see module comment
         # on the named decay gap this leg does not attempt to close.
-
-    watcher_path = _group_em_watch_launcher()
-    if watcher_path is None:
-        print(
-            "postuse_advisory_dispatch: group_em_watch_arm found no "
-            "group-em-watch launcher under the settings home -- staying "
-            "silent rather than emitting a command that cannot run.",
-            file=sys.stderr,
-        )
-        return ""
 
     formatted = [_portable_arg(v) for v in (watcher_path, git_root)]
     if any(arg is None for arg in formatted):

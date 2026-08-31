@@ -431,7 +431,7 @@ def _compose_envelope(owning_repo: Optional[str], event: dict) -> str:
     owning_line = f'owning_repo: "{owning_repo}"' if owning_repo else "owning_repo: null"
     frontmatter_lines = [
         "---",
-        "kind: sovereign-tracker-event",
+        f"kind: {tracker_store.EVENT_KIND_FRONTMATTER_LABEL}",
         owning_line,
         f'delivered_at: "{now}"',
     ]
@@ -530,7 +530,7 @@ def _delivery_commit_message(rel_path: str) -> str:
     rather than naming a var here closes both.
     """
     lines = [
-        f"cross-repo: deliver sovereign-tracker event {rel_path}",
+        f"cross-repo: deliver {tracker_store.EVENT_KIND_FRONTMATTER_LABEL} {rel_path}",
         "",
         f"Deliverable-Id: {_DELIVERABLE_ID}",
     ]

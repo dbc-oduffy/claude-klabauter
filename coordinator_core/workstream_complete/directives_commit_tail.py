@@ -1607,6 +1607,283 @@ def revert_ship_stamps(
 
 
 # ---------------------------------------------------------------------------
+# C1 (state/dispatch-briefs/2026-08-31-a-close-disposes-the-baton-it-closed/
+# C1.md) — dispose a NON-shipped baton the same close pass ship-stamps a
+# shipped one. `resolve_ship_stamp_candidates` above ONLY ever selects
+# disposition=="shipped"; closed/abandoned/continued fell through to
+# nothing, leaving the baton non-terminal and its ledger claim held after a
+# close that told the caller otherwise. SAME claim-ledger source
+# (`_held_handoff_basenames` — the SAME `list_claims_by_session_checked`
+# reader; NO corpus scan), SAME positive-membership rule (a held claim
+# qualifies only because THIS close's own `decisions["handoff_dispositions"]`
+# says so, never because it is merely held), SAME
+# `state/handoffs/<basename>` active-on-disk restriction as the ship-stamp
+# resolver above.
+# ---------------------------------------------------------------------------
+
+_HANDOFF_DISPOSITION_CLOSED = "closed"
+_HANDOFF_DISPOSITION_ABANDONED = "abandoned"
+_HANDOFF_DISPOSITION_CONTINUED = "continued"
+
+#: `abandoned` maps onto the SAME `handoff.transition` `close` verb `closed`
+#: already uses, with the SAME caller-supplied `closed_reason` requirement —
+#: this is DR-084's own documented replacement, not a silent vocabulary
+#: collapse: `_supersede`'s own docstring states plainly that
+#: "deployment_state:abandoned has RETIRED — the old consumed+abandoned
+#: expression ... is gone[; the replacement is] closed+closed_reason, [a]
+#: human/session-only decision" (handoff_transition.py, `_supersede`
+#: docstring). There is no separate `deployment_state:abandoned` writer
+#: anywhere in this codebase to route `abandoned` onto instead — DR-084 left
+#: it nowhere else to go, so writing `deployment_state:closed` for an
+#: `abandoned` disposition IS honouring the caller's own disposition, not
+#: overriding it.
+_CLOSE_VERB_DISPOSITIONS = frozenset(
+    {_HANDOFF_DISPOSITION_CLOSED, _HANDOFF_DISPOSITION_ABANDONED}
+)
+
+_HANDOFF_DISPOSAL_VALUES = frozenset(
+    {_HANDOFF_DISPOSITION_CLOSED, _HANDOFF_DISPOSITION_ABANDONED, _HANDOFF_DISPOSITION_CONTINUED}
+)
+
+
+class CloseStampOutcome(NamedTuple):
+    """`apply_close_stamps`'s own return shape — mirrors `ShipStampOutcome`'s
+    "ran and found nothing" vs "never ran" distinction for the SIBLING
+    disposal path (closed/abandoned/continued) `resolve_ship_stamp_
+    candidates`/`apply_ship_stamps` never cover. `attempted` is the
+    candidate count BEFORE any per-candidate failure, so `attempted > 0`
+    with `disposed_paths == ()` reads as "ran, everything failed/skipped",
+    distinct from `attempted == 0` ("nothing held qualified")."""
+
+    disposed_paths: tuple[str, ...]
+    skipped_paths: tuple[str, ...]
+    attempted: int
+    diagnostics: tuple[str, ...]
+
+
+#: The "ran, found nothing" sentinel — mirrors `EMPTY_SHIP_STAMP_OUTCOME`'s
+#: own rationale (a single module-level constant so callers cannot drift on
+#: field values by hand-constructing this shape separately).
+EMPTY_CLOSE_STAMP_OUTCOME = CloseStampOutcome(
+    disposed_paths=(), skipped_paths=(), attempted=0, diagnostics=()
+)
+
+
+def resolve_close_stamp_candidates(
+    worktree_root: "Union[Path, str]",
+    session_id: Optional[str],
+    decisions: "dict[str, Any]",
+) -> "list[tuple[str, str, Optional[str]]]":
+    """Returns `[(handoff_relpath, disposition, closed_reason), ...]` for
+    every held claim this close's own `decisions["handoff_dispositions"]`
+    records as `closed`/`abandoned`/`continued` in THIS session — the
+    sibling of `resolve_ship_stamp_candidates` for every disposition that
+    resolver's positive `disposition == "shipped"` selection excludes.
+
+    `closed_reason` is read alongside `disposition` from the SAME
+    caller-supplied entry (never defaulted — a `closed`/`abandoned` entry
+    with no `closed_reason` is a caller error `apply_close_stamps` surfaces
+    as a diagnostic and skips, never a gap this resolver fills by
+    guessing). `continued` entries carry `closed_reason=None`
+    unconditionally — a disposition that is ALREADY terminal by definition
+    needs no reason and none is read for it.
+
+    Returns `[]` (never raises) for a falsy `session_id` or an empty/absent
+    `decisions["handoff_dispositions"]` — same two "nothing to do"
+    early-outs as `resolve_ship_stamp_candidates`."""
+    if not session_id:
+        return []
+    dispositions = decisions.get(_KEY_HANDOFF_DISPOSITIONS) or {}
+    if not dispositions:
+        return []
+    held = set(_held_handoff_basenames(worktree_root, session_id))
+    root = Path(worktree_root)
+    candidates: "list[tuple[str, str, Optional[str]]]" = []
+    for basename, entry in dispositions.items():
+        if basename not in held:
+            continue
+        if not isinstance(entry, dict):
+            continue
+        disposition = entry.get("disposition")
+        if disposition not in _HANDOFF_DISPOSAL_VALUES:
+            continue
+        active_path = root / "state" / "handoffs" / basename
+        if not active_path.is_file():
+            continue
+        closed_reason = (
+            entry.get("closed_reason") if disposition in _CLOSE_VERB_DISPOSITIONS else None
+        )
+        candidates.append((f"state/handoffs/{basename}", disposition, closed_reason))
+    return candidates
+
+
+def _release_handoff_claim(worktree_root: "Union[Path, str]", basename: str) -> None:
+    """Releases this session's own `handoff-claims/<basename>` ledger entry —
+    self-release only (`session.claims.release_artifact` resolves holder
+    identity from `cwd`/`worktree_root` itself, same mechanism
+    `_held_handoff_basenames` already reads this session's claims through).
+    Best-effort, never raises: mirrors `_release_committed_path_claims`'s
+    own fail-safe posture — a release failure must never surface as this
+    disposal's own failure, since the terminal write it follows (per this
+    section's ordering guarantee) is already durable on disk; the residue
+    is a stale claim on an already-terminal record, not a live one wrongly
+    freed."""
+    try:
+        from coordinator_core.session.claims import release_artifact
+
+        release_artifact("handoff", basename, cwd=str(worktree_root))
+    except Exception:
+        pass
+
+
+def apply_close_stamps(
+    worktree_root: "Union[Path, str]",
+    candidates: "list[tuple[str, str, Optional[str]]]",
+) -> "tuple[CloseStampOutcome, dict[str, str]]":
+    """Disposes each `resolve_close_stamp_candidates` candidate:
+
+      1. `closed`/`abandoned` — stamps `deployment_state: closed` (plus the
+         caller-supplied `closed_reason`) via `handoff.transition`'s `close`
+         verb, the SAME op `apply_ship_stamps` uses for its own `ship`
+         verb. Refuses (diagnostic, skip, no write, no release) a
+         `closed_reason` that is missing or not one of `_CLOSED_REASONS`
+         (`cancelled | displaced | stale`) — a fabricated reason is exactly
+         what the chunk body's item (a) forbids; the caller's own entry is
+         the sole source.
+      2. `continued` — ALREADY terminal by definition (DR-084: `continued`
+         is the automated-writer terminal `handoff.transition supersede`
+         stamps) and gets no re-stamp. This function only ASSERTS the
+         on-disk `deployment_state` already reads `continued` before
+         disposing it (`extract_frontmatter_scalar`, the same lightweight
+         fence-scoped reader `handoff_transition.py` itself uses for an
+         analogous read-only check) — a mismatch is a diagnostic + skip
+         (no release), never a silent guess or an overwrite.
+
+    ORDERING IS LOAD-BEARING (chunk body item (c)): for every candidate the
+    terminal stamp (or the `continued` assertion) is checked/applied FIRST,
+    the ledger claim released SECOND — never the reverse. The window this
+    ordering closes is exactly what `pickup_assemble`'s held-claim read
+    (`_resolve_held_handoff_for_session`, the same reader
+    `baton_assemble`'s own docstring names) would otherwise misread as
+    live, inheritable work rather than a disposed baton: a claim released
+    while the record is still non-terminal reads, to that reader, as
+    "nothing holds this any more AND it is still open" — precisely the
+    corruption this chunk exists to close. A crash between the two steps
+    for a given candidate leaves the SAFE half standing: terminal-on-disk,
+    claim still held — the record itself no longer reads as live work
+    either way, and a later pass can still find and release the stale
+    claim.
+
+    Returns `(outcome, backups)` — `backups` is `{relpath: original_text}`,
+    captured BEFORE a `closed`/`abandoned` write (mirrors `apply_ship_
+    stamps`'s own backup contract) so a caller whose own fold-in commit
+    later fails/is refused can restore via `revert_close_stamps`. A
+    `continued` candidate that only asserted (no write) never appears in
+    `backups` — there is nothing to revert for it. Ledger-claim release is
+    best-effort per candidate (`_release_handoff_claim`) and is never
+    itself reverted — a release failure leaves a stale claim on an
+    already-terminal record (safe residue, per the ordering note above); a
+    release success is not undone just because a later commit fails, since
+    the terminal write is what `revert_close_stamps` restores instead."""
+    from coordinator_core.ops._fm_util import extract_frontmatter_scalar
+    from coordinator_core.ops.handoff_transition import _CLOSED_REASONS
+    from coordinator_core.ops.handoff_transition import _handler as _transition_handler
+
+    root = Path(worktree_root)
+    disposed: "list[str]" = []
+    diagnostics: "list[str]" = []
+    backups: "dict[str, str]" = {}
+
+    for relpath, disposition, closed_reason in candidates:
+        abspath = root / relpath
+        basename = Path(relpath).name
+
+        if disposition == _HANDOFF_DISPOSITION_CONTINUED:
+            try:
+                text = abspath.read_text(encoding="utf-8")
+            except OSError as exc:
+                diagnostics.append(f"{relpath}: could not read for continued assertion: {exc}")
+                continue
+            on_disk = extract_frontmatter_scalar(text, "deployment_state")
+            if on_disk != _HANDOFF_DISPOSITION_CONTINUED:
+                diagnostics.append(
+                    f"{relpath}: disposition 'continued' asserted deployment_state:"
+                    f"continued but found {on_disk!r} — refusing to stamp or release"
+                )
+                continue
+            disposed.append(relpath)
+            _release_handoff_claim(worktree_root, basename)
+            continue
+
+        # closed | abandoned
+        if closed_reason not in _CLOSED_REASONS:
+            diagnostics.append(
+                f"{relpath}: disposition {disposition!r} requires a closed_reason in "
+                f"{sorted(_CLOSED_REASONS)} (got {closed_reason!r}) — refusing to "
+                "fabricate one; skipped, no write"
+            )
+            continue
+
+        try:
+            original_text = abspath.read_text(encoding="utf-8")
+        except OSError as exc:
+            diagnostics.append(f"{relpath}: could not read for backup, skipped: {exc}")
+            continue
+
+        try:
+            close_result = asyncio.run(
+                _transition_handler(
+                    {"handoff_path": str(abspath), "verb": "close", "reason": closed_reason},
+                    repo_root=root,
+                )
+            )
+        except Exception as exc:  # noqa: BLE001 - fold, never crash the close
+            diagnostics.append(f"{relpath}: handoff.transition close raised: {exc}")
+            continue
+        if int(close_result.get("exit_code", 1)) != 0:
+            diagnostics.append(f"{relpath}: handoff.transition close failed: {close_result.get('error')}")
+            continue
+
+        disposed.append(relpath)
+        backups[relpath] = original_text
+        _release_handoff_claim(worktree_root, basename)
+
+    disposed_set = set(disposed)
+    outcome_obj = CloseStampOutcome(
+        disposed_paths=tuple(disposed),
+        skipped_paths=tuple(
+            relpath for relpath, _disposition, _reason in candidates if relpath not in disposed_set
+        ),
+        attempted=len(candidates),
+        diagnostics=tuple(diagnostics),
+    )
+    return outcome_obj, backups
+
+
+def revert_close_stamps(
+    worktree_root: "Union[Path, str]", relpaths: "Sequence[str]", backups: "dict[str, str]"
+) -> None:
+    """WRITE-LANDS-THEN-COMMIT-FAILS: best-effort restore of the exact prior
+    bytes captured by `apply_close_stamps` before its `closed`/`abandoned`
+    write, for every `relpath` in `relpaths` that has a backup — mirrors
+    `revert_ship_stamps` exactly (same rationale, same never-raises
+    contract). A `continued` candidate has no backup entry (nothing was
+    written for it) and is silently skipped here, same as any other
+    `relpath` absent from `backups`. Never touches ledger-claim state —
+    `apply_close_stamps`'s own docstring names why a release is not
+    reverted by this function."""
+    root = Path(worktree_root)
+    for relpath in relpaths:
+        original = backups.get(relpath)
+        if original is None:
+            continue
+        try:
+            (root / relpath).write_text(original, encoding="utf-8")
+        except OSError:
+            pass
+
+
+# ---------------------------------------------------------------------------
 # Step 3.35 — d-push-outstanding — wires push_outstanding() (C4b, 2026-08-25,
 # docs/plans/2026-08-25-push-re-homes-onto-the-cadence-surfaces.md)
 # ---------------------------------------------------------------------------

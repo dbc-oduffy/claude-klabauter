@@ -77,7 +77,10 @@ def test_ac1_all_conditions_true_yields_auto():
         trailer_bound=True,
         reachable_on_default_branch=True,
     )
-    assert tcp.classify_code_complete_tier(evidence) == "auto"
+    assert (
+        tcp.classify_code_complete_tier(evidence, closure_fidelity="auto-observable")
+        == "auto"
+    )
 
 
 def test_ac1_trailer_not_bound_with_reachable_true_yields_suggest():
@@ -86,7 +89,10 @@ def test_ac1_trailer_not_bound_with_reachable_true_yields_suggest():
         trailer_bound=False,
         reachable_on_default_branch=True,
     )
-    assert tcp.classify_code_complete_tier(evidence) == "suggest"
+    assert (
+        tcp.classify_code_complete_tier(evidence, closure_fidelity="auto-observable")
+        == "suggest"
+    )
 
 
 def test_ac1_trailer_bound_with_reachable_false_yields_suggest():
@@ -95,7 +101,10 @@ def test_ac1_trailer_bound_with_reachable_false_yields_suggest():
         trailer_bound=True,
         reachable_on_default_branch=False,
     )
-    assert tcp.classify_code_complete_tier(evidence) == "suggest"
+    assert (
+        tcp.classify_code_complete_tier(evidence, closure_fidelity="auto-observable")
+        == "suggest"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -110,7 +119,10 @@ def test_ac2_reachable_none_yields_suggest_and_never_raises():
         reachable_on_default_branch=None,
     )
     # No exception is the assertion; the classification is checked too.
-    assert tcp.classify_code_complete_tier(evidence) == "suggest"
+    assert (
+        tcp.classify_code_complete_tier(evidence, closure_fidelity="auto-observable")
+        == "suggest"
+    )
 
 
 def test_ac2_reachable_none_with_trailer_unbound_yields_suggest():
@@ -119,7 +131,10 @@ def test_ac2_reachable_none_with_trailer_unbound_yields_suggest():
         trailer_bound=False,
         reachable_on_default_branch=None,
     )
-    assert tcp.classify_code_complete_tier(evidence) == "suggest"
+    assert (
+        tcp.classify_code_complete_tier(evidence, closure_fidelity="auto-observable")
+        == "suggest"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -169,12 +184,20 @@ def test_c2_classifiers_return_unchanged_values():
     evidence = tcp.CodeCompleteEvidence(
         sha="a" * 40, trailer_bound=True, reachable_on_default_branch=True
     )
-    assert tcp.classify_code_complete_tier(evidence) == "auto"
+    assert (
+        tcp.classify_code_complete_tier(evidence, closure_fidelity="auto-observable")
+        == "auto"
+    )
 
     evidence_suggest = tcp.CodeCompleteEvidence(
         sha="b" * 40, trailer_bound=False, reachable_on_default_branch=True
     )
-    assert tcp.classify_code_complete_tier(evidence_suggest) == "suggest"
+    assert (
+        tcp.classify_code_complete_tier(
+            evidence_suggest, closure_fidelity="auto-observable"
+        )
+        == "suggest"
+    )
 
     qa_evidence = tcp.QaVerifiedEvidence(source="ci", confidence=1.0)
     assert tcp.classify_qa_verified(qa_evidence) == "suggest"
@@ -278,6 +301,7 @@ def test_ac4_retract_payload_carries_reverts_sha_never_completing_sha():
         revert_evidence,
         actor="ci",
         source_observation_id="obs-revert-ac4",
+        closure_fidelity="auto-observable",
     )
 
     assert payload is not None
@@ -311,6 +335,7 @@ def test_ac4_unverified_revert_returns_none(trailer_bound, reachable_on_default_
             revert_evidence,
             actor="ci",
             source_observation_id="obs-revert-unverified",
+            closure_fidelity="auto-observable",
         )
         is None
     )
@@ -353,12 +378,14 @@ def test_ac14_concurrent_revert_detection_dedupes_to_one_stored_event(repo_root,
         revert_evidence,
         actor="ci",
         source_observation_id="obs-revert-ac14",
+        closure_fidelity="auto-observable",
     )
     payload2 = tcp.detect_symmetric_retract(
         "item-ac14",
         revert_evidence,
         actor="ci",
         source_observation_id="obs-revert-ac14",
+        closure_fidelity="auto-observable",
     )
     assert payload1 is not None
     assert payload2 is not None
@@ -457,6 +484,7 @@ def test_ac8_auto_tier_applied_at_set_at_creation(repo_root):
         actor="ci",
         source_observation_id="obs-ac8-auto",
         repo_root=repo_root,
+        closure_fidelity="auto-observable",
     )
     assert event["tier"] == "auto"
     assert event["applied_at"] is not None
@@ -497,6 +525,7 @@ def test_ac8_suggest_tier_applied_at_is_none(repo_root):
         actor="ci",
         source_observation_id="obs-ac8-suggest",
         repo_root=repo_root,
+        closure_fidelity="auto-observable",
     )
     assert event["tier"] == "suggest"
     assert event["applied_at"] is None
@@ -520,8 +549,11 @@ def test_c4_emit_code_complete_assert_classifies_via_c1(repo_root):
         actor="ci",
         source_observation_id="obs-c4-classify",
         repo_root=repo_root,
+        closure_fidelity="auto-observable",
     )
-    assert event["tier"] == tcp.classify_code_complete_tier(evidence)
+    assert event["tier"] == tcp.classify_code_complete_tier(
+        evidence, closure_fidelity="auto-observable"
+    )
     assert event["axis"] == "code_complete"
     assert event["to_state"] == "asserted"
     assert event["evidence"] == {"sha": "d" * 40}
@@ -541,3 +573,126 @@ def test_c4_emit_code_complete_assert_does_not_accept_a_tier_argument():
 
     signature = inspect.signature(tcp.emit_code_complete_assert)
     assert "tier" not in signature.parameters
+
+
+# ---------------------------------------------------------------------------
+# C6 — closure_fidelity is a REQUIRED keyword-only parameter, threaded into
+# the shared classifier, and a `verify-with-effort` item can NEVER yield
+# `"auto"` no matter how strong its evidence is (adversarial: exhaustively
+# re-drives every AC1/AC2 evidence combination that yields "auto" for an
+# auto-observable item and asserts each yields "suggest" for a
+# verify-with-effort one).
+# ---------------------------------------------------------------------------
+
+
+def test_c6_closure_fidelity_is_required_keyword_only_on_all_three_callers():
+    import inspect
+
+    for fn in (
+        tcp.classify_code_complete_tier,
+        tcp.detect_symmetric_retract,
+        tcp.emit_code_complete_assert,
+    ):
+        signature = inspect.signature(fn)
+        param = signature.parameters["closure_fidelity"]
+        assert param.kind == inspect.Parameter.KEYWORD_ONLY
+        assert param.default is inspect.Parameter.empty
+
+
+@pytest.mark.parametrize(
+    "trailer_bound, reachable_on_default_branch",
+    [
+        (True, True),  # the ONLY combination that yields "auto" for auto-observable
+        (False, True),
+        (True, False),
+        (True, None),
+        (False, False),
+        (False, None),
+    ],
+)
+def test_c6_verify_with_effort_never_yields_auto(
+    trailer_bound, reachable_on_default_branch
+):
+    evidence = tcp.CodeCompleteEvidence(
+        sha="e" * 40,
+        trailer_bound=trailer_bound,
+        reachable_on_default_branch=reachable_on_default_branch,
+    )
+    # Adversarial control: confirm this exact evidence combination would
+    # yield "auto" for an auto-observable item when (and only when) both
+    # conditions hold — proving the verify-with-effort case below is a real
+    # degradation, not a vacuous check over inputs that were "suggest"
+    # already.
+    auto_observable_tier = tcp.classify_code_complete_tier(
+        evidence, closure_fidelity="auto-observable"
+    )
+    if trailer_bound and reachable_on_default_branch is True:
+        assert auto_observable_tier == "auto"
+    else:
+        assert auto_observable_tier == "suggest"
+
+    assert (
+        tcp.classify_code_complete_tier(evidence, closure_fidelity="verify-with-effort")
+        == "suggest"
+    )
+
+
+def test_c6_closure_fidelity_symbol_is_module_level_frozenset():
+    assert "_CLOSURE_FIDELITY_DEGRADES_TO_SUGGEST" in dir(tcp)
+    assert isinstance(tcp._CLOSURE_FIDELITY_DEGRADES_TO_SUGGEST, frozenset)
+    assert "verify-with-effort" in tcp._CLOSURE_FIDELITY_DEGRADES_TO_SUGGEST
+
+
+def test_c6_emit_code_complete_assert_verify_with_effort_never_auto(repo_root):
+    evidence = tcp.CodeCompleteEvidence(
+        sha="f" * 40,
+        trailer_bound=True,
+        reachable_on_default_branch=True,
+    )
+    event = tcp.emit_code_complete_assert(
+        "item-c6-verify-with-effort",
+        evidence,
+        actor="ci",
+        source_observation_id="obs-c6-verify-with-effort",
+        repo_root=repo_root,
+        closure_fidelity="verify-with-effort",
+    )
+    assert event["tier"] == "suggest"
+    assert event["applied_at"] is None
+
+
+def test_c6_detect_symmetric_retract_verify_with_effort_is_suppressed():
+    # Finding 3 (EM-adjudicated): the shared classifier's degradation gate
+    # applies to detect_symmetric_retract too (not just the assert path),
+    # so a verify-with-effort revert never retracts even when its evidence
+    # clears the same trailer_bound/reachable gate an auto-observable revert
+    # would clear. This is the deliberate, tested consequence — not a
+    # silent behavior change.
+    revert_evidence = tcp.CodeCompleteEvidence(
+        sha="r" * 40,
+        trailer_bound=True,
+        reachable_on_default_branch=True,
+    )
+    assert (
+        tcp.detect_symmetric_retract(
+            "item-c6-retract-suppressed",
+            revert_evidence,
+            actor="ci",
+            source_observation_id="obs-c6-retract-suppressed",
+            closure_fidelity="verify-with-effort",
+        )
+        is None
+    )
+
+    # Control: the SAME evidence, auto-observable, DOES retract — proving
+    # the suppression above is caused by closure_fidelity, not by the
+    # evidence shape.
+    payload = tcp.detect_symmetric_retract(
+        "item-c6-retract-control",
+        revert_evidence,
+        actor="ci",
+        source_observation_id="obs-c6-retract-control",
+        closure_fidelity="auto-observable",
+    )
+    assert payload is not None
+    assert payload["to_state"] == "retracted"

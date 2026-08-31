@@ -18,13 +18,14 @@ import os
 from coordinator_core.group_em import send_pass
 
 
-def _verdict(session_id, reason="turn-ended", candidate=True, state="paused", source="reader"):
+def _verdict(session_id, reason="turn-ended", candidate=True, state="paused", source="reader", cwd=None):
     return {
         "session_id": session_id,
         "candidate": candidate,
         "reason": reason,
         "state": state,
         "source": source,
+        "cwd": cwd,
     }
 
 
@@ -302,6 +303,84 @@ def test_dwell_seconds_derived_from_receiver_state_stamp(tmp_path, monkeypatch):
     assert digest["entries"][0]["dwell_seconds"] == 500.0
 
 
+def test_dwell_seconds_uses_peer_cwd_not_repo_root(tmp_path, monkeypatch):
+    """Finding 1 (coordinator:code-reviewer, P1): a peer whose `cwd` is a
+    subdirectory of `repo_root` (permitted by `build_roster`'s "within
+    repo_root" filter) must have ITS OWN cwd threaded to
+    `_transcript_mtime_epoch`, matching `read_pass.classify_peer`'s own
+    `peer.get("cwd") or repo_root` pattern -- else `_transcript_path_for`
+    looks up the wrong encoded path and dwell silently degrades to `None`
+    forever for exactly this population."""
+    repo_root = str(tmp_path)
+    peer_cwd = str(tmp_path / "nested-worktree")
+
+    monkeypatch.setattr(
+        send_pass.read_pass, "read_receiver_state", lambda sid, root: None
+    )
+
+    seen_cwds: list = []
+
+    def fake_transcript_mtime(sid, cwd):
+        seen_cwds.append(cwd)
+        return 500.0 if cwd == peer_cwd else None
+
+    monkeypatch.setattr(
+        send_pass.read_pass, "_transcript_mtime_epoch", fake_transcript_mtime
+    )
+
+    roster = [_verdict("peer-nested", cwd=peer_cwd)]
+    digest = send_pass.build_send_digest(repo_root, roster, "caller-nested", now=1000.0)
+
+    assert digest["entries"][0]["dwell_seconds"] == 500.0
+    assert peer_cwd in seen_cwds
+    assert repo_root not in seen_cwds
+
+
+def test_dwell_seconds_prefers_more_recent_of_stamp_and_transcript(tmp_path, monkeypatch):
+    """Finding 2 (coordinator:code-reviewer, P2): the module docstring's
+    entire justification for reading both sources is that the more RECENT
+    of the two wins. Pin both directions -- a rewrite that always preferred
+    `stamped_at` (or always preferred the transcript) would fail one of
+    these."""
+    from datetime import datetime, timezone
+
+    repo_root = str(tmp_path)
+    stamp_dt = datetime(2026, 8, 31, 0, 0, 0, tzinfo=timezone.utc)
+    stamp_epoch = stamp_dt.timestamp()
+
+    monkeypatch.setattr(
+        send_pass.read_pass,
+        "read_receiver_state",
+        lambda sid, root: {"stamped_at": "2026-08-31T00:00:00Z"},
+    )
+
+    # Transcript is NEWER than the stamp -- dwell must be measured from the
+    # transcript, not the stale stamp.
+    monkeypatch.setattr(
+        send_pass.read_pass,
+        "_transcript_mtime_epoch",
+        lambda sid, cwd: stamp_epoch + 200.0,
+    )
+    roster = [_verdict("peer-newer-transcript")]
+    digest = send_pass.build_send_digest(
+        repo_root, roster, "caller-max-1", now=stamp_epoch + 500.0
+    )
+    assert digest["entries"][0]["dwell_seconds"] == 300.0
+
+    # Transcript is OLDER than the stamp -- dwell must be measured from the
+    # (more recent) stamp, not the stale transcript.
+    monkeypatch.setattr(
+        send_pass.read_pass,
+        "_transcript_mtime_epoch",
+        lambda sid, cwd: stamp_epoch - 200.0,
+    )
+    roster2 = [_verdict("peer-newer-stamp")]
+    digest2 = send_pass.build_send_digest(
+        repo_root, roster2, "caller-max-2", now=stamp_epoch + 500.0
+    )
+    assert digest2["entries"][0]["dwell_seconds"] == 500.0
+
+
 def test_open_obligations_includes_freshly_emitted_entries(tmp_path):
     repo_root = str(tmp_path)
     roster = [_verdict("peer-open")]
@@ -350,13 +429,20 @@ def test_empty_roster_declines_the_obligation_to_look(tmp_path):
 
 def test_every_suppressed_peer_gets_its_own_declination(tmp_path):
     """DoE's wording: a declination for every roster entry it does not message,
-    naming which gate failed. One suppressed peer, one row, carrying its reason."""
+    naming which gate failed. One suppressed peer, one row, carrying its reason.
+
+    Review: overengineering-reviewer (finding #4, EM-ratified partial) -- the
+    per-peer declination is a projection of `suppressed`, folded in there
+    (`obligation`/`dwell_seconds` on the row itself) rather than round-tripped
+    through `declined`, which now names only tick-level declinations.
+    """
     roster = [_verdict("peer-away", reason="away", state="away")]
     digest = send_pass.build_send_digest(str(tmp_path), roster, "caller-sup", now=1000.0)
     assert not digest["entries"]
-    by_peer = {row["session_id"]: row for row in digest["declined"] if row["session_id"]}
+    by_peer = {row["session_id"]: row for row in digest["suppressed"] if row["session_id"]}
     assert "peer-away" in by_peer
-    assert by_peer["peer-away"]["reason"]
+    assert by_peer["peer-away"]["why"]
+    assert by_peer["peer-away"]["obligation"] == "message peer peer-away"
 
 
 def test_full_roster_none_eligible_still_declines_the_tick(tmp_path):
@@ -395,14 +481,12 @@ def test_cooldown_declination_carries_dwell_so_the_hold_is_weighable(tmp_path, m
     roster = [_verdict("peer-held")]
     send_pass.build_send_digest(repo_root, roster, "caller-dw", now=1000.0)
 
-    monkeypatch.setattr(send_pass, "_dwell_seconds", lambda r, p, n: 624.0)
+    monkeypatch.setattr(send_pass, "_dwell_seconds", lambda r, p, n, cwd=None: 624.0)
     digest = send_pass.build_send_digest(repo_root, roster, "caller-dw", now=1060.0)
 
     held = [row for row in digest["suppressed"] if row["why"] == "cooldown"]
     assert held, "expected the second tick to hold the peer on cooldown"
-    row = next(r for r in digest["declined"] if r["session_id"] == "peer-held")
-    assert row["reason"] == "cooldown"
-    assert row["dwell_seconds"] == 624.0
+    assert held[0]["dwell_seconds"] == 624.0
 
 
 def test_non_cooldown_declinations_do_not_pay_for_dwell(tmp_path, monkeypatch):
@@ -414,6 +498,6 @@ def test_non_cooldown_declinations_do_not_pay_for_dwell(tmp_path, monkeypatch):
     )
     roster = [_verdict("peer-away", reason="away", state="away")]
     digest = send_pass.build_send_digest(str(tmp_path), roster, "caller-away", now=1000.0)
-    row = next(r for r in digest["declined"] if r["session_id"] == "peer-away")
+    row = next(r for r in digest["suppressed"] if r["session_id"] == "peer-away")
     assert row["dwell_seconds"] is None
-    assert all("dwell_seconds" in r for r in digest["declined"])
+    assert all("dwell_seconds" in r for r in digest["suppressed"])

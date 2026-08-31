@@ -53,8 +53,10 @@ import threading
 from coordinator_core import tracker_entities, tracker_store
 from coordinator_core import tracker_transitions as tt
 from coordinator_core.tracker_entities import (
+    CLOSURE_FIDELITY_VALUES,
     RESERVED_PROJECT_ID,
     TrackerEntityError,
+    emit_item_closure_fidelity_set,
     emit_item_created,
     emit_item_person_added,
     emit_item_person_retracted,
@@ -71,7 +73,9 @@ from coordinator_core.tracker_entities import (
     mint_person_id,
 )
 from coordinator_core.tracker_projection import (
+    DEFAULT_CLOSURE_FIDELITY,
     current_state,
+    fold_closure_fidelity,
     fold_membership,
     fold_membership_wire,
     fold_person_membership,
@@ -201,6 +205,69 @@ def test_ac3_every_item_reachable_in_the_stream_folds_non_empty(repo_root):
     for item_id in (bare_item, with_edge, toggled_to_empty, only_added, only_retracted):
         assert item_id in folded, f"{item_id} vanished from the fold entirely"
         assert folded[item_id], f"{item_id} folded to the empty set — totality violated"
+
+
+# ---------------------------------------------------------------------------
+# C4 — fold_closure_fidelity (DR-closure-fidelity-tier-axis.md D1/D4)
+# ---------------------------------------------------------------------------
+
+
+def test_closure_fidelity_explicit_classification_folds(repo_root):
+    item_id = _make_item(repo_root, title="Classified", body="explicitly set")
+    emit_item_closure_fidelity_set(item_id, "auto-observable", repo_root=repo_root)
+
+    folded = fold_closure_fidelity(repo_root=repo_root)
+
+    assert folded[item_id] == "auto-observable"
+
+
+def test_closure_fidelity_latest_classification_wins(repo_root):
+    item_id = _make_item(repo_root, title="Reclassified", body="set twice")
+    emit_item_closure_fidelity_set(item_id, "auto-observable", repo_root=repo_root)
+    emit_item_closure_fidelity_set(item_id, "human-attested", repo_root=repo_root)
+
+    folded = fold_closure_fidelity(repo_root=repo_root)
+
+    assert folded[item_id] == "human-attested"
+
+
+def test_closure_fidelity_item_created_with_no_classification_defaults(repo_root):
+    # An item that HAS an item_created event but never receives an
+    # item_closure_fidelity_set event — this alone is NOT the case D4/C4
+    # brief calls out (that requires an item reached only through a
+    # membership event, below); this covers the item_created-only leg.
+    bare_item = _make_item(repo_root, title="Bare", body="no classification ever")
+
+    folded = fold_closure_fidelity(repo_root=repo_root)
+
+    assert folded[bare_item] == DEFAULT_CLOSURE_FIDELITY
+
+
+def test_closure_fidelity_item_reached_only_via_membership_event_defaults(repo_root):
+    # The load-bearing case: an item with NO item_created event at all,
+    # reachable in the stream ONLY through an item_project_added event, and
+    # never classified. fold_closure_fidelity's totality must still seed it
+    # to DEFAULT_CLOSURE_FIDELITY (D4) -- this is distinct from, and does
+    # not degrade to, "an item_created item with the field unset".
+    emit_project_created("proj-alpha", name="Alpha", repo_root=repo_root)
+    only_added = mint_item_id(
+        "OnlyAdded", "no item_created, no classification ever", "2026-08-05T10:00:00.000000Z"
+    )
+    _emit_membership_event_for_foreign_item(
+        only_added, "proj-alpha", kind="item_project_added", repo_root=repo_root
+    )
+
+    folded = fold_closure_fidelity(repo_root=repo_root)
+
+    assert only_added in folded, f"{only_added} vanished from the closure_fidelity fold"
+    assert folded[only_added] == DEFAULT_CLOSURE_FIDELITY
+
+
+def test_closure_fidelity_default_value_is_the_conservative_verify_with_effort_tier(repo_root):
+    # D4 names the default explicitly as verify-with-effort, not merely
+    # "some" closed value -- pin it, not just membership in the enum.
+    assert DEFAULT_CLOSURE_FIDELITY == "verify-with-effort"
+    assert DEFAULT_CLOSURE_FIDELITY in CLOSURE_FIDELITY_VALUES
 
 
 # ---------------------------------------------------------------------------

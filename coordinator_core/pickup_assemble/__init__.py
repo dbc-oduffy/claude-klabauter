@@ -4547,6 +4547,16 @@ def compute_baton_unification_verdict(
         one level down. No backfill and no default is invented here to
         dodge the count.
 
+    A held claim that resolves to nothing readable at all is excluded
+    ahead of both filters and counted in its own third bucket,
+    `unreadable_skipped`. That is the claim-outlives-the-file residue a
+    hand repair leaves behind (frontmatter fixed, claim ledger not), and
+    it used to leave NO counter anywhere: the verdict read identically
+    whether the ledger was clean or carried a dangling row, so the second
+    leg of a repair could not be verified except by waiting for a
+    complaint. The bucket is deliberately separate from
+    `unstamped_skipped`, which stays specifically the absent-axis case.
+
     (a2) CARDINALITY GATE — the inheritable set must contain a baton that
     is NOT the artifact being picked up. `brief()` claims the target
     (`acquire_brief_claim`) BEFORE routing here, so by the time the held
@@ -4600,6 +4610,7 @@ def compute_baton_unification_verdict(
             "inheritable": [],
             "disposed_skipped": [],
             "unstamped_skipped": 0,
+            "unreadable_skipped": 0,
             "disposition": None,
             "message": "No held handoff claim on this session — nothing to unify.",
         }
@@ -4608,15 +4619,16 @@ def compute_baton_unification_verdict(
     inheritable: list[str] = []
     disposed_skipped: list[str] = []
     unstamped_skipped = 0
+    unreadable_skipped = 0
 
     for held_path in held_paths:
         resolved = _resolve_lineage_artifact_path(root, held_path)
         held_fm = _read_lineage_artifact_fm(resolved) if resolved is not None else None
         if held_fm is None:
-            # Unreadable held claim — neither disposed nor role-matched;
-            # excluded from inheritance but NOT counted as an unstamped
-            # skip (that bucket is specifically the absent-axis case, not
-            # "couldn't read the file at all").
+            # Neither disposed nor role-matched, so it belongs in neither of
+            # those buckets — `unstamped_skipped` is specifically the
+            # absent-axis case, not "couldn't read the file at all".
+            unreadable_skipped += 1
             continue
         if held_fm.get("deployment_state") in HANDOFF_TERMINAL_DEPLOYMENT:
             disposed_skipped.append(held_path)
@@ -4646,6 +4658,7 @@ def compute_baton_unification_verdict(
             "inheritable": [],
             "disposed_skipped": disposed_skipped,
             "unstamped_skipped": unstamped_skipped,
+            "unreadable_skipped": unreadable_skipped,
             "disposition": None,
             "message": (
                 "The only inheritable held baton IS the artifact being picked "
@@ -4676,6 +4689,7 @@ def compute_baton_unification_verdict(
         "inheritable": inheritable,
         "disposed_skipped": disposed_skipped,
         "unstamped_skipped": unstamped_skipped,
+        "unreadable_skipped": unreadable_skipped,
         "disposition": disposition,
         "message": (
             f"Held baton {primary!r} unifies cleanly ({disposition})."
