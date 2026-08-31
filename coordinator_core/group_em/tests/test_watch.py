@@ -23,6 +23,54 @@ from coordinator_core.group_em import watch
 REPO_ROOT = "/repo/root"
 
 
+def test_armed_line_names_the_watched_repo_not_a_literal(tmp_path):
+    """The ARMED label tracks --repo-root, and a hardcoded repo name is the defect.
+
+    Regression for a live miss measured against the PUBLISHED engine 2026-08-31 by
+    doe-claude-80: the line read `claude-klabauter peers` for every --repo-root,
+    because the source carried the literal `claude-klabauter` and the publish transform
+    rewrites that token on the way into the mirror. So the label was wrong in BOTH
+    trees at once and wrong differently in each.
+
+    The counts were correct throughout -- 3 for DoE-claude, 14 for claude-klabauter --
+    which is what makes it worth a pin rather than a cosmetic edit. A Group EM arming
+    for one repo reads a plausible count beside a FOREIGN repo name, and the honest
+    reading is that the watch is pointed at the wrong tree: the failure lands as an
+    operator stand-down, not an error. Same family as the guard-messaging rule that
+    agent-facing text is a register -- mechanism right, text an operator reads wrong.
+
+    Two roots, because one root cannot distinguish "derived from repo_root" from
+    "happens to match this one literal".
+    """
+    for name in ("alpha-repo", "beta-repo"):
+        root = tmp_path / name
+        root.mkdir()
+        lines: list[str] = []
+
+        class _Stream:
+            def write(self, text):
+                if text.strip():
+                    lines.append(text.strip())
+
+            def flush(self):
+                pass
+
+        with mock.patch.object(
+            watch, "_measure_snapshot_ms", return_value=(2.0, 7)
+        ), mock.patch.object(watch, "poll_once", return_value=({}, [])):
+            watch.main(
+                str(root),
+                caller_session_id="caller-1",
+                stream=_Stream(),
+                sleep_fn=lambda _s: None,
+                max_iterations=1,
+            )
+
+        assert lines[0].startswith(f"ARMED peer_count=7 {name} peers, "), lines[0]
+        assert "claude-klabauter" not in lines[0]
+        assert "klabauter" not in lines[0]
+
+
 # ---------------------------------------------------------------------------
 # transitions -- pure function over two boolean maps
 # ---------------------------------------------------------------------------
@@ -272,7 +320,11 @@ def test_main_arms_and_reports_measured_interval(tmp_path):
         )
 
     armed_line = stream_lines[0]
-    assert armed_line.startswith("ARMED peer_count=5 claude-klabauter peers, snapshot=2.0ms")
+    # The repo name is READ OFF repo_root, so it is tmp_path's basename here rather
+    # than a literal. Pinned that way on purpose -- see the regression test below.
+    assert armed_line.startswith(
+        f"ARMED peer_count=5 {tmp_path.name} peers, snapshot=2.0ms"
+    )
     # interval = max(floor, 1000 * snapshot_s) = max(5.0, 1000 * 0.002) = 5.0
     assert "interval=5.0s" in armed_line
 

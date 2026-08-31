@@ -225,6 +225,68 @@ def _closed_pickup_kind() -> dict[str, Any]:
     }
 
 
+#: Plan lifecycle states that are NOT terminal but DO mean every chunk's code is
+#: already on the branch -- i.e. the plan is past execution and the only thing
+#: between it and `implemented` is a terminal status write nobody has made.
+#: Read off `coordinator_core/frontmatter/schemas/plan.schema.json`'s own `status`
+#: enum and its description, which states the property this constant depends on:
+#: "'landed' sits between 'executing' and 'implemented' ... It is NOT terminal --
+#: a plan in 'landed' still has outstanding row-level work to close out before it
+#: can move to 'implemented'."
+#:
+#: DELIBERATELY ONLY `landed`. `executing` is also non-terminal, but a plan there
+#: is owed WORK, not a write, and reporting `terminal_write_owed` for it would
+#: point an operator at `stamp-plan-implemented` for a plan whose chunks have not
+#: landed -- the remedy would be wrong, which is worse than silence. `draft`,
+#: `reviewed`, `approved` are pre-execution for the same reason. `deferred`,
+#: `abandoned`, `superseded` are terminal by disposition and owe nothing.
+_TERMINAL_WRITE_OWED_STATUSES = frozenset({"landed"})
+
+
+def _terminal_write_owed(governing_plan: dict[str, Any]) -> bool:
+    """Does this governing plan still owe a terminal status write?
+
+    `cross-repo/archive/2026-08-21-example-retrieval-repo-em-quick-wrap-landed-plan-stalls-
+    silently.md`, the sender's own option (3) and stated first preference: *"A
+    `close_gate.governing_plan.terminal_write_owed: true` ... would have turned my
+    misread into a directive. This is the cheapest of the three fixes and the one
+    that would actually have caught me, since I read the brief and did not read the
+    tripwire page."*
+
+    The failure it closes: an EM read `close_gate.governing_plan.status: "landed"`,
+    read the sizing back as non-terminal, and concluded the deliverable cascade
+    owned the flip and would get there. It does not -- the cascade waits on a
+    terminal plan status nobody had written, and one `archive-stamp-cli
+    stamp-plan-implemented` advanced the plan AND fired the cascade in the same
+    call. The brief already held `status: "landed"`; nothing in it said that was a
+    state the reader was expected to ACT on, so a stall read as designed behaviour.
+    The doctrine tripwire for exactly this misread already existed as prose and did
+    not fire, because a reader who is about to make this error is not the reader who
+    goes looking for the page about it.
+
+    COMPUTED FROM `status` ALONE -- no spine read, no plan-body parse, no git.
+    A stricter reading is available and is deliberately NOT taken: "every spine row
+    is dispositioned AND the status is non-terminal" is what makes a plan ready for
+    `implemented` RIGHT NOW, and answering that needs the spine rows, which this
+    module does not read and would have to go to disk for on the close path. That
+    is a cost this field does not justify and a precision the caller does not need:
+    `landed` is non-terminal BY DEFINITION, so a `landed` plan at close-out is owed
+    a terminal write whether or not it is ready for one this second. The narrower
+    question -- ready now vs. owed eventually -- belongs to the ceremony that does
+    the stamping, which already reads the spine.
+
+    Degraded reads answer `False`. `_closed_governing_plan()` substitutes
+    `status: None` when the governing-plan fact could not be resolved, and a
+    `None` status is not evidence of an owed write -- claiming one there would
+    point an operator at `stamp-plan-implemented` for a plan this call could not
+    even read.
+    """
+    if not governing_plan.get("present"):
+        return False
+    status = (governing_plan.get("status") or "").strip().lower()
+    return status in _TERMINAL_WRITE_OWED_STATUSES
+
+
 def _closed_governing_plan() -> dict[str, Any]:
     """Substitute for `session_governing_plan`'s `value` when that fact is degraded.
 
@@ -850,6 +912,22 @@ def brief(worktree_root: Path | None = None) -> dict[str, Any]:
     )
 
     entry_test = _entry_test(pickup_kind, governing_plan, diff, root)
+
+    # `terminal_write_owed` rides INSIDE the `governing_plan` record's own `value`,
+    # which is where the memo asked for it (`close_gate.governing_plan.
+    # terminal_write_owed`) and the only place it reads as a property OF THE PLAN
+    # rather than a sixth independent close-gate probe. Added to the record's value
+    # rather than beside it so a consumer that already destructures
+    # `close_gate.governing_plan` gets it without learning a new key path.
+    #
+    # Mutating a copy, never `governing_plan_record["value"]` in place: that dict is
+    # `session_facts.session_governing_plan`'s own return, and this module must not
+    # write a computed field back into a FACT another caller may hold a reference to.
+    governing_plan_record = dict(governing_plan_record)
+    governing_plan_record["value"] = {
+        **governing_plan,
+        "terminal_write_owed": _terminal_write_owed(governing_plan),
+    }
 
     close_gate = {
         "pickup_kind": pickup_kind_record,

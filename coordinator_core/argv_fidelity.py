@@ -123,6 +123,59 @@ def resolve_body(
     return body
 
 
+def resolve_optional_prose(
+    inline: str | None,
+    from_file: str | None,
+    *,
+    flag_name: str,
+    allow_empty: bool = False,
+) -> str | None:
+    """Resolve an OPTIONAL prose flag, losslessly, or None when absent.
+
+    resolve_body requires exactly one of its two arguments and raises when
+    both are absent -- the wrong shape for a flag where absent is the
+    common case (every C3-C11 flag this exists for). This function adds
+    exactly one case on top of resolve_body: both `inline` and `from_file`
+    absent returns None instead of raising. It does not wrap resolve_body's
+    both-absent error to swallow it -- that would make an unreadable-file
+    error and an absent flag indistinguishable at the call site, which is
+    the shape this function exists to prevent. Every other case -- both
+    supplied, inline-only, file-only, an unreadable file, a hollow result --
+    delegates to resolve_body unchanged, including its exact error text.
+
+    Before delegating, this calls refuse_newline_argv(inline,
+    flag_name=flag_name) so a newline-bearing inline value is refused
+    outright rather than reaching resolve_body's mutual-exclusion or
+    empty checks first. This refusal is never platform-conditional -- it
+    fires on every host, not only where cmd.exe's own truncation would
+    otherwise apply, because the failure mode it prevents (a value already
+    short by the time argparse sees it) is indistinguishable from a value
+    that arrived intact but was deliberately short.
+
+    `allow_empty` is passed straight through to resolve_body and carries
+    the same restriction: it exists only for a flag whose emptiness is the
+    caller's intent (the archive-stamp-cli correct-handoff-body
+    --new-string "" precedent), never for a flag whose emptiness means
+    "the caller forgot".
+
+    Stdin sentinel: `from_file` of "-" is passed through to resolve_body,
+    which reads sys.stdin.read() unchanged -- this function does not
+    special-case it. On a non-tty stdin that is already at EOF (the common
+    case for an agent's Bash tool, which attaches /dev/null), stdin.read()
+    resolves to "", and resolve_body's own hollow-result check then raises
+    ArgvFidelityError (unless allow_empty=True, in which case it silently
+    resolves to ""). This function does not add or relax that behaviour;
+    a caller passing `-` with allow_empty=True accepts that an
+    already-exhausted stdin and a deliberately empty one are indistinguishable.
+    """
+    if inline is None and from_file is None:
+        return None
+    refuse_newline_argv(inline, flag_name=flag_name)
+    return resolve_body(
+        inline, from_file, flag_name=flag_name, allow_empty=allow_empty
+    )
+
+
 def refuse_newline_argv(value: str | None, *, flag_name: str) -> None:
     """Raise ArgvFidelityError if `value` contains a newline.
 

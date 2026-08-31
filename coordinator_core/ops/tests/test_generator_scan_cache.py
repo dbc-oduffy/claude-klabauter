@@ -9,10 +9,18 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from pathlib import Path
 
-from coordinator_core.ops.generator_provenance import FileWrites, WriteSite
+import pytest
+
+from coordinator_core.ops import generator_provenance as gp
+from coordinator_core.ops.generator_provenance import FileWrites, WriteSite, discover_generators
 from coordinator_core.ops import generator_scan_cache as cache
+from coordinator_core.ops.tests.test_generator_discovery_oracle import (
+    REPO_ROOT,
+    serialize_generator_records,
+)
 
 
 def _sample_writes() -> FileWrites:
@@ -126,3 +134,118 @@ def test_file_writes_round_trip_with_list_of_dicts_generates(tmp_path: Path) -> 
     )
     round_tripped = cache.file_writes_from_json(cache.file_writes_to_json(writes))
     assert round_tripped == writes
+
+
+def _write_fixture_module(root: Path, name: str, body: str) -> Path:
+    sweep_dir = root / "coordinator_core"
+    sweep_dir.mkdir(parents=True, exist_ok=True)
+    module_path = sweep_dir / name
+    module_path.write_text(body, encoding="utf-8")
+    return module_path
+
+
+_UNDECLARED_WRITER_SOURCE = """
+from pathlib import Path
+
+
+def write():
+    Path("artifact.txt").write_text("x")
+"""
+
+_DECLARED_GENERATOR_SOURCE = """
+GENERATES = [{"artifact": "out.txt", "stamp_key": "k", "sources": ["a.py"]}]
+
+from pathlib import Path
+
+
+def write():
+    Path("out.txt").write_text("x")
+"""
+
+
+def test_cold_warm_byte_identity(tmp_path: Path) -> None:
+    _write_fixture_module(tmp_path, "gen_a.py", _DECLARED_GENERATOR_SOURCE)
+    _write_fixture_module(tmp_path, "gen_b.py", _UNDECLARED_WRITER_SOURCE)
+
+    cold = discover_generators(tmp_path)
+    warm = discover_generators(tmp_path)
+
+    assert serialize_generator_records(cold) == serialize_generator_records(warm)
+    assert serialize_generator_records(cold) != "[]"
+
+
+def test_touching_one_file_rescans_only_it(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _write_fixture_module(tmp_path, "gen_a.py", _DECLARED_GENERATOR_SOURCE)
+    stable_path = _write_fixture_module(tmp_path, "gen_b.py", _UNDECLARED_WRITER_SOURCE)
+
+    discover_generators(tmp_path)
+
+    calls: list[Path] = []
+    original = gp._scan_or_reuse_file_writes
+
+    def _spy(path: Path) -> FileWrites:
+        calls.append(path)
+        return original(path)
+
+    monkeypatch.setattr(gp, "_scan_or_reuse_file_writes", _spy)
+
+    new_mtime = time.time() + 10
+    os.utime(stable_path, (new_mtime, new_mtime))
+    stable_path.write_text(_UNDECLARED_WRITER_SOURCE + "\n# touched\n", encoding="utf-8")
+    os.utime(stable_path, (new_mtime, new_mtime))
+
+    discover_generators(tmp_path)
+
+    assert calls == [stable_path]
+
+
+def test_corrupt_cache_warm_run_returns_full_correct_set(tmp_path: Path) -> None:
+    _write_fixture_module(tmp_path, "gen_a.py", _DECLARED_GENERATOR_SOURCE)
+    _write_fixture_module(tmp_path, "gen_b.py", _UNDECLARED_WRITER_SOURCE)
+
+    baseline = serialize_generator_records(discover_generators(tmp_path))
+
+    cache_path = cache._cache_path(tmp_path)
+    cache_path.write_text("{not json at all", encoding="utf-8")
+
+    recovered = serialize_generator_records(discover_generators(tmp_path))
+    assert recovered == baseline
+
+
+def test_resolution_reruns_against_changed_tracked_set(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module_path = _write_fixture_module(tmp_path, "gen_writer.py", _UNDECLARED_WRITER_SOURCE)
+
+    monkeypatch.setattr(gp, "_tracked_paths", lambda repo_root: frozenset())
+    absent_records = discover_generators(tmp_path)
+    assert all(record.generator != "coordinator_core/gen_writer.py" for record in absent_records)
+
+    calls: list[Path] = []
+    original = gp._scan_or_reuse_file_writes
+
+    def _spy(path: Path) -> FileWrites:
+        calls.append(path)
+        return original(path)
+
+    monkeypatch.setattr(gp, "_scan_or_reuse_file_writes", _spy)
+    monkeypatch.setattr(gp, "_tracked_paths", lambda repo_root: frozenset({"artifact.txt"}))
+
+    present_records = discover_generators(tmp_path)
+    present = [r for r in present_records if r.generator == "coordinator_core/gen_writer.py"]
+
+    assert calls == []
+    assert len(present) == 1
+    assert present[0].detail.startswith("coordinator_core/gen_writer.py writes tracked path 'artifact.txt'")
+    assert module_path.exists()
+
+
+@pytest.mark.cadence
+def test_warm_discover_generators_process_time_under_bar() -> None:
+    discover_generators(REPO_ROOT)
+
+    start = time.process_time()
+    discover_generators(REPO_ROOT)
+    elapsed_ms = (time.process_time() - start) * 1000
+
+    assert elapsed_ms < 500, f"warm discover_generators took {elapsed_ms:.1f}ms, over the 500ms bar"

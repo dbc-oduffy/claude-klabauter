@@ -1196,3 +1196,79 @@ def test_a_degraded_fold_scan_still_surfaces_its_own_judgment_point(repo: Path, 
 
     assert "j-fold-sidecars-degraded" in [p["id"] for p in envelope["judgment_points"]]
     assert "d2" not in _d2_ids(envelope["directives"])
+
+
+# ---------------------------------------------------------------------------
+# terminal_write_owed -- cross-repo/archive/2026-08-21-example-retrieval-repo-em-quick-wrap-
+# landed-plan-stalls-silently.md, the sender's own option (3) and first
+# preference. Baton item 4, state/handoffs/2026-08-30-workstream-complete-and-
+# close-out-cannot.md.
+# ---------------------------------------------------------------------------
+
+
+def test_landed_plan_is_reported_as_owing_a_terminal_write():
+    """The exact state that stalled the sender: plan at `landed`, read out of the
+    brief, and nothing in the payload saying `landed` is a state the reader is
+    expected to ACT on. They concluded the deliverable cascade owned the flip.
+    It does not.
+    """
+    assert qwa._terminal_write_owed({"present": True, "status": "landed"}) is True
+
+
+def test_a_terminal_status_owes_nothing():
+    assert qwa._terminal_write_owed({"present": True, "status": "implemented"}) is False
+
+
+def test_pre_terminal_but_unlanded_statuses_owe_nothing():
+    """`executing` is non-terminal too, and deliberately NOT reported: a plan
+    there is owed WORK, not a write. Reporting it would point an operator at
+    `stamp-plan-implemented` for a plan whose chunks have not landed -- a wrong
+    remedy, which is worse than silence. Same for the pre-execution states and
+    for the terminal-by-disposition ones.
+    """
+    for status in (
+        "draft", "reviewed", "approved", "executing",
+        "deferred", "abandoned", "superseded",
+    ):
+        assert qwa._terminal_write_owed({"present": True, "status": status}) is False, status
+
+
+def test_a_degraded_governing_plan_read_never_claims_a_write_is_owed():
+    """`_closed_governing_plan()` substitutes `status: None` when the fact could
+    not be resolved. A `None` status is not evidence of an owed write, and
+    claiming one would point an operator at a stamp for a plan this call could
+    not even read.
+    """
+    assert qwa._terminal_write_owed(qwa._closed_governing_plan()) is False
+    assert qwa._terminal_write_owed({"present": True, "status": None}) is False
+    assert qwa._terminal_write_owed({"present": False, "status": "landed"}) is False
+
+
+def test_status_comparison_is_case_and_whitespace_insensitive():
+    assert qwa._terminal_write_owed({"present": True, "status": "  LANDED "}) is True
+
+
+def test_every_status_in_the_schema_enum_is_classified():
+    """Guard: the constant is derived from `plan.schema.json`'s own `status`
+    enum, so a new lifecycle state added there must be considered here rather
+    than silently defaulting to "owes nothing". Fails loud on an enum this
+    module has never seen.
+    """
+    import json
+
+    schema = json.loads(
+        (
+            Path(__file__).resolve().parent
+            / "frontmatter" / "schemas" / "plan.schema.json"
+        ).read_text(encoding="utf-8")
+    )
+    known = {
+        "draft", "reviewed", "approved", "executing", "landed",
+        "implemented", "deferred", "abandoned", "superseded",
+    }
+    enum = set(schema["properties"]["status"]["enum"])
+    assert enum == known, (
+        "plan.schema.json's status enum changed; classify the new value(s) in "
+        f"_TERMINAL_WRITE_OWED_STATUSES before widening this guard: {enum ^ known}"
+    )
+    assert qwa._TERMINAL_WRITE_OWED_STATUSES <= enum

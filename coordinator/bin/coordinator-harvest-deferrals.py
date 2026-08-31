@@ -431,6 +431,33 @@ def _child_identity_env() -> dict:
 # precedence exactly (see _candidate_search_dirs' write-seam-parity comment
 # below for the failure mode this guards against).
 _QUEUE_APPEND_OUTPUT_ROOT_ENV = "QUEUE_APPEND_OUTPUT_ROOT"
+_ISOLATION_ROOT_WARNED: set[str] = set()
+
+
+def _isolation_root(env_var: str, caller_name: str) -> str | None:
+    """Local twin of `bin/lib/cli_shared.isolation_root_if_under_test` — see that
+    docstring for the defect this closes.
+
+    Deliberately dependency-free (stdlib only, no `cli_shared` import) rather than
+    delegating: this module's bootstrap is order-sensitive, and forcing it early
+    just to read an env var re-resolves the registry inside a caller's
+    env-stripped window and changes which roots resolve. The predicate is four
+    lines; the ordering hazard is not worth sharing them.
+    """
+    value = (os.environ.get(env_var) or "").strip()
+    if not value:
+        return None
+    if os.environ.get("PYTEST_CURRENT_TEST"):
+        return value
+    if env_var not in _ISOLATION_ROOT_WARNED:
+        _ISOLATION_ROOT_WARNED.add(env_var)
+        print(
+            f"{caller_name}: ignoring inherited {env_var}={value} — a test-isolation "
+            f"redirect outside a test run. Writing to the resolved repo path instead.",
+            file=sys.stderr,
+        )
+    return None
+
 _LESSON_PROMOTE_OUTBOX_ROOT_ENV = "LESSON_PROMOTE_OUTBOX_ROOT"
 
 
@@ -985,7 +1012,9 @@ def _candidate_search_dirs(row: dict) -> list[str]:
     dirs: list[str] = []
     root = _repo_root()
 
-    queue_override = os.environ.get(_QUEUE_APPEND_OUTPUT_ROOT_ENV, "").strip()
+    queue_override = _isolation_root(
+        _QUEUE_APPEND_OUTPUT_ROOT_ENV, "coordinator-harvest-deferrals"
+    )
     if queue_override:
         dirs.append(os.path.join(queue_override, "state", "improvement-queue"))
     elif root:
@@ -995,7 +1024,9 @@ def _candidate_search_dirs(row: dict) -> list[str]:
     # VERBATIM when set (it IS the lessons-outbox dir itself, unlike
     # QUEUE_APPEND_OUTPUT_ROOT which is a root that "state/improvement-queue" is
     # joined onto) — do not append "state/lessons-outbox" onto it here.
-    lessons_override = os.environ.get(_LESSON_PROMOTE_OUTBOX_ROOT_ENV, "").strip()
+    lessons_override = _isolation_root(
+        _LESSON_PROMOTE_OUTBOX_ROOT_ENV, "coordinator-harvest-deferrals"
+    )
     if lessons_override:
         dirs.append(lessons_override)
 

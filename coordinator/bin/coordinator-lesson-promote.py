@@ -415,7 +415,9 @@ def _outbox_root() -> str:
     Spec backlink: docs/plans/2026-07-06-gate2-w23-state-seam-caller-switch.md § C1
     """
     _bootstrap_engine()
-    override = os.environ.get(_OUTBOX_ROOT_ENV)
+    override = cli_shared.isolation_root_if_under_test(
+        _OUTBOX_ROOT_ENV, caller_name="coordinator-lesson-promote"
+    )
     if override:
         return override
     # Central state (lessons-outbox) routes to DoE — doctrine class.
@@ -1004,7 +1006,9 @@ def main(argv: list[str] | None = None) -> int:
     # coordinator-queue-append's identical QUEUE_APPEND_OUTPUT_ROOT gate immediately
     # above _cc_route("queue.append", ...) in that sibling CLI. In production,
     # LESSON_PROMOTE_OUTBOX_ROOT is NEVER set, so this check is a no-op.
-    if os.environ.get(_OUTBOX_ROOT_ENV):
+    if cli_shared.isolation_root_if_under_test(
+        _OUTBOX_ROOT_ENV, caller_name="coordinator-lesson-promote"
+    ):
         return _run_legacy_with_write_declaration()
 
     result = _cc_route("queue.promote", params, repo_root, _run_legacy_with_write_declaration)

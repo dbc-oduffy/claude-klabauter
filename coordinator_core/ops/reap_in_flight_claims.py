@@ -257,6 +257,39 @@ def _shipped_orphan_candidate_shas(
     holder — which claim a completion entry ships for cannot be
     disambiguated, so both fail closed to None.
     P3 (no completions): the holder authored zero completion entries.
+
+    P3'S COVERAGE IS NARROW BY CONSTRUCTION, AND THE WIDENING WAS DECLINED
+    (2026-08-31, this module's EM; raised by doe-claude-em, who measured it
+    and left the call here). The only source of candidate shas is the dead
+    holder's completion entry, written by the close ceremony — so the net's
+    input is produced by the step whose non-completion defines the population
+    it covers. Measured against the five sessions that stranded a baton on
+    2026-08-30: ONE had a completion record; the other four died before
+    writing one, which is the common shape (context exhaustion, a closed
+    terminal). One in five, and the four it misses are the four that strand
+    hardest.
+
+    The proposed widening — a plan's `deliverable_id` plus `status:
+    implemented` as a second route, via `_build_implemented_plan_index`
+    above — is NOT taken, on this file's own evidence rather than on
+    caution: `deliverable_id` is not unique per handoff. The 2026-08-26
+    whole-corpus census cited at the `kind != "spinoff"` branch below found
+    168 of 666 ids shared across more than one handoff (one by ten), with
+    sharing crossing the session-handoff/spinoff boundary. Widening a
+    RECLAIM arm on a non-unique key trades a fail-closed miss for a
+    misattributed reclaim, which is the worse direction for a verb that
+    mutates someone else's claim. The answer to a session that dies before
+    its completion entry is to stamp at close, not to infer the stamp
+    afterwards from a shared id. Re-open this only with a key that is
+    one-to-one with the claim.
+
+    SELECTION CONVENTION, stated because two exist and neither was written
+    down: `_best_shipped_sha` picks MAX committer-timestamp — the CLOSE
+    commit. A human tracing provenance by hand picks the commit that changed
+    the deliverable instead. Both satisfy Branch B (object-existence only),
+    so nothing is broken; the machine's rule is the close commit and that is
+    deliberate — it is the one commit guaranteed to exist for a shipped
+    claim.
     """
     if dead_holders_seen.get(holder, 0) > 1:
         return None

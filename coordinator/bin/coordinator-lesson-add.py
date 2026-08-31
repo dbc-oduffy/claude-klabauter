@@ -63,6 +63,33 @@ def _bootstrap_imports() -> None:
 # When set, the dedup scan looks under <QUEUE_APPEND_OUTPUT_ROOT>/state/lessons/
 # (matching where coordinator-queue-append writes when this env var is set).
 _QUEUE_APPEND_OUTPUT_ROOT_ENV = "QUEUE_APPEND_OUTPUT_ROOT"
+_ISOLATION_ROOT_WARNED: set[str] = set()
+
+
+def _isolation_root(env_var: str, caller_name: str) -> str | None:
+    """Local twin of `bin/lib/cli_shared.isolation_root_if_under_test` — see that
+    docstring for the defect this closes.
+
+    Deliberately dependency-free (stdlib only, no `cli_shared` import) rather than
+    delegating: this module's bootstrap is order-sensitive, and forcing it early
+    just to read an env var re-resolves the registry inside a caller's
+    env-stripped window and changes which roots resolve. The predicate is four
+    lines; the ordering hazard is not worth sharing them.
+    """
+    value = (os.environ.get(env_var) or "").strip()
+    if not value:
+        return None
+    if os.environ.get("PYTEST_CURRENT_TEST"):
+        return value
+    if env_var not in _ISOLATION_ROOT_WARNED:
+        _ISOLATION_ROOT_WARNED.add(env_var)
+        print(
+            f"{caller_name}: ignoring inherited {env_var}={value} — a test-isolation "
+            f"redirect outside a test run. Writing to the resolved repo path instead.",
+            file=sys.stderr,
+        )
+    return None
+
 
 # Mirrors coordinator-queue-append._CLAUDE_HOME_ENV for test isolation.
 # Review: code-reviewer (F4) — unused for resolution since _claude_home()
@@ -178,7 +205,9 @@ def _lessons_dir():
     Fix: align with queue-append._output_path else-branch (stop-the-rot taxonomy).
     Spec backlink: state/bug-backlog/2026-07-06-lesson-add-dedup-scans-wrong-dir-in-meta.yaml
     """
-    override = os.environ.get(_QUEUE_APPEND_OUTPUT_ROOT_ENV)
+    override = _isolation_root(
+        _QUEUE_APPEND_OUTPUT_ROOT_ENV, "coordinator-lesson-add"
+    )
     if override:
         return os.path.join(override, "state", "lessons")
     root = _git_root()

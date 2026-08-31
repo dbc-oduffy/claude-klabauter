@@ -702,7 +702,9 @@ def _output_path(
     """
     _bootstrap_imports()
     output_dir = _SCHEMA_OUTPUT_DIRS[schema_name]
-    override_root = os.environ.get(_QUEUE_APPEND_OUTPUT_ROOT_ENV)
+    override_root = cli_shared.isolation_root_if_under_test(
+        _QUEUE_APPEND_OUTPUT_ROOT_ENV, caller_name="coordinator-queue-append"
+    )
     if override_root:
         # Non-absolute has no legitimate use-case — defense-in-depth for the test knob.
         if not os.path.isabs(override_root):
@@ -2285,9 +2287,12 @@ def main(argv: "list[str] | None" = None) -> int:
 
     # Test isolation gate: QUEUE_APPEND_OUTPUT_ROOT redirects the output path, which the
     # native op does not honour (it constructs its own path from schema + title).
-    # When set, routing native would write to the wrong location — use legacy instead.
-    # In production, QUEUE_APPEND_OUTPUT_ROOT is NEVER set, so this check is a no-op.
-    if os.environ.get(_QUEUE_APPEND_OUTPUT_ROOT_ENV):
+    # When honoured, routing native would write to the wrong location — use legacy instead.
+    # Gated on the same under-test predicate _output_path() uses, so an override this
+    # process merely INHERITED cannot pull the write off the native route either.
+    if cli_shared.isolation_root_if_under_test(
+        _QUEUE_APPEND_OUTPUT_ROOT_ENV, caller_name="coordinator-queue-append"
+    ):
         _run_legacy_with_write_declaration()
         return
 

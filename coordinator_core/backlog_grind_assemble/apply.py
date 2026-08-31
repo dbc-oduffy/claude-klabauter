@@ -1136,6 +1136,28 @@ def main_apply(argv: list[str]) -> int:
         )
         return _usage("backlog-grind-assemble")
 
+    if not wave_paths and cadence == "bug-blitz":
+        # THE GATE IS NOT UNOPENABLE; NOTHING ASKED IT TO OPEN. bug-blitz's
+        # standing commit-readiness judgment point ships with a single
+        # disposition whose `resolves` is empty, and
+        # `_wire_single_disposition_resolves` fills it from the directives that
+        # `depends_on` it — which only exist when `--wave-path` was supplied.
+        # Without one, the run halts reporting the JP id and nothing else, and
+        # that report is indistinguishable from the pre-`adb36b820d` defect
+        # where no `--decisions` value could ever clear the gate. A 2026-08-31
+        # live run was read that way and filed as a regression against a tree
+        # and a mirror that both carry the fix
+        # (cross-repo/inbox/2026-08-31-doe-claude-em-blitz-apply-verb-emits-no-
+        # commit-directive.md). Naming the omission at the surface the operator
+        # used is the whole fix; the wiring needs nothing.
+        print(
+            "backlog-grind-assemble apply: no --wave-path given, so no commit "
+            "directive is built and bug-blitz's commit-readiness gate has "
+            "nothing to resolve -- pass --wave-path (with --granularity and "
+            "--message) to commit this wave.",
+            file=sys.stderr,
+        )
+
     extra_directives: Optional[list[dict[str, Any]]] = None
     if wave_paths:
         root = Path.cwd()

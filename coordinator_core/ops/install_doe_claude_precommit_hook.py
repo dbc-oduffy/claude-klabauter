@@ -133,6 +133,22 @@ _GATE_REGISTRY: List[_Gate] = [
         label="doctrine-surface-ratio",
         override_env="COORDINATOR_OVERRIDE_PRECOMMIT_DOCTRINE_SURFACE_RATIO",
     ),
+    _Gate(
+        marker="guard-phantom-staged-deletion",
+        # The NATIVE-`git commit` leg of the committer-P0
+        # (state/audits/2026-08-31-committer-p0-*). The engine route is
+        # already covered in-process: `commit_paths` refuses a declared
+        # deletion for a path still on disk (62fe8736d1), and
+        # `_split_paths_for_commit_v2` no longer infers a deletion from a
+        # failed probe (6a2e5223cf). Neither reaches a bare `git commit`:
+        # `ceremony.commit_v2` is `commit-tree` plumbing that fires NO git
+        # hooks, and conversely a native commit never enters those checks.
+        # So a phantom staged deletion arriving by the native route had no
+        # guard at all on either side, which is what this entry closes.
+        filename="guard-phantom-staged-deletion-precommit.py",
+        label="phantom-staged-deletion",
+        override_env="COORDINATOR_OVERRIDE_PRECOMMIT_PHANTOM_STAGED_DELETION",
+    ),
 ]
 
 

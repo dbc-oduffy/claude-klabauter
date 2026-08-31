@@ -21,6 +21,7 @@ from coordinator_core.argv_fidelity import (
     ArgvFidelityError,
     refuse_newline_argv,
     resolve_body,
+    resolve_optional_prose,
 )
 
 
@@ -91,6 +92,57 @@ def test_resolve_body_custom_flag_name_in_messages():
     message = str(exc_info.value)
     assert "--summary" in message
     assert "--summary-file" in message
+
+
+# ---------------------------------------------------------------------------
+# resolve_optional_prose
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_optional_prose_both_absent_returns_none():
+    assert resolve_optional_prose(None, None, flag_name="--summary") is None
+
+
+def test_resolve_optional_prose_inline_only():
+    result = resolve_optional_prose("a plain value", None, flag_name="--summary")
+    assert result == "a plain value"
+
+
+def test_resolve_optional_prose_file_only(tmp_path):
+    body_path = tmp_path / "summary.txt"
+    body_path.write_text("line one\nline two\n", encoding="utf-8")
+    result = resolve_optional_prose(
+        None, str(body_path), flag_name="--summary"
+    )
+    assert result == "line one\nline two\n"
+
+
+def test_resolve_optional_prose_both_supplied_is_usage_error():
+    with pytest.raises(ArgvFidelityError, match="mutually exclusive"):
+        resolve_optional_prose(
+            "inline value", "some/path.txt", flag_name="--summary"
+        )
+
+
+def test_resolve_optional_prose_newline_inline_refused_names_file_flag():
+    with pytest.raises(ArgvFidelityError, match="--summary-file"):
+        resolve_optional_prose(
+            "line one\nline two", None, flag_name="--summary"
+        )
+
+
+def test_resolve_optional_prose_unreadable_file_refuses(tmp_path):
+    missing_path = tmp_path / "does-not-exist.txt"
+    with pytest.raises(ArgvFidelityError, match="unreadable"):
+        resolve_optional_prose(
+            None, str(missing_path), flag_name="--summary"
+        )
+
+
+def test_resolve_optional_prose_stdin_sentinel_already_eof_raises(monkeypatch):
+    monkeypatch.setattr("sys.stdin", __import__("io").StringIO(""))
+    with pytest.raises(ArgvFidelityError, match="empty"):
+        resolve_optional_prose(None, "-", flag_name="--summary")
 
 
 # ---------------------------------------------------------------------------

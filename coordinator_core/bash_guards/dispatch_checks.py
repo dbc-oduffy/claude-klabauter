@@ -7138,6 +7138,7 @@ def _bt_parse_find_exec_segment(tokens: List[str]) -> Optional[Dict[str, Any]]:
     rest = tokens[exec_idx + 1:]
     plus_idx = rest.index("+") if "+" in rest else None
     exec_argv = rest[:plus_idx] if plus_idx is not None else rest
+    terminator = "plus" if plus_idx is not None else "semi"
     # Strip a literal trailing ";" for the rare case it DID survive inside
     # the segment (e.g. a quoted `';'` operand -- tokenize_full_command
     # respects quoting, so a quoted semicolon is one ordinary token, not a
@@ -7152,6 +7153,7 @@ def _bt_parse_find_exec_segment(tokens: List[str]) -> Optional[Dict[str, Any]]:
         "name_pattern": name_pattern,
         "only_files": only_files,
         "exec_argv": exec_argv,
+        "terminator": terminator,
     }
 
 
@@ -7513,6 +7515,16 @@ def check_find_exec_rewrite(
             continue
         parsed = _bt_parse_find_exec_segment(tokens)
         if not parsed:
+            continue
+        if parsed["terminator"] == "plus":
+            # `-exec CMD {} +` batches matches into as few invocations as
+            # ARG_MAX allows (measured: 3 matches -> 1 invocation, GNU
+            # findutils 4.11.0) -- it does NOT fork one process per match,
+            # so the founding-incident 879-process claim below is false of
+            # this shape. An already-batched command is not this guard's
+            # business: SILENT allow, no advisory, no rewrite -- the guard
+            # has nothing to say to a command that already did the right
+            # thing.
             continue
         rewrite = _bt_find_exec_python_rewrite(parsed)
         if rewrite and single_segment:

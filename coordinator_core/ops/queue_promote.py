@@ -77,6 +77,7 @@ from coordinator_core.frontmatter.schema_validate import describe as _describe_s
 from coordinator_core.ipc import register_op
 from coordinator_core.ops.coordinator_doe_root import coordinator_doe_root
 from coordinator_core.ops.fleet._common import main_worktree_root
+from coordinator_core.telemetry import op_latency
 
 logger = logging.getLogger(__name__)
 
@@ -107,6 +108,30 @@ class _DoeUnresolvable(RuntimeError):
 # ---------------------------------------------------------------------------
 
 
+def _outbox_root_override() -> "str | None":
+    """The ``LESSON_PROMOTE_OUTBOX_ROOT`` test-isolation redirect, but ONLY
+    when this process is the one the caller ran in.
+
+    Mirrors ``queue_append._output_root_override`` -- see that docstring for the
+    mechanism. ``LESSON_PROMOTE_OUTBOX_ROOT`` is a property of a CALLING process;
+    under the warm engine this op executes in a long-lived server whose
+    environment came from whichever session spawned it, so one session's export
+    becomes a standing redirect for every OTHER session's promotes for as long
+    as that server lives. The sibling queue.append op was hardened against
+    exactly that after real bug-backlog rows landed in a pytest tmpdir; this op
+    was left on the unguarded read.
+
+    Never a raise: an override that cannot be honoured is dropped, and the write
+    lands where it should have all along.
+    """
+    override = os.environ.get(_OUTBOX_ROOT_ENV)
+    if not override:
+        return None
+    if op_latency.execution_route() != op_latency.IN_PROCESS:
+        return None
+    return override
+
+
 def _outbox_root() -> str:
     """Return the lessons-outbox directory path.
 
@@ -128,7 +153,7 @@ def _outbox_root() -> str:
     Spec backlink: pln-stop-the-rot-claude-klabauter-state-home-placement-4cc787 § C12 / AC13
     Parity oracle: [DoE-claude] coordinator/bin/coordinator-lesson-promote § _outbox_root
     """
-    override = os.environ.get(_OUTBOX_ROOT_ENV)
+    override = _outbox_root_override()
     if override:
         return override
     doe = coordinator_doe_root()

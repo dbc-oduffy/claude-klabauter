@@ -100,6 +100,7 @@ NEGATIVE SPEC -- what this module deliberately does not do:
 
 from __future__ import annotations
 
+import os
 import sys
 import time
 import traceback
@@ -493,7 +494,21 @@ def main(
     # Review: coordinatorcode-reviewer.a9e1410288878bea9 -- the ARMED line is
     # operator-facing; "denominator" is an internal metric name from the
     # interval derivation and reads oddly next to "peers" on that surface.
-    emit(f"ARMED peer_count={peer_count} claude-klabauter peers, snapshot={snapshot_ms:.1f}ms, interval={interval:.1f}s")
+    # The repo NAME is read off `repo_root`, never written as a literal. A literal
+    # here is rewritten by the publish transform, so source says "claude-klabauter peers" and
+    # the shipped mirror says "claude-klabauter peers" -- and both are printed
+    # whatever `--repo-root` the operator passed. doe-claude-80 measured it against
+    # the published engine 2026-08-31: --repo-root X:/DoE-claude printed "3
+    # claude-klabauter peers", X:/claude-klabauter printed "14 claude-klabauter peers".
+    # The COUNTS tracked the flag correctly, so only the label lied. That is the worse
+    # half: a Group EM arming for DoE reads a foreign repo name beside a plausible
+    # count and the honest conclusion is that the watch is pointed at the wrong repo,
+    # so the failure lands as a stand-down rather than an error.
+    watched_repo = os.path.basename(os.path.abspath(str(repo_root))) or str(repo_root)
+    emit(
+        f"ARMED peer_count={peer_count} {watched_repo} peers, "
+        f"snapshot={snapshot_ms:.1f}ms, interval={interval:.1f}s"
+    )
 
     prev_parked: dict[str, bool] = {}
     iterations = 0

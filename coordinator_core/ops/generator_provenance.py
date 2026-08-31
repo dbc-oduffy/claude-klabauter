@@ -172,6 +172,7 @@ from __future__ import annotations
 import ast
 import fnmatch
 import json
+import stat as stat_module
 import subprocess
 import tomllib
 from dataclasses import dataclass
@@ -1381,10 +1382,38 @@ def _build_record(
     )
 
 
+def _scan_or_reuse_file_writes(path: Path) -> FileWrites:
+    """Produce this file's `FileWrites`, treating an unreadable file or a
+    `SyntaxError` as a cacheable outcome rather than a skip.
+
+    Both failures resolve to no record downstream (`syntax_error=True`
+    short-circuits `discover_generators`' sweep loop before any record is
+    built), matching today's silent `continue` -- but the failure itself is
+    now paid once per file's `(mtime_ns, size)` rather than on every run.
+    """
+    try:
+        source = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return FileWrites(generates=None, mutates=None, write_sites=[], syntax_error=True)
+
+    try:
+        tree = ast.parse(source, filename=str(path))
+    except SyntaxError:
+        return FileWrites(generates=None, mutates=None, write_sites=[], syntax_error=True)
+
+    return _scan_file_writes(tree)
+
+
 def discover_generators(repo_root: Path) -> list[GeneratorRecord]:
+    from coordinator_core.ops import generator_scan_cache
+
     records: list[GeneratorRecord] = []
     tracked = _tracked_paths(repo_root)
     test_module_globs = _test_module_globs(repo_root)
+
+    cached_entries = generator_scan_cache.load(repo_root)
+    new_entries: dict = {}
+    cache_dirty = False
 
     for sweep_dir in _SWEEP_DIRS:
         root = repo_root / sweep_dir
@@ -1392,21 +1421,35 @@ def discover_generators(repo_root: Path) -> list[GeneratorRecord]:
             continue
 
         for path in sorted(root.rglob("*.py")):
-            if not path.is_file():
+            try:
+                stat = path.stat()
+            except OSError:
+                continue
+            if not stat_module.S_ISREG(stat.st_mode):
                 continue
 
-            try:
-                source = path.read_text(encoding="utf-8")
-            except (OSError, UnicodeDecodeError):
-                continue
+            key = generator_scan_cache.rel_key(repo_root, path)
+            cached = cached_entries.get(key)
+            if (
+                cached is not None
+                and cached["mtime_ns"] == stat.st_mtime_ns
+                and cached["size"] == stat.st_size
+            ):
+                writes = cached["writes"]
+            else:
+                writes = _scan_or_reuse_file_writes(path)
+                cache_dirty = True
 
-            try:
-                tree = ast.parse(source, filename=str(path))
-            except SyntaxError:
+            new_entries[key] = {
+                "mtime_ns": stat.st_mtime_ns,
+                "size": stat.st_size,
+                "writes": writes,
+            }
+
+            if writes.syntax_error:
                 continue
 
             rel_path = path.relative_to(repo_root).as_posix()
-            writes = _scan_file_writes(tree)
             generates = writes.generates
             mutates = writes.mutates
 
@@ -1418,5 +1461,8 @@ def discover_generators(repo_root: Path) -> list[GeneratorRecord]:
                     continue
 
             records.append(_build_record(rel_path, generates, repo_root, basis, mutates=mutates, tracked=tracked))
+
+    if cache_dirty or set(new_entries) != set(cached_entries):
+        generator_scan_cache.save(repo_root, new_entries)
 
     return records
