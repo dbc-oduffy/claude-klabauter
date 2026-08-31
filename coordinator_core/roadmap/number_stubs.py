@@ -21,9 +21,10 @@ Provides two modes:
                    readiness state for all stubs on disk for a given roadmap_id,
                    read straight from frontmatter, and print it. Replaces the
                    operator-navigated state-branch prose in
-                   coordinator/skills/roadmap-planning/SKILL.md Step 3.1 — this
+                   coordinator/skills/roadmap-planning/SKILL.md § After Phase 2 — this
                    resolver only enumerates and prints; it does NOT automate the
-                   gate-meaningfulness y/n/clarify judgment (Step 3.2), which
+                   gate-meaningfulness y/n/clarify judgment (§ After Phase 2 →
+                   Downstream mechanism — gate-meaningfulness audit), which
                    stays a human/skill-side decision on purpose.
                    Spec backlink: docs/plans/2026-07-24-computed-skills-b5-
                    planning-cluster.md § C12.
@@ -899,8 +900,9 @@ def run_check_mode(run_id: str) -> int:
 
 def run_state_mode(run_id: str) -> int:
     """Enumerate stubs for *run_id* (live + archived spinoff-roadmap stubs) and
-    print each stub's ``deployment_state`` and ``gate_dependency`` (when
-    ``awaiting_gate``), sorted by ``(sprint, wave, number)``.
+    print each stub's ``deployment_state`` and gate reason (``gate_dependency``,
+    falling back to ``blocking_notes`` when absent, when ``awaiting_gate``),
+    sorted by ``(sprint, wave, number)``.
 
     EXTENSION of the roadmap-number-stubs CLI family (not ported from the JS
     oracle) — see module docstring "--state mode" section. This is a pure
@@ -948,7 +950,7 @@ def run_state_mode(run_id: str) -> int:
                 "deployment_state": fm.get("deployment_state") or "",
                 "sprint": _coerce_number(fm.get("sprint")),
                 "wave": _coerce_number(fm.get("wave")),
-                "gate_dependency": fm.get("gate_dependency") or "",
+                "gate_dependency": fm.get("gate_dependency") or fm.get("blocking_notes") or "",
             }
         )
 

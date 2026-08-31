@@ -646,7 +646,8 @@ def _compute_fresh_output_path(
     """
     stem = Path(artifact_path).stem
     if stem:
-        slug = re.sub(r"^\d{4}-\d{2}-\d{2}-", "", stem)
+        slug = re.sub(r"^\d{4}-\d{2}-\d{2}_\d{6}_", "", stem)
+        slug = re.sub(r"^\d{4}-\d{2}-\d{2}-", "", slug)
     else:
         sizing_slug = _resolve_session_sizing_slug(root) if root is not None else None
         if sizing_slug:
@@ -4349,7 +4350,8 @@ def _build_judgment_points(
                 )
             ],
             evidence="Left to the caller SKILL.md's own Step 0 prose (C4/C5).",
-            reason="Judgment residue -- not mechanically decidable from disk state alone.",
+            # Judgment residue -- not mechanically decidable from disk state alone.
+            reason="insufficient-evidence",
         ),
         build_untrusted_gate_judgment_point(
             id="j-pm-auth",
@@ -4374,7 +4376,8 @@ def _build_judgment_points(
                 )
             ],
             evidence="PM authorization is a conversational fact, not a disk artifact.",
-            reason="Judgment residue -- the EM/PM dialogue, never mechanically inferred.",
+            # Judgment residue -- the EM/PM dialogue, never mechanically inferred.
+            reason="insufficient-evidence",
         ),
     ]
     if kind == "spinoff":
@@ -4430,7 +4433,8 @@ def _build_judgment_points(
                     "EM/PM knowledge -- the minter cannot know it and must "
                     "not scan for candidates (F10 rejected)."
                 ),
-                reason="Judgment residue -- never mechanically inferred from disk state.",
+                # Judgment residue -- never mechanically inferred from disk state.
+                reason="insufficient-evidence",
                 reportable=False,
             )
         )
@@ -4489,7 +4493,8 @@ def _build_judgment_points(
                     ),
                 ],
                 evidence="Requires reading the predecessor's actual content, not just its frontmatter.",
-                reason="Judgment residue -- stays SKILL prose (C4).",
+                # Judgment residue -- stays SKILL prose (C4).
+                reason="insufficient-evidence",
             )
         )
     # 2026-07-31 fix (two-sided question, one-sided answer set): this used to
@@ -4531,7 +4536,8 @@ def _build_judgment_points(
                 question="Dirty-tree case-c: are the uncommitted changes this baton's own, or a sibling session's?",
                 dispositions=[build_disposition("mine", ["d1"])],
                 evidence=evidence,
-                reason="Judgment residue -- stays SKILL prose (C4/C5).",
+                # Judgment residue -- stays SKILL prose (C4/C5).
+                reason="insufficient-evidence",
             )
         )
     return points

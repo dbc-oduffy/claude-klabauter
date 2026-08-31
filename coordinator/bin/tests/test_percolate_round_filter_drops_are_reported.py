@@ -185,3 +185,48 @@ def test_an_ignored_path_is_one_git_add_would_refuse(tmp_path):
         "git accepted a path check-ignore called ignored -- the filter's premise "
         "is broken and the drop really would lose a commit"
     )
+
+
+def test_a_negation_matching_nothing_never_drops_the_file_it_names(tmp_path):
+    """Third `.gitignore` negation shape, distinct from the two above.
+
+    `build/` + `!build/keep/` (a real re-include) and `build/*` +
+    `!build/keep/` both involve a negation that DOES something. This memo's
+    trigger did not: `*.local.toml` + `!*.toml.example` over a file named
+    `keep.toml.example`, which `*.local.toml` never matched in the first
+    place (it requires the name to END in `.local.toml`). The negation is a
+    no-op -- nothing was ignored to begin with -- and the file was never
+    excluded (`git status` reports it `??`, untracked-not-ignored).
+
+    `_filter_commit_pathspec` is check-ignore-driven (§ its own docstring:
+    "git check-ignore is index-aware ... an ignored path here is one `git
+    add` would refuse"), so this shape was never actually reachable through
+    this filter -- check-ignore answers the real question regardless of an
+    inert `!` line. Pinned here because the corpus had two shapes covered and
+    a third, structurally different one (inert negation, no re-include, no
+    prior exclusion) unpinned -- see
+    2026-08-28-doe-claude-em-our-negation-instance-was-a-no-op-and-still-
+    broke-the-commit.md.
+    """
+    repo = _init_repo(tmp_path)
+    (repo / ".gitignore").write_text("*.local.toml\n\n!*.toml.example\n", encoding="utf-8")
+    (repo / "keep.toml.example").write_text("x", encoding="utf-8")
+
+    status = _git(repo, "status", "--porcelain", "--", "keep.toml.example")
+    assert status.stdout.strip().startswith("??"), (
+        "keep.toml.example must be untracked-not-ignored for this to be the "
+        "no-op-negation shape -- if it shows anything else the fixture no "
+        "longer represents the memo's trigger"
+    )
+
+    seen = {str(repo / "keep.toml.example"): ("MODIFY", "keep.toml.example")}
+    kept, drops = _mod._filter_commit_pathspec(repo, str(repo), seen, repo_root=str(repo))
+
+    assert kept == ["keep.toml.example"]
+    assert drops["gitignored"] == 0
+
+    added = _git(repo, "add", "--", "keep.toml.example")
+    assert added.returncode == 0, (
+        "git refused a path the no-op negation never excluded -- the fixture "
+        "does not reproduce the memo's trigger"
+    )

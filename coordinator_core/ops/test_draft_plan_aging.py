@@ -147,6 +147,18 @@ def test_list_stale_executing_excludes_checker_sidecar(tmp_path):
     assert result == []
 
 
+def test_list_stale_executing_excludes_plan_review_check_sidecar(tmp_path):
+    today = date(2026, 7, 22)
+    _init_repo(tmp_path)
+    _write_and_commit_plan(
+        tmp_path, "old.plan-review-check.md", "executing", commit_days_ago=30, today=today
+    )
+
+    result = list_stale_executing(tmp_path, threshold_days=3, today=today)
+
+    assert result == []
+
+
 def test_list_stale_executing_no_docs_plans_dir(tmp_path):
     _init_repo(tmp_path)
 

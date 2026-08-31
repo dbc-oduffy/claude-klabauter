@@ -200,3 +200,56 @@ def test_detect_root_falls_back_to_cwd_when_git_fails(tmp_path: Path, monkeypatc
         mock_run.return_value = subprocess.CompletedProcess(args=[], returncode=1, stdout="")
         result = query_completions._detect_root(None)
     assert result == tmp_path
+
+
+# ---------------------------------------------------------------------------
+# `commits` display coercion -- cross-repo/archive/2026-08-16-example-retrieval-repo-em-
+# ceremony-cli-defects-found-running-workweek-complete.md § 1. An all-digit
+# short SHA is an int after YAML parse, and `", ".join` raised on it inside
+# `/workstream-complete`'s MANDATORY LoE gate: a display concern took down a
+# gate. These pin the formatter, not the producers -- the sender's own point
+# is that quoting at the source would not make the formatter safe.
+# ---------------------------------------------------------------------------
+
+
+def test_all_digit_short_sha_renders_instead_of_raising():
+    assert query_completions._format_commits([1234567]) == "1234567"
+
+
+def test_mixed_int_and_str_shas_all_render():
+    out = query_completions._format_commits([1234567, "abc1234"])
+    assert out == "1234567, abc1234"
+
+
+def test_a_bare_string_is_not_iterated_character_by_character():
+    """The failure mode most likely to survive review, because it does not
+    raise: `", ".join("abc1234")` returns `a, b, c, 1, 2, 3, 4` and looks like
+    seven commits."""
+    assert query_completions._format_commits("abc1234") == "abc1234"
+
+
+def test_absent_and_empty_stay_no_commit():
+    for value in (None, [], ""):
+        assert query_completions._format_commits(value) == "no-commit"
+
+
+def test_a_non_int_non_str_scalar_still_renders():
+    """Coercion is total on purpose -- narrowing to `int` would leave the same
+    crash one YAML scalar away."""
+    assert query_completions._format_commits([True]) == "True"
+
+
+def test_the_formatter_survives_an_all_digit_sha_end_to_end(tmp_path: Path):
+    """The crash was reached through `_format_completion_markdown`, not by
+    calling the helper directly -- pin the path the gate actually takes."""
+    _write_completion(
+        tmp_path,
+        "2026-08",
+        "2026-08-16-entry.md",
+        "title: An entry\nnature: code\nchain: some-chain\ncommits:\n  - 1234567\n",
+    )
+    records = [
+        {"frontmatter": {"title": "An entry", "nature": "code", "chain": "c", "commits": [1234567]}}
+    ]
+    out = query_completions._format_completion_markdown(records)
+    assert "1234567" in out

@@ -11,8 +11,14 @@ frontmatter (``plan_path``, the SOLE v1 value-source; see Decision D1,
 ``docs/plans/2026-07-17-claude-klabauter-handoff-phase-execution-emit-leg.md``). Per the
 PM's ruling ("claude-klabauter owns the marking, the skill just carries the invocation" —
 DR-210 § Decision 1), this op is claude-klabauter's authoritative write path for the
-execution-baton overlay; the DoE ``/handoff`` SKILL.md invokes it rather than
-writing the fields itself.
+execution-baton overlay. Docstring correction (2026-08-31, cross-repo/archive/
+2026-08-20-doe-claude-em-stamp-phase-execution-value-source-is-unsatisfiable.md):
+the DoE ``/handoff`` SKILL.md does NOT currently invoke this op — zero
+invocations found anywhere in the DoE tree at the time this was reported. This
+op is latent: nothing calls it yet, so the value-source question the same
+memo raises (this op reads from the cited plan's frontmatter, which is empty
+at exactly the point post-DR-174 wiring would stamp ``phase=execution``) is
+also latent, not live, and is NOT resolved here.
 
 Fourth addition to the DR-212 sanctioned ``handoff.*`` in-place frontmatter-
 mutation population (``handoff.transition``, ``handoff.stamp``,

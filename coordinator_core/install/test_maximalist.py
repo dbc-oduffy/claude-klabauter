@@ -2158,3 +2158,47 @@ def test_import_in_mismatched_plane_subprocess_does_not_exit_nonzero(tmp_path):
         "mismatched plane, only main()/__main__ may FATAL"
     )
     assert "imported ok" in proc.stdout
+
+
+# ---------------------------------------------------------------------------
+# `run_advisory`'s WARN line must distinguish "the interpreter never
+# launched" (127) and "it timed out" (124) from a genuine nonzero return by
+# the launched process itself -- cross-repo/inbox/2026-08-10-doe-claude-em-
+# exit3-residuals-are-both-yours-and-one-refutes.md, item 1.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "rc,expected_note",
+    [
+        (127, "the interpreter never launched"),
+        (124, "timed out"),
+    ],
+)
+def test_run_advisory_warn_names_the_synthesized_rc(monkeypatch, capsys, rc, expected_note):
+    orch = maximalist._Orchestrator()
+    monkeypatch.setattr(maximalist, "_run", lambda cmd, env=None: rc)
+
+    orch.run_advisory("some phase", ["does-not-matter"])
+
+    err = capsys.readouterr().err
+    assert f"exit {rc}" in err
+    assert expected_note in err, (
+        f"WARN line for rc={rc} did not name the cause -- it read as an "
+        "ordinary nonzero return from the launched process, exactly the "
+        "diagnosability gap the memo reported"
+    )
+
+
+def test_run_advisory_warn_does_not_misname_a_genuine_nonzero_return(monkeypatch, capsys):
+    """rc=1 is a real exit from a process that DID launch -- must not carry
+    either synthesized-code note."""
+    orch = maximalist._Orchestrator()
+    monkeypatch.setattr(maximalist, "_run", lambda cmd, env=None: 1)
+
+    orch.run_advisory("some phase", ["does-not-matter"])
+
+    err = capsys.readouterr().err
+    assert "exit 1" in err
+    assert "the interpreter never launched" not in err
+    assert "timed out" not in err

@@ -62,7 +62,10 @@ from coordinator_core.tracker_completion_policy import (
     CodeCompleteEvidence,
     emit_code_complete_assert,
 )
-from coordinator_core.tracker_entities import CLOSURE_FIDELITY_VALUES
+from coordinator_core.tracker_entities import (
+    TrackerEntityError,
+    reject_invalid_closure_fidelity,
+)
 from coordinator_core.tracker_projection import DEFAULT_CLOSURE_FIDELITY
 
 # ---------------------------------------------------------------------------
@@ -155,11 +158,14 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     # from projected state stays the caller's job -- this module holds its
     # negative-spec import boundary and does not read the store to find it.
     closure_fidelity = params.get("closure_fidelity", DEFAULT_CLOSURE_FIDELITY)
-    if closure_fidelity not in CLOSURE_FIDELITY_VALUES:
-        raise ValueError(
-            "tracker.assert_code_complete: closure_fidelity must be one of "
-            f"{sorted(CLOSURE_FIDELITY_VALUES)}, got {closure_fidelity!r}"
-        )
+    # Review: overengineering-reviewer -- reuse the single enum guard
+    # (tracker_entities.reject_invalid_closure_fidelity) instead of a second
+    # inline membership check; re-raised as ValueError to preserve this op's
+    # documented wire contract (see docstring `Raises:`).
+    try:
+        reject_invalid_closure_fidelity(closure_fidelity, action="assert code_complete for")
+    except TrackerEntityError as exc:
+        raise ValueError(str(exc)) from exc
 
     evidence = CodeCompleteEvidence(
         sha=sha,

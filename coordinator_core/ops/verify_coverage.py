@@ -616,6 +616,30 @@ def main(argv: List[str]) -> int:
     # directory rather than the class, so the gate HALTed /update-docs on 19
     # period-correct references (claude-klabauter, 2026-08-06).
     #
+    # recovered/ is the same class a third time, asked for BY NAME rather than
+    # found by a halt: example-retrieval-repo-em (cross-repo/archive/2026-08-16-example-retrieval-repo-
+    # em-ceremony-cli-defects-found-running-workweek-complete.md, section 2)
+    # carries a verbatim port under docs/recovered/ banner-marked "Historical
+    # record -- paths and tool names are example-game-repo-era and may be stale", and it
+    # contributed 8 of their 9 remaining orphans, all commands that genuinely
+    # existed when the document was written. /update-docs Phase 11h2 HALTS on a
+    # non-zero verify-coverage, so a correctly-preserved historical document
+    # blocked their docs pipeline outright.
+    #
+    # They asked which of two shapes we wanted, and the exclusion set is the
+    # right one: REF_ALLOWLIST needs a new entry per orphaned REF, so it grows
+    # with every recovered document and encodes nothing about WHY those refs are
+    # exempt, while the exclusion set encodes exactly the rationale that applies
+    # -- a period-correct ref is not an orphan. Their own read, and it is the
+    # consistent one.
+    #
+    # Basename-scoped like every other member here, so a `recovered/` anywhere in
+    # the tree is excluded, not only `docs/recovered/`. Deliberate and consistent
+    # with `archive`/`audits`/`tasks`, which over-match the same way: the name is
+    # the claim. A directory called `recovered` holding live surfaces someone
+    # will act on would be misnamed, and no such directory exists in this repo
+    # today.
+    #
     # inbox/, sent/ and dispatch-briefs/ are the same class again, found the same
     # way (the gate HALTed /update-docs on 11 of them, claude-klabauter 2026-08-27).
     # A DELIVERED memo -- inbound under cross-repo/inbox/ or outbound under
@@ -650,6 +674,7 @@ def main(argv: List[str]) -> int:
             "inbox",
             "sent",
             "dispatch-briefs",
+            "recovered",
         },
         errors=walk_dir_errors,
     ):

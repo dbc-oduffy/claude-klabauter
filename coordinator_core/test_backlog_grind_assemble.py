@@ -2149,8 +2149,15 @@ class TestMisePhase6ReviewScaleVerdict:
             assert "d-mise-phase-6-review-scale" not in [
                 d["id"] for d in result.directives
             ]
+            # `collect()` no longer wires this leg's sub-reader in at all
+            # (DoE ruling `ecbb6b786` orphaned it -- see
+            # `TestMisePhase6ReviewScaleVerdict`'s own note), so `collect()`
+            # never emits its judgment point either; call the sub-reader
+            # directly to confirm it still asks rather than raises or
+            # defaults on the same unusable inputs.
+            sub_result = bga.readers_mise_en_place._read_phase_6_review_scale(run_id)
             assert "j-mise-phase-6-review-scale-unresolved" in [
-                jp["id"] for jp in result.judgment_points
+                jp["id"] for jp in sub_result.judgment_points
             ], f"run_id={run_id!r} produced no judgment point"
 
     # -- AC2/AC5 case 4: the Phase-0 call stays silent ----------------------
@@ -2189,9 +2196,17 @@ class TestMisePhase6ReviewScaleVerdict:
 
         assert result.directives == [] and result.judgment_points == []
 
-    def test_collect_carries_the_tail_surface_only_for_its_own_cadence(
+    def test_collect_never_wires_the_orphaned_review_scale_leg_for_any_cadence(
         self, monkeypatch, tmp_path
     ):
+        # DoE ruling `ecbb6b786` (doctrine(mise): review belongs to the
+        # capping ceremony, not the run) retired the mise-side review gate
+        # this leg served; `collect()` no longer calls
+        # `_read_phase_6_review_scale` at all, for any cadence, even though
+        # the sub-reader itself (exercised directly elsewhere in this class)
+        # still resolves a verdict when called. See
+        # `cross-repo/archive/2026-08-06-doe-claude-em-mise-review-ruling-
+        # orphans-readers-mise-leg.md`.
         self._arrange(
             monkeypatch,
             tmp_path,
@@ -2201,7 +2216,7 @@ class TestMisePhase6ReviewScaleVerdict:
         mise = bga.readers_mise_en_place.collect("mise-en-place", run_id=_MISE_RUN_ID)
         other = bga.readers_mise_en_place.collect("bug-blitz", run_id=_MISE_RUN_ID)
 
-        assert "d-mise-phase-6-review-scale" in [d["id"] for d in mise.directives]
+        assert "d-mise-phase-6-review-scale" not in [d["id"] for d in mise.directives]
         assert other.directives == [] and other.judgment_points == []
 
 
@@ -2511,7 +2526,13 @@ class TestMiseRunIdentityInferenceIsDeletedNotDormant:
         seen: list[list[str]] = []
         self._arrange(monkeypatch, tmp_path, seen)
 
-        bga.readers_mise_en_place.collect("mise-en-place", run_id=run_id)
+        # Calls the sub-reader directly, not `collect()`: `collect()` no
+        # longer wires this leg in at all (DoE ruling `ecbb6b786` orphaned
+        # it -- see `TestMisePhase6ReviewScaleVerdict`'s own note), but the
+        # sub-reader itself is still live code with its own contract, and
+        # this class is asserting THAT contract never re-grows an ancestry
+        # probe on any path.
+        bga.readers_mise_en_place._read_phase_6_review_scale(run_id)
 
         if run_id in (_MISE_RUN_ID, "run-prior"):
             assert seen, "expected the range measurements on the resolved path"

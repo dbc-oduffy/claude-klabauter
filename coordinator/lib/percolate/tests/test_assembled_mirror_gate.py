@@ -236,6 +236,93 @@ def test_tree_missing_coordinator_core_refuses_before_running_a_subprocess(tmp_p
     assert "coordinator_core" in format_refusal(result)
 
 
+# --- CONTENT vs INCOMPLETE classification -----------------------------------
+
+
+def test_timed_out_result_is_incomplete_and_carries_no_content_verdict(tmp_path):
+    tree = tmp_path / "slow_tree"
+    tree.mkdir()
+    (tree / "pyproject.toml").write_text(_PYPROJECT, encoding="utf-8")
+    (tree / "coordinator_core").mkdir()
+
+    import subprocess as _subprocess
+
+    def _fake_run(command, **kwargs):
+        raise _subprocess.TimeoutExpired(cmd=command, timeout=kwargs.get("timeout"))
+
+    with mock.patch("percolate.assembled_mirror_gate.subprocess.run", _fake_run):
+        result = run_assembled_mirror_gate(tree, timeout_s=0.01)
+
+    assert result.timed_out is True
+    assert result.is_incomplete is True
+    assert result.passed is False
+    assert result.timeout_s == 0.01
+
+
+def test_completed_run_carries_a_content_verdict_never_the_incomplete_one(tmp_path):
+    tree = _write_tree(
+        tmp_path,
+        "def test_one():\n    assert True\n",
+    )
+    result = run_assembled_mirror_gate(tree, timeout_s=30.0)
+    assert result.is_incomplete is False
+    assert result.timed_out is False
+
+
+def test_errored_completed_collection_is_a_content_verdict_not_incomplete(tmp_path):
+    """A collection that ran to completion and errored still reached a
+    verdict ABOUT the tree (a bad one) — it must not read as incomplete."""
+    tree = _write_tree(
+        tmp_path,
+        "from coordinator_core.benchmarks.this_module_was_dropped import thing\n\n\n"
+        "def test_uses_it():\n    assert thing\n",
+    )
+    result = run_assembled_mirror_gate(tree, timeout_s=30.0)
+    assert result.errored is True
+    assert result.is_incomplete is False
+
+
+def test_isolation_unverified_result_is_incomplete(tmp_path):
+    tree = tmp_path / "no_coordinator_core_2"
+    tree.mkdir()
+    (tree / "pyproject.toml").write_text(_PYPROJECT, encoding="utf-8")
+
+    with mock.patch("percolate.assembled_mirror_gate.subprocess.run") as run_mock:
+        result = run_assembled_mirror_gate(tree, timeout_s=42.0)
+
+    run_mock.assert_not_called()
+    assert result.is_incomplete is True
+    assert result.timeout_s == 42.0
+
+
+def test_non_default_timeout_s_is_reported_in_both_timed_out_and_incomplete_renderings(tmp_path):
+    tree = tmp_path / "slow_tree_2"
+    tree.mkdir()
+    (tree / "pyproject.toml").write_text(_PYPROJECT, encoding="utf-8")
+    (tree / "coordinator_core").mkdir()
+
+    import subprocess as _subprocess
+
+    def _fake_run(command, **kwargs):
+        raise _subprocess.TimeoutExpired(cmd=command, timeout=kwargs.get("timeout"))
+
+    with mock.patch("percolate.assembled_mirror_gate.subprocess.run", _fake_run):
+        timed_out_result = run_assembled_mirror_gate(tree, timeout_s=7.5)
+
+    isolation_tree = tmp_path / "no_coordinator_core_3"
+    isolation_tree.mkdir()
+    (isolation_tree / "pyproject.toml").write_text(_PYPROJECT, encoding="utf-8")
+    isolation_result = run_assembled_mirror_gate(isolation_tree, timeout_s=7.5)
+
+    timed_out_msg = format_refusal(timed_out_result)
+    isolation_msg = format_refusal(isolation_result)
+    assert "TIMED OUT" in timed_out_msg
+    assert "budget 8s" in timed_out_msg
+    assert "INCOMPLETE" in timed_out_msg
+    assert "INCOMPLETE" in isolation_msg
+    assert "budget 8s" in isolation_msg
+
+
 # --- summary-parsing unit pins ----------------------------------------------
 
 

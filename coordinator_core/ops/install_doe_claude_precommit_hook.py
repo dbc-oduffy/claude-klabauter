@@ -145,6 +145,15 @@ _GATE_REGISTRY: List[_Gate] = [
         # hooks, and conversely a native commit never enters those checks.
         # So a phantom staged deletion arriving by the native route had no
         # guard at all on either side, which is what this entry closes.
+        # Review: overengineering-reviewer flagged this row as inert (script
+        # absent, wrong repo) — false: guard-phantom-staged-deletion-precommit.py
+        # was authored in DoE-claude on 2026-08-28 (55add252c, 1b40e1865),
+        # predating this row. Scope limit that IS real: this installer only
+        # ever targets DoE-claude, so this row closes the native-`git commit`
+        # leg for DoE-claude only. Claude-klabauter's own native-`git commit` leg stays
+        # uncovered because claude-klabauter has had no pre-commit hook by design since
+        # 2026-08-25 ("the staged rollback gate dies without blocking a
+        # commit") — there is no hook here to hang a gate on.
         filename="guard-phantom-staged-deletion-precommit.py",
         label="phantom-staged-deletion",
         override_env="COORDINATOR_OVERRIDE_PRECOMMIT_PHANTOM_STAGED_DELETION",

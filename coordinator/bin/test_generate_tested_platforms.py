@@ -254,6 +254,65 @@ def test_stale_record_does_not_promote() -> None:
         shutil.rmtree(repo_root, ignore_errors=True)
 
 
+def test_write_does_not_reflow_unrelated_manifest_content() -> None:
+    """--write must splice only the tested_platforms array's own text region.
+
+    Negative-spec: a whole-file `json.dump` re-serialization would escape the
+    em-dash to `\\u2014`, blow the hand-inlined `present_platforms` array out
+    to one element per line, and (pre-fix) drop the trailing newline. None of
+    that may happen to a field --write was not asked to change.
+
+    cross-repo/archive/2026-08-26-doe-claude-em-generate-tested-platforms-write-reflows-the-manifest.md
+    """
+    repo_root, sha = _make_scratch_repo(tested_platforms=[])
+    try:
+        manifest_path = os.path.join(repo_root, _MANIFEST_REL)
+        raw = (
+            "{\n"
+            '  "standalone_setup_script": {"posix": "coordinator/scripts/setup.py"},\n'
+            '  "programmatic_entry_point": {"posix": "coordinator/scripts/install-maximalist.py"},\n'
+            '  "why": "an em—dash in hand-authored prose",\n'
+            '  "tested_platforms": [],\n'
+            '  "present_platforms": ["macos", "linux", "windows"]\n'
+            "}\n"
+        )
+        with open(manifest_path, "w", encoding="utf-8", newline="\n") as fh:
+            fh.write(raw)
+        _run_git(repo_root, "add", "-A")
+        _run_git(repo_root, "commit", "-q", "-m", "reseed with hand-formatted manifest")
+        sha = _run_git(repo_root, "rev-parse", "HEAD").stdout.strip()
+
+        _write_record(
+            repo_root,
+            platform="windows",
+            machine="machine-b",
+            surface="standalone_setup_script",
+            surface_sha=sha,
+        )
+        proc = _run_generator(repo_root, write=True)
+        _check(proc.returncode == 0, f"(f) generator exits 0: {proc.stderr}")
+
+        with open(manifest_path, "r", encoding="utf-8", newline="") as fh:
+            after_raw = fh.read()
+
+        _check(
+            "—" in after_raw and "\\u2014" not in after_raw,
+            "(f) em-dash prose is not escaped by --write (ensure_ascii=False)",
+        )
+        _check(
+            '"present_platforms": ["macos", "linux", "windows"]' in after_raw,
+            f"(f) unrelated hand-inlined array is byte-preserved: {after_raw!r}",
+        )
+        _check(after_raw.endswith("\n"), "(f) file retains a trailing newline")
+        manifest = json.loads(after_raw)
+        _check(
+            manifest.get("tested_platforms") == ["windows"],
+            f"(f) tested_platforms itself is still correctly updated: got {manifest.get('tested_platforms')}",
+        )
+    finally:
+        shutil.rmtree(repo_root, ignore_errors=True)
+
+
 def test_hot_path_surface_does_not_promote() -> None:
     """Bonus (e): a ceremony-hot-path surface (e.g. 'workday-start', C5's KR-2
     shape) is NOT a manifest-declared entry point and must not promote, even

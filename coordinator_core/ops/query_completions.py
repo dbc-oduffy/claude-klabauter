@@ -61,7 +61,7 @@ import json
 import subprocess
 import sys
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, List, Optional
 
 from coordinator_core.git.repo_root import show_toplevel
 from coordinator_core.ops.ceremony.records_query import query_records
@@ -110,6 +110,44 @@ def _js_field(fm: dict, key: str) -> str:
     return str(val)
 
 
+def _format_commits(commits: Any) -> str:
+    """Renders a completion record's ``commits`` frontmatter for display.
+
+    EVERY ENTRY IS COERCED WITH ``str()``, and the reason is a live crash, not
+    tidiness: a short SHA that happens to be all digits (``1234567``) is parsed
+    by YAML as an INT, and ``", ".join`` then raises ``TypeError: sequence item
+    0: expected str instance, int found``. `/workstream-complete`'s mandatory
+    LoE gate calls this formatter, so a display concern took down a gate --
+    reported by example-retrieval-repo-em (`cross-repo/archive/2026-08-16-example-retrieval-repo-em-
+    ceremony-cli-defects-found-running-workweek-complete.md` § 1), who quoted
+    their own offending value at their `f3615dd0a` and confirmed it was the
+    only instance in their corpus. Their framing is the one this fixes on:
+    "the formatter should not be able to crash a ceremony on a display
+    concern", independently of whether producers also start quoting.
+
+    NOT NARROWED TO ints. Coercing only the int case would leave the same crash
+    one YAML scalar away -- a bare ``yes`` is a bool, an unquoted ``1.2e3``-
+    shaped abbreviation is a float, and a nested list is neither. `str()` is
+    total, and this function's whole contract is display.
+
+    A non-list ``commits`` (a bare scalar where a list was meant, which the
+    schema does not forbid) renders as that one value rather than being
+    iterated CHARACTER BY CHARACTER, which is what a bare ``", ".join`` on a
+    string does -- a silent wrong answer, and the failure mode most likely to
+    survive review because it does not raise. Empty/absent stays
+    ``"no-commit"``, unchanged: `bin/query-records.js:314`'s own
+    ``commits.join(', ')|'no-commit'`` behaviour, which this is a native port
+    of.
+    """
+    if not commits:
+        return "no-commit"
+    if isinstance(commits, (str, bytes)):
+        return commits.decode("utf-8", "replace") if isinstance(commits, bytes) else commits
+    if not isinstance(commits, (list, tuple)):
+        return str(commits)
+    return ", ".join(str(c) for c in commits)
+
+
 def _format_completion_markdown(records: list) -> str:
     """Native port of ``TYPE_DISPLAY.completion`` (bin/query-records.js:314).
 
@@ -121,8 +159,7 @@ def _format_completion_markdown(records: list) -> str:
         title = _js_field(fm, "title")
         nature = _js_field(fm, "nature")
         chain = fm.get("chain") or "none"
-        commits = fm.get("commits")
-        commits_str = ", ".join(commits) if commits else "no-commit"
+        commits_str = _format_commits(fm.get("commits"))
         lines.append(f"- **{title}** [{nature}] (chain: {chain}) — {commits_str}")
     return "\n".join(lines)
 

@@ -331,6 +331,29 @@ def _extract_section(text: str, header_line: str) -> str:
     return "\n".join(out)
 
 
+def _extract_last_section_by_prefix(text: str, header_prefix: str) -> str:
+    """Extract non-blank lines of the LAST `## <header_prefix>...` section
+    (e.g. the most recent `## Week of <date>` block), up to the next `## `
+    heading. Mirrors _extract_section's terminator rule but matches by
+    prefix and keeps the latest match rather than the first, since these
+    sections are chronological and undated callers want the newest one."""
+    out: List[str] = []
+    current: List[str] = []
+    in_section = False
+    for line in text.splitlines():
+        if line.startswith("## "):
+            if in_section:
+                out = current
+            current = []
+            in_section = line.startswith(header_prefix)
+            continue
+        if in_section and line.strip() != "":
+            current.append(line)
+    if in_section:
+        out = current
+    return "\n".join(out)
+
+
 def _run_git_log(repo_root: str) -> str:
     try:
         proc = subprocess.run(
@@ -393,6 +416,16 @@ def _derive_progress(state_root: str, repo_root: str) -> str:
                 except OSError:
                     pr_text = ""
                 highlights = _extract_section(pr_text, "## Highlights")
+                if not highlights:
+                    # Pending-release writer moved to per-week `## Week of
+                    # <date>` blocks (no `## Highlights` heading at all,
+                    # confirmed on the current pending-release grammar) —
+                    # without this, the reader stays permanently stuck on
+                    # rung 3 (raw git-log SHAs) even though prose is on
+                    # disk, silently degrading the cockpit-facing
+                    # docs/exec-summary.md narrative. See cross-repo/archive/
+                    # 2026-08-28-doe-claude-em-exec-summary-highlights-reader-greps-a-retired-heading.md
+                    highlights = _extract_last_section_by_prefix(pr_text, "## Week of ")
 
     # --- Assemble output ---
     if highlights:

@@ -205,6 +205,28 @@ class MirrorCollectionResult:
     `collected_count`/`errored` carry the same fail-closed values a
     `TimeoutExpired` reports."""
 
+    timeout_s: float = DEFAULT_TIMEOUT_S
+    """The budget actually enforced for the run that produced this result —
+    i.e. the `timeout_s` value passed to `run_assembled_mirror_gate`, never
+    the module default read cold. `format_refusal`'s TIMED OUT and
+    INCOMPLETE renderings read this field, not `DEFAULT_TIMEOUT_S`, so a
+    caller overriding the budget gets a refusal naming the number that was
+    actually enforced rather than one that was never in effect."""
+
+    @property
+    def is_incomplete(self) -> bool:
+        """True iff this result carries NO claim about the tree's content at
+        all — collection either did not finish inside budget (`timed_out`)
+        or never started because isolation could not be verified
+        (`isolation_unverified`). Distinct from `errored`: a collection that
+        ran to completion and hit collection errors DID reach a verdict
+        about the tree (a bad one) and is a CONTENT result, `is_incomplete
+        =False`. An INCOMPLETE result must never be treated as evidence
+        about the tree by any caller — see `dispatch_end_of_run_assembled_
+        mirror_gate` in `publish.py`, which gates its exemption lookup on
+        this property being False."""
+        return self.timed_out or self.isolation_unverified
+
 
 def _tail(text: str, n_lines: int = 40) -> str:
     lines = text.splitlines()
@@ -379,6 +401,7 @@ def run_assembled_mirror_gate(
                 "_verify_isolation_precondition)."
             ),
             isolation_unverified=True,
+            timeout_s=timeout_s,
         )
 
     start = time.perf_counter()
@@ -406,6 +429,7 @@ def run_assembled_mirror_gate(
             tree_root=str(tree_root),
             stdout_tail=_tail(exc.stdout or ""),
             stderr_tail=_tail(exc.stderr or ""),
+            timeout_s=timeout_s,
         )
     elapsed_s = time.perf_counter() - start
 
@@ -423,6 +447,7 @@ def run_assembled_mirror_gate(
         tree_root=str(tree_root),
         stdout_tail=_tail(result.stdout),
         stderr_tail=_tail(result.stderr),
+        timeout_s=timeout_s,
     )
 
 
@@ -657,9 +682,15 @@ def format_refusal(result: MirrorCollectionResult) -> str:
     errored/clean-zero distinction reproduces the abstention defect this
     plan exists to close."""
     if result.isolation_unverified:
-        shape = "ISOLATION UNVERIFIED — no subprocess run"
+        shape = (
+            "INCOMPLETE — ISOLATION UNVERIFIED, no subprocess run "
+            f"(budget {result.timeout_s:.0f}s)"
+        )
     elif result.timed_out:
-        shape = f"TIMED OUT after {result.elapsed_s:.1f}s (budget {DEFAULT_TIMEOUT_S:.0f}s)"
+        shape = (
+            f"INCOMPLETE — TIMED OUT after {result.elapsed_s:.1f}s "
+            f"(budget {result.timeout_s:.0f}s)"
+        )
     elif result.errored:
         shape = (
             f"collection ERRORED (exit={result.exit_code}), "

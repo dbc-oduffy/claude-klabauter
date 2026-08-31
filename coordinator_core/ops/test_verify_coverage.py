@@ -323,6 +323,70 @@ def test_vendor_dir_excluded_from_sweep(tmp_path):
     assert r["json"]["summary"]["violations"] == 0
 
 
+def test_docs_recovered_excluded_from_sweep(tmp_path):
+    """cross-repo/archive/2026-08-16-example-retrieval-repo-em-ceremony-cli-defects-found-
+    running-workweek-complete.md section 2: a recovered historical document
+    names commands that genuinely existed when it was written, and rewriting it
+    to name a live command falsifies the record. /update-docs Phase 11h2 HALTS
+    on a non-zero verify-coverage, so this was blocking a sibling's docs
+    pipeline outright, with the only escapes being REF_ALLOWLIST churn or
+    editing the record."""
+    root = _scaffold(
+        tmp_path,
+        {"coordinator": {"skills": ["plan"]}},
+        {
+            "coordinator/skills/plan/SKILL.md": "# plan\n\nAll good here.\n",
+            "docs/recovered/example-game-repo-era-notes.md": (
+                "# Historical record\n\nPaths and tool names are example-game-repo-era and may be "
+                "stale. Dispatch `coordinator:review-dispatch` to check.\n"
+            ),
+        },
+    )
+    r = _run(root, root)
+    assert r["exit"] == 0, r["json"]
+    assert r["json"]["summary"]["violations"] == 0
+
+
+def test_recovered_exclusion_is_basename_scoped_not_docs_scoped(tmp_path):
+    """Deliberate, and consistent with every other member of the set --
+    `archive`, `audits` and `tasks` over-match the same way. The NAME is the
+    claim: a directory called `recovered` holding a live surface someone will
+    act on would be misnamed. Pinned so the over-match is a decision on the
+    record rather than something a later reader `docs/`-scopes as a bug fix."""
+    root = _scaffold(
+        tmp_path,
+        {"coordinator": {"skills": ["plan"]}},
+        {
+            "coordinator/skills/plan/SKILL.md": "# plan\n\nAll good here.\n",
+            "state/recovered/older-notes.md": (
+                "# Recovered\n\nNames `coordinator:ghost-thing`, retired since.\n"
+            ),
+        },
+    )
+    r = _run(root, root)
+    assert r["exit"] == 0, r["json"]
+
+
+def test_a_live_docs_page_with_the_same_ref_is_still_flagged(tmp_path):
+    """The negative half. `docs/` itself stays swept -- the comment's own line
+    is that live surfaces someone will ACT on are the whole signal this gate
+    exists to produce, so the exclusion must not leak upward from
+    `docs/recovered/` to `docs/`."""
+    root = _scaffold(
+        tmp_path,
+        {"coordinator": {"skills": ["plan"]}},
+        {
+            "coordinator/skills/plan/SKILL.md": "# plan\n\nAll good here.\n",
+            "docs/reference/live-page.md": (
+                "# Live\n\nDispatch `coordinator:ghost-thing` for this.\n"
+            ),
+        },
+    )
+    r = _run(root, root)
+    assert r["exit"] == 1, r["json"]
+    assert r["json"]["violations"][0]["ref"] == "coordinator:ghost-thing"
+
+
 def test_non_excluded_dir_with_same_bogus_ref_is_flagged(tmp_path):
     root = _scaffold(
         tmp_path,

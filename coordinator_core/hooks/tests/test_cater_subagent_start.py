@@ -34,6 +34,7 @@ from coordinator_core.hooks.cater_subagent_start import (
     ADDITIONAL_CONTEXT_CHAR_CAP,
     BLOCKS_COMPANION_MARKER_PREFIX,
     SIDECAR_MISS_MARKER,
+    SIDECAR_MISS_NO_FOREIGN_WRITE,
     SIDECAR_PATH_MARKER_PREFIX,
     _compose_blocks_pointer_text,
     _compose_sidecar_miss_text,
@@ -1108,11 +1109,15 @@ def test_no_miss_body_leaves_a_foreign_sidecar_write_unforbidden():
         "unnamed": _compose_sidecar_miss_text(""),
     }
     for label, body in bodies.items():
-        assert "no other agent's sidecar" in body, label
+        assert SIDECAR_MISS_NO_FOREIGN_WRITE in body, label
 
     # The clause is appended ahead of the marker line, never through it --
     # consumers key off the last line and a clause spliced after it would
-    # break every one of them.
+    # break every one of them. Unlike the clause assertion above, the marker
+    # literals below are intentionally hardcoded, not asserted against a
+    # constant: `coordinator/agents/code-reviewer.md` § HARD RULE step 1
+    # does an exact-line match on this text, so the literal pins that
+    # external consumer contract -- do not "fix" these to use the constant.
     assert bodies["sentinel"].rstrip().endswith(SIDECAR_PATH_MARKER_PREFIX + "/x/y.md")
     assert bodies["named"].rstrip().endswith(SIDECAR_MISS_MARKER)
     assert bodies["unnamed"].rstrip().endswith(SIDECAR_MISS_MARKER)

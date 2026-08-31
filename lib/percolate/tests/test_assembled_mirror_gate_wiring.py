@@ -81,8 +81,14 @@ def _write_collectable_tree(root: Path) -> None:
 def _write_colliding_tree(root: Path) -> None:
     """A tree whose collection genuinely errors -- module-scope code that
     raises on import, the exact klabauter#3 shape this whole plan exists
-    to catch."""
+    to catch.
+
+    Carries `coordinator_core/` at its root, same as `_write_collectable_
+    tree`, so this is a CONTENT verdict (collection ran, and errored) --
+    never `isolation_unverified` -- and so remains eligible for the
+    exemption lookup these tests exercise."""
     root.mkdir(parents=True, exist_ok=True)
+    (root / "coordinator_core").mkdir(parents=True, exist_ok=True)
     (root / "pytest.ini").write_text(
         "[pytest]\ntestpaths = .\n", encoding="utf-8", newline="\n"
     )
@@ -198,6 +204,80 @@ class TestEndOfRunAssembledMirrorGateLeg:
         assert ok is False
         captured = capsys.readouterr()
         assert "assembled-mirror gate FAILED" in captured.err
+
+    def test_exempted_row_with_incomplete_timed_out_result_still_fails(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        """C3: an exemption waives a KNOWN-BAD tree; a load-driven timeout
+        makes no claim about the tree at all, so a declared exemption on the
+        row must NOT absorb it -- `ok` stays False and the operator text
+        says the exemption did not apply, rather than being silently folded
+        into declared content debt."""
+        import percolate.assembled_mirror_gate as gate_module
+
+        repo_root = tmp_path / "repo"
+        _write_collectable_tree(repo_root)
+        monkeypatch.setattr(
+            publish,
+            "_load_assembled_mirror_gate_exemptions",
+            lambda: {"claude-klabauter": "known debt, tracked separately"},
+        )
+
+        def _fake_timed_out(tree_root, **kwargs):
+            return gate_module.MirrorCollectionResult(
+                passed=False,
+                collected_count=0,
+                errored=True,
+                exit_code=None,
+                timed_out=True,
+                elapsed_s=60.1,
+                command=("python", "-m", "pytest"),
+                tree_root=str(tree_root),
+                stdout_tail="",
+                stderr_tail="",
+                timeout_s=60.0,
+            )
+
+        monkeypatch.setattr(publish, "run_assembled_mirror_gate", _fake_timed_out)
+
+        ok = publish.dispatch_end_of_run_assembled_mirror_gate(
+            [repo_root],
+            rows_by_repo_root={repo_root: [_ResolvedTargetStub("claude-klabauter")]},
+            target_filtered=False,
+        )
+        assert ok is False
+        captured = capsys.readouterr()
+        assert "known debt, tracked separately" not in captured.err
+        assert "known debt, tracked separately" not in captured.out
+        assert "no claim about the tree" in captured.err
+
+    def test_exempted_row_with_isolation_unverified_result_still_fails(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        """Same rule for the OTHER incomplete shape: a result refused before
+        a subprocess ever ran carries no content verdict either, so it must
+        not be absorbed by a declared exemption."""
+        repo_root = tmp_path / "repo"
+        # Deliberately no coordinator_core/ dir -- isolation_unverified.
+        repo_root.mkdir(parents=True, exist_ok=True)
+        (repo_root / "pytest.ini").write_text(
+            "[pytest]\ntestpaths = .\n", encoding="utf-8", newline="\n"
+        )
+        monkeypatch.setattr(
+            publish,
+            "_load_assembled_mirror_gate_exemptions",
+            lambda: {"claude-klabauter": "known debt, tracked separately"},
+        )
+
+        ok = publish.dispatch_end_of_run_assembled_mirror_gate(
+            [repo_root],
+            rows_by_repo_root={repo_root: [_ResolvedTargetStub("claude-klabauter")]},
+            target_filtered=False,
+        )
+        assert ok is False
+        captured = capsys.readouterr()
+        assert "known debt, tracked separately" not in captured.err
+        assert "no claim about the tree" in captured.err
 
     def test_missing_repo_root_is_a_hard_failure(self, tmp_path, capsys):
         repo_root = tmp_path / "does-not-exist"

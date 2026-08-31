@@ -211,7 +211,9 @@ def test_engine_output_passes_its_own_verifier(tmp_path):
         atlas_lines=[
             "- `docs/architecture/systems/` — per-subsystem architecture pages: engine"
         ],
-        capability_pointers_lines=[],
+        capability_pointers_lines=[
+            "- `coordinator_core/ops/` — op-registry handlers callable over the IPC wire"
+        ],
         fast_test_lines=["- fast test: `python3 -m pytest -q`"],
         audits_lines=["- `state/audits/` — existing investigation records"],
         hook_cancellation_line="",

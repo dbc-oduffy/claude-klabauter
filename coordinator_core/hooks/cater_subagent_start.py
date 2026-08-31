@@ -57,14 +57,19 @@ NAME, never a policy key, so the roster lookup could never have
 succeeded for it either way), or a dispatch for which no type resolved
 at all.
 
-The `sidecar_path: <path>` and `sidecar_provisioning: missed` marker lines
+The `sidecar_path: <path>` and `sidecar_provisioning: missed` marker LINES
 are byte-identical to their Agent-path counterparts
 (`_compose_sidecar_offer_text` / `_compose_sidecar_miss_text` in
 `enforce-agent-dispatch-mode.py`) minus that hook's DoE-local
 `_message_envelope.compose`/`render` prose-capping wrapper, which this repo
-does not own or import -- the prose itself is carried verbatim so a
-consuming agent's exact-line marker match (`coordinator/agents/
-code-reviewer.md` § HARD RULE step 1) behaves identically on both paths.
+does not own or import -- so a consuming agent's exact-line marker match
+(`coordinator/agents/code-reviewer.md` § HARD RULE step 1) behaves
+identically on both paths. The surrounding prose is NOT claimed verbatim:
+`SIDECAR_MISS_NO_FOREIGN_WRITE` (added 2026-08-31, see its own docstring)
+is appended to every `_compose_sidecar_miss_text` body in THIS repo only,
+with no matching cross-repo memo yet filed to add it to DoE's counterpart --
+that divergence is intentional here and unresolved there, tracked
+separately from the marker-line guarantee above.
 
 CONTRACT CHANGE (2026-08-21, agreed with doe-claude-6d, bug-backlog
 `2026-08-21-named-dispatch-catering-resolves-contrac-0755d38ec8ea.yaml`):
@@ -221,17 +226,15 @@ SIDECAR_MISS_NOTICE_LEAD = "Sidecar provisioning did not complete for this dispa
 #: that field. A receipt in the wrong file is strictly worse than a missing one,
 #: because absence is the case the guards are built to notice.
 #:
-#: It survived only because the file's real owner found foreign content in its
-#: own scaffold, declined to overwrite, and appended. A normal write would have
-#: destroyed the misfiled receipt silently.
-#:
 #: Appended to every miss body, including the sentinel one: an agent holding a
 #: sentinel still has no receipt file of its own, and the sentinel is not a
 #: substitute for one.
 #: `state/bug-backlog/2026-08-31-missing-sidecar-provisioning-sends-an-integrator-receipt-into-a-siblings-file.yaml`
 SIDECAR_MISS_NO_FOREIGN_WRITE = (
-    " Write to no other agent's sidecar: with no file of your own, skip any "
-    "receipt or stamp your role would write and say in your report that you did."
+    " Write to no other agent's sidecar: with no file of your own, do not "
+    "write to one that exists for another dispatch, including any receipt "
+    "or stamp your role would normally write -- say in your report that "
+    "you skipped it."
 )
 
 #: Same machine-readable "key: value" shape as `SIDECAR_PATH_MARKER_PREFIX`

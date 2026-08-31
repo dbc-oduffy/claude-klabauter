@@ -255,37 +255,20 @@ class GeneratorRecord:
 
 
 @dataclass(frozen=True)
-class WriteSite:
-    """One write call site found while scanning a module's AST.
-
-    Fully classified against the module's own source alone (R1/R2/R5/R7's
-    exclusions, R3/R4's tmp-handle substitution, R8's local-name
-    substitution) -- never against `tracked` or `is_test_module`, both of
-    which arrive only at sweep time. `target_literal` is the resolved
-    literal target when one exists, or `None` for a write whose target
-    could not be determined statically. `via_tmp_handle` marks a site
-    reached by following R3's atomic-write idiom (a `tempfile.mkstemp`
-    handle promoted by a later `os.replace`/`Path.replace`) to its real
-    destination, rather than found directly at a write call. `excluded`
-    marks a site that contributes no signal at all -- R1/R2/R5/R7, or a
-    literal target that looks like a tmp path -- kept for observability
-    even though `_resolve` skips it unconditionally.
-    """
-
-    target_literal: str | None
-    via_tmp_handle: bool
-    excluded: bool
-
-
-@dataclass(frozen=True)
 class FileWrites:
     """A module's write behaviour and declared provenance, derived purely
     from its parsed source -- no git state, no pytest configuration.
 
     `generates`/`mutates` are the raw `ast.literal_eval`d GENERATES/MUTATES
     module-level assignments (a list, `"__MALFORMED__"`, or `None`);
-    `write_sites` are the write calls `_scan_file_writes` found, each
-    classified up to but not including tracked-set resolution.
+    `write_sites` are the resolved literal targets `_scan_file_writes` found
+    among write calls it did not exclude (R1/R2/R5/R7, and R3/R4's
+    tmp-handle substitution to its real destination), classified up to but
+    not including tracked-set resolution -- an entry is the literal target
+    string, or `None` for a write whose target could not be determined
+    statically. A site R1/R2/R5/R7 excludes (or a literal that looks like a
+    tmp path) contributes no signal `_resolve` ever reads, so it is never
+    appended here at all, rather than recorded and skipped.
     `syntax_error` is carried for shape parity with a future bytes-keyed
     cache entry that failed to parse at all -- `_scan_file_writes` always
     takes an already-parsed `tree`, so it is always `False` here.
@@ -293,7 +276,7 @@ class FileWrites:
 
     generates: object
     mutates: object
-    write_sites: list[WriteSite]
+    write_sites: list[str | None]
     syntax_error: bool
 
 
@@ -1047,7 +1030,7 @@ def _scan_file_writes(tree: ast.AST) -> FileWrites:
     scope_binds = _ScopeBindings(tree)
     scratch_fds = _scratch_mkstemp_fds(tree, scope_binds)
 
-    sites: list[WriteSite] = []
+    sites: list[str | None] = []
 
     for node in ast.walk(tree):
         if not (isinstance(node, ast.Call) and _call_is_write(node, json_module_aliases, json_dump_names)):
@@ -1058,39 +1041,34 @@ def _scan_file_writes(tree: ast.AST) -> FileWrites:
         if is_dump:
             file_arg = _dump_file_arg(node)
             if file_arg is not None:
-                if _is_stdio_sink(file_arg):  # R1
-                    sites.append(WriteSite(target_literal=None, via_tmp_handle=False, excluded=True))
+                if _is_stdio_sink(file_arg):  # R1 -- excluded, contributes no signal
                     continue
-                if isinstance(file_arg, ast.Name) and file_arg.id in handle_names:  # R2
-                    sites.append(WriteSite(target_literal=None, via_tmp_handle=False, excluded=True))
+                if isinstance(file_arg, ast.Name) and file_arg.id in handle_names:  # R2 -- excluded
                     continue
-            sites.append(WriteSite(target_literal=None, via_tmp_handle=False, excluded=False))
+            sites.append(None)
             continue
 
-        if _is_fdopen_of_scratch_fd(node, scratch_fds):  # R7
-            sites.append(WriteSite(target_literal=None, via_tmp_handle=False, excluded=True))
+        if _is_fdopen_of_scratch_fd(node, scratch_fds):  # R7 -- excluded
             continue
 
         expr = _write_target_expr(node)
         if expr is None:
-            sites.append(WriteSite(target_literal=None, via_tmp_handle=False, excluded=False))
+            sites.append(None)
             continue
 
         kind, literal = _resolve_target_expr(
             expr, tmp_bases, scope_binds.at(node.lineno)
         )
         if kind == "excluded":  # R5 (widened by R8)
-            sites.append(WriteSite(target_literal=None, via_tmp_handle=False, excluded=True))
             continue
         if kind == "unresolved":
-            sites.append(WriteSite(target_literal=None, via_tmp_handle=False, excluded=False))
+            sites.append(None)
             continue
 
         assert literal is not None
-        if _looks_like_tmp(literal):
-            sites.append(WriteSite(target_literal=literal, via_tmp_handle=False, excluded=True))
+        if _looks_like_tmp(literal):  # excluded
             continue
-        sites.append(WriteSite(target_literal=literal, via_tmp_handle=False, excluded=False))
+        sites.append(literal)
 
     if tmp_var_names:
         for dest_expr in _replace_destination_exprs(tree, tmp_var_names):  # R3
@@ -1099,7 +1077,7 @@ def _scan_file_writes(tree: ast.AST) -> FileWrites:
                 continue
             if _looks_like_tmp(literal):
                 continue
-            sites.append(WriteSite(target_literal=literal, via_tmp_handle=True, excluded=False))
+            sites.append(literal)
 
     return FileWrites(
         generates=_extract_generates(tree),
@@ -1130,12 +1108,13 @@ def _resolve(
         exempted from this basis — its writes are fixture writes (typically
         through a `tmp_path`-derived variable), not repo artifacts.
 
-    `writes.write_sites` already carries R1-R9's exclusions and the
-    R3/R4 temp-handle-to-destination upgrade, in the same order they were
-    found; this only replays that order against the two per-run inputs
-    `_scan_file_writes` could not see — `tracked` membership and
-    `is_test_module` — so the first resolvable tracked write still
-    short-circuits the rest exactly as it did before the split.
+    `writes.write_sites` already carries R1-R9's exclusions (excluded sites
+    are never appended at all) and the R3/R4 temp-handle-to-destination
+    upgrade, in the same order they were found; this only replays that
+    order against the two per-run inputs `_scan_file_writes` could not see
+    — `tracked` membership and `is_test_module` — so the first resolvable
+    tracked write still short-circuits the rest exactly as it did before
+    the split.
 
     Returns None when no write was found. Truthiness is unchanged from the
     prior bool return, so the caller's `not _resolve(...)` guard keeps its
@@ -1143,15 +1122,13 @@ def _resolve(
     """
     unresolved_seen = False
 
-    for site in writes.write_sites:
-        if site.excluded:
-            continue
-        if site.target_literal is None:
+    for target_literal in writes.write_sites:
+        if target_literal is None:
             unresolved_seen = True
             continue
-        if tracked is not None and _normalize_target(site.target_literal) not in tracked:
+        if tracked is not None and _normalize_target(target_literal) not in tracked:
             continue
-        return f"tracked:{_normalize_target(site.target_literal)}"
+        return f"tracked:{_normalize_target(target_literal)}"
 
     return "unresolved" if (unresolved_seen and not is_test_module) else None
 
@@ -1504,6 +1481,13 @@ def discover_generators(repo_root: Path) -> list[GeneratorRecord]:
                     continue
 
                 path = Path(entry.path)
+                # POSIX-relative cache key, forward slashes on every host.
+                # `.replace("\\", "/")` rather than `PureWindowsPath` here:
+                # routing through `PureWindowsPath` would reinterpret a
+                # backslash inside a legal filename as a separator on a
+                # POSIX host, which is wrong rather than merely redundant --
+                # a plain replace only ever fires on the Windows-native
+                # separator this walk actually produces.
                 key = entry.path[prefix_len:].replace("\\", "/")
                 cached = cached_entries.get(key)
                 if (
@@ -1540,6 +1524,9 @@ def discover_generators(repo_root: Path) -> list[GeneratorRecord]:
                     _build_record(rel_path, generates, repo_root, basis, mutates=mutates, tracked=tracked)
                 )
 
+        # C6's os.scandir stack walk is unordered across filesystems -- this
+        # sort is the sole source of deterministic output order now that
+        # the walk itself no longer provides one.
         sweep_records.sort(key=lambda record: record.generator)
         records.extend(sweep_records)
 

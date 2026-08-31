@@ -440,7 +440,7 @@ def _render_extra_field(key: str, value: Any) -> str:
 
 
 # kind enum — mirrors DoE cross-repo-memo._VALID_KINDS (~line 1774).
-_VALID_KINDS = ("ask", "consult", "fyi", "proposal")
+_VALID_KINDS = ("ask", "consult", "fyi", "proposal", "bug")
 
 # Single source of truth for the two frontmatter literals that matter most for
 # receiver-lifecycle correctness. `_compose_memo`'s self-validation call and

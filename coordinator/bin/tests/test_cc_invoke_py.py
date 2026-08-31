@@ -1029,6 +1029,43 @@ class TestRouteMutation(unittest.TestCase):
         self.assertEqual(ctx.exception.result, envelope)
         self.assertEqual(ctx.exception.result["failed"], envelope["failed"])
 
+    def test_composite_refusal_reports_per_family_failed_detail(self) -> None:
+        """A composite result (e.g. sweep-boot's) carries no top-level `failed`
+        at all — its failures live one level down, in per-family sub-buckets.
+        Without walking those sub-buckets, the refusal message carried only
+        exit_code/error and dropped which family actually failed.
+        """
+        envelope = {
+            "exit_code": 2,
+            "shipped_handoffs": {"failed": [{"reason": "a"}]},
+            "sizings": {"failed": [{"reason": "b"}, {"reason": "c"}]},
+            "clean_family": {"failed": []},
+        }
+
+        with unittest.mock.patch.object(_mod, "route", return_value=envelope):
+            with self.assertRaises(_mod.RouteMutationError) as ctx:
+                _mod.route_mutation("boot.sweep", {}, "/fake/repo", lambda: None)
+
+        message = str(ctx.exception)
+        self.assertIn("shipped_handoffs.failed=1", message)
+        self.assertIn("sizings.failed=2", message)
+        self.assertNotIn("clean_family", message)
+
+    def test_op_stderr_labeled_as_unattributed_not_causal(self) -> None:
+        """op_stderr is the child process's FULL accumulated stderr across every
+        internal leg, not just the refusing one — a succeeding leg's stderr can
+        land here too. The message must not imply the stderr text explains the
+        refusal; it must be labeled as unattributed.
+        """
+        envelope = {"exit_code": 1, "error": "setup failed"}
+
+        message = _mod.mutation_refusal_message(
+            "memo.send", envelope, op_stderr="some succeeding leg's own output"
+        )
+        self.assertIsNotNone(message)
+        self.assertIn("child stderr (may include non-fatal/succeeding-leg output):", message)
+        self.assertNotIn("\n  op stderr:", message)
+
 
 # ---------------------------------------------------------------------------
 # _seam_present — direct unit tests (F4)

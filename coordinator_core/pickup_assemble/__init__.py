@@ -1656,40 +1656,33 @@ _MEMO_TERMINAL_STATUS = frozenset({"actioned", "superseded"})
 def classify(path: Path, fm_text: str, repo_root: Path) -> str:
     """Path + frontmatter shape -> handoff | memo | spinoff | ambiguous.
 
-    Mirrors pickup/SKILL.md's classification table (§ MECHANICAL checklist,
-    Step 1.5) verbatim: `state/handoffs/` + status/deployment_state shape ->
-    handoff (or spinoff, when `kind: spinoff`); `cross-repo/inbox/` OR
-    from:+to:+status: open|actioned -> memo; otherwise -> ambiguous (do not
-    guess).
+    `state/handoffs/` + a recognized `status` -> handoff (or spinoff, when
+    `kind: spinoff`); `cross-repo/inbox/` OR from:+to:+status: open|actioned
+    -> memo; otherwise -> ambiguous (do not guess).
+
+    2026-08-31 fix (cross-repo/archive/2026-08-18-example-market-data-repo-em-
+    lint-valid-handoff-classifies-ambiguous.md): `deployment_state` is
+    lifecycle-routing metadata, not a classification gate — it is absent
+    from `handoff.schema.json`'s `required` set, so a lint-valid handoff
+    with no `deployment_state` used to strand here as `ambiguous` even
+    though the schema that governs it never required the field. Option 2
+    of the memo's two asks: keep `deployment_state` for lifecycle routing
+    elsewhere, stop treating its absence as a classification failure here —
+    no fleet sweep, no invalidation of existing lint-valid handoffs. The
+    docstring's stale claim to mirror a since-removed `pickup/SKILL.md`
+    MECHANICAL checklist (the memo's adjacent finding) is dropped above
+    rather than repeated.
     """
     in_handoffs_dir = "state/handoffs" in path.as_posix()
     in_inbox_dir = "cross-repo/inbox" in path.as_posix()
 
     kind = read_fm_field_unquoted(fm_text, "kind")
     status = read_fm_field_unquoted(fm_text, "status")
-    deployment_state = read_fm_field_unquoted(fm_text, "deployment_state")
 
     if in_handoffs_dir and status in {"active", "consumed", "open", "claimed"}:
-        if deployment_state is not None:
-            if _is_spinoff_kind(kind):
-                return "spinoff"
-            return "handoff"
-        # Ledger-first (C11, row 20): a mirror revert can drop
-        # `deployment_state` alongside the claim stamp, which would
-        # otherwise fall through to `ambiguous` and refuse to route a live,
-        # ledger-claimed handoff at all (fact-find row 20). A live ledger
-        # claim on this path can only exist for a handoff/spinoff —
-        # `claim_state` is class-generic onto handoffs only, per that
-        # module's own Anti-scope — so it settles the classification
-        # without needing `deployment_state` to have survived the revert.
-        try:
-            claim_state = resolve_claim_state(repo_root / path, repo_root=repo_root)
-        except Exception:
-            claim_state = None
-        if claim_state is not None and claim_state.source == "ledger":
-            if _is_spinoff_kind(kind):
-                return "spinoff"
-            return "handoff"
+        if _is_spinoff_kind(kind):
+            return "spinoff"
+        return "handoff"
 
     if in_inbox_dir or (_has_memo_shape(fm_text) and (status == "open" or status in _MEMO_TERMINAL_STATUS)):
         return "memo"

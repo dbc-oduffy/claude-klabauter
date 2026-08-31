@@ -28,7 +28,7 @@ from pathlib import Path
 
 import pytest
 
-from coordinator_core.ops.generator_provenance import discover_generators
+from coordinator_core.ops.generator_provenance import _tracked_paths, discover_generators
 from coordinator_core.ops.staleness_git import Verdict
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -71,7 +71,25 @@ def serialize_generator_records(records: list) -> str:
 
 @pytest.mark.cadence
 def test_discover_generators_matches_oracle() -> None:
-    live = discover_generators(REPO_ROOT)
+    """Compare only records for GIT-TRACKED sources against the oracle.
+
+    `discover_generators` sweeps the WORKING TREE, and this repo is one
+    checkout shared by 50+ concurrent sessions. An unfiltered comparison
+    therefore fails whenever any peer merely has an uncommitted `.py` under a
+    swept directory -- a false positive this test cannot distinguish from a
+    real regression, and whose tempting "fix" is regenerating the fixture,
+    which is precisely the guarantee this file exists to hold. Every one of
+    the fixture's records is tracked, so restricting the live set to tracked
+    sources compares like with like and costs no coverage. Untracked
+    generators are named in the failure output rather than silently dropped.
+    """
+    tracked = _tracked_paths(REPO_ROOT)
+    assert tracked, "git ls-files returned nothing; cannot scope the oracle to tracked sources"
+
+    live_all = discover_generators(REPO_ROOT)
+    live = [record for record in live_all if record.generator in tracked]
+    untracked = sorted(r.generator for r in live_all if r.generator not in tracked)
+
     live_text = serialize_generator_records(live)
     fixture_text = FIXTURE_PATH.read_text(encoding="utf-8")
 
@@ -89,7 +107,11 @@ def test_discover_generators_matches_oracle() -> None:
                     f"discover_generators output diverged from the oracle fixture "
                     f"at rel_path={rel_path!r}:\n"
                     f"  live:    {live_by_path.get(rel_path)!r}\n"
-                    f"  fixture: {fixture_by_path.get(rel_path)!r}"
+                    f"  fixture: {fixture_by_path.get(rel_path)!r}\n"
+                    f"  (untracked sources excluded from this comparison: {untracked or 'none'})"
                 )
 
-        pytest.fail("discover_generators output diverged from the oracle fixture (no single rel_path differed)")
+        pytest.fail(
+            "discover_generators output diverged from the oracle fixture "
+            f"(no single rel_path differed; {len(untracked)} untracked source(s) excluded)"
+        )

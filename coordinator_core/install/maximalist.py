@@ -273,6 +273,20 @@ def _parse_args(argv: Sequence[str]) -> Optional[Dict[str, bool]]:
     }
 
 
+#: `_run`'s own synthesized codes (never emitted by a launched interpreter's
+#: own exit) so a caller reading only the int -- `run_advisory`'s WARN line,
+#: previously indistinguishable from a genuine nonzero return from the
+#: launched process itself -- can tell "the interpreter never launched" (127,
+#: FileNotFoundError) and "it launched but ran past its budget" (124,
+#: TimeoutExpired) apart from "it launched, ran, and returned this code" (any
+#: other value). cross-repo/inbox/2026-08-10-doe-claude-em-exit3-residuals-
+#: are-both-yours-and-one-refutes.md, item 1.
+_RUN_RC_NOTE = {
+    124: ", timed out",
+    127: ", command not found -- the interpreter never launched",
+}
+
+
 def _run(cmd: Sequence[str], env: Optional[Dict[str, str]] = None) -> int:
     """subprocess.run wrapper: bounded timeout, stdin guard, no console flash (A2/A4)."""
     try:
@@ -845,7 +859,8 @@ class _Orchestrator:
         rc = _run(cmd, env=env)
         if rc != 0:
             print(
-                f"WARN: phase '{desc}' failed (exit {rc}) -- continuing (advisory, not fatal): {' '.join(cmd)}",
+                f"WARN: phase '{desc}' failed (exit {rc}{_RUN_RC_NOTE.get(rc, '')}) -- "
+                f"continuing (advisory, not fatal): {' '.join(cmd)}",
                 file=sys.stderr,
             )
             self.failed = True

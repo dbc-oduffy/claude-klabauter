@@ -15,7 +15,7 @@ from pathlib import Path
 import pytest
 
 from coordinator_core.ops import generator_provenance as gp
-from coordinator_core.ops.generator_provenance import FileWrites, WriteSite, discover_generators
+from coordinator_core.ops.generator_provenance import FileWrites, discover_generators
 from coordinator_core.ops import generator_scan_cache as cache
 from coordinator_core.ops.tests.test_generator_discovery_oracle import (
     REPO_ROOT,
@@ -27,10 +27,7 @@ def _sample_writes() -> FileWrites:
     return FileWrites(
         generates=[{"artifact": "a.txt", "stamp_key": "k", "sources": ["s.py"]}],
         mutates=None,
-        write_sites=[
-            WriteSite(target_literal="a.txt", via_tmp_handle=False, excluded=False),
-            WriteSite(target_literal=None, via_tmp_handle=True, excluded=False),
-        ],
+        write_sites=["a.txt", None],
         syntax_error=False,
     )
 
@@ -72,7 +69,7 @@ def test_load_invalid_json_returns_empty(tmp_path: Path) -> None:
 def test_load_truncated_body_returns_empty(tmp_path: Path) -> None:
     cache_path = cache._cache_path(tmp_path)
     cache_path.parent.mkdir(parents=True, exist_ok=True)
-    full = json.dumps({"schema": 1, "entries": {"x": {"mtime_ns": 1, "size": 1, "writes": {}}}})
+    full = json.dumps({"schema": 2, "entries": {"x": {"mtime_ns": 1, "size": 1, "writes": {}}}})
     cache_path.write_text(full[: len(full) // 2], encoding="utf-8")
     assert cache.load(tmp_path) == {}
 
@@ -80,7 +77,7 @@ def test_load_truncated_body_returns_empty(tmp_path: Path) -> None:
 def test_load_wrong_schema_returns_empty(tmp_path: Path) -> None:
     cache_path = cache._cache_path(tmp_path)
     cache_path.parent.mkdir(parents=True, exist_ok=True)
-    cache_path.write_text(json.dumps({"schema": 2, "entries": {}}), encoding="utf-8")
+    cache_path.write_text(json.dumps({"schema": 3, "entries": {}}), encoding="utf-8")
     assert cache.load(tmp_path) == {}
 
 
@@ -88,7 +85,7 @@ def test_load_malformed_entry_returns_empty(tmp_path: Path) -> None:
     cache_path = cache._cache_path(tmp_path)
     cache_path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
-        "schema": 1,
+        "schema": 2,
         "entries": {"x.py": {"mtime_ns": "not-an-int", "size": 1, "writes": {}}},
     }
     cache_path.write_text(json.dumps(payload), encoding="utf-8")
@@ -126,10 +123,7 @@ def test_file_writes_round_trip_with_list_of_dicts_generates(tmp_path: Path) -> 
             {"artifact": "b.txt", "stamp_key": "k2", "sources": []},
         ],
         mutates=["state/**/*.yaml"],
-        write_sites=[
-            WriteSite(target_literal="a.txt", via_tmp_handle=False, excluded=False),
-            WriteSite(target_literal=None, via_tmp_handle=False, excluded=True),
-        ],
+        write_sites=["a.txt", None],
         syntax_error=False,
     )
     round_tripped = cache.file_writes_from_json(cache.file_writes_to_json(writes))

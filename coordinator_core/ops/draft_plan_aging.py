@@ -137,7 +137,7 @@ LANDED_STATUS = "landed"
 
 # Checker-sidecar suffix denylist (report artifacts, not plans — see module
 # docstring). Kept as a tuple so it's greppable and extensible.
-SIDECAR_SUFFIXES = (".prior-art-check.md", ".review.md", ".docs-check.md", ".plan-coverage-check.md")
+SIDECAR_SUFFIXES = (".prior-art-check.md", ".review.md", ".docs-check.md", ".plan-coverage-check.md", ".plan-review-check.md")
 
 # Mechanical commit-subject denylist prefixes (anchored — always prefixes in
 # this repo's commit-message convention).

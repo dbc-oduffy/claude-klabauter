@@ -299,13 +299,46 @@ def test_stale_reading_is_reported_with_its_age_not_discarded():
     assert "measured 9" in text and "s ago" in text
 
 
-def _under_sentinel(tmp_path, monkeypatch, session_id: str) -> None:
+def _under_sentinel(tmp_path, monkeypatch, session_id: str, mode: str = "1") -> None:
     from coordinator_core.session import autonomous_sentinel
 
     sentinel = tmp_path / f"autonomous-{session_id}"
-    sentinel.write_text("1", encoding="utf-8")
+    sentinel.write_text(mode, encoding="utf-8")
     monkeypatch.setattr(autonomous_sentinel, "sentinel_path", lambda sid: sentinel)
     monkeypatch.setattr(pad, "sentinel_path", lambda sid: sentinel)
+
+
+class TestMiseContinuanceRedBand:
+    """cross-repo/archive/2026-08-03-...-mise-continuance-context-pressure-
+    text.md: the sentinel's `mode` field (mise-en-place | autonomous) was
+    written and never read -- every reader branched on mere presence, so a
+    mise-en-place session got the same 'informational, keep going' text as an
+    autonomous one, instead of a CONTINUANCE tail-then-handoff instruction.
+    """
+
+    def test_mise_en_place_red_band_names_the_tail_not_a_bare_handoff(
+        self, tmp_path, monkeypatch
+    ):
+        session_id = "session-mise-continuance"
+        _under_sentinel(tmp_path, monkeypatch, session_id, mode="mise-en-place")
+        _write_sidecar(session_id, 60)
+        text = _check(session_id)
+        assert "Phase 6" in text
+        assert "then" in text and "author the handoff" in text
+        # Not the generic bare-handoff nudge, and not the autonomous
+        # informational variant either -- mise gets its own text.
+        assert "This is the point to run /handoff" not in text
+        assert "INFORMATIONAL" not in text
+
+    def test_autonomous_mode_content_still_gets_the_informational_text(
+        self, tmp_path, monkeypatch
+    ):
+        session_id = "session-mise-not-continuance"
+        _under_sentinel(tmp_path, monkeypatch, session_id, mode="autonomous")
+        _write_sidecar(session_id, 60)
+        text = _check(session_id)
+        assert "INFORMATIONAL" in text
+        assert "Phase 6" not in text
 
 
 class TestAutonomousSentinelSuppressesTheRecommendation:

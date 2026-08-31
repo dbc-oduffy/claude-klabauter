@@ -1915,11 +1915,6 @@ def _record_claimant_identity_best_effort(
     name_resolved = bool(resolved_name)
     if resolved_name:
         fields.append(("claimed_by_name", resolved_name, anchor_field))
-    # `not name_resolved` still has work to do -- clearing a stale name -- so it
-    # is NOT an early return. Returning here on an empty `fields` is what let an
-    # unresolvable claimant leave a previous holder's name standing.
-    if not fields and name_resolved:
-        return
     try:
         repo_root = _git_common_dir(worktree)
         if repo_root is None:
@@ -1961,25 +1956,10 @@ def _record_claimant_identity_best_effort(
                 # unreachable. This arm handles the same state one layer over, where
                 # there is nothing to reconcile to.
                 #
-                # It is the same mismatch as the observed incident above -- one
-                # session's id under another's name -- reached by the other route:
-                # there the new claimant's name resolved and simply was not written;
-                # here it does not resolve at all, so the reconcile branch cannot
-                # cover it.
-                #
-                # Reported mechanism, NOT verified in this tree: the harness derives
-                # the name after session start (`nameSource: derived` with a
-                # `nameSince`), so a claim firing before the derivation lands resolves
-                # no name. Nothing in claude-klabauter parses those keys -- recorded as the
-                # likely population, not as a measurement.
-                #
-                # A second instance WAS filed claiming a nameless session stamped an
-                # uninvolved peer's name; `claude-klabauter-2d` RETRACTED it at
-                # `21765e2d16` (they had read `name` from
-                # `.git/coordinator-sessions/<sid>/meta.json`, which carries no
-                # `name` key on any box -- the backing registry is the harness's own
-                # `sessions/<pid>.json`, and the stamp had been correct). Recorded
-                # because this arm's rationale must not rest on a withdrawn instance.
+                # Incident history, retraction record, and the reported
+                # (unverified) derived-name-timing mechanism:
+                # `state/bug-backlog/2026-08-31-claim-handoff-takes-a-foreign-claim-and-drop-releases-nothing.yaml`,
+                # `state/bug-backlog/2026-08-31-the-session-meta-json-answers-name-with-b07c2bf5d06c.yaml`.
                 if read_fm_field(fm_text, "claimed_by_name") is not None:
                     fm_text = remove_fm_field(fm_text, "claimed_by_name")
             return rebuild(split, fm_text)

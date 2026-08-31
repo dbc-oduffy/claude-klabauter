@@ -310,6 +310,43 @@ def test_extract_section_stops_only_at_next_heading_not_blank_lines():
     assert mod._extract_section(text, "## Counters") == "line1\nline2"
 
 
+def test_extract_last_section_by_prefix_takes_the_newest_match():
+    text = (
+        "## Week of 2026-07-06\nold bullet\n"
+        "## Week of 2026-07-13\nnewer bullet\n"
+        "## Daily summaries backing this digest\nnot this\n"
+    )
+    assert mod._extract_last_section_by_prefix(text, "## Week of ") == "newer bullet"
+
+
+def test_derive_progress_reads_week_of_grammar_when_no_highlights_heading(tmp_path):
+    """Regression for the retired-heading defect (cross-repo/archive/
+    2026-08-28-doe-claude-em-exec-summary-highlights-reader-greps-a-retired-heading.md):
+    the pending-release writer moved to `## Week of <date>` sections with no
+    `## Highlights` heading anywhere in the file. Before the fix,
+    _extract_section("## Highlights") always returned "", so this prose was
+    invisible and _derive_progress fell through to the raw git-log fallback
+    every time — silently degrading the cockpit-facing Progress narrative.
+    """
+    repo_dir = tmp_path / "repo"
+    state_root = repo_dir / "state"
+    wc_archive = repo_dir / "archive" / "week-changelogs" / "2026-07-20"
+    wc_archive.mkdir(parents=True)
+    (state_root / "week-changelog").mkdir(parents=True)
+
+    (wc_archive / "2026-07-20-pending-release.md").write_text(
+        "# Pending Release — 2026-07-20\n\n"
+        "## Week of 2026-07-20\n- Did the thing.\n\n"
+        "## Week of 2026-07-27\n- Did the newer thing.\n\n"
+        "## Daily summaries backing this digest\n- 2026-07-27.md\n",
+        encoding="utf-8",
+    )
+
+    result = mod._derive_progress(str(state_root), str(repo_dir))
+    assert "Did the newer thing." in result
+    assert "Recent commits:" not in result
+
+
 def test_trim_trailing_blank():
     assert mod._trim_trailing_blank("a\nb\n\n\n") == "a\nb"
 

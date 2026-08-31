@@ -13,14 +13,15 @@ than silently no-op'd.
 Usage:
   append-integrator-dispositions.py --sidecar <path> \\
       [--applied F1,F2] [--escalated-disagree F4] [--escalated-ask F6,F9] \\
-      [--escalated-p0 F3] [--deferred F8] [--root <repo-root>] \
+      [--escalated-p0 F3] [--deferred F8] [--root <repo-root>] \\
       [--rationale-stdin | --rationale-file <path>]
 
-Rationale prose: prefer --rationale-stdin and pipe the prose in. --rationale-file
-takes a CALLER-CHOSEN path, which is shared state on a box running dozens of
-concurrent sessions: one reusing that path replaces this block's rationale with its
-own, silently and with a zero exit, leaving the structured buckets correct and the
-human-readable explanation belonging to a different review
+Rationale prose: prefer --rationale-stdin, or the equivalent --rationale-file -, and
+pipe the prose in. A --rationale-file naming a real path is CALLER-CHOSEN, and that
+path is shared state on a box running dozens of concurrent sessions: one reusing it
+replaces this block's rationale with its own, silently and with a zero exit, leaving
+the structured buckets correct and the human-readable explanation belonging to a
+different review
 (state/bug-backlog/2026-08-31-concurrent-sessions-collide-on-a-shared.yaml).
 
 Exit codes (parity with the ported module — coordinator_core/ops/append_integrator_dispositions.py):

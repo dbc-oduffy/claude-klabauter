@@ -10,7 +10,7 @@ Enforces the fixed schema documented in
 the current value and the measurement behind it), a three-key frontmatter
 block, an allowlisted heading set, and per-section shape regexes for
 Active workstreams / Pinboard / Auto-push health / Trust caveats / Wiki /
-Architecture atlas / Fast test / Audits & censuses, plus a
+Architecture atlas / Capabilities / Fast test / Audits & censuses, plus a
 filesystem-detector-regression guard (a `*.uproject` anywhere in the repo
 requires a first Trust-caveats line naming "Unreal Engine project detected").
 
@@ -107,6 +107,7 @@ ALLOWED_HEADINGS = (
     "Auto-push health",
     "Wiki",
     "Architecture atlas",
+    "Capabilities",
     "Fast test",
     "Audits & censuses",
     "Housekeeping",

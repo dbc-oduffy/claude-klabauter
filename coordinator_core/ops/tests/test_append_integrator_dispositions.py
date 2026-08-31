@@ -923,6 +923,29 @@ class TestCliEntrypoint:
         after = text.split("### Rationale", 1)[1]
         assert "the precedence read was right" in after
 
+    def test_cli_dash_rationale_file_reads_stdin(self, tmp_path, monkeypatch):
+        """`--rationale-file -` is the POSIX stdin convention, and a caller reached
+        for it and was refused before this existed. Refusing it pushes the caller
+        back onto a real temp path -- the hazard the stdin channel removes.
+        """
+        import io as _io
+
+        sidecar = _write_sidecar(
+            tmp_path, "sess-abc", "codereview-sliceA.md",
+            agent_type="coordinator:code-reviewer", body=_FINDINGS_BODY,
+        )
+        monkeypatch.setattr(mod.sys, "stdin", _io.StringIO("piped in through the dash."))
+        rc = mod.main([
+            "--sidecar", str(sidecar),
+            "--applied", "F1",
+            "--rationale-file", "-",
+            "--root", str(tmp_path),
+        ])
+        assert rc == 0
+        text = sidecar.read_text(encoding="utf-8")
+        assert "### Rationale" in text
+        assert "piped in through the dash" in text.split("### Rationale", 1)[1]
+
     def test_cli_refuses_both_rationale_channels_at_once(self, tmp_path, capsys):
         """Two sources for one field is a caller bug, not something to resolve by
         precedence -- silently picking one is how the wrong prose lands."""

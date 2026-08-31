@@ -504,6 +504,25 @@ def _check_context_pressure_sync(session_id: str, transcript_path: str) -> str:
     # budget this call site draws against.
     compaction_warnings_variant = resolve_mode("compaction_warnings", session_id)
 
+    # --- mise-en-place CONTINUANCE detection (content-level, not mere
+    # presence). `autonomous_run` above answers "does the sentinel exist",
+    # which is the right question for its OTHER consumers (e.g.
+    # nudge_em_code_dispatch's sentinel bypass is correct under both modes),
+    # but this RED-band text needs to tell "autonomous run, keep going" apart
+    # from "mise-en-place run, tail then handoff" — the sentinel's own
+    # `mode` field (mise-en-place | autonomous) already carries that
+    # distinction and was previously discarded here.
+    # cross-repo/archive/2026-08-03-doe-claude-em-mise-continuance-context-pressure-text.md
+    mise_continuance = False
+    if autonomous_run:
+        try:
+            mise_continuance = (
+                sentinel_path(session_id).read_text(encoding="utf-8").strip()
+                == "mise-en-place"
+            )
+        except Exception:
+            mise_continuance = False
+
     reading = read_usage(session_id, now=time.time())
     context_window_block = reading.context_window if reading is not None else None
 
@@ -581,6 +600,21 @@ def _check_context_pressure_sync(session_id: str, transcript_path: str) -> str:
         # delivers the exact nudge the PM switched the mode on to remove, at
         # the moment a long run is most likely to take it.
         # (Reported by doe-claude-41, observed firing twice in one session.)
+        if mise_continuance:
+            # CONTINUANCE terminal (docs/plans/2026-08-02-mise-completion-
+            # semantics.md, AC14/C8): name the tail explicitly rather than a
+            # bare "/handoff" nudge — the latter invites skipping the review
+            # loop, verification, and tracker sweep that a mise run still
+            # owes before its handoff.
+            return (
+                f"CONTEXT PRESSURE — HANDOFF NOW: ~{display_pct}% of window"
+                f" used{age_note}, measured from the harness's own"
+                f" context_window block. Mise-en-place: run the full Phase 6"
+                f" tail now (review loop to zero findings, end-of-run"
+                f" verification, tracker sweep, baton disposition), then"
+                f" author the handoff — compaction from here is involuntary"
+                f" and lossy."
+            )
         if autonomous_run or compaction_warnings_variant == "informational":
             # The mode clause is chosen by WHICH side selected this variant, not
             # by the variant itself. `autonomous_run` is the session's own

@@ -42,6 +42,33 @@ import coordinator_core.claim_state as claim_state_mod
 import coordinator_core.pickup_assemble as pa
 from coordinator_core.win_portability import no_console_creationflags
 
+_HANDOFF_SCHEMA_PATH = (
+    Path(__file__).resolve().parents[2]
+    / "frontmatter"
+    / "schemas"
+    / "handoff.schema.json"
+)
+
+
+def test_classify_does_not_gate_on_deployment_state_the_schema_never_required():
+    """Producer/verifier pin (cross-repo/archive/2026-08-18-market-
+    intelligence-em-lint-valid-handoff-classifies-ambiguous.md): `classify()`
+    must never require `deployment_state` for handoff routing while
+    `handoff.schema.json`'s `required` set still omits it — otherwise a
+    lint-valid handoff can silently strand as `ambiguous` again. If the
+    schema's `required` set ever grows to include `deployment_state`, this
+    assertion is the prompt to revisit `classify()`'s deliberate non-gate,
+    not something this test should silently start passing on stale grounds."""
+    import json
+
+    schema = json.loads(_HANDOFF_SCHEMA_PATH.read_text(encoding="utf-8"))
+    required = set(schema.get("required", []))
+    assert "deployment_state" not in required, (
+        "handoff.schema.json now requires deployment_state — "
+        "classify()'s deliberate non-gate on it (see its own docstring) "
+        "needs revisiting, not silent staleness"
+    )
+
 # Spawns a real external process; runs at cadence gates, not per-commit.
 # Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
 pytestmark = [
@@ -371,7 +398,13 @@ def test_classify_ledger_only_claim_with_dropped_deployment_state(tmp_path):
     assert classification == "handoff"
 
 
-def test_classify_no_ledger_claim_and_dropped_deployment_state_stays_ambiguous(tmp_path):
+def test_classify_no_deployment_state_and_no_ledger_claim_still_classifies_handoff(tmp_path):
+    """2026-08-31 fix (cross-repo/archive/2026-08-18-example-market-data-repo-em-
+    lint-valid-handoff-classifies-ambiguous.md): `deployment_state` is
+    absent from `handoff.schema.json`'s `required` set, so `classify()`
+    must not gate on it — a lint-valid handoff with neither a
+    `deployment_state` nor a ledger claim still classifies as `handoff`,
+    it does not strand as `ambiguous`."""
     repo = tmp_path / "repo"
     _init_repo(repo)
     path = _seed_handoff(repo, "h1.md", deployment_state=None)
@@ -380,7 +413,7 @@ def test_classify_no_ledger_claim_and_dropped_deployment_state_stays_ambiguous(t
     fm_text = "status: open\npredecessor: \"none\"\n"
     classification = pa.classify(path, fm_text, repo)
 
-    assert classification == "ambiguous"
+    assert classification == "handoff"
 
 
 # ---------------------------------------------------------------------------

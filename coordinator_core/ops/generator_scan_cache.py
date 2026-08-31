@@ -42,10 +42,10 @@ import json
 import os
 from pathlib import Path
 
-from coordinator_core.ops.generator_provenance import FileWrites, WriteSite
+from coordinator_core.ops.generator_provenance import FileWrites
 
 _CACHE_RELATIVE_PATH = ("state", "cache", "generator-scan-cache.json")
-_SCHEMA_VERSION = 1
+_SCHEMA_VERSION = 2
 
 
 def _cache_path(repo_root: Path) -> Path:
@@ -60,29 +60,14 @@ def _cache_path(repo_root: Path) -> Path:
     return path
 
 
-def _write_site_to_json(site: WriteSite) -> dict:
-    return {
-        "target_literal": site.target_literal,
-        "via_tmp_handle": site.via_tmp_handle,
-        "excluded": site.excluded,
-    }
+def _write_site_to_json(target_literal: str | None) -> str | None:
+    return target_literal
 
 
-def _write_site_from_json(data: object) -> WriteSite:
-    if not isinstance(data, dict):
-        raise ValueError("write site entry is not a mapping")
-    target_literal = data["target_literal"]
-    if target_literal is not None and not isinstance(target_literal, str):
-        raise ValueError("target_literal must be a string or null")
-    via_tmp_handle = data["via_tmp_handle"]
-    excluded = data["excluded"]
-    if not isinstance(via_tmp_handle, bool) or not isinstance(excluded, bool):
-        raise ValueError("via_tmp_handle/excluded must be booleans")
-    return WriteSite(
-        target_literal=target_literal,
-        via_tmp_handle=via_tmp_handle,
-        excluded=excluded,
-    )
+def _write_site_from_json(data: object) -> str | None:
+    if data is not None and not isinstance(data, str):
+        raise ValueError("write site entry must be a string or null")
+    return data
 
 
 def file_writes_to_json(writes: FileWrites) -> dict:
@@ -90,7 +75,10 @@ def file_writes_to_json(writes: FileWrites) -> dict:
 
     `generates`/`mutates` are already `json`-safe Python values (the raw
     `ast.literal_eval` output a caller produced upstream -- a list, a
-    string sentinel, a dict, or None) and are stored as-is.
+    string sentinel, a dict, or None) and are stored as-is. `write_sites`
+    entries are already JSON-able (`str | None`) -- a site R1/R2/R5/R7
+    excludes never reaches `FileWrites.write_sites` in the first place, so
+    there is nothing left to filter here.
     """
     return {
         "generates": writes.generates,
@@ -211,16 +199,3 @@ def save(repo_root: Path, entries: dict) -> None:
                 tmp_path.unlink()
         except OSError:
             pass
-
-
-def rel_key(repo_root: Path, file_path: Path) -> str:
-    """POSIX-relative key for *file_path* under *repo_root*, for use as an
-    `entries` mapping key.
-
-    `as_posix()` on the platform's own `Path` already yields forward slashes on
-    every host, so a cache written on Windows keys identically to one written on
-    macOS. Routing through `PureWindowsPath` to force that would be wrong rather
-    than merely redundant: on a POSIX host it reinterprets a backslash inside a
-    legal filename as a separator.
-    """
-    return file_path.relative_to(repo_root).as_posix()

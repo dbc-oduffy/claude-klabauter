@@ -9395,6 +9395,15 @@ def check_git_commit_safe_commit_advise(
     """
     if not cmd:
         return None
+    # Review: overengineering-reviewer (nitpick) -- the fail-open reasons
+    # buffer used to be cleared a second time mid-cascade (just before the
+    # index-probe predicates), which meant a reader had to reconstruct
+    # which of two clearing sites ran, and in what order relative to the
+    # probes, to know what a given advisory's note could contain. One set
+    # point (here, at cascade entry) and one drain point
+    # (`_take_probe_fail_open_reasons`, at the fall-through advisory) now
+    # own the whole lifecycle between them.
+    _clear_probe_fail_open_reasons()
     cmd = _crlf_strip(cmd)
     # Dialect-aware Start-Process expansion (C8,
     # pln-the-destructive-core-learns-the-she): this entry's `matchers`
@@ -9585,7 +9594,6 @@ def check_git_commit_safe_commit_advise(
                 )
                 + ("\n\n%s" % _commit_bare_note if _commit_bare_note else "")
             )
-        _clear_probe_fail_open_reasons()
         if _bt_compound_add_bare_commit(seg_tokens, segments, seg_index):
             return _deny(
                 (

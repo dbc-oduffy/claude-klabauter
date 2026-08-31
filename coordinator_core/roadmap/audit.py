@@ -746,7 +746,7 @@ def _audit1_stub_coverage(
     # DR-172 a succession deliberately leaves two records sharing one `stub_id`
     # — the archived predecessor and the live successor — permanently. Summing
     # record counts therefore over-counts by one per succession and fails this
-    # audit forever after the first one, blocking Phase 3 dispatch on a roadmap
+    # audit forever after the first one, blocking Phase 2 close on a roadmap
     # whose graph is sound. Count distinct stub_ids instead.
     # `stub_id` lives under the record's `frontmatter` mapping, not at top level —
     # same access path `_build_stub_descriptors` uses.
@@ -1121,7 +1121,7 @@ def _sprint_scoped_fail_summary(
     r.stdout_lines.append("")
     r.stdout_lines.append(
         f"audit-roadmap: one or more checks FAILED for roadmap_id={run_id} "
-        f"sprint={sprint_id} — Phase 3 dispatch is blocked"
+        f"sprint={sprint_id} — Phase 2 close is blocked"
     )
     return r.exit_code, r.stdout_lines, r.stderr_lines
 
@@ -1201,7 +1201,7 @@ def _run_audit_sprint_scoped(
     else:
         r.stdout_lines.append(
             f"audit-roadmap: one or more checks FAILED for roadmap_id={run_id} "
-            f"sprint={sprint_id} — Phase 3 dispatch is blocked"
+            f"sprint={sprint_id} — Phase 2 close is blocked"
         )
 
     return r.exit_code, r.stdout_lines, r.stderr_lines
@@ -1240,7 +1240,7 @@ def run_audit(
     else:
         r.stdout_lines.append(
             f"audit-roadmap: one or more checks FAILED for roadmap_id={run_id} — "
-            f"Phase 3 dispatch is blocked"
+            f"Phase 2 close is blocked"
         )
 
     return r.exit_code, r.stdout_lines, r.stderr_lines

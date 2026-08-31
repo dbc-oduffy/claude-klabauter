@@ -138,7 +138,7 @@
     },
     "kind": {
       "type": "string",
-      "description": "Sender-declared shape of the memo. When present must be one of: ask | consult | fyi | proposal. Absent is valid (reader applies 'ask' default). Validated via a cross-field rule (schema_validate._memo_cf_kind_enum) rather than a schema enum so the grandfather cutoff applies consistently — required at SEND time only (DEC-1: memo_send.py's own gate, not this schema's `required` array; no retroactive invalidation of the existing corpus)."
+      "description": "Sender-declared shape of the memo. When present must be one of: ask | consult | fyi | proposal | bug. Absent is valid (reader applies 'ask' default). Validated via a cross-field rule (schema_validate._memo_cf_kind_enum) rather than a schema enum so the grandfather cutoff applies consistently — required at SEND time only (DEC-1: memo_send.py's own gate, not this schema's `required` array; no retroactive invalidation of the existing corpus)."
     },
     "summary": {
       "type": "string",

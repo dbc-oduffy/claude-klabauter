@@ -454,6 +454,7 @@ def _write_state_stub(
     wave,
     gate_dependency=None,
     kind: str = "spinoff-roadmap",
+    blocking_notes=None,
 ) -> None:
     lines = [
         "---",
@@ -471,6 +472,8 @@ def _write_state_stub(
         lines.append(f"wave: {wave}")
     if gate_dependency:
         lines.append(f'gate_dependency: "{gate_dependency}"')
+    if blocking_notes:
+        lines.append(f'blocking_notes: "{blocking_notes}"')
     lines.append("---")
     lines.append("")
     path.write_text("\n".join(lines), encoding="utf-8")
@@ -518,6 +521,31 @@ def test_state_mode_prints_readiness_and_gate_dependency(tmp_path, monkeypatch, 
     assert "awaiting_gate" in out
     assert "peer-team-ask:foo" in out
     assert "1 ready_to_fire, 1 awaiting_gate" in out
+
+
+def test_state_mode_falls_back_to_blocking_notes_when_gate_dependency_absent(
+    tmp_path, monkeypatch, capsys
+):
+    handoffs = tmp_path / "state" / "handoffs"
+    handoffs.mkdir(parents=True)
+    _write_state_stub(
+        handoffs / "stub-c-1.md",
+        "rm-state",
+        "stub-c-1",
+        "awaiting_gate",
+        1,
+        1,
+        blocking_notes="waiting on DoE schema ruling",
+    )
+
+    import coordinator_core.roadmap.number_stubs as mod
+
+    monkeypatch.setattr(mod, "resolve_root", lambda: str(tmp_path))
+
+    rc = run_state_mode("rm-state")
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "waiting on DoE schema ruling" in out
 
 
 def test_state_mode_canonical_kind_roadmap_baton_is_found(tmp_path, monkeypatch, capsys):

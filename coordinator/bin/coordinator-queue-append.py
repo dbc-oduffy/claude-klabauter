@@ -1310,7 +1310,7 @@ Examples:
       --schema debt-backlog \\
       --title "Fan-out overlap pass verifies interface presence, not correctness" \\
       --body "The overlap pass verifies a pinned interface file exists..." \\
-      --source "daily-review/the Staff Engineer/2026-06-15" \\
+      --source "daily-review/staff-eng/2026-06-15" \\
       --status open \\
       --risk "Wrong pin causes divergent executor outputs." \\
       --proposed-action "Add interface-pin verification gate." \\

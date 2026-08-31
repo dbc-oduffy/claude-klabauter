@@ -27,14 +27,12 @@ This module pins:
   6. Re-claiming RECONCILES `claimed_by_name` to the id beside it, and an
      unresolvable name CLEARS a stale one rather than leaving it standing.
      REVERSED 2026-08-31 from "never overwrites — the first claimant's identity
-     is the forensic record". That rule could not hold: the claim transition
+     is the forensic record" — that rule could not hold: the claim transition
      overwrites `claimed_by` in the same operation, so leaving the name behind
-     manufactured a record that never existed — one session's id under another
-     session's name. Observed twice on 2026-08-31, once for 45 minutes across
-     seven interleaved commits by two sessions who could not see each other from
-     the artifact, and once carrying a live uninvolved peer's name that a
-     reconciling session would have messaged. `human_claimant` keeps
-     insert-when-absent: the operating human does not change when the claim does.
+     manufactured a record that never existed. Incident and retraction record:
+     `state/bug-backlog/2026-08-31-claim-handoff-takes-a-foreign-claim-and-drop-releases-nothing.yaml`.
+     `human_claimant` keeps insert-when-absent: the operating human does not
+     change when the claim does.
   6b. `cs_claim_handoff` REFUSES a baton held by a different LIVE session, fails
      open on an indeterminate liveness read, and does not refuse a DEAD holder
      (takeover of a dead claim is the ordinary recovery path).
@@ -207,21 +205,11 @@ class TestHandoffClaimStampsIdentity:
     def test_a_stale_name_is_reconciled_to_the_id_beside_it(self, tmp_path, monkeypatch):
         """`claimed_by_name` must agree with `claimed_by`, so a re-claim rewrites it.
 
-        REVERSES `test_existing_identity_is_never_overwritten` (2026-08-30), which
-        pinned the opposite on the reasoning that "the FIRST claimant's identity is
-        the forensic record". That intent cannot hold: the claim transition
-        overwrites `claimed_by` unconditionally in the SAME operation, so leaving
-        the name behind does not preserve a forensic record — it manufactures a
-        record that never existed, one session's id under another session's name.
-        The field's own docstring says it describes WHO HOLDS THE BATON, and the
-        abandoned-claim orientation signal reads it as the current holder.
-
-        Not a hypothetical: observed twice on 2026-08-31. Once for 45 minutes
-        across seven interleaved commits by two sessions, neither able to see the
-        other from the artifact; once carrying a live, wholly uninvolved peer's
-        name, which a reconciling session would have messaged.
+        REVERSES `test_existing_identity_is_never_overwritten` (2026-08-30): the
+        claim transition overwrites `claimed_by` unconditionally in the SAME
+        operation, so leaving the name behind manufactures a record that never
+        existed. Incident record:
         `state/bug-backlog/2026-08-31-claim-handoff-takes-a-foreign-claim-and-drop-releases-nothing.yaml`.
-
         The PM ruling of 2026-08-30 established the FIELD; never-overwrite was an
         implementation choice made alongside it, and is what is reversed here.
         """
@@ -252,17 +240,9 @@ class TestHandoffClaimStampsIdentity:
 
         MODELLED, not merely reasoned. A record resolving with no name is a
         first-class state in this plane: `session/reachability.py :: _resolve_one`
-        returns None on `not record.name` and its docstring names the degradation,
-        so that branch would be dead code if the state were unreachable. This is
-        the observed mismatch reached by the other route — there the claimant's
-        name resolved and was not written, here it does not resolve at all, and
-        the reconcile branch cannot cover it because there is nothing to reconcile
-        to.
-
-        A filed second instance that would have made this arm OBSERVED was
-        RETRACTED by `claude-klabauter-2d` at `21765e2d16` (they had read `name`
-        from `.git/coordinator-sessions/<sid>/meta.json`, which carries no `name`
-        key on any box). This test does not rest on it.
+        returns None on `not record.name`, so that branch would be dead code if
+        the state were unreachable. Incident and retraction record:
+        `state/bug-backlog/2026-08-31-the-session-meta-json-answers-name-with-b07c2bf5d06c.yaml`.
         """
         repo = tmp_path / "repo"
         _init_repo(repo)

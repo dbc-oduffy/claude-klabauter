@@ -41,7 +41,7 @@ from typing import List
 from coordinator_core.launchable import resolve_launchable
 
 _PROG = "verify-no-powershell-flash.sh"
-_CANONICAL_GUARD_NAME = "verify-no-console-flash.sh"
+_CANONICAL_GUARD_NAME = "verify-no-console-flash.py"
 
 
 def main(argv: List[str]) -> int:

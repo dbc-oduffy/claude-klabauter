@@ -1545,9 +1545,27 @@ def collect(cadence: str, *, run_id: Optional[str] = None) -> ReaderResult:
     `run_id` is the caller's `--run-id`, threaded uniformly to all five
     readers by the `__init__.py` seam and self-gated here exactly as
     `cadence` is: this reader consumes it, the other four ignore it, and the
-    seam never learns which is which. Only the Phase-6 tail surface and the
-    baton-unification surface read it; the other two sub-readers below are
-    run-invariant."""
+    seam never learns which is which. Only the baton-unification surface
+    reads it; the other three sub-readers below are run-invariant.
+
+    `_read_phase_6_review_scale` is DELIBERATELY NOT called here. DoE-claude
+    `ecbb6b78607fa3df61dde22559417d686e8ec3ea` ("doctrine(mise): review
+    belongs to the capping ceremony, not the run") retired `/mise-en-place`'s
+    own review gate — mise now freezes its run diff and routes to
+    `/workstream-complete`'s chain-scoped review, which decides its own
+    scale over the chain diff, a range that strictly contains this run's.
+    Nothing downstream reads `d-mise-phase-6-review-scale` any more (see
+    `cross-repo/archive/2026-08-06-doe-claude-em-mise-review-ruling-orphans-
+    readers-mise-leg.md`). The function itself, and the shared
+    `decide_review_scale` it calls, are NOT orphaned -- `workstream_complete`
+    still calls the latter, and this reader's own pinned tests still exercise
+    the former directly -- only this call site, wiring an unused directive
+    into mise's own Phase-6 output, is inert. Left in the module rather than
+    deleted: `decide_review_scale`'s row-4 metrics and this reader's
+    range/baton-count derivation are exactly what a future chain-scoped
+    caller would need, and the plan that named this leg
+    (`pln-mise-phase-6-review-scale-is-c-82f708`, chunk C1) still exists on
+    disk as the record of why it was built."""
     if cadence != CADENCE:
         return ReaderResult()
 
@@ -1555,7 +1573,6 @@ def collect(cadence: str, *, run_id: Optional[str] = None) -> ReaderResult:
         _read_backlog_readiness(),
         _read_executor_dispatch_template(),
         _read_haiku_verifier_dispatch(),
-        _read_phase_6_review_scale(run_id),
         _read_baton_unification(run_id),
     ]
 

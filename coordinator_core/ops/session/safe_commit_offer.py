@@ -1714,6 +1714,39 @@ async def _commit_group(
     }
 
 
+def _empty_commit_offer_report(
+    session_id: str,
+    excluded: List[str],
+    *,
+    status: str,
+    detail: str,
+) -> CommitOfferReport:
+    """The shared shape of a `CommitOfferReport` that did no committing at
+    all — every list/mapping field empty, only `outcome` distinguishing the
+    unresolved-root fail-closed exit from the ordinary `empty` outcome.
+    Single builder so a future key lands on both exits instead of drifting
+    the first time one of them is edited and the other is not."""
+    return {
+        "session_id": session_id,
+        "groups": [],
+        "excluded": excluded,
+        "failed_groups": [],
+        "dropped_groups": [],
+        "residue": OrderedDict(),
+        "reconciliation": {
+            "reconciled": False,
+            "claimed_absent": [],
+            "unclaimed": [],
+        },
+        "outcome": {
+            "status": status,
+            "detail": detail,
+            "committed_paths": [],
+            "conflicted_paths": [],
+        },
+    }
+
+
 async def commit_session_offer_async(
     session_id: str,
     cwd: Optional[str] = None,
@@ -1885,25 +1918,18 @@ async def commit_session_offer_async(
             "declared path would classify as deleted against an unresolved "
             "root. Nothing was committed." % (cwd or "<no cwd>")
         )
-        return {
-            "session_id": session_id,
-            "groups": [],
-            "excluded": offer["excluded"],
-            "failed_groups": [],
-            "dropped_groups": [],
-            "residue": OrderedDict(),
-            "reconciliation": {
-                "reconciled": False,
-                "claimed_absent": [],
-                "unclaimed": [],
-            },
-            "outcome": {
-                "status": "skipped_unresolved_root",
-                "detail": detail,
-                "committed_paths": [],
-                "conflicted_paths": [],
-            },
-        }
+        # Review: overengineering-reviewer (minor) — this fail-closed exit
+        # used to hand-assemble the full report literal a second time,
+        # independently of the normal-exit construction below; the two would
+        # drift the first time a key was added to one and not the other.
+        # `_empty_commit_offer_report` is now the single builder for the
+        # empty shape both this exit and the normal `empty` outcome share.
+        return _empty_commit_offer_report(
+            session_id,
+            offer["excluded"],
+            status="skipped_unresolved_root",
+            detail=detail,
+        )
     worktree_root = resolved_root
     group_results = [
         await _commit_group(worktree_root, g, session_id) for g in resolved_groups

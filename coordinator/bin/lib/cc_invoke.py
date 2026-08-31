@@ -2688,11 +2688,31 @@ def mutation_refusal_message(op: str, result: Any, *, op_stderr: str = "") -> st
         detail_parts.append(f"failed={failed_count}")
     elif failed_truthy:
         detail_parts.append(f"failed={failed!r} (non-list shape)")
+    else:
+        # A composite result (e.g. sweep-boot's) carries no top-level `failed`
+        # at all — its failures live one level down, in per-family sub-buckets
+        # like result["shipped_handoffs"]["failed"] / result["sizings"]["failed"].
+        # Without this walk, `failed_is_list=False, failed_truthy=False` left
+        # detail_parts with nothing but exit_code/error, so a composite refusal
+        # reported zero detail about which family actually failed.
+        family_failed_parts = []
+        for family, sub in result.items():
+            if isinstance(sub, dict):
+                sub_failed = sub.get("failed")
+                if isinstance(sub_failed, list) and sub_failed:
+                    family_failed_parts.append(f"{family}.failed={len(sub_failed)}")
+        if family_failed_parts:
+            detail_parts.append(f"failed=0 (see {', '.join(family_failed_parts)})")
     if error_text_available:
         detail_parts.append(f"error={error_field!r}")
     message = f"route_mutation: op={op!r} refused ({', '.join(detail_parts)})"
     if op_stderr:
-        message += f"\n  op stderr: {op_stderr}"
+        # _stderr_sink accumulates ALL captured stderr from the child process
+        # across every internal leg/family, regardless of which leg produced
+        # it or whether that leg succeeded — a succeeding leg's own stderr
+        # output lands here just as readily as the refusing leg's. Label it
+        # as such rather than implying it explains the refusal.
+        message += f"\n  child stderr (may include non-fatal/succeeding-leg output): {op_stderr}"
     return message
 
 

@@ -743,6 +743,11 @@ def _add_task(plan_path: str, task: dict, worktree: Path, repo_root: Path) -> di
         # frontmatter parse.
         plan_fm = parse_frontmatter(old_text).get("frontmatter")
         plan_created = plan_fm.get("created") if isinstance(plan_fm, dict) else None
+        # governed threaded into validation (2026-08-31 fix, cross-repo/archive/
+        # 2026-08-13-doe-claude-em-plan-tasks-mutate-governed-flag-asymmetry.md):
+        # mirrors `resolve`'s own resolution from the same frontmatter parse, so
+        # add-task and resolve agree on row validity for the same governed plan.
+        governed = is_governed_plan(plan_fm) if isinstance(plan_fm, dict) else False
 
         if result.status is LocateStatus.ABSENT:
             rows: list = []
@@ -752,7 +757,7 @@ def _add_task(plan_path: str, task: dict, worktree: Path, repo_root: Path) -> di
             # instead of validating `task` alone here (F3).
             try:
                 untouched_invalid = _validate_all(
-                    new_rows, touched_ids={task["id"]}, plan_created=plan_created,
+                    new_rows, governed=governed, touched_ids={task["id"]}, plan_created=plan_created,
                 )
             except MutateAbort as exc:
                 raise MutateAbort(f"add-task: {exc.args[0] if exc.args else exc}") from exc
@@ -776,7 +781,7 @@ def _add_task(plan_path: str, task: dict, worktree: Path, repo_root: Path) -> di
         new_rows = rows + [task]
         try:
             untouched_invalid = _validate_all(
-                new_rows, touched_ids={task["id"]}, plan_created=plan_created,
+                new_rows, governed=governed, touched_ids={task["id"]}, plan_created=plan_created,
             )
         except MutateAbort as exc:
             raise MutateAbort(f"add-task: {exc.args[0] if exc.args else exc}") from exc
@@ -874,6 +879,11 @@ def _stamp(plan_path: str, updates: list, worktree: Path, repo_root: Path) -> di
         # rule (2026-08-19 fix) — see _add_task's identical resolution.
         plan_fm = parse_frontmatter(old_text).get("frontmatter")
         plan_created = plan_fm.get("created") if isinstance(plan_fm, dict) else None
+        # governed threaded into validation (2026-08-31 fix, cross-repo/archive/
+        # 2026-08-13-doe-claude-em-plan-tasks-mutate-governed-flag-asymmetry.md):
+        # mirrors `resolve`'s own resolution from the same frontmatter parse, so
+        # stamp and resolve agree on row validity for the same governed plan.
+        governed = is_governed_plan(plan_fm) if isinstance(plan_fm, dict) else False
 
         rows = _parse_rows_or_abort(result.body, "stamp")
 
@@ -909,7 +919,7 @@ def _stamp(plan_path: str, updates: list, worktree: Path, repo_root: Path) -> di
         # stamp must not veto the batch — see _validate_all's own docstring.
         try:
             untouched_invalid = _validate_all(
-                rows, touched_ids=set(stamped_ids), plan_created=plan_created,
+                rows, governed=governed, touched_ids=set(stamped_ids), plan_created=plan_created,
             )
         except MutateAbort as exc:
             raise MutateAbort(f"stamp: {exc.args[0] if exc.args else exc}") from exc

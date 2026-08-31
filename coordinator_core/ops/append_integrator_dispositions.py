@@ -683,10 +683,10 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         "--rationale-file",
         default=None,
         help=(
-            "Path to a file whose content becomes the block's prose ### Rationale section. "
-            "Prefer --rationale-stdin — a caller-chosen path is shared state, and a "
-            "concurrent session that reuses it replaces this rationale with its own, "
-            "silently and with a correct exit code."
+            "Path to a file whose content becomes the block's prose ### Rationale section, "
+            "or \"-\" to read stdin (same as --rationale-stdin). Prefer stdin — a "
+            "caller-chosen path is shared state, and a concurrent session that reuses it "
+            "replaces this rationale with its own, silently and with a correct exit code."
         ),
     )
     parser.add_argument(
@@ -711,17 +711,22 @@ def main(argv: Optional[List[str]] = None) -> int:
     }
 
     rationale: Optional[str] = None
-    if args.rationale_stdin and args.rationale_file:
+    if args.rationale_stdin and args.rationale_file and args.rationale_file != "-":
         print(
             "append-integrator-dispositions: --rationale-stdin and --rationale-file are "
             "mutually exclusive; pass one.",
             file=sys.stderr,
         )
         return 2
-    if args.rationale_stdin:
+    if args.rationale_stdin or args.rationale_file == "-":
         # No path, so nothing for a concurrent session to clobber -- the whole reason
         # this channel exists (see --rationale-file's help, and
         # state/bug-backlog/2026-08-31-concurrent-sessions-collide-on-a-shared.yaml).
+        #
+        # `--rationale-file -` is accepted as the same thing: a caller reaching for the
+        # POSIX stdin convention has understood the contract, and refusing it would
+        # push them back onto a real temp path -- the exact hazard this channel exists
+        # to remove. A caller who genuinely means a file named "-" can write "./-".
         rationale = sys.stdin.read()
     elif args.rationale_file:
         try:

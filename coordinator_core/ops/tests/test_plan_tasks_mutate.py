@@ -1105,6 +1105,75 @@ def test_resolve_governed_admits_on_approved_grouping(tmp_path):
     assert "disposition: spun_off" in plan.read_text(encoding="utf-8")
 
 
+def test_add_task_governed_admits_row_without_pm_approved(tmp_path):
+    """add-task must resolve `governed` from the same plan frontmatter
+    `resolve` does, so a governed plan's rows are validated against the
+    governed schema (pm_approved not required) rather than the legacy one.
+
+    Regression for cross-repo/archive/2026-08-13-doe-claude-em-plan-tasks-
+    mutate-governed-flag-asymmetry.md: prior to the fix, add-task always
+    validated with governed=False, so a backlogged/wont_do row with no
+    pm_approved field failed the legacy schema's required-field check on a
+    plan `resolve` would have accepted."""
+    repo = _make_git_repo(tmp_path)
+    plan = _seed_plan(repo, "add-task-governed-ok.md", _governed_plan())
+
+    result = _run(_handler(
+        {
+            "verb": "add-task",
+            "plan_path": str(plan),
+            "task": {
+                "id": "C2",
+                "title": "Second chunk",
+                "change_kind": "script-edit",
+                "surface": "some/other.py",
+                "queue_scope": "project",
+                "deferred": False,
+                "body": "Do the second thing.\n",
+                "disposition": "backlogged",
+                "disposition_ref": "state/backlog/example.yaml",
+                "disposition_detail": "deferred by the same PM ruling",
+                "case_against": "deferred by the same PM ruling",
+            },
+        },
+        repo_root=repo / ".git",
+    ))
+
+    assert result["exit_code"] == 0, result
+    assert "id: C2" in plan.read_text(encoding="utf-8")
+
+
+def test_stamp_governed_uses_governed_schema(tmp_path):
+    """stamp must resolve `governed` the same way add-task/resolve do —
+    stamping a non-reserved field on a governed-plan row that already
+    carries `disposition: backlogged` (and no pm_approved) must not be
+    revalidated against the legacy pm_approved-required schema.
+
+    Regression for cross-repo/archive/2026-08-13-doe-claude-em-plan-tasks-
+    mutate-governed-flag-asymmetry.md."""
+    repo = _make_git_repo(tmp_path)
+    plan_text = _governed_plan().replace(
+        "  body: |\n    Do the first thing.\n",
+        "  body: |\n    Do the first thing.\n  disposition: backlogged\n"
+        "  disposition_ref: state/backlog/example.yaml\n"
+        "  disposition_detail: deferred by the same PM ruling\n"
+        "  case_against: deferred by the same PM ruling\n",
+    )
+    plan = _seed_plan(repo, "stamp-governed-ok.md", plan_text)
+
+    result = _run(_handler(
+        {
+            "verb": "stamp",
+            "plan_path": str(plan),
+            "updates": [{"id": "C1", "title": "First chunk (renamed)"}],
+        },
+        repo_root=repo / ".git",
+    ))
+
+    assert result["exit_code"] == 0, result
+    assert "title: First chunk (renamed)" in plan.read_text(encoding="utf-8")
+
+
 def test_resolve_governed_refuses_pending_grouping(tmp_path):
     repo = _make_git_repo(tmp_path)
     plan = _seed_plan(repo, "resolve-governed-pending.md", _governed_plan(status="pending"))

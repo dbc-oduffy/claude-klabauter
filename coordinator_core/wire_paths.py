@@ -21,7 +21,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-__all__ = ["rel_id"]
+__all__ = ["rel_id", "plans_dir"]
 
 
 def rel_id(path: Path, root: Path) -> str:
@@ -47,3 +47,20 @@ def rel_id(path: Path, root: Path) -> str:
     callers that must tolerate that classify the item themselves.
     """
     return path.relative_to(root).as_posix()
+
+
+def plans_dir(root: Path) -> Path:
+    """Return the single fleet-wide plans directory for ``root``:
+    ``<repo-root>/docs/plans/``.
+
+    Emitter over an existing constant, not a co-design (cross-repo/archive/
+    2026-08-08-doe-claude-em-plans-path-emitter-one-home.md): the path is
+    not configurable — no ``plans_dir``/``plan_home``/``plans_root`` key
+    exists anywhere in this tree, and ``coordinator/docs/plans/`` (the one
+    historical second home) was retired fleet-wide (96191e335fd8). The one
+    thing that varies is which repo root, which callers already resolve
+    before calling this. Callers should use this instead of composing
+    ``root / "docs" / "plans"`` inline, so the two planes cannot disagree
+    about where plans live.
+    """
+    return root / "docs" / "plans"

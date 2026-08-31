@@ -2084,7 +2084,7 @@ _OUTBOX_REQUIRED_FIELDS = ("title", "from", "to", "created", "status", "delivery
 # (validKinds) — the receiver-side cross-field rule. Checked here too so a
 # malformed kind fails loud on the SENDER side, before delivery, instead of
 # jamming the receiver's lifecycle wrappers at stamp time.
-_VALID_KINDS = ("ask", "consult", "fyi", "proposal")
+_VALID_KINDS = ("ask", "consult", "fyi", "proposal", "bug")
 
 # The kinds that assert a premise about the RECEIVER's tree state, and so earn
 # the premise-check advisory. `fyi`/`consult` are deliberately excluded: they
@@ -3113,6 +3113,10 @@ def _cmd_send(args: argparse.Namespace) -> int:
     receiver_side_path = acted_item.get("id")
     if receiver_side_path:
         print(f"Receiver-side: {os.path.abspath(receiver_side_path)}")
+        print(
+            "That commit is the channel, not a cross-repo write grant — it "
+            "touches cross-repo/ only."
+        )
     if acted_item.get("sender_unattributed"):
         # Not a failure: the memo IS delivered. But it carries no sender, so
         # the receiver cannot reply to it by message and the only route back
@@ -3525,7 +3529,7 @@ def _build_combined_parser(for_help: bool = False) -> argparse.ArgumentParser:
     # REQUIRED, matching `send`'s own gate on the same field: a kindless
     # draft is an artifact this CLI's own send verb refuses. See
     # memo_draft.py::_validate_draft_params for the full note.
-    draft_p.add_argument("--kind", choices=list(_VALID_KINDS), required=True, help="REQUIRED. Memo kind (ask | consult | fyi | proposal)")
+    draft_p.add_argument("--kind", choices=list(_VALID_KINDS), required=True, help="REQUIRED. Memo kind (ask | consult | fyi | proposal | bug)")
     draft_p.add_argument(
         "--in-reply-to", metavar="MEMO", default=None,
         help="OPTIONAL. Basename (or path — normalized to basename) of the "

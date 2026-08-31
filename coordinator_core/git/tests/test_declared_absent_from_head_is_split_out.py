@@ -19,6 +19,14 @@ refusal behaviour.
 Fixture style mirrors `test_zero_delta_commit_is_refused.py` /
 `test_phantom_deletion_is_refused.py`: a throwaway `mkdtemp` repo per test,
 real git for the seed, `commit_paths` for everything under test.
+
+# Review: overengineering-reviewer (minor) -- this module overlapped
+# `coordinator_core/ops/ceremony/tests/test_commit_v2_splits_the_skipped_warning.py`,
+# which already pins the observable warning-split facts end-to-end through
+# `_handler`, at a cost of ~55 real-git spawns across both files for one
+# warning-string split. Trimmed to the single test here that pins a fact the
+# ceremony-layer tests cannot see: that the refusal predicate's `no_delta`
+# membership was deliberately not narrowed when the field was split out.
 """
 
 import subprocess
@@ -57,39 +65,6 @@ def _head(repo):
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_a_deletion_head_never_had_is_named_on_both_tuples(repo):
-    # `ghost.txt` is in neither HEAD nor the worktree -- exactly what an
-    # untracked new file becomes once the pathspec split forwards it as a
-    # deletion. It must be named as SKIPPED, and it must still count toward
-    # `no_delta` so the refusal predicate is unchanged.
-    (repo / "seed.txt").write_text("moved\n", encoding="utf-8", newline="\n")
-
-    outcome = gcommit.commit_paths(
-        repo, ["seed.txt"], "one real change", deleted_paths=["ghost.txt"]
-    )
-
-    assert outcome.declared_absent_from_head == ("ghost.txt",)
-    assert "ghost.txt" in outcome.no_delta
-    assert "seed.txt" not in outcome.no_delta
-    assert _head(repo) == outcome.sha
-
-
-@pytest.mark.spawns_process
-@pytest.mark.cadence
-def test_a_path_matching_head_is_no_delta_but_not_declared_absent(repo):
-    # The benign half: `held.txt` is tracked, unmodified, and genuinely owed
-    # nothing. It must NOT be swept into the SKIPPED bucket -- that would
-    # replace one false sentence with another.
-    (repo / "seed.txt").write_text("moved\n", encoding="utf-8", newline="\n")
-
-    outcome = gcommit.commit_paths(repo, ["seed.txt", "held.txt"], "one real change")
-
-    assert outcome.no_delta == ("held.txt",)
-    assert outcome.declared_absent_from_head == ()
-
-
-@pytest.mark.spawns_process
-@pytest.mark.cadence
 def test_nothing_to_commit_still_raises_when_every_path_is_no_delta(repo):
     # The predicate is `len(no_delta) == len(assembled)`, and the absent path
     # is deliberately still a member of `no_delta`. A commit whose only
@@ -105,44 +80,3 @@ def test_nothing_to_commit_still_raises_when_every_path_is_no_delta(repo):
     assert _head(repo) == before
 
 
-@pytest.mark.spawns_process
-@pytest.mark.cadence
-def test_a_declaration_of_only_absent_deletions_is_refused(repo):
-    # The all-absent shape on its own -- the `NOTHING TO COMMIT: every named
-    # path already matches HEAD` the operator saw, with no genuinely-matching
-    # path in the pathspec at all.
-    before = _head(repo)
-
-    with pytest.raises(NothingToCommit):
-        gcommit.commit_paths(
-            repo, [], "phantoms only", deleted_paths=["ghost.txt", "other/ghost.txt"]
-        )
-
-    assert _head(repo) == before
-
-
-@pytest.mark.spawns_process
-@pytest.mark.cadence
-def test_a_normal_mixed_commit_declares_nothing_absent(repo):
-    # A modification plus a REAL deletion (present at HEAD, gone from disk):
-    # the ordinary shape, and it must leave the new field empty rather than
-    # emitting a SKIPPED warning on every close ceremony.
-    (repo / "seed.txt").write_text("moved\n", encoding="utf-8", newline="\n")
-    (repo / "held.txt").unlink()
-
-    outcome = gcommit.commit_paths(
-        repo, ["seed.txt"], "edit plus deletion", deleted_paths=["held.txt"]
-    )
-
-    assert outcome.declared_absent_from_head == ()
-    assert outcome.no_delta == ()
-    tracked = _git(repo, "ls-tree", "--name-only", "-r", "HEAD").stdout.split()
-    assert tracked == ["seed.txt"]
-
-
-def test_the_field_defaults_empty_on_a_bare_outcome():
-    # Every existing construction site passes four fields; a fifth with no
-    # default would break them, and a reader destructuring the outcome must
-    # never see the key absent.
-    outcome = gcommit.CommitOutcome(sha="x", staged_preferred=(), worktree_over_staged=())
-    assert outcome.declared_absent_from_head == ()
